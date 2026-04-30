@@ -1,6 +1,25 @@
 ////////////////////////////////
 //  Bridge Types
 
+/**
+ * Discord attachment metadata propagated from evie-bot through the bridge.
+ *
+ * Presence of `base64` means the bot fetched the bytes and the host MCP
+ * plugin should materialize the file under /tmp/evie-files/<msgId>/. Absence
+ * means the entry is metadata-only and the agent should reach the file via
+ * `evie_fetch_message_files` instead.
+ *
+ * Mirror: evie-bot's `ForwardDmFile` in `app/features/bridge/BridgeServer.ts`.
+ * Wire validation lives in `ChannelFileSchema` (`shared/schemas.ts`).
+ */
+export interface ChannelFile {
+	filename: string;
+	mime: string;
+	size: number;
+	descriptiveKey: string;
+	base64?: string;
+}
+
 export type ConnectionMode = "cli" | "channel";
 export type EffortLevel = "simple" | "standard" | "complex";
 export type RequestType = "feature" | "bugfix" | "question";
@@ -15,7 +34,7 @@ export type ResponseStatus =
 
 ////////////////////////////////
 //  Note: CLI replies (crosstalk_reply) carry a status. Channel replies
-//  (channel_reply) are stream messages with no status at all — the fields
+//  (channel_reply) are stream messages with no status at all. The fields
 //  below are optional so the same payload type serves both paths.
 
 export interface InjectPayload {
@@ -38,6 +57,8 @@ export interface ChannelPushPayload {
 	is_follow_up: boolean;
 	replyJsonSchema?: string;
 	message_id?: string;
+	discord_message_id?: string;
+	files?: ChannelFile[];
 }
 
 export interface ResponsePayload {

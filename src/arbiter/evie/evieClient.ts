@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import WebSocket from "ws";
+import type { ChannelFile } from "../../shared/types.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -22,6 +23,7 @@ export interface DmForwardPayload {
 	userId: string;
 	channelId: string;
 	messageId: string;
+	files?: ChannelFile[];
 }
 
 export interface EvieClientConfig {
@@ -86,7 +88,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				config.onDmForward?.(msg as unknown as DmForwardPayload);
 			}
 
-			if (msg.type === "tool_result" || msg.type === "tool_error" || msg.type === "post_response_result") {
+			if (msg.type === "tool_result" || msg.type === "tool_error") {
 				const callId = msg.callId as string;
 				const pending = pendingCalls.get(callId);
 				if (pending) {
@@ -95,7 +97,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					if (msg.type === "tool_error") {
 						pending.resolve({ callId, error: msg.error as string });
 					} else {
-						pending.resolve({ callId, result: msg.result ?? msg });
+						pending.resolve({ callId, result: msg.result });
 					}
 				}
 			}

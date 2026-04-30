@@ -1,0 +1,145 @@
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { extname, join } from "node:path";
+import { cleanupTmpDir } from "../../shared/tmp-files.js";
+import type { ChannelFile } from "../../shared/types.js";
+
+////////////////////////////////
+//  Interfaces & Types
+
+export interface MaterializeFilesParams {
+	discordMessageId: string;
+	files: ChannelFile[];
+}
+
+export interface MaterializedFile {
+	descriptiveKey: string;
+	path?: string;
+}
+
+export interface RenderFilesBlockParams {
+	discordMessageId?: string;
+	files: MaterializedFile[];
+}
+
+////////////////////////////////
+//  Constants
+
+export const EVIE_FILES_DIR = "/tmp/evie-files";
+export const EVIE_FILES_TTL_MS = 60 * 60 * 1000;
+
+const MAX_LEAF_BYTES = 200;
+// Discord caps a message at 10 attachments; the bound is generous theatre.
+const MAX_COLLISION_SUFFIX = 50;
+
+////////////////////////////////
+//  Functions & Helpers
+
+/**
+ * Sanitize a Discord-supplied filename into a safe leaf.
+ *
+ * - Defangs path traversal by taking the basename only.
+ * - Strips leading dots (no hidden files) and ASCII control chars.
+ * - Preserves unicode and spaces.
+ * - Caps the result at 200 bytes (UTF-8) so ext4 / tmpfs accept it.
+ */
+export function safeFilename(name: string): string {
+	let safe = name.split(/[/\\]/).pop() ?? "";
+	safe = safe.replace(/^\.+/, "");
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping is the point
+	safe = safe.replace(/[\x00-\x1f\x7f]/g, "");
+	if (!safe) safe = "file";
+
+	while (Buffer.byteLength(safe, "utf8") > MAX_LEAF_BYTES) {
+		safe = safe.slice(0, -1);
+	}
+	return safe;
+}
+
+/**
+ * Materialize Discord-bridge files to /tmp/evie-files/<discordMessageId>/.
+ *
+ * Files with a `base64` payload are written to disk via tmp + atomic rename.
+ * Files without `base64` (out-of-scope categories) pass through as metadata-only
+ * so the renderer can list them without a `-> /path`.
+ *
+ * Lazy cleanup of expired buckets runs at the top of every call.
+ */
+export function materializeFiles({ discordMessageId, files }: MaterializeFilesParams): MaterializedFile[] {
+	mkdirSync(EVIE_FILES_DIR, { recursive: true });
+	cleanupTmpDir({ dir: EVIE_FILES_DIR, maxAgeMs: EVIE_FILES_TTL_MS, mode: "dirs" });
+
+	// safeFilename is a no-op for real Discord snowflakes (pure digits) but
+	// keeps `path.join` from escaping EVIE_FILES_DIR when the id is supplied
+	// from tests or any future non-Discord origin.
+	const bucket = join(EVIE_FILES_DIR, safeFilename(discordMessageId));
+	const claimedLeaves = new Set<string>();
+	const out: MaterializedFile[] = [];
+
+	for (const file of files) {
+		const meta: MaterializedFile = {
+			descriptiveKey: file.descriptiveKey,
+		};
+
+		if (file.base64) {
+			try {
+				mkdirSync(bucket, { recursive: true });
+				const targetPath = resolveCollisionFreePath(bucket, file.filename, claimedLeaves);
+				writeAtomic(targetPath, Buffer.from(file.base64, "base64"));
+				meta.path = targetPath;
+			} catch (err) {
+				console.error(
+					`[evie-files] failed to materialize "${file.filename}" for msg ${discordMessageId}: ${(err as Error).message}`,
+				);
+			}
+		}
+
+		out.push(meta);
+	}
+
+	return out;
+}
+
+/**
+ * Render the unified [FILES] sentinel block for the channel notification.
+ * Materialized entries get `-> /path`; metadata-only entries do not.
+ */
+export function renderFilesBlock({ discordMessageId, files }: RenderFilesBlockParams): string {
+	if (files.length === 0) return "";
+
+	const opener = discordMessageId ? `[FILES messageId="${discordMessageId}"]` : `[FILES]`;
+	const instruction = `*Files with \`-> /path\` are on disk; Read them. Others: use tool \`evie_fetch_message_files\` to fetch.*`;
+	const lines = files.map((f, i) => {
+		const head = `${i + 1}. ${f.descriptiveKey}`;
+		return f.path ? `${head} -> \`${f.path}\`` : head;
+	});
+
+	return `${opener}\n${instruction}\n${lines.join("\n")}\n[/FILES]`;
+}
+
+function resolveCollisionFreePath(bucket: string, requestedLeaf: string, claimedLeaves: Set<string>): string {
+	const safe = safeFilename(requestedLeaf);
+	const ext = extname(safe);
+	const base = ext ? safe.slice(0, safe.length - ext.length) : safe;
+
+	for (let suffix = 0; suffix < MAX_COLLISION_SUFFIX; suffix++) {
+		const candidate = suffix === 0 ? safe : `${base}-${suffix + 1}${ext}`;
+		const path = join(bucket, candidate);
+		if (!claimedLeaves.has(candidate) && !existsSync(path)) {
+			claimedLeaves.add(candidate);
+			return path;
+		}
+	}
+
+	throw new Error(`Too many collisions resolving safe filename for "${requestedLeaf}"`);
+}
+
+/**
+ * Write to <target>.tmp.<pid> then rename to target. Rename is atomic on POSIX
+ * so concurrent host MCP processes that received the same channel_push end up
+ * with identical bytes at the target path; last rename wins.
+ */
+function writeAtomic(targetPath: string, buffer: Buffer): void {
+	const tmpPath = `${targetPath}.tmp.${process.pid}`;
+	writeFileSync(tmpPath, buffer);
+	renameSync(tmpPath, targetPath);
+}

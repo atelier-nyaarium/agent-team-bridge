@@ -5,6 +5,7 @@ import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import type { Mutex } from "../shared/mutex.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
+import { PostResponsePartsSchema } from "../shared/schemas.js";
 import type { ArbiterConfig, ConnectionMode, ResponsePayload, ResponsePushPayload, TeamInfo } from "../shared/types.js";
 import {
 	type ConversationRegistry,
@@ -69,7 +70,7 @@ const EvieToolCallSchema = z.object({
 const HumanRespondSchema = z.object({
 	from: z.string(),
 	session_id: z.string(),
-	parts: z.array(z.string()).min(1),
+	parts: PostResponsePartsSchema,
 });
 
 const HumanTransferSchema = z.object({
@@ -530,10 +531,9 @@ export function createRoutes({
 		if (result.error) {
 			return jsonResponse({ error: result.error }, 500);
 		}
-		console.log(
-			`[human] ${from} responded to channel ${channelId} (${parts.length} part${parts.length > 1 ? "s" : ""})`,
-		);
-		return jsonResponse({ ok: true, partsSent: parts.length });
+		const partsSent = (result.result as { partsSent?: number } | undefined)?.partsSent ?? parts.length;
+		console.log(`[human] ${from} responded to channel ${channelId} (${partsSent}/${parts.length} parts)`);
+		return jsonResponse({ ok: true, partsSent });
 	}
 
 	async function humanTransfer(body: Record<string, unknown>): Promise<Response> {

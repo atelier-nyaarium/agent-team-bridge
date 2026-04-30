@@ -5,13 +5,48 @@ import type { ServerWebSocket } from "bun";
 import { debugLog } from "../shared/debug-log.js";
 import { getMutex, type Mutex } from "../shared/mutex.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
-import type { ChannelPushPayload, ResponsePayload } from "../shared/types.js";
+import { ChannelFilesSchema } from "../shared/schemas.js";
+import type { ChannelFile, ChannelPushPayload, ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { type DmForwardPayload, startEvieClient } from "./evie/evieClient.js";
 import { startPortForward } from "./evie/portForward.js";
 import { createRoutes } from "./routes.js";
 import { WakeCoordinator } from "./wake.js";
 import { createWebSocketHandlers, formatHolderConnectedMessage, getAllActiveWs, type WsData } from "./websocket.js";
+
+// Mirrors evie-bot's MessageHandler.BRIDGE_BYTES_HARD_BACKSTOP. Caps total raw
+// bytes (post-decode) per inbound DM so a compromised or buggy bridge cannot
+// flood the host MCP plugin into materializing arbitrary amounts of data.
+const FILES_BYTES_HARD_BACKSTOP = 500 * 1024 * 1024;
+
+/**
+ * Validate the inbound files array from a `dm_forward` frame and apply the
+ * consumer-side hard backstop. Malformed entries are dropped silently with a
+ * console warning. Entries that would push the total decoded byte count past
+ * the backstop are demoted to metadata-only (`base64` stripped) so the agent
+ * can still see them via `evie_fetch_message_files`.
+ */
+function sanitizeInboundFiles(raw: unknown): ChannelFile[] | undefined {
+	if (raw === undefined) return undefined;
+	const parsed = ChannelFilesSchema.safeParse(raw);
+	if (!parsed.success) {
+		console.error(`[evie] dropping malformed files payload: ${parsed.error.message}`);
+		return undefined;
+	}
+	let bytesQueued = 0;
+	return parsed.data.map((file) => {
+		if (!file.base64) return file;
+		// file.size is Discord-reported and validated by ChannelFileSchema. Trust it
+		// for the backstop check rather than re-deriving from base64 length, which
+		// would overcount by padding bytes.
+		if (file.size > FILES_BYTES_HARD_BACKSTOP || bytesQueued + file.size > FILES_BYTES_HARD_BACKSTOP) {
+			console.error(`[evie] file "${file.filename}" exceeds backstop; demoting to metadata-only`);
+			return { ...file, base64: undefined };
+		}
+		bytesQueued += file.size;
+		return file;
+	});
+}
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -143,6 +178,7 @@ export async function startArbiter(): Promise<void> {
 
 	async function tryDeliverDm(dm: DmForwardPayload): Promise<boolean> {
 		const channelId = dm.channelId;
+		const files = sanitizeInboundFiles(dm.files);
 		let holder = pinnedHolders.get(channelId) ?? null;
 
 		// If the pinned team is no longer online, null the pin so auto-assign runs.
@@ -191,6 +227,8 @@ export async function startArbiter(): Promise<void> {
 			effort: "standard",
 			session_id: sessionId,
 			is_follow_up: false,
+			discord_message_id: dm.messageId,
+			files,
 		};
 
 		const serialized = JSON.stringify(payload);

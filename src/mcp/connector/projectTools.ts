@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { cleanupTmpDir } from "../../shared/tmp-files.js";
 import { invokeResolved } from "./listener.js";
 import { registerStubTool, textResult } from "./utils.js";
 
@@ -41,19 +42,6 @@ export function getToolSchema(name: string): z.ZodObject<z.ZodRawShape> | undefi
 	return loadedToolSchemas.get(name);
 }
 
-function cleanupOldFiles(): void {
-	if (!existsSync(CONNECTOR_FILES_DIR)) return;
-	const now = Date.now();
-	for (const file of readdirSync(CONNECTOR_FILES_DIR)) {
-		const filePath = join(CONNECTOR_FILES_DIR, file);
-		try {
-			if (now - statSync(filePath).mtimeMs > FILE_MAX_AGE_MS) {
-				unlinkSync(filePath);
-			}
-		} catch {}
-	}
-}
-
 function processResponseFiles(toolName: string, result: Record<string, unknown>): Record<string, unknown> {
 	const specs = loadedResponseFiles.get(toolName);
 	if (!specs) return result;
@@ -64,7 +52,7 @@ function processResponseFiles(toolName: string, result: Record<string, unknown>)
 		if (typeof value !== "string" || !value) continue;
 
 		mkdirSync(CONNECTOR_FILES_DIR, { recursive: true });
-		cleanupOldFiles();
+		cleanupTmpDir({ dir: CONNECTOR_FILES_DIR, maxAgeMs: FILE_MAX_AGE_MS, mode: "files" });
 
 		const fileName = `${toolName}-${Date.now()}.${spec.extension}`;
 		const filePath = join(CONNECTOR_FILES_DIR, fileName);

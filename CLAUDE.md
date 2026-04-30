@@ -25,8 +25,10 @@
       - `replyTool.ts` - Shared reply tool factory (used by channelReply and cliReply)
       - `registerBridgeTools.ts` - Container-side tool registration (crosstalk + reply tools)
     - `channel/` - **Channel mode** - For Claude agents receiving push notifications
-      - `channelNotify.ts` - Emit `notifications/claude/channel` to push messages into Claude sessions
+      - `channelNotify.ts` - Emit `notifications/claude/channel` to push messages into Claude sessions; materializes inbound Discord file attachments and prepends a `[FILES]` block to the body
       - `channelReply.ts` - `channel_reply` tool: reply to an incoming channel message
+      - `humanTools.ts` - `respond_to_human` and `transfer_human_to` tools; `respond_to_human` accepts per-part `{text?, attachments?: [absolutePath, ...]}` so the agent can attach any file from its filesystem
+      - `evieFiles.ts` - Sanitize, materialize, and render Discord-bridge file attachments under `/tmp/evie-files/<msgId>/`; lazy mtime sweep with 1h TTL
     - `cli/` - **CLI mode** - For non-Claude agents (cursor, copilot, codex)
       - `agentHandlers.ts` - CLI agent process spawners (cursor-agent, copilot, codex)
       - `handleInject.ts` - Handle inject messages from arbiter, spawn CLI agent
@@ -53,8 +55,9 @@
       - `evieTools.ts` - Converts evie's JSON Schema tool definitions to Zod via `z.fromJSONSchema()`
     - `resolve-model.ts` - Model resolution by agent type and effort level
   - `shared/` - Shared utilities used by both arbiter and MCP
-    - `types.ts` - Shared TypeScript types (payloads, configs, connection modes)
-    - `schemas.ts` - BridgeReplySchema (Zod) shared by channel_reply and crosstalk_reply
+    - `types.ts` - Shared TypeScript types (payloads, configs, connection modes, `ChannelFile`)
+    - `schemas.ts` - Zod schemas shared across layers: `BridgeReplySchema` (channel_reply / crosstalk_reply), `PostResponsePartSchema` + `PostResponsePartsSchema` (outbound `respond_to_human` parts), `ChannelFileSchema` + `ChannelFilesSchema` (inbound Discord-bridge file validation)
+    - `tmp-files.ts` - `cleanupTmpDir({dir, maxAgeMs, mode: "files" | "dirs"})` - generic lazy mtime sweep used by the connector and the Discord-bridge file materializer
     - `env.ts` - Container detection (isInsideContainer)
     - `mutex.ts` - Mutex class for serializing CLI-mode requests per team
     - `pending-job-store.ts` - PendingJobStore for tracking in-flight requests with timeout/polling
@@ -100,11 +103,19 @@ Channel-mode agents (Claude windows and devcontainer Claudes) have persistent co
 ### Evie Bridge
 
 The arbiter maintains a kubectl port-forward tunnel to evie-bot's K8s pod (port 20001). A WebSocket client connects with bearer auth and receives:
-- Tool registry (46 action schemas exported as JSON Schema)
+- Tool registry (action schemas exported as JSON Schema)
 - DM forwards (Discord DMs from the owner, relayed to the host orchestrator)
 - Tool call results (responses to forwarded tool invocations)
 
 Evie's tools are dynamically registered as MCP tools on the host using `z.fromJSONSchema()` (Zod v4.3.0+), prefixed with `evie_`.
+
+### Discord File Attachments (bridge)
+
+Bidirectional, integrated with the Evie bridge.
+
+**Inbound (user-Discord -> agent):** The bot fetches image and GIF attachment bytes on DM arrival and ships them base64-encoded inside the `dm_forward` frame as a `files` array (`ChannelFile[]`). Other attachment types pass through metadata-only. The arbiter validates the array via `ChannelFilesSchema`, applies a 500 MB consumer-side hard backstop (mirroring the bot's send-side cap), and forwards the payload as part of the `channel_push`. The host MCP plugin's `materializeFiles()` (in `mcp/channel/evieFiles.ts`) writes byte-bearing entries to `/tmp/evie-files/<discord_message_id>/<safeFilename>` via `<path>.tmp.<pid>` + atomic `rename`, then `renderFilesBlock()` builds a unified `[FILES messageId="..."]` block prepended to the channel notification body. Materialized entries get `-> /path` (agent uses `Read`); non-materialized entries do not (agent uses `evie_fetch_message_files`). Lazy mtime sweep keeps the directory bounded with a 1-hour TTL.
+
+**Outbound (agent -> user-Discord):** The `respond_to_human` tool accepts `parts: Array<string | {text?, attachments?: [absolutePath, ...]}>`. Strings auto-wrap to `{text}` via the schema-level `.transform()`. The MCP plugin reads each absolute path with `fs.readFile`, base64-encodes, and ships per-part `{text?, attachments?: [{filename, base64}]}` records via the arbiter's `/human/respond` route. Evie-bot's `BridgeServer.handlePostResponse` rebuilds each part as `channel.send({content, files: AttachmentBuilder[]})`. Discord auto-renders images inline; other files appear as download links. Per-part error handling reports `Sent X/Y parts before failure` so partial sends are visible to the agent.
 
 ### Port Map
 

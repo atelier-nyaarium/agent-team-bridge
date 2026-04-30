@@ -1,6 +1,7 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { debugLog } from "../../shared/debug-log.js";
 import type { ChannelPushPayload, ResponsePushPayload } from "../../shared/types.js";
+import { materializeFiles, renderFilesBlock } from "./evieFiles.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -23,6 +24,17 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 	}
 	const replyReminder = lines.join("\n");
 
+	let filesBlock = "";
+	if (payload.files && payload.files.length > 0 && payload.discord_message_id) {
+		const materialized = materializeFiles({
+			discordMessageId: payload.discord_message_id,
+			files: payload.files,
+		});
+		filesBlock = renderFilesBlock({ discordMessageId: payload.discord_message_id, files: materialized });
+	}
+
+	const bodyWithFiles = filesBlock ? `${payload.body}\n\n${filesBlock}` : payload.body;
+
 	// #region Hypothesis A: channel_push received by this sub-process
 	debugLog("A", "src/mcp/channel/channelNotify.ts:emitChannelNotification", "channel_push received", {
 		pid: process.pid,
@@ -35,7 +47,7 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 	await server.notification({
 		method: "notifications/claude/channel",
 		params: {
-			content: `${replyReminder}\n\n${payload.body}`,
+			content: `${replyReminder}\n\n${bodyWithFiles}`,
 			meta: {
 				session_id: payload.session_id,
 				from: payload.from,
