@@ -12,8 +12,11 @@ debug/
 /.vscode/
 /compose*.yml
 /coverage/
-/debug*.log
 /volumes/
+/.playwright-mcp/
+/.claude/scheduled_tasks.lock
+debug*.log
+kubeconfig*
 
 #### OS
 Thumbs.db

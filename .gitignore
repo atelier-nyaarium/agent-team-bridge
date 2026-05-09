@@ -12,7 +12,10 @@ _test/
 /.env*
 /compose*.yml
 /next-env.d.ts
+/.playwright-mcp/
+/.claude/scheduled_tasks.lock
 debug*.log
+kubeconfig*
 
 #### OS
 Thumbs.db
