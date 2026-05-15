@@ -54,9 +54,9 @@ export function registerCompactSession(mcpServer: McpServer): void {
 		async (args: CompactSessionArgs) => {
 			try {
 				const command = `/compact ${args.instructions}`;
-				const b64 = Buffer.from(command).toString("base64");
+				const b64 = Buffer.from(args.instructions).toString("base64");
 				execSync(
-					`bash -c "tmux send-keys -t ${TMUX_TARGET} -l \\"\\$(echo '${b64}' | base64 -d)\\" && tmux send-keys -t ${TMUX_TARGET} Enter"`,
+					`bash -c "tmux send-keys -t ${TMUX_TARGET} '/compact ' && tmux send-keys -t ${TMUX_TARGET} -l \\"\\$(echo '${b64}' | base64 -d)\\" && tmux send-keys -t ${TMUX_TARGET} Enter"`,
 					{ encoding: "utf-8", timeout: 10_000 },
 				);
 
