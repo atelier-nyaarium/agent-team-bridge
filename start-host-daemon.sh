@@ -6,6 +6,15 @@ set -e
 TMUX_SESSION="claude"
 HOST_NAME="$(hostname)"
 
+MARKETPLACE_SOURCE="atelier-nyaarium/claude-marketplace"
+MARKETPLACE_KEY="atelier-nyaarium"
+PLUGINS=(
+	"switchboard@atelier-nyaarium"
+	"nyaaskills@atelier-nyaarium"
+)
+SETTINGS_FILE="${HOME}/.claude/settings.json"
+INSTALLED_PLUGINS_FILE="${HOME}/.claude/plugins/installed_plugins.json"
+
 
 # Check if tmux session already exists
 if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
@@ -13,6 +22,38 @@ if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
 	echo "  Attach: tmux attach -t $TMUX_SESSION"
 	exit 0
 fi
+
+
+# Ensure marketplace + plugins are installed before launching claude.
+marketplace_installed() {
+	[ -f "$SETTINGS_FILE" ] && jq -e ".extraKnownMarketplaces[\"${MARKETPLACE_KEY}\"]" "$SETTINGS_FILE" >/dev/null 2>&1
+}
+
+plugin_installed() {
+	local key="$1"
+	[ -f "$INSTALLED_PLUGINS_FILE" ] && jq -e ".plugins[\"${key}\"]" "$INSTALLED_PLUGINS_FILE" >/dev/null 2>&1
+}
+
+if ! marketplace_installed; then
+	echo "Adding marketplace ${MARKETPLACE_SOURCE}..."
+	claude plugin marketplace add "${MARKETPLACE_SOURCE}"
+fi
+
+# jq-merge autoUpdate:true into the marketplace entry (preserves any other keys).
+mkdir -p "$(dirname "$SETTINGS_FILE")"
+TMP_SETTINGS="$(mktemp)"
+(cat "$SETTINGS_FILE" 2>/dev/null || echo '{}') \
+	| jq --arg key "$MARKETPLACE_KEY" \
+		'(if . == null then {} else . end) * { extraKnownMarketplaces: { ($key): { autoUpdate: true } } }' \
+	> "$TMP_SETTINGS"
+mv "$TMP_SETTINGS" "$SETTINGS_FILE"
+
+for plugin in "${PLUGINS[@]}"; do
+	if ! plugin_installed "$plugin"; then
+		echo "Installing plugin ${plugin}..."
+		claude plugin install "$plugin"
+	fi
+done
 
 
 echo "Starting claude on ${HOST_NAME}..."
