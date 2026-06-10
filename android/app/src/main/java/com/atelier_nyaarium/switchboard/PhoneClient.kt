@@ -48,6 +48,23 @@ data class Provisioning(
 	}
 }
 
+data class Team(val name: String, val status: String, val mode: String, val queueDepth: Int)
+
+data class RegisterResult(val cursor: Int, val epoch: Int)
+
+data class SendResult(val ok: Boolean, val status: String, val inlineBody: String?, val error: String?)
+
+data class MailboxEntry(
+	val kind: String,
+	val sessionId: String,
+	val from: String?,
+	val body: String,
+	val seq: Int,
+	val at: Long,
+)
+
+data class Mailbox(val entries: List<MailboxEntry>, val cursor: Int, val epoch: Int, val dropped: Int)
+
 /** Talks to the phone bridge through the CA-pinned k8s API service-proxy. */
 class PhoneClient(private val prov: Provisioning) {
 	private val client = buildPinnedClient(prov.caPem)
@@ -92,10 +109,56 @@ class PhoneClient(private val prov: Provisioning) {
 		}
 	}
 
-	fun listTeams(): List<String> {
+	/** Claim this device's mailbox. Returns the starting cursor + epoch. */
+	fun register(): RegisterResult {
+		val r = JSONObject(relay("""{"kind":"register"}""")).optJSONObject("result") ?: error("register: no result")
+		return RegisterResult(cursor = r.optInt("cursor", 0), epoch = r.optInt("epoch", 0))
+	}
+
+	fun teams(): List<Team> {
 		val result = JSONObject(relay("""{"kind":"list_teams"}""")).optJSONObject("result") ?: return emptyList()
 		val arr = result.optJSONArray("teams") ?: return emptyList()
-		return (0 until arr.length()).map { arr.getJSONObject(it).optString("team") }
+		return (0 until arr.length()).map {
+			val t = arr.getJSONObject(it)
+			Team(t.optString("team"), t.optString("status"), t.optString("mode"), t.optInt("queue_depth"))
+		}
+	}
+
+	fun listTeams(): List<String> = teams().map { it.name }
+
+	/**
+	 * Send a message to a team. The reply may arrive inline (within the relay hold)
+	 * or land in the mailbox for a later poll; either way the conversation is keyed
+	 * server-side by (this device, team).
+	 */
+	fun send(to: String, body: String): SendResult {
+		val reply = JSONObject(relay(JSONObject().put("kind", "send").put("to", to).put("body", body).toString()))
+		val result = reply.optJSONObject("result")
+		return SendResult(
+			ok = reply.optBoolean("ok", false),
+			status = result?.optString("status").orEmpty(),
+			inlineBody = result?.optString("response").takeIf { !it.isNullOrEmpty() },
+			error = reply.optString("error").takeIf { reply.has("error") },
+		)
+	}
+
+	/** Drain new mailbox entries since cursor (epoch-gated). */
+	fun poll(cursor: Int, epoch: Int): Mailbox {
+		val op = JSONObject().put("kind", "poll").put("cursor", cursor).put("epoch", epoch).toString()
+		val result = JSONObject(relay(op)).optJSONObject("result") ?: return Mailbox(emptyList(), cursor, epoch, 0)
+		val arr = result.optJSONArray("entries")
+		val entries = if (arr == null) emptyList() else (0 until arr.length()).map {
+			val e = arr.getJSONObject(it)
+			MailboxEntry(
+				kind = e.optString("kind"),
+				sessionId = e.optString("session_id"),
+				from = e.optString("from").takeIf { s -> s.isNotEmpty() },
+				body = e.optString("body"),
+				seq = e.optInt("seq"),
+				at = e.optLong("at"),
+			)
+		}
+		return Mailbox(entries, result.optInt("cursor", cursor), result.optInt("epoch", epoch), result.optInt("dropped", 0))
 	}
 
 	companion object {

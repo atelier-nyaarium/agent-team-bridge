@@ -214,7 +214,13 @@ Validated end to end on a headless emulator: builds (`./gradlew :app:assembleDeb
 
 Minimal Kotlin/Compose app (built on the user's machine): paste-provisioned creds, OkHttp with CA pinning + bearer, call `list_teams` over the service-proxy, render the list. De-risks the device-side tunnel. Acceptance: Gradle build + ktlint/detekt gate (CI-able without an emulator); unit test for the OkHttp CA-pinning client.
 
-## P8 Android multi-thread chat (tabs + inbox)
+## P8 Android multi-thread chat (tabs + inbox) - core DONE
+
+Core built + validated live on the emulator against the deployed backend (with the scoped SA token, not admin). `ChatRepository` holds per-team threads + an unread tally and runs the 5s poll loop, routing each mailbox reply to its team via the `conv:<id>:<team>` session id; `PhoneClient` gained register/teams/send/poll. UI: provision screen -> inbox (live teams + unread badges) -> thread (send + received bubbles), state-based nav, process-lifetime `Repo` singleton. Verified by driving the real UI: opened nyaadot, sent `ping-from-the-app-UI`, and the agent's `pong-from-the-nyaadot-session` reply came back through the poll loop and rendered in the thread.
+
+Still to do (P8 polish, deferred): switchable tab strip (currently single open thread), local Room cache for durable transcripts (in-memory today; couples to P10), and the unit tests for poll/cursor/seq-dedup. Acceptance for those: the client dedupes inbound entries by `seq` and advances the poll `cursor` monotonically (highest contiguous seq consumed), so a duplicate drain from a lost ack never double-inserts; a non-monotonic seq jump or sticky `dropped` surfaces a gap.
+
+Original spec:
 
 Full chat client: send/poll loop (5s foreground), per-team threads, inbox with attention badges, opening a thread pins a tab. Local Room cache. Acceptance: the client dedupes inbound entries by `seq` and advances the poll `cursor` monotonically (highest contiguous seq consumed), so a duplicate drain from a lost ack never double-inserts the transcript; a non-monotonic seq jump or a sticky `dropped` surfaces a gap. Unit tests for the poll/cursor/dedup logic.
 
