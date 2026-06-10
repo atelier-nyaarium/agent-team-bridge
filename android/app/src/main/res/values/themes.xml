@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose owns the real theming; this is just a no-action-bar host theme. -->
+    <style name="Theme.SwitchboardPhone" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

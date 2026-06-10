@@ -1,0 +1,22 @@
+name: Push (main)
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+    paths:
+      - "android/**"
+      - ".github/workflows/_build-android.yml"
+      - ".github/workflows/main-push.yml"
+
+jobs:
+  Android:
+    name: "Build & Release Android"
+    uses: ./.github/workflows/_build-android.yml
+    secrets: inherit
+    permissions:
+      contents: write
+    with:
+      create_release: true
