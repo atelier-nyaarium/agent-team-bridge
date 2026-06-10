@@ -3,16 +3,26 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { debugLog } from "../shared/debug-log.js";
+import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { getMutex, type Mutex } from "../shared/mutex.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
+import type { PhoneRelayFrame } from "../shared/phone-protocol.js";
 import { ChannelFilesSchema } from "../shared/schemas.js";
 import type { ChannelFile, ChannelPushPayload, ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { type DmForwardPayload, startEvieClient } from "./evie/evieClient.js";
 import { startPortForward } from "./evie/portForward.js";
+import { createPhoneHandler } from "./phone/phoneHandler.js";
+import { createPhoneRelayPump } from "./phone/relayPump.js";
 import { createRoutes } from "./routes.js";
 import { WakeCoordinator } from "./wake.js";
-import { createWebSocketHandlers, formatHolderConnectedMessage, getAllActiveWs, type WsData } from "./websocket.js";
+import {
+	createWebSocketHandlers,
+	formatHolderConnectedMessage,
+	getAllActiveRealWs,
+	getAllActiveWs,
+	type WsData,
+} from "./websocket.js";
 
 // Mirrors evie-bot's MessageHandler.BRIDGE_BYTES_HARD_BACKSTOP. Caps total raw
 // bytes (post-decode) per inbound DM so a compromised or buggy bridge cannot
@@ -90,7 +100,15 @@ export async function startArbiter(): Promise<void> {
 	const pinnedHolders = new Map<string, string | null>();
 	const sessionToChannel = new Map<string, string>();
 
+	// Phone bridge: per-install mailboxes drained by the phone's poll op. The
+	// handler is constructed after routes exist; relay frames arriving before
+	// that are dropped (the phone re-polls).
+	const mailboxStore = new DeviceMailboxStore();
+	let handlePhoneRelay: ((frame: PhoneRelayFrame) => void) | null = null;
+	let evictPhonePeer: ((conversationId: string) => void) | null = null;
+
 	store.startCleanup();
+	mailboxStore.startCleanup();
 
 	const getMutexForTeam: MutexAccessor = Object.assign((team: string) => getMutex(targetLocks, team), {
 		peek: (team: string) => targetLocks.get(team),
@@ -162,7 +180,9 @@ export async function startArbiter(): Promise<void> {
 		if (hostSubs && getAllActiveWs(hostSubs).length > 0) return "host";
 		for (const [name, subs] of registry) {
 			if (name === "host" || name === "arbiter") continue;
-			if (getAllActiveWs(subs).length > 0) return name;
+			// Virtual phone peers are always "online" but have no respond_to_human
+			// path; they must never become Discord-channel holders.
+			if (getAllActiveRealWs(subs).length > 0) return name;
 		}
 		return null;
 	}
@@ -182,9 +202,11 @@ export async function startArbiter(): Promise<void> {
 		let holder = pinnedHolders.get(channelId) ?? null;
 
 		// If the pinned team is no longer online, null the pin so auto-assign runs.
+		// Real sockets only: a virtual phone peer is always "online" but cannot
+		// hold the human channel.
 		if (holder) {
 			const subs = registry.get(holder);
-			if (!subs || getAllActiveWs(subs).length === 0) {
+			if (!subs || getAllActiveRealWs(subs).length === 0) {
 				pinnedHolders.set(channelId, null);
 				console.log(`[human] pin on channel ${channelId} cleared (${holder} offline)`);
 				holder = null;
@@ -209,7 +231,7 @@ export async function startArbiter(): Promise<void> {
 		}
 
 		const subs = registry.get(holder);
-		const activeWs = subs ? getAllActiveWs(subs) : [];
+		const activeWs = subs ? getAllActiveRealWs(subs) : [];
 		if (activeWs.length === 0) {
 			// Raced with disconnect between auto-assign and send.
 			pinnedHolders.set(channelId, null);
@@ -291,6 +313,9 @@ export async function startArbiter(): Promise<void> {
 					console.log(`[evie] DM bounced - no team online [channel ${dm.channelId}]`);
 				})();
 			},
+			onPhoneRelay: (frame) => {
+				handlePhoneRelay?.(frame);
+			},
 			onDisconnect: () => {
 				console.error(`[evie] disconnected from evie-bot`);
 			},
@@ -324,6 +349,9 @@ export async function startArbiter(): Promise<void> {
 		onTeamDisconnect: (team) => {
 			clearPinsForTeam(team);
 		},
+		onVirtualPeerEvicted: (conversationId) => {
+			evictPhonePeer?.(conversationId);
+		},
 	});
 
 	const routes = createRoutes({
@@ -340,6 +368,16 @@ export async function startArbiter(): Promise<void> {
 		sessionToChannel,
 		postSystemMessageToChannel,
 	});
+
+	if (evieClient) {
+		const phoneHandler = createPhoneHandler({ registry, conversationRegistry, mailboxStore, routes });
+		handlePhoneRelay = createPhoneRelayPump({
+			handleFrame: phoneHandler.handleFrame,
+			sendReply: (reply) =>
+				evieClient!.callTool("phone_relay_reply", reply as unknown as Record<string, unknown>),
+		});
+		evictPhonePeer = (conversationId) => phoneHandler.removePeer(conversationId);
+	}
 
 	async function router(req: Request): Promise<Response> {
 		const url = new URL(req.url);

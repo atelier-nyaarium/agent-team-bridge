@@ -12,8 +12,12 @@
     - `wake.ts` - WakeCoordinator class for container on-demand startup
     - `connectorProxy.ts` - WebSocket proxy for game client connector pass-through
     - `evie/` - **Evie bridge** - kubectl port-forward tunnel to evie-bot K8s pod
-      - `evieClient.ts` - WebSocket client to evie's BridgeServer, tool call forwarding, DM forwarding
+      - `evieClient.ts` - WebSocket client to evie's BridgeServer, tool call forwarding, DM forwarding, `phone_relay` frame intake (`onPhoneRelay`)
       - `portForward.ts` - kubectl port-forward child process manager with auto-restart
+    - `phone/` - **Phone bridge** - arbiter side of the Android channel (see Phone Bridge below)
+      - `phoneHandler.ts` - `createPhoneHandler`: validates device identity, dispatches the phone ops (register/list_teams/send/respond/poll) by reusing the HTTP routes, owns per-conversation mailbox/binding/idempotency state
+      - `phonePeer.ts` - `PhonePeer`, a duck-typed virtual bridge socket whose `send()` appends to the device mailbox instead of a wire
+      - `relayPump.ts` - `createPhoneRelayPump`: zod-validates each relay frame, runs the handler, sends the reply back to evie as a `phone_relay_reply` tool call
     - `discord/` - Discord utilities (validateMessageParts, used by tests)
   - `mcp/` - **MCP plugin** - Tools registered for Claude Code and other IDE agents
     - `index.ts` - MCP server initialization, mode detection (host vs container), tool registration
@@ -61,6 +65,8 @@
     - `env.ts` - Container detection (isInsideContainer)
     - `mutex.ts` - Mutex class for serializing CLI-mode requests per team
     - `pending-job-store.ts` - PendingJobStore for tracking in-flight requests with timeout/polling
+    - `device-mailbox.ts` - `DeviceMailbox` (per-phone inbound queue: monotonic seq, cursor ack, entry cap, epoch) and `DeviceMailboxStore` (per-conversation, idle TTL sweep + LRU device cap, `setOnEvict`)
+    - `phone-protocol.ts` - Phone bridge wire types: relay frame, the five ops, op results, mailbox entry
     - `reconnect.ts` - Exponential backoff reconnector for WebSocket connections
   - `__tests__/` - Test files (vitest)
 - `skills/` - Claude Code skills
@@ -116,6 +122,16 @@ Bidirectional, integrated with the Evie bridge.
 **Inbound (user-Discord -> agent):** The bot fetches image and GIF attachment bytes on DM arrival and ships them base64-encoded inside the `dm_forward` frame as a `files` array (`ChannelFile[]`). Other attachment types pass through metadata-only. The arbiter validates the array via `ChannelFilesSchema`, applies a 500 MB consumer-side hard backstop (mirroring the bot's send-side cap), and forwards the payload as part of the `channel_push`. The host MCP plugin's `materializeFiles()` (in `mcp/channel/evieFiles.ts`) writes byte-bearing entries to `/tmp/evie-files/<discord_message_id>/<safeFilename>` via `<path>.tmp.<pid>` + atomic `rename`, then `renderFilesBlock()` builds a unified `[FILES messageId="..."]` block prepended to the channel notification body. Materialized entries get `-> /path` (agent uses `Read`); non-materialized entries do not (agent uses `evie_fetch_message_files`). Lazy mtime sweep keeps the directory bounded with a 1-hour TTL.
 
 **Outbound (agent -> user-Discord):** The `respond_to_human` tool accepts `parts: Array<string | {text?, attachments?: [absolutePath, ...]}>`. Strings auto-wrap to `{text}` via the schema-level `.transform()`. The MCP plugin reads each absolute path with `fs.readFile`, base64-encodes, and ships per-part `{text?, attachments?: [{filename, base64}]}` records via the arbiter's `/human/respond` route. Evie-bot's `BridgeServer.handlePostResponse` rebuilds each part as `channel.send({content, files: AttachmentBuilder[]})`. Discord auto-renders images inline; other files appear as download links. Per-part error handling reports `Sent X/Y parts before failure` so partial sends are visible to the agent.
+
+### Phone Bridge (Android channel)
+
+Arbiter side of a native Android chat client that reaches the bridge through evie (the only host the phone and the home-NAT arbiter both reach). The phone is a poll-based client, not a live socket: evie relays opaque `phone_relay` frames over the existing arbiter<->evie WS, and the arbiter answers each with a `phone_relay_reply` tool call. See `arbiter/phone/` and the full design in `plans/android-channel-app.md`.
+
+- **Identity:** keyed by the phone's per-install `conversationId` (the human Device Name is a display label). `phoneHandler.ts:assertValidIdentity` rejects reserved names, a name already held by a real team, and a conversation already owned by a live socket.
+- **Virtual peer:** `PhonePeer` is inserted into the team + conversation registries like a real bridge peer, so existing crosstalk routing (wake, persistent conversations, `channel_push`/`response_push` delivery) is reused unchanged. Its `send()` appends to the device's `DeviceMailbox` instead of a wire; the phone drains it with the `poll` op. Virtual peers are excluded from the heartbeat and from DM-holder selection (`getAllActiveRealWs`), and a real registration evicts a squatting virtual peer.
+- **Ops:** `register`, `list_teams`, `send` (to a devcontainer), `respond` (only to a thread delivered to this device), `poll`. `send`/`respond` are idempotent per `(conversationId, opId)`; reads run fresh.
+- **Mailbox:** `DeviceMailbox` is bounded (entry cap with cumulative `dropped` gap signal, 1h idle TTL, store-wide LRU device cap). Each instance carries an `epoch`; `poll` is epoch-gated so a cursor from an evicted instance cannot ack away a new instance's entries.
+- **Trust:** frames are zod-validated at the boundary (`PhoneRelayFrameSchema`); the arbiter trusts only frames relayed off the evie WS and adds no new HTTP surface. Evie verifies the phone's bearer token. Not yet wired end to end (evie phone-bridge port + k8s service-proxy are later phases).
 
 ### Port Map
 

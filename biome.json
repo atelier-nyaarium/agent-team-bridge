@@ -6,6 +6,7 @@
 			"!**/.claude",
 			"!**/.cursor",
 			"!**/coverage",
+			"!**/plans",
 			"!**/node_modules",
 			"!**/volumes",
 			"!**/*.md",

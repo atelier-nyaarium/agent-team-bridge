@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import WebSocket from "ws";
+import type { PhoneRelayFrame } from "../../shared/phone-protocol.js";
 import type { ChannelFile } from "../../shared/types.js";
 
 ////////////////////////////////
@@ -31,6 +32,7 @@ export interface EvieClientConfig {
 	authToken: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	onDmForward?: (dm: DmForwardPayload) => void;
+	onPhoneRelay?: (frame: PhoneRelayFrame) => void;
 	onDisconnect?: () => void;
 }
 
@@ -88,6 +90,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				config.onDmForward?.(msg as unknown as DmForwardPayload);
 			}
 
+			if (msg.type === "phone_relay") {
+				config.onPhoneRelay?.(msg as unknown as PhoneRelayFrame);
+			}
+
 			if (msg.type === "tool_result" || msg.type === "tool_error") {
 				const callId = msg.callId as string;
 				const pending = pendingCalls.get(callId);
@@ -105,6 +111,13 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 
 		ws.on("close", () => {
 			ws = null;
+			// Fail in-flight calls now rather than letting each wait out its 120s
+			// timer across a reconnect; callers see a fast retryable error.
+			for (const [callId, pending] of pendingCalls) {
+				clearTimeout(pending.timer);
+				pending.resolve({ callId, error: `Disconnected from evie-bot` });
+			}
+			pendingCalls.clear();
 			config.onDisconnect?.();
 			if (!stopped) {
 				console.error(`[evie-client] disconnected, reconnecting in ${RECONNECT_DELAY_MS / 1000}s...`);

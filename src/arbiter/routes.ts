@@ -98,12 +98,15 @@ function getFirstWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket
 	return undefined;
 }
 
-/** Get the mode of a team from its first sub-session. */
+/** Get the mode of a team, preferring real sockets over virtual phone peers
+ * (which are always channel mode and could otherwise misroute a CLI team). */
 function getTeamMode(subs: Map<string, ServerWebSocket<WsData>>): ConnectionMode {
+	let virtualMode: ConnectionMode | null = null;
 	for (const [, ws] of subs) {
-		return ws.data.mode;
+		if (!ws.data.virtual) return ws.data.mode;
+		virtualMode = virtualMode ?? ws.data.mode;
 	}
-	return "cli";
+	return virtualMode ?? "cli";
 }
 
 /**
@@ -406,7 +409,11 @@ export function createRoutes({
 			}
 		}
 
-		if (!pushedViaConversation) {
+		// Conversation-routed sends never degrade to name-based broadcast: the
+		// sender team name may since have been claimed by an unrelated identity
+		// (e.g. a real team replacing an evicted phone peer), and the result
+		// stays poll-recoverable in the store regardless.
+		if (!pushedViaConversation && !deliverResult.fromConversationId) {
 			const fromSubs = registry.get(deliverResult.from);
 			if (fromSubs && getTeamMode(fromSubs) === "channel") {
 				try {

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { debugLog } from "../shared/debug-log.js";
 import type { Mutex } from "../shared/mutex.js";
@@ -22,6 +23,9 @@ export interface WebSocketDeps {
 	config: WebSocketConfig;
 	onTeamConnect?: (team: string, ws: ServerWebSocket<WsData>) => void;
 	onTeamDisconnect?: (team: string) => void;
+	// Fired when a real registration evicts a virtual phone peer, so the phone
+	// handler can clear its binding/mailbox and let the device re-register.
+	onVirtualPeerEvicted?: (conversationId: string) => void;
 }
 
 export interface WsData {
@@ -34,6 +38,10 @@ export interface WsData {
 	handshakeConfirmed: boolean;
 	proxyProject?: string;
 	proxyAuth?: string;
+	// True for a phone mailbox peer: a duck-typed socket whose send() appends to a
+	// DeviceMailbox instead of writing a wire. Liveness comes from the phone<->evie
+	// connection, so it is excluded from the ping/pong heartbeat.
+	virtual?: boolean;
 }
 
 ////////////////////////////////
@@ -54,6 +62,15 @@ export function getAllActiveWs(subs: Map<string, ServerWebSocket<WsData>>): Serv
 	return result;
 }
 
+/**
+ * Active sockets excluding virtual phone peers, whose readyState is hardwired
+ * open. Use this wherever "online" must mean a live process that can act (DM
+ * holder selection, liveness checks), not a passive mailbox.
+ */
+export function getAllActiveRealWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData>[] {
+	return getAllActiveWs(subs).filter((ws) => !ws.data.virtual);
+}
+
 export function createWebSocketHandlers({
 	registry,
 	conversationRegistry,
@@ -65,6 +82,7 @@ export function createWebSocketHandlers({
 	config,
 	onTeamConnect,
 	onTeamDisconnect,
+	onVirtualPeerEvicted,
 }: WebSocketDeps) {
 	const { HEARTBEAT_INTERVAL_MS = 30000, MISSED_PINGS_LIMIT = 2 } = config;
 
@@ -72,6 +90,7 @@ export function createWebSocketHandlers({
 		for (const [teamName, subs] of registry) {
 			for (const [subId, ws] of subs) {
 				const data = ws.data as WsData;
+				if (data.virtual) continue;
 				data.missedPings = (data.missedPings || 0) + 1;
 				if (data.missedPings >= MISSED_PINGS_LIMIT) {
 					// #region Hypothesis E: heartbeat evicting stale socket
@@ -135,6 +154,21 @@ export function createWebSocketHandlers({
 			if (!subs) {
 				subs = new Map();
 				registry.set(team, subs);
+			}
+
+			// A real registration claims the name over any virtual phone peers
+			// squatting it: evict them so a phone can never absorb a real team's
+			// traffic. The phone's next frame gets the name-taken rejection.
+			for (const [virtualSubId, virtualWs] of [...subs]) {
+				if (virtualWs.data.virtual) {
+					subs.delete(virtualSubId);
+					const virtualConvId = virtualWs.data.conversationId;
+					if (virtualConvId && conversationRegistry.get(virtualConvId) === virtualWs) {
+						conversationRegistry.delete(virtualConvId);
+					}
+					if (virtualConvId) onVirtualPeerEvicted?.(virtualConvId);
+					console.log(`[ws] evicted virtual peer ${team}/${virtualSubId} (real registration)`);
+				}
 			}
 
 			// If this subId already exists with a different socket, close the old one
@@ -299,9 +333,12 @@ export function createWebSocketHandlers({
 			conversationRegistry.delete(closingConversationId);
 		}
 
-		// If team has no more sub-sessions, clean up fully
-		if (subs.size === 0) {
-			registry.delete(teamName);
+		// If team has no more live sub-sessions, clean up fully. Virtual phone
+		// peers do not count as liveness; they must not suppress disconnect
+		// cleanup (pin clearing, job cancellation, mutex release).
+		const hasRealSubs = [...subs.values()].some((s) => !s.data.virtual);
+		if (!hasRealSubs) {
+			if (subs.size === 0) registry.delete(teamName);
 			onTeamDisconnect?.(teamName);
 
 			// Cancel only transient (CLI-mode) pending jobs. Persistent channel conversations
