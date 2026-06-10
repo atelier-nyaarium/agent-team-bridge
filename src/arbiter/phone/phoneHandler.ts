@@ -21,6 +21,16 @@ export interface PhoneRoutes {
 	teams: () => Response;
 }
 
+/** The JSON body shape returned by routes.send, read in both the in-time and
+ * backgrounded send paths. One definition so the two read sites cannot drift. */
+interface SendRouteJson {
+	session_id?: string;
+	status?: string;
+	response?: string;
+	replyAsJson?: Record<string, unknown>;
+	error?: string;
+}
+
 export interface PhoneHandlerDeps {
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
@@ -249,13 +259,7 @@ export function createPhoneHandler({
 					// appendIfLive so a since-evicted conversation drops cleanly.
 					void sendPromise
 						.then(async (res) => {
-							const json = (await res.json().catch(() => ({}))) as {
-								session_id?: string;
-								status?: string;
-								response?: string;
-								replyAsJson?: Record<string, unknown>;
-								error?: string;
-							};
+							const json = (await res.json().catch(() => ({}))) as SendRouteJson;
 							if (!res.ok) {
 								appendIfLive(conversationId, {
 									kind: "reply",
@@ -279,13 +283,7 @@ export function createPhoneHandler({
 					return { session_id: expectedSession, status: "running" };
 				}
 
-				const json = (await winner.json()) as {
-					session_id?: string;
-					status?: string;
-					response?: string;
-					replyAsJson?: Record<string, unknown>;
-					error?: string;
-				};
+				const json = (await winner.json()) as SendRouteJson;
 				if (!winner.ok) throw new Error(json.error ?? "send failed");
 				// A non-deterministic session id means a CLI-shaped synchronous answer
 				// (a CLI team woken by this send and finished within the bound). Its
