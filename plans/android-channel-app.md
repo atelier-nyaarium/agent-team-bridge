@@ -178,7 +178,11 @@ Relay legs are cross-provider, because the phone-bridge does not own the arbiter
 
 Acceptance: builds + lints in evie-bot; integration test driving `phone_relay_reply` through `BridgeServer.handleCall` settles a held request by opId; opId timeout AND arbiter-offline both bounce the phone cleanly.
 
-## P5 K8s manifests
+## P5 K8s manifests (DONE - authored, not applied)
+
+Authored as `evie-bot/deploy/phone-bridge.yaml` + `phone-bridge.README.md`, committed in evie-bot. Pre-gate resolved: evie's Deployment is managed imperatively via the Linode k8s dashboard (managedFields show `dashboard-api` + `kubectl-rollout`, no `last-applied-configuration`), so standalone `kubectl apply` objects are safe and survive rollouts. Package: ClusterIP Service (`evie-phone-bridge` -> pod port 20004, selector verified against the live pod label), scoped ServiceAccount + Role (get/create on `services/proxy` for `evie-phone-bridge:20004` only) + RoleBinding, and a long-lived SA-token Secret. The `ANDROID_BRIDGE_TOKEN` app-token is created imperatively (kept out of git) and added to the pod via `kubectl set env`. README documents apply order, the RBAC `can-i` dry-run (verified against the load-bearing port-form resourceName), and phone provisioning. Reviewed against the live cluster; NOT applied (gated on user approval).
+
+Original spec:
 
 Pre-P5 gate (hard prerequisite): locate the source that applies evie's Deployment (NOT in the evie-bot repo; CI only does `kubectl rollout restart`). Confirm how it is applied and that new objects survive the next apply. Authoring YAML before this risks orphan manifests.
 
