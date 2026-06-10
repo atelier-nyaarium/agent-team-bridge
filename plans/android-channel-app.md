@@ -194,7 +194,19 @@ Authored `evie-bot/deploy/phone-bridge-smoketest.sh` (curl-as-phone: health, reg
 
 True gate: external cluster apply approved + applied (the P5 package), not just P3-P5 code done. Then simulate the phone with curl through the service-proxy: register, list_teams, send to a mock team, poll the mailbox, respond. Run the 5s foreground loop for several minutes watching for 429 / API-priority-and-fairness throttling and audit-log volume (5s polls traverse the LKE control-plane API server; foreground-only + ~15min background bounds it). Record the new tradeoff: chat availability is now coupled to LKE control-plane availability (alongside the existing evie-uptime coupling). Proves the whole pipe minus the UI.
 
-## P7 Android tunnel spike
+## P7 Android tunnel spike (DONE)
+
+Built + run + validated. `switchboard/android/` is a Kotlin/Compose app (`com.atelier_nyaarium.switchboard`, minSdk 26, compileSdk 35, AGP 8.7.3 / Gradle 8.11.1 / Kotlin 2.0.21). `PhoneClient` builds an OkHttp client pinned to the cluster CA and reaches the phone bridge through the k8s API service-proxy (SA token in `Authorization`, app token in `X-Android-Bridge-Token`). The spike screen pastes a provisioning blob, tests the tunnel, and lists teams; a base64 `provisioning_b64` + `autotest` intent extra allows headless injection. CI: `.github/workflows/main-push.yml` + `_build-android.yml` build the APK on push (path android/**) and refresh a single latest GitHub release (delete + recreate the `android-app` tag, `make_latest`), mirroring evie's pattern.
+
+Validated end to end on a headless emulator: builds (`./gradlew :app:assembleDebug`), installs, renders the Compose UI (screenshot), and the CA-pinned tunnel reached the LIVE LKE API server (`reachable (HTTP 200)` from the emulator). Only `list_teams` awaits the P5/P6 deploy; the tunnel mechanism is proven.
+
+### Dev environment (set up this session, on the host)
+
+- `kubectl` v1.36.1 in `~/.local/bin` (verified against the cluster).
+- Android toolchain in `~/android-dev` (user-space, no sudo): Temurin JDK 17, Android SDK (cmdline-tools, platform-tools, platform/build-tools 35, emulator, x86_64 system image), Gradle 8.11.1. Source `~/android-dev/env.sh` for `JAVA_HOME`/`ANDROID_HOME`/PATH.
+- Headless emulator AVD `phone35` (KVM-accelerated via the `/dev/kvm` ACL on the user; software GPU `-gpu swiftshader_indirect`). Boot, `adb install`, and `adb exec-out screencap` all work without a display.
+
+### Original spec
 
 Minimal Kotlin/Compose app (built on the user's machine): paste-provisioned creds, OkHttp with CA pinning + bearer, call `list_teams` over the service-proxy, render the list. De-risks the device-side tunnel. Acceptance: Gradle build + ktlint/detekt gate (CI-able without an emulator); unit test for the OkHttp CA-pinning client.
 
