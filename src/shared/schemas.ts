@@ -121,3 +121,46 @@ export const ChannelFileSchema = z.object({
 });
 
 export const ChannelFilesSchema = z.array(ChannelFileSchema);
+
+////////////////////////////////
+//  Phone Relay Frame Schema
+//
+//  Validates phone_relay frames at the arbiter trust boundary. The frame body
+//  is phone-authored and evie relays it opaquely, so the arbiter must not
+//  blind-cast it. Mirror: the PhoneOp / PhoneRelayFrame types in
+//  `shared/phone-protocol.ts`. Keep the shapes in lockstep.
+
+export const PhoneOpSchema = z.discriminatedUnion("kind", [
+	z.object({ kind: z.literal("register") }),
+	z.object({ kind: z.literal("list_teams") }),
+	z.object({
+		kind: z.literal("send"),
+		to: z.string().min(1).max(128),
+		request_type: z.enum(["feature", "bugfix", "question"]).optional(),
+		effort: z.enum(["simple", "standard", "complex", "auto"]).optional(),
+		body: z.string().min(1),
+		files: ChannelFilesSchema.optional(),
+	}),
+	z.object({
+		kind: z.literal("respond"),
+		session_id: z.string().min(1),
+		status: z.string().optional(),
+		response: z.string().optional(),
+		replyAsJson: z.record(z.string(), z.unknown()).optional(),
+		files: ChannelFilesSchema.optional(),
+	}),
+	z.object({
+		kind: z.literal("poll"),
+		cursor: z.number().int().nonnegative().optional(),
+		epoch: z.number().int().nonnegative().optional(),
+	}),
+]);
+
+export const PhoneRelayFrameSchema = z.object({
+	type: z.literal("phone_relay"),
+	v: z.number().int().positive(),
+	device: z.string().min(1).max(64),
+	conversationId: z.string().min(1).max(128),
+	opId: z.string().min(1).max(128),
+	op: PhoneOpSchema,
+});

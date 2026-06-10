@@ -275,3 +275,88 @@ describe("createWebSocketHandlers", () => {
 		expect(knownTeamPaths.get("proj-b")).toBe("/catalog/proj-b");
 	});
 });
+
+describe("virtual peer awareness", () => {
+	let intervals: ReturnType<typeof setInterval>[] = [];
+	afterEach(() => {
+		for (const id of intervals) clearInterval(id);
+		intervals = [];
+	});
+
+	function setup() {
+		const registry: TeamRegistry = new Map();
+		const conversationRegistry: ConversationRegistry = new Map();
+		const store = new PendingJobStore<ResponsePayload>();
+		const targetLocks = new Map<string, Mutex>();
+		const evicted: string[] = [];
+		const handlers = createWebSocketHandlers({
+			registry,
+			conversationRegistry,
+			store,
+			targetLocks,
+			config: { HEARTBEAT_INTERVAL_MS: 100000, MISSED_PINGS_LIMIT: 2 },
+			knownTeamPaths: new Map(),
+			offlineCatalog: new Map(),
+			wakeCoordinator: new WakeCoordinator(),
+			onVirtualPeerEvicted: (conversationId) => evicted.push(conversationId),
+		});
+		intervals.push(handlers.heartbeatInterval);
+		return { handlers, registry, conversationRegistry, store, targetLocks, evicted };
+	}
+
+	function createVirtualWs(team: string, conversationId: string) {
+		const ws = createMockWs();
+		ws.data.teamName = team;
+		ws.data.subId = conversationId;
+		ws.data.conversationId = conversationId;
+		ws.data.virtual = true;
+		return ws;
+	}
+
+	it("a real registration evicts virtual phone squatters and their conversation pointers", () => {
+		const { handlers, registry, conversationRegistry, evicted } = setup();
+		const squatter = createVirtualWs("teamx", "conv-1");
+		registry.set("teamx", new Map([["conv-1", squatter]]));
+		conversationRegistry.set("conv-1", squatter);
+
+		const real = createMockWs();
+		handlers.open(real);
+		handlers.message(
+			real,
+			JSON.stringify({
+				type: "register",
+				team: "teamx",
+				subId: "r1",
+				mode: "channel",
+				conversationId: "conv-real",
+			}),
+		);
+
+		const subs = registry.get("teamx");
+		expect(subs?.has("conv-1")).toBe(false);
+		expect(subs?.has("r1")).toBe(true);
+		expect(conversationRegistry.get("conv-1")).toBeUndefined();
+		expect(evicted).toEqual(["conv-1"]);
+	});
+
+	it("close cleanup is not suppressed by a lingering virtual sub", () => {
+		const { handlers, registry, store } = setup();
+
+		const real = createMockWs();
+		handlers.open(real);
+		handlers.message(real, JSON.stringify({ type: "register", team: "teamx", subId: "r1", mode: "cli" }));
+
+		// Virtual sub lands beside the real one after registration.
+		const subs = registry.get("teamx");
+		subs?.set("conv-1", createVirtualWs("teamx", "conv-1"));
+
+		store.create("job-1", "sender", "teamx");
+		handlers.close(real);
+
+		// Transient job cancelled even though the virtual sub keeps the entry alive.
+		const result = store.poll("job-1");
+		expect(result).toMatchObject({ status: "error" });
+		expect(registry.get("teamx")?.size).toBe(1);
+		expect(registry.get("teamx")?.has("conv-1")).toBe(true);
+	});
+});
