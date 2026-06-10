@@ -198,3 +198,18 @@ Tests live in `src/__tests__/`. Run with `bun run test` or target a specific fil
 ```bash
 bun run test src/__tests__/mutex.test.ts
 ```
+
+## Deploying the phone bridge
+
+The phone bridge spans two repos and three runtimes (evie pod, k8s objects, host arbiter), so a deploy is a fixed sequence. evie deploys via GitHub CI (push to main builds the image and rolls out k8s); the arbiter is a local Docker container rebuilt on the host.
+
+1. **Push evie** (the `app/features/bridge` + `deploy/` changes). On main: `gitPushNewBranch(merge)` moves the commits to a branch + auto-merging PR. The merge to main runs `Push (main)` which builds the image and rolls out the deployment. Await the run, then `gitPull` evie locally (the push reset local main to origin, so the working tree is missing the new files until you pull).
+2. **Push switchboard** the same way. Its `main-push.yml` builds the Android APK and refreshes the single latest release. The merge also makes origin/main current so the arbiter's `git pull` picks up the P3 relay code. `gitPull` switchboard locally.
+3. **Apply the cluster objects** (from the evie-bot repo, after the pull restores `deploy/`):
+   - `kubectl create secret generic phone-bridge-app-token -n evie-bot --from-literal=ANDROID_BRIDGE_TOKEN=$(openssl rand -hex 32)` (save the token for the phone).
+   - `kubectl apply -f deploy/phone-bridge.yaml` (Service + scoped SA/Role/RoleBinding + SA-token Secret).
+   - `kubectl set env deploy/evie-bot-deployment -n evie-bot --from=secret/phone-bridge-app-token` (rolls out; the phone bridge only starts on port 20004 when `ANDROID_BRIDGE_TOKEN` is set).
+4. **Restart the arbiter + host daemon** on the host: `./down.sh && ./start-arbiter.sh && ./start-host-daemon.sh`. `start-arbiter.sh` pulls main and rebuilds the container, so the new arbiter has the `phone_relay` handler and reconnects to evie's bridge.
+5. **Validate** with `evie-bot/deploy/phone-bridge-smoketest.sh` (health, register, list_teams, idempotency through the API service-proxy). For a full round trip, send a phone op to an online team and poll the mailbox for the reply.
+
+Order matters: the phone bridge can serve `health` as soon as the env is set, but `register`/`send`/`list_teams` relay through the arbiter, so they only succeed once the arbiter is rebuilt (step 4). Setting the env before applying `phone-bridge.yaml` enables the bridge inside the pod but leaves it unreachable until the Service exists.

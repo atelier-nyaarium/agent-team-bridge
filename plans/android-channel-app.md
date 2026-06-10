@@ -188,7 +188,11 @@ Pre-P5 gate (hard prerequisite): locate the source that applies evie's Deploymen
 
 Then author (do NOT apply) as ONE approval/apply package: the ClusterIP Service fronting the evie phone-bridge port, a scoped ServiceAccount, a Role granting only get/create on `services/proxy` for that one service in `evie-bot`, a RoleBinding, the SA token Secret, AND the `ANDROID_BRIDGE_TOKEN` pod-env addition to the Deployment. Acceptance: apply-source found + confirmed; package reviewed by user; SelfSubjectAccessReview dry-run documented.
 
-## P6 Curl-as-phone end-to-end (deploy-gated; script authored)
+## P6 Curl-as-phone end-to-end (DONE - deployed + validated live)
+
+Deployed and validated in production. Full cycle: pushed evie (CI built image + k8s rollout) and switchboard (Android APK release) via `gitPushNewBranch(merge)`; created the app-token secret + applied `phone-bridge.yaml` + set the env (phone bridge came up on 20004); rebuilt the arbiter + host daemon (`down.sh`/`start-arbiter.sh`/`start-host-daemon.sh`). `phone-bridge-smoketest.sh` returned ALL PASS (health, register, list_teams returning 5 online teams, idempotency replay). A live phone `send` of "hello" to the `nyaadot` team round-tripped: the agent's reply came back through the mailbox (`seq:1, cursor:1, epoch:2`). The deploy ritual is documented in `CLAUDE.md` ("Deploying the phone bridge"). The header-passthrough fix held in production.
+
+Original (deploy-gated) spec:
 
 Authored `evie-bot/deploy/phone-bridge-smoketest.sh` (curl-as-phone: health, register, list_teams, send, poll, idempotency replay). The live run is gated on the user deploying P3-P5. Tracing the deploy path here surfaced a real integration fix (now committed): the k8s API service-proxy consumes the request `Authorization` header (the SA token) for its own auth, so the evie phone bridge reads the app token from a separate forwarded header `X-Android-Bridge-Token` instead. The smoke test's register check is the canary for that header surviving the proxy hop; if it does not, the fallback is to drop the app-token gate and rely on the scoped SA token + RBAC alone. This corrects the Cycle 2 "double-gated" note (the two gates ride two different headers on one request, not one).
 
