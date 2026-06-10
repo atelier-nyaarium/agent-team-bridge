@@ -163,7 +163,11 @@ Trust boundary (acceptance, not a deferred open item): no widening of the arbite
 
 Acceptance: typechecks + lint clean; tests asserting (a) relay frame in -> reply out via a fake evie transport, (b) `device` = an existing real team or a reserved name is rejected, (c) `removeDevice` leaves a co-resident real team intact, (d) sticky `dropped`. No prod.
 
-## P4 Evie phone-bridge
+## P4 Evie phone-bridge (DONE)
+
+Committed in the evie-bot repo (`app/features/bridge/PhoneBridgeServer.ts` + edits to `BridgeServer.ts`/`BridgeService.ts`, `PhoneBridgeServer.bun.test.ts`). Audited (combined align+bug+security pass, zero accepted findings; wire contract verified end-to-end against the arbiter), 10/10 bun tests + 21 bridge tests, tsc 0, lint 0. Note: evie-bot's vitest needs Node 20+ (host is 18), so the test is a `*.bun.test.ts` run under Bun's native runner like the existing `BridgeTransport.bun.test.ts`. Default hold widened to 35s (> the arbiter's 25s send bound + reply round-trip).
+
+Original spec:
 
 In evie-bot repo. The phone front door is a NEW fetch-only `Bun.serve` (reuse only `constantTimeBearerEquals` for `ANDROID_BRIDGE_TOKEN`), NOT `BridgeTransport` - whose `handleFetch` only does a WS upgrade and 426s plain HTTP requests. (The earlier "reuses BridgeTransport" wording was wrong for the HTTP front door.)
 
