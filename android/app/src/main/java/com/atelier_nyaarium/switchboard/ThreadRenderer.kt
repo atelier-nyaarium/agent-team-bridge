@@ -132,14 +132,20 @@ class ThreadRenderer(context: Context) {
 	private fun toJson(messages: List<Message>): String {
 		val arr = JSONArray()
 		for (m in messages) {
-			arr.put(
-				JSONObject()
-					.put("id", m.id)
-					.put("role", if (m.fromMe) "user" else "agent")
-					.put("from", if (m.fromMe) "you" else "")
-					.put("at", m.at)
-					.put("body", m.text),
-			)
+			val obj = JSONObject()
+				.put("id", m.id)
+				.put("role", if (m.fromMe) "user" else "agent")
+				.put("from", if (m.fromMe) "you" else "")
+				.put("at", m.at)
+				.put("body", m.text)
+			if (m.files.isNotEmpty()) {
+				val files = JSONArray()
+				for (f in m.files) {
+					files.put(JSONObject().put("name", f.name).put("mime", f.mime).put("src", f.src))
+				}
+				obj.put("files", files)
+			}
+			arr.put(obj)
 		}
 		return arr.toString()
 	}

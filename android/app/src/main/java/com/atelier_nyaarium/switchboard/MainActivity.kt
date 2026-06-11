@@ -139,13 +139,18 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 				},
 				onBack = { showSettings = false },
 			)
-		openTeam != null ->
+		openTeam != null -> {
+			// The demo session renders through the same Thread pipeline but is fed an
+			// in-memory fixture and is read-only, so it never reaches the persisted store.
+			// Gated on DEBUG so a real peer named "demo" in a release build shows its own
+			// thread, not the fixture.
+			val isDemo = BuildConfig.DEBUG && openTeam == DEMO_TEAM
 			ThreadScreen(
 				team = openTeam!!,
 				label = state.label(openTeam!!),
 				tabs = state.openTabs,
 				tabLabel = { state.label(it) },
-				messages = state.threads[openTeam].orEmpty(),
+				messages = if (isDemo) demoMessages() else state.threads[openTeam].orEmpty(),
 				error = state.error,
 				rendererPool = rendererPool,
 				onSwitch = { openTeam = it },
@@ -157,17 +162,19 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 					repo.closeTab(t)
 				},
 				onSessions = { openTeam = null },
-				onSend = { text -> scope.launch { repo.send(openTeam!!, text) } },
-				onRename = { name -> repo.setLabel(openTeam!!, name) },
+				onSend = { text -> if (!isDemo) scope.launch { repo.send(openTeam!!, text) } },
+				onRename = { name -> if (!isDemo) repo.setLabel(openTeam!!, name) },
 				onForget = {
 					val t = openTeam!!
-					repo.forget(t)
+					if (!isDemo) repo.forget(t) else repo.closeTab(t)
 					openTeam = null
 				},
 			)
+		}
 		else ->
 			SessionsScreen(
 				state = state,
+				showDemo = BuildConfig.DEBUG,
 				onRefresh = { scope.launch { repo.refreshTeams() } },
 				onSettings = { showSettings = true },
 				onOpen = { team ->
@@ -249,7 +256,13 @@ private fun looksProvisionable(s: String): Boolean = runCatching {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SessionsScreen(state: ChatState, onRefresh: () -> Unit, onSettings: () -> Unit, onOpen: (String) -> Unit) {
+fun SessionsScreen(
+	state: ChatState,
+	showDemo: Boolean,
+	onRefresh: () -> Unit,
+	onSettings: () -> Unit,
+	onOpen: (String) -> Unit,
+) {
 	Scaffold(
 		topBar = {
 			TopAppBar(
@@ -274,6 +287,19 @@ fun SessionsScreen(state: ChatState, onRefresh: () -> Unit, onSettings: () -> Un
 				Text("  ${state.error ?: state.status.ifEmpty { "connecting..." }}", Modifier.padding(16.dp))
 			}
 			LazyColumn(Modifier.fillMaxSize()) {
+				if (showDemo) {
+					item(key = DEMO_TEAM) {
+						ListItem(
+							headlineContent = { Text("Render demo") },
+							supportingContent = { Text("markdown matrix, debug build only") },
+							trailingContent = {
+								Badge(containerColor = MaterialTheme.colorScheme.secondary) { Text("demo") }
+							},
+							modifier = Modifier.fillMaxWidth().clickable { onOpen(DEMO_TEAM) },
+						)
+						HorizontalDivider()
+					}
+				}
 				items(state.sessions, key = { it.name }) { team ->
 					val unread = state.unread[team.name] ?: 0
 					val display = state.label(team.name)

@@ -12,10 +12,21 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** A rendered attachment on a message. `src` is what the WebView loads (a data URI
+ * or an appassets-proxied local path); a null `src` renders as a download chip.
+ * Real attachment plumbing decodes these to disk in a later phase. */
+data class MessageFile(val name: String, val mime: String, val src: String? = null)
+
 /** `id` is a per-thread, local-only row key for the WebView DOM (lets the renderer
  * replace a row in place). It is NOT the mailbox seq; poll dedupe stays lastSeq-based.
  * Stamped on append; reassigned from list order on load so old transcripts still work. */
-data class Message(val fromMe: Boolean, val text: String, val at: Long, val id: Long = 0)
+data class Message(
+	val fromMe: Boolean,
+	val text: String,
+	val at: Long,
+	val id: Long = 0,
+	val files: List<MessageFile> = emptyList(),
+)
 
 data class ChatState(
 	val provisioned: Boolean = false,
