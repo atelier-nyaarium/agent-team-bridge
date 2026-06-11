@@ -142,6 +142,47 @@ describe("routes", () => {
 				result: expect.objectContaining({ status: "completed", response: "done" }),
 			});
 		});
+
+		it("rejects an oversized attachment payload with 413", () => {
+			const store = new PendingJobStore<ResponsePayload>();
+			store.create("sess-files", "agent", "phone");
+			const ctx = makeCtx({ store });
+			const { respond } = createRoutes(ctx);
+			const huge = "A".repeat(14_000_001); // ~10.5 MB decoded, over the 10 MB cap
+			const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+				session_id: "sess-files",
+				response: "here",
+				files: [
+					{
+						filename: "big.bin",
+						mime: "application/octet-stream",
+						size: 0,
+						descriptiveKey: "big.bin",
+						base64: huge,
+					},
+				],
+			});
+			expect(res.status).toBe(413);
+		});
+
+		it("stores file metadata without base64 but pushes the full bytes", async () => {
+			const store = new PendingJobStore<ResponsePayload>();
+			store.create("sess-files", "agent", "phone");
+			await store.waitForResult("sess-files", 1); // settle so the result is poll-recoverable
+			const ctx = makeCtx({ store });
+			const { respond, poll } = createRoutes(ctx);
+			const b64 = Buffer.from("hello bytes").toString("base64");
+			respond(new Request("http://localhost/respond", { method: "POST" }), {
+				session_id: "sess-files",
+				response: "screenshot attached",
+				files: [{ filename: "shot.png", mime: "image/png", size: 11, descriptiveKey: "shot.png", base64: b64 }],
+			});
+			// The stored (poll-recoverable) result keeps metadata only, no base64.
+			const polled = poll(new Request("http://localhost/poll", { method: "POST" }), { session_id: "sess-files" });
+			const body = (await polled.json()) as ResponsePayload;
+			expect(body.files?.[0]).toMatchObject({ filename: "shot.png", mime: "image/png" });
+			expect(body.files?.[0].base64).toBeUndefined();
+		});
 	});
 
 	describe("/poll", () => {

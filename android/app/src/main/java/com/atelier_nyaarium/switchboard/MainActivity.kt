@@ -72,7 +72,8 @@ object Repo {
 
 	fun get(context: Context): ChatRepository =
 		instance ?: synchronized(this) {
-			instance ?: ChatRepository(ProvisioningStore(context.applicationContext)).also { instance = it }
+			val app = context.applicationContext
+			instance ?: ChatRepository(ProvisioningStore(app), app.filesDir).also { instance = it }
 		}
 }
 

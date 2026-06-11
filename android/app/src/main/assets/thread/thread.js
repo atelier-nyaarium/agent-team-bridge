@@ -176,6 +176,17 @@
 		return row;
 	}
 
+	// Tapping an attachment hands its path to the host, which opens it in the
+	// system viewer/share sheet. The bridge takes only the attachments-relative
+	// path; absent (e.g. in a browser harness) taps are simply inert.
+	function openAttachment(src) {
+		if (!src) return;
+		const rel = src.split("/attachments/")[1];
+		if (rel && window.Android && typeof window.Android.openAttachment === "function") {
+			window.Android.openAttachment(rel);
+		}
+	}
+
 	function buildFiles(files) {
 		const wrap = document.createElement("div");
 		wrap.className = "files";
@@ -187,6 +198,7 @@
 				img.loading = "lazy";
 				img.src = f.src;
 				img.alt = f.name || "";
+				img.addEventListener("click", () => openAttachment(f.src));
 				wrap.appendChild(img);
 			} else {
 				const chip = document.createElement("span");
@@ -196,6 +208,7 @@
 				name.textContent = f.name || "file";
 				chip.title = f.name || "";
 				chip.appendChild(name);
+				if (f.src) chip.addEventListener("click", () => openAttachment(f.src));
 				wrap.appendChild(chip);
 			}
 		}

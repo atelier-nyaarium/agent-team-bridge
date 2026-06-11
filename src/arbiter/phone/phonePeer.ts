@@ -75,6 +75,7 @@ export class PhonePeer {
 				replyAsJson: p.replyAsJson,
 				question: p.question,
 				reason: p.reason,
+				files: p.files,
 			});
 		}
 	}

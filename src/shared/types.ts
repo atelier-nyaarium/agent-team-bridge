@@ -71,6 +71,7 @@ export interface ResponsePayload {
 	estimated_minutes?: number;
 	what_to_decide?: string;
 	message?: string;
+	files?: ChannelFile[];
 }
 
 export interface ResponsePushPayload {
@@ -84,6 +85,7 @@ export interface ResponsePushPayload {
 	estimated_minutes?: number;
 	what_to_decide?: string;
 	message?: string;
+	files?: ChannelFile[];
 }
 
 export interface EffortEnv {

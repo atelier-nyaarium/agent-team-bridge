@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
+import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -19,11 +20,15 @@ private const val THREAD_URL = "https://appassets.androidplatform.net/assets/thr
 
 /**
  * One WebView running the bundled thread renderer (assets/thread/). Messages flow
- * one way via evaluateJavascript; there is no JS-to-Kotlin bridge. Agent markdown
- * is semi-trusted, so beyond the renderer's own html-off + link allowlist, every
- * resource load outside the appassets origin is blocked at shouldInterceptRequest
- * (the callback that sees subresources like img tags; shouldOverrideUrlLoading
- * only sees navigations and just routes link taps to the system browser).
+ * one way via evaluateJavascript. Agent markdown is semi-trusted, so beyond the
+ * renderer's own html-off + link allowlist, every resource load outside the
+ * appassets origin is blocked at shouldInterceptRequest (the callback that sees
+ * subresources like img tags; shouldOverrideUrlLoading only sees navigations and
+ * just routes link taps to the system browser).
+ *
+ * The one JS-to-Kotlin bridge (`Android.openAttachment`) carries only an opaque
+ * attachments-relative path; the Kotlin side validates it stays inside the
+ * attachments directory and exposes no filesystem listing or token surface.
  */
 class ThreadRenderer(context: Context) {
 	val webView: WebView = WebView(context)
@@ -33,6 +38,10 @@ class ThreadRenderer(context: Context) {
 	 * onRenderProcessGone). */
 	var onRendererGone: (() -> Unit)? = null
 
+	/** Set by the owner; called on the main thread with an attachments-relative
+	 * path when the user taps an image or file chip. */
+	var onOpenAttachment: ((String) -> Unit)? = null
+
 	private var ready = false
 	private val pending = mutableListOf<String>()
 	private var renderedCount = 0
@@ -41,15 +50,31 @@ class ThreadRenderer(context: Context) {
 		configure(context)
 	}
 
-	@SuppressLint("SetJavaScriptEnabled")
+	@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
 	private fun configure(context: Context) {
+		// Serve bundled assets and decoded attachments through the asset loader so
+		// the WebView loads them over https (file:// breaks module + fetch behavior).
+		Attachments.root(context.filesDir).mkdirs()
 		val assetLoader = WebViewAssetLoader.Builder()
 			.addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
+			.addPathHandler(
+				"/${Attachments.DIR}/",
+				WebViewAssetLoader.InternalStoragePathHandler(context, Attachments.root(context.filesDir)),
+			)
 			.build()
 
 		webView.settings.javaScriptEnabled = true
 		webView.settings.allowFileAccess = false
 		webView.settings.allowContentAccess = false
+		webView.addJavascriptInterface(
+			object {
+				@JavascriptInterface
+				fun openAttachment(relPath: String) {
+					webView.post { onOpenAttachment?.invoke(relPath) }
+				}
+			},
+			"Android",
+		)
 		// Transparent so the page's own CSS background shows without a white flash
 		// while the dark variant loads.
 		webView.setBackgroundColor(Color.TRANSPARENT)

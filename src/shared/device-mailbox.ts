@@ -11,9 +11,18 @@ export interface MailboxSnapshot {
 }
 
 const DEFAULT_MAX_ENTRIES = 200;
+const DEFAULT_MAX_BYTES = 30_000_000;
 const DEFAULT_TTL_MS = 3_600_000;
 const DEFAULT_SWEEP_MS = 300_000;
 const DEFAULT_MAX_DEVICES = 500;
+
+/** Cheap byte estimate for cap accounting: the body plus the base64 of every
+ * attachment, which dominates. Avoids re-serializing the whole entry per append. */
+function entryBytes(input: MailboxInput): number {
+	let n = input.body?.length ?? 0;
+	if (input.files) for (const f of input.files) n += f.base64?.length ?? 0;
+	return n;
+}
 
 ////////////////////////////////
 //  Class
@@ -33,15 +42,19 @@ const DEFAULT_MAX_DEVICES = 500;
  */
 export class DeviceMailbox {
 	private entries: MailboxEntry[] = [];
+	private entryBytes: number[] = [];
+	private bytesUsed = 0;
 	private nextSeq = 1;
 	private dropped = 0;
 	private maxEntries: number;
+	private maxBytes: number;
 	readonly epoch: number;
 	lastActivity = Date.now();
 
-	constructor(epoch: number, maxEntries = DEFAULT_MAX_ENTRIES) {
+	constructor(epoch: number, maxEntries = DEFAULT_MAX_ENTRIES, maxBytes = DEFAULT_MAX_BYTES) {
 		this.epoch = epoch;
 		this.maxEntries = maxEntries;
+		this.maxBytes = maxBytes;
 	}
 
 	get size(): number {
@@ -59,10 +72,15 @@ export class DeviceMailbox {
 	append(input: MailboxInput): MailboxEntry {
 		const entry: MailboxEntry = { ...input, seq: this.nextSeq++, at: Date.now() };
 		this.entries.push(entry);
-		if (this.entries.length > this.maxEntries) {
-			const overflow = this.entries.length - this.maxEntries;
-			this.entries.splice(0, overflow);
-			this.dropped += overflow;
+		this.entryBytes.push(entryBytes(input));
+		this.bytesUsed += this.entryBytes[this.entryBytes.length - 1];
+		// Evict the oldest entries until both the count cap and the byte cap hold.
+		// Always keep the just-appended entry even if it alone exceeds the byte cap
+		// (a single oversized file is rejected upstream; this is only a backstop).
+		while (this.entries.length > this.maxEntries || (this.bytesUsed > this.maxBytes && this.entries.length > 1)) {
+			this.bytesUsed -= this.entryBytes.shift() ?? 0;
+			this.entries.shift();
+			this.dropped += 1;
 		}
 		this.lastActivity = Date.now();
 		return entry;
@@ -93,7 +111,10 @@ export class DeviceMailbox {
 	ack(cursor: number): void {
 		let i = 0;
 		while (i < this.entries.length && this.entries[i].seq <= cursor) i++;
-		if (i > 0) this.entries.splice(0, i);
+		if (i > 0) {
+			for (const b of this.entryBytes.splice(0, i)) this.bytesUsed -= b;
+			this.entries.splice(0, i);
+		}
 	}
 
 	isExpired(now: number, ttlMs: number): boolean {
@@ -111,14 +132,16 @@ export class DeviceMailboxStore {
 	private mailboxes = new Map<string, DeviceMailbox>();
 	private ttlMs: number;
 	private maxEntries: number;
+	private maxBytes: number;
 	private maxDevices: number;
 	private nextEpoch = 1;
 	private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 	private onEvictCb: ((device: string) => void) | null = null;
 
-	constructor(opts: { ttlMs?: number; maxEntries?: number; maxDevices?: number } = {}) {
+	constructor(opts: { ttlMs?: number; maxEntries?: number; maxBytes?: number; maxDevices?: number } = {}) {
 		this.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
 		this.maxEntries = opts.maxEntries ?? DEFAULT_MAX_ENTRIES;
+		this.maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
 		this.maxDevices = opts.maxDevices ?? DEFAULT_MAX_DEVICES;
 	}
 
@@ -137,7 +160,7 @@ export class DeviceMailboxStore {
 		let box = this.mailboxes.get(device);
 		if (!box) {
 			if (this.mailboxes.size >= this.maxDevices) this.evictLeastRecentlyActive();
-			box = new DeviceMailbox(this.nextEpoch++, this.maxEntries);
+			box = new DeviceMailbox(this.nextEpoch++, this.maxEntries, this.maxBytes);
 			this.mailboxes.set(device, box);
 		}
 		return box;

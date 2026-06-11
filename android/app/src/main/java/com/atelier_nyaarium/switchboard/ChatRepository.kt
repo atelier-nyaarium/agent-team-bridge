@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -81,7 +82,7 @@ data class ChatState(
  * or the entry's `from`). Transcripts persist (encrypted) so history survives
  * restarts; the durable host-side ledger is a later phase.
  */
-class ChatRepository(private val store: ProvisioningStore) {
+class ChatRepository(private val store: ProvisioningStore, private val filesDir: File) {
 	private val _state = MutableStateFlow(
 		ChatState(
 			provisioned = store.load() != null,
@@ -163,8 +164,9 @@ class ChatRepository(private val store: ProvisioningStore) {
 						if (e.seq <= lastSeq) continue // dedupe a re-drain after a lost ack
 						lastSeq = e.seq
 						val team = teamFromSession(e.sessionId) ?: e.from ?: continue
-						if (e.body.isNotEmpty()) {
-							append(team, Message(false, e.body, e.at))
+						val files = Attachments.decode(filesDir, mb.epoch, e.seq, e.files)
+						if (e.body.isNotEmpty() || files.isNotEmpty()) {
+							append(team, Message(false, e.body, e.at, files = files))
 							bumpUnread(team)
 						}
 					}
@@ -274,7 +276,16 @@ class ChatRepository(private val store: ProvisioningStore) {
 		for ((team, msgs) in threads) {
 			val arr = JSONArray()
 			for (m in msgs) {
-				arr.put(JSONObject().put("me", m.fromMe).put("text", m.text).put("at", m.at))
+				val obj = JSONObject().put("me", m.fromMe).put("text", m.text).put("at", m.at)
+				// Persist local paths (the decoded files survive on disk), never base64.
+				if (m.files.isNotEmpty()) {
+					val files = JSONArray()
+					for (f in m.files) {
+						files.put(JSONObject().put("name", f.name).put("mime", f.mime).putOpt("src", f.src))
+					}
+					obj.put("files", files)
+				}
+				arr.put(obj)
 			}
 			root.put(team, arr)
 		}
@@ -292,11 +303,19 @@ class ChatRepository(private val store: ProvisioningStore) {
 					// stable per-thread key whether the JSON is old (no id) or new.
 					put(team, (0 until arr.length()).map {
 						val m = arr.getJSONObject(it)
-						Message(m.optBoolean("me"), m.optString("text"), m.optLong("at"), it.toLong())
+						Message(m.optBoolean("me"), m.optString("text"), m.optLong("at"), it.toLong(), loadFiles(m))
 					})
 				}
 			}
 		}.getOrDefault(emptyMap())
+	}
+
+	private fun loadFiles(m: JSONObject): List<MessageFile> {
+		val arr = m.optJSONArray("files") ?: return emptyList()
+		return (0 until arr.length()).map {
+			val f = arr.getJSONObject(it)
+			MessageFile(f.optString("name"), f.optString("mime"), f.optString("src").takeIf { s -> s.isNotEmpty() })
+		}
 	}
 
 	private fun persistLabels(labels: Map<String, String>) {

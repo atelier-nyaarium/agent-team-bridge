@@ -54,6 +54,10 @@ data class RegisterResult(val cursor: Int, val epoch: Int)
 
 data class SendResult(val ok: Boolean, val status: String, val inlineBody: String?, val error: String?)
 
+/** Raw attachment as it arrives in a mailbox entry: base64 bytes plus metadata.
+ * The repository decodes these to app-private storage before the UI sees them. */
+data class RawFile(val filename: String, val mime: String, val base64: String?)
+
 data class MailboxEntry(
 	val kind: String,
 	val sessionId: String,
@@ -61,6 +65,7 @@ data class MailboxEntry(
 	val body: String,
 	val seq: Int,
 	val at: Long,
+	val files: List<RawFile> = emptyList(),
 )
 
 data class Mailbox(val entries: List<MailboxEntry>, val cursor: Int, val epoch: Int, val dropped: Int)
@@ -149,6 +154,15 @@ class PhoneClient(private val prov: Provisioning) {
 		val arr = result.optJSONArray("entries")
 		val entries = if (arr == null) emptyList() else (0 until arr.length()).map {
 			val e = arr.getJSONObject(it)
+			val filesArr = e.optJSONArray("files")
+			val files = if (filesArr == null) emptyList() else (0 until filesArr.length()).map { fi ->
+				val f = filesArr.getJSONObject(fi)
+				RawFile(
+					filename = f.optString("filename"),
+					mime = f.optString("mime"),
+					base64 = f.optString("base64").takeIf { s -> s.isNotEmpty() },
+				)
+			}
 			MailboxEntry(
 				kind = e.optString("kind"),
 				sessionId = e.optString("session_id"),
@@ -156,6 +170,7 @@ class PhoneClient(private val prov: Provisioning) {
 				body = e.optString("body"),
 				seq = e.optInt("seq"),
 				at = e.optLong("at"),
+				files = files,
 			)
 		}
 		return Mailbox(entries, result.optInt("cursor", cursor), result.optInt("epoch", epoch), result.optInt("dropped", 0))
