@@ -1,0 +1,249 @@
+:root {
+	--bg: #ffffff;
+	--fg: #1f2328;
+	--muted: #59636e;
+	--border: #d1d9e0;
+	--user-tint: #ddf4ff;
+	--user-edge: #54aeff;
+	--code-bg: #f6f8fa;
+	--link: #0969da;
+	--table-head: #f6f8fa;
+	--chip-bg: #f6f8fa;
+	--error: #d1242f;
+	--running: #9a6700;
+}
+
+html.dark {
+	--bg: #0d1117;
+	--fg: #f0f6fc;
+	--muted: #9198a1;
+	--border: #3d444d;
+	--user-tint: #121d2f;
+	--user-edge: #1f6feb;
+	--code-bg: #151b23;
+	--link: #4493f8;
+	--table-head: #151b23;
+	--chip-bg: #151b23;
+	--error: #f85149;
+	--running: #d29922;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html, body {
+	margin: 0;
+	padding: 0;
+	background: var(--bg);
+	color: var(--fg);
+	font-family: system-ui, sans-serif;
+	font-size: 15px;
+	line-height: 1.5;
+	overflow-wrap: break-word;
+}
+
+/* Full-width rows, left-aligned only. The user tint plus a left edge marks
+   authorship instead of bubble alignment. */
+.row {
+	padding: 8px 14px 10px;
+	border-bottom: 1px solid var(--border);
+	content-visibility: auto;
+	contain-intrinsic-size: auto 140px;
+}
+
+.row.user {
+	background: var(--user-tint);
+	box-shadow: inset 3px 0 0 var(--user-edge);
+}
+
+.meta {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	font-size: 12px;
+	color: var(--muted);
+	margin-bottom: 2px;
+}
+
+.meta .from {
+	font-weight: 600;
+	font-family: ui-monospace, monospace;
+}
+
+.meta .status {
+	text-transform: uppercase;
+	font-size: 10px;
+	letter-spacing: 0.5px;
+}
+
+.meta .status.running { color: var(--running); }
+.meta .status.error { color: var(--error); }
+
+/* Markdown content */
+
+.body > :first-child { margin-top: 0; }
+.body > :last-child { margin-bottom: 0; }
+
+.body h1, .body h2, .body h3, .body h4, .body h5, .body h6 {
+	margin: 14px 0 6px;
+	line-height: 1.25;
+}
+
+.body h1 { font-size: 1.45em; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.body h2 { font-size: 1.25em; border-bottom: 1px solid var(--border); padding-bottom: 3px; }
+.body h3 { font-size: 1.1em; }
+.body h4, .body h5, .body h6 { font-size: 1em; }
+
+.body p, .body ul, .body ol, .body table, .body blockquote {
+	margin: 6px 0;
+}
+
+.body a {
+	color: var(--link);
+	text-decoration: none;
+}
+
+.body blockquote {
+	border-left: 3px solid var(--border);
+	padding: 0 10px;
+	color: var(--muted);
+}
+
+.body hr {
+	border: none;
+	border-top: 1px solid var(--border);
+	margin: 12px 0;
+}
+
+.body code {
+	font-family: ui-monospace, monospace;
+	font-size: 0.88em;
+	background: var(--code-bg);
+	padding: 1px 5px;
+	border-radius: 4px;
+}
+
+.body pre {
+	margin: 8px 0;
+	padding: 0;
+	background: none;
+}
+
+.body pre code {
+	display: block;
+	padding: 10px 12px;
+	border-radius: 8px;
+	border: 1px solid var(--border);
+	overflow-x: auto;
+	font-size: 0.85em;
+	line-height: 1.45;
+}
+
+.code-block { position: relative; }
+
+.code-lang {
+	position: absolute;
+	top: 4px;
+	right: 8px;
+	font-size: 10px;
+	font-family: ui-monospace, monospace;
+	color: var(--muted);
+	text-transform: lowercase;
+	pointer-events: none;
+}
+
+.body table {
+	border-collapse: collapse;
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
+	font-size: 0.92em;
+}
+
+.body th, .body td {
+	border: 1px solid var(--border);
+	padding: 4px 10px;
+}
+
+.body th {
+	background: var(--table-head);
+	font-weight: 600;
+}
+
+.body img {
+	max-width: 100%;
+	border-radius: 6px;
+}
+
+/* Mermaid */
+
+.mermaid-block {
+	margin: 8px 0;
+	padding: 10px;
+	background: var(--code-bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	overflow-x: auto;
+}
+
+.mermaid-block svg {
+	max-width: 100%;
+	height: auto;
+	display: block;
+	margin: 0 auto;
+}
+
+.mermaid-block .mermaid-src {
+	display: block;
+	font-family: ui-monospace, monospace;
+	font-size: 0.85em;
+	white-space: pre;
+	overflow-x: auto;
+	margin: 0;
+}
+
+.mermaid-block.pending .mermaid-src { color: var(--muted); }
+
+.mermaid-error {
+	color: var(--error);
+	font-size: 12px;
+	margin-bottom: 6px;
+}
+
+/* Attachments */
+
+.files {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+.files .thumb {
+	max-width: min(46%, 240px);
+	max-height: 200px;
+	border-radius: 8px;
+	border: 1px solid var(--border);
+	object-fit: cover;
+}
+
+.files .chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 10px;
+	background: var(--chip-bg);
+	border: 1px solid var(--border);
+	border-radius: 14px;
+	font-size: 12px;
+	font-family: ui-monospace, monospace;
+	color: var(--fg);
+	max-width: 100%;
+}
+
+.files .chip .name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
