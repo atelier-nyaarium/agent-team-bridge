@@ -40,6 +40,8 @@ data class ChatState(
 	val biometricLock: Boolean = false,
 	val deviceName: String = "",
 	val labels: Map<String, String> = emptyMap(),
+	val connected: Boolean = false,
+	val pollFailStreak: Int = 0,
 ) {
 	/** Sessions shows live teams plus any team we already have a thread with (agent-initiated). */
 	val sessions: List<Team>
@@ -48,6 +50,25 @@ data class ChatState(
 			val extra = threads.keys.filter { it !in known }.map { Team(it, "offline", "channel", 0) }
 			return teams + extra
 		}
+
+	/** Bridge link health for the dashboard header: green once registered and polling
+	 * cleanly, amber while a poll-failure streak is building, red when offline. */
+	enum class Health { ONLINE, DEGRADED, OFFLINE }
+
+	val health: Health
+		get() = when {
+			connected && pollFailStreak == 0 -> Health.ONLINE
+			pollFailStreak >= 2 -> Health.OFFLINE
+			connected -> Health.DEGRADED
+			else -> Health.OFFLINE
+		}
+
+	/** Last local activity time for a thread, for the session card subtitle. */
+	fun lastActivity(team: String): Long? = threads[team]?.maxByOrNull { it.at }?.at
+
+	/** One-line preview from the thread tail. */
+	fun snippet(team: String): String? = threads[team]?.lastOrNull()?.text
+		?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
 
 	/** The user's friendly name for a team, falling back to its (possibly random) id. */
 	fun label(team: String): String = labels[team] ?: team
@@ -97,9 +118,15 @@ class ChatRepository(private val store: ProvisioningStore) {
 			val reg = client().register()
 			cursor = reg.cursor
 			epoch = reg.epoch
-			_state.value = _state.value.copy(teams = client().teams(), status = "connected", error = null)
+			_state.value = _state.value.copy(
+				teams = client().teams(),
+				status = "connected",
+				error = null,
+				connected = true,
+				pollFailStreak = 0,
+			)
 		} catch (e: Exception) {
-			_state.value = _state.value.copy(status = "error", error = e.message)
+			_state.value = _state.value.copy(status = "error", error = e.message, connected = false)
 		}
 	}
 
@@ -143,11 +170,14 @@ class ChatRepository(private val store: ProvisioningStore) {
 					}
 					cursor = mb.cursor
 					pollFails = 0
-					if (_state.value.error != null) _state.value = _state.value.copy(error = null)
+					if (_state.value.error != null || _state.value.pollFailStreak != 0) {
+						_state.value = _state.value.copy(error = null, pollFailStreak = 0, connected = true)
+					}
 				} catch (e: Exception) {
 					// One blip is silent; the loop retries every cycle. Surface only after a
 					// couple of consecutive failures, and clear it on the next success above.
 					pollFails++
+					_state.value = _state.value.copy(pollFailStreak = pollFails)
 					if (pollFails >= 2) {
 						val msg =
 							if (e is java.net.UnknownHostException) "Offline. Retrying..." else "Connection issue, retrying..."

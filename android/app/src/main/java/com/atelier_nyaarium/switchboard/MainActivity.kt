@@ -9,27 +9,33 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScrollableTabRow
@@ -51,6 +57,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -275,47 +283,164 @@ fun SessionsScreen(
 		},
 	) { pad ->
 		Column(Modifier.padding(pad).fillMaxSize()) {
+			HealthHeader(state)
 			if (state.gap) {
+				Surface(
+					color = MaterialTheme.colorScheme.errorContainer,
+					modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+					shape = MaterialTheme.shapes.medium,
+				) {
+					Text(
+						"Some messages were dropped (mailbox overflow). Pull history from the host to recover.",
+						Modifier.padding(12.dp),
+						color = MaterialTheme.colorScheme.onErrorContainer,
+						style = MaterialTheme.typography.bodySmall,
+					)
+				}
+			}
+			if (state.sessions.isEmpty() && !showDemo) {
+				if (!state.connected) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
 				Text(
-					"Some messages were dropped (mailbox overflow). Pull history from the host to recover.",
-					Modifier.fillMaxWidth().padding(12.dp),
-					color = MaterialTheme.colorScheme.error,
+					state.error ?: state.status.ifEmpty { "Connecting..." },
+					Modifier.padding(16.dp),
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
 				)
 			}
-			if (state.teams.isEmpty() && state.threads.isEmpty()) {
-				LinearProgressIndicator(Modifier.fillMaxWidth())
-				Text("  ${state.error ?: state.status.ifEmpty { "connecting..." }}", Modifier.padding(16.dp))
-			}
-			LazyColumn(Modifier.fillMaxSize()) {
+			LazyColumn(
+				Modifier.fillMaxSize(),
+				contentPadding = PaddingValues(12.dp),
+				verticalArrangement = Arrangement.spacedBy(8.dp),
+			) {
 				if (showDemo) {
-					item(key = DEMO_TEAM) {
-						ListItem(
-							headlineContent = { Text("Render demo") },
-							supportingContent = { Text("markdown matrix, debug build only") },
-							trailingContent = {
-								Badge(containerColor = MaterialTheme.colorScheme.secondary) { Text("demo") }
-							},
-							modifier = Modifier.fillMaxWidth().clickable { onOpen(DEMO_TEAM) },
-						)
-						HorizontalDivider()
-					}
+					item(key = DEMO_TEAM) { DemoCard(onClick = { onOpen(DEMO_TEAM) }) }
 				}
 				items(state.sessions, key = { it.name }) { team ->
-					val unread = state.unread[team.name] ?: 0
-					val display = state.label(team.name)
-					ListItem(
-						headlineContent = { Text(display) },
-						supportingContent = {
-							val idHint = if (display != team.name) "${team.name} - " else ""
-							Text("$idHint${team.status} - ${team.mode}")
-						},
-						trailingContent = { if (unread > 0) Badge { Text("$unread") } },
-						modifier = Modifier.fillMaxWidth().clickable { onOpen(team.name) },
-					)
-					HorizontalDivider()
+					SessionCard(state = state, team = team, onClick = { onOpen(team.name) })
 				}
 			}
 		}
+	}
+}
+
+@Composable
+fun HealthHeader(state: ChatState) {
+	val (dot, label) = when (state.health) {
+		ChatState.Health.ONLINE -> Color(0xFF2EA043) to "Bridge online"
+		ChatState.Health.DEGRADED -> Color(0xFFD29922) to "Reconnecting..."
+		ChatState.Health.OFFLINE -> Color(0xFFCF222E) to "Offline"
+	}
+	Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
+		Row(
+			Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+			verticalAlignment = Alignment.CenterVertically,
+		) {
+			Box(Modifier.size(10.dp).clip(CircleShape).background(dot))
+			Spacer(Modifier.width(8.dp))
+			Text(label, style = MaterialTheme.typography.labelLarge)
+			Spacer(Modifier.weight(1f))
+			if (state.deviceName.isNotEmpty()) {
+				Text(
+					state.deviceName,
+					style = MaterialTheme.typography.labelMedium,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+					fontFamily = FontFamily.Monospace,
+				)
+			}
+		}
+	}
+}
+
+@Composable
+private fun StatusChip(text: String, color: Color) {
+	Surface(color = color.copy(alpha = 0.16f), shape = MaterialTheme.shapes.small) {
+		Row(Modifier.padding(horizontal = 8.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+			Box(Modifier.size(7.dp).clip(CircleShape).background(color))
+			Spacer(Modifier.width(5.dp))
+			Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+		}
+	}
+}
+
+@Composable
+fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit) {
+	val display = state.label(team.name)
+	val unread = state.unread[team.name] ?: 0
+	val live = team.status == "online"
+	val statusColor = if (live) Color(0xFF2EA043) else MaterialTheme.colorScheme.outline
+	Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+		Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+			Row(verticalAlignment = Alignment.CenterVertically) {
+				Text(
+					display,
+					style = MaterialTheme.typography.titleMedium,
+					fontFamily = FontFamily.Monospace,
+					modifier = Modifier.weight(1f),
+				)
+				if (unread > 0) Badge { Text("$unread") }
+			}
+			if (display != team.name) {
+				Text(
+					team.name,
+					style = MaterialTheme.typography.labelSmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+					fontFamily = FontFamily.Monospace,
+				)
+			}
+			Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+				StatusChip(if (live) "live" else "offline", statusColor)
+				team.mode?.let { StatusChip(it, MaterialTheme.colorScheme.primary) }
+				Spacer(Modifier.weight(1f))
+				state.lastActivity(team.name)?.let {
+					Text(
+						relativeTime(it),
+						style = MaterialTheme.typography.labelSmall,
+						color = MaterialTheme.colorScheme.onSurfaceVariant,
+					)
+				}
+			}
+			state.snippet(team.name)?.let {
+				Text(
+					it,
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+					maxLines = 1,
+					overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+				)
+			}
+		}
+	}
+}
+
+@Composable
+fun DemoCard(onClick: () -> Unit) {
+	Card(
+		onClick = onClick,
+		modifier = Modifier.fillMaxWidth(),
+		colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+	) {
+		Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+			Column(Modifier.weight(1f)) {
+				Text("Render demo", style = MaterialTheme.typography.titleMedium)
+				Text(
+					"markdown matrix, debug build only",
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.onSecondaryContainer,
+				)
+			}
+			Badge(containerColor = MaterialTheme.colorScheme.secondary) { Text("demo") }
+		}
+	}
+}
+
+/** Compact relative time for the session cards: now, 5m, 3h, 2d, else a date. */
+private fun relativeTime(at: Long): String {
+	val delta = System.currentTimeMillis() - at
+	return when {
+		delta < 60_000 -> "now"
+		delta < 3_600_000 -> "${delta / 60_000}m"
+		delta < 86_400_000 -> "${delta / 3_600_000}h"
+		delta < 604_800_000 -> "${delta / 86_400_000}d"
+		else -> java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(java.util.Date(at))
 	}
 }
 
