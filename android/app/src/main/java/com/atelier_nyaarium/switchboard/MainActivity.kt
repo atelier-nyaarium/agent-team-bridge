@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -106,22 +105,42 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 @Composable
 fun ProvisionScreen(onProvision: (String) -> Unit) {
 	var blob by remember { mutableStateOf("") }
+	var submitted by remember { mutableStateOf(false) }
+
+	fun submit(s: String) {
+		if (submitted) return
+		submitted = true
+		onProvision(s.trim())
+	}
+
 	Scaffold(topBar = { TopAppBar(title = { Text("Provision Switchboard") }) }) { pad ->
 		Column(
 			Modifier.padding(pad).padding(16.dp).fillMaxSize(),
 			verticalArrangement = Arrangement.spacedBy(12.dp),
 		) {
-			Text("Paste the provisioning JSON (apiUrl, caPem, saToken, appToken).")
+			Text("Paste the provisioning JSON. It connects automatically once it looks complete.")
+			// weight(1f) keeps the button pinned below the field no matter how tall the paste is.
 			OutlinedTextField(
 				value = blob,
-				onValueChange = { blob = it },
+				onValueChange = {
+					blob = it
+					if (looksProvisionable(it)) submit(it)
+				},
 				label = { Text("Provisioning JSON") },
-				modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp),
+				modifier = Modifier.fillMaxWidth().weight(1f),
 			)
-			Button(enabled = blob.isNotBlank(), onClick = { onProvision(blob) }) { Text("Save & connect") }
+			Button(enabled = blob.isNotBlank() && !submitted, onClick = { submit(blob) }) {
+				Text(if (submitted) "Connecting..." else "Save & connect")
+			}
 		}
 	}
 }
+
+/** True once the field holds a JSON object with the fields a Provisioning needs. */
+private fun looksProvisionable(s: String): Boolean = runCatching {
+	val j = org.json.JSONObject(s.trim())
+	j.has("apiUrl") && j.has("saToken") && j.has("caPem")
+}.getOrDefault(false)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
