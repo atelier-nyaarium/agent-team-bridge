@@ -116,7 +116,7 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 		if (locked && activity != null) promptUnlock(activity) { ok -> if (ok) unlocked = true }
 	}
 
-	// System back navigates within the app (thread/settings -> inbox) instead of exiting.
+	// System back navigates within the app (thread/settings -> sessions) instead of exiting.
 	BackHandler(enabled = openTeam != null || showSettings) {
 		when {
 			openTeam != null -> openTeam = null
@@ -156,7 +156,7 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 					if (t == openTeam) openTeam = state.openTabs.firstOrNull { it != t }
 					repo.closeTab(t)
 				},
-				onInbox = { openTeam = null },
+				onSessions = { openTeam = null },
 				onSend = { text -> scope.launch { repo.send(openTeam!!, text) } },
 				onRename = { name -> repo.setLabel(openTeam!!, name) },
 				onForget = {
@@ -166,7 +166,7 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 				},
 			)
 		else ->
-			InboxScreen(
+			SessionsScreen(
 				state = state,
 				onRefresh = { scope.launch { repo.refreshTeams() } },
 				onSettings = { showSettings = true },
@@ -249,11 +249,11 @@ private fun looksProvisionable(s: String): Boolean = runCatching {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun InboxScreen(state: ChatState, onRefresh: () -> Unit, onSettings: () -> Unit, onOpen: (String) -> Unit) {
+fun SessionsScreen(state: ChatState, onRefresh: () -> Unit, onSettings: () -> Unit, onOpen: (String) -> Unit) {
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text("Inbox") },
+				title = { Text("Agent Sessions") },
 				actions = {
 					TextButton(onClick = onRefresh) { Text("Refresh") }
 					TextButton(onClick = onSettings) { Text("Settings") }
@@ -274,7 +274,7 @@ fun InboxScreen(state: ChatState, onRefresh: () -> Unit, onSettings: () -> Unit,
 				Text("  ${state.error ?: state.status.ifEmpty { "connecting..." }}", Modifier.padding(16.dp))
 			}
 			LazyColumn(Modifier.fillMaxSize()) {
-				items(state.inboxTeams, key = { it.name }) { team ->
+				items(state.sessions, key = { it.name }) { team ->
 					val unread = state.unread[team.name] ?: 0
 					val display = state.label(team.name)
 					ListItem(
@@ -305,7 +305,7 @@ fun ThreadScreen(
 	rendererPool: ThreadRendererPool,
 	onSwitch: (String) -> Unit,
 	onCloseTab: (String) -> Unit,
-	onInbox: () -> Unit,
+	onSessions: () -> Unit,
 	onSend: (String) -> Unit,
 	onRename: (String) -> Unit,
 	onForget: () -> Unit,
@@ -333,7 +333,7 @@ fun ThreadScreen(
 		topBar = {
 			TopAppBar(
 				title = { Text(label, fontFamily = FontFamily.Monospace) },
-				navigationIcon = { TextButton(onClick = onInbox) { Text("Inbox") } },
+				navigationIcon = { TextButton(onClick = onSessions) { Text("Sessions") } },
 				actions = {
 					TextButton(onClick = { showRename = true }) { Text("Rename") }
 					TextButton(onClick = { onCloseTab(team) }) { Text("Close") }

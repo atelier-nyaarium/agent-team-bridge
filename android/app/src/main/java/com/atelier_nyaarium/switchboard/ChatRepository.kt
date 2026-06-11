@@ -30,8 +30,8 @@ data class ChatState(
 	val deviceName: String = "",
 	val labels: Map<String, String> = emptyMap(),
 ) {
-	/** Inbox shows live teams plus any team we already have a thread with (agent-initiated). */
-	val inboxTeams: List<Team>
+	/** Sessions shows live teams plus any team we already have a thread with (agent-initiated). */
+	val sessions: List<Team>
 		get() {
 			val known = teams.associateBy { it.name }
 			val extra = threads.keys.filter { it !in known }.map { Team(it, "offline", "channel", 0) }
