@@ -1,8 +1,11 @@
 package com.atelier_nyaarium.switchboard
 
+import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -149,39 +152,57 @@ fun LockScreen(onUnlock: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProvisionScreen(onProvision: (String) -> Unit) {
-	var blob by remember { mutableStateOf("") }
-	var submitted by remember { mutableStateOf(false) }
+	val context = LocalContext.current
+	var status by remember { mutableStateOf("") }
 
-	fun submit(s: String) {
-		if (submitted) return
-		submitted = true
-		onProvision(s.trim())
+	fun tryProvision(text: String?, source: String) {
+		val s = text?.trim().orEmpty()
+		if (looksProvisionable(s)) {
+			status = "Connecting..."
+			onProvision(s)
+		} else {
+			status = "$source did not contain provisioning JSON."
+		}
+	}
+
+	// SAF file picker. arrayOf("*/*") so a .json with any reported MIME type is selectable.
+	val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+		if (uri == null) return@rememberLauncherForActivityResult
+		val text = runCatching {
+			context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+		}.getOrNull()
+		tryProvision(text, "File")
 	}
 
 	Scaffold(topBar = { TopAppBar(title = { Text("Provision Switchboard") }) }) { pad ->
 		Column(
-			Modifier.padding(pad).padding(16.dp).fillMaxSize(),
-			verticalArrangement = Arrangement.spacedBy(12.dp),
+			Modifier.padding(pad).padding(24.dp).fillMaxSize(),
+			verticalArrangement = Arrangement.spacedBy(16.dp),
 		) {
-			Text("Paste the provisioning JSON. It connects automatically once it looks complete.")
-			// weight(1f) keeps the button pinned below the field no matter how tall the paste is.
-			OutlinedTextField(
-				value = blob,
-				onValueChange = {
-					blob = it
-					if (looksProvisionable(it)) submit(it)
-				},
-				label = { Text("Provisioning JSON") },
-				modifier = Modifier.fillMaxWidth().weight(1f),
-			)
-			Button(enabled = blob.isNotBlank() && !submitted, onClick = { submit(blob) }) {
-				Text(if (submitted) "Connecting..." else "Save & connect")
+			Text("Load the provisioning blob the host generated for you.")
+			Button(
+				onClick = { tryProvision(readClipboard(context), "Clipboard") },
+				modifier = Modifier.fillMaxWidth(),
+			) { Text("Paste from clipboard") }
+			Button(
+				onClick = { fileLauncher.launch(arrayOf("*/*")) },
+				modifier = Modifier.fillMaxWidth(),
+			) { Text("Import from file") }
+			if (status.isNotEmpty()) {
+				val color =
+					if (status.startsWith("Connecting")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+				Text(status, color = color)
 			}
 		}
 	}
 }
 
-/** True once the field holds a JSON object with the fields a Provisioning needs. */
+private fun readClipboard(context: Context): String? {
+	val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
+	return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+}
+
+/** True once the text is a JSON object with the fields a Provisioning needs. */
 private fun looksProvisionable(s: String): Boolean = runCatching {
 	val j = org.json.JSONObject(s.trim())
 	j.has("apiUrl") && j.has("saToken") && j.has("caPem")
