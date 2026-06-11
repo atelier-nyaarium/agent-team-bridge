@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -97,6 +99,14 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 		if (locked && activity != null) promptUnlock(activity) { ok -> if (ok) unlocked = true }
 	}
 
+	// System back navigates within the app (thread/settings -> inbox) instead of exiting.
+	BackHandler(enabled = openTeam != null || showSettings) {
+		when {
+			openTeam != null -> openTeam = null
+			showSettings -> showSettings = false
+		}
+	}
+
 	when {
 		!state.provisioned -> ProvisionScreen(onProvision = { scope.launch { repo.provision(it) } })
 		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
@@ -115,7 +125,9 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 		openTeam != null ->
 			ThreadScreen(
 				team = openTeam!!,
+				label = state.label(openTeam!!),
 				tabs = state.openTabs,
+				tabLabel = { state.label(it) },
 				messages = state.threads[openTeam].orEmpty(),
 				error = state.error,
 				onSwitch = { openTeam = it },
@@ -125,6 +137,12 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 				},
 				onInbox = { openTeam = null },
 				onSend = { text -> scope.launch { repo.send(openTeam!!, text) } },
+				onRename = { name -> repo.setLabel(openTeam!!, name) },
+				onForget = {
+					val t = openTeam!!
+					repo.forget(t)
+					openTeam = null
+				},
 			)
 		else ->
 			InboxScreen(
@@ -237,9 +255,13 @@ fun InboxScreen(state: ChatState, onRefresh: () -> Unit, onSettings: () -> Unit,
 			LazyColumn(Modifier.fillMaxSize()) {
 				items(state.inboxTeams, key = { it.name }) { team ->
 					val unread = state.unread[team.name] ?: 0
+					val display = state.label(team.name)
 					ListItem(
-						headlineContent = { Text(team.name) },
-						supportingContent = { Text("${team.status} - ${team.mode}") },
+						headlineContent = { Text(display) },
+						supportingContent = {
+							val idHint = if (display != team.name) "${team.name} - " else ""
+							Text("$idHint${team.status} - ${team.mode}")
+						},
 						trailingContent = { if (unread > 0) Badge { Text("$unread") } },
 						modifier = Modifier.fillMaxWidth().clickable { onOpen(team.name) },
 					)
@@ -254,26 +276,50 @@ fun InboxScreen(state: ChatState, onRefresh: () -> Unit, onSettings: () -> Unit,
 @Composable
 fun ThreadScreen(
 	team: String,
+	label: String,
 	tabs: List<String>,
+	tabLabel: (String) -> String,
 	messages: List<Message>,
 	error: String?,
 	onSwitch: (String) -> Unit,
 	onCloseTab: (String) -> Unit,
 	onInbox: () -> Unit,
 	onSend: (String) -> Unit,
+	onRename: (String) -> Unit,
+	onForget: () -> Unit,
 ) {
 	var draft by remember { mutableStateOf("") }
+	var showRename by remember { mutableStateOf(false) }
 	val listState = rememberLazyListState()
 	LaunchedEffect(messages.size) {
 		if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
 	}
 
+	if (showRename) {
+		RenameDialog(
+			team = team,
+			current = label,
+			onSave = {
+				onRename(it)
+				showRename = false
+			},
+			onForget = {
+				showRename = false
+				onForget()
+			},
+			onDismiss = { showRename = false },
+		)
+	}
+
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text(team, fontFamily = FontFamily.Monospace) },
+				title = { Text(label, fontFamily = FontFamily.Monospace) },
 				navigationIcon = { TextButton(onClick = onInbox) { Text("Inbox") } },
-				actions = { TextButton(onClick = { onCloseTab(team) }) { Text("Close") } },
+				actions = {
+					TextButton(onClick = { showRename = true }) { Text("Rename") }
+					TextButton(onClick = { onCloseTab(team) }) { Text("Close") }
+				},
 			)
 		},
 	) { pad ->
@@ -282,7 +328,7 @@ fun ThreadScreen(
 				val selected = tabs.indexOf(team).coerceAtLeast(0)
 				ScrollableTabRow(selectedTabIndex = selected, edgePadding = 8.dp) {
 					tabs.forEachIndexed { i, t ->
-						Tab(selected = i == selected, onClick = { onSwitch(t) }, text = { Text(t) })
+						Tab(selected = i == selected, onClick = { onSwitch(t) }, text = { Text(tabLabel(t)) })
 					}
 				}
 			}
@@ -361,6 +407,33 @@ fun SettingsScreen(
 			Text("Removes the stored credential and chat history from this device.", style = MaterialTheme.typography.bodySmall)
 		}
 	}
+}
+
+@Composable
+fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onForget: () -> Unit, onDismiss: () -> Unit) {
+	var name by remember { mutableStateOf(if (current == team) "" else current) }
+	AlertDialog(
+		onDismissRequest = onDismiss,
+		title = { Text("Rename peer") },
+		text = {
+			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+				Text("Id: $team", style = MaterialTheme.typography.bodySmall)
+				OutlinedTextField(
+					value = name,
+					onValueChange = { name = it },
+					label = { Text("Display name") },
+					singleLine = true,
+				)
+			}
+		},
+		confirmButton = { TextButton(onClick = { onSave(name) }) { Text("Save") } },
+		dismissButton = {
+			Row {
+				TextButton(onClick = onForget) { Text("Forget") }
+				TextButton(onClick = onDismiss) { Text("Cancel") }
+			}
+		},
+	)
 }
 
 @Composable
