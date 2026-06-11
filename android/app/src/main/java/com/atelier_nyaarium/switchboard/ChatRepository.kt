@@ -25,6 +25,7 @@ data class ChatState(
 	val gap: Boolean = false,
 	val biometricLock: Boolean = false,
 	val deviceName: String = "",
+	val labels: Map<String, String> = emptyMap(),
 ) {
 	/** Inbox shows live teams plus any team we already have a thread with (agent-initiated). */
 	val inboxTeams: List<Team>
@@ -33,6 +34,9 @@ data class ChatState(
 			val extra = threads.keys.filter { it !in known }.map { Team(it, "offline", "channel", 0) }
 			return teams + extra
 		}
+
+	/** The user's friendly name for a team, falling back to its (possibly random) id. */
+	fun label(team: String): String = labels[team] ?: team
 }
 
 /**
@@ -49,6 +53,7 @@ class ChatRepository(private val store: ProvisioningStore) {
 			threads = loadPersistedThreads(),
 			biometricLock = store.biometricLock,
 			deviceName = currentDeviceName(),
+			labels = loadPersistedLabels(),
 		),
 	)
 	val state: StateFlow<ChatState> = _state
@@ -152,6 +157,29 @@ class ChatRepository(private val store: ProvisioningStore) {
 		_state.value = _state.value.copy(openTabs = _state.value.openTabs - team)
 	}
 
+	/** Give a team a local display label (or clear it with a blank name). */
+	fun setLabel(team: String, name: String) {
+		val s = _state.value
+		val labels = if (name.isBlank()) s.labels - team else s.labels + (team to name.trim())
+		_state.value = s.copy(labels = labels)
+		persistLabels(labels)
+	}
+
+	/** Drop a peer from this device: its thread, unread, tab, and label. */
+	fun forget(team: String) {
+		val s = _state.value
+		val threads = s.threads - team
+		val labels = s.labels - team
+		_state.value = s.copy(
+			threads = threads,
+			labels = labels,
+			unread = s.unread - team,
+			openTabs = s.openTabs - team,
+		)
+		persistThreads(threads)
+		persistLabels(labels)
+	}
+
 	fun setBiometricLock(enabled: Boolean) {
 		store.biometricLock = enabled
 		_state.value = _state.value.copy(biometricLock = enabled)
@@ -220,6 +248,20 @@ class ChatRepository(private val store: ProvisioningStore) {
 					})
 				}
 			}
+		}.getOrDefault(emptyMap())
+	}
+
+	private fun persistLabels(labels: Map<String, String>) {
+		val root = JSONObject()
+		for ((team, name) in labels) root.put(team, name)
+		runCatching { store.saveLabels(root.toString()) }
+	}
+
+	private fun loadPersistedLabels(): Map<String, String> {
+		val json = store.loadLabels() ?: return emptyMap()
+		return runCatching {
+			val root = JSONObject(json)
+			buildMap { for (team in root.keys()) put(team, root.getString(team)) }
 		}.getOrDefault(emptyMap())
 	}
 

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -46,10 +47,28 @@ const CHANNEL_INSTRUCTIONS = [
 	"When finished, call the channel_reply tool with the session_id from the tag attributes.",
 ].join(" ");
 
+/** Random 6-char id for an unnamed peer session. The phone gives it a friendly label. */
+function randomTeamId(): string {
+	return crypto.randomBytes(3).toString("hex");
+}
+
 export async function startMcp(): Promise<void> {
 	const inContainer = isInsideContainer();
-	const agentType = inContainer ? process.env.AGENT_TYPE || detectAgentType() : "claude";
-	const isChannel = inContainer && agentType === "claude";
+	// The orchestrator is the single host session started by start-host-daemon (it sets the
+	// flag); it stays the reserved, phone-hidden coordinator. Every other session is a bridge
+	// peer: a devcontainer (PROJECT_NAME set) or a host/ad-hoc Claude that joins under a random
+	// id the phone can rename. Peers reach the arbiter on the docker network inside a container
+	// or the forwarded localhost port elsewhere.
+	const isOrchestrator = !inContainer && !!process.env.SWITCHBOARD_ORCHESTRATOR;
+	if (!isOrchestrator) {
+		if (!process.env.PROJECT_NAME) process.env.PROJECT_NAME = randomTeamId();
+		if (!process.env.BRIDGE_ROUTER_URL) {
+			process.env.BRIDGE_ROUTER_URL = inContainer ? "http://switchboard:20000" : "http://localhost:20000";
+		}
+	}
+
+	const agentType = isOrchestrator ? "claude" : process.env.AGENT_TYPE || detectAgentType();
+	const isChannel = !isOrchestrator && agentType === "claude";
 
 	const needsChannel = agentType === "claude";
 
@@ -65,49 +84,52 @@ export async function startMcp(): Promise<void> {
 
 	let routerAlreadyConnected = false;
 
-	if (inContainer) {
-		// Container: register crosstalk tools for cross-team communication
+	if (!isOrchestrator) {
+		// Peer (devcontainer or host/ad-hoc session): crosstalk + channel reply, joined as a team.
 		registerBridgeTools(mcpServer);
 		registerReloadPlugins(mcpServer);
 		registerSetEffortLevel(mcpServer);
 		registerCompactSession(mcpServer);
 		registerHumanTools(mcpServer);
 
-		const projectName = process.env.PROJECT_NAME;
-		const port = Number(process.env.MCP_CONNECTOR_PORT) || 20002;
+		// The game-client connector serves /workspace project schemas, so it is container-only.
+		if (inContainer) {
+			const projectName = process.env.PROJECT_NAME;
+			const port = Number(process.env.MCP_CONNECTOR_PORT) || 20002;
 
-		if (projectName) {
-			const connectorDir = `/workspace/${projectName}/.claude/connector`;
+			if (projectName) {
+				const connectorDir = `/workspace/${projectName}/.claude/connector`;
 
-			const tokenPath = `${connectorDir}/token`;
-			if (fs.existsSync(tokenPath)) {
-				setAuthToken(fs.readFileSync(tokenPath, "utf-8").trim());
-				console.error(`[connector] Auth token loaded`);
+				const tokenPath = `${connectorDir}/token`;
+				if (fs.existsSync(tokenPath)) {
+					setAuthToken(fs.readFileSync(tokenPath, "utf-8").trim());
+					console.error(`[connector] Auth token loaded`);
+				}
+
+				// Best-effort start - port may be held by another IDE session
+				try {
+					startListener(port);
+				} catch {
+					console.error(`[connector] port ${port} in use, connector managed by another session`);
+				}
+
+				registerConnectorTools(mcpServer, projectName, connectorDir, port);
+				await registerProjectTools(mcpServer, projectName, connectorDir);
+			} else {
+				registerStubTool(
+					mcpServer,
+					"projectMcpConnectorStatus",
+					"Project MCP connector is disabled. Call this tool for details.",
+					() =>
+						[
+							"Project MCP connector is disabled.",
+							"",
+							"Requirements:",
+							"  - PROJECT_NAME env var must be set in the container",
+							"  - MCP_CONNECTOR_PORT (default 20002) must be exposed via compose.yml",
+						].join("\n"),
+				);
 			}
-
-			// Best-effort start - port may be held by another IDE session
-			try {
-				startListener(port);
-			} catch {
-				console.error(`[connector] port ${port} in use, connector managed by another session`);
-			}
-
-			registerConnectorTools(mcpServer, projectName, connectorDir, port);
-			await registerProjectTools(mcpServer, projectName, connectorDir);
-		} else {
-			registerStubTool(
-				mcpServer,
-				"projectMcpConnectorStatus",
-				"Project MCP connector is disabled. Call this tool for details.",
-				() =>
-					[
-						"Project MCP connector is disabled.",
-						"",
-						"Requirements:",
-						"  - PROJECT_NAME env var must be set in the container",
-						"  - MCP_CONNECTOR_PORT (default 20002) must be exposed via compose.yml",
-					].join("\n"),
-			);
 		}
 	} else {
 		// Host: register dispatch tools for managing containers

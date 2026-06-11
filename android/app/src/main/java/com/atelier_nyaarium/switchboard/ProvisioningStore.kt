@@ -41,9 +41,14 @@ class ProvisioningStore(context: Context) {
 
 	fun loadThreads(): String? = prefs.getString(KEY_THREADS, null)
 
+	fun saveLabels(json: String) = prefs.edit().putString(KEY_LABELS, json).apply()
+
+	fun loadLabels(): String? = prefs.getString(KEY_LABELS, null)
+
 	private companion object {
 		const val KEY_BLOB = "provisioning"
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"
+		const val KEY_LABELS = "labels"
 	}
 }
