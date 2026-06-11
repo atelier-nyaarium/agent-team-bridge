@@ -3,11 +3,14 @@ package com.atelier_nyaarium.switchboard
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,12 +22,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -38,7 +38,10 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -51,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
 import kotlinx.coroutines.launch
 
@@ -71,7 +75,10 @@ class MainActivity : FragmentActivity() {
 		val repo = Repo.get(this)
 		val injected = intent.getStringExtra("provisioning_b64")
 			?.let { runCatching { String(android.util.Base64.decode(it, android.util.Base64.DEFAULT)) }.getOrNull() }
-		setContent { MaterialTheme { App(repo, injected) } }
+		setContent {
+			val colors = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
+			MaterialTheme(colorScheme = colors) { App(repo, injected) }
+		}
 	}
 }
 
@@ -79,10 +86,20 @@ class MainActivity : FragmentActivity() {
 fun App(repo: ChatRepository, injectedBlob: String?) {
 	val state by repo.state.collectAsState()
 	val scope = rememberCoroutineScope()
-	val activity = LocalContext.current as? FragmentActivity
+	val context = LocalContext.current
+	val activity = context as? FragmentActivity
 	var openTeam by remember { mutableStateOf<String?>(null) }
 	var showSettings by remember { mutableStateOf(false) }
 	var unlocked by remember { mutableStateOf(false) }
+
+	// WebView pool lives at App scope (never leaves composition) so each thread's
+	// renderer survives Sessions round-trips and tab switches. Pruned to open tabs;
+	// destroyed with the Activity.
+	val rendererPool = remember { ThreadRendererPool(context.applicationContext) }
+	val dark = isSystemInDarkTheme()
+	LaunchedEffect(dark) { rendererPool.setDark(dark) }
+	LaunchedEffect(state.openTabs) { rendererPool.retain(state.openTabs.toSet()) }
+	DisposableEffect(Unit) { onDispose { rendererPool.destroyAll() } }
 
 	LaunchedEffect(injectedBlob) {
 		if (injectedBlob != null && !state.provisioned) repo.provision(injectedBlob)
@@ -130,10 +147,14 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 				tabLabel = { state.label(it) },
 				messages = state.threads[openTeam].orEmpty(),
 				error = state.error,
+				rendererPool = rendererPool,
 				onSwitch = { openTeam = it },
 				onCloseTab = { t ->
-					repo.closeTab(t)
+					// Move off the closing tab before dropping it from openTabs, so the
+					// retain() pass that destroys its renderer never targets the one
+					// still on screen.
 					if (t == openTeam) openTeam = state.openTabs.firstOrNull { it != t }
+					repo.closeTab(t)
 				},
 				onInbox = { openTeam = null },
 				onSend = { text -> scope.launch { repo.send(openTeam!!, text) } },
@@ -281,6 +302,7 @@ fun ThreadScreen(
 	tabLabel: (String) -> String,
 	messages: List<Message>,
 	error: String?,
+	rendererPool: ThreadRendererPool,
 	onSwitch: (String) -> Unit,
 	onCloseTab: (String) -> Unit,
 	onInbox: () -> Unit,
@@ -290,10 +312,6 @@ fun ThreadScreen(
 ) {
 	var draft by remember { mutableStateOf("") }
 	var showRename by remember { mutableStateOf(false) }
-	val listState = rememberLazyListState()
-	LaunchedEffect(messages.size) {
-		if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
-	}
 
 	if (showRename) {
 		RenameDialog(
@@ -332,12 +350,12 @@ fun ThreadScreen(
 					}
 				}
 			}
-			LazyColumn(
-				state = listState,
-				modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
-			) {
-				itemsIndexed(messages) { _, m -> MessageBubble(m) }
-			}
+			ThreadWebView(
+				team = team,
+				messages = messages,
+				rendererPool = rendererPool,
+				modifier = Modifier.weight(1f).fillMaxWidth(),
+			)
 			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
 			Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
 				OutlinedTextField(
@@ -436,12 +454,38 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onForg
 	)
 }
 
+/**
+ * Hosts a thread's pooled WebView inside a FrameLayout. The renderer is pulled from
+ * the pool (so scroll position and rendered DOM survive tab switches and Sessions
+ * round-trips) and re-fed incrementally via sync(). A crashed renderer is swapped
+ * for a fresh one and re-fed.
+ */
 @Composable
-fun MessageBubble(m: Message) {
-	Box(
-		Modifier.fillMaxWidth().padding(vertical = 4.dp),
-		contentAlignment = if (m.fromMe) Alignment.CenterEnd else Alignment.CenterStart,
-	) {
-		Card { Text(m.text, Modifier.padding(10.dp)) }
+fun ThreadWebView(team: String, messages: List<Message>, rendererPool: ThreadRendererPool, modifier: Modifier) {
+	var renderer by remember(team) { mutableStateOf(rendererPool.get(team)) }
+
+	DisposableEffect(renderer) {
+		renderer.onRendererGone = { renderer = rendererPool.recreate(team) }
+		onDispose { renderer.onRendererGone = null }
 	}
+	LaunchedEffect(renderer, messages) { renderer.sync(messages) }
+
+	AndroidView(
+		factory = { ctx -> FrameLayout(ctx) },
+		update = { frame ->
+			val wv = renderer.webView
+			if (wv.parent !== frame) {
+				(wv.parent as? ViewGroup)?.removeView(wv)
+				frame.removeAllViews()
+				frame.addView(
+					wv,
+					FrameLayout.LayoutParams(
+						FrameLayout.LayoutParams.MATCH_PARENT,
+						FrameLayout.LayoutParams.MATCH_PARENT,
+					),
+				)
+			}
+		},
+		modifier = modifier,
+	)
 }

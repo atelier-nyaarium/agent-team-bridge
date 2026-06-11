@@ -35,6 +35,7 @@ class ThreadRenderer(context: Context) {
 
 	private var ready = false
 	private val pending = mutableListOf<String>()
+	private var renderedCount = 0
 
 	init {
 		configure(context)
@@ -81,10 +82,11 @@ class ThreadRenderer(context: Context) {
 
 			override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
 				// Returning true keeps the app alive, but this WebView is dead per
-				// the API contract. Hand recovery to the owner, who replaces the
-				// instance and re-feeds the transcript.
+				// the API contract. Recovery (which destroys this WebView) must not
+				// run re-entrantly inside this callback, so post it to the main loop.
 				ready = false
-				onRendererGone?.invoke()
+				renderedCount = 0
+				view.post { onRendererGone?.invoke() }
 				return true
 			}
 		}
@@ -92,12 +94,23 @@ class ThreadRenderer(context: Context) {
 		webView.loadUrl(THREAD_URL)
 	}
 
-	fun setMessages(messages: List<Message>) {
-		eval("window.thread.setMessages(${toJson(messages)})")
-	}
-
-	fun appendMessages(messages: List<Message>) {
-		eval("window.thread.appendMessages(${toJson(messages)})")
+	/**
+	 * Feed the current transcript, sending only what changed so re-opening a thread
+	 * keeps its scroll position and rendered DOM. Threads are append-only, so a grown
+	 * list appends the tail; anything else (first feed, shrink from clear/forget)
+	 * replaces wholesale.
+	 */
+	fun sync(messages: List<Message>) {
+		when {
+			renderedCount == 0 || messages.size < renderedCount -> {
+				eval("window.thread.setMessages(${toJson(messages)})")
+			}
+			messages.size > renderedCount -> {
+				eval("window.thread.appendMessages(${toJson(messages.subList(renderedCount, messages.size))})")
+			}
+			else -> return
+		}
+		renderedCount = messages.size
 	}
 
 	fun setDark(dark: Boolean) {
@@ -118,10 +131,10 @@ class ThreadRenderer(context: Context) {
 
 	private fun toJson(messages: List<Message>): String {
 		val arr = JSONArray()
-		messages.forEachIndexed { index, m ->
+		for (m in messages) {
 			arr.put(
 				JSONObject()
-					.put("id", index)
+					.put("id", m.id)
 					.put("role", if (m.fromMe) "user" else "agent")
 					.put("from", if (m.fromMe) "you" else "")
 					.put("at", m.at)

@@ -12,7 +12,10 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class Message(val fromMe: Boolean, val text: String, val at: Long)
+/** `id` is a per-thread, local-only row key for the WebView DOM (lets the renderer
+ * replace a row in place). It is NOT the mailbox seq; poll dedupe stays lastSeq-based.
+ * Stamped on append; reassigned from list order on load so old transcripts still work. */
+data class Message(val fromMe: Boolean, val text: String, val at: Long, val id: Long = 0)
 
 data class ChatState(
 	val provisioned: Boolean = false,
@@ -209,7 +212,9 @@ class ChatRepository(private val store: ProvisioningStore) {
 
 	private fun append(team: String, msg: Message) {
 		val s = _state.value
-		val thread = s.threads[team].orEmpty() + msg
+		val existing = s.threads[team].orEmpty()
+		val nextId = (existing.maxOfOrNull { it.id } ?: -1L) + 1
+		val thread = existing + msg.copy(id = nextId)
 		val threads = s.threads + (team to thread)
 		_state.value = s.copy(threads = threads)
 		persistThreads(threads)
@@ -242,9 +247,11 @@ class ChatRepository(private val store: ProvisioningStore) {
 			buildMap {
 				for (team in root.keys()) {
 					val arr = root.getJSONArray(team)
+					// id is not persisted; reassign from list order so it stays a dense,
+					// stable per-thread key whether the JSON is old (no id) or new.
 					put(team, (0 until arr.length()).map {
 						val m = arr.getJSONObject(it)
-						Message(m.optBoolean("me"), m.optString("text"), m.optLong("at"))
+						Message(m.optBoolean("me"), m.optString("text"), m.optLong("at"), it.toLong())
 					})
 				}
 			}
