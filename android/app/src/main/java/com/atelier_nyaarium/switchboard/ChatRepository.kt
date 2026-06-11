@@ -57,6 +57,7 @@ class ChatRepository(private val store: ProvisioningStore) {
 	private var cursor = 0
 	private var epoch = 0
 	private var lastSeq = -1
+	private var pollFails = 0
 	private var pollJob: Job? = null
 
 	private fun client(): PhoneClient {
@@ -122,8 +123,17 @@ class ChatRepository(private val store: ProvisioningStore) {
 						}
 					}
 					cursor = mb.cursor
+					pollFails = 0
+					if (_state.value.error != null) _state.value = _state.value.copy(error = null)
 				} catch (e: Exception) {
-					_state.value = _state.value.copy(error = "poll: ${e.message}")
+					// One blip is silent; the loop retries every cycle. Surface only after a
+					// couple of consecutive failures, and clear it on the next success above.
+					pollFails++
+					if (pollFails >= 2) {
+						val msg =
+							if (e is java.net.UnknownHostException) "Offline. Retrying..." else "Connection issue, retrying..."
+						_state.value = _state.value.copy(error = msg)
+					}
 				}
 				delay(POLL_INTERVAL_MS)
 			}
