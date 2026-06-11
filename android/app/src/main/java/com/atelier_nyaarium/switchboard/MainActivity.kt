@@ -2,19 +2,21 @@ package com.atelier_nyaarium.switchboard
 
 import android.content.Context
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -25,6 +27,9 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -38,8 +43,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.fragment.app.FragmentActivity
 import kotlinx.coroutines.launch
 
 /** Process-lifetime repository so chat state survives Activity recreation. */
@@ -52,11 +59,11 @@ object Repo {
 		}
 }
 
-class MainActivity : ComponentActivity() {
+// FragmentActivity (not ComponentActivity) so androidx.biometric can attach its prompt.
+class MainActivity : FragmentActivity() {
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
 		val repo = Repo.get(this)
-		// Optional one-shot provisioning via a base64 JSON intent extra (handy for headless setup).
 		val injected = intent.getStringExtra("provisioning_b64")
 			?.let { runCatching { String(android.util.Base64.decode(it, android.util.Base64.DEFAULT)) }.getOrNull() }
 		setContent { MaterialTheme { App(repo, injected) } }
@@ -67,7 +74,10 @@ class MainActivity : ComponentActivity() {
 fun App(repo: ChatRepository, injectedBlob: String?) {
 	val state by repo.state.collectAsState()
 	val scope = rememberCoroutineScope()
+	val activity = LocalContext.current as? FragmentActivity
 	var openTeam by remember { mutableStateOf<String?>(null) }
+	var showSettings by remember { mutableStateOf(false) }
+	var unlocked by remember { mutableStateOf(false) }
 
 	LaunchedEffect(injectedBlob) {
 		if (injectedBlob != null && !state.provisioned) repo.provision(injectedBlob)
@@ -79,25 +89,60 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 		}
 	}
 
+	val locked = state.provisioned && state.biometricLock && !unlocked
+	LaunchedEffect(locked) {
+		if (locked && activity != null) promptUnlock(activity) { ok -> if (ok) unlocked = true }
+	}
+
 	when {
 		!state.provisioned -> ProvisionScreen(onProvision = { scope.launch { repo.provision(it) } })
+		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
+		showSettings ->
+			SettingsScreen(
+				state = state,
+				onSetDeviceName = { scope.launch { repo.setDeviceName(it) } },
+				onToggleBiometric = { repo.setBiometricLock(it) },
+				onClear = {
+					scope.launch { repo.clearAll() }
+					showSettings = false
+					openTeam = null
+				},
+				onBack = { showSettings = false },
+			)
 		openTeam != null ->
 			ThreadScreen(
 				team = openTeam!!,
+				tabs = state.openTabs,
 				messages = state.threads[openTeam].orEmpty(),
 				error = state.error,
-				onBack = { openTeam = null },
+				onSwitch = { openTeam = it },
+				onCloseTab = { t ->
+					repo.closeTab(t)
+					if (t == openTeam) openTeam = state.openTabs.firstOrNull { it != t }
+				},
+				onInbox = { openTeam = null },
 				onSend = { text -> scope.launch { repo.send(openTeam!!, text) } },
 			)
 		else ->
 			InboxScreen(
 				state = state,
 				onRefresh = { scope.launch { repo.refreshTeams() } },
+				onSettings = { showSettings = true },
 				onOpen = { team ->
 					repo.openThread(team)
 					openTeam = team
 				},
 			)
+	}
+}
+
+@Composable
+fun LockScreen(onUnlock: () -> Unit) {
+	Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+		Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+			Text("Switchboard is locked", style = MaterialTheme.typography.titleLarge)
+			Button(onClick = onUnlock) { Text("Unlock") }
+		}
 	}
 }
 
@@ -144,22 +189,32 @@ private fun looksProvisionable(s: String): Boolean = runCatching {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun InboxScreen(state: ChatState, onRefresh: () -> Unit, onOpen: (String) -> Unit) {
+fun InboxScreen(state: ChatState, onRefresh: () -> Unit, onSettings: () -> Unit, onOpen: (String) -> Unit) {
 	Scaffold(
 		topBar = {
 			TopAppBar(
 				title = { Text("Inbox") },
-				actions = { TextButton(onClick = onRefresh) { Text("Refresh") } },
+				actions = {
+					TextButton(onClick = onRefresh) { Text("Refresh") }
+					TextButton(onClick = onSettings) { Text("Settings") }
+				},
 			)
 		},
 	) { pad ->
 		Column(Modifier.padding(pad).fillMaxSize()) {
-			if (state.teams.isEmpty()) {
+			if (state.gap) {
+				Text(
+					"Some messages were dropped (mailbox overflow). Pull history from the host to recover.",
+					Modifier.fillMaxWidth().padding(12.dp),
+					color = MaterialTheme.colorScheme.error,
+				)
+			}
+			if (state.teams.isEmpty() && state.threads.isEmpty()) {
 				LinearProgressIndicator(Modifier.fillMaxWidth())
 				Text("  ${state.error ?: state.status.ifEmpty { "connecting..." }}", Modifier.padding(16.dp))
 			}
 			LazyColumn(Modifier.fillMaxSize()) {
-				items(state.teams, key = { it.name }) { team ->
+				items(state.inboxTeams, key = { it.name }) { team ->
 					val unread = state.unread[team.name] ?: 0
 					ListItem(
 						headlineContent = { Text(team.name) },
@@ -178,25 +233,45 @@ fun InboxScreen(state: ChatState, onRefresh: () -> Unit, onOpen: (String) -> Uni
 @Composable
 fun ThreadScreen(
 	team: String,
+	tabs: List<String>,
 	messages: List<Message>,
 	error: String?,
-	onBack: () -> Unit,
+	onSwitch: (String) -> Unit,
+	onCloseTab: (String) -> Unit,
+	onInbox: () -> Unit,
 	onSend: (String) -> Unit,
 ) {
 	var draft by remember { mutableStateOf("") }
+	val listState = rememberLazyListState()
+	LaunchedEffect(messages.size) {
+		if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+	}
+
 	Scaffold(
 		topBar = {
 			TopAppBar(
 				title = { Text(team, fontFamily = FontFamily.Monospace) },
-				navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+				navigationIcon = { TextButton(onClick = onInbox) { Text("Inbox") } },
+				actions = { TextButton(onClick = { onCloseTab(team) }) { Text("Close") } },
 			)
 		},
 	) { pad ->
 		Column(Modifier.padding(pad).fillMaxSize()) {
-			LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp)) {
+			if (tabs.size > 1) {
+				val selected = tabs.indexOf(team).coerceAtLeast(0)
+				ScrollableTabRow(selectedTabIndex = selected, edgePadding = 8.dp) {
+					tabs.forEachIndexed { i, t ->
+						Tab(selected = i == selected, onClick = { onSwitch(t) }, text = { Text(t) })
+					}
+				}
+			}
+			LazyColumn(
+				state = listState,
+				modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
+			) {
 				itemsIndexed(messages) { _, m -> MessageBubble(m) }
 			}
-			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp))
+			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
 			Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
 				OutlinedTextField(
 					value = draft,
@@ -213,6 +288,56 @@ fun ThreadScreen(
 					modifier = Modifier.padding(start = 8.dp),
 				) { Text("Send") }
 			}
+		}
+	}
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+	state: ChatState,
+	onSetDeviceName: (String) -> Unit,
+	onToggleBiometric: (Boolean) -> Unit,
+	onClear: () -> Unit,
+	onBack: () -> Unit,
+) {
+	var name by remember { mutableStateOf(state.deviceName) }
+	Scaffold(
+		topBar = {
+			TopAppBar(
+				title = { Text("Settings") },
+				navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+			)
+		},
+	) { pad ->
+		Column(
+			Modifier.padding(pad).padding(16.dp).fillMaxSize(),
+			verticalArrangement = Arrangement.spacedBy(16.dp),
+		) {
+			Text("Device name", style = MaterialTheme.typography.titleMedium)
+			Row(verticalAlignment = Alignment.CenterVertically) {
+				OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.weight(1f))
+				Button(
+					enabled = name.isNotBlank() && name != state.deviceName,
+					onClick = { onSetDeviceName(name.trim()) },
+					modifier = Modifier.padding(start = 8.dp),
+				) { Text("Save") }
+			}
+
+			HorizontalDivider()
+			Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+				Text("Biometric lock", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+				Switch(checked = state.biometricLock, onCheckedChange = onToggleBiometric)
+			}
+			Text(
+				"Require fingerprint or device PIN on app open. Falls back to unlocked if nothing is enrolled.",
+				style = MaterialTheme.typography.bodySmall,
+			)
+
+			HorizontalDivider()
+			Spacer(Modifier.width(0.dp))
+			Button(onClick = onClear) { Text("Clear & re-provision") }
+			Text("Removes the stored credential and chat history from this device.", style = MaterialTheme.typography.bodySmall)
 		}
 	}
 }
