@@ -48,4 +48,6 @@ dependencies {
 	implementation(libs.androidx.material3)
 	implementation(libs.okhttp)
 	implementation(libs.kotlinx.coroutines.android)
+	implementation(libs.androidx.security.crypto)
+	implementation(libs.androidx.biometric)
 }

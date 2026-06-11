@@ -218,13 +218,19 @@ Minimal Kotlin/Compose app (built on the user's machine): paste-provisioned cred
 
 Core built + validated live on the emulator against the deployed backend (with the scoped SA token, not admin). `ChatRepository` holds per-team threads + an unread tally and runs the 5s poll loop, routing each mailbox reply to its team via the `conv:<id>:<team>` session id; `PhoneClient` gained register/teams/send/poll. UI: provision screen -> inbox (live teams + unread badges) -> thread (send + received bubbles), state-based nav, process-lifetime `Repo` singleton. Verified by driving the real UI: opened nyaadot, sent `ping-from-the-app-UI`, and the agent's `pong-from-the-nyaadot-session` reply came back through the poll loop and rendered in the thread.
 
-Still to do (P8 polish, deferred): switchable tab strip (currently single open thread), local Room cache for durable transcripts (in-memory today; couples to P10), and the unit tests for poll/cursor/seq-dedup. Acceptance for those: the client dedupes inbound entries by `seq` and advances the poll `cursor` monotonically (highest contiguous seq consumed), so a duplicate drain from a lost ack never double-inserts; a non-monotonic seq jump or sticky `dropped` surfaces a gap.
+P8 polish landed (with P9): switchable tab strip (`ScrollableTabRow` over open tabs + close), durable transcripts (JSON in `EncryptedSharedPreferences`; Room deferred as a scaling option), seq-dedup in the poll loop (skip `seq <= lastSeq`), a `dropped`-gap banner, auto-scroll to latest, and agent-initiated threads surfaced in the inbox (`inboxTeams`). Remaining: the unit tests for the poll/cursor/seq-dedup logic.
 
 Original spec:
 
 Full chat client: send/poll loop (5s foreground), per-team threads, inbox with attention badges, opening a thread pins a tab. Local Room cache. Acceptance: the client dedupes inbound entries by `seq` and advances the poll `cursor` monotonically (highest contiguous seq consumed), so a duplicate drain from a lost ack never double-inserts the transcript; a non-monotonic seq jump or a sticky `dropped` surfaces a gap. Unit tests for the poll/cursor/dedup logic.
 
-## P9 Android poll lifecycle + biometric + provisioning
+## P9 Android poll lifecycle + biometric + provisioning - core DONE
+
+Built + validated on the emulator: biometric lock (androidx.biometric `BiometricPrompt`, `BIOMETRIC_WEAK | DEVICE_CREDENTIAL`, cold-start gate, falls open if nothing enrolled) toggled from Settings; `EncryptedSharedPreferences` (androidx.security) stores the provisioning blob + transcript at rest; a Settings screen with editable Device Name (re-registers), the biometric toggle, and Clear & re-provision. `MainActivity` is now a `FragmentActivity` (biometric requirement). Paste-to-provision auto-connects (the earlier fix).
+
+Still to do (deferred): WorkManager background poll (~15 min floor) for while-closed delivery, re-lock on return-from-background (currently cold-start only), QR provisioning, and unit tests for the token storage + WorkManager poll.
+
+Original spec:
 
 WorkManager background poll (~15 min floor); biometric lock (androidx.biometric) gating app + EncryptedSharedPreferences token; Settings (Device Name, poll cadence). Optional QR provisioning. Unit tests for the WorkManager poll + token storage. (Idle-on-minimize op dropped from scope: poll cadence + mailbox TTL already bound a dead device; revisit only if instant-while-closed is ever added, which would need a PhoneOpKind extension + protocol-version bump.)
 

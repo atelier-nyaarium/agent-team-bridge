@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class Message(val fromMe: Boolean, val text: String, val at: Long)
 
@@ -17,23 +19,44 @@ data class ChatState(
 	val teams: List<Team> = emptyList(),
 	val threads: Map<String, List<Message>> = emptyMap(),
 	val unread: Map<String, Int> = emptyMap(),
+	val openTabs: List<String> = emptyList(),
 	val status: String = "",
 	val error: String? = null,
-)
+	val gap: Boolean = false,
+	val biometricLock: Boolean = false,
+	val deviceName: String = "",
+) {
+	/** Inbox shows live teams plus any team we already have a thread with (agent-initiated). */
+	val inboxTeams: List<Team>
+		get() {
+			val known = teams.associateBy { it.name }
+			val extra = threads.keys.filter { it !in known }.map { Team(it, "offline", "channel", 0) }
+			return teams + extra
+		}
+}
 
 /**
- * In-memory chat state over a PhoneClient. Holds per-team threads, an unread
- * tally, and a poll loop that drains the device mailbox and routes each reply to
- * its team (parsed from the `conv:<id>:<team>` session id). Durable storage is a
- * later phase; this keeps state for the life of the process.
+ * Chat state over a PhoneClient. Holds per-team threads, an unread tally, the open
+ * tab set, and a poll loop that drains the device mailbox, dedupes by mailbox seq,
+ * and routes each reply to its team (parsed from the `conv:<id>:<team>` session id
+ * or the entry's `from`). Transcripts persist (encrypted) so history survives
+ * restarts; the durable host-side ledger is a later phase.
  */
 class ChatRepository(private val store: ProvisioningStore) {
-	private val _state = MutableStateFlow(ChatState(provisioned = store.load() != null))
+	private val _state = MutableStateFlow(
+		ChatState(
+			provisioned = store.load() != null,
+			threads = loadPersistedThreads(),
+			biometricLock = store.biometricLock,
+			deviceName = currentDeviceName(),
+		),
+	)
 	val state: StateFlow<ChatState> = _state
 
 	private var client: PhoneClient? = null
 	private var cursor = 0
 	private var epoch = 0
+	private var lastSeq = -1
 	private var pollJob: Job? = null
 
 	private fun client(): PhoneClient {
@@ -43,10 +66,10 @@ class ChatRepository(private val store: ProvisioningStore) {
 	}
 
 	suspend fun provision(blob: String) = withContext(Dispatchers.IO) {
-		Provisioning.parse(blob) // throws on malformed input before we persist
+		val prov = Provisioning.parse(blob) // throws on malformed input before we persist
 		store.save(blob)
 		client = null
-		_state.value = _state.value.copy(provisioned = true, error = null)
+		_state.value = _state.value.copy(provisioned = true, error = null, deviceName = prov.device)
 	}
 
 	suspend fun connect() = withContext(Dispatchers.IO) {
@@ -86,8 +109,12 @@ class ChatRepository(private val store: ProvisioningStore) {
 					if (mb.epoch != epoch) {
 						epoch = mb.epoch
 						cursor = 0
+						lastSeq = -1
 					}
+					if (mb.dropped > 0) _state.value = _state.value.copy(gap = true)
 					for (e in mb.entries) {
+						if (e.seq <= lastSeq) continue // dedupe a re-drain after a lost ack
+						lastSeq = e.seq
 						val team = teamFromSession(e.sessionId) ?: e.from ?: continue
 						if (e.body.isNotEmpty()) {
 							append(team, Message(false, e.body, e.at))
@@ -104,13 +131,50 @@ class ChatRepository(private val store: ProvisioningStore) {
 	}
 
 	fun openThread(team: String) {
-		_state.value = _state.value.copy(unread = _state.value.unread - team)
+		val s = _state.value
+		_state.value = s.copy(
+			unread = s.unread - team,
+			openTabs = if (team in s.openTabs) s.openTabs else s.openTabs + team,
+		)
+	}
+
+	fun closeTab(team: String) {
+		_state.value = _state.value.copy(openTabs = _state.value.openTabs - team)
+	}
+
+	fun setBiometricLock(enabled: Boolean) {
+		store.biometricLock = enabled
+		_state.value = _state.value.copy(biometricLock = enabled)
+	}
+
+	suspend fun setDeviceName(name: String) = withContext(Dispatchers.IO) {
+		val blob = store.load() ?: return@withContext
+		val j = JSONObject(blob).put("device", name)
+		store.save(j.toString())
+		client = null
+		_state.value = _state.value.copy(deviceName = name)
+		connect()
+	}
+
+	private fun currentDeviceName(): String =
+		store.load()?.let { runCatching { Provisioning.parse(it).device }.getOrNull() } ?: ""
+
+	suspend fun clearAll() = withContext(Dispatchers.IO) {
+		pollJob?.cancel()
+		store.clear()
+		client = null
+		cursor = 0
+		epoch = 0
+		lastSeq = -1
+		_state.value = ChatState(provisioned = false)
 	}
 
 	private fun append(team: String, msg: Message) {
 		val s = _state.value
-		val thread = (s.threads[team].orEmpty()) + msg
-		_state.value = s.copy(threads = s.threads + (team to thread))
+		val thread = s.threads[team].orEmpty() + msg
+		val threads = s.threads + (team to thread)
+		_state.value = s.copy(threads = threads)
+		persistThreads(threads)
 	}
 
 	private fun bumpUnread(team: String) {
@@ -120,6 +184,34 @@ class ChatRepository(private val store: ProvisioningStore) {
 
 	private fun teamFromSession(sessionId: String): String? =
 		sessionId.substringAfterLast(':').takeIf { it.isNotEmpty() && it != sessionId }
+
+	private fun persistThreads(threads: Map<String, List<Message>>) {
+		val root = JSONObject()
+		for ((team, msgs) in threads) {
+			val arr = JSONArray()
+			for (m in msgs) {
+				arr.put(JSONObject().put("me", m.fromMe).put("text", m.text).put("at", m.at))
+			}
+			root.put(team, arr)
+		}
+		runCatching { store.saveThreads(root.toString()) }
+	}
+
+	private fun loadPersistedThreads(): Map<String, List<Message>> {
+		val json = store.loadThreads() ?: return emptyMap()
+		return runCatching {
+			val root = JSONObject(json)
+			buildMap {
+				for (team in root.keys()) {
+					val arr = root.getJSONArray(team)
+					put(team, (0 until arr.length()).map {
+						val m = arr.getJSONObject(it)
+						Message(m.optBoolean("me"), m.optString("text"), m.optLong("at"))
+					})
+				}
+			}
+		}.getOrDefault(emptyMap())
+	}
 
 	private companion object {
 		const val POLL_INTERVAL_MS = 5_000L
