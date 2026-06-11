@@ -8,11 +8,27 @@ android {
 	namespace = "com.atelier_nyaarium.switchboard"
 	compileSdk = 35
 
+	signingConfigs {
+		// CI supplies one stable keystore via env so every release shares a signature.
+		// Without this each build's random debug key blocks install-over-update on a
+		// phone ("App not installed"). Local builds with no env keep the default debug key.
+		getByName("debug") {
+			val ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
+			if (!ksPath.isNullOrBlank()) {
+				storeFile = file(ksPath)
+				storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+				keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+				keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+			}
+		}
+	}
+
 	defaultConfig {
 		applicationId = "com.atelier_nyaarium.switchboard"
 		minSdk = 26
 		targetSdk = 35
-		versionCode = 1
+		// Monotonic in CI (build number) so updates are never seen as a downgrade.
+		versionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1
 		versionName = "0.1.0"
 	}
 

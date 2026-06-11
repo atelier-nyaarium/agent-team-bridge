@@ -28,7 +28,25 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      # Decode the stable signing keystore so every release shares one signature.
+      - name: Decode signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/switchboard.keystore"
+            echo "have_keystore=true" >> "$GITHUB_ENV"
+          else
+            echo "have_keystore=false" >> "$GITHUB_ENV"
+          fi
+
       - name: Build debug APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ env.have_keystore == 'true' && format('{0}/switchboard.keystore', runner.temp) || '' }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
         run: ./gradlew :app:assembleDebug --no-daemon --console=plain
 
       - name: Upload APK as artifact
@@ -58,4 +76,8 @@ jobs:
           body: |
             Switchboard Android app, built from ${{ github.sha }}.
 
-            Sideload to your phone: `adb install -r app-debug.apk`
+            Signed with the stable release key, so updates install over each other.
+            First install after this change: uninstall any older Switchboard build once
+            (earlier builds had random signatures), then install this one.
+
+            Sideload: `adb install -r app-debug.apk`
