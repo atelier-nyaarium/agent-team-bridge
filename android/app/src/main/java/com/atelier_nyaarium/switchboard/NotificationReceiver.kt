@@ -7,9 +7,10 @@ import android.content.Intent
 /**
  * Handles the message-notification actions that must work without opening the
  * Activity: swiping a team's notification away marks that team read, and the
- * Play action is a stub for an upcoming feature (it will consume the notice
- * `summary` tier). Unread is process-local state, so after a process death
- * there is nothing to clear and mark-read degrades to a no-op.
+ * Play actions speak the burst-last message through SttsPlayer. The play call
+ * only enqueues onto the player's own daemon thread (single-flight dedupes
+ * multi-taps), so the receiver returns immediately without goAsync. Unread is
+ * process-local state, so after a process death mark-read degrades to a no-op.
  */
 class NotificationReceiver : BroadcastReceiver() {
 	override fun onReceive(context: Context, intent: Intent) {
@@ -18,19 +19,18 @@ class NotificationReceiver : BroadcastReceiver() {
 			return
 		}
 		val team = intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM) ?: return
+		val at = intent.getLongExtra(SwitchboardService.EXTRA_MESSAGE_AT, -1L)
 		when (intent.action) {
 			ACTION_MARK_READ -> Repo.get(context).markRead(team)
-			ACTION_PLAY -> {
-				// Stub: reserved for the upcoming play feature (reads the message's
-				// summary tier). Intentionally no user-visible effect yet.
-				android.util.Log.i("NotificationReceiver", "Play tapped for $team (stub)")
-			}
+			ACTION_PLAY_FULL -> if (at > 0) Repo.get(context).playMessage(team, at, SttsPlayer.Tier.FULL)
+			ACTION_PLAY_SUMMARY -> if (at > 0) Repo.get(context).playMessage(team, at, SttsPlayer.Tier.SUMMARY)
 		}
 	}
 
 	companion object {
 		const val ACTION_MARK_READ = "com.atelier_nyaarium.switchboard.MARK_READ"
-		const val ACTION_PLAY = "com.atelier_nyaarium.switchboard.PLAY"
+		const val ACTION_PLAY_FULL = "com.atelier_nyaarium.switchboard.PLAY_FULL"
+		const val ACTION_PLAY_SUMMARY = "com.atelier_nyaarium.switchboard.PLAY_SUMMARY"
 		const val ACTION_STATUS_DISMISSED = "com.atelier_nyaarium.switchboard.STATUS_DISMISSED"
 	}
 }

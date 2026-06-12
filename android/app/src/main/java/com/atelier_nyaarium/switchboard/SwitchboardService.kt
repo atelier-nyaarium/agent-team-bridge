@@ -128,14 +128,19 @@ class SwitchboardService : Service() {
 	}
 
 	/** Broadcast to NotificationReceiver for swipe/action handling. The request
-	 * code mixes team and action so per-team intents never collide. */
-	private fun actionIntent(team: String, action: String): PendingIntent =
-		PendingIntent.getBroadcast(
+	 * code mixes team and action so per-team intents never collide; the message
+	 * `at` rides as an extra and FLAG_UPDATE_CURRENT keeps it on the burst-last
+	 * message, which is what the notification summarizes. */
+	private fun actionIntent(team: String, action: String, at: Long? = null): PendingIntent {
+		val intent = Intent(this, NotificationReceiver::class.java).setAction(action).putExtra(EXTRA_OPEN_TEAM, team)
+		if (at != null) intent.putExtra(EXTRA_MESSAGE_AT, at)
+		return PendingIntent.getBroadcast(
 			this,
 			(team.hashCode() * 31) xor action.hashCode(),
-			Intent(this, NotificationReceiver::class.java).setAction(action).putExtra(EXTRA_OPEN_TEAM, team),
+			intent,
 			PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
 		)
+	}
 
 	private fun buildStatusNotification(stateLine: String, unread: Int): Notification =
 		NotificationCompat.Builder(this, CHANNEL_STATUS)
@@ -185,7 +190,7 @@ class SwitchboardService : Service() {
 			style.addLine(if (line.isEmpty()) "(attachment)" else line.take(120))
 		}
 		val last = messages.last()
-		val notification = NotificationCompat.Builder(this, CHANNEL_MESSAGES)
+		val builder = NotificationCompat.Builder(this, CHANNEL_MESSAGES)
 			.setSmallIcon(android.R.drawable.stat_notify_chat)
 			.setContentTitle(label)
 			.setContentText(if (unread > 1) "$unread messages" else (last.title ?: last.text).take(120))
@@ -194,8 +199,13 @@ class SwitchboardService : Service() {
 			.setContentIntent(contentIntent(team))
 			// Swiping the notification away reads the burst without opening the app.
 			.setDeleteIntent(actionIntent(team, NotificationReceiver.ACTION_MARK_READ))
-			.addAction(0, "Play", actionIntent(team, NotificationReceiver.ACTION_PLAY))
-			.build()
+		// Play actions speak the burst-last message; omitted entirely when STTS
+		// is unprovisioned so unconfigured installs see no dead buttons.
+		if (repo.sttsReady()) {
+			builder.addAction(0, "Play Full", actionIntent(team, NotificationReceiver.ACTION_PLAY_FULL, last.at))
+			builder.addAction(0, "Play Summary", actionIntent(team, NotificationReceiver.ACTION_PLAY_SUMMARY, last.at))
+		}
+		val notification = builder.build()
 		NotificationManagerCompat.from(this).notify(teamNotificationId(team), notification)
 	}
 
@@ -208,6 +218,7 @@ class SwitchboardService : Service() {
 		const val CHANNEL_MESSAGES = "messages_v2"
 		const val STATUS_NOTIFICATION_ID = 1
 		const val EXTRA_OPEN_TEAM = "open_team"
+		const val EXTRA_MESSAGE_AT = "message_at"
 
 		/** The user swiped the status entry away this process; stop re-posting it.
 		 * Reset on service start so it returns with the next boot/launch. */
