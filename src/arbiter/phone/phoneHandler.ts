@@ -241,6 +241,7 @@ export function createPhoneHandler({
 					type: op.request_type,
 					effort: op.effort,
 					body: op.body,
+					files: op.files,
 				});
 
 				let boundTimer: ReturnType<typeof setTimeout> | undefined;
@@ -313,6 +314,7 @@ export function createPhoneHandler({
 					status: op.status,
 					response: op.response,
 					replyAsJson: op.replyAsJson,
+					files: op.files,
 				});
 				const json = (await res.json()) as { error?: string };
 				if (!res.ok) throw new Error(json.error ?? "respond failed");

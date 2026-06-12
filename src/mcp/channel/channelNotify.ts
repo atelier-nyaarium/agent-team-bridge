@@ -25,12 +25,12 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 	const replyReminder = lines.join("\n");
 
 	let filesBlock = "";
-	if (payload.files && payload.files.length > 0 && payload.discord_message_id) {
-		const materialized = materializeFiles({
-			discordMessageId: payload.discord_message_id,
-			files: payload.files,
-		});
-		filesBlock = renderFilesBlock({ discordMessageId: payload.discord_message_id, files: materialized });
+	// Discord files key the bucket by discord_message_id; phone-origin files lack
+	// one, so fall back to the channel message_id.
+	const bucketKey = payload.discord_message_id ?? payload.message_id;
+	if (payload.files && payload.files.length > 0 && bucketKey) {
+		const materialized = materializeFiles({ discordMessageId: bucketKey, files: payload.files });
+		filesBlock = renderFilesBlock({ discordMessageId: bucketKey, files: materialized });
 	}
 
 	const bodyWithFiles = filesBlock ? `${payload.body}\n\n${filesBlock}` : payload.body;

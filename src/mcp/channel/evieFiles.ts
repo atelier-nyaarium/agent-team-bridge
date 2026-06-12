@@ -107,7 +107,12 @@ export function renderFilesBlock({ discordMessageId, files }: RenderFilesBlockPa
 	if (files.length === 0) return "";
 
 	const opener = discordMessageId ? `[FILES messageId="${discordMessageId}"]` : `[FILES]`;
-	const instruction = `*Files with \`-> /path\` are on disk; Read them. Others: use tool \`evie_fetch_message_files\` to fetch.*`;
+	// The fetch-later hint only makes sense for evie-origin metadata-only entries;
+	// phone files always arrive with bytes and are already on disk.
+	const hasMetadataOnly = files.some((f) => !f.path);
+	const instruction = hasMetadataOnly
+		? `*Files with \`-> /path\` are on disk; Read them. Others: use tool \`evie_fetch_message_files\` to fetch.*`
+		: `*Files with \`-> /path\` are on disk; Read them.*`;
 	const lines = files.map((f, i) => {
 		const head = `${i + 1}. ${f.descriptiveKey}`;
 		return f.path ? `${head} -> \`${f.path}\`` : head;

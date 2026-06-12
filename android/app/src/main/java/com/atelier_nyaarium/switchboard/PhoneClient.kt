@@ -12,6 +12,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -57,6 +58,9 @@ data class SendResult(val ok: Boolean, val status: String, val inlineBody: Strin
 /** Raw attachment as it arrives in a mailbox entry: base64 bytes plus metadata.
  * The repository decodes these to app-private storage before the UI sees them. */
 data class RawFile(val filename: String, val mime: String, val base64: String?)
+
+/** A file the user picked to send. Bytes are base64-encoded onto the wire. */
+data class OutgoingFile(val name: String, val mime: String, val bytes: ByteArray)
 
 data class MailboxEntry(
 	val kind: String,
@@ -136,8 +140,23 @@ class PhoneClient(private val prov: Provisioning) {
 	 * or land in the mailbox for a later poll; either way the conversation is keyed
 	 * server-side by (this device, team).
 	 */
-	fun send(to: String, body: String): SendResult {
-		val reply = JSONObject(relay(JSONObject().put("kind", "send").put("to", to).put("body", body).toString()))
+	fun send(to: String, body: String, files: List<OutgoingFile> = emptyList()): SendResult {
+		val op = JSONObject().put("kind", "send").put("to", to).put("body", body)
+		if (files.isNotEmpty()) {
+			val arr = JSONArray()
+			for (f in files) {
+				arr.put(
+					JSONObject()
+						.put("filename", f.name)
+						.put("mime", f.mime)
+						.put("size", f.bytes.size)
+						.put("descriptiveKey", f.name)
+						.put("base64", android.util.Base64.encodeToString(f.bytes, android.util.Base64.NO_WRAP)),
+				)
+			}
+			op.put("files", arr)
+		}
+		val reply = JSONObject(relay(op.toString()))
 		val result = reply.optJSONObject("result")
 		return SendResult(
 			ok = reply.optBoolean("ok", false),

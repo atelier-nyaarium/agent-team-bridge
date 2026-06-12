@@ -192,6 +192,25 @@ describe("createPhoneHandler", () => {
 		expect(reply.error).toContain("not connected");
 	});
 
+	it("send forwards op.files to routes.send", async () => {
+		const h = makeHarness();
+		const file = { filename: "shot.png", mime: "image/png", size: 3, descriptiveKey: "shot.png", base64: "aGk=" };
+		await h.handler.handleFrame(frame({ kind: "send", to: "team-a", body: "see this", files: [file] }, "op2"));
+		expect(h.sendCalls[0].files).toEqual([file]);
+	});
+
+	it("a retried send with the same opId runs the route once (idempotent)", async () => {
+		const h = makeHarness();
+		const file = { filename: "a.png", mime: "image/png", size: 3, descriptiveKey: "a.png", base64: "aGk=" };
+		const f = frame({ kind: "send", to: "team-a", body: "x", files: [file] }, "dup-op");
+		// Concurrent retry coalesces onto the in-flight promise; a later retry replays.
+		const [r1, r2] = await Promise.all([h.handler.handleFrame(f), h.handler.handleFrame(f)]);
+		const r3 = await h.handler.handleFrame(f);
+		expect(h.sendCalls.length).toBe(1);
+		expect(r1.result).toEqual(r2.result);
+		expect(r3.result).toEqual(r1.result);
+	});
+
 	function deliverInbound(h: Harness, sessionId: string): void {
 		const peer = h.registry.get("pixel")?.get("conv-pixel") as unknown as ServerWebSocket<WsData>;
 		peer.send(

@@ -1,5 +1,8 @@
 package com.atelier_nyaarium.switchboard
 
+import android.content.ContentResolver
+import android.net.Uri
+import android.provider.OpenableColumns
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,7 +85,11 @@ data class ChatState(
  * or the entry's `from`). Transcripts persist (encrypted) so history survives
  * restarts; the durable host-side ledger is a later phase.
  */
-class ChatRepository(private val store: ProvisioningStore, private val filesDir: File) {
+class ChatRepository(
+	private val store: ProvisioningStore,
+	private val filesDir: File,
+	private val contentResolver: ContentResolver,
+) {
 	private val _state = MutableStateFlow(
 		ChatState(
 			provisioned = store.load() != null,
@@ -135,10 +142,19 @@ class ChatRepository(private val store: ProvisioningStore, private val filesDir:
 		runCatching { client().teams() }.onSuccess { _state.value = _state.value.copy(teams = it) }
 	}
 
-	suspend fun send(team: String, text: String) = withContext(Dispatchers.IO) {
-		append(team, Message(true, text, System.currentTimeMillis()))
+	suspend fun send(team: String, text: String, uris: List<Uri> = emptyList()) = withContext(Dispatchers.IO) {
+		val picked = uris.mapNotNull { readUri(it) }
+		val total = picked.sumOf { it.bytes.size }
+		if (total > MAX_OUTGOING_BYTES) {
+			_state.value = _state.value.copy(error = "Attachments too large (max ${MAX_OUTGOING_BYTES / 1_000_000} MB).")
+			return@withContext
+		}
+		// Local echo: persist the picked files so the sent message shows its own
+		// thumbnails through the same asset-loader path as inbound files.
+		val localFiles = Attachments.storeOutgoing(filesDir, "out-${System.currentTimeMillis()}", picked)
+		append(team, Message(true, text, System.currentTimeMillis(), files = localFiles))
 		try {
-			val r = client().send(team, text)
+			val r = client().send(team, text, picked)
 			when {
 				!r.ok -> _state.value = _state.value.copy(error = r.error ?: "send failed")
 				r.inlineBody != null -> append(team, Message(false, r.inlineBody, System.currentTimeMillis()))
@@ -147,6 +163,18 @@ class ChatRepository(private val store: ProvisioningStore, private val filesDir:
 			_state.value = _state.value.copy(error = e.message)
 		}
 	}
+
+	private fun readUri(uri: Uri): OutgoingFile? = runCatching {
+		val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+		val mime = contentResolver.getType(uri) ?: "application/octet-stream"
+		OutgoingFile(queryName(uri) ?: "file", mime, bytes)
+	}.getOrNull()
+
+	private fun queryName(uri: Uri): String? = runCatching {
+		contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+			if (c.moveToFirst()) c.getString(0) else null
+		}
+	}.getOrNull()
 
 	fun startPolling(scope: CoroutineScope) {
 		if (pollJob?.isActive == true) return
@@ -334,5 +362,6 @@ class ChatRepository(private val store: ProvisioningStore, private val filesDir:
 
 	private companion object {
 		const val POLL_INTERVAL_MS = 5_000L
+		const val MAX_OUTGOING_BYTES = 10_000_000
 	}
 }

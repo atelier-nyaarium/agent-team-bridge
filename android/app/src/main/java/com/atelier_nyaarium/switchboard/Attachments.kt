@@ -67,6 +67,22 @@ object Attachments {
 		}
 	}
 
+	/** Persist outbound (user-picked) files so the sent message can show its own
+	 * thumbnails through the same asset-loader path as inbound attachments. */
+	fun storeOutgoing(filesDir: File, bucket: String, files: List<OutgoingFile>): List<MessageFile> {
+		if (files.isEmpty()) return emptyList()
+		val dir = File(root(filesDir), bucket)
+		val used = mutableSetOf<String>()
+		return files.mapNotNull { f ->
+			val name = uniqueName(safeName(f.name), used)
+			runCatching {
+				dir.mkdirs()
+				File(dir, name).writeBytes(f.bytes)
+				MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name")
+			}.getOrNull()
+		}
+	}
+
 	/**
 	 * Resolve an asset-relative path (e.g. "<epoch>-<seq>/<name>") back to a real
 	 * file, but only if it stays inside the attachments directory. Returns null on

@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import android.os.Bundle
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -73,7 +75,7 @@ object Repo {
 	fun get(context: Context): ChatRepository =
 		instance ?: synchronized(this) {
 			val app = context.applicationContext
-			instance ?: ChatRepository(ProvisioningStore(app), app.filesDir).also { instance = it }
+			instance ?: ChatRepository(ProvisioningStore(app), app.filesDir, app.contentResolver).also { instance = it }
 		}
 }
 
@@ -171,7 +173,7 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 					repo.closeTab(t)
 				},
 				onSessions = { openTeam = null },
-				onSend = { text -> if (!isDemo) scope.launch { repo.send(openTeam!!, text) } },
+				onSend = { text, uris -> if (!isDemo) scope.launch { repo.send(openTeam!!, text, uris) } },
 				onRename = { name -> if (!isDemo) repo.setLabel(openTeam!!, name) },
 				onForget = {
 					val t = openTeam!!
@@ -458,12 +460,16 @@ fun ThreadScreen(
 	onSwitch: (String) -> Unit,
 	onCloseTab: (String) -> Unit,
 	onSessions: () -> Unit,
-	onSend: (String) -> Unit,
+	onSend: (String, List<Uri>) -> Unit,
 	onRename: (String) -> Unit,
 	onForget: () -> Unit,
 ) {
 	var draft by remember { mutableStateOf("") }
 	var showRename by remember { mutableStateOf(false) }
+	var attachments by remember { mutableStateOf<List<Uri>>(emptyList()) }
+	val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+		if (uris.isNotEmpty()) attachments = attachments + uris
+	}
 
 	if (showRename) {
 		RenameDialog(
@@ -509,7 +515,38 @@ fun ThreadScreen(
 				modifier = Modifier.weight(1f).fillMaxWidth(),
 			)
 			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
+			if (attachments.isNotEmpty()) {
+				Row(
+					Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 4.dp),
+					horizontalArrangement = Arrangement.spacedBy(6.dp),
+				) {
+					attachments.forEach { uri ->
+						Surface(
+							color = MaterialTheme.colorScheme.surfaceVariant,
+							shape = MaterialTheme.shapes.small,
+						) {
+							Row(
+								Modifier.padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+								verticalAlignment = Alignment.CenterVertically,
+							) {
+								Text(
+									uri.lastPathSegment?.substringAfterLast('/') ?: "file",
+									style = MaterialTheme.typography.labelSmall,
+									maxLines = 1,
+									overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+									modifier = Modifier.widthIn(max = 120.dp),
+								)
+								TextButton(
+									onClick = { attachments = attachments - uri },
+									contentPadding = PaddingValues(horizontal = 4.dp),
+								) { Text("x") }
+							}
+						}
+					}
+				}
+			}
 			Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+				TextButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("Attach") }
 				OutlinedTextField(
 					value = draft,
 					onValueChange = { draft = it },
@@ -517,10 +554,11 @@ fun ThreadScreen(
 					modifier = Modifier.weight(1f),
 				)
 				Button(
-					enabled = draft.isNotBlank(),
+					enabled = draft.isNotBlank() || attachments.isNotEmpty(),
 					onClick = {
-						onSend(draft)
+						onSend(draft, attachments)
 						draft = ""
+						attachments = emptyList()
 					},
 					modifier = Modifier.padding(start = 8.dp),
 				) { Text("Send") }

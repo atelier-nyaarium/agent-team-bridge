@@ -51,6 +51,7 @@ const SendRequestSchema = z.object({
 	session_id: z.string().optional(),
 	debug: z.boolean().optional(),
 	replyJsonSchema: z.string().optional(),
+	files: ChannelFilesSchema.optional(),
 });
 
 const RespondBodySchema = z.object({
@@ -217,7 +218,28 @@ export function createRoutes({
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
-		const { from, fromConversationId, to, type, effort, body: msgBody, debug, replyJsonSchema } = parsed.data;
+		const {
+			from,
+			fromConversationId,
+			to,
+			type,
+			effort,
+			body: msgBody,
+			debug,
+			replyJsonSchema,
+			files,
+		} = parsed.data;
+
+		// Raw-bytes backstop at the trust boundary before the payload is pushed.
+		if (files && files.length > 0) {
+			const total = fileBytes(files);
+			if (total > MAX_RESPONSE_FILE_BYTES) {
+				return jsonResponse(
+					{ error: `Attachments total ${total} bytes, over the ${MAX_RESPONSE_FILE_BYTES}-byte limit` },
+					413,
+				);
+			}
+		}
 
 		if (RESERVED_TEAM_NAMES.has(to)) {
 			return jsonResponse(
@@ -279,6 +301,8 @@ export function createRoutes({
 					is_follow_up: isFollowUp,
 				};
 				if (replyJsonSchema) channelPayload.replyJsonSchema = replyJsonSchema;
+				// message_id becomes the materialization bucket key in the target container.
+				if (files && files.length > 0) channelPayload.files = files;
 				const payload = JSON.stringify(channelPayload);
 
 				const activeWs = getAllActiveWs(subs);
