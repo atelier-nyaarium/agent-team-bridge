@@ -40,6 +40,11 @@ jobs:
             echo "have_keystore=false" >> "$GITHUB_ENV"
           fi
 
+      # Red unit tests (incl. the golden protocol fixtures shared with vitest)
+      # must fail the run before any artifact builds.
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --console=plain
+
       - name: Build debug APK
         env:
           ANDROID_KEYSTORE_PATH: ${{ env.have_keystore == 'true' && format('{0}/switchboard.keystore', runner.temp) || '' }}

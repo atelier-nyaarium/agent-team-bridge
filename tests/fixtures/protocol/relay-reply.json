@@ -1,0 +1,12 @@
+{
+	"type": "phone_relay_reply",
+	"v": 1,
+	"opId": "op-poll-1",
+	"ok": true,
+	"result": {
+		"entries": [],
+		"cursor": 42,
+		"dropped": 0,
+		"epoch": 1073741824
+	}
+}

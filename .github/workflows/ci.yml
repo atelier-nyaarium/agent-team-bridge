@@ -1,0 +1,45 @@
+# TS-side gate: lint, tests (incl. the golden protocol fixtures shared with
+# the Android unit tests), the codegen drift check (the committed Protocol.kt
+# must match what the zod truth generates), and the node_modules residue
+# guard. main-push.yml is android-scoped, so without this workflow TS edits
+# run zero CI. Post-merge gating (push to main) matches the repo's stance;
+# add pull_request if pre-merge gating is ever wanted.
+name: CI
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+
+jobs:
+  ci:
+    name: Lint + Test + Drift
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Module residue guard
+        run: bun scripts/check-module-residue.ts
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Test
+        run: bun run test
+
+      - name: Codegen drift check
+        # --exit-code alone is vacuous for untracked output; the porcelain
+        # check also fails if generated files are new or deleted.
+        run: |
+          bun scripts/codegen-kotlin.ts
+          git diff --exit-code -- android/app/src/main/java/com/atelier_nyaarium/switchboard/proto/
+          test -z "$(git status --porcelain -- android/app/src/main/java/com/atelier_nyaarium/switchboard/proto/)"

@@ -1,0 +1,9 @@
+{
+	"seq": 46,
+	"at": 1781300978000,
+	"kind": "message",
+	"session_id": "conv:11111111-2222-3333-4444-555555555555:evie-bot",
+	"from": "evie-bot",
+	"body": "carries a field from the future",
+	"field_from_the_future": { "nested": [1, 2, 3] }
+}

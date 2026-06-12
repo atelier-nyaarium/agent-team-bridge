@@ -2,6 +2,7 @@ plugins {
 	alias(libs.plugins.android.application)
 	alias(libs.plugins.kotlin.android)
 	alias(libs.plugins.kotlin.compose)
+	alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -55,6 +56,13 @@ android {
 		compose = true
 		buildConfig = true
 	}
+
+	sourceSets {
+		// Golden protocol fixtures live at the repo root (shared with vitest);
+		// exposing them as test resources keeps the path stable across local
+		// runs and CI working dirs.
+		getByName("test").resources.srcDir("../../tests/fixtures")
+	}
 }
 
 dependencies {
@@ -74,4 +82,7 @@ dependencies {
 	// Activity Result API (file picker) with "Can only use lower 16 bits for requestCode".
 	implementation(libs.androidx.fragment)
 	implementation(libs.androidx.webkit)
+	implementation(libs.kotlinx.serialization.json)
+
+	testImplementation(libs.junit)
 }

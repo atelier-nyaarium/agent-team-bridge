@@ -1,0 +1,171 @@
+// generated from src/shared/schemas.ts + src/shared/phone-protocol.ts - DO NOT EDIT.
+// Regenerate: bun scripts/codegen-kotlin.ts
+//
+// Decode with Json { ignoreUnknownKeys = true } (the additive-protocol
+// posture). Enum-like fields are open Strings on purpose: the phone must
+// tolerate values newer than this build.
+@file:Suppress("unused")
+
+package com.atelier_nyaarium.switchboard.proto
+
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonClassDiscriminator
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+
+object Protocol {
+	const val PHONE_PROTOCOL_VERSION: Int = 1
+
+	/** Session-id prefix for broadcast notices; the sender follows it. */
+	const val NOTICE_SESSION_PREFIX: String = "notice:"
+
+	/** Session-id prefix for channel conversations; the target team is the tail after the LAST colon. */
+	const val CONV_SESSION_PREFIX: String = "conv:"
+}
+
+@Serializable
+data class ChannelFile(
+	val filename: String,
+	val mime: String,
+	val size: Long,
+	val descriptiveKey: String,
+	val base64: String? = null,
+)
+
+@Serializable
+data class TeamInfo(
+	val team: String,
+	val status: String,
+	val mode: String? = null,
+	val kind: String,
+	val queue_depth: Long,
+)
+
+@Serializable
+data class MailboxEntry(
+	val seq: Long,
+	val at: Long,
+	val kind: String,
+	val session_id: String,
+	val from: String? = null,
+	val title: String? = null,
+	val summary: String? = null,
+	val body: String? = null,
+	val status: String? = null,
+	val replyAsJson: JsonObject? = null,
+	val question: String? = null,
+	val reason: String? = null,
+	val request_type: String? = null,
+	val effort: String? = null,
+	val is_follow_up: Boolean? = null,
+	val files: List<ChannelFile>? = null,
+)
+
+@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("kind")
+sealed class PhoneOp {
+	@Serializable
+	@SerialName("register")
+	data object Register : PhoneOp()
+
+	@Serializable
+	@SerialName("list_teams")
+	data object ListTeams : PhoneOp()
+
+	@Serializable
+	@SerialName("send")
+	data class Send(
+		val to: String,
+		val request_type: String? = null,
+		val effort: String? = null,
+		val body: String,
+		val files: List<ChannelFile>? = null,
+	) : PhoneOp()
+
+	@Serializable
+	@SerialName("respond")
+	data class Respond(
+		val session_id: String,
+		val status: String? = null,
+		val response: String? = null,
+		val replyAsJson: JsonObject? = null,
+		val files: List<ChannelFile>? = null,
+	) : PhoneOp()
+
+	@Serializable
+	@SerialName("poll")
+	data class Poll(
+		val cursor: Long? = null,
+		val epoch: Long? = null,
+		val holdMs: Long? = null,
+	) : PhoneOp()
+}
+
+@Serializable
+data class PhoneRelayFrame(
+	val type: String = "phone_relay",
+	val v: Long,
+	val device: String,
+	val conversationId: String,
+	val opId: String,
+	val op: PhoneOp,
+)
+
+@Serializable
+data class PhoneRelayReply(
+	val type: String = "phone_relay_reply",
+	val v: Long,
+	val opId: String,
+	val ok: Boolean,
+	val result: JsonElement? = null,
+	val error: String? = null,
+)
+
+@Serializable
+data class PhoneRegisterResult(
+	val device: String,
+	val cursor: Long,
+	val epoch: Long,
+)
+
+@Serializable
+data class PhoneListTeamsResult(
+	val teams: List<TeamInfo>,
+)
+
+@Serializable
+data class PhoneSendResult(
+	val session_id: String,
+	val status: String,
+)
+
+@Serializable
+data class PhoneRespondResult(
+	val delivered: Boolean,
+)
+
+@Serializable
+data class PhonePollResult(
+	val entries: List<MailboxEntry>,
+	val cursor: Long,
+	val dropped: Long,
+	val epoch: Long,
+)
+
+@Serializable
+data class Provisioning(
+	val apiUrl: String,
+	val caPem: String,
+	val saToken: String,
+	val appToken: String? = null,
+	val namespace: String? = null,
+	val service: String? = null,
+	val port: Long? = null,
+	val device: String? = null,
+	val conversationId: String? = null,
+	val sttsUrl: String? = null,
+	val sttsKey: String? = null,
+)
