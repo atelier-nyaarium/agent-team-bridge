@@ -32,8 +32,10 @@ cleanup) and `evie-bot/app/features/StructuredAIClient/utils.ts:104`.
 No. User: "I rather not. We will maintain it our side and not bother him with
 that. Schema up what you know from those API endpoints and reverse
 engineering." The reverse-engineered knowledge (verified live 2026-06-12,
-documented in plans/done/stts-play.md and SttsClient.kt:96-106) becomes our
-maintained descriptor data. No endpoint ask, no handoff spec.
+documented in SttsClient.kt:96-106; the shipped stts-play plan lives in git
+history - the user deleted the plans/done/ archive, so done docs are
+history-only) becomes our maintained descriptor data. No endpoint ask, no
+handoff spec.
 
 **3. STTS descriptor distribution?**
 Bundled in the APK. User's update taxonomy, confirmed: "we update our schemas
@@ -60,8 +62,9 @@ delivered as a proposal awaiting greenlight by design, not interrupted.)
   headline - NOT a long-winded sentence. Transition aliases on BOTH the tool
   and the route (see Phase 4).
 - Minor-bump every touched repo on each phase that touches it.
-- Cleanup of shipped plan docs: done immediately (plans/done/ archive), not a
-  phase.
+- Cleanup of shipped plan docs: done immediately. (Archived to plans/done/
+  first; the user then deleted the archive from the tree - shipped plan docs
+  live in git history only, commit f08e83d.)
 
 **5c. Amendment (user, during lap 1->2): dependency maturity side quest.**
 "make it an early side quest to update all app's packages up to, but not
@@ -89,14 +92,26 @@ slow: one package at a time, version-checked then installed at that exact
 version. Android Gradle deps are OUT of scope here - they are
 toolchain-locked (see Phase 1.2's kotlinx pin) and not bun-managed.
 
-- **Selection rule per package:** list publish timestamps
-  (`npm view <pkg> time --json` works under bun; `bun pm view` where
-  available), pick the highest version whose publish date is <= now minus 7
-  days. Never newer. If the currently-installed version is already the
-  newest mature one, skip. Install pinned: `bun add <pkg>@<version>` (or
-  `bun add -d` for devDependencies), preserving the existing range style
-  only if the repo already uses ranges - exact selection is what the rule is
-  about.
+- **Selection rule per package:** compute ONE cutoff timestamp at sweep
+  start (UTC now minus 7*24h) and use it for every package - the boundary is
+  hour-sensitive (fuse.js 7.4.2 and @types/node 25.9.2 cross the line during
+  2026-06-12). List publish timestamps (`npm view <pkg> time --json`; `bun pm
+  view <pkg> time` confirmed working on bun 1.3.11), skip the `created`/
+  `modified` keys, consider STABLE releases only (skip any version with a
+  semver prerelease component - canary/beta/rc; zod's highest-semver mature
+  version is a canary, the rule must not pick it), never select above the
+  `latest` dist-tag, then pick the highest remaining version whose publish
+  date is <= the cutoff. If the currently-installed version is already the
+  newest mature one, skip.
+- **Manifests move to EXACT pins** (`bun add <pkg>@<version>` writes exact
+  natively; `bun add -d` for devDeps). NOT range-preserving - verified
+  blocker: both plugins launch via `bun --install=force run` (.mcp.json:5 in
+  switchboard AND nyaaskills), and force mode resolves package.json RANGES
+  directly, bypassing the lockfile entirely - a caret range means every
+  plugin start can silently pull a 0-day-old release, defeating the maturity
+  window. Honest caveat: exact pins cover direct deps only; transitives
+  still float under --install=force (their own manifests use ranges), so
+  the window is best-effort below the first level.
 - **Majors are not automatic:** a major bump within the mature window is
   taken only after reading its changelog/migration notes; if the migration
   is non-trivial, hold the package at the newest mature version of the
@@ -105,14 +120,40 @@ toolchain-locked (see Phase 1.2's kotlinx pin) and not bun-managed.
 - **Cross-repo alignment:** shared deps land on the SAME version in all
   three repos - zod (today: switchboard ^4.4.3, nyaaskills ^4.4.3, evie-bot
   ^4.3.6 - the misalignment directly affects Phase 4's synced schema
-  copies), typescript, biome, vitest/bun:test tooling, @types/*, MCP SDK
-  where shared. Build the shared-dep list by diffing the three
+  copies; 4.4.3 is the newest mature stable), typescript, biome,
+  vitest/bun:test tooling, @types/* (pin @types/bun exact - evie carries
+  BOTH `@types/bun: "latest"` and a direct bun-types; the "latest" range
+  violates the maturity rule on every re-resolve, and the bun-types
+  duplicate goes), ws (switchboard dep AND an evie override - align), MCP
+  SDK where shared. Build the shared-dep list by diffing the three
   package.json files at sweep start.
+- **evie-bot's `overrides` block (package.json:56-69, 12 entries) is in
+  scope but HAND-EDITED** - `bun add` cannot touch overrides. The lurking
+  majors all live here (undici 8.x, fast-uri 4.x, @hono/node-server 2.x);
+  they are security pins for transitives, so hold each at the newest mature
+  version of its CURRENT major. Align the ws override with switchboard's
+  direct dep.
+- **Dedupe step after the sweep:** grep each bun.lock for duplicate
+  resolutions of the shared-dep list and re-resolve (`bun update <pkg>`) -
+  switchboard's lock currently carries a stale nested zod 4.3.6 under the
+  MCP SDK alongside root 4.4.3.
 - **Verification cadence:** after each package (or small same-family batch),
   run that repo's lint + full test suite; on failure, bisect the batch.
-  switchboard: `bun run lint && bun run test`; nyaaskills: its lint + `bun
-  test`; evie-bot: its lint + test scripts. End-state: all three suites
-  green, lockfiles committed.
+  switchboard: `bun run lint && bun run test`. nyaaskills: its lint + `bun
+  test`. evie-bot: `bun run lint && bun run test && bun run test:bun` - TWO
+  test scripts; vitest explicitly excludes `**/*.bun.test.ts`
+  (vitest.config.ts:27), and the bridge transport tests live there. Commit
+  manifest + bun.lock ATOMICALLY per repo: evie CI runs plain `bun install`
+  with no --frozen-lockfile and has no test job on main-push, so the LOCAL
+  suites are the gate (optional ride-along: add --frozen-lockfile to evie's
+  _audit.yml/_lint.yml so future mismatches fail loudly). End-state: all
+  three suites green, lockfiles committed.
+- **Dependabot alignment (ride-along):** evie-bot already runs daily npm
+  dependabot with `cooldown: default-days: 7` - the exact maturity window
+  this phase codifies; switchboard and nyaaskills have NO dependabot. Copy
+  evie's config to both so all three repos drift together under the same
+  7-day window (dependabot will rewrite the exact pins on its own cadence -
+  that is the intended steady-state updater after this one-time alignment).
 - **Deploy:** rides each repo's next normal deploy (minor bumps per the
   Versions note; evie-bot deploys via its push-to-main CI). No protocol or
   behavior change expected; if a dep bump changes observable behavior, that
@@ -139,7 +180,22 @@ generator must cover is plain TS interfaces or Kotlin-only knowledge:
 - Collapse the TS-internal mirror: derive the existing interfaces via
   `z.infer` from the new schemas so phone-protocol.ts interfaces and
   schemas.ts cannot drift (one truth file; otherwise codegen creates a THIRD
-  copy).
+  copy). The collapse extends to types.ts or the new schemas re-declare ITS
+  shapes: `ChannelFile := z.infer<typeof ChannelFileSchema>` (killing the
+  "Keep the shapes in lockstep" mirror comment, schemas.ts:121),
+  `TeamInfo := z.infer` of its new schema; ConnectionMode / TeamKind /
+  RequestType / EffortLevel derive from exported z.enum consts. Decode-side
+  request_type stays an OPEN z.string() in MailboxEntry: routes.ts:707
+  composes a live `request_type: "handoff"` outside the types.ts union -
+  evidence that closed decode enums break on real traffic.
+- The `conv:` session grammar is a SECOND cross-language wire-grammar
+  mirror, today with no pin at all: routes.ts:168 and phoneHandler.ts:250
+  compose `conv:<convId>:<team>` by hand; ChatRepository.kt:627-628
+  tail-parses it. Add CONV_SESSION_PREFIX + composeConvSessionId /
+  parseConvSessionTeam helpers to the phone-protocol truth, swap both TS
+  compose sites to the helper, and emit the constant through the generator
+  alongside NOTICE_SESSION_PREFIX (cleanup-1a's teamForEntry imports the
+  generated constant).
 - Provisioning runtime behavior stays app-side: `device` defaulting to
   `Build.MODEL`, `conversationId` minting a UUID, and `trimEnd('/')` URL
   normalization (PhoneClient.kt:42, 49-51) cannot live in a schema. The
@@ -172,6 +228,9 @@ until Phase 2 deletes the hand types).
   different keys (PhoneOp uses `kind`, evie frames use `type`).
 - **Sealed classes apply to ENCODE-side unions only**: PhoneOpSchema (the
   phone only encodes ops, closure is safe) and Phase 2's evie frame union.
+  The designation lives as a hardcoded encode-side-roots list in
+  scripts/codegen-kotlin.ts (no schema-side magic); everything not on the
+  list defaults to open.
   Op results generate as five independent data classes - they carry no wire
   discriminator (PhoneOpResult is a plain union correlated by opId,
   phone-protocol.ts:125-130) and adding one is a wire change the additive
@@ -231,13 +290,19 @@ AGP 8.7.3 (libs.versions.toml:2-3):
   `sourceSets["test"].resources.srcDir("../../tests/fixtures")` in
   app/build.gradle.kts so fixtures load from the classpath regardless of CI
   working dir. Cross-reference cleanup 1a's test-infra block
-  (cleanup-framework.md:33-40) - the real-org.json-jar mandate there applies
+  (cleanup-framework.md:43-50) - the real-org.json-jar mandate there applies
   to 1a's codec tests, not these serialization fixtures; whichever phase
   lands first wires junit, the other reuses it.
 - Fixture set must include: every op kind, a mailbox entry per kind
   (message/reply/notice incl. title+summary), an unknown-extra-field fixture
   (must PASS both sides - tolerance bar), a missing-required fixture (must
-  FAIL both sides), and an `at` value above 2^31 (fails any Int mapping).
+  FAIL both sides), an `at` value above 2^31 (fails any Int mapping), and a
+  `request_type: "handoff"` entry (the live out-of-union value).
+- The Kotlin half of the fixture contract must ACTUALLY run in CI: add
+  `./gradlew :app:testDebugUnitTest` to _build-android.yml (JDK/SDK already
+  provisioned there) before the release step - the new bun-only ci.yml
+  cannot run it, and without this step the Kotlin fixtures are local-only
+  and rot.
 - New `ci.yml` (none exists; main-push.yml fires only on android/** paths,
   so TS edits run zero CI today): checkout + `oven-sh/setup-bun@v2` + bun
   install + `bun run lint` + `bun run test` + drift check
@@ -254,20 +319,33 @@ check and fixture tests fail; full `bun run test` + `testDebugUnitTest`.
 by both plans:** wire entry decode = generated kotlinx serializers (owned by
 this plan; PhoneClient/codec call `Json.decodeFromString`). MailboxCodec
 keeps `Message <-> JSONObject` persistence (org.json, its own legacy-compat
-rules) and the grammar verbs (`teamForEntry`). Either plan may land first: if
-1a lands first its hand decode swaps to generated serializers here; if this
-lands first, 1a builds the codec around generated types from day one.
-Generated types are the nouns; the codec keeps the verbs.
+rules) and the grammar verbs (`teamForEntry`). CONSTANTS: the generated
+proto/ constants own NOTICE_SESSION_PREFIX, CONV_SESSION_PREFIX, and
+PHONE_PROTOCOL_VERSION once P1 lands - teamForEntry imports the generated
+constant and the hand doc-mirror comment dies; 1a's hand-owned constant
+applies only if 1a lands first, swapping at P1 like the decode. Either plan
+may land first: if 1a lands first its hand decode swaps to generated
+serializers here; if this lands first, 1a builds the codec around generated
+types from day one. Generated types are the nouns; the codec keeps the
+verbs.
 
 ## Phase 2: parse-don't-validate at every boundary
 
 - Phone wire (Kotlin): replace ALL of PhoneClient's hand parsing with
-  generated types - the audit's full site list: mailbox entries + team lists
-  + register results (PhoneClient.kt:69-96, 213-238), the PhoneRelayReply
-  envelope unwrap repeated at every call site (:153, :158, :200-207, :222 -
-  becomes ONE generated decode), Provisioning field-mapping (:39-54; the
-  thin wrapper from Phase 1.0 keeps runtime defaults), and `RawFile` dies in
-  favor of generated ChannelFile (Attachments.decode signature adapts).
+  generated types - the audit's full site list: the hand data classes
+  (PhoneClient.kt:61-97) and the decode sites (:153-170 register/teams,
+  :213-247 poll incl. title/summary), the PhoneRelayReply envelope unwrap
+  repeated at every call site (:153, :158, :200-207, :222 - becomes ONE
+  generated decode of the Phase 1.0 schema), Provisioning field-mapping
+  (:39-54; the thin wrapper from Phase 1.0 keeps runtime defaults), and
+  `RawFile` dies in favor of generated ChannelFile (Attachments.decode
+  signature adapts). Two more blob touch points beyond PhoneClient:
+  `setDeviceName` rewrites the stored blob key-surgically
+  (ChatRepository.kt:563-570) - it STAYS a raw JSON-tree edit, never
+  decode->re-encode through the generated type (that would silently strip
+  unknown future fields from the stored blob - a data-loss trap);
+  `looksProvisionable` (MainActivity.kt:382-386) either stays a heuristic
+  or delegates to the wrapper's safe-parse.
   Decision folded in: the `SendResult.inlineBody` path
   (PhoneClient.kt:71/200-207 -> ChatRepository.kt:356) reads a `response`
   field the arbiter has never sent (phoneHandler.ts:26-27 documents
@@ -291,9 +369,12 @@ Generated types are the nouns; the codec keeps the verbs.
   - Outbound: a `ToolCallFrame` schema ({type:"tool_call", callId, action,
     params}, evieClient.ts:154-161).
   - `phone_relay_reply` is NOT a frame type - it travels as a tool_call and
-    evie intercepts it by tool NAME (BridgeServer.ts:162-164). It gets a
-    `PhoneRelayReplySchema` validating the PARAMS payload that relayPump.ts:
-    30-36 composes, not a union member.
+    evie intercepts it by tool NAME (BridgeServer.ts:162-164), piping params
+    opaquely. The schema validating that PARAMS payload (composed at
+    relayPump.ts:30-36) is the Phase 1.0 PhoneRelayReply schema, living with
+    the phone-protocol truth and consumed arbiter-side - evie-protocol.ts
+    carries NO reply schema, keeping the Phase 4 copy a true leaf with no
+    duplication.
   - No auth/hello member: auth is an HTTP Bearer header at WS upgrade, and
     the de facto hello is the tool_registry push.
   - The phone_relay BODY stays opaque-but-typed in the envelope union; full
@@ -371,14 +452,21 @@ falling back to Azure.
   every push even though it ships in the APK. The Kotlin descriptor data
   class comes from the Phase 1 generator (free-form `request` maps to
   JsonObject per the type table).
-- SttsClient rewrite: Provider enum and `requestBody()` die. The client
-  takes a descriptor: builds the URL from `path`, runs the template walk,
-  streams to file. Zero per-provider branches. Engine code (timeouts, auth
-  header, health) stays.
-- Cache: key switches enum path -> descriptor id; since ids equal enum
-  names, existing cache entries actually survive. If an id ever changes,
-  old entries are abandoned by design (cache is disposable, reclaimed only
-  by forget/clearAll - acceptable, audio is bounded by message count).
+- SttsClient rewrite: Provider enum and `requestBody()` die. The
+  DESCRIPTOR IS A PER-CALL PARAMETER replacing the Provider param in
+  `stream()`/`sample()` - the constructor stays `(baseUrl, apiKey)`,
+  because ChatRepository caches ONE provider-agnostic client invalidated
+  only on credential change (ChatRepository.kt:145, 184-189) while the
+  provider is chosen per call (:218-231). In-scope signature updates ride
+  along: SttsPlayer.play/playSample/key/cacheFile (SttsPlayer.kt:59-90,
+  181-185) swap their Provider param for the descriptor. Zero per-provider
+  branches; engine code (timeouts, auth header, health) stays.
+- Cache: keyed on descriptor `path` (NOT id) - the path strings ("Azure",
+  "OpenAI") are what today's keys embed (SttsPlayer.kt:181-185,
+  `provider.path`), so existing cache entries genuinely survive. Ids
+  ("AZURE") are the pref/identity lane only. If a path ever changes, old
+  entries are abandoned by design (cache is disposable, reclaimed only by
+  forget/clearAll - acceptable, audio is bounded by message count).
 - Settings UI: picker lists descriptors from the catalog; voice field
   offers the catalog as suggestions while staying free-text (catalogs are
   curated, not exhaustive).
@@ -410,8 +498,8 @@ falling back to Azure.
   - switchboard: humanTools.ts:43 (field), :87 (NOTIFY_DESCRIPTION prose),
     :212 (destructure), :229 (wire POST key); routes.ts:117
     (HumanNotifySchema), :730, :749; routes.test.ts:147-197 (several
-    sites); CLAUDE.md:34 (already stale - says `{tiny, full?}` though
-    summary/full are required; fix regardless).
+    sites); CLAUDE.md:34 (rename only - the tier doc itself was already
+    corrected during lap 1).
   - nyaaskills: notify.ts:17-21, :40, :61, :83 (relayInstruction prose);
     cycleCheckpoint.ts:40-64 (tier fields; attachments follows at :65-72),
     :120 (description), :125 (destructure), :134-135, :145-146, :197-198
@@ -449,8 +537,8 @@ falling back to Azure.
     136-182), BridgeServer.forwardDM (dm_forward, BridgeServer.ts:127),
     PhoneBridgeServer.handleRequest (phone_relay, PhoneBridgeServer.ts:
     146-153). The server-manager bridge shares BridgeTransport (second
-    instance, :62-66) and adopts the same envelope schema by construction -
-    intended.
+    instance at app/services/BridgeService.ts:62-71) and adopts the same
+    envelope schema by construction - intended.
   - Every copy headed:
     `// SYNCED COPY - source of truth: switchboard/src/shared/<file>.ts`
     `// MUST re-copy on change: cp <src> <dest> (see switchboard CLAUDE.md)`.
@@ -486,8 +574,11 @@ falling back to Azure.
   consume the generator; 4 syncs schemas that 2 creates).
 - Deploy shape: P0 = all three repos' next normal deploys (no behavior
   change expected). P1 = app + CI only. P2 = arbiter rebuild + app. P3 =
-  app only. P4 = switchboard plugin bump + push + ARBITER REBUILD FIRST +
-  then reload_plugins + nyaaskills plugin bump + evie CI deploy.
+  app only. P4 order, pinned: bump + push BOTH plugin repos (switchboard +
+  nyaaskills) first, then ARBITER REBUILD, then ONE reload_plugins (the
+  single /plugin update covers both plugins - bumping nyaaskills after the
+  reload would leave the renamed cycleCheckpoint unactivated in live
+  sessions), then evie CI deploy.
 - "app" defined: any android/** merge to main auto-builds and refreshes the
   single latest APK release (main-push.yml paths filter +
   _build-android.yml:59-84) - every Android-touching phase ships a release
@@ -507,9 +598,15 @@ falling back to Azure.
   P4.
 - Emulator harness: `source ~/android-dev/env.sh`, AVD phone35,
   `wm size 720x1600` + `density 280`, reset after.
-- cleanup-framework.md interplay: 1a/1b can run before, after, or
-  interleaved with this plan; the shared resources are the Android junit
-  test classpath (first lander wires it) and the wire-decode stack
-  resolution pinned in Phase 1's interplay block (kotlinx owns wire decode;
-  MailboxCodec owns org.json persistence + grammar verbs). Both plans state
-  the same end-state.
+- cleanup-framework.md interplay: 1a/1b can run before or after this plan's
+  cycle, or as items appended into the same cycle (the run-to-completion
+  rule allows appending, not parking). Shared resources: the Android junit
+  test classpath (first lander wires it), the wire-decode stack + constants
+  resolution pinned in Phase 1's interplay block (kotlinx owns wire decode
+  and the generated constants; MailboxCodec owns org.json persistence +
+  grammar verbs), AND the notify surfaces - cleanup P2 (notify opId) and
+  cleanup P4 (routes split moving humanNotify into routes/human.ts) edit
+  the same humanTools.ts/routes.ts sites this plan's P4 renames. The opId
+  and tiny->title changes are independent additive edits; whichever plan
+  lands second re-runs the blast-radius grep instead of trusting this
+  plan's line numbers.

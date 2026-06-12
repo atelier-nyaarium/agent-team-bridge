@@ -31,7 +31,11 @@ classpath. The codec is independently testable before any transport seam exists.
     entry decode ultimately belongs to schema-first's GENERATED
     kotlinx-serialization types (the codec or PhoneClient calls
     `Json.decodeFromString`); MailboxCodec keeps the org.json persistence
-    round-trip and the grammar verbs. If 1a lands first, extract the hand
+    round-trip and the grammar verbs. CONSTANTS: once schema-first P1 lands,
+    the generated proto/ constants own NOTICE_SESSION_PREFIX (and
+    CONV_SESSION_PREFIX) - teamForEntry imports the generated constant and
+    the doc-mirror comment dies; the hand-owned mirrored constant above
+    applies only while 1a runs first. If 1a lands first, extract the hand
     decode as-is and swap it for the generated serializers when schema-first
     Phase 1 lands; if schema-first lands first, build the codec around the
     generated types from day one. The real-org.json-test-jar mandate below
@@ -89,7 +93,7 @@ The framework extraction proper. Android reducer becomes testable end to end.
   stay for now; they are outgoing-attachment I/O used before the transport call.
   If reducer tests ever need them faked, lift behind a small seam then - not
   speculatively now.
-- Composition root stays `Repo.get(context)` (MainActivity.kt:80-88), the SINGLE
+- Composition root stays `Repo.get(context)` (MainActivity.kt:83-91), the SINGLE
   wiring point shared by BOTH composition paths - MainActivity and
   `SwitchboardService.onCreate` (SwitchboardService.kt:46) both obtain the
   singleton through it. Production passes `::PhoneClient` as the factory; tests
@@ -155,7 +159,8 @@ Reachable now via FakeTransport. Cross-runtime phase: arbiter AND app change.
   immediately). `appendIfLive` stays separate.
 - Ride-along: resolve `parseNoticeSession` (phone-protocol.ts) - currently a
   dead export with no TS caller. Either the arbiter-side mis-thread work gains a
-  caller, or delete it (Phase 5 codegen supersedes the mirror anyway).
+  caller, or delete it (schema-first Phase 1 codegen supersedes the mirror
+  anyway).
 - Verification: new TS tests (routes.test.ts, phone-handler.test.ts,
   device-mailbox.test.ts) + Android regression tests; full `bun run test` +
   `testDebugUnitTest`. Deploy: full cross-runtime ritual (arbiter rebuild + app
@@ -245,6 +250,12 @@ whichever plan runs first wires the Android junit test classpath.
   change (the 3.9.0 tolerance checks from the notify cycle are the bar). New
   apps must also tolerate old arbiters (the mis-thread phone guard exists for
   exactly this).
+- Overlap with plans/schema-first.md P4: this plan's Phase 2 (notify opId)
+  and Phase 4 (routes split moving humanNotify into routes/human.ts) edit
+  the same humanTools.ts/routes.ts sites schema-first renames (tiny ->
+  title). The changes are independent additive edits; whichever plan lands
+  second re-runs the blast-radius grep instead of trusting the other plan's
+  line numbers.
 - Emulator harness: `source ~/android-dev/env.sh`, AVD phone35,
   `wm size 720x1600` + `density 280`, reset after.
 - Known debt, out of scope here: the pending-job store is in-memory, so an
