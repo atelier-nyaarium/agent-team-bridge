@@ -1,17 +1,11 @@
 import crypto from "node:crypto";
 import WebSocket from "ws";
-import type { PhoneRelayFrame } from "../../shared/phone-protocol.js";
-import type { ChannelFile } from "../../shared/types.js";
+import { type BridgeTool, EvieInboundFrameSchema, type ToolCallFrame } from "../../shared/evie-protocol.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
-export interface EvieToolSchema {
-	name: string;
-	title: string;
-	description: string;
-	parameters: Record<string, unknown>;
-}
+export type EvieToolSchema = BridgeTool;
 
 export interface EvieToolCallResult {
 	callId: string;
@@ -19,20 +13,19 @@ export interface EvieToolCallResult {
 	error?: string;
 }
 
-export interface DmForwardPayload {
-	content: string;
-	userId: string;
-	channelId: string;
-	messageId: string;
-	files?: ChannelFile[];
-}
+export type DmForwardPayload = Extract<
+	import("../../shared/evie-protocol.js").EvieInboundFrame,
+	{ type: "dm_forward" }
+>;
 
 export interface EvieClientConfig {
 	url: string;
 	authToken: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	onDmForward?: (dm: DmForwardPayload) => void;
-	onPhoneRelay?: (frame: PhoneRelayFrame) => void;
+	// The relay pump owns full PhoneRelayFrameSchema validation; the envelope
+	// union only routes by type, so the frame travels as unknown.
+	onPhoneRelay?: (frame: unknown) => void;
 	onDisconnect?: () => void;
 }
 
@@ -54,6 +47,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 	let stopped = false;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	let cachedTools: EvieToolSchema[] = [];
+	let droppedFrames = 0;
 	const pendingCalls = new Map<
 		string,
 		{ resolve: (result: EvieToolCallResult) => void; timer: ReturnType<typeof setTimeout> }
@@ -73,38 +67,66 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		});
 
 		ws.on("message", (raw: WebSocket.Data) => {
-			let msg: Record<string, unknown>;
+			let msg: unknown;
 			try {
 				msg = JSON.parse(raw.toString());
 			} catch {
+				droppedFrames++;
+				console.warn(`[evie-client] dropped non-JSON frame (${droppedFrames} dropped total)`);
 				return;
 			}
 
-			if (msg.type === "tool_registry" && Array.isArray(msg.tools)) {
-				cachedTools = msg.tools as EvieToolSchema[];
-				console.log(`[evie-client] received ${cachedTools.length} tool schemas`);
-				config.onToolRegistry?.(cachedTools);
+			// Boundary parse: unknown frame types and malformed envelopes drop
+			// with a counter instead of being blind-cast (or silently ignored).
+			const parsed = EvieInboundFrameSchema.safeParse(msg);
+			if (!parsed.success) {
+				droppedFrames++;
+				const kind = (msg as { type?: unknown } | null)?.type;
+				console.warn(
+					`[evie-client] dropped frame type=${JSON.stringify(kind)} (${droppedFrames} dropped total): ${parsed.error.issues[0]?.message ?? "malformed"}`,
+				);
+				return;
 			}
+			const frame = parsed.data;
 
-			if (msg.type === "dm_forward") {
-				config.onDmForward?.(msg as unknown as DmForwardPayload);
-			}
-
-			if (msg.type === "phone_relay") {
-				config.onPhoneRelay?.(msg as unknown as PhoneRelayFrame);
-			}
-
-			if (msg.type === "tool_result" || msg.type === "tool_error") {
-				const callId = msg.callId as string;
-				const pending = pendingCalls.get(callId);
-				if (pending) {
-					clearTimeout(pending.timer);
-					pendingCalls.delete(callId);
-					if (msg.type === "tool_error") {
-						pending.resolve({ callId, error: msg.error as string });
-					} else {
-						pending.resolve({ callId, result: msg.result });
+			switch (frame.type) {
+				case "tool_registry": {
+					cachedTools = frame.tools;
+					console.log(`[evie-client] received ${cachedTools.length} tool schemas`);
+					config.onToolRegistry?.(cachedTools);
+					break;
+				}
+				case "dm_forward": {
+					config.onDmForward?.(frame);
+					break;
+				}
+				case "phone_relay": {
+					config.onPhoneRelay?.(frame);
+					break;
+				}
+				case "tool_result": {
+					const pending = pendingCalls.get(frame.callId);
+					if (pending) {
+						clearTimeout(pending.timer);
+						pendingCalls.delete(frame.callId);
+						pending.resolve({ callId: frame.callId, result: frame.result });
 					}
+					break;
+				}
+				case "tool_error": {
+					// tool_error legitimately carries callId: null (evie could not
+					// attribute the failure to a call); nothing pends under null.
+					if (frame.callId === null) {
+						console.warn(`[evie-client] tool_error with no callId: ${frame.error ?? "unknown"}`);
+						break;
+					}
+					const pending = pendingCalls.get(frame.callId);
+					if (pending) {
+						clearTimeout(pending.timer);
+						pendingCalls.delete(frame.callId);
+						pending.resolve({ callId: frame.callId, error: frame.error ?? "unknown error" });
+					}
+					break;
 				}
 			}
 		});
@@ -151,14 +173,8 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 
 			pendingCalls.set(callId, { resolve, timer });
 
-			ws!.send(
-				JSON.stringify({
-					type: "tool_call",
-					callId,
-					action,
-					params,
-				}),
-			);
+			const frame: ToolCallFrame = { type: "tool_call", callId, action, params };
+			ws!.send(JSON.stringify(frame));
 		});
 	}
 

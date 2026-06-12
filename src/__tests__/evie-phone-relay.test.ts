@@ -2,7 +2,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { type EvieClient, startEvieClient } from "../arbiter/evie/evieClient.js";
-import type { PhoneRelayFrame } from "../shared/phone-protocol.js";
+import { PhoneRelayFrameSchema } from "../shared/schemas.js";
 
 interface FakeEvie {
 	wss: WebSocketServer;
@@ -47,7 +47,7 @@ describe("evieClient phone relay", () => {
 			}
 		});
 
-		const relayed = new Promise<PhoneRelayFrame>((resolve) => {
+		const relayed = new Promise<unknown>((resolve) => {
 			client = startEvieClient({
 				url: `ws://localhost:${evie?.port}`,
 				authToken: "test-token",
@@ -75,7 +75,9 @@ describe("evieClient phone relay", () => {
 			}),
 		);
 
-		const frame = await relayed;
+		// The handler receives the frame as unknown (the relay pump owns full
+		// validation in production); the test re-parses to assert the shape.
+		const frame = PhoneRelayFrameSchema.parse(await relayed);
 		expect(frame.opId).toBe("op-abc");
 		expect(frame.op.kind).toBe("register");
 

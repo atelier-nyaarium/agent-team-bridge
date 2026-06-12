@@ -131,25 +131,29 @@ export const PostResponsePartsSchema = z.array(PostResponsePartSchema).min(1);
 ////////////////////////////////
 //  Channel File Schema (inbound from evie-bot bridge)
 //
-//  Validates the per-attachment record on the dm_forward / channel_push path.
-//  No regex on `base64` because the field can hold up to ~670 MB on the wire
-//  (the locked 500 MB hard backstop, base64-inflated). Shape-only validation
-//  catches malformed envelopes without the per-byte scan cost.
+//  Owned by evie-protocol.ts (the self-contained module synced into
+//  evie-bot); re-exported here so the phone-protocol schemas and existing
+//  importers keep one import surface.
+
+import { ChannelFilesSchema } from "./evie-protocol.js";
+
+export { ChannelFileSchema, ChannelFilesSchema } from "./evie-protocol.js";
+
+////////////////////////////////
+//  WS Register Schema
 //
-//  Mirror: evie-bot's `ForwardDmFile` interface in
-//  `app/features/bridge/BridgeServer.ts`. Keep the shapes in lockstep.
+//  Validates the register message at the bridge WebSocket boundary - the one
+//  message where a blind-cast team name could key the registry on undefined.
+//  mode stays an open string (the handler maps anything non-"channel" to
+//  "cli", tolerant of future modes).
 
-export const ChannelFileSchema = z
-	.object({
-		filename: z.string().min(1).max(255),
-		mime: z.string(),
-		size: z.number().int().nonnegative(),
-		descriptiveKey: z.string(),
-		base64: z.string().optional(),
-	})
-	.meta({ id: "ChannelFile" });
-
-export const ChannelFilesSchema = z.array(ChannelFileSchema);
+export const WsRegisterSchema = z.object({
+	type: z.literal("register"),
+	team: z.string().min(1).max(64),
+	mode: z.string().optional(),
+	subId: z.string().optional(),
+	conversationId: z.string().optional(),
+});
 
 ////////////////////////////////
 //  Team Info Schema

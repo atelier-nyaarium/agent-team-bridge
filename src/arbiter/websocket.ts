@@ -3,6 +3,7 @@ import type { ServerWebSocket } from "bun";
 import { debugLog } from "../shared/debug-log.js";
 import type { Mutex } from "../shared/mutex.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
+import { WsRegisterSchema } from "../shared/schemas.js";
 import type { ConnectionMode, ResponsePayload, WebSocketConfig } from "../shared/types.js";
 import type { WakeCoordinator } from "./wake.js";
 
@@ -129,10 +130,15 @@ export function createWebSocketHandlers({
 		}
 
 		if (msg.type === "register") {
-			const team = msg.team as string;
-			const subId = (msg.subId as string) || crypto.randomUUID().slice(0, 8);
-			const mode = (msg.mode === "channel" ? "channel" : "cli") as ConnectionMode;
-			const conversationId = (msg.conversationId as string | undefined) ?? null;
+			const reg = WsRegisterSchema.safeParse(msg);
+			if (!reg.success) {
+				console.warn(`[ws] dropped malformed register: ${reg.error.issues[0]?.message ?? "invalid"}`);
+				return;
+			}
+			const team = reg.data.team;
+			const subId = reg.data.subId || crypto.randomUUID().slice(0, 8);
+			const mode: ConnectionMode = reg.data.mode === "channel" ? "channel" : "cli";
+			const conversationId = reg.data.conversationId ?? null;
 
 			// Reserved-name protection: first live registration wins. A second process
 			// trying to claim "arbiter" or "host" is rejected so a stray container project

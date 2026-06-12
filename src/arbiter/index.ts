@@ -104,7 +104,8 @@ export async function startArbiter(): Promise<void> {
 	// handler is constructed after routes exist; relay frames arriving before
 	// that are dropped (the phone re-polls).
 	const mailboxStore = new DeviceMailboxStore();
-	let handlePhoneRelay: ((frame: PhoneRelayFrame) => void) | null = null;
+	// Takes unknown: the relay pump owns the full frame validation.
+	let handlePhoneRelay: ((frame: unknown) => void) | null = null;
 	let evictPhonePeer: ((conversationId: string) => void) | null = null;
 
 	store.startCleanup();
