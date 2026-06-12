@@ -85,6 +85,8 @@ Use "host" as the team to return the line to the host orchestrator.
 
 const NOTIFY_DESCRIPTION = `
 Push a notification to the human's phone(s). Broadcasts to every registered phone device: \`tiny\` becomes the notification-bar line, \`summary\` rides as its own short tier (phone features read it directly), and \`full\` the message body, threaded under your team's name. All three are required - a notice must always carry a real body. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply / respond_to_human for those).
+
+Write every tier as plain content: no lead-in labels ("Short answer:", "Summary:", "TLDR:") - the tiers are already structurally separated, and labels waste phone screen space.
 `.trim();
 
 /**
