@@ -727,10 +727,13 @@ describe("DeviceMailboxStore caps", () => {
 	});
 
 	it("a fresh instance gets a new epoch", () => {
+		// Epochs are random (the phone compares them only for equality), so the
+		// contract is "different", not "greater" - greater was the old counter
+		// semantics that collided across arbiter restarts.
 		const store = new DeviceMailboxStore();
 		const e1 = store.ensure("x").epoch;
 		store.delete("x");
 		const e2 = store.ensure("x").epoch;
-		expect(e2).toBeGreaterThan(e1);
+		expect(e2).not.toBe(e1);
 	});
 });
