@@ -140,6 +140,31 @@ describe("createPhoneHandler", () => {
 		}
 	});
 
+	it("rejects a device name that matches a devcontainer project, even a sleeping one", async () => {
+		// Without this, a phone named after a sleeping catalog project squats its
+		// registry slot: teams() shows it online, sends land in the phone mailbox,
+		// and the real project's wake is suppressed.
+		const registry: TeamRegistry = new Map();
+		const conversationRegistry: ConversationRegistry = new Map();
+		const mailboxStore = new DeviceMailboxStore();
+		const handler = createPhoneHandler({
+			registry,
+			conversationRegistry,
+			mailboxStore,
+			routes: {
+				send: async () => jsonRes({}),
+				respond: () => jsonRes({}),
+				teams: () => jsonRes([]),
+			},
+			isProjectName: (name) => name === "recipe-app",
+		});
+
+		const reply = await handler.handleFrame(frame({ kind: "register" }, "op1", "recipe-app", "conv-x"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("project on the bridge");
+		expect(registry.get("recipe-app")).toBeUndefined();
+	});
+
 	it("rejects a device name already held by a real team", async () => {
 		const h = makeHarness();
 		const subs = new Map([["abc123", realTeamWs("team-a", "abc123")]]);
@@ -182,6 +207,8 @@ describe("createPhoneHandler", () => {
 			fromConversationId: "conv-pixel",
 			to: "team-a",
 			body: "hello",
+			// Phone sends must never enter the route's CLI branch (random session ids).
+			channelOnly: true,
 		});
 	});
 
@@ -481,7 +508,11 @@ describe("createPhoneHandler", () => {
 		expect(entries[0].body).toContain("not connected");
 	});
 
-	it("a woken CLI team's late answer is recovered into the mailbox", async () => {
+	it("a sleeping CLI team woken past the bound lands a clean error, never a random session id", async () => {
+		// The route's channelOnly check rejects the woken CLI team with 409 after
+		// the relay bound already returned "running". The continuation must turn
+		// that into an error reply on the deterministic session, not mirror a
+		// random-uuid session into the mailbox.
 		const registry: TeamRegistry = new Map();
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
@@ -501,14 +532,22 @@ describe("createPhoneHandler", () => {
 			},
 		});
 
-		await handler.handleFrame(frame({ kind: "send", to: "sleepy-cli", body: "hi" }));
-		resolveSend?.(jsonRes({ session_id: "random-uuid-1", status: "completed", response: "cli answer" }));
+		const reply = await handler.handleFrame(frame({ kind: "send", to: "sleepy-cli", body: "hi" }));
+		expect(reply.result).toEqual({ session_id: "conv:conv-pixel:sleepy-cli", status: "running" });
+
+		resolveSend?.(
+			jsonRes(
+				{ error: '"sleepy-cli" is a CLI-mode agent; phone chat supports channel-mode (Claude) teams only' },
+				409,
+			),
+		);
 		await new Promise((r) => setTimeout(r, 10));
 
 		const poll = await handler.handleFrame(frame({ kind: "poll" }, "op2"));
-		const entries = (poll.result as { entries: { body?: string; session_id: string }[] }).entries;
+		const entries = (poll.result as { entries: { body?: string; status?: string; session_id: string }[] }).entries;
 		expect(entries).toHaveLength(1);
-		expect(entries[0]).toMatchObject({ session_id: "random-uuid-1", body: "cli answer" });
+		expect(entries[0]).toMatchObject({ session_id: "conv:conv-pixel:sleepy-cli", status: "error" });
+		expect(entries[0].body).toContain("CLI-mode");
 	});
 
 	it("a retried opId replays the cached reply without re-running the send", async () => {
@@ -578,13 +617,14 @@ describe("createPhoneHandler", () => {
 		await handler.handleFrame(frame({ kind: "send", to: "sleepy", body: "hi" }, "s1", "pixel", "C"));
 		// Rename the same conversation before the send resolves.
 		await handler.handleFrame(frame({ kind: "register" }, "r1", "pixel-9", "C"));
-		resolveSend?.(jsonRes({ session_id: "random-1", status: "completed", response: "cli answer" }));
+		resolveSend?.(jsonRes({ error: 'Team "sleepy" is not connected' }, 404));
 		await new Promise((r) => setTimeout(r, 10));
 
 		const poll = await handler.handleFrame(frame({ kind: "poll" }, "p1", "pixel-9", "C"));
-		const entries = (poll.result as { entries: { body?: string }[] }).entries;
+		const entries = (poll.result as { entries: { body?: string; status?: string }[] }).entries;
 		expect(entries).toHaveLength(1);
-		expect(entries[0].body).toBe("cli answer");
+		expect(entries[0]).toMatchObject({ status: "error" });
+		expect(entries[0].body).toContain("not connected");
 	});
 
 	it("poll reports the mailbox epoch and survives an idle-eviction reset", async () => {

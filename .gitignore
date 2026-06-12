@@ -3,6 +3,7 @@ node_modules/
 
 # Development
 _test/
+temp/
 /.swc/
 /.vscode-server/
 /.vscode/

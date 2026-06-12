@@ -20,6 +20,7 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 	const conversationRegistry = overrides.conversationRegistry || (new Map() as RoutesDeps["conversationRegistry"]);
 	const store = overrides.store || new PendingJobStore<ResponsePayload>();
 	const offlineCatalog = overrides.offlineCatalog || new Map<string, string>();
+	const knownTeamPaths = overrides.knownTeamPaths || new Map<string, string>();
 	const targetLocks = new Map<string, Mutex>();
 	const getMutexFn = ((team: string) => {
 		if (!targetLocks.has(team)) targetLocks.set(team, new Mutex());
@@ -34,6 +35,7 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		config: { LOG_PATH: "/tmp/test-debug.log", RESPONSE_TIMEOUT_MS: 500 },
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
 		offlineCatalog,
+		knownTeamPaths,
 		pinnedHolders: overrides.pinnedHolders || new Map<string, string | null>(),
 		sessionToChannel: overrides.sessionToChannel || new Map<string, string>(),
 		postSystemMessageToChannel: overrides.postSystemMessageToChannel || (() => Promise.resolve()),
@@ -75,16 +77,20 @@ describe("routes", () => {
 
 			const { teams } = createRoutes(ctx);
 			const res = teams();
-			expect(await res.json()).toEqual([{ team: "team-x", status: "online", mode: "cli", queue_depth: 1 }]);
+			expect(await res.json()).toEqual([
+				{ team: "team-x", status: "online", mode: "cli", kind: "loose", queue_depth: 1 },
+			]);
 		});
 
-		it("returns offline teams from catalog", async () => {
+		it("returns offline teams from catalog as available devcontainers", async () => {
 			const offlineCatalog = new Map<string, string>();
 			offlineCatalog.set("proj-a", "/home/user/proj-a");
 			const ctx = makeCtx({ offlineCatalog });
 			const { teams } = createRoutes(ctx);
 			const res = teams();
-			expect(await res.json()).toEqual([{ team: "proj-a", status: "available", queue_depth: 0 }]);
+			expect(await res.json()).toEqual([
+				{ team: "proj-a", status: "available", kind: "devcontainer", queue_depth: 0 },
+			]);
 		});
 
 		it("active teams take precedence over catalog", async () => {
@@ -97,8 +103,25 @@ describe("routes", () => {
 			const res = teams();
 			const json = await res.json();
 			expect(json).toEqual([
-				{ team: "proj-a", status: "online", mode: "cli", queue_depth: 0 },
-				{ team: "proj-b", status: "available", queue_depth: 0 },
+				{ team: "proj-a", status: "online", mode: "cli", kind: "devcontainer", queue_depth: 0 },
+				{ team: "proj-b", status: "available", kind: "devcontainer", queue_depth: 0 },
+			]);
+		});
+
+		it("flags online teams as devcontainer via knownTeamPaths even when the catalog is empty", async () => {
+			// offlineCatalog clears when the host daemon disconnects; knownTeamPaths
+			// is the durable fallback, so catalog loss must not demote a project.
+			const registry = makeRegistry({
+				"proj-a": { readyState: 1, data: { mode: "channel" } },
+				"2fb1f8": { readyState: 1, data: { mode: "channel" } },
+			});
+			const knownTeamPaths = new Map<string, string>([["proj-a", "/home/user/proj-a"]]);
+			const ctx = makeCtx({ registry, knownTeamPaths });
+			const { teams } = createRoutes(ctx);
+			const json = await teams().json();
+			expect(json).toEqual([
+				{ team: "proj-a", status: "online", mode: "channel", kind: "devcontainer", queue_depth: 0 },
+				{ team: "2fb1f8", status: "online", mode: "channel", kind: "loose", queue_depth: 0 },
 			]);
 		});
 	});
@@ -353,6 +376,80 @@ describe("routes", () => {
 			expect(json.status).toBe("running");
 			expect(json.session_id).toBeDefined();
 		}, 10000);
+
+		it("rejects a channelOnly send to an online CLI team with 409", async () => {
+			const fakeWs = { readyState: 1, data: { mode: "cli" }, send() {} };
+			const registry = makeRegistry({ "cli-team": fakeWs });
+			const ctx = makeCtx({ registry });
+			const { send } = createRoutes(ctx);
+
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "cli-team",
+				body: "hi",
+				channelOnly: true,
+			});
+			expect(res.status).toBe(409);
+			expect((await res.json()).error).toContain("CLI-mode");
+		});
+
+		it("rejects a channelOnly send to a SLEEPING CLI team woken by the send (no random session id)", async () => {
+			// The team is offline at send time; the wake brings up a CLI-mode agent.
+			// Without channelOnly this fell into the CLI branch and minted a random
+			// uuid session. With it, the post-wake mode check returns a clean 409.
+			const registry = makeRegistry({});
+			const cliWs = { readyState: 1, data: { mode: "cli" }, send() {} };
+			const ctx = makeCtx({
+				registry,
+				tryWakeTeam: (team: string) => {
+					const subs = new Map();
+					subs.set("sub-1", cliWs);
+					registry.set(team, subs as never);
+					return Promise.resolve(true);
+				},
+			});
+			const { send } = createRoutes(ctx);
+
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "sleepy-cli",
+				body: "hi",
+				channelOnly: true,
+			});
+			expect(res.status).toBe(409);
+			const json = await res.json();
+			expect(json.error).toContain("CLI-mode");
+			expect(json.session_id).toBeUndefined();
+		}, 10000);
+
+		it("channelOnly send to a channel team proceeds with the deterministic session id", async () => {
+			const pushed: Record<string, unknown>[] = [];
+			const fakeWs = {
+				readyState: 1,
+				data: { mode: "channel" },
+				send(data: string) {
+					pushed.push(JSON.parse(data));
+				},
+			};
+			const registry = makeRegistry({ "proj-a": fakeWs });
+			const ctx = makeCtx({ registry });
+			const { send } = createRoutes(ctx);
+
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "proj-a",
+				body: "hi",
+				channelOnly: true,
+			});
+			const json = await res.json();
+			expect(json.session_id).toBe("conv:conv-1:proj-a");
+			expect(json.status).toBe("running");
+			expect(pushed.length).toBe(1);
+			expect(pushed[0].type).toBe("channel_push");
+		});
 
 		it("late delivery is stored and pollable after timeout", async () => {
 			const fakeWs = { readyState: 1, data: { mode: "cli" }, send() {} };

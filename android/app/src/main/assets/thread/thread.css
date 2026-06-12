@@ -79,6 +79,7 @@ html, body {
 
 .meta .status.running { color: var(--running); }
 .meta .status.error { color: var(--error); }
+.meta .status.retry { cursor: pointer; text-decoration: underline; }
 
 /* Markdown content */
 

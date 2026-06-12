@@ -105,10 +105,15 @@ export interface RegisterMessage {
 	conversationId: string;
 }
 
+/** Devcontainer-backed teams are wakeable projects; loose teams are ad-hoc
+ * sessions (host windows, one-off peers) that end when their process does. */
+export type TeamKind = "devcontainer" | "loose";
+
 export interface TeamInfo {
 	team: string;
 	status: "online" | "available";
 	mode?: ConnectionMode;
+	kind: TeamKind;
 	queue_depth: number;
 }
 

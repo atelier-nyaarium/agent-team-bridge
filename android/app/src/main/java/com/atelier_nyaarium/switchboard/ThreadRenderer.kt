@@ -42,9 +42,18 @@ class ThreadRenderer(context: Context) {
 	 * path when the user taps an image or file chip. */
 	var onOpenAttachment: ((String) -> Unit)? = null
 
+	/** Set by the owner; called on the main thread with the row id of a failed
+	 * send when the user taps its retry badge. */
+	var onRetryMessage: ((Long) -> Unit)? = null
+
 	private var ready = false
 	private val pending = mutableListOf<String>()
 	private var renderedCount = 0
+
+	// Per-row content fingerprints of what is on screen, so an in-place change
+	// (echo pending -> sent/error, waking placeholder resolving into the reply)
+	// re-renders just that row via the id-replace path in appendMessages.
+	private var fingerprints = mapOf<Long, Int>()
 
 	init {
 		configure(context)
@@ -71,6 +80,12 @@ class ThreadRenderer(context: Context) {
 				@JavascriptInterface
 				fun openAttachment(relPath: String) {
 					webView.post { onOpenAttachment?.invoke(relPath) }
+				}
+
+				@JavascriptInterface
+				fun retryMessage(id: String) {
+					val msgId = id.toLongOrNull() ?: return
+					webView.post { onRetryMessage?.invoke(msgId) }
 				}
 			},
 			"Android",
@@ -121,21 +136,35 @@ class ThreadRenderer(context: Context) {
 
 	/**
 	 * Feed the current transcript, sending only what changed so re-opening a thread
-	 * keeps its scroll position and rendered DOM. Threads are append-only, so a grown
-	 * list appends the tail; anything else (first feed, shrink from clear/forget)
+	 * keeps its scroll position and rendered DOM. Threads are append-mostly: a grown
+	 * list appends the tail, rows whose content changed in place (send states, the
+	 * waking placeholder resolving) re-render by id, and a shrink (clear/forget)
 	 * replaces wholesale.
 	 */
 	fun sync(messages: List<Message>) {
-		when {
-			renderedCount == 0 || messages.size < renderedCount -> {
-				eval("window.thread.setMessages(${toJson(messages)})")
-			}
-			messages.size > renderedCount -> {
-				eval("window.thread.appendMessages(${toJson(messages.subList(renderedCount, messages.size))})")
-			}
-			else -> return
+		val prevRendered = renderedCount
+		if (renderedCount == 0 || messages.size < renderedCount) {
+			eval("window.thread.setMessages(${toJson(messages)})")
+			renderedCount = messages.size
+			fingerprints = messages.associate { it.id to fingerprint(it) }
+			return
 		}
-		renderedCount = messages.size
+		if (messages.size > renderedCount) {
+			eval("window.thread.appendMessages(${toJson(messages.subList(renderedCount, messages.size))})")
+			renderedCount = messages.size
+		}
+		val changed = messages.subList(0, prevRendered).filter { fingerprints[it.id] != fingerprint(it) }
+		if (changed.isNotEmpty()) {
+			eval("window.thread.appendMessages(${toJson(changed)})")
+		}
+		fingerprints = messages.associate { it.id to fingerprint(it) }
+	}
+
+	private fun fingerprint(m: Message): Int {
+		var h = m.text.hashCode()
+		h = 31 * h + (m.status?.hashCode() ?: 0)
+		h = 31 * h + m.files.size
+		return h
 	}
 
 	fun setDark(dark: Boolean) {
@@ -163,6 +192,7 @@ class ThreadRenderer(context: Context) {
 				.put("from", if (m.fromMe) "you" else "")
 				.put("at", m.at)
 				.put("body", m.text)
+			m.status?.let { obj.put("status", it) }
 			if (m.files.isNotEmpty()) {
 				val files = JSONArray()
 				for (f in m.files) {

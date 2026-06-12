@@ -22,12 +22,12 @@ export interface PhoneRoutes {
 }
 
 /** The JSON body shape returned by routes.send, read in both the in-time and
- * backgrounded send paths. One definition so the two read sites cannot drift. */
+ * backgrounded send paths. One definition so the two read sites cannot drift.
+ * channelOnly sends never produce an inline response body: a success is always
+ * the deterministic channel session, with the answer arriving via response_push. */
 interface SendRouteJson {
 	session_id?: string;
 	status?: string;
-	response?: string;
-	replyAsJson?: Record<string, unknown>;
 	error?: string;
 }
 
@@ -37,6 +37,11 @@ export interface PhoneHandlerDeps {
 	mailboxStore: DeviceMailboxStore;
 	routes: PhoneRoutes;
 	sendBoundMs?: number;
+	/** True when the name belongs to a devcontainer project (catalog or known
+	 * paths). A device must not take such a name: while the project sleeps, the
+	 * phone's virtual peer would squat the registry slot, absorb sends meant for
+	 * the project, and suppress its wake. */
+	isProjectName?: (name: string) => boolean;
 }
 
 ////////////////////////////////
@@ -71,6 +76,7 @@ export function createPhoneHandler({
 	mailboxStore,
 	routes,
 	sendBoundMs = SEND_BOUND_MS,
+	isProjectName,
 }: PhoneHandlerDeps) {
 	// The per-install conversationId is the real identity: it keys the mailbox,
 	// the registry sub, and this binding to the human-facing device name. The
@@ -113,6 +119,9 @@ export function createPhoneHandler({
 	function assertValidIdentity(device: string, conversationId: string): void {
 		if (RESERVED_TEAM_NAMES.has(device)) {
 			throw new Error(`"${device}" is a reserved name; pick another device name`);
+		}
+		if (isProjectName?.(device)) {
+			throw new Error(`"${device}" is a project on the bridge; pick another device name`);
 		}
 		const bound = bindings.get(conversationId);
 		if (bound && bound !== device) {
@@ -219,9 +228,10 @@ export function createPhoneHandler({
 
 			case "send": {
 				// Online CLI-mode targets answer synchronously through /send's blocking
-				// wait, far past any relay hold. Reject up front; sleeping CLI teams
-				// that slip past this (woken by the send) are recovered by the
-				// post-bound continuation below.
+				// wait, far past any relay hold. Reject those up front. A SLEEPING
+				// CLI team is unknowable here (mode surfaces only on register), so
+				// it pays a wake and is then rejected by the route's channelOnly
+				// check instead of minting a random session id.
 				const targetSubs = registry.get(op.to);
 				if (targetSubs) {
 					for (const [, ws] of targetSubs) {
@@ -242,6 +252,7 @@ export function createPhoneHandler({
 					effort: op.effort,
 					body: op.body,
 					files: op.files,
+					channelOnly: true,
 				});
 
 				let boundTimer: ReturnType<typeof setTimeout> | undefined;
@@ -253,32 +264,21 @@ export function createPhoneHandler({
 
 				if (winner === null) {
 					// Wake still in progress; hand back the deterministic channel job
-					// key now. The continuation recovers whatever the backgrounded
-					// send eventually produces into the mailbox: a wake/send failure
-					// becomes an error reply, and a woken-CLI team's synchronous
-					// answer (random session id) becomes a normal reply entry. It uses
-					// appendIfLive so a since-evicted conversation drops cleanly.
+					// key now. channelOnly guarantees a successful send is always the
+					// deterministic channel session (the real answer arrives later via
+					// response_push), so the continuation only has to surface a
+					// backgrounded failure as an error reply. It uses appendIfLive so
+					// a since-evicted conversation drops cleanly.
 					void sendPromise
 						.then(async (res) => {
+							if (res.ok) return;
 							const json = (await res.json().catch(() => ({}))) as SendRouteJson;
-							if (!res.ok) {
-								appendIfLive(conversationId, {
-									kind: "reply",
-									session_id: expectedSession,
-									status: "error",
-									body: json.error ?? `send to "${op.to}" failed`,
-								});
-								return;
-							}
-							if (json.session_id && json.session_id !== expectedSession) {
-								appendIfLive(conversationId, {
-									kind: "reply",
-									session_id: json.session_id,
-									status: json.status,
-									body: json.response,
-									replyAsJson: json.replyAsJson,
-								});
-							}
+							appendIfLive(conversationId, {
+								kind: "reply",
+								session_id: expectedSession,
+								status: "error",
+								body: json.error ?? `send to "${op.to}" failed`,
+							});
 						})
 						.catch(() => {});
 					return { session_id: expectedSession, status: "running" };
@@ -286,18 +286,6 @@ export function createPhoneHandler({
 
 				const json = (await winner.json()) as SendRouteJson;
 				if (!winner.ok) throw new Error(json.error ?? "send failed");
-				// A non-deterministic session id means a CLI-shaped synchronous answer
-				// (a CLI team woken by this send and finished within the bound). Its
-				// body would otherwise be dropped, so mirror it into the mailbox.
-				if (json.session_id && json.session_id !== expectedSession && (json.response || json.replyAsJson)) {
-					appendIfLive(conversationId, {
-						kind: "reply",
-						session_id: json.session_id,
-						status: json.status,
-						body: json.response,
-						replyAsJson: json.replyAsJson,
-					});
-				}
 				return { session_id: json.session_id ?? "", status: json.status ?? "running" };
 			}
 
