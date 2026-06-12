@@ -991,7 +991,14 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 	var voice by remember { mutableStateOf(repo.sttsVoice) }
 	var pickerOpen by remember { mutableStateOf(false) }
 	var healthy by remember { mutableStateOf<Boolean?>(null) }
+	var sampleError by remember { mutableStateOf<String?>(null) }
 	LaunchedEffect(Unit) { healthy = repo.sttsHealth() }
+	// Failed previews surface here instead of dead-ending in the log (snapshot
+	// state writes are thread-safe, so the player thread can set it directly).
+	DisposableEffect(Unit) {
+		repo.stts.onPlaybackError = { reason -> sampleError = reason }
+		onDispose { repo.stts.onPlaybackError = null }
+	}
 
 	Text("Voice playback", style = MaterialTheme.typography.titleMedium)
 	Text(
@@ -1015,7 +1022,16 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 			singleLine = true,
 		)
 	}
-	Button(enabled = healthy == true, onClick = { repo.playSttsSample() }) { Text("Play a sample") }
+	Button(
+		enabled = healthy == true,
+		onClick = {
+			sampleError = null
+			repo.playSttsSample()
+		},
+	) { Text("Play a sample") }
+	sampleError?.let {
+		Text("Playback failed: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+	}
 
 	if (pickerOpen) {
 		AlertDialog(

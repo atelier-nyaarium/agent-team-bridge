@@ -37,6 +37,11 @@ class SttsPlayer(private val root: File) {
 	 * thread UI can swap its play/stop glyph. */
 	@Volatile var onPlayingChanged: ((team: String, at: Long, playing: Boolean) -> Unit)? = null
 
+	/** Set by the owner; fired on the player thread when a synthesis or
+	 * playback attempt fails, so a tap never dead-ends silently (e.g. a
+	 * provider the service has no key for streams zero bytes). */
+	@Volatile var onPlaybackError: ((reason: String) -> Unit)? = null
+
 	fun isPlaying(team: String, at: Long, tier: Tier): Boolean =
 		currentKey?.startsWith("$team/$at-${tier.suffix}-") == true
 
@@ -103,6 +108,7 @@ class SttsPlayer(private val root: File) {
 			} catch (e: Exception) {
 				Log.w(TAG, "stts $k failed: ${e.message}")
 				dest.delete()
+				onPlaybackError?.invoke(e.message ?: "synthesis failed")
 			} finally {
 				inFlight.remove(k)
 			}
