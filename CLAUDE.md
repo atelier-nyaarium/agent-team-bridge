@@ -59,14 +59,14 @@
       - `evieTools.ts` - Converts evie's JSON Schema tool definitions to Zod via `z.fromJSONSchema()`
     - `resolve-model.ts` - Model resolution by agent type and effort level
   - `shared/` - Shared utilities used by both arbiter and MCP
-    - `types.ts` - Shared TypeScript types (payloads, configs, connection modes, `ChannelFile`)
-    - `schemas.ts` - Zod schemas shared across layers: `BridgeReplySchema` (channel_reply / crosstalk_reply), `PostResponsePartSchema` + `PostResponsePartsSchema` (outbound `respond_to_human` parts), `ChannelFileSchema` + `ChannelFilesSchema` (inbound Discord-bridge file validation)
+    - `types.ts` - Shared TypeScript types; wire shapes derive from schemas.ts via `z.infer` (`ChannelFile`, `TeamInfo`, the enums), local payload/config types stay hand-written
+    - `schemas.ts` - THE single zod truth for every wire shape: reply schemas, `PostResponsePart*` (outbound `respond_to_human` parts), `ChannelFileSchema`, `TeamInfoSchema`, the full phone protocol (`PhoneOpSchema`, `PhoneRelayFrameSchema`, `PhoneRelayReplySchema`, op results, `MailboxEntrySchema`), and `ProvisioningSchema`. Every shared schema carries `.meta({ id })` - the id is the generated Kotlin class name (see codegen below)
     - `tmp-files.ts` - `cleanupTmpDir({dir, maxAgeMs, mode: "files" | "dirs"})` - generic lazy mtime sweep used by the connector and the Discord-bridge file materializer
     - `env.ts` - Container detection (isInsideContainer)
     - `mutex.ts` - Mutex class for serializing CLI-mode requests per team
     - `pending-job-store.ts` - PendingJobStore for tracking in-flight requests with timeout/polling
     - `device-mailbox.ts` - `DeviceMailbox` (per-phone inbound queue: monotonic seq, cursor ack, entry cap, epoch) and `DeviceMailboxStore` (per-conversation, idle TTL sweep + LRU device cap, `setOnEvict`)
-    - `phone-protocol.ts` - Phone bridge wire types: relay frame, the five ops, op results, mailbox entry
+    - `phone-protocol.ts` - Phone protocol constants + session-id grammars (`NOTICE_SESSION_PREFIX`, `CONV_SESSION_PREFIX` with compose/parse helpers, `PHONE_PROTOCOL_VERSION`); the wire TYPES re-export from schemas.ts via `z.infer`
     - `reconnect.ts` - Exponential backoff reconnector for WebSocket connections
   - `__tests__/` - Test files (vitest)
 - `skills/` - Claude Code skills
@@ -83,6 +83,8 @@
 - `start-arbiter.sh` - Quick script to rebuild and start the arbiter container
 - `start-host-daemon.sh` - Start Claude Code host daemon in a tmux session
 - `scripts/check-module-residue.ts` - Verify node_modules matches bun.lock (no unsanctioned nested dirs shadowing pinned versions)
+- `scripts/codegen-kotlin.ts` - Generate `android/.../proto/Protocol.kt` (kotlinx data classes + sealed `PhoneOp` + wire constants) from the zod truth in `src/shared/schemas.ts`; committed output, drift-checked by ci.yml. Emission rules live in the script header (encode-side sealed only, open Strings for decode-side enums, integer -> Long)
+- `tests/fixtures/protocol/` - Golden wire fixtures decoded by BOTH vitest and the Android unit tests; `_manifest.json` is the single inventory both suites iterate (vitest also asserts directory/manifest agreement)
 
 ## Architecture
 
@@ -152,6 +154,7 @@ Arbiter side of a native Android chat client that reaches the bridge through evi
 - `bun run start:arbiter` - Start arbiter locally
 - `bun run start:mcp` - Start MCP server locally
 - `bun scripts/check-module-residue.ts` - Verify the node_modules tree against bun.lock
+- `bun scripts/codegen-kotlin.ts` - Regenerate the Kotlin protocol types after editing a shared schema (CI fails on a stale `proto/Protocol.kt`)
 
 ### Dependencies
 
