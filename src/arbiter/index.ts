@@ -114,7 +114,24 @@ export async function startArbiter(): Promise<void> {
 		peek: (team: string) => targetLocks.get(team),
 	});
 
-	async function tryWakeTeam(team: string): Promise<boolean> {
+	// Concurrent sends to the same sleeping team must share ONE wake: two
+	// parallel `devcontainer up` runs for the same project race each other and
+	// both error out, failing sends whose container actually comes up.
+	const inflightWakes = new Map<string, Promise<boolean>>();
+
+	function tryWakeTeam(team: string): Promise<boolean> {
+		const existing = inflightWakes.get(team);
+		if (existing) {
+			console.log(`[wake] ${team} wake already in flight; joining it`);
+			return existing;
+		}
+		const wake = doWakeTeam(team);
+		inflightWakes.set(team, wake);
+		void wake.finally(() => inflightWakes.delete(team));
+		return wake;
+	}
+
+	async function doWakeTeam(team: string): Promise<boolean> {
 		const hostSubs = registry.get("host");
 		const hostWs = hostSubs ? [...hostSubs.values()].find((ws) => ws.readyState === 1) : undefined;
 

@@ -32,9 +32,13 @@ data class Message(
 	val at: Long,
 	val id: Long = 0,
 	val files: List<MessageFile> = emptyList(),
-	/** Wire reply state: "running" interim, "error", or null for a final answer.
-	 * Parsed and persisted here; the renderer's status badge is wired in P3. */
+	/** Reply/send state: wire "running"/"error", local "pending" (echo in flight)
+	 * and "waking" (the cold-wake placeholder), or null for a settled message. */
 	val status: String? = null,
+	/** The relay opId this send was first delivered under. A retry reuses it so
+	 * the arbiter's idempotency cache replays a lost reply instead of double-
+	 * delivering to the agent (the phone protocol contract). */
+	val opId: String? = null,
 )
 
 data class ChatState(
@@ -63,11 +67,12 @@ data class ChatState(
 		}
 
 	/** Busy heuristic for the status board: we are awaiting a reply (the thread
-	 * ends on our cleanly-sent message) or the agent's last word was an interim
-	 * running status. An error-marked tail (failed send) is not "working". */
+	 * ends on our pending or cleanly-sent message) or the tail is a waking/running
+	 * placeholder. An error-marked tail (failed send) is not "working". */
 	fun working(team: String): Boolean {
 		val last = threads[team]?.lastOrNull() ?: return false
-		return (last.fromMe && last.status == null) || last.status == "running"
+		return (last.fromMe && (last.status == null || last.status == "pending")) ||
+			last.status == "running" || last.status == "waking"
 	}
 
 	/** Bridge link health for the dashboard header: green once registered and polling
@@ -168,33 +173,109 @@ class ChatRepository(
 			return@withContext
 		}
 		// Local echo: persist the picked files so the sent message shows its own
-		// thumbnails through the same asset-loader path as inbound files.
+		// thumbnails through the same asset-loader path as inbound files. The echo
+		// starts "pending" and resolves to sent (null) or "error" when the op lands.
 		val localFiles = Attachments.storeOutgoing(filesDir, "out-${System.currentTimeMillis()}", picked)
-		append(team, Message(true, text, System.currentTimeMillis(), files = localFiles))
+		val opId = java.util.UUID.randomUUID().toString()
+		val echoId = append(
+			team,
+			Message(true, text, System.currentTimeMillis(), files = localFiles, status = "pending", opId = opId),
+		)
+		val wasAvailable = _state.value.teams.firstOrNull { it.name == team }?.status == "available"
+		val hasPlaceholder = _state.value.threads[team]?.any { !it.fromMe && it.status == "waking" } == true
+		var placeholderId: Long? = null
+		if (wasAvailable && !hasPlaceholder) {
+			// Cold wake takes minutes with no wire traffic; show one placeholder row
+			// that the first real reply resolves in place (appendInbound). "waking"
+			// is a local-only status, so a future wire "running" can never be
+			// mistaken for it.
+			placeholderId = append(
+				team,
+				Message(false, "Waking $team... first boot can take a minute or two.", System.currentTimeMillis(), status = "waking"),
+			)
+		}
+		deliver(team, echoId, text, picked, opId, placeholderId)
+	}
+
+	/** Re-send a failed message, rebuilding attachment bytes from their local
+	 * copies. The error -> pending flip is the atomic claim: a double-tap's second
+	 * coroutine finds the row already pending and backs off, so the wire send runs
+	 * once. The original opId is reused so the arbiter dedupes a lost-reply retry. */
+	suspend fun retrySend(team: String, messageId: Long) = withContext(Dispatchers.IO) {
+		var claimed = false
+		_state.update { s ->
+			val thread = s.threads[team] ?: return@update s.also { claimed = false }
+			val msg = thread.firstOrNull { it.id == messageId }
+			if (msg == null || !msg.fromMe || msg.status != "error") {
+				claimed = false
+				s
+			} else {
+				claimed = true
+				s.copy(threads = s.threads + (team to thread.map { if (it.id == messageId) it.copy(status = "pending") else it }))
+			}
+		}
+		if (!claimed) return@withContext
+		val msg = _state.value.threads[team]?.firstOrNull { it.id == messageId } ?: return@withContext
+		persistThreads(_state.value.threads)
+		val files = msg.files.mapNotNull { f ->
+			val rel = f.src?.substringAfter("/${Attachments.DIR}/", "")?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+			val file = Attachments.resolve(filesDir, rel) ?: return@mapNotNull null
+			runCatching { OutgoingFile(f.name, f.mime, file.readBytes()) }.getOrNull()
+		}
+		if (msg.text.isBlank() && files.isEmpty()) {
+			// Nothing recoverable (attachment copies gone); put the badge back and say why.
+			setMessageStatus(team, messageId, "error")
+			_state.update { it.copy(error = "Attachments are no longer on this device; cannot retry.") }
+			return@withContext
+		}
+		if (files.size < msg.files.size) {
+			_state.update { it.copy(error = "Some attachments are no longer on this device; resending the rest.") }
+		}
+		deliver(team, messageId, msg.text, files, msg.opId ?: java.util.UUID.randomUUID().toString(), null)
+	}
+
+	/** Run the wire send and settle the echo row's state from the outcome. On
+	 * failure the cold-wake placeholder (if this send created one) is removed:
+	 * nothing is coming to resolve it. */
+	private fun deliver(
+		team: String,
+		echoId: Long,
+		text: String,
+		picked: List<OutgoingFile>,
+		opId: String,
+		placeholderId: Long?,
+	) {
+		fun fail(message: String?) {
+			_state.update { it.copy(error = message ?: "send failed") }
+			setMessageStatus(team, echoId, "error")
+			if (placeholderId != null) removeMessage(team, placeholderId)
+		}
 		try {
-			val r = client().send(team, text, picked)
+			val r = client().send(team, text, picked, opId)
 			when {
-				!r.ok -> {
-					_state.update { it.copy(error = r.error ?: "send failed") }
-					markLastMessageError(team)
+				!r.ok -> fail(r.error)
+				else -> {
+					setMessageStatus(team, echoId, null)
+					if (r.inlineBody != null) append(team, Message(false, r.inlineBody, System.currentTimeMillis()))
 				}
-				r.inlineBody != null -> append(team, Message(false, r.inlineBody, System.currentTimeMillis()))
 			}
 		} catch (e: Exception) {
-			_state.update { s -> s.copy(error = e.message) }
-			markLastMessageError(team)
+			fail(e.message)
 		}
 	}
 
-	/** Stamp the just-echoed message as failed, so the thread tail stops reading
-	 * as awaiting-reply (working chip) and P3 can badge it. The atomic update
-	 * re-checks the tail on every retry, so a reply that raced in is never the
-	 * one dropped and re-stamped. */
-	private fun markLastMessageError(team: String) {
+	private fun removeMessage(team: String, id: Long) {
 		val threads = _state.updateAndGet { s ->
 			val thread = s.threads[team] ?: return@updateAndGet s
-			val last = thread.lastOrNull()?.takeIf { it.fromMe && it.status == null } ?: return@updateAndGet s
-			s.copy(threads = s.threads + (team to (thread.dropLast(1) + last.copy(status = "error"))))
+			s.copy(threads = s.threads + (team to thread.filterNot { it.id == id }))
+		}.threads
+		persistThreads(threads)
+	}
+
+	private fun setMessageStatus(team: String, id: Long, status: String?) {
+		val threads = _state.updateAndGet { s ->
+			val thread = s.threads[team] ?: return@updateAndGet s
+			s.copy(threads = s.threads + (team to thread.map { if (it.id == id) it.copy(status = status) else it }))
 		}.threads
 		persistThreads(threads)
 	}
@@ -237,8 +318,10 @@ class ChatRepository(
 						lastSeq = e.seq
 						val team = teamFromSession(e.sessionId) ?: e.from ?: continue
 						val files = Attachments.decode(filesDir, mb.epoch, e.seq, e.files)
-						if (e.body.isNotEmpty() || files.isNotEmpty()) {
-							append(team, Message(false, e.body, e.at, files = files, status = e.status))
+						// status-only entries still land (e.g. a wake-failure error
+						// with no body would otherwise vanish).
+						if (e.body.isNotEmpty() || files.isNotEmpty() || e.status != null) {
+							appendInbound(team, Message(false, e.body, e.at, files = files, status = e.status))
 							bumpUnread(team)
 						}
 					}
@@ -326,13 +409,39 @@ class ChatRepository(
 		_state.value = ChatState(provisioned = false)
 	}
 
-	private fun append(team: String, msg: Message) {
+	private fun append(team: String, msg: Message): Long {
+		var newId = 0L
 		val threads = _state.updateAndGet { s ->
 			val existing = s.threads[team].orEmpty()
-			val nextId = (existing.maxOfOrNull { it.id } ?: -1L) + 1
-			s.copy(threads = s.threads + (team to (existing + msg.copy(id = nextId))))
+			newId = (existing.maxOfOrNull { it.id } ?: -1L) + 1
+			s.copy(threads = s.threads + (team to (existing + msg.copy(id = newId))))
 		}.threads
 		persistThreads(threads)
+		return newId
+	}
+
+	/** Append a message that came from the wire. If the thread holds the synthetic
+	 * waking placeholder (wherever it sits - a second send may have landed after
+	 * it), the first real word from the team resolves it in place (same row id),
+	 * so the placeholder never lingers in the transcript. */
+	private fun appendInbound(team: String, msg: Message) {
+		var replaced = true
+		val threads = _state.updateAndGet { s ->
+			val thread = s.threads[team].orEmpty()
+			val idx = thread.indexOfLast { !it.fromMe && it.status == "waking" }
+			if (idx >= 0) {
+				val next = thread.toMutableList().also { it[idx] = msg.copy(id = thread[idx].id) }
+				s.copy(threads = s.threads + (team to next))
+			} else {
+				replaced = false
+				s
+			}
+		}.threads
+		if (replaced) {
+			persistThreads(threads)
+		} else {
+			append(team, msg)
+		}
 	}
 
 	private fun bumpUnread(team: String) {
@@ -349,6 +458,7 @@ class ChatRepository(
 			for (m in msgs) {
 				val obj = JSONObject().put("me", m.fromMe).put("text", m.text).put("at", m.at)
 				obj.putOpt("status", m.status)
+				obj.putOpt("opId", m.opId)
 				// Persist local paths (the decoded files survive on disk), never base64.
 				if (m.files.isNotEmpty()) {
 					val files = JSONArray()
@@ -373,7 +483,7 @@ class ChatRepository(
 					val arr = root.getJSONArray(team)
 					// id is not persisted; reassign from list order so it stays a dense,
 					// stable per-thread key whether the JSON is old (no id) or new.
-					put(team, (0 until arr.length()).map {
+					val loaded = (0 until arr.length()).map {
 						val m = arr.getJSONObject(it)
 						Message(
 							m.optBoolean("me"),
@@ -382,8 +492,18 @@ class ChatRepository(
 							it.toLong(),
 							loadFiles(m),
 							m.optString("status").takeIf { s -> s.isNotEmpty() },
+							m.optString("opId").takeIf { s -> s.isNotEmpty() },
 						)
-					})
+					}
+					// Reconcile rows stranded by a process death mid-send: a "pending"
+					// echo has no deliver() coming (demote to retriable error) and a
+					// "waking" placeholder has no resolution coming (drop it).
+					put(
+						team,
+						loaded
+							.filterNot { !it.fromMe && it.status == "waking" }
+							.map { if (it.fromMe && it.status == "pending") it.copy(status = "error") else it },
+					)
 				}
 			}
 		}.getOrDefault(emptyMap())

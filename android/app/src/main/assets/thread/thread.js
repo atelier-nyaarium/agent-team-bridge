@@ -160,7 +160,19 @@
 		if (m.status && m.status !== "completed") {
 			const status = document.createElement("span");
 			status.className = "status " + (m.status === "error" ? "error" : "running");
-			status.textContent = m.status;
+			// A failed send is actionable: tapping the badge asks the host to retry.
+			const retriable = m.status === "error" && m.role === "user" && m.id !== undefined && m.id !== null;
+			if (retriable) {
+				status.classList.add("retry");
+				status.textContent = "failed - tap to retry";
+				status.addEventListener("click", () => {
+					if (window.Android && typeof window.Android.retryMessage === "function") {
+						window.Android.retryMessage(String(m.id));
+					}
+				});
+			} else {
+				status.textContent = m.status;
+			}
 			meta.appendChild(status);
 		}
 		row.appendChild(meta);

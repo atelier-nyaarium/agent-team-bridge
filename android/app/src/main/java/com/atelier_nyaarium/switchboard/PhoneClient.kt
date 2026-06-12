@@ -108,12 +108,14 @@ class PhoneClient(private val prov: Provisioning) {
 		}
 	}
 
-	/** Send a phone op through the service-proxy to the phone bridge. */
-	fun relay(opJson: String): String {
+	/** Send a phone op through the service-proxy to the phone bridge. Mutating ops
+	 * pass their own stable opId so a retry after a lost reply replays the cached
+	 * result server-side instead of running the op twice (the protocol contract). */
+	fun relay(opJson: String, opId: String = UUID.randomUUID().toString()): String {
 		val body = JSONObject()
 			.put("device", prov.device)
 			.put("conversationId", prov.conversationId)
-			.put("opId", UUID.randomUUID().toString())
+			.put("opId", opId)
 			.put("op", JSONObject(opJson))
 			.toString()
 		val req = Request.Builder()
@@ -157,7 +159,12 @@ class PhoneClient(private val prov: Provisioning) {
 	 * or land in the mailbox for a later poll; either way the conversation is keyed
 	 * server-side by (this device, team).
 	 */
-	fun send(to: String, body: String, files: List<OutgoingFile> = emptyList()): SendResult {
+	fun send(
+		to: String,
+		body: String,
+		files: List<OutgoingFile> = emptyList(),
+		opId: String = UUID.randomUUID().toString(),
+	): SendResult {
 		val op = JSONObject().put("kind", "send").put("to", to).put("body", body)
 		if (files.isNotEmpty()) {
 			val arr = JSONArray()
@@ -173,7 +180,7 @@ class PhoneClient(private val prov: Provisioning) {
 			}
 			op.put("files", arr)
 		}
-		val reply = JSONObject(relay(op.toString()))
+		val reply = JSONObject(relay(op.toString(), opId))
 		val result = reply.optJSONObject("result")
 		return SendResult(
 			ok = reply.optBoolean("ok", false),
@@ -226,7 +233,16 @@ class PhoneClient(private val prov: Provisioning) {
 			val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(ks) }
 			val tm = tmf.trustManagers.first { it is X509TrustManager } as X509TrustManager
 			val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), SecureRandom()) }
-			return OkHttpClient.Builder().sslSocketFactory(ssl.socketFactory, tm).build()
+			// The relay holds a send op server-side for up to 25s (the arbiter's
+			// send bound) before answering "running", so OkHttp's 10s default read
+			// timeout would mislabel every cold-wake send as failed. Write gets
+			// headroom for 10 MB attachment uploads on slow links.
+			return OkHttpClient.Builder()
+				.sslSocketFactory(ssl.socketFactory, tm)
+				.connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+				.readTimeout(35, java.util.concurrent.TimeUnit.SECONDS)
+				.writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+				.build()
 		}
 	}
 }

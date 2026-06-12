@@ -16,11 +16,16 @@ class ThreadRendererPool(private val context: Context) {
 	private val renderers = mutableMapOf<String, ThreadRenderer>()
 	private var dark = false
 
+	/** Set by the owner; called with (team, row id) when a failed send's retry
+	 * badge is tapped in that team's thread. */
+	var onRetry: ((String, Long) -> Unit)? = null
+
 	fun get(team: String): ThreadRenderer =
 		renderers.getOrPut(team) {
 			ThreadRenderer(context).also {
 				it.setDark(dark)
 				it.onOpenAttachment = ::openAttachment
+				it.onRetryMessage = { id -> onRetry?.invoke(team, id) }
 			}
 		}
 

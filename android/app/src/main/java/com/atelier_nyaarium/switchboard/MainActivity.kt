@@ -112,6 +112,10 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 	// renderer survives Sessions round-trips and tab switches. Pruned to open tabs;
 	// destroyed with the Activity.
 	val rendererPool = remember { ThreadRendererPool(context.applicationContext) }
+	rendererPool.onRetry = { team, id ->
+		// The demo fixture's error row must never reach the real repository.
+		if (!(BuildConfig.DEBUG && team == DEMO_TEAM)) scope.launch { repo.retrySend(team, id) }
+	}
 	val dark = isSystemInDarkTheme()
 	LaunchedEffect(dark) { rendererPool.setDark(dark) }
 	LaunchedEffect(state.openTabs) { rendererPool.retain(state.openTabs.toSet()) }
@@ -162,12 +166,20 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 			// thread, not the fixture.
 			val isDemo = BuildConfig.DEBUG && openTeam == DEMO_TEAM
 			// Devcontainer names are the project identity; only loose peers take labels.
-			val kind = state.sessions.firstOrNull { it.name == openTeam }?.kind
+			val session = state.sessions.firstOrNull { it.name == openTeam }
+			val kind = session?.kind
 			// Rename only when positively known loose; an unknown kind (team gone
 			// from the list) stays un-renameable rather than defaulting open.
+			val presence = when {
+				isDemo || session == null -> null
+				session.status == "online" -> if (state.working(session.name)) "working..." else "live"
+				session.status == "available" -> if (state.working(session.name)) "waking..." else "available"
+				else -> "ended"
+			}
 			ThreadScreen(
 				team = openTeam!!,
 				label = state.label(openTeam!!),
+				presence = presence,
 				tabs = state.openTabs,
 				tabLabel = { state.label(it) },
 				messages = if (isDemo) demoMessages() else state.threads[openTeam].orEmpty(),
@@ -441,6 +453,15 @@ fun HealthHeader(state: ChatState) {
 	}
 }
 
+/** Chip color for the board/thread presence vocabulary. */
+@Composable
+private fun presenceColor(presence: String): Color = when (presence) {
+	"live" -> Color(0xFF2EA043)
+	"working...", "waking..." -> Color(0xFFD29922)
+	"available" -> Color(0xFF0969DA)
+	else -> MaterialTheme.colorScheme.outline
+}
+
 @Composable
 private fun StatusChip(text: String, color: Color) {
 	Surface(color = color.copy(alpha = 0.16f), shape = MaterialTheme.shapes.small) {
@@ -615,6 +636,7 @@ private fun relativeTime(at: Long): String {
 fun ThreadScreen(
 	team: String,
 	label: String,
+	presence: String?,
 	tabs: List<String>,
 	tabLabel: (String) -> String,
 	messages: List<Message>,
@@ -664,7 +686,18 @@ fun ThreadScreen(
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text(label, fontFamily = FontFamily.Monospace) },
+				title = {
+					Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+						Text(
+							label,
+							fontFamily = FontFamily.Monospace,
+							maxLines = 1,
+							overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+							modifier = Modifier.weight(1f, fill = false),
+						)
+						presence?.let { StatusChip(it, presenceColor(it)) }
+					}
+				},
 				navigationIcon = { TextButton(onClick = onSessions) { Text("Sessions") } },
 				actions = {
 					IconButton(onClick = { showMenu = true }) { Text("⋮", style = MaterialTheme.typography.titleLarge) }
@@ -706,12 +739,34 @@ fun ThreadScreen(
 					}
 				}
 			}
-			ThreadWebView(
-				team = team,
-				messages = messages,
-				rendererPool = rendererPool,
-				modifier = Modifier.weight(1f).fillMaxWidth(),
-			)
+			if (messages.isEmpty()) {
+				Column(
+					Modifier.weight(1f).fillMaxWidth().padding(32.dp),
+					verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
+					horizontalAlignment = Alignment.CenterHorizontally,
+				) {
+					Text(label, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace)
+					Text(
+						when (presence) {
+							"available", "waking..." ->
+								"No messages yet. Sending will wake $label - first boot can take a minute or two."
+							"live", "working..." -> "No messages yet. $label is live."
+							"ended" -> "This session has ended."
+							else -> "No messages yet."
+						},
+						style = MaterialTheme.typography.bodyMedium,
+						color = MaterialTheme.colorScheme.onSurfaceVariant,
+						textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+					)
+				}
+			} else {
+				ThreadWebView(
+					team = team,
+					messages = messages,
+					rendererPool = rendererPool,
+					modifier = Modifier.weight(1f).fillMaxWidth(),
+				)
+			}
 			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
 			if (attachments.isNotEmpty()) {
 				Row(

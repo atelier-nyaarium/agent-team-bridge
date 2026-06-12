@@ -137,4 +137,6 @@ fun demoMessages(): List<Message> = listOf(
 	),
 	Message(true, longBody, DEMO_AT + 6000, 6),
 	Message(false, hugeCodeBody, DEMO_AT + 7000, 7),
+	Message(false, "Waking demo... first boot can take a minute or two.", DEMO_AT + 8000, 8, status = "waking"),
+	Message(true, "This send failed on purpose, to demo the retry badge.", DEMO_AT + 9000, 9, status = "error"),
 )
