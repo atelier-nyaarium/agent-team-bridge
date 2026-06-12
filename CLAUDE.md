@@ -12,7 +12,7 @@
     - `wake.ts` - WakeCoordinator class for container on-demand startup
     - `connectorProxy.ts` - WebSocket proxy for game client connector pass-through
     - `evie/` - **Evie bridge** - kubectl port-forward tunnel to evie-bot K8s pod
-      - `evieClient.ts` - WebSocket client to evie's BridgeServer, tool call forwarding, DM forwarding, `phone_relay` frame intake (`onPhoneRelay`)
+      - `evieClient.ts` - WebSocket client to evie's BridgeServer, tool call forwarding, DM forwarding, `phone_relay` frame intake (`onPhoneRelay`). Inbound frames are boundary-parsed through `EvieInboundFrameSchema` (shared/evie-protocol.ts); unknown/malformed frames are counted and warned, never blind-cast
       - `portForward.ts` - kubectl port-forward child process manager with auto-restart
     - `phone/` - **Phone bridge** - arbiter side of the Android channel (see Phone Bridge below)
       - `phoneHandler.ts` - `createPhoneHandler`: validates device identity, dispatches the phone ops (register/list_teams/send/respond/poll) by reusing the HTTP routes, owns per-conversation mailbox/binding/idempotency state
@@ -67,6 +67,7 @@
     - `pending-job-store.ts` - PendingJobStore for tracking in-flight requests with timeout/polling
     - `device-mailbox.ts` - `DeviceMailbox` (per-phone inbound queue: monotonic seq, cursor ack, entry cap, epoch) and `DeviceMailboxStore` (per-conversation, idle TTL sweep + LRU device cap, `setOnEvict`)
     - `phone-protocol.ts` - Phone protocol constants + session-id grammars (`NOTICE_SESSION_PREFIX`, `CONV_SESSION_PREFIX` with compose/parse helpers, `PHONE_PROTOCOL_VERSION`); the wire TYPES re-export from schemas.ts via `z.infer`
+    - `evie-protocol.ts` - SELF-CONTAINED (zod-only) leaf owning the arbiter<->evie frame vocabulary: `EvieInboundFrameSchema` (tool_registry / tool_result / tool_error / dm_forward / loose phone_relay), `ToolCallFrameSchema`, and `ChannelFileSchema` (re-exported by schemas.ts). Built to be copied verbatim into evie-bot in a later phase; nothing imports into it
     - `reconnect.ts` - Exponential backoff reconnector for WebSocket connections
   - `__tests__/` - Test files (vitest)
 - `skills/` - Claude Code skills
