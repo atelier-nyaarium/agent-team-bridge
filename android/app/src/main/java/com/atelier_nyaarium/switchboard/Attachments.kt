@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.proto.ChannelFile
 import android.util.Base64
 import java.io.File
 
@@ -46,8 +47,8 @@ object Attachments {
 	 * renderer DTOs. Metadata-only entries (no base64) get a null src so the UI
 	 * shows a plain chip with no thumbnail.
 	 */
-	fun decode(filesDir: File, epoch: Int, seq: Int, raw: List<RawFile>): List<MessageFile> {
-		if (raw.isEmpty()) return emptyList()
+	fun decode(filesDir: File, epoch: Long, seq: Long, raw: List<ChannelFile>?): List<MessageFile> {
+		if (raw.isNullOrEmpty()) return emptyList()
 		val bucket = "$epoch-$seq"
 		val dir = File(root(filesDir), bucket)
 		val used = mutableSetOf<String>()

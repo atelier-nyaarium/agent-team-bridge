@@ -134,9 +134,9 @@ class ChatRepository(
 	// the player's daemon thread); @Volatile gives the writes visibility. A
 	// rare double-construct race is harmless (last writer wins, cheap build).
 	@Volatile private var client: PhoneClient? = null
-	private var cursor = 0
-	private var epoch = 0
-	private var lastSeq = -1
+	private var cursor = 0L
+	private var epoch = 0L
+	private var lastSeq = -1L
 	private var pollFails = 0
 	private var pollJob: Job? = null
 
@@ -351,10 +351,7 @@ class ChatRepository(
 			val r = client().send(team, text, picked, opId)
 			when {
 				!r.ok -> fail(r.error)
-				else -> {
-					setMessageStatus(team, echoId, null)
-					if (r.inlineBody != null) append(team, Message(false, r.inlineBody, System.currentTimeMillis()))
-				}
+				else -> setMessageStatus(team, echoId, null)
 			}
 		} catch (e: Exception) {
 			fail(e.message)
@@ -438,16 +435,17 @@ class ChatRepository(
 						// Broadcast notices thread under the SENDER: their session id is
 						// the pinned "notice:<from>" grammar, not a conversation.
 						val team = if (e.kind == "notice") {
-							e.from ?: e.sessionId.removePrefix(NOTICE_SESSION_PREFIX).takeIf { it.isNotEmpty() } ?: continue
+							e.from ?: e.session_id.removePrefix(NOTICE_SESSION_PREFIX).takeIf { it.isNotEmpty() } ?: continue
 						} else {
-							teamFromSession(e.sessionId) ?: e.from ?: continue
+							teamFromSession(e.session_id) ?: e.from ?: continue
 						}
 						val files = Attachments.decode(filesDir, mb.epoch, e.seq, e.files)
 						// status-only entries still land (e.g. a wake-failure error
 						// with no body would otherwise vanish).
-						if (e.body.isNotEmpty() || files.isNotEmpty() || e.status != null) {
+						val bodyText = e.body.orEmpty()
+						if (bodyText.isNotEmpty() || files.isNotEmpty() || e.status != null) {
 							val msg =
-								Message(false, e.body, e.at, files = files, status = e.status, title = e.title, summary = e.summary)
+								Message(false, bodyText, e.at, files = files, status = e.status, title = e.title, summary = e.summary)
 							appendInbound(team, msg)
 							bumpUnread(team)
 							burst.getOrPut(team) { mutableListOf() }.add(msg)
@@ -579,9 +577,9 @@ class ChatRepository(
 		sttsClient = null
 		stts.stop()
 		File(filesDir, "stts").deleteRecursively()
-		cursor = 0
-		epoch = 0
-		lastSeq = -1
+		cursor = 0L
+		epoch = 0L
+		lastSeq = -1L
 		_state.value = ChatState(provisioned = false)
 	}
 

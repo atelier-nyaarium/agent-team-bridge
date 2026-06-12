@@ -1,5 +1,11 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.proto.ChannelFile
+import com.atelier_nyaarium.switchboard.proto.PhoneOp
+import com.atelier_nyaarium.switchboard.proto.PhonePollResult
+import com.atelier_nyaarium.switchboard.proto.PhoneRegisterResult
+import com.atelier_nyaarium.switchboard.proto.PhoneRelayReply
+import com.atelier_nyaarium.switchboard.proto.PhoneSendResult
 import java.io.ByteArrayInputStream
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -8,17 +14,23 @@ import java.util.UUID
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
 
 /**
  * Credential blob the phone holds (pasted once). Reaches the phone bridge through
  * the k8s API service-proxy: the SA token authenticates to the API server, the app
  * token (a separate forwarded header) authenticates to evie.
+ *
+ * Thin wrapper over the generated proto.Provisioning (the wire shape): this class
+ * owns the RUNTIME behavior a schema cannot express - device defaulting to
+ * Build.MODEL, conversationId minting a UUID, trailing-slash URL normalization,
+ * and the service-proxy defaults.
  */
 data class Provisioning(
 	val apiUrl: String,
@@ -37,27 +49,27 @@ data class Provisioning(
 ) {
 	companion object {
 		fun parse(blob: String): Provisioning {
-			val j = JSONObject(blob)
+			val p = wireJson.decodeFromString<com.atelier_nyaarium.switchboard.proto.Provisioning>(blob)
 			return Provisioning(
-				apiUrl = j.getString("apiUrl").trimEnd('/'),
-				caPem = j.getString("caPem"),
-				saToken = j.getString("saToken"),
-				appToken = j.optString("appToken", ""),
-				namespace = j.optString("namespace", "evie-bot"),
-				service = j.optString("service", "evie-phone-bridge"),
-				port = j.optInt("port", 20004),
-				device = j.optString("device", android.os.Build.MODEL ?: "android"),
-				conversationId = j.optString("conversationId", UUID.randomUUID().toString()),
-				sttsUrl = j.optString("sttsUrl", "").trimEnd('/'),
-				sttsKey = j.optString("sttsKey", ""),
+				apiUrl = p.apiUrl.trimEnd('/'),
+				caPem = p.caPem,
+				saToken = p.saToken,
+				appToken = p.appToken ?: "",
+				namespace = p.namespace ?: "evie-bot",
+				service = p.service ?: "evie-phone-bridge",
+				port = p.port?.toInt() ?: 20004,
+				device = p.device ?: (android.os.Build.MODEL ?: "android"),
+				conversationId = p.conversationId ?: UUID.randomUUID().toString(),
+				sttsUrl = (p.sttsUrl ?: "").trimEnd('/'),
+				sttsKey = p.sttsKey ?: "",
 			)
 		}
 	}
 }
 
-/** `status` is the wire word verbatim ("online" | "available"); `kind` is
- * "devcontainer" (wakeable project) or "loose" (ad-hoc session). Old arbiters
- * omit kind, which defaults to loose. */
+/** UI model for the sessions board. Mapped one-to-one from the wire TeamInfo in
+ * `teams()`; also constructed locally for ended threads whose team has left the
+ * bridge (a state that never exists on the wire). */
 data class Team(
 	val name: String,
 	val status: String,
@@ -66,35 +78,25 @@ data class Team(
 	val kind: String = "loose",
 )
 
-data class RegisterResult(val cursor: Int, val epoch: Int)
-
-data class SendResult(val ok: Boolean, val status: String, val inlineBody: String?, val error: String?)
-
-/** Raw attachment as it arrives in a mailbox entry: base64 bytes plus metadata.
- * The repository decodes these to app-private storage before the UI sees them. */
-data class RawFile(val filename: String, val mime: String, val base64: String?)
+data class SendResult(val ok: Boolean, val status: String, val error: String?)
 
 /** A file the user picked to send. Bytes are base64-encoded onto the wire. */
 data class OutgoingFile(val name: String, val mime: String, val bytes: ByteArray)
 
-data class MailboxEntry(
-	val kind: String,
-	val sessionId: String,
-	val from: String?,
-	val body: String,
-	val seq: Int,
-	val at: Long,
-	val files: List<RawFile> = emptyList(),
-	/** Reply state from the wire: "running" interim, "error", or null/completed. */
-	val status: String? = null,
-	/** Notification-bar line for kind "notice"; the body carries the full report. */
-	val title: String? = null,
-	/** The Short tier of a notice (4-6 sentences), addressable without parsing
-	 * the body. Stub: parsed and persisted now, consumed by an upcoming feature. */
-	val summary: String? = null,
+/** The op-only envelope the phone POSTs; evie composes the full phone_relay
+ * frame around it (type + protocol version), so this is not PhoneRelayFrame. */
+@Serializable
+private data class RelayEnvelope(
+	val device: String,
+	val conversationId: String,
+	val opId: String,
+	val op: PhoneOp,
 )
 
-data class Mailbox(val entries: List<MailboxEntry>, val cursor: Int, val epoch: Int, val dropped: Int)
+/** Decode posture for everything off the wire: unknown fields are tolerated
+ * (additive protocol). Encode posture: the default config omits null-defaulted
+ * optionals, which is exactly what the arbiter's schemas accept. */
+internal val wireJson = Json { ignoreUnknownKeys = true }
 
 /** Talks to the phone bridge through the CA-pinned k8s API service-proxy. */
 class PhoneClient(private val prov: Provisioning) {
@@ -123,18 +125,13 @@ class PhoneClient(private val prov: Provisioning) {
 	 * pass their own stable opId so a retry after a lost reply replays the cached
 	 * result server-side instead of running the op twice (the protocol contract).
 	 * A held op (long-poll) passes a read timeout above its server-side hold. */
-	fun relay(opJson: String, opId: String = UUID.randomUUID().toString(), readTimeoutMs: Long? = null): String {
-		val body = JSONObject()
-			.put("device", prov.device)
-			.put("conversationId", prov.conversationId)
-			.put("opId", opId)
-			.put("op", JSONObject(opJson))
-			.toString()
+	private fun relay(op: PhoneOp, opId: String = UUID.randomUUID().toString(), readTimeoutMs: Long? = null): PhoneRelayReply {
+		val envelope = RelayEnvelope(prov.device, prov.conversationId, opId, op)
 		val req = Request.Builder()
 			.url("$proxyBase/relay")
 			.header("Authorization", "Bearer ${prov.saToken}")
 			.header("X-Android-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(body.toRequestBody(JSON))
+			.post(wireJson.encodeToString(RelayEnvelope.serializer(), envelope).toRequestBody(JSON))
 			.build()
 		val callClient = if (readTimeoutMs != null) {
 			client.newBuilder().readTimeout(readTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS).build()
@@ -144,27 +141,32 @@ class PhoneClient(private val prov: Provisioning) {
 		callClient.newCall(req).execute().use { resp ->
 			val text = resp.body?.string().orEmpty()
 			if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(500)}")
-			return text
+			return wireJson.decodeFromString<PhoneRelayReply>(text)
 		}
 	}
 
-	/** Claim this device's mailbox. Returns the starting cursor + epoch. */
-	fun register(): RegisterResult {
-		val r = JSONObject(relay("""{"kind":"register"}""")).optJSONObject("result") ?: error("register: no result")
-		return RegisterResult(cursor = r.optInt("cursor", 0), epoch = r.optInt("epoch", 0))
+	/** The reply's result payload decoded as T, or an error for a failed op. */
+	private inline fun <reified T> resultOf(reply: PhoneRelayReply, op: String): T {
+		if (!reply.ok) error("$op failed: ${reply.error ?: "unknown error"}")
+		val result = reply.result ?: error("$op: no result")
+		return wireJson.decodeFromJsonElement(result)
 	}
 
+	/** Claim this device's mailbox. Returns the starting cursor + epoch. */
+	fun register(): PhoneRegisterResult = resultOf(relay(PhoneOp.Register), "register")
+
 	fun teams(): List<Team> {
-		val result = JSONObject(relay("""{"kind":"list_teams"}""")).optJSONObject("result") ?: return emptyList()
-		val arr = result.optJSONArray("teams") ?: return emptyList()
-		return (0 until arr.length()).map {
-			val t = arr.getJSONObject(it)
+		val reply = relay(PhoneOp.ListTeams)
+		if (!reply.ok || reply.result == null) return emptyList()
+		val result =
+			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.PhoneListTeamsResult>(reply.result)
+		return result.teams.map {
 			Team(
-				name = t.optString("team"),
-				status = t.optString("status"),
-				mode = t.optString("mode"),
-				queueDepth = t.optInt("queue_depth"),
-				kind = t.optString("kind", "loose"),
+				name = it.team,
+				status = it.status,
+				mode = it.mode ?: "",
+				queueDepth = it.queue_depth.toInt(),
+				kind = it.kind ?: "loose",
 			)
 		}
 	}
@@ -182,70 +184,36 @@ class PhoneClient(private val prov: Provisioning) {
 		files: List<OutgoingFile> = emptyList(),
 		opId: String = UUID.randomUUID().toString(),
 	): SendResult {
-		val op = JSONObject().put("kind", "send").put("to", to).put("body", body)
-		if (files.isNotEmpty()) {
-			val arr = JSONArray()
-			for (f in files) {
-				arr.put(
-					JSONObject()
-						.put("filename", f.name)
-						.put("mime", f.mime)
-						.put("size", f.bytes.size)
-						.put("descriptiveKey", f.name)
-						.put("base64", android.util.Base64.encodeToString(f.bytes, android.util.Base64.NO_WRAP)),
-				)
-			}
-			op.put("files", arr)
+		val wireFiles = files.map { f ->
+			ChannelFile(
+				filename = f.name,
+				mime = f.mime,
+				size = f.bytes.size.toLong(),
+				descriptiveKey = f.name,
+				base64 = android.util.Base64.encodeToString(f.bytes, android.util.Base64.NO_WRAP),
+			)
 		}
-		val reply = JSONObject(relay(op.toString(), opId))
-		val result = reply.optJSONObject("result")
-		return SendResult(
-			ok = reply.optBoolean("ok", false),
-			status = result?.optString("status").orEmpty(),
-			inlineBody = result?.optString("response").takeIf { !it.isNullOrEmpty() },
-			error = reply.optString("error").takeIf { reply.has("error") },
-		)
+		val op = PhoneOp.Send(to = to, body = body, files = wireFiles.ifEmpty { null })
+		val reply = relay(op, opId)
+		val status = reply.result?.let {
+			runCatching { wireJson.decodeFromJsonElement<PhoneSendResult>(it).status }.getOrNull()
+		}
+		return SendResult(ok = reply.ok, status = status.orEmpty(), error = reply.error)
 	}
 
 	/** Drain new mailbox entries since cursor (epoch-gated). With holdMs > 0 the
 	 * server long-polls: an empty mailbox holds the request open until a message
 	 * arrives or the hold expires, so delivery is near-instant at ~1 request per
 	 * hold window instead of constant fast polling. */
-	fun poll(cursor: Int, epoch: Int, holdMs: Long = 0): Mailbox {
-		val op = JSONObject().put("kind", "poll").put("cursor", cursor).put("epoch", epoch)
-		if (holdMs > 0) op.put("holdMs", holdMs)
+	fun poll(cursor: Long, epoch: Long, holdMs: Long = 0): PhonePollResult {
+		val op = PhoneOp.Poll(cursor = cursor, epoch = epoch, holdMs = if (holdMs > 0) holdMs else null)
 		// Ordered timeout chain for a held poll: arbiter replies by holdMs (40s),
 		// evie's relay hold fires at 55s if the arbiter vanished, this read timeout
 		// at holdMs+18s (58s) catches a vanished evie, and the apiserver proxy's
 		// 60s outranks them all. Each failure layer returns before the next races it.
-		val raw = relay(op.toString(), readTimeoutMs = if (holdMs > 0) holdMs + 18_000 else null)
-		val result = JSONObject(raw).optJSONObject("result") ?: return Mailbox(emptyList(), cursor, epoch, 0)
-		val arr = result.optJSONArray("entries")
-		val entries = if (arr == null) emptyList() else (0 until arr.length()).map {
-			val e = arr.getJSONObject(it)
-			val filesArr = e.optJSONArray("files")
-			val files = if (filesArr == null) emptyList() else (0 until filesArr.length()).map { fi ->
-				val f = filesArr.getJSONObject(fi)
-				RawFile(
-					filename = f.optString("filename"),
-					mime = f.optString("mime"),
-					base64 = f.optString("base64").takeIf { s -> s.isNotEmpty() },
-				)
-			}
-			MailboxEntry(
-				kind = e.optString("kind"),
-				sessionId = e.optString("session_id"),
-				from = e.optString("from").takeIf { s -> s.isNotEmpty() },
-				body = e.optString("body"),
-				seq = e.optInt("seq"),
-				at = e.optLong("at"),
-				files = files,
-				status = e.optString("status").takeIf { s -> s.isNotEmpty() },
-				title = e.optString("title").takeIf { s -> s.isNotEmpty() },
-				summary = e.optString("summary").takeIf { s -> s.isNotEmpty() },
-			)
-		}
-		return Mailbox(entries, result.optInt("cursor", cursor), result.optInt("epoch", epoch), result.optInt("dropped", 0))
+		val reply = relay(op, readTimeoutMs = if (holdMs > 0) holdMs + 18_000 else null)
+		if (!reply.ok || reply.result == null) return PhonePollResult(emptyList(), cursor, 0, epoch)
+		return wireJson.decodeFromJsonElement<PhonePollResult>(reply.result)
 	}
 
 	companion object {
