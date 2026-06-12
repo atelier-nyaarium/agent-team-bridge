@@ -45,12 +45,12 @@ const NotifyHumanSchema = z.object({
 		.string()
 		.min(1)
 		.describe(
-			`4-6 plain sentences: what happened and what is next. Carried as its own field for phone features; the body does not replace it.`,
+			`4-6 plain sentences: what happened and what is next. Plain content, no lead-in labels ("Summary:"). Carried as its own field for phone features; the body does not replace it.`,
 		),
 	full: z
 		.string()
 		.min(1)
-		.describe(`Full markdown report (mermaid renders too). Shown as the message body on the phone.`),
+		.describe(`Full markdown report (mermaid renders too). Shown as the message body on the phone; start with the report itself, no lead-in labels.`),
 	attachments: z
 		.array(z.string())
 		.optional()
@@ -85,8 +85,6 @@ Use "host" as the team to return the line to the host orchestrator.
 
 const NOTIFY_DESCRIPTION = `
 Push a notification to the human's phone(s). Broadcasts to every registered phone device: \`tiny\` becomes the notification-bar line, \`summary\` rides as its own short tier (phone features read it directly), and \`full\` the message body, threaded under your team's name. All three are required - a notice must always carry a real body. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply / respond_to_human for those).
-
-Write every tier as plain content: no lead-in labels ("Short answer:", "Summary:", "TLDR:") - the tiers are already structurally separated, and labels waste phone screen space.
 `.trim();
 
 /**

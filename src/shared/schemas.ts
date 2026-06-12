@@ -13,7 +13,7 @@ export const CliReplySchema = z
 		replyAsString: z
 			.string()
 			.optional()
-			.describe(`Your text response. Use this for normal replies. Mutually exclusive with replyAsJson.`),
+			.describe(`Your text response. Lead with the answer itself: no lead-in labels ("Short answer:", "TLDR:") and no restating the question - replies often render on a phone. Mutually exclusive with replyAsJson.`),
 		replyAsJson: z
 			.string()
 			.optional()
@@ -51,7 +51,7 @@ export const ChannelReplySchema = z
 		replyAsString: z
 			.string()
 			.optional()
-			.describe(`Your text response. Use this for normal replies. Mutually exclusive with replyAsJson.`),
+			.describe(`Your text response. Lead with the answer itself: no lead-in labels ("Short answer:", "TLDR:") and no restating the question - replies often render on a phone. Mutually exclusive with replyAsJson.`),
 		replyAsJson: z
 			.string()
 			.optional()
