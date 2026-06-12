@@ -448,6 +448,12 @@ class ChatRepository(
 		}
 	}
 
+	/** Clear a team's unread tally without touching tabs (swipe-away on its
+	 * notification reads the burst without opening the thread). */
+	fun markRead(team: String) {
+		_state.update { s -> s.copy(unread = s.unread - team) }
+	}
+
 	fun openThread(team: String) {
 		_state.update { s ->
 			s.copy(

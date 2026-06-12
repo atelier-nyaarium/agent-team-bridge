@@ -186,9 +186,13 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		openTeamRequest.value?.let { team ->
 			repo.openThread(team)
 			openTeam = team
-			SwitchboardService.cancelTeamNotification(context, team)
 			openTeamRequest.value = null
 		}
+	}
+	// Reading a thread clears its bar notification no matter how it was opened
+	// (session card, notification tap, or tab) - the bar mirrors unread state.
+	LaunchedEffect(openTeam) {
+		openTeam?.let { SwitchboardService.cancelTeamNotification(context, it) }
 	}
 
 	val locked = state.provisioned && state.biometricLock && !unlocked

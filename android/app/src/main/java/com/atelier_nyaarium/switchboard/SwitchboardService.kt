@@ -126,6 +126,16 @@ class SwitchboardService : Service() {
 		)
 	}
 
+	/** Broadcast to NotificationReceiver for swipe/action handling. The request
+	 * code mixes team and action so per-team intents never collide. */
+	private fun actionIntent(team: String, action: String): PendingIntent =
+		PendingIntent.getBroadcast(
+			this,
+			(team.hashCode() * 31) xor action.hashCode(),
+			Intent(this, NotificationReceiver::class.java).setAction(action).putExtra(EXTRA_OPEN_TEAM, team),
+			PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+		)
+
 	private fun buildStatusNotification(stateLine: String, unread: Int): Notification =
 		NotificationCompat.Builder(this, CHANNEL_STATUS)
 			.setSmallIcon(android.R.drawable.stat_notify_chat)
@@ -168,6 +178,9 @@ class SwitchboardService : Service() {
 			.setStyle(style)
 			.setAutoCancel(true)
 			.setContentIntent(contentIntent(team))
+			// Swiping the notification away reads the burst without opening the app.
+			.setDeleteIntent(actionIntent(team, NotificationReceiver.ACTION_MARK_READ))
+			.addAction(0, "Play", actionIntent(team, NotificationReceiver.ACTION_PLAY))
 			.build()
 		NotificationManagerCompat.from(this).notify(teamNotificationId(team), notification)
 	}
