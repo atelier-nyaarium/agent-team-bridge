@@ -24,6 +24,16 @@ function entryBytes(input: MailboxInput): number {
 	return n;
 }
 
+/** Random positive Int31 (the phone parses epoch as a signed 32-bit int). The
+ * phone only compares epochs for equality, so what matters is that a mailbox
+ * instance from a restarted arbiter can never re-mint an epoch a phone still
+ * holds from the previous process. A counter base did exactly that: the phone
+ * could not detect the new instance, its stale cursor acked away every fresh
+ * entry, and its seq dedupe silently ate the rest. */
+function mintEpoch(): number {
+	return 1 + Math.floor(Math.random() * 0x7ffffffe);
+}
+
 ////////////////////////////////
 //  Class
 
@@ -128,7 +138,10 @@ export class DeviceMailbox {
 	 * against the previous total (or by any non-contiguous seq jump).
 	 */
 	drain(cursor = 0, epoch?: number): MailboxSnapshot {
-		const epochOk = epoch === undefined ? cursor <= this.highWater : epoch === this.epoch;
+		// A cursor beyond highWater is proof of a stale instance no matter what
+		// the epoch claims (this instance never issued it); honoring it would ack
+		// away entries the phone has never seen.
+		const epochOk = (epoch === undefined || epoch === this.epoch) && cursor <= this.highWater;
 		if (cursor > 0 && epochOk) this.ack(cursor);
 		this.lastActivity = Date.now();
 		return { entries: [...this.entries], cursor: this.highWater, dropped: this.dropped, epoch: this.epoch };
@@ -160,7 +173,6 @@ export class DeviceMailboxStore {
 	private maxEntries: number;
 	private maxBytes: number;
 	private maxDevices: number;
-	private nextEpoch = 1;
 	private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 	private onEvictCb: ((device: string) => void) | null = null;
 
@@ -186,7 +198,7 @@ export class DeviceMailboxStore {
 		let box = this.mailboxes.get(device);
 		if (!box) {
 			if (this.mailboxes.size >= this.maxDevices) this.evictLeastRecentlyActive();
-			box = new DeviceMailbox(this.nextEpoch++, this.maxEntries, this.maxBytes);
+			box = new DeviceMailbox(mintEpoch(), this.maxEntries, this.maxBytes);
 			this.mailboxes.set(device, box);
 		}
 		return box;

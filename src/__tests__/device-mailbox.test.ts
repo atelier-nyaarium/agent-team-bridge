@@ -78,6 +78,18 @@ describe("DeviceMailbox", () => {
 		expect(box.drain(3).entries).toHaveLength(0);
 	});
 
+	it("a cursor beyond highWater never acks, even when the epoch matches", () => {
+		// The arbiter-restart trap: if a new instance ever minted an epoch the
+		// phone still held, the phone's stale (larger) cursor must not be able to
+		// ack away entries this instance never issued.
+		const box = new DeviceMailbox(7);
+		box.append(message("s1", "fresh-1"));
+		box.append(message("s1", "fresh-2"));
+		const stale = box.drain(47, 7);
+		expect(stale.entries.map((e) => e.body)).toEqual(["fresh-1", "fresh-2"]);
+		expect(stale.cursor).toBe(2);
+	});
+
 	// No body, so the byte estimate is exactly the base64 length per entry.
 	function fileMessage(session_id: string, base64: string): MailboxInput {
 		return {
@@ -185,6 +197,18 @@ describe("DeviceMailboxStore", () => {
 		store.delete("pixel");
 		expect(store.get("pixel")).toBeUndefined();
 		expect(store.size).toBe(0);
+	});
+
+	it("a recreated store mints a different epoch for the same device", () => {
+		// Simulates an arbiter restart with a phone that kept running: the new
+		// store's mailbox must carry an epoch the phone cannot already hold, or
+		// the phone never detects the new instance and goes silently deaf. A
+		// deterministic counter base re-minted colliding epochs across restarts.
+		const before = new DeviceMailboxStore().ensure("aqua").epoch;
+		const after = new DeviceMailboxStore().ensure("aqua").epoch;
+		expect(after).not.toBe(before);
+		expect(before).toBeGreaterThan(0);
+		expect(after).toBeLessThanOrEqual(0x7fffffff);
 	});
 
 	it("sweepExpired removes only idle mailboxes", () => {
