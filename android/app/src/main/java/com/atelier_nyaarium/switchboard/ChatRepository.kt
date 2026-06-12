@@ -43,6 +43,9 @@ data class Message(
 	/** Notification-bar line for broadcast notices. Notification-only: the thread
 	 * renders the body as usual and never shows this. */
 	val title: String? = null,
+	/** The Short tier of a notice, persisted for an upcoming feature; no UI
+	 * reads it yet. */
+	val summary: String? = null,
 )
 
 data class ChatState(
@@ -380,7 +383,8 @@ class ChatRepository(
 						// status-only entries still land (e.g. a wake-failure error
 						// with no body would otherwise vanish).
 						if (e.body.isNotEmpty() || files.isNotEmpty() || e.status != null) {
-							val msg = Message(false, e.body, e.at, files = files, status = e.status, title = e.title)
+							val msg =
+								Message(false, e.body, e.at, files = files, status = e.status, title = e.title, summary = e.summary)
 							appendInbound(team, msg)
 							bumpUnread(team)
 							burst.getOrPut(team) { mutableListOf() }.add(msg)
@@ -558,6 +562,7 @@ class ChatRepository(
 				obj.putOpt("status", m.status)
 				obj.putOpt("opId", m.opId)
 				obj.putOpt("title", m.title)
+				obj.putOpt("summary", m.summary)
 				// Persist local paths (the decoded files survive on disk), never base64.
 				if (m.files.isNotEmpty()) {
 					val files = JSONArray()
@@ -593,6 +598,7 @@ class ChatRepository(
 							m.optString("status").takeIf { s -> s.isNotEmpty() },
 							m.optString("opId").takeIf { s -> s.isNotEmpty() },
 							title = m.optString("title").takeIf { s -> s.isNotEmpty() },
+							summary = m.optString("summary").takeIf { s -> s.isNotEmpty() },
 						)
 					}
 					// A "waking" placeholder has no resolution coming after a process
