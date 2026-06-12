@@ -20,14 +20,22 @@ class ThreadRendererPool(private val context: Context) {
 	 * badge is tapped in that team's thread. */
 	var onRetry: ((String, Long) -> Unit)? = null
 
+	/** Set by the owner; receives the attachments-relative path of a tapped
+	 * attachment (the in-app viewer). When unset, taps fall back to the system
+	 * "Open with" chooser. */
+	var onAttachmentTap: ((String) -> Unit)? = null
+
 	fun get(team: String): ThreadRenderer =
 		renderers.getOrPut(team) {
 			ThreadRenderer(context).also {
 				it.setDark(dark)
-				it.onOpenAttachment = ::openAttachment
+				it.onOpenAttachment = { rel -> onAttachmentTap?.invoke(rel) ?: openAttachment(rel) }
 				it.onRetryMessage = { id -> onRetry?.invoke(team, id) }
 			}
 		}
+
+	/** System "Open with" chooser for a validated attachment path. */
+	fun openWith(relPath: String) = openAttachment(relPath)
 
 	/** Replace a crashed renderer with a fresh one; the caller re-feeds the transcript. */
 	fun recreate(team: String): ThreadRenderer {

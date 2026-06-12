@@ -116,6 +116,19 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 		// The demo fixture's error row must never reach the real repository.
 		if (!(BuildConfig.DEBUG && team == DEMO_TEAM)) scope.launch { repo.retrySend(team, id) }
 	}
+	// Attachment taps open the in-app viewer; the path is re-validated against the
+	// attachments root before any file is touched. The wire mime (what the agent
+	// declared) is preferred over extension guessing.
+	var viewer by remember { mutableStateOf<OpenAttachment?>(null) }
+	rendererPool.onAttachmentTap = { rel ->
+		Attachments.resolve(context.filesDir, rel)?.let { file ->
+			val wireMime = state.threads.values.asSequence().flatten()
+				.flatMap { it.files.asSequence() }
+				.firstOrNull { it.src?.endsWith("/$rel") == true }
+				?.mime?.takeIf { it.isNotEmpty() }
+			viewer = OpenAttachment(file, file.name, wireMime ?: mimeForFile(file), rel)
+		}
+	}
 	val dark = isSystemInDarkTheme()
 	LaunchedEffect(dark) { rendererPool.setDark(dark) }
 	LaunchedEffect(state.openTabs) { rendererPool.retain(state.openTabs.toSet()) }
@@ -217,6 +230,18 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 				onRename = { team, name -> repo.setLabel(team, name) },
 				onForget = { team -> repo.forget(team) },
 			)
+	}
+
+	// Composed after the screens so it overlays them and its BackHandler wins.
+	viewer?.let { att ->
+		AttachmentViewer(
+			att = att,
+			onOpenWith = {
+				rendererPool.openWith(att.relPath)
+				viewer = null
+			},
+			onDismiss = { viewer = null },
+		)
 	}
 }
 
