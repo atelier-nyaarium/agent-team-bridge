@@ -82,6 +82,7 @@
 - `uninstall.sh` - Remove switchboard Docker network from a devcontainer project
 - `start-arbiter.sh` - Quick script to rebuild and start the arbiter container
 - `start-host-daemon.sh` - Start Claude Code host daemon in a tmux session
+- `scripts/check-module-residue.ts` - Verify node_modules matches bun.lock (no unsanctioned nested dirs shadowing pinned versions)
 
 ## Architecture
 
@@ -150,6 +151,11 @@ Arbiter side of a native Android chat client that reaches the bridge through evi
 - `bun run test` - Run all tests (vitest)
 - `bun run start:arbiter` - Start arbiter locally
 - `bun run start:mcp` - Start MCP server locally
+- `bun scripts/check-module-residue.ts` - Verify the node_modules tree against bun.lock
+
+### Dependencies
+
+Manifests use EXACT version pins, no ranges. The plugin launches via `bun --install=force run` (.mcp.json), which resolves package.json ranges directly and bypasses the lockfile - a caret range means any plugin start can pull a brand-new release. Dependabot (daily, 7-day cooldown) is the updater; the cooldown gives security audits time to flag a vulnerable release before we take it. The `overrides` block pins transitives with known advisories. After any manifest change, finish with `rm -rf node_modules && bun install --frozen-lockfile`, then run `scripts/check-module-residue.ts` - bun never prunes nested node_modules dirs the lock stopped sanctioning, and a stale nested copy silently shadows the pinned version for both tsc and runtime.
 
 ### Code Style
 

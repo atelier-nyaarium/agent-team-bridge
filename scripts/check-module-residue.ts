@@ -2,8 +2,7 @@
 // node_modules directory must correspond to a "parent/child" resolution key
 // in the lock. bun install never prunes nested dirs the lock stopped
 // sanctioning, and an unsanctioned dir silently shadows the hoisted (often
-// security-override-pinned) version for both tsc and runtime - this bit
-// three times during the 2026-06-12 dependency sweep.
+// security-override-pinned) version for both tsc and runtime.
 //
 // Run AFTER `rm -rf node_modules && bun install --frozen-lockfile` (a
 // reinstall before the final manifest state just mints new residue).
