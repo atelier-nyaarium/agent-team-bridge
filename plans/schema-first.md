@@ -151,9 +151,12 @@ toolchain-locked (see Phase 1.2's kotlinx pin) and not bun-managed.
 - **Dependabot alignment (ride-along):** evie-bot already runs daily npm
   dependabot with `cooldown: default-days: 7` - the exact maturity window
   this phase codifies; switchboard and nyaaskills have NO dependabot. Copy
-  evie's config to both so all three repos drift together under the same
-  7-day window (dependabot will rewrite the exact pins on its own cadence -
-  that is the intended steady-state updater after this one-time alignment).
+  the npm block's schedule + cooldown + versioning-strategy ONLY (drop
+  evie's react>=19 ignores, react/remix/MUI/emotion groups, assignee, and
+  docker section - neither repo uses any of that) so all three repos drift
+  together under the same 7-day window (dependabot will rewrite the exact
+  pins on its own cadence - that is the intended steady-state updater after
+  this one-time alignment).
 - **Deploy:** rides each repo's next normal deploy (minor bumps per the
   Versions note; evie-bot deploys via its push-to-main CI). No protocol or
   behavior change expected; if a dep bump changes observable behavior, that
@@ -182,7 +185,9 @@ generator must cover is plain TS interfaces or Kotlin-only knowledge:
   schemas.ts cannot drift (one truth file; otherwise codegen creates a THIRD
   copy). The collapse extends to types.ts or the new schemas re-declare ITS
   shapes: `ChannelFile := z.infer<typeof ChannelFileSchema>` (killing the
-  "Keep the shapes in lockstep" mirror comment, schemas.ts:121),
+  TS-internal mirror note at types.ts:12-14; the schemas.ts:118-119 comment
+  pinning evie-bot's ForwardDmFile lockstep SURVIVES until Phase 4's synced
+  evie-protocol.ts replaces that cross-repo mirror),
   `TeamInfo := z.infer` of its new schema; ConnectionMode / TeamKind /
   RequestType / EffortLevel derive from exported z.enum consts. Decode-side
   request_type stays an OPEN z.string() in MailboxEntry: routes.ts:707
@@ -290,7 +295,7 @@ AGP 8.7.3 (libs.versions.toml:2-3):
   `sourceSets["test"].resources.srcDir("../../tests/fixtures")` in
   app/build.gradle.kts so fixtures load from the classpath regardless of CI
   working dir. Cross-reference cleanup 1a's test-infra block
-  (cleanup-framework.md:43-50) - the real-org.json-jar mandate there applies
+  (cleanup-framework.md:47-54) - the real-org.json-jar mandate there applies
   to 1a's codec tests, not these serialization fixtures; whichever phase
   lands first wires junit, the other reuses it.
 - Fixture set must include: every op kind, a mailbox entry per kind
@@ -493,14 +498,15 @@ falling back to Azure.
   `body` mapping (routes.ts:751, PhoneClient.kt:239 hard-reads `body`) - the
   mailbox field is NOT renamed (additive rule). The APK needs NO change for
   the rename: the entire Kotlin client already speaks title/summary/body.
-- **Rename blast radius (audit-enumerated; or run `grep -rn tiny` in both
-  repos):**
+- **Rename blast radius (audit-enumerated; ALWAYS re-run `grep -rn tiny` in
+  both repos before editing - line numbers drift):**
   - switchboard: humanTools.ts:43 (field), :87 (NOTIFY_DESCRIPTION prose),
     :212 (destructure), :229 (wire POST key); routes.ts:117
     (HumanNotifySchema), :730, :749; routes.test.ts:147-197 (several
     sites); CLAUDE.md:34 (rename only - the tier doc itself was already
     corrected during lap 1).
-  - nyaaskills: notify.ts:17-21, :40, :61, :83 (relayInstruction prose);
+  - nyaaskills: notify.ts:17-21, :40, :61, :83 (relayInstruction prose),
+    :127 (prose), :139 (the `tiny: ctx.tiny` payload compose);
     cycleCheckpoint.ts:40-64 (tier fields; attachments follows at :65-72),
     :120 (description), :125 (destructure), :134-135, :145-146, :197-198
     (nextAction strings); run.ts:241 (checkpointCall instruction string);
@@ -527,8 +533,11 @@ falling back to Azure.
     module - zod-only imports, zero relative imports - so the verbatim copy
     sidesteps the import-extension mismatch (switchboard uses `.js`
     specifiers, nyaaskills uses `.ts`). nyaaskills consumes it via
-    `NoticeSchema.extend({...})` with per-tool describe/max overrides where
-    cycle semantics differ.
+    `NoticeSchema.extend({...})` with per-tool describe/max/OPTIONALITY
+    overrides where cycle semantics differ - notably cycleCheckpoint's
+    `full` stays OPTIONAL (cycleCheckpoint.ts:57-64; the arbiter wire
+    requires all three tiers, but the checkpoint tool composes `full` only
+    on done/critical-stop and half its test calls pass tiny+summary alone).
   - `evie-protocol.ts` -> `evie-bot/app/features/bridge/evie-protocol.ts`
     (replacing the hand-typed frame mirrors there). Self-contained leaf per
     Phase 2, so the copy needs no import surgery. Evie-side integration
