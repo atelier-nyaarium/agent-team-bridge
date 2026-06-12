@@ -143,7 +143,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	}
 	// In-thread Play: buttons render only when STTS is provisioned; taps speak
 	// the full tier, and the player's now-playing pushes glyph state back.
-	rendererPool.playEnabled = remember { repo.sttsReady() }
+	// Re-evaluated per recomposition (cheap cached null-check) so provisioning
+	// in-session lights the buttons for renderers built afterward; a thread
+	// already open gains them on its next (re)open rather than never.
+	rendererPool.playEnabled = repo.sttsReady()
 	rendererPool.onPlayTap = { team, at -> repo.playMessage(team, at, SttsPlayer.Tier.FULL) }
 	DisposableEffect(Unit) {
 		// Fires on the player's daemon thread; the pool's renderer map is
