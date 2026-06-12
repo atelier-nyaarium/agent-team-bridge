@@ -56,6 +56,10 @@ const FAKE_REQ = new Request("http://arbiter/phone");
 // landing in the mailbox via the persistent conversation.
 const SEND_BOUND_MS = 25_000;
 
+// Ceiling on a poll's long-poll hold. Must clear the relay chain with headroom:
+// evie holds the phone's HTTP request 55s and the apiserver proxy allows 60s.
+const HOLD_CAP_MS = 45_000;
+
 // At-most-once side effects: the phone->evie->arbiter path is at-least-once
 // (a lost reply makes the phone retry the same opId), so a seen opId replays its
 // cached reply instead of re-running the op (which would duplicate a
@@ -310,7 +314,18 @@ export function createPhoneHandler({
 			}
 
 			case "poll": {
-				const snap = mailboxStore.ensure(conversationId).drain(op.cursor ?? 0, op.epoch);
+				// Long-poll: an empty drain holds the op open (bounded under the
+				// relay-chain timeouts) until an append wakes it, then drains again.
+				// The pump runs frames concurrently, so a held poll blocks nothing,
+				// and retried polls just become additional waiters (reads are not
+				// opId-cached; the phone dedupes entries by seq).
+				const box = mailboxStore.ensure(conversationId);
+				let snap = box.drain(op.cursor ?? 0, op.epoch);
+				const hold = Math.min(op.holdMs ?? 0, HOLD_CAP_MS);
+				if (snap.entries.length === 0 && hold > 0) {
+					await box.waitForAppend(hold);
+					snap = box.drain(op.cursor ?? 0, op.epoch);
+				}
 				return { entries: snap.entries, cursor: snap.cursor, dropped: snap.dropped, epoch: snap.epoch };
 			}
 		}

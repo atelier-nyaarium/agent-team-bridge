@@ -324,6 +324,32 @@ describe("createPhoneHandler", () => {
 		expect(result.entries[0]).toMatchObject({ kind: "reply", body: "answer", status: "completed" });
 	});
 
+	it("a held poll returns as soon as a message is appended (long-poll)", async () => {
+		const h = makeHarness();
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const peer = h.registry.get("pixel")?.get("conv-pixel") as unknown as ServerWebSocket<WsData>;
+
+		const held = h.handler.handleFrame(frame({ kind: "poll", holdMs: 5_000 }, "lp1"));
+		await new Promise((r) => setTimeout(r, 20));
+		peer.send(JSON.stringify({ type: "response_push", session_id: "s", response: "instant" }));
+
+		const start = Date.now();
+		const reply = await held;
+		expect(Date.now() - start).toBeLessThan(2_000); // woke on append, not the hold timeout
+		const result = reply.result as { entries: { body?: string }[] };
+		expect(result.entries).toHaveLength(1);
+		expect(result.entries[0].body).toBe("instant");
+	});
+
+	it("a held poll on an empty mailbox returns empty after the hold elapses", async () => {
+		const h = makeHarness();
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const start = Date.now();
+		const reply = await h.handler.handleFrame(frame({ kind: "poll", holdMs: 40 }, "lp2"));
+		expect(Date.now() - start).toBeGreaterThanOrEqual(30);
+		expect((reply.result as { entries: unknown[] }).entries).toHaveLength(0);
+	});
+
 	it("poll cursor acks consumed entries", async () => {
 		const h = makeHarness();
 		await h.handler.handleFrame(frame({ kind: "register" }));

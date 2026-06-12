@@ -143,6 +143,35 @@ describe("DeviceMailbox", () => {
 		box.touch();
 		expect(box.isExpired(box.lastActivity + 1000, 5000)).toBe(false);
 	});
+
+	it("waitForAppend resolves when an entry is appended", async () => {
+		const box = new DeviceMailbox(1);
+		let resolved = false;
+		const wait = box.waitForAppend(5_000).then(() => {
+			resolved = true;
+		});
+		await new Promise((r) => setTimeout(r, 10));
+		expect(resolved).toBe(false);
+		box.append({ kind: "message", session_id: "s", body: "wake up" });
+		await wait;
+		expect(resolved).toBe(true);
+		expect(box.drain().entries).toHaveLength(1);
+	});
+
+	it("waitForAppend resolves on timeout when nothing arrives", async () => {
+		const box = new DeviceMailbox(1);
+		const start = Date.now();
+		await box.waitForAppend(30);
+		expect(Date.now() - start).toBeGreaterThanOrEqual(25);
+		expect(box.drain().entries).toHaveLength(0);
+	});
+
+	it("releaseWaiters wakes every held poll (store teardown path)", async () => {
+		const box = new DeviceMailbox(1);
+		const waits = [box.waitForAppend(60_000), box.waitForAppend(60_000)];
+		box.releaseWaiters();
+		await Promise.all(waits); // resolves promptly, not after a minute
+	});
 });
 
 describe("DeviceMailboxStore", () => {

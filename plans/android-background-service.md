@@ -100,11 +100,16 @@ only.
   (service should keep running or restart); reboot (boot receiver); deep doze via
   `dumpsys deviceidle force-idle` with and without the battery exemption.
 - Live pass against the real bridge (blob injection harness as before).
-- Deploy, cross-repo order per the phone-bridge ritual: push evie (CI builds + rolls
-  out the pod with the 55s hold), push switchboard (version 3.9.0 in plugin.json +
-  package.json; CI refreshes the `android-app` release), arbiter restart is user-owned
+- Deploy, cross-repo order per the phone-bridge ritual: push evie FIRST and await its
+  rollout (CI builds + rolls out the pod with the 55s hold) - an old 35s evie under a
+  40s-holding chain would 504 every idle long-poll. The app tolerates that window
+  anyway (a 504 during a hold is treated as an empty poll, not a failure), but the
+  order avoids it entirely. Then push switchboard (version 3.9.0 in plugin.json +
+  package.json; CI refreshes the `android-app` release). Arbiter restart is user-owned
   (P2 hold lands arbiter-side). P1 app behavior must degrade cleanly against the
-  pre-P2 arbiter (holdMs ignored = plain poll).
+  pre-P2 arbiter (holdMs ignored = plain poll, floored cadence). Timeout chain, each
+  layer ordered before the next: arbiter reply <= 40s, evie 504 at 55s, phone read
+  timeout at 58s, apiserver proxy at 60s.
 
 ### Notes for implementers
 

@@ -50,6 +50,10 @@ export interface PhonePollOp {
 	// matches the live mailbox epoch, so a cursor carried over from an evicted
 	// instance can never ack away the new instance's entries.
 	epoch?: number;
+	// Long-poll: when the mailbox is empty, hold the op open up to this many ms
+	// waiting for an append before returning. Capped server-side well under the
+	// relay-chain timeouts (evie HTTP hold, apiserver proxy 60s).
+	holdMs?: number;
 }
 
 export type PhoneOp = PhoneRegisterOp | PhoneListTeamsOp | PhoneSendOp | PhoneRespondOp | PhonePollOp;

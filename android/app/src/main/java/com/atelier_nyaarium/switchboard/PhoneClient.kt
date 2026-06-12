@@ -110,8 +110,9 @@ class PhoneClient(private val prov: Provisioning) {
 
 	/** Send a phone op through the service-proxy to the phone bridge. Mutating ops
 	 * pass their own stable opId so a retry after a lost reply replays the cached
-	 * result server-side instead of running the op twice (the protocol contract). */
-	fun relay(opJson: String, opId: String = UUID.randomUUID().toString()): String {
+	 * result server-side instead of running the op twice (the protocol contract).
+	 * A held op (long-poll) passes a read timeout above its server-side hold. */
+	fun relay(opJson: String, opId: String = UUID.randomUUID().toString(), readTimeoutMs: Long? = null): String {
 		val body = JSONObject()
 			.put("device", prov.device)
 			.put("conversationId", prov.conversationId)
@@ -124,7 +125,12 @@ class PhoneClient(private val prov: Provisioning) {
 			.header("X-Android-Bridge-Token", "Bearer ${prov.appToken}")
 			.post(body.toRequestBody(JSON))
 			.build()
-		client.newCall(req).execute().use { resp ->
+		val callClient = if (readTimeoutMs != null) {
+			client.newBuilder().readTimeout(readTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS).build()
+		} else {
+			client
+		}
+		callClient.newCall(req).execute().use { resp ->
 			val text = resp.body?.string().orEmpty()
 			if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(500)}")
 			return text
@@ -190,10 +196,19 @@ class PhoneClient(private val prov: Provisioning) {
 		)
 	}
 
-	/** Drain new mailbox entries since cursor (epoch-gated). */
-	fun poll(cursor: Int, epoch: Int): Mailbox {
-		val op = JSONObject().put("kind", "poll").put("cursor", cursor).put("epoch", epoch).toString()
-		val result = JSONObject(relay(op)).optJSONObject("result") ?: return Mailbox(emptyList(), cursor, epoch, 0)
+	/** Drain new mailbox entries since cursor (epoch-gated). With holdMs > 0 the
+	 * server long-polls: an empty mailbox holds the request open until a message
+	 * arrives or the hold expires, so delivery is near-instant at ~1 request per
+	 * hold window instead of constant fast polling. */
+	fun poll(cursor: Int, epoch: Int, holdMs: Long = 0): Mailbox {
+		val op = JSONObject().put("kind", "poll").put("cursor", cursor).put("epoch", epoch)
+		if (holdMs > 0) op.put("holdMs", holdMs)
+		// Ordered timeout chain for a held poll: arbiter replies by holdMs (40s),
+		// evie's relay hold fires at 55s if the arbiter vanished, this read timeout
+		// at holdMs+18s (58s) catches a vanished evie, and the apiserver proxy's
+		// 60s outranks them all. Each failure layer returns before the next races it.
+		val raw = relay(op.toString(), readTimeoutMs = if (holdMs > 0) holdMs + 18_000 else null)
+		val result = JSONObject(raw).optJSONObject("result") ?: return Mailbox(emptyList(), cursor, epoch, 0)
 		val arr = result.optJSONArray("entries")
 		val entries = if (arr == null) emptyList() else (0 until arr.length()).map {
 			val e = arr.getJSONObject(it)

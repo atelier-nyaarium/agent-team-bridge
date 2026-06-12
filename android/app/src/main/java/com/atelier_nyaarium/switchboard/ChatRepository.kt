@@ -329,20 +329,31 @@ class ChatRepository(
 	fun startPolling(scope: CoroutineScope) {
 		if (pollJob?.isActive == true) return
 		pollJob = scope.launch(Dispatchers.IO) {
-			var tick = 0
+			var lastTeamsAt = 0L
 			while (isActive) {
+				var failed = false
+				var heldEmpty = false
+				var hold = 0L
 				try {
 					// The board's live/available states would otherwise only change on
 					// a manual Refresh; piggyback a team-list refresh on the poll loop.
-					// AFK ticks (one a minute) always refresh; visible ticks every Nth.
-					if (forceTeamsRefresh || !visible || tick % TEAMS_REFRESH_TICKS == 0) {
+					val now = System.currentTimeMillis()
+					if (forceTeamsRefresh || now - lastTeamsAt >= TEAMS_REFRESH_MS) {
 						forceTeamsRefresh = false
+						lastTeamsAt = now
 						runCatching { client().teams() }.onSuccess { t ->
 							_state.update { it.copy(teams = t) }
 						}
 					}
-					tick++
-					val mb = client().poll(cursor, epoch)
+					// Visible: long-poll (the hold IS the wait; re-poll immediately).
+					// AFK: plain poll, then sleep an interval; the mailbox batches.
+					hold = if (visible) LONG_POLL_HOLD_MS else 0L
+					val started = System.currentTimeMillis()
+					val mb = client().poll(cursor, epoch, hold)
+					// An old arbiter ignores holdMs and returns empty instantly; floor
+					// the cadence so that degradation never becomes a tight spin.
+					heldEmpty = hold > 0 && mb.entries.isEmpty() &&
+						System.currentTimeMillis() - started < 3_000
 					if (mb.epoch != epoch) {
 						epoch = mb.epoch
 						cursor = 0
@@ -371,20 +382,33 @@ class ChatRepository(
 						_state.update { it.copy(error = null, pollFailStreak = 0, connected = true) }
 					}
 				} catch (e: Exception) {
-					// One blip is silent; the loop retries every cycle. Surface only after a
-					// couple of consecutive failures, and clear it on the next success above.
-					pollFails++
-					_state.update { it.copy(pollFailStreak = pollFails) }
-					if (pollFails >= 2) {
-						val msg =
-							if (e is java.net.UnknownHostException) "Offline. Retrying..." else "Connection issue, retrying..."
-						_state.update { it.copy(error = msg) }
+					if (hold > 0 && e.message?.startsWith("HTTP 504") == true) {
+						// A relay-timeout during a hold is an empty long-poll, not an
+						// outage: an evie still on the shorter hold (upgrade window) or
+						// a transient arbiter drop mid-hold. Back off, do not alarm.
+						heldEmpty = true
+					} else {
+						// One blip is silent; the loop retries every cycle. Surface only
+						// after a couple of consecutive failures, cleared on next success.
+						failed = true
+						pollFails++
+						_state.update { it.copy(pollFailStreak = pollFails) }
+						if (pollFails >= 2) {
+							val msg =
+								if (e is java.net.UnknownHostException) "Offline. Retrying..." else "Connection issue, retrying..."
+							_state.update { it.copy(error = msg) }
+						}
 					}
 				}
 				// Adaptive cadence with a foreground kick: a resume interrupts the
-				// AFK wait so the user never stares at stale state.
-				val interval = if (visible) POLL_INTERVAL_MS else AFK_POLL_INTERVAL_MS
-				withTimeoutOrNull(interval) { kick.receive() }
+				// AFK wait so the user never stares at stale state. Visible long-polls
+				// chain back-to-back; failures and ignored holds back off to 5s.
+				val interval = when {
+					!visible -> AFK_POLL_INTERVAL_MS
+					failed || heldEmpty -> POLL_INTERVAL_MS
+					else -> 0L
+				}
+				if (interval > 0) withTimeoutOrNull(interval) { kick.receive() }
 			}
 		}
 	}
@@ -602,8 +626,10 @@ class ChatRepository(
 		const val POLL_INTERVAL_MS = 5_000L
 		// AFK cadence: one plain poll a minute drains the accumulated burst.
 		const val AFK_POLL_INTERVAL_MS = 60_000L
-		// Refresh the team list every Nth poll (~30s) so card states track reality.
-		const val TEAMS_REFRESH_TICKS = 6
+		// Visible cadence: server-held long-poll (under the arbiter's 45s cap).
+		const val LONG_POLL_HOLD_MS = 40_000L
+		// Refresh the team list at most this often, regardless of poll cadence.
+		const val TEAMS_REFRESH_MS = 30_000L
 		const val MAX_OUTGOING_BYTES = 10_000_000
 	}
 }
