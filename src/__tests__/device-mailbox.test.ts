@@ -78,6 +78,55 @@ describe("DeviceMailbox", () => {
 		expect(box.drain(3).entries).toHaveLength(0);
 	});
 
+	// No body, so the byte estimate is exactly the base64 length per entry.
+	function fileMessage(session_id: string, base64: string): MailboxInput {
+		return {
+			kind: "reply",
+			session_id,
+			files: [
+				{
+					filename: "a.bin",
+					mime: "application/octet-stream",
+					size: base64.length,
+					descriptiveKey: "a.bin",
+					base64,
+				},
+			],
+		};
+	}
+
+	it("byte cap evicts oldest file-bearing entries and counts them in dropped", () => {
+		// 100-byte byte cap; each entry carries ~40 bytes of base64.
+		const box = new DeviceMailbox(1, 100, 100);
+		const big = "x".repeat(40);
+		box.append(fileMessage("s1", big));
+		box.append(fileMessage("s1", big));
+		box.append(fileMessage("s1", big)); // now ~120 bytes > 100, oldest evicted
+		const snap = box.drain(0);
+		expect(snap.entries.length).toBe(2);
+		expect(snap.dropped).toBe(1);
+	});
+
+	it("byte cap always keeps the just-appended entry even if it alone exceeds the cap", () => {
+		const box = new DeviceMailbox(1, 100, 50);
+		box.append(fileMessage("s1", "x".repeat(200))); // single oversized entry (backstop only)
+		const snap = box.drain(0);
+		expect(snap.entries.length).toBe(1);
+	});
+
+	it("ack keeps the byte accounting in sync so later appends do not over-evict", () => {
+		const box = new DeviceMailbox(1, 100, 100);
+		const big = "x".repeat(40);
+		box.append(fileMessage("s1", big));
+		box.append(fileMessage("s1", big));
+		box.drain(2, 1); // ack both, freeing their bytes
+		// A fresh pair fits because the acked bytes were reclaimed.
+		box.append(fileMessage("s1", big));
+		box.append(fileMessage("s1", big));
+		expect(box.drain(0).entries.length).toBe(2);
+		expect(box.drain(0).dropped).toBe(0);
+	});
+
 	it("ack on empty or below-floor cursor is a no-op", () => {
 		const box = new DeviceMailbox(1);
 		box.ack(5);

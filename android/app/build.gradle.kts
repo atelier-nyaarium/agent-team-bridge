@@ -50,6 +50,7 @@ android {
 
 	buildFeatures {
 		compose = true
+		buildConfig = true
 	}
 }
 
@@ -69,4 +70,5 @@ dependencies {
 	// Force a modern fragment over biometric's old transitive 1.2.x, which crashes the
 	// Activity Result API (file picker) with "Can only use lower 16 bits for requestCode".
 	implementation(libs.androidx.fragment)
+	implementation(libs.androidx.webkit)
 }

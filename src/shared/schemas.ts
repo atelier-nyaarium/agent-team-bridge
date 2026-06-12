@@ -58,6 +58,12 @@ export const ChannelReplySchema = z
 			.describe(
 				`A JSON object response. Use when the request specifies a Reply Schema. Pass a valid JSON string matching the schema. Mutually exclusive with replyAsString.`,
 			),
+		attachments: z
+			.array(z.string())
+			.optional()
+			.describe(
+				`Optional absolute file paths to attach to this reply (e.g. screenshots, logs). Images render inline on the phone; other files appear as download chips.`,
+			),
 	})
 	.refine((data) => !(data.replyAsString && data.replyAsJson), {
 		message: "Provide replyAsString or replyAsJson, not both.",

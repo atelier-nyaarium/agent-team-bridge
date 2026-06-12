@@ -5,8 +5,15 @@ import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import type { Mutex } from "../shared/mutex.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
-import { PostResponsePartsSchema } from "../shared/schemas.js";
-import type { ArbiterConfig, ConnectionMode, ResponsePayload, ResponsePushPayload, TeamInfo } from "../shared/types.js";
+import { ChannelFilesSchema, PostResponsePartsSchema } from "../shared/schemas.js";
+import type {
+	ArbiterConfig,
+	ChannelFile,
+	ConnectionMode,
+	ResponsePayload,
+	ResponsePushPayload,
+	TeamInfo,
+} from "../shared/types.js";
 import {
 	type ConversationRegistry,
 	formatHolderConnectedMessage,
@@ -44,6 +51,7 @@ const SendRequestSchema = z.object({
 	session_id: z.string().optional(),
 	debug: z.boolean().optional(),
 	replyJsonSchema: z.string().optional(),
+	files: ChannelFilesSchema.optional(),
 });
 
 const RespondBodySchema = z.object({
@@ -56,7 +64,25 @@ const RespondBodySchema = z.object({
 	estimated_minutes: z.number().optional(),
 	what_to_decide: z.string().optional(),
 	message: z.string().optional(),
+	files: ChannelFilesSchema.optional(),
 });
+
+// Raw-bytes backstop on attachment payloads at the trust boundary. Shape
+// validation does not bound memory, so sum the decoded sizes cheaply (base64 is
+// ~4/3 of the bytes) before anything is stored or pushed.
+const MAX_RESPONSE_FILE_BYTES = 10_000_000;
+
+function fileBytes(files: ChannelFile[]): number {
+	let n = 0;
+	for (const f of files) n += f.base64 ? Math.floor((f.base64.length * 3) / 4) : f.size;
+	return n;
+}
+
+/** Drop base64 so a persistent store entry never retains the bytes; the live
+ * push and the mailbox carry the payload, the store keeps only metadata. */
+function stripFileBytes(files: ChannelFile[]): ChannelFile[] {
+	return files.map(({ base64: _omit, ...meta }) => meta);
+}
 
 const PollRequestSchema = z.object({
 	session_id: z.string(),
@@ -192,7 +218,28 @@ export function createRoutes({
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
-		const { from, fromConversationId, to, type, effort, body: msgBody, debug, replyJsonSchema } = parsed.data;
+		const {
+			from,
+			fromConversationId,
+			to,
+			type,
+			effort,
+			body: msgBody,
+			debug,
+			replyJsonSchema,
+			files,
+		} = parsed.data;
+
+		// Raw-bytes backstop at the trust boundary before the payload is pushed.
+		if (files && files.length > 0) {
+			const total = fileBytes(files);
+			if (total > MAX_RESPONSE_FILE_BYTES) {
+				return jsonResponse(
+					{ error: `Attachments total ${total} bytes, over the ${MAX_RESPONSE_FILE_BYTES}-byte limit` },
+					413,
+				);
+			}
+		}
 
 		if (RESERVED_TEAM_NAMES.has(to)) {
 			return jsonResponse(
@@ -254,6 +301,8 @@ export function createRoutes({
 					is_follow_up: isFollowUp,
 				};
 				if (replyJsonSchema) channelPayload.replyJsonSchema = replyJsonSchema;
+				// message_id becomes the materialization bucket key in the target container.
+				if (files && files.length > 0) channelPayload.files = files;
 				const payload = JSON.stringify(channelPayload);
 
 				const activeWs = getAllActiveWs(subs);
@@ -342,9 +391,20 @@ export function createRoutes({
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
 
-		const { session_id: respondSessionId, replyAsJson, ...rest } = parsed.data;
+		const { session_id: respondSessionId, replyAsJson, files, ...rest } = parsed.data;
 
-		// Check if this is a handshake response
+		// Raw-bytes backstop before anything is stored or pushed.
+		if (files && files.length > 0) {
+			const total = fileBytes(files);
+			if (total > MAX_RESPONSE_FILE_BYTES) {
+				return jsonResponse(
+					{ error: `Attachments total ${total} bytes, over the ${MAX_RESPONSE_FILE_BYTES}-byte limit` },
+					413,
+				);
+			}
+		}
+
+		// Check if this is a handshake response (handshakes never carry files).
 		if (resolveHandshake?.(respondSessionId, replyAsJson ?? undefined, rest.response ?? undefined)) {
 			return jsonResponse({ delivered: true, handshake: true });
 		}
@@ -360,6 +420,9 @@ export function createRoutes({
 			what_to_decide: rest.what_to_decide,
 			message: rest.message,
 		};
+		// The store result is poll-recoverable and (for channel convs) never swept,
+		// so it keeps file metadata only; the bytes ride the live push/mailbox below.
+		if (files && files.length > 0) response.files = stripFileBytes(files);
 		if (replyAsJson) {
 			response.replyAsJson = replyAsJson;
 			if (!response.response) {
@@ -391,6 +454,8 @@ export function createRoutes({
 			reason: response.reason,
 		};
 		if (response.status) push.status = response.status;
+		// The push carries the full bytes (the store kept metadata only).
+		if (files && files.length > 0) push.files = files;
 		const pushMsg = JSON.stringify(push);
 
 		let pushedViaConversation = false;
