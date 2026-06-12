@@ -36,7 +36,10 @@ const MIME_BY_EXT: Record<string, string> = {
 	".csv": "text/csv",
 };
 
-async function readReplyAttachment(filePath: string): Promise<ChannelFile> {
+/** Read and base64 an absolute-path attachment with the 10MB advisory cap.
+ * Shared by the reply tools, respond_to_human, and notify_human. Unlike
+ * inbound ChannelFiles (which may be metadata-only), this always carries bytes. */
+export async function readReplyAttachment(filePath: string): Promise<ChannelFile & { base64: string }> {
 	if (!isAbsolute(filePath)) throw new Error(`Attachment path must be absolute: ${filePath}`);
 	const buffer = await readFile(filePath);
 	if (buffer.length > MAX_ATTACHMENT_BYTES) {

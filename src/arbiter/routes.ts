@@ -5,6 +5,7 @@ import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import type { Mutex } from "../shared/mutex.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
+import { noticeSessionId } from "../shared/phone-protocol.js";
 import { ChannelFilesSchema, PostResponsePartsSchema } from "../shared/schemas.js";
 import type {
 	ArbiterConfig,
@@ -37,6 +38,9 @@ export interface RoutesDeps {
 	// empties when the host daemon disconnects). Membership in either marks a
 	// team as devcontainer-backed.
 	knownTeamPaths: Map<string, string>;
+	// Phone mailboxes, for broadcast notices (notify_human). Optional so test
+	// harnesses without a phone bridge need not supply one.
+	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
 	config: ArbiterConfig;
 	evieClient?: import("./evie/evieClient.js").EvieClient | null;
 	resolveHandshake?: (sessionId: string, replyAsJson?: Record<string, unknown>, response?: string) => boolean;
@@ -106,6 +110,13 @@ const HumanRespondSchema = z.object({
 	parts: PostResponsePartsSchema,
 });
 
+const HumanNotifySchema = z.object({
+	from: z.string().min(1).max(128),
+	tiny: z.string().min(1).max(200),
+	full: z.string().optional(),
+	files: ChannelFilesSchema.optional(),
+});
+
 const HumanTransferSchema = z.object({
 	from: z.string(),
 	session_id: z.string(),
@@ -162,6 +173,7 @@ export function createRoutes({
 	tryWakeTeam,
 	offlineCatalog,
 	knownTeamPaths,
+	mailboxStore,
 	config,
 	evieClient,
 	resolveHandshake,
@@ -704,6 +716,43 @@ export function createRoutes({
 		return jsonResponse({ ok: true, target, session_id: briefSessionId });
 	}
 
+	/** Broadcast a notice to every registered phone mailbox. Notices thread under
+	 * the sender on the phone and are never respondable: they are appended
+	 * directly here (not via a peer push), so no inbound session is recorded. */
+	function humanNotify(body: Record<string, unknown>): Response {
+		const parsed = HumanNotifySchema.safeParse(body);
+		if (!parsed.success) {
+			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
+		}
+		const { from, tiny, full, files } = parsed.data;
+		if (files && files.length > 0) {
+			const total = fileBytes(files);
+			if (total > MAX_RESPONSE_FILE_BYTES) {
+				return jsonResponse(
+					{ error: `Attachments total ${total} bytes, over the ${MAX_RESPONSE_FILE_BYTES}-byte limit` },
+					413,
+				);
+			}
+		}
+		if (!mailboxStore) {
+			return jsonResponse({ error: "phone bridge is not enabled on this arbiter" }, 503);
+		}
+		let delivered = 0;
+		mailboxStore.forEach((_conversationId, box) => {
+			box.append({
+				kind: "notice",
+				session_id: noticeSessionId(from),
+				from,
+				title: tiny,
+				body: full || tiny,
+				...(files && files.length > 0 ? { files } : {}),
+			});
+			delivered++;
+		});
+		console.log(`[notify] notice from ${from} delivered to ${delivered} phone(s)`);
+		return jsonResponse({ delivered });
+	}
+
 	return {
 		ingest,
 		pending,
@@ -716,5 +765,6 @@ export function createRoutes({
 		evieTools,
 		humanRespond,
 		humanTransfer,
+		humanNotify,
 	};
 }

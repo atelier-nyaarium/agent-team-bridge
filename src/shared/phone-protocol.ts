@@ -132,7 +132,26 @@ export type PhoneOpResult =
 ////////////////////////////////
 //  Mailbox
 
-export type MailboxEntryKind = "message" | "reply";
+// "notice" is a broadcast announcement (e.g. a cycle-end report relayed via the
+// notify_human tool): delivered to every phone, threaded under the sender, and
+// never respondable (its session id is not a conversation).
+export type MailboxEntryKind = "message" | "reply" | "notice";
+
+// Session-id grammar for broadcast notices. The phone parses the sender out of
+// this id to thread the notice under the sender's name. This constant is the
+// single source of truth; the Kotlin client mirrors it as NOTICE_SESSION_PREFIX
+// in android/.../switchboard/ChatRepository.kt (it cannot import this module),
+// so a format change here is a protocol change and must update both.
+export const NOTICE_SESSION_PREFIX = "notice:";
+
+export function noticeSessionId(from: string): string {
+	return `${NOTICE_SESSION_PREFIX}${from}`;
+}
+
+/** The sender of a notice session id, or null if the id is not a notice. */
+export function parseNoticeSession(sessionId: string): string | null {
+	return sessionId.startsWith(NOTICE_SESSION_PREFIX) ? sessionId.slice(NOTICE_SESSION_PREFIX.length) : null;
+}
 
 export interface MailboxEntry {
 	seq: number;
@@ -140,6 +159,8 @@ export interface MailboxEntry {
 	kind: MailboxEntryKind;
 	session_id: string;
 	from?: string;
+	// Notification-bar line for notices; the body carries the full report.
+	title?: string;
 	body?: string;
 	status?: string;
 	replyAsJson?: Record<string, unknown>;

@@ -380,6 +380,7 @@ export async function startArbiter(): Promise<void> {
 		tryWakeTeam,
 		offlineCatalog,
 		knownTeamPaths,
+		mailboxStore,
 		evieClient,
 		resolveHandshake: wsHandlers.resolveHandshake,
 		pinnedHolders,
@@ -430,6 +431,7 @@ export async function startArbiter(): Promise<void> {
 		if (method === "POST" && url.pathname === "/evie/tool-call") return routes.evieToolCall(req, body);
 		if (method === "POST" && url.pathname === "/human/respond") return routes.humanRespond(body);
 		if (method === "POST" && url.pathname === "/human/transfer") return routes.humanTransfer(body);
+		if (method === "POST" && url.pathname === "/human/notify") return routes.humanNotify(body);
 
 		return new Response("Not Found", { status: 404 });
 	}

@@ -350,6 +350,28 @@ describe("createPhoneHandler", () => {
 		expect((reply.result as { entries: unknown[] }).entries).toHaveLength(0);
 	});
 
+	it("a notice session id is never respondable", async () => {
+		const h = makeHarness();
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		// Notices are appended directly to the mailbox (broadcast route), never via
+		// the peer push path, so they are not recorded as inbound sessions.
+		h.mailboxStore.get("conv-pixel")?.append({
+			kind: "notice",
+			session_id: "notice:recipe-app",
+			from: "recipe-app",
+			title: "cycle done",
+			body: "report",
+		});
+		const poll = await h.handler.handleFrame(frame({ kind: "poll" }, "p-notice"));
+		expect((poll.result as { entries: { kind: string }[] }).entries[0].kind).toBe("notice");
+
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "respond", session_id: "notice:recipe-app", response: "hi" }, "r-notice"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("Unknown session_id");
+	});
+
 	it("poll cursor acks consumed entries", async () => {
 		const h = makeHarness();
 		await h.handler.handleFrame(frame({ kind: "register" }));

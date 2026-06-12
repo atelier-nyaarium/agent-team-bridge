@@ -40,6 +40,9 @@ data class Message(
 	 * the arbiter's idempotency cache replays a lost reply instead of double-
 	 * delivering to the agent (the phone protocol contract). */
 	val opId: String? = null,
+	/** Notification-bar line for broadcast notices. Notification-only: the thread
+	 * renders the body as usual and never shows this. */
+	val title: String? = null,
 )
 
 data class ChatState(
@@ -92,7 +95,9 @@ data class ChatState(
 	fun lastActivity(team: String): Long? = threads[team]?.maxByOrNull { it.at }?.at
 
 	/** One-line preview from the thread tail. */
-	fun snippet(team: String): String? = threads[team]?.lastOrNull()?.text
+	// Prefer a notice's one-phrase title over its long report body, same as the
+	// notification line: this preview is a glance surface, not the thread.
+	fun snippet(team: String): String? = threads[team]?.lastOrNull()?.let { it.title ?: it.text }
 		?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
 
 	/** The user's friendly name for a team, falling back to its (possibly random) id. */
@@ -364,12 +369,18 @@ class ChatRepository(
 					for (e in mb.entries) {
 						if (e.seq <= lastSeq) continue // dedupe a re-drain after a lost ack
 						lastSeq = e.seq
-						val team = teamFromSession(e.sessionId) ?: e.from ?: continue
+						// Broadcast notices thread under the SENDER: their session id is
+						// the pinned "notice:<from>" grammar, not a conversation.
+						val team = if (e.kind == "notice") {
+							e.from ?: e.sessionId.removePrefix(NOTICE_SESSION_PREFIX).takeIf { it.isNotEmpty() } ?: continue
+						} else {
+							teamFromSession(e.sessionId) ?: e.from ?: continue
+						}
 						val files = Attachments.decode(filesDir, mb.epoch, e.seq, e.files)
 						// status-only entries still land (e.g. a wake-failure error
 						// with no body would otherwise vanish).
 						if (e.body.isNotEmpty() || files.isNotEmpty() || e.status != null) {
-							val msg = Message(false, e.body, e.at, files = files, status = e.status)
+							val msg = Message(false, e.body, e.at, files = files, status = e.status, title = e.title)
 							appendInbound(team, msg)
 							bumpUnread(team)
 							burst.getOrPut(team) { mutableListOf() }.add(msg)
@@ -546,6 +557,7 @@ class ChatRepository(
 				val obj = JSONObject().put("me", m.fromMe).put("text", m.text).put("at", m.at)
 				obj.putOpt("status", m.status)
 				obj.putOpt("opId", m.opId)
+				obj.putOpt("title", m.title)
 				// Persist local paths (the decoded files survive on disk), never base64.
 				if (m.files.isNotEmpty()) {
 					val files = JSONArray()
@@ -580,6 +592,7 @@ class ChatRepository(
 							loadFiles(m),
 							m.optString("status").takeIf { s -> s.isNotEmpty() },
 							m.optString("opId").takeIf { s -> s.isNotEmpty() },
+							title = m.optString("title").takeIf { s -> s.isNotEmpty() },
 						)
 					}
 					// A "waking" placeholder has no resolution coming after a process
@@ -631,5 +644,8 @@ class ChatRepository(
 		// Refresh the team list at most this often, regardless of poll cadence.
 		const val TEAMS_REFRESH_MS = 30_000L
 		const val MAX_OUTGOING_BYTES = 10_000_000
+		// Mirrors NOTICE_SESSION_PREFIX in src/shared/phone-protocol.ts, the single
+		// source of truth for the broadcast-notice session-id grammar.
+		const val NOTICE_SESSION_PREFIX = "notice:"
 	}
 }

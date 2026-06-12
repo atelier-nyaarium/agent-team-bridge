@@ -1,9 +1,9 @@
-import { readFile } from "node:fs/promises";
-import { basename, isAbsolute } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { PostResponsePart } from "../../shared/schemas.js";
+import type { ChannelFile } from "../../shared/types.js";
 import { bridgeProjectName, routerPost } from "../bridge/helpers.js";
+import { readReplyAttachment } from "../bridge/replyTool.js";
 
 ////////////////////////////////
 //  Schemas
@@ -39,6 +39,19 @@ const TransferHumanToSchema = z.object({
 });
 type TransferHumanToArgs = z.infer<typeof TransferHumanToSchema>;
 
+const NotifyHumanSchema = z.object({
+	tiny: z.string().min(1).max(200).describe(`One phrase for the phone's notification bar (~60 chars).`),
+	full: z
+		.string()
+		.optional()
+		.describe(`Optional full markdown report (mermaid renders too). Shown as the message body on the phone.`),
+	attachments: z
+		.array(z.string())
+		.optional()
+		.describe(`Optional absolute file paths to attach (screenshots, logs). Images render inline on the phone.`),
+});
+type NotifyHumanArgs = z.infer<typeof NotifyHumanSchema>;
+
 ////////////////////////////////
 //  Functions & Helpers
 
@@ -64,6 +77,10 @@ Arbiter will:
 Use "host" as the team to return the line to the host orchestrator.
 `.trim();
 
+const NOTIFY_DESCRIPTION = `
+Push a notification to the human's phone(s). Broadcasts to every registered phone device: \`tiny\` becomes the notification-bar line and \`full\` the message body, threaded under your team's name. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply / respond_to_human for those).
+`.trim();
+
 /**
  * Resolve one user-supplied part into the wire shape sent to the arbiter.
  * Strings auto-wrap to `{ text }`. Attachments are read from disk, base64
@@ -76,17 +93,17 @@ async function materializeWirePart(part: RespondToHumanArgs["parts"][number]): P
 	const wire: PostResponsePart = {};
 	if (part.text) wire.text = part.text;
 	if (part.attachments && part.attachments.length > 0) {
-		wire.attachments = await Promise.all(part.attachments.map(readAttachment));
+		wire.attachments = await Promise.all(part.attachments.map(readDiscordAttachment));
 	}
 	return wire;
 }
 
-async function readAttachment(filePath: string): Promise<{ filename: string; base64: string }> {
-	if (!isAbsolute(filePath)) {
-		throw new Error(`Attachment path must be absolute: ${filePath}`);
-	}
-	const buffer = await readFile(filePath);
-	return { filename: basename(filePath), base64: buffer.toString("base64") };
+// One capped reader for every attachment path: read through readReplyAttachment
+// (absolute-path guard + 10MB advisory cap), then project down to the Discord
+// wire shape, which carries only filename + base64.
+async function readDiscordAttachment(filePath: string): Promise<{ filename: string; base64: string }> {
+	const file = await readReplyAttachment(filePath);
+	return { filename: file.filename, base64: file.base64 };
 }
 
 export function registerHumanTools(mcpServer: McpServer): void {
@@ -94,6 +111,8 @@ export function registerHumanTools(mcpServer: McpServer): void {
 	const respondSchema: any = RespondToHumanSchema;
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
 	const transferSchema: any = TransferHumanToSchema;
+	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
+	const notifySchema: any = NotifyHumanSchema;
 
 	mcpServer.registerTool(
 		"respond_to_human",
@@ -170,6 +189,53 @@ export function registerHumanTools(mcpServer: McpServer): void {
 			} catch (err) {
 				return {
 					content: [{ type: "text" as const, text: `transfer_human_to failed: ${(err as Error).message}` }],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	mcpServer.registerTool(
+		"notify_human",
+		{
+			title: "Notify Human",
+			description: NOTIFY_DESCRIPTION,
+			inputSchema: notifySchema,
+		},
+		async (args: NotifyHumanArgs) => {
+			const { tiny, full, attachments } = args;
+			let files: ChannelFile[] | undefined;
+			if (attachments?.length) {
+				try {
+					files = await Promise.all(attachments.map(readReplyAttachment));
+				} catch (err) {
+					return {
+						content: [{ type: "text" as const, text: `Attachment error: ${(err as Error).message}` }],
+						isError: true,
+					};
+				}
+			}
+			try {
+				// routerPost parses the JSON and throws on any non-ok response with
+				// the server's error message (including the 413 cap and 503 no-bridge).
+				const result = (await routerPost("/human/notify", {
+					from: bridgeProjectName() || "unknown",
+					tiny,
+					...(full ? { full } : {}),
+					...(files ? { files } : {}),
+				})) as { delivered?: number };
+				const delivered = result.delivered ?? 0;
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Notice delivered to ${delivered} phone(s).${delivered === 0 ? " No phones are currently registered; it was not queued." : ""}`,
+						},
+					],
+				};
+			} catch (err) {
+				return {
+					content: [{ type: "text" as const, text: `Notify failed: ${(err as Error).message}` }],
 					isError: true,
 				};
 			}

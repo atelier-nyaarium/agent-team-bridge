@@ -96,9 +96,20 @@ class SwitchboardService : Service() {
 				setShowBadge(false)
 			},
 		)
+		// Channels are immutable after creation; the original "messages" channel
+		// shipped without an explicit sound, so audible alerts need this v2 id.
+		nm.deleteNotificationChannel("messages")
 		nm.createNotificationChannel(
-			NotificationChannel(CHANNEL_MESSAGES, "Messages", NotificationManager.IMPORTANCE_DEFAULT).apply {
+			NotificationChannel(CHANNEL_MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH).apply {
 				description = "New messages from agent sessions"
+				setSound(
+					android.provider.Settings.System.DEFAULT_NOTIFICATION_URI,
+					android.media.AudioAttributes.Builder()
+						.setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+						.setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+						.build(),
+				)
+				enableVibration(true)
 			},
 		)
 	}
@@ -144,13 +155,16 @@ class SwitchboardService : Service() {
 		val unread = state.unread[team] ?: messages.size
 		val style = NotificationCompat.InboxStyle()
 		for (m in messages.takeLast(5)) {
-			val line = m.text.replace(Regex("\\s+"), " ").trim()
+			// A notice carries a purpose-written notification line; its body may be
+			// a long report that would truncate uselessly here.
+			val line = (m.title ?: m.text).replace(Regex("\\s+"), " ").trim()
 			style.addLine(if (line.isEmpty()) "(attachment)" else line.take(120))
 		}
+		val last = messages.last()
 		val notification = NotificationCompat.Builder(this, CHANNEL_MESSAGES)
 			.setSmallIcon(android.R.drawable.stat_notify_chat)
 			.setContentTitle(label)
-			.setContentText(if (unread > 1) "$unread messages" else messages.last().text.take(120))
+			.setContentText(if (unread > 1) "$unread messages" else (last.title ?: last.text).take(120))
 			.setStyle(style)
 			.setAutoCancel(true)
 			.setContentIntent(contentIntent(team))
@@ -164,7 +178,7 @@ class SwitchboardService : Service() {
 
 	companion object {
 		const val CHANNEL_STATUS = "status"
-		const val CHANNEL_MESSAGES = "messages"
+		const val CHANNEL_MESSAGES = "messages_v2"
 		const val STATUS_NOTIFICATION_ID = 1
 		const val EXTRA_OPEN_TEAM = "open_team"
 
