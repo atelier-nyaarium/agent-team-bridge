@@ -5,7 +5,7 @@ import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import type { Mutex } from "../shared/mutex.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
-import { noticeSessionId } from "../shared/phone-protocol.js";
+import { composeConvSessionId, noticeSessionId } from "../shared/phone-protocol.js";
 import { ChannelFilesSchema, PostResponsePartsSchema } from "../shared/schemas.js";
 import type {
 	ArbiterConfig,
@@ -165,7 +165,7 @@ function getTeamMode(subs: Map<string, ServerWebSocket<WsData>>): ConnectionMode
  */
 function deriveChannelJobId(fromConversationId: string | undefined, to: string): string | null {
 	if (!fromConversationId) return null;
-	return `conv:${fromConversationId}:${to}`;
+	return composeConvSessionId(fromConversationId, to);
 }
 
 export function createRoutes({
