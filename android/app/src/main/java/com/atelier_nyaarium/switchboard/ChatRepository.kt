@@ -95,7 +95,9 @@ data class ChatState(
 	fun lastActivity(team: String): Long? = threads[team]?.maxByOrNull { it.at }?.at
 
 	/** One-line preview from the thread tail. */
-	fun snippet(team: String): String? = threads[team]?.lastOrNull()?.text
+	// Prefer a notice's one-phrase title over its long report body, same as the
+	// notification line: this preview is a glance surface, not the thread.
+	fun snippet(team: String): String? = threads[team]?.lastOrNull()?.let { it.title ?: it.text }
 		?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
 
 	/** The user's friendly name for a team, falling back to its (possibly random) id. */

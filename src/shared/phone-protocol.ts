@@ -139,8 +139,9 @@ export type MailboxEntryKind = "message" | "reply" | "notice";
 
 // Session-id grammar for broadcast notices. The phone parses the sender out of
 // this id to thread the notice under the sender's name. This constant is the
-// single source of truth; the Kotlin client mirrors it as a named constant (it
-// cannot import this module), so a format change here is a protocol change.
+// single source of truth; the Kotlin client mirrors it as NOTICE_SESSION_PREFIX
+// in android/.../switchboard/ChatRepository.kt (it cannot import this module),
+// so a format change here is a protocol change and must update both.
 export const NOTICE_SESSION_PREFIX = "notice:";
 
 export function noticeSessionId(from: string): string {
