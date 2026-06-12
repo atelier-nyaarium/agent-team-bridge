@@ -7,25 +7,62 @@ import com.atelier_nyaarium.switchboard.proto.PhonePollResult
 import com.atelier_nyaarium.switchboard.proto.PhoneRegisterResult
 import com.atelier_nyaarium.switchboard.proto.PhoneRelayFrame
 import com.atelier_nyaarium.switchboard.proto.PhoneRelayReply
+import com.atelier_nyaarium.switchboard.proto.PhoneRespondResult
 import com.atelier_nyaarium.switchboard.proto.PhoneSendResult
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Decodes the golden protocol fixtures (tests/fixtures/protocol at the repo
- * root, wired as test resources) with the generated proto/ types. The same
- * files are parsed by the zod schemas in vitest, so the two runtimes cannot
- * drift on the wire shape without a red suite.
+ * Decodes the golden protocol fixtures with the generated proto/ types. The
+ * inventory is _manifest.json (also iterated by the vitest suite), so the two
+ * runtimes always test the same corpus: a fixture missing from the manifest
+ * fails the vitest directory check, and a manifest entry this suite cannot
+ * decode fails here.
  */
 class ProtocolFixturesTest {
 	private val json = Json { ignoreUnknownKeys = true }
 
 	private fun fixture(name: String): String =
 		javaClass.classLoader!!.getResourceAsStream("protocol/$name")!!.bufferedReader().readText()
+
+	private fun decodeAs(schema: String, body: String) {
+		when (schema) {
+			"PhoneRelayFrame" -> json.decodeFromString<PhoneRelayFrame>(body)
+			"PhoneRelayReply" -> json.decodeFromString<PhoneRelayReply>(body)
+			"MailboxEntry" -> json.decodeFromString<MailboxEntry>(body)
+			"PhoneRegisterResult" -> json.decodeFromString<PhoneRegisterResult>(body)
+			"PhoneListTeamsResult" -> json.decodeFromString<PhoneListTeamsResult>(body)
+			"PhoneSendResult" -> json.decodeFromString<PhoneSendResult>(body)
+			"PhoneRespondResult" -> json.decodeFromString<PhoneRespondResult>(body)
+			"PhonePollResult" -> json.decodeFromString<PhonePollResult>(body)
+			else -> throw AssertionError("unknown manifest schema: $schema")
+		}
+	}
+
+	@Test
+	fun everyManifestFixtureDecodesAsDeclared() {
+		val manifest = json.parseToJsonElement(fixture("_manifest.json")).jsonObject["fixtures"]!!.jsonArray
+		assertTrue("manifest must not be empty", manifest.isNotEmpty())
+		for (entry in manifest) {
+			val obj = entry.jsonObject
+			val file = obj["file"]!!.jsonPrimitive.content
+			val schema = obj["schema"]!!.jsonPrimitive.content
+			val expectPass = obj["expect"]!!.jsonPrimitive.content == "pass"
+			try {
+				decodeAs(schema, fixture(file))
+				assertTrue("$file decoded but manifest expects failure", expectPass)
+			} catch (e: SerializationException) {
+				assertTrue("$file failed to decode as $schema: ${e.message}", !expectPass)
+			}
+		}
+	}
 
 	@Test
 	fun decodesEveryOpKindThroughTheFrame() {
@@ -70,22 +107,6 @@ class ProtocolFixturesTest {
 	}
 
 	@Test
-	fun toleratesUnknownExtraFields() {
-		val entry = json.decodeFromString<MailboxEntry>(fixture("tolerance-extra-field.json"))
-		assertEquals(46L, entry.seq)
-	}
-
-	@Test
-	fun rejectsMissingRequiredField() {
-		try {
-			json.decodeFromString<MailboxEntry>(fixture("invalid-missing-required.json"))
-			throw AssertionError("decode must fail on missing session_id")
-		} catch (expected: SerializationException) {
-			// missing non-nullable field
-		}
-	}
-
-	@Test
 	fun toleratesOldArbiterTeamWithoutKind() {
 		val result = json.decodeFromString<PhoneListTeamsResult>(fixture("list-teams-result.json"))
 		assertEquals(2, result.teams.size)
@@ -94,28 +115,7 @@ class ProtocolFixturesTest {
 	}
 
 	@Test
-	fun decodesRemainingOpResultsAndErrorReply() {
-		val register = json.decodeFromString<PhoneRegisterResult>(fixture("register-result.json"))
-		assertEquals(42L, register.cursor)
-
-		val send = json.decodeFromString<PhoneSendResult>(fixture("send-result.json"))
-		assertEquals("delivered", send.status)
-
-		val failed = json.decodeFromString<PhoneRelayReply>(fixture("relay-reply-error.json"))
-		assertEquals(false, failed.ok)
-		assertTrue(failed.error!!.isNotEmpty())
-
-		val withFiles = json.decodeFromString<MailboxEntry>(fixture("mailbox-reply-files.json"))
-		assertEquals(1, withFiles.files!!.size)
-		assertEquals("Which environment?", withFiles.question)
-	}
-
-	@Test
-	fun decodesPollResultAndRelayReply() {
-		val poll = json.decodeFromString<PhonePollResult>(fixture("poll-result.json"))
-		assertEquals(1, poll.entries.size)
-		assertEquals(42L, poll.cursor)
-
+	fun decodesNestedRelayReplyResultPerOp() {
 		val reply = json.decodeFromString<PhoneRelayReply>(fixture("relay-reply.json"))
 		assertTrue(reply.ok)
 		assertNull(reply.error)

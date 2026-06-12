@@ -1,0 +1,23 @@
+{
+	"_comment": "Single inventory of the golden protocol fixtures. BOTH test suites (vitest protocol-fixtures.test.ts and Android ProtocolFixturesTest.kt) iterate this file, so a fixture cannot be covered by one runtime and forgotten by the other. schema names the parse target; expect is pass or fail.",
+	"fixtures": [
+		{ "file": "frame-register.json", "schema": "PhoneRelayFrame", "expect": "pass" },
+		{ "file": "frame-list-teams.json", "schema": "PhoneRelayFrame", "expect": "pass" },
+		{ "file": "frame-send.json", "schema": "PhoneRelayFrame", "expect": "pass" },
+		{ "file": "frame-respond.json", "schema": "PhoneRelayFrame", "expect": "pass" },
+		{ "file": "frame-poll.json", "schema": "PhoneRelayFrame", "expect": "pass" },
+		{ "file": "mailbox-message.json", "schema": "MailboxEntry", "expect": "pass" },
+		{ "file": "mailbox-reply.json", "schema": "MailboxEntry", "expect": "pass" },
+		{ "file": "mailbox-notice.json", "schema": "MailboxEntry", "expect": "pass" },
+		{ "file": "mailbox-handoff.json", "schema": "MailboxEntry", "expect": "pass" },
+		{ "file": "mailbox-reply-files.json", "schema": "MailboxEntry", "expect": "pass" },
+		{ "file": "tolerance-extra-field.json", "schema": "MailboxEntry", "expect": "pass" },
+		{ "file": "invalid-missing-required.json", "schema": "MailboxEntry", "expect": "fail" },
+		{ "file": "poll-result.json", "schema": "PhonePollResult", "expect": "pass" },
+		{ "file": "relay-reply.json", "schema": "PhoneRelayReply", "expect": "pass" },
+		{ "file": "relay-reply-error.json", "schema": "PhoneRelayReply", "expect": "pass" },
+		{ "file": "register-result.json", "schema": "PhoneRegisterResult", "expect": "pass" },
+		{ "file": "send-result.json", "schema": "PhoneSendResult", "expect": "pass" },
+		{ "file": "list-teams-result.json", "schema": "PhoneListTeamsResult", "expect": "pass" }
+	]
+}
