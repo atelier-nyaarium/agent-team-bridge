@@ -68,6 +68,7 @@
     - `device-mailbox.ts` - `DeviceMailbox` (per-phone inbound queue: monotonic seq, cursor ack, entry cap, epoch) and `DeviceMailboxStore` (per-conversation, idle TTL sweep + LRU device cap, `setOnEvict`)
     - `phone-protocol.ts` - Phone protocol constants + session-id grammars (`NOTICE_SESSION_PREFIX`, `CONV_SESSION_PREFIX` with compose/parse helpers, `PHONE_PROTOCOL_VERSION`); the wire TYPES re-export from schemas.ts via `z.infer`
     - `evie-protocol.ts` - SELF-CONTAINED (zod-only) leaf owning the arbiter<->evie frame vocabulary: `EvieInboundFrameSchema` (tool_registry / tool_result / tool_error / dm_forward / loose phone_relay), `ToolCallFrameSchema`, and `ChannelFileSchema` (re-exported by schemas.ts). Built to be copied verbatim into evie-bot in a later phase; nothing imports into it
+    - `stts-providers.ts` - `SttsProviderSchema` for the TTS provider catalog (bundled at `android/.../assets/stts-providers.json`): per-provider id/label/path/container/voices plus a request-body TEMPLATE ($text/$voice). Validated by vitest on every push; the generated Kotlin `SttsProvider` decodes it at runtime and `SttsClient.fillTemplate` fills the template per call
     - `reconnect.ts` - Exponential backoff reconnector for WebSocket connections
   - `__tests__/` - Test files (vitest)
 - `skills/` - Claude Code skills
