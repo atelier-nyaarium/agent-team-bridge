@@ -604,6 +604,17 @@ falling back to Azure.
   - Every copy headed:
     `// SYNCED COPY - source of truth: switchboard/src/shared/<file>.ts`
     `// MUST re-copy on change: cp <src> <dest> (see switchboard CLAUDE.md)`.
+  - Staleness-guard shape, IF one is wanted later (framework-pass design
+    note - the manual cp + header is the committed baseline): a single-repo
+    CI step cannot diff across three separate git repos, so the realistic
+    mechanism is a content-hash marker. The source file's header carries a
+    hash of its own schema body; each synced copy records the source hash it
+    was cut from; each repo's CI asserts its copy's recorded hash matches the
+    copy's actual content (catches a hand-edit of a copy), and a manual or
+    periodic cross-repo job asserts the recorded hash equals the live
+    source's hash (catches a stale copy). Deferred until the copies exist and
+    a second synced file (notice.ts) justifies the generalization; the header
+    + manual cp ship first.
 - CLAUDE.md notes in all three repos: which files are synced copies, which
   direction, the copy command.
 - Verification: nyaaskills cycle lap composing a notice through the synced
