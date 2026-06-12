@@ -235,7 +235,16 @@ class ChatRepository(
 	suspend fun sttsHealth(): Boolean = withContext(Dispatchers.IO) { sttsClient()?.health() == true }
 
 	suspend fun provision(blob: String) = withContext(Dispatchers.IO) {
-		val prov = Provisioning.parse(blob) // throws on malformed input before we persist
+		// Strict wire parse: reject before persisting. Surfaced as state.error
+		// rather than thrown - callers launch this from coroutines with no
+		// catch, and the strict kotlinx parse rejects blobs the old lenient
+		// org.json parser would have coerced (single quotes, stringy numbers).
+		val prov = try {
+			Provisioning.parse(blob)
+		} catch (e: Exception) {
+			_state.update { it.copy(error = "Invalid provisioning blob: ${e.message?.take(160) ?: "unparseable"}") }
+			return@withContext
+		}
 		store.save(blob)
 		client = null
 		sttsClient = null

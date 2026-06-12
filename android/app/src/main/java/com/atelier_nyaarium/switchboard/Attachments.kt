@@ -54,7 +54,9 @@ object Attachments {
 		val used = mutableSetOf<String>()
 		return raw.mapNotNull { f ->
 			val name = uniqueName(safeName(f.filename), used)
-			if (f.base64 == null) return@mapNotNull MessageFile(name, f.mime, null)
+			// Empty base64 is metadata-only too: decoding it would materialize a
+			// 0-byte file and hand the WebView a broken image src.
+			if (f.base64.isNullOrEmpty()) return@mapNotNull MessageFile(name, f.mime, null)
 			val bytes = runCatching { Base64.decode(f.base64, Base64.DEFAULT) }.getOrNull() ?: return@mapNotNull null
 			runCatching {
 				dir.mkdirs()
