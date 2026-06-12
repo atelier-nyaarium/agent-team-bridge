@@ -7,7 +7,7 @@
   - `main-arbiter.ts` - Arbiter server entry point (runs in Docker)
   - `arbiter/` - **Arbiter server** - Central HTTP + WebSocket router running in Docker
     - `index.ts` - Server setup: Bun.serve, routes, WebSocket handlers, evie client init, port-forward
-    - `routes.ts` - HTTP route handlers (send, respond, poll, teams, health, evie tool-call, ingest)
+    - `routes.ts` - HTTP route handlers (send, respond, poll, teams, health, evie tool-call, ingest, human notify broadcast)
     - `websocket.ts` - WebSocket connection handlers, team registry, heartbeat, wake coordination
     - `wake.ts` - WakeCoordinator class for container on-demand startup
     - `connectorProxy.ts` - WebSocket proxy for game client connector pass-through
@@ -31,7 +31,7 @@
     - `channel/` - **Channel mode** - For Claude agents receiving push notifications
       - `channelNotify.ts` - Emit `notifications/claude/channel` to push messages into Claude sessions; materializes inbound Discord file attachments and prepends a `[FILES]` block to the body
       - `channelReply.ts` - `channel_reply` tool: reply to an incoming channel message
-      - `humanTools.ts` - `respond_to_human` and `transfer_human_to` tools; `respond_to_human` accepts per-part `{text?, attachments?: [absolutePath, ...]}` so the agent can attach any file from its filesystem
+      - `humanTools.ts` - `respond_to_human`, `transfer_human_to`, and `notify_human` tools; `respond_to_human` accepts per-part `{text?, attachments?: [absolutePath, ...]}` so the agent can attach any file from its filesystem; `notify_human` broadcasts a `{tiny, full?, attachments?}` notice to every registered phone via the arbiter's `POST /human/notify`
       - `evieFiles.ts` - Sanitize, materialize, and render Discord-bridge file attachments under `/tmp/evie-files/<msgId>/`; lazy mtime sweep with 1h TTL
     - `cli/` - **CLI mode** - For non-Claude agents (cursor, copilot, codex)
       - `agentHandlers.ts` - CLI agent process spawners (cursor-agent, copilot, codex)

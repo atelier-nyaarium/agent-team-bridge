@@ -5,6 +5,7 @@ import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import type { Mutex } from "../shared/mutex.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
+import { noticeSessionId } from "../shared/phone-protocol.js";
 import { ChannelFilesSchema, PostResponsePartsSchema } from "../shared/schemas.js";
 import type {
 	ArbiterConfig,
@@ -740,7 +741,7 @@ export function createRoutes({
 		mailboxStore.forEach((_conversationId, box) => {
 			box.append({
 				kind: "notice",
-				session_id: `notice:${from}`,
+				session_id: noticeSessionId(from),
 				from,
 				title: tiny,
 				body: full || tiny,
