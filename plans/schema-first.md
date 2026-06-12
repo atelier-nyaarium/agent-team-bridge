@@ -148,6 +148,14 @@ toolchain-locked (see Phase 1.2's kotlinx pin) and not bun-managed.
   suites are the gate (optional ride-along: add --frozen-lockfile to evie's
   _audit.yml/_lint.yml so future mismatches fail loudly). End-state: all
   three suites green, lockfiles committed.
+- **Staleness note (2026-06-12):** the evie checkout was 6 commits behind
+  during the audit laps; the pull landed three dependabot bumps (bun-types
+  ^1.3.14, @biomejs/biome ^2.4.16, ansis ^4.3.0), so this phase's quoted
+  evie versions are a snapshot, not gospel. The mechanics already require
+  it, but to be explicit: REBUILD the three-repo dependency diff at sweep
+  start from the live manifests; do not transcribe versions from this plan.
+  (The overrides block still spans package.json:56-69 post-pull; the
+  @types/bun "latest" + bun-types duplication still holds.)
 - **Dependabot alignment (ride-along):** evie-bot already runs daily npm
   dependabot with `cooldown: default-days: 7` - the exact maturity window
   this phase codifies; switchboard and nyaaskills have NO dependabot. Copy
@@ -386,6 +394,12 @@ verbs.
     validation remains relayPump's `PhoneRelayFrameSchema.safeParse`
     (relayPump.ts:25) - one parse, one error path, no divergent
     double-validation.
+  - Staleness note (2026-06-12): the evie checkout was 6 commits behind
+    during the audit; the pull changed PhoneBridgeServer.ts (relay hold
+    raised to 55s, PR #1363). Re-verified post-pull: the phone_relay frame
+    SHAPE ({type, v, device, conversationId, opId, op}) is unchanged - the
+    commit touched timeout behavior only. Re-grep evie cites at
+    implementation rather than trusting line numbers here.
   - Honest delta: phone_relay and dm_forward files are ALREADY validated
     (relayPump; sanitizeInboundFiles index.ts:41-43). The genuinely
     unvalidated casts are tool_registry/tool_result/tool_error/dm_forward
@@ -548,6 +562,12 @@ falling back to Azure.
     146-153). The server-manager bridge shares BridgeTransport (second
     instance at app/services/BridgeService.ts:62-71) and adopts the same
     envelope schema by construction - intended.
+  - Staleness note (2026-06-12): evie was pulled 6 commits forward after
+    the audit laps; the evie-side integration cites in this phase
+    (BridgeTransport/BridgeServer/PhoneBridgeServer/BridgeService line
+    numbers) were taken from the stale checkout. The frame shapes
+    re-verified unchanged post-pull, but re-grep the integration sites at
+    implementation.
   - Every copy headed:
     `// SYNCED COPY - source of truth: switchboard/src/shared/<file>.ts`
     `// MUST re-copy on change: cp <src> <dest> (see switchboard CLAUDE.md)`.
