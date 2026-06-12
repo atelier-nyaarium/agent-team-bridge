@@ -10,10 +10,11 @@ import java.util.concurrent.Executors
 /**
  * Synthesis playback with a per-message audio cache. Owns the cache layout and
  * the MediaPlayer; SttsClient owns the wire. Audio is cached per
- * (team, message.at, tier) - `at` is the stable per-message identity
- * (Message.id is reassigned on load). The container varies by provider (MP3 or
- * streaming WAV mislabeled as audio/wav), so files keep a neutral extension
- * and MediaPlayer sniffs.
+ * (team, message.at, tier, provider, voice) - `at` is the stable per-message
+ * identity (Message.id is reassigned on load), and the voice identity rides
+ * the key so a settings change can never replay another voice's audio. The
+ * container varies by provider (MP3 or streaming WAV mislabeled as audio/wav),
+ * so files keep a neutral extension and MediaPlayer sniffs.
  *
  * Single-flight: a tap while the same message+tier is synthesizing is a no-op;
  * a cache hit plays with no request; tapping the one currently playing stops
@@ -29,7 +30,8 @@ class SttsPlayer(private val root: File) {
 	@Volatile private var player: MediaPlayer? = null
 	@Volatile private var currentKey: String? = null
 
-	fun isPlaying(team: String, at: Long, tier: Tier): Boolean = currentKey == key(team, at, tier)
+	fun isPlaying(team: String, at: Long, tier: Tier): Boolean =
+		currentKey?.startsWith("$team/$at-${tier.suffix}-") == true
 
 	/**
 	 * Play (or toggle-stop) one message tier. Synthesizes through `client` on
@@ -44,14 +46,14 @@ class SttsPlayer(private val root: File) {
 		tier: Tier,
 		text: String,
 	) {
-		val k = key(team, at, tier)
+		val k = key(team, at, tier, provider, voice)
 		if (currentKey == k) {
 			stop()
 			return
 		}
 		if (text.isBlank() || !inFlight.add(k)) return
 		exec.execute {
-			val dest = cacheFile(team, at, tier)
+			val dest = cacheFile(team, at, tier, provider, voice)
 			try {
 				if (!dest.exists() || dest.length() == 0L) {
 					dest.parentFile?.mkdirs()
@@ -118,10 +120,16 @@ class SttsPlayer(private val root: File) {
 		}
 	}
 
-	private fun key(team: String, at: Long, tier: Tier): String = "$team/$at-${tier.suffix}"
+	// Provider and voice ride the key so a settings change can never replay
+	// another voice's cached audio: distinct voices land in distinct files.
+	private fun key(team: String, at: Long, tier: Tier, provider: SttsClient.Provider, voice: String?): String =
+		"$team/$at-${tier.suffix}-${provider.path}-${safeVoice(voice)}"
 
-	private fun cacheFile(team: String, at: Long, tier: Tier): File =
-		File(File(root, "stts/$team"), "$at-${tier.suffix}.audio")
+	private fun cacheFile(team: String, at: Long, tier: Tier, provider: SttsClient.Provider, voice: String?): File =
+		File(File(root, "stts/$team"), "$at-${tier.suffix}-${provider.path}-${safeVoice(voice)}.audio")
+
+	private fun safeVoice(voice: String?): String =
+		(voice ?: "default").replace(Regex("[^A-Za-z0-9_-]"), "_").take(48)
 
 	companion object {
 		private const val TAG = "SttsPlayer"
