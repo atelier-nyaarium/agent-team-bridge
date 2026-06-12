@@ -319,8 +319,10 @@ AGP 8.7.3 (libs.versions.toml:2-3):
 - New `ci.yml` (none exists; main-push.yml fires only on android/** paths,
   so TS edits run zero CI today): checkout + `oven-sh/setup-bun@v2` + bun
   install + `bun run lint` + `bun run test` + drift check
-  (`bun scripts/codegen-kotlin.ts && git diff --exit-code`). No Android
-  SDK/JDK needed - regeneration writes text. Trigger: push to main, ALL
+  (`bun scripts/codegen-kotlin.ts && git diff --exit-code`) + the module
+  residue guard (`bun scripts/check-module-residue.ts`, built during Phase
+  0's framework pass). No Android SDK/JDK needed - regeneration writes
+  text. Trigger: push to main, ALL
   paths (not android-scoped like main-push.yml); post-merge gating accepted,
   consistent with cleanup 1a's stance; add pull_request later if pre-merge
   gating is wanted.
@@ -631,8 +633,11 @@ falling back to Azure.
   AND runtime. After ANY manifest override/dedupe change, finish with
   `rm -rf node_modules && bun install --frozen-lockfile` AS THE LAST STEP
   (a reinstall before the final manifest state just mints new residue),
-  then verify: every `find node_modules -mindepth 2 -name node_modules`
-  hit must have a matching "parent/child" key in bun.lock.
+  then run `bun scripts/check-module-residue.ts [repo-root]` - the
+  committed guard (works on all three repos by path arg; verified to catch
+  a planted offender). Phase 1's ci.yml runs it after its install step so
+  dependabot's autonomous pin rewrites stay guarded; evie/nyaaskills adopt
+  it via Phase 4's sync mechanism if wanted.
 - Never `docker exec` as root into a bind-mounted repo (it leaves
   root-owned files the host cannot delete - the .vite cache blocked a
   node_modules purge). Use the container's non-root user or chown after.
