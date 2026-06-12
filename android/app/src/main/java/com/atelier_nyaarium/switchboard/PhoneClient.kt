@@ -30,6 +30,10 @@ data class Provisioning(
 	val port: Int,
 	val device: String,
 	val conversationId: String,
+	/** STTS (TTS playback) service base URL; empty until known. */
+	val sttsUrl: String = "",
+	/** STTS API key, sent as the vrcstt-api-key header; empty disables Play. */
+	val sttsKey: String = "",
 ) {
 	companion object {
 		fun parse(blob: String): Provisioning {
@@ -44,6 +48,8 @@ data class Provisioning(
 				port = j.optInt("port", 20004),
 				device = j.optString("device", android.os.Build.MODEL ?: "android"),
 				conversationId = j.optString("conversationId", UUID.randomUUID().toString()),
+				sttsUrl = j.optString("sttsUrl", "").trimEnd('/'),
+				sttsKey = j.optString("sttsKey", ""),
 			)
 		}
 	}
