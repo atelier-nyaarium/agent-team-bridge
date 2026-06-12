@@ -81,6 +81,8 @@ data class MailboxEntry(
 	val files: List<RawFile> = emptyList(),
 	/** Reply state from the wire: "running" interim, "error", or null/completed. */
 	val status: String? = null,
+	/** Notification-bar line for kind "notice"; the body carries the full report. */
+	val title: String? = null,
 )
 
 data class Mailbox(val entries: List<MailboxEntry>, val cursor: Int, val epoch: Int, val dropped: Int)
@@ -230,6 +232,7 @@ class PhoneClient(private val prov: Provisioning) {
 				at = e.optLong("at"),
 				files = files,
 				status = e.optString("status").takeIf { s -> s.isNotEmpty() },
+				title = e.optString("title").takeIf { s -> s.isNotEmpty() },
 			)
 		}
 		return Mailbox(entries, result.optInt("cursor", cursor), result.optInt("epoch", epoch), result.optInt("dropped", 0))

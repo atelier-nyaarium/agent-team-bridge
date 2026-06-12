@@ -155,13 +155,16 @@ class SwitchboardService : Service() {
 		val unread = state.unread[team] ?: messages.size
 		val style = NotificationCompat.InboxStyle()
 		for (m in messages.takeLast(5)) {
-			val line = m.text.replace(Regex("\\s+"), " ").trim()
+			// A notice carries a purpose-written notification line; its body may be
+			// a long report that would truncate uselessly here.
+			val line = (m.title ?: m.text).replace(Regex("\\s+"), " ").trim()
 			style.addLine(if (line.isEmpty()) "(attachment)" else line.take(120))
 		}
+		val last = messages.last()
 		val notification = NotificationCompat.Builder(this, CHANNEL_MESSAGES)
 			.setSmallIcon(android.R.drawable.stat_notify_chat)
 			.setContentTitle(label)
-			.setContentText(if (unread > 1) "$unread messages" else messages.last().text.take(120))
+			.setContentText(if (unread > 1) "$unread messages" else (last.title ?: last.text).take(120))
 			.setStyle(style)
 			.setAutoCancel(true)
 			.setContentIntent(contentIntent(team))

@@ -107,6 +107,22 @@ private val hugeCodeBody = buildString {
 	append("```\n")
 }
 
+// Shaped like a real notify_human broadcast: the title is the notification-bar
+// line (never rendered in-thread), the body is the composed English report.
+private val noticeBody = """
+demo completed phase "Schema" and is continuing on phase "Tools".
+
+The schema landed with all twelve tables and the migration ran clean on a fresh database. Indexes cover the three hot queries from the profiling notes. Two legacy columns were kept behind a compatibility view rather than dropped. Next up is wiring the query tools against the new shape.
+
+---
+
+```mermaid
+flowchart LR
+  S[Schema] -->|done| T[Tools]
+  T --> V[Validate]
+```
+""".trimIndent()
+
 /** Built fresh each call; never stored. */
 fun demoMessages(): List<Message> = listOf(
 	Message(true, "Run the demo matrix please", DEMO_AT, 0),
@@ -139,4 +155,5 @@ fun demoMessages(): List<Message> = listOf(
 	Message(false, hugeCodeBody, DEMO_AT + 7000, 7),
 	Message(false, "Waking demo... first boot can take a minute or two.", DEMO_AT + 8000, 8, status = "waking"),
 	Message(true, "This send failed on purpose, to demo the retry badge.", DEMO_AT + 9000, 9, status = "error"),
+	Message(false, noticeBody, DEMO_AT + 10000, 10, title = "demo: phase Schema done, on to Tools"),
 )
