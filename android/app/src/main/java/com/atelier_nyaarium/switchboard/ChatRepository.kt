@@ -130,7 +130,10 @@ class ChatRepository(
 	)
 	val state: StateFlow<ChatState> = _state
 
-	private var client: PhoneClient? = null
+	// Lazy clients are read and invalidated across threads (poll loop, main,
+	// the player's daemon thread); @Volatile gives the writes visibility. A
+	// rare double-construct race is harmless (last writer wins, cheap build).
+	@Volatile private var client: PhoneClient? = null
 	private var cursor = 0
 	private var epoch = 0
 	private var lastSeq = -1
@@ -139,7 +142,7 @@ class ChatRepository(
 
 	/** TTS playback engine; cache lives under filesDir/stts/<team>/. */
 	val stts = SttsPlayer(filesDir)
-	private var sttsClient: SttsClient? = null
+	@Volatile private var sttsClient: SttsClient? = null
 
 	/** True while the Activity is started; drives the poll cadence (5s visible,
 	 * 60s AFK burst). The mailbox accumulates server-side either way. */
@@ -189,15 +192,19 @@ class ChatRepository(
 	fun sttsReady(): Boolean = sttsClient() != null
 
 	/**
-	 * Speak one message tier (notification action or thread button). Cache and
-	 * single-flight live in SttsPlayer, so impatient multi-taps synthesize
-	 * once; tapping the playing message stops it. No-op when unconfigured or
-	 * the message is gone.
+	 * Speak one message tier (notification action or thread button). The whole
+	 * resolution (credential decrypt, message lookup, text prep) hops to the
+	 * player's daemon thread so a broadcast receiver's main thread does zero
+	 * disk or crypto work. Cache and single-flight live in SttsPlayer, so
+	 * impatient multi-taps synthesize once; tapping the playing message stops
+	 * it. No-op when unconfigured or the message is gone.
 	 */
 	fun playMessage(team: String, at: Long, tier: SttsPlayer.Tier) {
-		val client = sttsClient() ?: return
-		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return
-		stts.play(client, SttsClient.Provider.AZURE, null, team, at, tier, SttsPlayer.ttsText(msg, tier))
+		stts.post {
+			val client = sttsClient() ?: return@post
+			val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return@post
+			stts.play(client, SttsClient.Provider.AZURE, null, team, at, tier, SttsPlayer.ttsText(msg, tier))
+		}
 	}
 
 	suspend fun provision(blob: String) = withContext(Dispatchers.IO) {

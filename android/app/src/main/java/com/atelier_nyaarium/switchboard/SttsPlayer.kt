@@ -33,6 +33,13 @@ class SttsPlayer(private val root: File) {
 	fun isPlaying(team: String, at: Long, tier: Tier): Boolean =
 		currentKey?.startsWith("$team/$at-${tier.suffix}-") == true
 
+	/** Run work on the player's daemon thread. Lets callers move credential
+	 * loading and message resolution off their own thread (a broadcast
+	 * receiver's main thread must hold zero disk or crypto work). */
+	fun post(action: () -> Unit) {
+		exec.execute(action)
+	}
+
 	/**
 	 * Play (or toggle-stop) one message tier. Synthesizes through `client` on
 	 * a cache miss, then plays the cached file. Safe to call from any thread.

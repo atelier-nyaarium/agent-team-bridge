@@ -7,10 +7,11 @@ import android.content.Intent
 /**
  * Handles the message-notification actions that must work without opening the
  * Activity: swiping a team's notification away marks that team read, and the
- * Play actions speak the burst-last message through SttsPlayer. The play call
- * only enqueues onto the player's own daemon thread (single-flight dedupes
- * multi-taps), so the receiver returns immediately without goAsync. Unread is
- * process-local state, so after a process death mark-read degrades to a no-op.
+ * Play actions speak the burst-last message through SttsPlayer. playMessage
+ * hands the entire resolution (credential decrypt included) to the player's
+ * daemon thread, so this receiver does zero disk or crypto work on main and
+ * needs no goAsync; single-flight dedupes multi-taps. Unread is process-local
+ * state, so after a process death mark-read degrades to a no-op.
  */
 class NotificationReceiver : BroadcastReceiver() {
 	override fun onReceive(context: Context, intent: Intent) {
