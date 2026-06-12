@@ -35,6 +35,13 @@ describe("stts-providers.json", () => {
 		expect(new Set(ids).size).toBe(ids.length);
 	});
 
+	it("has unique provider paths", () => {
+		// The audio cache keys on path, so two descriptors sharing a path would
+		// collide (provider A's cached audio replays for provider B).
+		const paths = parsed.providers.map((p) => p.path);
+		expect(new Set(paths).size).toBe(paths.length);
+	});
+
 	it("each request template carries exactly one $text", () => {
 		for (const p of parsed.providers) {
 			expect(countPlaceholder(p.request, "$text"), `provider ${p.id}`).toBe(1);

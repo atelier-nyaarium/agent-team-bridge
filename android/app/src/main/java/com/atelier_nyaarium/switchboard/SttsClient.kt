@@ -80,8 +80,13 @@ class SttsClient(private val baseUrl: String, private val apiKey: String) {
 	}
 
 	/** Fill the descriptor's request template: the chosen voice falls back to
-	 * the descriptor default when blank. */
+	 * the descriptor default when blank. Fails loud if the template carries no
+	 * "$text" placeholder (a malformed descriptor would otherwise speak
+	 * nothing silently). */
 	private fun buildBody(provider: SttsProvider, text: String, voice: String?): String {
+		require(containsPlaceholder(provider.request, "\$text")) {
+			"STTS descriptor ${provider.id} has no \$text placeholder in its request template"
+		}
 		val resolvedVoice = voice?.takeIf { it.isNotBlank() } ?: provider.defaults.voice
 		return fillTemplate(provider.request, text, resolvedVoice).toString()
 	}
@@ -96,6 +101,13 @@ class SttsClient(private val baseUrl: String, private val apiKey: String) {
 		 * strings pass through verbatim. The serializer JSON-encodes the
 		 * substituted values, so arbitrary synthesis text is never string-spliced.
 		 */
+		/** Whether any string VALUE in the template tree equals `placeholder`. */
+		fun containsPlaceholder(node: JsonElement, placeholder: String): Boolean = when (node) {
+			is JsonObject -> node.values.any { containsPlaceholder(it, placeholder) }
+			is JsonArray -> node.any { containsPlaceholder(it, placeholder) }
+			is JsonPrimitive -> node.isString && node.content == placeholder
+		}
+
 		fun fillTemplate(node: JsonElement, text: String, voice: String): JsonElement = when (node) {
 			is JsonObject -> JsonObject(node.mapValues { fillTemplate(it.value, text, voice) })
 			is JsonArray -> JsonArray(node.map { fillTemplate(it, text, voice) })
