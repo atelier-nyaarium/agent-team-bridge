@@ -48,6 +48,7 @@ export class DeviceMailbox {
 	private dropped = 0;
 	private maxEntries: number;
 	private maxBytes: number;
+	private waiters: Array<() => void> = [];
 	readonly epoch: number;
 	lastActivity = Date.now();
 
@@ -83,7 +84,32 @@ export class DeviceMailbox {
 			this.dropped += 1;
 		}
 		this.lastActivity = Date.now();
+		this.releaseWaiters();
 		return entry;
+	}
+
+	/**
+	 * Resolve when an entry is appended, the timeout elapses, or the mailbox is
+	 * torn down - whichever comes first. This is the long-poll hold: the poll op
+	 * waits here when the box is empty instead of returning an empty drain.
+	 */
+	waitForAppend(timeoutMs: number): Promise<void> {
+		return new Promise((resolve) => {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const settle = () => {
+				clearTimeout(timer);
+				const i = this.waiters.indexOf(settle);
+				if (i >= 0) this.waiters.splice(i, 1);
+				resolve();
+			};
+			timer = setTimeout(settle, timeoutMs);
+			this.waiters.push(settle);
+		});
+	}
+
+	/** Wake every held poll (append, or the store tearing this instance down). */
+	releaseWaiters(): void {
+		for (const settle of this.waiters.splice(0)) settle();
 	}
 
 	/**
@@ -171,6 +197,7 @@ export class DeviceMailboxStore {
 	}
 
 	delete(device: string): void {
+		this.mailboxes.get(device)?.releaseWaiters();
 		this.mailboxes.delete(device);
 	}
 
@@ -191,6 +218,7 @@ export class DeviceMailboxStore {
 		let removed = 0;
 		for (const [device, box] of this.mailboxes) {
 			if (box.isExpired(now, this.ttlMs)) {
+				box.releaseWaiters();
 				this.mailboxes.delete(device);
 				removed++;
 				this.onEvictCb?.(device);
@@ -209,6 +237,7 @@ export class DeviceMailboxStore {
 			}
 		}
 		if (oldestDevice !== null) {
+			this.mailboxes.get(oldestDevice)?.releaseWaiters();
 			this.mailboxes.delete(oldestDevice);
 			this.onEvictCb?.(oldestDevice);
 		}

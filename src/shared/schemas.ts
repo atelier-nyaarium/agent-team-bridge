@@ -159,6 +159,7 @@ export const PhoneOpSchema = z.discriminatedUnion("kind", [
 		kind: z.literal("poll"),
 		cursor: z.number().int().nonnegative().optional(),
 		epoch: z.number().int().nonnegative().optional(),
+		holdMs: z.number().int().nonnegative().max(45_000).optional(),
 	}),
 ]);
 
