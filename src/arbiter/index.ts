@@ -362,6 +362,7 @@ export async function startArbiter(): Promise<void> {
 		config: { LOG_PATH, RESPONSE_TIMEOUT_MS },
 		tryWakeTeam,
 		offlineCatalog,
+		knownTeamPaths,
 		evieClient,
 		resolveHandshake: wsHandlers.resolveHandshake,
 		pinnedHolders,
@@ -370,7 +371,13 @@ export async function startArbiter(): Promise<void> {
 	});
 
 	if (evieClient) {
-		const phoneHandler = createPhoneHandler({ registry, conversationRegistry, mailboxStore, routes });
+		const phoneHandler = createPhoneHandler({
+			registry,
+			conversationRegistry,
+			mailboxStore,
+			routes,
+			isProjectName: (name) => offlineCatalog.has(name) || knownTeamPaths.has(name),
+		});
 		handlePhoneRelay = createPhoneRelayPump({
 			handleFrame: phoneHandler.handleFrame,
 			sendReply: (reply) =>

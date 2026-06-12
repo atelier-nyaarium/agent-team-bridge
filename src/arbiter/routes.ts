@@ -33,6 +33,10 @@ export interface RoutesDeps {
 	getMutex: ((team: string) => Mutex) & { peek: (team: string) => Mutex | undefined };
 	tryWakeTeam: (team: string) => Promise<boolean>;
 	offlineCatalog: Map<string, string>;
+	// Durable team -> projectPath map (never cleared, unlike offlineCatalog which
+	// empties when the host daemon disconnects). Membership in either marks a
+	// team as devcontainer-backed.
+	knownTeamPaths: Map<string, string>;
 	config: ArbiterConfig;
 	evieClient?: import("./evie/evieClient.js").EvieClient | null;
 	resolveHandshake?: (sessionId: string, replyAsJson?: Record<string, unknown>, response?: string) => boolean;
@@ -52,6 +56,9 @@ const SendRequestSchema = z.object({
 	debug: z.boolean().optional(),
 	replyJsonSchema: z.string().optional(),
 	files: ChannelFilesSchema.optional(),
+	// Phone-originated sends: reject CLI-mode targets instead of entering the
+	// CLI branch, which mints a random session id the phone can never thread.
+	channelOnly: z.boolean().optional(),
 });
 
 const RespondBodySchema = z.object({
@@ -154,6 +161,7 @@ export function createRoutes({
 	getMutex,
 	tryWakeTeam,
 	offlineCatalog,
+	knownTeamPaths,
 	config,
 	evieClient,
 	resolveHandshake,
@@ -192,6 +200,7 @@ export function createRoutes({
 	function teams(): Response {
 		const teamsList: TeamInfo[] = [];
 		const seen = new Set<string>();
+		const isDevcontainer = (name: string) => offlineCatalog.has(name) || knownTeamPaths.has(name);
 
 		for (const [name, subs] of registry) {
 			if (name === "host") continue;
@@ -201,13 +210,14 @@ export function createRoutes({
 				team: name,
 				status: "online",
 				mode: getTeamMode(subs),
+				kind: isDevcontainer(name) ? "devcontainer" : "loose",
 				queue_depth: lock ? lock.queue.length + (lock.locked ? 1 : 0) : 0,
 			});
 		}
 
 		for (const [name] of offlineCatalog) {
 			if (seen.has(name)) continue;
-			teamsList.push({ team: name, status: "available", queue_depth: 0 });
+			teamsList.push({ team: name, status: "available", kind: "devcontainer", queue_depth: 0 });
 		}
 
 		return jsonResponse(teamsList);
@@ -228,6 +238,7 @@ export function createRoutes({
 			debug,
 			replyJsonSchema,
 			files,
+			channelOnly,
 		} = parsed.data;
 
 		// Raw-bytes backstop at the trust boundary before the payload is pushed.
@@ -276,6 +287,18 @@ export function createRoutes({
 		}
 
 		const targetMode = getTeamMode(subs);
+
+		// channelOnly senders (the phone) must never reach the CLI branch below:
+		// it mints a fresh random session id that can never join the sender's
+		// deterministic conversation threads. Checked post-wake, so even a
+		// sleeping CLI team that this send just woke gets a clean error instead
+		// of an orphan session.
+		if (channelOnly && targetMode !== "channel") {
+			return jsonResponse(
+				{ error: `"${to}" is a CLI-mode agent; phone chat supports channel-mode (Claude) teams only` },
+				409,
+			);
+		}
 
 		// Channel mode: stable job id per (sender_conversation_id, target_team) pair.
 		// Same pair reuses the same store entry forever; entries are persistent.

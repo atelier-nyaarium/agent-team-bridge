@@ -49,7 +49,16 @@ data class Provisioning(
 	}
 }
 
-data class Team(val name: String, val status: String, val mode: String, val queueDepth: Int)
+/** `status` is the wire word verbatim ("online" | "available"); `kind` is
+ * "devcontainer" (wakeable project) or "loose" (ad-hoc session). Old arbiters
+ * omit kind, which defaults to loose. */
+data class Team(
+	val name: String,
+	val status: String,
+	val mode: String,
+	val queueDepth: Int,
+	val kind: String = "loose",
+)
 
 data class RegisterResult(val cursor: Int, val epoch: Int)
 
@@ -70,6 +79,8 @@ data class MailboxEntry(
 	val seq: Int,
 	val at: Long,
 	val files: List<RawFile> = emptyList(),
+	/** Reply state from the wire: "running" interim, "error", or null/completed. */
+	val status: String? = null,
 )
 
 data class Mailbox(val entries: List<MailboxEntry>, val cursor: Int, val epoch: Int, val dropped: Int)
@@ -129,7 +140,13 @@ class PhoneClient(private val prov: Provisioning) {
 		val arr = result.optJSONArray("teams") ?: return emptyList()
 		return (0 until arr.length()).map {
 			val t = arr.getJSONObject(it)
-			Team(t.optString("team"), t.optString("status"), t.optString("mode"), t.optInt("queue_depth"))
+			Team(
+				name = t.optString("team"),
+				status = t.optString("status"),
+				mode = t.optString("mode"),
+				queueDepth = t.optInt("queue_depth"),
+				kind = t.optString("kind", "loose"),
+			)
 		}
 	}
 
@@ -190,6 +207,7 @@ class PhoneClient(private val prov: Provisioning) {
 				seq = e.optInt("seq"),
 				at = e.optLong("at"),
 				files = files,
+				status = e.optString("status").takeIf { s -> s.isNotEmpty() },
 			)
 		}
 		return Mailbox(entries, result.optInt("cursor", cursor), result.optInt("epoch", epoch), result.optInt("dropped", 0))

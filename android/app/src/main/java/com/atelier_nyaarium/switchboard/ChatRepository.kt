@@ -30,6 +30,9 @@ data class Message(
 	val at: Long,
 	val id: Long = 0,
 	val files: List<MessageFile> = emptyList(),
+	/** Wire reply state: "running" interim, "error", or null for a final answer.
+	 * Parsed and persisted here; the renderer's status badge is wired in P3. */
+	val status: String? = null,
 )
 
 data class ChatState(
@@ -194,7 +197,7 @@ class ChatRepository(
 						val team = teamFromSession(e.sessionId) ?: e.from ?: continue
 						val files = Attachments.decode(filesDir, mb.epoch, e.seq, e.files)
 						if (e.body.isNotEmpty() || files.isNotEmpty()) {
-							append(team, Message(false, e.body, e.at, files = files))
+							append(team, Message(false, e.body, e.at, files = files, status = e.status))
 							bumpUnread(team)
 						}
 					}
@@ -305,6 +308,7 @@ class ChatRepository(
 			val arr = JSONArray()
 			for (m in msgs) {
 				val obj = JSONObject().put("me", m.fromMe).put("text", m.text).put("at", m.at)
+				obj.putOpt("status", m.status)
 				// Persist local paths (the decoded files survive on disk), never base64.
 				if (m.files.isNotEmpty()) {
 					val files = JSONArray()
@@ -331,7 +335,14 @@ class ChatRepository(
 					// stable per-thread key whether the JSON is old (no id) or new.
 					put(team, (0 until arr.length()).map {
 						val m = arr.getJSONObject(it)
-						Message(m.optBoolean("me"), m.optString("text"), m.optLong("at"), it.toLong(), loadFiles(m))
+						Message(
+							m.optBoolean("me"),
+							m.optString("text"),
+							m.optLong("at"),
+							it.toLong(),
+							loadFiles(m),
+							m.optString("status").takeIf { s -> s.isNotEmpty() },
+						)
 					})
 				}
 			}
