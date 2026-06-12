@@ -241,9 +241,8 @@ whichever plan runs first wires the Android junit test classpath.
   arbiter restart drops persistent channel conversations and replies bounce
   with "No pending request" until the peer sends again (bit twice on
   2026-06-12). A durable conversation store is its own future plan.
-- Out of scope: archiving shipped plan docs (plans/android-*.md,
-  cycle-notify-human.md) - android-channel-app.md is still cross-referenced
-  from CLAUDE.md.
+- Shipped plan docs were archived to plans/done/ (2026-06-12); the CLAUDE.md
+  cross-reference points there now.
 - Already fixed, do NOT redo: mailbox epoch collision (random mint + drain
   guard, PR #29); capless respond_to_human reader; notice session grammar
   pinning; notify_human registration drift.

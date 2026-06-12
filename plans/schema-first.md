@@ -51,6 +51,19 @@ must state it "shouldn't stop mid plan" - captured as the run-to-completion
 rule above. (Historical note: cleanup-framework never started; it was
 delivered as a proposal awaiting greenlight by design, not interrupted.)
 
+**5b. Amendments (user, pre-refinement):**
+- Rename `tiny` -> `title` (user: "you may rename it from `tiny` to a better
+  name lol. I just called it `tiny`"). `title` aligns the whole chain: tool
+  param -> wire -> mailbox entry `{title, summary, body}` -> notification-bar
+  title. Its description must say: 1 short sentence or phrase, the
+  notification-bar headline - NOT a long-winded sentence. Arbiter accepts
+  both `tiny` and `title` during transition (additive tolerance; old plugins
+  send `tiny`).
+- Minor-bump every touched repo on each phase that touches it (switchboard
+  plugin + APK, nyaaskills, evie-bot).
+- Cleanup of shipped plan docs: done immediately (plans/done/ archive), not a
+  phase.
+
 **5. Cross-repo contract sharing (evie frames, notice tiers)?**
 Synced schema modules, manual for now. User: "Sorta. For now, manual
 `cp`/`rsync` shared/ to update them. Comment on top saying to MUST
@@ -175,11 +188,14 @@ disables loudly instead of silently falling back to Azure
 
 ## Phase 4: notice contract + cross-repo sync
 
-- `src/shared/notice.ts`: `NoticeSchema` `{ tiny, summary, full }` with the
+- `src/shared/notice.ts`: `NoticeSchema` `{ title, summary, full }` with the
   tier semantics as `.describe()` text ON the fields (the parameter-describe
-  doctrine: rules about what goes in a field live on the field). notify_human
-  and the arbiter's `/human/notify` route both import it; the mailbox entry's
-  `{title, summary, body}` mapping is documented beside it.
+  doctrine: rules about what goes in a field live on the field). `title`
+  replaces `tiny` (questionaire 5b): its describe states "1 short sentence or
+  phrase - the notification-bar headline. Not a long-winded sentence."
+  notify_human and the arbiter's `/human/notify` route both import it; the
+  route accepts legacy `tiny` as an alias during transition. The mailbox
+  entry `{title, summary, body}` now matches the wire name end to end.
 - Sync copies, manual per the questionaire: `notice.ts` ->
   nyaaskills (cycleCheckpoint currently re-declares tiny/summary/full
   independently at cycleCheckpoint.ts:40-62 - its zod fields become imports of
@@ -219,8 +235,10 @@ disables loudly instead of silently falling back to Azure
 - Keep the phone protocol additive throughout; the 3.9.0 tolerance bar from
   the notify cycle applies. Generated Kotlin parses with ignoreUnknownKeys so
   old apps tolerate new fields and new apps tolerate old arbiters.
-- Versions: switchboard plugin + APK bump per its deploy doc; nyaaskills bump
-  on P4.
+- Versions: MINOR bump every repo a phase touches, all three version spots
+  per the deploy doctrine (plugin.json + package.json + McpServer version for
+  the plugins). Switchboard bumps on P1/P2/P3/P4; nyaaskills and evie-bot
+  bump on P4.
 - Emulator harness: `source ~/android-dev/env.sh`, AVD phone35,
   `wm size 720x1600` + `density 280`, reset after.
 - cleanup-framework.md interplay: 1a/1b can run before, after, or interleaved

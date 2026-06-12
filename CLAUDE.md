@@ -125,7 +125,7 @@ Bidirectional, integrated with the Evie bridge.
 
 ### Phone Bridge (Android channel)
 
-Arbiter side of a native Android chat client that reaches the bridge through evie (the only host the phone and the home-NAT arbiter both reach). The phone is a poll-based client, not a live socket: evie relays opaque `phone_relay` frames over the existing arbiter<->evie WS, and the arbiter answers each with a `phone_relay_reply` tool call. See `arbiter/phone/` and the full design in `plans/android-channel-app.md`.
+Arbiter side of a native Android chat client that reaches the bridge through evie (the only host the phone and the home-NAT arbiter both reach). The phone is a poll-based client, not a live socket: evie relays opaque `phone_relay` frames over the existing arbiter<->evie WS, and the arbiter answers each with a `phone_relay_reply` tool call. See `arbiter/phone/` and the full design in `plans/done/android-channel-app.md`.
 
 - **Identity:** keyed by the phone's per-install `conversationId` (the human Device Name is a display label). `phoneHandler.ts:assertValidIdentity` rejects reserved names, a name already held by a real team, and a conversation already owned by a live socket.
 - **Virtual peer:** `PhonePeer` is inserted into the team + conversation registries like a real bridge peer, so existing crosstalk routing (wake, persistent conversations, `channel_push`/`response_push` delivery) is reused unchanged. Its `send()` appends to the device's `DeviceMailbox` instead of a wire; the phone drains it with the `poll` op. Virtual peers are excluded from the heartbeat and from DM-holder selection (`getAllActiveRealWs`), and a real registration evicts a squatting virtual peer.
