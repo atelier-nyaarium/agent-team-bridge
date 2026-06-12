@@ -15,11 +15,7 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 	const replyInstruction = isDiscord
 		? "┃ Reply via `respond_to_human`. You hold the channel for this session until you transfer it. Do not output additional text outside the tool call."
 		: "┃ Reply via `channel_reply`. The conversation stays open, so you can reply multiple times: use status `running` for interim updates (phase reports, progress, ACKs) and `completed` for the final answer. Do not output additional text outside the tool call.";
-	// Replies often render on a phone: every agent gets the style rule with the
-	// message itself, so no agent needs memory or training to follow it.
-	const styleLine =
-		"┃ Style: lead with the answer itself. No lead-in labels (\"Short answer:\", \"TLDR:\"), no restating the question.";
-	const lines = [replyInstruction, styleLine, `┃ session_id: \`${payload.session_id}\``];
+	const lines = [replyInstruction, `┃ session_id: \`${payload.session_id}\``];
 	if (payload.message_id) {
 		lines.push(`┃ message_id: \`${payload.message_id}\``);
 	}
