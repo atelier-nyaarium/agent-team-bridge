@@ -80,8 +80,7 @@ phone-protocol.ts and PhoneClient.kt; NOTICE_SESSION_PREFIX is a
 comment-pinned mirror (phone-protocol.ts:141-145 -> ChatRepository.kt).
 
 - `scripts/codegen-kotlin.ts` (bun): imports the zod schemas from
-  `src/shared/`, converts via `z.toJSONSchema()` (reference: evie's
-  actionSchemaToTool.ts conversion + cleanup walk), walks the JSON Schema, and
+  `src/shared/`, converts via `z.toJSONSchema()`, walks the JSON Schema, and
   emits one Kotlin file per schema group into
   `android/app/src/main/java/com/atelier_nyaarium/switchboard/proto/`:
   - `data class` per object schema, `@Serializable`, defaults from zod
@@ -92,6 +91,19 @@ comment-pinned mirror (phone-protocol.ts:141-145 -> ChatRepository.kt).
     op kind strings, PHONE_PROTOCOL_VERSION.
   - Every file headed `// generated from src/shared/<file>.ts - DO NOT EDIT.
     Regenerate: bun scripts/codegen-kotlin.ts`.
+- The zod -> JSON Schema leg MUST follow evie's battle-hardened conversion
+  hygiene, not raw `z.toJSONSchema()` output. The reference chain in evie-bot:
+  `app/actions/actionSchemaToTool.ts` (the core: `z.toJSONSchema()` then strip
+  `$schema`, force `additionalProperties: false`, and a recursive walk
+  removing JSON Schema `format` validators downstream consumers do not
+  support - zod still enforces them at runtime),
+  `app/features/StructuredAIClient/utils.ts:adapterToTool` (same pass), and
+  `app/features/bridge/exportToolSchemas.ts` (registry -> wire: deep-clone +
+  strip internal fields from `properties`/`required`). Lift that cleanup walk
+  into a shared `zodToCleanJsonSchema()` step in the codegen script; the
+  Kotlin emitter consumes only cleaned schemas. (Switchboard already consumes
+  the reverse leg via `z.fromJSONSchema()` in mcp/evie/evieTools.ts - the
+  round trip is proven in production across this exact pair of repos.)
 - Android adopts kotlinx-serialization: plugin + runtime in
   libs.versions.toml / build.gradle.kts. org.json stays for not-yet-migrated
   code; new generated types parse via `Json { ignoreUnknownKeys = true }`
