@@ -137,6 +137,10 @@ class ChatRepository(
 	private var pollFails = 0
 	private var pollJob: Job? = null
 
+	/** TTS playback engine; cache lives under filesDir/stts/<team>/. */
+	val stts = SttsPlayer(filesDir)
+	private var sttsClient: SttsClient? = null
+
 	/** True while the Activity is started; drives the poll cadence (5s visible,
 	 * 60s AFK burst). The mailbox accumulates server-side either way. */
 	@Volatile private var visible = false
@@ -172,10 +176,35 @@ class ChatRepository(
 		return PhoneClient(Provisioning.parse(blob)).also { client = it }
 	}
 
+	/** STTS client from the provisioning blob, or null when not configured.
+	 * Rebuilt after re-provisioning (the same client=null invalidation). */
+	private fun sttsClient(): SttsClient? {
+		sttsClient?.let { return it.takeIf { c -> c.isConfigured } }
+		val blob = store.load() ?: return null
+		val prov = runCatching { Provisioning.parse(blob) }.getOrNull() ?: return null
+		return SttsClient(prov.sttsUrl, prov.sttsKey).also { sttsClient = it }.takeIf { it.isConfigured }
+	}
+
+	/** Gates the Play surfaces; true once the blob carries sttsUrl + sttsKey. */
+	fun sttsReady(): Boolean = sttsClient() != null
+
+	/**
+	 * Speak one message tier (notification action or thread button). Cache and
+	 * single-flight live in SttsPlayer, so impatient multi-taps synthesize
+	 * once; tapping the playing message stops it. No-op when unconfigured or
+	 * the message is gone.
+	 */
+	fun playMessage(team: String, at: Long, tier: SttsPlayer.Tier) {
+		val client = sttsClient() ?: return
+		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return
+		stts.play(client, SttsClient.Provider.AZURE, null, team, at, tier, SttsPlayer.ttsText(msg, tier))
+	}
+
 	suspend fun provision(blob: String) = withContext(Dispatchers.IO) {
 		val prov = Provisioning.parse(blob) // throws on malformed input before we persist
 		store.save(blob)
 		client = null
+		sttsClient = null
 		_state.update { it.copy(provisioned = true, error = null, deviceName = prov.device) }
 	}
 
@@ -476,7 +505,8 @@ class ChatRepository(
 		persistLabels(labels)
 	}
 
-	/** Drop a peer from this device: its thread, unread, tab, and label. */
+	/** Drop a peer from this device: its thread, unread, tab, label, and any
+	 * cached TTS audio. */
 	fun forget(team: String) {
 		val next = _state.updateAndGet { s ->
 			s.copy(
@@ -488,6 +518,7 @@ class ChatRepository(
 		}
 		persistThreads(next.threads)
 		persistLabels(next.labels)
+		stts.purge(team)
 	}
 
 	fun setBiometricLock(enabled: Boolean) {
@@ -511,6 +542,9 @@ class ChatRepository(
 		pollJob?.cancel()
 		store.clear()
 		client = null
+		sttsClient = null
+		stts.stop()
+		File(filesDir, "stts").deleteRecursively()
 		cursor = 0
 		epoch = 0
 		lastSeq = -1
