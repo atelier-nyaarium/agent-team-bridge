@@ -4,6 +4,14 @@
 // Decode with Json { ignoreUnknownKeys = true } (the additive-protocol
 // posture). Enum-like fields are open Strings on purpose: the phone must
 // tolerate values newer than this build.
+//
+// ENCODE config is load-bearing: the default Json (encodeDefaults = false)
+// omits null-defaulted optionals, which is exactly what the arbiter's zod
+// schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
+// is ever enabled (e.g. to emit a defaulted const like PhoneRelayFrame.type),
+// it MUST pair with explicitNulls = false. Note the phone's POST body is the
+// op-only envelope {device, conversationId, opId, op}; evie composes the full
+// phone_relay frame, so PhoneRelayFrame is decode-side here.
 @file:Suppress("unused")
 
 package com.atelier_nyaarium.switchboard.proto
@@ -39,7 +47,7 @@ data class TeamInfo(
 	val team: String,
 	val status: String,
 	val mode: String? = null,
-	val kind: String,
+	val kind: String? = null,
 	val queue_depth: Long,
 )
 

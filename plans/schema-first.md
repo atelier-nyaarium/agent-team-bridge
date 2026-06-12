@@ -367,6 +367,31 @@ verbs.
   channelOnly sends never produce an inline body; :293 returns only
   {session_id, status}) - DELETE it as dead code after a git-history sanity
   check during implementation.
+- **Migration hazards (Phase 1 parity audit findings - work items for the
+  hand-type swap, not generated-type bugs):**
+  - Null vs empty-string semantics flip: hand parsing used optString("")
+    then `takeIf { isNotEmpty }`; generated types yield String? = null.
+    Consumers need orEmpty()/null-handling: body at ChatRepository's
+    isNotEmpty check + Message constructor, status/from/title/summary
+    reads.
+  - Wire names: generated MailboxEntry uses `session_id` (wire) where the
+    hand class renamed to sessionId - consumption sites adapt.
+  - Long ripple: seq/cursor/epoch/at are Long in generated types; hand vars
+    (lastSeq, cursor, epoch) and Attachments.decode's signature are Int -
+    they widen, or epoch stays Int31 by mint contract (device-mailbox.ts
+    documents the random positive Int31 mint precisely for the phone).
+  - RawFile (3 fields, shrugging optStrings) -> generated ChannelFile (5
+    fields, size/descriptiveKey required): a malformed file record now
+    fails the WHOLE poll decode rather than one attachment. All real
+    ingress is ChannelFilesSchema-validated so the fields always exist;
+    note the blast-radius change in error handling.
+  - The phone's POST body stays the op-only envelope {device,
+    conversationId, opId, op} - evie composes the full phone_relay frame.
+    Generated PhoneRelayFrame is decode-side; if it is ever encoded, the
+    Json config MUST be encodeDefaults + explicitNulls=false (default
+    config omits the defaulted `type` const; zod rejects explicit nulls).
+  - TeamInfo.kind is optional in the schema (old arbiters omit it);
+    consumers default to "loose" exactly as the hand client did.
 - OUT of scope, explicitly: on-disk thread persistence
   (persistThreads/loadPersistedThreads, ChatRepository.kt:630-694). It is a
   LOCAL format with its own legacy rules (id reassignment, opId demotes),

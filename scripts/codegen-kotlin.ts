@@ -22,11 +22,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import {
-	CONV_SESSION_PREFIX,
-	NOTICE_SESSION_PREFIX,
-	PHONE_PROTOCOL_VERSION,
-} from "../src/shared/phone-protocol.js";
+import { CONV_SESSION_PREFIX, NOTICE_SESSION_PREFIX, PHONE_PROTOCOL_VERSION } from "../src/shared/phone-protocol.js";
 import {
 	ChannelFileSchema,
 	MailboxEntrySchema,
@@ -152,7 +148,8 @@ function kotlinType(node: Json, defs: Map<string, Json>): string {
 			return `List<${items ? kotlinType(items, defs) : "JsonElement"}>`;
 		}
 		case "object":
-			if (node.properties) throw new Error("inline object without $defs id - add .meta({ id }) to the sub-schema");
+			if (node.properties)
+				throw new Error("inline object without $defs id - add .meta({ id }) to the sub-schema");
 			return "JsonObject"; // z.record / free-form
 		default:
 			return "JsonElement"; // z.unknown and friends
@@ -262,8 +259,6 @@ for (const name of order) {
 	} else if (node.properties) {
 		blocks.push(emitDataClass(name, node, defs));
 	} else {
-		// Root-level plain union (none today; PhoneOpResult is field-inlined).
-		continue;
 	}
 }
 
@@ -273,6 +268,14 @@ const header = `// generated from src/shared/schemas.ts + src/shared/phone-proto
 // Decode with Json { ignoreUnknownKeys = true } (the additive-protocol
 // posture). Enum-like fields are open Strings on purpose: the phone must
 // tolerate values newer than this build.
+//
+// ENCODE config is load-bearing: the default Json (encodeDefaults = false)
+// omits null-defaulted optionals, which is exactly what the arbiter's zod
+// schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
+// is ever enabled (e.g. to emit a defaulted const like PhoneRelayFrame.type),
+// it MUST pair with explicitNulls = false. Note the phone's POST body is the
+// op-only envelope {device, conversationId, opId, op}; evie composes the full
+// phone_relay frame, so PhoneRelayFrame is decode-side here.
 @file:Suppress("unused")
 
 package com.atelier_nyaarium.switchboard.proto

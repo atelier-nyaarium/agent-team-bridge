@@ -1,10 +1,13 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
+import com.atelier_nyaarium.switchboard.proto.PhoneListTeamsResult
 import com.atelier_nyaarium.switchboard.proto.PhoneOp
 import com.atelier_nyaarium.switchboard.proto.PhonePollResult
+import com.atelier_nyaarium.switchboard.proto.PhoneRegisterResult
 import com.atelier_nyaarium.switchboard.proto.PhoneRelayFrame
 import com.atelier_nyaarium.switchboard.proto.PhoneRelayReply
+import com.atelier_nyaarium.switchboard.proto.PhoneSendResult
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -80,6 +83,31 @@ class ProtocolFixturesTest {
 		} catch (expected: SerializationException) {
 			// missing non-nullable field
 		}
+	}
+
+	@Test
+	fun toleratesOldArbiterTeamWithoutKind() {
+		val result = json.decodeFromString<PhoneListTeamsResult>(fixture("list-teams-result.json"))
+		assertEquals(2, result.teams.size)
+		assertEquals("devcontainer", result.teams[0].kind)
+		assertNull(result.teams[1].kind)
+	}
+
+	@Test
+	fun decodesRemainingOpResultsAndErrorReply() {
+		val register = json.decodeFromString<PhoneRegisterResult>(fixture("register-result.json"))
+		assertEquals(42L, register.cursor)
+
+		val send = json.decodeFromString<PhoneSendResult>(fixture("send-result.json"))
+		assertEquals("delivered", send.status)
+
+		val failed = json.decodeFromString<PhoneRelayReply>(fixture("relay-reply-error.json"))
+		assertEquals(false, failed.ok)
+		assertTrue(failed.error!!.isNotEmpty())
+
+		val withFiles = json.decodeFromString<MailboxEntry>(fixture("mailbox-reply-files.json"))
+		assertEquals(1, withFiles.files!!.size)
+		assertEquals("Which environment?", withFiles.question)
 	}
 
 	@Test

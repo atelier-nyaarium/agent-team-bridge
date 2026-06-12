@@ -163,7 +163,9 @@ export const TeamInfoSchema = z
 		team: z.string(),
 		status: z.enum(["online", "available"]),
 		mode: ConnectionModeSchema.optional(),
-		kind: TeamKindSchema,
+		// Optional for decode tolerance: old arbiters omit kind and consumers
+		// default it to "loose" (the hand Kotlin client always did).
+		kind: TeamKindSchema.optional(),
 		queue_depth: z.number().int().nonnegative(),
 	})
 	.meta({ id: "TeamInfo" });

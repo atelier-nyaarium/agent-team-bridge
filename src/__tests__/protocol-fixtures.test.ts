@@ -3,9 +3,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	MailboxEntrySchema,
+	PhoneListTeamsResultSchema,
 	PhonePollResultSchema,
+	PhoneRegisterResultSchema,
 	PhoneRelayFrameSchema,
 	PhoneRelayReplySchema,
+	PhoneSendResultSchema,
 } from "../shared/schemas.js";
 
 ////////////////////////////////
@@ -27,19 +30,25 @@ function fixture(name: string): unknown {
 }
 
 describe("protocol fixtures", () => {
-	it.each(["frame-register.json", "frame-list-teams.json", "frame-send.json", "frame-respond.json", "frame-poll.json"])(
-		"%s parses as a relay frame",
-		(name) => {
-			expect(PhoneRelayFrameSchema.safeParse(fixture(name)).success).toBe(true);
-		},
-	);
+	it.each([
+		"frame-register.json",
+		"frame-list-teams.json",
+		"frame-send.json",
+		"frame-respond.json",
+		"frame-poll.json",
+	])("%s parses as a relay frame", (name) => {
+		expect(PhoneRelayFrameSchema.safeParse(fixture(name)).success).toBe(true);
+	});
 
-	it.each(["mailbox-message.json", "mailbox-reply.json", "mailbox-notice.json", "mailbox-handoff.json"])(
-		"%s parses as a mailbox entry",
-		(name) => {
-			expect(MailboxEntrySchema.safeParse(fixture(name)).success).toBe(true);
-		},
-	);
+	it.each([
+		"mailbox-message.json",
+		"mailbox-reply.json",
+		"mailbox-notice.json",
+		"mailbox-handoff.json",
+		"mailbox-reply-files.json",
+	])("%s parses as a mailbox entry", (name) => {
+		expect(MailboxEntrySchema.safeParse(fixture(name)).success).toBe(true);
+	});
 
 	it("keeps the at field above 2^31 (Long bait for the Kotlin side)", () => {
 		const entry = MailboxEntrySchema.parse(fixture("mailbox-message.json"));
@@ -63,5 +72,23 @@ describe("protocol fixtures", () => {
 
 	it("relay-reply.json parses as a relay reply", () => {
 		expect(PhoneRelayReplySchema.safeParse(fixture("relay-reply.json")).success).toBe(true);
+	});
+
+	it("relay-reply-error.json parses as a failed relay reply", () => {
+		const reply = PhoneRelayReplySchema.parse(fixture("relay-reply-error.json"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toBeTruthy();
+	});
+
+	it("register-result.json and send-result.json parse as op results", () => {
+		expect(PhoneRegisterResultSchema.safeParse(fixture("register-result.json")).success).toBe(true);
+		expect(PhoneSendResultSchema.safeParse(fixture("send-result.json")).success).toBe(true);
+	});
+
+	it("list-teams-result.json tolerates an old-arbiter team without kind", () => {
+		const result = PhoneListTeamsResultSchema.parse(fixture("list-teams-result.json"));
+		expect(result.teams).toHaveLength(2);
+		expect(result.teams[0].kind).toBe("devcontainer");
+		expect(result.teams[1].kind).toBeUndefined();
 	});
 });
