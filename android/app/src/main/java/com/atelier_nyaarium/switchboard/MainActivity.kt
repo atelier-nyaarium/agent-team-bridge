@@ -10,8 +10,10 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,8 +35,11 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -156,6 +161,10 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 			// Gated on DEBUG so a real peer named "demo" in a release build shows its own
 			// thread, not the fixture.
 			val isDemo = BuildConfig.DEBUG && openTeam == DEMO_TEAM
+			// Devcontainer names are the project identity; only loose peers take labels.
+			val kind = state.sessions.firstOrNull { it.name == openTeam }?.kind
+			// Rename only when positively known loose; an unknown kind (team gone
+			// from the list) stays un-renameable rather than defaulting open.
 			ThreadScreen(
 				team = openTeam!!,
 				label = state.label(openTeam!!),
@@ -164,6 +173,7 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 				messages = if (isDemo) demoMessages() else state.threads[openTeam].orEmpty(),
 				error = state.error,
 				rendererPool = rendererPool,
+				canRename = !isDemo && kind == "loose",
 				onSwitch = { openTeam = it },
 				onCloseTab = { t ->
 					// Move off the closing tab before dropping it from openTabs, so the
@@ -192,6 +202,8 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 					repo.openThread(team)
 					openTeam = team
 				},
+				onRename = { team, name -> repo.setLabel(team, name) },
+				onForget = { team -> repo.forget(team) },
 			)
 	}
 }
@@ -265,6 +277,12 @@ private fun looksProvisionable(s: String): Boolean = runCatching {
 	j.has("apiUrl") && j.has("saToken") && j.has("caPem")
 }.getOrDefault(false)
 
+/** Live first, then most recent activity, then name, within each section. */
+private fun sessionOrder(state: ChatState): Comparator<Team> =
+	compareByDescending<Team> { it.status == "online" }
+		.thenByDescending { state.lastActivity(it.name) ?: 0L }
+		.thenBy { it.name }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionsScreen(
@@ -273,7 +291,53 @@ fun SessionsScreen(
 	onRefresh: () -> Unit,
 	onSettings: () -> Unit,
 	onOpen: (String) -> Unit,
+	onRename: (String, String) -> Unit,
+	onForget: (String) -> Unit,
 ) {
+	// Long-press flow: action menu -> rename dialog or forget confirm.
+	var actionTeam by remember { mutableStateOf<Team?>(null) }
+	var renameTeam by remember { mutableStateOf<Team?>(null) }
+	var forgetTeam by remember { mutableStateOf<Team?>(null) }
+
+	actionTeam?.let { team ->
+		SessionActionsDialog(
+			label = state.label(team.name),
+			canRename = team.kind != "devcontainer",
+			onRename = {
+				actionTeam = null
+				renameTeam = team
+			},
+			onForget = {
+				actionTeam = null
+				forgetTeam = team
+			},
+			onDismiss = { actionTeam = null },
+		)
+	}
+	renameTeam?.let { team ->
+		RenameDialog(
+			team = team.name,
+			current = state.label(team.name),
+			onSave = {
+				onRename(team.name, it)
+				renameTeam = null
+			},
+			onDismiss = { renameTeam = null },
+		)
+	}
+	forgetTeam?.let { team ->
+		ConfirmDialog(
+			title = "Forget ${state.label(team.name)}?",
+			body = "Drops this thread, its label, and unread state from this device.",
+			confirmText = "Forget",
+			onConfirm = {
+				onForget(team.name)
+				forgetTeam = null
+			},
+			onDismiss = { forgetTeam = null },
+		)
+	}
+
 	Scaffold(
 		topBar = {
 			TopAppBar(
@@ -309,16 +373,40 @@ fun SessionsScreen(
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 				)
 			}
+			val order = sessionOrder(state)
+			val projects = state.sessions.filter { it.kind == "devcontainer" }.sortedWith(order)
+			val windows = state.sessions.filter { it.kind != "devcontainer" }.sortedWith(order)
 			LazyColumn(
 				Modifier.fillMaxSize(),
 				contentPadding = PaddingValues(12.dp),
 				verticalArrangement = Arrangement.spacedBy(8.dp),
 			) {
-				if (showDemo) {
-					item(key = DEMO_TEAM) { DemoCard(onClick = { onOpen(DEMO_TEAM) }) }
+				// Keys are namespaced so a team literally named "hdr-projects" or
+				// "demo" cannot collide with the header/demo items.
+				if (projects.isNotEmpty()) {
+					item(key = "hdr-projects") { SectionLabel("Projects") }
+					items(projects, key = { "team:${it.name}" }) { team ->
+						SessionCard(
+							state = state,
+							team = team,
+							onClick = { onOpen(team.name) },
+							onLongPress = { actionTeam = team },
+						)
+					}
 				}
-				items(state.sessions, key = { it.name }) { team ->
-					SessionCard(state = state, team = team, onClick = { onOpen(team.name) })
+				if (windows.isNotEmpty()) {
+					item(key = "hdr-windows") { SectionLabel("Windows") }
+					items(windows, key = { "team:${it.name}" }) { team ->
+						SessionCard(
+							state = state,
+							team = team,
+							onClick = { onOpen(team.name) },
+							onLongPress = { actionTeam = team },
+						)
+					}
+				}
+				if (showDemo) {
+					item(key = "card-demo") { DemoCard(onClick = { onOpen(DEMO_TEAM) }) }
 				}
 			}
 		}
@@ -365,12 +453,39 @@ private fun StatusChip(text: String, color: Color) {
 }
 
 @Composable
-fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit) {
+fun SectionLabel(text: String) {
+	Text(
+		text.uppercase(),
+		style = MaterialTheme.typography.labelSmall,
+		color = MaterialTheme.colorScheme.onSurfaceVariant,
+		letterSpacing = androidx.compose.ui.unit.TextUnit(1.5f, androidx.compose.ui.unit.TextUnitType.Sp),
+		modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
+	)
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: () -> Unit) {
 	val display = state.label(team.name)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
-	val statusColor = if (live) Color(0xFF2EA043) else MaterialTheme.colorScheme.outline
-	Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+	val isCli = team.mode == "cli"
+	// Wire vocabulary -> board vocabulary: online teams are live, catalog teams are
+	// available (wakeable), anything else is an ended loose session.
+	val (statusWord, statusColor) = when {
+		live -> "live" to Color(0xFF2EA043)
+		team.status == "available" -> "available" to Color(0xFF0969DA)
+		else -> "ended" to MaterialTheme.colorScheme.outline
+	}
+	// Long-press stays enabled for CLI cards: the action sheet's Forget is the only
+	// way to clear their local thread state. Only opening (tap) is gated off. The
+	// clip keeps the ripple inside the card's rounded corners.
+	Card(
+		modifier = Modifier.fillMaxWidth().clip(CardDefaults.shape).combinedClickable(
+			onClick = { if (!isCli) onClick() },
+			onLongClick = onLongPress,
+		),
+	) {
 		Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
 			Row(verticalAlignment = Alignment.CenterVertically) {
 				Text(
@@ -390,8 +505,9 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit) {
 				)
 			}
 			Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-				StatusChip(if (live) "live" else "offline", statusColor)
-				team.mode?.let { StatusChip(it, MaterialTheme.colorScheme.primary) }
+				StatusChip(statusWord, statusColor)
+				if (live && state.working(team.name)) StatusChip("working...", Color(0xFFD29922))
+				if (isCli) StatusChip("cli", MaterialTheme.colorScheme.outline)
 				Spacer(Modifier.weight(1f))
 				state.lastActivity(team.name)?.let {
 					Text(
@@ -400,6 +516,13 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit) {
 						color = MaterialTheme.colorScheme.onSurfaceVariant,
 					)
 				}
+			}
+			if (isCli) {
+				Text(
+					"CLI agent - phone chat is not supported",
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+				)
 			}
 			state.snippet(team.name)?.let {
 				Text(
@@ -412,6 +535,46 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit) {
 			}
 		}
 	}
+}
+
+@Composable
+fun SessionActionsDialog(
+	label: String,
+	canRename: Boolean,
+	onRename: () -> Unit,
+	onForget: () -> Unit,
+	onDismiss: () -> Unit,
+) {
+	AlertDialog(
+		onDismissRequest = onDismiss,
+		title = { Text(label, fontFamily = FontFamily.Monospace) },
+		text = {
+			Column {
+				if (canRename) {
+					TextButton(onClick = onRename, modifier = Modifier.fillMaxWidth()) { Text("Rename") }
+				} else {
+					Text(
+						"Project names come from the host and cannot be renamed.",
+						style = MaterialTheme.typography.bodySmall,
+						color = MaterialTheme.colorScheme.onSurfaceVariant,
+					)
+				}
+				TextButton(onClick = onForget, modifier = Modifier.fillMaxWidth()) { Text("Forget...") }
+			}
+		},
+		confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+	)
+}
+
+@Composable
+fun ConfirmDialog(title: String, body: String, confirmText: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+	AlertDialog(
+		onDismissRequest = onDismiss,
+		title = { Text(title) },
+		text = { Text(body) },
+		confirmButton = { TextButton(onClick = onConfirm) { Text(confirmText) } },
+		dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+	)
 }
 
 @Composable
@@ -457,6 +620,7 @@ fun ThreadScreen(
 	messages: List<Message>,
 	error: String?,
 	rendererPool: ThreadRendererPool,
+	canRename: Boolean,
 	onSwitch: (String) -> Unit,
 	onCloseTab: (String) -> Unit,
 	onSessions: () -> Unit,
@@ -465,7 +629,9 @@ fun ThreadScreen(
 	onForget: () -> Unit,
 ) {
 	var draft by remember { mutableStateOf("") }
+	var showMenu by remember { mutableStateOf(false) }
 	var showRename by remember { mutableStateOf(false) }
+	var confirmForget by remember { mutableStateOf(false) }
 	var attachments by remember { mutableStateOf<List<Uri>>(emptyList()) }
 	val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
 		if (uris.isNotEmpty()) attachments = attachments + uris
@@ -479,11 +645,19 @@ fun ThreadScreen(
 				onRename(it)
 				showRename = false
 			},
-			onForget = {
-				showRename = false
+			onDismiss = { showRename = false },
+		)
+	}
+	if (confirmForget) {
+		ConfirmDialog(
+			title = "Forget $label?",
+			body = "Drops this thread, its label, and unread state from this device.",
+			confirmText = "Forget",
+			onConfirm = {
+				confirmForget = false
 				onForget()
 			},
-			onDismiss = { showRename = false },
+			onDismiss = { confirmForget = false },
 		)
 	}
 
@@ -493,8 +667,32 @@ fun ThreadScreen(
 				title = { Text(label, fontFamily = FontFamily.Monospace) },
 				navigationIcon = { TextButton(onClick = onSessions) { Text("Sessions") } },
 				actions = {
-					TextButton(onClick = { showRename = true }) { Text("Rename") }
-					TextButton(onClick = { onCloseTab(team) }) { Text("Close") }
+					IconButton(onClick = { showMenu = true }) { Text("⋮", style = MaterialTheme.typography.titleLarge) }
+					DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+						if (canRename) {
+							DropdownMenuItem(
+								text = { Text("Rename") },
+								onClick = {
+									showMenu = false
+									showRename = true
+								},
+							)
+						}
+						DropdownMenuItem(
+							text = { Text("Close tab") },
+							onClick = {
+								showMenu = false
+								onCloseTab(team)
+							},
+						)
+						DropdownMenuItem(
+							text = { Text("Forget...") },
+							onClick = {
+								showMenu = false
+								confirmForget = true
+							},
+						)
+					}
 				},
 			)
 		},
@@ -618,11 +816,11 @@ fun SettingsScreen(
 }
 
 @Composable
-fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onForget: () -> Unit, onDismiss: () -> Unit) {
+fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDismiss: () -> Unit) {
 	var name by remember { mutableStateOf(if (current == team) "" else current) }
 	AlertDialog(
 		onDismissRequest = onDismiss,
-		title = { Text("Rename peer") },
+		title = { Text("Rename session") },
 		text = {
 			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 				Text("Id: $team", style = MaterialTheme.typography.bodySmall)
@@ -635,12 +833,7 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onForg
 			}
 		},
 		confirmButton = { TextButton(onClick = { onSave(name) }) { Text("Save") } },
-		dismissButton = {
-			Row {
-				TextButton(onClick = onForget) { Text("Forget") }
-				TextButton(onClick = onDismiss) { Text("Cancel") }
-			}
-		},
+		dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
 	)
 }
 

@@ -74,7 +74,8 @@ this is a personal app, keep it lean. Fix obvious security issues; no enterprise
   marker and a disabled/explanatory card rather than a dead-end send error.
 - Working indicator: `queue_depth > 0` or an in-flight/running thread state shows a
   `working...` chip (this is the dashboard's whole point: glanceable "what is everyone
-  doing").
+  doing"). [Implemented without queue_depth, deliberately: queue_depth is mutex-based
+  and mutexes exist only for CLI sends, whose cards are not chattable from the phone.]
 - Unread badge stays. Snippet + relative time stay. Card layout freeform to the
   implementing agents - lap against the emulator until it reads as a status board, both
   themes.
@@ -95,6 +96,13 @@ this is a personal app, keep it lean. Fix obvious security issues; no enterprise
 - Trap (P1 red team): `ChatRepository`'s poll loop only appends entries with a non-empty
   body or files, so a status-only interim reply is dropped. Relax that gate when wiring
   the badge.
+- Wire decision needed (P2 red team): `channel_reply` deliberately carries NO status
+  (commit 5185da6, "channel conversations are streams without finality"), so agent
+  replies never arrive marked running/completed today. The only wire status a phone
+  sees is the "error" from the send-failure continuation. Options for interim updates:
+  a respond-route-only optional status for phone conversations, or render "waiting"
+  purely client-side (thread tail is ours). Decide deliberately; do not blindly re-add
+  status to channel_reply.
 - Cold-wake feedback: sending to an `available` team immediately shows a synthetic
   status row ("Waking <team>...") that resolves when the first real reply or status
   change arrives. Implementation shape freeform.
@@ -138,6 +146,9 @@ this is a personal app, keep it lean. Fix obvious security issues; no enterprise
 - `knownTeamPaths` never deletes entries, so a project removed from the host catalog
   keeps `kind: "devcontainer"` until arbiter restart. Accepted as the durability
   tradeoff; the catalog refresh corrects status on every host reconnect.
+- Agent-initiated `channel_push` to the phone can mis-key the thread under the phone's
+  own device name when the session id does not parse (pre-existing; the app falls back
+  to the `from` field, so it usually lands right). Revisit with history sync.
 
 ### Notes for implementers
 
