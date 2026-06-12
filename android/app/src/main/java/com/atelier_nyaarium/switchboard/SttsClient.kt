@@ -93,17 +93,40 @@ class SttsClient(private val baseUrl: String, private val apiKey: String) {
 	}
 
 	/**
-	 * Per-provider request JSON (mirrors TextToSpeech{Provider}Request). The
-	 * shapes below are PLACEHOLDERS pending live-spec introspection; adjust per
-	 * provider here and nowhere else. ElevenLabs is known to nest
-	 * data/settings sub-objects (TextToSpeechElevenLabsRequestData/Settings).
+	 * Per-provider request JSON (mirrors TextToSpeech{Provider}Request).
+	 * Shapes confirmed by live introspection on 2026-06-12 (empty-body
+	 * validation errors enumerate the required fields, then a successful
+	 * synthesis per provider). `voice` maps to each provider's voice
+	 * identifier; defaults are the values verified live. Response audio is MP3
+	 * for Amazon/Azure/Google/xAI and length-unbounded streaming WAV for
+	 * IBM/OpenAI, always labeled content-type audio/wav - let the player sniff
+	 * the container, never trust the header. Uberduck needs a real
+	 * voicemodel_uuid (none verified). ElevenLabs accepted the shape but
+	 * streamed zero bytes on the test account.
 	 */
-	private fun requestBody(provider: Provider, text: String, voice: String?): JSONObject {
-		val body = JSONObject().put("text", text)
-		if (voice != null) body.put("voice", voice)
-		return when (provider) {
-			else -> body
-		}
+	private fun requestBody(provider: Provider, text: String, voice: String?): JSONObject = when (provider) {
+		Provider.AMAZON ->
+			JSONObject().put("text", text).put("engine", "neural").put("modelId", voice ?: "Joanna")
+				.put("language", "en-US")
+		Provider.AZURE ->
+			JSONObject().put("text", text).put("region", "eastus").put("modelId", voice ?: "en-US-JennyNeural")
+				.put("language", "en-US")
+		Provider.ELEVENLABS ->
+			JSONObject().put("VoiceId", voice ?: "21m00Tcm4TlvDq8ikWAM").put(
+				"RequestData",
+				JSONObject().put("text", text).put("model_id", "eleven_multilingual_v2").put(
+					"voice_settings",
+					JSONObject().put("stability", 0.5).put("similarity_boost", 0.75),
+				),
+			)
+		Provider.GOOGLE ->
+			JSONObject().put("text", text).put("modelId", voice ?: "en-US-Neural2-C").put("language", "en-US")
+		Provider.IBM -> JSONObject().put("text", text).put("modelId", voice ?: "en-US_AllisonV3Voice")
+		Provider.OPENAI ->
+			JSONObject().put("text", text).put("engine", "tts-1").put("modelId", voice ?: "alloy")
+				.put("language", "en-US")
+		Provider.UBERDUCK -> JSONObject().put("speech", text).put("voicemodel_uuid", voice ?: "")
+		Provider.XAI -> JSONObject().put("text", text).put("language", "en-US").put("voiceId", voice ?: "Ara")
 	}
 
 	companion object {

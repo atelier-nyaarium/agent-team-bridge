@@ -17,7 +17,24 @@ its cache. This consumes the `summary` tier added for exactly this.
   it ships inside the desktop exe - must come from the API owner, ideally with
   the live `swagger/v1/swagger.json` or one example body per provider).
 
-## Phase 1: introspection laps (gated on sttsUrl)
+## Phase 1: introspection laps - DONE 2026-06-12
+
+Base URL: https://vrcsttapi.azurewebsites.net (set in the provisioning blob).
+Swagger UI is disabled in prod; shapes were introspected via empty-body
+validation errors, then one live synthesis per provider (temp/stts-lab/).
+Confirmed: Amazon {text,engine,modelId,language} / Azure {text,region,modelId,
+language} / Google {text,modelId,language} / IBM {text,modelId} / OpenAI
+{text,engine,modelId,language} / xAI {text,language,voiceId} / Uberduck
+{speech,voicemodel_uuid} (needs a real voice uuid) / ElevenLabs
+{VoiceId,RequestData{text,model_id,voice_settings{stability,similarity_boost}}}
+(accepted, zero-byte stream: the service has no ElevenLabs key; SKIP it).
+Audio: MP3 for Amazon/Azure/Google/xAI, length-unbounded streaming WAV for
+IBM/OpenAI, all mislabeled content-type audio/wav - sniff the container, never
+trust the header or its WAV length field. Verified durations 1.6-2.8s for the
+test sentence, non-silent RMS on the WAVs. Shapes locked into
+SttsClient.requestBody().
+
+## Phase 1 original spec (kept for reference)
 
 - No-key `GET /health`; fetch live `swagger.json` and extract every
   `TextToSpeech{Provider}Request` schema (fallback: ask for a Postman export
