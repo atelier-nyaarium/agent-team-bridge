@@ -7,7 +7,7 @@ import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -128,6 +129,35 @@ class ChatRepository(
 	private var pollFails = 0
 	private var pollJob: Job? = null
 
+	/** True while the Activity is started; drives the poll cadence (5s visible,
+	 * 60s AFK burst). The mailbox accumulates server-side either way. */
+	@Volatile private var visible = false
+	val isVisible: Boolean get() = visible
+	private val kick = Channel<Unit>(Channel.CONFLATED)
+	@Volatile private var forceTeamsRefresh = false
+	// Rows already given their one reconcile attempt this process. Synchronized:
+	// the service's start and the Activity's foreground transition can race here.
+	private val reconciled = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+	/** Set by the service: called per poll with the new inbound messages of one
+	 * team, so a background burst can become a notification. */
+	var onInbound: ((team: String, messages: List<Message>) -> Unit)? = null
+
+	/** The Activity came on screen: switch to the fast cadence, optimistically
+	 * clear a doze-corpse failure banner (the kicked poll re-raises it within
+	 * seconds if the bridge is genuinely down), and poll right now. */
+	fun onForeground() {
+		visible = true
+		pollFails = 0
+		_state.update { it.copy(error = null, pollFailStreak = 0) }
+		forceTeamsRefresh = true
+		kick.trySend(Unit)
+	}
+
+	fun onBackground() {
+		visible = false
+	}
+
 	private fun client(): PhoneClient {
 		client?.let { return it }
 		val blob = store.load() ?: error("not provisioned")
@@ -217,11 +247,7 @@ class ChatRepository(
 		if (!claimed) return@withContext
 		val msg = _state.value.threads[team]?.firstOrNull { it.id == messageId } ?: return@withContext
 		persistThreads(_state.value.threads)
-		val files = msg.files.mapNotNull { f ->
-			val rel = f.src?.substringAfter("/${Attachments.DIR}/", "")?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
-			val file = Attachments.resolve(filesDir, rel) ?: return@mapNotNull null
-			runCatching { OutgoingFile(f.name, f.mime, file.readBytes()) }.getOrNull()
-		}
+		val files = rebuildFiles(msg)
 		if (msg.text.isBlank() && files.isEmpty()) {
 			// Nothing recoverable (attachment copies gone); put the badge back and say why.
 			setMessageStatus(team, messageId, "error")
@@ -264,6 +290,14 @@ class ChatRepository(
 		}
 	}
 
+	/** Rebuild outgoing bytes from the local attachment copies stored at first
+	 * send; files whose copies are gone are dropped (caller decides how loudly). */
+	private fun rebuildFiles(msg: Message): List<OutgoingFile> = msg.files.mapNotNull { f ->
+		val rel = f.src?.substringAfter("/${Attachments.DIR}/", "")?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+		val file = Attachments.resolve(filesDir, rel) ?: return@mapNotNull null
+		runCatching { OutgoingFile(f.name, f.mime, file.readBytes()) }.getOrNull()
+	}
+
 	private fun removeMessage(team: String, id: Long) {
 		val threads = _state.updateAndGet { s ->
 			val thread = s.threads[team] ?: return@updateAndGet s
@@ -300,7 +334,9 @@ class ChatRepository(
 				try {
 					// The board's live/available states would otherwise only change on
 					// a manual Refresh; piggyback a team-list refresh on the poll loop.
-					if (tick % TEAMS_REFRESH_TICKS == 0) {
+					// AFK ticks (one a minute) always refresh; visible ticks every Nth.
+					if (forceTeamsRefresh || !visible || tick % TEAMS_REFRESH_TICKS == 0) {
+						forceTeamsRefresh = false
 						runCatching { client().teams() }.onSuccess { t ->
 							_state.update { it.copy(teams = t) }
 						}
@@ -313,6 +349,7 @@ class ChatRepository(
 						lastSeq = -1
 					}
 					if (mb.dropped > 0) _state.update { it.copy(gap = true) }
+					val burst = mutableMapOf<String, MutableList<Message>>()
 					for (e in mb.entries) {
 						if (e.seq <= lastSeq) continue // dedupe a re-drain after a lost ack
 						lastSeq = e.seq
@@ -321,10 +358,13 @@ class ChatRepository(
 						// status-only entries still land (e.g. a wake-failure error
 						// with no body would otherwise vanish).
 						if (e.body.isNotEmpty() || files.isNotEmpty() || e.status != null) {
-							appendInbound(team, Message(false, e.body, e.at, files = files, status = e.status))
+							val msg = Message(false, e.body, e.at, files = files, status = e.status)
+							appendInbound(team, msg)
 							bumpUnread(team)
+							burst.getOrPut(team) { mutableListOf() }.add(msg)
 						}
 					}
+					for ((team, msgs) in burst) onInbound?.invoke(team, msgs)
 					cursor = mb.cursor
 					pollFails = 0
 					if (_state.value.error != null || _state.value.pollFailStreak != 0) {
@@ -341,7 +381,30 @@ class ChatRepository(
 						_state.update { it.copy(error = msg) }
 					}
 				}
-				delay(POLL_INTERVAL_MS)
+				// Adaptive cadence with a foreground kick: a resume interrupts the
+				// AFK wait so the user never stares at stale state.
+				val interval = if (visible) POLL_INTERVAL_MS else AFK_POLL_INTERVAL_MS
+				withTimeoutOrNull(interval) { kick.receive() }
+			}
+		}
+	}
+
+	/** Re-deliver echoes stranded "pending" (process death, doze-killed socket)
+	 * once each, using their original opId: the arbiter replays the cached result
+	 * if the send actually landed, so this can never double-deliver. A row whose
+	 * send never landed re-fails to the tap-to-retry badge. */
+	suspend fun reconcilePending() = withContext(Dispatchers.IO) {
+		for ((team, msgs) in _state.value.threads) {
+			for (m in msgs) {
+				if (!m.fromMe || m.status != "pending") continue
+				val key = "$team:${m.id}"
+				if (!reconciled.add(key)) continue
+				if (m.opId == null) {
+					// Legacy row with no opId: cannot re-send safely; make it retriable.
+					setMessageStatus(team, m.id, "error")
+					continue
+				}
+				deliver(team, m.id, m.text, rebuildFiles(m), m.opId, null)
 			}
 		}
 	}
@@ -495,14 +558,18 @@ class ChatRepository(
 							m.optString("opId").takeIf { s -> s.isNotEmpty() },
 						)
 					}
-					// Reconcile rows stranded by a process death mid-send: a "pending"
-					// echo has no deliver() coming (demote to retriable error) and a
-					// "waking" placeholder has no resolution coming (drop it).
+					// A "waking" placeholder has no resolution coming after a process
+					// death; drop it. "pending" echoes WITH an opId are kept for the
+					// service's idempotent reconcile; legacy ones without an opId
+					// cannot be re-sent safely, so they demote to retriable here (and
+					// never strand a forever-working chip if the service fails early).
 					put(
 						team,
 						loaded
 							.filterNot { !it.fromMe && it.status == "waking" }
-							.map { if (it.fromMe && it.status == "pending") it.copy(status = "error") else it },
+							.map {
+								if (it.fromMe && it.status == "pending" && it.opId == null) it.copy(status = "error") else it
+							},
 					)
 				}
 			}
@@ -533,6 +600,8 @@ class ChatRepository(
 
 	private companion object {
 		const val POLL_INTERVAL_MS = 5_000L
+		// AFK cadence: one plain poll a minute drains the accumulated burst.
+		const val AFK_POLL_INTERVAL_MS = 60_000L
 		// Refresh the team list every Nth poll (~30s) so card states track reality.
 		const val TEAMS_REFRESH_TICKS = 6
 		const val MAX_OUTGOING_BYTES = 10_000_000

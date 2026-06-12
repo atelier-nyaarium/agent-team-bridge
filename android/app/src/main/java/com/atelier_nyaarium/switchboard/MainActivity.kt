@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.ViewGroup
@@ -56,6 +57,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -86,20 +88,29 @@ object Repo {
 
 // FragmentActivity (not ComponentActivity) so androidx.biometric can attach its prompt.
 class MainActivity : FragmentActivity() {
+	/** Team a notification tap asked to open; consumed by App, refreshed by onNewIntent. */
+	private val openTeamRequest = mutableStateOf<String?>(null)
+
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
 		val repo = Repo.get(this)
 		val injected = intent.getStringExtra("provisioning_b64")
 			?.let { runCatching { String(android.util.Base64.decode(it, android.util.Base64.DEFAULT)) }.getOrNull() }
+		openTeamRequest.value = intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM)
 		setContent {
 			val colors = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
-			MaterialTheme(colorScheme = colors) { App(repo, injected) }
+			MaterialTheme(colorScheme = colors) { App(repo, injected, openTeamRequest) }
 		}
+	}
+
+	override fun onNewIntent(intent: Intent) {
+		super.onNewIntent(intent)
+		intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM)?.let { openTeamRequest.value = it }
 	}
 }
 
 @Composable
-fun App(repo: ChatRepository, injectedBlob: String?) {
+fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableState<String?>) {
 	val state by repo.state.collectAsState()
 	val scope = rememberCoroutineScope()
 	val context = LocalContext.current
@@ -137,10 +148,45 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 	LaunchedEffect(injectedBlob) {
 		if (injectedBlob != null && !state.provisioned) repo.provision(injectedBlob)
 	}
+	// The service owns the connection and poll loop; the Activity just makes sure
+	// it is running and asks for notification permission once provisioned.
+	val notifPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
 	LaunchedEffect(state.provisioned) {
 		if (state.provisioned) {
-			repo.connect()
-			repo.startPolling(scope)
+			SwitchboardService.start(context)
+			if (
+				android.os.Build.VERSION.SDK_INT >= 33 &&
+				context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+				android.content.pm.PackageManager.PERMISSION_GRANTED
+			) {
+				notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+			}
+		}
+	}
+	// Visibility drives the poll cadence; a foreground transition also kicks an
+	// immediate poll and reconciles any sends stranded mid-flight.
+	val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+	DisposableEffect(lifecycleOwner) {
+		val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+			when (event) {
+				androidx.lifecycle.Lifecycle.Event.ON_START -> {
+					repo.onForeground()
+					scope.launch { repo.reconcilePending() }
+				}
+				androidx.lifecycle.Lifecycle.Event.ON_STOP -> repo.onBackground()
+				else -> {}
+			}
+		}
+		lifecycleOwner.lifecycle.addObserver(observer)
+		onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+	}
+	// A notification tap routes straight to its thread.
+	LaunchedEffect(openTeamRequest.value) {
+		openTeamRequest.value?.let { team ->
+			repo.openThread(team)
+			openTeam = team
+			SwitchboardService.cancelTeamNotification(context, team)
+			openTeamRequest.value = null
 		}
 	}
 
@@ -226,6 +272,7 @@ fun App(repo: ChatRepository, injectedBlob: String?) {
 				onOpen = { team ->
 					repo.openThread(team)
 					openTeam = team
+					SwitchboardService.cancelTeamNotification(context, team)
 				},
 				onRename = { team, name -> repo.setLabel(team, name) },
 				onForget = { team -> repo.forget(team) },
@@ -888,11 +935,55 @@ fun SettingsScreen(
 			)
 
 			HorizontalDivider()
+			BatteryExemptionRow()
+
+			HorizontalDivider()
 			Spacer(Modifier.width(0.dp))
 			Button(onClick = onClear) { Text("Clear & re-provision") }
 			Text("Removes the stored credential and chat history from this device.", style = MaterialTheme.typography.bodySmall)
 		}
 	}
+}
+
+/** Deep doze cuts network even for a foreground service; screen-off delivery
+ * needs the battery-optimization exemption, which a sideloaded app may simply
+ * request. The state re-checks on resume (the system dialog is another activity). */
+@Composable
+private fun BatteryExemptionRow() {
+	val context = LocalContext.current
+	val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+	var exempt by remember { mutableStateOf(pm.isIgnoringBatteryOptimizations(context.packageName)) }
+	val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+	DisposableEffect(lifecycleOwner) {
+		val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+			if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+				exempt = pm.isIgnoringBatteryOptimizations(context.packageName)
+			}
+		}
+		lifecycleOwner.lifecycle.addObserver(observer)
+		onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+	}
+	Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+		Text("Background delivery", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+		if (exempt) {
+			Text("Allowed", color = MaterialTheme.colorScheme.primary)
+		} else {
+			Button(onClick = {
+				runCatching {
+					context.startActivity(
+						Intent(
+							android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+							Uri.parse("package:${context.packageName}"),
+						),
+					)
+				}
+			}) { Text("Allow") }
+		}
+	}
+	Text(
+		"Exempts the app from battery optimization so messages keep arriving while the screen is off.",
+		style = MaterialTheme.typography.bodySmall,
+	)
 }
 
 @Composable
