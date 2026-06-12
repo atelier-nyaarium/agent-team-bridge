@@ -177,3 +177,33 @@ data class Provisioning(
 	val sttsUrl: String? = null,
 	val sttsKey: String? = null,
 )
+
+@Serializable
+data class SttsProviders(
+	val providers: List<SttsProvider>,
+)
+
+@Serializable
+data class SttsProvider(
+	val id: String,
+	val label: String,
+	val path: String,
+	val hasSample: Boolean,
+	val container: String? = null,
+	val request: JsonObject,
+	val defaults: SttsDefaults,
+	val voices: List<SttsVoice>,
+	val voiceHint: String,
+	val note: String? = null,
+)
+
+@Serializable
+data class SttsDefaults(
+	val voice: String,
+)
+
+@Serializable
+data class SttsVoice(
+	val id: String,
+	val label: String? = null,
+)

@@ -37,6 +37,7 @@ import {
 	ProvisioningSchema,
 	TeamInfoSchema,
 } from "../src/shared/schemas.js";
+import { SttsProvidersSchema } from "../src/shared/stts-providers.js";
 
 ////////////////////////////////
 //  Config
@@ -60,6 +61,7 @@ const ROOTS: z.ZodType[] = [
 	PhoneRespondResultSchema,
 	PhonePollResultSchema,
 	ProvisioningSchema,
+	SttsProvidersSchema,
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything

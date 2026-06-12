@@ -1,42 +1,38 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.proto.SttsProvider
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
 
 /**
- * Client for the VRCSTT "STTS" TTS service (OAS title VRCSTTAPI). Mapped from
- * the owner's Swagger snapshot + notes:
+ * Client for the VRCSTT "STTS" TTS service. Provider knowledge is DATA, not
+ * code: each call passes an `SttsProvider` descriptor (from the bundled
+ * assets/stts-providers.json catalog) carrying the URL path and a request-body
+ * TEMPLATE. This client owns only the transport - URL assembly, auth header,
+ * template substitution, and streaming the bytes to a file.
  *
- * - POST /TextToSpeech/{provider}/stream  -> raw WAV streamed back
- * - POST /TextToSpeech/{provider}/sample  -> short voice sample WAV (no sample
- *   route for ElevenLabs)
- * - GET  /health                          -> service liveness
+ * - POST /TextToSpeech/{path}/stream  -> audio streamed back
+ * - POST /TextToSpeech/{path}/sample  -> short voice sample (providers without
+ *   a sample route fall back to stream)
+ * - GET  /health                      -> service liveness (gates the Play UI)
  * - Auth: "vrcstt-api-key" header, key from the provisioning blob (sttsKey).
- * - Each provider takes a custom JSON body (TextToSpeech{Provider}Request).
- *   The exact per-provider fields are NOT yet confirmed (the Swagger snapshot
- *   had every schema collapsed); requestBody() ships a minimal {text, voice}
- *   default and a per-provider override point to fill in as the live spec is
- *   introspected. Keep this the ONLY place wire shapes live.
+ *
+ * Response audio is MP3 or length-unbounded streaming WAV, always labeled
+ * content-type audio/wav - the player sniffs the container, never trusts the
+ * header. The descriptor's `container` field records the verified container
+ * where known, but it is documentation; the player sniffs regardless.
  *
  * Blocking OkHttp like PhoneClient: callers own the dispatcher boundary.
  */
 class SttsClient(private val baseUrl: String, private val apiKey: String) {
-	enum class Provider(val path: String, val hasSample: Boolean = true) {
-		AMAZON("Amazon"),
-		AZURE("Azure"),
-		ELEVENLABS("ElevenLabs", hasSample = false),
-		GOOGLE("Google"),
-		IBM("IBM"),
-		OPENAI("OpenAI"),
-		UBERDUCK("Uberduck"),
-		XAI("xAI"),
-	}
-
 	private val client = OkHttpClient.Builder()
 		.connectTimeout(10, TimeUnit.SECONDS)
 		// TTS synthesis of a multi-sentence summary can take a while; the body
@@ -54,82 +50,65 @@ class SttsClient(private val baseUrl: String, private val apiKey: String) {
 	}
 
 	/**
-	 * Synthesize `text` and write the streamed WAV to `dest`. Returns the byte
-	 * count. Throws with the server's error text on a non-2xx reply.
+	 * Synthesize `text` with `provider` and write the streamed audio to `dest`.
+	 * Returns the byte count. Throws with the server's error text on a non-2xx.
 	 */
-	fun stream(provider: Provider, text: String, voice: String?, dest: File): Long {
-		require(isConfigured) { "STTS is not provisioned (sttsUrl/sttsKey missing)" }
-		val req = Request.Builder()
-			.url("$baseUrl/TextToSpeech/${provider.path}/stream")
-			.header("vrcstt-api-key", apiKey)
-			.post(requestBody(provider, text, voice).toString().toRequestBody(JSON))
-			.build()
-		client.newCall(req).execute().use { resp ->
-			if (!resp.isSuccessful) {
-				error("STTS ${provider.path} HTTP ${resp.code}: ${resp.body?.string().orEmpty().take(300)}")
-			}
-			val body = resp.body ?: error("STTS ${provider.path}: empty body")
-			dest.outputStream().use { out -> return body.byteStream().copyTo(out) }
-		}
-	}
+	fun stream(provider: SttsProvider, text: String, voice: String?, dest: File): Long =
+		post("${provider.path}/stream", buildBody(provider, text, voice), dest)
 
 	/** Short voice sample for the settings picker (providers without a sample
 	 * route fall back to streaming the sample text). */
-	fun sample(provider: Provider, text: String, voice: String?, dest: File): Long {
+	fun sample(provider: SttsProvider, text: String, voice: String?, dest: File): Long {
 		if (!provider.hasSample) return stream(provider, text, voice, dest)
+		return post("${provider.path}/sample", buildBody(provider, text, voice), dest)
+	}
+
+	private fun post(pathTail: String, body: String, dest: File): Long {
 		require(isConfigured) { "STTS is not provisioned (sttsUrl/sttsKey missing)" }
 		val req = Request.Builder()
-			.url("$baseUrl/TextToSpeech/${provider.path}/sample")
+			.url("$baseUrl/TextToSpeech/$pathTail")
 			.header("vrcstt-api-key", apiKey)
-			.post(requestBody(provider, text, voice).toString().toRequestBody(JSON))
+			.post(body.toRequestBody(JSON))
 			.build()
 		client.newCall(req).execute().use { resp ->
 			if (!resp.isSuccessful) {
-				error("STTS ${provider.path} HTTP ${resp.code}: ${resp.body?.string().orEmpty().take(300)}")
+				error("STTS HTTP ${resp.code}: ${resp.body?.string().orEmpty().take(300)}")
 			}
-			val body = resp.body ?: error("STTS ${provider.path}: empty body")
-			dest.outputStream().use { out -> return body.byteStream().copyTo(out) }
+			val respBody = resp.body ?: error("STTS: empty body")
+			dest.outputStream().use { out -> return respBody.byteStream().copyTo(out) }
 		}
 	}
 
-	/**
-	 * Per-provider request JSON (mirrors TextToSpeech{Provider}Request).
-	 * Shapes confirmed by live introspection on 2026-06-12 (empty-body
-	 * validation errors enumerate the required fields, then a successful
-	 * synthesis per provider). `voice` maps to each provider's voice
-	 * identifier; defaults are the values verified live. Response audio is MP3
-	 * for Amazon/Azure/Google/xAI and length-unbounded streaming WAV for
-	 * IBM/OpenAI, always labeled content-type audio/wav - let the player sniff
-	 * the container, never trust the header. Uberduck needs a real
-	 * voicemodel_uuid (none verified). ElevenLabs accepted the shape but
-	 * streamed zero bytes on the test account.
-	 */
-	private fun requestBody(provider: Provider, text: String, voice: String?): JSONObject = when (provider) {
-		Provider.AMAZON ->
-			JSONObject().put("text", text).put("engine", "neural").put("modelId", voice ?: "Joanna")
-				.put("language", "en-US")
-		Provider.AZURE ->
-			JSONObject().put("text", text).put("region", "eastus").put("modelId", voice ?: "en-US-JennyNeural")
-				.put("language", "en-US")
-		Provider.ELEVENLABS ->
-			JSONObject().put("VoiceId", voice ?: "21m00Tcm4TlvDq8ikWAM").put(
-				"RequestData",
-				JSONObject().put("text", text).put("model_id", "eleven_multilingual_v2").put(
-					"voice_settings",
-					JSONObject().put("stability", 0.5).put("similarity_boost", 0.75),
-				),
-			)
-		Provider.GOOGLE ->
-			JSONObject().put("text", text).put("modelId", voice ?: "en-US-Neural2-C").put("language", "en-US")
-		Provider.IBM -> JSONObject().put("text", text).put("modelId", voice ?: "en-US_AllisonV3Voice")
-		Provider.OPENAI ->
-			JSONObject().put("text", text).put("engine", "tts-1").put("modelId", voice ?: "alloy")
-				.put("language", "en-US")
-		Provider.UBERDUCK -> JSONObject().put("speech", text).put("voicemodel_uuid", voice ?: "")
-		Provider.XAI -> JSONObject().put("text", text).put("language", "en-US").put("voiceId", voice ?: "Ara")
+	/** Fill the descriptor's request template: the chosen voice falls back to
+	 * the descriptor default when blank. */
+	private fun buildBody(provider: SttsProvider, text: String, voice: String?): String {
+		val resolvedVoice = voice?.takeIf { it.isNotBlank() } ?: provider.defaults.voice
+		return fillTemplate(provider.request, text, resolvedVoice).toString()
 	}
 
 	companion object {
 		private val JSON = "application/json".toMediaType()
+
+		/**
+		 * Substitute placeholders in a request-body template tree. Replaces ONLY
+		 * string values exactly equal to "$text" or "$voice" - whole-value match,
+		 * never substring splicing - so nested objects, JSON numbers, and literal
+		 * strings pass through verbatim. The serializer JSON-encodes the
+		 * substituted values, so arbitrary synthesis text is never string-spliced.
+		 */
+		fun fillTemplate(node: JsonElement, text: String, voice: String): JsonElement = when (node) {
+			is JsonObject -> JsonObject(node.mapValues { fillTemplate(it.value, text, voice) })
+			is JsonArray -> JsonArray(node.map { fillTemplate(it, text, voice) })
+			is JsonPrimitive ->
+				if (node.isString) {
+					when (node.content) {
+						"\$text" -> JsonPrimitive(text)
+						"\$voice" -> JsonPrimitive(voice)
+						else -> node
+					}
+				} else {
+					node
+				}
+		}
 	}
 }

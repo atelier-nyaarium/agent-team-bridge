@@ -38,18 +38,27 @@ class ProvisioningStore(context: Context) {
 		}
 
 	/** TTS voice settings live in prefs, not the blob: the blob carries only
-	 * credentials, and these are user taste a re-provision should not reset. */
+	 * credentials, and these are user taste a re-provision should not reset.
+	 * The provider is stored by descriptor id; voice is per-provider. */
 	var sttsProvider: String
 		get() = prefs.getString(KEY_STTS_PROVIDER, "") ?: ""
 		set(value) {
 			prefs.edit().putString(KEY_STTS_PROVIDER, value).apply()
 		}
 
+	/** Legacy single global voice (pre per-provider). Seeded into the current
+	 * provider's per-provider key once, then unused. */
 	var sttsVoice: String
 		get() = prefs.getString(KEY_STTS_VOICE, "") ?: ""
 		set(value) {
 			prefs.edit().putString(KEY_STTS_VOICE, value).apply()
 		}
+
+	fun sttsVoiceFor(providerId: String): String = prefs.getString(KEY_STTS_VOICE_PREFIX + providerId, "") ?: ""
+
+	fun setSttsVoiceFor(providerId: String, voice: String) {
+		prefs.edit().putString(KEY_STTS_VOICE_PREFIX + providerId, voice).apply()
+	}
 
 	fun saveThreads(json: String) = prefs.edit().putString(KEY_THREADS, json).apply()
 
@@ -66,5 +75,6 @@ class ProvisioningStore(context: Context) {
 		const val KEY_LABELS = "labels"
 		const val KEY_STTS_PROVIDER = "stts_provider"
 		const val KEY_STTS_VOICE = "stts_voice"
+		const val KEY_STTS_VOICE_PREFIX = "stts_voice."
 	}
 }

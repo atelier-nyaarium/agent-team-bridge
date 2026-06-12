@@ -86,8 +86,23 @@ object Repo {
 	fun get(context: Context): ChatRepository =
 		instance ?: synchronized(this) {
 			val app = context.applicationContext
-			instance ?: ChatRepository(ProvisioningStore(app), app.filesDir, app.contentResolver).also { instance = it }
+			instance ?: ChatRepository(
+				ProvisioningStore(app),
+				app.filesDir,
+				app.contentResolver,
+				loadSttsCatalog(app),
+			).also { instance = it }
 		}
+
+	/** Parse the bundled STTS provider catalog once. A corrupt/missing asset
+	 * yields an empty catalog, which keeps Play dark rather than crashing. */
+	private fun loadSttsCatalog(app: Context): List<com.atelier_nyaarium.switchboard.proto.SttsProvider> =
+		runCatching {
+			val json = app.assets.open("stts-providers.json").bufferedReader().use { it.readText() }
+			kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+				.decodeFromString<com.atelier_nyaarium.switchboard.proto.SttsProviders>(json)
+				.providers
+		}.getOrDefault(emptyList())
 }
 
 // FragmentActivity (not ComponentActivity) so androidx.biometric can attach its prompt.
@@ -987,8 +1002,10 @@ fun SettingsScreen(
  * prefs (not the credential blob) through the repository. */
 @Composable
 private fun SttsVoiceSection(repo: ChatRepository) {
-	var provider by remember { mutableStateOf(repo.sttsProvider) }
-	var voice by remember { mutableStateOf(repo.sttsVoice) }
+	val providers = remember { repo.sttsProviders() }
+	var providerId by remember { mutableStateOf(repo.sttsProviderId) }
+	val current = providers.firstOrNull { it.id == providerId }
+	var voice by remember(providerId) { mutableStateOf(repo.sttsVoiceFor(providerId)) }
 	var pickerOpen by remember { mutableStateOf(false) }
 	var healthy by remember { mutableStateOf<Boolean?>(null) }
 	var sampleError by remember { mutableStateOf<String?>(null) }
@@ -1010,20 +1027,29 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		style = MaterialTheme.typography.bodySmall,
 	)
 	Row(verticalAlignment = Alignment.CenterVertically) {
-		OutlinedButton(onClick = { pickerOpen = true }) { Text(provider.path) }
+		OutlinedButton(onClick = { pickerOpen = true }) { Text(current?.label ?: providerId.ifEmpty { "Provider" }) }
 		OutlinedTextField(
 			value = voice,
 			onValueChange = {
 				voice = it
-				repo.sttsVoice = it
+				repo.setSttsVoiceFor(providerId, it)
 			},
-			label = { Text("Voice (blank = default)") },
+			label = { Text(current?.voiceHint?.let { "$it (blank = default)" } ?: "Voice (blank = default)") },
 			modifier = Modifier.weight(1f).padding(start = 8.dp),
 			singleLine = true,
 		)
 	}
+	current?.note?.let {
+		Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+	}
+	if (current?.voices?.isNotEmpty() == true) {
+		Text(
+			"Suggested: " + current.voices.joinToString(", ") { it.label ?: it.id },
+			style = MaterialTheme.typography.bodySmall,
+		)
+	}
 	Button(
-		enabled = healthy == true,
+		enabled = healthy == true && current != null,
 		onClick = {
 			sampleError = null
 			repo.playSttsSample()
@@ -1040,12 +1066,13 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 			title = { Text("Provider") },
 			text = {
 				Column {
-					for (p in SttsClient.Provider.entries) {
+					for (p in providers) {
 						TextButton(onClick = {
-							provider = p
-							repo.sttsProvider = p
+							providerId = p.id
+							repo.sttsProviderId = p.id
+							voice = repo.sttsVoiceFor(p.id)
 							pickerOpen = false
-						}) { Text(p.path) }
+						}) { Text(p.label) }
 					}
 				}
 			},

@@ -118,6 +118,9 @@ class ChatRepository(
 	private val store: ProvisioningStore,
 	private val filesDir: File,
 	private val contentResolver: ContentResolver,
+	// STTS provider catalog, parsed + validated once from the bundled asset by
+	// Repo.get. Empty only if the asset is missing/corrupt (Play stays dark).
+	private val sttsCatalog: List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = emptyList(),
 ) {
 	private val _state = MutableStateFlow(
 		ChatState(
@@ -188,24 +191,53 @@ class ChatRepository(
 		return SttsClient(prov.sttsUrl, prov.sttsKey).also { sttsClient = it }.takeIf { it.isConfigured }
 	}
 
-	/** Gates the Play surfaces; true once the blob carries sttsUrl + sttsKey. */
-	fun sttsReady(): Boolean = sttsClient() != null
+	/** Gates the Play surfaces; true once the blob carries sttsUrl + sttsKey AND
+	 * the bundled catalog parsed (without descriptors there is nothing to play). */
+	fun sttsReady(): Boolean = sttsClient() != null && sttsCatalog.isNotEmpty()
 
-	/** Voice settings (prefs, not blob): provider falls back to Azure. */
-	var sttsProvider: SttsClient.Provider
-		get() = SttsClient.Provider.entries.firstOrNull { it.name == store.sttsProvider } ?: SttsClient.Provider.AZURE
+	/** The provider descriptors for the settings picker. */
+	fun sttsProviders(): List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = sttsCatalog
+
+	/** The selected provider id (the descriptor id, e.g. "AZURE"). Unset resolves
+	 * to AZURE when present, else the first descriptor. */
+	var sttsProviderId: String
+		get() {
+			val stored = store.sttsProvider
+			if (stored.isNotEmpty()) return stored
+			return sttsCatalog.firstOrNull { it.id == "AZURE" }?.id ?: sttsCatalog.firstOrNull()?.id ?: ""
+		}
 		set(value) {
-			store.sttsProvider = value.name
+			store.sttsProvider = value
 		}
 
-	/** Voice identifier for the chosen provider; blank uses its default. */
-	var sttsVoice: String
-		get() = store.sttsVoice
-		set(value) {
-			store.sttsVoice = value.trim()
-		}
+	/** The descriptor for the current selection, or null if the stored id is not
+	 * in the catalog (a removed provider) - the Play surfaces disable loudly
+	 * rather than silently substituting another voice. */
+	private fun currentProvider(): com.atelier_nyaarium.switchboard.proto.SttsProvider? {
+		val id = sttsProviderId
+		return sttsCatalog.firstOrNull { it.id == id }
+	}
 
-	private fun voiceOrNull(): String? = sttsVoice.takeIf { it.isNotEmpty() }
+	/** True when the stored provider id is non-empty but absent from the catalog. */
+	fun sttsProviderMissing(): Boolean {
+		val id = store.sttsProvider
+		return id.isNotEmpty() && sttsCatalog.none { it.id == id }
+	}
+
+	/** Per-provider voice; blank uses the descriptor default. Reads seed once
+	 * from the legacy global voice so an existing install keeps its choice. */
+	fun sttsVoiceFor(providerId: String): String {
+		val perProvider = store.sttsVoiceFor(providerId)
+		if (perProvider.isNotEmpty()) return perProvider
+		val legacy = store.sttsVoice
+		if (legacy.isNotEmpty() && providerId == sttsProviderId) {
+			store.setSttsVoiceFor(providerId, legacy)
+			return legacy
+		}
+		return ""
+	}
+
+	fun setSttsVoiceFor(providerId: String, voice: String) = store.setSttsVoiceFor(providerId, voice.trim())
 
 	/**
 	 * Speak one message tier (notification action or thread button). The whole
@@ -218,8 +250,10 @@ class ChatRepository(
 	fun playMessage(team: String, at: Long, tier: SttsPlayer.Tier) {
 		stts.post {
 			val client = sttsClient() ?: return@post
+			val provider = currentProvider() ?: return@post
 			val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return@post
-			stts.play(client, sttsProvider, voiceOrNull(), team, at, tier, SttsPlayer.ttsText(msg, tier))
+			val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+			stts.play(client, provider, voice, team, at, tier, SttsPlayer.ttsText(msg, tier))
 		}
 	}
 
@@ -227,7 +261,9 @@ class ChatRepository(
 	fun playSttsSample() {
 		stts.post {
 			val client = sttsClient() ?: return@post
-			stts.playSample(client, sttsProvider, voiceOrNull(), "This is your switchboard voice.")
+			val provider = currentProvider() ?: return@post
+			val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+			stts.playSample(client, provider, voice, "This is your switchboard voice.")
 		}
 	}
 
@@ -584,8 +620,7 @@ class ChatRepository(
 		store.clear()
 		client = null
 		sttsClient = null
-		stts.stop()
-		File(filesDir, "stts").deleteRecursively()
+		stts.purgeAll()
 		cursor = 0L
 		epoch = 0L
 		lastSeq = -1L

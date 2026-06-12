@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.util.Log
+import com.atelier_nyaarium.switchboard.proto.SttsProvider
 import java.io.File
 import java.util.Collections
 import java.util.concurrent.Executors
@@ -58,7 +59,7 @@ class SttsPlayer(private val root: File) {
 	 */
 	fun play(
 		client: SttsClient,
-		provider: SttsClient.Provider,
+		provider: SttsProvider,
 		voice: String?,
 		team: String,
 		at: Long,
@@ -79,7 +80,7 @@ class SttsPlayer(private val root: File) {
 	/** Voice preview for the settings screen: synthesizes through the cheaper
 	 * sample endpoint (stream for providers without one) and plays. Cached per
 	 * provider+voice under the reserved "_sample" team, purged with clearAll. */
-	fun playSample(client: SttsClient, provider: SttsClient.Provider, voice: String?, text: String) {
+	fun playSample(client: SttsClient, provider: SttsProvider, voice: String?, text: String) {
 		val k = "_sample/${provider.path}-${safeVoice(voice)}"
 		if (currentKey == k) {
 			stop()
@@ -126,6 +127,13 @@ class SttsPlayer(private val root: File) {
 	fun purge(team: String) {
 		if (currentKey?.startsWith("$team/") == true) stop()
 		File(root, "stts/$team").deleteRecursively()
+	}
+
+	/** Stop and delete the entire cache root; wired into ChatRepository.clearAll
+	 * so the repository never reaches into the player's directory layout. */
+	fun purgeAll() {
+		stop()
+		File(root, "stts").deleteRecursively()
 	}
 
 	/** Null out the now-playing fields and notify the glyph listener. Callers
@@ -176,12 +184,14 @@ class SttsPlayer(private val root: File) {
 		onPlayingChanged?.invoke(team, at, true)
 	}
 
-	// Provider and voice ride the key so a settings change can never replay
-	// another voice's cached audio: distinct voices land in distinct files.
-	private fun key(team: String, at: Long, tier: Tier, provider: SttsClient.Provider, voice: String?): String =
+	// Provider PATH and voice ride the key so a settings change can never replay
+	// another voice's cached audio: distinct voices land in distinct files. The
+	// path (not the descriptor id) is the cache component so entries survive an
+	// id rename, and it matches the pre-descriptor key layout.
+	private fun key(team: String, at: Long, tier: Tier, provider: SttsProvider, voice: String?): String =
 		"$team/$at-${tier.suffix}-${provider.path}-${safeVoice(voice)}"
 
-	private fun cacheFile(team: String, at: Long, tier: Tier, provider: SttsClient.Provider, voice: String?): File =
+	private fun cacheFile(team: String, at: Long, tier: Tier, provider: SttsProvider, voice: String?): File =
 		File(File(root, "stts/$team"), "$at-${tier.suffix}-${provider.path}-${safeVoice(voice)}.audio")
 
 	private fun safeVoice(voice: String?): String =

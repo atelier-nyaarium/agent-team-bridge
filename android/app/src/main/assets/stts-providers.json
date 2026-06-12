@@ -1,0 +1,120 @@
+{
+	"providers": [
+		{
+			"id": "AMAZON",
+			"label": "Amazon Polly",
+			"path": "Amazon",
+			"hasSample": true,
+			"container": "mp3",
+			"request": { "text": "$text", "engine": "neural", "modelId": "$voice", "language": "en-US" },
+			"defaults": { "voice": "Joanna" },
+			"voices": [
+				{ "id": "Joanna", "label": "Joanna (US)" },
+				{ "id": "Matthew", "label": "Matthew (US)" },
+				{ "id": "Amy", "label": "Amy (UK)" }
+			],
+			"voiceHint": "Amazon Polly neural voice id"
+		},
+		{
+			"id": "AZURE",
+			"label": "Azure",
+			"path": "Azure",
+			"hasSample": true,
+			"container": "mp3",
+			"request": { "text": "$text", "region": "eastus", "modelId": "$voice", "language": "en-US" },
+			"defaults": { "voice": "en-US-JennyNeural" },
+			"voices": [
+				{ "id": "en-US-JennyNeural", "label": "Jenny (US)" },
+				{ "id": "en-US-GuyNeural", "label": "Guy (US)" },
+				{ "id": "en-GB-SoniaNeural", "label": "Sonia (UK)" }
+			],
+			"voiceHint": "Azure neural voice name"
+		},
+		{
+			"id": "ELEVENLABS",
+			"label": "ElevenLabs",
+			"path": "ElevenLabs",
+			"hasSample": false,
+			"request": {
+				"VoiceId": "$voice",
+				"RequestData": {
+					"text": "$text",
+					"model_id": "eleven_multilingual_v2",
+					"voice_settings": { "stability": 0.5, "similarity_boost": 0.75 }
+				}
+			},
+			"defaults": { "voice": "21m00Tcm4TlvDq8ikWAM" },
+			"voices": [],
+			"voiceHint": "ElevenLabs VoiceId",
+			"note": "Requires an ElevenLabs key on the service; unverified."
+		},
+		{
+			"id": "GOOGLE",
+			"label": "Google",
+			"path": "Google",
+			"hasSample": true,
+			"container": "mp3",
+			"request": { "text": "$text", "modelId": "$voice", "language": "en-US" },
+			"defaults": { "voice": "en-US-Neural2-C" },
+			"voices": [
+				{ "id": "en-US-Neural2-C", "label": "Neural2 C (US)" },
+				{ "id": "en-US-Neural2-D", "label": "Neural2 D (US)" }
+			],
+			"voiceHint": "Google Cloud TTS voice name"
+		},
+		{
+			"id": "IBM",
+			"label": "IBM Watson",
+			"path": "IBM",
+			"hasSample": true,
+			"container": "wav-stream",
+			"request": { "text": "$text", "modelId": "$voice" },
+			"defaults": { "voice": "en-US_AllisonV3Voice" },
+			"voices": [
+				{ "id": "en-US_AllisonV3Voice", "label": "Allison (US)" },
+				{ "id": "en-US_MichaelV3Voice", "label": "Michael (US)" }
+			],
+			"voiceHint": "IBM Watson voice id"
+		},
+		{
+			"id": "OPENAI",
+			"label": "OpenAI",
+			"path": "OpenAI",
+			"hasSample": true,
+			"container": "wav-stream",
+			"request": { "text": "$text", "engine": "tts-1", "modelId": "$voice", "language": "en-US" },
+			"defaults": { "voice": "alloy" },
+			"voices": [
+				{ "id": "alloy" },
+				{ "id": "echo" },
+				{ "id": "nova" },
+				{ "id": "shimmer" }
+			],
+			"voiceHint": "OpenAI TTS voice"
+		},
+		{
+			"id": "UBERDUCK",
+			"label": "Uberduck",
+			"path": "Uberduck",
+			"hasSample": true,
+			"request": { "speech": "$text", "voicemodel_uuid": "$voice" },
+			"defaults": { "voice": "" },
+			"voices": [],
+			"voiceHint": "Uberduck voicemodel_uuid",
+			"note": "Needs a real voicemodel_uuid; unverified."
+		},
+		{
+			"id": "XAI",
+			"label": "xAI",
+			"path": "xAI",
+			"hasSample": true,
+			"container": "mp3",
+			"request": { "text": "$text", "language": "en-US", "voiceId": "$voice" },
+			"defaults": { "voice": "Ara" },
+			"voices": [
+				{ "id": "Ara" }
+			],
+			"voiceHint": "xAI voice id"
+		}
+	]
+}
