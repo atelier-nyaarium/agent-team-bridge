@@ -1,6 +1,6 @@
 {
 	"name": "switchboard",
-	"version": "3.15.0",
+	"version": "3.16.0",
 	"type": "module",
 	"scripts": {
 		"start:arbiter": "bun run src/main-arbiter.ts",
@@ -10,15 +10,15 @@
 		"test": "vitest run"
 	},
 	"dependencies": {
-		"@modelcontextprotocol/sdk": "^1.29.0",
-		"ws": "^8.21.0",
-		"zod": "^4.4.3"
+		"@modelcontextprotocol/sdk": "1.29.0",
+		"ws": "8.21.0",
+		"zod": "4.4.3"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.4.16",
-		"@types/ws": "^8.18.1",
-		"bun-types": "^1.3.14",
-		"typescript": "^6.0.3",
-		"vitest": "^4.1.8"
+		"@biomejs/biome": "2.4.16",
+		"@types/ws": "8.18.1",
+		"bun-types": "1.3.14",
+		"typescript": "6.0.3",
+		"vitest": "4.1.8"
 	}
 }
