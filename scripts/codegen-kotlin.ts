@@ -85,7 +85,9 @@ function zodToCleanJsonSchema(schema: z.ZodType): Json {
 			return;
 		}
 		const record = node as Json;
-		delete record.format;
+		// Keyword form only: a PROPERTY named "format" is a schema object here,
+		// while the format validator keyword is always a string.
+		if (typeof record.format === "string") delete record.format;
 		for (const key in record) walk(record[key]);
 	};
 	walk(json);
@@ -119,6 +121,16 @@ function pascal(value: string): string {
 		.join("");
 }
 
+/** The non-null member of a zod .nullable() union (a 2-member anyOf with
+ * {type:"null"}), or null when the node is not that shape. */
+function nullableInner(node: Json): Json | null {
+	const members = (node.anyOf ?? node.oneOf) as Json[] | undefined;
+	if (!members || members.length !== 2) return null;
+	const nullIndex = members.findIndex((m) => (m as Json).type === "null");
+	if (nullIndex === -1) return null;
+	return members[1 - nullIndex] as Json;
+}
+
 /** Kotlin type for a JSON Schema node. `defs` resolves $ref names; refs to
  * scalar/enum defs (e.g. RequestType) inline their underlying type - the
  * decode-side rule keeps them open Strings, never Kotlin enums. */
@@ -131,6 +143,9 @@ function kotlinType(node: Json, defs: Map<string, Json>): string {
 		if (!target.properties && !target.oneOf && !target.anyOf) return kotlinType(target, defs);
 		return name;
 	}
+	// .nullable() unwraps to T (the param emitter adds the ? = null).
+	const inner = nullableInner(node);
+	if (inner) return kotlinType(inner, defs);
 	// Non-discriminated unions stay opaque: the consumer decodes per context.
 	if (node.anyOf || node.oneOf) return "JsonElement";
 	const type = node.type as string | undefined;
@@ -160,6 +175,11 @@ function escapeKdoc(text: string): string {
 	return text.replace(/\*\//g, "*&#47;").trim();
 }
 
+/** Kotlin string literal: JSON escaping plus `$` (template interpolation). */
+function kotlinString(value: string): string {
+	return JSON.stringify(value).replace(/\$/g, "\\$");
+}
+
 /** Emit the properties of one object schema as constructor params. */
 function emitParams(node: Json, defs: Map<string, Json>, omit: Set<string>): string[] {
 	const props = (node.properties ?? {}) as Record<string, Json>;
@@ -168,12 +188,15 @@ function emitParams(node: Json, defs: Map<string, Json>, omit: Set<string>): str
 	for (const [name, prop] of Object.entries(props)) {
 		if (omit.has(name)) continue;
 		const baseType = kotlinType(prop, defs);
-		const optional = !required.has(name);
-		const constValue = prop.const as string | undefined;
+		const nullable = nullableInner(prop) !== null;
+		const optional = !required.has(name) || nullable;
+		const constValue = prop.const;
 		const description = prop.description as string | undefined;
 		if (description) lines.push(`${INDENT}/** ${escapeKdoc(description)} */`);
-		if (constValue !== undefined) {
-			lines.push(`${INDENT}val ${name}: ${baseType} = ${JSON.stringify(constValue)},`);
+		if (typeof constValue === "string") {
+			lines.push(`${INDENT}val ${name}: ${baseType} = ${kotlinString(constValue)},`);
+		} else if (constValue !== undefined) {
+			throw new Error(`non-string const for ${name} - extend the emitter before using it`);
 		} else if (optional) {
 			lines.push(`${INDENT}val ${name}: ${baseType}? = null,`);
 		} else {
@@ -194,7 +217,7 @@ function emitSealedClass(name: string, node: Json, discriminator: string, defs: 
 	const out: string[] = [
 		`@Serializable`,
 		`@OptIn(ExperimentalSerializationApi::class)`,
-		`@JsonClassDiscriminator(${JSON.stringify(discriminator)})`,
+		`@JsonClassDiscriminator(${kotlinString(discriminator)})`,
 		`sealed class ${name} {`,
 	];
 	for (const member of members) {
@@ -205,7 +228,7 @@ function emitSealedClass(name: string, node: Json, discriminator: string, defs: 
 		// kotlinx writes the discriminator from @SerialName; it is not a property.
 		const params = emitParams(member, defs, new Set([discriminator]));
 		out.push(`${INDENT}@Serializable`);
-		out.push(`${INDENT}@SerialName(${JSON.stringify(kindValue)})`);
+		out.push(`${INDENT}@SerialName(${kotlinString(kindValue)})`);
 		if (params.length === 0) {
 			// kotlinx needs object (or a no-arg class) for parameterless members;
 			// data object keeps equals/toString sane.
@@ -233,13 +256,21 @@ for (const schema of ROOTS) {
 	const json = zodToCleanJsonSchema(schema);
 	const nested = (json.$defs ?? {}) as Record<string, Json>;
 	delete json.$defs;
-	// With .meta ids + reused:"ref", the root itself converts to its body and
-	// shared sub-schemas land in $defs keyed by id. Merge everything; identical
-	// ids from different roots are identical bodies (same source schema).
-	defs.set(id, json);
+	// The root converts to its body and .meta'd sub-schemas land in $defs
+	// keyed by id. The same id reappearing across roots must carry an
+	// identical body (same source schema) - anything else is a name
+	// collision that would silently emit one class for two shapes.
+	const guardedSet = (name: string, body: Json) => {
+		const existing = defs.get(name);
+		if (existing && JSON.stringify(existing) !== JSON.stringify(body)) {
+			throw new Error(`.meta id collision: "${name}" maps to two different shapes`);
+		}
+		defs.set(name, body);
+	};
+	guardedSet(id, json);
 	for (const [name, body] of Object.entries(nested)) {
 		if (name === id) continue;
-		defs.set(name, body);
+		guardedSet(name, body);
 	}
 	rootIds.push(id);
 }
@@ -291,10 +322,10 @@ object Protocol {
 ${INDENT}const val PHONE_PROTOCOL_VERSION: Int = ${PHONE_PROTOCOL_VERSION}
 
 ${INDENT}/** Session-id prefix for broadcast notices; the sender follows it. */
-${INDENT}const val NOTICE_SESSION_PREFIX: String = ${JSON.stringify(NOTICE_SESSION_PREFIX)}
+${INDENT}const val NOTICE_SESSION_PREFIX: String = ${kotlinString(NOTICE_SESSION_PREFIX)}
 
 ${INDENT}/** Session-id prefix for channel conversations; the target team is the tail after the LAST colon. */
-${INDENT}const val CONV_SESSION_PREFIX: String = ${JSON.stringify(CONV_SESSION_PREFIX)}
+${INDENT}const val CONV_SESSION_PREFIX: String = ${kotlinString(CONV_SESSION_PREFIX)}
 }`;
 
 const output = `${[header, ...blocks].join("\n\n")}\n`;

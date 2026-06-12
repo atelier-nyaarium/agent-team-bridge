@@ -315,7 +315,13 @@ AGP 8.7.3 (libs.versions.toml:2-3):
   `./gradlew :app:testDebugUnitTest` to _build-android.yml (JDK/SDK already
   provisioned there) before the release step - the new bun-only ci.yml
   cannot run it, and without this step the Kotlin fixtures are local-only
-  and rot.
+  and rot. main-push.yml's path filter additionally covers
+  tests/fixtures/**, src/shared/**, and the generator script (red-team
+  finding: a TS-only push could otherwise drift the Kotlin decode green).
+  Accepted risk, same class as post-merge gating: ci.yml and the Android
+  workflow are independent jobs, so a push failing the TS gate can still
+  publish an APK from the committed (stale) Protocol.kt - the next push
+  corrects it, and merging the workflows is not worth the coupling today.
 - New `ci.yml` (none exists; main-push.yml fires only on android/** paths,
   so TS edits run zero CI today): checkout + `oven-sh/setup-bun@v2` + bun
   install + `bun run lint` + `bun run test` + drift check
