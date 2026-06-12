@@ -37,6 +37,20 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putBoolean(KEY_BIO, value).apply()
 		}
 
+	/** TTS voice settings live in prefs, not the blob: the blob carries only
+	 * credentials, and these are user taste a re-provision should not reset. */
+	var sttsProvider: String
+		get() = prefs.getString(KEY_STTS_PROVIDER, "") ?: ""
+		set(value) {
+			prefs.edit().putString(KEY_STTS_PROVIDER, value).apply()
+		}
+
+	var sttsVoice: String
+		get() = prefs.getString(KEY_STTS_VOICE, "") ?: ""
+		set(value) {
+			prefs.edit().putString(KEY_STTS_VOICE, value).apply()
+		}
+
 	fun saveThreads(json: String) = prefs.edit().putString(KEY_THREADS, json).apply()
 
 	fun loadThreads(): String? = prefs.getString(KEY_THREADS, null)
@@ -50,5 +64,7 @@ class ProvisioningStore(context: Context) {
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"
 		const val KEY_LABELS = "labels"
+		const val KEY_STTS_PROVIDER = "stts_provider"
+		const val KEY_STTS_VOICE = "stts_voice"
 	}
 }

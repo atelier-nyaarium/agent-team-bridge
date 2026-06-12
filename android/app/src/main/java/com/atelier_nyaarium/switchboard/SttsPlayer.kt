@@ -65,14 +65,35 @@ class SttsPlayer(private val root: File) {
 			stop()
 			return
 		}
-		if (text.isBlank() || !inFlight.add(k)) return
+		if (text.isBlank()) return
+		synthesizeAndPlay(k, team, at, cacheFile(team, at, tier, provider, voice)) { dest ->
+			client.stream(provider, text, voice, dest)
+		}
+	}
+
+	/** Voice preview for the settings screen: synthesizes through the cheaper
+	 * sample endpoint (stream for providers without one) and plays. Cached per
+	 * provider+voice under the reserved "_sample" team, purged with clearAll. */
+	fun playSample(client: SttsClient, provider: SttsClient.Provider, voice: String?, text: String) {
+		val k = "_sample/${provider.path}-${safeVoice(voice)}"
+		if (currentKey == k) {
+			stop()
+			return
+		}
+		val dest = File(File(root, "stts/_sample"), "${provider.path}-${safeVoice(voice)}.audio")
+		synthesizeAndPlay(k, "_sample", 0, dest) { d -> client.sample(provider, text, voice, d) }
+	}
+
+	/** Shared synthesis path: single-flight on the key, atomic cache write,
+	 * then playback. `fetch` writes the audio into the destination file. */
+	private fun synthesizeAndPlay(k: String, team: String, at: Long, dest: File, fetch: (File) -> Unit) {
+		if (!inFlight.add(k)) return
 		exec.execute {
-			val dest = cacheFile(team, at, tier, provider, voice)
 			try {
 				if (!dest.exists() || dest.length() == 0L) {
 					dest.parentFile?.mkdirs()
 					val tmp = File(dest.parentFile, "${dest.name}.tmp")
-					client.stream(provider, text, voice, tmp)
+					fetch(tmp)
 					if (tmp.length() == 0L || !tmp.renameTo(dest)) {
 						tmp.delete()
 						error("synthesis returned no audio")

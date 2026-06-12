@@ -29,6 +29,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -45,6 +47,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScrollableTabRow
@@ -229,6 +232,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		showSettings ->
 			SettingsScreen(
 				state = state,
+				repo = repo,
 				onSetDeviceName = { scope.launch { repo.setDeviceName(it) } },
 				onToggleBiometric = { repo.setBiometricLock(it) },
 				onClear = {
@@ -918,6 +922,7 @@ fun ThreadScreen(
 @Composable
 fun SettingsScreen(
 	state: ChatState,
+	repo: ChatRepository,
 	onSetDeviceName: (String) -> Unit,
 	onToggleBiometric: (Boolean) -> Unit,
 	onClear: () -> Unit,
@@ -933,7 +938,9 @@ fun SettingsScreen(
 		},
 	) { pad ->
 		Column(
-			Modifier.padding(pad).padding(16.dp).fillMaxSize(),
+			// Scrollable: the settings list outgrew one screen once the voice
+			// playback section landed.
+			Modifier.padding(pad).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(16.dp),
 		) {
 			Text("Device name", style = MaterialTheme.typography.titleMedium)
@@ -959,6 +966,11 @@ fun SettingsScreen(
 			HorizontalDivider()
 			BatteryExemptionRow()
 
+			if (repo.sttsReady()) {
+				HorizontalDivider()
+				SttsVoiceSection(repo)
+			}
+
 			HorizontalDivider()
 			AppUpdateRow()
 
@@ -967,6 +979,61 @@ fun SettingsScreen(
 			Button(onClick = onClear) { Text("Clear & re-provision") }
 			Text("Removes the stored credential and chat history from this device.", style = MaterialTheme.typography.bodySmall)
 		}
+	}
+}
+
+/** Voice settings for message playback: provider picker, voice identifier,
+ * an audible sample preview, and a service liveness line. Values persist in
+ * prefs (not the credential blob) through the repository. */
+@Composable
+private fun SttsVoiceSection(repo: ChatRepository) {
+	var provider by remember { mutableStateOf(repo.sttsProvider) }
+	var voice by remember { mutableStateOf(repo.sttsVoice) }
+	var pickerOpen by remember { mutableStateOf(false) }
+	var healthy by remember { mutableStateOf<Boolean?>(null) }
+	LaunchedEffect(Unit) { healthy = repo.sttsHealth() }
+
+	Text("Voice playback", style = MaterialTheme.typography.titleMedium)
+	Text(
+		when (healthy) {
+			null -> "Checking speech service..."
+			true -> "Speech service online"
+			false -> "Speech service unreachable"
+		},
+		style = MaterialTheme.typography.bodySmall,
+	)
+	Row(verticalAlignment = Alignment.CenterVertically) {
+		OutlinedButton(onClick = { pickerOpen = true }) { Text(provider.path) }
+		OutlinedTextField(
+			value = voice,
+			onValueChange = {
+				voice = it
+				repo.sttsVoice = it
+			},
+			label = { Text("Voice (blank = default)") },
+			modifier = Modifier.weight(1f).padding(start = 8.dp),
+			singleLine = true,
+		)
+	}
+	Button(enabled = healthy == true, onClick = { repo.playSttsSample() }) { Text("Play a sample") }
+
+	if (pickerOpen) {
+		AlertDialog(
+			onDismissRequest = { pickerOpen = false },
+			confirmButton = {},
+			title = { Text("Provider") },
+			text = {
+				Column {
+					for (p in SttsClient.Provider.entries) {
+						TextButton(onClick = {
+							provider = p
+							repo.sttsProvider = p
+							pickerOpen = false
+						}) { Text(p.path) }
+					}
+				}
+			},
+		)
 	}
 }
 

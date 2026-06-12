@@ -191,6 +191,22 @@ class ChatRepository(
 	/** Gates the Play surfaces; true once the blob carries sttsUrl + sttsKey. */
 	fun sttsReady(): Boolean = sttsClient() != null
 
+	/** Voice settings (prefs, not blob): provider falls back to Azure. */
+	var sttsProvider: SttsClient.Provider
+		get() = SttsClient.Provider.entries.firstOrNull { it.name == store.sttsProvider } ?: SttsClient.Provider.AZURE
+		set(value) {
+			store.sttsProvider = value.name
+		}
+
+	/** Voice identifier for the chosen provider; blank uses its default. */
+	var sttsVoice: String
+		get() = store.sttsVoice
+		set(value) {
+			store.sttsVoice = value.trim()
+		}
+
+	private fun voiceOrNull(): String? = sttsVoice.takeIf { it.isNotEmpty() }
+
 	/**
 	 * Speak one message tier (notification action or thread button). The whole
 	 * resolution (credential decrypt, message lookup, text prep) hops to the
@@ -203,9 +219,20 @@ class ChatRepository(
 		stts.post {
 			val client = sttsClient() ?: return@post
 			val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return@post
-			stts.play(client, SttsClient.Provider.AZURE, null, team, at, tier, SttsPlayer.ttsText(msg, tier))
+			stts.play(client, sttsProvider, voiceOrNull(), team, at, tier, SttsPlayer.ttsText(msg, tier))
 		}
 	}
+
+	/** Settings voice preview with the current provider/voice. */
+	fun playSttsSample() {
+		stts.post {
+			val client = sttsClient() ?: return@post
+			stts.playSample(client, sttsProvider, voiceOrNull(), "This is your switchboard voice.")
+		}
+	}
+
+	/** STTS service liveness for the settings indicator. */
+	suspend fun sttsHealth(): Boolean = withContext(Dispatchers.IO) { sttsClient()?.health() == true }
 
 	suspend fun provision(blob: String) = withContext(Dispatchers.IO) {
 		val prov = Provisioning.parse(blob) // throws on malformed input before we persist
