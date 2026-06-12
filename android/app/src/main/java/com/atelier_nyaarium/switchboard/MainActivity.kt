@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -802,7 +803,9 @@ fun ThreadScreen(
 			)
 		},
 	) { pad ->
-		Column(Modifier.padding(pad).fillMaxSize()) {
+		// imePadding keeps the composer above the keyboard (adjustResize alone does
+		// not resize a Compose window on modern Android).
+		Column(Modifier.padding(pad).fillMaxSize().imePadding()) {
 			if (tabs.size > 1) {
 				val selected = tabs.indexOf(team).coerceAtLeast(0)
 				ScrollableTabRow(selectedTabIndex = selected, edgePadding = 8.dp) {
@@ -938,11 +941,59 @@ fun SettingsScreen(
 			BatteryExemptionRow()
 
 			HorizontalDivider()
+			AppUpdateRow()
+
+			HorizontalDivider()
 			Spacer(Modifier.width(0.dp))
 			Button(onClick = onClear) { Text("Clear & re-provision") }
 			Text("Removes the stored credential and chat history from this device.", style = MaterialTheme.typography.bodySmall)
 		}
 	}
+}
+
+/** One-press self-update: download the latest APK straight from the public
+ * GitHub release, then launch the installer if it is newer than this build. */
+@Composable
+private fun AppUpdateRow() {
+	val context = LocalContext.current
+	val scope = rememberCoroutineScope()
+	var status by remember { mutableStateOf("") }
+	var busy by remember { mutableStateOf(false) }
+	Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+		Column(Modifier.weight(1f)) {
+			Text("App update", style = MaterialTheme.typography.titleMedium)
+			Text(
+				"v${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
+				style = MaterialTheme.typography.bodySmall,
+				color = MaterialTheme.colorScheme.onSurfaceVariant,
+			)
+		}
+		Button(
+			enabled = !busy,
+			onClick = {
+				busy = true
+				status = "Checking for updates..."
+				scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+					val result = AppUpdater.downloadAndStage(context)
+					kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+						when (result) {
+							is AppUpdater.Result.Newer -> {
+								status = "Installing v${result.versionName ?: "?"} (build ${result.versionCode})..."
+								AppUpdater.install(context)
+							}
+							AppUpdater.Result.UpToDate -> status = "Already up to date."
+							is AppUpdater.Result.Failed -> status = result.message
+						}
+						busy = false
+					}
+				}
+			},
+		) { Text(if (busy) "..." else "Update") }
+	}
+	Text(
+		status.ifEmpty { "Downloads and installs the latest APK from the GitHub release." },
+		style = MaterialTheme.typography.bodySmall,
+	)
 }
 
 /** Deep doze cuts network even for a foreground service; screen-off delivery

@@ -29,7 +29,10 @@ android {
 		targetSdk = 35
 		// Monotonic in CI (build number) so updates are never seen as a downgrade.
 		versionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1
-		versionName = "0.1.0"
+		// Track the plugin version (single bump ritual covers the app too).
+		versionName = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"")
+			.find(rootProject.file("../package.json").readText())
+			?.groupValues?.get(1) ?: "0.0.0"
 	}
 
 	buildTypes {

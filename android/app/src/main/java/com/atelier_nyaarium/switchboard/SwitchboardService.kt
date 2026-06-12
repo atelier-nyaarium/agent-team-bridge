@@ -96,9 +96,20 @@ class SwitchboardService : Service() {
 				setShowBadge(false)
 			},
 		)
+		// Channels are immutable after creation; the original "messages" channel
+		// shipped without an explicit sound, so audible alerts need this v2 id.
+		nm.deleteNotificationChannel("messages")
 		nm.createNotificationChannel(
-			NotificationChannel(CHANNEL_MESSAGES, "Messages", NotificationManager.IMPORTANCE_DEFAULT).apply {
+			NotificationChannel(CHANNEL_MESSAGES, "Messages", NotificationManager.IMPORTANCE_HIGH).apply {
 				description = "New messages from agent sessions"
+				setSound(
+					android.provider.Settings.System.DEFAULT_NOTIFICATION_URI,
+					android.media.AudioAttributes.Builder()
+						.setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+						.setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+						.build(),
+				)
+				enableVibration(true)
 			},
 		)
 	}
@@ -164,7 +175,7 @@ class SwitchboardService : Service() {
 
 	companion object {
 		const val CHANNEL_STATUS = "status"
-		const val CHANNEL_MESSAGES = "messages"
+		const val CHANNEL_MESSAGES = "messages_v2"
 		const val STATUS_NOTIFICATION_ID = 1
 		const val EXTRA_OPEN_TEAM = "open_team"
 

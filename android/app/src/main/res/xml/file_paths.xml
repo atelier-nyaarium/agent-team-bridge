@@ -3,4 +3,7 @@
     <files-path
         name="attachments"
         path="attachments/" />
+    <cache-path
+        name="updates"
+        path="updates/" />
 </paths>
