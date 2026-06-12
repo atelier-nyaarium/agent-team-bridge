@@ -63,6 +63,15 @@ delivered as a proposal awaiting greenlight by design, not interrupted.)
 - Cleanup of shipped plan docs: done immediately (plans/done/ archive), not a
   phase.
 
+**5c. Amendment (user, during lap 1->2): dependency maturity side quest.**
+"make it an early side quest to update all app's packages up to, but not
+earlier than 7 days recent. As in, update the package to a version that is at
+least 7 days old. Giving security audits time to know if a package is
+vulnerable. So this is a slower process of bun version checking each package
+1 by 1, and bun installing it at that version. This also gives you a chance
+to get all 3 repos on the same versions now since they are all intertwined."
+Captured as Phase 0.
+
 **5. Cross-repo contract sharing (evie frames, notice tiers)?**
 Synced schema modules, manual for now. User: "Sorta. For now, manual
 `cp`/`rsync` shared/ to update them. Comment on top saying to MUST
@@ -70,6 +79,44 @@ Synced schema modules, manual for now. User: "Sorta. For now, manual
 truth files; evie-bot and nyaaskills carry committed copies headed by a
 MUST-sync comment naming the source path and the exact cp command. No sync
 script, no CI staleness check yet (explicitly deferred).
+
+## Phase 0: dependency maturity sweep (side quest, runs first)
+
+Update every bun package across all three repos (switchboard, nyaaskills,
+evie-bot) to the NEWEST version that is AT LEAST 7 DAYS OLD - the maturity
+window gives security audits time to flag a vulnerable release. Deliberately
+slow: one package at a time, version-checked then installed at that exact
+version. Android Gradle deps are OUT of scope here - they are
+toolchain-locked (see Phase 1.2's kotlinx pin) and not bun-managed.
+
+- **Selection rule per package:** list publish timestamps
+  (`npm view <pkg> time --json` works under bun; `bun pm view` where
+  available), pick the highest version whose publish date is <= now minus 7
+  days. Never newer. If the currently-installed version is already the
+  newest mature one, skip. Install pinned: `bun add <pkg>@<version>` (or
+  `bun add -d` for devDependencies), preserving the existing range style
+  only if the repo already uses ranges - exact selection is what the rule is
+  about.
+- **Majors are not automatic:** a major bump within the mature window is
+  taken only after reading its changelog/migration notes; if the migration
+  is non-trivial, hold the package at the newest mature version of the
+  current major and note it in the commit. The sweep must not balloon into
+  a refactor.
+- **Cross-repo alignment:** shared deps land on the SAME version in all
+  three repos - zod (today: switchboard ^4.4.3, nyaaskills ^4.4.3, evie-bot
+  ^4.3.6 - the misalignment directly affects Phase 4's synced schema
+  copies), typescript, biome, vitest/bun:test tooling, @types/*, MCP SDK
+  where shared. Build the shared-dep list by diffing the three
+  package.json files at sweep start.
+- **Verification cadence:** after each package (or small same-family batch),
+  run that repo's lint + full test suite; on failure, bisect the batch.
+  switchboard: `bun run lint && bun run test`; nyaaskills: its lint + `bun
+  test`; evie-bot: its lint + test scripts. End-state: all three suites
+  green, lockfiles committed.
+- **Deploy:** rides each repo's next normal deploy (minor bumps per the
+  Versions note; evie-bot deploys via its push-to-main CI). No protocol or
+  behavior change expected; if a dep bump changes observable behavior, that
+  is a finding to surface, not to absorb silently.
 
 ## Phase 1: codegen pipeline (the framework primitive)
 
@@ -434,11 +481,13 @@ falling back to Azure.
 
 ### Notes for implementers
 
-- Phase order is load-bearing: 1 -> 2 -> 3 -> 4 (2 and 3 consume the
-  generator; 4 syncs schemas that 2 creates).
-- Deploy shape: P1 = app + CI only. P2 = arbiter rebuild + app. P3 = app
-  only. P4 = switchboard plugin bump + push + ARBITER REBUILD FIRST + then
-  reload_plugins + nyaaskills plugin bump + evie CI deploy.
+- Phase order is load-bearing: 0 -> 1 -> 2 -> 3 -> 4 (0 stabilizes the dep
+  baseline the rest builds on - notably zod alignment across repos; 2 and 3
+  consume the generator; 4 syncs schemas that 2 creates).
+- Deploy shape: P0 = all three repos' next normal deploys (no behavior
+  change expected). P1 = app + CI only. P2 = arbiter rebuild + app. P3 =
+  app only. P4 = switchboard plugin bump + push + ARBITER REBUILD FIRST +
+  then reload_plugins + nyaaskills plugin bump + evie CI deploy.
 - "app" defined: any android/** merge to main auto-builds and refreshes the
   single latest APK release (main-push.yml paths filter +
   _build-android.yml:59-84) - every Android-touching phase ships a release
@@ -454,7 +503,8 @@ falling back to Azure.
   package.json, AND the hardcoded literal in src/cycle-mcp.ts:16-19).
   evie-bot = package.json only (no plugin.json; image tag is :latest; its
   McpServer reads pkg.version). MINOR bump each repo on every phase that
-  touches it: switchboard P1/P2/P3/P4; nyaaskills + evie-bot on P4.
+  touches it: switchboard P0/P1/P2/P3/P4; nyaaskills + evie-bot on P0 and
+  P4.
 - Emulator harness: `source ~/android-dev/env.sh`, AVD phone35,
   `wm size 720x1600` + `density 280`, reset after.
 - cleanup-framework.md interplay: 1a/1b can run before, after, or
