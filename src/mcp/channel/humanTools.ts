@@ -50,7 +50,9 @@ const NotifyHumanSchema = z.object({
 	full: z
 		.string()
 		.min(1)
-		.describe(`Full markdown report (mermaid renders too). Shown as the message body on the phone; start with the report itself, no lead-in labels.`),
+		.describe(
+			`Full markdown report (mermaid renders too). Shown as the message body on the phone; start with the report itself, no lead-in labels.`,
+		),
 	attachments: z
 		.array(z.string())
 		.optional()
