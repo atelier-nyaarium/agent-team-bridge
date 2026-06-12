@@ -1,6 +1,6 @@
 {
 	"name": "switchboard",
-	"version": "3.11.0",
+	"version": "3.12.0",
 	"type": "module",
 	"scripts": {
 		"start:arbiter": "bun run src/main-arbiter.ts",

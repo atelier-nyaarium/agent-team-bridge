@@ -249,6 +249,10 @@ risk. Only sensible after Phase 1a gives Kotlin a single grammar owner.
   exactly this).
 - Emulator harness: `source ~/android-dev/env.sh`, AVD phone35,
   `wm size 720x1600` + `density 280`, reset after.
+- Known debt, out of scope here: the pending-job store is in-memory, so an
+  arbiter restart drops persistent channel conversations and replies bounce
+  with "No pending request" until the peer sends again (bit twice on
+  2026-06-12). A durable conversation store is its own future plan.
 - Out of scope: archiving shipped plan docs (plans/android-*.md,
   cycle-notify-human.md) - android-channel-app.md is still cross-referenced
   from CLAUDE.md.
