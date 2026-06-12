@@ -29,6 +29,13 @@ class SttsPlayer(private val root: File) {
 
 	@Volatile private var player: MediaPlayer? = null
 	@Volatile private var currentKey: String? = null
+	@Volatile private var currentTeam: String? = null
+	@Volatile private var currentAt: Long = 0
+
+	/** Set by the owner; fired on any thread when playback starts (playing=true)
+	 * or ends by completion, error, stop, or replacement (playing=false), so the
+	 * thread UI can swap its play/stop glyph. */
+	@Volatile var onPlayingChanged: ((team: String, at: Long, playing: Boolean) -> Unit)? = null
 
 	fun isPlaying(team: String, at: Long, tier: Tier): Boolean =
 		currentKey?.startsWith("$team/$at-${tier.suffix}-") == true
@@ -71,7 +78,7 @@ class SttsPlayer(private val root: File) {
 						error("synthesis returned no audio")
 					}
 				}
-				playFile(k, dest)
+				playFile(k, team, at, dest)
 			} catch (e: Exception) {
 				Log.w(TAG, "stts $k failed: ${e.message}")
 				dest.delete()
@@ -85,7 +92,7 @@ class SttsPlayer(private val root: File) {
 	fun stop() {
 		runCatching { player?.release() }
 		player = null
-		currentKey = null
+		clearNowPlaying()
 	}
 
 	/** Delete a team's cached audio; wired into ChatRepository.forget. */
@@ -94,10 +101,24 @@ class SttsPlayer(private val root: File) {
 		File(root, "stts/$team").deleteRecursively()
 	}
 
+	/** Null out the now-playing fields and notify the glyph listener. Callers
+	 * hold the monitor or run on the completion path where currentKey matched. */
+	private fun clearNowPlaying() {
+		val team = currentTeam
+		val at = currentAt
+		currentKey = null
+		currentTeam = null
+		currentAt = 0
+		if (team != null) onPlayingChanged?.invoke(team, at, false)
+	}
+
 	@Synchronized
-	private fun playFile(k: String, f: File) {
+	private fun playFile(k: String, team: String, at: Long, f: File) {
 		runCatching { player?.release() }
+		if (currentKey != null) clearNowPlaying()
 		currentKey = k
+		currentTeam = team
+		currentAt = at
 		player = MediaPlayer().apply {
 			setAudioAttributes(
 				AudioAttributes.Builder()
@@ -110,7 +131,7 @@ class SttsPlayer(private val root: File) {
 				runCatching { it.release() }
 				if (currentKey == k) {
 					player = null
-					currentKey = null
+					clearNowPlaying()
 				}
 			}
 			setOnErrorListener { mp, what, extra ->
@@ -118,13 +139,14 @@ class SttsPlayer(private val root: File) {
 				runCatching { mp.release() }
 				if (currentKey == k) {
 					player = null
-					currentKey = null
+					clearNowPlaying()
 				}
 				true
 			}
 			prepare()
 			start()
 		}
+		onPlayingChanged?.invoke(team, at, true)
 	}
 
 	// Provider and voice ride the key so a settings change can never replay

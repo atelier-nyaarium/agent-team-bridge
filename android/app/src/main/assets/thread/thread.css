@@ -46,11 +46,30 @@ html, body {
 /* Full-width rows, left-aligned only. The user tint plus a left edge marks
    authorship instead of bubble alignment. */
 .row {
+	position: relative;
 	padding: 8px 14px 10px;
 	border-bottom: 1px solid var(--border);
 	content-visibility: auto;
 	contain-intrinsic-size: auto 140px;
 }
+
+/* Top-right speak button on agent rows; absolute so long bodies never shift. */
+.play-btn {
+	position: absolute;
+	top: 6px;
+	right: 10px;
+	min-width: 30px;
+	height: 24px;
+	padding: 0 6px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: transparent;
+	color: var(--fg-dim, inherit);
+	font-size: 11px;
+	line-height: 22px;
+	opacity: 0.75;
+}
+.play-btn:active { opacity: 1; }
 
 .row.user {
 	background: var(--user-tint);

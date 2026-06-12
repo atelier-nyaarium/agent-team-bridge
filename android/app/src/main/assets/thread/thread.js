@@ -146,6 +146,23 @@
 		const row = document.createElement("article");
 		row.className = "row " + (m.role === "user" ? "user" : "agent");
 		if (m.id !== undefined && m.id !== null) row.dataset.id = String(m.id);
+		if (m.at !== undefined && m.at !== null) row.dataset.at = String(m.at);
+
+		// Agent rows get a top-right Play button when the host enables it
+		// (canPlay rides each message). Tap toggles: the host pushes the
+		// playing state back through setPlaying, which swaps the glyph.
+		if (m.canPlay && m.role === "agent" && m.at !== undefined && m.at !== null) {
+			const play = document.createElement("button");
+			play.className = "play-btn";
+			play.textContent = playingAt === m.at ? "\u25A0" : "\u25B6";
+			play.setAttribute("aria-label", "Play message");
+			play.addEventListener("click", () => {
+				if (window.Android && typeof window.Android.playMessage === "function") {
+					window.Android.playMessage(String(m.at));
+				}
+			});
+			row.appendChild(play);
+		}
 
 		const meta = document.createElement("div");
 		meta.className = "meta";
@@ -304,5 +321,16 @@
 
 	initMermaid();
 
-	window.thread = { setMessages, appendMessages, setTheme };
+	// The at of the message currently speaking (null = none). Pushed by the
+	// host so glyphs stay honest even when playback ends on its own.
+	let playingAt = null;
+	function setPlaying(at) {
+		playingAt = at === undefined ? null : at;
+		for (const btn of container.querySelectorAll(".play-btn")) {
+			const rowAt = Number(btn.parentElement.dataset.at);
+			btn.textContent = playingAt !== null && rowAt === playingAt ? "\u25A0" : "\u25B6";
+		}
+	}
+
+	window.thread = { setMessages, appendMessages, setTheme, setPlaying };
 })();

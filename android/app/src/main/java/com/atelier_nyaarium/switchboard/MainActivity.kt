@@ -141,6 +141,18 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			viewer = OpenAttachment(file, file.name, wireMime ?: mimeForFile(file), rel)
 		}
 	}
+	// In-thread Play: buttons render only when STTS is provisioned; taps speak
+	// the full tier, and the player's now-playing pushes glyph state back.
+	rendererPool.playEnabled = remember { repo.sttsReady() }
+	rendererPool.onPlayTap = { team, at -> repo.playMessage(team, at, SttsPlayer.Tier.FULL) }
+	DisposableEffect(Unit) {
+		// Fires on the player's daemon thread; the pool's renderer map is
+		// main-owned, so hop through the composition scope (main-dispatched).
+		repo.stts.onPlayingChanged = { team, at, playing ->
+			scope.launch { rendererPool.setPlaying(team, if (playing) at else null) }
+		}
+		onDispose { repo.stts.onPlayingChanged = null }
+	}
 	val dark = isSystemInDarkTheme()
 	LaunchedEffect(dark) { rendererPool.setDark(dark) }
 	LaunchedEffect(state.openTabs) { rendererPool.retain(state.openTabs.toSet()) }
