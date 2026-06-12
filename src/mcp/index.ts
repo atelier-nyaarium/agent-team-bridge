@@ -19,6 +19,7 @@ import {
 	setEvieToolsHandler,
 	setIsMainOrLeadAgent,
 } from "./bridge/helpers.js";
+import { registerNotifyHuman } from "./bridge/notifyHuman.js";
 import { detectAgentType, registerBridgeTools } from "./bridge/registerBridgeTools.js";
 import { emitChannelNotification } from "./channel/channelNotify.js";
 import { registerHumanTools } from "./channel/humanTools.js";
@@ -91,6 +92,7 @@ export async function startMcp(): Promise<void> {
 		registerSetEffortLevel(mcpServer);
 		registerCompactSession(mcpServer);
 		registerHumanTools(mcpServer);
+		registerNotifyHuman(mcpServer);
 
 		// The game-client connector serves /workspace project schemas, so it is container-only.
 		if (inContainer) {
@@ -157,6 +159,7 @@ export async function startMcp(): Promise<void> {
 		registerBridgeSend(mcpServer);
 		registerBridgeDiscover(mcpServer);
 		registerHumanTools(mcpServer);
+		registerNotifyHuman(mcpServer);
 		setChannelServer(mcpServer.server);
 
 		// Evie tool registration: try HTTP probe, then fall back to WebSocket push.

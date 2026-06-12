@@ -196,6 +196,11 @@ export class DeviceMailboxStore {
 		return this.mailboxes.get(device);
 	}
 
+	/** Visit every live mailbox (broadcast delivery, e.g. human notices). */
+	forEach(cb: (conversationId: string, box: DeviceMailbox) => void): void {
+		for (const [conversationId, box] of this.mailboxes) cb(conversationId, box);
+	}
+
 	delete(device: string): void {
 		this.mailboxes.get(device)?.releaseWaiters();
 		this.mailboxes.delete(device);

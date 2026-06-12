@@ -132,7 +132,10 @@ export type PhoneOpResult =
 ////////////////////////////////
 //  Mailbox
 
-export type MailboxEntryKind = "message" | "reply";
+// "notice" is a broadcast announcement (e.g. a cycle-end report relayed via the
+// notify_human tool): delivered to every phone, threaded under the sender, and
+// never respondable (its session id is not a conversation).
+export type MailboxEntryKind = "message" | "reply" | "notice";
 
 export interface MailboxEntry {
 	seq: number;
@@ -140,6 +143,8 @@ export interface MailboxEntry {
 	kind: MailboxEntryKind;
 	session_id: string;
 	from?: string;
+	// Notification-bar line for notices; the body carries the full report.
+	title?: string;
 	body?: string;
 	status?: string;
 	replyAsJson?: Record<string, unknown>;

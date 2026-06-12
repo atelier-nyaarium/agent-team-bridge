@@ -126,6 +126,67 @@ describe("routes", () => {
 		});
 	});
 
+	describe("/human/notify", () => {
+		async function makeStoreWithPhones(): Promise<{
+			ctx: RoutesDeps;
+			mailboxStore: import("../shared/device-mailbox.js").DeviceMailboxStore;
+		}> {
+			const { DeviceMailboxStore } = await import("../shared/device-mailbox.js");
+			const mailboxStore = new DeviceMailboxStore();
+			mailboxStore.ensure("phone-a");
+			mailboxStore.ensure("phone-b");
+			const ctx = { ...makeCtx(), mailboxStore };
+			return { ctx, mailboxStore };
+		}
+
+		it("broadcasts a notice to every phone mailbox, threaded under the sender", async () => {
+			const { ctx, mailboxStore } = await makeStoreWithPhones();
+			const { humanNotify } = createRoutes(ctx);
+			const res = humanNotify({ from: "recipe-app", tiny: "cycle done", full: "# report\n\nall good" });
+			expect((await res.json()).delivered).toBe(2);
+			for (const conv of ["phone-a", "phone-b"]) {
+				const snap = mailboxStore.get(conv)!.drain();
+				expect(snap.entries).toHaveLength(1);
+				expect(snap.entries[0]).toMatchObject({
+					kind: "notice",
+					session_id: "notice:recipe-app",
+					from: "recipe-app",
+					title: "cycle done",
+					body: "# report\n\nall good",
+				});
+			}
+		});
+
+		it("falls back to tiny as the body and wakes a held poll", async () => {
+			const { ctx, mailboxStore } = await makeStoreWithPhones();
+			const { humanNotify } = createRoutes(ctx);
+			const box = mailboxStore.get("phone-a")!;
+			const start = Date.now();
+			const held = box.waitForAppend(10_000);
+			humanNotify({ from: "t", tiny: "ping" });
+			await held;
+			expect(Date.now() - start).toBeLessThan(2_000);
+			expect(box.drain().entries[0].body).toBe("ping");
+		});
+
+		it("rejects oversized attachments with 413 and missing store with 503", async () => {
+			const { ctx } = await makeStoreWithPhones();
+			const { humanNotify } = createRoutes(ctx);
+			const huge = "A".repeat(14_000_001);
+			const res = humanNotify({
+				from: "t",
+				tiny: "big",
+				files: [
+					{ filename: "b.bin", mime: "application/octet-stream", size: 0, descriptiveKey: "b", base64: huge },
+				],
+			});
+			expect(res.status).toBe(413);
+
+			const { humanNotify: noStore } = createRoutes(makeCtx());
+			expect(noStore({ from: "t", tiny: "x" }).status).toBe(503);
+		});
+	});
+
 	describe("/respond", () => {
 		it("returns 400 when session_id missing", async () => {
 			const ctx = makeCtx();
