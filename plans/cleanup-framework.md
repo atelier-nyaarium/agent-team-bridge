@@ -211,26 +211,14 @@ Mostly filing; one real extraction. Arbiter-side: rebuild on deploy.
   destructure sites; arbiter smoke (health, send round trip, notify broadcast,
   DM holder pin/transfer/disconnect-clear).
 
-## Phase 5: build-enforced cross-runtime contract (stretch)
+## Phase 5: moved to plans/schema-first.md
 
-Kill the comment-enforced mirror class that produced today's epoch-style drift
-risk. Only sensible after Phase 1a gives Kotlin a single grammar owner.
-
-- Generate `Protocol.kt` (a small bun script reading phone-protocol.ts) with the
-  constants that have actually drifted-by-comment or are duplicated literals:
-  `NOTICE_SESSION_PREFIX` (the drift this kills) and the phone op kinds. Do NOT
-  emit the ~20 mailbox/team optString field-name keys - they live in one file,
-  have never drifted, and constant-ifying them is churn. `PHONE_PROTOCOL_VERSION`
-  optional (the phone never sends `v`).
-- `Protocol.kt` is generated-and-checked-in, not generated-at-build, so the APK
-  workflow needs no toolchain change. The drift check (regenerate + git diff
-  --exit-code) needs a TS CI workflow that does not exist yet - land a minimal
-  `ci.yml` (bun lint + test + the drift check) in this phase; Android tests are
-  already gated by Phase 1a's step in `_build-android.yml`.
-- `MailboxCodec` consumes the generated constants; the hand-written mirror
-  comments become pointers to the generator.
-- Verification: intentionally skew one constant locally and confirm the check
-  fails; then full both-side test suites.
+The constants-only codegen stub that lived here was absorbed and expanded by
+plans/schema-first.md (full zod -> Kotlin type codegen, drift-checked CI,
+golden fixtures, STTS descriptors, cross-repo contract sync). Interplay for
+this plan: Phase 1a's MailboxCodec consumes schema-first's generated types if
+they exist, or swaps its hand types for them when schema-first Phase 1 lands;
+whichever plan runs first wires the Android junit test classpath.
 
 ### Notes for implementers
 
@@ -239,7 +227,7 @@ risk. Only sensible after Phase 1a gives Kotlin a single grammar owner.
   constructor that 3 files around; 2 needs FakeTransport).
 - Deploy shape per phase: 1a/1b/3 are app-plugin only (no arbiter rebuild);
   2 and 4 change the arbiter (full ritual: version bumps, branch+automerge PR,
-  arbiter rebuild); 5 ships CI + a generated file only.
+  arbiter rebuild).
 - Each phase that moves or adds files updates CLAUDE.md Key Paths in the same
   commit (Phase 1a/1b add the codec/transport seam lines; Phase 4 replaces the
   single routes.ts entry with the routes/ module list + ChannelHolder).
