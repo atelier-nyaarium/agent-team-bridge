@@ -83,6 +83,9 @@ data class MailboxEntry(
 	val status: String? = null,
 	/** Notification-bar line for kind "notice"; the body carries the full report. */
 	val title: String? = null,
+	/** The Short tier of a notice (4-6 sentences), addressable without parsing
+	 * the body. Stub: parsed and persisted now, consumed by an upcoming feature. */
+	val summary: String? = null,
 )
 
 data class Mailbox(val entries: List<MailboxEntry>, val cursor: Int, val epoch: Int, val dropped: Int)
@@ -233,6 +236,7 @@ class PhoneClient(private val prov: Provisioning) {
 				files = files,
 				status = e.optString("status").takeIf { s -> s.isNotEmpty() },
 				title = e.optString("title").takeIf { s -> s.isNotEmpty() },
+				summary = e.optString("summary").takeIf { s -> s.isNotEmpty() },
 			)
 		}
 		return Mailbox(entries, result.optInt("cursor", cursor), result.optInt("epoch", epoch), result.optInt("dropped", 0))

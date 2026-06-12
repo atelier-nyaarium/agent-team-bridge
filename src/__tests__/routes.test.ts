@@ -142,7 +142,12 @@ describe("routes", () => {
 		it("broadcasts a notice to every phone mailbox, threaded under the sender", async () => {
 			const { ctx, mailboxStore } = await makeStoreWithPhones();
 			const { humanNotify } = createRoutes(ctx);
-			const res = humanNotify({ from: "recipe-app", tiny: "cycle done", full: "# report\n\nall good" });
+			const res = humanNotify({
+				from: "recipe-app",
+				tiny: "cycle done",
+				summary: "All phases shipped. Nothing is blocked.",
+				full: "# report\n\nall good",
+			});
 			expect((await res.json()).delivered).toBe(2);
 			for (const conv of ["phone-a", "phone-b"]) {
 				const snap = mailboxStore.get(conv)!.drain();
@@ -152,21 +157,25 @@ describe("routes", () => {
 					session_id: "notice:recipe-app",
 					from: "recipe-app",
 					title: "cycle done",
+					summary: "All phases shipped. Nothing is blocked.",
 					body: "# report\n\nall good",
 				});
 			}
 		});
 
-		it("falls back to tiny as the body and wakes a held poll", async () => {
+		it("requires summary and full (no ghost pings) and wakes a held poll", async () => {
 			const { ctx, mailboxStore } = await makeStoreWithPhones();
 			const { humanNotify } = createRoutes(ctx);
+			// Tiny-only notices are rejected outright.
+			expect(humanNotify({ from: "t", tiny: "ping" }).status).toBe(400);
+			expect(humanNotify({ from: "t", tiny: "ping", summary: "s" }).status).toBe(400);
 			const box = mailboxStore.get("phone-a")!;
 			const start = Date.now();
 			const held = box.waitForAppend(10_000);
-			humanNotify({ from: "t", tiny: "ping" });
+			humanNotify({ from: "t", tiny: "ping", summary: "s", full: "body" });
 			await held;
 			expect(Date.now() - start).toBeLessThan(2_000);
-			expect(box.drain().entries[0].body).toBe("ping");
+			expect(box.drain().entries[0].body).toBe("body");
 		});
 
 		it("rejects oversized attachments with 413 and missing store with 503", async () => {
@@ -176,6 +185,8 @@ describe("routes", () => {
 			const res = humanNotify({
 				from: "t",
 				tiny: "big",
+				summary: "s",
+				full: "body",
 				files: [
 					{ filename: "b.bin", mime: "application/octet-stream", size: 0, descriptiveKey: "b", base64: huge },
 				],
@@ -183,7 +194,7 @@ describe("routes", () => {
 			expect(res.status).toBe(413);
 
 			const { humanNotify: noStore } = createRoutes(makeCtx());
-			expect(noStore({ from: "t", tiny: "x" }).status).toBe(503);
+			expect(noStore({ from: "t", tiny: "x", summary: "s", full: "body" }).status).toBe(503);
 		});
 	});
 

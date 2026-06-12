@@ -41,10 +41,16 @@ type TransferHumanToArgs = z.infer<typeof TransferHumanToSchema>;
 
 const NotifyHumanSchema = z.object({
 	tiny: z.string().min(1).max(200).describe(`One phrase for the phone's notification bar (~60 chars).`),
+	summary: z
+		.string()
+		.min(1)
+		.describe(
+			`4-6 plain sentences: what happened and what is next. Carried as its own field for phone features; the body does not replace it.`,
+		),
 	full: z
 		.string()
-		.optional()
-		.describe(`Optional full markdown report (mermaid renders too). Shown as the message body on the phone.`),
+		.min(1)
+		.describe(`Full markdown report (mermaid renders too). Shown as the message body on the phone.`),
 	attachments: z
 		.array(z.string())
 		.optional()
@@ -78,7 +84,7 @@ Use "host" as the team to return the line to the host orchestrator.
 `.trim();
 
 const NOTIFY_DESCRIPTION = `
-Push a notification to the human's phone(s). Broadcasts to every registered phone device: \`tiny\` becomes the notification-bar line and \`full\` the message body, threaded under your team's name. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply / respond_to_human for those).
+Push a notification to the human's phone(s). Broadcasts to every registered phone device: \`tiny\` becomes the notification-bar line, \`summary\` rides as its own short tier (phone features read it directly), and \`full\` the message body, threaded under your team's name. All three are required - a notice must always carry a real body. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply / respond_to_human for those).
 `.trim();
 
 /**
@@ -203,7 +209,7 @@ export function registerHumanTools(mcpServer: McpServer): void {
 			inputSchema: notifySchema,
 		},
 		async (args: NotifyHumanArgs) => {
-			const { tiny, full, attachments } = args;
+			const { tiny, summary, full, attachments } = args;
 			let files: ChannelFile[] | undefined;
 			if (attachments?.length) {
 				try {
@@ -221,7 +227,8 @@ export function registerHumanTools(mcpServer: McpServer): void {
 				const result = (await routerPost("/human/notify", {
 					from: bridgeProjectName() || "unknown",
 					tiny,
-					...(full ? { full } : {}),
+					summary,
+					full,
 					...(files ? { files } : {}),
 				})) as { delivered?: number };
 				const delivered = result.delivered ?? 0;

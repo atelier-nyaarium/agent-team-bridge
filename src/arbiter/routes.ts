@@ -110,10 +110,13 @@ const HumanRespondSchema = z.object({
 	parts: PostResponsePartsSchema,
 });
 
+// summary and full are REQUIRED: a notice must always carry an addressable
+// short tier and a real body (no ghost pings that are only a bar headline).
 const HumanNotifySchema = z.object({
 	from: z.string().min(1).max(128),
 	tiny: z.string().min(1).max(200),
-	full: z.string().optional(),
+	summary: z.string().min(1),
+	full: z.string().min(1),
 	files: ChannelFilesSchema.optional(),
 });
 
@@ -724,7 +727,7 @@ export function createRoutes({
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
-		const { from, tiny, full, files } = parsed.data;
+		const { from, tiny, summary, full, files } = parsed.data;
 		if (files && files.length > 0) {
 			const total = fileBytes(files);
 			if (total > MAX_RESPONSE_FILE_BYTES) {
@@ -744,7 +747,8 @@ export function createRoutes({
 				session_id: noticeSessionId(from),
 				from,
 				title: tiny,
-				body: full || tiny,
+				summary,
+				body: full,
 				...(files && files.length > 0 ? { files } : {}),
 			});
 			delivered++;

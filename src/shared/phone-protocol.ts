@@ -161,6 +161,10 @@ export interface MailboxEntry {
 	from?: string;
 	// Notification-bar line for notices; the body carries the full report.
 	title?: string;
+	// The Short tier of a notice (4-6 sentences), addressable on its own so
+	// phone features never parse it back out of the body. Always sent by
+	// current arbiters; typed optional for decode tolerance of older wires.
+	summary?: string;
 	body?: string;
 	status?: string;
 	replyAsJson?: Record<string, unknown>;
