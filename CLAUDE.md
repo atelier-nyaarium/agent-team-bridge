@@ -31,7 +31,7 @@
     - `channel/` - **Channel mode** - For Claude agents receiving push notifications
       - `channelNotify.ts` - Emit `notifications/claude/channel` to push messages into Claude sessions; materializes inbound Discord file attachments and prepends a `[FILES]` block to the body
       - `channelReply.ts` - `channel_reply` tool: reply to an incoming channel message
-      - `humanTools.ts` - `respond_to_human`, `transfer_human_to`, and `notify_human` tools; `respond_to_human` accepts per-part `{text?, attachments?: [absolutePath, ...]}` so the agent can attach any file from its filesystem; `notify_human` broadcasts a `{tiny, full?, attachments?}` notice to every registered phone via the arbiter's `POST /human/notify`
+      - `humanTools.ts` - `respond_to_human`, `transfer_human_to`, and `notify_human` tools; `respond_to_human` accepts per-part `{text?, attachments?: [absolutePath, ...]}` so the agent can attach any file from its filesystem; `notify_human` broadcasts a `{tiny, summary, full, attachments?}` notice (all three tiers required) to every registered phone via the arbiter's `POST /human/notify`
       - `evieFiles.ts` - Sanitize, materialize, and render Discord-bridge file attachments under `/tmp/evie-files/<msgId>/`; lazy mtime sweep with 1h TTL
     - `cli/` - **CLI mode** - For non-Claude agents (cursor, copilot, codex)
       - `agentHandlers.ts` - CLI agent process spawners (cursor-agent, copilot, codex)

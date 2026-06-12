@@ -17,15 +17,25 @@ has zero unit tests while the TS side has 160+.
 Smallest-blast-radius first lap: extract the pure codec and stand up the test
 classpath. The codec is independently testable before any transport seam exists.
 
-- `MailboxCodec`: a plain JVM class (org.json only, NO android.* imports). Owns:
-  wire entry decode (the hand-parse currently inline in `PhoneClient.poll`,
-  PhoneClient.kt:213-238 - it produces `MailboxEntry` carrying base64 STRINGS in
-  `RawFile.base64`, so the codec never touches `android.util.Base64`),
-  `Message <-> JSONObject` persistence both directions (currently hand-rolled
-  twice in `persistThreads` / `loadPersistedThreads`), and the session grammar
-  as `teamForEntry(entry, selfName)` (collapsing `teamFromSession` + the
+- `MailboxCodec`: a plain JVM class (NO android.* imports; org.json for the
+  persistence round-trip). Owns: wire entry decode (the hand-parse currently
+  inline in `PhoneClient.poll`, PhoneClient.kt:213-238 - it produces
+  `MailboxEntry` carrying base64 STRINGS in `RawFile.base64`, so the codec
+  never touches `android.util.Base64`), `Message <-> JSONObject` persistence
+  both directions (currently hand-rolled twice in `persistThreads` /
+  `loadPersistedThreads`), and the session grammar as
+  `teamForEntry(entry, selfName)` (collapsing `teamFromSession` + the
   notice-prefix branch; `NOTICE_SESSION_PREFIX` moves here as the single Kotlin
   owner, still doc-mirrored to phone-protocol.ts).
+  - End-state shared with plans/schema-first.md (pinned in BOTH plans): wire
+    entry decode ultimately belongs to schema-first's GENERATED
+    kotlinx-serialization types (the codec or PhoneClient calls
+    `Json.decodeFromString`); MailboxCodec keeps the org.json persistence
+    round-trip and the grammar verbs. If 1a lands first, extract the hand
+    decode as-is and swap it for the generated serializers when schema-first
+    Phase 1 lands; if schema-first lands first, build the codec around the
+    generated types from day one. The real-org.json-test-jar mandate below
+    applies to the PERSISTENCE tests either way.
 - Base64 boundary: ENCODE stays in the transport (PhoneClient.kt:186). The
   base64-to-bytes decode + file write is `Attachments.decode` (Attachments.kt:57,
   imports android.util.Base64), invoked from the reducer at ChatRepository.kt:379.
@@ -241,8 +251,7 @@ whichever plan runs first wires the Android junit test classpath.
   arbiter restart drops persistent channel conversations and replies bounce
   with "No pending request" until the peer sends again (bit twice on
   2026-06-12). A durable conversation store is its own future plan.
-- Shipped plan docs were archived to plans/done/ (2026-06-12); the CLAUDE.md
-  cross-reference points there now.
+- Shipped plan docs have been cleared out.
 - Already fixed, do NOT redo: mailbox epoch collision (random mint + drain
   guard, PR #29); capless respond_to_human reader; notice session grammar
   pinning; notify_human registration drift.
