@@ -13,6 +13,10 @@ import android.content.Intent
  */
 class NotificationReceiver : BroadcastReceiver() {
 	override fun onReceive(context: Context, intent: Intent) {
+		if (intent.action == ACTION_STATUS_DISMISSED) {
+			SwitchboardService.statusDismissed = true
+			return
+		}
 		val team = intent.getStringExtra(SwitchboardService.EXTRA_OPEN_TEAM) ?: return
 		when (intent.action) {
 			ACTION_MARK_READ -> Repo.get(context).markRead(team)
@@ -27,5 +31,6 @@ class NotificationReceiver : BroadcastReceiver() {
 	companion object {
 		const val ACTION_MARK_READ = "com.atelier_nyaarium.switchboard.MARK_READ"
 		const val ACTION_PLAY = "com.atelier_nyaarium.switchboard.PLAY"
+		const val ACTION_STATUS_DISMISSED = "com.atelier_nyaarium.switchboard.STATUS_DISMISSED"
 	}
 }

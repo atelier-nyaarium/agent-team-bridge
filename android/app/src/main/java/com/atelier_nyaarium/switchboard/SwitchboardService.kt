@@ -40,6 +40,7 @@ class SwitchboardService : Service() {
 
 	override fun onCreate() {
 		super.onCreate()
+		statusDismissed = false
 		createChannels()
 		startInForeground()
 
@@ -144,6 +145,16 @@ class SwitchboardService : Service() {
 			.setOngoing(true)
 			.setOnlyAlertOnce(true)
 			.setContentIntent(contentIntent(null))
+			// Android 13+ lets the user swipe a foreground-service notification
+			// away (the service keeps running); this records the dismissal.
+			.setDeleteIntent(
+				PendingIntent.getBroadcast(
+					this,
+					0,
+					Intent(this, NotificationReceiver::class.java).setAction(NotificationReceiver.ACTION_STATUS_DISMISSED),
+					PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+				),
+			)
 			.build()
 
 	private fun updateStatusNotification(health: ChatState.Health, unread: Int) {
@@ -153,6 +164,9 @@ class SwitchboardService : Service() {
 			ChatState.Health.OFFLINE -> "Offline"
 		}
 		if (!canNotify()) return
+		// Respect a swipe-dismissal: once the user clears the status entry, state
+		// changes must not resurrect it. It returns on the next service start.
+		if (statusDismissed) return
 		NotificationManagerCompat.from(this).notify(STATUS_NOTIFICATION_ID, buildStatusNotification(line, unread))
 	}
 
@@ -194,6 +208,10 @@ class SwitchboardService : Service() {
 		const val CHANNEL_MESSAGES = "messages_v2"
 		const val STATUS_NOTIFICATION_ID = 1
 		const val EXTRA_OPEN_TEAM = "open_team"
+
+		/** The user swiped the status entry away this process; stop re-posting it.
+		 * Reset on service start so it returns with the next boot/launch. */
+		@Volatile var statusDismissed = false
 
 		/** Team notification ids live in their own range so a team name can never
 		 * hash onto the persistent status notification's id. */
