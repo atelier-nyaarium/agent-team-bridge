@@ -1,67 +1,97 @@
-# STTS Play: speak the summary tier through VRCSTT
+# STTS Play: speak messages through VRCSTT
 
-The notification Play button (stubbed in NotificationReceiver.ACTION_PLAY)
-synthesizes a message's `summary` tier through the VRCSTT "STTS" service and
-plays the WAV. This is the consumer the required `summary` field was added for.
+The notification Play stub becomes a real playback feature: "Play Full" and
+"Play Summary" actions on message notifications, and a per-message "Play"
+button in the thread view. Audio synthesizes through the VRCSTT STTS service
+(`SttsClient.kt`, drafted) and caches per message; Forget on a session purges
+its cache. This consumes the `summary` tier added for exactly this.
 
-## API map (from temp/Swagger.txt DOM snapshot + temp/notes.txt)
+## API facts (from temp/ artifacts; see SttsClient.kt header)
 
-- Service: VRCSTTAPI, OAS 3.0. Product site vrcstt.com (WordPress storefront,
-  desktop VRCSTT.exe, Patreon-gated keys); the API base URL is NOT public on
-  the site and is still unknown - it ships inside the desktop app.
-- Auth: `vrcstt-api-key: <key>` header on every TTS call. Key lives in the
-  provisioning blob (`sttsKey`, already added to
-  ~/android-dev/secrets/phone-provisioning.json alongside an empty `sttsUrl`).
-- Endpoints:
-  - `POST /TextToSpeech/{Provider}/stream` -> raw WAV streamed back.
-  - `POST /TextToSpeech/{Provider}/sample` -> short voice sample (ElevenLabs
-    has NO sample route).
-  - Providers: Amazon, Azure, ElevenLabs, Google, IBM, OpenAI, Uberduck, xAI.
-  - `GET /health`.
-  - Out of scope for Play: `/AI/OpenAI/Chat`, `/AI/ChatGPTOpenAI/Chat`,
-    `/Translation/Azure`, `/Authentication/*`, `/Patreon/Webhook`.
-- Request bodies: per-provider `TextToSpeech{Provider}Request` schemas. The
-  snapshot has them COLLAPSED - field names unknown. ElevenLabs nests
-  `...RequestData` + `...RequestSettings` sub-objects. Notes confirm "each
-  service has a custom json".
+- `POST /TextToSpeech/{Provider}/stream` -> raw WAV; `/sample` for a short
+  voice sample (ElevenLabs has no sample route). `GET /health`. Auth header
+  `vrcstt-api-key`. Providers: Amazon, Azure, ElevenLabs, Google, IBM, OpenAI,
+  Uberduck, xAI. Per-provider custom JSON bodies; field names NOT in the dump.
+- Credentials ride the provisioning blob: `sttsKey` (set) + `sttsUrl` (empty,
+  HARD GATE: the base URL is not in any artifact and not public on vrcstt.com;
+  it ships inside the desktop exe - must come from the API owner, ideally with
+  the live `swagger/v1/swagger.json` or one example body per provider).
 
-## Blocked on (ask the API owner)
+## Phase 1: introspection laps (gated on sttsUrl)
 
-1. Base URL the phone can reach.
-2. Per-provider request fields - live Swagger JSON
-   (`<base>/swagger/v1/swagger.json`), a Postman export, or one example body
-   per provider of interest. With the live spec, introspect and fill
-   `SttsClient.requestBody()` per provider.
-3. Whether /sample is free/cheap vs /stream (for the settings voice picker).
+- No-key `GET /health`; fetch live `swagger.json` and extract every
+  `TextToSpeech{Provider}Request` schema (fallback: ask for a Postman export
+  or example bodies).
+- Lap per provider: call `/sample` (ElevenLabs: short `/stream`) with the key,
+  save to `temp/stts-lab/<provider>.wav`, machine-verify each file: RIFF/fmt
+  header, sample rate, channels, bit depth, duration seconds
+  (data bytes / byte rate), duration plausibility vs text length, non-silence
+  RMS. python `wave` on the host (no ffprobe). Human ear-checks one or two.
+- Lock real request shapes into `SttsClient.requestBody()` per provider;
+  document each provider's voice identifier format next to it. Commit.
 
-## Built already (uncommitted, switchboard holds pushes)
+## Phase 2: playback engine + per-message cache (app)
 
-- `SttsClient.kt`: blocking-OkHttp client mirroring PhoneClient idioms.
-  Provider enum (sample-less ElevenLabs modeled), health(), stream()/sample()
-  writing WAV to a dest file, placeholder `{text, voice}` request body with a
-  single per-provider override point.
-- `Provisioning` gains `sttsUrl`/`sttsKey` (optString, default empty -
-  re-pasting an old blob still works; empty key disables Play).
+- `SttsPlayer` (new): owns synthesis + cache + MediaPlayer.
+  - Cache key: `(team, message.at, tier, provider, voice)` - `Message.at` is
+    the stable per-message identity (`Message.id` is reassigned on load, NOT
+    stable). Path: `filesDir/stts/<team>/<at>-<tier>.wav`.
+  - Single-flight: an in-flight set on the cache key. Impatient multi-taps
+    while synthesizing are no-ops; a cache hit plays immediately with no
+    re-fetch. Starting a new playback stops the previous one.
+  - Text preparation: tier full = message text run through a light TTS
+    sanitizer (drop fenced code/mermaid blocks, collapse the FILES block and
+    links to their labels, collapse whitespace); tier summary =
+    `summary ?: tiny-title ?: sanitized text`.
+- Forget purges: `ChatRepository.forget(team)` (ChatRepository.kt:480) also
+  deletes `filesDir/stts/<team>/` recursively. Repo already holds filesDir.
+- No size cap needed beyond Forget (WAVs are bounded by message counts), but
+  delete a message's stale tier file if a re-synthesis is forced later.
 
-## Remaining phases
+## Phase 3: notification actions
 
-1. Introspection lap (needs base URL): GET /health with no key; fetch live
-   swagger.json; one /sample call per candidate provider with the key; parse
-   the WAV (RIFF header, sample rate, duration) to verify; lock the request
-   shapes into requestBody().
-2. Playback path: ACTION_PLAY resolves the message (summary ?: title ?: text),
-   SttsClient.stream() to cache (reuse the updates/ cache-dir pattern), play
-   via MediaPlayer; foreground-service-safe (the receiver hops to a coroutine
-   or short-lived service - receivers cannot block).
-3. Settings: provider picker + voice field; Play-a-sample button using
-   /sample; surface health state. sttsUrl/sttsKey stay provisioning-blob-fed.
-4. Emulator lap: fake server first (local HTTP fixture serving a WAV) so the
-   pipeline laps offline, then live once the base URL exists.
+- Rename the stubbed action "Play" -> "Play Summary"; add "Play Full" BEFORE
+  it (addAction order controls display order; 2 actions, under Android's 3
+  cap). Both carry team + the burst-last message's `at` in the intent extras.
+- `NotificationReceiver` routes both to `SttsPlayer` with tier full/summary.
+  Receivers cannot block: `goAsync()` + launch on the Repo-owned scope, finish
+  on completion. Multi-tap idempotency is Phase 2's single-flight.
+- Buttons only when configured: skip addAction when the provisioning has no
+  sttsUrl/sttsKey, so unconfigured installs see no dead buttons.
 
-## Verification notes
+## Phase 4: in-thread Play button
 
-- Claude cannot listen to audio, but verifies WAV programmatically: RIFF/fmt
-  header parse, sample rate, channel count, duration, non-silence amplitude
-  check (python wave module on the host; no ffprobe installed).
-- Live verification protocol: synthesize a known sentence, assert WAV header
-  sanity + plausible duration for the text length, then the human ears it.
+- Agent (inbound) message rows get a top-right "Play" button in the WebView
+  renderer, same behavior as Play Full for that specific message.
+- ThreadRenderer gains an `onPlayTap(at)` callback beside the existing
+  onRetry/onAttachmentTap bridge pattern; the row template adds the button for
+  non-self rows only. Hidden entirely when STTS is unconfigured (and in the
+  demo thread unless a fixture is active).
+- Visual: small icon button, top-right of the bubble, no layout shift on long
+  bodies; playing state swaps to a stop glyph (tap again = stop).
+
+## Phase 5: settings + emulator lap
+
+- Settings: provider picker (enum), voice text field, "Play a sample" button
+  (uses /sample; ElevenLabs falls back to stream), health indicator gating.
+  Persisted in ProvisioningStore prefs (NOT the blob - blob carries only
+  credentials).
+- Emulator lap runs OFFLINE first: a local fixture (python http.server serving
+  a generated WAV at the stream/sample paths) with sttsUrl pointed at
+  http://10.0.2.2:<port>. NOTE: cleartext HTTP needs a debug-only
+  networkSecurityConfig allowing 10.0.2.2, or the fixture is unreachable on
+  modern Android. Verify: multi-tap fires one synthesis; cache hit replays
+  without a request; Forget deletes the team's cache dir; both notification
+  actions and the in-thread button play.
+- Live lap once sttsUrl exists: repeat against the real service, then the
+  human ear-check.
+
+### Notes for implementers
+
+- Lean passes; switchboard pushes are currently held - local commits only.
+- `SttsClient` stays the ONLY owner of wire shapes; `SttsPlayer` the only
+  owner of cache layout. UI layers never touch OkHttp or files directly.
+- Emulator harness: `source ~/android-dev/env.sh`, AVD phone35,
+  `wm size 720x1600` + `density 280`, reset after.
+- Built already: SttsClient.kt (placeholder bodies), Provisioning
+  sttsUrl/sttsKey, key staged in ~/android-dev/secrets/phone-provisioning.json.
