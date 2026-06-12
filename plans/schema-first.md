@@ -625,6 +625,17 @@ falling back to Azure.
   McpServer reads pkg.version). MINOR bump each repo on every phase that
   touches it: switchboard P0/P1/P2/P3/P4; nyaaskills + evie-bot on P0 and
   P4.
+- bun residue rule (bit THREE times during Phase 0, 2026-06-12): `bun
+  install` never prunes physical nested node_modules dirs the lock stopped
+  sanctioning - they silently shadow hoisted/overridden versions for tsc
+  AND runtime. After ANY manifest override/dedupe change, finish with
+  `rm -rf node_modules && bun install --frozen-lockfile` AS THE LAST STEP
+  (a reinstall before the final manifest state just mints new residue),
+  then verify: every `find node_modules -mindepth 2 -name node_modules`
+  hit must have a matching "parent/child" key in bun.lock.
+- Never `docker exec` as root into a bind-mounted repo (it leaves
+  root-owned files the host cannot delete - the .vite cache blocked a
+  node_modules purge). Use the container's non-root user or chown after.
 - Emulator harness: `source ~/android-dev/env.sh`, AVD phone35,
   `wm size 720x1600` + `density 280`, reset after.
 - cleanup-framework.md interplay: 1a/1b can run before or after this plan's
