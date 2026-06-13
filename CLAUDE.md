@@ -69,6 +69,7 @@
     - `phone-protocol.ts` - Phone protocol constants + session-id grammars (`NOTICE_SESSION_PREFIX`, `CONV_SESSION_PREFIX` with compose/parse helpers, `PHONE_PROTOCOL_VERSION`); the wire TYPES re-export from schemas.ts via `z.infer`
     - `evie-protocol.ts` - SELF-CONTAINED (zod-only) leaf owning the arbiter<->evie frame vocabulary: `EvieInboundFrameSchema` (tool_registry / tool_result / tool_error / dm_forward / loose phone_relay), `ToolCallFrameSchema`, and `ChannelFileSchema` (re-exported by schemas.ts). Built to be copied verbatim into evie-bot in a later phase; nothing imports into it
     - `stts-providers.ts` - `SttsProviderSchema` for the TTS provider catalog (bundled at `android/.../assets/stts-providers.json`): per-provider id/label/path/container/voices plus a request-body TEMPLATE ($text/$voice). Validated by vitest on every push; the generated Kotlin `SttsProvider` decodes it at runtime and `SttsClient.fillTemplate` fills the template per call
+    - `notice.ts` - `NoticeSchema` `{ title, summary, full }`, the single truth for the `notify_human` tool param and the `/human/notify` wire (tier rules on the field describes). SYNCED leaf: a byte-verbatim copy lives at `nyaaskills/src/shared/notice.ts` (re-copy with `cp src/shared/notice.ts ../nyaaskills/src/shared/notice.ts`). `title` replaces the old `tiny`; the tool/route accept `tiny` as a deprecated alias for one transition release
     - `reconnect.ts` - Exponential backoff reconnector for WebSocket connections
   - `__tests__/` - Test files (vitest)
 - `skills/` - Claude Code skills
@@ -161,6 +162,15 @@ Arbiter side of a native Android chat client that reaches the bridge through evi
 ### Dependencies
 
 Manifests use EXACT version pins, no ranges. The plugin launches via `bun --install=force run` (.mcp.json), which resolves package.json ranges directly and bypasses the lockfile - a caret range means any plugin start can pull a brand-new release. Dependabot (daily, 7-day cooldown) is the updater; the cooldown gives security audits time to flag a vulnerable release before we take it. The `overrides` block pins transitives with known advisories. After any manifest change, finish with `rm -rf node_modules && bun install --frozen-lockfile`, then run `scripts/check-module-residue.ts` - bun never prunes nested node_modules dirs the lock stopped sanctioning, and a stale nested copy silently shadows the pinned version for both tsc and runtime.
+
+### Synced schema modules
+
+Two zod-only leaf modules in `src/shared/` are the source of truth for a wire shape shared with a sibling repo, and are copied VERBATIM (no sync script yet - manual `cp`). Each file's header carries the source path and the exact copy command. After editing a source, re-copy:
+
+- `src/shared/notice.ts` -> `nyaaskills/src/shared/notice.ts` (`cp src/shared/notice.ts ../nyaaskills/src/shared/notice.ts`)
+- `src/shared/evie-protocol.ts` -> `evie-bot/app/features/bridge/evie-protocol.ts` (`cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts`)
+
+The copies are byte-identical (the header reads correctly from either location). A staleness CI guard is deferred; see plans/schema-first.md for the content-hash-marker design.
 
 ### Code Style
 

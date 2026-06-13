@@ -144,6 +144,10 @@ reconnect_mcp() {
 
 reconnect_mcp "nyaascripts"
 reconnect_mcp "plugin:.*switchboard"
+# Reconnect the nyaaskills cycle MCP too, so a plugin update flips the
+# switchboard/nyaaskills pair together in one live session (otherwise a
+# renamed cycle tool stays stale until the next manual reconnect).
+reconnect_mcp "plugin:.*nyaaskills"
 
 echo "Reload sequence complete."
 `;
@@ -156,6 +160,7 @@ Spawns a background script that drives the tmux session through:
 2. /reload-plugins
 3. /mcp reconnect nyaascripts
 4. /mcp reconnect plugin:switchboard (prioritized over plain switchboard)
+5. /mcp reconnect plugin:nyaaskills (so the switchboard/nyaaskills pair flips together)
 
 The tool returns immediately. The script waits for the current tool call to finish before starting.
 On the host, omit 'team' to target the host session, or provide 'team' to target a devcontainer.

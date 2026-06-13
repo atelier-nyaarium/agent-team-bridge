@@ -112,13 +112,18 @@ const HumanRespondSchema = z.object({
 
 // summary and full are REQUIRED: a notice must always carry an addressable
 // short tier and a real body (no ghost pings that are only a bar headline).
-const HumanNotifySchema = z.object({
-	from: z.string().min(1).max(128),
-	tiny: z.string().min(1).max(200),
-	summary: z.string().min(1),
-	full: z.string().min(1),
-	files: ChannelFilesSchema.optional(),
-});
+// title accepts the legacy `tiny` key during the rename transition; the
+// handler resolves `title ?? tiny`.
+const HumanNotifySchema = z
+	.object({
+		from: z.string().min(1).max(128),
+		title: z.string().min(1).max(200).optional(),
+		tiny: z.string().min(1).max(200).optional(),
+		summary: z.string().min(1),
+		full: z.string().min(1),
+		files: ChannelFilesSchema.optional(),
+	})
+	.refine((d) => Boolean(d.title || d.tiny), { message: "title (or legacy tiny) is required" });
 
 const HumanTransferSchema = z.object({
 	from: z.string(),
@@ -727,7 +732,8 @@ export function createRoutes({
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
-		const { from, tiny, summary, full, files } = parsed.data;
+		const { from, summary, full, files } = parsed.data;
+		const title = parsed.data.title ?? parsed.data.tiny;
 		if (files && files.length > 0) {
 			const total = fileBytes(files);
 			if (total > MAX_RESPONSE_FILE_BYTES) {
@@ -746,7 +752,7 @@ export function createRoutes({
 				kind: "notice",
 				session_id: noticeSessionId(from),
 				from,
-				title: tiny,
+				title,
 				summary,
 				body: full,
 				...(files && files.length > 0 ? { files } : {}),

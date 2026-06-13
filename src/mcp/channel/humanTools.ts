@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { NoticeFull, NoticeLegacyTiny, NoticeSummary, NoticeTitle } from "../../shared/notice.js";
 import type { PostResponsePart } from "../../shared/schemas.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { bridgeProjectName, routerPost } from "../bridge/helpers.js";
@@ -39,20 +40,15 @@ const TransferHumanToSchema = z.object({
 });
 type TransferHumanToArgs = z.infer<typeof TransferHumanToSchema>;
 
+// title is optional ONLY to accept the legacy `tiny` alias during the rename
+// transition; the handler requires one of the two. summary/full stay required
+// (no ghost ping that is only a bar headline). Plain z.object (no
+// refine/preprocess) so the MCP registration keeps its `.shape`.
 const NotifyHumanSchema = z.object({
-	tiny: z.string().min(1).max(200).describe(`One phrase for the phone's notification bar (~60 chars).`),
-	summary: z
-		.string()
-		.min(1)
-		.describe(
-			`4-6 plain sentences: what happened and what is next. Plain content, no lead-in labels ("Summary:"). Carried as its own field for phone features; the body does not replace it.`,
-		),
-	full: z
-		.string()
-		.min(1)
-		.describe(
-			`Full markdown report (mermaid renders too). Shown as the message body on the phone; start with the report itself, no lead-in labels.`,
-		),
+	title: NoticeTitle.optional(),
+	tiny: NoticeLegacyTiny,
+	summary: NoticeSummary,
+	full: NoticeFull,
 	attachments: z
 		.array(z.string())
 		.optional()
@@ -86,7 +82,7 @@ Use "host" as the team to return the line to the host orchestrator.
 `.trim();
 
 const NOTIFY_DESCRIPTION = `
-Push a notification to the human's phone(s). Broadcasts to every registered phone device: \`tiny\` becomes the notification-bar line, \`summary\` rides as its own short tier (phone features read it directly), and \`full\` the message body, threaded under your team's name. All three are required - a notice must always carry a real body. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply / respond_to_human for those).
+Push a notification to the human's phone(s). Broadcasts to every registered phone device: \`title\` becomes the notification-bar line, \`summary\` rides as its own short tier (phone features read it directly), and \`full\` the message body, threaded under your team's name. title, summary, and full are all required - a notice must always carry a real body. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply / respond_to_human for those).
 `.trim();
 
 /**
@@ -211,7 +207,14 @@ export function registerHumanTools(mcpServer: McpServer): void {
 			inputSchema: notifySchema,
 		},
 		async (args: NotifyHumanArgs) => {
-			const { tiny, summary, full, attachments } = args;
+			const { summary, full, attachments } = args;
+			const title = args.title ?? args.tiny;
+			if (!title) {
+				return {
+					content: [{ type: "text" as const, text: `Notify failed: title is required.` }],
+					isError: true,
+				};
+			}
 			let files: ChannelFile[] | undefined;
 			if (attachments?.length) {
 				try {
@@ -228,7 +231,11 @@ export function registerHumanTools(mcpServer: McpServer): void {
 				// the server's error message (including the 413 cap and 503 no-bridge).
 				const result = (await routerPost("/human/notify", {
 					from: bridgeProjectName() || "unknown",
-					tiny,
+					// Send BOTH keys for the transition: an old arbiter reads `tiny`,
+					// a new one reads `title` (or `tiny`). Drop `tiny` once arbiters
+					// are caught up.
+					title,
+					tiny: title,
 					summary,
 					full,
 					...(files ? { files } : {}),

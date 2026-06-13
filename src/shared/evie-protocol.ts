@@ -1,12 +1,14 @@
+// SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
+// Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
+// MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
 import { z } from "zod";
 
 ////////////////////////////////
 //  Evie bridge wire protocol
 //
 //  Frames exchanged over the arbiter<->evie-bot WebSocket. SELF-CONTAINED on
-//  purpose: this module imports nothing but zod, because it is copied
-//  verbatim into evie-bot (SYNCED COPY mechanism - see the switchboard
-//  CLAUDE.md); sibling shared modules import FROM it, never into it.
+//  purpose: this module imports nothing but zod, so the verbatim copy needs
+//  no import surgery; sibling shared modules import FROM it, never into it.
 //
 //  The phone_relay member stays loose: the arbiter's relay pump runs the
 //  full PhoneRelayFrameSchema parse (shared/schemas.ts) with its own error
