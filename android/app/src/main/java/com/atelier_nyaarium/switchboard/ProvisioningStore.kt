@@ -68,6 +68,14 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putBoolean(KEY_AUTO_TTS, value).apply()
 		}
 
+	/** When on (with autoTts), the summary is played aloud automatically once it
+	 * is synthesized, hands-free. */
+	var autoPlaySummary: Boolean
+		get() = prefs.getBoolean(KEY_AUTO_PLAY_SUMMARY, false)
+		set(value) {
+			prefs.edit().putBoolean(KEY_AUTO_PLAY_SUMMARY, value).apply()
+		}
+
 	fun saveThreads(json: String) = prefs.edit().putString(KEY_THREADS, json).apply()
 
 	fun loadThreads(): String? = prefs.getString(KEY_THREADS, null)
@@ -85,5 +93,6 @@ class ProvisioningStore(context: Context) {
 		const val KEY_STTS_VOICE = "stts_voice"
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."
 		const val KEY_AUTO_TTS = "auto_tts"
+		const val KEY_AUTO_PLAY_SUMMARY = "auto_play_summary"
 	}
 }

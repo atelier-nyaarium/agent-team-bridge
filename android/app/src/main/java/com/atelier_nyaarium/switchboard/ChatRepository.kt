@@ -268,6 +268,14 @@ class ChatRepository(
 			store.autoTts = value
 		}
 
+	/** When on (with sttsAutoGen), the summary plays aloud automatically once it
+	 * is synthesized. Persisted in prefs. */
+	var sttsAutoPlaySummary: Boolean
+		get() = store.autoPlaySummary
+		set(value) {
+			store.autoPlaySummary = value
+		}
+
 	/** Pre-synthesize both tiers of a message into the cache so a later Play is
 	 * instant. Blocking; runs off the poll loop on an IO thread. Silent on any
 	 * failure - the notification fires regardless and Play falls back to live
@@ -546,6 +554,9 @@ class ChatRepository(
 								// slow synth still falls through and the notification fires.
 								preloadMessage(t, at)
 								onInbound?.invoke(t, ms)
+								// Hands-free: speak the summary the moment it is ready (a
+								// cache hit from the preload above).
+								if (sttsAutoPlaySummary) playMessage(t, at, SttsPlayer.Tier.SUMMARY)
 							}
 						} else {
 							onInbound?.invoke(team, msgs)

@@ -1144,6 +1144,25 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		)
 	}
 
+	var autoPlay by remember { mutableStateOf(repo.sttsAutoPlaySummary) }
+	Row(verticalAlignment = Alignment.CenterVertically) {
+		Column(Modifier.weight(1f)) {
+			Text("Auto-play summary", style = MaterialTheme.typography.titleSmall)
+			Text(
+				"Speak the summary aloud the moment it is ready, hands-free. Requires auto-generate voice.",
+				style = MaterialTheme.typography.bodySmall,
+			)
+		}
+		Switch(
+			checked = autoPlay,
+			enabled = autoTts,
+			onCheckedChange = {
+				autoPlay = it
+				repo.sttsAutoPlaySummary = it
+			},
+		)
+	}
+
 	if (pickerOpen) {
 		AlertDialog(
 			onDismissRequest = { pickerOpen = false },
