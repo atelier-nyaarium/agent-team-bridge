@@ -540,10 +540,11 @@ class ChatRepository(
 							val ms = msgs
 							val at = lastAgent.at
 							scope.launch(Dispatchers.IO) {
-								// Cap the notification's wait; if synthesis runs long it
-								// finishes in the background and still warms the cache.
-								val pre = launch(Dispatchers.IO) { preloadMessage(t, at) }
-								withTimeoutOrNull(PRELOAD_CAP_MS) { pre.join() }
+								// Wait fully for synthesis so the cache is warm when the
+								// notification lands. preloadMessage never throws and is
+								// bounded by the STTS client's own timeouts, so a failed or
+								// slow synth still falls through and the notification fires.
+								preloadMessage(t, at)
 								onInbound?.invoke(t, ms)
 							}
 						} else {
@@ -822,10 +823,5 @@ class ChatRepository(
 		// Mirrors NOTICE_SESSION_PREFIX in src/shared/phone-protocol.ts, the single
 		// source of truth for the broadcast-notice session-id grammar.
 		const val NOTICE_SESSION_PREFIX = "notice:"
-		// Auto-TTS: how long the notification waits for preload before firing
-		// anyway. Sized above the provider's synthesis latency (~14-20s observed
-		// for xAI on a multi-sentence message) so the cache is warm when the
-		// notification lands; synthesis keeps running past this regardless.
-		const val PRELOAD_CAP_MS = 30_000L
 	}
 }
