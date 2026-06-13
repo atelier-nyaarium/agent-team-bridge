@@ -165,12 +165,17 @@ Manifests use EXACT version pins, no ranges. The plugin launches via `bun --inst
 
 ### Synced schema modules
 
-Two zod-only leaf modules in `src/shared/` are the source of truth for a wire shape shared with a sibling repo, and are copied VERBATIM (no sync script yet - manual `cp`). Each file's header carries the source path and the exact copy command. After editing a source, re-copy:
+Two zod-only leaf modules in `src/shared/` are the source of truth for a wire shape shared with a sibling repo, and are copied VERBATIM (manual `cp`). Each file's header carries the source path, the copy command, and a `// SYNC-HASH:` of its body. After editing a source, RESTAMP then re-copy:
 
-- `src/shared/notice.ts` -> `nyaaskills/src/shared/notice.ts` (`cp src/shared/notice.ts ../nyaaskills/src/shared/notice.ts`)
-- `src/shared/evie-protocol.ts` -> `evie-bot/app/features/bridge/evie-protocol.ts` (`cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts`)
+```
+bun scripts/check-sync-hash.ts --write src/shared/notice.ts
+cp src/shared/notice.ts ../nyaaskills/src/shared/notice.ts
+```
 
-The copies are byte-identical (the header reads correctly from either location). A staleness CI guard is deferred; see plans/schema-first.md for the content-hash-marker design.
+- `src/shared/notice.ts` -> `nyaaskills/src/shared/notice.ts`
+- `src/shared/evie-protocol.ts` -> `evie-bot/app/features/bridge/evie-protocol.ts`
+
+The copies are byte-identical. Each repo's CI runs `check-sync-hash.ts` on its copy: a hand-edit that diverges a copy from the hash it was cut at fails the build (even one that still type-checks). The cross-repo stale-copy check (recorded hash vs live source) is deferred.
 
 ### Code Style
 
