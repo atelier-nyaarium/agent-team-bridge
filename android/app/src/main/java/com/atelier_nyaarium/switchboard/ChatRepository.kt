@@ -198,13 +198,13 @@ class ChatRepository(
 	/** The provider descriptors for the settings picker. */
 	fun sttsProviders(): List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = sttsCatalog
 
-	/** The selected provider id (the descriptor id, e.g. "AZURE"). Unset resolves
-	 * to AZURE when present, else the first descriptor. */
+	/** The selected provider id (the descriptor id, e.g. "XAI"). Unset resolves
+	 * to XAI when present, else the first descriptor. */
 	var sttsProviderId: String
 		get() {
 			val stored = store.sttsProvider
 			if (stored.isNotEmpty()) return stored
-			return sttsCatalog.firstOrNull { it.id == "AZURE" }?.id ?: sttsCatalog.firstOrNull()?.id ?: ""
+			return sttsCatalog.firstOrNull { it.id == "XAI" }?.id ?: sttsCatalog.firstOrNull()?.id ?: ""
 		}
 		set(value) {
 			store.sttsProvider = value

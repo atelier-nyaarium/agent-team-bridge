@@ -54,7 +54,15 @@ describe("stts-providers.json", () => {
 		}
 	});
 
-	it("ships the default Azure provider", () => {
-		expect(parsed.providers.some((p) => p.id === "AZURE")).toBe(true);
+	it("ships the default xAI provider and only working providers", () => {
+		expect(parsed.providers.some((p) => p.id === "XAI")).toBe(true);
+		// Providers whose /stream returns no audio were removed; these must not return.
+		const removed = ["AZURE", "AMAZON", "ELEVENLABS", "GOOGLE", "UBERDUCK"];
+		for (const id of removed) {
+			expect(
+				parsed.providers.some((p) => p.id === id),
+				`${id} should be removed`,
+			).toBe(false);
+		}
 	});
 });

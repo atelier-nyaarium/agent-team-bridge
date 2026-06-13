@@ -55,71 +55,12 @@ function sortVoices(voices: Array<SttsVoice & { locale?: string }>): SttsVoice[]
 		.map(({ id, label }) => (label ? { id, label } : { id }));
 }
 
-// SSML_VOICE_GENDER enum on Google's wire: 1 = MALE, 2 = FEMALE, 3 = NEUTRAL.
-function googleGender(g: unknown): string | undefined {
-	return g === 1 ? "Male" : g === 2 ? "Female" : g === 3 ? "Neutral" : undefined;
-}
-
 function joinLabel(name: string, ...parts: Array<string | undefined>): string {
 	const detail = parts.filter((p): p is string => !!p && p.length > 0).join(", ");
 	return detail ? `${name} (${detail})` : name;
 }
 
 const ADAPTERS: Record<string, VoiceAdapter> = {
-	AZURE: {
-		file: "azure.json",
-		map: (raw) => {
-			const rows = raw as Array<Record<string, string>>;
-			return sortVoices(
-				rows
-					// Deprecated voices still list but error or vanish; Preview + GA stay.
-					.filter((v) => v.Status !== "Deprecated")
-					.map((v) => ({
-						id: v.ShortName,
-						label: joinLabel(
-							v.DisplayName || v.ShortName,
-							v.Locale,
-							v.Gender,
-							v.VoiceType === "NeuralHD" ? "HD" : undefined,
-						),
-						locale: v.Locale,
-					})),
-			);
-		},
-	},
-	AMAZON: {
-		file: "amazon.json",
-		// The request template pins engine "neural", so a standard-only voice would
-		// 400. Offer only neural-capable voices.
-		map: (raw) => {
-			const rows = raw as Array<Record<string, unknown>>;
-			return sortVoices(
-				rows
-					.filter((v) => Array.isArray(v.SupportedEngines) && v.SupportedEngines.includes("neural"))
-					.map((v) => ({
-						id: String(v.Id),
-						label: joinLabel(String(v.Name ?? v.Id), v.LanguageCode as string, v.Gender as string),
-						locale: v.LanguageCode as string,
-					})),
-			);
-		},
-	},
-	GOOGLE: {
-		file: "google.json",
-		map: (raw) => {
-			const rows = raw as Array<Record<string, unknown>>;
-			return sortVoices(
-				rows.map((v) => {
-					const locale = Array.isArray(v.LanguageCodes) ? String(v.LanguageCodes[0]) : undefined;
-					return {
-						id: String(v.Name),
-						label: joinLabel(String(v.Name), locale, googleGender(v.SsmlGender)),
-						locale,
-					};
-				}),
-			);
-		},
-	},
 	IBM: {
 		file: "ibm.json",
 		map: (raw) => {
