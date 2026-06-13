@@ -8,6 +8,12 @@ on:
       - main
     paths:
       - "android/**"
+      # The Kotlin half of the golden-fixture contract: fixture or schema/
+      # generator edits must run the Android unit tests too, or a TS-only
+      # push can drift the Kotlin decode green.
+      - "tests/fixtures/**"
+      - "src/shared/**"
+      - "scripts/codegen-kotlin.ts"
       - ".github/workflows/_build-android.yml"
       - ".github/workflows/main-push.yml"
 

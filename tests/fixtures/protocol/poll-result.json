@@ -1,0 +1,15 @@
+{
+	"entries": [
+		{
+			"seq": 42,
+			"at": 4102444800000,
+			"kind": "message",
+			"session_id": "conv:11111111-2222-3333-4444-555555555555:evie-bot",
+			"from": "evie-bot",
+			"body": "hello"
+		}
+	],
+	"cursor": 42,
+	"dropped": 0,
+	"epoch": 1073741824
+}

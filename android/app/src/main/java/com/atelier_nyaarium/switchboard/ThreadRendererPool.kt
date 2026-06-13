@@ -25,14 +25,29 @@ class ThreadRendererPool(private val context: Context) {
 	 * "Open with" chooser. */
 	var onAttachmentTap: ((String) -> Unit)? = null
 
+	/** Set by the owner; called with (team, message at) when an agent row's
+	 * Play button is tapped. */
+	var onPlayTap: ((String, Long) -> Unit)? = null
+
+	/** Whether agent rows render Play buttons; the demo thread overrides this
+	 * per renderer (see get). Set before threads first sync. */
+	var playEnabled = false
+
 	fun get(team: String): ThreadRenderer =
 		renderers.getOrPut(team) {
 			ThreadRenderer(context).also {
 				it.setDark(dark)
+				it.playEnabled = playEnabled && team != DEMO_TEAM
 				it.onOpenAttachment = { rel -> onAttachmentTap?.invoke(rel) ?: openAttachment(rel) }
 				it.onRetryMessage = { id -> onRetry?.invoke(team, id) }
+				it.onPlayMessage = { at -> onPlayTap?.invoke(team, at) }
 			}
 		}
+
+	/** Push the now-playing message to one team's renderer (null = stopped). */
+	fun setPlaying(team: String, at: Long?) {
+		renderers[team]?.setPlaying(at)
+	}
 
 	/** System "Open with" chooser for a validated attachment path. */
 	fun openWith(relPath: String) = openAttachment(relPath)

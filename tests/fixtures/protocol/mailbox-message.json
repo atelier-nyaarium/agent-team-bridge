@@ -1,0 +1,11 @@
+{
+	"seq": 42,
+	"at": 4102444800000,
+	"kind": "message",
+	"session_id": "conv:11111111-2222-3333-4444-555555555555:evie-bot",
+	"from": "evie-bot",
+	"body": "hello from the bridge",
+	"request_type": "question",
+	"effort": "standard",
+	"is_follow_up": false
+}

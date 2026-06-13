@@ -163,6 +163,14 @@ describe("routes", () => {
 			}
 		});
 
+		it("accepts the new title key and rejects a notice carrying neither title nor tiny", async () => {
+			const { ctx, mailboxStore } = await makeStoreWithPhones();
+			const { humanNotify } = createRoutes(ctx);
+			humanNotify({ from: "recipe-app", title: "via title", summary: "s", full: "body" });
+			expect(mailboxStore.get("phone-a")!.drain().entries[0]).toMatchObject({ title: "via title" });
+			expect(humanNotify({ from: "t", summary: "s", full: "body" }).status).toBe(400);
+		});
+
 		it("requires summary and full (no ghost pings) and wakes a held poll", async () => {
 			const { ctx, mailboxStore } = await makeStoreWithPhones();
 			const { humanNotify } = createRoutes(ctx);

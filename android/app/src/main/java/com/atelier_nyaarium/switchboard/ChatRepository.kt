@@ -118,6 +118,9 @@ class ChatRepository(
 	private val store: ProvisioningStore,
 	private val filesDir: File,
 	private val contentResolver: ContentResolver,
+	// STTS provider catalog, parsed + validated once from the bundled asset by
+	// Repo.get. Empty only if the asset is missing/corrupt (Play stays dark).
+	private val sttsCatalog: List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = emptyList(),
 ) {
 	private val _state = MutableStateFlow(
 		ChatState(
@@ -130,12 +133,19 @@ class ChatRepository(
 	)
 	val state: StateFlow<ChatState> = _state
 
-	private var client: PhoneClient? = null
-	private var cursor = 0
-	private var epoch = 0
-	private var lastSeq = -1
+	// Lazy clients are read and invalidated across threads (poll loop, main,
+	// the player's daemon thread); @Volatile gives the writes visibility. A
+	// rare double-construct race is harmless (last writer wins, cheap build).
+	@Volatile private var client: PhoneClient? = null
+	private var cursor = 0L
+	private var epoch = 0L
+	private var lastSeq = -1L
 	private var pollFails = 0
 	private var pollJob: Job? = null
+
+	/** TTS playback engine; cache lives under filesDir/stts/<team>/. */
+	val stts = SttsPlayer(filesDir)
+	@Volatile private var sttsClient: SttsClient? = null
 
 	/** True while the Activity is started; drives the poll cadence (5s visible,
 	 * 60s AFK burst). The mailbox accumulates server-side either way. */
@@ -172,10 +182,108 @@ class ChatRepository(
 		return PhoneClient(Provisioning.parse(blob)).also { client = it }
 	}
 
+	/** STTS client from the provisioning blob, or null when not configured.
+	 * Rebuilt after re-provisioning (the same client=null invalidation). */
+	private fun sttsClient(): SttsClient? {
+		sttsClient?.let { return it.takeIf { c -> c.isConfigured } }
+		val blob = store.load() ?: return null
+		val prov = runCatching { Provisioning.parse(blob) }.getOrNull() ?: return null
+		return SttsClient(prov.sttsUrl, prov.sttsKey).also { sttsClient = it }.takeIf { it.isConfigured }
+	}
+
+	/** Gates the Play surfaces; true once the blob carries sttsUrl + sttsKey AND
+	 * the bundled catalog parsed (without descriptors there is nothing to play). */
+	fun sttsReady(): Boolean = sttsClient() != null && sttsCatalog.isNotEmpty()
+
+	/** The provider descriptors for the settings picker. */
+	fun sttsProviders(): List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = sttsCatalog
+
+	/** The selected provider id (the descriptor id, e.g. "AZURE"). Unset resolves
+	 * to AZURE when present, else the first descriptor. */
+	var sttsProviderId: String
+		get() {
+			val stored = store.sttsProvider
+			if (stored.isNotEmpty()) return stored
+			return sttsCatalog.firstOrNull { it.id == "AZURE" }?.id ?: sttsCatalog.firstOrNull()?.id ?: ""
+		}
+		set(value) {
+			store.sttsProvider = value
+		}
+
+	/** The descriptor for the current selection, or null if the stored id is not
+	 * in the catalog (a removed provider) - the Play surfaces disable loudly
+	 * rather than silently substituting another voice. */
+	private fun currentProvider(): com.atelier_nyaarium.switchboard.proto.SttsProvider? {
+		val id = sttsProviderId
+		return sttsCatalog.firstOrNull { it.id == id }
+	}
+
+	/** True when the stored provider id is non-empty but absent from the catalog. */
+	fun sttsProviderMissing(): Boolean {
+		val id = store.sttsProvider
+		return id.isNotEmpty() && sttsCatalog.none { it.id == id }
+	}
+
+	/** Per-provider voice; blank uses the descriptor default. Reads seed once
+	 * from the legacy global voice so an existing install keeps its choice. */
+	fun sttsVoiceFor(providerId: String): String {
+		val perProvider = store.sttsVoiceFor(providerId)
+		if (perProvider.isNotEmpty()) return perProvider
+		val legacy = store.sttsVoice
+		if (legacy.isNotEmpty() && providerId == sttsProviderId) {
+			store.setSttsVoiceFor(providerId, legacy)
+			return legacy
+		}
+		return ""
+	}
+
+	fun setSttsVoiceFor(providerId: String, voice: String) = store.setSttsVoiceFor(providerId, voice.trim())
+
+	/**
+	 * Speak one message tier (notification action or thread button). The whole
+	 * resolution (credential decrypt, message lookup, text prep) hops to the
+	 * player's daemon thread so a broadcast receiver's main thread does zero
+	 * disk or crypto work. Cache and single-flight live in SttsPlayer, so
+	 * impatient multi-taps synthesize once; tapping the playing message stops
+	 * it. No-op when unconfigured or the message is gone.
+	 */
+	fun playMessage(team: String, at: Long, tier: SttsPlayer.Tier) {
+		stts.post {
+			val client = sttsClient() ?: return@post
+			val provider = currentProvider() ?: return@post
+			val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return@post
+			val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+			stts.play(client, provider, voice, team, at, tier, SttsPlayer.ttsText(msg, tier))
+		}
+	}
+
+	/** Settings voice preview with the current provider/voice. */
+	fun playSttsSample() {
+		stts.post {
+			val client = sttsClient() ?: return@post
+			val provider = currentProvider() ?: return@post
+			val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+			stts.playSample(client, provider, voice, "This is your switchboard voice.")
+		}
+	}
+
+	/** STTS service liveness for the settings indicator. */
+	suspend fun sttsHealth(): Boolean = withContext(Dispatchers.IO) { sttsClient()?.health() == true }
+
 	suspend fun provision(blob: String) = withContext(Dispatchers.IO) {
-		val prov = Provisioning.parse(blob) // throws on malformed input before we persist
+		// Strict wire parse: reject before persisting. Surfaced as state.error
+		// rather than thrown - callers launch this from coroutines with no
+		// catch, and the strict kotlinx parse rejects blobs the old lenient
+		// org.json parser would have coerced (single quotes, stringy numbers).
+		val prov = try {
+			Provisioning.parse(blob)
+		} catch (e: Exception) {
+			_state.update { it.copy(error = "Invalid provisioning blob: ${e.message?.take(160) ?: "unparseable"}") }
+			return@withContext
+		}
 		store.save(blob)
 		client = null
+		sttsClient = null
 		_state.update { it.copy(provisioned = true, error = null, deviceName = prov.device) }
 	}
 
@@ -288,10 +396,7 @@ class ChatRepository(
 			val r = client().send(team, text, picked, opId)
 			when {
 				!r.ok -> fail(r.error)
-				else -> {
-					setMessageStatus(team, echoId, null)
-					if (r.inlineBody != null) append(team, Message(false, r.inlineBody, System.currentTimeMillis()))
-				}
+				else -> setMessageStatus(team, echoId, null)
 			}
 		} catch (e: Exception) {
 			fail(e.message)
@@ -375,16 +480,17 @@ class ChatRepository(
 						// Broadcast notices thread under the SENDER: their session id is
 						// the pinned "notice:<from>" grammar, not a conversation.
 						val team = if (e.kind == "notice") {
-							e.from ?: e.sessionId.removePrefix(NOTICE_SESSION_PREFIX).takeIf { it.isNotEmpty() } ?: continue
+							e.from ?: e.session_id.removePrefix(NOTICE_SESSION_PREFIX).takeIf { it.isNotEmpty() } ?: continue
 						} else {
-							teamFromSession(e.sessionId) ?: e.from ?: continue
+							teamFromSession(e.session_id) ?: e.from ?: continue
 						}
 						val files = Attachments.decode(filesDir, mb.epoch, e.seq, e.files)
 						// status-only entries still land (e.g. a wake-failure error
 						// with no body would otherwise vanish).
-						if (e.body.isNotEmpty() || files.isNotEmpty() || e.status != null) {
+						val bodyText = e.body.orEmpty()
+						if (bodyText.isNotEmpty() || files.isNotEmpty() || e.status != null) {
 							val msg =
-								Message(false, e.body, e.at, files = files, status = e.status, title = e.title, summary = e.summary)
+								Message(false, bodyText, e.at, files = files, status = e.status, title = e.title, summary = e.summary)
 							appendInbound(team, msg)
 							bumpUnread(team)
 							burst.getOrPut(team) { mutableListOf() }.add(msg)
@@ -476,7 +582,8 @@ class ChatRepository(
 		persistLabels(labels)
 	}
 
-	/** Drop a peer from this device: its thread, unread, tab, and label. */
+	/** Drop a peer from this device: its thread, unread, tab, label, and any
+	 * cached TTS audio. */
 	fun forget(team: String) {
 		val next = _state.updateAndGet { s ->
 			s.copy(
@@ -488,6 +595,7 @@ class ChatRepository(
 		}
 		persistThreads(next.threads)
 		persistLabels(next.labels)
+		stts.purge(team)
 	}
 
 	fun setBiometricLock(enabled: Boolean) {
@@ -511,9 +619,11 @@ class ChatRepository(
 		pollJob?.cancel()
 		store.clear()
 		client = null
-		cursor = 0
-		epoch = 0
-		lastSeq = -1
+		sttsClient = null
+		stts.purgeAll()
+		cursor = 0L
+		epoch = 0L
+		lastSeq = -1L
 		_state.value = ChatState(provisioned = false)
 	}
 

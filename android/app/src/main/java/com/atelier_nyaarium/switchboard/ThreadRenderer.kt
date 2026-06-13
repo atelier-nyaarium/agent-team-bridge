@@ -46,6 +46,14 @@ class ThreadRenderer(context: Context) {
 	 * send when the user taps its retry badge. */
 	var onRetryMessage: ((Long) -> Unit)? = null
 
+	/** Set by the owner; called on the main thread with a message `at` when the
+	 * user taps an agent row's Play button. */
+	var onPlayMessage: ((Long) -> Unit)? = null
+
+	/** Whether agent rows render a Play button. The owner sets it before sync
+	 * (false for the demo thread and unprovisioned STTS). */
+	var playEnabled = false
+
 	private var ready = false
 	private val pending = mutableListOf<String>()
 	private var renderedCount = 0
@@ -86,6 +94,12 @@ class ThreadRenderer(context: Context) {
 				fun retryMessage(id: String) {
 					val msgId = id.toLongOrNull() ?: return
 					webView.post { onRetryMessage?.invoke(msgId) }
+				}
+
+				@JavascriptInterface
+				fun playMessage(at: String) {
+					val msgAt = at.toLongOrNull() ?: return
+					webView.post { onPlayMessage?.invoke(msgAt) }
 				}
 			},
 			"Android",
@@ -171,6 +185,13 @@ class ThreadRenderer(context: Context) {
 		eval("window.thread.setTheme($dark)")
 	}
 
+	/** Swap the Play glyph on the row whose message is playing (null = none).
+	 * Safe from any thread: playback state changes arrive from the player's
+	 * daemon thread and evaluateJavascript must run on main. */
+	fun setPlaying(at: Long?) {
+		webView.post { eval("window.thread.setPlaying(${at ?: "null"})") }
+	}
+
 	fun destroy() {
 		webView.destroy()
 	}
@@ -192,6 +213,7 @@ class ThreadRenderer(context: Context) {
 				.put("from", if (m.fromMe) "you" else "")
 				.put("at", m.at)
 				.put("body", m.text)
+			if (playEnabled && !m.fromMe) obj.put("canPlay", true)
 			m.status?.let { obj.put("status", it) }
 			if (m.files.isNotEmpty()) {
 				val files = JSONArray()

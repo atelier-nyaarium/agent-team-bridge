@@ -8,7 +8,16 @@ import { z } from "zod";
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 const SetEffortLevelSchema = z.object({
-	level: z.enum(EFFORT_LEVELS).describe(`Effort level to set on the local Claude Code session.`),
+	level: z.enum(EFFORT_LEVELS).describe(
+		`
+Effort level to set on the local Claude Code session.
+  low:    Quick, straightforward implementation with minimal overhead
+  medium: Balanced approach with standard implementation and testing
+  high:   Comprehensive implementation with extensive testing and documentation
+  xhigh:  Deeper reasoning than high, just below maximum
+  max:    Maximum capability with deepest reasoning
+`.trim(),
+	),
 });
 type SetEffortLevelArgs = z.infer<typeof SetEffortLevelSchema>;
 
@@ -24,13 +33,6 @@ const description = `
 Set the effort level on the local Claude Code session by sending "/effort <level>" to tmux pane 0.
 
 Requires the session to be idle: the "/effort" line only takes effect when the REPL prompt is accepting input. Before calling this tool, schedule a one-shot CronCreate for 2 minutes later with prompt "Resume.", then stop the current turn so the session goes idle.
-
-Levels:
-  low:    Quick, straightforward implementation with minimal overhead
-  medium: Balanced approach with standard implementation and testing
-  high:   Comprehensive implementation with extensive testing and documentation
-  xhigh:  Deeper reasoning than high, just below maximum
-  max:    Maximum capability with deepest reasoning
 `.trim();
 
 export function registerSetEffortLevel(mcpServer: McpServer): void {

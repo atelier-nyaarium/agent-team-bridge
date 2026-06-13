@@ -1,0 +1,8 @@
+{
+	"type": "phone_relay",
+	"v": 1,
+	"device": "pixel-test",
+	"conversationId": "11111111-2222-3333-4444-555555555555",
+	"opId": "op-poll-1",
+	"op": { "kind": "poll", "cursor": 41, "epoch": 1073741824, "holdMs": 25000 }
+}

@@ -1,0 +1,20 @@
+{
+	"seq": 48,
+	"at": 1781300980000,
+	"kind": "reply",
+	"session_id": "conv:11111111-2222-3333-4444-555555555555:switchboard",
+	"from": "switchboard",
+	"body": "see attached",
+	"status": "clarification",
+	"question": "Which environment?",
+	"reason": "Ambiguous target",
+	"files": [
+		{
+			"filename": "log.txt",
+			"mime": "text/plain",
+			"size": 4,
+			"descriptiveKey": "log",
+			"base64": "dGVzdA=="
+		}
+	]
+}

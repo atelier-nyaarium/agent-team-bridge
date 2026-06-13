@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.proto.ChannelFile
 import android.util.Base64
 import java.io.File
 
@@ -46,14 +47,16 @@ object Attachments {
 	 * renderer DTOs. Metadata-only entries (no base64) get a null src so the UI
 	 * shows a plain chip with no thumbnail.
 	 */
-	fun decode(filesDir: File, epoch: Int, seq: Int, raw: List<RawFile>): List<MessageFile> {
-		if (raw.isEmpty()) return emptyList()
+	fun decode(filesDir: File, epoch: Long, seq: Long, raw: List<ChannelFile>?): List<MessageFile> {
+		if (raw.isNullOrEmpty()) return emptyList()
 		val bucket = "$epoch-$seq"
 		val dir = File(root(filesDir), bucket)
 		val used = mutableSetOf<String>()
 		return raw.mapNotNull { f ->
 			val name = uniqueName(safeName(f.filename), used)
-			if (f.base64 == null) return@mapNotNull MessageFile(name, f.mime, null)
+			// Empty base64 is metadata-only too: decoding it would materialize a
+			// 0-byte file and hand the WebView a broken image src.
+			if (f.base64.isNullOrEmpty()) return@mapNotNull MessageFile(name, f.mime, null)
 			val bytes = runCatching { Base64.decode(f.base64, Base64.DEFAULT) }.getOrNull() ?: return@mapNotNull null
 			runCatching {
 				dir.mkdirs()

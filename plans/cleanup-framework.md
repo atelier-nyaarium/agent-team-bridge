@@ -17,15 +17,29 @@ has zero unit tests while the TS side has 160+.
 Smallest-blast-radius first lap: extract the pure codec and stand up the test
 classpath. The codec is independently testable before any transport seam exists.
 
-- `MailboxCodec`: a plain JVM class (org.json only, NO android.* imports). Owns:
-  wire entry decode (the hand-parse currently inline in `PhoneClient.poll`,
-  PhoneClient.kt:213-238 - it produces `MailboxEntry` carrying base64 STRINGS in
-  `RawFile.base64`, so the codec never touches `android.util.Base64`),
-  `Message <-> JSONObject` persistence both directions (currently hand-rolled
-  twice in `persistThreads` / `loadPersistedThreads`), and the session grammar
-  as `teamForEntry(entry, selfName)` (collapsing `teamFromSession` + the
+- `MailboxCodec`: a plain JVM class (NO android.* imports; org.json for the
+  persistence round-trip). Owns: wire entry decode (the hand-parse currently
+  inline in `PhoneClient.poll`, PhoneClient.kt:213-238 - it produces
+  `MailboxEntry` carrying base64 STRINGS in `RawFile.base64`, so the codec
+  never touches `android.util.Base64`), `Message <-> JSONObject` persistence
+  both directions (currently hand-rolled twice in `persistThreads` /
+  `loadPersistedThreads`), and the session grammar as
+  `teamForEntry(entry, selfName)` (collapsing `teamFromSession` + the
   notice-prefix branch; `NOTICE_SESSION_PREFIX` moves here as the single Kotlin
   owner, still doc-mirrored to phone-protocol.ts).
+  - End-state shared with plans/schema-first.md (pinned in BOTH plans): wire
+    entry decode ultimately belongs to schema-first's GENERATED
+    kotlinx-serialization types (the codec or PhoneClient calls
+    `Json.decodeFromString`); MailboxCodec keeps the org.json persistence
+    round-trip and the grammar verbs. CONSTANTS: once schema-first P1 lands,
+    the generated proto/ constants own NOTICE_SESSION_PREFIX (and
+    CONV_SESSION_PREFIX) - teamForEntry imports the generated constant and
+    the doc-mirror comment dies; the hand-owned mirrored constant above
+    applies only while 1a runs first. If 1a lands first, extract the hand
+    decode as-is and swap it for the generated serializers when schema-first
+    Phase 1 lands; if schema-first lands first, build the codec around the
+    generated types from day one. The real-org.json-test-jar mandate below
+    applies to the PERSISTENCE tests either way.
 - Base64 boundary: ENCODE stays in the transport (PhoneClient.kt:186). The
   base64-to-bytes decode + file write is `Attachments.decode` (Attachments.kt:57,
   imports android.util.Base64), invoked from the reducer at ChatRepository.kt:379.
@@ -79,7 +93,7 @@ The framework extraction proper. Android reducer becomes testable end to end.
   stay for now; they are outgoing-attachment I/O used before the transport call.
   If reducer tests ever need them faked, lift behind a small seam then - not
   speculatively now.
-- Composition root stays `Repo.get(context)` (MainActivity.kt:80-88), the SINGLE
+- Composition root stays `Repo.get(context)` (MainActivity.kt:83-91), the SINGLE
   wiring point shared by BOTH composition paths - MainActivity and
   `SwitchboardService.onCreate` (SwitchboardService.kt:46) both obtain the
   singleton through it. Production passes `::PhoneClient` as the factory; tests
@@ -145,7 +159,8 @@ Reachable now via FakeTransport. Cross-runtime phase: arbiter AND app change.
   immediately). `appendIfLive` stays separate.
 - Ride-along: resolve `parseNoticeSession` (phone-protocol.ts) - currently a
   dead export with no TS caller. Either the arbiter-side mis-thread work gains a
-  caller, or delete it (Phase 5 codegen supersedes the mirror anyway).
+  caller, or delete it (schema-first Phase 1 codegen supersedes the mirror
+  anyway).
 - Verification: new TS tests (routes.test.ts, phone-handler.test.ts,
   device-mailbox.test.ts) + Android regression tests; full `bun run test` +
   `testDebugUnitTest`. Deploy: full cross-runtime ritual (arbiter rebuild + app
@@ -211,26 +226,14 @@ Mostly filing; one real extraction. Arbiter-side: rebuild on deploy.
   destructure sites; arbiter smoke (health, send round trip, notify broadcast,
   DM holder pin/transfer/disconnect-clear).
 
-## Phase 5: build-enforced cross-runtime contract (stretch)
+## Phase 5: moved to plans/schema-first.md
 
-Kill the comment-enforced mirror class that produced today's epoch-style drift
-risk. Only sensible after Phase 1a gives Kotlin a single grammar owner.
-
-- Generate `Protocol.kt` (a small bun script reading phone-protocol.ts) with the
-  constants that have actually drifted-by-comment or are duplicated literals:
-  `NOTICE_SESSION_PREFIX` (the drift this kills) and the phone op kinds. Do NOT
-  emit the ~20 mailbox/team optString field-name keys - they live in one file,
-  have never drifted, and constant-ifying them is churn. `PHONE_PROTOCOL_VERSION`
-  optional (the phone never sends `v`).
-- `Protocol.kt` is generated-and-checked-in, not generated-at-build, so the APK
-  workflow needs no toolchain change. The drift check (regenerate + git diff
-  --exit-code) needs a TS CI workflow that does not exist yet - land a minimal
-  `ci.yml` (bun lint + test + the drift check) in this phase; Android tests are
-  already gated by Phase 1a's step in `_build-android.yml`.
-- `MailboxCodec` consumes the generated constants; the hand-written mirror
-  comments become pointers to the generator.
-- Verification: intentionally skew one constant locally and confirm the check
-  fails; then full both-side test suites.
+The constants-only codegen stub that lived here was absorbed and expanded by
+plans/schema-first.md (full zod -> Kotlin type codegen, drift-checked CI,
+golden fixtures, STTS descriptors, cross-repo contract sync). Interplay for
+this plan: Phase 1a's MailboxCodec consumes schema-first's generated types if
+they exist, or swaps its hand types for them when schema-first Phase 1 lands;
+whichever plan runs first wires the Android junit test classpath.
 
 ### Notes for implementers
 
@@ -239,7 +242,7 @@ risk. Only sensible after Phase 1a gives Kotlin a single grammar owner.
   constructor that 3 files around; 2 needs FakeTransport).
 - Deploy shape per phase: 1a/1b/3 are app-plugin only (no arbiter rebuild);
   2 and 4 change the arbiter (full ritual: version bumps, branch+automerge PR,
-  arbiter rebuild); 5 ships CI + a generated file only.
+  arbiter rebuild).
 - Each phase that moves or adds files updates CLAUDE.md Key Paths in the same
   commit (Phase 1a/1b add the codec/transport seam lines; Phase 4 replaces the
   single routes.ts entry with the routes/ module list + ChannelHolder).
@@ -247,15 +250,19 @@ risk. Only sensible after Phase 1a gives Kotlin a single grammar owner.
   change (the 3.9.0 tolerance checks from the notify cycle are the bar). New
   apps must also tolerate old arbiters (the mis-thread phone guard exists for
   exactly this).
+- Overlap with plans/schema-first.md P4: this plan's Phase 2 (notify opId)
+  and Phase 4 (routes split moving humanNotify into routes/human.ts) edit
+  the same humanTools.ts/routes.ts sites schema-first renames (tiny ->
+  title). The changes are independent additive edits; whichever plan lands
+  second re-runs the blast-radius grep instead of trusting the other plan's
+  line numbers.
 - Emulator harness: `source ~/android-dev/env.sh`, AVD phone35,
   `wm size 720x1600` + `density 280`, reset after.
 - Known debt, out of scope here: the pending-job store is in-memory, so an
   arbiter restart drops persistent channel conversations and replies bounce
   with "No pending request" until the peer sends again (bit twice on
   2026-06-12). A durable conversation store is its own future plan.
-- Out of scope: archiving shipped plan docs (plans/android-*.md,
-  cycle-notify-human.md) - android-channel-app.md is still cross-referenced
-  from CLAUDE.md.
+- Shipped plan docs have been cleared out.
 - Already fixed, do NOT redo: mailbox epoch collision (random mint + drain
   guard, PR #29); capless respond_to_human reader; notice session grammar
   pinning; notify_human registration drift.

@@ -1,0 +1,13 @@
+# Mirrors evie-bot's npm cadence: daily checks with a 7-day cooldown, the
+# same maturity window the Phase 0 dependency sweep codifies. Keep the three
+# intertwined repos (switchboard, nyaaskills, evie-bot) drifting together.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    versioning-strategy: "increase"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "11:00"
+    cooldown:
+      default-days: 7

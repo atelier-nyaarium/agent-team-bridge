@@ -29,6 +29,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -45,6 +47,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScrollableTabRow
@@ -83,8 +86,23 @@ object Repo {
 	fun get(context: Context): ChatRepository =
 		instance ?: synchronized(this) {
 			val app = context.applicationContext
-			instance ?: ChatRepository(ProvisioningStore(app), app.filesDir, app.contentResolver).also { instance = it }
+			instance ?: ChatRepository(
+				ProvisioningStore(app),
+				app.filesDir,
+				app.contentResolver,
+				loadSttsCatalog(app),
+			).also { instance = it }
 		}
+
+	/** Parse the bundled STTS provider catalog once. A corrupt/missing asset
+	 * yields an empty catalog, which keeps Play dark rather than crashing. */
+	private fun loadSttsCatalog(app: Context): List<com.atelier_nyaarium.switchboard.proto.SttsProvider> =
+		runCatching {
+			val json = app.assets.open("stts-providers.json").bufferedReader().use { it.readText() }
+			kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+				.decodeFromString<com.atelier_nyaarium.switchboard.proto.SttsProviders>(json)
+				.providers
+		}.getOrDefault(emptyList())
 }
 
 // FragmentActivity (not ComponentActivity) so androidx.biometric can attach its prompt.
@@ -140,6 +158,21 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				?.mime?.takeIf { it.isNotEmpty() }
 			viewer = OpenAttachment(file, file.name, wireMime ?: mimeForFile(file), rel)
 		}
+	}
+	// In-thread Play: buttons render only when STTS is provisioned; taps speak
+	// the full tier, and the player's now-playing pushes glyph state back.
+	// Re-evaluated per recomposition (cheap cached null-check) so provisioning
+	// in-session lights the buttons for renderers built afterward; a thread
+	// already open gains them on its next (re)open rather than never.
+	rendererPool.playEnabled = repo.sttsReady()
+	rendererPool.onPlayTap = { team, at -> repo.playMessage(team, at, SttsPlayer.Tier.FULL) }
+	DisposableEffect(Unit) {
+		// Fires on the player's daemon thread; the pool's renderer map is
+		// main-owned, so hop through the composition scope (main-dispatched).
+		repo.stts.onPlayingChanged = { team, at, playing ->
+			scope.launch { rendererPool.setPlaying(team, if (playing) at else null) }
+		}
+		onDispose { repo.stts.onPlayingChanged = null }
 	}
 	val dark = isSystemInDarkTheme()
 	LaunchedEffect(dark) { rendererPool.setDark(dark) }
@@ -214,6 +247,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		showSettings ->
 			SettingsScreen(
 				state = state,
+				repo = repo,
 				onSetDeviceName = { scope.launch { repo.setDeviceName(it) } },
 				onToggleBiometric = { repo.setBiometricLock(it) },
 				onClear = {
@@ -903,6 +937,7 @@ fun ThreadScreen(
 @Composable
 fun SettingsScreen(
 	state: ChatState,
+	repo: ChatRepository,
 	onSetDeviceName: (String) -> Unit,
 	onToggleBiometric: (Boolean) -> Unit,
 	onClear: () -> Unit,
@@ -918,7 +953,9 @@ fun SettingsScreen(
 		},
 	) { pad ->
 		Column(
-			Modifier.padding(pad).padding(16.dp).fillMaxSize(),
+			// Scrollable: the settings list outgrew one screen once the voice
+			// playback section landed.
+			Modifier.padding(pad).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(16.dp),
 		) {
 			Text("Device name", style = MaterialTheme.typography.titleMedium)
@@ -944,6 +981,11 @@ fun SettingsScreen(
 			HorizontalDivider()
 			BatteryExemptionRow()
 
+			if (repo.sttsReady()) {
+				HorizontalDivider()
+				SttsVoiceSection(repo)
+			}
+
 			HorizontalDivider()
 			AppUpdateRow()
 
@@ -952,6 +994,89 @@ fun SettingsScreen(
 			Button(onClick = onClear) { Text("Clear & re-provision") }
 			Text("Removes the stored credential and chat history from this device.", style = MaterialTheme.typography.bodySmall)
 		}
+	}
+}
+
+/** Voice settings for message playback: provider picker, voice identifier,
+ * an audible sample preview, and a service liveness line. Values persist in
+ * prefs (not the credential blob) through the repository. */
+@Composable
+private fun SttsVoiceSection(repo: ChatRepository) {
+	val providers = remember { repo.sttsProviders() }
+	var providerId by remember { mutableStateOf(repo.sttsProviderId) }
+	val current = providers.firstOrNull { it.id == providerId }
+	var voice by remember(providerId) { mutableStateOf(repo.sttsVoiceFor(providerId)) }
+	var pickerOpen by remember { mutableStateOf(false) }
+	var healthy by remember { mutableStateOf<Boolean?>(null) }
+	var sampleError by remember { mutableStateOf<String?>(null) }
+	LaunchedEffect(Unit) { healthy = repo.sttsHealth() }
+	// Failed previews surface here instead of dead-ending in the log (snapshot
+	// state writes are thread-safe, so the player thread can set it directly).
+	DisposableEffect(Unit) {
+		repo.stts.onPlaybackError = { reason -> sampleError = reason }
+		onDispose { repo.stts.onPlaybackError = null }
+	}
+
+	Text("Voice playback", style = MaterialTheme.typography.titleMedium)
+	Text(
+		when (healthy) {
+			null -> "Checking speech service..."
+			true -> "Speech service online"
+			false -> "Speech service unreachable"
+		},
+		style = MaterialTheme.typography.bodySmall,
+	)
+	Row(verticalAlignment = Alignment.CenterVertically) {
+		OutlinedButton(onClick = { pickerOpen = true }) { Text(current?.label ?: providerId.ifEmpty { "Provider" }) }
+		OutlinedTextField(
+			value = voice,
+			onValueChange = {
+				voice = it
+				repo.setSttsVoiceFor(providerId, it)
+			},
+			label = { Text(current?.voiceHint?.let { "$it (blank = default)" } ?: "Voice (blank = default)") },
+			modifier = Modifier.weight(1f).padding(start = 8.dp),
+			singleLine = true,
+		)
+	}
+	current?.note?.let {
+		Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+	}
+	if (current?.voices?.isNotEmpty() == true) {
+		Text(
+			"Suggested: " + current.voices.joinToString(", ") { it.label ?: it.id },
+			style = MaterialTheme.typography.bodySmall,
+		)
+	}
+	Button(
+		enabled = healthy == true && current != null,
+		onClick = {
+			sampleError = null
+			repo.playSttsSample()
+		},
+	) { Text("Play a sample") }
+	sampleError?.let {
+		Text("Playback failed: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+	}
+
+	if (pickerOpen) {
+		AlertDialog(
+			onDismissRequest = { pickerOpen = false },
+			confirmButton = {},
+			title = { Text("Provider") },
+			text = {
+				Column {
+					for (p in providers) {
+						TextButton(onClick = {
+							providerId = p.id
+							repo.sttsProviderId = p.id
+							voice = repo.sttsVoiceFor(p.id)
+							pickerOpen = false
+						}) { Text(p.label) }
+					}
+				}
+			},
+		)
 	}
 }
 

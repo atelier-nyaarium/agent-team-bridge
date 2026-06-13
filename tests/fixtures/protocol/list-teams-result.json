@@ -1,0 +1,16 @@
+{
+	"teams": [
+		{
+			"team": "switchboard",
+			"status": "online",
+			"mode": "channel",
+			"kind": "devcontainer",
+			"queue_depth": 0
+		},
+		{
+			"team": "old-arbiter-team",
+			"status": "available",
+			"queue_depth": 2
+		}
+	]
+}

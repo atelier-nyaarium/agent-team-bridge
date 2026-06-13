@@ -1,5 +1,6 @@
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import {
+	composeConvSessionId,
 	type MailboxInput,
 	PHONE_PROTOCOL_VERSION,
 	type PhoneOp,
@@ -247,7 +248,7 @@ export function createPhoneHandler({
 					}
 				}
 
-				const expectedSession = `conv:${conversationId}:${op.to}`;
+				const expectedSession = composeConvSessionId(conversationId, op.to);
 				const sendPromise = routes.send(FAKE_REQ, {
 					from: device,
 					fromConversationId: conversationId,

@@ -1,5 +1,19 @@
+import type { z } from "zod";
+import type {
+	ChannelFileSchema,
+	ConnectionModeSchema,
+	EffortLevelSchema,
+	RequestTypeSchema,
+	ResponseStatusSchema,
+	TeamInfoSchema,
+	TeamKindSchema,
+} from "./schemas.js";
+
 ////////////////////////////////
 //  Bridge Types
+//
+//  Wire shapes derive from the zod schemas in shared/schemas.ts (the single
+//  truth). Local-only types (payloads, config) stay hand-written here.
 
 /**
  * Discord attachment metadata propagated from evie-bot through the bridge.
@@ -8,29 +22,13 @@
  * plugin should materialize the file under /tmp/evie-files/<msgId>/. Absence
  * means the entry is metadata-only and the agent should reach the file via
  * `evie_fetch_message_files` instead.
- *
- * Mirror: evie-bot's `ForwardDmFile` in `app/features/bridge/BridgeServer.ts`.
- * Wire validation lives in `ChannelFileSchema` (`shared/schemas.ts`).
  */
-export interface ChannelFile {
-	filename: string;
-	mime: string;
-	size: number;
-	descriptiveKey: string;
-	base64?: string;
-}
+export type ChannelFile = z.infer<typeof ChannelFileSchema>;
 
-export type ConnectionMode = "cli" | "channel";
-export type EffortLevel = "simple" | "standard" | "complex";
-export type RequestType = "feature" | "bugfix" | "question";
-export type ResponseStatus =
-	| "completed"
-	| "clarification"
-	| "deferred"
-	| "needs_human"
-	| "error"
-	| "timeout"
-	| "running";
+export type ConnectionMode = z.infer<typeof ConnectionModeSchema>;
+export type EffortLevel = z.infer<typeof EffortLevelSchema>;
+export type RequestType = z.infer<typeof RequestTypeSchema>;
+export type ResponseStatus = z.infer<typeof ResponseStatusSchema>;
 
 ////////////////////////////////
 //  Note: CLI replies (crosstalk_reply) carry a status. Channel replies
@@ -107,15 +105,9 @@ export interface RegisterMessage {
 
 /** Devcontainer-backed teams are wakeable projects; loose teams are ad-hoc
  * sessions (host windows, one-off peers) that end when their process does. */
-export type TeamKind = "devcontainer" | "loose";
+export type TeamKind = z.infer<typeof TeamKindSchema>;
 
-export interface TeamInfo {
-	team: string;
-	status: "online" | "available";
-	mode?: ConnectionMode;
-	kind: TeamKind;
-	queue_depth: number;
-}
+export type TeamInfo = z.infer<typeof TeamInfoSchema>;
 
 export interface CatalogMessage {
 	type: "catalog";
