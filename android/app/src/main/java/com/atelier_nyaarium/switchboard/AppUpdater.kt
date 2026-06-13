@@ -16,7 +16,7 @@ import okhttp3.Request
  * No browser, no auth, no storage permissions.
  */
 object AppUpdater {
-	private const val ASSET_NAME = "app-debug.apk"
+	private const val ASSET_NAME = "app-release.apk"
 	const val RELEASE_URL =
 		"https://github.com/atelier-nyaarium/switchboard/releases/download/android-app/$ASSET_NAME"
 

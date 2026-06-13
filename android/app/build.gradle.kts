@@ -10,10 +10,20 @@ android {
 	compileSdk = 35
 
 	signingConfigs {
-		// CI supplies one stable keystore via env so every release shares a signature.
-		// Without this each build's random debug key blocks install-over-update on a
-		// phone ("App not installed"). Local builds with no env keep the default debug key.
+		// CI supplies one stable keystore via env so every build shares a signature.
+		// Without it each build's random key blocks install-over-update on a phone
+		// ("App not installed"). Local builds with no env keep the default debug key
+		// (debug type); a local release assembled without the env stays unsigned.
 		getByName("debug") {
+			val ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
+			if (!ksPath.isNullOrBlank()) {
+				storeFile = file(ksPath)
+				storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+				keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+				keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+			}
+		}
+		create("release") {
 			val ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
 			if (!ksPath.isNullOrBlank()) {
 				storeFile = file(ksPath)
@@ -40,6 +50,11 @@ android {
 		release {
 			isMinifyEnabled = false
 			proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+			// Sign with the stable release key only when CI provides it; a local
+			// release assembled without the env stays unsigned rather than failing.
+			if (!System.getenv("ANDROID_KEYSTORE_PATH").isNullOrBlank()) {
+				signingConfig = signingConfigs.getByName("release")
+			}
 		}
 	}
 
