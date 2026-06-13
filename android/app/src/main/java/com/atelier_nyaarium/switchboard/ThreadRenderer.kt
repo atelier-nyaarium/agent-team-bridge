@@ -51,7 +51,7 @@ class ThreadRenderer(context: Context) {
 	var onPlayMessage: ((Long) -> Unit)? = null
 
 	/** Whether agent rows render a Play button. The owner sets it before sync
-	 * (false for the demo thread and unprovisioned STTS). */
+	 * (false when STTS is unprovisioned). */
 	var playEnabled = false
 
 	private var ready = false

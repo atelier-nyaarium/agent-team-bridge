@@ -252,23 +252,60 @@
 		return el.scrollHeight - el.scrollTop - el.clientHeight < 160;
 	}
 
+	// Track whether the reader is parked at the bottom, so a viewport resize (the
+	// soft keyboard opening or closing shrinks/grows the WebView) can re-pin to the
+	// last message. `stuck` reflects reader INTENT, so only genuine user scrolls
+	// update it: the `pinning` window suppresses the recompute while our own
+	// programmatic scroll-to-bottom and the IME-resize reflow it rides settle.
+	// Without that guard an estimated-metric scroll event mid-animation could latch
+	// `stuck` false and silently defeat the re-pin.
+	let stuck = true;
+	let pinning = false;
+	let pinTimer = 0;
+
 	function scrollToBottom() {
-		// content-visibility:auto makes scrollHeight an estimate while off-screen
-		// rows are skipped, so a raw scrollTop = scrollHeight can land short of the
-		// last message. Anchor on the actual last row instead.
+		pinning = true;
+		stuck = true;
 		const last = container.lastElementChild;
 		if (last) {
+			// content-visibility:auto makes scrollHeight an estimate while off-screen
+			// rows are skipped, so a raw scrollTop = scrollHeight can land short of the
+			// last message. Anchor on the actual last row instead.
 			last.scrollIntoView(false);
 		} else {
 			document.scrollingElement.scrollTop = document.scrollingElement.scrollHeight;
 		}
+		clearTimeout(pinTimer);
+		// Release the guard once the programmatic scroll and any IME-resize reflow
+		// have settled, so genuine user scrolls resume driving `stuck`.
+		pinTimer = setTimeout(() => {
+			pinning = false;
+		}, 200);
 	}
+
+	window.addEventListener(
+		"scroll",
+		() => {
+			if (!pinning) stuck = nearBottom();
+		},
+		{ passive: true },
+	);
+
+	function repin() {
+		if (stuck) requestAnimationFrame(scrollToBottom);
+	}
+	window.addEventListener("resize", repin);
+	if (window.visualViewport) window.visualViewport.addEventListener("resize", repin);
 
 	////////////////////////////////
 	//  Public API
 
 	function appendMessages(messages) {
 		const stick = nearBottom();
+		// A brand-new user row means the local user just sent: always jump to the
+		// bottom for it, even if they had scrolled up. Agent rows still respect the
+		// reader's position and only follow when already near the bottom.
+		let sentByUser = false;
 		for (const m of messages) {
 			const row = buildRow(m);
 			const existing =
@@ -284,10 +321,11 @@
 				existing.replaceWith(row);
 			} else {
 				container.appendChild(row);
+				if (m.role === "user") sentByUser = true;
 			}
 			observeMermaid(row);
 		}
-		if (stick) scrollToBottom();
+		if (stick || sentByUser) scrollToBottom();
 	}
 
 	function setMessages(messages) {

@@ -76,6 +76,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -145,10 +146,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// renderer survives Sessions round-trips and tab switches. Pruned to open tabs;
 	// destroyed with the Activity.
 	val rendererPool = remember { ThreadRendererPool(context.applicationContext) }
-	rendererPool.onRetry = { team, id ->
-		// The demo fixture's error row must never reach the real repository.
-		if (!(BuildConfig.DEBUG && team == DEMO_TEAM)) scope.launch { repo.retrySend(team, id) }
-	}
+	rendererPool.onRetry = { team, id -> scope.launch { repo.retrySend(team, id) } }
 	// Attachment taps open the in-app viewer; the path is re-validated against the
 	// attachments root before any file is touched. The wire mime (what the agent
 	// declared) is preferred over extension guessing.
@@ -261,18 +259,13 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onBack = { showSettings = false },
 			)
 		openTeam != null -> {
-			// The demo session renders through the same Thread pipeline but is fed an
-			// in-memory fixture and is read-only, so it never reaches the persisted store.
-			// Gated on DEBUG so a real peer named "demo" in a release build shows its own
-			// thread, not the fixture.
-			val isDemo = BuildConfig.DEBUG && openTeam == DEMO_TEAM
 			// Devcontainer names are the project identity; only loose peers take labels.
 			val session = state.sessions.firstOrNull { it.name == openTeam }
 			val kind = session?.kind
 			// Rename only when positively known loose; an unknown kind (team gone
 			// from the list) stays un-renameable rather than defaulting open.
 			val presence = when {
-				isDemo || session == null -> null
+				session == null -> null
 				session.status == "online" -> if (state.working(session.name)) "working..." else "live"
 				session.status == "available" -> if (state.working(session.name)) "waking..." else "available"
 				else -> "ended"
@@ -283,10 +276,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				presence = presence,
 				tabs = state.openTabs,
 				tabLabel = { state.label(it) },
-				messages = if (isDemo) demoMessages() else state.threads[openTeam].orEmpty(),
+				messages = state.threads[openTeam].orEmpty(),
 				error = state.error,
 				rendererPool = rendererPool,
-				canRename = !isDemo && kind == "loose",
+				canRename = kind == "loose",
 				onSwitch = { openTeam = it },
 				onCloseTab = { t ->
 					// Move off the closing tab before dropping it from openTabs, so the
@@ -296,11 +289,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					repo.closeTab(t)
 				},
 				onSessions = { openTeam = null },
-				onSend = { text, uris -> if (!isDemo) scope.launch { repo.send(openTeam!!, text, uris) } },
-				onRename = { name -> if (!isDemo) repo.setLabel(openTeam!!, name) },
+				onSend = { text, uris -> scope.launch { repo.send(openTeam!!, text, uris) } },
+				onRename = { name -> repo.setLabel(openTeam!!, name) },
 				onForget = {
-					val t = openTeam!!
-					if (!isDemo) repo.forget(t) else repo.closeTab(t)
+					repo.forget(openTeam!!)
 					openTeam = null
 				},
 			)
@@ -308,7 +300,6 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		else ->
 			SessionsScreen(
 				state = state,
-				showDemo = BuildConfig.DEBUG,
 				onRefresh = { scope.launch { repo.refreshTeams() } },
 				onSettings = { showSettings = true },
 				onOpen = { team ->
@@ -413,7 +404,6 @@ private fun sessionOrder(state: ChatState): Comparator<Team> =
 @Composable
 fun SessionsScreen(
 	state: ChatState,
-	showDemo: Boolean,
 	onRefresh: () -> Unit,
 	onSettings: () -> Unit,
 	onOpen: (String) -> Unit,
@@ -491,7 +481,7 @@ fun SessionsScreen(
 					)
 				}
 			}
-			if (state.sessions.isEmpty() && !showDemo) {
+			if (state.sessions.isEmpty()) {
 				if (!state.connected) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
 				Text(
 					state.error ?: state.status.ifEmpty { "Connecting..." },
@@ -507,8 +497,8 @@ fun SessionsScreen(
 				contentPadding = PaddingValues(12.dp),
 				verticalArrangement = Arrangement.spacedBy(8.dp),
 			) {
-				// Keys are namespaced so a team literally named "hdr-projects" or
-				// "demo" cannot collide with the header/demo items.
+				// Keys are namespaced so a team literally named "hdr-projects"
+				// cannot collide with the header items.
 				if (projects.isNotEmpty()) {
 					item(key = "hdr-projects") { SectionLabel("Projects") }
 					items(projects, key = { "team:${it.name}" }) { team ->
@@ -530,9 +520,6 @@ fun SessionsScreen(
 							onLongPress = { actionTeam = team },
 						)
 					}
-				}
-				if (showDemo) {
-					item(key = "card-demo") { DemoCard(onClick = { onOpen(DEMO_TEAM) }) }
 				}
 			}
 		}
@@ -712,27 +699,6 @@ fun ConfirmDialog(title: String, body: String, confirmText: String, onConfirm: (
 	)
 }
 
-@Composable
-fun DemoCard(onClick: () -> Unit) {
-	Card(
-		onClick = onClick,
-		modifier = Modifier.fillMaxWidth(),
-		colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-	) {
-		Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-			Column(Modifier.weight(1f)) {
-				Text("Render demo", style = MaterialTheme.typography.titleMedium)
-				Text(
-					"markdown matrix, debug build only",
-					style = MaterialTheme.typography.bodySmall,
-					color = MaterialTheme.colorScheme.onSecondaryContainer,
-				)
-			}
-			Badge(containerColor = MaterialTheme.colorScheme.secondary) { Text("demo") }
-		}
-	}
-}
-
 /** Compact relative time for the session cards: now, 5m, 3h, 2d, else a date. */
 private fun relativeTime(at: Long): String {
 	val delta = System.currentTimeMillis() - at
@@ -771,6 +737,14 @@ fun ThreadScreen(
 	var attachments by remember { mutableStateOf<List<Uri>>(emptyList()) }
 	val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
 		if (uris.isNotEmpty()) attachments = attachments + uris
+	}
+
+	// Hold the screen awake while a thread is open (reading or replying); released
+	// when this screen leaves the composition.
+	val view = LocalView.current
+	DisposableEffect(view) {
+		view.keepScreenOn = true
+		onDispose { view.keepScreenOn = false }
 	}
 
 	if (showRename) {
@@ -914,23 +888,26 @@ fun ThreadScreen(
 					}
 				}
 			}
-			Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-				TextButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("Attach") }
+			Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
 				OutlinedTextField(
 					value = draft,
 					onValueChange = { draft = it },
 					label = { Text("Message") },
 					modifier = Modifier.weight(1f),
 				)
-				Button(
-					enabled = draft.isNotBlank() || attachments.isNotEmpty(),
-					onClick = {
-						onSend(draft, attachments)
-						draft = ""
-						attachments = emptyList()
-					},
-					modifier = Modifier.padding(start = 8.dp),
-				) { Text("Send") }
+				// Attach stacks above Send in a narrow right column, handing the text
+				// field the width the inline Attach button used to occupy.
+				Column(Modifier.padding(start = 8.dp), horizontalAlignment = Alignment.End) {
+					TextButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("Attach") }
+					Button(
+						enabled = draft.isNotBlank() || attachments.isNotEmpty(),
+						onClick = {
+							onSend(draft, attachments)
+							draft = ""
+							attachments = emptyList()
+						},
+					) { Text("Send") }
+				}
 			}
 		}
 	}

@@ -29,15 +29,14 @@ class ThreadRendererPool(private val context: Context) {
 	 * Play button is tapped. */
 	var onPlayTap: ((String, Long) -> Unit)? = null
 
-	/** Whether agent rows render Play buttons; the demo thread overrides this
-	 * per renderer (see get). Set before threads first sync. */
+	/** Whether agent rows render Play buttons. Set before threads first sync. */
 	var playEnabled = false
 
 	fun get(team: String): ThreadRenderer =
 		renderers.getOrPut(team) {
 			ThreadRenderer(context).also {
 				it.setDark(dark)
-				it.playEnabled = playEnabled && team != DEMO_TEAM
+				it.playEnabled = playEnabled
 				it.onOpenAttachment = { rel -> onAttachmentTap?.invoke(rel) ?: openAttachment(rel) }
 				it.onRetryMessage = { id -> onRetry?.invoke(team, id) }
 				it.onPlayMessage = { at -> onPlayTap?.invoke(team, at) }
