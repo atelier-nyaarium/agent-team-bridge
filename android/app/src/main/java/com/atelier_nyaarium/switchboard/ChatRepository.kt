@@ -823,7 +823,9 @@ class ChatRepository(
 		// source of truth for the broadcast-notice session-id grammar.
 		const val NOTICE_SESSION_PREFIX = "notice:"
 		// Auto-TTS: how long the notification waits for preload before firing
-		// anyway. Synthesis keeps running past this and still warms the cache.
-		const val PRELOAD_CAP_MS = 15_000L
+		// anyway. Sized above the provider's synthesis latency (~14-20s observed
+		// for xAI on a multi-sentence message) so the cache is warm when the
+		// notification lands; synthesis keeps running past this regardless.
+		const val PRELOAD_CAP_MS = 30_000L
 	}
 }
