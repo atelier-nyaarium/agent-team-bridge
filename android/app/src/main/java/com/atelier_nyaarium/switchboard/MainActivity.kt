@@ -42,10 +42,13 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -997,9 +1000,11 @@ fun SettingsScreen(
 	}
 }
 
-/** Voice settings for message playback: provider picker, voice identifier,
- * an audible sample preview, and a service liveness line. Values persist in
- * prefs (not the credential blob) through the repository. */
+/** Voice settings for message playback: provider picker, a voice dropdown that
+ * lists the selected provider's curated voices (still typeable for voices not
+ * in the catalog), an audible sample preview, and a service liveness line.
+ * Values persist in prefs (not the credential blob) through the repository. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SttsVoiceSection(repo: ChatRepository) {
 	val providers = remember { repo.sttsProviders() }
@@ -1007,6 +1012,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 	val current = providers.firstOrNull { it.id == providerId }
 	var voice by remember(providerId) { mutableStateOf(repo.sttsVoiceFor(providerId)) }
 	var pickerOpen by remember { mutableStateOf(false) }
+	var voiceMenuOpen by remember { mutableStateOf(false) }
 	var healthy by remember { mutableStateOf<Boolean?>(null) }
 	var sampleError by remember { mutableStateOf<String?>(null) }
 	LaunchedEffect(Unit) { healthy = repo.sttsHealth() }
@@ -1028,25 +1034,51 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 	)
 	Row(verticalAlignment = Alignment.CenterVertically) {
 		OutlinedButton(onClick = { pickerOpen = true }) { Text(current?.label ?: providerId.ifEmpty { "Provider" }) }
-		OutlinedTextField(
-			value = voice,
-			onValueChange = {
-				voice = it
-				repo.setSttsVoiceFor(providerId, it)
-			},
-			label = { Text(current?.voiceHint?.let { "$it (blank = default)" } ?: "Voice (blank = default)") },
+		ExposedDropdownMenuBox(
+			expanded = voiceMenuOpen,
+			onExpandedChange = { voiceMenuOpen = it },
 			modifier = Modifier.weight(1f).padding(start = 8.dp),
-			singleLine = true,
-		)
+		) {
+			OutlinedTextField(
+				value = voice,
+				onValueChange = {
+					voice = it
+					repo.setSttsVoiceFor(providerId, it)
+				},
+				label = { Text(current?.voiceHint?.let { "$it (blank = default)" } ?: "Voice (blank = default)") },
+				trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = voiceMenuOpen) },
+				singleLine = true,
+				modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryEditable),
+			)
+			// Curated voices for the picked provider, plus a Default entry that
+			// clears the field so synthesis uses the provider's default voice.
+			// The field stays editable: ELEVENLABS/UBERDUCK ship no curated voices
+			// and the catalog list is non-exhaustive, so a custom id can be typed.
+			ExposedDropdownMenu(expanded = voiceMenuOpen, onDismissRequest = { voiceMenuOpen = false }) {
+				DropdownMenuItem(
+					text = { Text("Default voice") },
+					onClick = {
+						voice = ""
+						repo.setSttsVoiceFor(providerId, "")
+						voiceMenuOpen = false
+					},
+				)
+				for (v in current?.voices.orEmpty()) {
+					val itemLabel = if (v.label != null && v.label != v.id) "${v.label} (${v.id})" else v.id
+					DropdownMenuItem(
+						text = { Text(itemLabel) },
+						onClick = {
+							voice = v.id
+							repo.setSttsVoiceFor(providerId, v.id)
+							voiceMenuOpen = false
+						},
+					)
+				}
+			}
+		}
 	}
 	current?.note?.let {
 		Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-	}
-	if (current?.voices?.isNotEmpty() == true) {
-		Text(
-			"Suggested: " + current.voices.joinToString(", ") { it.label ?: it.id },
-			style = MaterialTheme.typography.bodySmall,
-		)
 	}
 	Button(
 		enabled = healthy == true && current != null,
