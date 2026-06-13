@@ -1000,6 +1000,10 @@ fun SettingsScreen(
 	}
 }
 
+// Cap the rendered voice menu: some providers ship hundreds of voices, and the
+// field's text filters the rest into view.
+private const val MAX_VOICE_MENU_ITEMS = 60
+
 /** Voice settings for message playback: provider picker, a voice dropdown that
  * lists the selected provider's curated voices (still typeable for voices not
  * in the catalog), an audible sample preview, and a service liveness line.
@@ -1044,16 +1048,25 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 				onValueChange = {
 					voice = it
 					repo.setSttsVoiceFor(providerId, it)
+					// Surface the filtered matches as the user types, not just on the
+					// trailing-icon tap.
+					voiceMenuOpen = true
 				},
 				label = { Text(current?.voiceHint?.let { "$it (blank = default)" } ?: "Voice (blank = default)") },
 				trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = voiceMenuOpen) },
 				singleLine = true,
 				modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryEditable),
 			)
-			// Curated voices for the picked provider, plus a Default entry that
-			// clears the field so synthesis uses the provider's default voice.
-			// The field stays editable: ELEVENLABS/UBERDUCK ship no curated voices
-			// and the catalog list is non-exhaustive, so a custom id can be typed.
+			// The catalog ships the provider's full voice list (hundreds for some),
+			// so the field text filters the menu by id or label. A Default entry
+			// clears to the provider default. The field stays editable: ElevenLabs
+			// and Uberduck ship no voices, and a custom id can always be typed.
+			val query = voice.trim()
+			val matches = current?.voices.orEmpty().filter {
+				query.isEmpty() || it.id.contains(query, ignoreCase = true) ||
+					(it.label?.contains(query, ignoreCase = true) == true)
+			}
+			val shown = matches.take(MAX_VOICE_MENU_ITEMS)
 			ExposedDropdownMenu(expanded = voiceMenuOpen, onDismissRequest = { voiceMenuOpen = false }) {
 				DropdownMenuItem(
 					text = { Text("Default voice") },
@@ -1063,15 +1076,37 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 						voiceMenuOpen = false
 					},
 				)
-				for (v in current?.voices.orEmpty()) {
-					val itemLabel = if (v.label != null && v.label != v.id) "${v.label} (${v.id})" else v.id
+				for (v in shown) {
 					DropdownMenuItem(
-						text = { Text(itemLabel) },
+						text = {
+							Column {
+								Text(v.label ?: v.id)
+								if (v.label != null && v.label != v.id) {
+									Text(
+										v.id,
+										style = MaterialTheme.typography.bodySmall,
+										color = MaterialTheme.colorScheme.onSurfaceVariant,
+									)
+								}
+							}
+						},
 						onClick = {
 							voice = v.id
 							repo.setSttsVoiceFor(providerId, v.id)
 							voiceMenuOpen = false
 						},
+					)
+				}
+				if (matches.size > shown.size) {
+					DropdownMenuItem(
+						enabled = false,
+						text = {
+							Text(
+								"${matches.size - shown.size} more, type to narrow",
+								style = MaterialTheme.typography.bodySmall,
+							)
+						},
+						onClick = {},
 					)
 				}
 			}

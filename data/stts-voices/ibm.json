@@ -1,0 +1,614 @@
+[
+    {
+      "name": "en-US_LisaExpressive",
+      "language": "en-US",
+      "gender": "female",
+      "description": "Lisa: American English female voice. Dnn E2E technology with conversational and expressive capabilities.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_LisaExpressive"
+    },
+    {
+      "name": "en-AU_JackExpressive",
+      "language": "en-AU",
+      "gender": "male",
+      "description": "Jack: Australian English male voice. Dnn E2E technology with conversational and expressive capabilities.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-AU_JackExpressive"
+    },
+    {
+      "name": "en-AU_HeidiExpressive",
+      "language": "en-AU",
+      "gender": "female",
+      "description": "Heidi: Australian English female voice. Dnn E2E technology with conversational and expressive capabilities.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-AU_HeidiExpressive"
+    },
+    {
+      "name": "en-US_AllisonVoice",
+      "language": "en-US",
+      "gender": "female",
+      "description": "Allison: American English female voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": true
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_AllisonVoice"
+    },
+    {
+      "name": "en-US_MichaelVoice",
+      "language": "en-US",
+      "gender": "male",
+      "description": "Michael: American English male voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": true
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_MichaelVoice"
+    },
+    {
+      "name": "en-US_EmmaExpressive",
+      "language": "en-US",
+      "gender": "female",
+      "description": "Emma: American English female voice. Dnn E2E technology with conversational and expressive capabilities.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_EmmaExpressive"
+    },
+    {
+      "name": "en-GB_KateVoice",
+      "language": "en-GB",
+      "gender": "female",
+      "description": "Kate: British English female voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-GB_KateVoice"
+    },
+    {
+      "name": "en-US_MichaelExpressive",
+      "language": "en-US",
+      "gender": "male",
+      "description": "Michael: American English male voice. Dnn E2E technology with conversational and expressive capabilities.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_MichaelExpressive"
+    },
+    {
+      "name": "ko-KR_JinV3Voice",
+      "language": "ko-KR",
+      "gender": "female",
+      "description": "Jin: Korean female voice. Dnn technology. ",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/ko-KR_JinV3Voice"
+    },
+    {
+      "name": "en-US_AllisonExpressive",
+      "language": "en-US",
+      "gender": "female",
+      "description": "Allison: American English female voice. Dnn E2E technology with conversational and expressive capabilities.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_AllisonExpressive"
+    },
+    {
+      "name": "de-DE_DieterVoice",
+      "language": "de-DE",
+      "gender": "male",
+      "description": "Dieter: Standard German (Standarddeutsch) male voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/de-DE_DieterVoice"
+    },
+    {
+      "name": "fr-FR_ReneeVoice",
+      "language": "fr-FR",
+      "gender": "female",
+      "description": "Renee: French (français) female voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/fr-FR_ReneeVoice"
+    },
+    {
+      "name": "de-DE_BirgitVoice",
+      "language": "de-DE",
+      "gender": "female",
+      "description": "Birgit: Standard German (Standarddeutsch) female voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/de-DE_BirgitVoice"
+    },
+    {
+      "name": "en-US_OliviaV3Voice",
+      "language": "en-US",
+      "gender": "female",
+      "description": "Olivia: American English female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_OliviaV3Voice"
+    },
+    {
+      "name": "en-US_KevinV3Voice",
+      "language": "en-US",
+      "gender": "male",
+      "description": "Kevin: American English male voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_KevinV3Voice"
+    },
+    {
+      "name": "en-US_EmilyV3Voice",
+      "language": "en-US",
+      "gender": "female",
+      "description": "Emily: American English female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_EmilyV3Voice"
+    },
+    {
+      "name": "en-US_LisaV2Voice",
+      "language": "en-US",
+      "gender": "female",
+      "description": "Lisa: American English female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_LisaV2Voice"
+    },
+    {
+      "name": "de-DE_DieterV2Voice",
+      "language": "de-DE",
+      "gender": "male",
+      "description": "Dieter: Standard German (Standarddeutsch) male voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/de-DE_DieterV2Voice"
+    },
+    {
+      "name": "it-IT_FrancescaVoice",
+      "language": "it-IT",
+      "gender": "female",
+      "description": "Francesca: Italian (italiano) female voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/it-IT_FrancescaVoice"
+    },
+    {
+      "name": "es-ES_LauraVoice",
+      "language": "es-ES",
+      "gender": "female",
+      "description": "Laura: Castilian Spanish (español castellano) female voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/es-ES_LauraVoice"
+    },
+    {
+      "name": "es-ES_EnriqueVoice",
+      "language": "es-ES",
+      "gender": "male",
+      "description": "Enrique: Castilian Spanish (español castellano) male voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/es-ES_EnriqueVoice"
+    },
+    {
+      "name": "pt-BR_IsabelaV3Voice",
+      "language": "pt-BR",
+      "gender": "female",
+      "description": "Isabela: Brazilian Portuguese (português brasileiro) female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/pt-BR_IsabelaV3Voice"
+    },
+    {
+      "name": "it-IT_FrancescaV2Voice",
+      "language": "it-IT",
+      "gender": "female",
+      "description": "Francesca: Italian (italiano) female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/it-IT_FrancescaV2Voice"
+    },
+    {
+      "name": "en-US_LisaV3Voice",
+      "language": "en-US",
+      "gender": "female",
+      "description": "Lisa: American English female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_LisaV3Voice"
+    },
+    {
+      "name": "de-DE_ErikaV3Voice",
+      "language": "de-DE",
+      "gender": "female",
+      "description": "Erika: Standard German (Standarddeutsch) female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/de-DE_ErikaV3Voice"
+    },
+    {
+      "name": "en-US_MichaelV3Voice",
+      "language": "en-US",
+      "gender": "male",
+      "description": "Michael: American English male voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_MichaelV3Voice"
+    },
+    {
+      "name": "de-DE_BirgitV2Voice",
+      "language": "de-DE",
+      "gender": "female",
+      "description": "Birgit: Standard German (Standarddeutsch) female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/de-DE_BirgitV2Voice"
+    },
+    {
+      "name": "nl-NL_MerelV3Voice",
+      "language": "nl-NL",
+      "gender": "female",
+      "description": "Merel: Dutch female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/nl-NL_MerelV3Voice"
+    },
+    {
+      "name": "en-GB_CharlotteV3Voice",
+      "language": "en-GB",
+      "gender": "female",
+      "description": "Charlotte: British English female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-GB_CharlotteV3Voice"
+    },
+    {
+      "name": "de-DE_DieterV3Voice",
+      "language": "de-DE",
+      "gender": "male",
+      "description": "Dieter: Standard German (Standarddeutsch) male voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/de-DE_DieterV3Voice"
+    },
+    {
+      "name": "es-US_SofiaV3Voice",
+      "language": "es-US",
+      "gender": "female",
+      "description": "Sofia: North American Spanish (español norteamericano) female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/es-US_SofiaV3Voice"
+    },
+    {
+      "name": "en-US_MichaelV2Voice",
+      "language": "en-US",
+      "gender": "male",
+      "description": "Michael: American English male voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_MichaelV2Voice"
+    },
+    {
+      "name": "en-GB_JamesV3Voice",
+      "language": "en-GB",
+      "gender": "male",
+      "description": "James: British English male voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-GB_JamesV3Voice"
+    },
+    {
+      "name": "de-DE_BirgitV3Voice",
+      "language": "de-DE",
+      "gender": "female",
+      "description": "Birgit: Standard German (Standarddeutsch) female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/de-DE_BirgitV3Voice"
+    },
+    {
+      "name": "fr-CA_LouiseV3Voice",
+      "language": "fr-CA",
+      "gender": "female",
+      "description": "Louise: French Canadian female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/fr-CA_LouiseV3Voice"
+    },
+    {
+      "name": "ja-JP_EmiVoice",
+      "language": "ja-JP",
+      "gender": "female",
+      "description": "Emi: Japanese (日本語) female voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/ja-JP_EmiVoice"
+    },
+    {
+      "name": "es-LA_SofiaV3Voice",
+      "language": "es-LA",
+      "gender": "female",
+      "description": "Sofia: Latin American Spanish (español latinoamericano) female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/es-LA_SofiaV3Voice"
+    },
+    {
+      "name": "en-US_HenryV3Voice",
+      "language": "en-US",
+      "gender": "male",
+      "description": "Henry: American English male voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_HenryV3Voice"
+    },
+    {
+      "name": "it-IT_FrancescaV3Voice",
+      "language": "it-IT",
+      "gender": "female",
+      "description": "Francesca: Italian (italiano) female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/it-IT_FrancescaV3Voice"
+    },
+    {
+      "name": "en-US_AllisonV2Voice",
+      "language": "en-US",
+      "gender": "female",
+      "description": "Allison: American English female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_AllisonV2Voice"
+    },
+    {
+      "name": "en-GB_KateV3Voice",
+      "language": "en-GB",
+      "gender": "female",
+      "description": "Kate: British English female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-GB_KateV3Voice"
+    },
+    {
+      "name": "es-LA_SofiaVoice",
+      "language": "es-LA",
+      "gender": "female",
+      "description": "Sofia: Latin American Spanish (español latinoamericano) female voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/es-LA_SofiaVoice"
+    },
+    {
+      "name": "en-US_AllisonV3Voice",
+      "language": "en-US",
+      "gender": "female",
+      "description": "Allison: American English female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_AllisonV3Voice"
+    },
+    {
+      "name": "es-ES_LauraV3Voice",
+      "language": "es-ES",
+      "gender": "female",
+      "description": "Laura: Castilian Spanish (español castellano) female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/es-ES_LauraV3Voice"
+    },
+    {
+      "name": "en-US_LisaVoice",
+      "language": "en-US",
+      "gender": "female",
+      "description": "Lisa: American English female voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": true
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/en-US_LisaVoice"
+    },
+    {
+      "name": "ja-JP_EmiV3Voice",
+      "language": "ja-JP",
+      "gender": "female",
+      "description": "Emi: Japanese (日本語) female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/ja-JP_EmiV3Voice"
+    },
+    {
+      "name": "es-US_SofiaVoice",
+      "language": "es-US",
+      "gender": "female",
+      "description": "Sofia: North American Spanish (español norteamericano) female voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/es-US_SofiaVoice"
+    },
+    {
+      "name": "fr-FR_NicolasV3Voice",
+      "language": "fr-FR",
+      "gender": "male",
+      "description": "Nicolas: French (français) male voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/fr-FR_NicolasV3Voice"
+    },
+    {
+      "name": "pt-BR_IsabelaVoice",
+      "language": "pt-BR",
+      "gender": "female",
+      "description": "Isabela: Brazilian Portuguese (português brasileiro) female voice.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/pt-BR_IsabelaVoice"
+    },
+    {
+      "name": "fr-FR_ReneeV3Voice",
+      "language": "fr-FR",
+      "gender": "female",
+      "description": "Renee: French (français) female voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/fr-FR_ReneeV3Voice"
+    },
+    {
+      "name": "es-ES_EnriqueV3Voice",
+      "language": "es-ES",
+      "gender": "male",
+      "description": "Enrique: Castilian Spanish (español castellano) male voice. Dnn technology.",
+      "customizable": true,
+      "supported_features": {
+        "custom_pronunciation": true,
+        "voice_transformation": false
+      },
+      "url": "https://api.us-south.text-to-speech.watson.cloud.ibm.com/instances/87d0230a-270e-48b9-ab16-d478d5ec69e5/v1/voices/es-ES_EnriqueV3Voice"
+    }
+  ]

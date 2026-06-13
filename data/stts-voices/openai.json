@@ -1,0 +1,2396 @@
+[
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "en-US",
+    "LanguageName": "English ",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "en-US",
+    "LanguageName": "English ",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "en-US",
+    "LanguageName": "English ",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "en-US",
+    "LanguageName": "English ",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "en-US",
+    "LanguageName": "English ",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "en-US",
+    "LanguageName": "English ",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "af-ZA",
+    "LanguageName": "Afrikaans",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "af-ZA",
+    "LanguageName": "Afrikaans",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "af-ZA",
+    "LanguageName": "Afrikaans",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "af-ZA",
+    "LanguageName": "Afrikaans",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "af-ZA",
+    "LanguageName": "Afrikaans",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "af-ZA",
+    "LanguageName": "Afrikaans",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "ar",
+    "LanguageName": "Arabic",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "ar",
+    "LanguageName": "Arabic",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "ar",
+    "LanguageName": "Arabic",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "ar",
+    "LanguageName": "Arabic",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "ar",
+    "LanguageName": "Arabic",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "ar",
+    "LanguageName": "Arabic",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "hy",
+    "LanguageName": "Armenian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "hy",
+    "LanguageName": "Armenian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "hy",
+    "LanguageName": "Armenian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "hy",
+    "LanguageName": "Armenian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "hy",
+    "LanguageName": "Armenian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "hy",
+    "LanguageName": "Armenian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "az",
+    "LanguageName": "Azerbaijani",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "az",
+    "LanguageName": "Azerbaijani",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "az",
+    "LanguageName": "Azerbaijani",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "az",
+    "LanguageName": "Azerbaijani",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "az",
+    "LanguageName": "Azerbaijani",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "az",
+    "LanguageName": "Azerbaijani",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "be",
+    "LanguageName": "Belarusian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "be",
+    "LanguageName": "Belarusian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "be",
+    "LanguageName": "Belarusian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "be",
+    "LanguageName": "Belarusian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "be",
+    "LanguageName": "Belarusian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "be",
+    "LanguageName": "Belarusian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "bs",
+    "LanguageName": "Bosnian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "bs",
+    "LanguageName": "Bosnian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "bs",
+    "LanguageName": "Bosnian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "bs",
+    "LanguageName": "Bosnian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "bs",
+    "LanguageName": "Bosnian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "bs",
+    "LanguageName": "Bosnian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "bg",
+    "LanguageName": "Bulgarian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "bg",
+    "LanguageName": "Bulgarian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "bg",
+    "LanguageName": "Bulgarian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "bg",
+    "LanguageName": "Bulgarian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "bg",
+    "LanguageName": "Bulgarian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "bg",
+    "LanguageName": "Bulgarian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "ca",
+    "LanguageName": "Catalan",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "ca",
+    "LanguageName": "Catalan",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "ca",
+    "LanguageName": "Catalan",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "ca",
+    "LanguageName": "Catalan",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "ca",
+    "LanguageName": "Catalan",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "ca",
+    "LanguageName": "Catalan",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "zh",
+    "LanguageName": "Chinese",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "zh",
+    "LanguageName": "Chinese",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "zh",
+    "LanguageName": "Chinese",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "zh",
+    "LanguageName": "Chinese",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "zh",
+    "LanguageName": "Chinese",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "zh",
+    "LanguageName": "Chinese",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "hr",
+    "LanguageName": "Croatian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "hr",
+    "LanguageName": "Croatian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "hr",
+    "LanguageName": "Croatian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "hr",
+    "LanguageName": "Croatian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "hr",
+    "LanguageName": "Croatian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "hr",
+    "LanguageName": "Croatian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "cs",
+    "LanguageName": "Czech",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "cs",
+    "LanguageName": "Czech",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "cs",
+    "LanguageName": "Czech",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "cs",
+    "LanguageName": "Czech",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "cs",
+    "LanguageName": "Czech",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "cs",
+    "LanguageName": "Czech",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "da",
+    "LanguageName": "Danish",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "da",
+    "LanguageName": "Danish",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "da",
+    "LanguageName": "Danish",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "da",
+    "LanguageName": "Danish",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "da",
+    "LanguageName": "Danish",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "da",
+    "LanguageName": "Danish",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "nl",
+    "LanguageName": "Dutch",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "nl",
+    "LanguageName": "Dutch",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "nl",
+    "LanguageName": "Dutch",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "nl",
+    "LanguageName": "Dutch",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "nl",
+    "LanguageName": "Dutch",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "nl",
+    "LanguageName": "Dutch",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "et",
+    "LanguageName": "Estonian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "et",
+    "LanguageName": "Estonian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "et",
+    "LanguageName": "Estonian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "et",
+    "LanguageName": "Estonian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "et",
+    "LanguageName": "Estonian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "et",
+    "LanguageName": "Estonian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "fi",
+    "LanguageName": "Finnish",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "fi",
+    "LanguageName": "Finnish",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "fi",
+    "LanguageName": "Finnish",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "fi",
+    "LanguageName": "Finnish",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "fi",
+    "LanguageName": "Finnish",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "fi",
+    "LanguageName": "Finnish",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "fr",
+    "LanguageName": "French",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "fr",
+    "LanguageName": "French",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "fr",
+    "LanguageName": "French",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "fr",
+    "LanguageName": "French",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "fr",
+    "LanguageName": "French",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "fr",
+    "LanguageName": "French",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "gl",
+    "LanguageName": "Galician",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "gl",
+    "LanguageName": "Galician",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "gl",
+    "LanguageName": "Galician",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "gl",
+    "LanguageName": "Galician",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "gl",
+    "LanguageName": "Galician",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "gl",
+    "LanguageName": "Galician",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "de",
+    "LanguageName": "German",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "de",
+    "LanguageName": "German",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "de",
+    "LanguageName": "German",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "de",
+    "LanguageName": "German",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "de",
+    "LanguageName": "German",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "de",
+    "LanguageName": "German",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "el",
+    "LanguageName": "Greek",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "el",
+    "LanguageName": "Greek",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "el",
+    "LanguageName": "Greek",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "el",
+    "LanguageName": "Greek",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "el",
+    "LanguageName": "Greek",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "el",
+    "LanguageName": "Greek",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "he",
+    "LanguageName": "Hebrew",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "he",
+    "LanguageName": "Hebrew",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "he",
+    "LanguageName": "Hebrew",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "he",
+    "LanguageName": "Hebrew",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "he",
+    "LanguageName": "Hebrew",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "he",
+    "LanguageName": "Hebrew",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "hi",
+    "LanguageName": "Hindi",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "hi",
+    "LanguageName": "Hindi",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "hi",
+    "LanguageName": "Hindi",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "hi",
+    "LanguageName": "Hindi",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "hi",
+    "LanguageName": "Hindi",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "hi",
+    "LanguageName": "Hindi",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "hu",
+    "LanguageName": "Hungarian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "hu",
+    "LanguageName": "Hungarian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "hu",
+    "LanguageName": "Hungarian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "hu",
+    "LanguageName": "Hungarian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "hu",
+    "LanguageName": "Hungarian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "hu",
+    "LanguageName": "Hungarian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "is",
+    "LanguageName": "Icelandic",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "is",
+    "LanguageName": "Icelandic",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "is",
+    "LanguageName": "Icelandic",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "is",
+    "LanguageName": "Icelandic",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "is",
+    "LanguageName": "Icelandic",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "is",
+    "LanguageName": "Icelandic",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "id",
+    "LanguageName": "Indonesian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "id",
+    "LanguageName": "Indonesian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "id",
+    "LanguageName": "Indonesian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "id",
+    "LanguageName": "Indonesian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "id",
+    "LanguageName": "Indonesian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "id",
+    "LanguageName": "Indonesian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "it",
+    "LanguageName": "Italian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "it",
+    "LanguageName": "Italian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "it",
+    "LanguageName": "Italian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "it",
+    "LanguageName": "Italian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "it",
+    "LanguageName": "Italian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "it",
+    "LanguageName": "Italian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "ja",
+    "LanguageName": "Japanese",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "ja",
+    "LanguageName": "Japanese",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "ja",
+    "LanguageName": "Japanese",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "ja",
+    "LanguageName": "Japanese",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "ja",
+    "LanguageName": "Japanese",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "ja",
+    "LanguageName": "Japanese",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "kn",
+    "LanguageName": "Kannada",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "kn",
+    "LanguageName": "Kannada",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "kn",
+    "LanguageName": "Kannada",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "kn",
+    "LanguageName": "Kannada",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "kn",
+    "LanguageName": "Kannada",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "kn",
+    "LanguageName": "Kannada",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "kk",
+    "LanguageName": "Kazakh",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "kk",
+    "LanguageName": "Kazakh",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "kk",
+    "LanguageName": "Kazakh",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "kk",
+    "LanguageName": "Kazakh",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "kk",
+    "LanguageName": "Kazakh",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "kk",
+    "LanguageName": "Kazakh",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "ko",
+    "LanguageName": "Korean",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "ko",
+    "LanguageName": "Korean",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "ko",
+    "LanguageName": "Korean",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "ko",
+    "LanguageName": "Korean",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "ko",
+    "LanguageName": "Korean",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "ko",
+    "LanguageName": "Korean",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "lv",
+    "LanguageName": "Latvian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "lv",
+    "LanguageName": "Latvian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "lv",
+    "LanguageName": "Latvian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "lv",
+    "LanguageName": "Latvian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "lv",
+    "LanguageName": "Latvian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "lv",
+    "LanguageName": "Latvian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "lt",
+    "LanguageName": "Lithuanian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "lt",
+    "LanguageName": "Lithuanian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "lt",
+    "LanguageName": "Lithuanian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "lt",
+    "LanguageName": "Lithuanian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "lt",
+    "LanguageName": "Lithuanian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "lt",
+    "LanguageName": "Lithuanian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "mk",
+    "LanguageName": "Macedonian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "mk",
+    "LanguageName": "Macedonian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "mk",
+    "LanguageName": "Macedonian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "mk",
+    "LanguageName": "Macedonian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "mk",
+    "LanguageName": "Macedonian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "mk",
+    "LanguageName": "Macedonian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "ms",
+    "LanguageName": "Malay",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "ms",
+    "LanguageName": "Malay",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "ms",
+    "LanguageName": "Malay",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "ms",
+    "LanguageName": "Malay",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "ms",
+    "LanguageName": "Malay",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "ms",
+    "LanguageName": "Malay",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "mr",
+    "LanguageName": "Marathi",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "mr",
+    "LanguageName": "Marathi",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "mr",
+    "LanguageName": "Marathi",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "mr",
+    "LanguageName": "Marathi",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "mr",
+    "LanguageName": "Marathi",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "mr",
+    "LanguageName": "Marathi",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "mi",
+    "LanguageName": "Maori",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "mi",
+    "LanguageName": "Maori",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "mi",
+    "LanguageName": "Maori",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "mi",
+    "LanguageName": "Maori",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "mi",
+    "LanguageName": "Maori",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "mi",
+    "LanguageName": "Maori",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "ne",
+    "LanguageName": "Nepali",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "ne",
+    "LanguageName": "Nepali",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "ne",
+    "LanguageName": "Nepali",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "ne",
+    "LanguageName": "Nepali",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "ne",
+    "LanguageName": "Nepali",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "ne",
+    "LanguageName": "Nepali",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "no",
+    "LanguageName": "Norwegian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "no",
+    "LanguageName": "Norwegian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "no",
+    "LanguageName": "Norwegian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "no",
+    "LanguageName": "Norwegian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "no",
+    "LanguageName": "Norwegian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "no",
+    "LanguageName": "Norwegian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "fa",
+    "LanguageName": "Persian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "fa",
+    "LanguageName": "Persian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "fa",
+    "LanguageName": "Persian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "fa",
+    "LanguageName": "Persian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "fa",
+    "LanguageName": "Persian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "fa",
+    "LanguageName": "Persian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "pl",
+    "LanguageName": "Polish",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "pl",
+    "LanguageName": "Polish",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "pl",
+    "LanguageName": "Polish",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "pl",
+    "LanguageName": "Polish",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "pl",
+    "LanguageName": "Polish",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "pl",
+    "LanguageName": "Polish",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "pt",
+    "LanguageName": "Portuguese",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "pt",
+    "LanguageName": "Portuguese",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "pt",
+    "LanguageName": "Portuguese",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "pt",
+    "LanguageName": "Portuguese",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "pt",
+    "LanguageName": "Portuguese",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "pt",
+    "LanguageName": "Portuguese",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "ro",
+    "LanguageName": "Romanian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "ro",
+    "LanguageName": "Romanian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "ro",
+    "LanguageName": "Romanian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "ro",
+    "LanguageName": "Romanian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "ro",
+    "LanguageName": "Romanian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "ro",
+    "LanguageName": "Romanian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "ru",
+    "LanguageName": "Russian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "ru",
+    "LanguageName": "Russian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "ru",
+    "LanguageName": "Russian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "ru",
+    "LanguageName": "Russian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "ru",
+    "LanguageName": "Russian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "ru",
+    "LanguageName": "Russian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "sr",
+    "LanguageName": "Serbian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "sr",
+    "LanguageName": "Serbian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "sr",
+    "LanguageName": "Serbian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "sr",
+    "LanguageName": "Serbian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "sr",
+    "LanguageName": "Serbian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "sr",
+    "LanguageName": "Serbian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "sk",
+    "LanguageName": "Slovak",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "sk",
+    "LanguageName": "Slovak",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "sk",
+    "LanguageName": "Slovak",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "sk",
+    "LanguageName": "Slovak",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "sk",
+    "LanguageName": "Slovak",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "sk",
+    "LanguageName": "Slovak",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "sl",
+    "LanguageName": "Slovenian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "sl",
+    "LanguageName": "Slovenian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "sl",
+    "LanguageName": "Slovenian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "sl",
+    "LanguageName": "Slovenian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "sl",
+    "LanguageName": "Slovenian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "sl",
+    "LanguageName": "Slovenian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "es",
+    "LanguageName": "Spanish",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "es",
+    "LanguageName": "Spanish",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "es",
+    "LanguageName": "Spanish",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "es",
+    "LanguageName": "Spanish",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "es",
+    "LanguageName": "Spanish",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "es",
+    "LanguageName": "Spanish",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "sw",
+    "LanguageName": "Swahili",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "sw",
+    "LanguageName": "Swahili",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "sw",
+    "LanguageName": "Swahili",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "sw",
+    "LanguageName": "Swahili",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "sw",
+    "LanguageName": "Swahili",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "sw",
+    "LanguageName": "Swahili",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "sv",
+    "LanguageName": "Swedish",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "sv",
+    "LanguageName": "Swedish",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "sv",
+    "LanguageName": "Swedish",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "sv",
+    "LanguageName": "Swedish",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "sv",
+    "LanguageName": "Swedish",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "sv",
+    "LanguageName": "Swedish",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "tl",
+    "LanguageName": "Tagalog",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "tl",
+    "LanguageName": "Tagalog",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "tl",
+    "LanguageName": "Tagalog",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "tl",
+    "LanguageName": "Tagalog",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "tl",
+    "LanguageName": "Tagalog",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "tl",
+    "LanguageName": "Tagalog",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "ta",
+    "LanguageName": "Tamil",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "ta",
+    "LanguageName": "Tamil",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "ta",
+    "LanguageName": "Tamil",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "ta",
+    "LanguageName": "Tamil",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "ta",
+    "LanguageName": "Tamil",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "ta",
+    "LanguageName": "Tamil",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "th",
+    "LanguageName": "Thai",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "th",
+    "LanguageName": "Thai",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "th",
+    "LanguageName": "Thai",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "th",
+    "LanguageName": "Thai",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "th",
+    "LanguageName": "Thai",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "th",
+    "LanguageName": "Thai",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "tr",
+    "LanguageName": "Turkish",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "tr",
+    "LanguageName": "Turkish",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "tr",
+    "LanguageName": "Turkish",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "tr",
+    "LanguageName": "Turkish",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "tr",
+    "LanguageName": "Turkish",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "tr",
+    "LanguageName": "Turkish",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "uk",
+    "LanguageName": "Ukrainian",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "uk",
+    "LanguageName": "Ukrainian",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "uk",
+    "LanguageName": "Ukrainian",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "uk",
+    "LanguageName": "Ukrainian",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "uk",
+    "LanguageName": "Ukrainian",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "uk",
+    "LanguageName": "Ukrainian",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "ur",
+    "LanguageName": "Urdu",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "ur",
+    "LanguageName": "Urdu",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "ur",
+    "LanguageName": "Urdu",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "ur",
+    "LanguageName": "Urdu",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "ur",
+    "LanguageName": "Urdu",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "ur",
+    "LanguageName": "Urdu",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "vi",
+    "LanguageName": "Vietnamese",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "vi",
+    "LanguageName": "Vietnamese",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "vi",
+    "LanguageName": "Vietnamese",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "vi",
+    "LanguageName": "Vietnamese",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "vi",
+    "LanguageName": "Vietnamese",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "vi",
+    "LanguageName": "Vietnamese",
+    "Name": "Shimmer"
+  },
+  {
+    "Gender": "Male",
+    "Id": "alloy",
+    "LanguageCode": "cy",
+    "LanguageName": "Welsh",
+    "Name": "Alloy"
+  },
+  {
+    "Gender": "Male",
+    "Id": "echo",
+    "LanguageCode": "cy",
+    "LanguageName": "Welsh",
+    "Name": "Echo"
+  },
+  {
+    "Gender": "Male",
+    "Id": "fable",
+    "LanguageCode": "cy",
+    "LanguageName": "Welsh",
+    "Name": "Fable"
+  },
+  {
+    "Gender": "Male",
+    "Id": "onyx",
+    "LanguageCode": "cy",
+    "LanguageName": "Welsh",
+    "Name": "Onyx"
+  },
+  {
+    "Gender": "Female",
+    "Id": "nova",
+    "LanguageCode": "cy",
+    "LanguageName": "Welsh",
+    "Name": "Nova"
+  },
+  {
+    "Gender": "Female",
+    "Id": "shimmer",
+    "LanguageCode": "cy",
+    "LanguageName": "Welsh",
+    "Name": "Shimmer"
+  }
+]

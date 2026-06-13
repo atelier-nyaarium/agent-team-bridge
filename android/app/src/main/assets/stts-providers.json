@@ -6,12 +6,184 @@
 			"path": "Amazon",
 			"hasSample": true,
 			"container": "mp3",
-			"request": { "text": "$text", "engine": "neural", "modelId": "$voice", "language": "en-US" },
-			"defaults": { "voice": "Joanna" },
+			"request": {
+				"text": "$text",
+				"engine": "neural",
+				"modelId": "$voice",
+				"language": "en-US"
+			},
+			"defaults": {
+				"voice": "Joanna"
+			},
 			"voices": [
-				{ "id": "Joanna", "label": "Joanna (US)" },
-				{ "id": "Matthew", "label": "Matthew (US)" },
-				{ "id": "Amy", "label": "Amy (UK)" }
+				{
+					"id": "Ivy",
+					"label": "Ivy (en-US, Female)"
+				},
+				{
+					"id": "Joanna",
+					"label": "Joanna (en-US, Female)"
+				},
+				{
+					"id": "Joey",
+					"label": "Joey (en-US, Male)"
+				},
+				{
+					"id": "Justin",
+					"label": "Justin (en-US, Male)"
+				},
+				{
+					"id": "Kendra",
+					"label": "Kendra (en-US, Female)"
+				},
+				{
+					"id": "Kevin",
+					"label": "Kevin (en-US, Male)"
+				},
+				{
+					"id": "Kimberly",
+					"label": "Kimberly (en-US, Female)"
+				},
+				{
+					"id": "Matthew",
+					"label": "Matthew (en-US, Male)"
+				},
+				{
+					"id": "Salli",
+					"label": "Salli (en-US, Female)"
+				},
+				{
+					"id": "Olivia",
+					"label": "Olivia (en-AU, Female)"
+				},
+				{
+					"id": "Amy",
+					"label": "Amy (en-GB, Female)"
+				},
+				{
+					"id": "Arthur",
+					"label": "Arthur (en-GB, Male)"
+				},
+				{
+					"id": "Brian",
+					"label": "Brian (en-GB, Male)"
+				},
+				{
+					"id": "Emma",
+					"label": "Emma (en-GB, Female)"
+				},
+				{
+					"id": "Kajal",
+					"label": "Kajal (en-IN, Female)"
+				},
+				{
+					"id": "Aria",
+					"label": "Aria (en-NZ, Female)"
+				},
+				{
+					"id": "Ayanda",
+					"label": "Ayanda (en-ZA, Female)"
+				},
+				{
+					"id": "Hala",
+					"label": "Hala (ar-AE, Female)"
+				},
+				{
+					"id": "Arlet",
+					"label": "Arlet (ca-ES, Female)"
+				},
+				{
+					"id": "Zhiyu",
+					"label": "Zhiyu (cmn-CN, Female)"
+				},
+				{
+					"id": "Hannah",
+					"label": "Hannah (de-AT, Female)"
+				},
+				{
+					"id": "Daniel",
+					"label": "Daniel (de-DE, Male)"
+				},
+				{
+					"id": "Vicki",
+					"label": "Vicki (de-DE, Female)"
+				},
+				{
+					"id": "Lucia",
+					"label": "Lucia (es-ES, Female)"
+				},
+				{
+					"id": "Mia",
+					"label": "Mia (es-MX, Female)"
+				},
+				{
+					"id": "Lupe",
+					"label": "Lupe (es-US, Female)"
+				},
+				{
+					"id": "Pedro",
+					"label": "Pedro (es-US, Male)"
+				},
+				{
+					"id": "Suvi",
+					"label": "Suvi (fi-FI, Female)"
+				},
+				{
+					"id": "Gabrielle",
+					"label": "Gabrielle (fr-CA, Female)"
+				},
+				{
+					"id": "Liam",
+					"label": "Liam (fr-CA, Male)"
+				},
+				{
+					"id": "Lea",
+					"label": "Léa (fr-FR, Female)"
+				},
+				{
+					"id": "Bianca",
+					"label": "Bianca (it-IT, Female)"
+				},
+				{
+					"id": "Takumi",
+					"label": "Takumi (ja-JP, Male)"
+				},
+				{
+					"id": "Seoyeon",
+					"label": "Seoyeon (ko-KR, Female)"
+				},
+				{
+					"id": "Ida",
+					"label": "Ida (nb-NO, Female)"
+				},
+				{
+					"id": "Laura",
+					"label": "Laura (nl-NL, Female)"
+				},
+				{
+					"id": "Ola",
+					"label": "Ola (pl-PL, Female)"
+				},
+				{
+					"id": "Camila",
+					"label": "Camila (pt-BR, Female)"
+				},
+				{
+					"id": "Vitoria",
+					"label": "Vitória (pt-BR, Female)"
+				},
+				{
+					"id": "Ines",
+					"label": "Inês (pt-PT, Female)"
+				},
+				{
+					"id": "Elin",
+					"label": "Elin (sv-SE, Female)"
+				},
+				{
+					"id": "Hiujin",
+					"label": "Hiujin (yue-CN, Female)"
+				}
 			],
 			"voiceHint": "Amazon Polly neural voice id"
 		},
@@ -21,12 +193,2356 @@
 			"path": "Azure",
 			"hasSample": true,
 			"container": "mp3",
-			"request": { "text": "$text", "region": "eastus", "modelId": "$voice", "language": "en-US" },
-			"defaults": { "voice": "en-US-JennyNeural" },
+			"request": {
+				"text": "$text",
+				"region": "eastus",
+				"modelId": "$voice",
+				"language": "en-US"
+			},
+			"defaults": {
+				"voice": "en-US-JennyNeural"
+			},
 			"voices": [
-				{ "id": "en-US-JennyNeural", "label": "Jenny (US)" },
-				{ "id": "en-US-GuyNeural", "label": "Guy (US)" },
-				{ "id": "en-GB-SoniaNeural", "label": "Sonia (UK)" }
+				{
+					"id": "en-US-Adam:DragonHDLatestNeural",
+					"label": "Adam Dragon HD Latest (en-US, Male, HD)"
+				},
+				{
+					"id": "en-US-AdamMultilingualNeural",
+					"label": "Adam Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-Alloy:DragonHDLatestNeural",
+					"label": "Alloy Dragon HD Latest (en-US, Male, HD)"
+				},
+				{
+					"id": "en-US-AlloyTurboMultilingualNeural",
+					"label": "Alloy Turbo Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-AmandaMultilingualNeural",
+					"label": "Amanda Multilingual (en-US, Female)"
+				},
+				{
+					"id": "en-US-AmberNeural",
+					"label": "Amber (en-US, Female)"
+				},
+				{
+					"id": "en-US-AnaNeural",
+					"label": "Ana (en-US, Female)"
+				},
+				{
+					"id": "en-US-Andrew:DragonHDLatestNeural",
+					"label": "Andrew Dragon HD Latest (en-US, Male, HD)"
+				},
+				{
+					"id": "en-US-Andrew2:DragonHDLatestNeural",
+					"label": "Andrew2 Dragon HD Latest (en-US, Male, HD)"
+				},
+				{
+					"id": "en-US-Andrew3:DragonHDLatestNeural",
+					"label": "Andrew3 Dragon HD Latest (en-US, Male, HD)"
+				},
+				{
+					"id": "en-US-AndrewMultilingualNeural",
+					"label": "Andrew Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-AndrewNeural",
+					"label": "Andrew (en-US, Male)"
+				},
+				{
+					"id": "en-US-Aria:DragonHDLatestNeural",
+					"label": "Aria Dragon HD Latest (en-US, Female, HD)"
+				},
+				{
+					"id": "en-US-AriaNeural",
+					"label": "Aria (en-US, Female)"
+				},
+				{
+					"id": "en-US-AshleyNeural",
+					"label": "Ashley (en-US, Female)"
+				},
+				{
+					"id": "en-US-Ava:DragonHDLatestNeural",
+					"label": "Ava Dragon HD Latest (en-US, Female, HD)"
+				},
+				{
+					"id": "en-US-Ava3:DragonHDLatestNeural",
+					"label": "Ava3 Dragon HD Latest (en-US, Female, HD)"
+				},
+				{
+					"id": "en-US-AvaMultilingualNeural",
+					"label": "Ava Multilingual (en-US, Female)"
+				},
+				{
+					"id": "en-US-AvaNeural",
+					"label": "Ava (en-US, Female)"
+				},
+				{
+					"id": "en-US-BrandonMultilingualNeural",
+					"label": "Brandon Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-BrandonNeural",
+					"label": "Brandon (en-US, Male)"
+				},
+				{
+					"id": "en-US-Brian:DragonHDLatestNeural",
+					"label": "Brian Dragon HD Latest (en-US, Male, HD)"
+				},
+				{
+					"id": "en-US-BrianMultilingualNeural",
+					"label": "Brian Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-BrianNeural",
+					"label": "Brian (en-US, Male)"
+				},
+				{
+					"id": "en-US-ChristopherMultilingualNeural",
+					"label": "Christopher Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-ChristopherNeural",
+					"label": "Christopher (en-US, Male)"
+				},
+				{
+					"id": "en-US-CoraMultilingualNeural",
+					"label": "Cora Multilingual (en-US, Female)"
+				},
+				{
+					"id": "en-US-CoraNeural",
+					"label": "Cora (en-US, Female)"
+				},
+				{
+					"id": "en-US-Davis:DragonHDLatestNeural",
+					"label": "Davis Dragon HD Latest (en-US, Male, HD)"
+				},
+				{
+					"id": "en-US-DavisMultilingualNeural",
+					"label": "Davis Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-DavisNeural",
+					"label": "Davis (en-US, Male)"
+				},
+				{
+					"id": "en-US-DerekMultilingualNeural",
+					"label": "Derek Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-DustinMultilingualNeural",
+					"label": "Dustin Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-EchoTurboMultilingualNeural",
+					"label": "Echo Turbo Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-ElizabethNeural",
+					"label": "Elizabeth (en-US, Female)"
+				},
+				{
+					"id": "en-US-Emma:DragonHDLatestNeural",
+					"label": "Emma Dragon HD Latest (en-US, Female, HD)"
+				},
+				{
+					"id": "en-US-Emma2:DragonHDLatestNeural",
+					"label": "Emma2 Dragon HD Latest (en-US, Female, HD)"
+				},
+				{
+					"id": "en-US-EmmaMultilingualNeural",
+					"label": "Emma Multilingual (en-US, Female)"
+				},
+				{
+					"id": "en-US-EmmaNeural",
+					"label": "Emma (en-US, Female)"
+				},
+				{
+					"id": "en-US-EricNeural",
+					"label": "Eric (en-US, Male)"
+				},
+				{
+					"id": "en-US-FableTurboMultilingualNeural",
+					"label": "Fable Turbo Multilingual (en-US, Neutral)"
+				},
+				{
+					"id": "en-US-GuyNeural",
+					"label": "Guy (en-US, Male)"
+				},
+				{
+					"id": "en-US-JacobNeural",
+					"label": "Jacob (en-US, Male)"
+				},
+				{
+					"id": "en-US-Jane:DragonHDLatestNeural",
+					"label": "Jane Dragon HD Latest (en-US, Female, HD)"
+				},
+				{
+					"id": "en-US-JaneNeural",
+					"label": "Jane (en-US, Female)"
+				},
+				{
+					"id": "en-US-JasonNeural",
+					"label": "Jason (en-US, Male)"
+				},
+				{
+					"id": "en-US-Jenny:DragonHDLatestNeural",
+					"label": "Jenny Dragon HD Latest (en-US, Female, HD)"
+				},
+				{
+					"id": "en-US-JennyMultilingualNeural",
+					"label": "Jenny Multilingual (en-US, Female)"
+				},
+				{
+					"id": "en-US-JennyNeural",
+					"label": "Jenny (en-US, Female)"
+				},
+				{
+					"id": "en-US-KaiNeural",
+					"label": "Kai (en-US, Male)"
+				},
+				{
+					"id": "en-US-LewisMultilingualNeural",
+					"label": "Lewis Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-LolaMultilingualNeural",
+					"label": "Lola Multilingual (en-US, Female)"
+				},
+				{
+					"id": "en-US-LunaNeural",
+					"label": "Luna (en-US, Female)"
+				},
+				{
+					"id": "en-US-MichelleNeural",
+					"label": "Michelle (en-US, Female)"
+				},
+				{
+					"id": "en-US-MonicaNeural",
+					"label": "Monica (en-US, Female)"
+				},
+				{
+					"id": "en-US-MultiTalker-Ava-Andrew:DragonHDLatestNeural",
+					"label": "Ava & Andrew MultiTalker Dragon HD Latest (en-US, Neutral, HD)"
+				},
+				{
+					"id": "en-US-MultiTalker-Ava-Steffan:DragonHDLatestNeural",
+					"label": "Ava & Steffan MultiTalker Dragon HD Latest (en-US, Neutral, HD)"
+				},
+				{
+					"id": "en-US-NancyMultilingualNeural",
+					"label": "Nancy Multilingual (en-US, Female)"
+				},
+				{
+					"id": "en-US-NancyNeural",
+					"label": "Nancy (en-US, Female)"
+				},
+				{
+					"id": "en-US-Nova:DragonHDLatestNeural",
+					"label": "Nova Dragon HD Latest (en-US, Female, HD)"
+				},
+				{
+					"id": "en-US-NovaTurboMultilingualNeural",
+					"label": "Nova Turbo Multilingual (en-US, Female)"
+				},
+				{
+					"id": "en-US-OnyxTurboMultilingualNeural",
+					"label": "Onyx Turbo Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-Phoebe:DragonHDLatestNeural",
+					"label": "Phoebe Dragon HD Latest (en-US, Female, HD)"
+				},
+				{
+					"id": "en-US-PhoebeMultilingualNeural",
+					"label": "Phoebe Multilingual (en-US, Female)"
+				},
+				{
+					"id": "en-US-RogerNeural",
+					"label": "Roger (en-US, Male)"
+				},
+				{
+					"id": "en-US-RyanMultilingualNeural",
+					"label": "Ryan Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-SamuelMultilingualNeural",
+					"label": "Samuel Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-SaraNeural",
+					"label": "Sara (en-US, Female)"
+				},
+				{
+					"id": "en-US-Serena:DragonHDLatestNeural",
+					"label": "Serena Dragon HD Latest (en-US, Female, HD)"
+				},
+				{
+					"id": "en-US-SerenaMultilingualNeural",
+					"label": "Serena Multilingual (en-US, Female)"
+				},
+				{
+					"id": "en-US-ShimmerTurboMultilingualNeural",
+					"label": "Shimmer Turbo Multilingual (en-US, Female)"
+				},
+				{
+					"id": "en-US-Steffan:DragonHDLatestNeural",
+					"label": "Steffan Dragon HD Latest (en-US, Male, HD)"
+				},
+				{
+					"id": "en-US-SteffanMultilingualNeural",
+					"label": "Steffan Multilingual (en-US, Male)"
+				},
+				{
+					"id": "en-US-SteffanNeural",
+					"label": "Steffan (en-US, Male)"
+				},
+				{
+					"id": "en-US-TonyNeural",
+					"label": "Tony (en-US, Male)"
+				},
+				{
+					"id": "en-AU-AnnetteNeural",
+					"label": "Annette (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-CarlyNeural",
+					"label": "Carly (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-DarrenNeural",
+					"label": "Darren (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-DuncanNeural",
+					"label": "Duncan (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-ElsieNeural",
+					"label": "Elsie (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-FreyaNeural",
+					"label": "Freya (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-JoanneNeural",
+					"label": "Joanne (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-KenNeural",
+					"label": "Ken (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-KimNeural",
+					"label": "Kim (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-NatashaNeural",
+					"label": "Natasha (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-NeilNeural",
+					"label": "Neil (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-TimNeural",
+					"label": "Tim (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-TinaNeural",
+					"label": "Tina (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-WilliamMultilingualNeural",
+					"label": "William Multilingual (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-WilliamNeural",
+					"label": "William (en-AU, Male)"
+				},
+				{
+					"id": "en-CA-ClaraNeural",
+					"label": "Clara (en-CA, Female)"
+				},
+				{
+					"id": "en-CA-LiamNeural",
+					"label": "Liam (en-CA, Male)"
+				},
+				{
+					"id": "en-GB-AbbiNeural",
+					"label": "Abbi (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-AdaMultilingualNeural",
+					"label": "Ada Multilingual (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-AlfieNeural",
+					"label": "Alfie (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-BellaNeural",
+					"label": "Bella (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-ElliotNeural",
+					"label": "Elliot (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-EthanNeural",
+					"label": "Ethan (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-HollieNeural",
+					"label": "Hollie (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-LibbyNeural",
+					"label": "Libby (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-MaisieNeural",
+					"label": "Maisie (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-NoahNeural",
+					"label": "Noah (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-OliverNeural",
+					"label": "Oliver (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-OliviaNeural",
+					"label": "Olivia (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-OllieMultilingualNeural",
+					"label": "Ollie Multilingual (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-RyanNeural",
+					"label": "Ryan (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-SoniaNeural",
+					"label": "Sonia (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-ThomasNeural",
+					"label": "Thomas (en-GB, Male)"
+				},
+				{
+					"id": "en-HK-SamNeural",
+					"label": "Sam (en-HK, Male)"
+				},
+				{
+					"id": "en-HK-YanNeural",
+					"label": "Yan (en-HK, Female)"
+				},
+				{
+					"id": "en-IE-ConnorNeural",
+					"label": "Connor (en-IE, Male)"
+				},
+				{
+					"id": "en-IE-EmilyNeural",
+					"label": "Emily (en-IE, Female)"
+				},
+				{
+					"id": "en-IN-AaravNeural",
+					"label": "Aarav (en-IN, Male)"
+				},
+				{
+					"id": "en-IN-AartiIndicNeural",
+					"label": "Aarti Indic (en-IN, Female)"
+				},
+				{
+					"id": "en-IN-AartiNeural",
+					"label": "Aarti (en-IN, Female)"
+				},
+				{
+					"id": "en-IN-AashiNeural",
+					"label": "Aashi (en-IN, Female)"
+				},
+				{
+					"id": "en-IN-AnanyaNeural",
+					"label": "Ananya (en-IN, Female)"
+				},
+				{
+					"id": "en-IN-ArjunIndicNeural",
+					"label": "Arjun Indic (en-IN, Male)"
+				},
+				{
+					"id": "en-IN-ArjunNeural",
+					"label": "Arjun (en-IN, Male)"
+				},
+				{
+					"id": "en-IN-KavyaNeural",
+					"label": "Kavya (en-IN, Female)"
+				},
+				{
+					"id": "en-IN-KunalNeural",
+					"label": "Kunal (en-IN, Male)"
+				},
+				{
+					"id": "en-IN-NeerjaIndicNeural",
+					"label": "Neerja Indic (en-IN, Female)"
+				},
+				{
+					"id": "en-IN-NeerjaNeural",
+					"label": "Neerja (en-IN, Female)"
+				},
+				{
+					"id": "en-IN-PrabhatIndicNeural",
+					"label": "Prabhat Indic (en-IN, Male)"
+				},
+				{
+					"id": "en-IN-PrabhatNeural",
+					"label": "Prabhat (en-IN, Male)"
+				},
+				{
+					"id": "en-IN-RehaanNeural",
+					"label": "Rehaan (en-IN, Male)"
+				},
+				{
+					"id": "en-KE-AsiliaNeural",
+					"label": "Asilia (en-KE, Female)"
+				},
+				{
+					"id": "en-KE-ChilembaNeural",
+					"label": "Chilemba (en-KE, Male)"
+				},
+				{
+					"id": "en-NG-AbeoNeural",
+					"label": "Abeo (en-NG, Male)"
+				},
+				{
+					"id": "en-NG-EzinneNeural",
+					"label": "Ezinne (en-NG, Female)"
+				},
+				{
+					"id": "en-NZ-MitchellNeural",
+					"label": "Mitchell (en-NZ, Male)"
+				},
+				{
+					"id": "en-NZ-MollyNeural",
+					"label": "Molly (en-NZ, Female)"
+				},
+				{
+					"id": "en-PH-JamesNeural",
+					"label": "James (en-PH, Male)"
+				},
+				{
+					"id": "en-PH-RosaNeural",
+					"label": "Rosa (en-PH, Female)"
+				},
+				{
+					"id": "en-SG-LunaNeural",
+					"label": "Luna (en-SG, Female)"
+				},
+				{
+					"id": "en-SG-WayneNeural",
+					"label": "Wayne (en-SG, Male)"
+				},
+				{
+					"id": "en-TZ-ElimuNeural",
+					"label": "Elimu (en-TZ, Male)"
+				},
+				{
+					"id": "en-TZ-ImaniNeural",
+					"label": "Imani (en-TZ, Female)"
+				},
+				{
+					"id": "en-ZA-LeahNeural",
+					"label": "Leah (en-ZA, Female)"
+				},
+				{
+					"id": "en-ZA-LukeNeural",
+					"label": "Luke (en-ZA, Male)"
+				},
+				{
+					"id": "af-ZA-AdriNeural",
+					"label": "Adri (af-ZA, Female)"
+				},
+				{
+					"id": "af-ZA-WillemNeural",
+					"label": "Willem (af-ZA, Male)"
+				},
+				{
+					"id": "am-ET-AmehaNeural",
+					"label": "Ameha (am-ET, Male)"
+				},
+				{
+					"id": "am-ET-MekdesNeural",
+					"label": "Mekdes (am-ET, Female)"
+				},
+				{
+					"id": "ar-AE-FatimaNeural",
+					"label": "Fatima (ar-AE, Female)"
+				},
+				{
+					"id": "ar-AE-HamdanNeural",
+					"label": "Hamdan (ar-AE, Male)"
+				},
+				{
+					"id": "ar-BH-AliNeural",
+					"label": "Ali (ar-BH, Male)"
+				},
+				{
+					"id": "ar-BH-LailaNeural",
+					"label": "Laila (ar-BH, Female)"
+				},
+				{
+					"id": "ar-DZ-AminaNeural",
+					"label": "Amina (ar-DZ, Female)"
+				},
+				{
+					"id": "ar-DZ-IsmaelNeural",
+					"label": "Ismael (ar-DZ, Male)"
+				},
+				{
+					"id": "ar-EG-SalmaNeural",
+					"label": "Salma (ar-EG, Female)"
+				},
+				{
+					"id": "ar-EG-ShakirNeural",
+					"label": "Shakir (ar-EG, Male)"
+				},
+				{
+					"id": "ar-IQ-BasselNeural",
+					"label": "Bassel (ar-IQ, Male)"
+				},
+				{
+					"id": "ar-IQ-RanaNeural",
+					"label": "Rana (ar-IQ, Female)"
+				},
+				{
+					"id": "ar-JO-SanaNeural",
+					"label": "Sana (ar-JO, Female)"
+				},
+				{
+					"id": "ar-JO-TaimNeural",
+					"label": "Taim (ar-JO, Male)"
+				},
+				{
+					"id": "ar-KW-FahedNeural",
+					"label": "Fahed (ar-KW, Male)"
+				},
+				{
+					"id": "ar-KW-NouraNeural",
+					"label": "Noura (ar-KW, Female)"
+				},
+				{
+					"id": "ar-LB-LaylaNeural",
+					"label": "Layla (ar-LB, Female)"
+				},
+				{
+					"id": "ar-LB-RamiNeural",
+					"label": "Rami (ar-LB, Male)"
+				},
+				{
+					"id": "ar-LY-ImanNeural",
+					"label": "Iman (ar-LY, Female)"
+				},
+				{
+					"id": "ar-LY-OmarNeural",
+					"label": "Omar (ar-LY, Male)"
+				},
+				{
+					"id": "ar-MA-JamalNeural",
+					"label": "Jamal (ar-MA, Male)"
+				},
+				{
+					"id": "ar-MA-MounaNeural",
+					"label": "Mouna (ar-MA, Female)"
+				},
+				{
+					"id": "ar-OM-AbdullahNeural",
+					"label": "Abdullah (ar-OM, Male)"
+				},
+				{
+					"id": "ar-OM-AyshaNeural",
+					"label": "Aysha (ar-OM, Female)"
+				},
+				{
+					"id": "ar-QA-AmalNeural",
+					"label": "Amal (ar-QA, Female)"
+				},
+				{
+					"id": "ar-QA-MoazNeural",
+					"label": "Moaz (ar-QA, Male)"
+				},
+				{
+					"id": "ar-SA-HamedNeural",
+					"label": "Hamed (ar-SA, Male)"
+				},
+				{
+					"id": "ar-SA-ZariyahNeural",
+					"label": "Zariyah (ar-SA, Female)"
+				},
+				{
+					"id": "ar-SY-AmanyNeural",
+					"label": "Amany (ar-SY, Female)"
+				},
+				{
+					"id": "ar-SY-LaithNeural",
+					"label": "Laith (ar-SY, Male)"
+				},
+				{
+					"id": "ar-TN-HediNeural",
+					"label": "Hedi (ar-TN, Male)"
+				},
+				{
+					"id": "ar-TN-ReemNeural",
+					"label": "Reem (ar-TN, Female)"
+				},
+				{
+					"id": "ar-YE-MaryamNeural",
+					"label": "Maryam (ar-YE, Female)"
+				},
+				{
+					"id": "ar-YE-SalehNeural",
+					"label": "Saleh (ar-YE, Male)"
+				},
+				{
+					"id": "as-IN-PriyomNeural",
+					"label": "Priyom (as-IN, Male)"
+				},
+				{
+					"id": "as-IN-YashicaNeural",
+					"label": "Yashica (as-IN, Female)"
+				},
+				{
+					"id": "az-AZ-BabekNeural",
+					"label": "Babek (az-AZ, Male)"
+				},
+				{
+					"id": "az-AZ-BanuNeural",
+					"label": "Banu (az-AZ, Female)"
+				},
+				{
+					"id": "bg-BG-BorislavNeural",
+					"label": "Borislav (bg-BG, Male)"
+				},
+				{
+					"id": "bg-BG-KalinaNeural",
+					"label": "Kalina (bg-BG, Female)"
+				},
+				{
+					"id": "bn-BD-NabanitaNeural",
+					"label": "Nabanita (bn-BD, Female)"
+				},
+				{
+					"id": "bn-BD-PradeepNeural",
+					"label": "Pradeep (bn-BD, Male)"
+				},
+				{
+					"id": "bn-IN-BashkarNeural",
+					"label": "Bashkar (bn-IN, Male)"
+				},
+				{
+					"id": "bn-IN-TanishaaNeural",
+					"label": "Tanishaa (bn-IN, Female)"
+				},
+				{
+					"id": "bs-BA-GoranNeural",
+					"label": "Goran (bs-BA, Male)"
+				},
+				{
+					"id": "bs-BA-VesnaNeural",
+					"label": "Vesna (bs-BA, Female)"
+				},
+				{
+					"id": "ca-ES-AlbaNeural",
+					"label": "Alba (ca-ES, Female)"
+				},
+				{
+					"id": "ca-ES-EnricNeural",
+					"label": "Enric (ca-ES, Male)"
+				},
+				{
+					"id": "ca-ES-JoanaNeural",
+					"label": "Joana (ca-ES, Female)"
+				},
+				{
+					"id": "cs-CZ-AntoninNeural",
+					"label": "Antonin (cs-CZ, Male)"
+				},
+				{
+					"id": "cs-CZ-VlastaNeural",
+					"label": "Vlasta (cs-CZ, Female)"
+				},
+				{
+					"id": "cy-GB-AledNeural",
+					"label": "Aled (cy-GB, Male)"
+				},
+				{
+					"id": "cy-GB-NiaNeural",
+					"label": "Nia (cy-GB, Female)"
+				},
+				{
+					"id": "da-DK-ChristelNeural",
+					"label": "Christel (da-DK, Female)"
+				},
+				{
+					"id": "da-DK-JeppeNeural",
+					"label": "Jeppe (da-DK, Male)"
+				},
+				{
+					"id": "de-AT-IngridNeural",
+					"label": "Ingrid (de-AT, Female)"
+				},
+				{
+					"id": "de-AT-JonasNeural",
+					"label": "Jonas (de-AT, Male)"
+				},
+				{
+					"id": "de-CH-JanNeural",
+					"label": "Jan (de-CH, Male)"
+				},
+				{
+					"id": "de-CH-LeniNeural",
+					"label": "Leni (de-CH, Female)"
+				},
+				{
+					"id": "de-DE-AmalaNeural",
+					"label": "Amala (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-BerndNeural",
+					"label": "Bernd (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-ChristophNeural",
+					"label": "Christoph (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-ConradNeural",
+					"label": "Conrad (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-ElkeNeural",
+					"label": "Elke (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-Florian:DragonHDLatestNeural",
+					"label": "Florian Dragon HD Latest (de-DE, Male, HD)"
+				},
+				{
+					"id": "de-DE-FlorianMultilingualNeural",
+					"label": "Florian Multilingual (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-GiselaNeural",
+					"label": "Gisela (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-KasperNeural",
+					"label": "Kasper (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-KatjaNeural",
+					"label": "Katja (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-KillianNeural",
+					"label": "Killian (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-KlarissaNeural",
+					"label": "Klarissa (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-KlausNeural",
+					"label": "Klaus (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-LouisaNeural",
+					"label": "Louisa (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-MajaNeural",
+					"label": "Maja (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-RalfNeural",
+					"label": "Ralf (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-Seraphina:DragonHDLatestNeural",
+					"label": "Seraphina Dragon HD Latest (de-DE, Female, HD)"
+				},
+				{
+					"id": "de-DE-SeraphinaMultilingualNeural",
+					"label": "Seraphina Multilingual (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-TanjaNeural",
+					"label": "Tanja (de-DE, Female)"
+				},
+				{
+					"id": "el-GR-AthinaNeural",
+					"label": "Athina (el-GR, Female)"
+				},
+				{
+					"id": "el-GR-NestorasNeural",
+					"label": "Nestoras (el-GR, Male)"
+				},
+				{
+					"id": "es-AR-ElenaNeural",
+					"label": "Elena (es-AR, Female)"
+				},
+				{
+					"id": "es-AR-TomasNeural",
+					"label": "Tomas (es-AR, Male)"
+				},
+				{
+					"id": "es-BO-MarceloNeural",
+					"label": "Marcelo (es-BO, Male)"
+				},
+				{
+					"id": "es-BO-SofiaNeural",
+					"label": "Sofia (es-BO, Female)"
+				},
+				{
+					"id": "es-CL-CatalinaNeural",
+					"label": "Catalina (es-CL, Female)"
+				},
+				{
+					"id": "es-CL-LorenzoNeural",
+					"label": "Lorenzo (es-CL, Male)"
+				},
+				{
+					"id": "es-CO-GonzaloNeural",
+					"label": "Gonzalo (es-CO, Male)"
+				},
+				{
+					"id": "es-CO-SalomeNeural",
+					"label": "Salome (es-CO, Female)"
+				},
+				{
+					"id": "es-CR-JuanNeural",
+					"label": "Juan (es-CR, Male)"
+				},
+				{
+					"id": "es-CR-MariaNeural",
+					"label": "Maria (es-CR, Female)"
+				},
+				{
+					"id": "es-CU-BelkysNeural",
+					"label": "Belkys (es-CU, Female)"
+				},
+				{
+					"id": "es-CU-ManuelNeural",
+					"label": "Manuel (es-CU, Male)"
+				},
+				{
+					"id": "es-DO-EmilioNeural",
+					"label": "Emilio (es-DO, Male)"
+				},
+				{
+					"id": "es-DO-RamonaNeural",
+					"label": "Ramona (es-DO, Female)"
+				},
+				{
+					"id": "es-EC-AndreaNeural",
+					"label": "Andrea (es-EC, Female)"
+				},
+				{
+					"id": "es-EC-LuisNeural",
+					"label": "Luis (es-EC, Male)"
+				},
+				{
+					"id": "es-ES-AbrilNeural",
+					"label": "Abril (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-AlvaroNeural",
+					"label": "Alvaro (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-ArabellaMultilingualNeural",
+					"label": "Arabella Multilingual (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-ArnauNeural",
+					"label": "Arnau (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-DarioNeural",
+					"label": "Dario (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-EliasNeural",
+					"label": "Elias (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-ElviraNeural",
+					"label": "Elvira (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-EstrellaNeural",
+					"label": "Estrella (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-IreneNeural",
+					"label": "Irene (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-IsidoraMultilingualNeural",
+					"label": "Isidora Multilingual (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-LaiaNeural",
+					"label": "Laia (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-LiaNeural",
+					"label": "Lia (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-NilNeural",
+					"label": "Nil (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-SaulNeural",
+					"label": "Saul (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-TeoNeural",
+					"label": "Teo (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-TrianaNeural",
+					"label": "Triana (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-Tristan:DragonHDLatestNeural",
+					"label": "Tristan Dragon HD Latest (es-ES, Male, HD)"
+				},
+				{
+					"id": "es-ES-TristanMultilingualNeural",
+					"label": "Tristan Multilingual (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-VeraNeural",
+					"label": "Vera (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-Ximena:DragonHDLatestNeural",
+					"label": "Ximena Dragon HD Latest (es-ES, Female, HD)"
+				},
+				{
+					"id": "es-ES-XimenaMultilingualNeural",
+					"label": "Ximena Multilingual (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-XimenaNeural",
+					"label": "Ximena (es-ES, Female)"
+				},
+				{
+					"id": "es-GQ-JavierNeural",
+					"label": "Javier (es-GQ, Male)"
+				},
+				{
+					"id": "es-GQ-TeresaNeural",
+					"label": "Teresa (es-GQ, Female)"
+				},
+				{
+					"id": "es-GT-AndresNeural",
+					"label": "Andres (es-GT, Male)"
+				},
+				{
+					"id": "es-GT-MartaNeural",
+					"label": "Marta (es-GT, Female)"
+				},
+				{
+					"id": "es-HN-CarlosNeural",
+					"label": "Carlos (es-HN, Male)"
+				},
+				{
+					"id": "es-HN-KarlaNeural",
+					"label": "Karla (es-HN, Female)"
+				},
+				{
+					"id": "es-MX-BeatrizNeural",
+					"label": "Beatriz (es-MX, Female)"
+				},
+				{
+					"id": "es-MX-CandelaNeural",
+					"label": "Candela (es-MX, Female)"
+				},
+				{
+					"id": "es-MX-CarlotaNeural",
+					"label": "Carlota (es-MX, Female)"
+				},
+				{
+					"id": "es-MX-CecilioNeural",
+					"label": "Cecilio (es-MX, Male)"
+				},
+				{
+					"id": "es-MX-DaliaMultilingualNeural",
+					"label": "Dalia Multilingual (es-MX, Female)"
+				},
+				{
+					"id": "es-MX-DaliaNeural",
+					"label": "Dalia (es-MX, Female)"
+				},
+				{
+					"id": "es-MX-GerardoNeural",
+					"label": "Gerardo (es-MX, Male)"
+				},
+				{
+					"id": "es-MX-JorgeMultilingualNeural",
+					"label": "Jorge Multilingual (es-MX, Male)"
+				},
+				{
+					"id": "es-MX-JorgeNeural",
+					"label": "Jorge (es-MX, Male)"
+				},
+				{
+					"id": "es-MX-LarissaNeural",
+					"label": "Larissa (es-MX, Female)"
+				},
+				{
+					"id": "es-MX-LibertoNeural",
+					"label": "Liberto (es-MX, Male)"
+				},
+				{
+					"id": "es-MX-LucianoNeural",
+					"label": "Luciano (es-MX, Male)"
+				},
+				{
+					"id": "es-MX-MarinaNeural",
+					"label": "Marina (es-MX, Female)"
+				},
+				{
+					"id": "es-MX-NuriaNeural",
+					"label": "Nuria (es-MX, Female)"
+				},
+				{
+					"id": "es-MX-PelayoNeural",
+					"label": "Pelayo (es-MX, Male)"
+				},
+				{
+					"id": "es-MX-RenataNeural",
+					"label": "Renata (es-MX, Female)"
+				},
+				{
+					"id": "es-MX-YagoNeural",
+					"label": "Yago (es-MX, Male)"
+				},
+				{
+					"id": "es-NI-FedericoNeural",
+					"label": "Federico (es-NI, Male)"
+				},
+				{
+					"id": "es-NI-YolandaNeural",
+					"label": "Yolanda (es-NI, Female)"
+				},
+				{
+					"id": "es-PA-MargaritaNeural",
+					"label": "Margarita (es-PA, Female)"
+				},
+				{
+					"id": "es-PA-RobertoNeural",
+					"label": "Roberto (es-PA, Male)"
+				},
+				{
+					"id": "es-PE-AlexNeural",
+					"label": "Alex (es-PE, Male)"
+				},
+				{
+					"id": "es-PE-CamilaNeural",
+					"label": "Camila (es-PE, Female)"
+				},
+				{
+					"id": "es-PR-KarinaNeural",
+					"label": "Karina (es-PR, Female)"
+				},
+				{
+					"id": "es-PR-VictorNeural",
+					"label": "Victor (es-PR, Male)"
+				},
+				{
+					"id": "es-PY-MarioNeural",
+					"label": "Mario (es-PY, Male)"
+				},
+				{
+					"id": "es-PY-TaniaNeural",
+					"label": "Tania (es-PY, Female)"
+				},
+				{
+					"id": "es-SV-LorenaNeural",
+					"label": "Lorena (es-SV, Female)"
+				},
+				{
+					"id": "es-SV-RodrigoNeural",
+					"label": "Rodrigo (es-SV, Male)"
+				},
+				{
+					"id": "es-US-AlonsoNeural",
+					"label": "Alonso (es-US, Male)"
+				},
+				{
+					"id": "es-US-PalomaNeural",
+					"label": "Paloma (es-US, Female)"
+				},
+				{
+					"id": "es-UY-MateoNeural",
+					"label": "Mateo (es-UY, Male)"
+				},
+				{
+					"id": "es-UY-ValentinaNeural",
+					"label": "Valentina (es-UY, Female)"
+				},
+				{
+					"id": "es-VE-PaolaNeural",
+					"label": "Paola (es-VE, Female)"
+				},
+				{
+					"id": "es-VE-SebastianNeural",
+					"label": "Sebastian (es-VE, Male)"
+				},
+				{
+					"id": "et-EE-AnuNeural",
+					"label": "Anu (et-EE, Female)"
+				},
+				{
+					"id": "et-EE-KertNeural",
+					"label": "Kert (et-EE, Male)"
+				},
+				{
+					"id": "eu-ES-AinhoaNeural",
+					"label": "Ainhoa (eu-ES, Female)"
+				},
+				{
+					"id": "eu-ES-AnderNeural",
+					"label": "Ander (eu-ES, Male)"
+				},
+				{
+					"id": "fa-IR-DilaraNeural",
+					"label": "Dilara (fa-IR, Female)"
+				},
+				{
+					"id": "fa-IR-FaridNeural",
+					"label": "Farid (fa-IR, Male)"
+				},
+				{
+					"id": "fi-FI-HarriNeural",
+					"label": "Harri (fi-FI, Male)"
+				},
+				{
+					"id": "fi-FI-NooraNeural",
+					"label": "Noora (fi-FI, Female)"
+				},
+				{
+					"id": "fi-FI-SelmaNeural",
+					"label": "Selma (fi-FI, Female)"
+				},
+				{
+					"id": "fil-PH-AngeloNeural",
+					"label": "Angelo (fil-PH, Male)"
+				},
+				{
+					"id": "fil-PH-BlessicaNeural",
+					"label": "Blessica (fil-PH, Female)"
+				},
+				{
+					"id": "fr-BE-CharlineNeural",
+					"label": "Charline (fr-BE, Female)"
+				},
+				{
+					"id": "fr-BE-GerardNeural",
+					"label": "Gerard (fr-BE, Male)"
+				},
+				{
+					"id": "fr-CA-AntoineNeural",
+					"label": "Antoine (fr-CA, Male)"
+				},
+				{
+					"id": "fr-CA-JeanNeural",
+					"label": "Jean (fr-CA, Male)"
+				},
+				{
+					"id": "fr-CA-SylvieNeural",
+					"label": "Sylvie (fr-CA, Female)"
+				},
+				{
+					"id": "fr-CA-ThierryNeural",
+					"label": "Thierry (fr-CA, Male)"
+				},
+				{
+					"id": "fr-CH-ArianeNeural",
+					"label": "Ariane (fr-CH, Female)"
+				},
+				{
+					"id": "fr-CH-FabriceNeural",
+					"label": "Fabrice (fr-CH, Male)"
+				},
+				{
+					"id": "fr-FR-AlainNeural",
+					"label": "Alain (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-BrigitteNeural",
+					"label": "Brigitte (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-CelesteNeural",
+					"label": "Celeste (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-ClaudeNeural",
+					"label": "Claude (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-CoralieNeural",
+					"label": "Coralie (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-DeniseNeural",
+					"label": "Denise (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-EloiseNeural",
+					"label": "Eloise (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-HenriNeural",
+					"label": "Henri (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-JacquelineNeural",
+					"label": "Jacqueline (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-JeromeNeural",
+					"label": "Jerome (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-JosephineNeural",
+					"label": "Josephine (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-LucienMultilingualNeural",
+					"label": "Lucien Multilingual (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-MauriceNeural",
+					"label": "Maurice (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-Remy:DragonHDLatestNeural",
+					"label": "Remy Dragon HD Latest (fr-FR, Male, HD)"
+				},
+				{
+					"id": "fr-FR-RemyMultilingualNeural",
+					"label": "Remy Multilingual (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-Vivienne:DragonHDLatestNeural",
+					"label": "Vivienne Dragon HD Latest (fr-FR, Female, HD)"
+				},
+				{
+					"id": "fr-FR-VivienneMultilingualNeural",
+					"label": "Vivienne Multilingual (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-YvesNeural",
+					"label": "Yves (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-YvetteNeural",
+					"label": "Yvette (fr-FR, Female)"
+				},
+				{
+					"id": "ga-IE-ColmNeural",
+					"label": "Colm (ga-IE, Male)"
+				},
+				{
+					"id": "ga-IE-OrlaNeural",
+					"label": "Orla (ga-IE, Female)"
+				},
+				{
+					"id": "gl-ES-RoiNeural",
+					"label": "Roi (gl-ES, Male)"
+				},
+				{
+					"id": "gl-ES-SabelaNeural",
+					"label": "Sabela (gl-ES, Female)"
+				},
+				{
+					"id": "gu-IN-DhwaniNeural",
+					"label": "Dhwani (gu-IN, Female)"
+				},
+				{
+					"id": "gu-IN-NiranjanNeural",
+					"label": "Niranjan (gu-IN, Male)"
+				},
+				{
+					"id": "he-IL-AvriNeural",
+					"label": "Avri (he-IL, Male)"
+				},
+				{
+					"id": "he-IL-HilaNeural",
+					"label": "Hila (he-IL, Female)"
+				},
+				{
+					"id": "hi-IN-AaravNeural",
+					"label": "Aarav (hi-IN, Male)"
+				},
+				{
+					"id": "hi-IN-AartiNeural",
+					"label": "Aarti (hi-IN, Female)"
+				},
+				{
+					"id": "hi-IN-AnanyaNeural",
+					"label": "Ananya (hi-IN, Female)"
+				},
+				{
+					"id": "hi-IN-ArjunNeural",
+					"label": "Arjun (hi-IN, Male)"
+				},
+				{
+					"id": "hi-IN-KavyaNeural",
+					"label": "Kavya (hi-IN, Female)"
+				},
+				{
+					"id": "hi-IN-KunalNeural",
+					"label": "Kunal (hi-IN, Male)"
+				},
+				{
+					"id": "hi-IN-MadhurNeural",
+					"label": "Madhur (hi-IN, Male)"
+				},
+				{
+					"id": "hi-IN-RehaanNeural",
+					"label": "Rehaan (hi-IN, Male)"
+				},
+				{
+					"id": "hi-IN-SwaraNeural",
+					"label": "Swara (hi-IN, Female)"
+				},
+				{
+					"id": "hr-HR-GabrijelaNeural",
+					"label": "Gabrijela (hr-HR, Female)"
+				},
+				{
+					"id": "hr-HR-SreckoNeural",
+					"label": "Srecko (hr-HR, Male)"
+				},
+				{
+					"id": "hu-HU-NoemiNeural",
+					"label": "Noemi (hu-HU, Female)"
+				},
+				{
+					"id": "hu-HU-TamasNeural",
+					"label": "Tamas (hu-HU, Male)"
+				},
+				{
+					"id": "hy-AM-AnahitNeural",
+					"label": "Anahit (hy-AM, Female)"
+				},
+				{
+					"id": "hy-AM-HaykNeural",
+					"label": "Hayk (hy-AM, Male)"
+				},
+				{
+					"id": "id-ID-ArdiNeural",
+					"label": "Ardi (id-ID, Male)"
+				},
+				{
+					"id": "id-ID-GadisNeural",
+					"label": "Gadis (id-ID, Female)"
+				},
+				{
+					"id": "is-IS-GudrunNeural",
+					"label": "Gudrun (is-IS, Female)"
+				},
+				{
+					"id": "is-IS-GunnarNeural",
+					"label": "Gunnar (is-IS, Male)"
+				},
+				{
+					"id": "it-IT-Alessio:DragonHDLatestNeural",
+					"label": "Alessio Dragon HD Latest (it-IT, Male, HD)"
+				},
+				{
+					"id": "it-IT-AlessioMultilingualNeural",
+					"label": "Alessio Multilingual (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-BenignoNeural",
+					"label": "Benigno (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-CalimeroNeural",
+					"label": "Calimero (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-CataldoNeural",
+					"label": "Cataldo (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-DiegoNeural",
+					"label": "Diego (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-ElsaNeural",
+					"label": "Elsa (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-FabiolaNeural",
+					"label": "Fabiola (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-FiammaNeural",
+					"label": "Fiamma (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-GianniNeural",
+					"label": "Gianni (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-GiuseppeMultilingualNeural",
+					"label": "Giuseppe Multilingual (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-GiuseppeNeural",
+					"label": "Giuseppe (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-ImeldaNeural",
+					"label": "Imelda (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-IrmaNeural",
+					"label": "Irma (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-Isabella:DragonHDLatestNeural",
+					"label": "Isabella Dragon HD Latest (it-IT, Female, HD)"
+				},
+				{
+					"id": "it-IT-IsabellaMultilingualNeural",
+					"label": "Isabella Multilingual (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-IsabellaNeural",
+					"label": "Isabella (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-LisandroNeural",
+					"label": "Lisandro (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-MarcelloMultilingualNeural",
+					"label": "Marcello Multilingual (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-PalmiraNeural",
+					"label": "Palmira (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-PierinaNeural",
+					"label": "Pierina (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-RinaldoNeural",
+					"label": "Rinaldo (it-IT, Male)"
+				},
+				{
+					"id": "iu-Cans-CA-SiqiniqNeural",
+					"label": "Siqiniq (iu-Cans-CA, Female)"
+				},
+				{
+					"id": "iu-Cans-CA-TaqqiqNeural",
+					"label": "Taqqiq (iu-Cans-CA, Male)"
+				},
+				{
+					"id": "iu-Latn-CA-SiqiniqNeural",
+					"label": "Siqiniq (iu-Latn-CA, Female)"
+				},
+				{
+					"id": "iu-Latn-CA-TaqqiqNeural",
+					"label": "Taqqiq (iu-Latn-CA, Male)"
+				},
+				{
+					"id": "ja-JP-AoiNeural",
+					"label": "Aoi (ja-JP, Female)"
+				},
+				{
+					"id": "ja-JP-DaichiNeural",
+					"label": "Daichi (ja-JP, Male)"
+				},
+				{
+					"id": "ja-JP-KeitaNeural",
+					"label": "Keita (ja-JP, Male)"
+				},
+				{
+					"id": "ja-JP-Masaru:DragonHDLatestNeural",
+					"label": "Masaru Dragon HD Latest (ja-JP, Male, HD)"
+				},
+				{
+					"id": "ja-JP-MayuNeural",
+					"label": "Mayu (ja-JP, Female)"
+				},
+				{
+					"id": "ja-JP-Nanami:DragonHDLatestNeural",
+					"label": "Nanami Dragon HD Latest (ja-JP, Female, HD)"
+				},
+				{
+					"id": "ja-JP-NanamiNeural",
+					"label": "Nanami (ja-JP, Female)"
+				},
+				{
+					"id": "ja-JP-NaokiNeural",
+					"label": "Naoki (ja-JP, Male)"
+				},
+				{
+					"id": "ja-JP-ShioriNeural",
+					"label": "Shiori (ja-JP, Female)"
+				},
+				{
+					"id": "jv-ID-DimasNeural",
+					"label": "Dimas (jv-ID, Male)"
+				},
+				{
+					"id": "jv-ID-SitiNeural",
+					"label": "Siti (jv-ID, Female)"
+				},
+				{
+					"id": "ka-GE-EkaNeural",
+					"label": "Eka (ka-GE, Female)"
+				},
+				{
+					"id": "ka-GE-GiorgiNeural",
+					"label": "Giorgi (ka-GE, Male)"
+				},
+				{
+					"id": "kk-KZ-AigulNeural",
+					"label": "Aigul (kk-KZ, Female)"
+				},
+				{
+					"id": "kk-KZ-DauletNeural",
+					"label": "Daulet (kk-KZ, Male)"
+				},
+				{
+					"id": "km-KH-PisethNeural",
+					"label": "Piseth (km-KH, Male)"
+				},
+				{
+					"id": "km-KH-SreymomNeural",
+					"label": "Sreymom (km-KH, Female)"
+				},
+				{
+					"id": "kn-IN-GaganNeural",
+					"label": "Gagan (kn-IN, Male)"
+				},
+				{
+					"id": "kn-IN-SapnaNeural",
+					"label": "Sapna (kn-IN, Female)"
+				},
+				{
+					"id": "ko-KR-BongJinNeural",
+					"label": "BongJin (ko-KR, Male)"
+				},
+				{
+					"id": "ko-KR-GookMinNeural",
+					"label": "GookMin (ko-KR, Male)"
+				},
+				{
+					"id": "ko-KR-HyunsuMultilingualNeural",
+					"label": "Hyunsu Multilingual (ko-KR, Male)"
+				},
+				{
+					"id": "ko-KR-HyunsuNeural",
+					"label": "Hyunsu (ko-KR, Male)"
+				},
+				{
+					"id": "ko-KR-InJoonNeural",
+					"label": "InJoon (ko-KR, Male)"
+				},
+				{
+					"id": "ko-KR-JiMinNeural",
+					"label": "JiMin (ko-KR, Female)"
+				},
+				{
+					"id": "ko-KR-SeoHyeonNeural",
+					"label": "SeoHyeon (ko-KR, Female)"
+				},
+				{
+					"id": "ko-KR-SoonBokNeural",
+					"label": "SoonBok (ko-KR, Female)"
+				},
+				{
+					"id": "ko-KR-SunHiNeural",
+					"label": "Sun-Hi (ko-KR, Female)"
+				},
+				{
+					"id": "ko-KR-YuJinNeural",
+					"label": "YuJin (ko-KR, Female)"
+				},
+				{
+					"id": "lo-LA-ChanthavongNeural",
+					"label": "Chanthavong (lo-LA, Male)"
+				},
+				{
+					"id": "lo-LA-KeomanyNeural",
+					"label": "Keomany (lo-LA, Female)"
+				},
+				{
+					"id": "lt-LT-LeonasNeural",
+					"label": "Leonas (lt-LT, Male)"
+				},
+				{
+					"id": "lt-LT-OnaNeural",
+					"label": "Ona (lt-LT, Female)"
+				},
+				{
+					"id": "lv-LV-EveritaNeural",
+					"label": "Everita (lv-LV, Female)"
+				},
+				{
+					"id": "lv-LV-NilsNeural",
+					"label": "Nils (lv-LV, Male)"
+				},
+				{
+					"id": "mk-MK-AleksandarNeural",
+					"label": "Aleksandar (mk-MK, Male)"
+				},
+				{
+					"id": "mk-MK-MarijaNeural",
+					"label": "Marija (mk-MK, Female)"
+				},
+				{
+					"id": "ml-IN-MidhunNeural",
+					"label": "Midhun (ml-IN, Male)"
+				},
+				{
+					"id": "ml-IN-SobhanaNeural",
+					"label": "Sobhana (ml-IN, Female)"
+				},
+				{
+					"id": "mn-MN-BataaNeural",
+					"label": "Bataa (mn-MN, Male)"
+				},
+				{
+					"id": "mn-MN-YesuiNeural",
+					"label": "Yesui (mn-MN, Female)"
+				},
+				{
+					"id": "mr-IN-AarohiNeural",
+					"label": "Aarohi (mr-IN, Female)"
+				},
+				{
+					"id": "mr-IN-ManoharNeural",
+					"label": "Manohar (mr-IN, Male)"
+				},
+				{
+					"id": "ms-MY-OsmanNeural",
+					"label": "Osman (ms-MY, Male)"
+				},
+				{
+					"id": "ms-MY-YasminNeural",
+					"label": "Yasmin (ms-MY, Female)"
+				},
+				{
+					"id": "mt-MT-GraceNeural",
+					"label": "Grace (mt-MT, Female)"
+				},
+				{
+					"id": "mt-MT-JosephNeural",
+					"label": "Joseph (mt-MT, Male)"
+				},
+				{
+					"id": "my-MM-NilarNeural",
+					"label": "Nilar (my-MM, Female)"
+				},
+				{
+					"id": "my-MM-ThihaNeural",
+					"label": "Thiha (my-MM, Male)"
+				},
+				{
+					"id": "nb-NO-FinnNeural",
+					"label": "Finn (nb-NO, Male)"
+				},
+				{
+					"id": "nb-NO-IselinNeural",
+					"label": "Iselin (nb-NO, Female)"
+				},
+				{
+					"id": "nb-NO-PernilleNeural",
+					"label": "Pernille (nb-NO, Female)"
+				},
+				{
+					"id": "ne-NP-HemkalaNeural",
+					"label": "Hemkala (ne-NP, Female)"
+				},
+				{
+					"id": "ne-NP-SagarNeural",
+					"label": "Sagar (ne-NP, Male)"
+				},
+				{
+					"id": "nl-BE-ArnaudNeural",
+					"label": "Arnaud (nl-BE, Male)"
+				},
+				{
+					"id": "nl-BE-DenaNeural",
+					"label": "Dena (nl-BE, Female)"
+				},
+				{
+					"id": "nl-NL-ColetteNeural",
+					"label": "Colette (nl-NL, Female)"
+				},
+				{
+					"id": "nl-NL-FennaNeural",
+					"label": "Fenna (nl-NL, Female)"
+				},
+				{
+					"id": "nl-NL-MaartenNeural",
+					"label": "Maarten (nl-NL, Male)"
+				},
+				{
+					"id": "or-IN-SubhasiniNeural",
+					"label": "Subhasini (or-IN, Female)"
+				},
+				{
+					"id": "or-IN-SukantNeural",
+					"label": "Sukant (or-IN, Male)"
+				},
+				{
+					"id": "pa-IN-OjasNeural",
+					"label": "Ojas (pa-IN, Male)"
+				},
+				{
+					"id": "pa-IN-VaaniNeural",
+					"label": "Vaani (pa-IN, Female)"
+				},
+				{
+					"id": "pl-PL-AgnieszkaNeural",
+					"label": "Agnieszka (pl-PL, Female)"
+				},
+				{
+					"id": "pl-PL-MarekNeural",
+					"label": "Marek (pl-PL, Male)"
+				},
+				{
+					"id": "pl-PL-ZofiaNeural",
+					"label": "Zofia (pl-PL, Female)"
+				},
+				{
+					"id": "ps-AF-GulNawazNeural",
+					"label": "Gul Nawaz (ps-AF, Male)"
+				},
+				{
+					"id": "ps-AF-LatifaNeural",
+					"label": "Latifa (ps-AF, Female)"
+				},
+				{
+					"id": "pt-BR-AntonioNeural",
+					"label": "Antonio (pt-BR, Male)"
+				},
+				{
+					"id": "pt-BR-BrendaNeural",
+					"label": "Brenda (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-DonatoNeural",
+					"label": "Donato (pt-BR, Male)"
+				},
+				{
+					"id": "pt-BR-ElzaNeural",
+					"label": "Elza (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-FabioNeural",
+					"label": "Fabio (pt-BR, Male)"
+				},
+				{
+					"id": "pt-BR-FranciscaNeural",
+					"label": "Francisca (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-GiovannaNeural",
+					"label": "Giovanna (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-HumbertoNeural",
+					"label": "Humberto (pt-BR, Male)"
+				},
+				{
+					"id": "pt-BR-JulioNeural",
+					"label": "Julio (pt-BR, Male)"
+				},
+				{
+					"id": "pt-BR-LeilaNeural",
+					"label": "Leila (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-LeticiaNeural",
+					"label": "Leticia (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-Macerio:DragonHDLatestNeural",
+					"label": "Macerio Dragon HD Latest (pt-BR, Male, HD)"
+				},
+				{
+					"id": "pt-BR-MacerioMultilingualNeural",
+					"label": "Macerio Multilingual (pt-BR, Male)"
+				},
+				{
+					"id": "pt-BR-ManuelaNeural",
+					"label": "Manuela (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-NicolauNeural",
+					"label": "Nicolau (pt-BR, Male)"
+				},
+				{
+					"id": "pt-BR-Thalita:DragonHDLatestNeural",
+					"label": "Thalita Dragon HD Latest (pt-BR, Female, HD)"
+				},
+				{
+					"id": "pt-BR-ThalitaMultilingualNeural",
+					"label": "Thalita Multilingual (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-ThalitaNeural",
+					"label": "Thalita (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-ValerioNeural",
+					"label": "Valerio (pt-BR, Male)"
+				},
+				{
+					"id": "pt-BR-YaraNeural",
+					"label": "Yara (pt-BR, Female)"
+				},
+				{
+					"id": "pt-PT-DuarteNeural",
+					"label": "Duarte (pt-PT, Male)"
+				},
+				{
+					"id": "pt-PT-FernandaNeural",
+					"label": "Fernanda (pt-PT, Female)"
+				},
+				{
+					"id": "pt-PT-RaquelNeural",
+					"label": "Raquel (pt-PT, Female)"
+				},
+				{
+					"id": "ro-RO-AlinaNeural",
+					"label": "Alina (ro-RO, Female)"
+				},
+				{
+					"id": "ro-RO-EmilNeural",
+					"label": "Emil (ro-RO, Male)"
+				},
+				{
+					"id": "ru-RU-DariyaNeural",
+					"label": "Dariya (ru-RU, Female)"
+				},
+				{
+					"id": "ru-RU-DmitryNeural",
+					"label": "Dmitry (ru-RU, Male)"
+				},
+				{
+					"id": "ru-RU-SvetlanaNeural",
+					"label": "Svetlana (ru-RU, Female)"
+				},
+				{
+					"id": "si-LK-SameeraNeural",
+					"label": "Sameera (si-LK, Male)"
+				},
+				{
+					"id": "si-LK-ThiliniNeural",
+					"label": "Thilini (si-LK, Female)"
+				},
+				{
+					"id": "sk-SK-LukasNeural",
+					"label": "Lukas (sk-SK, Male)"
+				},
+				{
+					"id": "sk-SK-ViktoriaNeural",
+					"label": "Viktoria (sk-SK, Female)"
+				},
+				{
+					"id": "sl-SI-PetraNeural",
+					"label": "Petra (sl-SI, Female)"
+				},
+				{
+					"id": "sl-SI-RokNeural",
+					"label": "Rok (sl-SI, Male)"
+				},
+				{
+					"id": "so-SO-MuuseNeural",
+					"label": "Muuse (so-SO, Male)"
+				},
+				{
+					"id": "so-SO-UbaxNeural",
+					"label": "Ubax (so-SO, Female)"
+				},
+				{
+					"id": "sq-AL-AnilaNeural",
+					"label": "Anila (sq-AL, Female)"
+				},
+				{
+					"id": "sq-AL-IlirNeural",
+					"label": "Ilir (sq-AL, Male)"
+				},
+				{
+					"id": "sr-Latn-RS-NicholasNeural",
+					"label": "Nicholas (sr-Latn-RS, Male)"
+				},
+				{
+					"id": "sr-Latn-RS-SophieNeural",
+					"label": "Sophie (sr-Latn-RS, Female)"
+				},
+				{
+					"id": "sr-RS-NicholasNeural",
+					"label": "Nicholas (sr-RS, Male)"
+				},
+				{
+					"id": "sr-RS-SophieNeural",
+					"label": "Sophie (sr-RS, Female)"
+				},
+				{
+					"id": "su-ID-JajangNeural",
+					"label": "Jajang (su-ID, Male)"
+				},
+				{
+					"id": "su-ID-TutiNeural",
+					"label": "Tuti (su-ID, Female)"
+				},
+				{
+					"id": "sv-SE-HilleviNeural",
+					"label": "Hillevi (sv-SE, Female)"
+				},
+				{
+					"id": "sv-SE-MattiasNeural",
+					"label": "Mattias (sv-SE, Male)"
+				},
+				{
+					"id": "sv-SE-SofieNeural",
+					"label": "Sofie (sv-SE, Female)"
+				},
+				{
+					"id": "sw-KE-RafikiNeural",
+					"label": "Rafiki (sw-KE, Male)"
+				},
+				{
+					"id": "sw-KE-ZuriNeural",
+					"label": "Zuri (sw-KE, Female)"
+				},
+				{
+					"id": "sw-TZ-DaudiNeural",
+					"label": "Daudi (sw-TZ, Male)"
+				},
+				{
+					"id": "sw-TZ-RehemaNeural",
+					"label": "Rehema (sw-TZ, Female)"
+				},
+				{
+					"id": "ta-IN-PallaviNeural",
+					"label": "Pallavi (ta-IN, Female)"
+				},
+				{
+					"id": "ta-IN-ValluvarNeural",
+					"label": "Valluvar (ta-IN, Male)"
+				},
+				{
+					"id": "ta-LK-KumarNeural",
+					"label": "Kumar (ta-LK, Male)"
+				},
+				{
+					"id": "ta-LK-SaranyaNeural",
+					"label": "Saranya (ta-LK, Female)"
+				},
+				{
+					"id": "ta-MY-KaniNeural",
+					"label": "Kani (ta-MY, Female)"
+				},
+				{
+					"id": "ta-MY-SuryaNeural",
+					"label": "Surya (ta-MY, Male)"
+				},
+				{
+					"id": "ta-SG-AnbuNeural",
+					"label": "Anbu (ta-SG, Male)"
+				},
+				{
+					"id": "ta-SG-VenbaNeural",
+					"label": "Venba (ta-SG, Female)"
+				},
+				{
+					"id": "te-IN-MohanNeural",
+					"label": "Mohan (te-IN, Male)"
+				},
+				{
+					"id": "te-IN-ShrutiNeural",
+					"label": "Shruti (te-IN, Female)"
+				},
+				{
+					"id": "th-TH-AcharaNeural",
+					"label": "Achara (th-TH, Female)"
+				},
+				{
+					"id": "th-TH-NiwatNeural",
+					"label": "Niwat (th-TH, Male)"
+				},
+				{
+					"id": "th-TH-PremwadeeNeural",
+					"label": "Premwadee (th-TH, Female)"
+				},
+				{
+					"id": "tr-TR-AhmetNeural",
+					"label": "Ahmet (tr-TR, Male)"
+				},
+				{
+					"id": "tr-TR-EmelNeural",
+					"label": "Emel (tr-TR, Female)"
+				},
+				{
+					"id": "uk-UA-OstapNeural",
+					"label": "Ostap (uk-UA, Male)"
+				},
+				{
+					"id": "uk-UA-PolinaNeural",
+					"label": "Polina (uk-UA, Female)"
+				},
+				{
+					"id": "ur-IN-GulNeural",
+					"label": "Gul (ur-IN, Female)"
+				},
+				{
+					"id": "ur-IN-SalmanNeural",
+					"label": "Salman (ur-IN, Male)"
+				},
+				{
+					"id": "ur-PK-AsadNeural",
+					"label": "Asad (ur-PK, Male)"
+				},
+				{
+					"id": "ur-PK-UzmaNeural",
+					"label": "Uzma (ur-PK, Female)"
+				},
+				{
+					"id": "uz-UZ-MadinaNeural",
+					"label": "Madina (uz-UZ, Female)"
+				},
+				{
+					"id": "uz-UZ-SardorNeural",
+					"label": "Sardor (uz-UZ, Male)"
+				},
+				{
+					"id": "vi-VN-HoaiMyNeural",
+					"label": "HoaiMy (vi-VN, Female)"
+				},
+				{
+					"id": "vi-VN-NamMinhNeural",
+					"label": "NamMinh (vi-VN, Male)"
+				},
+				{
+					"id": "wuu-CN-XiaotongNeural",
+					"label": "Xiaotong (wuu-CN, Female)"
+				},
+				{
+					"id": "wuu-CN-YunzheNeural",
+					"label": "Yunzhe (wuu-CN, Male)"
+				},
+				{
+					"id": "yue-CN-XiaoMinNeural",
+					"label": "XiaoMin (yue-CN, Female)"
+				},
+				{
+					"id": "yue-CN-YunSongNeural",
+					"label": "YunSong (yue-CN, Male)"
+				},
+				{
+					"id": "zh-CN-Xiaochen:DragonHDLatestNeural",
+					"label": "Xiaochen Dragon HD Latest (zh-CN, Female, HD)"
+				},
+				{
+					"id": "zh-CN-XiaochenMultilingualNeural",
+					"label": "Xiaochen Multilingual (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaochenNeural",
+					"label": "Xiaochen (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaohanNeural",
+					"label": "Xiaohan (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaomengNeural",
+					"label": "Xiaomeng (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaomoNeural",
+					"label": "Xiaomo (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaoqiuNeural",
+					"label": "Xiaoqiu (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaorouNeural",
+					"label": "Xiaorou (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaoruiNeural",
+					"label": "Xiaorui (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaoshuangNeural",
+					"label": "Xiaoshuang (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaoxiaoDialectsNeural",
+					"label": "Xiaoxiao Dialects (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaoxiaoMultilingualNeural",
+					"label": "Xiaoxiao Multilingual (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaoxiaoNeural",
+					"label": "Xiaoxiao (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaoxuanNeural",
+					"label": "Xiaoxuan (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaoyanNeural",
+					"label": "Xiaoyan (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaoyiNeural",
+					"label": "Xiaoyi (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaoyouNeural",
+					"label": "Xiaoyou (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaoyuMultilingualNeural",
+					"label": "Xiaoyu Multilingual (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-XiaozhenNeural",
+					"label": "Xiaozhen (zh-CN, Female)"
+				},
+				{
+					"id": "zh-CN-Yunfan:DragonHDLatestNeural",
+					"label": "Yunfan Dragon HD Latest (zh-CN, Male, HD)"
+				},
+				{
+					"id": "zh-CN-YunfanMultilingualNeural",
+					"label": "Yunfan Multilingual (zh-CN, Male)"
+				},
+				{
+					"id": "zh-CN-YunfengNeural",
+					"label": "Yunfeng (zh-CN, Male)"
+				},
+				{
+					"id": "zh-CN-YunhaoNeural",
+					"label": "Yunhao (zh-CN, Male)"
+				},
+				{
+					"id": "zh-CN-YunjianNeural",
+					"label": "Yunjian (zh-CN, Male)"
+				},
+				{
+					"id": "zh-CN-YunjieNeural",
+					"label": "Yunjie (zh-CN, Male)"
+				},
+				{
+					"id": "zh-CN-YunxiaNeural",
+					"label": "Yunxia (zh-CN, Male)"
+				},
+				{
+					"id": "zh-CN-YunxiaoMultilingualNeural",
+					"label": "Yunxiao Multilingual (zh-CN, Male)"
+				},
+				{
+					"id": "zh-CN-YunxiNeural",
+					"label": "Yunxi (zh-CN, Male)"
+				},
+				{
+					"id": "zh-CN-YunyangNeural",
+					"label": "Yunyang (zh-CN, Male)"
+				},
+				{
+					"id": "zh-CN-YunyeNeural",
+					"label": "Yunye (zh-CN, Male)"
+				},
+				{
+					"id": "zh-CN-YunyiMultilingualNeural",
+					"label": "Yunyi Multilingual (zh-CN, Male)"
+				},
+				{
+					"id": "zh-CN-YunzeNeural",
+					"label": "Yunze (zh-CN, Male)"
+				},
+				{
+					"id": "zh-CN-henan-YundengNeural",
+					"label": "Yundeng (zh-CN-henan, Male)"
+				},
+				{
+					"id": "zh-CN-liaoning-XiaobeiNeural",
+					"label": "Xiaobei (zh-CN-liaoning, Female)"
+				},
+				{
+					"id": "zh-CN-shaanxi-XiaoniNeural",
+					"label": "Xiaoni (zh-CN-shaanxi, Female)"
+				},
+				{
+					"id": "zh-CN-shandong-YunxiangNeural",
+					"label": "Yunxiang (zh-CN-shandong, Male)"
+				},
+				{
+					"id": "zh-CN-sichuan-YunxiNeural",
+					"label": "YunxiSichuan (zh-CN-sichuan, Male)"
+				},
+				{
+					"id": "zh-HK-HiuGaaiNeural",
+					"label": "HiuGaai (zh-HK, Female)"
+				},
+				{
+					"id": "zh-HK-HiuMaanNeural",
+					"label": "HiuMaan (zh-HK, Female)"
+				},
+				{
+					"id": "zh-HK-WanLungNeural",
+					"label": "WanLung (zh-HK, Male)"
+				},
+				{
+					"id": "zh-TW-HsiaoChenNeural",
+					"label": "HsiaoChen (zh-TW, Female)"
+				},
+				{
+					"id": "zh-TW-HsiaoYuNeural",
+					"label": "HsiaoYu (zh-TW, Female)"
+				},
+				{
+					"id": "zh-TW-YunJheNeural",
+					"label": "YunJhe (zh-TW, Male)"
+				},
+				{
+					"id": "zu-ZA-ThandoNeural",
+					"label": "Thando (zu-ZA, Female)"
+				},
+				{
+					"id": "zu-ZA-ThembaNeural",
+					"label": "Themba (zu-ZA, Male)"
+				}
 			],
 			"voiceHint": "Azure neural voice name"
 		},
@@ -40,10 +2556,15 @@
 				"RequestData": {
 					"text": "$text",
 					"model_id": "eleven_multilingual_v2",
-					"voice_settings": { "stability": 0.5, "similarity_boost": 0.75 }
+					"voice_settings": {
+						"stability": 0.5,
+						"similarity_boost": 0.75
+					}
 				}
 			},
-			"defaults": { "voice": "21m00Tcm4TlvDq8ikWAM" },
+			"defaults": {
+				"voice": "21m00Tcm4TlvDq8ikWAM"
+			},
 			"voices": [],
 			"voiceHint": "ElevenLabs VoiceId",
 			"note": "Requires an ElevenLabs key on the service; unverified."
@@ -54,11 +2575,1755 @@
 			"path": "Google",
 			"hasSample": true,
 			"container": "mp3",
-			"request": { "text": "$text", "modelId": "$voice", "language": "en-US" },
-			"defaults": { "voice": "en-US-Neural2-C" },
+			"request": {
+				"text": "$text",
+				"modelId": "$voice",
+				"language": "en-US"
+			},
+			"defaults": {
+				"voice": "en-US-Neural2-C"
+			},
 			"voices": [
-				{ "id": "en-US-Neural2-C", "label": "Neural2 C (US)" },
-				{ "id": "en-US-Neural2-D", "label": "Neural2 D (US)" }
+				{
+					"id": "en-US-Neural2-A",
+					"label": "en-US-Neural2-A (en-US, Male)"
+				},
+				{
+					"id": "en-US-Neural2-C",
+					"label": "en-US-Neural2-C (en-US, Female)"
+				},
+				{
+					"id": "en-US-Neural2-D",
+					"label": "en-US-Neural2-D (en-US, Male)"
+				},
+				{
+					"id": "en-US-Neural2-E",
+					"label": "en-US-Neural2-E (en-US, Female)"
+				},
+				{
+					"id": "en-US-Neural2-F",
+					"label": "en-US-Neural2-F (en-US, Female)"
+				},
+				{
+					"id": "en-US-Neural2-G",
+					"label": "en-US-Neural2-G (en-US, Female)"
+				},
+				{
+					"id": "en-US-Neural2-H",
+					"label": "en-US-Neural2-H (en-US, Female)"
+				},
+				{
+					"id": "en-US-Neural2-I",
+					"label": "en-US-Neural2-I (en-US, Male)"
+				},
+				{
+					"id": "en-US-Neural2-J",
+					"label": "en-US-Neural2-J (en-US, Male)"
+				},
+				{
+					"id": "en-US-News-K",
+					"label": "en-US-News-K (en-US, Female)"
+				},
+				{
+					"id": "en-US-News-L",
+					"label": "en-US-News-L (en-US, Female)"
+				},
+				{
+					"id": "en-US-News-M",
+					"label": "en-US-News-M (en-US, Male)"
+				},
+				{
+					"id": "en-US-News-N",
+					"label": "en-US-News-N (en-US, Male)"
+				},
+				{
+					"id": "en-US-Polyglot-1",
+					"label": "en-US-Polyglot-1 (en-US, Male)"
+				},
+				{
+					"id": "en-US-Standard-A",
+					"label": "en-US-Standard-A (en-US, Male)"
+				},
+				{
+					"id": "en-US-Standard-B",
+					"label": "en-US-Standard-B (en-US, Male)"
+				},
+				{
+					"id": "en-US-Standard-C",
+					"label": "en-US-Standard-C (en-US, Female)"
+				},
+				{
+					"id": "en-US-Standard-D",
+					"label": "en-US-Standard-D (en-US, Male)"
+				},
+				{
+					"id": "en-US-Standard-E",
+					"label": "en-US-Standard-E (en-US, Female)"
+				},
+				{
+					"id": "en-US-Standard-F",
+					"label": "en-US-Standard-F (en-US, Female)"
+				},
+				{
+					"id": "en-US-Standard-G",
+					"label": "en-US-Standard-G (en-US, Female)"
+				},
+				{
+					"id": "en-US-Standard-H",
+					"label": "en-US-Standard-H (en-US, Female)"
+				},
+				{
+					"id": "en-US-Standard-I",
+					"label": "en-US-Standard-I (en-US, Male)"
+				},
+				{
+					"id": "en-US-Standard-J",
+					"label": "en-US-Standard-J (en-US, Male)"
+				},
+				{
+					"id": "en-US-Studio-M",
+					"label": "en-US-Studio-M (en-US, Male)"
+				},
+				{
+					"id": "en-US-Studio-O",
+					"label": "en-US-Studio-O (en-US, Female)"
+				},
+				{
+					"id": "en-US-Studio-Q",
+					"label": "en-US-Studio-Q (en-US, Male)"
+				},
+				{
+					"id": "en-US-Wavenet-A",
+					"label": "en-US-Wavenet-A (en-US, Male)"
+				},
+				{
+					"id": "en-US-Wavenet-B",
+					"label": "en-US-Wavenet-B (en-US, Male)"
+				},
+				{
+					"id": "en-US-Wavenet-C",
+					"label": "en-US-Wavenet-C (en-US, Female)"
+				},
+				{
+					"id": "en-US-Wavenet-D",
+					"label": "en-US-Wavenet-D (en-US, Male)"
+				},
+				{
+					"id": "en-US-Wavenet-E",
+					"label": "en-US-Wavenet-E (en-US, Female)"
+				},
+				{
+					"id": "en-US-Wavenet-F",
+					"label": "en-US-Wavenet-F (en-US, Female)"
+				},
+				{
+					"id": "en-US-Wavenet-G",
+					"label": "en-US-Wavenet-G (en-US, Female)"
+				},
+				{
+					"id": "en-US-Wavenet-H",
+					"label": "en-US-Wavenet-H (en-US, Female)"
+				},
+				{
+					"id": "en-US-Wavenet-I",
+					"label": "en-US-Wavenet-I (en-US, Male)"
+				},
+				{
+					"id": "en-US-Wavenet-J",
+					"label": "en-US-Wavenet-J (en-US, Male)"
+				},
+				{
+					"id": "en-AU-Neural2-A",
+					"label": "en-AU-Neural2-A (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-Neural2-B",
+					"label": "en-AU-Neural2-B (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-Neural2-C",
+					"label": "en-AU-Neural2-C (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-Neural2-D",
+					"label": "en-AU-Neural2-D (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-News-E",
+					"label": "en-AU-News-E (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-News-F",
+					"label": "en-AU-News-F (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-News-G",
+					"label": "en-AU-News-G (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-Polyglot-1",
+					"label": "en-AU-Polyglot-1 (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-Standard-A",
+					"label": "en-AU-Standard-A (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-Standard-B",
+					"label": "en-AU-Standard-B (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-Standard-C",
+					"label": "en-AU-Standard-C (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-Standard-D",
+					"label": "en-AU-Standard-D (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-Wavenet-A",
+					"label": "en-AU-Wavenet-A (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-Wavenet-B",
+					"label": "en-AU-Wavenet-B (en-AU, Male)"
+				},
+				{
+					"id": "en-AU-Wavenet-C",
+					"label": "en-AU-Wavenet-C (en-AU, Female)"
+				},
+				{
+					"id": "en-AU-Wavenet-D",
+					"label": "en-AU-Wavenet-D (en-AU, Male)"
+				},
+				{
+					"id": "en-GB-Neural2-A",
+					"label": "en-GB-Neural2-A (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-Neural2-B",
+					"label": "en-GB-Neural2-B (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-Neural2-C",
+					"label": "en-GB-Neural2-C (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-Neural2-D",
+					"label": "en-GB-Neural2-D (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-Neural2-F",
+					"label": "en-GB-Neural2-F (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-News-G",
+					"label": "en-GB-News-G (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-News-H",
+					"label": "en-GB-News-H (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-News-I",
+					"label": "en-GB-News-I (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-News-J",
+					"label": "en-GB-News-J (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-News-K",
+					"label": "en-GB-News-K (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-News-L",
+					"label": "en-GB-News-L (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-News-M",
+					"label": "en-GB-News-M (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-Standard-A",
+					"label": "en-GB-Standard-A (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-Standard-B",
+					"label": "en-GB-Standard-B (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-Standard-C",
+					"label": "en-GB-Standard-C (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-Standard-D",
+					"label": "en-GB-Standard-D (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-Standard-F",
+					"label": "en-GB-Standard-F (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-Studio-B",
+					"label": "en-GB-Studio-B (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-Studio-C",
+					"label": "en-GB-Studio-C (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-Wavenet-A",
+					"label": "en-GB-Wavenet-A (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-Wavenet-B",
+					"label": "en-GB-Wavenet-B (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-Wavenet-C",
+					"label": "en-GB-Wavenet-C (en-GB, Female)"
+				},
+				{
+					"id": "en-GB-Wavenet-D",
+					"label": "en-GB-Wavenet-D (en-GB, Male)"
+				},
+				{
+					"id": "en-GB-Wavenet-F",
+					"label": "en-GB-Wavenet-F (en-GB, Female)"
+				},
+				{
+					"id": "en-IN-Neural2-A",
+					"label": "en-IN-Neural2-A (en-IN, Female)"
+				},
+				{
+					"id": "en-IN-Neural2-B",
+					"label": "en-IN-Neural2-B (en-IN, Male)"
+				},
+				{
+					"id": "en-IN-Neural2-C",
+					"label": "en-IN-Neural2-C (en-IN, Male)"
+				},
+				{
+					"id": "en-IN-Neural2-D",
+					"label": "en-IN-Neural2-D (en-IN, Female)"
+				},
+				{
+					"id": "en-IN-Standard-A",
+					"label": "en-IN-Standard-A (en-IN, Female)"
+				},
+				{
+					"id": "en-IN-Standard-B",
+					"label": "en-IN-Standard-B (en-IN, Male)"
+				},
+				{
+					"id": "en-IN-Standard-C",
+					"label": "en-IN-Standard-C (en-IN, Male)"
+				},
+				{
+					"id": "en-IN-Standard-D",
+					"label": "en-IN-Standard-D (en-IN, Female)"
+				},
+				{
+					"id": "en-IN-Wavenet-A",
+					"label": "en-IN-Wavenet-A (en-IN, Female)"
+				},
+				{
+					"id": "en-IN-Wavenet-B",
+					"label": "en-IN-Wavenet-B (en-IN, Male)"
+				},
+				{
+					"id": "en-IN-Wavenet-C",
+					"label": "en-IN-Wavenet-C (en-IN, Male)"
+				},
+				{
+					"id": "en-IN-Wavenet-D",
+					"label": "en-IN-Wavenet-D (en-IN, Female)"
+				},
+				{
+					"id": "af-ZA-Standard-A",
+					"label": "af-ZA-Standard-A (af-ZA, Female)"
+				},
+				{
+					"id": "ar-XA-Standard-A",
+					"label": "ar-XA-Standard-A (ar-XA, Female)"
+				},
+				{
+					"id": "ar-XA-Standard-B",
+					"label": "ar-XA-Standard-B (ar-XA, Male)"
+				},
+				{
+					"id": "ar-XA-Standard-C",
+					"label": "ar-XA-Standard-C (ar-XA, Male)"
+				},
+				{
+					"id": "ar-XA-Standard-D",
+					"label": "ar-XA-Standard-D (ar-XA, Female)"
+				},
+				{
+					"id": "ar-XA-Wavenet-A",
+					"label": "ar-XA-Wavenet-A (ar-XA, Female)"
+				},
+				{
+					"id": "ar-XA-Wavenet-B",
+					"label": "ar-XA-Wavenet-B (ar-XA, Male)"
+				},
+				{
+					"id": "ar-XA-Wavenet-C",
+					"label": "ar-XA-Wavenet-C (ar-XA, Male)"
+				},
+				{
+					"id": "ar-XA-Wavenet-D",
+					"label": "ar-XA-Wavenet-D (ar-XA, Female)"
+				},
+				{
+					"id": "bg-BG-Standard-A",
+					"label": "bg-BG-Standard-A (bg-BG, Female)"
+				},
+				{
+					"id": "bn-IN-Standard-A",
+					"label": "bn-IN-Standard-A (bn-IN, Female)"
+				},
+				{
+					"id": "bn-IN-Standard-B",
+					"label": "bn-IN-Standard-B (bn-IN, Male)"
+				},
+				{
+					"id": "bn-IN-Wavenet-A",
+					"label": "bn-IN-Wavenet-A (bn-IN, Female)"
+				},
+				{
+					"id": "bn-IN-Wavenet-B",
+					"label": "bn-IN-Wavenet-B (bn-IN, Male)"
+				},
+				{
+					"id": "ca-ES-Standard-A",
+					"label": "ca-ES-Standard-A (ca-ES, Female)"
+				},
+				{
+					"id": "cmn-CN-Standard-A",
+					"label": "cmn-CN-Standard-A (cmn-CN, Female)"
+				},
+				{
+					"id": "cmn-CN-Standard-B",
+					"label": "cmn-CN-Standard-B (cmn-CN, Male)"
+				},
+				{
+					"id": "cmn-CN-Standard-C",
+					"label": "cmn-CN-Standard-C (cmn-CN, Male)"
+				},
+				{
+					"id": "cmn-CN-Standard-D",
+					"label": "cmn-CN-Standard-D (cmn-CN, Female)"
+				},
+				{
+					"id": "cmn-CN-Wavenet-A",
+					"label": "cmn-CN-Wavenet-A (cmn-CN, Female)"
+				},
+				{
+					"id": "cmn-CN-Wavenet-B",
+					"label": "cmn-CN-Wavenet-B (cmn-CN, Male)"
+				},
+				{
+					"id": "cmn-CN-Wavenet-C",
+					"label": "cmn-CN-Wavenet-C (cmn-CN, Male)"
+				},
+				{
+					"id": "cmn-CN-Wavenet-D",
+					"label": "cmn-CN-Wavenet-D (cmn-CN, Female)"
+				},
+				{
+					"id": "cmn-TW-Standard-A",
+					"label": "cmn-TW-Standard-A (cmn-TW, Female)"
+				},
+				{
+					"id": "cmn-TW-Standard-B",
+					"label": "cmn-TW-Standard-B (cmn-TW, Male)"
+				},
+				{
+					"id": "cmn-TW-Standard-C",
+					"label": "cmn-TW-Standard-C (cmn-TW, Male)"
+				},
+				{
+					"id": "cmn-TW-Wavenet-A",
+					"label": "cmn-TW-Wavenet-A (cmn-TW, Female)"
+				},
+				{
+					"id": "cmn-TW-Wavenet-B",
+					"label": "cmn-TW-Wavenet-B (cmn-TW, Male)"
+				},
+				{
+					"id": "cmn-TW-Wavenet-C",
+					"label": "cmn-TW-Wavenet-C (cmn-TW, Male)"
+				},
+				{
+					"id": "cs-CZ-Standard-A",
+					"label": "cs-CZ-Standard-A (cs-CZ, Female)"
+				},
+				{
+					"id": "cs-CZ-Wavenet-A",
+					"label": "cs-CZ-Wavenet-A (cs-CZ, Female)"
+				},
+				{
+					"id": "da-DK-Neural2-D",
+					"label": "da-DK-Neural2-D (da-DK, Female)"
+				},
+				{
+					"id": "da-DK-Standard-A",
+					"label": "da-DK-Standard-A (da-DK, Female)"
+				},
+				{
+					"id": "da-DK-Standard-C",
+					"label": "da-DK-Standard-C (da-DK, Male)"
+				},
+				{
+					"id": "da-DK-Standard-D",
+					"label": "da-DK-Standard-D (da-DK, Female)"
+				},
+				{
+					"id": "da-DK-Standard-E",
+					"label": "da-DK-Standard-E (da-DK, Female)"
+				},
+				{
+					"id": "da-DK-Wavenet-A",
+					"label": "da-DK-Wavenet-A (da-DK, Female)"
+				},
+				{
+					"id": "da-DK-Wavenet-C",
+					"label": "da-DK-Wavenet-C (da-DK, Male)"
+				},
+				{
+					"id": "da-DK-Wavenet-D",
+					"label": "da-DK-Wavenet-D (da-DK, Female)"
+				},
+				{
+					"id": "da-DK-Wavenet-E",
+					"label": "da-DK-Wavenet-E (da-DK, Female)"
+				},
+				{
+					"id": "de-DE-Neural2-A",
+					"label": "de-DE-Neural2-A (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-Neural2-B",
+					"label": "de-DE-Neural2-B (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-Neural2-C",
+					"label": "de-DE-Neural2-C (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-Neural2-D",
+					"label": "de-DE-Neural2-D (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-Neural2-F",
+					"label": "de-DE-Neural2-F (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-Polyglot-1",
+					"label": "de-DE-Polyglot-1 (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-Standard-A",
+					"label": "de-DE-Standard-A (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-Standard-B",
+					"label": "de-DE-Standard-B (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-Standard-C",
+					"label": "de-DE-Standard-C (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-Standard-D",
+					"label": "de-DE-Standard-D (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-Standard-E",
+					"label": "de-DE-Standard-E (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-Standard-F",
+					"label": "de-DE-Standard-F (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-Wavenet-A",
+					"label": "de-DE-Wavenet-A (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-Wavenet-B",
+					"label": "de-DE-Wavenet-B (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-Wavenet-C",
+					"label": "de-DE-Wavenet-C (de-DE, Female)"
+				},
+				{
+					"id": "de-DE-Wavenet-D",
+					"label": "de-DE-Wavenet-D (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-Wavenet-E",
+					"label": "de-DE-Wavenet-E (de-DE, Male)"
+				},
+				{
+					"id": "de-DE-Wavenet-F",
+					"label": "de-DE-Wavenet-F (de-DE, Female)"
+				},
+				{
+					"id": "el-GR-Standard-A",
+					"label": "el-GR-Standard-A (el-GR, Female)"
+				},
+				{
+					"id": "el-GR-Wavenet-A",
+					"label": "el-GR-Wavenet-A (el-GR, Female)"
+				},
+				{
+					"id": "es-ES-Neural2-A",
+					"label": "es-ES-Neural2-A (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-Neural2-B",
+					"label": "es-ES-Neural2-B (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-Neural2-C",
+					"label": "es-ES-Neural2-C (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-Neural2-D",
+					"label": "es-ES-Neural2-D (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-Neural2-E",
+					"label": "es-ES-Neural2-E (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-Neural2-F",
+					"label": "es-ES-Neural2-F (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-Polyglot-1",
+					"label": "es-ES-Polyglot-1 (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-Standard-A",
+					"label": "es-ES-Standard-A (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-Standard-B",
+					"label": "es-ES-Standard-B (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-Standard-C",
+					"label": "es-ES-Standard-C (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-Standard-D",
+					"label": "es-ES-Standard-D (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-Wavenet-B",
+					"label": "es-ES-Wavenet-B (es-ES, Male)"
+				},
+				{
+					"id": "es-ES-Wavenet-C",
+					"label": "es-ES-Wavenet-C (es-ES, Female)"
+				},
+				{
+					"id": "es-ES-Wavenet-D",
+					"label": "es-ES-Wavenet-D (es-ES, Female)"
+				},
+				{
+					"id": "es-US-Neural2-A",
+					"label": "es-US-Neural2-A (es-US, Female)"
+				},
+				{
+					"id": "es-US-Neural2-B",
+					"label": "es-US-Neural2-B (es-US, Male)"
+				},
+				{
+					"id": "es-US-Neural2-C",
+					"label": "es-US-Neural2-C (es-US, Male)"
+				},
+				{
+					"id": "es-US-News-D",
+					"label": "es-US-News-D (es-US, Male)"
+				},
+				{
+					"id": "es-US-News-E",
+					"label": "es-US-News-E (es-US, Male)"
+				},
+				{
+					"id": "es-US-News-F",
+					"label": "es-US-News-F (es-US, Female)"
+				},
+				{
+					"id": "es-US-News-G",
+					"label": "es-US-News-G (es-US, Female)"
+				},
+				{
+					"id": "es-US-Polyglot-1",
+					"label": "es-US-Polyglot-1 (es-US, Male)"
+				},
+				{
+					"id": "es-US-Standard-A",
+					"label": "es-US-Standard-A (es-US, Female)"
+				},
+				{
+					"id": "es-US-Standard-B",
+					"label": "es-US-Standard-B (es-US, Male)"
+				},
+				{
+					"id": "es-US-Standard-C",
+					"label": "es-US-Standard-C (es-US, Male)"
+				},
+				{
+					"id": "es-US-Studio-B",
+					"label": "es-US-Studio-B (es-US, Male)"
+				},
+				{
+					"id": "es-US-Wavenet-A",
+					"label": "es-US-Wavenet-A (es-US, Female)"
+				},
+				{
+					"id": "es-US-Wavenet-B",
+					"label": "es-US-Wavenet-B (es-US, Male)"
+				},
+				{
+					"id": "es-US-Wavenet-C",
+					"label": "es-US-Wavenet-C (es-US, Male)"
+				},
+				{
+					"id": "eu-ES-Standard-A",
+					"label": "eu-ES-Standard-A (eu-ES, Female)"
+				},
+				{
+					"id": "fi-FI-Standard-A",
+					"label": "fi-FI-Standard-A (fi-FI, Female)"
+				},
+				{
+					"id": "fi-FI-Wavenet-A",
+					"label": "fi-FI-Wavenet-A (fi-FI, Female)"
+				},
+				{
+					"id": "fil-ph-Neural2-A",
+					"label": "fil-ph-Neural2-A (fil-PH, Female)"
+				},
+				{
+					"id": "fil-ph-Neural2-D",
+					"label": "fil-ph-Neural2-D (fil-PH, Male)"
+				},
+				{
+					"id": "fil-PH-Standard-A",
+					"label": "fil-PH-Standard-A (fil-PH, Female)"
+				},
+				{
+					"id": "fil-PH-Standard-B",
+					"label": "fil-PH-Standard-B (fil-PH, Female)"
+				},
+				{
+					"id": "fil-PH-Standard-C",
+					"label": "fil-PH-Standard-C (fil-PH, Male)"
+				},
+				{
+					"id": "fil-PH-Standard-D",
+					"label": "fil-PH-Standard-D (fil-PH, Male)"
+				},
+				{
+					"id": "fil-PH-Wavenet-A",
+					"label": "fil-PH-Wavenet-A (fil-PH, Female)"
+				},
+				{
+					"id": "fil-PH-Wavenet-B",
+					"label": "fil-PH-Wavenet-B (fil-PH, Female)"
+				},
+				{
+					"id": "fil-PH-Wavenet-C",
+					"label": "fil-PH-Wavenet-C (fil-PH, Male)"
+				},
+				{
+					"id": "fil-PH-Wavenet-D",
+					"label": "fil-PH-Wavenet-D (fil-PH, Male)"
+				},
+				{
+					"id": "fr-CA-Neural2-A",
+					"label": "fr-CA-Neural2-A (fr-CA, Female)"
+				},
+				{
+					"id": "fr-CA-Neural2-B",
+					"label": "fr-CA-Neural2-B (fr-CA, Male)"
+				},
+				{
+					"id": "fr-CA-Neural2-C",
+					"label": "fr-CA-Neural2-C (fr-CA, Female)"
+				},
+				{
+					"id": "fr-CA-Neural2-D",
+					"label": "fr-CA-Neural2-D (fr-CA, Male)"
+				},
+				{
+					"id": "fr-CA-Standard-A",
+					"label": "fr-CA-Standard-A (fr-CA, Female)"
+				},
+				{
+					"id": "fr-CA-Standard-B",
+					"label": "fr-CA-Standard-B (fr-CA, Male)"
+				},
+				{
+					"id": "fr-CA-Standard-C",
+					"label": "fr-CA-Standard-C (fr-CA, Female)"
+				},
+				{
+					"id": "fr-CA-Standard-D",
+					"label": "fr-CA-Standard-D (fr-CA, Male)"
+				},
+				{
+					"id": "fr-CA-Wavenet-A",
+					"label": "fr-CA-Wavenet-A (fr-CA, Female)"
+				},
+				{
+					"id": "fr-CA-Wavenet-B",
+					"label": "fr-CA-Wavenet-B (fr-CA, Male)"
+				},
+				{
+					"id": "fr-CA-Wavenet-C",
+					"label": "fr-CA-Wavenet-C (fr-CA, Female)"
+				},
+				{
+					"id": "fr-CA-Wavenet-D",
+					"label": "fr-CA-Wavenet-D (fr-CA, Male)"
+				},
+				{
+					"id": "fr-FR-Neural2-A",
+					"label": "fr-FR-Neural2-A (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-Neural2-B",
+					"label": "fr-FR-Neural2-B (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-Neural2-C",
+					"label": "fr-FR-Neural2-C (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-Neural2-D",
+					"label": "fr-FR-Neural2-D (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-Neural2-E",
+					"label": "fr-FR-Neural2-E (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-Polyglot-1",
+					"label": "fr-FR-Polyglot-1 (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-Standard-A",
+					"label": "fr-FR-Standard-A (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-Standard-B",
+					"label": "fr-FR-Standard-B (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-Standard-C",
+					"label": "fr-FR-Standard-C (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-Standard-D",
+					"label": "fr-FR-Standard-D (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-Standard-E",
+					"label": "fr-FR-Standard-E (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-Wavenet-A",
+					"label": "fr-FR-Wavenet-A (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-Wavenet-B",
+					"label": "fr-FR-Wavenet-B (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-Wavenet-C",
+					"label": "fr-FR-Wavenet-C (fr-FR, Female)"
+				},
+				{
+					"id": "fr-FR-Wavenet-D",
+					"label": "fr-FR-Wavenet-D (fr-FR, Male)"
+				},
+				{
+					"id": "fr-FR-Wavenet-E",
+					"label": "fr-FR-Wavenet-E (fr-FR, Female)"
+				},
+				{
+					"id": "gl-ES-Standard-A",
+					"label": "gl-ES-Standard-A (gl-ES, Female)"
+				},
+				{
+					"id": "gu-IN-Standard-A",
+					"label": "gu-IN-Standard-A (gu-IN, Female)"
+				},
+				{
+					"id": "gu-IN-Standard-B",
+					"label": "gu-IN-Standard-B (gu-IN, Male)"
+				},
+				{
+					"id": "gu-IN-Wavenet-A",
+					"label": "gu-IN-Wavenet-A (gu-IN, Female)"
+				},
+				{
+					"id": "gu-IN-Wavenet-B",
+					"label": "gu-IN-Wavenet-B (gu-IN, Male)"
+				},
+				{
+					"id": "he-IL-Standard-A",
+					"label": "he-IL-Standard-A (he-IL, Female)"
+				},
+				{
+					"id": "he-IL-Standard-B",
+					"label": "he-IL-Standard-B (he-IL, Male)"
+				},
+				{
+					"id": "he-IL-Standard-C",
+					"label": "he-IL-Standard-C (he-IL, Female)"
+				},
+				{
+					"id": "he-IL-Standard-D",
+					"label": "he-IL-Standard-D (he-IL, Male)"
+				},
+				{
+					"id": "he-IL-Wavenet-A",
+					"label": "he-IL-Wavenet-A (he-IL, Female)"
+				},
+				{
+					"id": "he-IL-Wavenet-B",
+					"label": "he-IL-Wavenet-B (he-IL, Male)"
+				},
+				{
+					"id": "he-IL-Wavenet-C",
+					"label": "he-IL-Wavenet-C (he-IL, Female)"
+				},
+				{
+					"id": "he-IL-Wavenet-D",
+					"label": "he-IL-Wavenet-D (he-IL, Male)"
+				},
+				{
+					"id": "hi-IN-Neural2-A",
+					"label": "hi-IN-Neural2-A (hi-IN, Female)"
+				},
+				{
+					"id": "hi-IN-Neural2-B",
+					"label": "hi-IN-Neural2-B (hi-IN, Male)"
+				},
+				{
+					"id": "hi-IN-Neural2-C",
+					"label": "hi-IN-Neural2-C (hi-IN, Male)"
+				},
+				{
+					"id": "hi-IN-Neural2-D",
+					"label": "hi-IN-Neural2-D (hi-IN, Female)"
+				},
+				{
+					"id": "hi-IN-Standard-A",
+					"label": "hi-IN-Standard-A (hi-IN, Female)"
+				},
+				{
+					"id": "hi-IN-Standard-B",
+					"label": "hi-IN-Standard-B (hi-IN, Male)"
+				},
+				{
+					"id": "hi-IN-Standard-C",
+					"label": "hi-IN-Standard-C (hi-IN, Male)"
+				},
+				{
+					"id": "hi-IN-Standard-D",
+					"label": "hi-IN-Standard-D (hi-IN, Female)"
+				},
+				{
+					"id": "hi-IN-Wavenet-A",
+					"label": "hi-IN-Wavenet-A (hi-IN, Female)"
+				},
+				{
+					"id": "hi-IN-Wavenet-B",
+					"label": "hi-IN-Wavenet-B (hi-IN, Male)"
+				},
+				{
+					"id": "hi-IN-Wavenet-C",
+					"label": "hi-IN-Wavenet-C (hi-IN, Male)"
+				},
+				{
+					"id": "hi-IN-Wavenet-D",
+					"label": "hi-IN-Wavenet-D (hi-IN, Female)"
+				},
+				{
+					"id": "hu-HU-Standard-A",
+					"label": "hu-HU-Standard-A (hu-HU, Female)"
+				},
+				{
+					"id": "hu-HU-Wavenet-A",
+					"label": "hu-HU-Wavenet-A (hu-HU, Female)"
+				},
+				{
+					"id": "id-ID-Standard-A",
+					"label": "id-ID-Standard-A (id-ID, Female)"
+				},
+				{
+					"id": "id-ID-Standard-B",
+					"label": "id-ID-Standard-B (id-ID, Male)"
+				},
+				{
+					"id": "id-ID-Standard-C",
+					"label": "id-ID-Standard-C (id-ID, Male)"
+				},
+				{
+					"id": "id-ID-Standard-D",
+					"label": "id-ID-Standard-D (id-ID, Female)"
+				},
+				{
+					"id": "id-ID-Wavenet-A",
+					"label": "id-ID-Wavenet-A (id-ID, Female)"
+				},
+				{
+					"id": "id-ID-Wavenet-B",
+					"label": "id-ID-Wavenet-B (id-ID, Male)"
+				},
+				{
+					"id": "id-ID-Wavenet-C",
+					"label": "id-ID-Wavenet-C (id-ID, Male)"
+				},
+				{
+					"id": "id-ID-Wavenet-D",
+					"label": "id-ID-Wavenet-D (id-ID, Female)"
+				},
+				{
+					"id": "is-IS-Standard-A",
+					"label": "is-IS-Standard-A (is-IS, Female)"
+				},
+				{
+					"id": "it-IT-Neural2-A",
+					"label": "it-IT-Neural2-A (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-Neural2-C",
+					"label": "it-IT-Neural2-C (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-Standard-A",
+					"label": "it-IT-Standard-A (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-Standard-B",
+					"label": "it-IT-Standard-B (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-Standard-C",
+					"label": "it-IT-Standard-C (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-Standard-D",
+					"label": "it-IT-Standard-D (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-Wavenet-A",
+					"label": "it-IT-Wavenet-A (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-Wavenet-B",
+					"label": "it-IT-Wavenet-B (it-IT, Female)"
+				},
+				{
+					"id": "it-IT-Wavenet-C",
+					"label": "it-IT-Wavenet-C (it-IT, Male)"
+				},
+				{
+					"id": "it-IT-Wavenet-D",
+					"label": "it-IT-Wavenet-D (it-IT, Male)"
+				},
+				{
+					"id": "ja-JP-Neural2-B",
+					"label": "ja-JP-Neural2-B (ja-JP, Female)"
+				},
+				{
+					"id": "ja-JP-Neural2-C",
+					"label": "ja-JP-Neural2-C (ja-JP, Male)"
+				},
+				{
+					"id": "ja-JP-Neural2-D",
+					"label": "ja-JP-Neural2-D (ja-JP, Male)"
+				},
+				{
+					"id": "ja-JP-Standard-A",
+					"label": "ja-JP-Standard-A (ja-JP, Female)"
+				},
+				{
+					"id": "ja-JP-Standard-B",
+					"label": "ja-JP-Standard-B (ja-JP, Female)"
+				},
+				{
+					"id": "ja-JP-Standard-C",
+					"label": "ja-JP-Standard-C (ja-JP, Male)"
+				},
+				{
+					"id": "ja-JP-Standard-D",
+					"label": "ja-JP-Standard-D (ja-JP, Male)"
+				},
+				{
+					"id": "ja-JP-Wavenet-A",
+					"label": "ja-JP-Wavenet-A (ja-JP, Female)"
+				},
+				{
+					"id": "ja-JP-Wavenet-B",
+					"label": "ja-JP-Wavenet-B (ja-JP, Female)"
+				},
+				{
+					"id": "ja-JP-Wavenet-C",
+					"label": "ja-JP-Wavenet-C (ja-JP, Male)"
+				},
+				{
+					"id": "ja-JP-Wavenet-D",
+					"label": "ja-JP-Wavenet-D (ja-JP, Male)"
+				},
+				{
+					"id": "kn-IN-Standard-A",
+					"label": "kn-IN-Standard-A (kn-IN, Female)"
+				},
+				{
+					"id": "kn-IN-Standard-B",
+					"label": "kn-IN-Standard-B (kn-IN, Male)"
+				},
+				{
+					"id": "kn-IN-Wavenet-A",
+					"label": "kn-IN-Wavenet-A (kn-IN, Female)"
+				},
+				{
+					"id": "kn-IN-Wavenet-B",
+					"label": "kn-IN-Wavenet-B (kn-IN, Male)"
+				},
+				{
+					"id": "ko-KR-Neural2-A",
+					"label": "ko-KR-Neural2-A (ko-KR, Female)"
+				},
+				{
+					"id": "ko-KR-Neural2-B",
+					"label": "ko-KR-Neural2-B (ko-KR, Female)"
+				},
+				{
+					"id": "ko-KR-Neural2-C",
+					"label": "ko-KR-Neural2-C (ko-KR, Male)"
+				},
+				{
+					"id": "ko-KR-Standard-A",
+					"label": "ko-KR-Standard-A (ko-KR, Female)"
+				},
+				{
+					"id": "ko-KR-Standard-B",
+					"label": "ko-KR-Standard-B (ko-KR, Female)"
+				},
+				{
+					"id": "ko-KR-Standard-C",
+					"label": "ko-KR-Standard-C (ko-KR, Male)"
+				},
+				{
+					"id": "ko-KR-Standard-D",
+					"label": "ko-KR-Standard-D (ko-KR, Male)"
+				},
+				{
+					"id": "ko-KR-Wavenet-A",
+					"label": "ko-KR-Wavenet-A (ko-KR, Female)"
+				},
+				{
+					"id": "ko-KR-Wavenet-B",
+					"label": "ko-KR-Wavenet-B (ko-KR, Female)"
+				},
+				{
+					"id": "ko-KR-Wavenet-C",
+					"label": "ko-KR-Wavenet-C (ko-KR, Male)"
+				},
+				{
+					"id": "ko-KR-Wavenet-D",
+					"label": "ko-KR-Wavenet-D (ko-KR, Male)"
+				},
+				{
+					"id": "lt-LT-Standard-A",
+					"label": "lt-LT-Standard-A (lt-LT, Male)"
+				},
+				{
+					"id": "lv-LV-Standard-A",
+					"label": "lv-LV-Standard-A (lv-LV, Male)"
+				},
+				{
+					"id": "ml-IN-Standard-A",
+					"label": "ml-IN-Standard-A (ml-IN, Female)"
+				},
+				{
+					"id": "ml-IN-Standard-B",
+					"label": "ml-IN-Standard-B (ml-IN, Male)"
+				},
+				{
+					"id": "ml-IN-Wavenet-A",
+					"label": "ml-IN-Wavenet-A (ml-IN, Female)"
+				},
+				{
+					"id": "ml-IN-Wavenet-B",
+					"label": "ml-IN-Wavenet-B (ml-IN, Male)"
+				},
+				{
+					"id": "ml-IN-Wavenet-C",
+					"label": "ml-IN-Wavenet-C (ml-IN, Female)"
+				},
+				{
+					"id": "ml-IN-Wavenet-D",
+					"label": "ml-IN-Wavenet-D (ml-IN, Male)"
+				},
+				{
+					"id": "mr-IN-Standard-A",
+					"label": "mr-IN-Standard-A (mr-IN, Female)"
+				},
+				{
+					"id": "mr-IN-Standard-B",
+					"label": "mr-IN-Standard-B (mr-IN, Male)"
+				},
+				{
+					"id": "mr-IN-Standard-C",
+					"label": "mr-IN-Standard-C (mr-IN, Female)"
+				},
+				{
+					"id": "mr-IN-Wavenet-A",
+					"label": "mr-IN-Wavenet-A (mr-IN, Female)"
+				},
+				{
+					"id": "mr-IN-Wavenet-B",
+					"label": "mr-IN-Wavenet-B (mr-IN, Male)"
+				},
+				{
+					"id": "mr-IN-Wavenet-C",
+					"label": "mr-IN-Wavenet-C (mr-IN, Female)"
+				},
+				{
+					"id": "ms-MY-Standard-A",
+					"label": "ms-MY-Standard-A (ms-MY, Female)"
+				},
+				{
+					"id": "ms-MY-Standard-B",
+					"label": "ms-MY-Standard-B (ms-MY, Male)"
+				},
+				{
+					"id": "ms-MY-Standard-C",
+					"label": "ms-MY-Standard-C (ms-MY, Female)"
+				},
+				{
+					"id": "ms-MY-Standard-D",
+					"label": "ms-MY-Standard-D (ms-MY, Male)"
+				},
+				{
+					"id": "ms-MY-Wavenet-A",
+					"label": "ms-MY-Wavenet-A (ms-MY, Female)"
+				},
+				{
+					"id": "ms-MY-Wavenet-B",
+					"label": "ms-MY-Wavenet-B (ms-MY, Male)"
+				},
+				{
+					"id": "ms-MY-Wavenet-C",
+					"label": "ms-MY-Wavenet-C (ms-MY, Female)"
+				},
+				{
+					"id": "ms-MY-Wavenet-D",
+					"label": "ms-MY-Wavenet-D (ms-MY, Male)"
+				},
+				{
+					"id": "nb-NO-Standard-A",
+					"label": "nb-NO-Standard-A (nb-NO, Female)"
+				},
+				{
+					"id": "nb-NO-Standard-B",
+					"label": "nb-NO-Standard-B (nb-NO, Male)"
+				},
+				{
+					"id": "nb-NO-Standard-C",
+					"label": "nb-NO-Standard-C (nb-NO, Female)"
+				},
+				{
+					"id": "nb-NO-Standard-D",
+					"label": "nb-NO-Standard-D (nb-NO, Male)"
+				},
+				{
+					"id": "nb-NO-Standard-E",
+					"label": "nb-NO-Standard-E (nb-NO, Female)"
+				},
+				{
+					"id": "nb-NO-Wavenet-A",
+					"label": "nb-NO-Wavenet-A (nb-NO, Female)"
+				},
+				{
+					"id": "nb-NO-Wavenet-B",
+					"label": "nb-NO-Wavenet-B (nb-NO, Male)"
+				},
+				{
+					"id": "nb-NO-Wavenet-C",
+					"label": "nb-NO-Wavenet-C (nb-NO, Female)"
+				},
+				{
+					"id": "nb-NO-Wavenet-D",
+					"label": "nb-NO-Wavenet-D (nb-NO, Male)"
+				},
+				{
+					"id": "nb-NO-Wavenet-E",
+					"label": "nb-NO-Wavenet-E (nb-NO, Female)"
+				},
+				{
+					"id": "nl-BE-Standard-A",
+					"label": "nl-BE-Standard-A (nl-BE, Female)"
+				},
+				{
+					"id": "nl-BE-Standard-B",
+					"label": "nl-BE-Standard-B (nl-BE, Male)"
+				},
+				{
+					"id": "nl-BE-Wavenet-A",
+					"label": "nl-BE-Wavenet-A (nl-BE, Female)"
+				},
+				{
+					"id": "nl-BE-Wavenet-B",
+					"label": "nl-BE-Wavenet-B (nl-BE, Male)"
+				},
+				{
+					"id": "nl-NL-Standard-A",
+					"label": "nl-NL-Standard-A (nl-NL, Female)"
+				},
+				{
+					"id": "nl-NL-Standard-B",
+					"label": "nl-NL-Standard-B (nl-NL, Male)"
+				},
+				{
+					"id": "nl-NL-Standard-C",
+					"label": "nl-NL-Standard-C (nl-NL, Male)"
+				},
+				{
+					"id": "nl-NL-Standard-D",
+					"label": "nl-NL-Standard-D (nl-NL, Female)"
+				},
+				{
+					"id": "nl-NL-Standard-E",
+					"label": "nl-NL-Standard-E (nl-NL, Female)"
+				},
+				{
+					"id": "nl-NL-Wavenet-A",
+					"label": "nl-NL-Wavenet-A (nl-NL, Female)"
+				},
+				{
+					"id": "nl-NL-Wavenet-B",
+					"label": "nl-NL-Wavenet-B (nl-NL, Male)"
+				},
+				{
+					"id": "nl-NL-Wavenet-C",
+					"label": "nl-NL-Wavenet-C (nl-NL, Male)"
+				},
+				{
+					"id": "nl-NL-Wavenet-D",
+					"label": "nl-NL-Wavenet-D (nl-NL, Female)"
+				},
+				{
+					"id": "nl-NL-Wavenet-E",
+					"label": "nl-NL-Wavenet-E (nl-NL, Female)"
+				},
+				{
+					"id": "pa-IN-Standard-A",
+					"label": "pa-IN-Standard-A (pa-IN, Female)"
+				},
+				{
+					"id": "pa-IN-Standard-B",
+					"label": "pa-IN-Standard-B (pa-IN, Male)"
+				},
+				{
+					"id": "pa-IN-Standard-C",
+					"label": "pa-IN-Standard-C (pa-IN, Female)"
+				},
+				{
+					"id": "pa-IN-Standard-D",
+					"label": "pa-IN-Standard-D (pa-IN, Male)"
+				},
+				{
+					"id": "pa-IN-Wavenet-A",
+					"label": "pa-IN-Wavenet-A (pa-IN, Female)"
+				},
+				{
+					"id": "pa-IN-Wavenet-B",
+					"label": "pa-IN-Wavenet-B (pa-IN, Male)"
+				},
+				{
+					"id": "pa-IN-Wavenet-C",
+					"label": "pa-IN-Wavenet-C (pa-IN, Female)"
+				},
+				{
+					"id": "pa-IN-Wavenet-D",
+					"label": "pa-IN-Wavenet-D (pa-IN, Male)"
+				},
+				{
+					"id": "pl-PL-Standard-A",
+					"label": "pl-PL-Standard-A (pl-PL, Female)"
+				},
+				{
+					"id": "pl-PL-Standard-B",
+					"label": "pl-PL-Standard-B (pl-PL, Male)"
+				},
+				{
+					"id": "pl-PL-Standard-C",
+					"label": "pl-PL-Standard-C (pl-PL, Male)"
+				},
+				{
+					"id": "pl-PL-Standard-D",
+					"label": "pl-PL-Standard-D (pl-PL, Female)"
+				},
+				{
+					"id": "pl-PL-Standard-E",
+					"label": "pl-PL-Standard-E (pl-PL, Female)"
+				},
+				{
+					"id": "pl-PL-Wavenet-A",
+					"label": "pl-PL-Wavenet-A (pl-PL, Female)"
+				},
+				{
+					"id": "pl-PL-Wavenet-B",
+					"label": "pl-PL-Wavenet-B (pl-PL, Male)"
+				},
+				{
+					"id": "pl-PL-Wavenet-C",
+					"label": "pl-PL-Wavenet-C (pl-PL, Male)"
+				},
+				{
+					"id": "pl-PL-Wavenet-D",
+					"label": "pl-PL-Wavenet-D (pl-PL, Female)"
+				},
+				{
+					"id": "pl-PL-Wavenet-E",
+					"label": "pl-PL-Wavenet-E (pl-PL, Female)"
+				},
+				{
+					"id": "pt-BR-Neural2-A",
+					"label": "pt-BR-Neural2-A (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-Neural2-B",
+					"label": "pt-BR-Neural2-B (pt-BR, Male)"
+				},
+				{
+					"id": "pt-BR-Neural2-C",
+					"label": "pt-BR-Neural2-C (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-Standard-A",
+					"label": "pt-BR-Standard-A (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-Standard-B",
+					"label": "pt-BR-Standard-B (pt-BR, Male)"
+				},
+				{
+					"id": "pt-BR-Standard-C",
+					"label": "pt-BR-Standard-C (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-Wavenet-A",
+					"label": "pt-BR-Wavenet-A (pt-BR, Female)"
+				},
+				{
+					"id": "pt-BR-Wavenet-B",
+					"label": "pt-BR-Wavenet-B (pt-BR, Male)"
+				},
+				{
+					"id": "pt-BR-Wavenet-C",
+					"label": "pt-BR-Wavenet-C (pt-BR, Female)"
+				},
+				{
+					"id": "pt-PT-Standard-A",
+					"label": "pt-PT-Standard-A (pt-PT, Female)"
+				},
+				{
+					"id": "pt-PT-Standard-B",
+					"label": "pt-PT-Standard-B (pt-PT, Male)"
+				},
+				{
+					"id": "pt-PT-Standard-C",
+					"label": "pt-PT-Standard-C (pt-PT, Male)"
+				},
+				{
+					"id": "pt-PT-Standard-D",
+					"label": "pt-PT-Standard-D (pt-PT, Female)"
+				},
+				{
+					"id": "pt-PT-Wavenet-A",
+					"label": "pt-PT-Wavenet-A (pt-PT, Female)"
+				},
+				{
+					"id": "pt-PT-Wavenet-B",
+					"label": "pt-PT-Wavenet-B (pt-PT, Male)"
+				},
+				{
+					"id": "pt-PT-Wavenet-C",
+					"label": "pt-PT-Wavenet-C (pt-PT, Male)"
+				},
+				{
+					"id": "pt-PT-Wavenet-D",
+					"label": "pt-PT-Wavenet-D (pt-PT, Female)"
+				},
+				{
+					"id": "ro-RO-Standard-A",
+					"label": "ro-RO-Standard-A (ro-RO, Female)"
+				},
+				{
+					"id": "ro-RO-Wavenet-A",
+					"label": "ro-RO-Wavenet-A (ro-RO, Female)"
+				},
+				{
+					"id": "ru-RU-Standard-A",
+					"label": "ru-RU-Standard-A (ru-RU, Female)"
+				},
+				{
+					"id": "ru-RU-Standard-B",
+					"label": "ru-RU-Standard-B (ru-RU, Male)"
+				},
+				{
+					"id": "ru-RU-Standard-C",
+					"label": "ru-RU-Standard-C (ru-RU, Female)"
+				},
+				{
+					"id": "ru-RU-Standard-D",
+					"label": "ru-RU-Standard-D (ru-RU, Male)"
+				},
+				{
+					"id": "ru-RU-Standard-E",
+					"label": "ru-RU-Standard-E (ru-RU, Female)"
+				},
+				{
+					"id": "ru-RU-Wavenet-A",
+					"label": "ru-RU-Wavenet-A (ru-RU, Female)"
+				},
+				{
+					"id": "ru-RU-Wavenet-B",
+					"label": "ru-RU-Wavenet-B (ru-RU, Male)"
+				},
+				{
+					"id": "ru-RU-Wavenet-C",
+					"label": "ru-RU-Wavenet-C (ru-RU, Female)"
+				},
+				{
+					"id": "ru-RU-Wavenet-D",
+					"label": "ru-RU-Wavenet-D (ru-RU, Male)"
+				},
+				{
+					"id": "ru-RU-Wavenet-E",
+					"label": "ru-RU-Wavenet-E (ru-RU, Female)"
+				},
+				{
+					"id": "sk-SK-Standard-A",
+					"label": "sk-SK-Standard-A (sk-SK, Female)"
+				},
+				{
+					"id": "sk-SK-Wavenet-A",
+					"label": "sk-SK-Wavenet-A (sk-SK, Female)"
+				},
+				{
+					"id": "sr-RS-Standard-A",
+					"label": "sr-RS-Standard-A (sr-RS, Female)"
+				},
+				{
+					"id": "sv-SE-Standard-A",
+					"label": "sv-SE-Standard-A (sv-SE, Female)"
+				},
+				{
+					"id": "sv-SE-Standard-B",
+					"label": "sv-SE-Standard-B (sv-SE, Female)"
+				},
+				{
+					"id": "sv-SE-Standard-C",
+					"label": "sv-SE-Standard-C (sv-SE, Female)"
+				},
+				{
+					"id": "sv-SE-Standard-D",
+					"label": "sv-SE-Standard-D (sv-SE, Male)"
+				},
+				{
+					"id": "sv-SE-Standard-E",
+					"label": "sv-SE-Standard-E (sv-SE, Male)"
+				},
+				{
+					"id": "sv-SE-Wavenet-A",
+					"label": "sv-SE-Wavenet-A (sv-SE, Female)"
+				},
+				{
+					"id": "sv-SE-Wavenet-B",
+					"label": "sv-SE-Wavenet-B (sv-SE, Female)"
+				},
+				{
+					"id": "sv-SE-Wavenet-C",
+					"label": "sv-SE-Wavenet-C (sv-SE, Male)"
+				},
+				{
+					"id": "sv-SE-Wavenet-D",
+					"label": "sv-SE-Wavenet-D (sv-SE, Female)"
+				},
+				{
+					"id": "sv-SE-Wavenet-E",
+					"label": "sv-SE-Wavenet-E (sv-SE, Male)"
+				},
+				{
+					"id": "ta-IN-Standard-A",
+					"label": "ta-IN-Standard-A (ta-IN, Female)"
+				},
+				{
+					"id": "ta-IN-Standard-B",
+					"label": "ta-IN-Standard-B (ta-IN, Male)"
+				},
+				{
+					"id": "ta-IN-Standard-C",
+					"label": "ta-IN-Standard-C (ta-IN, Female)"
+				},
+				{
+					"id": "ta-IN-Standard-D",
+					"label": "ta-IN-Standard-D (ta-IN, Male)"
+				},
+				{
+					"id": "ta-IN-Wavenet-A",
+					"label": "ta-IN-Wavenet-A (ta-IN, Female)"
+				},
+				{
+					"id": "ta-IN-Wavenet-B",
+					"label": "ta-IN-Wavenet-B (ta-IN, Male)"
+				},
+				{
+					"id": "ta-IN-Wavenet-C",
+					"label": "ta-IN-Wavenet-C (ta-IN, Female)"
+				},
+				{
+					"id": "ta-IN-Wavenet-D",
+					"label": "ta-IN-Wavenet-D (ta-IN, Male)"
+				},
+				{
+					"id": "te-IN-Standard-A",
+					"label": "te-IN-Standard-A (te-IN, Female)"
+				},
+				{
+					"id": "te-IN-Standard-B",
+					"label": "te-IN-Standard-B (te-IN, Male)"
+				},
+				{
+					"id": "th-TH-Neural2-C",
+					"label": "th-TH-Neural2-C (th-TH, Female)"
+				},
+				{
+					"id": "th-TH-Standard-A",
+					"label": "th-TH-Standard-A (th-TH, Female)"
+				},
+				{
+					"id": "tr-TR-Standard-A",
+					"label": "tr-TR-Standard-A (tr-TR, Female)"
+				},
+				{
+					"id": "tr-TR-Standard-B",
+					"label": "tr-TR-Standard-B (tr-TR, Male)"
+				},
+				{
+					"id": "tr-TR-Standard-C",
+					"label": "tr-TR-Standard-C (tr-TR, Female)"
+				},
+				{
+					"id": "tr-TR-Standard-D",
+					"label": "tr-TR-Standard-D (tr-TR, Female)"
+				},
+				{
+					"id": "tr-TR-Standard-E",
+					"label": "tr-TR-Standard-E (tr-TR, Male)"
+				},
+				{
+					"id": "tr-TR-Wavenet-A",
+					"label": "tr-TR-Wavenet-A (tr-TR, Female)"
+				},
+				{
+					"id": "tr-TR-Wavenet-B",
+					"label": "tr-TR-Wavenet-B (tr-TR, Male)"
+				},
+				{
+					"id": "tr-TR-Wavenet-C",
+					"label": "tr-TR-Wavenet-C (tr-TR, Female)"
+				},
+				{
+					"id": "tr-TR-Wavenet-D",
+					"label": "tr-TR-Wavenet-D (tr-TR, Female)"
+				},
+				{
+					"id": "tr-TR-Wavenet-E",
+					"label": "tr-TR-Wavenet-E (tr-TR, Male)"
+				},
+				{
+					"id": "uk-UA-Standard-A",
+					"label": "uk-UA-Standard-A (uk-UA, Female)"
+				},
+				{
+					"id": "uk-UA-Wavenet-A",
+					"label": "uk-UA-Wavenet-A (uk-UA, Female)"
+				},
+				{
+					"id": "vi-VN-Neural2-A",
+					"label": "vi-VN-Neural2-A (vi-VN, Female)"
+				},
+				{
+					"id": "vi-VN-Neural2-D",
+					"label": "vi-VN-Neural2-D (vi-VN, Male)"
+				},
+				{
+					"id": "vi-VN-Standard-A",
+					"label": "vi-VN-Standard-A (vi-VN, Female)"
+				},
+				{
+					"id": "vi-VN-Standard-B",
+					"label": "vi-VN-Standard-B (vi-VN, Male)"
+				},
+				{
+					"id": "vi-VN-Standard-C",
+					"label": "vi-VN-Standard-C (vi-VN, Female)"
+				},
+				{
+					"id": "vi-VN-Standard-D",
+					"label": "vi-VN-Standard-D (vi-VN, Male)"
+				},
+				{
+					"id": "vi-VN-Wavenet-A",
+					"label": "vi-VN-Wavenet-A (vi-VN, Female)"
+				},
+				{
+					"id": "vi-VN-Wavenet-B",
+					"label": "vi-VN-Wavenet-B (vi-VN, Male)"
+				},
+				{
+					"id": "vi-VN-Wavenet-C",
+					"label": "vi-VN-Wavenet-C (vi-VN, Female)"
+				},
+				{
+					"id": "vi-VN-Wavenet-D",
+					"label": "vi-VN-Wavenet-D (vi-VN, Male)"
+				},
+				{
+					"id": "yue-HK-Standard-A",
+					"label": "yue-HK-Standard-A (yue-HK, Female)"
+				},
+				{
+					"id": "yue-HK-Standard-B",
+					"label": "yue-HK-Standard-B (yue-HK, Male)"
+				},
+				{
+					"id": "yue-HK-Standard-C",
+					"label": "yue-HK-Standard-C (yue-HK, Female)"
+				},
+				{
+					"id": "yue-HK-Standard-D",
+					"label": "yue-HK-Standard-D (yue-HK, Male)"
+				}
 			],
 			"voiceHint": "Google Cloud TTS voice name"
 		},
@@ -68,11 +4333,218 @@
 			"path": "IBM",
 			"hasSample": true,
 			"container": "wav-stream",
-			"request": { "text": "$text", "modelId": "$voice" },
-			"defaults": { "voice": "en-US_AllisonV3Voice" },
+			"request": {
+				"text": "$text",
+				"modelId": "$voice"
+			},
+			"defaults": {
+				"voice": "en-US_AllisonV3Voice"
+			},
 			"voices": [
-				{ "id": "en-US_AllisonV3Voice", "label": "Allison (US)" },
-				{ "id": "en-US_MichaelV3Voice", "label": "Michael (US)" }
+				{
+					"id": "en-US_AllisonExpressive",
+					"label": "Allison (en-US, female)"
+				},
+				{
+					"id": "en-US_AllisonV2Voice",
+					"label": "Allison (en-US, female)"
+				},
+				{
+					"id": "en-US_AllisonV3Voice",
+					"label": "Allison (en-US, female)"
+				},
+				{
+					"id": "en-US_AllisonVoice",
+					"label": "Allison (en-US, female)"
+				},
+				{
+					"id": "en-US_EmilyV3Voice",
+					"label": "Emily (en-US, female)"
+				},
+				{
+					"id": "en-US_EmmaExpressive",
+					"label": "Emma (en-US, female)"
+				},
+				{
+					"id": "en-US_HenryV3Voice",
+					"label": "Henry (en-US, male)"
+				},
+				{
+					"id": "en-US_KevinV3Voice",
+					"label": "Kevin (en-US, male)"
+				},
+				{
+					"id": "en-US_LisaExpressive",
+					"label": "Lisa (en-US, female)"
+				},
+				{
+					"id": "en-US_LisaV2Voice",
+					"label": "Lisa (en-US, female)"
+				},
+				{
+					"id": "en-US_LisaV3Voice",
+					"label": "Lisa (en-US, female)"
+				},
+				{
+					"id": "en-US_LisaVoice",
+					"label": "Lisa (en-US, female)"
+				},
+				{
+					"id": "en-US_MichaelExpressive",
+					"label": "Michael (en-US, male)"
+				},
+				{
+					"id": "en-US_MichaelV2Voice",
+					"label": "Michael (en-US, male)"
+				},
+				{
+					"id": "en-US_MichaelV3Voice",
+					"label": "Michael (en-US, male)"
+				},
+				{
+					"id": "en-US_MichaelVoice",
+					"label": "Michael (en-US, male)"
+				},
+				{
+					"id": "en-US_OliviaV3Voice",
+					"label": "Olivia (en-US, female)"
+				},
+				{
+					"id": "en-AU_HeidiExpressive",
+					"label": "Heidi (en-AU, female)"
+				},
+				{
+					"id": "en-AU_JackExpressive",
+					"label": "Jack (en-AU, male)"
+				},
+				{
+					"id": "en-GB_CharlotteV3Voice",
+					"label": "Charlotte (en-GB, female)"
+				},
+				{
+					"id": "en-GB_JamesV3Voice",
+					"label": "James (en-GB, male)"
+				},
+				{
+					"id": "en-GB_KateV3Voice",
+					"label": "Kate (en-GB, female)"
+				},
+				{
+					"id": "en-GB_KateVoice",
+					"label": "Kate (en-GB, female)"
+				},
+				{
+					"id": "de-DE_BirgitV2Voice",
+					"label": "Birgit (de-DE, female)"
+				},
+				{
+					"id": "de-DE_BirgitV3Voice",
+					"label": "Birgit (de-DE, female)"
+				},
+				{
+					"id": "de-DE_BirgitVoice",
+					"label": "Birgit (de-DE, female)"
+				},
+				{
+					"id": "de-DE_DieterV2Voice",
+					"label": "Dieter (de-DE, male)"
+				},
+				{
+					"id": "de-DE_DieterV3Voice",
+					"label": "Dieter (de-DE, male)"
+				},
+				{
+					"id": "de-DE_DieterVoice",
+					"label": "Dieter (de-DE, male)"
+				},
+				{
+					"id": "de-DE_ErikaV3Voice",
+					"label": "Erika (de-DE, female)"
+				},
+				{
+					"id": "es-ES_EnriqueV3Voice",
+					"label": "Enrique (es-ES, male)"
+				},
+				{
+					"id": "es-ES_EnriqueVoice",
+					"label": "Enrique (es-ES, male)"
+				},
+				{
+					"id": "es-ES_LauraV3Voice",
+					"label": "Laura (es-ES, female)"
+				},
+				{
+					"id": "es-ES_LauraVoice",
+					"label": "Laura (es-ES, female)"
+				},
+				{
+					"id": "es-LA_SofiaV3Voice",
+					"label": "Sofia (es-LA, female)"
+				},
+				{
+					"id": "es-LA_SofiaVoice",
+					"label": "Sofia (es-LA, female)"
+				},
+				{
+					"id": "es-US_SofiaV3Voice",
+					"label": "Sofia (es-US, female)"
+				},
+				{
+					"id": "es-US_SofiaVoice",
+					"label": "Sofia (es-US, female)"
+				},
+				{
+					"id": "fr-CA_LouiseV3Voice",
+					"label": "Louise (fr-CA, female)"
+				},
+				{
+					"id": "fr-FR_NicolasV3Voice",
+					"label": "Nicolas (fr-FR, male)"
+				},
+				{
+					"id": "fr-FR_ReneeV3Voice",
+					"label": "Renee (fr-FR, female)"
+				},
+				{
+					"id": "fr-FR_ReneeVoice",
+					"label": "Renee (fr-FR, female)"
+				},
+				{
+					"id": "it-IT_FrancescaV2Voice",
+					"label": "Francesca (it-IT, female)"
+				},
+				{
+					"id": "it-IT_FrancescaV3Voice",
+					"label": "Francesca (it-IT, female)"
+				},
+				{
+					"id": "it-IT_FrancescaVoice",
+					"label": "Francesca (it-IT, female)"
+				},
+				{
+					"id": "ja-JP_EmiV3Voice",
+					"label": "Emi (ja-JP, female)"
+				},
+				{
+					"id": "ja-JP_EmiVoice",
+					"label": "Emi (ja-JP, female)"
+				},
+				{
+					"id": "ko-KR_JinV3Voice",
+					"label": "Jin (ko-KR, female)"
+				},
+				{
+					"id": "nl-NL_MerelV3Voice",
+					"label": "Merel (nl-NL, female)"
+				},
+				{
+					"id": "pt-BR_IsabelaV3Voice",
+					"label": "Isabela (pt-BR, female)"
+				},
+				{
+					"id": "pt-BR_IsabelaVoice",
+					"label": "Isabela (pt-BR, female)"
+				}
 			],
 			"voiceHint": "IBM Watson voice id"
 		},
@@ -82,13 +4554,40 @@
 			"path": "OpenAI",
 			"hasSample": true,
 			"container": "wav-stream",
-			"request": { "text": "$text", "engine": "tts-1", "modelId": "$voice", "language": "en-US" },
-			"defaults": { "voice": "alloy" },
+			"request": {
+				"text": "$text",
+				"engine": "tts-1",
+				"modelId": "$voice",
+				"language": "en-US"
+			},
+			"defaults": {
+				"voice": "alloy"
+			},
 			"voices": [
-				{ "id": "alloy" },
-				{ "id": "echo" },
-				{ "id": "nova" },
-				{ "id": "shimmer" }
+				{
+					"id": "alloy",
+					"label": "Alloy"
+				},
+				{
+					"id": "echo",
+					"label": "Echo"
+				},
+				{
+					"id": "fable",
+					"label": "Fable"
+				},
+				{
+					"id": "nova",
+					"label": "Nova"
+				},
+				{
+					"id": "onyx",
+					"label": "Onyx"
+				},
+				{
+					"id": "shimmer",
+					"label": "Shimmer"
+				}
 			],
 			"voiceHint": "OpenAI TTS voice"
 		},
@@ -97,8 +4596,13 @@
 			"label": "Uberduck",
 			"path": "Uberduck",
 			"hasSample": true,
-			"request": { "speech": "$text", "voicemodel_uuid": "$voice" },
-			"defaults": { "voice": "" },
+			"request": {
+				"speech": "$text",
+				"voicemodel_uuid": "$voice"
+			},
+			"defaults": {
+				"voice": ""
+			},
 			"voices": [],
 			"voiceHint": "Uberduck voicemodel_uuid",
 			"note": "Needs a real voicemodel_uuid; unverified."
@@ -109,10 +4613,18 @@
 			"path": "xAI",
 			"hasSample": true,
 			"container": "mp3",
-			"request": { "text": "$text", "language": "en-US", "voiceId": "$voice" },
-			"defaults": { "voice": "Ara" },
+			"request": {
+				"text": "$text",
+				"language": "en-US",
+				"voiceId": "$voice"
+			},
+			"defaults": {
+				"voice": "Ara"
+			},
 			"voices": [
-				{ "id": "Ara" }
+				{
+					"id": "Ara"
+				}
 			],
 			"voiceHint": "xAI voice id"
 		}

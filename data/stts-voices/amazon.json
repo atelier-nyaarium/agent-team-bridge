@@ -1,0 +1,713 @@
+[
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Kevin",
+      "LanguageCode": "en-US",
+      "LanguageName": "US English",
+      "Name": "Kevin",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Filiz",
+      "LanguageCode": "tr-TR",
+      "LanguageName": "Turkish",
+      "Name": "Filiz",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Elin",
+      "LanguageCode": "sv-SE",
+      "LanguageName": "Swedish",
+      "Name": "Elin",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Astrid",
+      "LanguageCode": "sv-SE",
+      "LanguageName": "Swedish",
+      "Name": "Astrid",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Tatyana",
+      "LanguageCode": "ru-RU",
+      "LanguageName": "Russian",
+      "Name": "Tatyana",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Maxim",
+      "LanguageCode": "ru-RU",
+      "LanguageName": "Russian",
+      "Name": "Maxim",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Carmen",
+      "LanguageCode": "ro-RO",
+      "LanguageName": "Romanian",
+      "Name": "Carmen",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Ines",
+      "LanguageCode": "pt-PT",
+      "LanguageName": "Portuguese",
+      "Name": "Inês",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Cristiano",
+      "LanguageCode": "pt-PT",
+      "LanguageName": "Portuguese",
+      "Name": "Cristiano",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Vitoria",
+      "LanguageCode": "pt-BR",
+      "LanguageName": "Brazilian Portuguese",
+      "Name": "Vitória",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Ricardo",
+      "LanguageCode": "pt-BR",
+      "LanguageName": "Brazilian Portuguese",
+      "Name": "Ricardo",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Camila",
+      "LanguageCode": "pt-BR",
+      "LanguageName": "Brazilian Portuguese",
+      "Name": "Camila",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Maja",
+      "LanguageCode": "pl-PL",
+      "LanguageName": "Polish",
+      "Name": "Maja",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Jan",
+      "LanguageCode": "pl-PL",
+      "LanguageName": "Polish",
+      "Name": "Jan",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Jacek",
+      "LanguageCode": "pl-PL",
+      "LanguageName": "Polish",
+      "Name": "Jacek",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Ewa",
+      "LanguageCode": "pl-PL",
+      "LanguageName": "Polish",
+      "Name": "Ewa",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Ola",
+      "LanguageCode": "pl-PL",
+      "LanguageName": "Polish",
+      "Name": "Ola",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Ruben",
+      "LanguageCode": "nl-NL",
+      "LanguageName": "Dutch",
+      "Name": "Ruben",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Lotte",
+      "LanguageCode": "nl-NL",
+      "LanguageName": "Dutch",
+      "Name": "Lotte",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Laura",
+      "LanguageCode": "nl-NL",
+      "LanguageName": "Dutch",
+      "Name": "Laura",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Ida",
+      "LanguageCode": "nb-NO",
+      "LanguageName": "Norwegian",
+      "Name": "Ida",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Liv",
+      "LanguageCode": "nb-NO",
+      "LanguageName": "Norwegian",
+      "Name": "Liv",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Seoyeon",
+      "LanguageCode": "ko-KR",
+      "LanguageName": "Korean",
+      "Name": "Seoyeon",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Takumi",
+      "LanguageCode": "ja-JP",
+      "LanguageName": "Japanese",
+      "Name": "Takumi",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Mizuki",
+      "LanguageCode": "ja-JP",
+      "LanguageName": "Japanese",
+      "Name": "Mizuki",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Bianca",
+      "LanguageCode": "it-IT",
+      "LanguageName": "Italian",
+      "Name": "Bianca",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Giorgio",
+      "LanguageCode": "it-IT",
+      "LanguageName": "Italian",
+      "Name": "Giorgio",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Carla",
+      "LanguageCode": "it-IT",
+      "LanguageName": "Italian",
+      "Name": "Carla",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Karl",
+      "LanguageCode": "is-IS",
+      "LanguageName": "Icelandic",
+      "Name": "Karl",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Dora",
+      "LanguageCode": "is-IS",
+      "LanguageName": "Icelandic",
+      "Name": "Dóra",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Mathieu",
+      "LanguageCode": "fr-FR",
+      "LanguageName": "French",
+      "Name": "Mathieu",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Lea",
+      "LanguageCode": "fr-FR",
+      "LanguageName": "French",
+      "Name": "Léa",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Celine",
+      "LanguageCode": "fr-FR",
+      "LanguageName": "French",
+      "Name": "Céline",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Chantal",
+      "LanguageCode": "fr-CA",
+      "LanguageName": "Canadian French",
+      "Name": "Chantal",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Gabrielle",
+      "LanguageCode": "fr-CA",
+      "LanguageName": "Canadian French",
+      "Name": "Gabrielle",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Penelope",
+      "LanguageCode": "es-US",
+      "LanguageName": "US Spanish",
+      "Name": "Penélope",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Miguel",
+      "LanguageCode": "es-US",
+      "LanguageName": "US Spanish",
+      "Name": "Miguel",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Lupe",
+      "LanguageCode": "es-US",
+      "LanguageName": "US Spanish",
+      "Name": "Lupe",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Mia",
+      "LanguageCode": "es-MX",
+      "LanguageName": "Mexican Spanish",
+      "Name": "Mia",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Lucia",
+      "LanguageCode": "es-ES",
+      "LanguageName": "Castilian Spanish",
+      "Name": "Lucia",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Enrique",
+      "LanguageCode": "es-ES",
+      "LanguageName": "Castilian Spanish",
+      "Name": "Enrique",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Conchita",
+      "LanguageCode": "es-ES",
+      "LanguageName": "Castilian Spanish",
+      "Name": "Conchita",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Geraint",
+      "LanguageCode": "en-GB-WLS",
+      "LanguageName": "Welsh English",
+      "Name": "Geraint",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Salli",
+      "LanguageCode": "en-US",
+      "LanguageName": "US English",
+      "Name": "Salli",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Matthew",
+      "LanguageCode": "en-US",
+      "LanguageName": "US English",
+      "Name": "Matthew",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Kimberly",
+      "LanguageCode": "en-US",
+      "LanguageName": "US English",
+      "Name": "Kimberly",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Kendra",
+      "LanguageCode": "en-US",
+      "LanguageName": "US English",
+      "Name": "Kendra",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Justin",
+      "LanguageCode": "en-US",
+      "LanguageName": "US English",
+      "Name": "Justin",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Joey",
+      "LanguageCode": "en-US",
+      "LanguageName": "US English",
+      "Name": "Joey",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Joanna",
+      "LanguageCode": "en-US",
+      "LanguageName": "US English",
+      "Name": "Joanna",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Ivy",
+      "LanguageCode": "en-US",
+      "LanguageName": "US English",
+      "Name": "Ivy",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Aria",
+      "LanguageCode": "en-NZ",
+      "LanguageName": "New Zealand English",
+      "Name": "Aria",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Ayanda",
+      "LanguageCode": "en-ZA",
+      "LanguageName": "South African English",
+      "Name": "Ayanda",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Raveena",
+      "LanguageCode": "en-IN",
+      "LanguageName": "Indian English",
+      "Name": "Raveena",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": [ "hi-IN" ],
+      "Gender": "Female",
+      "Id": "Aditi",
+      "LanguageCode": "en-IN",
+      "LanguageName": "Indian English",
+      "Name": "Aditi",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Emma",
+      "LanguageCode": "en-GB",
+      "LanguageName": "British English",
+      "Name": "Emma",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Brian",
+      "LanguageCode": "en-GB",
+      "LanguageName": "British English",
+      "Name": "Brian",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Amy",
+      "LanguageCode": "en-GB",
+      "LanguageName": "British English",
+      "Name": "Amy",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Russell",
+      "LanguageCode": "en-AU",
+      "LanguageName": "Australian English",
+      "Name": "Russell",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Nicole",
+      "LanguageCode": "en-AU",
+      "LanguageName": "Australian English",
+      "Name": "Nicole",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Olivia",
+      "LanguageCode": "en-AU",
+      "LanguageName": "Australian English",
+      "Name": "Olivia",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Vicki",
+      "LanguageCode": "de-DE",
+      "LanguageName": "German",
+      "Name": "Vicki",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Marlene",
+      "LanguageCode": "de-DE",
+      "LanguageName": "German",
+      "Name": "Marlene",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Hans",
+      "LanguageCode": "de-DE",
+      "LanguageName": "German",
+      "Name": "Hans",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Naja",
+      "LanguageCode": "da-DK",
+      "LanguageName": "Danish",
+      "Name": "Naja",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Mads",
+      "LanguageCode": "da-DK",
+      "LanguageName": "Danish",
+      "Name": "Mads",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Gwyneth",
+      "LanguageCode": "cy-GB",
+      "LanguageName": "Welsh",
+      "Name": "Gwyneth",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Zhiyu",
+      "LanguageCode": "cmn-CN",
+      "LanguageName": "Chinese Mandarin",
+      "Name": "Zhiyu",
+      "SupportedEngines": [ "neural", "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Zeina",
+      "LanguageCode": "arb",
+      "LanguageName": "Arabic",
+      "Name": "Zeina",
+      "SupportedEngines": [ "standard" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Hala",
+      "LanguageCode": "ar-AE",
+      "LanguageName": "Gulf Arabic",
+      "Name": "Hala",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Arlet",
+      "LanguageCode": "ca-ES",
+      "LanguageName": "Catalan",
+      "Name": "Arlet",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Hannah",
+      "LanguageCode": "de-AT",
+      "LanguageName": "German",
+      "Name": "Hannah",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": [ "hi-IN" ],
+      "Gender": "Female",
+      "Id": "Kajal",
+      "LanguageCode": "en-IN",
+      "LanguageName": "Indian English",
+      "Name": "Kajal",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Hiujin",
+      "LanguageCode": "yue-CN",
+      "LanguageName": "Cantonese",
+      "Name": "Hiujin",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Female",
+      "Id": "Suvi",
+      "LanguageCode": "fi-FI",
+      "LanguageName": "Finnish",
+      "Name": "Suvi",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Arthur",
+      "LanguageCode": "en-GB",
+      "LanguageName": "British English",
+      "Name": "Arthur",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Daniel",
+      "LanguageCode": "de-DE",
+      "LanguageName": "German",
+      "Name": "Daniel",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Liam",
+      "LanguageCode": "fr-CA",
+      "LanguageName": "Canadian French",
+      "Name": "Liam",
+      "SupportedEngines": [ "neural" ]
+    },
+    {
+      "AdditionalLanguageCodes": null,
+      "Gender": "Male",
+      "Id": "Pedro",
+      "LanguageCode": "es-US",
+      "LanguageName": "US Spanish",
+      "Name": "Pedro",
+      "SupportedEngines": [ "neural" ]
+    }
+  ]

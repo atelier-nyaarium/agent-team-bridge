@@ -1,0 +1,2612 @@
+[
+  {
+    "LanguageCodes": [ "af-ZA" ],
+    "Name": "af-ZA-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ar-XA" ],
+    "Name": "ar-XA-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ar-XA" ],
+    "Name": "ar-XA-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ar-XA" ],
+    "Name": "ar-XA-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ar-XA" ],
+    "Name": "ar-XA-Standard-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ar-XA" ],
+    "Name": "ar-XA-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ar-XA" ],
+    "Name": "ar-XA-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ar-XA" ],
+    "Name": "ar-XA-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ar-XA" ],
+    "Name": "ar-XA-Wavenet-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "bg-BG" ],
+    "Name": "bg-BG-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "bn-IN" ],
+    "Name": "bn-IN-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "bn-IN" ],
+    "Name": "bn-IN-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "bn-IN" ],
+    "Name": "bn-IN-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "bn-IN" ],
+    "Name": "bn-IN-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ca-ES" ],
+    "Name": "ca-ES-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-CN" ],
+    "Name": "cmn-CN-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-CN" ],
+    "Name": "cmn-CN-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-CN" ],
+    "Name": "cmn-CN-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-CN" ],
+    "Name": "cmn-CN-Standard-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-CN" ],
+    "Name": "cmn-CN-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-CN" ],
+    "Name": "cmn-CN-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-CN" ],
+    "Name": "cmn-CN-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-CN" ],
+    "Name": "cmn-CN-Wavenet-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-TW" ],
+    "Name": "cmn-TW-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-TW" ],
+    "Name": "cmn-TW-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-TW" ],
+    "Name": "cmn-TW-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-TW" ],
+    "Name": "cmn-TW-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-TW" ],
+    "Name": "cmn-TW-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cmn-TW" ],
+    "Name": "cmn-TW-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cs-CZ" ],
+    "Name": "cs-CZ-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "cs-CZ" ],
+    "Name": "cs-CZ-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "da-DK" ],
+    "Name": "da-DK-Neural2-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "da-DK" ],
+    "Name": "da-DK-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "da-DK" ],
+    "Name": "da-DK-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "da-DK" ],
+    "Name": "da-DK-Standard-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "da-DK" ],
+    "Name": "da-DK-Standard-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "da-DK" ],
+    "Name": "da-DK-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "da-DK" ],
+    "Name": "da-DK-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "da-DK" ],
+    "Name": "da-DK-Wavenet-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "da-DK" ],
+    "Name": "da-DK-Wavenet-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Neural2-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Neural2-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Neural2-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Neural2-F",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Polyglot-1",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Standard-E",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Standard-F",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Wavenet-E",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "de-DE" ],
+    "Name": "de-DE-Wavenet-F",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "el-GR" ],
+    "Name": "el-GR-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "el-GR" ],
+    "Name": "el-GR-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Neural2-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Neural2-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Neural2-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-News-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-News-F",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-News-G",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Polyglot-1",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-AU" ],
+    "Name": "en-AU-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Neural2-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Neural2-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Neural2-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Neural2-F",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-News-G",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-News-H",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-News-I",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-News-J",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-News-K",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-News-L",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-News-M",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Standard-F",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Studio-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Studio-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-GB" ],
+    "Name": "en-GB-Wavenet-F",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-IN" ],
+    "Name": "en-IN-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-IN" ],
+    "Name": "en-IN-Neural2-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-IN" ],
+    "Name": "en-IN-Neural2-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-IN" ],
+    "Name": "en-IN-Neural2-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-IN" ],
+    "Name": "en-IN-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-IN" ],
+    "Name": "en-IN-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-IN" ],
+    "Name": "en-IN-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-IN" ],
+    "Name": "en-IN-Standard-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-IN" ],
+    "Name": "en-IN-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-IN" ],
+    "Name": "en-IN-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-IN" ],
+    "Name": "en-IN-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-IN" ],
+    "Name": "en-IN-Wavenet-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Neural2-A",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Neural2-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Neural2-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Neural2-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Neural2-F",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Neural2-G",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Neural2-H",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Neural2-I",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Neural2-J",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-News-K",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-News-L",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-News-M",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-News-N",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Polyglot-1",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Standard-A",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Standard-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Standard-F",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Standard-G",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Standard-H",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Standard-I",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Standard-J",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Studio-M",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Studio-O",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Studio-Q",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Wavenet-A",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Wavenet-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Wavenet-F",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Wavenet-G",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Wavenet-H",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Wavenet-I",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "en-US" ],
+    "Name": "en-US-Wavenet-J",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Neural2-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Neural2-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Neural2-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Neural2-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Neural2-F",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Polyglot-1",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Standard-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-ES" ],
+    "Name": "es-ES-Wavenet-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-Neural2-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-Neural2-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-News-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-News-E",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-News-F",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-News-G",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-Polyglot-1",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-Studio-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "es-US" ],
+    "Name": "es-US-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "eu-ES" ],
+    "Name": "eu-ES-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fi-FI" ],
+    "Name": "fi-FI-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fi-FI" ],
+    "Name": "fi-FI-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fil-PH" ],
+    "Name": "fil-PH-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fil-PH" ],
+    "Name": "fil-PH-Standard-B",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fil-PH" ],
+    "Name": "fil-PH-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fil-PH" ],
+    "Name": "fil-PH-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fil-PH" ],
+    "Name": "fil-PH-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fil-PH" ],
+    "Name": "fil-PH-Wavenet-B",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fil-PH" ],
+    "Name": "fil-PH-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fil-PH" ],
+    "Name": "fil-PH-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fil-PH" ],
+    "Name": "fil-ph-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fil-PH" ],
+    "Name": "fil-ph-Neural2-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-CA" ],
+    "Name": "fr-CA-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-CA" ],
+    "Name": "fr-CA-Neural2-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-CA" ],
+    "Name": "fr-CA-Neural2-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-CA" ],
+    "Name": "fr-CA-Neural2-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-CA" ],
+    "Name": "fr-CA-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-CA" ],
+    "Name": "fr-CA-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-CA" ],
+    "Name": "fr-CA-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-CA" ],
+    "Name": "fr-CA-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-CA" ],
+    "Name": "fr-CA-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-CA" ],
+    "Name": "fr-CA-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-CA" ],
+    "Name": "fr-CA-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-CA" ],
+    "Name": "fr-CA-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Neural2-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Neural2-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Neural2-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Neural2-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Polyglot-1",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Standard-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "fr-FR" ],
+    "Name": "fr-FR-Wavenet-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "gl-ES" ],
+    "Name": "gl-ES-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "gu-IN" ],
+    "Name": "gu-IN-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "gu-IN" ],
+    "Name": "gu-IN-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "gu-IN" ],
+    "Name": "gu-IN-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "gu-IN" ],
+    "Name": "gu-IN-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "he-IL" ],
+    "Name": "he-IL-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "he-IL" ],
+    "Name": "he-IL-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "he-IL" ],
+    "Name": "he-IL-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "he-IL" ],
+    "Name": "he-IL-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "he-IL" ],
+    "Name": "he-IL-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "he-IL" ],
+    "Name": "he-IL-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "he-IL" ],
+    "Name": "he-IL-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "he-IL" ],
+    "Name": "he-IL-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hi-IN" ],
+    "Name": "hi-IN-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hi-IN" ],
+    "Name": "hi-IN-Neural2-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hi-IN" ],
+    "Name": "hi-IN-Neural2-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hi-IN" ],
+    "Name": "hi-IN-Neural2-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hi-IN" ],
+    "Name": "hi-IN-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hi-IN" ],
+    "Name": "hi-IN-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hi-IN" ],
+    "Name": "hi-IN-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hi-IN" ],
+    "Name": "hi-IN-Standard-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hi-IN" ],
+    "Name": "hi-IN-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hi-IN" ],
+    "Name": "hi-IN-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hi-IN" ],
+    "Name": "hi-IN-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hi-IN" ],
+    "Name": "hi-IN-Wavenet-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hu-HU" ],
+    "Name": "hu-HU-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "hu-HU" ],
+    "Name": "hu-HU-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "id-ID" ],
+    "Name": "id-ID-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "id-ID" ],
+    "Name": "id-ID-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "id-ID" ],
+    "Name": "id-ID-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "id-ID" ],
+    "Name": "id-ID-Standard-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "id-ID" ],
+    "Name": "id-ID-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "id-ID" ],
+    "Name": "id-ID-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "id-ID" ],
+    "Name": "id-ID-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "id-ID" ],
+    "Name": "id-ID-Wavenet-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "is-IS" ],
+    "Name": "is-IS-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "it-IT" ],
+    "Name": "it-IT-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "it-IT" ],
+    "Name": "it-IT-Neural2-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "it-IT" ],
+    "Name": "it-IT-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "it-IT" ],
+    "Name": "it-IT-Standard-B",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "it-IT" ],
+    "Name": "it-IT-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "it-IT" ],
+    "Name": "it-IT-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "it-IT" ],
+    "Name": "it-IT-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "it-IT" ],
+    "Name": "it-IT-Wavenet-B",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "it-IT" ],
+    "Name": "it-IT-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "it-IT" ],
+    "Name": "it-IT-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ja-JP" ],
+    "Name": "ja-JP-Neural2-B",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ja-JP" ],
+    "Name": "ja-JP-Neural2-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ja-JP" ],
+    "Name": "ja-JP-Neural2-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ja-JP" ],
+    "Name": "ja-JP-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ja-JP" ],
+    "Name": "ja-JP-Standard-B",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ja-JP" ],
+    "Name": "ja-JP-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ja-JP" ],
+    "Name": "ja-JP-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ja-JP" ],
+    "Name": "ja-JP-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ja-JP" ],
+    "Name": "ja-JP-Wavenet-B",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ja-JP" ],
+    "Name": "ja-JP-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ja-JP" ],
+    "Name": "ja-JP-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "kn-IN" ],
+    "Name": "kn-IN-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "kn-IN" ],
+    "Name": "kn-IN-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "kn-IN" ],
+    "Name": "kn-IN-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "kn-IN" ],
+    "Name": "kn-IN-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ko-KR" ],
+    "Name": "ko-KR-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ko-KR" ],
+    "Name": "ko-KR-Neural2-B",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ko-KR" ],
+    "Name": "ko-KR-Neural2-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ko-KR" ],
+    "Name": "ko-KR-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ko-KR" ],
+    "Name": "ko-KR-Standard-B",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ko-KR" ],
+    "Name": "ko-KR-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ko-KR" ],
+    "Name": "ko-KR-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ko-KR" ],
+    "Name": "ko-KR-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ko-KR" ],
+    "Name": "ko-KR-Wavenet-B",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ko-KR" ],
+    "Name": "ko-KR-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ko-KR" ],
+    "Name": "ko-KR-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "lt-LT" ],
+    "Name": "lt-LT-Standard-A",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "lv-LV" ],
+    "Name": "lv-LV-Standard-A",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ml-IN" ],
+    "Name": "ml-IN-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ml-IN" ],
+    "Name": "ml-IN-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ml-IN" ],
+    "Name": "ml-IN-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ml-IN" ],
+    "Name": "ml-IN-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ml-IN" ],
+    "Name": "ml-IN-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ml-IN" ],
+    "Name": "ml-IN-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "mr-IN" ],
+    "Name": "mr-IN-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "mr-IN" ],
+    "Name": "mr-IN-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "mr-IN" ],
+    "Name": "mr-IN-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "mr-IN" ],
+    "Name": "mr-IN-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "mr-IN" ],
+    "Name": "mr-IN-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "mr-IN" ],
+    "Name": "mr-IN-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ms-MY" ],
+    "Name": "ms-MY-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ms-MY" ],
+    "Name": "ms-MY-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ms-MY" ],
+    "Name": "ms-MY-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ms-MY" ],
+    "Name": "ms-MY-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ms-MY" ],
+    "Name": "ms-MY-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ms-MY" ],
+    "Name": "ms-MY-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ms-MY" ],
+    "Name": "ms-MY-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ms-MY" ],
+    "Name": "ms-MY-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nb-NO" ],
+    "Name": "nb-NO-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nb-NO" ],
+    "Name": "nb-NO-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nb-NO" ],
+    "Name": "nb-NO-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nb-NO" ],
+    "Name": "nb-NO-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nb-NO" ],
+    "Name": "nb-NO-Standard-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nb-NO" ],
+    "Name": "nb-NO-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nb-NO" ],
+    "Name": "nb-NO-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nb-NO" ],
+    "Name": "nb-NO-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nb-NO" ],
+    "Name": "nb-NO-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nb-NO" ],
+    "Name": "nb-NO-Wavenet-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-BE" ],
+    "Name": "nl-BE-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-BE" ],
+    "Name": "nl-BE-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-BE" ],
+    "Name": "nl-BE-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-BE" ],
+    "Name": "nl-BE-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-NL" ],
+    "Name": "nl-NL-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-NL" ],
+    "Name": "nl-NL-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-NL" ],
+    "Name": "nl-NL-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-NL" ],
+    "Name": "nl-NL-Standard-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-NL" ],
+    "Name": "nl-NL-Standard-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-NL" ],
+    "Name": "nl-NL-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-NL" ],
+    "Name": "nl-NL-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-NL" ],
+    "Name": "nl-NL-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-NL" ],
+    "Name": "nl-NL-Wavenet-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "nl-NL" ],
+    "Name": "nl-NL-Wavenet-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pa-IN" ],
+    "Name": "pa-IN-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pa-IN" ],
+    "Name": "pa-IN-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pa-IN" ],
+    "Name": "pa-IN-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pa-IN" ],
+    "Name": "pa-IN-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pa-IN" ],
+    "Name": "pa-IN-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pa-IN" ],
+    "Name": "pa-IN-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pa-IN" ],
+    "Name": "pa-IN-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pa-IN" ],
+    "Name": "pa-IN-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pl-PL" ],
+    "Name": "pl-PL-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pl-PL" ],
+    "Name": "pl-PL-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pl-PL" ],
+    "Name": "pl-PL-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pl-PL" ],
+    "Name": "pl-PL-Standard-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pl-PL" ],
+    "Name": "pl-PL-Standard-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pl-PL" ],
+    "Name": "pl-PL-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pl-PL" ],
+    "Name": "pl-PL-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pl-PL" ],
+    "Name": "pl-PL-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pl-PL" ],
+    "Name": "pl-PL-Wavenet-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pl-PL" ],
+    "Name": "pl-PL-Wavenet-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-BR" ],
+    "Name": "pt-BR-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-BR" ],
+    "Name": "pt-BR-Neural2-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-BR" ],
+    "Name": "pt-BR-Neural2-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-BR" ],
+    "Name": "pt-BR-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-BR" ],
+    "Name": "pt-BR-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-BR" ],
+    "Name": "pt-BR-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-BR" ],
+    "Name": "pt-BR-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-BR" ],
+    "Name": "pt-BR-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-BR" ],
+    "Name": "pt-BR-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-PT" ],
+    "Name": "pt-PT-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-PT" ],
+    "Name": "pt-PT-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-PT" ],
+    "Name": "pt-PT-Standard-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-PT" ],
+    "Name": "pt-PT-Standard-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-PT" ],
+    "Name": "pt-PT-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-PT" ],
+    "Name": "pt-PT-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-PT" ],
+    "Name": "pt-PT-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "pt-PT" ],
+    "Name": "pt-PT-Wavenet-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ro-RO" ],
+    "Name": "ro-RO-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ro-RO" ],
+    "Name": "ro-RO-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ru-RU" ],
+    "Name": "ru-RU-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ru-RU" ],
+    "Name": "ru-RU-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ru-RU" ],
+    "Name": "ru-RU-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ru-RU" ],
+    "Name": "ru-RU-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ru-RU" ],
+    "Name": "ru-RU-Standard-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ru-RU" ],
+    "Name": "ru-RU-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ru-RU" ],
+    "Name": "ru-RU-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ru-RU" ],
+    "Name": "ru-RU-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ru-RU" ],
+    "Name": "ru-RU-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ru-RU" ],
+    "Name": "ru-RU-Wavenet-E",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sk-SK" ],
+    "Name": "sk-SK-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sk-SK" ],
+    "Name": "sk-SK-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sr-RS" ],
+    "Name": "sr-RS-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sv-SE" ],
+    "Name": "sv-SE-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sv-SE" ],
+    "Name": "sv-SE-Standard-B",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sv-SE" ],
+    "Name": "sv-SE-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sv-SE" ],
+    "Name": "sv-SE-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sv-SE" ],
+    "Name": "sv-SE-Standard-E",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sv-SE" ],
+    "Name": "sv-SE-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sv-SE" ],
+    "Name": "sv-SE-Wavenet-B",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sv-SE" ],
+    "Name": "sv-SE-Wavenet-C",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sv-SE" ],
+    "Name": "sv-SE-Wavenet-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "sv-SE" ],
+    "Name": "sv-SE-Wavenet-E",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ta-IN" ],
+    "Name": "ta-IN-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ta-IN" ],
+    "Name": "ta-IN-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ta-IN" ],
+    "Name": "ta-IN-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ta-IN" ],
+    "Name": "ta-IN-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ta-IN" ],
+    "Name": "ta-IN-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ta-IN" ],
+    "Name": "ta-IN-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ta-IN" ],
+    "Name": "ta-IN-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "ta-IN" ],
+    "Name": "ta-IN-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "te-IN" ],
+    "Name": "te-IN-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "te-IN" ],
+    "Name": "te-IN-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "th-TH" ],
+    "Name": "th-TH-Neural2-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "th-TH" ],
+    "Name": "th-TH-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "tr-TR" ],
+    "Name": "tr-TR-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "tr-TR" ],
+    "Name": "tr-TR-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "tr-TR" ],
+    "Name": "tr-TR-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "tr-TR" ],
+    "Name": "tr-TR-Standard-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "tr-TR" ],
+    "Name": "tr-TR-Standard-E",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "tr-TR" ],
+    "Name": "tr-TR-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "tr-TR" ],
+    "Name": "tr-TR-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "tr-TR" ],
+    "Name": "tr-TR-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "tr-TR" ],
+    "Name": "tr-TR-Wavenet-D",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "tr-TR" ],
+    "Name": "tr-TR-Wavenet-E",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "uk-UA" ],
+    "Name": "uk-UA-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "uk-UA" ],
+    "Name": "uk-UA-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "vi-VN" ],
+    "Name": "vi-VN-Neural2-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "vi-VN" ],
+    "Name": "vi-VN-Neural2-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "vi-VN" ],
+    "Name": "vi-VN-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "vi-VN" ],
+    "Name": "vi-VN-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "vi-VN" ],
+    "Name": "vi-VN-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "vi-VN" ],
+    "Name": "vi-VN-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "vi-VN" ],
+    "Name": "vi-VN-Wavenet-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "vi-VN" ],
+    "Name": "vi-VN-Wavenet-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "vi-VN" ],
+    "Name": "vi-VN-Wavenet-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "vi-VN" ],
+    "Name": "vi-VN-Wavenet-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "yue-HK" ],
+    "Name": "yue-HK-Standard-A",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "yue-HK" ],
+    "Name": "yue-HK-Standard-B",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "yue-HK" ],
+    "Name": "yue-HK-Standard-C",
+    "SsmlGender": 2,
+    "NaturalSampleRateHertz": 24000
+  },
+  {
+    "LanguageCodes": [ "yue-HK" ],
+    "Name": "yue-HK-Standard-D",
+    "SsmlGender": 1,
+    "NaturalSampleRateHertz": 24000
+  }
+]

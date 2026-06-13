@@ -46,3 +46,10 @@ jobs:
           bun scripts/codegen-kotlin.ts
           git diff --exit-code -- android/app/src/main/java/com/atelier_nyaarium/switchboard/proto/
           test -z "$(git status --porcelain -- android/app/src/main/java/com/atelier_nyaarium/switchboard/proto/)"
+
+      - name: STTS voice import drift check
+        # The bundled catalog's voices must match what the per-provider dumps
+        # normalize to, so a stale paste-in cannot ship.
+        run: |
+          bun scripts/import-stts-voices.ts
+          git diff --exit-code -- android/app/src/main/assets/stts-providers.json
