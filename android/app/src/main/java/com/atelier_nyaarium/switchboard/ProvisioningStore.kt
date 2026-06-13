@@ -60,6 +60,14 @@ class ProvisioningStore(context: Context) {
 		prefs.edit().putString(KEY_STTS_VOICE_PREFIX + providerId, voice).apply()
 	}
 
+	/** When on, an incoming message for a followed (open) thread is
+	 * pre-synthesized before its notification, so Play is an instant cache hit. */
+	var autoTts: Boolean
+		get() = prefs.getBoolean(KEY_AUTO_TTS, false)
+		set(value) {
+			prefs.edit().putBoolean(KEY_AUTO_TTS, value).apply()
+		}
+
 	fun saveThreads(json: String) = prefs.edit().putString(KEY_THREADS, json).apply()
 
 	fun loadThreads(): String? = prefs.getString(KEY_THREADS, null)
@@ -76,5 +84,6 @@ class ProvisioningStore(context: Context) {
 		const val KEY_STTS_PROVIDER = "stts_provider"
 		const val KEY_STTS_VOICE = "stts_voice"
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."
+		const val KEY_AUTO_TTS = "auto_tts"
 	}
 }

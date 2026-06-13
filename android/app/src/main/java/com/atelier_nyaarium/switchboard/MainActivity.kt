@@ -1126,6 +1126,24 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		Text("Playback failed: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
 	}
 
+	var autoTts by remember { mutableStateOf(repo.sttsAutoGen) }
+	Row(verticalAlignment = Alignment.CenterVertically) {
+		Column(Modifier.weight(1f)) {
+			Text("Auto-generate voice", style = MaterialTheme.typography.titleSmall)
+			Text(
+				"Pre-synthesize incoming messages for threads you have open, so Play is instant. Adds about 10s to the notification.",
+				style = MaterialTheme.typography.bodySmall,
+			)
+		}
+		Switch(
+			checked = autoTts,
+			onCheckedChange = {
+				autoTts = it
+				repo.sttsAutoGen = it
+			},
+		)
+	}
+
 	if (pickerOpen) {
 		AlertDialog(
 			onDismissRequest = { pickerOpen = false },

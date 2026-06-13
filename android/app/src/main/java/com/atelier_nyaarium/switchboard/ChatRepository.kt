@@ -142,6 +142,9 @@ class ChatRepository(
 	private var lastSeq = -1L
 	private var pollFails = 0
 	private var pollJob: Job? = null
+	// The poll loop's scope, reused to launch auto-TTS preloads that gate the
+	// notification (so the audio is cached before the user is pinged).
+	private var pollScope: CoroutineScope? = null
 
 	/** TTS playback engine; cache lives under filesDir/stts/<team>/. */
 	val stts = SttsPlayer(filesDir)
@@ -255,6 +258,34 @@ class ChatRepository(
 			val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
 			stts.play(client, provider, voice, team, at, tier, SttsPlayer.ttsText(msg, tier))
 		}
+	}
+
+	/** When on, an incoming message for a followed (open) thread is
+	 * pre-synthesized before its notification. Persisted in prefs. */
+	var sttsAutoGen: Boolean
+		get() = store.autoTts
+		set(value) {
+			store.autoTts = value
+		}
+
+	/** Pre-synthesize both tiers of a message into the cache so a later Play is
+	 * instant. Blocking; runs off the poll loop on an IO thread. Silent on any
+	 * failure - the notification fires regardless and Play falls back to live
+	 * synthesis. No-op when unconfigured or the message is gone. */
+	private fun preloadMessage(team: String, at: Long) {
+		val client = sttsClient() ?: return
+		val provider = currentProvider() ?: return
+		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return
+		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
+		stts.preloadBoth(
+			client,
+			provider,
+			voice,
+			team,
+			at,
+			SttsPlayer.ttsText(msg, SttsPlayer.Tier.SUMMARY),
+			SttsPlayer.ttsText(msg, SttsPlayer.Tier.FULL),
+		)
 	}
 
 	/** Settings voice preview with the current provider/voice. */
@@ -441,6 +472,7 @@ class ChatRepository(
 
 	fun startPolling(scope: CoroutineScope) {
 		if (pollJob?.isActive == true) return
+		pollScope = scope
 		pollJob = scope.launch(Dispatchers.IO) {
 			var lastTeamsAt = 0L
 			while (isActive) {
@@ -496,7 +528,28 @@ class ChatRepository(
 							burst.getOrPut(team) { mutableListOf() }.add(msg)
 						}
 					}
-					for ((team, msgs) in burst) onInbound?.invoke(team, msgs)
+					for ((team, msgs) in burst) {
+						val lastAgent = msgs.lastOrNull { !it.fromMe }
+						// Only spend synthesis on followed threads (open tabs); a
+						// never-opened or forgotten session is not in openTabs, so it
+						// notifies without preloading.
+						val followed = team in _state.value.openTabs
+						val scope = pollScope
+						if (scope != null && lastAgent != null && sttsAutoGen && sttsReady() && followed) {
+							val t = team
+							val ms = msgs
+							val at = lastAgent.at
+							scope.launch(Dispatchers.IO) {
+								// Cap the notification's wait; if synthesis runs long it
+								// finishes in the background and still warms the cache.
+								val pre = launch(Dispatchers.IO) { preloadMessage(t, at) }
+								withTimeoutOrNull(PRELOAD_CAP_MS) { pre.join() }
+								onInbound?.invoke(t, ms)
+							}
+						} else {
+							onInbound?.invoke(team, msgs)
+						}
+					}
 					cursor = mb.cursor
 					pollFails = 0
 					if (_state.value.error != null || _state.value.pollFailStreak != 0) {
@@ -769,5 +822,8 @@ class ChatRepository(
 		// Mirrors NOTICE_SESSION_PREFIX in src/shared/phone-protocol.ts, the single
 		// source of truth for the broadcast-notice session-id grammar.
 		const val NOTICE_SESSION_PREFIX = "notice:"
+		// Auto-TTS: how long the notification waits for preload before firing
+		// anyway. Synthesis keeps running past this and still warms the cache.
+		const val PRELOAD_CAP_MS = 15_000L
 	}
 }

@@ -90,6 +90,62 @@ class SttsPlayer(private val root: File) {
 		synthesizeAndPlay(k, "_sample", 0, dest) { d -> client.sample(provider, text, voice, d) }
 	}
 
+	/** Pre-synthesize both tiers of one message into the cache without playing,
+	 * so a later Play is an instant cache hit. Blocking - call off the main
+	 * thread. Dedups when the two tiers speak the same text (most plain
+	 * messages): synthesize once and copy. Never throws; a failed tier just
+	 * leaves no cache entry and Play synthesizes on demand later. */
+	fun preloadBoth(
+		client: SttsClient,
+		provider: SttsProvider,
+		voice: String?,
+		team: String,
+		at: Long,
+		summaryText: String,
+		fullText: String,
+	) {
+		val sumDest = cacheFile(team, at, Tier.SUMMARY, provider, voice)
+		val sumOk = synthToCache(client, provider, voice, summaryText, sumDest)
+		val fullDest = cacheFile(team, at, Tier.FULL, provider, voice)
+		if (fullText == summaryText) {
+			if (sumOk && (!fullDest.exists() || fullDest.length() == 0L)) {
+				runCatching { sumDest.copyTo(fullDest, overwrite = true) }
+			}
+		} else {
+			synthToCache(client, provider, voice, fullText, fullDest)
+		}
+	}
+
+	/** Synthesize `text` into `dest` (atomic, cache-skip), returning whether
+	 * `dest` holds audio afterward. Uses a preload-specific temp name so it never
+	 * collides with a concurrent play's temp file; a play that races it just
+	 * re-synthesizes (last atomic rename wins, same bytes). Never throws. */
+	private fun synthToCache(
+		client: SttsClient,
+		provider: SttsProvider,
+		voice: String?,
+		text: String,
+		dest: File,
+	): Boolean {
+		if (dest.exists() && dest.length() > 0L) return true
+		if (text.isBlank()) return false
+		return try {
+			dest.parentFile?.mkdirs()
+			val tmp = File(dest.parentFile, "${dest.name}.ptmp")
+			client.stream(provider, text, voice, tmp)
+			if (tmp.length() == 0L || !tmp.renameTo(dest)) {
+				tmp.delete()
+				false
+			} else {
+				true
+			}
+		} catch (e: Exception) {
+			Log.w(TAG, "preload synth failed: ${e.message}")
+			dest.delete()
+			false
+		}
+	}
+
 	/** Shared synthesis path: single-flight on the key, atomic cache write,
 	 * then playback. `fetch` writes the audio into the destination file. */
 	private fun synthesizeAndPlay(k: String, team: String, at: Long, dest: File, fetch: (File) -> Unit) {
