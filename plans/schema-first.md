@@ -604,17 +604,16 @@ falling back to Azure.
   - Every copy headed:
     `// SYNCED COPY - source of truth: switchboard/src/shared/<file>.ts`
     `// MUST re-copy on change: cp <src> <dest> (see switchboard CLAUDE.md)`.
-  - Staleness-guard shape, IF one is wanted later (framework-pass design
-    note - the manual cp + header is the committed baseline): a single-repo
-    CI step cannot diff across three separate git repos, so the realistic
-    mechanism is a content-hash marker. The source file's header carries a
-    hash of its own schema body; each synced copy records the source hash it
-    was cut from; each repo's CI asserts its copy's recorded hash matches the
-    copy's actual content (catches a hand-edit of a copy), and a manual or
-    periodic cross-repo job asserts the recorded hash equals the live
-    source's hash (catches a stale copy). Deferred until the copies exist and
-    a second synced file (notice.ts) justifies the generalization; the header
-    + manual cp ship first.
+  - Staleness guard (DELIVERED, framework pass): the per-copy half shipped as
+    `scripts/check-sync-hash.ts`. Each leaf header carries a `// SYNC-HASH:`
+    of its body; each repo's CI recomputes its copy's body hash and fails on a
+    divergence (catches a hand-edit that still type-checks). switchboard
+    ci.yml, evie-bot _lint.yml, and a NEW nyaaskills ci.yml (it had no CI at
+    all) all run it; the script is copied into each consumer repo. The
+    cross-repo half (recorded hash vs live source's hash, catching a STALE
+    copy) stays deferred - the re-copy command in the header makes a stale
+    copy the unlikely failure, and a stale copy self-corrects at the next
+    legitimate sync.
 - CLAUDE.md notes in all three repos: which files are synced copies, which
   direction, the copy command.
 - Verification: nyaaskills cycle lap composing a notice through the synced
