@@ -1,9 +1,15 @@
-// SYNC-HASH: 177537b854c8c968ca812a43b65be0d3
+// SYNC-HASH: 9d20dbf367b2af6154835e6c440c32b4
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
 import { z } from "zod";
-import { type Admission, type SignedAdmission, signAdmission } from "./admission.js";
+import {
+	type Admission,
+	type SignedAdmission,
+	SignedAdmissionSchema,
+	SignedRevocationSchema,
+	signAdmission,
+} from "./admission.js";
 import { fingerprint } from "./crypto.js";
 
 ////////////////////////////////
@@ -59,10 +65,35 @@ export const EnrollmentPayloadSchema = z
 	])
 	.meta({ id: "EnrollmentPayload" });
 
+/** The owner device's enrollment requests to evie (NOT relayed to a Host - evie
+ * is the Domain root). All three are self-authenticating: `enroll_redeem` is
+ * authorized by the single-use nonce evie minted, and the submit ops carry an
+ * owner-signed artifact evie verifies against the rooted owner key. The phone
+ * sends them over the same app-token-gated bridge as its arbiter ops. */
+export const EnrollOpSchema = z
+	.discriminatedUnion("kind", [
+		z.object({
+			kind: z.literal("enroll_redeem"),
+			nonce: z.string().min(1),
+			ownerSignPub: z.string().min(1),
+			ownerBoxPub: z.string().min(1),
+		}),
+		z.object({ kind: z.literal("submit_admission"), admission: SignedAdmissionSchema }),
+		z.object({ kind: z.literal("submit_revocation"), revocation: SignedRevocationSchema }),
+	])
+	.meta({ id: "EnrollOp" });
+
+/** evie's reply to an enroll op. */
+export const EnrollResultSchema = z
+	.object({ ok: z.boolean(), error: z.string().optional() })
+	.meta({ id: "EnrollResult" });
+
 export type EnrollmentPayload = z.infer<typeof EnrollmentPayloadSchema>;
 export type EnrollOwnerPayload = Extract<EnrollmentPayload, { type: "enroll-owner" }>;
 export type AdmitHostPayload = Extract<EnrollmentPayload, { type: "admit-host" }>;
 export type AuthorizePhonePayload = Extract<EnrollmentPayload, { type: "authorize-phone" }>;
+export type EnrollOp = z.infer<typeof EnrollOpSchema>;
+export type EnrollResult = z.infer<typeof EnrollResultSchema>;
 
 ////////////////////////////////
 //  Functions & Helpers

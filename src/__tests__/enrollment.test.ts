@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { resolveAdmitted, verifyAdmission } from "../shared/admission.js";
+import { resolveAdmitted, signAdmission, verifyAdmission } from "../shared/admission.js";
 import { fingerprint, generateIdentity } from "../shared/crypto.js";
-import { admissionFromScan, EnrollmentPayloadSchema, payloadSas } from "../shared/enrollment.js";
+import { admissionFromScan, EnrollmentPayloadSchema, EnrollOpSchema, payloadSas } from "../shared/enrollment.js";
 
 const owner = generateIdentity();
 const host = generateIdentity();
@@ -36,6 +36,28 @@ describe("enrollment", () => {
 		expect(verifyAdmission(signed, owner.sign.pub)).toBe(true);
 		const got = resolveAdmitted([signed], [], owner.sign.pub, host.sign.pub);
 		expect(got).toMatchObject({ kind: "host", hostId: "laptop", boxPub: host.box.pub });
+	});
+
+	it("parses each enroll op and rejects an unfilled redeem", () => {
+		expect(
+			EnrollOpSchema.safeParse({ kind: "enroll_redeem", nonce: "n", ownerSignPub: "s", ownerBoxPub: "b" })
+				.success,
+		).toBe(true);
+		const signed = signAdmission(
+			{
+				kind: "host",
+				signPub: host.sign.pub,
+				boxPub: host.box.pub,
+				hostId: "laptop",
+				issuedAt: 1,
+				nonce: "bg==",
+			},
+			owner.sign.priv,
+			owner.sign.pub,
+		);
+		expect(EnrollOpSchema.safeParse({ kind: "submit_admission", admission: signed }).success).toBe(true);
+		// Missing the owner keys: a redeem without them cannot root the Domain.
+		expect(EnrollOpSchema.safeParse({ kind: "enroll_redeem", nonce: "n" }).success).toBe(false);
 	});
 
 	it("admits a scanned phone with kind phone (no hostId)", () => {
