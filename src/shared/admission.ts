@@ -1,4 +1,4 @@
-// SYNC-HASH: 3e5ddf312dfcc482605943fd011f1df9
+// SYNC-HASH: d1d87ce0b09167ca159bdc51517bccc3
 // SYNCED MODULE - source of truth: switchboard/src/shared/admission.ts
 // Copied verbatim into: evie-bot/app/features/bridge/admission.ts
 // MUST re-copy on change: cp src/shared/admission.ts ../evie-bot/app/features/bridge/admission.ts
@@ -173,35 +173,45 @@ export function resolveAdmitted(
 //
 //  An admission is owner-signed but not secret: it rides every registration, so
 //  an observer could replay one to impersonate the admitted Host. The registering
-//  Host therefore also PROVES it holds the admitted signing key by signing a
-//  self-timestamped challenge; the verifier checks the signature against the
-//  admission's signPub AND that the timestamp is fresh. Replay inside the freshness
-//  window is bounded (a seen-nonce cache closes it - the replay-reject slice); the
-//  bytes are the same versioned newline encoding as admissions.
+//  Host therefore PROVES it holds the admitted signing key by signing a
+//  self-timestamped challenge carrying a fresh random NONCE; the verifier checks
+//  the signature against the admission's signPub, that the timestamp is fresh, AND
+//  (statefully, on evie) that the nonce has not been seen within the window - so a
+//  captured proof cannot be replayed even inside the skew window. The bytes are the
+//  same versioned newline encoding as admissions.
 
 /** Default proof freshness window (epoch ms). A proof older / newer than this
- * from the verifier's clock is rejected as stale. */
+ * from the verifier's clock is rejected as stale (and the seen-nonce cache only
+ * needs to remember this long). */
 export const REGISTER_MAX_SKEW_MS = 120_000;
 
-export function registerSigningBytes(hostId: string, proofAt: number): Buffer {
-	return Buffer.from(["REGISTER_V1", hostId, String(proofAt)].join("\n"), "utf8");
+export function registerSigningBytes(hostId: string, proofAt: number, nonce: string): Buffer {
+	return Buffer.from(["REGISTER_V1", hostId, String(proofAt), nonce].join("\n"), "utf8");
 }
 
 /** Sign a fresh registration proof with the Host's raw Ed25519 private key. */
-export function signRegister(hostId: string, proofAt: number, signPrivB64: string): string {
-	return sign(registerSigningBytes(hostId, proofAt), signPrivB64);
+export function signRegister(hostId: string, proofAt: number, nonce: string, signPrivB64: string): string {
+	return sign(registerSigningBytes(hostId, proofAt, nonce), signPrivB64);
 }
 
-export function verifyRegister(hostId: string, proofAt: number, sigB64: string, signPubB64: string): boolean {
-	return verify(registerSigningBytes(hostId, proofAt), sigB64, signPubB64);
+export function verifyRegister(
+	hostId: string,
+	proofAt: number,
+	nonce: string,
+	sigB64: string,
+	signPubB64: string,
+): boolean {
+	return verify(registerSigningBytes(hostId, proofAt, nonce), sigB64, signPubB64);
 }
 
 export interface RegistrationClaim {
 	hostId: string;
 	signPub: string;
+	boxPub: string;
 	admission: SignedAdmission;
 	proof: string;
 	proofAt: number;
+	nonce: string;
 }
 
 export interface RegistrationTrust {
@@ -212,16 +222,22 @@ export interface RegistrationTrust {
 }
 
 /** Verify an admitted Host's registration end to end: the admission is
- * owner-signed and not revoked, binds this Host id + a `host` kind, and the proof
- * shows the connection holds the admitted signing key freshly. Returns null on
- * success, or a short rejection reason. */
+ * owner-signed and not revoked, binds this Host id + both keys + a `host` kind, and
+ * the proof shows the connection holds the admitted signing key freshly. Returns
+ * null on success, or a short rejection reason. The caller (evie) ALSO rejects a
+ * replayed `nonce` within the window - this pure check cannot dedup statefully. */
 export function verifyRegistration(claim: RegistrationClaim, trust: RegistrationTrust): string | null {
 	const admitted = resolveAdmitted([claim.admission], trust.revocations ?? [], trust.ownerSignPub, claim.signPub);
 	if (!admitted) return "admission not owner-signed or revoked";
 	if (admitted.kind !== "host") return "admission is not a host admission";
 	if (admitted.hostId !== claim.hostId) return "admission hostId does not match";
+	// Bind the box key too: the admission attests both keys, so a registration may
+	// not present a different boxPub than the owner signed.
+	if (admitted.boxPub !== claim.boxPub) return "admission boxPub does not match";
 	const skew = Math.abs(trust.nowMs - claim.proofAt);
 	if (skew > (trust.maxSkewMs ?? REGISTER_MAX_SKEW_MS)) return "registration proof is stale";
-	if (!verifyRegister(claim.hostId, claim.proofAt, claim.proof, claim.signPub)) return "registration proof invalid";
+	if (!verifyRegister(claim.hostId, claim.proofAt, claim.nonce, claim.proof, claim.signPub)) {
+		return "registration proof invalid";
+	}
 	return null;
 }

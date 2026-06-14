@@ -113,12 +113,15 @@ describe("registration proof-of-possession", () => {
 	const now = 1_000_000;
 	function claim(over: Partial<{ proofAt: number; signPriv: string }> = {}) {
 		const proofAt = over.proofAt ?? now;
+		const nonce = "cHJvb2Y=";
 		return {
 			hostId: "laptop",
 			signPub: host.sign.pub,
+			boxPub: host.box.pub,
 			admission: signAdmission(admission(), owner.sign.priv, owner.sign.pub),
-			proof: signRegister("laptop", proofAt, over.signPriv ?? host.sign.priv),
+			proof: signRegister("laptop", proofAt, nonce, over.signPriv ?? host.sign.priv),
 			proofAt,
+			nonce,
 		};
 	}
 
@@ -147,10 +150,22 @@ describe("registration proof-of-possession", () => {
 	it("rejects an admission that grants a different hostId", () => {
 		const c = { ...claim(), hostId: "desktop" };
 		// The proof is over "desktop" but the admission binds "laptop".
-		const proof = signRegister("desktop", now, host.sign.priv);
+		const proof = signRegister("desktop", now, c.nonce, host.sign.priv);
 		expect(verifyRegistration({ ...c, proof }, { ownerSignPub: owner.sign.pub, nowMs: now })).toMatch(
 			/hostId does not match/,
 		);
+	});
+
+	it("rejects a registration presenting a different boxPub than the admission", () => {
+		const stranger = generateIdentity();
+		const c = { ...claim(), boxPub: stranger.box.pub };
+		expect(verifyRegistration(c, { ownerSignPub: owner.sign.pub, nowMs: now })).toMatch(/boxPub does not match/);
+	});
+
+	it("rejects a proof whose nonce was swapped (signature no longer matches)", () => {
+		const c = { ...claim(), nonce: "ZGlmZmVyZW50" };
+		// The proof was signed over the original nonce; a swapped nonce fails.
+		expect(verifyRegistration(c, { ownerSignPub: owner.sign.pub, nowMs: now })).toMatch(/proof invalid/);
 	});
 
 	it("rejects once the admitted key is revoked", () => {

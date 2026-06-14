@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ServerWebSocket } from "bun";
@@ -191,12 +192,14 @@ export async function startArbiter(): Promise<void> {
 				const self = allowlist.selfAdmission(identity.sign.pub);
 				if (!self) return null;
 				const proofAt = Date.now();
+				const proofNonce = randomBytes(18).toString("base64");
 				return {
 					signPub: identity.sign.pub,
 					boxPub: identity.box.pub,
 					admission: JSON.stringify(self),
-					proof: signRegister(localHostId, proofAt, identity.sign.priv),
+					proof: signRegister(localHostId, proofAt, proofNonce, identity.sign.priv),
 					proofAt,
+					proofNonce,
 				};
 			},
 			onDisconnect: () => {

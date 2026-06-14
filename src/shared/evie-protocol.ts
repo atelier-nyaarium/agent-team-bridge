@@ -1,4 +1,4 @@
-// SYNC-HASH: 45a773357d0f4f21fa6d8cdca6c50a78
+// SYNC-HASH: 04105779c0a213007b344953f4a07598
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -117,9 +117,12 @@ export const ArbiterRegisterParamsSchema = z.object({
 	boxPub: z.string().min(1).optional(),
 	// JSON-encoded SignedAdmission (owner-signed). Parsed downstream, not here.
 	admission: z.string().min(1).optional(),
-	// Ed25519 signature over registerSigningBytes(hostId, proofAt) (base64).
+	// Ed25519 signature over registerSigningBytes(hostId, proofAt, proofNonce) (base64).
 	proof: z.string().min(1).optional(),
 	proofAt: z.number().int().nonnegative().optional(),
+	// Fresh per-registration random; evie rejects a seen nonce within the freshness
+	// window so a captured proof cannot be replayed even inside the skew.
+	proofNonce: z.string().min(1).optional(),
 });
 
 /** `host_relay` tool-call params: the routing envelope evie switches on. */
