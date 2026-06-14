@@ -18,8 +18,11 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 					team: string;
 					status: string;
 					queue_depth: number;
+					kind?: string;
 				}>;
-				const others = teams.filter((t) => t.team !== bridgeProjectName());
+				// Phones are the human's device, not a crosstalk peer - never advertise
+				// them to agents; reach the human via the reply tools or notify_human.
+				const others = teams.filter((t) => t.team !== bridgeProjectName() && t.kind !== "phone");
 
 				if (others.length === 0) {
 					return { content: [{ type: "text" as const, text: `No other teams found.` }] };

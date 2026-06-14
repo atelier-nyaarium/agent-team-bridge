@@ -18,6 +18,7 @@ import type {
 import {
 	type ConversationRegistry,
 	formatHolderConnectedMessage,
+	getAllActiveRealWs,
 	getAllActiveWs,
 	RESERVED_TEAM_NAMES,
 	type TeamRegistry,
@@ -226,11 +227,14 @@ export function createRoutes({
 			if (name === "host") continue;
 			seen.add(name);
 			const lock = getMutex.peek(name);
+			// A team whose only live sockets are virtual phone peers is the human's
+			// device, not a crosstalk peer - mark it so the agent-facing listing hides it.
+			const isPhone = getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0;
 			teamsList.push({
 				team: name,
 				status: "online",
 				mode: getTeamMode(subs),
-				kind: isDevcontainer(name) ? "devcontainer" : "loose",
+				kind: isPhone ? "phone" : isDevcontainer(name) ? "devcontainer" : "loose",
 				queue_depth: lock ? lock.queue.length + (lock.locked ? 1 : 0) : 0,
 			});
 		}
