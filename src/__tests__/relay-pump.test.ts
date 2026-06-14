@@ -26,6 +26,7 @@ describe("createPhoneRelayPump", () => {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),
+				discover: async () => jsonRes([]),
 			},
 		});
 		const replies: PhoneRelayReply[] = [];

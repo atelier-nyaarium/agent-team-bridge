@@ -233,7 +233,6 @@ export function createRoutes({
 		}
 		const qualifiedTo = qualifyTeam(targetHost, targetName);
 		const srcSession = composeConvSessionId(fromConversationId, qualifiedTo);
-		store.create(srcSession, from, qualifiedTo, { persistent: true, fromConversationId });
 		const op: FederatedOp = {
 			kind: "send",
 			from: qualifyTeam(localHostId, from),
@@ -246,6 +245,11 @@ export function createRoutes({
 		};
 		const relay = await relayToHost(targetHost, op);
 		if (!relay.ok) return jsonResponse({ error: relay.error ?? `cross-Host send to "${qualifiedTo}" failed` }, 502);
+		// Keep a local pollable anchor ONLY once the destination accepted the send, so
+		// a failed send (offline / timed-out Host) never leaves a dangling persistent
+		// entry. The destination's reply is asynchronous (its agent answers later), so
+		// the anchor is always present before any response_push arrives.
+		store.create(srcSession, from, qualifiedTo, { persistent: true, fromConversationId });
 		return jsonResponse({
 			session_id: srcSession,
 			status: "running",
@@ -315,6 +319,26 @@ export function createRoutes({
 		}
 
 		return jsonResponse(teamsList);
+	}
+
+	/** Discovery across the mesh: local teams plus a fan-out to every online peer
+	 * Host. evie supplies only the presence roster (content-blind); each peer's
+	 * team list is fetched directly via a host_relay list_teams, so evie never sees
+	 * who runs what. A peer that errors or times out is simply omitted. */
+	async function discover(): Promise<Response> {
+		const local = (await teams().json()) as TeamInfo[];
+		if (!evieClient?.isConnected()) return jsonResponse(local);
+		const rosterCall = await evieClient.callTool("list_hosts", {});
+		const roster = (rosterCall.result as { hosts?: { hostId: string }[] } | undefined)?.hosts ?? [];
+		if (roster.length === 0) return jsonResponse(local);
+		const remote = await Promise.all(
+			roster.map(async (h) => {
+				const r = await relayToHost(h.hostId, { kind: "list_teams" });
+				if (!r.ok) return [] as TeamInfo[];
+				return (r.result as { teams?: TeamInfo[] } | undefined)?.teams ?? [];
+			}),
+		);
+		return jsonResponse([...local, ...remote.flat()]);
 	}
 
 	async function send(req: Request, body: Record<string, unknown>): Promise<Response> {
@@ -771,6 +795,7 @@ export function createRoutes({
 		ingest,
 		pending,
 		teams,
+		discover,
 		send,
 		respond,
 		poll,

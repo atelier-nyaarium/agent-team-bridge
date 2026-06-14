@@ -339,6 +339,9 @@ class ChatRepository(
 			cursor = reg.cursor
 			epoch = reg.epoch
 			reg.hostId?.let { adoptHostId(it) }
+			// Pin every subsequent relay to this home Host so the Router routes there
+			// even once other Hosts join the mesh.
+			client().homeHost = localHostId.ifEmpty { null }
 			val teams = client().teams(localHostId)
 			_state.update {
 				it.copy(

@@ -236,6 +236,7 @@ export async function startArbiter(): Promise<void> {
 		if (method === "POST" && url.pathname === "/ingest") return routes.ingest(req, body);
 		if (method === "GET" && url.pathname === "/pending") return routes.pending();
 		if (method === "GET" && url.pathname === "/teams") return routes.teams();
+		if (method === "GET" && url.pathname === "/discover") return routes.discover();
 		if (method === "POST" && url.pathname === "/send") return routes.send(req, body);
 		if (method === "POST" && url.pathname === "/respond") return routes.respond(req, body);
 		if (method === "POST" && url.pathname === "/poll") return routes.poll(req, body);

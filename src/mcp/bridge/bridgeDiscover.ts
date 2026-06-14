@@ -14,8 +14,12 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 		},
 		async () => {
 			try {
-				const teams = (await routerGet("/teams")) as Array<{
+				// /discover fans out across the mesh: local teams plus every online
+				// peer Host's teams (evie stays content-blind). Remote teams carry a
+				// different `host`, shown as `host/team` so they are addressable.
+				const teams = (await routerGet("/discover")) as Array<{
 					team: string;
+					host?: string;
 					status: string;
 					queue_depth: number;
 					kind?: string;
@@ -33,9 +37,10 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 				}
 
 				const lines = others.map((t) => {
-					if (t.status === "available") return `- ${t.team}: available`;
+					const name = t.host ? `${t.host}/${t.team}` : t.team;
+					if (t.status === "available") return `- ${name}: available`;
 					const status = t.queue_depth > 0 ? `busy (${t.queue_depth} in queue)` : "online";
-					return `- ${t.team}: ${status}`;
+					return `- ${name}: ${status}`;
 				});
 
 				return {

@@ -192,4 +192,34 @@ describe("federation routing", () => {
 		expect(senderPushes).toHaveLength(1);
 		expect(senderPushes[0]).toMatchObject({ type: "response_push", session_id: srcSession, response: "all good" });
 	});
+
+	it("DISCOVERY: fans out list_teams over the evie roster and merges with local teams", async () => {
+		const evie = fakeEvie((action) => {
+			if (action === "list_hosts") return { hosts: [{ hostId: "hostb", online: true }] };
+			if (action === "host_relay") {
+				return {
+					ok: true,
+					result: {
+						teams: [{ team: "api", host: "hostb", status: "online", mode: "channel", queue_depth: 0 }],
+					},
+				};
+			}
+			return { ok: true };
+		});
+		const registry = registryWith({ "recipe-app": channelWs([]) });
+		const ctx = makeCtx("hosta", {
+			evieClient: evie.client,
+			registry,
+			knownTeamPaths: new Map([["recipe-app", "/x"]]),
+		});
+		const { discover } = createRoutes(ctx);
+
+		const teams = (await (await discover()).json()) as { team: string; host?: string }[];
+		// Local team carries the local Host; the peer's team carries its own Host.
+		expect(teams.find((t) => t.team === "recipe-app")?.host).toBe("hosta");
+		expect(teams.find((t) => t.team === "api")?.host).toBe("hostb");
+		// evie was asked only for presence, then a per-Host list_teams fanned out.
+		expect(evie.calls.some((c) => c.action === "list_hosts")).toBe(true);
+		expect(evie.calls.some((c) => c.action === "host_relay")).toBe(true);
+	});
 });

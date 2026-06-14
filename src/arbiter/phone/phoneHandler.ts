@@ -22,6 +22,9 @@ export interface PhoneRoutes {
 	send: (req: Request, body: Record<string, unknown>) => Promise<Response>;
 	respond: (req: Request, body: Record<string, unknown>) => Response;
 	teams: () => Response;
+	// Mesh-wide team list (local + every online peer Host); the phone is a
+	// roaming console and sees all Hosts, not just its home Host.
+	discover: () => Promise<Response>;
 }
 
 /** The JSON body shape returned by routes.send, read in both the in-time and
@@ -234,10 +237,12 @@ export function createPhoneHandler({
 			}
 
 			case "list_teams": {
-				const teams = (await routes.teams().json()) as TeamInfo[];
+				// Fan out across the mesh so the phone sees every Host's sessions, each
+				// carrying its own `host` (the phone keys threads by host/name).
+				const teams = (await (await routes.discover()).json()) as TeamInfo[];
 				// A phone does not list other phones as send targets, and excludes
 				// itself. teams() already drops the cli "host" daemon; the "arbiter"
-				// host-agent stays (kind "host"), reachable from the phone.
+				// host-agent of each Host stays (kind "host"), reachable from the phone.
 				return {
 					teams: teams.filter((t) => t.team !== device && t.kind !== "phone"),
 				};

@@ -64,6 +64,13 @@ function makeHarness(overrides: Partial<PhoneRoutes> = {}): Harness {
 				{ team: "pixel", status: "online", mode: "channel", queue_depth: 0 },
 				{ team: "arbiter", status: "online", mode: "channel", queue_depth: 0 },
 			]),
+		// list_teams fans out via discover; mirror the team list here.
+		discover: async () =>
+			jsonRes([
+				{ team: "team-a", status: "online", mode: "channel", queue_depth: 0 },
+				{ team: "pixel", status: "online", mode: "channel", queue_depth: 0 },
+				{ team: "arbiter", status: "online", mode: "channel", queue_depth: 0 },
+			]),
 		...overrides,
 	};
 
@@ -164,6 +171,7 @@ describe("createPhoneHandler", () => {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),
+				discover: async () => jsonRes([]),
 			},
 			isProjectName: (name) => name === "recipe-app",
 		});
@@ -470,6 +478,7 @@ describe("createPhoneHandler", () => {
 				send: () => new Promise<Response>(() => {}),
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
+				discover: async () => jsonRes([]),
 			},
 		});
 
@@ -551,6 +560,7 @@ describe("createPhoneHandler", () => {
 					}),
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
+				discover: async () => jsonRes([]),
 			},
 		});
 
@@ -592,6 +602,7 @@ describe("createPhoneHandler", () => {
 					}),
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
+				discover: async () => jsonRes([]),
 			},
 		});
 
@@ -675,6 +686,7 @@ describe("createPhoneHandler", () => {
 				send: () => new Promise<Response>((resolve) => (resolveSend = resolve)),
 				respond: () => jsonRes({ delivered: true }),
 				teams: () => jsonRes([]),
+				discover: async () => jsonRes([]),
 			},
 		});
 

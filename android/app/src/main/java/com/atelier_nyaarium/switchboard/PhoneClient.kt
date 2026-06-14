@@ -100,13 +100,16 @@ data class SendResult(val ok: Boolean, val status: String, val error: String?)
 data class OutgoingFile(val name: String, val mime: String, val bytes: ByteArray)
 
 /** The op-only envelope the phone POSTs; evie composes the full phone_relay
- * frame around it (type + protocol version), so this is not PhoneRelayFrame. */
+ * frame around it (type + protocol version), so this is not PhoneRelayFrame.
+ * `homeHost` (once learned at register) tells the Router which Host to route to;
+ * absent on the first register, where the Router falls back to the live arbiter. */
 @Serializable
 private data class RelayEnvelope(
 	val device: String,
 	val conversationId: String,
 	val opId: String,
 	val op: PhoneOp,
+	val homeHost: String? = null,
 )
 
 /** Decode posture for everything off the wire: unknown fields are tolerated
@@ -119,6 +122,11 @@ class PhoneClient(private val prov: Provisioning) {
 	private val client = buildPinnedClient(prov.caPem)
 	private val proxyBase =
 		"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
+
+	/** This phone's home Host id, learned at register and set by ChatRepository.
+	 * Rides every relay so the Router routes to the right Host; null until learned. */
+	@Volatile
+	var homeHost: String? = null
 
 	/**
 	 * Direct CA-pinned GET to the API server with the SA token. Proves the tunnel
@@ -142,7 +150,7 @@ class PhoneClient(private val prov: Provisioning) {
 	 * result server-side instead of running the op twice (the protocol contract).
 	 * A held op (long-poll) passes a read timeout above its server-side hold. */
 	private fun relay(op: PhoneOp, opId: String = UUID.randomUUID().toString(), readTimeoutMs: Long? = null): PhoneRelayReply {
-		val envelope = RelayEnvelope(prov.device, prov.conversationId, opId, op)
+		val envelope = RelayEnvelope(prov.device, prov.conversationId, opId, op, homeHost)
 		val req = Request.Builder()
 			.url("$proxyBase/relay")
 			.header("Authorization", "Bearer ${prov.saToken}")
