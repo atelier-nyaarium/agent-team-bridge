@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ServerWebSocket } from "bun";
+import { signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { resolveLocalHostId } from "../shared/host-id.js";
 import { getMutex, type Mutex } from "../shared/mutex.js";
@@ -140,7 +141,8 @@ export async function startArbiter(): Promise<void> {
 		// and build the E2E sealer (cross-Host frames are sealed peer-to-peer).
 		const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
 		const allowlist = new Allowlist(federationDir);
-		sealer = createSealer(loadOrCreateIdentity(federationDir), allowlist);
+		const identity = loadOrCreateIdentity(federationDir);
+		sealer = createSealer(identity, allowlist);
 		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);
 
 		const portForward = startPortForward({
@@ -163,6 +165,21 @@ export async function startArbiter(): Promise<void> {
 			},
 			onHostRelay: (frame) => {
 				handleHostRelay?.(frame);
+			},
+			buildRegisterAuth: () => {
+				// Present this Host's owner-signed admission + a fresh possession proof,
+				// so evie can gate registration once a Domain owner exists. Null (token
+				// only) until enrollment writes the self-admission into the allowlist.
+				const self = allowlist.selfAdmission(identity.sign.pub);
+				if (!self) return null;
+				const proofAt = Date.now();
+				return {
+					signPub: identity.sign.pub,
+					boxPub: identity.box.pub,
+					admission: JSON.stringify(self),
+					proof: signRegister(localHostId, proofAt, identity.sign.priv),
+					proofAt,
+				};
 			},
 			onDisconnect: () => {
 				console.error(`[evie] disconnected from evie-bot`);

@@ -31,6 +31,11 @@ export interface EvieClientConfig {
 	// A cross-Host frame the Router switched to this Host; the host-relay pump owns
 	// full HostRelayFrameSchema validation, so the frame travels as unknown.
 	onHostRelay?: (frame: unknown) => void;
+	// Extra `arbiter_register` params (the admitted-identity proof: signPub/boxPub
+	// + owner-signed admission + a fresh possession proof), computed at each
+	// (re)register so the proof timestamp is current. Returns null pre-enrollment,
+	// leaving registration token-only.
+	buildRegisterAuth?: () => Record<string, unknown> | null;
 	onDisconnect?: () => void;
 }
 
@@ -74,6 +79,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			void callTool("arbiter_register", {
 				hostId: config.hostId,
 				protocolVersion: FEDERATION_PROTOCOL_VERSION,
+				...(config.buildRegisterAuth?.() ?? {}),
 			}).then((res) => {
 				const r = res.result as { ok?: boolean; error?: string; hosts?: string[] } | undefined;
 				if (res.error) console.error(`[evie-client] arbiter_register failed: ${res.error}`);

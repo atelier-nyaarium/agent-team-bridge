@@ -1,3 +1,7 @@
+// SYNC-HASH: 98cc2e10343696a465266f86710725f7
+// SYNCED MODULE - source of truth: switchboard/src/shared/crypto.ts
+// Copied verbatim into: evie-bot/app/features/bridge/crypto.ts
+// MUST re-copy on change: cp src/shared/crypto.ts ../evie-bot/app/features/bridge/crypto.ts
 import crypto from "node:crypto";
 
 ////////////////////////////////

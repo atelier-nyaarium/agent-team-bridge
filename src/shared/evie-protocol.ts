@@ -1,4 +1,4 @@
-// SYNC-HASH: 4da4b5b2d67bd8090b0e8718c3ae8d05
+// SYNC-HASH: 45a773357d0f4f21fa6d8cdca6c50a78
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -103,10 +103,23 @@ export const ToolCallFrameSchema = z.object({
  * below its own floor with a typed close; the Host then degrades to single-Host. */
 export const FEDERATION_PROTOCOL_VERSION = 1;
 
-/** `arbiter_register` tool-call params: a Host announces its id + wire version. */
+/** `arbiter_register` tool-call params: a Host announces its id + wire version,
+ * plus the optional admitted-identity proof (signPub/boxPub + an owner-signed
+ * admission + a fresh possession proof). The auth fields stay opaque strings here
+ * so this leaf keeps importing nothing but zod; evie parses `admission` with the
+ * synced SignedAdmissionSchema and checks it with verifyRegistration. They are
+ * optional for a pre-enrollment / token-only Host; evie gates only once it holds
+ * a Domain trust anchor. */
 export const ArbiterRegisterParamsSchema = z.object({
 	hostId: z.string().min(1).max(64),
 	protocolVersion: z.number().int().positive(),
+	signPub: z.string().min(1).optional(),
+	boxPub: z.string().min(1).optional(),
+	// JSON-encoded SignedAdmission (owner-signed). Parsed downstream, not here.
+	admission: z.string().min(1).optional(),
+	// Ed25519 signature over registerSigningBytes(hostId, proofAt) (base64).
+	proof: z.string().min(1).optional(),
+	proofAt: z.number().int().nonnegative().optional(),
 });
 
 /** `host_relay` tool-call params: the routing envelope evie switches on. */

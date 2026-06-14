@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
 	type Admission,
+	REGISTER_MAX_SKEW_MS,
 	resolveAdmitted,
 	signAdmission,
+	signRegister,
 	signRevocation,
 	verifyAdmission,
+	verifyRegistration,
 } from "../shared/admission.js";
 import { generateIdentity } from "../shared/crypto.js";
 
@@ -103,5 +106,59 @@ describe("domain admission", () => {
 		];
 		// The attacker's revocation does not verify under the owner key.
 		expect(resolveAdmitted(list, revs, owner.sign.pub, host.sign.pub)).not.toBeNull();
+	});
+});
+
+describe("registration proof-of-possession", () => {
+	const now = 1_000_000;
+	function claim(over: Partial<{ proofAt: number; signPriv: string }> = {}) {
+		const proofAt = over.proofAt ?? now;
+		return {
+			hostId: "laptop",
+			signPub: host.sign.pub,
+			admission: signAdmission(admission(), owner.sign.priv, owner.sign.pub),
+			proof: signRegister("laptop", proofAt, over.signPriv ?? host.sign.priv),
+			proofAt,
+		};
+	}
+
+	it("accepts an admitted Host that proves possession freshly", () => {
+		expect(verifyRegistration(claim(), { ownerSignPub: owner.sign.pub, nowMs: now })).toBeNull();
+	});
+
+	it("rejects a registration whose admission is not owner-signed", () => {
+		const attacker = generateIdentity();
+		const c = { ...claim(), admission: signAdmission(admission(), attacker.sign.priv, attacker.sign.pub) };
+		expect(verifyRegistration(c, { ownerSignPub: owner.sign.pub, nowMs: now })).toMatch(/not owner-signed/);
+	});
+
+	it("rejects a replayed admission without the matching private key", () => {
+		// Attacker has the (public) admission but signs the proof with a different key.
+		const attacker = generateIdentity();
+		const c = claim({ signPriv: attacker.sign.priv });
+		expect(verifyRegistration(c, { ownerSignPub: owner.sign.pub, nowMs: now })).toMatch(/proof invalid/);
+	});
+
+	it("rejects a stale proof outside the freshness window", () => {
+		const c = claim({ proofAt: now - REGISTER_MAX_SKEW_MS - 1 });
+		expect(verifyRegistration(c, { ownerSignPub: owner.sign.pub, nowMs: now })).toMatch(/stale/);
+	});
+
+	it("rejects an admission that grants a different hostId", () => {
+		const c = { ...claim(), hostId: "desktop" };
+		// The proof is over "desktop" but the admission binds "laptop".
+		const proof = signRegister("desktop", now, host.sign.priv);
+		expect(verifyRegistration({ ...c, proof }, { ownerSignPub: owner.sign.pub, nowMs: now })).toMatch(
+			/hostId does not match/,
+		);
+	});
+
+	it("rejects once the admitted key is revoked", () => {
+		const revs = [
+			signRevocation({ signPub: host.sign.pub, issuedAt: 9999, nonce: "cmV2" }, owner.sign.priv, owner.sign.pub),
+		];
+		expect(verifyRegistration(claim(), { ownerSignPub: owner.sign.pub, nowMs: now, revocations: revs })).toMatch(
+			/revoked/,
+		);
 	});
 });

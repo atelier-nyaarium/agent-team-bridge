@@ -85,6 +85,19 @@ export class Allowlist {
 		return true;
 	}
 
+	/** This Host's own owner-signed admission (newest verified for its signing
+	 * key), to present at registration so evie can gate it. Null pre-enrollment. */
+	selfAdmission(signPubB64: string): SignedAdmission | null {
+		if (!this.state.ownerSignPub) return null;
+		let best: SignedAdmission | null = null;
+		for (const s of this.state.admissions) {
+			if (s.admission.signPub !== signPubB64) continue;
+			if (!verifyAdmission(s, this.state.ownerSignPub)) continue;
+			if (!best || s.admission.issuedAt > best.admission.issuedAt) best = s;
+		}
+		return best;
+	}
+
 	/** The admitted Admission for a sender signing key, or null. */
 	resolveBySignPub(signPubB64: string): Admission | null {
 		if (!this.state.ownerSignPub) return null;

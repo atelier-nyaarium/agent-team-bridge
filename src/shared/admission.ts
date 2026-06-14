@@ -1,3 +1,7 @@
+// SYNC-HASH: aeb5b32dc3ded2fb1646df4b501faf98
+// SYNCED MODULE - source of truth: switchboard/src/shared/admission.ts
+// Copied verbatim into: evie-bot/app/features/bridge/admission.ts
+// MUST re-copy on change: cp src/shared/admission.ts ../evie-bot/app/features/bridge/admission.ts
 import { z } from "zod";
 import { sign, verify } from "./crypto.js";
 
@@ -150,4 +154,62 @@ export function resolveAdmitted(
 		if (r.revocation.issuedAt >= best.issuedAt) return null;
 	}
 	return best;
+}
+
+////////////////////////////////
+//  Registration proof-of-possession
+//
+//  An admission is owner-signed but not secret: it rides every registration, so
+//  an observer could replay one to impersonate the admitted Host. The registering
+//  Host therefore also PROVES it holds the admitted signing key by signing a
+//  self-timestamped challenge; the verifier checks the signature against the
+//  admission's signPub AND that the timestamp is fresh. Replay inside the freshness
+//  window is bounded (a seen-nonce cache closes it - the replay-reject slice); the
+//  bytes are the same versioned newline encoding as admissions.
+
+/** Default proof freshness window (epoch ms). A proof older / newer than this
+ * from the verifier's clock is rejected as stale. */
+export const REGISTER_MAX_SKEW_MS = 120_000;
+
+export function registerSigningBytes(hostId: string, proofAt: number): Buffer {
+	return Buffer.from(["REGISTER_V1", hostId, String(proofAt)].join("\n"), "utf8");
+}
+
+/** Sign a fresh registration proof with the Host's raw Ed25519 private key. */
+export function signRegister(hostId: string, proofAt: number, signPrivB64: string): string {
+	return sign(registerSigningBytes(hostId, proofAt), signPrivB64);
+}
+
+export function verifyRegister(hostId: string, proofAt: number, sigB64: string, signPubB64: string): boolean {
+	return verify(registerSigningBytes(hostId, proofAt), sigB64, signPubB64);
+}
+
+export interface RegistrationClaim {
+	hostId: string;
+	signPub: string;
+	admission: SignedAdmission;
+	proof: string;
+	proofAt: number;
+}
+
+export interface RegistrationTrust {
+	ownerSignPub: string;
+	revocations?: SignedRevocation[];
+	nowMs: number;
+	maxSkewMs?: number;
+}
+
+/** Verify an admitted Host's registration end to end: the admission is
+ * owner-signed and not revoked, binds this Host id + a `host` kind, and the proof
+ * shows the connection holds the admitted signing key freshly. Returns null on
+ * success, or a short rejection reason. */
+export function verifyRegistration(claim: RegistrationClaim, trust: RegistrationTrust): string | null {
+	const admitted = resolveAdmitted([claim.admission], trust.revocations ?? [], trust.ownerSignPub, claim.signPub);
+	if (!admitted) return "admission not owner-signed or revoked";
+	if (admitted.kind !== "host") return "admission is not a host admission";
+	if (admitted.hostId !== claim.hostId) return "admission hostId does not match";
+	const skew = Math.abs(trust.nowMs - claim.proofAt);
+	if (skew > (trust.maxSkewMs ?? REGISTER_MAX_SKEW_MS)) return "registration proof is stale";
+	if (!verifyRegister(claim.hostId, claim.proofAt, claim.proof, claim.signPub)) return "registration proof invalid";
+	return null;
 }
