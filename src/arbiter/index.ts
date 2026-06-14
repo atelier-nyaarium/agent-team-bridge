@@ -11,6 +11,7 @@ import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } f
 import { startEvieClient } from "./evie/evieClient.js";
 import { startPortForward } from "./evie/portForward.js";
 import { Allowlist } from "./federation/allowlist.js";
+import { logAdmitHostQr } from "./federation/enrollQr.js";
 import { createHostRelayHandler, createHostRelayPump } from "./federation/hostRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
 import { createSealer, type Sealer } from "./federation/sealer.js";
@@ -144,6 +145,9 @@ export async function startArbiter(): Promise<void> {
 		const identity = loadOrCreateIdentity(federationDir);
 		sealer = createSealer(identity, allowlist);
 		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);
+		// Not admitted yet: print the admit-host QR so the owner can scan this Host
+		// into the Domain. Once admitted (mirrored from evie), this falls silent.
+		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitHostQr(identity, localHostId);
 
 		const portForward = startPortForward({
 			kubeconfig: evieKubeconfig,
