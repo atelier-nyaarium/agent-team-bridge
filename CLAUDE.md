@@ -247,6 +247,8 @@ File structure follows categorized sections:
 - `EVIE_DEPLOYMENT_LABEL` - Pod label selector (default: app=evie-bot-app)
 - `EVIE_BRIDGE_PORT` - Remote port on evie pod (default: 20001)
 - `EVIE_LOCAL_PORT` - Local port for port-forward (default: 20001)
+- `FEDERATION_OWNER_SIGN_PUB` - The Domain owner's raw Ed25519 signing public key (base64), PINNED out-of-band. When set, the Host refuses any allowlist snapshot rooted at a different key, so a malicious/token-holding evie cannot root a fresh Host at an attacker key. Unset = trust-on-first-use (convenient; pin it for the untrusted-evie threat model). The owner reads this key from the app after enrolling.
+- `FEDERATION_DIR` - Where this Host persists its keypair + mirrored allowlist (default: alongside the log path)
 
 **MCP Plugin (Container):**
 - `PROJECT_NAME` - Team name on the bridge (required for crosstalk)
@@ -286,7 +288,7 @@ Layers on top of the phone-bridge deploy. The token and the admission gate COEXI
 1. **Grant evie its Secret** (one-time RBAC): `kubectl apply -f evie-bot/deploy/federation-rbac.yaml`. It binds get/create/update on the `evie-federation` Secret to evie's pod ServiceAccount (edit the subject if evie does not run as `default`). On next boot evie mints + persists its keypair there and logs its SAS fingerprint.
 2. **Optional config** (env on the evie deployment): `FEDERATION_DOMAIN_ID` (default `home`), `FEDERATION_EVIE_ADDR` (shown in the enroll-owner QR). Leave `FEDERATION_REQUIRE_ADMISSION` unset (defaults false) until the cutover.
 3. **Enroll the owner**: ask evie (the owner-only `federation-enroll-owner` action) - it DMs a QR + its SAS. In the app, Settings -> Enroll by QR, scan, confirm the fingerprint matches the DM, tap Enroll. The Domain is now rooted (evie persists `ownerSignPub`).
-4. **Admit each Host**: the arbiter prints an admit-host QR + SAS on startup while un-admitted. Scan it in the app, confirm the fingerprint against the arbiter console, tap Enroll. evie records the admission and mirrors it back on the arbiter's next register; the QR stops printing once admitted.
+4. **Admit each Host**: the arbiter prints an admit-host QR + SAS on startup while un-admitted. Scan it in the app, confirm the fingerprint against the arbiter console, tap Enroll. evie records the admission and mirrors it back on the arbiter's next register; the QR stops printing once admitted. For the untrusted-evie model, set `FEDERATION_OWNER_SIGN_PUB` (the owner key, read from the app) on each arbiter so it pins the root and refuses a snapshot from a malicious evie; on a re-key, REVOKE the old key (the allowlist resolves the newest, but an un-revoked old key stays independently admitted).
 5. **Token retirement** (final, AFTER a full round trip validates): set `FEDERATION_REQUIRE_ADMISSION=true` so evie rejects a token-only register, then drop `BRIDGE_TOKEN` once every Host presents an admission.
 
 Recovery (clean-break): delete the `evie-federation` Secret + each arbiter's `<dataDir>/federation/federation-allowlist.json` (keep `identity.json`), then re-run steps 3-4. A redeem / snapshot for a different owner is refused by design, so there is no silent takeover.

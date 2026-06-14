@@ -121,4 +121,43 @@ describe("Allowlist", () => {
 		// The original root stands; the foreign snapshot is ignored.
 		expect(a.ownerSignPub).toBe(owner.sign.pub);
 	});
+
+	it("refuses to root at a non-pinned owner (untrusted-evie defense)", () => {
+		// A malicious evie relays a snapshot rooting a fresh Host at an attacker key.
+		const attacker = generateIdentity();
+		const a = new Allowlist(tmpDir(), owner.sign.pub);
+		a.applySnapshot({
+			ownerSignPub: attacker.sign.pub,
+			admissions: [signAdmission(hostAdmission(), attacker.sign.priv, attacker.sign.pub)],
+			revocations: [],
+		});
+		// The pinned owner did not sign this; the Host stays unrooted.
+		expect(a.ownerSignPub).toBeNull();
+		expect(a.resolveHost("laptop")).toBeNull();
+	});
+
+	it("adopts a snapshot that matches the pinned owner", () => {
+		const a = new Allowlist(tmpDir(), owner.sign.pub);
+		a.applySnapshot({
+			ownerSignPub: owner.sign.pub,
+			admissions: [signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub)],
+			revocations: [],
+		});
+		expect(a.ownerSignPub).toBe(owner.sign.pub);
+		expect(a.resolveHost("laptop")?.boxPub).toBe(host.box.pub);
+	});
+
+	it("clears a persisted root that disagrees with a newly-set pin", () => {
+		const dir = tmpDir();
+		const first = new Allowlist(dir);
+		first.applySnapshot({
+			ownerSignPub: owner.sign.pub,
+			admissions: [signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub)],
+			revocations: [],
+		});
+		// Re-open pinned to a DIFFERENT owner: the stale root is dropped, not served.
+		const other = generateIdentity();
+		const reopened = new Allowlist(dir, other.sign.pub);
+		expect(reopened.ownerSignPub).toBeNull();
+	});
 });

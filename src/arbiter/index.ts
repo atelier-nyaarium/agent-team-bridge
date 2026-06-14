@@ -141,7 +141,10 @@ export async function startArbiter(): Promise<void> {
 		// Load this Host's federation identity + mirrored allowlist from its volume,
 		// and build the E2E sealer (cross-Host frames are sealed peer-to-peer).
 		const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
-		const allowlist = new Allowlist(federationDir);
+		// Pin the owner root out-of-band so a malicious/token-holding evie cannot root
+		// this Host at an attacker key via the mirror (the snapshot is relayed through
+		// untrusted evie). Unset = trust-on-first-use.
+		const allowlist = new Allowlist(federationDir, process.env.FEDERATION_OWNER_SIGN_PUB);
 		const identity = loadOrCreateIdentity(federationDir);
 		sealer = createSealer(identity, allowlist);
 		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);

@@ -36,10 +36,23 @@ const ALLOWLIST_FILE = "federation-allowlist.json";
 export class Allowlist {
 	private file: string;
 	private state: AllowlistFile;
+	// The owner root pinned out-of-band (FEDERATION_OWNER_SIGN_PUB). When set, a
+	// snapshot rooted at any other key is refused - so a malicious / token-holding
+	// evie cannot root a fresh Host at an attacker key (the snapshot is relayed
+	// through untrusted evie). Null = trust-on-first-use (convenient, but trusts
+	// evie at the bootstrap; pinning is recommended for the untrusted-evie model).
+	private readonly pinnedOwner: string | null;
 
-	constructor(dataDir: string) {
+	constructor(dataDir: string, pinnedOwner?: string | null) {
 		this.file = path.join(dataDir, ALLOWLIST_FILE);
+		this.pinnedOwner = pinnedOwner ?? null;
 		this.state = this.read();
+		// A pin that disagrees with a persisted root means the Host was previously
+		// rooted at a different key; refuse to serve the stale root.
+		if (this.pinnedOwner && this.state.ownerSignPub && this.state.ownerSignPub !== this.pinnedOwner) {
+			console.warn(`[allowlist] persisted owner root != pinned owner; clearing the stale root`);
+			this.state = { ownerSignPub: null, admissions: [], revocations: [] };
+		}
 	}
 
 	private read(): AllowlistFile {
@@ -73,9 +86,16 @@ export class Allowlist {
 
 	/** Mirror the Domain state evie pushed (audit R3). Idempotent: replaces the
 	 * allowlist with the snapshot's owner-verified entries, so a re-sync converges
-	 * rather than accumulating duplicates. Ignores a snapshot for a different owner
-	 * root (recovery is a deliberate, separate path). */
+	 * rather than accumulating duplicates. Refuses to ROOT at a key other than the
+	 * out-of-band pin (untrusted-evie defense), and refuses to silently re-root an
+	 * already-rooted Host (recovery is a deliberate, separate path). */
 	applySnapshot(snapshot: DomainSnapshot): void {
+		// The snapshot arrives through untrusted evie. If an owner is pinned, the
+		// root MUST match it; otherwise evie could root a fresh Host at any key.
+		if (this.pinnedOwner && snapshot.ownerSignPub !== this.pinnedOwner) {
+			console.warn(`[allowlist] ignoring domain sync: root does not match the pinned owner key`);
+			return;
+		}
 		if (this.state.ownerSignPub && this.state.ownerSignPub !== snapshot.ownerSignPub) {
 			console.warn(`[allowlist] ignoring domain sync rooted at a different owner key`);
 			return;
