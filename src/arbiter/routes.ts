@@ -738,7 +738,7 @@ export function createRoutes({
 	}
 
 	async function evieToolCall(req: Request, body: Record<string, unknown>): Promise<Response> {
-		if (!evieClient || !evieClient.isConnected()) {
+		if (!evieClient?.isConnected()) {
 			return jsonResponse({ error: `Evie-bot is not connected.` }, 503);
 		}
 
