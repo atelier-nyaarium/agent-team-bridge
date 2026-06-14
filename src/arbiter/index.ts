@@ -147,7 +147,7 @@ export async function startArbiter(): Promise<void> {
 		// untrusted evie). Unset = trust-on-first-use.
 		const allowlist = new Allowlist(federationDir, process.env.FEDERATION_OWNER_SIGN_PUB);
 		const identity = loadOrCreateIdentity(federationDir);
-		sealer = createSealer(identity, allowlist);
+		sealer = createSealer(identity, allowlist, localHostId);
 		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);
 		// Not admitted yet: print the admit-host QR so the owner can scan this Host
 		// into the Domain. Once admitted (mirrored from evie), this falls silent.

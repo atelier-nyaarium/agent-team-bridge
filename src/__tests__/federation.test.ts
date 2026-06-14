@@ -16,14 +16,14 @@ import type { ResponsePayload } from "../shared/types.js";
 // to the peer's keys; the trust model itself is tested in admission.test.ts).
 const A = generateIdentity();
 const B = generateIdentity();
-function sealerFor(self: Identity, peers: Record<string, Identity>): Sealer {
+function sealerFor(self: Identity, localHostId: string, peers: Record<string, Identity>): Sealer {
 	const allowlist = {
 		resolveHost: (h: string) => (peers[h] ? { signPub: peers[h].sign.pub, boxPub: peers[h].box.pub } : null),
 	} as unknown as Allowlist;
-	return createSealer(self, allowlist);
+	return createSealer(self, allowlist, localHostId);
 }
-const sealerA = sealerFor(A, { hostb: B });
-const sealerB = sealerFor(B, { hosta: A });
+const sealerA = sealerFor(A, "hosta", { hostb: B });
+const sealerB = sealerFor(B, "hostb", { hosta: A });
 
 interface FakeEvie {
 	client: NonNullable<RoutesDeps["evieClient"]>;
