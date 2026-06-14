@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.atelier_nyaarium.switchboard.crypto.Crypto
 
 /**
  * Encrypted-at-rest storage for the provisioning blob (which holds the SA + app
@@ -90,12 +91,24 @@ class ProvisioningStore(context: Context) {
 
 	fun loadHostId(): String = prefs.getString(KEY_HOST_ID, "") ?: ""
 
+	/** This device's federation identity (the owner device's signing + box
+	 * keypairs). Minted once at enroll-owner and reused to sign admissions;
+	 * Keystore-wrapped at rest like the rest of this store. */
+	fun saveIdentity(identity: Crypto.Identity) =
+		prefs.edit().putString(KEY_IDENTITY, wireJson.encodeToString(Crypto.Identity.serializer(), identity)).apply()
+
+	fun loadIdentity(): Crypto.Identity? =
+		prefs.getString(KEY_IDENTITY, null)?.let { json ->
+			runCatching { wireJson.decodeFromString(Crypto.Identity.serializer(), json) }.getOrNull()
+		}
+
 	private companion object {
 		const val KEY_BLOB = "provisioning"
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"
 		const val KEY_LABELS = "labels"
 		const val KEY_HOST_ID = "host_id"
+		const val KEY_IDENTITY = "federation_identity"
 		const val KEY_STTS_PROVIDER = "stts_provider"
 		const val KEY_STTS_VOICE = "stts_voice"
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."

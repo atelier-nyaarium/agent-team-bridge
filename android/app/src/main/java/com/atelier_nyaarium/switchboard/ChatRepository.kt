@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.atelier_nyaarium.switchboard.enroll.EnrollmentController
 import com.atelier_nyaarium.switchboard.proto.Protocol
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -190,6 +191,13 @@ class ChatRepository(
 		client?.let { return it }
 		val blob = store.load() ?: error("not provisioned")
 		return PhoneClient(Provisioning.parse(blob)).also { client = it }
+	}
+
+	/** Enrollment controller over this device's identity store + bridge client, or
+	 * null when not provisioned (no bridge to reach for enroll ops). */
+	fun enrollmentController(): EnrollmentController? {
+		val c = runCatching { client() }.getOrNull() ?: return null
+		return EnrollmentController(store, c)
 	}
 
 	/** STTS client from the provisioning blob, or null when not configured.

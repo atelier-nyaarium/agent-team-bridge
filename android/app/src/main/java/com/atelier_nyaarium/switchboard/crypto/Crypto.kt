@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard.crypto
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
+import kotlinx.serialization.Serializable
 import org.bouncycastle.crypto.agreement.X25519Agreement
 import org.bouncycastle.crypto.digests.SHA256Digest
 import org.bouncycastle.crypto.engines.AESEngine
@@ -27,7 +28,10 @@ import org.bouncycastle.crypto.signers.Ed25519Signer
  * vectors in CryptoTest pin this.
  */
 object Crypto {
+	@Serializable
 	data class KeyPairRaw(val pub: String, val priv: String)
+
+	@Serializable
 	data class Identity(val sign: KeyPairRaw, val box: KeyPairRaw)
 	data class SealedEnvelope(
 		val ephemeralPub: String,

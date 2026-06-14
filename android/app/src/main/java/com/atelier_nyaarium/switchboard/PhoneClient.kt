@@ -1,6 +1,8 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
+import com.atelier_nyaarium.switchboard.proto.EnrollOp
+import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.PhoneOp
 import com.atelier_nyaarium.switchboard.proto.PhonePollResult
 import com.atelier_nyaarium.switchboard.proto.PhoneRegisterResult
@@ -112,6 +114,21 @@ private data class RelayEnvelope(
 	val homeHost: String? = null,
 )
 
+/** The owner enroll envelope: `enrollOp` (not `op`) routes to evie's enrollment
+ * coordinator, which answers an EnrollResult directly instead of relaying to a
+ * Host. */
+@Serializable
+private data class EnrollEnvelope(
+	val device: String,
+	val conversationId: String,
+	val opId: String,
+	val enrollOp: EnrollOp,
+)
+
+/** A retryable bounce body (offline / malformed), distinct from an EnrollResult. */
+@Serializable
+private data class BounceBody(val error: String? = null, val retryable: Boolean = false)
+
 /** Decode posture for everything off the wire: unknown fields are tolerated
  * (additive protocol). Encode posture: the default config omits null-defaulted
  * optionals, which is exactly what the arbiter's schemas accept. */
@@ -166,6 +183,27 @@ class PhoneClient(private val prov: Provisioning) {
 			val text = resp.body?.string().orEmpty()
 			if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(500)}")
 			return wireJson.decodeFromString<PhoneRelayReply>(text)
+		}
+	}
+
+	/** Submit an owner enroll op directly to evie (the Domain root). evie answers
+	 * with an EnrollResult, not a phone_relay_reply: enroll ops are evie-direct and
+	 * never relayed to a Host, so they succeed even with no arbiter connected. A
+	 * bounce (offline / 501 / malformed) is surfaced as a failed EnrollResult. */
+	fun enroll(op: EnrollOp): EnrollResult {
+		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), op)
+		val req = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Android-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON))
+			.build()
+		client.newCall(req).execute().use { resp ->
+			val text = resp.body?.string().orEmpty()
+			return runCatching { wireJson.decodeFromString<EnrollResult>(text) }.getOrElse {
+				val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+				EnrollResult(ok = false, error = err ?: "HTTP ${resp.code}")
+			}
 		}
 	}
 

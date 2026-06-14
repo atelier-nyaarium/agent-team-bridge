@@ -99,6 +99,7 @@ dependencies {
 	implementation(libs.androidx.webkit)
 	implementation(libs.kotlinx.serialization.json)
 	implementation(libs.bouncycastle)
+	implementation(libs.zxing.android.embedded)
 
 	testImplementation(libs.junit)
 }
