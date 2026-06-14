@@ -91,6 +91,34 @@ export function parseConvSessionTeam(sessionId: string): string | null {
 }
 
 ////////////////////////////////
+//  Host qualification
+//
+//  A session's address is host-qualified as `<hostId>/<name>` so the phone (and,
+//  in later federation phases, evie) can tell two Hosts' identically-named
+//  sessions apart. A BARE name (no separator) resolves to the local Host: the
+//  arbiter canonicalizes an inbound target to the qualified form before keying
+//  the channel job, and the phone normalizes a bare name off the wire to its
+//  connected Host. The separator is emitted into the generated Kotlin so the
+//  phone never hand-mirrors it. Host ids and local names never contain the
+//  separator, so the FIRST separator splits host from name unambiguously.
+
+export const HOST_QUALIFIER_SEP = "/";
+
+/** Qualify a bare local name under a host; a name that is already qualified
+ * (contains the separator) is returned unchanged. */
+export function qualifyTeam(host: string, name: string): string {
+	return name.includes(HOST_QUALIFIER_SEP) ? name : `${host}${HOST_QUALIFIER_SEP}${name}`;
+}
+
+/** Split a (possibly qualified) team into its host and local name. A bare name
+ * yields a null host (caller resolves it to the local Host). */
+export function parseQualifiedTeam(team: string): { host: string | null; name: string } {
+	const i = team.indexOf(HOST_QUALIFIER_SEP);
+	if (i === -1) return { host: null, name: team };
+	return { host: team.slice(0, i), name: team.slice(i + 1) };
+}
+
+////////////////////////////////
 //  Mailbox
 
 export type MailboxEntry = z.infer<typeof MailboxEntrySchema>;

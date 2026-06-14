@@ -21,10 +21,12 @@ describe("createPhoneRelayPump", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore: new DeviceMailboxStore(),
+			localHostId: "test-host",
 			routes: {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
 				teams: () => jsonRes([]),
+				discover: async () => jsonRes([]),
 			},
 		});
 		const replies: PhoneRelayReply[] = [];

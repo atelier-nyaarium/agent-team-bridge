@@ -31,6 +31,9 @@ object Protocol {
 
 	/** Session-id prefix for channel conversations; the target team is the tail after the LAST colon. */
 	const val CONV_SESSION_PREFIX: String = "conv:"
+
+	/** Separator in a host-qualified name (host then local name); the first one splits host from local name. */
+	const val HOST_QUALIFIER_SEP: String = "/"
 }
 
 @Serializable
@@ -45,6 +48,7 @@ data class ChannelFile(
 @Serializable
 data class TeamInfo(
 	val team: String,
+	val host: String? = null,
 	val status: String,
 	val mode: String? = null,
 	val kind: String? = null,
@@ -135,6 +139,7 @@ data class PhoneRelayReply(
 @Serializable
 data class PhoneRegisterResult(
 	val device: String,
+	val hostId: String? = null,
 	val cursor: Long,
 	val epoch: Long,
 )
@@ -181,6 +186,68 @@ data class Provisioning(
 @Serializable
 data class SttsProviders(
 	val providers: List<SttsProvider>,
+)
+
+@Serializable
+data class Admission(
+	val kind: String,
+	val signPub: String,
+	val boxPub: String,
+	val hostId: String? = null,
+	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
+data class SignedAdmission(
+	val admission: Admission,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class Revocation(
+	val signPub: String,
+	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
+data class SignedRevocation(
+	val revocation: Revocation,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("kind")
+sealed class EnrollOp {
+	@Serializable
+	@SerialName("enroll_redeem")
+	data class EnrollRedeem(
+		val nonce: String,
+		val ownerSignPub: String,
+		val ownerBoxPub: String,
+	) : EnrollOp()
+
+	@Serializable
+	@SerialName("submit_admission")
+	data class SubmitAdmission(
+		val admission: SignedAdmission,
+	) : EnrollOp()
+
+	@Serializable
+	@SerialName("submit_revocation")
+	data class SubmitRevocation(
+		val revocation: SignedRevocation,
+	) : EnrollOp()
+}
+
+@Serializable
+data class EnrollResult(
+	val ok: Boolean,
+	val error: String? = null,
 )
 
 @Serializable

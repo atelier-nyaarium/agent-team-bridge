@@ -120,6 +120,9 @@ export interface CatalogMessage {
 export interface ArbiterConfig {
 	LOG_PATH: string;
 	RESPONSE_TIMEOUT_MS: number;
+	// This Host's id, qualifying every local session name on the wire (HOST_ID
+	// env override, else the sanitized machine hostname).
+	localHostId: string;
 }
 
 export interface WebSocketConfig {

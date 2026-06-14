@@ -9,6 +9,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import com.atelier_nyaarium.switchboard.enroll.EnrollScreen
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -140,6 +141,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	val activity = context as? FragmentActivity
 	var openTeam by remember { mutableStateOf<String?>(null) }
 	var showSettings by remember { mutableStateOf(false) }
+	var showEnroll by remember { mutableStateOf(false) }
 	var unlocked by remember { mutableStateOf(false) }
 
 	// WebView pool lives at App scope (never leaves composition) so each thread's
@@ -235,8 +237,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	}
 
 	// System back navigates within the app (thread/settings -> sessions) instead of exiting.
-	BackHandler(enabled = openTeam != null || showSettings) {
+	BackHandler(enabled = openTeam != null || showSettings || showEnroll) {
 		when {
+			showEnroll -> showEnroll = false
 			openTeam != null -> openTeam = null
 			showSettings -> showSettings = false
 		}
@@ -245,12 +248,21 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	when {
 		!state.provisioned -> ProvisionScreen(onProvision = { scope.launch { repo.provision(it) } })
 		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
+		showEnroll -> {
+			val controller = repo.enrollmentController()
+			if (controller != null) {
+				EnrollScreen(controller = controller, onBack = { showEnroll = false })
+			} else {
+				LaunchedEffect(Unit) { showEnroll = false }
+			}
+		}
 		showSettings ->
 			SettingsScreen(
 				state = state,
 				repo = repo,
 				onSetDeviceName = { scope.launch { repo.setDeviceName(it) } },
 				onToggleBiometric = { repo.setBiometricLock(it) },
+				onEnroll = { showEnroll = true },
 				onClear = {
 					scope.launch { repo.clearAll() }
 					showSettings = false
@@ -418,7 +430,7 @@ fun SessionsScreen(
 	actionTeam?.let { team ->
 		SessionActionsDialog(
 			label = state.label(team.name),
-			canRename = team.kind != "devcontainer",
+			canRename = team.kind != "devcontainer" && team.kind != "host",
 			onRename = {
 				actionTeam = null
 				renameTeam = team
@@ -432,7 +444,7 @@ fun SessionsScreen(
 	}
 	renameTeam?.let { team ->
 		RenameDialog(
-			team = team.name,
+			team = team.displayName,
 			current = state.label(team.name),
 			onSave = {
 				onRename(team.name, it)
@@ -490,8 +502,9 @@ fun SessionsScreen(
 				)
 			}
 			val order = sessionOrder(state)
+			val hostAgents = state.sessions.filter { it.kind == "host" }.sortedWith(order)
 			val projects = state.sessions.filter { it.kind == "devcontainer" }.sortedWith(order)
-			val windows = state.sessions.filter { it.kind != "devcontainer" }.sortedWith(order)
+			val windows = state.sessions.filter { it.kind != "devcontainer" && it.kind != "host" }.sortedWith(order)
 			LazyColumn(
 				Modifier.fillMaxSize(),
 				contentPadding = PaddingValues(12.dp),
@@ -499,6 +512,17 @@ fun SessionsScreen(
 			) {
 				// Keys are namespaced so a team literally named "hdr-projects"
 				// cannot collide with the header items.
+				if (hostAgents.isNotEmpty()) {
+					item(key = "hdr-host") { SectionLabel("Host") }
+					items(hostAgents, key = { "team:${it.name}" }) { team ->
+						SessionCard(
+							state = state,
+							team = team,
+							onClick = { onOpen(team.name) },
+							onLongPress = { actionTeam = team },
+						)
+					}
+				}
 				if (projects.isNotEmpty()) {
 					item(key = "hdr-projects") { SectionLabel("Projects") }
 					items(projects, key = { "team:${it.name}" }) { team ->
@@ -588,7 +612,7 @@ fun SectionLabel(text: String) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: () -> Unit) {
-	val display = state.label(team.name)
+	val display = if (team.kind == "host") "Host" else state.label(team.name)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
 	val isCli = team.mode == "cli"
@@ -618,9 +642,12 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 				)
 				if (unread > 0) Badge { Text("$unread") }
 			}
-			if (display != team.name) {
+			// Under a custom label, surface the session's short local name so the user
+			// can still tell which session it maps to. label() falls back to the short
+			// name, so an unlabeled session adds nothing here.
+			if (display != team.displayName && team.kind != "host") {
 				Text(
-					team.name,
+					team.displayName,
 					style = MaterialTheme.typography.labelSmall,
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 					fontFamily = FontFamily.Monospace,
@@ -749,7 +776,9 @@ fun ThreadScreen(
 
 	if (showRename) {
 		RenameDialog(
-			team = team,
+			// `team` is the host-qualified id; show only the short local name (tail
+			// after the "/" qualifier) as the rename context.
+			team = team.substringAfter('/'),
 			current = label,
 			onSave = {
 				onRename(it)
@@ -920,6 +949,7 @@ fun SettingsScreen(
 	repo: ChatRepository,
 	onSetDeviceName: (String) -> Unit,
 	onToggleBiometric: (Boolean) -> Unit,
+	onEnroll: () -> Unit,
 	onClear: () -> Unit,
 	onBack: () -> Unit,
 ) {
@@ -968,6 +998,14 @@ fun SettingsScreen(
 
 			HorizontalDivider()
 			AppUpdateRow()
+
+			HorizontalDivider()
+			Text("Federation enrollment", style = MaterialTheme.typography.titleMedium)
+			Text(
+				"Scan an enrollment QR to root this device as the Domain owner, or to admit an arbiter or second device.",
+				style = MaterialTheme.typography.bodySmall,
+			)
+			OutlinedButton(onClick = onEnroll) { Text("Enroll by QR") }
 
 			HorizontalDivider()
 			Spacer(Modifier.width(0.dp))

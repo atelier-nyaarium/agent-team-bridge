@@ -31,7 +31,7 @@ jobs:
         run: bun scripts/check-module-residue.ts
 
       - name: Synced-leaf faithfulness
-        run: bun scripts/check-sync-hash.ts src/shared/notice.ts src/shared/evie-protocol.ts
+        run: bun scripts/check-sync-hash.ts src/shared/notice.ts src/shared/evie-protocol.ts src/shared/crypto.ts src/shared/admission.ts src/shared/enrollment.ts
 
       - name: Lint
         run: bun run lint

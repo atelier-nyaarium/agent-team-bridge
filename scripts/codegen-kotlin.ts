@@ -22,7 +22,19 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import { CONV_SESSION_PREFIX, NOTICE_SESSION_PREFIX, PHONE_PROTOCOL_VERSION } from "../src/shared/phone-protocol.js";
+import {
+	AdmissionSchema,
+	RevocationSchema,
+	SignedAdmissionSchema,
+	SignedRevocationSchema,
+} from "../src/shared/admission.js";
+import { EnrollOpSchema, EnrollResultSchema } from "../src/shared/enrollment.js";
+import {
+	CONV_SESSION_PREFIX,
+	HOST_QUALIFIER_SEP,
+	NOTICE_SESSION_PREFIX,
+	PHONE_PROTOCOL_VERSION,
+} from "../src/shared/phone-protocol.js";
 import {
 	ChannelFileSchema,
 	MailboxEntrySchema,
@@ -62,12 +74,20 @@ const ROOTS: z.ZodType[] = [
 	PhonePollResultSchema,
 	ProvisioningSchema,
 	SttsProvidersSchema,
+	AdmissionSchema,
+	SignedAdmissionSchema,
+	RevocationSchema,
+	SignedRevocationSchema,
+	EnrollOpSchema,
+	EnrollResultSchema,
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything
 // not listed emits open (decode-side rule). Maps schema id -> nothing needed;
-// the discriminator key is read from zod internals.
-const SEALED_ROOTS = new Set(["PhoneOp"]);
+// the discriminator key is read from zod internals. EnrollOp is composed by the
+// phone (owner enroll requests), so closure is safe; the scanned EnrollmentPayload
+// is DECODED and stays hand-parsed (forward-compatible) in the Android client.
+const SEALED_ROOTS = new Set(["PhoneOp", "EnrollOp"]);
 
 ////////////////////////////////
 //  zod -> cleaned JSON Schema (evie's conversion hygiene)
@@ -127,7 +147,7 @@ function pascal(value: string): string {
  * {type:"null"}), or null when the node is not that shape. */
 function nullableInner(node: Json): Json | null {
 	const members = (node.anyOf ?? node.oneOf) as Json[] | undefined;
-	if (!members || members.length !== 2) return null;
+	if (members?.length !== 2) return null;
 	const nullIndex = members.findIndex((m) => (m as Json).type === "null");
 	if (nullIndex === -1) return null;
 	return members[1 - nullIndex] as Json;
@@ -328,6 +348,9 @@ ${INDENT}const val NOTICE_SESSION_PREFIX: String = ${kotlinString(NOTICE_SESSION
 
 ${INDENT}/** Session-id prefix for channel conversations; the target team is the tail after the LAST colon. */
 ${INDENT}const val CONV_SESSION_PREFIX: String = ${kotlinString(CONV_SESSION_PREFIX)}
+
+${INDENT}/** Separator in a host-qualified name (host then local name); the first one splits host from local name. */
+${INDENT}const val HOST_QUALIFIER_SEP: String = ${kotlinString(HOST_QUALIFIER_SEP)}
 }`;
 
 const output = `${[header, ...blocks].join("\n\n")}\n`;

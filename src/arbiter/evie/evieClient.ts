@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import WebSocket from "ws";
-import { type BridgeTool, EvieInboundFrameSchema, type ToolCallFrame } from "../../shared/evie-protocol.js";
+import {
+	type BridgeTool,
+	EvieInboundFrameSchema,
+	FEDERATION_PROTOCOL_VERSION,
+	type ToolCallFrame,
+} from "../../shared/evie-protocol.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -16,10 +21,25 @@ export interface EvieToolCallResult {
 export interface EvieClientConfig {
 	url: string;
 	authToken: string;
+	// This Host's id, registered with the Router on connect so cross-Host frames
+	// can be switched to this Host.
+	hostId: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	// The relay pump owns full PhoneRelayFrameSchema validation; the envelope
 	// union only routes by type, so the frame travels as unknown.
 	onPhoneRelay?: (frame: unknown) => void;
+	// A cross-Host frame the Router switched to this Host; the host-relay pump owns
+	// full HostRelayFrameSchema validation, so the frame travels as unknown.
+	onHostRelay?: (frame: unknown) => void;
+	// Extra `arbiter_register` params (the admitted-identity proof: signPub/boxPub
+	// + owner-signed admission + a fresh possession proof), computed at each
+	// (re)register so the proof timestamp is current. Returns null pre-enrollment,
+	// leaving registration token-only.
+	buildRegisterAuth?: () => Record<string, unknown> | null;
+	// The mirrored Domain (owner root + allowlist) evie returns in the register
+	// reply; the Host applies it so a revocation bites even while evie is offline.
+	// Travels as unknown; the consumer validates with DomainSnapshotSchema.
+	onDomainSync?: (domain: unknown) => void;
 	onDisconnect?: () => void;
 }
 
@@ -58,6 +78,24 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 
 		ws.on("open", () => {
 			console.log(`[evie-client] connected`);
+			// Register this Host with the Router so cross-Host frames can find it.
+			// Re-runs on every reconnect (the Router re-keys host id -> socket).
+			void callTool("arbiter_register", {
+				hostId: config.hostId,
+				protocolVersion: FEDERATION_PROTOCOL_VERSION,
+				...(config.buildRegisterAuth?.() ?? {}),
+			}).then((res) => {
+				const r = res.result as
+					| { ok?: boolean; error?: string; hosts?: string[]; domain?: unknown }
+					| undefined;
+				if (res.error) console.error(`[evie-client] arbiter_register failed: ${res.error}`);
+				else if (r?.ok === false) console.error(`[evie-client] Router rejected registration: ${r.error}`);
+				else {
+					const peers = r?.hosts?.length ? `, peers: ${r.hosts.join(", ")}` : "";
+					console.log(`[evie-client] registered as Host "${config.hostId}"${peers}`);
+					if (r?.domain) config.onDomainSync?.(r.domain);
+				}
+			});
 		});
 
 		ws.on("message", (raw: WebSocket.Data) => {
@@ -92,6 +130,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				}
 				case "phone_relay": {
 					config.onPhoneRelay?.(frame);
+					break;
+				}
+				case "host_relay": {
+					config.onHostRelay?.(frame);
 					break;
 				}
 				case "tool_result": {

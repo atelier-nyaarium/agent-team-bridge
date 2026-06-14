@@ -1,6 +1,6 @@
 {
 	"name": "switchboard",
-	"version": "4.0.0",
+	"version": "4.1.0",
 	"type": "module",
 	"scripts": {
 		"start:arbiter": "bun run src/main-arbiter.ts",
@@ -11,6 +11,7 @@
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "1.29.0",
+		"qrcode-generator": "1.4.4",
 		"ws": "8.21.0",
 		"zod": "4.4.3"
 	},

@@ -1,11 +1,14 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
+import com.atelier_nyaarium.switchboard.proto.EnrollOp
+import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.PhoneOp
 import com.atelier_nyaarium.switchboard.proto.PhonePollResult
 import com.atelier_nyaarium.switchboard.proto.PhoneRegisterResult
 import com.atelier_nyaarium.switchboard.proto.PhoneRelayReply
 import com.atelier_nyaarium.switchboard.proto.PhoneSendResult
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import java.io.ByteArrayInputStream
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -67,16 +70,31 @@ data class Provisioning(
 	}
 }
 
+/** Qualify a bare local name under a Host as `host/name`. A name that is already
+ * qualified, or qualified under no Host (the pre-federation single-Host case), is
+ * returned unchanged - bare resolves to the local Host on the arbiter. */
+fun qualifyTeam(host: String, name: String): String =
+	if (host.isEmpty() || name.contains(Protocol.HOST_QUALIFIER_SEP)) name
+	else "$host${Protocol.HOST_QUALIFIER_SEP}$name"
+
 /** UI model for the sessions board. Mapped one-to-one from the wire TeamInfo in
  * `teams()`; also constructed locally for ended threads whose team has left the
- * bridge (a state that never exists on the wire). */
+ * bridge (a state that never exists on the wire). `name` is the host-qualified
+ * composite key (`host/local`); `displayName`/`host` derive from it. */
 data class Team(
 	val name: String,
 	val status: String,
 	val mode: String,
 	val queueDepth: Int,
 	val kind: String = "loose",
-)
+) {
+	/** Short local name shown in the UI: the tail after the host qualifier (the
+	 * whole name when bare). */
+	val displayName: String get() = name.substringAfter(Protocol.HOST_QUALIFIER_SEP)
+
+	/** Owning Host id (the segment before the qualifier), or "" for a bare name. */
+	val host: String get() = name.substringBefore(Protocol.HOST_QUALIFIER_SEP, "")
+}
 
 data class SendResult(val ok: Boolean, val status: String, val error: String?)
 
@@ -84,14 +102,32 @@ data class SendResult(val ok: Boolean, val status: String, val error: String?)
 data class OutgoingFile(val name: String, val mime: String, val bytes: ByteArray)
 
 /** The op-only envelope the phone POSTs; evie composes the full phone_relay
- * frame around it (type + protocol version), so this is not PhoneRelayFrame. */
+ * frame around it (type + protocol version), so this is not PhoneRelayFrame.
+ * `homeHost` (once learned at register) tells the Router which Host to route to;
+ * absent on the first register, where the Router falls back to the live arbiter. */
 @Serializable
 private data class RelayEnvelope(
 	val device: String,
 	val conversationId: String,
 	val opId: String,
 	val op: PhoneOp,
+	val homeHost: String? = null,
 )
+
+/** The owner enroll envelope: `enrollOp` (not `op`) routes to evie's enrollment
+ * coordinator, which answers an EnrollResult directly instead of relaying to a
+ * Host. */
+@Serializable
+private data class EnrollEnvelope(
+	val device: String,
+	val conversationId: String,
+	val opId: String,
+	val enrollOp: EnrollOp,
+)
+
+/** A retryable bounce body (offline / malformed), distinct from an EnrollResult. */
+@Serializable
+private data class BounceBody(val error: String? = null, val retryable: Boolean = false)
 
 /** Decode posture for everything off the wire: unknown fields are tolerated
  * (additive protocol). Encode posture: the default config omits null-defaulted
@@ -103,6 +139,11 @@ class PhoneClient(private val prov: Provisioning) {
 	private val client = buildPinnedClient(prov.caPem)
 	private val proxyBase =
 		"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
+
+	/** This phone's home Host id, learned at register and set by ChatRepository.
+	 * Rides every relay so the Router routes to the right Host; null until learned. */
+	@Volatile
+	var homeHost: String? = null
 
 	/**
 	 * Direct CA-pinned GET to the API server with the SA token. Proves the tunnel
@@ -126,7 +167,7 @@ class PhoneClient(private val prov: Provisioning) {
 	 * result server-side instead of running the op twice (the protocol contract).
 	 * A held op (long-poll) passes a read timeout above its server-side hold. */
 	private fun relay(op: PhoneOp, opId: String = UUID.randomUUID().toString(), readTimeoutMs: Long? = null): PhoneRelayReply {
-		val envelope = RelayEnvelope(prov.device, prov.conversationId, opId, op)
+		val envelope = RelayEnvelope(prov.device, prov.conversationId, opId, op, homeHost)
 		val req = Request.Builder()
 			.url("$proxyBase/relay")
 			.header("Authorization", "Bearer ${prov.saToken}")
@@ -145,6 +186,33 @@ class PhoneClient(private val prov: Provisioning) {
 		}
 	}
 
+	/** Submit an owner enroll op directly to evie (the Domain root). evie answers
+	 * with an EnrollResult, not a phone_relay_reply: enroll ops are evie-direct and
+	 * never relayed to a Host, so they succeed even with no arbiter connected. A
+	 * bounce (offline / 501 / malformed) is surfaced as a failed EnrollResult. */
+	fun enroll(op: EnrollOp): EnrollResult {
+		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), op)
+		val req = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Android-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON))
+			.build()
+		client.newCall(req).execute().use { resp ->
+			val text = resp.body?.string().orEmpty()
+			// 2xx: a real EnrollResult. A coordinator rejection is 400 with an
+			// EnrollResult body; a transport bounce is {error, retryable}. Cross-check
+			// the status so a non-2xx body is never read as a successful enroll.
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<EnrollResult>(text) }
+					.getOrElse { EnrollResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<EnrollResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return EnrollResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
 	/** The reply's result payload decoded as T, or an error for a failed op. */
 	private inline fun <reified T> resultOf(reply: PhoneRelayReply, op: String): T {
 		if (!reply.ok) error("$op failed: ${reply.error ?: "unknown error"}")
@@ -155,14 +223,19 @@ class PhoneClient(private val prov: Provisioning) {
 	/** Claim this device's mailbox. Returns the starting cursor + epoch. */
 	fun register(): PhoneRegisterResult = resultOf(relay(PhoneOp.Register), "register")
 
-	fun teams(): List<Team> {
+	/** List the bridge's sessions, each keyed by its host-qualified name. A
+	 * session's Host comes from the wire (`TeamInfo.host`); when a pre-federation
+	 * arbiter omits it, `localHostId` (this connection's Host, learned at register)
+	 * is the fallback. Both empty leaves the name bare (single implicit Host). */
+	fun teams(localHostId: String = ""): List<Team> {
 		val reply = relay(PhoneOp.ListTeams)
 		if (!reply.ok || reply.result == null) return emptyList()
 		val result =
 			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.PhoneListTeamsResult>(reply.result)
 		return result.teams.map {
+			val host = it.host?.ifEmpty { null } ?: localHostId
 			Team(
-				name = it.team,
+				name = qualifyTeam(host, it.team),
 				status = it.status,
 				mode = it.mode ?: "",
 				queueDepth = it.queue_depth.toInt(),
