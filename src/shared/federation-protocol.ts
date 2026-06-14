@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { ChannelFilesSchema } from "./evie-protocol.js";
-import { TeamInfoSchema } from "./schemas.js";
 
 ////////////////////////////////
 //  Federation inner protocol (arbiter <-> arbiter, via evie)
@@ -83,29 +82,15 @@ export const HostRelayFrameSchema = z.object({
 });
 
 ////////////////////////////////
-//  Op result schemas (destination -> origin, in host_relay_reply.result)
-
-export const FederatedSendResultSchema = z.object({
-	session_id: z.string(),
-	status: z.string(),
-});
-
-export const FederatedListTeamsResultSchema = z.object({
-	teams: z.array(TeamInfoSchema),
-});
-
-export const FederatedAckResultSchema = z.object({
-	ok: z.boolean(),
-});
-
-////////////////////////////////
 //  Types
+//
+//  Op RESULTS travel back in host_relay_reply.result as plain objects the origin
+//  reads loosely (a peer Host is semi-trusted; the phone's tolerant decode and
+//  the existing route validation handle shape). No result schemas here until the
+//  crypto phase needs to validate an unsealed result.
 
 export type ReturnRoute = z.infer<typeof ReturnRouteSchema>;
 export type FederatedOp = z.infer<typeof FederatedOpSchema>;
 export type FederatedOpKind = FederatedOp["kind"];
 export type HostRelayPayload = z.infer<typeof HostRelayPayloadSchema>;
 export type HostRelayFrame = z.infer<typeof HostRelayFrameSchema>;
-export type FederatedSendResult = z.infer<typeof FederatedSendResultSchema>;
-export type FederatedListTeamsResult = z.infer<typeof FederatedListTeamsResultSchema>;
-export type FederatedAckResult = z.infer<typeof FederatedAckResultSchema>;
