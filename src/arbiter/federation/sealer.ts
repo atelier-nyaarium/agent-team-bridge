@@ -1,5 +1,6 @@
 import { type Identity, type SealedEnvelope, seal, unseal } from "../../shared/crypto.js";
 import type { Allowlist } from "./allowlist.js";
+import { ReplayGuard } from "./replayGuard.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -15,7 +16,11 @@ export interface Sealer {
 ////////////////////////////////
 //  Functions & Helpers
 
-export function createSealer(identity: Identity, allowlist: Allowlist): Sealer {
+export function createSealer(
+	identity: Identity,
+	allowlist: Allowlist,
+	replayGuard: ReplayGuard = new ReplayGuard(),
+): Sealer {
 	return {
 		seal(dstHost, obj) {
 			const peer = allowlist.resolveHost(dstHost);
@@ -25,7 +30,13 @@ export function createSealer(identity: Identity, allowlist: Allowlist): Sealer {
 		open(srcHost, env) {
 			const peer = allowlist.resolveHost(srcHost);
 			if (!peer) throw new Error(`Host "${srcHost}" is not admitted to the Domain`);
-			return JSON.parse(unseal(env, identity.box.priv, peer.signPub).toString("utf8"));
+			// Verify authenticity first; only then guard against a replay of an
+			// authentic frame (so a forged nonce can never poison the seen-set).
+			const plain = unseal(env, identity.box.priv, peer.signPub);
+			if (!replayGuard.check(srcHost, env.nonce)) {
+				throw new Error(`seal: replayed envelope from "${srcHost}"`);
+			}
+			return JSON.parse(plain.toString("utf8"));
 		},
 	};
 }
