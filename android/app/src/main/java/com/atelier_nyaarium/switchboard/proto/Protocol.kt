@@ -220,6 +220,37 @@ data class SignedRevocation(
 )
 
 @Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("kind")
+sealed class EnrollOp {
+	@Serializable
+	@SerialName("enroll_redeem")
+	data class EnrollRedeem(
+		val nonce: String,
+		val ownerSignPub: String,
+		val ownerBoxPub: String,
+	) : EnrollOp()
+
+	@Serializable
+	@SerialName("submit_admission")
+	data class SubmitAdmission(
+		val admission: SignedAdmission,
+	) : EnrollOp()
+
+	@Serializable
+	@SerialName("submit_revocation")
+	data class SubmitRevocation(
+		val revocation: SignedRevocation,
+	) : EnrollOp()
+}
+
+@Serializable
+data class EnrollResult(
+	val ok: Boolean,
+	val error: String? = null,
+)
+
+@Serializable
 data class SttsProvider(
 	val id: String,
 	val label: String,

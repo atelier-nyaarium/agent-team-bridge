@@ -28,6 +28,7 @@ import {
 	SignedAdmissionSchema,
 	SignedRevocationSchema,
 } from "../src/shared/admission.js";
+import { EnrollOpSchema, EnrollResultSchema } from "../src/shared/enrollment.js";
 import {
 	CONV_SESSION_PREFIX,
 	HOST_QUALIFIER_SEP,
@@ -77,12 +78,16 @@ const ROOTS: z.ZodType[] = [
 	SignedAdmissionSchema,
 	RevocationSchema,
 	SignedRevocationSchema,
+	EnrollOpSchema,
+	EnrollResultSchema,
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything
 // not listed emits open (decode-side rule). Maps schema id -> nothing needed;
-// the discriminator key is read from zod internals.
-const SEALED_ROOTS = new Set(["PhoneOp"]);
+// the discriminator key is read from zod internals. EnrollOp is composed by the
+// phone (owner enroll requests), so closure is safe; the scanned EnrollmentPayload
+// is DECODED and stays hand-parsed (forward-compatible) in the Android client.
+const SEALED_ROOTS = new Set(["PhoneOp", "EnrollOp"]);
 
 ////////////////////////////////
 //  zod -> cleaned JSON Schema (evie's conversion hygiene)
