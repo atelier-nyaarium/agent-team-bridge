@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Shadows com.journeyapps:zxing-android-embedded's own zxing_barcode_scanner layout
+  (app resources win over a dependency's same-named resource), so DecoratedBarcodeView
+  picks this up app-wide without a custom capture Activity.
+
+  Two changes from the library default:
+   - The decode region is a centred SQUARE (zxing_framing_rect_*), matching a QR's
+     shape. The default region tracks the portrait preview, so a square QR could fall
+     outside it and never decode - the "not picking up" report.
+   - The horizontal red laser line is off and the surround is dimmed, so it reads as a
+     square QR box instead of a 1D-barcode scanner.
+-->
+<merge xmlns:android="http://schemas.android.com/apk/res/android"
+       xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <com.journeyapps.barcodescanner.BarcodeView
+        android:id="@+id/zxing_barcode_surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:zxing_framing_rect_width="260dp"
+        app:zxing_framing_rect_height="260dp" />
+
+    <com.journeyapps.barcodescanner.ViewfinderView
+        android:id="@+id/zxing_viewfinder_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:zxing_viewfinder_laser_visibility="false"
+        app:zxing_viewfinder_mask="#99000000" />
+
+    <TextView
+        android:id="@+id/zxing_status_view"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:background="@color/zxing_transparent"
+        android:text="@string/zxing_msg_default_status"
+        android:textColor="@color/zxing_status_text" />
+</merge>

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -26,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.atelier_nyaarium.switchboard.DebugLog
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -50,12 +52,19 @@ fun EnrollScreen(controller: EnrollmentController, onBack: () -> Unit) {
 		rememberLauncherForActivityResult(ScanContract()) { result ->
 			val contents = result.contents
 			when {
-				contents == null -> status = "Scan cancelled."
+				contents == null -> {
+					DebugLog.log("Enroll", "scan returned no contents (cancelled or nothing decoded)")
+					status = "Scan cancelled."
+				}
 				else -> {
+					// Length only, never the contents: the QR carries a single-use secret.
+					DebugLog.log("Enroll", "scan decoded ${contents.length} chars")
 					val payload = parseEnrollmentPayload(contents)
 					if (payload == null) {
+						DebugLog.log("Enroll", "payload did not parse as an enrollment code")
 						status = "That QR is not a switchboard enrollment code."
 					} else {
+						DebugLog.log("Enroll", "payload parsed: ${payloadTitle(payload)}")
 						scanned = payload
 						status = null
 					}
@@ -65,6 +74,7 @@ fun EnrollScreen(controller: EnrollmentController, onBack: () -> Unit) {
 
 	fun launchScan() {
 		status = null
+		DebugLog.log("Enroll", "launching QR scanner")
 		val options =
 			ScanOptions()
 				.setDesiredBarcodeFormats(ScanOptions.QR_CODE)
@@ -77,6 +87,7 @@ fun EnrollScreen(controller: EnrollmentController, onBack: () -> Unit) {
 	fun submit(payload: EnrollmentPayload) {
 		busy = true
 		status = null
+		DebugLog.log("Enroll", "submitting ${payloadTitle(payload)}")
 		scope.launch {
 			val result =
 				withContext(Dispatchers.IO) {
@@ -92,18 +103,26 @@ fun EnrollScreen(controller: EnrollmentController, onBack: () -> Unit) {
 			result
 				.onSuccess { r: EnrollResult ->
 					if (r.ok) {
+						DebugLog.log("Enroll", "enrolled OK")
 						status = "Enrolled."
 						scanned = null
 					} else {
+						DebugLog.log("Enroll", "rejected: ${r.error ?: "unknown"}")
 						status = "Rejected: ${r.error ?: "unknown"}"
 					}
 				}
-				.onFailure { status = "Failed: ${it.message}" }
+				.onFailure {
+					DebugLog.log("Enroll", "failed: ${it.message}")
+					status = "Failed: ${it.message}"
+				}
 		}
 	}
 
 	Column(
-		modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
+		// systemBarsPadding keeps the title clear of the status bar and the Back
+		// button clear of the nav bar (targetSdk 35 forces edge-to-edge, and this
+		// screen has no Scaffold to apply the insets for it).
+		modifier = Modifier.fillMaxSize().systemBarsPadding().padding(16.dp).verticalScroll(rememberScrollState()),
 		verticalArrangement = Arrangement.spacedBy(12.dp),
 	) {
 		Text("Enrollment", style = MaterialTheme.typography.headlineSmall)
