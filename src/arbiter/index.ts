@@ -9,7 +9,10 @@ import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { startEvieClient } from "./evie/evieClient.js";
 import { startPortForward } from "./evie/portForward.js";
+import { Allowlist } from "./federation/allowlist.js";
 import { createHostRelayHandler, createHostRelayPump } from "./federation/hostRelay.js";
+import { loadOrCreateIdentity } from "./federation/identity.js";
+import { createSealer, type Sealer } from "./federation/sealer.js";
 import { createPhoneHandler } from "./phone/phoneHandler.js";
 import { createPhoneRelayPump } from "./phone/relayPump.js";
 import { createRoutes } from "./routes.js";
@@ -130,8 +133,16 @@ export async function startArbiter(): Promise<void> {
 	const evieLocalPort = parseInt(process.env.EVIE_LOCAL_PORT || "20001", 10);
 
 	let evieClient: ReturnType<typeof startEvieClient> | null = null;
+	let sealer: Sealer | null = null;
 
 	if (evieAuthToken) {
+		// Load this Host's federation identity + mirrored allowlist from its volume,
+		// and build the E2E sealer (cross-Host frames are sealed peer-to-peer).
+		const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
+		const allowlist = new Allowlist(federationDir);
+		sealer = createSealer(loadOrCreateIdentity(federationDir), allowlist);
+		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);
+
 		const portForward = startPortForward({
 			kubeconfig: evieKubeconfig,
 			namespace: evieNamespace,
@@ -189,6 +200,7 @@ export async function startArbiter(): Promise<void> {
 		knownTeamPaths,
 		mailboxStore,
 		evieClient,
+		sealer,
 		resolveHandshake: wsHandlers.resolveHandshake,
 	});
 
@@ -212,6 +224,7 @@ export async function startArbiter(): Promise<void> {
 		// and the reply routes home through the Router.
 		const hostRelayHandler = createHostRelayHandler({ routes, tryWakeTeam });
 		handleHostRelay = createHostRelayPump({
+			sealer: sealer!,
 			handleOp: hostRelayHandler.handleOp,
 			sendReply: (reply) => evieClient!.callTool("host_relay_reply", reply as unknown as Record<string, unknown>),
 		});

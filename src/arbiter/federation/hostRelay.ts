@@ -1,10 +1,7 @@
 import type { HostRelayReplyParams } from "../../shared/evie-protocol.js";
-import {
-	FEDERATION_PROTOCOL_VERSION,
-	type FederatedOp,
-	HostRelayFrameSchema,
-} from "../../shared/federation-protocol.js";
+import { type FederatedOp, FederatedOpSchema, HostRelayFrameSchema } from "../../shared/federation-protocol.js";
 import type { TeamInfo } from "../../shared/types.js";
+import type { Sealer } from "./sealer.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -25,6 +22,8 @@ export interface HostRelayHandlerDeps {
 
 export interface HostRelayPumpDeps {
 	handleOp: (op: FederatedOp, srcHost: string) => Promise<unknown>;
+	/** Opens the inbound sealed op and seals the result back to the origin Host. */
+	sealer: Sealer;
 	/** Sends a host_relay_reply tool call back to the Router (correlated by relayId). */
 	sendReply: (reply: HostRelayReplyParams) => Promise<{ error?: string }>;
 }
@@ -91,7 +90,7 @@ export function createHostRelayHandler({ routes, tryWakeTeam }: HostRelayHandler
 
 /** Validates an inbound host_relay frame, runs its op, and ships the reply back
  * to the Router. Mirrors the phone relay pump: one parse, one error surface. */
-export function createHostRelayPump({ handleOp, sendReply }: HostRelayPumpDeps) {
+export function createHostRelayPump({ handleOp, sealer, sendReply }: HostRelayPumpDeps) {
 	return function pump(raw: unknown): void {
 		void (async () => {
 			const parsed = HostRelayFrameSchema.safeParse(raw);
@@ -109,20 +108,24 @@ export function createHostRelayPump({ handleOp, sendReply }: HostRelayPumpDeps) 
 				return;
 			}
 			const frame = parsed.data;
-			// Plaintext spike: the cleartext op rides payload.op. The crypto phase
-			// unseals payload.sealed here instead.
-			const op = frame.payload.op;
-			if (!op) {
+			// Open the E2E seal (verifies the origin Host's signature against the
+			// allowlist + decrypts) and parse the inner op. A non-admitted sender or a
+			// tampered seal is rejected without dispatching.
+			let op: FederatedOp;
+			try {
+				op = FederatedOpSchema.parse(sealer.open(frame.srcHost, frame.payload.sealed));
+			} catch (err) {
 				await sendReply({
 					relayId: frame.relayId,
 					ok: false,
-					error: `sealed payloads are not supported (federation v${FEDERATION_PROTOCOL_VERSION} plaintext)`,
+					error: `unseal failed: ${(err as Error).message}`,
 				});
 				return;
 			}
 			try {
 				const result = await handleOp(op, frame.srcHost);
-				await sendReply({ relayId: frame.relayId, ok: true, result });
+				// Seal the result back to the origin Host (E2E both directions).
+				await sendReply({ relayId: frame.relayId, ok: true, result: sealer.seal(frame.srcHost, result) });
 			} catch (err) {
 				await sendReply({ relayId: frame.relayId, ok: false, error: (err as Error).message });
 			}

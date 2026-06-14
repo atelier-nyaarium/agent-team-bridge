@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
+import type { SealedEnvelope } from "../shared/crypto.js";
 import { type FederatedOp, ReturnRouteSchema } from "../shared/federation-protocol.js";
 import type { Mutex } from "../shared/mutex.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
@@ -43,6 +44,8 @@ export interface RoutesDeps {
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
 	config: ArbiterConfig;
 	evieClient?: import("./evie/evieClient.js").EvieClient | null;
+	// E2E seal/open for cross-Host frames; absent when federation crypto is off.
+	sealer?: import("./federation/sealer.js").Sealer | null;
 	resolveHandshake?: (sessionId: string, replyAsJson?: Record<string, unknown>, response?: string) => boolean;
 }
 
@@ -173,6 +176,7 @@ export function createRoutes({
 	mailboxStore,
 	config,
 	evieClient,
+	sealer,
 	resolveHandshake,
 }: RoutesDeps) {
 	const { LOG_PATH, RESPONSE_TIMEOUT_MS, localHostId } = config;
@@ -197,17 +201,29 @@ export function createRoutes({
 	): Promise<{ ok: boolean; result?: unknown; error?: string }> {
 		if (!evieClient?.isConnected())
 			return { ok: false, error: `Router unavailable; cannot reach Host "${dstHost}"` };
+		if (!sealer) return { ok: false, error: `federation crypto is not configured` };
+		let sealed: SealedEnvelope;
+		try {
+			sealed = sealer.seal(dstHost, op);
+		} catch (err) {
+			return { ok: false, error: (err as Error).message };
+		}
 		const relayId = crypto.randomUUID();
 		const call = await evieClient.callTool("host_relay", {
 			relayId,
 			srcHost: localHostId,
 			dstHost,
-			payload: { op },
+			payload: { sealed },
 		});
 		if (call.error) return { ok: false, error: call.error };
 		const reply = call.result as { ok?: boolean; result?: unknown; error?: string } | undefined;
 		if (!reply || reply.ok === false) return { ok: false, error: reply?.error ?? "cross-Host relay failed" };
-		return { ok: true, result: reply.result };
+		// The reply result is sealed by the destination Host back to us; open it.
+		try {
+			return { ok: true, result: sealer.open(dstHost, reply.result as SealedEnvelope) };
+		} catch (err) {
+			return { ok: false, error: `bad sealed reply from "${dstHost}": ${(err as Error).message}` };
+		}
 	}
 
 	/** Origin side of a cross-Host channel send. Keeps a local pollable anchor keyed

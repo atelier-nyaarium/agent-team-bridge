@@ -61,13 +61,21 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	}),
 ]);
 
-/** The host_relay payload, crypto-aware. Plaintext spike: `op` carries the
- * cleartext federated op. Crypto phase: `op` is absent and {sealed, nonce} carry
- * the sealed op (the fields are reserved now so the format never re-freezes). */
+/** A sealed envelope (shared/crypto.ts): an ephemeral X25519 box + Ed25519
+ * signature. Carries the sealed FederatedOp on the request leg and a sealed
+ * op-result on the reply leg. */
+export const SealedEnvelopeSchema = z.object({
+	ephemeralPub: z.string(),
+	nonce: z.string(),
+	ciphertext: z.string(),
+	signature: z.string(),
+});
+
+/** The host_relay payload. Clean cutover: cross-Host traffic is ALWAYS E2E-sealed
+ * (the plaintext spike's cleartext `op` is retired), so evie sees only this opaque
+ * sealed blob - it cannot read or forge the op. */
 export const HostRelayPayloadSchema = z.object({
-	op: FederatedOpSchema.optional(),
-	sealed: z.string().optional(),
-	nonce: z.string().optional(),
+	sealed: SealedEnvelopeSchema,
 });
 
 /** The full host_relay frame the destination arbiter's relay pump validates (the
