@@ -60,13 +60,14 @@
     - `resolve-model.ts` - Model resolution by agent type and effort level
   - `shared/` - Shared utilities used by both arbiter and MCP
     - `types.ts` - Shared TypeScript types; wire shapes derive from schemas.ts via `z.infer` (`ChannelFile`, `TeamInfo`, the enums), local payload/config types stay hand-written
-    - `schemas.ts` - THE single zod truth for every wire shape: reply schemas, `ChannelFileSchema`, `TeamInfoSchema`, the full phone protocol (`PhoneOpSchema`, `PhoneRelayFrameSchema`, `PhoneRelayReplySchema`, op results, `MailboxEntrySchema`), and `ProvisioningSchema`. Every shared schema carries `.meta({ id })` - the id is the generated Kotlin class name (see codegen below)
+    - `schemas.ts` - THE single zod truth for every wire shape: reply schemas, `ChannelFileSchema`, `TeamInfoSchema` (with each session's owning `host`), the full phone protocol (`PhoneOpSchema`, `PhoneRelayFrameSchema`, `PhoneRelayReplySchema`, op results, `MailboxEntrySchema`), and `ProvisioningSchema`. Every shared schema carries `.meta({ id })` - the id is the generated Kotlin class name (see codegen below)
     - `tmp-files.ts` - `cleanupTmpDir({dir, maxAgeMs, mode: "files" | "dirs"})` - generic lazy mtime sweep used by the connector and the Discord-bridge file materializer
     - `env.ts` - Container detection (isInsideContainer)
     - `mutex.ts` - Mutex class for serializing CLI-mode requests per team
     - `pending-job-store.ts` - PendingJobStore for tracking in-flight requests with timeout/polling
     - `device-mailbox.ts` - `DeviceMailbox` (per-phone inbound queue: monotonic seq, cursor ack, entry cap, epoch) and `DeviceMailboxStore` (per-conversation, idle TTL sweep + LRU device cap, `setOnEvict`)
-    - `phone-protocol.ts` - Phone protocol constants + session-id grammars (`NOTICE_SESSION_PREFIX`, `CONV_SESSION_PREFIX` with compose/parse helpers, `PHONE_PROTOCOL_VERSION`); the wire TYPES re-export from schemas.ts via `z.infer`
+    - `phone-protocol.ts` - Phone protocol constants + session-id grammars (`NOTICE_SESSION_PREFIX`, `CONV_SESSION_PREFIX` with compose/parse helpers, `PHONE_PROTOCOL_VERSION`) and host qualification (`HOST_QUALIFIER_SEP` + `qualifyTeam`/`parseQualifiedTeam`: a session's address is `host/name`, a bare name resolves to the local Host); the wire TYPES re-export from schemas.ts via `z.infer`
+    - `host-id.ts` - The arbiter's own Host id: `resolveLocalHostId` (the `HOST_ID` env override, else the sanitized machine hostname) and `sanitizeHostId` (slug to `[a-z0-9-]`, never the qualifier separator). Threaded through `ArbiterConfig.localHostId`
     - `evie-protocol.ts` - SELF-CONTAINED (zod-only) leaf owning the arbiter<->evie frame vocabulary: `EvieInboundFrameSchema` (tool_registry / tool_result / tool_error / loose phone_relay), `ToolCallFrameSchema`, and `ChannelFileSchema` (re-exported by schemas.ts). Built to be copied verbatim into evie-bot in a later phase; nothing imports into it
     - `stts-providers.ts` - `SttsProviderSchema` for the TTS provider catalog (bundled at `android/.../assets/stts-providers.json`): per-provider id/label/path/container/voices plus a request-body TEMPLATE ($text/$voice). Validated by vitest on every push; the generated Kotlin `SttsProvider` decodes it at runtime and `SttsClient.fillTemplate` fills the template per call. The `voices` arrays are NOT hand-maintained: they are generated from the raw provider voice dumps in `data/stts-voices/` by `scripts/import-stts-voices.ts` (drift-checked by ci.yml). The settings voice picker filters this full list as you type
     - `notice.ts` - `NoticeSchema` `{ title, summary, full }`, the single truth for the `notify_human` tool param and the `/human/notify` wire (tier rules on the field describes). SYNCED leaf: a byte-verbatim copy lives at `nyaaskills/src/shared/notice.ts` (re-copy with `cp src/shared/notice.ts ../nyaaskills/src/shared/notice.ts`). `title` replaces the old `tiny`; the tool/route accept `tiny` as a deprecated alias for one transition release
@@ -126,6 +127,10 @@ File attachments flow over the phone channel; the Discord file path was retired 
 **Inbound (phone -> agent):** The phone's `send` / `respond` ops carry a `files` array (`ChannelFile[]`); byte-bearing entries include `base64`. The arbiter validates via `ChannelFilesSchema`, applies a 500 MB consumer-side hard backstop, and forwards the payload as part of the `channel_push`. The host MCP plugin's `materializeFiles()` (in `mcp/channel/evieFiles.ts`) writes byte-bearing entries to `/tmp/evie-files/<messageId>/<safeFilename>` via `<path>.tmp.<pid>` + atomic `rename`, then `renderFilesBlock()` builds a unified `[FILES]` block prepended to the channel notification body so the agent `Read`s them by path. Metadata-only entries (no bytes) have no re-fetch path and are surfaced as not-transferred. Lazy mtime sweep keeps the directory bounded with a 1-hour TTL.
 
 **Outbound (agent -> phone):** `notify_human` accepts `attachments` as absolute file paths; the MCP plugin reads each with `fs.readFile`, base64-encodes it into a `ChannelFile`, and ships it on the `/human/notify` notice. The arbiter appends the notice (with files) to every registered phone's mailbox.
+
+### Host identity and qualified names
+
+Every arbiter is a **Host** with an id (`HOST_ID`, else the sanitized machine hostname; see `resolveLocalHostId`). Session names are **host-qualified** as `host/name` on the wire and on the phone; a BARE name (no separator) resolves to the local Host. The arbiter stays keyed by bare local names internally and qualifies only at the wire edge: `teams()` stamps each `TeamInfo.host`, register returns the connected `hostId`, and `send` canonicalizes an inbound target (stripping the local Host, 404ing a different one) so the channel session id carries `host/name`. The phone keys every per-session surface (threads, tabs, unread, labels) by the composite `host/name` string, learns its Host id at register, and runs a one-time on-device migration re-keying pre-federation bare threads onto it (`ChatRepository.adoptHostId`). The grammar lives in `shared/phone-protocol.ts` (the separator is codegen'd into Kotlin; `qualifyTeam`/`parseQualifiedTeam` are reimplemented per language). Cross-Host routing is a later federation phase.
 
 ### Phone Bridge (Android channel)
 
@@ -200,6 +205,7 @@ File structure follows categorized sections:
 
 **Arbiter (Docker):**
 - `PORT` - HTTP/WS port (default: 20000)
+- `HOST_ID` - This Host's id, qualifying every local session name on the wire (default: the sanitized machine hostname)
 - `RESPONSE_TIMEOUT_MS` - How long to wait for a team response (default: 600000)
 - `BRIDGE_TOKEN` - Bearer token for evie bridge auth (activates evie bridge when set)
 - `EVIE_KUBECONFIG` - Path to kubeconfig (default: /app/kubeconfig.yaml)
