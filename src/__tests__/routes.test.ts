@@ -149,6 +149,16 @@ describe("routes", () => {
 				{ team: "proj-a", status: "online", mode: "channel", kind: "devcontainer", queue_depth: 0 },
 			]);
 		});
+
+		it("excludes the cli host wake-daemon from the listing", async () => {
+			const registry = makeRegistry({
+				host: { readyState: 1, data: { mode: "cli" } },
+				"team-a": { readyState: 1, data: { mode: "channel" } },
+			});
+			const ctx = makeCtx({ registry });
+			const json = (await createRoutes(ctx).teams().json()) as { team: string }[];
+			expect(json.map((t) => t.team)).toEqual(["team-a"]);
+		});
 	});
 
 	describe("/human/notify", () => {
