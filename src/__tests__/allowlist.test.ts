@@ -81,4 +81,44 @@ describe("Allowlist", () => {
 		expect(b.ownerSignPub).toBe(owner.sign.pub);
 		expect(b.resolveHost("laptop")?.boxPub).toBe(host.box.pub);
 	});
+
+	it("mirrors a Domain snapshot and surfaces the arbiter's own admission", () => {
+		const a = new Allowlist(tmpDir());
+		a.applySnapshot({
+			ownerSignPub: owner.sign.pub,
+			admissions: [signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub)],
+			revocations: [],
+		});
+		expect(a.ownerSignPub).toBe(owner.sign.pub);
+		expect(a.resolveHost("laptop")?.boxPub).toBe(host.box.pub);
+		expect(a.selfAdmission(host.sign.pub)?.admission.hostId).toBe("laptop");
+	});
+
+	it("applySnapshot is idempotent and drops non-owner entries", () => {
+		const a = new Allowlist(tmpDir());
+		const attacker = generateIdentity();
+		const snapshot = {
+			ownerSignPub: owner.sign.pub,
+			admissions: [
+				signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub),
+				// A forged admission in the sync is filtered out, not stored.
+				signAdmission(hostAdmission({ hostId: "evil" }), attacker.sign.priv, attacker.sign.pub),
+			],
+			revocations: [],
+		};
+		a.applySnapshot(snapshot);
+		a.applySnapshot(snapshot);
+		// Re-sync converged (no duplicate), and the forged "evil" admission never landed.
+		expect(a.resolveHost("evil")).toBeNull();
+		expect(a.resolveHost("laptop")?.boxPub).toBe(host.box.pub);
+	});
+
+	it("ignores a snapshot rooted at a different owner", () => {
+		const a = new Allowlist(tmpDir());
+		a.setOwner(owner.sign.pub);
+		const other = generateIdentity();
+		a.applySnapshot({ ownerSignPub: other.sign.pub, admissions: [], revocations: [] });
+		// The original root stands; the foreign snapshot is ignored.
+		expect(a.ownerSignPub).toBe(owner.sign.pub);
+	});
 });

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ServerWebSocket } from "bun";
-import { signRegister } from "../shared/admission.js";
+import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { resolveLocalHostId } from "../shared/host-id.js";
 import { getMutex, type Mutex } from "../shared/mutex.js";
@@ -165,6 +165,17 @@ export async function startArbiter(): Promise<void> {
 			},
 			onHostRelay: (frame) => {
 				handleHostRelay?.(frame);
+			},
+			onDomainSync: (domain) => {
+				// evie mirrors the owner root + allowlist on each register reply; apply
+				// the owner-verified snapshot so this Host enforces revocations locally.
+				const parsed = DomainSnapshotSchema.safeParse(domain);
+				if (!parsed.success) {
+					console.warn(`[federation] dropped malformed domain sync: ${parsed.error.issues[0]?.message}`);
+					return;
+				}
+				allowlist.applySnapshot(parsed.data);
+				console.log(`[federation] domain sync applied (${parsed.data.admissions.length} admissions)`);
 			},
 			buildRegisterAuth: () => {
 				// Present this Host's owner-signed admission + a fresh possession proof,

@@ -36,6 +36,10 @@ export interface EvieClientConfig {
 	// (re)register so the proof timestamp is current. Returns null pre-enrollment,
 	// leaving registration token-only.
 	buildRegisterAuth?: () => Record<string, unknown> | null;
+	// The mirrored Domain (owner root + allowlist) evie returns in the register
+	// reply; the Host applies it so a revocation bites even while evie is offline.
+	// Travels as unknown; the consumer validates with DomainSnapshotSchema.
+	onDomainSync?: (domain: unknown) => void;
 	onDisconnect?: () => void;
 }
 
@@ -81,12 +85,15 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				protocolVersion: FEDERATION_PROTOCOL_VERSION,
 				...(config.buildRegisterAuth?.() ?? {}),
 			}).then((res) => {
-				const r = res.result as { ok?: boolean; error?: string; hosts?: string[] } | undefined;
+				const r = res.result as
+					| { ok?: boolean; error?: string; hosts?: string[]; domain?: unknown }
+					| undefined;
 				if (res.error) console.error(`[evie-client] arbiter_register failed: ${res.error}`);
 				else if (r?.ok === false) console.error(`[evie-client] Router rejected registration: ${r.error}`);
 				else {
 					const peers = r?.hosts?.length ? `, peers: ${r.hosts.join(", ")}` : "";
 					console.log(`[evie-client] registered as Host "${config.hostId}"${peers}`);
+					if (r?.domain) config.onDomainSync?.(r.domain);
 				}
 			});
 		});

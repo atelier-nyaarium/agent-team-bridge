@@ -1,4 +1,4 @@
-// SYNC-HASH: aeb5b32dc3ded2fb1646df4b501faf98
+// SYNC-HASH: 3e5ddf312dfcc482605943fd011f1df9
 // SYNCED MODULE - source of truth: switchboard/src/shared/admission.ts
 // Copied verbatim into: evie-bot/app/features/bridge/admission.ts
 // MUST re-copy on change: cp src/shared/admission.ts ../evie-bot/app/features/bridge/admission.ts
@@ -69,6 +69,17 @@ export const SignedRevocationSchema = z
 	})
 	.meta({ id: "SignedRevocation" });
 
+/** The mirrored Domain state evie pushes to each Host so a revocation bites even
+ * while evie is unreachable (audit R3): the owner root plus the owner-signed
+ * allowlist. Only present once the Domain is rooted. */
+export const DomainSnapshotSchema = z
+	.object({
+		ownerSignPub: z.string().min(1),
+		admissions: z.array(SignedAdmissionSchema),
+		revocations: z.array(SignedRevocationSchema),
+	})
+	.meta({ id: "DomainSnapshot" });
+
 ////////////////////////////////
 //  Types
 
@@ -77,6 +88,7 @@ export type Admission = z.infer<typeof AdmissionSchema>;
 export type SignedAdmission = z.infer<typeof SignedAdmissionSchema>;
 export type Revocation = z.infer<typeof RevocationSchema>;
 export type SignedRevocation = z.infer<typeof SignedRevocationSchema>;
+export type DomainSnapshot = z.infer<typeof DomainSnapshotSchema>;
 
 ////////////////////////////////
 //  Functions & Helpers

@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import {
 	type Admission,
+	type DomainSnapshot,
 	resolveAdmitted,
 	type SignedAdmission,
 	SignedAdmissionSchema,
@@ -67,6 +68,21 @@ export class Allowlist {
 			throw new Error("allowlist already rooted at a different owner key");
 		}
 		this.state.ownerSignPub = ownerSignPubB64;
+		this.persist();
+	}
+
+	/** Mirror the Domain state evie pushed (audit R3). Idempotent: replaces the
+	 * allowlist with the snapshot's owner-verified entries, so a re-sync converges
+	 * rather than accumulating duplicates. Ignores a snapshot for a different owner
+	 * root (recovery is a deliberate, separate path). */
+	applySnapshot(snapshot: DomainSnapshot): void {
+		if (this.state.ownerSignPub && this.state.ownerSignPub !== snapshot.ownerSignPub) {
+			console.warn(`[allowlist] ignoring domain sync rooted at a different owner key`);
+			return;
+		}
+		this.state.ownerSignPub = snapshot.ownerSignPub;
+		this.state.admissions = snapshot.admissions.filter((s) => verifyAdmission(s, snapshot.ownerSignPub));
+		this.state.revocations = snapshot.revocations.filter((s) => verifyRevocation(s, snapshot.ownerSignPub));
 		this.persist();
 	}
 
