@@ -107,11 +107,12 @@ export function renderFilesBlock({ discordMessageId, files }: RenderFilesBlockPa
 	if (files.length === 0) return "";
 
 	const opener = discordMessageId ? `[FILES messageId="${discordMessageId}"]` : `[FILES]`;
-	// The fetch-later hint only makes sense for evie-origin metadata-only entries;
-	// phone files always arrive with bytes and are already on disk.
+	// Phone files always arrive with bytes and are materialized to disk. A
+	// metadata-only entry (no bytes) has no re-fetch path - the evie tool proxy
+	// that once re-served them is retired - so it is surfaced as not-transferred.
 	const hasMetadataOnly = files.some((f) => !f.path);
 	const instruction = hasMetadataOnly
-		? `*Files with \`-> /path\` are on disk; Read them. Others: use tool \`evie_fetch_message_files\` to fetch.*`
+		? `*Files with \`-> /path\` are on disk; Read them. Entries without a path were not transferred.*`
 		: `*Files with \`-> /path\` are on disk; Read them.*`;
 	const lines = files.map((f, i) => {
 		const head = `${i + 1}. ${f.descriptiveKey}`;

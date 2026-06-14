@@ -36,9 +36,6 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
 		offlineCatalog,
 		knownTeamPaths,
-		pinnedHolders: overrides.pinnedHolders || new Map<string, string | null>(),
-		sessionToChannel: overrides.sessionToChannel || new Map<string, string>(),
-		postSystemMessageToChannel: overrides.postSystemMessageToChannel || (() => Promise.resolve()),
 	};
 }
 
@@ -122,6 +119,20 @@ describe("routes", () => {
 			expect(json).toEqual([
 				{ team: "proj-a", status: "online", mode: "channel", kind: "devcontainer", queue_depth: 0 },
 				{ team: "2fb1f8", status: "online", mode: "channel", kind: "loose", queue_depth: 0 },
+			]);
+		});
+
+		it("marks a team whose only socket is a virtual phone peer as kind phone", async () => {
+			const registry = makeRegistry({
+				"proj-a": { readyState: 1, data: { mode: "channel" } },
+				Aqua: { readyState: 1, data: { virtual: true, mode: "channel" } },
+			});
+			const knownTeamPaths = new Map<string, string>([["proj-a", "/home/user/proj-a"]]);
+			const ctx = makeCtx({ registry, knownTeamPaths });
+			const json = await createRoutes(ctx).teams().json();
+			expect(json).toEqual([
+				{ team: "proj-a", status: "online", mode: "channel", kind: "devcontainer", queue_depth: 0 },
+				{ team: "Aqua", status: "online", mode: "channel", kind: "phone", queue_depth: 0 },
 			]);
 		});
 	});

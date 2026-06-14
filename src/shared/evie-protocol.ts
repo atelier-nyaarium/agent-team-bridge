@@ -1,4 +1,4 @@
-// SYNC-HASH: e86f4486c96baceec7468972cace5766
+// SYNC-HASH: 21efc35c4cdec421a7842d8bf0969033
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -20,16 +20,13 @@ import { z } from "zod";
 //  Schemas
 
 /**
- * Discord attachment metadata propagated from evie-bot through the bridge.
+ * Channel attachment metadata carried over the bridge (phone-origin files).
  *
- * Presence of `base64` means the bot fetched the bytes and the host MCP
- * plugin should materialize the file; absence means metadata-only (the agent
- * reaches the file via `evie_fetch_message_files`). No regex on `base64`: the
- * field can hold up to ~670 MB on the wire (the locked 500 MB hard backstop,
+ * Presence of `base64` means the sender included the bytes and the host MCP
+ * plugin should materialize the file; absence means metadata-only (no re-fetch
+ * path - the bytes were not transferred). No regex on `base64`: the field can
+ * hold up to ~670 MB on the wire (the locked 500 MB hard backstop,
  * base64-inflated), so validation is shape-only.
- *
- * Mirror: evie-bot's `ForwardDmFile` interface in
- * `app/features/bridge/BridgeServer.ts` until the synced copy replaces it.
  */
 export const ChannelFileSchema = z
 	.object({
@@ -71,14 +68,6 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 		callId: z.string().nullable(),
 		error: z.string().optional(),
 	}),
-	z.object({
-		type: z.literal("dm_forward"),
-		content: z.string(),
-		userId: z.string(),
-		channelId: z.string(),
-		messageId: z.string(),
-		files: ChannelFilesSchema.optional(),
-	}),
 	// Loose: the relay pump owns full validation (see module header).
 	z.looseObject({
 		type: z.literal("phone_relay"),
@@ -100,5 +89,4 @@ export const ToolCallFrameSchema = z.object({
 export type ChannelFile = z.infer<typeof ChannelFileSchema>;
 export type BridgeTool = z.infer<typeof BridgeToolSchema>;
 export type EvieInboundFrame = z.infer<typeof EvieInboundFrameSchema>;
-export type DmForwardFrame = Extract<EvieInboundFrame, { type: "dm_forward" }>;
 export type ToolCallFrame = z.infer<typeof ToolCallFrameSchema>;

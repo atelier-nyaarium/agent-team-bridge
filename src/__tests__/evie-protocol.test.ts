@@ -32,18 +32,6 @@ describe("evie inbound frame union", () => {
 		expect(result.success).toBe(true);
 	});
 
-	it("parses a dm_forward frame with files", () => {
-		const result = EvieInboundFrameSchema.safeParse({
-			type: "dm_forward",
-			content: "hi",
-			userId: "u1",
-			channelId: "ch1",
-			messageId: "m1",
-			files: [{ filename: "a.png", mime: "image/png", size: 4, descriptiveKey: "a" }],
-		});
-		expect(result.success).toBe(true);
-	});
-
 	it("keeps phone_relay loose - the relay pump owns full validation", () => {
 		const result = EvieInboundFrameSchema.safeParse({
 			type: "phone_relay",
@@ -61,8 +49,17 @@ describe("evie inbound frame union", () => {
 		expect(EvieInboundFrameSchema.safeParse({ type: "mystery_frame", payload: 1 }).success).toBe(false);
 	});
 
-	it("rejects a malformed dm_forward envelope", () => {
-		expect(EvieInboundFrameSchema.safeParse({ type: "dm_forward", content: "hi" }).success).toBe(false);
+	it("rejects dm_forward frames - the Discord human path is retired", () => {
+		// dm_forward no longer has a union member, so even a fully-formed one falls
+		// through to the unknown-type drop. Guards against silently re-adding it.
+		const result = EvieInboundFrameSchema.safeParse({
+			type: "dm_forward",
+			content: "hi",
+			userId: "u1",
+			channelId: "ch1",
+			messageId: "m1",
+		});
+		expect(result.success).toBe(false);
 	});
 });
 

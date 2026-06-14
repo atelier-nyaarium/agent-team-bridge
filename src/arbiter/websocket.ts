@@ -50,11 +50,6 @@ export interface WsData {
 
 export const RESERVED_TEAM_NAMES = new Set(["arbiter", "host"]);
 
-export function formatHolderConnectedMessage(name: string): string {
-	if (RESERVED_TEAM_NAMES.has(name)) return `> *Connected to host*`;
-	return `> *Connected to \`${name}\` agent*`;
-}
-
 export function getAllActiveWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData>[] {
 	const result: ServerWebSocket<WsData>[] = [];
 	for (const [, ws] of subs) {
