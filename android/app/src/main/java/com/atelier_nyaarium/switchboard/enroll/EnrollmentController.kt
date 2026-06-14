@@ -27,13 +27,18 @@ class EnrollmentController(
 	/** This device's owner identity, minted + persisted on first use. */
 	fun ownerIdentity(): Crypto.Identity = store.loadIdentity() ?: Crypto.generateIdentity().also { store.saveIdentity(it) }
 
-	/** True once this device holds an owner identity (it has enrolled as owner). */
-	fun isEnrolledOwner(): Boolean = store.loadIdentity() != null
+	/** True once evie has ROOTED the Domain at this device. Holding a minted-but-not-
+	 * redeemed keypair does NOT count, so a failed/expired redeem never leaves the UI
+	 * claiming this device is the owner. */
+	fun isEnrolledOwner(): Boolean = store.federationRooted
 
-	/** Redeem evie's enroll-owner nonce, rooting the Domain at this device's keys. */
+	/** Redeem evie's enroll-owner nonce, rooting the Domain at this device's keys. The
+	 * local rooted flag flips only on evie's ok, not on minting the keypair. */
 	fun redeemOwner(payload: EnrollmentPayload.EnrollOwner): EnrollResult {
 		val identity = ownerIdentity()
-		return client.enroll(EnrollOp.EnrollRedeem(payload.nonce, identity.sign.pub, identity.box.pub))
+		val result = client.enroll(EnrollOp.EnrollRedeem(payload.nonce, identity.sign.pub, identity.box.pub))
+		if (result.ok) store.federationRooted = true
+		return result
 	}
 
 	/** Owner-sign a Host admission for a scanned arbiter and submit it to evie. */
@@ -66,8 +71,10 @@ class EnrollmentController(
 		return client.enroll(EnrollOp.SubmitAdmission(signed))
 	}
 
-	private fun requireOwner(): Crypto.Identity =
-		store.loadIdentity() ?: error("This device is not enrolled as the Domain owner yet (scan evie's QR first).")
+	private fun requireOwner(): Crypto.Identity {
+		check(store.federationRooted) { "This device is not the enrolled Domain owner yet (scan evie's QR first)." }
+		return store.loadIdentity() ?: error("Owner identity missing; re-enroll this device.")
+	}
 
 	private fun freshNonce(): String {
 		val bytes = ByteArray(18)

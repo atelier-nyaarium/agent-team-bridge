@@ -12,6 +12,10 @@ import com.atelier_nyaarium.switchboard.crypto.Crypto
  * to plain prefs only if the device keystore is unavailable.
  */
 class ProvisioningStore(context: Context) {
+	// True when the Keystore-backed store initialized. The federation private keys
+	// are persisted ONLY when encrypted: refusing the plaintext fallback keeps the
+	// Domain root signing key off disk in cleartext (fail closed).
+	private var encrypted = false
 	private val prefs: SharedPreferences = run {
 		val ctx = context.applicationContext
 		runCatching {
@@ -22,7 +26,7 @@ class ProvisioningStore(context: Context) {
 				key,
 				EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
 				EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-			)
+			).also { encrypted = true }
 		}.getOrElse { ctx.getSharedPreferences("switchboard", Context.MODE_PRIVATE) }
 	}
 
@@ -92,14 +96,27 @@ class ProvisioningStore(context: Context) {
 	fun loadHostId(): String = prefs.getString(KEY_HOST_ID, "") ?: ""
 
 	/** This device's federation identity (the owner device's signing + box
-	 * keypairs). Minted once at enroll-owner and reused to sign admissions;
-	 * Keystore-wrapped at rest like the rest of this store. */
-	fun saveIdentity(identity: Crypto.Identity) =
+	 * keypairs). Minted once at enroll-owner and reused to sign admissions. Persisted
+	 * ONLY under the Keystore-backed store: if encryption is unavailable this throws
+	 * rather than write the Domain root private key in cleartext (the caller surfaces
+	 * the error and the owner retries when the keystore is healthy). */
+	fun saveIdentity(identity: Crypto.Identity) {
+		check(encrypted) { "secure storage unavailable; refusing to persist the federation key in cleartext" }
 		prefs.edit().putString(KEY_IDENTITY, wireJson.encodeToString(Crypto.Identity.serializer(), identity)).apply()
+	}
 
 	fun loadIdentity(): Crypto.Identity? =
 		prefs.getString(KEY_IDENTITY, null)?.let { json ->
 			runCatching { wireJson.decodeFromString(Crypto.Identity.serializer(), json) }.getOrNull()
+		}
+
+	/** Whether evie has ROOTED the Domain at this device (set only on a successful
+	 * enroll_redeem). Distinct from holding a keypair: a minted-but-not-redeemed
+	 * identity must not present as an enrolled owner. */
+	var federationRooted: Boolean
+		get() = prefs.getBoolean(KEY_ROOTED, false)
+		set(value) {
+			prefs.edit().putBoolean(KEY_ROOTED, value).apply()
 		}
 
 	private companion object {
@@ -109,6 +126,7 @@ class ProvisioningStore(context: Context) {
 		const val KEY_LABELS = "labels"
 		const val KEY_HOST_ID = "host_id"
 		const val KEY_IDENTITY = "federation_identity"
+		const val KEY_ROOTED = "federation_rooted"
 		const val KEY_STTS_PROVIDER = "stts_provider"
 		const val KEY_STTS_VOICE = "stts_voice"
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."

@@ -200,10 +200,16 @@ class PhoneClient(private val prov: Provisioning) {
 			.build()
 		client.newCall(req).execute().use { resp ->
 			val text = resp.body?.string().orEmpty()
-			return runCatching { wireJson.decodeFromString<EnrollResult>(text) }.getOrElse {
-				val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-				EnrollResult(ok = false, error = err ?: "HTTP ${resp.code}")
+			// 2xx: a real EnrollResult. A coordinator rejection is 400 with an
+			// EnrollResult body; a transport bounce is {error, retryable}. Cross-check
+			// the status so a non-2xx body is never read as a successful enroll.
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<EnrollResult>(text) }
+					.getOrElse { EnrollResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
 			}
+			runCatching { wireJson.decodeFromString<EnrollResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return EnrollResult(ok = false, error = err ?: "HTTP ${resp.code}")
 		}
 	}
 
