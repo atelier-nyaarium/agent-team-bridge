@@ -1,3 +1,7 @@
+// SYNC-HASH: 177537b854c8c968ca812a43b65be0d3
+// SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
+// Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
+// MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
 import { z } from "zod";
 import { type Admission, type SignedAdmission, signAdmission } from "./admission.js";
 import { fingerprint } from "./crypto.js";
