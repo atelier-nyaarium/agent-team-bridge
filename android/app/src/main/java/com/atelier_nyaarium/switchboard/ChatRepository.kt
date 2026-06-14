@@ -372,14 +372,14 @@ class ChatRepository(
 		if (hostId.isEmpty() || hostId == localHostId) return
 		localHostId = hostId
 		store.saveHostId(hostId)
-		fun remap(key: String): String =
-			if (key.contains(Protocol.HOST_QUALIFIER_SEP)) key else "$hostId${Protocol.HOST_QUALIFIER_SEP}$key"
+		// hostId is non-empty here, so qualifyTeam prepends it to every bare key and
+		// leaves an already-qualified key untouched (the migration is idempotent).
 		val migrated = _state.updateAndGet { s ->
 			s.copy(
-				threads = s.threads.mapKeys { remap(it.key) },
-				unread = s.unread.mapKeys { remap(it.key) },
-				labels = s.labels.mapKeys { remap(it.key) },
-				openTabs = s.openTabs.map { remap(it) }.distinct(),
+				threads = s.threads.mapKeys { qualifyTeam(hostId, it.key) },
+				unread = s.unread.mapKeys { qualifyTeam(hostId, it.key) },
+				labels = s.labels.mapKeys { qualifyTeam(hostId, it.key) },
+				openTabs = s.openTabs.map { qualifyTeam(hostId, it) }.distinct(),
 			)
 		}
 		persistThreads(migrated.threads)
