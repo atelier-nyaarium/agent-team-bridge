@@ -1,8 +1,6 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ServerWebSocket } from "bun";
-import { debugLog } from "../shared/debug-log.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { getMutex, type Mutex } from "../shared/mutex.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";

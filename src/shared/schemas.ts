@@ -93,42 +93,6 @@ export const ChannelReplySchema = z
 export type ChannelReplyArgs = z.infer<typeof ChannelReplySchema>;
 
 ////////////////////////////////
-//  respond_to_human Parts Schema
-//
-//  Each part becomes one Discord message. Strings auto-wrap to { text } via
-//  schema-level transform so downstream consumers only see the object form.
-//  Empty parts (no text and no attachments) are rejected at the input edge.
-
-const Base64Pattern = /^[A-Za-z0-9+/]+=*$/;
-
-export const PostResponseAttachmentSchema = z.object({
-	filename: z.string().min(1).max(255),
-	base64: z.string().regex(Base64Pattern, "must be valid base64"),
-});
-
-export type PostResponseAttachment = z.infer<typeof PostResponseAttachmentSchema>;
-
-export const PostResponsePartSchema = z
-	.union([
-		z.string().min(1),
-		z.object({
-			text: z.string().min(1).optional(),
-			attachments: z.array(PostResponseAttachmentSchema).min(1).optional(),
-		}),
-	])
-	.transform((p) => (typeof p === "string" ? { text: p } : p))
-	.refine((p) => !!p.text || !!p.attachments, {
-		message: "part must have text or at least one attachment",
-	})
-	.describe(
-		`Plain string for text-only, or { text?, attachments?: [{filename, base64}] } for attachment-bearing messages.`,
-	);
-
-export type PostResponsePart = z.infer<typeof PostResponsePartSchema>;
-
-export const PostResponsePartsSchema = z.array(PostResponsePartSchema).min(1);
-
-////////////////////////////////
 //  Channel File Schema (inbound from evie-bot bridge)
 //
 //  Owned by evie-protocol.ts (the self-contained module synced into
