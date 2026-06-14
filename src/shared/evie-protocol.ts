@@ -1,4 +1,4 @@
-// SYNC-HASH: 21efc35c4cdec421a7842d8bf0969033
+// SYNC-HASH: 4da4b5b2d67bd8090b0e8718c3ae8d05
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -72,6 +72,12 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 	z.looseObject({
 		type: z.literal("phone_relay"),
 	}),
+	// Loose: a cross-Host frame evie routed to this Host. The host-relay pump runs
+	// the full federation parse (federation-protocol.ts); evie only switched it
+	// here by destination Host, never reading the inner payload.
+	z.looseObject({
+		type: z.literal("host_relay"),
+	}),
 ]);
 
 /** The one frame the arbiter SENDS (besides phone_relay_reply, which travels
@@ -84,9 +90,50 @@ export const ToolCallFrameSchema = z.object({
 });
 
 ////////////////////////////////
+//  Federation (multi-Host routing through evie)
+//
+//  evie is the content-blind Router. A Host's arbiter REGISTERS its host id on
+//  connect, then reaches another Host by calling evie's `host_relay` tool; evie
+//  switches the frame to the destination Host's socket by `dstHost` alone and
+//  correlates the eventual `host_relay_reply` by `relayId`. The `payload` is
+//  opaque to evie (cleartext op in the plaintext spike; a sealed blob once the
+//  crypto phase lands), so these schemas validate only the routing envelope.
+
+/** Bumped when a federation wire shape changes. evie rejects a Host registering
+ * below its own floor with a typed close; the Host then degrades to single-Host. */
+export const FEDERATION_PROTOCOL_VERSION = 1;
+
+/** `arbiter_register` tool-call params: a Host announces its id + wire version. */
+export const ArbiterRegisterParamsSchema = z.object({
+	hostId: z.string().min(1).max(64),
+	protocolVersion: z.number().int().positive(),
+});
+
+/** `host_relay` tool-call params: the routing envelope evie switches on. */
+export const HostRelayRouteSchema = z.object({
+	relayId: z.string().min(1).max(128),
+	srcHost: z.string().min(1).max(64),
+	dstHost: z.string().min(1).max(64),
+	// Opaque to evie. The destination arbiter parses/unseals it.
+	payload: z.unknown(),
+});
+
+/** `host_relay_reply` tool-call params: the destination Host's answer, routed
+ * back to the originating Host's held `host_relay` call by `relayId`. */
+export const HostRelayReplyParamsSchema = z.object({
+	relayId: z.string().min(1).max(128),
+	ok: z.boolean(),
+	result: z.unknown().optional(),
+	error: z.string().optional(),
+});
+
+////////////////////////////////
 //  Types
 
 export type ChannelFile = z.infer<typeof ChannelFileSchema>;
 export type BridgeTool = z.infer<typeof BridgeToolSchema>;
 export type EvieInboundFrame = z.infer<typeof EvieInboundFrameSchema>;
 export type ToolCallFrame = z.infer<typeof ToolCallFrameSchema>;
+export type ArbiterRegisterParams = z.infer<typeof ArbiterRegisterParamsSchema>;
+export type HostRelayRoute = z.infer<typeof HostRelayRouteSchema>;
+export type HostRelayReplyParams = z.infer<typeof HostRelayReplyParamsSchema>;

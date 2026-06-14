@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import WebSocket from "ws";
-import { type BridgeTool, EvieInboundFrameSchema, type ToolCallFrame } from "../../shared/evie-protocol.js";
+import {
+	type BridgeTool,
+	EvieInboundFrameSchema,
+	FEDERATION_PROTOCOL_VERSION,
+	type ToolCallFrame,
+} from "../../shared/evie-protocol.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -16,10 +21,16 @@ export interface EvieToolCallResult {
 export interface EvieClientConfig {
 	url: string;
 	authToken: string;
+	// This Host's id, registered with the Router on connect so cross-Host frames
+	// can be switched to this Host.
+	hostId: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	// The relay pump owns full PhoneRelayFrameSchema validation; the envelope
 	// union only routes by type, so the frame travels as unknown.
 	onPhoneRelay?: (frame: unknown) => void;
+	// A cross-Host frame the Router switched to this Host; the host-relay pump owns
+	// full HostRelayFrameSchema validation, so the frame travels as unknown.
+	onHostRelay?: (frame: unknown) => void;
 	onDisconnect?: () => void;
 }
 
@@ -58,6 +69,20 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 
 		ws.on("open", () => {
 			console.log(`[evie-client] connected`);
+			// Register this Host with the Router so cross-Host frames can find it.
+			// Re-runs on every reconnect (the Router re-keys host id -> socket).
+			void callTool("arbiter_register", {
+				hostId: config.hostId,
+				protocolVersion: FEDERATION_PROTOCOL_VERSION,
+			}).then((res) => {
+				const r = res.result as { ok?: boolean; error?: string; hosts?: string[] } | undefined;
+				if (res.error) console.error(`[evie-client] arbiter_register failed: ${res.error}`);
+				else if (r?.ok === false) console.error(`[evie-client] Router rejected registration: ${r.error}`);
+				else {
+					const peers = r?.hosts?.length ? `, peers: ${r.hosts.join(", ")}` : "";
+					console.log(`[evie-client] registered as Host "${config.hostId}"${peers}`);
+				}
+			});
 		});
 
 		ws.on("message", (raw: WebSocket.Data) => {
@@ -92,6 +117,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				}
 				case "phone_relay": {
 					config.onPhoneRelay?.(frame);
+					break;
+				}
+				case "host_relay": {
+					config.onHostRelay?.(frame);
 					break;
 				}
 				case "tool_result": {

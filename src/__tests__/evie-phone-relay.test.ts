@@ -51,6 +51,7 @@ describe("evieClient phone relay", () => {
 			client = startEvieClient({
 				url: `ws://localhost:${evie?.port}`,
 				authToken: "test-token",
+				hostId: "test-host",
 				onPhoneRelay: resolve,
 			});
 		});
@@ -86,7 +87,12 @@ describe("evieClient phone relay", () => {
 		const result = await client!.callTool("phone_relay_reply", reply);
 		expect(result.error).toBeUndefined();
 		expect(result.result).toEqual({ consumed: true });
-		expect(toolCalls[0]).toMatchObject({ action: "phone_relay_reply", params: reply });
+		// The client registers its Host on connect, then answers the relay.
+		expect(toolCalls[0]).toMatchObject({ action: "arbiter_register", params: { hostId: "test-host" } });
+		expect(toolCalls.find((c) => c.action === "phone_relay_reply")).toMatchObject({
+			action: "phone_relay_reply",
+			params: reply,
+		});
 	});
 
 	it("in-flight calls fail fast when the socket closes instead of waiting out the timeout", async () => {
@@ -94,7 +100,7 @@ describe("evieClient phone relay", () => {
 			// Never reply; the close should settle the call.
 		});
 
-		client = startEvieClient({ url: `ws://localhost:${evie.port}`, authToken: "test-token" });
+		client = startEvieClient({ url: `ws://localhost:${evie.port}`, authToken: "test-token", hostId: "test-host" });
 		await new Promise<void>((resolve) => {
 			const t = setInterval(() => {
 				if (client?.isConnected()) {

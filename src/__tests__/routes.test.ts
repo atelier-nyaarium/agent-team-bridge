@@ -649,15 +649,15 @@ describe("routes", () => {
 			expect(pushed.length).toBe(1);
 		});
 
-		it("404s a target qualified with a different (unreachable) host", async () => {
+		it("routes a target qualified with a different Host, 503 when the Router is down", async () => {
 			const fakeWs = { readyState: 1, data: { mode: "channel" }, send() {} };
 			const registry = makeRegistry({ "proj-a": fakeWs });
+			// No evieClient in this ctx: the Router is unavailable, so a cross-Host
+			// target reports 503 rather than misresolving to the same-named local
+			// session.
 			const ctx = makeCtx({ registry });
 			const { send } = createRoutes(ctx);
 
-			// Federation routing is a later phase: a name qualified with another
-			// Host has no local route and must not misresolve to the same-named
-			// local session.
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
 				from: "pixel",
 				fromConversationId: "conv-1",
@@ -665,8 +665,8 @@ describe("routes", () => {
 				body: "hi",
 				channelOnly: true,
 			});
-			expect(res.status).toBe(404);
-			expect((await res.json()).error).toContain("not reachable");
+			expect(res.status).toBe(503);
+			expect((await res.json()).error).toContain("Router unavailable");
 		});
 
 		it("late delivery is stored and pollable after timeout", async () => {

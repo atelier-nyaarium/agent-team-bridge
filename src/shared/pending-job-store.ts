@@ -1,6 +1,8 @@
 ////////////////////////////////
 //  Interfaces & Types
 
+import type { ReturnRoute } from "./federation-protocol.js";
+
 export type JobState = "waiting" | "timed_out" | "stored";
 
 interface JobEntry<T> {
@@ -8,6 +10,10 @@ interface JobEntry<T> {
 	from: string;
 	to: string;
 	fromConversationId: string | null;
+	// Set on a job the destination Host created for a cross-Host send: where its
+	// reply must be forwarded (back to the origin Host's session). Null for a
+	// local job, so `respond` knows to deliver locally instead of forwarding.
+	returnRoute: ReturnRoute | null;
 	persistent: boolean;
 	state: JobState;
 	createdAt: number;
@@ -24,6 +30,17 @@ export interface WaitResult<T> {
 export interface CreateOptions {
 	persistent?: boolean;
 	fromConversationId?: string;
+	returnRoute?: ReturnRoute;
+}
+
+/** The metadata `deliver` hands back so the caller can route the reply. */
+export interface DeliverMeta {
+	delivered: boolean;
+	from: string;
+	to: string;
+	fromConversationId: string | null;
+	returnRoute: ReturnRoute | null;
+	persistent: boolean;
 }
 
 ////////////////////////////////
@@ -64,13 +81,15 @@ export class PendingJobStore<T> {
 	 * intact while resetting the TTL clock).
 	 */
 	create(id: string, from: string, to: string, opts: CreateOptions = {}): void {
-		const { persistent = false, fromConversationId = null } = opts;
+		const { persistent = false, fromConversationId = null, returnRoute = null } = opts;
 		const existing = this.entries.get(id);
 		if (existing) {
 			// Conversation reuse: keep stored result, refresh metadata.
 			existing.from = from;
 			existing.to = to;
 			existing.fromConversationId = fromConversationId;
+			// Keep an existing return-route if this refresh did not carry one.
+			if (returnRoute) existing.returnRoute = returnRoute;
 			existing.persistent = persistent || existing.persistent;
 			existing.createdAt = Date.now();
 			return;
@@ -80,6 +99,7 @@ export class PendingJobStore<T> {
 			from,
 			to,
 			fromConversationId,
+			returnRoute,
 			persistent,
 			state: "waiting",
 			createdAt: Date.now(),
@@ -103,12 +123,7 @@ export class PendingJobStore<T> {
 		});
 	}
 
-	deliver(
-		id: string,
-		result: T,
-	):
-		| { delivered: boolean; from: string; to: string; fromConversationId: string | null; persistent: boolean }
-		| false {
+	deliver(id: string, result: T): DeliverMeta | false {
 		const entry = this.entries.get(id);
 		if (!entry) return false;
 
@@ -131,6 +146,7 @@ export class PendingJobStore<T> {
 				from: entry.from,
 				to: entry.to,
 				fromConversationId: entry.fromConversationId,
+				returnRoute: entry.returnRoute,
 				persistent: entry.persistent,
 			};
 		}
@@ -145,6 +161,7 @@ export class PendingJobStore<T> {
 				from: entry.from,
 				to: entry.to,
 				fromConversationId: entry.fromConversationId,
+				returnRoute: entry.returnRoute,
 				persistent: entry.persistent,
 			};
 		}
@@ -158,6 +175,7 @@ export class PendingJobStore<T> {
 				from: entry.from,
 				to: entry.to,
 				fromConversationId: entry.fromConversationId,
+				returnRoute: entry.returnRoute,
 				persistent: entry.persistent,
 			};
 		}
@@ -171,6 +189,7 @@ export class PendingJobStore<T> {
 				from: entry.from,
 				to: entry.to,
 				fromConversationId: entry.fromConversationId,
+				returnRoute: entry.returnRoute,
 				persistent: entry.persistent,
 			};
 		}

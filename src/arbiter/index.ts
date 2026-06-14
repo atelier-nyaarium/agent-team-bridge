@@ -9,6 +9,7 @@ import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { startEvieClient } from "./evie/evieClient.js";
 import { startPortForward } from "./evie/portForward.js";
+import { createHostRelayHandler, createHostRelayPump } from "./federation/hostRelay.js";
 import { createPhoneHandler } from "./phone/phoneHandler.js";
 import { createPhoneRelayPump } from "./phone/relayPump.js";
 import { createRoutes } from "./routes.js";
@@ -58,6 +59,9 @@ export async function startArbiter(): Promise<void> {
 	const mailboxStore = new DeviceMailboxStore();
 	// Takes unknown: the relay pump owns the full frame validation.
 	let handlePhoneRelay: ((frame: unknown) => void) | null = null;
+	// Cross-Host frames the Router switched to this Host; the host-relay pump owns
+	// full validation.
+	let handleHostRelay: ((frame: unknown) => void) | null = null;
 	let evictPhonePeer: ((conversationId: string) => void) | null = null;
 
 	store.startCleanup();
@@ -142,8 +146,12 @@ export async function startArbiter(): Promise<void> {
 		evieClient = startEvieClient({
 			url: `ws://localhost:${evieLocalPort}`,
 			authToken: evieAuthToken,
+			hostId: localHostId,
 			onPhoneRelay: (frame) => {
 				handlePhoneRelay?.(frame);
+			},
+			onHostRelay: (frame) => {
+				handleHostRelay?.(frame);
 			},
 			onDisconnect: () => {
 				console.error(`[evie] disconnected from evie-bot`);
@@ -199,6 +207,14 @@ export async function startArbiter(): Promise<void> {
 				evieClient!.callTool("phone_relay_reply", reply as unknown as Record<string, unknown>),
 		});
 		evictPhonePeer = (conversationId) => phoneHandler.removePeer(conversationId);
+
+		// Federation: a peer Host's frames land here, run against the local routes,
+		// and the reply routes home through the Router.
+		const hostRelayHandler = createHostRelayHandler({ routes, tryWakeTeam });
+		handleHostRelay = createHostRelayPump({
+			handleOp: hostRelayHandler.handleOp,
+			sendReply: (reply) => evieClient!.callTool("host_relay_reply", reply as unknown as Record<string, unknown>),
+		});
 	}
 
 	async function router(req: Request): Promise<Response> {

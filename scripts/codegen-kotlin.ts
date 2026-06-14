@@ -132,7 +132,7 @@ function pascal(value: string): string {
  * {type:"null"}), or null when the node is not that shape. */
 function nullableInner(node: Json): Json | null {
 	const members = (node.anyOf ?? node.oneOf) as Json[] | undefined;
-	if (!members || members.length !== 2) return null;
+	if (members?.length !== 2) return null;
 	const nullIndex = members.findIndex((m) => (m as Json).type === "null");
 	if (nullIndex === -1) return null;
 	return members[1 - nullIndex] as Json;

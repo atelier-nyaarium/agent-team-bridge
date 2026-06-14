@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
+import { type FederatedOp, ReturnRouteSchema } from "../shared/federation-protocol.js";
 import type { Mutex } from "../shared/mutex.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
 import { composeConvSessionId, noticeSessionId, parseQualifiedTeam, qualifyTeam } from "../shared/phone-protocol.js";
@@ -59,6 +60,11 @@ const SendRequestSchema = z.object({
 	// Phone-originated sends: reject CLI-mode targets instead of entering the
 	// CLI branch, which mints a random session id the phone can never thread.
 	channelOnly: z.boolean().optional(),
+	// Cross-Host INBOUND send (the host-relay handler): use this exact session id
+	// as the channel job key (the origin owns it) and pin the reply via returnRoute
+	// instead of composing a local key from fromConversationId.
+	sessionId: z.string().optional(),
+	returnRoute: ReturnRouteSchema.optional(),
 });
 
 const RespondBodySchema = z.object({
@@ -182,6 +188,71 @@ export function createRoutes({
 		return { name, qualified: qualifyTeam(localHostId, name) };
 	}
 
+	/** Forward a federated op to another Host through the Router and unwrap the
+	 * reply. evie holds the call until the destination Host answers (or times
+	 * out), so a resolved result means the destination handled the op. */
+	async function relayToHost(
+		dstHost: string,
+		op: FederatedOp,
+	): Promise<{ ok: boolean; result?: unknown; error?: string }> {
+		if (!evieClient?.isConnected())
+			return { ok: false, error: `Router unavailable; cannot reach Host "${dstHost}"` };
+		const relayId = crypto.randomUUID();
+		const call = await evieClient.callTool("host_relay", {
+			relayId,
+			srcHost: localHostId,
+			dstHost,
+			payload: { op },
+		});
+		if (call.error) return { ok: false, error: call.error };
+		const reply = call.result as { ok?: boolean; result?: unknown; error?: string } | undefined;
+		if (!reply || reply.ok === false) return { ok: false, error: reply?.error ?? "cross-Host relay failed" };
+		return { ok: true, result: reply.result };
+	}
+
+	/** Origin side of a cross-Host channel send. Keeps a local pollable anchor keyed
+	 * by the canonical session id (so the sender can poll and the eventual
+	 * response_push delivers back to its conversation), forwards the send to the
+	 * destination Host with a return-route, and hands the session id back. */
+	async function sendCrossHost(args: {
+		targetHost: string;
+		targetName: string;
+		from: string;
+		fromConversationId: string | undefined;
+		type?: string;
+		effort?: string;
+		body?: string;
+		files?: ChannelFile[];
+	}): Promise<Response> {
+		const { targetHost, targetName, from, fromConversationId, type, effort, body, files } = args;
+		if (!evieClient?.isConnected()) {
+			return jsonResponse({ error: `Router unavailable; cannot reach Host "${targetHost}"` }, 503);
+		}
+		if (!fromConversationId) {
+			return jsonResponse({ error: `fromConversationId is required for a cross-Host send` }, 400);
+		}
+		const qualifiedTo = qualifyTeam(targetHost, targetName);
+		const srcSession = composeConvSessionId(fromConversationId, qualifiedTo);
+		store.create(srcSession, from, qualifiedTo, { persistent: true, fromConversationId });
+		const op: FederatedOp = {
+			kind: "send",
+			from: qualifyTeam(localHostId, from),
+			to: targetName,
+			request_type: type,
+			effort,
+			body: body ?? "",
+			...(files && files.length > 0 ? { files } : {}),
+			returnRoute: { srcHost: localHostId, srcConversationId: fromConversationId, srcSession },
+		};
+		const relay = await relayToHost(targetHost, op);
+		if (!relay.ok) return jsonResponse({ error: relay.error ?? `cross-Host send to "${qualifiedTo}" failed` }, 502);
+		return jsonResponse({
+			session_id: srcSession,
+			status: "running",
+			message: `Message routed to ${qualifiedTo} via the Router. Responses will be pushed back automatically.`,
+		});
+	}
+
 	function ingest(req: Request, body: Record<string, unknown>): Response {
 		const payload: Record<string, unknown> = body && typeof body === "object" ? body : { message: String(body) };
 		payload.timestamp = payload.timestamp ?? Date.now();
@@ -262,6 +333,8 @@ export function createRoutes({
 			replyJsonSchema,
 			files,
 			channelOnly,
+			sessionId: inboundSessionId,
+			returnRoute,
 		} = parsed.data;
 
 		// Raw-bytes backstop at the trust boundary before the payload is pushed.
@@ -275,11 +348,27 @@ export function createRoutes({
 			}
 		}
 
+		// Cross-Host OUTBOUND: a target qualified with another Host routes through
+		// the Router. An INBOUND federated send (the host-relay handler) arrives with
+		// a bare `to` plus an explicit sessionId, so it skips this and lands locally.
+		const parsedTarget = parseQualifiedTeam(to);
+		if (!inboundSessionId && parsedTarget.host && parsedTarget.host !== localHostId) {
+			return await sendCrossHost({
+				targetHost: parsedTarget.host,
+				targetName: parsedTarget.name,
+				from,
+				fromConversationId,
+				type,
+				effort,
+				body: msgBody,
+				files,
+			});
+		}
+
 		// Resolve the (bare or host-qualified) target to a local registry name. A
-		// name qualified with another Host has no local route yet (federation
-		// routing is a later phase), so it 404s here rather than misresolving to a
-		// same-named local session. `qualifiedTo` is the canonical local form used
-		// as the channel session-id target.
+		// local-qualified or bare name resolves here; a remote-qualified name was
+		// handled by the cross-Host branch above. `qualifiedTo` is the canonical
+		// local form used as the channel session-id target.
 		const target = resolveLocalTarget(to);
 		if (!target) {
 			return jsonResponse({ error: `Host for "${to}" is not reachable from this Host` }, 404);
@@ -348,13 +437,15 @@ export function createRoutes({
 		// are persistent.
 		if (targetMode === "channel") {
 			try {
-				const channelJobId = deriveChannelJobId(fromConversationId, qualifiedTo);
+				// A federated inbound send carries the origin's session id; a local send
+				// derives a stable key from (sender conversation, target).
+				const channelJobId = inboundSessionId ?? deriveChannelJobId(fromConversationId, qualifiedTo);
 				if (!channelJobId) {
 					return jsonResponse({ error: `fromConversationId is required for channel-mode targets` }, 400);
 				}
 
 				const isFollowUp = store.has(channelJobId);
-				store.create(channelJobId, from, localName, { persistent: true, fromConversationId });
+				store.create(channelJobId, from, localName, { persistent: true, fromConversationId, returnRoute });
 
 				const messageId = crypto.randomUUID();
 				const channelPayload: Record<string, unknown> = {
@@ -506,6 +597,28 @@ export function createRoutes({
 		}
 
 		console.log(`[respond] ${respondSessionId}${response.status ? ` → ${response.status}` : ""}`);
+
+		// Cross-Host reply-pinning: a job created by a federated send belongs to the
+		// ORIGIN Host's session, not a local conversation. Forward a response_push
+		// back through the Router (carrying the full file bytes) and stop here - the
+		// local conversationRegistry has no entry for the remote sender.
+		if (deliverResult.returnRoute) {
+			const rr = deliverResult.returnRoute;
+			void relayToHost(rr.srcHost, {
+				kind: "response_push",
+				session_id: rr.srcSession,
+				...(response.status ? { status: response.status } : {}),
+				...(response.response ? { response: response.response } : {}),
+				...(response.replyAsJson ? { replyAsJson: response.replyAsJson } : {}),
+				...(response.question ? { question: response.question } : {}),
+				...(response.reason ? { reason: response.reason } : {}),
+				...(files && files.length > 0 ? { files } : {}),
+			}).then((r) => {
+				if (!r.ok) console.error(`[respond] cross-Host reply-pin to ${rr.srcHost} failed: ${r.error}`);
+			});
+			console.log(`[respond] ${respondSessionId} pinned to Host ${rr.srcHost} via the Router`);
+			return jsonResponse({ delivered: true, federated: true });
+		}
 
 		// Push response back to the sender. For conversation-routed sends we target the
 		// specific sub-session via conversationRegistry so parallel host windows don't
