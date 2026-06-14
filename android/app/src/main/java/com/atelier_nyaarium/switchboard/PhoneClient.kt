@@ -6,6 +6,7 @@ import com.atelier_nyaarium.switchboard.proto.PhonePollResult
 import com.atelier_nyaarium.switchboard.proto.PhoneRegisterResult
 import com.atelier_nyaarium.switchboard.proto.PhoneRelayReply
 import com.atelier_nyaarium.switchboard.proto.PhoneSendResult
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import java.io.ByteArrayInputStream
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -67,16 +68,31 @@ data class Provisioning(
 	}
 }
 
+/** Qualify a bare local name under a Host as `host/name`. A name that is already
+ * qualified, or qualified under no Host (the pre-federation single-Host case), is
+ * returned unchanged - bare resolves to the local Host on the arbiter. */
+fun qualifyTeam(host: String, name: String): String =
+	if (host.isEmpty() || name.contains(Protocol.HOST_QUALIFIER_SEP)) name
+	else "$host${Protocol.HOST_QUALIFIER_SEP}$name"
+
 /** UI model for the sessions board. Mapped one-to-one from the wire TeamInfo in
  * `teams()`; also constructed locally for ended threads whose team has left the
- * bridge (a state that never exists on the wire). */
+ * bridge (a state that never exists on the wire). `name` is the host-qualified
+ * composite key (`host/local`); `displayName`/`host` derive from it. */
 data class Team(
 	val name: String,
 	val status: String,
 	val mode: String,
 	val queueDepth: Int,
 	val kind: String = "loose",
-)
+) {
+	/** Short local name shown in the UI: the tail after the host qualifier (the
+	 * whole name when bare). */
+	val displayName: String get() = name.substringAfter(Protocol.HOST_QUALIFIER_SEP)
+
+	/** Owning Host id (the segment before the qualifier), or "" for a bare name. */
+	val host: String get() = name.substringBefore(Protocol.HOST_QUALIFIER_SEP, "")
+}
 
 data class SendResult(val ok: Boolean, val status: String, val error: String?)
 
@@ -155,14 +171,19 @@ class PhoneClient(private val prov: Provisioning) {
 	/** Claim this device's mailbox. Returns the starting cursor + epoch. */
 	fun register(): PhoneRegisterResult = resultOf(relay(PhoneOp.Register), "register")
 
-	fun teams(): List<Team> {
+	/** List the bridge's sessions, each keyed by its host-qualified name. A
+	 * session's Host comes from the wire (`TeamInfo.host`); when a pre-federation
+	 * arbiter omits it, `localHostId` (this connection's Host, learned at register)
+	 * is the fallback. Both empty leaves the name bare (single implicit Host). */
+	fun teams(localHostId: String = ""): List<Team> {
 		val reply = relay(PhoneOp.ListTeams)
 		if (!reply.ok || reply.result == null) return emptyList()
 		val result =
 			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.PhoneListTeamsResult>(reply.result)
 		return result.teams.map {
+			val host = it.host?.ifEmpty { null } ?: localHostId
 			Team(
-				name = it.team,
+				name = qualifyTeam(host, it.team),
 				status = it.status,
 				mode = it.mode ?: "",
 				queueDepth = it.queue_depth.toInt(),

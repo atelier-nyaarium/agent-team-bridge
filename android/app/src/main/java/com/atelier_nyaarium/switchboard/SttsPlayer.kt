@@ -179,7 +179,10 @@ class SttsPlayer(private val root: File) {
 		clearNowPlaying()
 	}
 
-	/** Delete a team's cached audio; wired into ChatRepository.forget. */
+	/** Delete a team's cached audio; wired into ChatRepository.forget. A
+	 * host-qualified team ("host/name") nests one level deeper under stts/, which
+	 * is fine: the team string is the unique path, so two distinct sessions never
+	 * share a cache dir. */
 	fun purge(team: String) {
 		if (currentKey?.startsWith("$team/") == true) stop()
 		File(root, "stts/$team").deleteRecursively()

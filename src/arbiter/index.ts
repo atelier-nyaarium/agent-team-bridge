@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
+import { resolveLocalHostId } from "../shared/host-id.js";
 import { getMutex, type Mutex } from "../shared/mutex.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
@@ -38,6 +39,8 @@ export async function startArbiter(): Promise<void> {
 
 	const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "600000", 10);
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);
+	const localHostId = resolveLocalHostId();
+	console.log(`[arbiter] Host id: ${localHostId}`);
 	const HEARTBEAT_INTERVAL_MS = 30000;
 	const MISSED_PINGS_LIMIT = 2;
 
@@ -172,7 +175,7 @@ export async function startArbiter(): Promise<void> {
 		conversationRegistry,
 		store,
 		getMutex: getMutexForTeam,
-		config: { LOG_PATH, RESPONSE_TIMEOUT_MS },
+		config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localHostId },
 		tryWakeTeam,
 		offlineCatalog,
 		knownTeamPaths,
@@ -187,6 +190,7 @@ export async function startArbiter(): Promise<void> {
 			conversationRegistry,
 			mailboxStore,
 			routes,
+			localHostId,
 			isProjectName: (name) => offlineCatalog.has(name) || knownTeamPaths.has(name),
 		});
 		handlePhoneRelay = createPhoneRelayPump({

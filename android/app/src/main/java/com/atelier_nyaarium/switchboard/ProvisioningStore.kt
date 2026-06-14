@@ -84,11 +84,18 @@ class ProvisioningStore(context: Context) {
 
 	fun loadLabels(): String? = prefs.getString(KEY_LABELS, null)
 
+	/** The connected Host's id, learned from the register result. Anchors the
+	 * composite (host, name) key; empty until a federation-aware arbiter reports it. */
+	fun saveHostId(id: String) = prefs.edit().putString(KEY_HOST_ID, id).apply()
+
+	fun loadHostId(): String = prefs.getString(KEY_HOST_ID, "") ?: ""
+
 	private companion object {
 		const val KEY_BLOB = "provisioning"
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"
 		const val KEY_LABELS = "labels"
+		const val KEY_HOST_ID = "host_id"
 		const val KEY_STTS_PROVIDER = "stts_provider"
 		const val KEY_STTS_VOICE = "stts_voice"
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."

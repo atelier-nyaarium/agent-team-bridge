@@ -4,6 +4,7 @@
 		{ "file": "frame-register.json", "schema": "PhoneRelayFrame", "expect": "pass" },
 		{ "file": "frame-list-teams.json", "schema": "PhoneRelayFrame", "expect": "pass" },
 		{ "file": "frame-send.json", "schema": "PhoneRelayFrame", "expect": "pass" },
+		{ "file": "frame-send-qualified.json", "schema": "PhoneRelayFrame", "expect": "pass" },
 		{ "file": "frame-respond.json", "schema": "PhoneRelayFrame", "expect": "pass" },
 		{ "file": "frame-poll.json", "schema": "PhoneRelayFrame", "expect": "pass" },
 		{ "file": "mailbox-message.json", "schema": "MailboxEntry", "expect": "pass" },
@@ -17,6 +18,7 @@
 		{ "file": "relay-reply.json", "schema": "PhoneRelayReply", "expect": "pass" },
 		{ "file": "relay-reply-error.json", "schema": "PhoneRelayReply", "expect": "pass" },
 		{ "file": "register-result.json", "schema": "PhoneRegisterResult", "expect": "pass" },
+		{ "file": "register-result-host.json", "schema": "PhoneRegisterResult", "expect": "pass" },
 		{ "file": "send-result.json", "schema": "PhoneSendResult", "expect": "pass" },
 		{ "file": "list-teams-result.json", "schema": "PhoneListTeamsResult", "expect": "pass" }
 	]

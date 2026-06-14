@@ -50,11 +50,16 @@ class SwitchboardService : Service() {
 			return
 		}
 		repo.onInbound = { team, messages -> notifyBurst(repo, team, messages) }
+		// connect() runs register (which sets the Host id, cursor, epoch) and the
+		// on-device host-id migration; start the poll loop only after it, so the
+		// loop never qualifies an inbound team under an as-yet-unknown Host id and
+		// strands a bare-keyed thread beside its migrated, qualified twin. connect()
+		// never throws (it catches internally), so the poll loop always starts.
 		scope.launch(Dispatchers.IO) {
 			repo.connect()
 			repo.reconcilePending()
+			repo.startPolling(scope)
 		}
-		repo.startPolling(scope)
 
 		// Keep the persistent notification's state line current, and stop the
 		// service entirely if the user clears provisioning.

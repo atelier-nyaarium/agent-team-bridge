@@ -22,7 +22,12 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import { CONV_SESSION_PREFIX, NOTICE_SESSION_PREFIX, PHONE_PROTOCOL_VERSION } from "../src/shared/phone-protocol.js";
+import {
+	CONV_SESSION_PREFIX,
+	HOST_QUALIFIER_SEP,
+	NOTICE_SESSION_PREFIX,
+	PHONE_PROTOCOL_VERSION,
+} from "../src/shared/phone-protocol.js";
 import {
 	ChannelFileSchema,
 	MailboxEntrySchema,
@@ -328,6 +333,9 @@ ${INDENT}const val NOTICE_SESSION_PREFIX: String = ${kotlinString(NOTICE_SESSION
 
 ${INDENT}/** Session-id prefix for channel conversations; the target team is the tail after the LAST colon. */
 ${INDENT}const val CONV_SESSION_PREFIX: String = ${kotlinString(CONV_SESSION_PREFIX)}
+
+${INDENT}/** Separator in a host-qualified name (host then local name); the first one splits host from local name. */
+${INDENT}const val HOST_QUALIFIER_SEP: String = ${kotlinString(HOST_QUALIFIER_SEP)}
 }`;
 
 const output = `${[header, ...blocks].join("\n\n")}\n`;

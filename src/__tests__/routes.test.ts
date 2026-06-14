@@ -32,7 +32,7 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		conversationRegistry,
 		store,
 		getMutex: getMutexFn,
-		config: { LOG_PATH: "/tmp/test-debug.log", RESPONSE_TIMEOUT_MS: 500 },
+		config: { LOG_PATH: "/tmp/test-debug.log", RESPONSE_TIMEOUT_MS: 500, localHostId: "test-host" },
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
 		offlineCatalog,
 		knownTeamPaths,
@@ -75,7 +75,7 @@ describe("routes", () => {
 			const { teams } = createRoutes(ctx);
 			const res = teams();
 			expect(await res.json()).toEqual([
-				{ team: "team-x", status: "online", mode: "cli", kind: "loose", queue_depth: 1 },
+				{ team: "team-x", host: "test-host", status: "online", mode: "cli", kind: "loose", queue_depth: 1 },
 			]);
 		});
 
@@ -86,7 +86,7 @@ describe("routes", () => {
 			const { teams } = createRoutes(ctx);
 			const res = teams();
 			expect(await res.json()).toEqual([
-				{ team: "proj-a", status: "available", kind: "devcontainer", queue_depth: 0 },
+				{ team: "proj-a", host: "test-host", status: "available", kind: "devcontainer", queue_depth: 0 },
 			]);
 		});
 
@@ -100,8 +100,15 @@ describe("routes", () => {
 			const res = teams();
 			const json = await res.json();
 			expect(json).toEqual([
-				{ team: "proj-a", status: "online", mode: "cli", kind: "devcontainer", queue_depth: 0 },
-				{ team: "proj-b", status: "available", kind: "devcontainer", queue_depth: 0 },
+				{
+					team: "proj-a",
+					host: "test-host",
+					status: "online",
+					mode: "cli",
+					kind: "devcontainer",
+					queue_depth: 0,
+				},
+				{ team: "proj-b", host: "test-host", status: "available", kind: "devcontainer", queue_depth: 0 },
 			]);
 		});
 
@@ -117,8 +124,15 @@ describe("routes", () => {
 			const { teams } = createRoutes(ctx);
 			const json = await teams().json();
 			expect(json).toEqual([
-				{ team: "proj-a", status: "online", mode: "channel", kind: "devcontainer", queue_depth: 0 },
-				{ team: "2fb1f8", status: "online", mode: "channel", kind: "loose", queue_depth: 0 },
+				{
+					team: "proj-a",
+					host: "test-host",
+					status: "online",
+					mode: "channel",
+					kind: "devcontainer",
+					queue_depth: 0,
+				},
+				{ team: "2fb1f8", host: "test-host", status: "online", mode: "channel", kind: "loose", queue_depth: 0 },
 			]);
 		});
 
@@ -131,8 +145,15 @@ describe("routes", () => {
 			const ctx = makeCtx({ registry, knownTeamPaths });
 			const json = await createRoutes(ctx).teams().json();
 			expect(json).toEqual([
-				{ team: "proj-a", status: "online", mode: "channel", kind: "devcontainer", queue_depth: 0 },
-				{ team: "Aqua", status: "online", mode: "channel", kind: "phone", queue_depth: 0 },
+				{
+					team: "proj-a",
+					host: "test-host",
+					status: "online",
+					mode: "channel",
+					kind: "devcontainer",
+					queue_depth: 0,
+				},
+				{ team: "Aqua", host: "test-host", status: "online", mode: "channel", kind: "phone", queue_depth: 0 },
 			]);
 		});
 
@@ -145,8 +166,15 @@ describe("routes", () => {
 			const ctx = makeCtx({ registry, knownTeamPaths });
 			const json = await createRoutes(ctx).teams().json();
 			expect(json).toEqual([
-				{ team: "arbiter", status: "online", mode: "channel", kind: "host", queue_depth: 0 },
-				{ team: "proj-a", status: "online", mode: "channel", kind: "devcontainer", queue_depth: 0 },
+				{ team: "arbiter", host: "test-host", status: "online", mode: "channel", kind: "host", queue_depth: 0 },
+				{
+					team: "proj-a",
+					host: "test-host",
+					status: "online",
+					mode: "channel",
+					kind: "devcontainer",
+					queue_depth: 0,
+				},
 			]);
 		});
 
@@ -585,10 +613,60 @@ describe("routes", () => {
 				channelOnly: true,
 			});
 			const json = await res.json();
-			expect(json.session_id).toBe("conv:conv-1:proj-a");
+			// The channel session id carries the canonical host-qualified target so
+			// the phone threads the reply under (host, name).
+			expect(json.session_id).toBe("conv:conv-1:test-host/proj-a");
 			expect(json.status).toBe("running");
 			expect(pushed.length).toBe(1);
 			expect(pushed[0].type).toBe("channel_push");
+			expect((pushed[0] as { session_id: string }).session_id).toBe("conv:conv-1:test-host/proj-a");
+		});
+
+		it("resolves a host-qualified local target to the local session", async () => {
+			const pushed: Record<string, unknown>[] = [];
+			const fakeWs = {
+				readyState: 1,
+				data: { mode: "channel" },
+				send(data: string) {
+					pushed.push(JSON.parse(data));
+				},
+			};
+			const registry = makeRegistry({ "proj-a": fakeWs });
+			const ctx = makeCtx({ registry });
+			const { send } = createRoutes(ctx);
+
+			// The phone targets the qualified name; the arbiter strips the local
+			// host and resolves to the bare registry entry.
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "test-host/proj-a",
+				body: "hi",
+				channelOnly: true,
+			});
+			const json = await res.json();
+			expect(json.session_id).toBe("conv:conv-1:test-host/proj-a");
+			expect(pushed.length).toBe(1);
+		});
+
+		it("404s a target qualified with a different (unreachable) host", async () => {
+			const fakeWs = { readyState: 1, data: { mode: "channel" }, send() {} };
+			const registry = makeRegistry({ "proj-a": fakeWs });
+			const ctx = makeCtx({ registry });
+			const { send } = createRoutes(ctx);
+
+			// Federation routing is a later phase: a name qualified with another
+			// Host has no local route and must not misresolve to the same-named
+			// local session.
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "other-host/proj-a",
+				body: "hi",
+				channelOnly: true,
+			});
+			expect(res.status).toBe(404);
+			expect((await res.json()).error).toContain("not reachable");
 		});
 
 		it("late delivery is stored and pollable after timeout", async () => {

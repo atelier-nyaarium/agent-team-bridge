@@ -432,7 +432,7 @@ fun SessionsScreen(
 	}
 	renameTeam?.let { team ->
 		RenameDialog(
-			team = team.name,
+			team = team.displayName,
 			current = state.label(team.name),
 			onSave = {
 				onRename(team.name, it)
@@ -630,9 +630,12 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 				)
 				if (unread > 0) Badge { Text("$unread") }
 			}
-			if (display != team.name && team.kind != "host") {
+			// Under a custom label, surface the session's short local name so the user
+			// can still tell which session it maps to. label() falls back to the short
+			// name, so an unlabeled session adds nothing here.
+			if (display != team.displayName && team.kind != "host") {
 				Text(
-					team.name,
+					team.displayName,
 					style = MaterialTheme.typography.labelSmall,
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 					fontFamily = FontFamily.Monospace,
@@ -761,7 +764,9 @@ fun ThreadScreen(
 
 	if (showRename) {
 		RenameDialog(
-			team = team,
+			// `team` is the host-qualified id; show only the short local name (tail
+			// after the "/" qualifier) as the rename context.
+			team = team.substringAfter('/'),
 			current = label,
 			onSave = {
 				onRename(it)

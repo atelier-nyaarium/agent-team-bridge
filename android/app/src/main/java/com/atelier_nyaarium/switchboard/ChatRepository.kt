@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -103,8 +104,10 @@ data class ChatState(
 	fun snippet(team: String): String? = threads[team]?.lastOrNull()?.let { it.title ?: it.text }
 		?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
 
-	/** The user's friendly name for a team, falling back to its (possibly random) id. */
-	fun label(team: String): String = labels[team] ?: team
+	/** The user's friendly name for a team, falling back to its short local name
+	 * (the tail after the host qualifier; the whole key when bare). The qualified
+	 * `host/local` key is never shown raw. */
+	fun label(team: String): String = labels[team] ?: team.substringAfter(Protocol.HOST_QUALIFIER_SEP)
 }
 
 /**
@@ -139,6 +142,10 @@ class ChatRepository(
 	@Volatile private var client: PhoneClient? = null
 	private var cursor = 0L
 	private var epoch = 0L
+	// The connected Host's id, learned from the register result; anchors the
+	// composite (host, name) key. Empty until a federation-aware arbiter reports
+	// it, in which case names stay bare (a single implicit Host, resolved local).
+	@Volatile private var localHostId: String = store.loadHostId()
 	private var lastSeq = -1L
 	private var pollFails = 0
 	private var pollJob: Job? = null
@@ -331,7 +338,8 @@ class ChatRepository(
 			val reg = client().register()
 			cursor = reg.cursor
 			epoch = reg.epoch
-			val teams = client().teams()
+			reg.hostId?.let { adoptHostId(it) }
+			val teams = client().teams(localHostId)
 			_state.update {
 				it.copy(
 					teams = teams,
@@ -347,7 +355,35 @@ class ChatRepository(
 	}
 
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
-		runCatching { client().teams() }.onSuccess { t -> _state.update { it.copy(teams = t) } }
+		runCatching { client().teams(localHostId) }.onSuccess { t -> _state.update { it.copy(teams = t) } }
+	}
+
+	/** Qualify a bare local name under the connected Host. A name already qualified,
+	 * or any name before a Host id is known, is returned unchanged - bare resolves
+	 * to the local Host on the arbiter. */
+	private fun qualify(name: String): String = qualifyTeam(localHostId, name)
+
+	/** Learn the connected Host's id and migrate any bare-keyed persisted state
+	 * onto it (threads/labels/unread/openTabs), the audited Phase-1 on-device
+	 * migration. Idempotent: an already-qualified key is left alone, so re-running
+	 * on every connect is a no-op once migrated. A name qualified under a different
+	 * Host is also left as-is (host rename is out of Phase-1 scope). */
+	private fun adoptHostId(hostId: String) {
+		if (hostId.isEmpty() || hostId == localHostId) return
+		localHostId = hostId
+		store.saveHostId(hostId)
+		fun remap(key: String): String =
+			if (key.contains(Protocol.HOST_QUALIFIER_SEP)) key else "$hostId${Protocol.HOST_QUALIFIER_SEP}$key"
+		val migrated = _state.updateAndGet { s ->
+			s.copy(
+				threads = s.threads.mapKeys { remap(it.key) },
+				unread = s.unread.mapKeys { remap(it.key) },
+				labels = s.labels.mapKeys { remap(it.key) },
+				openTabs = s.openTabs.map { remap(it) }.distinct(),
+			)
+		}
+		persistThreads(migrated.threads)
+		persistLabels(migrated.labels)
 	}
 
 	suspend fun send(team: String, text: String, uris: List<Uri> = emptyList()) = withContext(Dispatchers.IO) {
@@ -494,7 +530,7 @@ class ChatRepository(
 					if (forceTeamsRefresh || now - lastTeamsAt >= TEAMS_REFRESH_MS) {
 						forceTeamsRefresh = false
 						lastTeamsAt = now
-						runCatching { client().teams() }.onSuccess { t ->
+						runCatching { client().teams(localHostId) }.onSuccess { t ->
 							_state.update { it.copy(teams = t) }
 						}
 					}
@@ -518,12 +554,16 @@ class ChatRepository(
 						if (e.seq <= lastSeq) continue // dedupe a re-drain after a lost ack
 						lastSeq = e.seq
 						// Broadcast notices thread under the SENDER: their session id is
-						// the pinned "notice:<from>" grammar, not a conversation.
-						val team = if (e.kind == "notice") {
+						// the pinned "notice:<from>" grammar, not a conversation. A bare
+						// name off the wire (a notice sender, or a pre-federation arbiter)
+						// is qualified to the connected Host so it threads under the same
+						// composite key as everything else.
+						val rawTeam = if (e.kind == "notice") {
 							e.from ?: e.session_id.removePrefix(NOTICE_SESSION_PREFIX).takeIf { it.isNotEmpty() } ?: continue
 						} else {
 							teamFromSession(e.session_id) ?: e.from ?: continue
 						}
+						val team = qualify(rawTeam)
 						val files = Attachments.decode(filesDir, mb.epoch, e.seq, e.files)
 						// status-only entries still land (e.g. a wake-failure error
 						// with no body would otherwise vanish).
@@ -688,6 +728,7 @@ class ChatRepository(
 		stts.purgeAll()
 		cursor = 0L
 		epoch = 0L
+		localHostId = ""
 		lastSeq = -1L
 		_state.value = ChatState(provisioned = false)
 	}

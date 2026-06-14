@@ -5,7 +5,7 @@ import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import type { Mutex } from "../shared/mutex.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
-import { composeConvSessionId, noticeSessionId } from "../shared/phone-protocol.js";
+import { composeConvSessionId, noticeSessionId, parseQualifiedTeam, qualifyTeam } from "../shared/phone-protocol.js";
 import { ChannelFilesSchema } from "../shared/schemas.js";
 import type {
 	ArbiterConfig,
@@ -169,7 +169,18 @@ export function createRoutes({
 	evieClient,
 	resolveHandshake,
 }: RoutesDeps) {
-	const { LOG_PATH, RESPONSE_TIMEOUT_MS } = config;
+	const { LOG_PATH, RESPONSE_TIMEOUT_MS, localHostId } = config;
+
+	/** Resolve a wire target (bare or host-qualified) to a local registry name.
+	 * A bare name or one qualified with this Host resolves locally; a name
+	 * qualified with a DIFFERENT Host has no local route yet (federation routing
+	 * lands in a later phase), so it returns null. `qualified` is the canonical
+	 * `localHostId/name` form used as the channel session-id target. */
+	function resolveLocalTarget(to: string): { name: string; qualified: string } | null {
+		const { host, name } = parseQualifiedTeam(to);
+		if (host !== null && host !== localHostId) return null;
+		return { name, qualified: qualifyTeam(localHostId, name) };
+	}
 
 	function ingest(req: Request, body: Record<string, unknown>): Response {
 		const payload: Record<string, unknown> = body && typeof body === "object" ? body : { message: String(body) };
@@ -213,6 +224,7 @@ export function createRoutes({
 			// it as the "host" agent, the machine's primary session (shown first).
 			teamsList.push({
 				team: name,
+				host: localHostId,
 				status: "online",
 				mode: getTeamMode(subs),
 				kind: name === "arbiter" ? "host" : isPhone ? "phone" : isDevcontainer(name) ? "devcontainer" : "loose",
@@ -222,7 +234,13 @@ export function createRoutes({
 
 		for (const [name] of offlineCatalog) {
 			if (seen.has(name)) continue;
-			teamsList.push({ team: name, status: "available", kind: "devcontainer", queue_depth: 0 });
+			teamsList.push({
+				team: name,
+				host: localHostId,
+				status: "available",
+				kind: "devcontainer",
+				queue_depth: 0,
+			});
 		}
 
 		return jsonResponse(teamsList);
@@ -257,33 +275,45 @@ export function createRoutes({
 			}
 		}
 
+		// Resolve the (bare or host-qualified) target to a local registry name. A
+		// name qualified with another Host has no local route yet (federation
+		// routing is a later phase), so it 404s here rather than misresolving to a
+		// same-named local session. `qualifiedTo` is the canonical local form used
+		// as the channel session-id target.
+		const target = resolveLocalTarget(to);
+		if (!target) {
+			return jsonResponse({ error: `Host for "${to}" is not reachable from this Host` }, 404);
+		}
+		const localName = target.name;
+		const qualifiedTo = target.qualified;
+
 		// The "host" cli wake-daemon is never a direct target. The "arbiter" channel
 		// identity (the host-agent) is reachable ONLY from the phone (channelOnly): a
 		// send injects a channel message into the host orchestrator. Cross-session
 		// (container -> host-agent) sends are deferred to the federation phases that
 		// design that trust boundary.
-		if (to === "host" || (to === "arbiter" && !channelOnly)) {
+		if (localName === "host" || (localName === "arbiter" && !channelOnly)) {
 			return jsonResponse(
 				{
-					error: `"${to}" is a reserved name; crosstalk_send targets container teams only.`,
+					error: `"${localName}" is a reserved name; crosstalk_send targets container teams only.`,
 				},
 				400,
 			);
 		}
 
-		let subs = registry.get(to);
+		let subs = registry.get(localName);
 		let targetWs = subs ? getFirstWs(subs) : undefined;
 
 		// If offline, attempt to wake the container. The "arbiter" host-agent is
 		// never a wakeable devcontainer (it is the host process itself), so an
 		// offline host-agent goes straight to the 404 below.
-		if (!targetWs && to !== "arbiter") {
-			const woken = await tryWakeTeam(to);
+		if (!targetWs && localName !== "arbiter") {
+			const woken = await tryWakeTeam(localName);
 			if (woken) {
 				// Claude Code needs time after MCP connect to initialize its channel listener.
 				// Registration happens instantly but channel notifications aren't ready yet.
 				await new Promise((r) => setTimeout(r, 3000));
-				subs = registry.get(to);
+				subs = registry.get(localName);
 				targetWs = subs ? getFirstWs(subs) : undefined;
 			}
 		}
@@ -291,8 +321,8 @@ export function createRoutes({
 		if (!targetWs || !subs) {
 			return jsonResponse(
 				{
-					error: `Team "${to}" is not connected`,
-					available: [...registry.keys()].filter((k) => k !== "host"),
+					error: `Team "${qualifiedTo}" is not connected`,
+					available: [...registry.keys()].filter((k) => k !== "host").map((k) => qualifyTeam(localHostId, k)),
 				},
 				404,
 			);
@@ -307,22 +337,24 @@ export function createRoutes({
 		// of an orphan session.
 		if (channelOnly && targetMode !== "channel") {
 			return jsonResponse(
-				{ error: `"${to}" is a CLI-mode agent; phone chat supports channel-mode (Claude) teams only` },
+				{ error: `"${localName}" is a CLI-mode agent; phone chat supports channel-mode (Claude) teams only` },
 				409,
 			);
 		}
 
 		// Channel mode: stable job id per (sender_conversation_id, target_team) pair.
-		// Same pair reuses the same store entry forever; entries are persistent.
+		// The target is the canonical qualified name, so the phone threads the reply
+		// under (host, name). Same pair reuses the same store entry forever; entries
+		// are persistent.
 		if (targetMode === "channel") {
 			try {
-				const channelJobId = deriveChannelJobId(fromConversationId, to);
+				const channelJobId = deriveChannelJobId(fromConversationId, qualifiedTo);
 				if (!channelJobId) {
 					return jsonResponse({ error: `fromConversationId is required for channel-mode targets` }, 400);
 				}
 
 				const isFollowUp = store.has(channelJobId);
-				store.create(channelJobId, from, to, { persistent: true, fromConversationId });
+				store.create(channelJobId, from, localName, { persistent: true, fromConversationId });
 
 				const messageId = crypto.randomUUID();
 				const channelPayload: Record<string, unknown> = {
@@ -342,7 +374,7 @@ export function createRoutes({
 
 				const activeWs = getAllActiveWs(subs);
 				if (activeWs.length === 0) {
-					throw new Error(`Team "${to}" has no active connections`);
+					throw new Error(`Team "${qualifiedTo}" has no active connections`);
 				}
 
 				for (const ws of activeWs) {
@@ -350,13 +382,13 @@ export function createRoutes({
 				}
 
 				console.log(
-					`[send] channel_push to ${to} [${channelJobId}] msg=${messageId.slice(0, 8)} from ${from} (${activeWs.length} sub-session${activeWs.length > 1 ? "s" : ""})`,
+					`[send] channel_push to ${qualifiedTo} [${channelJobId}] msg=${messageId.slice(0, 8)} from ${from} (${activeWs.length} sub-session${activeWs.length > 1 ? "s" : ""})`,
 				);
 
 				return jsonResponse({
 					session_id: channelJobId,
 					status: "running",
-					message: `Message pushed to ${to} via channel. Responses will be pushed back automatically.`,
+					message: `Message pushed to ${localName} via channel. Responses will be pushed back automatically.`,
 				});
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
@@ -370,12 +402,12 @@ export function createRoutes({
 		let release: (() => void) | undefined;
 
 		try {
-			const mutex = getMutex(to);
+			const mutex = getMutex(localName);
 			release = await mutex.acquire(sessionId);
 
-			console.log(`[mutex] ${to} locked by ${sessionId} (from ${from})`);
+			console.log(`[mutex] ${localName} locked by ${sessionId} (from ${from})`);
 
-			store.create(sessionId, from, to);
+			store.create(sessionId, from, localName);
 
 			const payload = {
 				type: "inject",
@@ -388,14 +420,14 @@ export function createRoutes({
 			};
 
 			if (targetWs.readyState !== 1) {
-				throw new Error(`Team "${to}" disconnected before message could be delivered`);
+				throw new Error(`Team "${localName}" disconnected before message could be delivered`);
 			}
 			targetWs.send(JSON.stringify(payload));
 
 			const waitResult = await store.waitForResult(sessionId, RESPONSE_TIMEOUT_MS);
 
 			if (release) {
-				console.log(`[mutex] ${to} released [${waitResult.delivered ? "delivered" : "running"}]`);
+				console.log(`[mutex] ${localName} released [${waitResult.delivered ? "delivered" : "running"}]`);
 				release();
 			}
 
@@ -410,7 +442,7 @@ export function createRoutes({
 			return jsonResponse({
 				session_id: sessionId,
 				status: "running",
-				message: `No response from ${to} within ${RESPONSE_TIMEOUT_MS / 1000}s. Poll with session_id to check later.`,
+				message: `No response from ${localName} within ${RESPONSE_TIMEOUT_MS / 1000}s. Poll with session_id to check later.`,
 			});
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);

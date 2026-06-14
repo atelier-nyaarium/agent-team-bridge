@@ -7,6 +7,8 @@ import {
 	type PhoneOpResult,
 	type PhoneRelayFrame,
 	type PhoneRelayReply,
+	parseQualifiedTeam,
+	qualifyTeam,
 } from "../../shared/phone-protocol.js";
 import type { TeamInfo } from "../../shared/types.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
@@ -37,6 +39,10 @@ export interface PhoneHandlerDeps {
 	conversationRegistry: ConversationRegistry;
 	mailboxStore: DeviceMailboxStore;
 	routes: PhoneRoutes;
+	/** This Host's id, returned on register so the phone anchors its composite
+	 * (host, name) key, and used to canonicalize a send target to the qualified
+	 * session-id form (matching routes.send). */
+	localHostId: string;
 	sendBoundMs?: number;
 	/** True when the name belongs to a devcontainer project (catalog or known
 	 * paths). A device must not take such a name: while the project sleeps, the
@@ -80,6 +86,7 @@ export function createPhoneHandler({
 	conversationRegistry,
 	mailboxStore,
 	routes,
+	localHostId,
 	sendBoundMs = SEND_BOUND_MS,
 	isProjectName,
 }: PhoneHandlerDeps) {
@@ -223,7 +230,7 @@ export function createPhoneHandler({
 		switch (op.kind) {
 			case "register": {
 				const box = mailboxStore.ensure(conversationId);
-				return { device, cursor: box.highWater, epoch: box.epoch };
+				return { device, hostId: localHostId, cursor: box.highWater, epoch: box.epoch };
 			}
 
 			case "list_teams": {
@@ -242,18 +249,25 @@ export function createPhoneHandler({
 				// CLI team is unknowable here (mode surfaces only on register), so
 				// it pays a wake and is then rejected by the route's channelOnly
 				// check instead of minting a random session id.
-				const targetSubs = registry.get(op.to);
+				// The phone may target a host-qualified name (`host/name`); strip the
+				// host for the local registry probe. Cross-host targets are rejected
+				// by routes.send (federation routing is a later phase).
+				const localTarget = parseQualifiedTeam(op.to).name;
+				const targetSubs = registry.get(localTarget);
 				if (targetSubs) {
 					for (const [, ws] of targetSubs) {
 						if (!ws.data.virtual && ws.readyState === 1 && ws.data.mode === "cli") {
 							throw new Error(
-								`"${op.to}" is a CLI-mode agent; phone chat supports channel-mode (Claude) teams only`,
+								`"${localTarget}" is a CLI-mode agent; phone chat supports channel-mode (Claude) teams only`,
 							);
 						}
 					}
 				}
 
-				const expectedSession = composeConvSessionId(conversationId, op.to);
+				// Canonical qualified session id, matching what routes.send composes,
+				// so the backgrounded-send path hands back the same id the in-time
+				// path would.
+				const expectedSession = composeConvSessionId(conversationId, qualifyTeam(localHostId, localTarget));
 				const sendPromise = routes.send(FAKE_REQ, {
 					from: device,
 					fromConversationId: conversationId,

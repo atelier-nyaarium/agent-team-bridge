@@ -67,7 +67,13 @@ function makeHarness(overrides: Partial<PhoneRoutes> = {}): Harness {
 		...overrides,
 	};
 
-	const handler = createPhoneHandler({ registry, conversationRegistry, mailboxStore, routes });
+	const handler = createPhoneHandler({
+		registry,
+		conversationRegistry,
+		mailboxStore,
+		localHostId: "test-host",
+		routes,
+	});
 	return { registry, conversationRegistry, mailboxStore, sendCalls, respondCalls, handler };
 }
 
@@ -120,7 +126,9 @@ describe("createPhoneHandler", () => {
 		const h = makeHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "register" }));
 		expect(reply.ok).toBe(true);
-		expect(reply.result).toMatchObject({ device: "pixel", cursor: 0 });
+		// register hands back the connected Host id so the phone anchors its
+		// composite (host, name) key and migrates bare-keyed threads onto it.
+		expect(reply.result).toMatchObject({ device: "pixel", hostId: "test-host", cursor: 0 });
 		expect((reply.result as { epoch: number }).epoch).toBeGreaterThan(0);
 
 		const peer = h.registry.get("pixel")?.get("conv-pixel") as unknown as ServerWebSocket<WsData>;
@@ -151,6 +159,7 @@ describe("createPhoneHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
+			localHostId: "test-host",
 			routes: {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
@@ -455,6 +464,7 @@ describe("createPhoneHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
+			localHostId: "test-host",
 			sendBoundMs: 50,
 			routes: {
 				send: () => new Promise<Response>(() => {}),
@@ -465,7 +475,8 @@ describe("createPhoneHandler", () => {
 
 		const reply = await handler.handleFrame(frame({ kind: "send", to: "asleep-team", body: "hi" }));
 		expect(reply.ok).toBe(true);
-		expect(reply.result).toEqual({ session_id: "conv:conv-pixel:asleep-team", status: "running" });
+		// The deterministic session id carries the canonical host-qualified target.
+		expect(reply.result).toEqual({ session_id: "conv:conv-pixel:test-host/asleep-team", status: "running" });
 	});
 
 	it("TTL sweep evicts the peer together with its mailbox", async () => {
@@ -531,6 +542,7 @@ describe("createPhoneHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
+			localHostId: "test-host",
 			sendBoundMs: 20,
 			routes: {
 				send: () =>
@@ -543,7 +555,7 @@ describe("createPhoneHandler", () => {
 		});
 
 		const reply = await handler.handleFrame(frame({ kind: "send", to: "asleep", body: "hi" }));
-		expect(reply.result).toEqual({ session_id: "conv:conv-pixel:asleep", status: "running" });
+		expect(reply.result).toEqual({ session_id: "conv:conv-pixel:test-host/asleep", status: "running" });
 
 		resolveSend?.(jsonRes({ error: 'Team "asleep" is not connected' }, 404));
 		await new Promise((r) => setTimeout(r, 10));
@@ -553,7 +565,7 @@ describe("createPhoneHandler", () => {
 		expect(entries).toHaveLength(1);
 		expect(entries[0]).toMatchObject({
 			status: "error",
-			session_id: "conv:conv-pixel:asleep",
+			session_id: "conv:conv-pixel:test-host/asleep",
 		});
 		expect(entries[0].body).toContain("not connected");
 	});
@@ -571,6 +583,7 @@ describe("createPhoneHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
+			localHostId: "test-host",
 			sendBoundMs: 20,
 			routes: {
 				send: () =>
@@ -583,7 +596,7 @@ describe("createPhoneHandler", () => {
 		});
 
 		const reply = await handler.handleFrame(frame({ kind: "send", to: "sleepy-cli", body: "hi" }));
-		expect(reply.result).toEqual({ session_id: "conv:conv-pixel:sleepy-cli", status: "running" });
+		expect(reply.result).toEqual({ session_id: "conv:conv-pixel:test-host/sleepy-cli", status: "running" });
 
 		resolveSend?.(
 			jsonRes(
@@ -596,7 +609,7 @@ describe("createPhoneHandler", () => {
 		const poll = await handler.handleFrame(frame({ kind: "poll" }, "op2"));
 		const entries = (poll.result as { entries: { body?: string; status?: string; session_id: string }[] }).entries;
 		expect(entries).toHaveLength(1);
-		expect(entries[0]).toMatchObject({ session_id: "conv:conv-pixel:sleepy-cli", status: "error" });
+		expect(entries[0]).toMatchObject({ session_id: "conv:conv-pixel:test-host/sleepy-cli", status: "error" });
 		expect(entries[0].body).toContain("CLI-mode");
 	});
 
@@ -656,6 +669,7 @@ describe("createPhoneHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
+			localHostId: "test-host",
 			sendBoundMs: 20,
 			routes: {
 				send: () => new Promise<Response>((resolve) => (resolveSend = resolve)),

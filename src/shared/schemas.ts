@@ -129,6 +129,12 @@ export const WsRegisterSchema = z.object({
 export const TeamInfoSchema = z
 	.object({
 		team: z.string(),
+		// The id of the Host that owns this session. `team` stays the bare local
+		// name; the phone composes the qualified key `host/team` to keep two Hosts'
+		// identically-named sessions apart. Optional for decode tolerance: a
+		// pre-federation arbiter omits it and the phone falls back to its connected
+		// Host id (bare resolves local).
+		host: z.string().optional(),
 		status: z.enum(["online", "available"]),
 		mode: ConnectionModeSchema.optional(),
 		// Optional for decode tolerance: old arbiters omit kind and consumers
@@ -230,6 +236,11 @@ export const MailboxEntrySchema = z
 export const PhoneRegisterResultSchema = z
 	.object({
 		device: z.string(),
+		// The id of the Host this phone is connected to. The phone anchors its
+		// composite (host, name) key to this: it qualifies bare names to this Host
+		// and migrates pre-federation bare-keyed threads onto it. Optional for
+		// decode tolerance of a pre-federation arbiter.
+		hostId: z.string().optional(),
 		// Current mailbox high-water seq so a reconnecting phone can resync its cursor.
 		cursor: z.number().int().nonnegative(),
 		// Mailbox instance id. If it differs from the phone's stored epoch, the
