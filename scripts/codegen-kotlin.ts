@@ -23,6 +23,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import {
+	AdmissionSchema,
+	RevocationSchema,
+	SignedAdmissionSchema,
+	SignedRevocationSchema,
+} from "../src/shared/admission.js";
+import {
 	CONV_SESSION_PREFIX,
 	HOST_QUALIFIER_SEP,
 	NOTICE_SESSION_PREFIX,
@@ -67,6 +73,10 @@ const ROOTS: z.ZodType[] = [
 	PhonePollResultSchema,
 	ProvisioningSchema,
 	SttsProvidersSchema,
+	AdmissionSchema,
+	SignedAdmissionSchema,
+	RevocationSchema,
+	SignedRevocationSchema,
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything

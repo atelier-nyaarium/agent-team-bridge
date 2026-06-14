@@ -189,6 +189,37 @@ data class SttsProviders(
 )
 
 @Serializable
+data class Admission(
+	val kind: String,
+	val signPub: String,
+	val boxPub: String,
+	val hostId: String? = null,
+	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
+data class SignedAdmission(
+	val admission: Admission,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class Revocation(
+	val signPub: String,
+	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
+data class SignedRevocation(
+	val revocation: Revocation,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
 data class SttsProvider(
 	val id: String,
 	val label: String,
