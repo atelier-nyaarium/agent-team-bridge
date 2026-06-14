@@ -12,7 +12,7 @@ import { z } from "zod";
 export const ConnectionModeSchema = z.enum(["cli", "channel"]).meta({ id: "ConnectionMode" });
 export const EffortLevelSchema = z.enum(["simple", "standard", "complex"]).meta({ id: "EffortLevel" });
 export const RequestTypeSchema = z.enum(["feature", "bugfix", "question"]).meta({ id: "RequestType" });
-export const TeamKindSchema = z.enum(["devcontainer", "loose", "phone"]).meta({ id: "TeamKind" });
+export const TeamKindSchema = z.enum(["devcontainer", "loose", "phone", "host"]).meta({ id: "TeamKind" });
 export const ResponseStatusSchema = z
 	.enum(["completed", "clarification", "deferred", "needs_human", "error", "timeout", "running"])
 	.meta({ id: "ResponseStatus" });

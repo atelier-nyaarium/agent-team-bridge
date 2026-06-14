@@ -418,7 +418,7 @@ fun SessionsScreen(
 	actionTeam?.let { team ->
 		SessionActionsDialog(
 			label = state.label(team.name),
-			canRename = team.kind != "devcontainer",
+			canRename = team.kind != "devcontainer" && team.kind != "host",
 			onRename = {
 				actionTeam = null
 				renameTeam = team
@@ -490,8 +490,9 @@ fun SessionsScreen(
 				)
 			}
 			val order = sessionOrder(state)
+			val hostAgents = state.sessions.filter { it.kind == "host" }.sortedWith(order)
 			val projects = state.sessions.filter { it.kind == "devcontainer" }.sortedWith(order)
-			val windows = state.sessions.filter { it.kind != "devcontainer" }.sortedWith(order)
+			val windows = state.sessions.filter { it.kind != "devcontainer" && it.kind != "host" }.sortedWith(order)
 			LazyColumn(
 				Modifier.fillMaxSize(),
 				contentPadding = PaddingValues(12.dp),
@@ -499,6 +500,17 @@ fun SessionsScreen(
 			) {
 				// Keys are namespaced so a team literally named "hdr-projects"
 				// cannot collide with the header items.
+				if (hostAgents.isNotEmpty()) {
+					item(key = "hdr-host") { SectionLabel("Host") }
+					items(hostAgents, key = { "team:${it.name}" }) { team ->
+						SessionCard(
+							state = state,
+							team = team,
+							onClick = { onOpen(team.name) },
+							onLongPress = { actionTeam = team },
+						)
+					}
+				}
 				if (projects.isNotEmpty()) {
 					item(key = "hdr-projects") { SectionLabel("Projects") }
 					items(projects, key = { "team:${it.name}" }) { team ->
@@ -588,7 +600,7 @@ fun SectionLabel(text: String) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: () -> Unit) {
-	val display = state.label(team.name)
+	val display = if (team.kind == "host") "Host" else state.label(team.name)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
 	val isCli = team.mode == "cli"
@@ -618,7 +630,7 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 				)
 				if (unread > 0) Badge { Text("$unread") }
 			}
-			if (display != team.name) {
+			if (display != team.name && team.kind != "host") {
 				Text(
 					team.name,
 					style = MaterialTheme.typography.labelSmall,

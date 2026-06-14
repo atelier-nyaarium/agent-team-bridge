@@ -228,12 +228,11 @@ export function createPhoneHandler({
 
 			case "list_teams": {
 				const teams = (await routes.teams().json()) as TeamInfo[];
-				// A phone does not list other phones as send targets (devcontainers +
-				// host windows only); it still excludes itself and reserved names.
+				// A phone does not list other phones as send targets, and excludes
+				// itself. teams() already drops the cli "host" daemon; the "arbiter"
+				// host-agent stays (kind "host"), reachable from the phone.
 				return {
-					teams: teams.filter(
-						(t) => t.team !== device && t.kind !== "phone" && !RESERVED_TEAM_NAMES.has(t.team),
-					),
+					teams: teams.filter((t) => t.team !== device && t.kind !== "phone"),
 				};
 			}
 

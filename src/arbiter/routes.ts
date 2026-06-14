@@ -19,7 +19,6 @@ import {
 	type ConversationRegistry,
 	getAllActiveRealWs,
 	getAllActiveWs,
-	RESERVED_TEAM_NAMES,
 	type TeamRegistry,
 	type WsData,
 } from "./websocket.js";
@@ -210,11 +209,13 @@ export function createRoutes({
 			// A team whose only live sockets are virtual phone peers is the human's
 			// device, not a crosstalk peer - mark it so the agent-facing listing hides it.
 			const isPhone = getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0;
+			// The host orchestrator registers its channel identity as "arbiter"; surface
+			// it as the "host" agent, the machine's primary session (shown first).
 			teamsList.push({
 				team: name,
 				status: "online",
 				mode: getTeamMode(subs),
-				kind: isPhone ? "phone" : isDevcontainer(name) ? "devcontainer" : "loose",
+				kind: name === "arbiter" ? "host" : isPhone ? "phone" : isDevcontainer(name) ? "devcontainer" : "loose",
 				queue_depth: lock ? lock.queue.length + (lock.locked ? 1 : 0) : 0,
 			});
 		}
@@ -256,7 +257,12 @@ export function createRoutes({
 			}
 		}
 
-		if (RESERVED_TEAM_NAMES.has(to)) {
+		// The "host" cli wake-daemon is never a direct target. The "arbiter" channel
+		// identity (the host-agent) is reachable ONLY from the phone (channelOnly): a
+		// send injects a channel message into the host orchestrator. Cross-session
+		// (container -> host-agent) sends are deferred to the federation phases that
+		// design that trust boundary.
+		if (to === "host" || (to === "arbiter" && !channelOnly)) {
 			return jsonResponse(
 				{
 					error: `"${to}" is a reserved name; crosstalk_send targets container teams only.`,
@@ -268,8 +274,10 @@ export function createRoutes({
 		let subs = registry.get(to);
 		let targetWs = subs ? getFirstWs(subs) : undefined;
 
-		// If offline, attempt to wake the container
-		if (!targetWs) {
+		// If offline, attempt to wake the container. The "arbiter" host-agent is
+		// never a wakeable devcontainer (it is the host process itself), so an
+		// offline host-agent goes straight to the 404 below.
+		if (!targetWs && to !== "arbiter") {
 			const woken = await tryWakeTeam(to);
 			if (woken) {
 				// Claude Code needs time after MCP connect to initialize its channel listener.
@@ -284,7 +292,7 @@ export function createRoutes({
 			return jsonResponse(
 				{
 					error: `Team "${to}" is not connected`,
-					available: [...registry.keys()].filter((k) => !RESERVED_TEAM_NAMES.has(k)),
+					available: [...registry.keys()].filter((k) => k !== "host"),
 				},
 				404,
 			);

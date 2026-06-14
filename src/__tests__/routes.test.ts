@@ -135,6 +135,20 @@ describe("routes", () => {
 				{ team: "Aqua", status: "online", mode: "channel", kind: "phone", queue_depth: 0 },
 			]);
 		});
+
+		it("marks the arbiter channel identity as kind host (the host-agent)", async () => {
+			const registry = makeRegistry({
+				arbiter: { readyState: 1, data: { mode: "channel" } },
+				"proj-a": { readyState: 1, data: { mode: "channel" } },
+			});
+			const knownTeamPaths = new Map<string, string>([["proj-a", "/home/user/proj-a"]]);
+			const ctx = makeCtx({ registry, knownTeamPaths });
+			const json = await createRoutes(ctx).teams().json();
+			expect(json).toEqual([
+				{ team: "arbiter", status: "online", mode: "channel", kind: "host", queue_depth: 0 },
+				{ team: "proj-a", status: "online", mode: "channel", kind: "devcontainer", queue_depth: 0 },
+			]);
+		});
 	});
 
 	describe("/human/notify", () => {
@@ -367,6 +381,31 @@ describe("routes", () => {
 			});
 			expect(res.status).toBe(404);
 			expect((await res.json()).error).toContain("not connected");
+		});
+
+		it("blocks a non-phone (crosstalk) send to the host-agent with 400", async () => {
+			const ctx = makeCtx();
+			const { send } = createRoutes(ctx);
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "proj-a",
+				to: "arbiter",
+				body: "hi",
+			});
+			expect(res.status).toBe(400);
+		});
+
+		it("lets a phone (channelOnly) send past the reserved guard to the host-agent", async () => {
+			// channelOnly send to "arbiter" clears the 400 guard; with no arbiter
+			// registered here it then 404s, proving it got past the reserved block.
+			const ctx = makeCtx();
+			const { send } = createRoutes(ctx);
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				to: "arbiter",
+				channelOnly: true,
+				body: "hi",
+			});
+			expect(res.status).toBe(404);
 		});
 
 		it("returns 404 when target ws.readyState !== 1", async () => {

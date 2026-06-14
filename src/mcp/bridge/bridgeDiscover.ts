@@ -22,7 +22,11 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 				}>;
 				// Phones are the human's device, not a crosstalk peer - never advertise
 				// them to agents; reach the human via the reply tools or notify_human.
-				const others = teams.filter((t) => t.team !== bridgeProjectName() && t.kind !== "phone");
+				// The "host" agent is the human's control point (reached from the phone),
+				// not an agent crosstalk peer, so it is hidden here too.
+				const others = teams.filter(
+					(t) => t.team !== bridgeProjectName() && t.kind !== "phone" && t.kind !== "host",
+				);
 
 				if (others.length === 0) {
 					return { content: [{ type: "text" as const, text: `No other teams found.` }] };

@@ -189,12 +189,14 @@ describe("createPhoneHandler", () => {
 		expect(h.mailboxStore.get("conv-1")).not.toBe(h.mailboxStore.get("conv-2"));
 	});
 
-	it("list_teams excludes the device itself and reserved names", async () => {
+	it("list_teams surfaces the host-agent, excludes the device and the cli host daemon", async () => {
 		const h = makeHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "list_teams" }));
 		expect(reply.ok).toBe(true);
 		const teams = (reply.result as { teams: { team: string }[] }).teams.map((t) => t.team);
-		expect(teams).toEqual(["team-a"]);
+		// "arbiter" (the host-agent) is now surfaced; the cli "host" daemon and the
+		// device itself stay excluded.
+		expect(teams.sort()).toEqual(["arbiter", "team-a"]);
 	});
 
 	it("send forwards from/fromConversationId/to and returns the session", async () => {
