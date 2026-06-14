@@ -98,6 +98,7 @@ dependencies {
 	implementation(libs.androidx.fragment)
 	implementation(libs.androidx.webkit)
 	implementation(libs.kotlinx.serialization.json)
+	implementation(libs.bouncycastle)
 
 	testImplementation(libs.junit)
 }

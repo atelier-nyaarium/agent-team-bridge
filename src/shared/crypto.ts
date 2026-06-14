@@ -11,7 +11,7 @@ import crypto from "node:crypto";
 //  Seal = a stateless per-message ephemeral box with a detached signature (the
 //  proportionate forward-secrecy fit per Owner decision D1, not a stateful
 //  ratchet): an ephemeral X25519 keypair does ECDH to the recipient's STATIC box
-//  key -> HKDF-SHA256 -> ChaCha20-Poly1305, and the whole sealed blob is signed by
+//  key -> HKDF-SHA256 -> AES-256-GCM, and the whole sealed blob is signed by
 //  the sender's STATIC Ed25519 identity. Forward secrecy comes from the ephemeral
 //  (its private half is discarded after sealing); authenticity from the signature;
 //  recipient-binding from the ECDH to the recipient's static key. evie never seals
@@ -38,7 +38,7 @@ export interface Identity {
 export interface SealedEnvelope {
 	/** Ephemeral X25519 public key for this message (raw 32 bytes, base64). */
 	ephemeralPub: string;
-	/** ChaCha20-Poly1305 nonce (12 bytes, base64). */
+	/** AES-256-GCM nonce / IV (12 bytes, base64). */
 	nonce: string;
 	/** Ciphertext || 16-byte auth tag (base64). */
 	ciphertext: string;
@@ -123,7 +123,7 @@ export function seal(plaintext: Buffer, recipientBoxPubB64: string, senderSignPr
 	const shared = crypto.diffieHellman({ privateKey: ephemeral.privateKey, publicKey: recipientPub });
 	const key = deriveKey(shared, ephemeralPubRaw);
 	const nonce = crypto.randomBytes(12);
-	const cipher = crypto.createCipheriv("chacha20-poly1305", key, nonce, { authTagLength: 16 });
+	const cipher = crypto.createCipheriv("aes-256-gcm", key, nonce, { authTagLength: 16 });
 	const ct = Buffer.concat([cipher.update(plaintext), cipher.final()]);
 	const sealed = Buffer.concat([ct, cipher.getAuthTag()]);
 	const signed = Buffer.concat([ephemeralPubRaw, nonce, sealed]);
@@ -154,7 +154,7 @@ export function unseal(env: SealedEnvelope, recipientBoxPrivB64: string, senderS
 		publicKey: rawPubToKey(ephemeralPubRaw, "x25519"),
 	});
 	const key = deriveKey(shared, ephemeralPubRaw);
-	const decipher = crypto.createDecipheriv("chacha20-poly1305", key, nonce, { authTagLength: 16 });
+	const decipher = crypto.createDecipheriv("aes-256-gcm", key, nonce, { authTagLength: 16 });
 	decipher.setAuthTag(tag);
 	return Buffer.concat([decipher.update(ct), decipher.final()]);
 }
