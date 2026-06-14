@@ -12,7 +12,7 @@
     - `wake.ts` - WakeCoordinator class for container on-demand startup
     - `connectorProxy.ts` - WebSocket proxy for game client connector pass-through
     - `evie/` - **Evie bridge** - kubectl port-forward tunnel to evie-bot K8s pod
-      - `evieClient.ts` - WebSocket client to evie's BridgeServer, tool call forwarding, DM forwarding, `phone_relay` frame intake (`onPhoneRelay`). Inbound frames are boundary-parsed through `EvieInboundFrameSchema` (shared/evie-protocol.ts); unknown/malformed frames are counted and warned, never blind-cast
+      - `evieClient.ts` - WebSocket client to evie's BridgeServer. Live role is the phone relay transport: `phone_relay` frame intake (`onPhoneRelay`) plus the shared tool-call wire (`callTool` + `tool_result` / `tool_error`) that `phone_relay_reply` rides. The `evie_*` tool proxy that once consumed `tool_registry` is detached (kept for history). Inbound frames are boundary-parsed through `EvieInboundFrameSchema` (shared/evie-protocol.ts); unknown/malformed frames are counted and warned, never blind-cast
       - `portForward.ts` - kubectl port-forward child process manager with auto-restart
     - `phone/` - **Phone bridge** - arbiter side of the Android channel (see Phone Bridge below)
       - `phoneHandler.ts` - `createPhoneHandler`: validates device identity, dispatches the phone ops (register/list_teams/send/respond/poll) by reusing the HTTP routes, owns per-conversation mailbox/binding/idempotency state
@@ -31,7 +31,7 @@
     - `channel/` - **Channel mode** - For Claude agents receiving push notifications
       - `channelNotify.ts` - Emit `notifications/claude/channel` to push messages into Claude sessions; materializes inbound Discord file attachments and prepends a `[FILES]` block to the body
       - `channelReply.ts` - `channel_reply` tool: reply to an incoming channel message
-      - `humanTools.ts` - `respond_to_human`, `transfer_human_to`, and `notify_human` tools; `respond_to_human` accepts per-part `{text?, attachments?: [absolutePath, ...]}` so the agent can attach any file from its filesystem; `notify_human` broadcasts a `{tiny, summary, full, attachments?}` notice (all three tiers required) to every registered phone via the arbiter's `POST /human/notify`
+      - `humanTools.ts` - the `notify_human` tool: broadcasts a `{title, summary, full, attachments?}` notice (all three tiers required; `tiny` is a deprecated alias for `title`) to every registered phone via the arbiter's `POST /human/notify`. `attachments` are absolute file paths the agent attaches from its filesystem
       - `evieFiles.ts` - Sanitize, materialize, and render Discord-bridge file attachments under `/tmp/evie-files/<msgId>/`; lazy mtime sweep with 1h TTL
     - `cli/` - **CLI mode** - For non-Claude agents (cursor, copilot, codex)
       - `agentHandlers.ts` - CLI agent process spawners (cursor-agent, copilot, codex)
@@ -60,14 +60,14 @@
     - `resolve-model.ts` - Model resolution by agent type and effort level
   - `shared/` - Shared utilities used by both arbiter and MCP
     - `types.ts` - Shared TypeScript types; wire shapes derive from schemas.ts via `z.infer` (`ChannelFile`, `TeamInfo`, the enums), local payload/config types stay hand-written
-    - `schemas.ts` - THE single zod truth for every wire shape: reply schemas, `PostResponsePart*` (outbound `respond_to_human` parts), `ChannelFileSchema`, `TeamInfoSchema`, the full phone protocol (`PhoneOpSchema`, `PhoneRelayFrameSchema`, `PhoneRelayReplySchema`, op results, `MailboxEntrySchema`), and `ProvisioningSchema`. Every shared schema carries `.meta({ id })` - the id is the generated Kotlin class name (see codegen below)
+    - `schemas.ts` - THE single zod truth for every wire shape: reply schemas, `ChannelFileSchema`, `TeamInfoSchema`, the full phone protocol (`PhoneOpSchema`, `PhoneRelayFrameSchema`, `PhoneRelayReplySchema`, op results, `MailboxEntrySchema`), and `ProvisioningSchema`. Every shared schema carries `.meta({ id })` - the id is the generated Kotlin class name (see codegen below)
     - `tmp-files.ts` - `cleanupTmpDir({dir, maxAgeMs, mode: "files" | "dirs"})` - generic lazy mtime sweep used by the connector and the Discord-bridge file materializer
     - `env.ts` - Container detection (isInsideContainer)
     - `mutex.ts` - Mutex class for serializing CLI-mode requests per team
     - `pending-job-store.ts` - PendingJobStore for tracking in-flight requests with timeout/polling
     - `device-mailbox.ts` - `DeviceMailbox` (per-phone inbound queue: monotonic seq, cursor ack, entry cap, epoch) and `DeviceMailboxStore` (per-conversation, idle TTL sweep + LRU device cap, `setOnEvict`)
     - `phone-protocol.ts` - Phone protocol constants + session-id grammars (`NOTICE_SESSION_PREFIX`, `CONV_SESSION_PREFIX` with compose/parse helpers, `PHONE_PROTOCOL_VERSION`); the wire TYPES re-export from schemas.ts via `z.infer`
-    - `evie-protocol.ts` - SELF-CONTAINED (zod-only) leaf owning the arbiter<->evie frame vocabulary: `EvieInboundFrameSchema` (tool_registry / tool_result / tool_error / dm_forward / loose phone_relay), `ToolCallFrameSchema`, and `ChannelFileSchema` (re-exported by schemas.ts). Built to be copied verbatim into evie-bot in a later phase; nothing imports into it
+    - `evie-protocol.ts` - SELF-CONTAINED (zod-only) leaf owning the arbiter<->evie frame vocabulary: `EvieInboundFrameSchema` (tool_registry / tool_result / tool_error / loose phone_relay), `ToolCallFrameSchema`, and `ChannelFileSchema` (re-exported by schemas.ts). Built to be copied verbatim into evie-bot in a later phase; nothing imports into it
     - `stts-providers.ts` - `SttsProviderSchema` for the TTS provider catalog (bundled at `android/.../assets/stts-providers.json`): per-provider id/label/path/container/voices plus a request-body TEMPLATE ($text/$voice). Validated by vitest on every push; the generated Kotlin `SttsProvider` decodes it at runtime and `SttsClient.fillTemplate` fills the template per call. The `voices` arrays are NOT hand-maintained: they are generated from the raw provider voice dumps in `data/stts-voices/` by `scripts/import-stts-voices.ts` (drift-checked by ci.yml). The settings voice picker filters this full list as you type
     - `notice.ts` - `NoticeSchema` `{ title, summary, full }`, the single truth for the `notify_human` tool param and the `/human/notify` wire (tier rules on the field describes). SYNCED leaf: a byte-verbatim copy lives at `nyaaskills/src/shared/notice.ts` (re-copy with `cp src/shared/notice.ts ../nyaaskills/src/shared/notice.ts`). `title` replaces the old `tiny`; the tool/route accept `tiny` as a deprecated alias for one transition release
     - `reconnect.ts` - Exponential backoff reconnector for WebSocket connections
@@ -113,22 +113,19 @@ Channel-mode agents (Claude windows and devcontainer Claudes) have persistent co
 - Responses push back to the specific sender sub-session via `conversationRegistry`, so parallel host windows targeting the same devcontainer do not receive each other's replies.
 - Reconnects rebind the conversation: the same `conversation_id` shows up with a new WebSocket, the arbiter swaps the registry pointer, and the conversation resumes without losing state.
 
-### Evie Bridge
+### Evie bridge (phone relay)
 
-The arbiter maintains a kubectl port-forward tunnel to evie-bot's K8s pod (port 20001). A WebSocket client connects with bearer auth and receives:
-- Tool registry (action schemas exported as JSON Schema)
-- DM forwards (Discord DMs from the owner, relayed to the host orchestrator)
-- Tool call results (responses to forwarded tool invocations)
+The arbiter maintains a kubectl port-forward tunnel to evie-bot's K8s pod (port 20001). A WebSocket client (`evieClient.ts`) connects with bearer auth. Its live role is the phone relay transport: evie relays the phone's `phone_relay` frames over this WS, and the arbiter answers each with a `phone_relay_reply` tool call (see Phone Bridge below). The same tool-call wire (`callTool` + `tool_result` / `tool_error` correlation) carries those replies.
 
-Evie's tools are dynamically registered as MCP tools on the host using `z.fromJSONSchema()` (Zod v4.3.0+), prefixed with `evie_`.
+Evie still emits a `tool_registry` frame, and the host-side `evie_*` tool proxy (`mcp/evie/evieTools.ts`, `z.fromJSONSchema()`) could register those as MCP tools. That proxy is DETACHED (marked `@unused`, unwired from registration): the owner reaches agents through the phone now, not evie's Discord tools, but the code is kept in the tree to re-enable later. Detaching the proxy never touches the tool-call wire the phone relay rides.
 
-### Discord File Attachments (bridge)
+### Channel file attachments
 
-Bidirectional, integrated with the Evie bridge.
+File attachments flow over the phone channel; the Discord file path was retired with the human bridge.
 
-**Inbound (user-Discord -> agent):** The bot fetches image and GIF attachment bytes on DM arrival and ships them base64-encoded inside the `dm_forward` frame as a `files` array (`ChannelFile[]`). Other attachment types pass through metadata-only. The arbiter validates the array via `ChannelFilesSchema`, applies a 500 MB consumer-side hard backstop (mirroring the bot's send-side cap), and forwards the payload as part of the `channel_push`. The host MCP plugin's `materializeFiles()` (in `mcp/channel/evieFiles.ts`) writes byte-bearing entries to `/tmp/evie-files/<discord_message_id>/<safeFilename>` via `<path>.tmp.<pid>` + atomic `rename`, then `renderFilesBlock()` builds a unified `[FILES messageId="..."]` block prepended to the channel notification body. Materialized entries get `-> /path` (agent uses `Read`); non-materialized entries do not (agent uses `evie_fetch_message_files`). Lazy mtime sweep keeps the directory bounded with a 1-hour TTL.
+**Inbound (phone -> agent):** The phone's `send` / `respond` ops carry a `files` array (`ChannelFile[]`); byte-bearing entries include `base64`. The arbiter validates via `ChannelFilesSchema`, applies a 500 MB consumer-side hard backstop, and forwards the payload as part of the `channel_push`. The host MCP plugin's `materializeFiles()` (in `mcp/channel/evieFiles.ts`) writes byte-bearing entries to `/tmp/evie-files/<messageId>/<safeFilename>` via `<path>.tmp.<pid>` + atomic `rename`, then `renderFilesBlock()` builds a unified `[FILES]` block prepended to the channel notification body so the agent `Read`s them by path. Metadata-only entries (no bytes) have no re-fetch path and are surfaced as not-transferred. Lazy mtime sweep keeps the directory bounded with a 1-hour TTL.
 
-**Outbound (agent -> user-Discord):** The `respond_to_human` tool accepts `parts: Array<string | {text?, attachments?: [absolutePath, ...]}>`. Strings auto-wrap to `{text}` via the schema-level `.transform()`. The MCP plugin reads each absolute path with `fs.readFile`, base64-encodes, and ships per-part `{text?, attachments?: [{filename, base64}]}` records via the arbiter's `/human/respond` route. Evie-bot's `BridgeServer.handlePostResponse` rebuilds each part as `channel.send({content, files: AttachmentBuilder[]})`. Discord auto-renders images inline; other files appear as download links. Per-part error handling reports `Sent X/Y parts before failure` so partial sends are visible to the agent.
+**Outbound (agent -> phone):** `notify_human` accepts `attachments` as absolute file paths; the MCP plugin reads each with `fs.readFile`, base64-encodes it into a `ChannelFile`, and ships it on the `/human/notify` notice. The arbiter appends the notice (with files) to every registered phone's mailbox.
 
 ### Phone Bridge (Android channel)
 
