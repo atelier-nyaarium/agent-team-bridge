@@ -16,12 +16,12 @@ import type {
 //  truth). Local-only types (payloads, config) stay hand-written here.
 
 /**
- * Discord attachment metadata propagated from evie-bot through the bridge.
+ * Channel attachment metadata carried over the bridge (phone-origin files).
  *
- * Presence of `base64` means the bot fetched the bytes and the host MCP
+ * Presence of `base64` means the sender included the bytes and the host MCP
  * plugin should materialize the file under /tmp/evie-files/<msgId>/. Absence
- * means the entry is metadata-only and the agent should reach the file via
- * `evie_fetch_message_files` instead.
+ * means the entry is metadata-only; those bytes were not transferred (there is
+ * no re-fetch path), so the agent only sees the metadata.
  */
 export type ChannelFile = z.infer<typeof ChannelFileSchema>;
 

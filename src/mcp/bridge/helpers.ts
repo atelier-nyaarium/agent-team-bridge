@@ -54,9 +54,6 @@ let channelServer: Server | null = null;
 // true = auto-reply lead, false = auto-reply worker, null = let the LLM decide via notification.
 let isMainOrLeadAgent: boolean | null = null;
 
-// Callback for dynamically registering evie tools when they arrive via WebSocket
-let evieToolsHandler: ((tools: unknown[]) => void) | null = null;
-
 export function initBridge(config: BridgeConfig): void {
 	ROUTER_URL = config.routerUrl;
 	PROJECT_NAME = config.projectName;
@@ -70,10 +67,6 @@ export function setChannelServer(server: Server): void {
 
 export function setIsMainOrLeadAgent(value: boolean): void {
 	isMainOrLeadAgent = value;
-}
-
-export function setEvieToolsHandler(handler: (tools: unknown[]) => void): void {
-	evieToolsHandler = handler;
 }
 
 export function bridgeProjectName(): string {
@@ -240,11 +233,6 @@ export function connectToRouter(): void {
 			handleInject(msg as unknown as InjectPayload, AGENT_TYPE, EFFORT_ENV).catch((err: Error) => {
 				console.error(`[bridge] handleInject error: ${err.message}`);
 			});
-		}
-
-		// Host mode: receive evie tool schemas pushed from arbiter
-		if (msg.type === "evie_tools" && Array.isArray(msg.tools) && evieToolsHandler) {
-			evieToolsHandler(msg.tools);
 		}
 	});
 

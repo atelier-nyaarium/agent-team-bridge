@@ -6,57 +6,15 @@ import { debugLog } from "../shared/debug-log.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { getMutex, type Mutex } from "../shared/mutex.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
-import type { PhoneRelayFrame } from "../shared/phone-protocol.js";
-import { ChannelFilesSchema } from "../shared/schemas.js";
-import type { ChannelFile, ChannelPushPayload, ResponsePayload } from "../shared/types.js";
+import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
-import { type DmForwardPayload, startEvieClient } from "./evie/evieClient.js";
+import { startEvieClient } from "./evie/evieClient.js";
 import { startPortForward } from "./evie/portForward.js";
 import { createPhoneHandler } from "./phone/phoneHandler.js";
 import { createPhoneRelayPump } from "./phone/relayPump.js";
 import { createRoutes } from "./routes.js";
 import { WakeCoordinator } from "./wake.js";
-import {
-	createWebSocketHandlers,
-	formatHolderConnectedMessage,
-	getAllActiveRealWs,
-	getAllActiveWs,
-	type WsData,
-} from "./websocket.js";
-
-// Mirrors evie-bot's MessageHandler.BRIDGE_BYTES_HARD_BACKSTOP. Caps total raw
-// bytes (post-decode) per inbound DM so a compromised or buggy bridge cannot
-// flood the host MCP plugin into materializing arbitrary amounts of data.
-const FILES_BYTES_HARD_BACKSTOP = 500 * 1024 * 1024;
-
-/**
- * Validate the inbound files array from a `dm_forward` frame and apply the
- * consumer-side hard backstop. Malformed entries are dropped silently with a
- * console warning. Entries that would push the total decoded byte count past
- * the backstop are demoted to metadata-only (`base64` stripped) so the agent
- * can still see them via `evie_fetch_message_files`.
- */
-function sanitizeInboundFiles(raw: unknown): ChannelFile[] | undefined {
-	if (raw === undefined) return undefined;
-	const parsed = ChannelFilesSchema.safeParse(raw);
-	if (!parsed.success) {
-		console.error(`[evie] dropping malformed files payload: ${parsed.error.message}`);
-		return undefined;
-	}
-	let bytesQueued = 0;
-	return parsed.data.map((file) => {
-		if (!file.base64) return file;
-		// file.size is Discord-reported and validated by ChannelFileSchema. Trust it
-		// for the backstop check rather than re-deriving from base64 length, which
-		// would overcount by padding bytes.
-		if (file.size > FILES_BYTES_HARD_BACKSTOP || bytesQueued + file.size > FILES_BYTES_HARD_BACKSTOP) {
-			console.error(`[evie] file "${file.filename}" exceeds backstop; demoting to metadata-only`);
-			return { ...file, base64: undefined };
-		}
-		bytesQueued += file.size;
-		return file;
-	});
-}
+import { createWebSocketHandlers, type WsData } from "./websocket.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -92,13 +50,6 @@ export async function startArbiter(): Promise<void> {
 	const knownTeamPaths = new Map<string, string>();
 	const offlineCatalog = new Map<string, string>();
 	const wakeCoordinator = new WakeCoordinator();
-
-	// Human-channel routing state. Pin is the team holding a given Discord channel;
-	// null/missing means no holder, and the next inbound DM or outbound respond_to_human
-	// call will assign one. sessionToChannel maps every DM/handoff session_id to the
-	// channel it originated from so respond_to_human and transfer_human_to can route.
-	const pinnedHolders = new Map<string, string | null>();
-	const sessionToChannel = new Map<string, string>();
 
 	// Phone bridge: per-install mailboxes drained by the phone's poll op. The
 	// handler is constructed after routes exist; relay frames arriving before
@@ -175,124 +126,6 @@ export async function startArbiter(): Promise<void> {
 
 	let evieClient: ReturnType<typeof startEvieClient> | null = null;
 
-	async function postSystemMessageToChannel(channelId: string, text: string): Promise<void> {
-		if (!evieClient || !evieClient.isConnected()) {
-			console.error(`[human] cannot post to channel ${channelId} - evie offline`);
-			return;
-		}
-		try {
-			await evieClient.callTool("post_response", { parts: [text], channelId });
-		} catch (err) {
-			console.error(`[human] post to channel ${channelId} failed: ${(err as Error).message}`);
-		}
-	}
-
-	function pickFirstOnlineTeam(): string | null {
-		// Prefer the host's channel-mode responder ("arbiter") over the cli-mode
-		// wake-listener daemon ("host"). Both run in the same host Claude process,
-		// but "arbiter" is the identity that respond_to_human sends from, so pinning
-		// it directly keeps the holder check consistent.
-		const arbiterSubs = registry.get("arbiter");
-		if (arbiterSubs && getAllActiveWs(arbiterSubs).length > 0) return "arbiter";
-		const hostSubs = registry.get("host");
-		if (hostSubs && getAllActiveWs(hostSubs).length > 0) return "host";
-		for (const [name, subs] of registry) {
-			if (name === "host" || name === "arbiter") continue;
-			// Virtual phone peers are always "online" but have no respond_to_human
-			// path; they must never become Discord-channel holders.
-			if (getAllActiveRealWs(subs).length > 0) return name;
-		}
-		return null;
-	}
-
-	function clearPinsForTeam(team: string): void {
-		for (const [channelId, holder] of pinnedHolders) {
-			if (holder === team) {
-				pinnedHolders.set(channelId, null);
-				console.log(`[human] pin on channel ${channelId} cleared (${team} disconnected)`);
-			}
-		}
-	}
-
-	async function tryDeliverDm(dm: DmForwardPayload): Promise<boolean> {
-		const channelId = dm.channelId;
-		const files = sanitizeInboundFiles(dm.files);
-		let holder = pinnedHolders.get(channelId) ?? null;
-
-		// If the pinned team is no longer online, null the pin so auto-assign runs.
-		// Real sockets only: a virtual phone peer is always "online" but cannot
-		// hold the human channel.
-		if (holder) {
-			const subs = registry.get(holder);
-			if (!subs || getAllActiveRealWs(subs).length === 0) {
-				pinnedHolders.set(channelId, null);
-				console.log(`[human] pin on channel ${channelId} cleared (${holder} offline)`);
-				holder = null;
-			}
-		}
-
-		// No pin: pick first-online (host first), commit, and announce.
-		if (!holder) {
-			holder = pickFirstOnlineTeam();
-			if (!holder) {
-				debugLog(
-					"N",
-					"src/arbiter/index.ts:tryDeliverDm",
-					"no team online",
-					{ userId: dm.userId, channelId, allTeams: [...registry.keys()] },
-					"arbiter",
-				);
-				return false;
-			}
-			pinnedHolders.set(channelId, holder);
-			await postSystemMessageToChannel(channelId, formatHolderConnectedMessage(holder));
-		}
-
-		const subs = registry.get(holder);
-		const activeWs = subs ? getAllActiveRealWs(subs) : [];
-		if (activeWs.length === 0) {
-			// Raced with disconnect between auto-assign and send.
-			pinnedHolders.set(channelId, null);
-			return false;
-		}
-
-		const sessionId = crypto.randomUUID();
-		sessionToChannel.set(sessionId, channelId);
-
-		const payload: ChannelPushPayload = {
-			type: "channel_push",
-			from: "discord",
-			request_type: "question",
-			body: dm.content,
-			effort: "standard",
-			session_id: sessionId,
-			is_follow_up: false,
-			discord_message_id: dm.messageId,
-			files,
-		};
-
-		const serialized = JSON.stringify(payload);
-		for (const ws of activeWs) {
-			ws.send(serialized);
-		}
-
-		debugLog(
-			"N",
-			"src/arbiter/index.ts:tryDeliverDm",
-			"delivered",
-			{
-				holder,
-				channelId,
-				sessionId: sessionId.slice(0, 8),
-				activeWsCount: activeWs.length,
-			},
-			"arbiter",
-		);
-
-		console.log(`[evie] DM forwarded to ${holder} [${sessionId.slice(0, 8)}...]`);
-		return true;
-	}
-
 	if (evieAuthToken) {
 		const portForward = startPortForward({
 			kubeconfig: evieKubeconfig,
@@ -308,29 +141,6 @@ export async function startArbiter(): Promise<void> {
 		evieClient = startEvieClient({
 			url: `ws://localhost:${evieLocalPort}`,
 			authToken: evieAuthToken,
-			onToolRegistry: (tools) => {
-				console.log(`[evie] received ${tools.length} tools`);
-				// Push tool schemas to orchestrator so it can register them dynamically
-				const orchestratorSubs = registry.get("arbiter");
-				if (orchestratorSubs) {
-					const payload = JSON.stringify({ type: "evie_tools", tools });
-					for (const ws of getAllActiveWs(orchestratorSubs)) {
-						ws.send(payload);
-					}
-					console.log(`[evie] pushed tool schemas to arbiter`);
-				}
-			},
-			onDmForward: (dm) => {
-				void (async () => {
-					const delivered = await tryDeliverDm(dm);
-					if (delivered) return;
-					await postSystemMessageToChannel(
-						dm.channelId,
-						`No team is currently online to handle this message. Please try again shortly.`,
-					);
-					console.log(`[evie] DM bounced - no team online [channel ${dm.channelId}]`);
-				})();
-			},
 			onPhoneRelay: (frame) => {
 				handlePhoneRelay?.(frame);
 			},
@@ -354,19 +164,6 @@ export async function startArbiter(): Promise<void> {
 		knownTeamPaths,
 		offlineCatalog,
 		wakeCoordinator,
-		onTeamConnect: (team, ws) => {
-			// When orchestrator connects, push cached evie tools if available
-			if (team === "arbiter" && evieClient?.isConnected()) {
-				const tools = evieClient.getToolSchemas();
-				if (tools.length > 0) {
-					ws.send(JSON.stringify({ type: "evie_tools", tools }));
-					console.log(`[evie] pushed ${tools.length} cached tool schemas to new arbiter`);
-				}
-			}
-		},
-		onTeamDisconnect: (team) => {
-			clearPinsForTeam(team);
-		},
 		onVirtualPeerEvicted: (conversationId) => {
 			evictPhonePeer?.(conversationId);
 		},
@@ -384,9 +181,6 @@ export async function startArbiter(): Promise<void> {
 		mailboxStore,
 		evieClient,
 		resolveHandshake: wsHandlers.resolveHandshake,
-		pinnedHolders,
-		sessionToChannel,
-		postSystemMessageToChannel,
 	});
 
 	if (evieClient) {
@@ -428,10 +222,7 @@ export async function startArbiter(): Promise<void> {
 		if (method === "POST" && url.pathname === "/respond") return routes.respond(req, body);
 		if (method === "POST" && url.pathname === "/poll") return routes.poll(req, body);
 		if (method === "GET" && url.pathname === "/health") return routes.health();
-		if (method === "GET" && url.pathname === "/evie/tools") return routes.evieTools();
 		if (method === "POST" && url.pathname === "/evie/tool-call") return routes.evieToolCall(req, body);
-		if (method === "POST" && url.pathname === "/human/respond") return routes.humanRespond(body);
-		if (method === "POST" && url.pathname === "/human/transfer") return routes.humanTransfer(body);
 		if (method === "POST" && url.pathname === "/human/notify") return routes.humanNotify(body);
 
 		return new Response("Not Found", { status: 404 });

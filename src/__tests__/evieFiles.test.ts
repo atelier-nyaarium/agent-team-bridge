@@ -129,7 +129,7 @@ describe("renderFilesBlock", () => {
 		});
 
 		expect(block).toContain(`[FILES messageId="abc"]`);
-		expect(block).toContain("evie_fetch_message_files");
+		expect(block).toContain("were not transferred");
 		expect(block).toContain("1. The 1st image named `dog.png` -> `/tmp/evie-files/abc/dog.png`");
 		expect(block).toContain("2. The PDF named `doc.pdf`");
 		expect(block).not.toContain("2. The PDF named `doc.pdf` ->");

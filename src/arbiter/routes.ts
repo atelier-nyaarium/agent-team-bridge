@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { Mutex } from "../shared/mutex.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
 import { composeConvSessionId, noticeSessionId } from "../shared/phone-protocol.js";
-import { ChannelFilesSchema, PostResponsePartsSchema } from "../shared/schemas.js";
+import { ChannelFilesSchema } from "../shared/schemas.js";
 import type {
 	ArbiterConfig,
 	ChannelFile,
@@ -17,7 +17,6 @@ import type {
 } from "../shared/types.js";
 import {
 	type ConversationRegistry,
-	formatHolderConnectedMessage,
 	getAllActiveRealWs,
 	getAllActiveWs,
 	RESERVED_TEAM_NAMES,
@@ -45,9 +44,6 @@ export interface RoutesDeps {
 	config: ArbiterConfig;
 	evieClient?: import("./evie/evieClient.js").EvieClient | null;
 	resolveHandshake?: (sessionId: string, replyAsJson?: Record<string, unknown>, response?: string) => boolean;
-	pinnedHolders: Map<string, string | null>;
-	sessionToChannel: Map<string, string>;
-	postSystemMessageToChannel: (channelId: string, text: string) => Promise<void>;
 }
 
 const SendRequestSchema = z.object({
@@ -105,12 +101,6 @@ const EvieToolCallSchema = z.object({
 	params: z.record(z.string(), z.unknown()),
 });
 
-const HumanRespondSchema = z.object({
-	from: z.string(),
-	session_id: z.string(),
-	parts: PostResponsePartsSchema,
-});
-
 // summary and full are REQUIRED: a notice must always carry an addressable
 // short tier and a real body (no ghost pings that are only a bar headline).
 // title accepts the legacy `tiny` key during the rename transition; the
@@ -125,13 +115,6 @@ const HumanNotifySchema = z
 		files: ChannelFilesSchema.optional(),
 	})
 	.refine((d) => Boolean(d.title || d.tiny), { message: "title (or legacy tiny) is required" });
-
-const HumanTransferSchema = z.object({
-	from: z.string(),
-	session_id: z.string(),
-	team: z.string(),
-	brief: z.string().min(1),
-});
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -186,9 +169,6 @@ export function createRoutes({
 	config,
 	evieClient,
 	resolveHandshake,
-	pinnedHolders,
-	sessionToChannel,
-	postSystemMessageToChannel,
 }: RoutesDeps) {
 	const { LOG_PATH, RESPONSE_TIMEOUT_MS } = config;
 
@@ -279,7 +259,7 @@ export function createRoutes({
 		if (RESERVED_TEAM_NAMES.has(to)) {
 			return jsonResponse(
 				{
-					error: `"${to}" is a reserved name. Use transfer_human_to for the Discord channel; crosstalk_send targets container teams only.`,
+					error: `"${to}" is a reserved name; crosstalk_send targets container teams only.`,
 				},
 				400,
 			);
@@ -595,139 +575,6 @@ export function createRoutes({
 		return jsonResponse(result, result.error ? 500 : 200);
 	}
 
-	function evieTools(): Response {
-		if (!evieClient || !evieClient.isConnected()) {
-			return jsonResponse({ error: `Evie-bot is not connected.`, tools: [] }, 503);
-		}
-		return jsonResponse({ tools: evieClient.getToolSchemas() });
-	}
-
-	// The host process registers two WebSockets with arbiter: "arbiter" (channel mode,
-	// the channel responder) and "host" (cli mode, the wake-listener daemon). They are
-	// the same Claude process, so either identity is authoritative for the other when
-	// checking channel-holder equality.
-	function holderMatchesSender(holder: string, from: string): boolean {
-		if (holder === from) return true;
-		if (RESERVED_TEAM_NAMES.has(holder) && RESERVED_TEAM_NAMES.has(from)) return true;
-		return false;
-	}
-
-	async function humanRespond(body: Record<string, unknown>): Promise<Response> {
-		const parsed = HumanRespondSchema.safeParse(body);
-		if (!parsed.success) {
-			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
-		}
-		const { from, session_id, parts } = parsed.data;
-
-		const channelId = sessionToChannel.get(session_id);
-		if (!channelId) {
-			return jsonResponse(
-				{ error: `Unknown session_id. Only sessions from recent channel_push messages are valid.` },
-				404,
-			);
-		}
-
-		const currentHolder = pinnedHolders.get(channelId) ?? null;
-		if (currentHolder !== null && !holderMatchesSender(currentHolder, from)) {
-			return jsonResponse(
-				{
-					error: `Channel is currently held by "${currentHolder}". Ask them via crosstalk_send for the line, then they can transfer_human_to you.`,
-				},
-				403,
-			);
-		}
-
-		if (currentHolder === null) {
-			pinnedHolders.set(channelId, from);
-			await postSystemMessageToChannel(channelId, formatHolderConnectedMessage(from));
-		}
-
-		if (!evieClient || !evieClient.isConnected()) {
-			return jsonResponse({ error: `Evie-bot is not connected.` }, 503);
-		}
-
-		const result = await evieClient.callTool("post_response", { parts, channelId });
-		if (result.error) {
-			return jsonResponse({ error: result.error }, 500);
-		}
-		const partsSent = (result.result as { partsSent?: number } | undefined)?.partsSent ?? parts.length;
-		console.log(`[human] ${from} responded to channel ${channelId} (${partsSent}/${parts.length} parts)`);
-		return jsonResponse({ ok: true, partsSent });
-	}
-
-	async function humanTransfer(body: Record<string, unknown>): Promise<Response> {
-		const parsed = HumanTransferSchema.safeParse(body);
-		if (!parsed.success) {
-			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
-		}
-		const { from, session_id, team: teamInput, brief } = parsed.data;
-
-		const channelId = sessionToChannel.get(session_id);
-		if (!channelId) {
-			return jsonResponse(
-				{ error: `Unknown session_id. Only sessions from recent channel_push messages are valid.` },
-				404,
-			);
-		}
-
-		const target = teamInput;
-		if (holderMatchesSender(target, from)) {
-			return jsonResponse({ error: `You are already the holder.` }, 400);
-		}
-
-		const currentHolder = pinnedHolders.get(channelId) ?? null;
-		if (currentHolder !== null && !holderMatchesSender(currentHolder, from)) {
-			return jsonResponse(
-				{
-					error: `Channel is currently held by "${currentHolder}". Ask them via crosstalk_send for the line first.`,
-				},
-				403,
-			);
-		}
-
-		let subs = registry.get(target);
-		let activeWs = subs ? getAllActiveWs(subs) : [];
-
-		if (activeWs.length === 0) {
-			if (RESERVED_TEAM_NAMES.has(target)) {
-				return jsonResponse({ error: `"${target}" is offline; cannot transfer.` }, 503);
-			}
-			const woken = await tryWakeTeam(target);
-			if (!woken) {
-				return jsonResponse({ error: `Failed to wake target team "${target}".` }, 503);
-			}
-			await new Promise((r) => setTimeout(r, 3000));
-			subs = registry.get(target);
-			activeWs = subs ? getAllActiveWs(subs) : [];
-			if (activeWs.length === 0) {
-				return jsonResponse({ error: `Target team "${target}" did not come online.` }, 503);
-			}
-		}
-
-		await postSystemMessageToChannel(channelId, formatHolderConnectedMessage(target));
-		pinnedHolders.set(channelId, target);
-
-		const briefSessionId = crypto.randomUUID();
-		sessionToChannel.set(briefSessionId, channelId);
-
-		const pushPayload = {
-			type: "channel_push",
-			from: "discord",
-			request_type: "handoff",
-			body: `[Handoff brief from ${from}]\n\n${brief}`,
-			effort: "standard",
-			session_id: briefSessionId,
-			is_follow_up: false,
-		};
-		const serialized = JSON.stringify(pushPayload);
-		for (const ws of activeWs) {
-			ws.send(serialized);
-		}
-
-		console.log(`[human] ${from} → ${target} transfer on channel ${channelId} [${briefSessionId.slice(0, 8)}]`);
-		return jsonResponse({ ok: true, target, session_id: briefSessionId });
-	}
-
 	/** Broadcast a notice to every registered phone mailbox. Notices thread under
 	 * the sender on the phone and are never respondable: they are appended
 	 * directly here (not via a peer push), so no inbound session is recorded. */
@@ -776,9 +623,6 @@ export function createRoutes({
 		poll,
 		health,
 		evieToolCall,
-		evieTools,
-		humanRespond,
-		humanTransfer,
 		humanNotify,
 	};
 }

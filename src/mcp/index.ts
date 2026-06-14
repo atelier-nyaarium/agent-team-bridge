@@ -10,15 +10,7 @@ import { isInsideContainer } from "../shared/env.js";
 import type { ChannelPushPayload } from "../shared/types.js";
 import { registerBridgeDiscover } from "./bridge/bridgeDiscover.js";
 import { registerBridgeSend } from "./bridge/bridgeSend.js";
-import {
-	closeRouter,
-	connectToRouter,
-	initBridge,
-	routerGet,
-	setChannelServer,
-	setEvieToolsHandler,
-	setIsMainOrLeadAgent,
-} from "./bridge/helpers.js";
+import { closeRouter, connectToRouter, initBridge, setChannelServer, setIsMainOrLeadAgent } from "./bridge/helpers.js";
 import { detectAgentType, registerBridgeTools } from "./bridge/registerBridgeTools.js";
 import { emitChannelNotification } from "./channel/channelNotify.js";
 import { registerHumanTools } from "./channel/humanTools.js";
@@ -159,103 +151,11 @@ export async function startMcp(): Promise<void> {
 		registerHumanTools(mcpServer);
 		setChannelServer(mcpServer.server);
 
-		// Evie tool registration: try HTTP probe, then fall back to WebSocket push.
-		// Tools MUST be registered before mcpServer.connect(transport) since Claude
-		// does not pick up dynamically added tools after the initial advertisement.
-		let evieToolsRegistered = false;
-		let onEvieToolsRegistered: (() => void) | null = null;
-
-		async function tryRegisterEvieTools(
-			tools: import("../arbiter/evie/evieClient.js").EvieToolSchema[],
-			source: string,
-		): Promise<void> {
-			if (evieToolsRegistered || tools.length === 0) {
-				// #region Hypothesis Q: registration skipped
-				debugLog("Q", "src/mcp/index.ts:tryRegisterEvieTools", "skipped", {
-					source,
-					alreadyRegistered: evieToolsRegistered,
-					toolCount: tools.length,
-				});
-				// #endregion
-				return;
-			}
-			try {
-				const { registerEvieTools } = await import("./evie/evieTools.js");
-				registerEvieTools(mcpServer, tools);
-				evieToolsRegistered = true;
-				onEvieToolsRegistered?.();
-				// #region Hypothesis Q: registration succeeded
-				debugLog("Q", "src/mcp/index.ts:tryRegisterEvieTools", "registered", {
-					source,
-					toolCount: tools.length,
-				});
-				// #endregion
-			} catch (err) {
-				// #region Hypothesis Q: registration failed (z.fromJSONSchema or other error)
-				debugLog("Q", "src/mcp/index.ts:tryRegisterEvieTools", "registration error", {
-					source,
-					toolCount: tools.length,
-					error: (err as Error).message,
-				});
-				// #endregion
-				console.error(`[mcp] evie tool registration failed: ${(err as Error).message}`);
-			}
-		}
-
-		// Listen for arbiter pushing tool schemas when evie connects/reconnects
-		setEvieToolsHandler((tools) => {
-			void tryRegisterEvieTools(tools as import("../arbiter/evie/evieClient.js").EvieToolSchema[], "ws-push");
-		});
-
-		// Fast path: HTTP probe for evie tools
-		try {
-			const health = (await routerGet("/health")) as Record<string, unknown>;
-			if (health.ok) {
-				const evieData = (await routerGet("/evie/tools")) as {
-					tools?: import("../arbiter/evie/evieClient.js").EvieToolSchema[];
-					error?: string;
-				};
-				// #region Hypothesis P: HTTP probe result
-				debugLog("P", "src/mcp/index.ts:evieProbe", "HTTP probe result", {
-					healthOk: true,
-					toolCount: evieData.tools?.length ?? 0,
-					error: evieData.error ?? null,
-				});
-				// #endregion
-				if (evieData.tools) {
-					await tryRegisterEvieTools(evieData.tools, "http-probe");
-				}
-			}
-		} catch (err) {
-			// #region Hypothesis P: HTTP probe failed
-			debugLog("P", "src/mcp/index.ts:evieProbe", "HTTP probe failed", {
-				error: (err as Error).message,
-			});
-			// #endregion
-			console.error(`[mcp] arbiter not reachable via HTTP, will try WebSocket`);
-		}
-
-		// Slow path: connect WebSocket and wait for arbiter to push evie tools
-		if (!evieToolsRegistered) {
-			connectToRouter();
-			routerAlreadyConnected = true;
-			console.error(`[mcp] waiting for evie tools via WebSocket...`);
-			const timedOut = await Promise.race([
-				new Promise<false>((resolve) => {
-					onEvieToolsRegistered = () => resolve(false);
-				}),
-				new Promise<true>((resolve) => setTimeout(() => resolve(true), 15_000)),
-			]);
-			// #region Hypothesis R: slow path outcome
-			debugLog("R", "src/mcp/index.ts:evieSlowPath", "slow path completed", {
-				timedOut,
-				evieToolsRegistered,
-			});
-			// #endregion
-			if (timedOut) {
-				console.error(`[mcp] evie tools unavailable after 15s, continuing without`);
-			}
-		}
+		// Evie tool proxy detached (see src/mcp/evie/evieTools.ts, kept @unused for
+		// history). The host still needs its router WebSocket for channel push +
+		// crosstalk, so connect it directly.
+		connectToRouter();
+		routerAlreadyConnected = true;
 
 		const projectDirs = [path.join(os.homedir(), "projects")];
 		startHostWakeListener(projectDirs, (msg) => {

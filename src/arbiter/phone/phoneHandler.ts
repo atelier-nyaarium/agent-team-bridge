@@ -231,7 +231,9 @@ export function createPhoneHandler({
 				// A phone does not list other phones as send targets (devcontainers +
 				// host windows only); it still excludes itself and reserved names.
 				return {
-					teams: teams.filter((t) => t.team !== device && t.kind !== "phone" && !RESERVED_TEAM_NAMES.has(t.team)),
+					teams: teams.filter(
+						(t) => t.team !== device && t.kind !== "phone" && !RESERVED_TEAM_NAMES.has(t.team),
+					),
 				};
 			}
 

@@ -36,9 +36,6 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
 		offlineCatalog,
 		knownTeamPaths,
-		pinnedHolders: overrides.pinnedHolders || new Map<string, string | null>(),
-		sessionToChannel: overrides.sessionToChannel || new Map<string, string>(),
-		postSystemMessageToChannel: overrides.postSystemMessageToChannel || (() => Promise.resolve()),
 	};
 }
 

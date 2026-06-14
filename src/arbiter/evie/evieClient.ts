@@ -13,16 +13,10 @@ export interface EvieToolCallResult {
 	error?: string;
 }
 
-export type DmForwardPayload = Extract<
-	import("../../shared/evie-protocol.js").EvieInboundFrame,
-	{ type: "dm_forward" }
->;
-
 export interface EvieClientConfig {
 	url: string;
 	authToken: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
-	onDmForward?: (dm: DmForwardPayload) => void;
 	// The relay pump owns full PhoneRelayFrameSchema validation; the envelope
 	// union only routes by type, so the frame travels as unknown.
 	onPhoneRelay?: (frame: unknown) => void;
@@ -94,10 +88,6 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					cachedTools = frame.tools;
 					console.log(`[evie-client] received ${cachedTools.length} tool schemas`);
 					config.onToolRegistry?.(cachedTools);
-					break;
-				}
-				case "dm_forward": {
-					config.onDmForward?.(frame);
 					break;
 				}
 				case "phone_relay": {
