@@ -11,6 +11,12 @@ import type {
 	PhoneRespondResultSchema,
 	PhoneSendResultSchema,
 } from "./schemas.js";
+// The session-id grammar constants are OWNED by session-id.ts now; imported for
+// the wire helpers below and re-exported so existing importers of this module
+// (codegen, host-id, un-migrated callers) keep resolving from here.
+import { CONV_SESSION_PREFIX, HOST_QUALIFIER_SEP, NOTICE_SESSION_PREFIX } from "./session-id.js";
+
+export { CONV_SESSION_PREFIX, HOST_QUALIFIER_SEP, NOTICE_SESSION_PREFIX };
 
 ////////////////////////////////
 //  Phone bridge protocol
@@ -62,8 +68,6 @@ export type PhoneOpResult = z.infer<typeof PhoneOpResultSchema>;
 
 // Broadcast notices: the phone parses the sender out of the session id to
 // thread the notice under the sender's name. Never respondable.
-export const NOTICE_SESSION_PREFIX = "notice:";
-
 export function noticeSessionId(from: string): string {
 	return `${NOTICE_SESSION_PREFIX}${from}`;
 }
@@ -78,8 +82,6 @@ export function parseNoticeSession(sessionId: string): string | null {
 // after the LAST colon is the target team (conversation ids never contain
 // colons; team names may not either, but last-colon parsing matches the
 // Kotlin client's substringAfterLast).
-export const CONV_SESSION_PREFIX = "conv:";
-
 export function composeConvSessionId(conversationId: string, team: string): string {
 	return `${CONV_SESSION_PREFIX}${conversationId}:${team}`;
 }
@@ -101,8 +103,6 @@ export function parseConvSessionTeam(sessionId: string): string | null {
 //  connected Host. The separator is emitted into the generated Kotlin so the
 //  phone never hand-mirrors it. Host ids and local names never contain the
 //  separator, so the FIRST separator splits host from name unambiguously.
-
-export const HOST_QUALIFIER_SEP = "/";
 
 /** Qualify a bare local name under a host; a name that is already qualified
  * (contains the separator) is returned unchanged. */
