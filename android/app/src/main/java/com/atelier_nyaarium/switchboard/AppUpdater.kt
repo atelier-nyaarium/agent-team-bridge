@@ -16,8 +16,13 @@ import okhttp3.Request
  * No browser, no auth, no storage permissions.
  */
 object AppUpdater {
-	private const val ASSET_NAME = "app-release.apk"
-	const val RELEASE_URL =
+	// Self-update to the SAME variant we are running: a debug build pulls
+	// switchboard-debug.apk (so it keeps the ingest log stream), a release build pulls
+	// switchboard-release.apk. Both are signed with the same key, so an update never
+	// bounces the user across variants. Not `const` because BuildConfig.DEBUG is
+	// resolved per build, not at the const-eval site.
+	private val ASSET_NAME = if (BuildConfig.DEBUG) "switchboard-debug.apk" else "switchboard-release.apk"
+	val RELEASE_URL =
 		"https://github.com/atelier-nyaarium/switchboard/releases/download/android-app/$ASSET_NAME"
 
 	sealed interface Result {

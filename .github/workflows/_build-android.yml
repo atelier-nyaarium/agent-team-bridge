@@ -42,7 +42,7 @@ jobs:
 
       # A shipped release must be signed: an unsigned assembleRelease emits
       # app-release-unsigned.apk, so the upload + release steps would reference a
-      # release/app-release.apk that does not exist and fail with a misleading
+      # release/switchboard-release.apk that does not exist and fail with a misleading
       # "file not found". Fail on the real cause instead.
       - name: Require keystore when releasing
         if: ${{ fromJSON(inputs.create_release) && env.have_keystore != 'true' }}
@@ -82,14 +82,14 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: switchboard-release-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: android/app/build/outputs/apk/release/switchboard-release.apk
           retention-days: 7
 
       - name: Upload debug APK as artifact
         uses: actions/upload-artifact@v7
         with:
           name: switchboard-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debug/switchboard-debug.apk
           retention-days: 7
 
       # Single latest release: delete the fixed-tag release, then recreate it.
@@ -108,17 +108,17 @@ jobs:
           tag_name: android-app
           name: Switchboard Android (latest)
           files: |
-            android/app/build/outputs/apk/release/app-release.apk
-            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/release/switchboard-release.apk
+            android/app/build/outputs/apk/debug/switchboard-debug.apk
           make_latest: true
           body: |
             Switchboard Android app, built from ${{ github.sha }}.
 
-            **app-release.apk** - production build, signed with the stable release key.
+            **switchboard-release.apk** - production build, signed with the stable release key.
             Updates install over each other. Install this one manually once; after it,
-            in-app updates resume. Sideload: `adb install -r app-release.apk`
+            in-app updates resume. Sideload: `adb install -r switchboard-release.apk`
 
-            **app-debug.apk** - debug build with ingest log streaming to evie,
+            **switchboard-debug.apk** - debug build with ingest log streaming to evie,
             signed with the SAME stable key as the release, so it installs straight
             over the release build (and back) for a one-tap side-step to debug.
-            Sideload: `adb install -r app-debug.apk`
+            Sideload: `adb install -r switchboard-debug.apk`

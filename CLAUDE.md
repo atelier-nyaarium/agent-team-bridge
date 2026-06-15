@@ -271,7 +271,7 @@ bun run test src/__tests__/mutex.test.ts
 
 When a phone-side symptom is otherwise invisible (a reply that polls in but never renders, etc.), use the debug build's log stream instead of guessing.
 
-- The GitHub release ships **`app-debug.apk`** beside `app-release.apk`, signed with the SAME key, so it installs straight over the release build and back (one-tap side-step). The debug build's `DebugLog` flushes its log to evie each poll cycle; the release build never does (gated on `BuildConfig.DEBUG`).
+- The GitHub release ships **`switchboard-debug.apk`** beside `switchboard-release.apk`, signed with the SAME key, so it installs straight over the release build and back (one-tap side-step). The debug build's `DebugLog` flushes its log to evie each poll cycle; the release build never does (gated on `BuildConfig.DEBUG`). The in-app updater is variant-aware (`AppUpdater.kt`), so a debug build self-updates to the debug asset and stays on debug; to GET onto debug from a release build you must sideload `switchboard-debug.apk` once (the update button can't cross variants).
 - Transport: the debug build POSTs its log lines to evie's `POST /ingest` on the phone-bridge port (same `ANDROID_BRIDGE_TOKEN` auth + K8s API service-proxy as `/relay`, no new network surface). evie writes each line to stdout under a `[phone-ingest]` marker.
 - **Fetch the phone's live log** (the only path into the firewalled K8s is evie's stdout, which the arbiter's kubectl already reads):
 

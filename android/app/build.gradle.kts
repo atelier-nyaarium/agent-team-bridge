@@ -78,6 +78,17 @@ android {
 		// runs and CI working dirs.
 		getByName("test").resources.srcDir("../../tests/fixtures")
 	}
+
+	// Name the built APKs switchboard-<variant>.apk instead of the module-default
+	// app-<variant>.apk, so the GitHub release assets, the sideload instructions,
+	// and the in-app self-updater all share the product name.
+	applicationVariants.all {
+		val variantName = name
+		outputs.all {
+			(this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
+				"switchboard-$variantName.apk"
+		}
+	}
 }
 
 dependencies {

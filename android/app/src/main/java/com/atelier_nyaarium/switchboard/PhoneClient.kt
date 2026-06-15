@@ -221,7 +221,9 @@ class PhoneClient(private val prov: Provisioning) {
 	 * is the fallback. Both empty leaves the name bare (single implicit Host). */
 	fun teams(localHostId: String = ""): List<Team> {
 		val reply = relay(PhoneOp.ListTeams)
-		if (!reply.ok || reply.result == null) return emptyList()
+		// Surface a relay failure instead of blanking the board with an empty list; the
+		// callers (connect, refreshTeams) wrap this in runCatching and keep the prior list.
+		if (!reply.ok || reply.result == null) error("list_teams relay failed: ${reply.error ?: "no result"}")
 		val result =
 			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.PhoneListTeamsResult>(reply.result)
 		return result.teams.map {
@@ -236,7 +238,9 @@ class PhoneClient(private val prov: Provisioning) {
 		}
 	}
 
-	fun listTeams(): List<String> = teams().map { it.name }
+	// teams() now throws on a relay failure; this convenience wrapper keeps its
+	// list-returning contract (empty on failure) for any external caller.
+	fun listTeams(): List<String> = runCatching { teams().map { it.name } }.getOrDefault(emptyList())
 
 	/**
 	 * Send a message to a team. The reply may arrive inline (within the relay hold)
@@ -277,7 +281,11 @@ class PhoneClient(private val prov: Provisioning) {
 		// at holdMs+18s (58s) catches a vanished evie, and the apiserver proxy's
 		// 60s outranks them all. Each failure layer returns before the next races it.
 		val reply = relay(op, readTimeoutMs = if (holdMs > 0) holdMs + 18_000 else null)
-		if (!reply.ok || reply.result == null) return PhonePollResult(emptyList(), cursor, 0, epoch)
+		// A relay-level failure must SURFACE, not masquerade as a successful empty drain:
+		// a fabricated empty (with epoch 0) hid outages from the health signal and forced
+		// a spurious epoch flip on the next real poll. Throw so the poll loop's catch
+		// counts the failure and shows the offline banner.
+		if (!reply.ok || reply.result == null) error("poll relay failed: ${reply.error ?: "no result"}")
 		return wireJson.decodeFromJsonElement<PhonePollResult>(reply.result)
 	}
 

@@ -235,6 +235,9 @@ export function createPhoneHandler({
 		switch (op.kind) {
 			case "register": {
 				const box = mailboxStore.ensure(conversationId);
+				console.log(
+					`[phone register] conv=${conversationId.slice(0, 12)} dev=${device} -> cursor=${box.highWater} epoch=${box.epoch}`,
+				);
 				return { device, hostId: localHostId, cursor: box.highWater, epoch: box.epoch };
 			}
 
@@ -356,6 +359,15 @@ export function createPhoneHandler({
 				if (snap.entries.length === 0 && hold > 0) {
 					await box.waitForAppend(hold);
 					snap = box.drain(op.cursor ?? 0, op.epoch);
+				}
+				// Permanent low-noise delivery observability: log only a poll that actually
+				// hands entries to the phone or signals a dropped-entry gap, never the
+				// steady stream of empty held polls. This is the one window into whether a
+				// reply reached the phone's poll (the blind spot that hid the Track A/C bugs).
+				if (snap.entries.length > 0 || snap.dropped > 0) {
+					console.log(
+						`[phone poll] conv=${conversationId.slice(0, 12)} reqCursor=${op.cursor ?? 0} reqEpoch=${op.epoch ?? "none"} -> drained=${snap.entries.length} retCursor=${snap.cursor} retEpoch=${snap.epoch} dropped=${snap.dropped}`,
+					);
 				}
 				return { entries: snap.entries, cursor: snap.cursor, dropped: snap.dropped, epoch: snap.epoch };
 			}

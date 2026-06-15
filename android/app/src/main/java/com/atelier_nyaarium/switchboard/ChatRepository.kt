@@ -121,6 +121,27 @@ data class ChatState(
 }
 
 /**
+ * Repair a persisted/legacy thread or label key to canonical form under a known host id.
+ * A bare name ("name") and - critically - an EMPTY-host qualified key ("/name", minted in
+ * a session before the host id was learned) both resolve to "<hostId>/name"; an already
+ * canonical "host/name" is unchanged. When hostId is empty (host not yet learned) the key
+ * is returned unchanged and repaired later by recanonicalizeAllKeys once connect() learns
+ * it. This closes the ghost-thread split where an inbound reply keys under "host/name"
+ * but the persisted/open thread is stuck at the empty-host "/name", so the message renders
+ * nowhere. `internal` so the unit test can pin the empty-host repair.
+ */
+internal fun canonicalThreadKey(rawKey: String, hostId: String): String {
+	SessionId.parse(rawKey, hostId)?.let { sid ->
+		val t = sid.target
+		val target = if (t.host.isEmpty() && hostId.isNotEmpty()) TeamAddress.remote(hostId, t.name) else t
+		return SessionId.channel(sid.conversationId, target).key
+	}
+	val a = TeamAddress.parse(rawKey, hostId)
+	val fixed = if (a.host.isEmpty() && hostId.isNotEmpty()) TeamAddress.remote(hostId, a.name) else a
+	return fixed.canonical
+}
+
+/**
  * Chat state over a PhoneClient. Holds per-team threads, an unread tally, the open
  * tab set, and a poll loop that drains the device mailbox, dedupes by mailbox seq,
  * and routes each reply to its team (parsed from the `conv:<id>:<team>` session id
@@ -362,10 +383,20 @@ class ChatRepository(
 					store.saveHostId(id)
 				}
 			}
+			// Repair any thread/label/unread/tab key minted under an empty/unknown host
+			// now that the real host id is known, so an inbound reply (keyed host/name)
+			// can no longer file into a ghost "/name" thread the open tab cannot read.
+			recanonicalizeAllKeys(localHostId)
 			// Pin every subsequent relay to this home Host so the Router routes there
 			// even once other Hosts join the mesh.
 			client().homeHost = localHostId.ifEmpty { null }
-			val teams = client().teams(localHostId)
+			// A teams refresh failure is not a connect failure: register succeeded, so we
+			// are connected. Log and proceed with the prior team list rather than masking
+			// the error as an empty board (which would blank live sessions).
+			val teams = runCatching { client().teams(localHostId) }.getOrElse {
+				DebugLog.log("Connect", "teams refresh failed: ${it.message?.take(120)}")
+				_state.value.teams
+			}
 			_state.update {
 				it.copy(
 					teams = teams,
@@ -386,6 +417,41 @@ class ChatRepository(
 
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
 		runCatching { client().teams(localHostId) }.onSuccess { t -> _state.update { it.copy(teams = t) } }
+	}
+
+	/** Repair every in-memory key (threads, unread, labels, open tabs) to canonical once
+	 * the host id is known, merging any collisions, so a thread loaded under an empty or
+	 * unknown host ("/name") can no longer shadow the canonical "host/name" an inbound
+	 * reply keys under. A no-op when every key is already canonical (the steady state),
+	 * so it costs nothing on a normal connect; only a one-time repair persists. The repair
+	 * lands at the startup connect() before any thread WebView is open (openTabs is not
+	 * persisted, so it is empty at launch) and is a no-op on every later reconnect, so it
+	 * cannot reorder/merge a thread out from under a live renderer. */
+	private fun recanonicalizeAllKeys(hostId: String) {
+		if (hostId.isEmpty()) return
+		val s0 = _state.value
+		val dirty = s0.threads.keys.any { it != canonicalThreadKey(it, hostId) } ||
+			s0.labels.keys.any { it != canonicalThreadKey(it, hostId) } ||
+			s0.unread.keys.any { it != canonicalThreadKey(it, hostId) } ||
+			s0.openTabs.any { it != canonicalThreadKey(it, hostId) }
+		if (!dirty) return
+		val next = _state.updateAndGet { s ->
+			val threads = LinkedHashMap<String, MutableList<Message>>()
+			for ((k, msgs) in s.threads) threads.getOrPut(canonicalThreadKey(k, hostId)) { mutableListOf() }.addAll(msgs)
+			val mergedThreads =
+				threads.mapValues { (_, m) -> m.sortedBy { it.at }.mapIndexed { i, x -> x.copy(id = i.toLong()) } }
+			val unread = LinkedHashMap<String, Int>()
+			for ((k, n) in s.unread) {
+				val ck = canonicalThreadKey(k, hostId)
+				unread[ck] = (unread[ck] ?: 0) + n
+			}
+			val labels = LinkedHashMap<String, String>()
+			for ((k, v) in s.labels) labels[canonicalThreadKey(k, hostId)] = v
+			val openTabs = s.openTabs.map { canonicalThreadKey(it, hostId) }.distinct()
+			s.copy(threads = mergedThreads, unread = unread, labels = labels, openTabs = openTabs)
+		}
+		persistThreads(next.threads)
+		persistLabels(next.labels)
 	}
 
 	suspend fun send(team: String, text: String, uris: List<Uri> = emptyList()) = withContext(Dispatchers.IO) {
@@ -840,44 +906,39 @@ class ChatRepository(
 		val json = store.loadThreads() ?: return emptyMap()
 		return runCatching {
 			val root = JSONObject(json)
-			buildMap {
-				for (rawKey in root.keys()) {
-					// Normalize legacy bare keys to canonical form on load. Session keys
-					// (conv:...) go through SessionId; plain team keys through TeamAddress.
-					val canonicalKey = SessionId.parse(rawKey, localHostId)?.key
-						?: TeamAddress.parse(rawKey, localHostId).canonical
-					val arr = root.getJSONArray(rawKey)
-					// id is not persisted; reassign from list order so it stays a dense,
-					// stable per-thread key whether the JSON is old (no id) or new.
-					val loaded = (0 until arr.length()).map {
-						val m = arr.getJSONObject(it)
-						Message(
-							m.optBoolean("me"),
-							m.optString("text"),
-							m.optLong("at"),
-							it.toLong(),
-							loadFiles(m),
-							m.optString("status").takeIf { s -> s.isNotEmpty() },
-							m.optString("opId").takeIf { s -> s.isNotEmpty() },
-							title = m.optString("title").takeIf { s -> s.isNotEmpty() },
-							summary = m.optString("summary").takeIf { s -> s.isNotEmpty() },
-						)
-					}
-					// A "waking" placeholder has no resolution coming after a process
-					// death; drop it. "pending" echoes WITH an opId are kept for the
-					// service's idempotent reconcile; legacy ones without an opId
-					// cannot be re-sent safely, so they demote to retriable here (and
-					// never strand a forever-working chip if the service fails early).
-					put(
-						canonicalKey,
-						loaded
-							.filterNot { !it.fromMe && it.status == "waking" }
-							.map {
-								if (it.fromMe && it.status == "pending" && it.opId == null) it.copy(status = "error") else it
-							},
+			// Accumulate per canonical key so two legacy keys that repair to the same
+			// canonical thread (e.g. "/9cb5b9" and "switchboard/9cb5b9") MERGE instead of
+			// the second silently dropping the first.
+			val merged = LinkedHashMap<String, MutableList<Message>>()
+			for (rawKey in root.keys()) {
+				val canonicalKey = canonicalThreadKey(rawKey, localHostId)
+				val arr = root.getJSONArray(rawKey)
+				val loaded = (0 until arr.length()).map {
+					val m = arr.getJSONObject(it)
+					Message(
+						m.optBoolean("me"),
+						m.optString("text"),
+						m.optLong("at"),
+						0L,
+						loadFiles(m),
+						m.optString("status").takeIf { s -> s.isNotEmpty() },
+						m.optString("opId").takeIf { s -> s.isNotEmpty() },
+						title = m.optString("title").takeIf { s -> s.isNotEmpty() },
+						summary = m.optString("summary").takeIf { s -> s.isNotEmpty() },
 					)
 				}
+					// A "waking" placeholder has no resolution coming after a process
+					// death; drop it. "pending" echoes WITH an opId are kept for the
+					// service's idempotent reconcile; legacy ones without an opId cannot
+					// be re-sent safely, so they demote to retriable here (and never
+					// strand a forever-working chip if the service fails early).
+					.filterNot { !it.fromMe && it.status == "waking" }
+					.map { if (it.fromMe && it.status == "pending" && it.opId == null) it.copy(status = "error") else it }
+				merged.getOrPut(canonicalKey) { mutableListOf() }.addAll(loaded)
 			}
+			// id is not persisted; assign a dense per-thread id by time order AFTER any
+			// merge, so it stays unique within the (possibly merged) thread.
+			merged.mapValues { (_, msgs) -> msgs.sortedBy { it.at }.mapIndexed { i, m -> m.copy(id = i.toLong()) } }
 		}.getOrDefault(emptyMap())
 	}
 
@@ -899,11 +960,10 @@ class ChatRepository(
 		val json = store.loadLabels() ?: return emptyMap()
 		return runCatching {
 			val root = JSONObject(json)
-			// Normalize legacy bare keys to canonical form on load.
+			// Normalize legacy bare/empty-host keys to canonical form on load.
 			buildMap {
 				for (rawKey in root.keys()) {
-					val canonicalKey = TeamAddress.parse(rawKey, localHostId).canonical
-					put(canonicalKey, root.getString(rawKey))
+					put(canonicalThreadKey(rawKey, localHostId), root.getString(rawKey))
 				}
 			}
 		}.getOrDefault(emptyMap())
