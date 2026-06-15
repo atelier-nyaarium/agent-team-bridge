@@ -8,7 +8,7 @@ import com.atelier_nyaarium.switchboard.proto.PhonePollResult
 import com.atelier_nyaarium.switchboard.proto.PhoneRegisterResult
 import com.atelier_nyaarium.switchboard.proto.PhoneRelayReply
 import com.atelier_nyaarium.switchboard.proto.PhoneSendResult
-import com.atelier_nyaarium.switchboard.proto.Protocol
+import com.atelier_nyaarium.switchboard.proto.TeamAddress
 import java.io.ByteArrayInputStream
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -70,13 +70,6 @@ data class Provisioning(
 	}
 }
 
-/** Qualify a bare local name under a Host as `host/name`. A name that is already
- * qualified, or qualified under no Host (the pre-federation single-Host case), is
- * returned unchanged - bare resolves to the local Host on the arbiter. */
-fun qualifyTeam(host: String, name: String): String =
-	if (host.isEmpty() || name.contains(Protocol.HOST_QUALIFIER_SEP)) name
-	else "$host${Protocol.HOST_QUALIFIER_SEP}$name"
-
 /** UI model for the sessions board. Mapped one-to-one from the wire TeamInfo in
  * `teams()`; also constructed locally for ended threads whose team has left the
  * bridge (a state that never exists on the wire). `name` is the host-qualified
@@ -88,12 +81,11 @@ data class Team(
 	val queueDepth: Int,
 	val kind: String = "loose",
 ) {
-	/** Short local name shown in the UI: the tail after the host qualifier (the
-	 * whole name when bare). */
-	val displayName: String get() = name.substringAfter(Protocol.HOST_QUALIFIER_SEP)
+	/** Short local name shown in the UI: the tail after the host qualifier. */
+	val displayName: String get() = TeamAddress.parse(name, "").name
 
 	/** Owning Host id (the segment before the qualifier), or "" for a bare name. */
-	val host: String get() = name.substringBefore(Protocol.HOST_QUALIFIER_SEP, "")
+	val host: String get() = TeamAddress.parse(name, "").host
 }
 
 data class SendResult(val ok: Boolean, val status: String, val error: String?)
@@ -235,7 +227,7 @@ class PhoneClient(private val prov: Provisioning) {
 		return result.teams.map {
 			val host = it.host?.ifEmpty { null } ?: localHostId
 			Team(
-				name = qualifyTeam(host, it.team),
+				name = TeamAddress.parse(it.team, host).canonical,
 				status = it.status,
 				mode = it.mode ?: "",
 				queueDepth = it.queue_depth.toInt(),

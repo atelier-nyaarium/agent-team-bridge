@@ -273,7 +273,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			)
 		openTeam != null -> {
 			// Devcontainer names are the project identity; only loose peers take labels.
-			val session = state.sessions.firstOrNull { it.name == openTeam }
+			val session = state.sessions(state.localHostId).firstOrNull { it.name == openTeam }
 			val kind = session?.kind
 			// Rename only when positively known loose; an unknown kind (team gone
 			// from the list) stays un-renameable rather than defaulting open.
@@ -285,10 +285,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			}
 			ThreadScreen(
 				team = openTeam!!,
-				label = state.label(openTeam!!),
+				label = state.label(openTeam!!, state.localHostId),
 				presence = presence,
 				tabs = state.openTabs,
-				tabLabel = { state.label(it) },
+				tabLabel = { state.label(it, state.localHostId) },
 				messages = state.threads[openTeam].orEmpty(),
 				error = state.error,
 				rendererPool = rendererPool,
@@ -430,7 +430,7 @@ fun SessionsScreen(
 
 	actionTeam?.let { team ->
 		SessionActionsDialog(
-			label = state.label(team.name),
+			label = state.label(team.name, state.localHostId),
 			canRename = team.kind != "devcontainer" && team.kind != "host",
 			onRename = {
 				actionTeam = null
@@ -446,7 +446,7 @@ fun SessionsScreen(
 	renameTeam?.let { team ->
 		RenameDialog(
 			team = team.displayName,
-			current = state.label(team.name),
+			current = state.label(team.name, state.localHostId),
 			onSave = {
 				onRename(team.name, it)
 				renameTeam = null
@@ -456,7 +456,7 @@ fun SessionsScreen(
 	}
 	forgetTeam?.let { team ->
 		ConfirmDialog(
-			title = "Forget ${state.label(team.name)}?",
+			title = "Forget ${state.label(team.name, state.localHostId)}?",
 			body = "Drops this thread, its label, and unread state from this device.",
 			confirmText = "Forget",
 			onConfirm = {
@@ -494,7 +494,7 @@ fun SessionsScreen(
 					)
 				}
 			}
-			if (state.sessions.isEmpty()) {
+			if (state.sessions(state.localHostId).isEmpty()) {
 				if (!state.connected) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
 				Text(
 					state.error ?: state.status.ifEmpty { "Connecting..." },
@@ -503,9 +503,10 @@ fun SessionsScreen(
 				)
 			}
 			val order = sessionOrder(state)
-			val hostAgents = state.sessions.filter { it.kind == "host" }.sortedWith(order)
-			val projects = state.sessions.filter { it.kind == "devcontainer" }.sortedWith(order)
-			val windows = state.sessions.filter { it.kind != "devcontainer" && it.kind != "host" }.sortedWith(order)
+			val sessions = state.sessions(state.localHostId)
+			val hostAgents = sessions.filter { it.kind == "host" }.sortedWith(order)
+			val projects = sessions.filter { it.kind == "devcontainer" }.sortedWith(order)
+			val windows = sessions.filter { it.kind != "devcontainer" && it.kind != "host" }.sortedWith(order)
 			LazyColumn(
 				Modifier.fillMaxSize(),
 				contentPadding = PaddingValues(12.dp),
@@ -613,7 +614,7 @@ fun SectionLabel(text: String) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: () -> Unit) {
-	val display = if (team.kind == "host") "Host" else state.label(team.name)
+	val display = if (team.kind == "host") "Host" else state.label(team.name, state.localHostId)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
 	val isCli = team.mode == "cli"

@@ -4,7 +4,9 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.atelier_nyaarium.switchboard.enroll.EnrollmentController
-import com.atelier_nyaarium.switchboard.proto.Protocol
+import com.atelier_nyaarium.switchboard.proto.NoticeId
+import com.atelier_nyaarium.switchboard.proto.SessionId
+import com.atelier_nyaarium.switchboard.proto.TeamAddress
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -64,16 +66,22 @@ data class ChatState(
 	val labels: Map<String, String> = emptyMap(),
 	val connected: Boolean = false,
 	val pollFailStreak: Int = 0,
+	/** Connected Host id, learned from the register result. Empty before the first
+	 * federation-aware connect; bare names resolve to the local Host in that case. */
+	val localHostId: String = "",
 ) {
 	/** Sessions shows live teams plus any team we already have a thread with
 	 * (agent-initiated). A thread-only peer is gone from the bridge and cannot be
-	 * woken, so it is synthesized as an ended loose session with no mode. */
-	val sessions: List<Team>
-		get() {
-			val known = teams.associateBy { it.name }
-			val extra = threads.keys.filter { it !in known }.map { Team(it, "ended", "", 0) }
-			return teams + extra
-		}
+	 * woken, so it is synthesized as an ended loose session with no mode.
+	 * Both sides are compared by their canonical key so a bare vs qualified form
+	 * of the same team never produces a phantom "ended" entry. */
+	fun sessions(localHostId: String): List<Team> {
+		val known = teams.associateBy { TeamAddress.parse(it.name, localHostId).canonical }
+		val extra = threads.keys
+			.filter { TeamAddress.parse(it, localHostId).canonical !in known }
+			.map { Team(it, "ended", "", 0) }
+		return teams + extra
+	}
 
 	/** Busy heuristic for the status board: we are awaiting a reply (the thread
 	 * ends on our pending or cleanly-sent message) or the tail is a waking/running
@@ -108,7 +116,8 @@ data class ChatState(
 	/** The user's friendly name for a team, falling back to its short local name
 	 * (the tail after the host qualifier; the whole key when bare). The qualified
 	 * `host/local` key is never shown raw. */
-	fun label(team: String): String = labels[team] ?: team.substringAfter(Protocol.HOST_QUALIFIER_SEP)
+	fun label(team: String, localHostId: String = ""): String =
+		labels[team] ?: TeamAddress.parse(team, localHostId).name
 }
 
 /**
@@ -126,6 +135,10 @@ class ChatRepository(
 	// Repo.get. Empty only if the asset is missing/corrupt (Play stays dark).
 	private val sttsCatalog: List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = emptyList(),
 ) {
+	// Declared before _state so loadPersistedThreads/Labels can normalize keys
+	// through TeamAddress. Kotlin initializes fields in declaration order.
+	@Volatile private var localHostId: String = store.loadHostId()
+
 	private val _state = MutableStateFlow(
 		ChatState(
 			provisioned = store.load() != null,
@@ -133,6 +146,7 @@ class ChatRepository(
 			biometricLock = store.biometricLock,
 			deviceName = currentDeviceName(),
 			labels = loadPersistedLabels(),
+			localHostId = localHostId,
 		),
 	)
 	val state: StateFlow<ChatState> = _state
@@ -143,10 +157,6 @@ class ChatRepository(
 	@Volatile private var client: PhoneClient? = null
 	private var cursor = 0L
 	private var epoch = 0L
-	// The connected Host's id, learned from the register result; anchors the
-	// composite (host, name) key. Empty until a federation-aware arbiter reports
-	// it, in which case names stay bare (a single implicit Host, resolved local).
-	@Volatile private var localHostId: String = store.loadHostId()
 	private var lastSeq = -1L
 	private var pollFails = 0
 	private var pollJob: Job? = null
@@ -346,7 +356,12 @@ class ChatRepository(
 			val reg = client().register()
 			cursor = reg.cursor
 			epoch = reg.epoch
-			reg.hostId?.let { adoptHostId(it) }
+			reg.hostId?.let { id ->
+				if (id.isNotEmpty() && id != localHostId) {
+					localHostId = id
+					store.saveHostId(id)
+				}
+			}
 			// Pin every subsequent relay to this home Host so the Router routes there
 			// even once other Hosts join the mesh.
 			client().homeHost = localHostId.ifEmpty { null }
@@ -358,6 +373,7 @@ class ChatRepository(
 					error = null,
 					connected = true,
 					pollFailStreak = 0,
+					localHostId = localHostId,
 				)
 			}
 		} catch (e: Exception) {
@@ -367,34 +383,6 @@ class ChatRepository(
 
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
 		runCatching { client().teams(localHostId) }.onSuccess { t -> _state.update { it.copy(teams = t) } }
-	}
-
-	/** Qualify a bare local name under the connected Host. A name already qualified,
-	 * or any name before a Host id is known, is returned unchanged - bare resolves
-	 * to the local Host on the arbiter. */
-	private fun qualify(name: String): String = qualifyTeam(localHostId, name)
-
-	/** Learn the connected Host's id and migrate any bare-keyed persisted state
-	 * onto it (threads/labels/unread/openTabs), the audited Phase-1 on-device
-	 * migration. Idempotent: an already-qualified key is left alone, so re-running
-	 * on every connect is a no-op once migrated. A name qualified under a different
-	 * Host is also left as-is (host rename is out of Phase-1 scope). */
-	private fun adoptHostId(hostId: String) {
-		if (hostId.isEmpty() || hostId == localHostId) return
-		localHostId = hostId
-		store.saveHostId(hostId)
-		// hostId is non-empty here, so qualifyTeam prepends it to every bare key and
-		// leaves an already-qualified key untouched (the migration is idempotent).
-		val migrated = _state.updateAndGet { s ->
-			s.copy(
-				threads = s.threads.mapKeys { qualifyTeam(hostId, it.key) },
-				unread = s.unread.mapKeys { qualifyTeam(hostId, it.key) },
-				labels = s.labels.mapKeys { qualifyTeam(hostId, it.key) },
-				openTabs = s.openTabs.map { qualifyTeam(hostId, it) }.distinct(),
-			)
-		}
-		persistThreads(migrated.threads)
-		persistLabels(migrated.labels)
 	}
 
 	suspend fun send(team: String, text: String, uris: List<Uri> = emptyList()) = withContext(Dispatchers.IO) {
@@ -564,17 +552,32 @@ class ChatRepository(
 					for (e in mb.entries) {
 						if (e.seq <= lastSeq) continue // dedupe a re-drain after a lost ack
 						lastSeq = e.seq
-						// Broadcast notices thread under the SENDER: their session id is
-						// the pinned "notice:<from>" grammar, not a conversation. A bare
-						// name off the wire (a notice sender, or a pre-federation arbiter)
-						// is qualified to the connected Host so it threads under the same
-						// composite key as everything else.
-						val rawTeam = if (e.kind == "notice") {
-							e.from ?: e.session_id.removePrefix(NOTICE_SESSION_PREFIX).takeIf { it.isNotEmpty() } ?: continue
+						// Determine which team key this entry belongs to.
+						// Notices thread under the sender canonical; conv sessions use the
+						// session target, except when the tail is THIS device (Face-4: an
+						// agent-initiated push whose session tail is our device name should
+						// thread under `from`, not under ourselves).
+						val team: String = if (e.kind == "notice") {
+							// Notice: prefer `from`, fall back to NoticeId parse.
+							val sender = e.from?.let { TeamAddress.parse(it, localHostId).canonical }
+								?: NoticeId.parse(e.session_id, localHostId)?.sender?.canonical
+								?: continue
+							sender
 						} else {
-							teamFromSession(e.session_id) ?: e.from ?: continue
+							val sid = SessionId.parse(e.session_id, localHostId)
+							if (sid != null) {
+								val thisDevice = TeamAddress.local(localHostId, currentDeviceName())
+								if (sid.target == thisDevice) {
+									// Face-4: session tail is this device; thread under sender.
+									e.from?.let { TeamAddress.parse(it, localHostId).canonical } ?: sid.target.canonical
+								} else {
+									sid.target.canonical
+								}
+							} else {
+								// Not a conv session id; fall back to `from` if present.
+								e.from?.let { TeamAddress.parse(it, localHostId).canonical } ?: continue
+							}
 						}
-						val team = qualify(rawTeam)
 						val files = Attachments.decode(filesDir, mb.epoch, e.seq, e.files)
 						// status-only entries still land (e.g. a wake-failure error
 						// with no body would otherwise vanish).
@@ -783,9 +786,6 @@ class ChatRepository(
 		_state.update { s -> s.copy(unread = s.unread + (team to (s.unread[team] ?: 0) + 1)) }
 	}
 
-	private fun teamFromSession(sessionId: String): String? =
-		sessionId.substringAfterLast(':').takeIf { it.isNotEmpty() && it != sessionId }
-
 	private fun persistThreads(threads: Map<String, List<Message>>) {
 		val root = JSONObject()
 		for ((team, msgs) in threads) {
@@ -816,8 +816,12 @@ class ChatRepository(
 		return runCatching {
 			val root = JSONObject(json)
 			buildMap {
-				for (team in root.keys()) {
-					val arr = root.getJSONArray(team)
+				for (rawKey in root.keys()) {
+					// Normalize legacy bare keys to canonical form on load. Session keys
+					// (conv:...) go through SessionId; plain team keys through TeamAddress.
+					val canonicalKey = SessionId.parse(rawKey, localHostId)?.key
+						?: TeamAddress.parse(rawKey, localHostId).canonical
+					val arr = root.getJSONArray(rawKey)
 					// id is not persisted; reassign from list order so it stays a dense,
 					// stable per-thread key whether the JSON is old (no id) or new.
 					val loaded = (0 until arr.length()).map {
@@ -840,7 +844,7 @@ class ChatRepository(
 					// cannot be re-sent safely, so they demote to retriable here (and
 					// never strand a forever-working chip if the service fails early).
 					put(
-						team,
+						canonicalKey,
 						loaded
 							.filterNot { !it.fromMe && it.status == "waking" }
 							.map {
@@ -870,7 +874,13 @@ class ChatRepository(
 		val json = store.loadLabels() ?: return emptyMap()
 		return runCatching {
 			val root = JSONObject(json)
-			buildMap { for (team in root.keys()) put(team, root.getString(team)) }
+			// Normalize legacy bare keys to canonical form on load.
+			buildMap {
+				for (rawKey in root.keys()) {
+					val canonicalKey = TeamAddress.parse(rawKey, localHostId).canonical
+					put(canonicalKey, root.getString(rawKey))
+				}
+			}
 		}.getOrDefault(emptyMap())
 	}
 
@@ -883,8 +893,5 @@ class ChatRepository(
 		// Refresh the team list at most this often, regardless of poll cadence.
 		const val TEAMS_REFRESH_MS = 30_000L
 		const val MAX_OUTGOING_BYTES = 10_000_000
-		// Mirrors NOTICE_SESSION_PREFIX in src/shared/phone-protocol.ts, the single
-		// source of truth for the broadcast-notice session-id grammar.
-		const val NOTICE_SESSION_PREFIX = "notice:"
 	}
 }
