@@ -376,6 +376,9 @@ class ChatRepository(
 					localHostId = localHostId,
 				)
 			}
+			// Attach ingest now that we have the provisioning. DEBUG-only inside attachIngest.
+			val blob = store.load()
+			if (blob != null) runCatching { DebugLog.attachIngest(Provisioning.parse(blob)) }
 		} catch (e: Exception) {
 			_state.update { it.copy(status = "error", error = e.message, connected = false) }
 		}
@@ -537,12 +540,19 @@ class ChatRepository(
 					// AFK: plain poll, then sleep an interval; the mailbox batches.
 					hold = if (visible) LONG_POLL_HOLD_MS else 0L
 					val started = System.currentTimeMillis()
+					DebugLog.log("Poll", "firing cursor=$cursor epoch=$epoch hold=${hold}ms")
 					val mb = client().poll(cursor, epoch, hold)
 					// An old arbiter ignores holdMs and returns empty instantly; floor
 					// the cadence so that degradation never becomes a tight spin.
 					heldEmpty = hold > 0 && mb.entries.isEmpty() &&
 						System.currentTimeMillis() - started < 3_000
+					if (mb.entries.isEmpty()) {
+						DebugLog.log("Poll", "empty (held=$heldEmpty epoch=${mb.epoch} cursor=${mb.cursor} dropped=${mb.dropped})")
+					} else {
+						DebugLog.log("Poll", "${mb.entries.size} entries epoch=${mb.epoch} cursor=${mb.cursor} dropped=${mb.dropped}")
+					}
 					if (mb.epoch != epoch) {
+						DebugLog.log("Poll", "epoch changed ${epoch} -> ${mb.epoch}; resetting cursor+lastSeq")
 						epoch = mb.epoch
 						cursor = 0
 						lastSeq = -1
@@ -550,19 +560,21 @@ class ChatRepository(
 					if (mb.dropped > 0) _state.update { it.copy(gap = true) }
 					val burst = mutableMapOf<String, MutableList<Message>>()
 					for (e in mb.entries) {
-						if (e.seq <= lastSeq) continue // dedupe a re-drain after a lost ack
+						if (e.seq <= lastSeq) {
+							DebugLog.log("Drain", "seq=${e.seq} deduped (lastSeq=$lastSeq)")
+							continue // dedupe a re-drain after a lost ack
+						}
 						lastSeq = e.seq
 						// Determine which team key this entry belongs to.
 						// Notices thread under the sender canonical; conv sessions use the
 						// session target, except when the tail is THIS device (Face-4: an
 						// agent-initiated push whose session tail is our device name should
 						// thread under `from`, not under ourselves).
-						val team: String = if (e.kind == "notice") {
+						// Resolve the thread key for this entry; null means drop it.
+						val team: String? = if (e.kind == "notice") {
 							// Notice: prefer `from`, fall back to NoticeId parse.
-							val sender = e.from?.let { TeamAddress.parse(it, localHostId).canonical }
+							e.from?.let { TeamAddress.parse(it, localHostId).canonical }
 								?: NoticeId.parse(e.session_id, localHostId)?.sender?.canonical
-								?: continue
-							sender
 						} else {
 							val sid = SessionId.parse(e.session_id, localHostId)
 							if (sid != null) {
@@ -575,19 +587,27 @@ class ChatRepository(
 								}
 							} else {
 								// Not a conv session id; fall back to `from` if present.
-								e.from?.let { TeamAddress.parse(it, localHostId).canonical } ?: continue
+								e.from?.let { TeamAddress.parse(it, localHostId).canonical }
 							}
+						}
+						if (team == null) {
+							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} from=${e.from} -> DROPPED (unresolvable team)")
+							continue
 						}
 						val files = Attachments.decode(filesDir, mb.epoch, e.seq, e.files)
 						// status-only entries still land (e.g. a wake-failure error
 						// with no body would otherwise vanish).
 						val bodyText = e.body.orEmpty()
+						val snippet = bodyText.replace(Regex("\\s+"), " ").trim().take(80)
 						if (bodyText.isNotEmpty() || files.isNotEmpty() || e.status != null) {
+							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team status=${e.status} files=${files.size} \"$snippet\"")
 							val msg =
 								Message(false, bodyText, e.at, files = files, status = e.status, title = e.title, summary = e.summary)
 							appendInbound(team, msg)
 							bumpUnread(team)
 							burst.getOrPut(team) { mutableListOf() }.add(msg)
+						} else {
+							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team SKIPPED (no body, no files, no status)")
 						}
 					}
 					for ((team, msgs) in burst) {
@@ -621,15 +641,19 @@ class ChatRepository(
 					if (_state.value.error != null || _state.value.pollFailStreak != 0) {
 						_state.update { it.copy(error = null, pollFailStreak = 0, connected = true) }
 					}
+					// Flush buffered debug lines to the ingest endpoint once per cycle.
+					DebugLog.flushToIngest()
 				} catch (e: Exception) {
 					if (hold > 0 && e.message?.startsWith("HTTP 504") == true) {
 						// A relay-timeout during a hold is an empty long-poll, not an
 						// outage: an evie still on the shorter hold (upgrade window) or
 						// a transient arbiter drop mid-hold. Back off, do not alarm.
+						DebugLog.log("Poll", "hold timeout (504) treated as empty long-poll")
 						heldEmpty = true
 					} else {
 						// One blip is silent; the loop retries every cycle. Surface only
 						// after a couple of consecutive failures, cleared on next success.
+						DebugLog.log("Poll", "error streak=${ pollFails + 1 }: ${e.message?.take(120)}")
 						failed = true
 						pollFails++
 						_state.update { it.copy(pollFailStreak = pollFails) }
@@ -639,6 +663,7 @@ class ChatRepository(
 							_state.update { it.copy(error = msg) }
 						}
 					}
+					DebugLog.flushToIngest()
 				}
 				// Adaptive cadence with a foreground kick: a resume interrupts the
 				// AFK wait so the user never stares at stale state. Visible long-polls

@@ -64,11 +64,23 @@ jobs:
           ANDROID_VERSION_CODE: ${{ github.run_number }}
         run: ./gradlew :app:assembleRelease --no-daemon --console=plain
 
-      - name: Upload APK as artifact
+      - name: Build debug APK
+        env:
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
+        run: ./gradlew :app:assembleDebug --no-daemon --console=plain
+
+      - name: Upload release APK as artifact
         uses: actions/upload-artifact@v7
         with:
           name: switchboard-release-apk
           path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 7
+
+      - name: Upload debug APK as artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: switchboard-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
 
       # Single latest release: delete the fixed-tag release, then recreate it.
@@ -86,15 +98,18 @@ jobs:
         with:
           tag_name: android-app
           name: Switchboard Android (latest)
-          files: android/app/build/outputs/apk/release/app-release.apk
+          files: |
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/apk/debug/app-debug.apk
           make_latest: true
           body: |
             Switchboard Android app, built from ${{ github.sha }}.
 
-            Signed with the stable release key, so updates install over each other.
-            The in-app updater cannot fetch this release (its APK asset was renamed to
-            app-release.apk), so install this one manually once; after it, in-app
-            updates resume. A stable-signed build installs over without uninstalling;
-            only a much older build with a random signature needs an uninstall first.
+            **app-release.apk** - production build, signed with the stable release key.
+            Updates install over each other. Install this one manually once; after it,
+            in-app updates resume. Sideload: `adb install -r app-release.apk`
 
-            Sideload: `adb install -r app-release.apk`
+            **app-debug.apk** - debug build with ingest log streaming to evie.
+            Signed with the default debug key (not the release key), so it must be
+            installed as a separate app or after uninstalling the release build.
+            Sideload: `adb install -r app-debug.apk`
