@@ -65,7 +65,16 @@ jobs:
         run: ./gradlew :app:assembleRelease --no-daemon --console=plain
 
       - name: Build debug APK
+        # Sign the debug build with the SAME stable key as release. Android refuses
+        # to install an APK over one with the same package but a different signature,
+        # so sharing the key makes the debug build a one-tap side-step from the
+        # release build (and back) when chasing an issue. The `debug` signingConfig
+        # reads the same ANDROID_KEYSTORE_* env as `release`.
         env:
+          ANDROID_KEYSTORE_PATH: ${{ env.have_keystore == 'true' && format('{0}/switchboard.keystore', runner.temp) || '' }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
         run: ./gradlew :app:assembleDebug --no-daemon --console=plain
 
@@ -109,7 +118,7 @@ jobs:
             Updates install over each other. Install this one manually once; after it,
             in-app updates resume. Sideload: `adb install -r app-release.apk`
 
-            **app-debug.apk** - debug build with ingest log streaming to evie.
-            Signed with the default debug key (not the release key), so it must be
-            installed as a separate app or after uninstalling the release build.
+            **app-debug.apk** - debug build with ingest log streaming to evie,
+            signed with the SAME stable key as the release, so it installs straight
+            over the release build (and back) for a one-tap side-step to debug.
             Sideload: `adb install -r app-debug.apk`
