@@ -267,6 +267,22 @@ Tests live in `src/__tests__/`. Run with `bun run test` or target a specific fil
 bun run test src/__tests__/mutex.test.ts
 ```
 
+## Debugging the phone (on-device, agent-fetchable)
+
+When a phone-side symptom is otherwise invisible (a reply that polls in but never renders, etc.), use the debug build's log stream instead of guessing.
+
+- The GitHub release ships **`app-debug.apk`** beside `app-release.apk`, signed with the SAME key, so it installs straight over the release build and back (one-tap side-step). The debug build's `DebugLog` flushes its log to evie each poll cycle; the release build never does (gated on `BuildConfig.DEBUG`).
+- Transport: the debug build POSTs its log lines to evie's `POST /ingest` on the phone-bridge port (same `ANDROID_BRIDGE_TOKEN` auth + K8s API service-proxy as `/relay`, no new network surface). evie writes each line to stdout under a `[phone-ingest]` marker.
+- **Fetch the phone's live log** (the only path into the firewalled K8s is evie's stdout, which the arbiter's kubectl already reads):
+
+```bash
+docker exec switchboard kubectl --kubeconfig=/app/kubeconfig.yaml -n evie-bot \
+  logs deploy/evie-bot-deployment --tail=200 | grep '\[phone-ingest\]'
+```
+
+- `DebugLog.kt` already traces the enroll scan flow and the poll/drain flow: `[Poll]` (per cycle: entry count, epoch, cursor) and `[Drain]` (per mailbox entry: kind, session id, resolved thread, OR the drop reason - `DROPPED (unresolvable team)` / `SKIPPED (no body)` / threaded). To instrument a new area, add `DebugLog.log("<Tag>", "<msg>")`. The build also writes `Downloads/switchboard-debug.log` (pullable by hand if the stream is unavailable).
+- Smoke-test the ingest loop end to end (proves stdout fetch works) by POSTing through the service-proxy with the real bridge creds (`~/android-dev/secrets/phone-provisioning.json`: `apiUrl`/`saToken`/`caPem`/`appToken`): `POST ${apiUrl}/api/v1/namespaces/evie-bot/services/evie-phone-bridge:20004/proxy/ingest`, headers `Authorization: Bearer <saToken>` + `X-Android-Bridge-Token: Bearer <appToken>`, body `{"conversationId":"smoketest","lines":["..."]}`; then grep evie stdout for `[phone-ingest]`.
+
 ## Deploying the phone bridge
 
 The phone bridge spans two repos and three runtimes (evie pod, k8s objects, host arbiter), so a deploy is a fixed sequence. evie deploys via GitHub CI (push to main builds the image and rolls out k8s); the arbiter is a local Docker container rebuilt on the host.
