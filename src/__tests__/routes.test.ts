@@ -217,7 +217,7 @@ describe("routes", () => {
 				expect(snap.entries).toHaveLength(1);
 				expect(snap.entries[0]).toMatchObject({
 					kind: "notice",
-					session_id: "notice:recipe-app",
+					session_id: "notice:test-host/recipe-app",
 					from: "recipe-app",
 					title: "cycle done",
 					summary: "All phases shipped. Nothing is blocked.",

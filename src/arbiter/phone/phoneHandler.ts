@@ -1,6 +1,5 @@
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import {
-	composeConvSessionId,
 	type MailboxInput,
 	PHONE_PROTOCOL_VERSION,
 	type PhoneOp,
@@ -8,8 +7,8 @@ import {
 	type PhoneRelayFrame,
 	type PhoneRelayReply,
 	parseQualifiedTeam,
-	qualifyTeam,
 } from "../../shared/phone-protocol.js";
+import { SessionId, TeamAddress } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
 import { PhonePeer } from "./phonePeer.js";
@@ -109,12 +108,15 @@ export function createPhoneHandler({
 	mailboxStore.setOnEvict((conversationId) => removePeer(conversationId));
 
 	function recordInbound(conversationId: string, sessionId: string): void {
+		// Canonicalize so the gate in respond can always compare canonical form
+		// against canonical form, whether the session id arrived bare or qualified.
+		const canonical = SessionId.parse(sessionId, localHostId)?.key ?? sessionId;
 		let set = inboundSessions.get(conversationId);
 		if (!set) {
 			set = new Set();
 			inboundSessions.set(conversationId, set);
 		}
-		set.add(sessionId);
+		set.add(canonical);
 		if (set.size > MAX_INBOUND_SESSIONS) {
 			const oldest = set.values().next().value;
 			if (oldest !== undefined) set.delete(oldest);
@@ -269,10 +271,12 @@ export function createPhoneHandler({
 					}
 				}
 
-				// Canonical qualified session id, matching what routes.send composes,
-				// so the backgrounded-send path hands back the same id the in-time
-				// path would.
-				const expectedSession = composeConvSessionId(conversationId, qualifyTeam(localHostId, localTarget));
+				// Canonical session id matching what routes.send composes, so the
+				// backgrounded-send path hands back the same id the in-time path would.
+				const expectedSession = SessionId.channel(
+					conversationId,
+					TeamAddress.local(localHostId, localTarget),
+				).key;
 				const sendPromise = routes.send(FAKE_REQ, {
 					from: device,
 					fromConversationId: conversationId,
@@ -322,12 +326,14 @@ export function createPhoneHandler({
 				// A phone may only settle a thread that was delivered to it. This
 				// blocks forging another conversation's reply and, critically, keeps
 				// op.session_id away from resolveHandshake (handshake ids are never
-				// recorded as inbound).
-				if (!inboundSessions.get(conversationId)?.has(op.session_id)) {
+				// recorded as inbound). Canonicalize via SessionId.parse so a bare
+				// session id matches the qualified key recorded on inbound delivery.
+				const canonicalRespondId = SessionId.parse(op.session_id, localHostId)?.key ?? op.session_id;
+				if (!inboundSessions.get(conversationId)?.has(canonicalRespondId)) {
 					throw new Error(`Unknown session_id; you can only respond to a thread delivered to this device`);
 				}
 				const res = routes.respond(FAKE_REQ, {
-					session_id: op.session_id,
+					session_id: canonicalRespondId,
 					status: op.status,
 					response: op.response,
 					replyAsJson: op.replyAsJson,

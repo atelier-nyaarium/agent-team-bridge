@@ -7,8 +7,8 @@ import type { SealedEnvelope } from "../shared/crypto.js";
 import { type FederatedOp, ReturnRouteSchema } from "../shared/federation-protocol.js";
 import type { Mutex } from "../shared/mutex.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
-import { composeConvSessionId, noticeSessionId, parseQualifiedTeam, qualifyTeam } from "../shared/phone-protocol.js";
 import { ChannelFilesSchema } from "../shared/schemas.js";
+import { NoticeId, SessionId, TeamAddress } from "../shared/session-id.js";
 import type {
 	ArbiterConfig,
 	ChannelFile,
@@ -153,18 +153,6 @@ function getTeamMode(subs: Map<string, ServerWebSocket<WsData>>): ConnectionMode
 	return virtualMode ?? "cli";
 }
 
-/**
- * Derive the stable channel job id for a channel-mode exchange.
- * Same (sender conversation id, target team) pair always produces the same key, so
- * subsequent sends reuse the same store entry instead of generating a fresh UUID
- * that eventually gets swept. Falls back to null if the sender did not provide
- * a conversation id (channel mode should always provide one now).
- */
-function deriveChannelJobId(fromConversationId: string | undefined, to: string): string | null {
-	if (!fromConversationId) return null;
-	return composeConvSessionId(fromConversationId, to);
-}
-
 export function createRoutes({
 	registry,
 	conversationRegistry,
@@ -187,9 +175,9 @@ export function createRoutes({
 	 * lands in a later phase), so it returns null. `qualified` is the canonical
 	 * `localHostId/name` form used as the channel session-id target. */
 	function resolveLocalTarget(to: string): { name: string; qualified: string } | null {
-		const { host, name } = parseQualifiedTeam(to);
-		if (host !== null && host !== localHostId) return null;
-		return { name, qualified: qualifyTeam(localHostId, name) };
+		const addr = TeamAddress.parse(to, localHostId);
+		if (addr.host !== localHostId) return null;
+		return { name: addr.name, qualified: addr.canonical };
 	}
 
 	/** Forward a federated op to another Host through the Router and unwrap the
@@ -247,11 +235,12 @@ export function createRoutes({
 		if (!fromConversationId) {
 			return jsonResponse({ error: `fromConversationId is required for a cross-Host send` }, 400);
 		}
-		const qualifiedTo = qualifyTeam(targetHost, targetName);
-		const srcSession = composeConvSessionId(fromConversationId, qualifiedTo);
+		const targetAddr = TeamAddress.remote(targetHost, targetName);
+		const qualifiedTo = targetAddr.canonical;
+		const srcSession = SessionId.channel(fromConversationId, targetAddr).key;
 		const op: FederatedOp = {
 			kind: "send",
-			from: qualifyTeam(localHostId, from),
+			from: TeamAddress.local(localHostId, from).canonical,
 			to: targetName,
 			request_type: type,
 			effort,
@@ -391,8 +380,8 @@ export function createRoutes({
 		// Cross-Host OUTBOUND: a target qualified with another Host routes through
 		// the Router. An INBOUND federated send (the host-relay handler) arrives with
 		// a bare `to` plus an explicit sessionId, so it skips this and lands locally.
-		const parsedTarget = parseQualifiedTeam(to);
-		if (!inboundSessionId && parsedTarget.host && parsedTarget.host !== localHostId) {
+		const parsedTarget = TeamAddress.parse(to, localHostId);
+		if (!inboundSessionId && parsedTarget.host !== localHostId) {
 			return await sendCrossHost({
 				targetHost: parsedTarget.host,
 				targetName: parsedTarget.name,
@@ -451,7 +440,9 @@ export function createRoutes({
 			return jsonResponse(
 				{
 					error: `Team "${qualifiedTo}" is not connected`,
-					available: [...registry.keys()].filter((k) => k !== "host").map((k) => qualifyTeam(localHostId, k)),
+					available: [...registry.keys()]
+						.filter((k) => k !== "host")
+						.map((k) => TeamAddress.local(localHostId, k).canonical),
 				},
 				404,
 			);
@@ -479,7 +470,11 @@ export function createRoutes({
 			try {
 				// A federated inbound send carries the origin's session id; a local send
 				// derives a stable key from (sender conversation, target).
-				const channelJobId = inboundSessionId ?? deriveChannelJobId(fromConversationId, qualifiedTo);
+				const channelJobId =
+					inboundSessionId ??
+					(fromConversationId
+						? SessionId.channel(fromConversationId, TeamAddress.parse(qualifiedTo, localHostId)).key
+						: null);
 				if (!channelJobId) {
 					return jsonResponse({ error: `fromConversationId is required for channel-mode targets` }, 400);
 				}
@@ -628,7 +623,8 @@ export function createRoutes({
 			}
 		}
 
-		const deliverResult = store.deliver(respondSessionId, response);
+		const canonicalSessionId = SessionId.parse(respondSessionId, localHostId)?.key ?? respondSessionId;
+		const deliverResult = store.deliver(canonicalSessionId, response);
 		if (!deliverResult) {
 			console.log(
 				`[respond] 404 - no pending job for ${respondSessionId.slice(0, 8)}... (already delivered or expired)`,
@@ -794,7 +790,7 @@ export function createRoutes({
 		mailboxStore.forEach((_conversationId, box) => {
 			box.append({
 				kind: "notice",
-				session_id: noticeSessionId(from),
+				session_id: NoticeId.of(TeamAddress.local(localHostId, from)).key,
 				from,
 				title,
 				summary,

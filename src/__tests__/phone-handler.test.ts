@@ -282,7 +282,7 @@ describe("createPhoneHandler", () => {
 		);
 		expect(reply.ok).toBe(true);
 		expect(reply.result).toEqual({ delivered: true });
-		expect(h.respondCalls[0]).toMatchObject({ session_id: "conv:team-a:pixel", response: "ok" });
+		expect(h.respondCalls[0]).toMatchObject({ session_id: "conv:team-a:test-host/pixel", response: "ok" });
 	});
 
 	it("respond rejects a session never delivered to this device (and never reaches resolveHandshake)", async () => {

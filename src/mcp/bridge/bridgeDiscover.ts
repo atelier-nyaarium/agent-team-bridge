@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { TeamAddress } from "../../shared/session-id.js";
 import { bridgeProjectName, routerGet } from "./helpers.js";
 
 ////////////////////////////////
@@ -37,7 +38,7 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 				}
 
 				const lines = others.map((t) => {
-					const name = t.host ? `${t.host}/${t.team}` : t.team;
+					const name = t.host ? TeamAddress.remote(t.host, t.team).canonical : t.team;
 					if (t.status === "available") return `- ${name}: available`;
 					const status = t.queue_depth > 0 ? `busy (${t.queue_depth} in queue)` : "online";
 					return `- ${name}: ${status}`;
