@@ -4,10 +4,10 @@ import path from "node:path";
 ////////////////////////////////
 //  Functions & Helpers
 
-// Arbiter writes to /app/log/debug.log, MCP host writes to .cursor/debug.log
+// Arbiter writes to /app/log/debug.log, MCP host writes to volumes/arbiter/debug.log
 const LOG_PATH = existsSync("/.dockerenv")
 	? process.env.LOG_PATH || "/app/log/debug.log"
-	: path.join(process.env.HOME || "/home/nyaarium", "projects/switchboard/.cursor/debug.log");
+	: path.join(process.env.HOME || "/home/nyaarium", "projects/switchboard/volumes/arbiter/debug.log");
 
 const RUN_ID_SUFFIX = `${process.pid}-${Date.now().toString(36)}`;
 
