@@ -211,6 +211,27 @@ export function createRoutes({
 		}
 	}
 
+	/** Relay a cross-Host op in the background, retrying on transient failure (evie
+	 * reconnecting, the origin Host restarting) with exponential backoff. The reply
+	 * it carries is already durable in the local anchor (poll-recoverable), so a
+	 * dropped first attempt no longer strands the origin's request the way the old
+	 * fire-and-forget did. */
+	function relayWithRetry(dstHost: string, op: FederatedOp, label: string): void {
+		const maxAttempts = 5;
+		let attempt = 0;
+		const tryOnce = async (): Promise<void> => {
+			const r = await relayToHost(dstHost, op);
+			if (r.ok) return;
+			attempt += 1;
+			if (attempt >= maxAttempts) {
+				console.error(`[respond] ${label} to ${dstHost} failed after ${maxAttempts} attempts: ${r.error}`);
+				return;
+			}
+			setTimeout(() => void tryOnce(), Math.min(2000 * 2 ** (attempt - 1), 30_000));
+		};
+		void tryOnce();
+	}
+
 	/** Origin side of a cross-Host channel send. Keeps a local pollable anchor keyed
 	 * by the canonical session id (so the sender can poll and the eventual
 	 * response_push delivers back to its conversation), forwards the send to the
@@ -583,18 +604,20 @@ export function createRoutes({
 		// local conversationRegistry has no entry for the remote sender.
 		if (deliverResult.returnRoute) {
 			const rr = deliverResult.returnRoute;
-			void relayToHost(rr.srcHost, {
-				kind: "response_push",
-				session_id: rr.srcSession,
-				...(response.status ? { status: response.status } : {}),
-				...(response.response ? { response: response.response } : {}),
-				...(response.replyAsJson ? { replyAsJson: response.replyAsJson } : {}),
-				...(response.question ? { question: response.question } : {}),
-				...(response.reason ? { reason: response.reason } : {}),
-				...(files && files.length > 0 ? { files } : {}),
-			}).then((r) => {
-				if (!r.ok) console.error(`[respond] cross-Host reply-pin to ${rr.srcHost} failed: ${r.error}`);
-			});
+			relayWithRetry(
+				rr.srcHost,
+				{
+					kind: "response_push",
+					session_id: rr.srcSession,
+					...(response.status ? { status: response.status } : {}),
+					...(response.response ? { response: response.response } : {}),
+					...(response.replyAsJson ? { replyAsJson: response.replyAsJson } : {}),
+					...(response.question ? { question: response.question } : {}),
+					...(response.reason ? { reason: response.reason } : {}),
+					...(files && files.length > 0 ? { files } : {}),
+				},
+				"cross-Host reply-pin",
+			);
 			console.log(`[respond] ${respondSessionId} pinned to Host ${rr.srcHost} via the Router`);
 			return jsonResponse({ delivered: true, federated: true });
 		}
