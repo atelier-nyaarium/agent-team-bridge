@@ -6,26 +6,28 @@ import { bridgeConversationId, bridgeProjectName, routerPost } from "./helpers.j
 ////////////////////////////////
 //  Schemas
 
-const BridgeSendSchema = z.object({
-	to: z.string().optional().describe(`Target team name. Use crosstalk_discover to find available teams.`),
-	type: z.enum(["feature", "bugfix", "question"]).optional().describe(`The type of request you are making.`),
-	effort: z
-		.enum(["simple", "standard", "complex"])
-		.optional()
-		.describe(`How much effort it should take to understand and handle this request.`),
-	body: z
-		.string()
-		.optional()
-		.describe(
-			`Full Markdown formatted details of the request. Provide a detailed description and any context that would be helpful to the other team.`,
-		),
-	session_id: z
-		.string()
-		.optional()
-		.describe(
-			`Polling only: pass a session_id (with no body) to peek at the latest result for an existing conversation. Omit this field for sends — channel conversations are auto-derived from the sender/target pair.`,
-		),
-});
+const BridgeSendSchema = z
+	.object({
+		to: z.string().optional().describe(`Target team name. Use crosstalk_discover to find available teams.`),
+		type: z.enum(["feature", "bugfix", "question"]).optional().describe(`The type of request you are making.`),
+		effort: z
+			.enum(["simple", "standard", "complex"])
+			.optional()
+			.describe(`How much effort it should take to understand and handle this request.`),
+		body: z
+			.string()
+			.optional()
+			.describe(
+				`Full Markdown formatted details of the request. Provide a detailed description and any context that would be helpful to the other team.`,
+			),
+		session_id: z
+			.string()
+			.optional()
+			.describe(
+				`Polling only: pass a session_id (with no body) to peek at the latest result for an existing conversation. Omit this field for sends - channel conversations are auto-derived from the sender/target pair.`,
+			),
+	})
+	.strict();
 type BridgeSendArgs = z.infer<typeof BridgeSendSchema>;
 
 ////////////////////////////////

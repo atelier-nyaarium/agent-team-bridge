@@ -50,6 +50,7 @@ export const CliReplySchema = z
 			.optional()
 			.describe(`The specific decision or approval a human must make. Required for needs_human.`),
 	})
+	.strict()
 	.refine((data) => !(data.respondAsMarkdownString && data.respondAsStructuredData), {
 		message: "Provide respondAsMarkdownString or respondAsStructuredData, not both.",
 	});
@@ -86,6 +87,7 @@ export const ChannelReplySchema = z
 				`Optional absolute file paths to attach to this reply (e.g. screenshots, logs). Images render inline on the phone; other files appear as download chips.`,
 			),
 	})
+	.strict()
 	.refine((data) => !(data.respondAsMarkdownString && data.respondAsStructuredData), {
 		message: "Provide respondAsMarkdownString or respondAsStructuredData, not both.",
 	});
