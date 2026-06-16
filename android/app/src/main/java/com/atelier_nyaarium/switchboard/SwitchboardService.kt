@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -36,6 +37,29 @@ import kotlinx.coroutines.launch
 class SwitchboardService : Service() {
 	private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+	// Held for the service's polling lifetime so the poll loop's wall-clock sleep
+	// resumes through Doze (which otherwise parks the CPU, the "stops polling when
+	// backgrounded" bug). This keeps the CPU partially awake while the bridge runs -
+	// the deliberate battery cost of background delivery without a push service. Doze
+	// can still defer the NETWORK unless the battery-optimization exemption is granted
+	// (Settings -> Background delivery), so the two work together.
+	private var wakeLock: PowerManager.WakeLock? = null
+
+	private fun acquireWakeLock() {
+		if (wakeLock?.isHeld == true) return
+		wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
+			.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "switchboard:poll-loop")
+			.apply {
+				setReferenceCounted(false)
+				acquire()
+			}
+	}
+
+	private fun releaseWakeLock() {
+		wakeLock?.let { if (it.isHeld) it.release() }
+		wakeLock = null
+	}
+
 	override fun onBind(intent: Intent?): IBinder? = null
 
 	override fun onCreate() {
@@ -50,6 +74,8 @@ class SwitchboardService : Service() {
 			return
 		}
 		repo.onInbound = { team, messages -> notifyBurst(repo, team, messages) }
+		// Keep the CPU awake for the poll loop while the bridge runs (background delivery).
+		acquireWakeLock()
 		// connect() runs register (which sets the Host id, cursor, epoch) and the
 		// on-device host-id migration; start the poll loop only after it, so the
 		// loop never qualifies an inbound team under an as-yet-unknown Host id and
@@ -81,6 +107,7 @@ class SwitchboardService : Service() {
 
 	override fun onDestroy() {
 		Repo.get(this).onInbound = null
+		releaseWakeLock()
 		scope.cancel()
 		super.onDestroy()
 	}
