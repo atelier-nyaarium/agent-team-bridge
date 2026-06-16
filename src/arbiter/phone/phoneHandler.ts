@@ -354,11 +354,11 @@ export function createPhoneHandler({
 				// and retried polls just become additional waiters (reads are not
 				// opId-cached; the phone dedupes entries by seq).
 				const box = mailboxStore.ensure(conversationId);
-				let snap = box.drain(op.cursor ?? 0, op.epoch);
+				let snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				const hold = Math.min(op.holdMs ?? 0, HOLD_CAP_MS);
 				if (snap.entries.length === 0 && hold > 0) {
 					await box.waitForAppend(hold);
-					snap = box.drain(op.cursor ?? 0, op.epoch);
+					snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				}
 				// Permanent low-noise delivery observability: log only a poll that actually
 				// hands entries to the phone or signals a dropped-entry gap, never the

@@ -281,3 +281,63 @@ describe("DeviceMailbox idempotent dedupeKey upsert", () => {
 		expect(restored.highWater).toBe(1);
 	});
 });
+
+describe("DeviceMailbox slowest-device watermark", () => {
+	it("minCursor is 0 with no registered device (trim nothing)", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "a"));
+		expect(box.minCursor()).toBe(0);
+		box.trimToMinCursor();
+		expect(box.size).toBe(1);
+	});
+
+	it("a single device drain via consumerId trims to that device's cursor", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "a"));
+		box.append(message("s1", "b"));
+		box.append(message("s1", "c"));
+		box.drain(2, 1, "phoneA"); // ack up to seq 2 on the watermark path
+		expect(box.size).toBe(1); // seq 3 retained, 1 and 2 compacted
+		expect(box.drain(0).dropped).toBe(0); // watermark trim is not a gap
+	});
+
+	it("trims only to the slowest of several devices", () => {
+		const box = new DeviceMailbox(1);
+		for (const b of ["a", "b", "c", "d", "e"]) box.append(message("s1", b));
+		box.advanceConsumer("phoneA", 5); // caught up
+		box.advanceConsumer("phoneB", 2); // slow
+		expect(box.minCursor()).toBe(2);
+		box.trimToMinCursor();
+		expect(box.size).toBe(3); // seq 3,4,5 retained for the slow phone
+		expect(box.drain(0).dropped).toBe(0);
+	});
+
+	it("forgetting the slow device advances the watermark", () => {
+		const box = new DeviceMailbox(1);
+		for (const b of ["a", "b", "c", "d", "e"]) box.append(message("s1", b));
+		box.advanceConsumer("phoneA", 5);
+		box.advanceConsumer("phoneB", 2);
+		box.forgetConsumer("phoneB"); // slow device evicted past its TTL
+		expect(box.minCursor()).toBe(5);
+		box.trimToMinCursor();
+		expect(box.size).toBe(0);
+	});
+
+	it("advanceConsumer is monotonic (a stale lower ack cannot rewind)", () => {
+		const box = new DeviceMailbox(1);
+		box.advanceConsumer("phoneA", 5);
+		box.advanceConsumer("phoneA", 3); // out-of-order/stale
+		expect(box.minCursor()).toBe(5);
+	});
+
+	it("consumerCursors survive a snapshot/restore round trip", () => {
+		const box = new DeviceMailbox(9);
+		for (const b of ["a", "b", "c"]) box.append(message("s1", b));
+		box.advanceConsumer("phoneA", 3);
+		box.advanceConsumer("phoneB", 1);
+		const restored = DeviceMailbox.fromSnapshot(box.snapshot());
+		expect(restored.minCursor()).toBe(1); // the slow phone still pins it
+		restored.trimToMinCursor();
+		expect(restored.size).toBe(2); // seq 2,3 retained
+	});
+});
