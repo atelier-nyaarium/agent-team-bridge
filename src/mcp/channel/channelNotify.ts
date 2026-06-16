@@ -12,7 +12,7 @@ import { materializeFiles, renderFilesBlock } from "./evieFiles.js";
  */
 export async function emitChannelNotification(server: Server, payload: ChannelPushPayload): Promise<void> {
 	const replyInstruction =
-		"┃ Reply via `channel_reply`. The conversation stays open, so you can reply multiple times: use status `running` for interim updates (phase reports, progress, ACKs) and `completed` for the final answer. Do not output additional text outside the tool call.";
+		"┃ Reply with the `channel_reply` tool: pass the session_id below and your prose in the `respondAsMarkdownString` field (it renders as markdown + mermaid for the human; use `respondAsStructuredData` only for a structured Reply Schema). The conversation stays open, so you can reply multiple times; each call is another message in the stream (no status or finality). Do not output text outside the tool call.";
 	const lines = [replyInstruction, `┃ session_id: \`${payload.session_id}\``];
 	if (payload.message_id) {
 		lines.push(`┃ message_id: \`${payload.message_id}\``);

@@ -222,7 +222,7 @@ export function createWebSocketHandlers({
 						type: "channel_push",
 						from: "arbiter",
 						request_type: "question",
-						body: `This is the initial bridge handshake. Reply via \`channel_reply\` using the session_id shown above.\n\nSet \`replyAsJson: { isMainOrLead: true }\` if you are the primary session or team lead.\nSet \`replyAsJson: { isMainOrLead: false }\` if you are a worker agent spawned by another agent.\n\nDo not use \`crosstalk_send\` — use \`channel_reply\` with status \`"completed"\` and the replyAsJson field.`,
+						body: `This is the initial bridge handshake. Reply with the \`channel_reply\` tool using the session_id shown above, setting \`respondAsStructuredData\` to a JSON string.\n\nUse respondAsStructuredData: '{ "isMainOrLead": true }' if you are the primary session or team lead, or '{ "isMainOrLead": false }' if you are a worker agent spawned by another agent.\n\nDo not use \`crosstalk_send\`.`,
 						effort: "simple",
 						session_id: hsSessionId,
 						is_follow_up: false,

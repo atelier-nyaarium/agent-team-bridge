@@ -11,8 +11,8 @@ import { routerPost } from "./helpers.js";
 interface ReplyArgsBase {
 	session_id: string;
 	status?: string;
-	replyAsString?: string;
-	replyAsJson?: string;
+	respondAsMarkdownString?: string;
+	respondAsStructuredData?: string;
 	attachments?: string[];
 }
 
@@ -73,8 +73,30 @@ export function registerReplyTool<S extends z.ZodTypeAny>(
 		},
 		async (args: unknown) => {
 			try {
-				const { session_id, status, replyAsString, replyAsJson, attachments, ...rest } = args as ReplyArgsBase &
-					Record<string, unknown>;
+				const { session_id, status, respondAsMarkdownString, respondAsStructuredData, attachments, ...rest } =
+					args as ReplyArgsBase & Record<string, unknown>;
+
+				// A reply with no prose, no structured data, no attachments, and no status
+				// produces an empty entry the consumer (the phone) silently skips - the exact
+				// failure that let a wrong body-field name pass unnoticed for a whole session.
+				// Reject it loudly instead of returning "Reply sent." over an empty message.
+				if (
+					!respondAsMarkdownString &&
+					!respondAsStructuredData &&
+					!(attachments && attachments.length > 0) &&
+					status === undefined
+				) {
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `Empty reply rejected. Put your prose in "respondAsMarkdownString" (the human-facing body), or use "respondAsStructuredData"/"attachments". Unknown keys are silently dropped, so a mistyped field sends nothing.`,
+							},
+						],
+						isError: true,
+					};
+				}
+
 				const payload: Record<string, unknown> = { session_id, ...rest };
 				if (status !== undefined) payload.status = status;
 
@@ -89,17 +111,17 @@ export function registerReplyTool<S extends z.ZodTypeAny>(
 					}
 				}
 
-				if (replyAsJson) {
+				if (respondAsStructuredData) {
 					try {
-						payload.replyAsJson = JSON.parse(replyAsJson);
+						payload.replyAsJson = JSON.parse(respondAsStructuredData);
 					} catch {
 						return {
-							content: [{ type: "text" as const, text: "replyAsJson must be a valid JSON string." }],
+							content: [{ type: "text" as const, text: "respondAsStructuredData must be a valid JSON string." }],
 							isError: true,
 						};
 					}
-				} else if (replyAsString !== undefined) {
-					payload.response = replyAsString;
+				} else if (respondAsMarkdownString !== undefined) {
+					payload.response = respondAsMarkdownString;
 				}
 
 				await routerPost("/respond", payload);

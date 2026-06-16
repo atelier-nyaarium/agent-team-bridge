@@ -27,17 +27,17 @@ export const CliReplySchema = z
 	.object({
 		session_id: z.string().describe(`The session_id for this request. Required to route the reply correctly.`),
 		status: z.enum(["completed", "clarification", "deferred", "needs_human"]).describe(`The outcome of your work.`),
-		replyAsString: z
+		respondAsMarkdownString: z
 			.string()
 			.optional()
 			.describe(
-				`Your text response. Lead with the answer itself: no lead-in labels ("Short answer:", "TLDR:") and no restating the question - replies often render on a phone. Mutually exclusive with replyAsJson.`,
+				`Your prose reply for the HUMAN to read, as a markdown string - put your message here. It renders as fully-featured markdown (headings, lists, tables, fenced code) AND mermaid diagrams, so use them when they help. Lead with the answer itself: no lead-in labels ("Short answer:", "TLDR:") and no restating the question; replies often render on a phone. Mutually exclusive with respondAsStructuredData.`,
 			),
-		replyAsJson: z
+		respondAsStructuredData: z
 			.string()
 			.optional()
 			.describe(
-				`A JSON object response. Use when the request specifies a Reply Schema. Pass a valid JSON string matching the schema. Mutually exclusive with replyAsString.`,
+				`Your structured reply, as a JSON string (object/array). Use ONLY when the request specifies a Reply Schema; pass valid JSON matching it. For ordinary prose use respondAsMarkdownString instead. Mutually exclusive with respondAsMarkdownString.`,
 			),
 		question: z
 			.string()
@@ -50,8 +50,8 @@ export const CliReplySchema = z
 			.optional()
 			.describe(`The specific decision or approval a human must make. Required for needs_human.`),
 	})
-	.refine((data) => !(data.replyAsString && data.replyAsJson), {
-		message: "Provide replyAsString or replyAsJson, not both.",
+	.refine((data) => !(data.respondAsMarkdownString && data.respondAsStructuredData), {
+		message: "Provide respondAsMarkdownString or respondAsStructuredData, not both.",
 	});
 
 export type CliReplyArgs = z.infer<typeof CliReplySchema>;
@@ -67,17 +67,17 @@ export type CliReplyArgs = z.infer<typeof CliReplySchema>;
 export const ChannelReplySchema = z
 	.object({
 		session_id: z.string().describe(`The session_id for this request. Required to route the reply correctly.`),
-		replyAsString: z
+		respondAsMarkdownString: z
 			.string()
 			.optional()
 			.describe(
-				`Your text response. Lead with the answer itself: no lead-in labels ("Short answer:", "TLDR:") and no restating the question - replies often render on a phone. Mutually exclusive with replyAsJson.`,
+				`Your prose reply for the HUMAN to read, as a markdown string - put your message here. It renders as fully-featured markdown (headings, lists, tables, fenced code) AND mermaid diagrams, so use them when they help. Lead with the answer itself: no lead-in labels ("Short answer:", "TLDR:") and no restating the question; replies often render on a phone. Mutually exclusive with respondAsStructuredData.`,
 			),
-		replyAsJson: z
+		respondAsStructuredData: z
 			.string()
 			.optional()
 			.describe(
-				`A JSON object response. Use when the request specifies a Reply Schema. Pass a valid JSON string matching the schema. Mutually exclusive with replyAsString.`,
+				`Your structured reply, as a JSON string (object/array). Use ONLY when the request specifies a Reply Schema; pass valid JSON matching it. For ordinary prose use respondAsMarkdownString instead. Mutually exclusive with respondAsMarkdownString.`,
 			),
 		attachments: z
 			.array(z.string())
@@ -86,8 +86,8 @@ export const ChannelReplySchema = z
 				`Optional absolute file paths to attach to this reply (e.g. screenshots, logs). Images render inline on the phone; other files appear as download chips.`,
 			),
 	})
-	.refine((data) => !(data.replyAsString && data.replyAsJson), {
-		message: "Provide replyAsString or replyAsJson, not both.",
+	.refine((data) => !(data.respondAsMarkdownString && data.respondAsStructuredData), {
+		message: "Provide respondAsMarkdownString or respondAsStructuredData, not both.",
 	});
 
 export type ChannelReplyArgs = z.infer<typeof ChannelReplySchema>;
