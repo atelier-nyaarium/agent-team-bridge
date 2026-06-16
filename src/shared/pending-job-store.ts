@@ -248,15 +248,6 @@ export class PendingJobStore<T> {
 		return ids;
 	}
 
-	/** Non-persistent entries only: used when cancelling pending jobs on team disconnect. */
-	getTransientIdsForTeam(team: string): string[] {
-		const ids: string[] = [];
-		for (const [id, entry] of this.entries) {
-			if (entry.to === team && !entry.persistent) ids.push(id);
-		}
-		return ids;
-	}
-
 	listAll(): Array<{ id: string; from: string; to: string; state: JobState; persistent: boolean }> {
 		return [...this.entries.values()].map(({ id, from, to, state, persistent }) => ({
 			id,

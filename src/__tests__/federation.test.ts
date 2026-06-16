@@ -5,7 +5,6 @@ import { createSealer, type Sealer } from "../arbiter/federation/sealer.js";
 import { createRoutes, type RoutesDeps } from "../arbiter/routes.js";
 import { generateIdentity, type Identity, type SealedEnvelope } from "../shared/crypto.js";
 import { type FederatedOp, FederatedOpSchema } from "../shared/federation-protocol.js";
-import { Mutex } from "../shared/mutex.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 
@@ -58,17 +57,10 @@ function fakeEvie(opts: {
 }
 
 function makeCtx(localHostId: string, over: Partial<RoutesDeps> = {}): RoutesDeps {
-	const targetLocks = new Map<string, Mutex>();
-	const getMutex = ((team: string) => {
-		if (!targetLocks.has(team)) targetLocks.set(team, new Mutex());
-		return targetLocks.get(team)!;
-	}) as RoutesDeps["getMutex"];
-	getMutex.peek = (team: string) => targetLocks.get(team);
 	return {
 		registry: new Map() as RoutesDeps["registry"],
 		conversationRegistry: new Map() as RoutesDeps["conversationRegistry"],
 		store: new PendingJobStore<ResponsePayload>(),
-		getMutex,
 		config: { LOG_PATH: "/tmp/fed-test.log", RESPONSE_TIMEOUT_MS: 500, localHostId },
 		tryWakeTeam: () => Promise.resolve(false),
 		offlineCatalog: new Map(),

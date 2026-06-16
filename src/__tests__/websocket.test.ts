@@ -6,9 +6,6 @@ import {
 	type TeamRegistry,
 	type WsData,
 } from "../arbiter/websocket.js";
-import { Mutex } from "../shared/mutex.js";
-import { PendingJobStore } from "../shared/pending-job-store.js";
-import type { ResponsePayload } from "../shared/types.js";
 
 function createMockWs() {
 	return {
@@ -31,8 +28,6 @@ describe("createWebSocketHandlers", () => {
 		overrides: {
 			registry?: TeamRegistry;
 			conversationRegistry?: ConversationRegistry;
-			store?: PendingJobStore<ResponsePayload>;
-			targetLocks?: Map<string, Mutex>;
 			knownTeamPaths?: Map<string, string>;
 			offlineCatalog?: Map<string, string>;
 			wakeCoordinator?: WakeCoordinator;
@@ -40,16 +35,12 @@ describe("createWebSocketHandlers", () => {
 	) {
 		const registry: TeamRegistry = overrides.registry || new Map();
 		const conversationRegistry: ConversationRegistry = overrides.conversationRegistry || new Map();
-		const store = overrides.store || new PendingJobStore<ResponsePayload>();
-		const targetLocks = overrides.targetLocks || new Map();
 		const knownTeamPaths = overrides.knownTeamPaths || new Map();
 		const offlineCatalog = overrides.offlineCatalog || new Map();
 		const wakeCoordinator = overrides.wakeCoordinator || new WakeCoordinator();
 		const handlers = createWebSocketHandlers({
 			registry,
 			conversationRegistry,
-			store,
-			targetLocks,
 			config: { HEARTBEAT_INTERVAL_MS: 100000, MISSED_PINGS_LIMIT: 2 },
 			knownTeamPaths,
 			offlineCatalog,
@@ -60,8 +51,6 @@ describe("createWebSocketHandlers", () => {
 			handlers,
 			registry,
 			conversationRegistry,
-			store,
-			targetLocks,
 			knownTeamPaths,
 			offlineCatalog,
 			wakeCoordinator,
@@ -144,40 +133,6 @@ describe("createWebSocketHandlers", () => {
 		handlers.message(ws, JSON.stringify({ type: "register", team: "alpha", subId: "s1" }));
 		handlers.close(ws);
 		expect(registry.has("alpha")).toBe(false);
-	});
-
-	it("last sub disconnect delivers error to pending jobs", async () => {
-		const store = new PendingJobStore<ResponsePayload>();
-		store.create("sess-1", "other", "alpha");
-
-		let waitResult: { delivered: boolean; result?: ResponsePayload } | null = null;
-		const waitPromise = store.waitForResult("sess-1", 10_000).then((r) => {
-			waitResult = r;
-		});
-
-		const { handlers } = setup({ store });
-		const ws = createMockWs();
-		handlers.open(ws);
-		handlers.message(ws, JSON.stringify({ type: "register", team: "alpha", subId: "s1" }));
-		handlers.close(ws);
-
-		await waitPromise;
-		expect(waitResult!.delivered).toBe(true);
-		expect(waitResult!.result!.status).toBe("error");
-	});
-
-	it("last sub disconnect force-releases mutex", async () => {
-		const targetLocks = new Map<string, Mutex>();
-		const mutex = new Mutex();
-		await mutex.acquire("id-1");
-		targetLocks.set("alpha", mutex);
-
-		const { handlers } = setup({ targetLocks });
-		const ws = createMockWs();
-		handlers.open(ws);
-		handlers.message(ws, JSON.stringify({ type: "register", team: "alpha", subId: "s1" }));
-		handlers.close(ws);
-		expect(mutex.locked).toBe(false);
 	});
 
 	it("stale close does not remove sub from registry", () => {
@@ -286,14 +241,10 @@ describe("virtual peer awareness", () => {
 	function setup() {
 		const registry: TeamRegistry = new Map();
 		const conversationRegistry: ConversationRegistry = new Map();
-		const store = new PendingJobStore<ResponsePayload>();
-		const targetLocks = new Map<string, Mutex>();
 		const evicted: string[] = [];
 		const handlers = createWebSocketHandlers({
 			registry,
 			conversationRegistry,
-			store,
-			targetLocks,
 			config: { HEARTBEAT_INTERVAL_MS: 100000, MISSED_PINGS_LIMIT: 2 },
 			knownTeamPaths: new Map(),
 			offlineCatalog: new Map(),
@@ -301,7 +252,7 @@ describe("virtual peer awareness", () => {
 			onVirtualPeerEvicted: (conversationId) => evicted.push(conversationId),
 		});
 		intervals.push(handlers.heartbeatInterval);
-		return { handlers, registry, conversationRegistry, store, targetLocks, evicted };
+		return { handlers, registry, conversationRegistry, evicted };
 	}
 
 	function createVirtualWs(team: string, conversationId: string) {
@@ -340,7 +291,7 @@ describe("virtual peer awareness", () => {
 	});
 
 	it("close cleanup is not suppressed by a lingering virtual sub", () => {
-		const { handlers, registry, store } = setup();
+		const { handlers, registry } = setup();
 
 		const real = createMockWs();
 		handlers.open(real);
@@ -350,12 +301,9 @@ describe("virtual peer awareness", () => {
 		const subs = registry.get("teamx");
 		subs?.set("conv-1", createVirtualWs("teamx", "conv-1"));
 
-		store.create("job-1", "sender", "teamx");
 		handlers.close(real);
 
-		// Transient job cancelled even though the virtual sub keeps the entry alive.
-		const result = store.poll("job-1");
-		expect(result).toMatchObject({ status: "error" });
+		// Virtual sub keeps the entry alive; the real sub's slot is cleaned up.
 		expect(registry.get("teamx")?.size).toBe(1);
 		expect(registry.get("teamx")?.has("conv-1")).toBe(true);
 	});

@@ -1,10 +1,8 @@
 import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { debugLog } from "../shared/debug-log.js";
-import type { Mutex } from "../shared/mutex.js";
-import type { PendingJobStore } from "../shared/pending-job-store.js";
 import { WsRegisterSchema } from "../shared/schemas.js";
-import type { ConnectionMode, ResponsePayload, WebSocketConfig } from "../shared/types.js";
+import type { ConnectionMode, WebSocketConfig } from "../shared/types.js";
 import type { WakeCoordinator } from "./wake.js";
 
 ////////////////////////////////
@@ -16,8 +14,6 @@ export type ConversationRegistry = Map<string, ServerWebSocket<WsData>>;
 export interface WebSocketDeps {
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
-	store: PendingJobStore<ResponsePayload>;
-	targetLocks: Map<string, Mutex>;
 	knownTeamPaths: Map<string, string>;
 	offlineCatalog: Map<string, string>;
 	wakeCoordinator: WakeCoordinator;
@@ -70,8 +66,6 @@ export function getAllActiveRealWs(subs: Map<string, ServerWebSocket<WsData>>): 
 export function createWebSocketHandlers({
 	registry,
 	conversationRegistry,
-	store,
-	targetLocks,
 	knownTeamPaths,
 	offlineCatalog,
 	wakeCoordinator,
@@ -336,28 +330,11 @@ export function createWebSocketHandlers({
 
 		// If team has no more live sub-sessions, clean up fully. Virtual phone
 		// peers do not count as liveness; they must not suppress disconnect
-		// cleanup (pin clearing, job cancellation, mutex release).
+		// cleanup (pin clearing, job cancellation).
 		const hasRealSubs = [...subs.values()].some((s) => !s.data.virtual);
 		if (!hasRealSubs) {
 			if (subs.size === 0) registry.delete(teamName);
 			onTeamDisconnect?.(teamName);
-
-			// Cancel only transient (CLI-mode) pending jobs. Persistent channel conversations
-			// stay alive so the conversation resumes cleanly when the team reconnects.
-			for (const id of store.getTransientIdsForTeam(teamName)) {
-				store.deliver(id, {
-					session_id: id,
-					status: "error",
-					message: `Team "${teamName}" disconnected before responding`,
-				} as ResponsePayload);
-				console.log(`[ws] cancelled pending session ${id} (${teamName} disconnected)`);
-			}
-
-			const mutex = targetLocks.get(teamName);
-			if (mutex?.locked) {
-				console.log(`[mutex] force-releasing ${teamName} after disconnect`);
-				mutex.release();
-			}
 		}
 	}
 

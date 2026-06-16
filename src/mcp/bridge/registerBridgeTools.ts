@@ -1,7 +1,6 @@
 import { execSync } from "node:child_process";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerChannelReply } from "../channel/channelReply.js";
-import { registerCliReply } from "../cli/cliReply.js";
 import { registerBridgeDiscover } from "./bridgeDiscover.js";
 import { registerBridgeSend } from "./bridgeSend.js";
 import { registerBridgeWait } from "./bridgeWait.js";
@@ -75,17 +74,11 @@ export function registerBridgeTools(mcpServer: McpServer): void {
 	}
 
 	const agentType = process.env.AGENT_TYPE || detectAgentType();
-	const isChannel = agentType === "claude";
 
 	initBridge({
 		routerUrl: process.env.BRIDGE_ROUTER_URL || "http://switchboard:20000",
 		projectName,
 		agentType,
-		effortEnv: {
-			simple: process.env.MODEL_SIMPLE,
-			standard: process.env.MODEL_STANDARD,
-			complex: process.env.MODEL_COMPLEX,
-		},
 	});
 
 	// Shared outgoing tools (all agents)
@@ -93,14 +86,7 @@ export function registerBridgeTools(mcpServer: McpServer): void {
 	registerBridgeSend(mcpServer);
 	registerBridgeWait(mcpServer);
 
-	if (isChannel) {
-		// Claude channel mode: register channel_reply, set up channel server reference
-		registerChannelReply(mcpServer);
-		setChannelServer(mcpServer.server);
-		console.error(`[bridge] Claude channel mode, channel_reply registered`);
-	} else {
-		// CLI mode: register crosstalk_reply for CLI agents
-		registerCliReply(mcpServer);
-		console.error(`[bridge] CLI mode (${agentType}), crosstalk_reply registered`);
-	}
+	registerChannelReply(mcpServer);
+	setChannelServer(mcpServer.server);
+	console.error(`[bridge] channel mode, channel_reply registered`);
 }

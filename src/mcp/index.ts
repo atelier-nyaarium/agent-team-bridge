@@ -141,7 +141,6 @@ export async function startMcp(): Promise<void> {
 			routerUrl: process.env.BRIDGE_ROUTER_URL || "http://localhost:20000",
 			projectName: "arbiter",
 			agentType: "claude",
-			effortEnv: {},
 		});
 		setIsMainOrLeadAgent(true);
 
@@ -186,11 +185,7 @@ export async function startMcp(): Promise<void> {
 		connectToRouter();
 	}
 
-	const mode = inContainer
-		? isChannel
-			? "channel + crosstalk + connector"
-			: "cli + crosstalk + connector"
-		: "dispatch + crosstalk + channel";
+	const mode = inContainer ? "crosstalk + connector" : "dispatch + crosstalk + channel";
 	console.error(`[mcp] started (${mode})`);
 
 	process.stdin.on("end", () => {

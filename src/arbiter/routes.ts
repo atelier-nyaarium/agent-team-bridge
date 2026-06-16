@@ -5,7 +5,6 @@ import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import type { SealedEnvelope } from "../shared/crypto.js";
 import { type FederatedOp, ReturnRouteSchema } from "../shared/federation-protocol.js";
-import type { Mutex } from "../shared/mutex.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
 import { ChannelFilesSchema } from "../shared/schemas.js";
 import { NoticeId, SessionId, TeamAddress } from "../shared/session-id.js";
@@ -32,7 +31,6 @@ export interface RoutesDeps {
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
 	store: PendingJobStore<ResponsePayload>;
-	getMutex: ((team: string) => Mutex) & { peek: (team: string) => Mutex | undefined };
 	tryWakeTeam: (team: string) => Promise<boolean>;
 	offlineCatalog: Map<string, string>;
 	// Durable team -> projectPath map (never cleared, unlike offlineCatalog which
@@ -157,7 +155,6 @@ export function createRoutes({
 	registry,
 	conversationRegistry,
 	store,
-	getMutex,
 	tryWakeTeam,
 	offlineCatalog,
 	knownTeamPaths,
@@ -167,7 +164,7 @@ export function createRoutes({
 	sealer,
 	resolveHandshake,
 }: RoutesDeps) {
-	const { LOG_PATH, RESPONSE_TIMEOUT_MS, localHostId } = config;
+	const { LOG_PATH, localHostId } = config;
 
 	/** Resolve a wire target (bare or host-qualified) to a local registry name.
 	 * A bare name or one qualified with this Host resolves locally; a name
@@ -296,7 +293,6 @@ export function createRoutes({
 		for (const [name, subs] of registry) {
 			if (name === "host") continue;
 			seen.add(name);
-			const lock = getMutex.peek(name);
 			// A team whose only live sockets are virtual phone peers is the human's
 			// device, not a crosstalk peer - mark it so the agent-facing listing hides it.
 			const isPhone = getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0;
@@ -308,7 +304,7 @@ export function createRoutes({
 				status: "online",
 				mode: getTeamMode(subs),
 				kind: name === "arbiter" ? "host" : isPhone ? "phone" : isDevcontainer(name) ? "devcontainer" : "loose",
-				queue_depth: lock ? lock.queue.length + (lock.locked ? 1 : 0) : 0,
+				queue_depth: 0,
 			});
 		}
 
@@ -358,7 +354,6 @@ export function createRoutes({
 			type,
 			effort,
 			body: msgBody,
-			debug,
 			replyJsonSchema,
 			files,
 			channelOnly,
@@ -523,59 +518,7 @@ export function createRoutes({
 			}
 		}
 
-		// CLI mode: send to first available sub, mutex + wait for response
-		const sessionId = crypto.randomUUID();
-		let release: (() => void) | undefined;
-
-		try {
-			const mutex = getMutex(localName);
-			release = await mutex.acquire(sessionId);
-
-			console.log(`[mutex] ${localName} locked by ${sessionId} (from ${from})`);
-
-			store.create(sessionId, from, localName);
-
-			const payload = {
-				type: "inject",
-				from,
-				request_type: type || "question",
-				body: msgBody || "",
-				effort: effort || "auto",
-				session_id: sessionId,
-				is_follow_up: false,
-			};
-
-			if (targetWs.readyState !== 1) {
-				throw new Error(`Team "${localName}" disconnected before message could be delivered`);
-			}
-			targetWs.send(JSON.stringify(payload));
-
-			const waitResult = await store.waitForResult(sessionId, RESPONSE_TIMEOUT_MS);
-
-			if (release) {
-				console.log(`[mutex] ${localName} released [${waitResult.delivered ? "delivered" : "running"}]`);
-				release();
-			}
-
-			if (waitResult.delivered && waitResult.result) {
-				const response = waitResult.result;
-				if (debug) {
-					return jsonResponse({ ...response, session_id: sessionId, from, to, is_follow_up: false });
-				}
-				return jsonResponse(response);
-			}
-
-			return jsonResponse({
-				session_id: sessionId,
-				status: "running",
-				message: `No response from ${localName} within ${RESPONSE_TIMEOUT_MS / 1000}s. Poll with session_id to check later.`,
-			});
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			console.error(`[send] Error:`, message);
-			if (release) release();
-			return jsonResponse({ error: message }, 500);
-		}
+		return jsonResponse({ error: "CLI-mode agents are no longer supported." }, 400);
 	}
 
 	function respond(req: Request, body: Record<string, unknown>): Response {

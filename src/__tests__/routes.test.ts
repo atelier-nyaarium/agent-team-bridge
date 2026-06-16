@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { createRoutes, type RoutesDeps } from "../arbiter/routes.js";
-import { Mutex } from "../shared/mutex.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 
@@ -21,17 +20,10 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 	const store = overrides.store || new PendingJobStore<ResponsePayload>();
 	const offlineCatalog = overrides.offlineCatalog || new Map<string, string>();
 	const knownTeamPaths = overrides.knownTeamPaths || new Map<string, string>();
-	const targetLocks = new Map<string, Mutex>();
-	const getMutexFn = ((team: string) => {
-		if (!targetLocks.has(team)) targetLocks.set(team, new Mutex());
-		return targetLocks.get(team)!;
-	}) as RoutesDeps["getMutex"];
-	getMutexFn.peek = (team: string) => targetLocks.get(team);
 	return {
 		registry,
 		conversationRegistry,
 		store,
-		getMutex: getMutexFn,
 		config: { LOG_PATH: "/tmp/test-debug.log", RESPONSE_TIMEOUT_MS: 500, localHostId: "test-host" },
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
 		offlineCatalog,
@@ -64,19 +56,6 @@ describe("routes", () => {
 			const { teams } = createRoutes(ctx);
 			const res = teams();
 			expect(await res.json()).toEqual([]);
-		});
-
-		it("returns team info with queue_depth", async () => {
-			const registry = makeRegistry({ "team-x": { readyState: 1, data: { mode: "cli" } } });
-			const ctx = makeCtx({ registry });
-			const mutex = ctx.getMutex("team-x");
-			await mutex.acquire("id-1");
-
-			const { teams } = createRoutes(ctx);
-			const res = teams();
-			expect(await res.json()).toEqual([
-				{ team: "team-x", host: "test-host", status: "online", mode: "cli", kind: "loose", queue_depth: 1 },
-			]);
 		});
 
 		it("returns offline teams from catalog as available devcontainers", async () => {
@@ -458,140 +437,6 @@ describe("routes", () => {
 			expect(res.status).toBe(404);
 		});
 
-		it("sends inject payload and returns response when delivered inline", async () => {
-			const sent: Record<string, unknown>[] = [];
-			const fakeWs = {
-				readyState: 1,
-				data: { mode: "cli" },
-				send(data: string) {
-					sent.push(JSON.parse(data));
-				},
-			};
-			const registry = makeRegistry({ b: fakeWs });
-			const store = new PendingJobStore<ResponsePayload>();
-			const ctx = makeCtx({ registry, store });
-			const { send } = createRoutes(ctx);
-
-			const promise = send(new Request("http://localhost/send", { method: "POST" }), {
-				from: "a",
-				to: "b",
-				type: "question",
-				body: "hi",
-			});
-
-			await new Promise((r) => setTimeout(r, 10));
-
-			// Deliver via the store (simulating /respond)
-			const jobs = store.listAll();
-			expect(jobs.length).toBe(1);
-			const deliverResult = store.deliver(jobs[0].id, {
-				session_id: jobs[0].id,
-				status: "completed",
-				response: "answer",
-			});
-			expect(deliverResult).toBeTruthy();
-
-			const res = await promise;
-			const json = await res.json();
-
-			expect(sent.length).toBe(1);
-			expect(sent[0].type).toBe("inject");
-			expect(sent[0].from).toBe("a");
-			expect(json.status).toBe("completed");
-			expect(json.response).toBe("answer");
-		});
-
-		it("includes debug fields when debug=true", async () => {
-			const fakeWs = { readyState: 1, data: { mode: "cli" }, send() {} };
-			const registry = makeRegistry({ b: fakeWs });
-			const store = new PendingJobStore<ResponsePayload>();
-			const ctx = makeCtx({ registry, store });
-			const { send } = createRoutes(ctx);
-
-			const promise = send(new Request("http://localhost/send", { method: "POST" }), {
-				from: "a",
-				to: "b",
-				body: "hi",
-				debug: true,
-			});
-			await new Promise((r) => setTimeout(r, 10));
-
-			const jobs = store.listAll();
-			store.deliver(jobs[0].id, { session_id: jobs[0].id, status: "completed" });
-
-			const res = await promise;
-			const json = await res.json();
-
-			expect(json.session_id).toBeDefined();
-			expect(json.from).toBe("a");
-			expect(json.to).toBe("b");
-		});
-
-		it("returns running when no response in time", async () => {
-			const fakeWs = { readyState: 1, data: { mode: "cli" }, send() {} };
-			const registry = makeRegistry({ b: fakeWs });
-			const ctx = makeCtx({ registry });
-			ctx.config.RESPONSE_TIMEOUT_MS = 50;
-			const { send } = createRoutes(ctx);
-
-			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
-				from: "a",
-				to: "b",
-				body: "hi",
-			});
-			const json = await res.json();
-
-			expect(json.status).toBe("running");
-			expect(json.session_id).toBeDefined();
-		}, 10000);
-
-		it("rejects a channelOnly send to an online CLI team with 409", async () => {
-			const fakeWs = { readyState: 1, data: { mode: "cli" }, send() {} };
-			const registry = makeRegistry({ "cli-team": fakeWs });
-			const ctx = makeCtx({ registry });
-			const { send } = createRoutes(ctx);
-
-			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
-				from: "pixel",
-				fromConversationId: "conv-1",
-				to: "cli-team",
-				body: "hi",
-				channelOnly: true,
-			});
-			expect(res.status).toBe(409);
-			expect((await res.json()).error).toContain("CLI-mode");
-		});
-
-		it("rejects a channelOnly send to a SLEEPING CLI team woken by the send (no random session id)", async () => {
-			// The team is offline at send time; the wake brings up a CLI-mode agent.
-			// Without channelOnly this fell into the CLI branch and minted a random
-			// uuid session. With it, the post-wake mode check returns a clean 409.
-			const registry = makeRegistry({});
-			const cliWs = { readyState: 1, data: { mode: "cli" }, send() {} };
-			const ctx = makeCtx({
-				registry,
-				tryWakeTeam: (team: string) => {
-					const subs = new Map();
-					subs.set("sub-1", cliWs);
-					registry.set(team, subs as never);
-					return Promise.resolve(true);
-				},
-			});
-			const { send } = createRoutes(ctx);
-
-			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
-				from: "pixel",
-				fromConversationId: "conv-1",
-				to: "sleepy-cli",
-				body: "hi",
-				channelOnly: true,
-			});
-			expect(res.status).toBe(409);
-			const json = await res.json();
-			expect(json.error).toContain("CLI-mode");
-			expect(json.session_id).toBeUndefined();
-		}, 10000);
-
 		it("channelOnly send to a channel team proceeds with the deterministic session id", async () => {
 			const pushed: Record<string, unknown>[] = [];
 			const fakeWs = {
@@ -668,37 +513,5 @@ describe("routes", () => {
 			expect(res.status).toBe(503);
 			expect((await res.json()).error).toContain("Router unavailable");
 		});
-
-		it("late delivery is stored and pollable after timeout", async () => {
-			const fakeWs = { readyState: 1, data: { mode: "cli" }, send() {} };
-			const registry = makeRegistry({ b: fakeWs });
-			const store = new PendingJobStore<ResponsePayload>();
-			const ctx = makeCtx({ registry, store });
-			ctx.config.RESPONSE_TIMEOUT_MS = 50;
-			const routes = createRoutes(ctx);
-
-			const sendRes = await routes.send(new Request("http://localhost/send", { method: "POST" }), {
-				from: "a",
-				to: "b",
-				body: "hi",
-			});
-			const sendJson = await sendRes.json();
-			expect(sendJson.status).toBe("running");
-
-			// Late delivery
-			store.deliver(sendJson.session_id, {
-				session_id: sendJson.session_id,
-				status: "completed",
-				response: "late answer",
-			});
-
-			// Poll should return the stored result
-			const pollRes = routes.poll(new Request("http://localhost/poll", { method: "POST" }), {
-				session_id: sendJson.session_id,
-			});
-			const pollJson = await pollRes.json();
-			expect(pollJson.status).toBe("completed");
-			expect(pollJson.response).toBe("late answer");
-		}, 10000);
 	});
 });

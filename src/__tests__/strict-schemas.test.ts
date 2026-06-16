@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ChannelReplySchema, CliReplySchema } from "../shared/schemas.js";
+import { ChannelReplySchema } from "../shared/schemas.js";
 
 // The silent-strip class: Zod strips unknown keys by default, so a mistyped
 // agent-facing field name forwards nothing and the reply lands empty. These
@@ -7,33 +7,6 @@ import { ChannelReplySchema, CliReplySchema } from "../shared/schemas.js";
 // to the agent as an InvalidParams tool error) instead of vanishing.
 
 describe("strict agent-facing reply schemas", () => {
-	it("CliReplySchema rejects a typo'd body field (the dead-guard bug)", () => {
-		const r = CliReplySchema.safeParse({
-			session_id: "s1",
-			status: "completed",
-			respondAsMarkdownStringg: "the answer", // one stray g
-		});
-		expect(r.success).toBe(false);
-	});
-
-	it("CliReplySchema accepts a valid completed reply", () => {
-		const r = CliReplySchema.safeParse({
-			session_id: "s1",
-			status: "completed",
-			respondAsMarkdownString: "the answer",
-		});
-		expect(r.success).toBe(true);
-	});
-
-	it("CliReplySchema accepts a clarification reply with question and no body", () => {
-		const r = CliReplySchema.safeParse({
-			session_id: "s1",
-			status: "clarification",
-			question: "which environment?",
-		});
-		expect(r.success).toBe(true);
-	});
-
 	it("ChannelReplySchema rejects a typo'd body field", () => {
 		const r = ChannelReplySchema.safeParse({
 			session_id: "s1",
