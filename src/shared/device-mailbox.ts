@@ -24,6 +24,9 @@ export interface MailboxSnapshotState {
 	// deviceId -> acked seq, so the slowest-device watermark survives a deploy
 	// (else a restart resets it and re-broadens retention). Optional.
 	consumerCursors?: Array<[string, number]>;
+	// session ids the device received and may therefore respond to. Persisted so a
+	// thread delivered before a restart stays respondable after it. Optional.
+	respondableSessions?: string[];
 }
 
 // The cap is the OOM BACKSTOP, not the primary compactor: the watermark
@@ -38,6 +41,7 @@ const DEFAULT_TTL_MS = 3_600_000;
 const DEFAULT_SWEEP_MS = 300_000;
 const DEFAULT_MAX_DEVICES = 500;
 const DEFAULT_MAX_SEEN_KEYS = 4096;
+const DEFAULT_MAX_RESPONDABLE_SESSIONS = 500;
 
 /** Cheap byte estimate for cap accounting: the body plus the base64 of every
  * attachment, which dominates. Avoids re-serializing the whole entry per append. */
@@ -86,6 +90,10 @@ export class DeviceMailbox {
 	// only to min(consumerCursors), so a faster device cannot ack away entries a
 	// slower device of the same recipient has not yet drained. Persisted.
 	private consumerCursors = new Map<string, number>();
+	// session ids this device received, so the phone may only respond to a thread
+	// actually delivered to it. Durable (in the snapshot) so respondability survives
+	// a restart, instead of the phone being told "Unknown session_id" after a deploy.
+	private respondableSessions = new Set<string>();
 	private maxEntries: number;
 	private maxBytes: number;
 	private waiters: Array<() => void> = [];
@@ -256,6 +264,21 @@ export class DeviceMailbox {
 		this.consumerCursors.delete(consumerId);
 	}
 
+	/** Remember a session id delivered to this device (FIFO-capped) so a later
+	 * respond op for it is authorized. Survives a restart via the snapshot. */
+	recordSession(sessionId: string): void {
+		this.respondableSessions.add(sessionId);
+		while (this.respondableSessions.size > DEFAULT_MAX_RESPONDABLE_SESSIONS) {
+			const oldest = this.respondableSessions.values().next().value;
+			if (oldest === undefined) break;
+			this.respondableSessions.delete(oldest);
+		}
+	}
+
+	canRespond(sessionId: string): boolean {
+		return this.respondableSessions.has(sessionId);
+	}
+
 	ack(cursor: number): void {
 		let i = 0;
 		while (i < this.entries.length && this.entries[i].seq <= cursor) i++;
@@ -280,6 +303,7 @@ export class DeviceMailbox {
 			entries: [...this.entries],
 			seenKeys: [...this.seenKeys],
 			consumerCursors: [...this.consumerCursors],
+			respondableSessions: [...this.respondableSessions],
 		};
 	}
 
@@ -302,6 +326,7 @@ export class DeviceMailbox {
 		}
 		if (s.seenKeys) for (const [k, v] of s.seenKeys) box.seenKeys.set(k, v);
 		if (s.consumerCursors) for (const [k, v] of s.consumerCursors) box.consumerCursors.set(k, v);
+		if (s.respondableSessions) for (const id of s.respondableSessions) box.respondableSessions.add(id);
 		return box;
 	}
 }

@@ -341,3 +341,23 @@ describe("DeviceMailbox slowest-device watermark", () => {
 		expect(restored.size).toBe(2); // seq 2,3 retained
 	});
 });
+
+describe("DeviceMailbox durable respondability", () => {
+	it("records and checks respondable sessions", () => {
+		const box = new DeviceMailbox(1);
+		expect(box.canRespond("conv:x:host/team")).toBe(false);
+		box.recordSession("conv:x:host/team");
+		expect(box.canRespond("conv:x:host/team")).toBe(true);
+	});
+
+	it("respondability survives a snapshot/restore (the class-10 fix)", () => {
+		const box = new DeviceMailbox(5);
+		box.recordSession("conv:a:host/team");
+		box.recordSession("conv:b:host/team");
+		const restored = DeviceMailbox.fromSnapshot(box.snapshot());
+		// After a restart the phone can still respond to a thread it received before.
+		expect(restored.canRespond("conv:a:host/team")).toBe(true);
+		expect(restored.canRespond("conv:b:host/team")).toBe(true);
+		expect(restored.canRespond("conv:never:host/team")).toBe(false);
+	});
+});
