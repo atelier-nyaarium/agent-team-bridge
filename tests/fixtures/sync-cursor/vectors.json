@@ -1,0 +1,59 @@
+{
+	"_comment": "Shared SyncCursor transition vectors, read by BOTH src/__tests__/sync-cursor.test.ts and android/.../SyncCursorVectorsTest.kt. A differing transition fails one runtime. epoch is a positive Int31 on the wire; 0 is the reserved initial sentinel the arbiter never mints. See plans/mailbox-sync-contract.md.",
+	"vectors": [
+		{
+			"name": "initial epoch-0 sentinel flips on first real poll, all fresh",
+			"start": { "epoch": 0, "ackedSeq": 0, "droppedBaseline": 0 },
+			"pollResult": { "entries": [{ "seq": 1 }, { "seq": 2 }], "cursor": 2, "epoch": 701238586, "dropped": 0 },
+			"expect": { "next": { "epoch": 701238586, "ackedSeq": 2, "droppedBaseline": 0 }, "freshSeqs": [1, 2], "gap": false }
+		},
+		{
+			"name": "same epoch, normal forward advance",
+			"start": { "epoch": 701238586, "ackedSeq": 2, "droppedBaseline": 0 },
+			"pollResult": { "entries": [{ "seq": 3 }], "cursor": 3, "epoch": 701238586, "dropped": 0 },
+			"expect": { "next": { "epoch": 701238586, "ackedSeq": 3, "droppedBaseline": 0 }, "freshSeqs": [3], "gap": false }
+		},
+		{
+			"name": "same epoch, at-least-once re-drain dedupes already-acked seqs",
+			"start": { "epoch": 701238586, "ackedSeq": 2, "droppedBaseline": 0 },
+			"pollResult": { "entries": [{ "seq": 1 }, { "seq": 2 }, { "seq": 3 }], "cursor": 3, "epoch": 701238586, "dropped": 0 },
+			"expect": { "next": { "epoch": 701238586, "ackedSeq": 3, "droppedBaseline": 0 }, "freshSeqs": [3], "gap": false }
+		},
+		{
+			"name": "same epoch, empty poll is a no-op",
+			"start": { "epoch": 701238586, "ackedSeq": 3, "droppedBaseline": 0 },
+			"pollResult": { "entries": [], "cursor": 3, "epoch": 701238586, "dropped": 0 },
+			"expect": { "next": { "epoch": 701238586, "ackedSeq": 3, "droppedBaseline": 0 }, "freshSeqs": [], "gap": false }
+		},
+		{
+			"name": "epoch flip (box recreated) resets ack, all entries fresh, no gap",
+			"start": { "epoch": 1585286207, "ackedSeq": 50, "droppedBaseline": 0 },
+			"pollResult": { "entries": [{ "seq": 1 }], "cursor": 1, "epoch": 1901445924, "dropped": 0 },
+			"expect": { "next": { "epoch": 1901445924, "ackedSeq": 1, "droppedBaseline": 0 }, "freshSeqs": [1], "gap": false }
+		},
+		{
+			"name": "gap delta: dropped grew past baseline -> gap true",
+			"start": { "epoch": 701238586, "ackedSeq": 3, "droppedBaseline": 0 },
+			"pollResult": { "entries": [{ "seq": 10 }], "cursor": 10, "epoch": 701238586, "dropped": 2 },
+			"expect": { "next": { "epoch": 701238586, "ackedSeq": 10, "droppedBaseline": 2 }, "freshSeqs": [10], "gap": true }
+		},
+		{
+			"name": "gap baseline: dropped unchanged from baseline -> no new gap",
+			"start": { "epoch": 701238586, "ackedSeq": 10, "droppedBaseline": 2 },
+			"pollResult": { "entries": [{ "seq": 11 }], "cursor": 11, "epoch": 701238586, "dropped": 2 },
+			"expect": { "next": { "epoch": 701238586, "ackedSeq": 11, "droppedBaseline": 2 }, "freshSeqs": [11], "gap": false }
+		},
+		{
+			"name": "epoch flip carries the result's dropped as the new baseline, gap false",
+			"start": { "epoch": 1585286207, "ackedSeq": 5, "droppedBaseline": 0 },
+			"pollResult": { "entries": [{ "seq": 1 }], "cursor": 1, "epoch": 1901445924, "dropped": 7 },
+			"expect": { "next": { "epoch": 1901445924, "ackedSeq": 1, "droppedBaseline": 7 }, "freshSeqs": [1], "gap": false }
+		},
+		{
+			"name": "defensive: epoch-0 result on epoch-0 start takes the same-epoch path (arbiter never mints 0)",
+			"start": { "epoch": 0, "ackedSeq": 0, "droppedBaseline": 0 },
+			"pollResult": { "entries": [{ "seq": 1 }], "cursor": 1, "epoch": 0, "dropped": 0 },
+			"expect": { "next": { "epoch": 0, "ackedSeq": 1, "droppedBaseline": 0 }, "freshSeqs": [1], "gap": false }
+		}
+	]
+}
