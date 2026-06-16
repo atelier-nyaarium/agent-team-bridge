@@ -236,7 +236,7 @@ export function createPhoneHandler({
 			case "register": {
 				const box = mailboxStore.ensure(conversationId);
 				console.log(
-					`[phone register] conv=${conversationId.slice(0, 12)} dev=${device} -> cursor=${box.highWater} epoch=${box.epoch}`,
+					`[phone register] conv=${conversationId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
 				);
 				return { device, hostId: localHostId, cursor: box.highWater, epoch: box.epoch };
 			}

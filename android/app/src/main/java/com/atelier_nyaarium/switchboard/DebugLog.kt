@@ -53,6 +53,11 @@ object DebugLog {
 	@Volatile private var ingestAppToken: String? = null
 	@Volatile private var ingestDevice: String? = null
 	@Volatile private var ingestConversationId: String? = null
+	// The ingest POST hits the K8s API server (cluster-signed cert), so a default
+	// HttpsURLConnection fails the handshake against the platform trust store and the
+	// error is swallowed - the reason the debug stream was silent. Pin the cluster CA
+	// the same way the relay's OkHttp client does.
+	@Volatile private var ingestSslFactory: javax.net.ssl.SSLSocketFactory? = null
 
 	fun init(context: Context) {
 		val ctx = context.applicationContext
@@ -83,7 +88,8 @@ object DebugLog {
 			ingestAppToken = prov.appToken
 			ingestDevice = prov.device
 			ingestConversationId = prov.conversationId
-			log("Ingest", "attached device=${prov.device} conv=${prov.conversationId}")
+			ingestSslFactory = runCatching { pinnedSocketFactory(prov.caPem) }.getOrNull()
+			log("Ingest", "attached device=${prov.device} conv=${prov.conversationId} pinned=${ingestSslFactory != null}")
 		}
 	}
 
@@ -112,6 +118,10 @@ object DebugLog {
 				val reqBody = body.toByteArray()
 				val url2 = java.net.URL(url)
 				val conn = url2.openConnection() as java.net.HttpURLConnection
+				// Trust the cluster CA, or the HTTPS handshake to the API server fails.
+				(conn as? javax.net.ssl.HttpsURLConnection)?.let { https ->
+					ingestSslFactory?.let { https.sslSocketFactory = it }
+				}
 				conn.requestMethod = "POST"
 				conn.setRequestProperty("Content-Type", "application/json")
 				conn.setRequestProperty("Authorization", "Bearer $saToken")
@@ -189,6 +199,22 @@ object DebugLog {
 		val ctx = appContext ?: return
 		val dir = ctx.getExternalFilesDir(null) ?: return
 		FileOutputStream(File(dir, FILE_NAME), !truncate).use { it.write(text.toByteArray()) }
+	}
+
+	/** A TLS socket factory trusting ONLY the cluster CA, matching the relay's pinned
+	 * OkHttp client. Without it the ingest POST to the cluster-signed API server fails
+	 * the handshake against the default trust store, which silenced the debug stream. */
+	private fun pinnedSocketFactory(caPem: String): javax.net.ssl.SSLSocketFactory {
+		val ca = java.security.cert.CertificateFactory.getInstance("X.509")
+			.generateCertificate(caPem.byteInputStream())
+		val ks = java.security.KeyStore.getInstance(java.security.KeyStore.getDefaultType()).apply {
+			load(null, null)
+			setCertificateEntry("cluster-ca", ca)
+		}
+		val tmf = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm())
+			.apply { init(ks) }
+		val sslCtx = javax.net.ssl.SSLContext.getInstance("TLS").apply { init(null, tmf.trustManagers, null) }
+		return sslCtx.socketFactory
 	}
 
 	/** Minimal hand-rolled JSON for the ingest body; avoids kotlinx.serialization

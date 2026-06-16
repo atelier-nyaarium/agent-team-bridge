@@ -212,8 +212,17 @@ class PhoneClient(private val prov: Provisioning) {
 		return wireJson.decodeFromJsonElement(result)
 	}
 
-	/** Claim this device's mailbox. Returns the starting cursor + epoch. */
-	fun register(): PhoneRegisterResult = resultOf(relay(PhoneOp.Register), "register")
+	/** Claim this device's mailbox. Returns the starting cursor + epoch. Carries this
+	 * build's identity so the arbiter logs which version/variant the phone runs. */
+	fun register(): PhoneRegisterResult = resultOf(
+		relay(
+			PhoneOp.Register(
+				clientVersion = "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}",
+				clientVariant = if (BuildConfig.DEBUG) "debug" else "release",
+			),
+		),
+		"register",
+	)
 
 	/** List the bridge's sessions, each keyed by its host-qualified name. A
 	 * session's Host comes from the wire (`TeamInfo.host`); when a pre-federation

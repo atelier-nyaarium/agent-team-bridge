@@ -154,7 +154,15 @@ export const TeamInfoSchema = z
 
 export const PhoneOpSchema = z
 	.discriminatedUnion("kind", [
-		z.object({ kind: z.literal("register") }),
+		z.object({
+			kind: z.literal("register"),
+			// Build identity for server-side observability: the arbiter logs these at
+			// register so the operator never has to guess which build (and debug-vs-
+			// release variant) a phone is running. Optional + additive: an older phone
+			// that omits them still registers.
+			clientVersion: z.string().max(64).optional(),
+			clientVariant: z.string().max(16).optional(),
+		}),
 		z.object({ kind: z.literal("list_teams") }),
 		z.object({
 			kind: z.literal("send"),

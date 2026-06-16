@@ -81,7 +81,10 @@ data class MailboxEntry(
 sealed class PhoneOp {
 	@Serializable
 	@SerialName("register")
-	data object Register : PhoneOp()
+	data class Register(
+		val clientVersion: String? = null,
+		val clientVariant: String? = null,
+	) : PhoneOp()
 
 	@Serializable
 	@SerialName("list_teams")
