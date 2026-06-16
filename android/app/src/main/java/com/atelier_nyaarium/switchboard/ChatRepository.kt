@@ -4,8 +4,11 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.atelier_nyaarium.switchboard.enroll.EnrollmentController
+import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.NoticeId
 import com.atelier_nyaarium.switchboard.proto.SessionId
+import com.atelier_nyaarium.switchboard.proto.SyncEntry
+import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -29,7 +32,7 @@ import org.json.JSONObject
 data class MessageFile(val name: String, val mime: String, val src: String? = null)
 
 /** `id` is a per-thread, local-only row key for the WebView DOM (lets the renderer
- * replace a row in place). It is NOT the mailbox seq; poll dedupe stays lastSeq-based.
+ * replace a row in place). It is NOT the mailbox seq; mailbox dedupe is owned by SyncCursor.
  * Stamped on append; reassigned from list order on load so old transcripts still work. */
 data class Message(
 	val fromMe: Boolean,
@@ -141,6 +144,12 @@ internal fun canonicalThreadKey(rawKey: String, hostId: String): String {
 	return fixed.canonical
 }
 
+/** Wraps a drained MailboxEntry as a SyncEntry so the SyncCursor rules can dedupe/advance
+ * by seq while the poll loop keeps the full entry to render. */
+private data class Drained(val entry: MailboxEntry) : SyncEntry {
+	override val seq: Long get() = entry.seq
+}
+
 /**
  * Chat state over a PhoneClient. Holds per-team threads, an unread tally, the open
  * tab set, and a poll loop that drains the device mailbox, dedupes by mailbox seq,
@@ -176,9 +185,10 @@ class ChatRepository(
 	// the player's daemon thread); @Volatile gives the writes visibility. A
 	// rare double-construct race is harmless (last writer wins, cheap build).
 	@Volatile private var client: PhoneClient? = null
-	private var cursor = 0L
-	private var epoch = 0L
-	private var lastSeq = -1L
+	// The mailbox cursor is phone-owned and durable: MailboxSync loads it from the store
+	// and the phone resumes from its own consumption point, never re-adopting a server-
+	// dictated cursor that would ack away the offline backlog on the next poll.
+	private val mailboxSync = MailboxSync(store)
 	private var pollFails = 0
 	private var pollJob: Job? = null
 	// The poll loop's scope, reused to launch auto-TTS preloads that gate the
@@ -374,9 +384,10 @@ class ChatRepository(
 
 	suspend fun connect() = withContext(Dispatchers.IO) {
 		try {
+			// register's cursor/epoch are no longer adopted: MailboxSync owns the durable
+			// cursor. We still register (to learn hostId, claim the mailbox, get the epoch
+			// the box is on); the poll loop's advance() reconciles any epoch change.
 			val reg = client().register()
-			cursor = reg.cursor
-			epoch = reg.epoch
 			reg.hostId?.let { id ->
 				if (id.isNotEmpty() && id != localHostId) {
 					localHostId = id
@@ -606,31 +617,30 @@ class ChatRepository(
 					// AFK: plain poll, then sleep an interval; the mailbox batches.
 					hold = if (visible) LONG_POLL_HOLD_MS else 0L
 					val started = System.currentTimeMillis()
-					DebugLog.log("Poll", "firing cursor=$cursor epoch=$epoch hold=${hold}ms")
-					val mb = client().poll(cursor, epoch, hold)
+					val params = mailboxSync.pollParams()
+					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms")
+					val mb = client().poll(params.cursor, params.epoch, hold)
 					// An old arbiter ignores holdMs and returns empty instantly; floor
 					// the cadence so that degradation never becomes a tight spin.
 					heldEmpty = hold > 0 && mb.entries.isEmpty() &&
 						System.currentTimeMillis() - started < 3_000
+					// Fold the result through the durable cursor: epoch flip, seq dedupe (a
+					// lost-ack re-drain), and the dropped-gap DELTA all live in advance(), which
+					// returns only genuinely-fresh entries. commit() advances the cursor LAST,
+					// after the fresh entries are rendered + persisted (two-phase: a crash
+					// re-delivers rather than skips).
+					val adv = mailboxSync.advance(
+						SyncPollResult(mb.entries.map { Drained(it) }, mb.cursor, mb.epoch, mb.dropped),
+					)
 					if (mb.entries.isEmpty()) {
 						DebugLog.log("Poll", "empty (held=$heldEmpty epoch=${mb.epoch} cursor=${mb.cursor} dropped=${mb.dropped})")
 					} else {
-						DebugLog.log("Poll", "${mb.entries.size} entries epoch=${mb.epoch} cursor=${mb.cursor} dropped=${mb.dropped}")
+						DebugLog.log("Poll", "${adv.fresh.size}/${mb.entries.size} fresh epoch=${mb.epoch} cursor=${mb.cursor} dropped=${mb.dropped}")
 					}
-					if (mb.epoch != epoch) {
-						DebugLog.log("Poll", "epoch changed ${epoch} -> ${mb.epoch}; resetting cursor+lastSeq")
-						epoch = mb.epoch
-						cursor = 0
-						lastSeq = -1
-					}
-					if (mb.dropped > 0) _state.update { it.copy(gap = true) }
+					if (adv.gap) _state.update { it.copy(gap = true) }
 					val burst = mutableMapOf<String, MutableList<Message>>()
-					for (e in mb.entries) {
-						if (e.seq <= lastSeq) {
-							DebugLog.log("Drain", "seq=${e.seq} deduped (lastSeq=$lastSeq)")
-							continue // dedupe a re-drain after a lost ack
-						}
-						lastSeq = e.seq
+					for (d in adv.fresh) {
+						val e = d.entry
 						// Determine which team key this entry belongs to.
 						// Notices thread under the sender canonical; conv sessions use the
 						// session target, except when the tail is THIS device (Face-4: an
@@ -702,7 +712,7 @@ class ChatRepository(
 							onInbound?.invoke(team, msgs)
 						}
 					}
-					cursor = mb.cursor
+					mailboxSync.commit(adv.next)
 					pollFails = 0
 					if (_state.value.error != null || _state.value.pollFailStreak != 0) {
 						_state.update { it.copy(error = null, pollFailStreak = 0, connected = true) }
@@ -831,10 +841,8 @@ class ChatRepository(
 		client = null
 		sttsClient = null
 		stts.purgeAll()
-		cursor = 0L
-		epoch = 0L
 		localHostId = ""
-		lastSeq = -1L
+		mailboxSync.clearInMemory()
 		_state.value = ChatState(provisioned = false)
 	}
 

@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.proto.SyncCursor
 
 /**
  * Encrypted-at-rest storage for the provisioning blob (which holds the SA + app
@@ -95,6 +96,27 @@ class ProvisioningStore(context: Context) {
 
 	fun loadHostId(): String = prefs.getString(KEY_HOST_ID, "") ?: ""
 
+	/** The phone-owned mailbox consumption cursor, durable across app restarts. The phone
+	 * resumes from its OWN cursor instead of re-adopting a server-dictated one, so the
+	 * backlog that piled up while the app was closed is never acked away on the next poll.
+	 * Null until the first commit (a fresh install). */
+	fun saveSyncCursor(cursor: SyncCursor) {
+		prefs.edit()
+			.putLong(KEY_SYNC_EPOCH, cursor.epoch)
+			.putLong(KEY_SYNC_ACKED, cursor.ackedSeq)
+			.putLong(KEY_SYNC_DROPPED, cursor.droppedBaseline)
+			.apply()
+	}
+
+	fun loadSyncCursor(): SyncCursor? {
+		if (!prefs.contains(KEY_SYNC_EPOCH)) return null
+		return SyncCursor.of(
+			prefs.getLong(KEY_SYNC_EPOCH, 0L),
+			prefs.getLong(KEY_SYNC_ACKED, 0L),
+			prefs.getLong(KEY_SYNC_DROPPED, 0L),
+		)
+	}
+
 	/** This device's federation identity (the owner device's signing + box
 	 * keypairs). Minted once at enroll-owner and reused to sign admissions. Persisted
 	 * ONLY under the Keystore-backed store: if encryption is unavailable this throws
@@ -132,5 +154,8 @@ class ProvisioningStore(context: Context) {
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."
 		const val KEY_AUTO_TTS = "auto_tts"
 		const val KEY_AUTO_PLAY_SUMMARY = "auto_play_summary"
+		const val KEY_SYNC_EPOCH = "sync_epoch"
+		const val KEY_SYNC_ACKED = "sync_acked"
+		const val KEY_SYNC_DROPPED = "sync_dropped"
 	}
 }
