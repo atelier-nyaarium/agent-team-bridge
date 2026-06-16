@@ -10,6 +10,16 @@ export interface MailboxSnapshot {
 	epoch: number;
 }
 
+/** A box's full serializable state for durability across an arbiter restart. The epoch is
+ * preserved on reload so the phone's persisted cursor still matches (no spurious flip). */
+export interface MailboxSnapshotState {
+	epoch: number;
+	nextSeq: number;
+	dropped: number;
+	lastActivity: number;
+	entries: MailboxEntry[];
+}
+
 const DEFAULT_MAX_ENTRIES = 200;
 const DEFAULT_MAX_BYTES = 30_000_000;
 const DEFAULT_TTL_MS = 3_600_000;
@@ -159,6 +169,38 @@ export class DeviceMailbox {
 	isExpired(now: number, ttlMs: number): boolean {
 		return now - this.lastActivity > ttlMs;
 	}
+
+	/** Serializable state for durability. Held polls (waiters) are transient and omitted;
+	 * the phone simply re-polls after the restart. */
+	snapshot(): MailboxSnapshotState {
+		return {
+			epoch: this.epoch,
+			nextSeq: this.nextSeq,
+			dropped: this.dropped,
+			lastActivity: this.lastActivity,
+			entries: [...this.entries],
+		};
+	}
+
+	/** Rebuild a box from a snapshot, keeping its epoch + seq so the phone resumes without
+	 * a spurious epoch flip and without re-seeing acked entries. */
+	static fromSnapshot(
+		s: MailboxSnapshotState,
+		maxEntries = DEFAULT_MAX_ENTRIES,
+		maxBytes = DEFAULT_MAX_BYTES,
+	): DeviceMailbox {
+		const box = new DeviceMailbox(s.epoch, maxEntries, maxBytes);
+		box.nextSeq = s.nextSeq;
+		box.dropped = s.dropped;
+		box.lastActivity = s.lastActivity;
+		for (const e of s.entries) {
+			box.entries.push(e);
+			const b = entryBytes(e);
+			box.entryBytes.push(b);
+			box.bytesUsed += b;
+		}
+		return box;
+	}
 }
 
 /**
@@ -211,6 +253,22 @@ export class DeviceMailboxStore {
 	/** Visit every live mailbox (broadcast delivery, e.g. human notices). */
 	forEach(cb: (conversationId: string, box: DeviceMailbox) => void): void {
 		for (const [conversationId, box] of this.mailboxes) cb(conversationId, box);
+	}
+
+	/** Every box's serializable state, keyed by conversation id, for durability. */
+	snapshot(): Record<string, MailboxSnapshotState> {
+		const out: Record<string, MailboxSnapshotState> = {};
+		for (const [conv, box] of this.mailboxes) out[conv] = box.snapshot();
+		return out;
+	}
+
+	/** Re-hydrate mailboxes on boot. A box that beat the load (a phone polled before the
+	 * restore ran) wins, so a live epoch is never replaced by a stale snapshot. */
+	restore(data: Record<string, MailboxSnapshotState>): void {
+		for (const [conv, s] of Object.entries(data)) {
+			if (this.mailboxes.has(conv)) continue;
+			this.mailboxes.set(conv, DeviceMailbox.fromSnapshot(s, this.maxEntries, this.maxBytes));
+		}
 	}
 
 	delete(device: string): void {

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
+import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalHostId } from "../shared/host-id.js";
 import { getMutex, type Mutex } from "../shared/mutex.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
@@ -72,6 +73,30 @@ export async function startArbiter(): Promise<void> {
 
 	store.startCleanup();
 	mailboxStore.startCleanup();
+
+	// Durability: the in-memory delivery state otherwise vanishes on a restart/deploy -
+	// 404ing a reply ("no pending request") and losing queued mail. Snapshot the
+	// persistent job anchors + the device mailboxes (each box keeps its epoch, so the
+	// phone's durable cursor still matches) to /app/log (a bind-mount that survives the
+	// container rebuild); reload on boot; re-save on a timer and on shutdown.
+	const jobsDurable = new DurableStore(path.dirname(LOG_PATH), "pending-jobs");
+	const mailboxDurable = new DurableStore(path.dirname(LOG_PATH), "mailboxes");
+	{
+		const jobs = jobsDurable.load();
+		if (Array.isArray(jobs)) store.restore(jobs as Parameters<typeof store.restore>[0]);
+		const boxes = mailboxDurable.load();
+		if (boxes && typeof boxes === "object")
+			mailboxStore.restore(boxes as Parameters<typeof mailboxStore.restore>[0]);
+		console.log(`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size}`);
+	}
+	const persistDelivery = () => {
+		jobsDurable.save(store.snapshot());
+		mailboxDurable.save(mailboxStore.snapshot());
+	};
+	const persistTimer = setInterval(persistDelivery, 3_000);
+	persistTimer.unref?.();
+	process.on("SIGTERM", persistDelivery);
+	process.on("SIGINT", persistDelivery);
 
 	const getMutexForTeam: MutexAccessor = Object.assign((team: string) => getMutex(targetLocks, team), {
 		peek: (team: string) => targetLocks.get(team),

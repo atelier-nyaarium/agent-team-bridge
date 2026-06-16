@@ -116,7 +116,9 @@ export function registerReplyTool<S extends z.ZodTypeAny>(
 						payload.replyAsJson = JSON.parse(respondAsStructuredData);
 					} catch {
 						return {
-							content: [{ type: "text" as const, text: "respondAsStructuredData must be a valid JSON string." }],
+							content: [
+								{ type: "text" as const, text: "respondAsStructuredData must be a valid JSON string." },
+							],
 							isError: true,
 						};
 					}

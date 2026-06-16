@@ -43,6 +43,19 @@ export interface DeliverMeta {
 	persistent: boolean;
 }
 
+/** A persistent entry in serializable form, for surviving an arbiter restart. The
+ * transient waiter (resolve/timer) is omitted - it re-arms when a client retries. */
+export interface PersistentJobSnapshot<T> {
+	id: string;
+	from: string;
+	to: string;
+	fromConversationId: string | null;
+	returnRoute: ReturnRoute | null;
+	state: JobState;
+	createdAt: number;
+	storedResult: T | null;
+}
+
 ////////////////////////////////
 //  Class
 
@@ -252,6 +265,47 @@ export class PendingJobStore<T> {
 			state,
 			persistent,
 		}));
+	}
+
+	/** The persistent entries (the only ones worth surviving a restart) in serializable
+	 * form. A timed-out persistent anchor restores as waiting so a later respond delivers. */
+	snapshot(): PersistentJobSnapshot<T>[] {
+		const out: PersistentJobSnapshot<T>[] = [];
+		for (const e of this.entries.values()) {
+			if (!e.persistent) continue;
+			out.push({
+				id: e.id,
+				from: e.from,
+				to: e.to,
+				fromConversationId: e.fromConversationId,
+				returnRoute: e.returnRoute,
+				state: e.state === "timed_out" ? "waiting" : e.state,
+				createdAt: e.createdAt,
+				storedResult: e.storedResult,
+			});
+		}
+		return out;
+	}
+
+	/** Re-hydrate persistent entries on boot. A live entry that beat the load wins (never
+	 * clobber a registration that raced the restore). */
+	restore(rows: PersistentJobSnapshot<T>[]): void {
+		for (const r of rows) {
+			if (this.entries.has(r.id)) continue;
+			this.entries.set(r.id, {
+				id: r.id,
+				from: r.from,
+				to: r.to,
+				fromConversationId: r.fromConversationId,
+				returnRoute: r.returnRoute,
+				persistent: true,
+				state: r.state,
+				createdAt: r.createdAt,
+				timer: null,
+				resolve: null,
+				storedResult: r.storedResult,
+			});
+		}
 	}
 
 	private sweep(): void {
