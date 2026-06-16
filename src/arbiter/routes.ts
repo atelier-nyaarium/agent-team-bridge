@@ -619,17 +619,42 @@ export function createRoutes({
 
 		let pushedViaConversation = false;
 		if (deliverResult.fromConversationId) {
-			const senderWs = conversationRegistry.get(deliverResult.fromConversationId);
-			if (senderWs && senderWs.readyState === 1) {
-				senderWs.send(pushMsg);
+			// A phone-bound reply is delivered by APPENDING to the device's durable
+			// mailbox by data, independent of any live PhonePeer. After an arbiter
+			// restart the mailbox is restored but the virtual peer is rebuilt only on
+			// the phone's next frame, so routing the reply through the live peer would
+			// drop it. The mailbox is the delivery truth; the peer is a wake hint. A
+			// mailbox existing for this conversation is the phone signal (a real
+			// channel agent has none and takes the live-WS branch below).
+			const mailbox = mailboxStore?.get(deliverResult.fromConversationId);
+			if (mailbox) {
+				mailbox.append({
+					kind: "reply",
+					session_id: respondSessionId,
+					body: response.response,
+					status: response.status,
+					replyAsJson: response.replyAsJson,
+					question: response.question,
+					reason: response.reason,
+					files: files && files.length > 0 ? files : undefined,
+				});
 				pushedViaConversation = true;
 				console.log(
-					`[respond] pushed to ${deliverResult.from} via conversation ${deliverResult.fromConversationId.slice(0, 8)}... [${respondSessionId}]`,
+					`[respond] appended to phone mailbox ${deliverResult.fromConversationId.slice(0, 8)}... [${respondSessionId}]`,
 				);
 			} else {
-				console.log(
-					`[respond] conversation ${deliverResult.fromConversationId.slice(0, 8)}... offline, response kept in store [${respondSessionId}]`,
-				);
+				const senderWs = conversationRegistry.get(deliverResult.fromConversationId);
+				if (senderWs && senderWs.readyState === 1) {
+					senderWs.send(pushMsg);
+					pushedViaConversation = true;
+					console.log(
+						`[respond] pushed to ${deliverResult.from} via conversation ${deliverResult.fromConversationId.slice(0, 8)}... [${respondSessionId}]`,
+					);
+				} else {
+					console.log(
+						`[respond] conversation ${deliverResult.fromConversationId.slice(0, 8)}... offline, response kept in store [${respondSessionId}]`,
+					);
+				}
 			}
 		}
 

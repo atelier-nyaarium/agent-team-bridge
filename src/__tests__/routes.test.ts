@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createRoutes, type RoutesDeps } from "../arbiter/routes.js";
+import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 
@@ -28,6 +29,7 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
 		offlineCatalog,
 		knownTeamPaths,
+		mailboxStore: overrides.mailboxStore,
 	};
 }
 
@@ -512,6 +514,40 @@ describe("routes", () => {
 			});
 			expect(res.status).toBe(503);
 			expect((await res.json()).error).toContain("Router unavailable");
+		});
+	});
+
+	describe("/respond phone durability", () => {
+		const req = new Request("http://arbiter/respond");
+
+		it("appends a reply to the device mailbox even when no live peer exists", () => {
+			// The class-4 case: after a restart the mailbox is restored but the virtual
+			// peer is not rehydrated, so conversationRegistry has no entry for the phone.
+			const store = new PendingJobStore<ResponsePayload>();
+			store.create("sess-1", "team-a", "phone", { persistent: true, fromConversationId: "phone-conv" });
+			const mailboxStore = new DeviceMailboxStore();
+			mailboxStore.ensure("phone-conv"); // mailbox restored, no conversationRegistry peer
+			const ctx = makeCtx({ store, mailboxStore });
+			const { respond } = createRoutes(ctx);
+
+			const res = respond(req, { session_id: "sess-1", status: "completed", response: "the answer" });
+			expect(res.status).toBe(200);
+
+			const drained = mailboxStore.get("phone-conv")?.drain(0);
+			expect(drained?.entries.length).toBe(1);
+			expect(drained?.entries[0]).toMatchObject({ kind: "reply", body: "the answer", status: "completed" });
+		});
+
+		it("does not create a spurious mailbox for a channel agent (no mailbox = live-WS path)", () => {
+			const store = new PendingJobStore<ResponsePayload>();
+			store.create("sess-2", "team-b", "agent", { persistent: true, fromConversationId: "agent-conv" });
+			const mailboxStore = new DeviceMailboxStore();
+			const ctx = makeCtx({ store, mailboxStore });
+			const { respond } = createRoutes(ctx);
+
+			respond(req, { session_id: "sess-2", status: "completed", response: "reply" });
+			// A channel agent has no mailbox; respond must not mint one for it.
+			expect(mailboxStore.get("agent-conv")).toBeUndefined();
 		});
 	});
 });
