@@ -9,8 +9,8 @@ package com.atelier_nyaarium.switchboard.proto
  * Hand-authored twin of src/shared/sync-cursor.ts, kept equivalent by the shared vectors
  * in tests/fixtures/sync-cursor/vectors.json (read by both runtimes). advance() is PURE:
  * the caller renders + persists threads first, then commits the cursor last, so a crash
- * between the two re-delivers (dedupe absorbs) rather than skips. See the TS file and
- * plans/mailbox-sync-contract.md for the design rationale.
+ * between the two re-delivers (dedupe absorbs) rather than skips. See the TS file for
+ * the design rationale.
  */
 
 /** A drained mailbox entry, reduced to the only field the cursor rules need. */

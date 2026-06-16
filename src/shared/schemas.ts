@@ -6,8 +6,8 @@ import { z } from "zod";
 //  The single truth for the wire enums; the TS types in types.ts derive from
 //  these via z.infer. Decode-side tolerance note: these closed enums validate
 //  what OUR side composes or what a closed protocol surface accepts. Fields a
-//  phone DECODES (e.g. MailboxEntry.request_type) stay open strings - see the
-//  schema-first plan's additive rule.
+//  phone DECODES (e.g. MailboxEntry.request_type) stay open strings, per the
+//  additive decode-tolerance rule.
 
 export const ConnectionModeSchema = z.enum(["cli", "channel"]).meta({ id: "ConnectionMode" });
 export const EffortLevelSchema = z.enum(["simple", "standard", "complex"]).meta({ id: "EffortLevel" });

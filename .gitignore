@@ -4,10 +4,7 @@ node_modules/
 # Development
 _test/
 temp/
-# Arbiter runtime state (bind-mounted as the container's /app/log). Holds the
-# durable mailbox/pending-job snapshots, the log, AND the Host's private
-# federation keypair - must never be committed.
-/.cursor/
+/.cursor/*.log
 /.swc/
 /.vscode-server/
 /.vscode/

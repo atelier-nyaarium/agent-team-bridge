@@ -3,7 +3,7 @@ import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 
 ////////////////////////////////
-//  Delivery-state durability (BC1)
+//  Delivery-state durability
 //
 //  The arbiter snapshots its in-memory delivery state to disk and reloads it on boot so a
 //  restart/deploy no longer 404s a reply ("no pending request") or loses queued mail.

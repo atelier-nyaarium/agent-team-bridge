@@ -363,7 +363,7 @@ export function createPhoneHandler({
 				// Permanent low-noise delivery observability: log only a poll that actually
 				// hands entries to the phone or signals a dropped-entry gap, never the
 				// steady stream of empty held polls. This is the one window into whether a
-				// reply reached the phone's poll (the blind spot that hid the Track A/C bugs).
+				// reply reached the phone's poll (the blind spot that hid the earlier delivery bugs).
 				if (snap.entries.length > 0 || snap.dropped > 0) {
 					console.log(
 						`[phone poll] conv=${conversationId.slice(0, 12)} reqCursor=${op.cursor ?? 0} reqEpoch=${op.epoch ?? "none"} -> drained=${snap.entries.length} retCursor=${snap.cursor} retEpoch=${snap.epoch} dropped=${snap.dropped}`,

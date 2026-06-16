@@ -4,7 +4,7 @@
 //
 //   bun scripts/codegen-kotlin.ts
 //
-// Emission rules (see plans/schema-first.md Phase 1):
+// Emission rules:
 // - Sealed classes ONLY for encode-side discriminated unions (the phone
 //   composes them, closure is safe). The list is hardcoded below. Everything
 //   else the phone DECODES stays forward-compatible: enums emit as open
