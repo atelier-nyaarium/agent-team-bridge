@@ -233,3 +233,51 @@ describe("DeviceMailboxStore", () => {
 		expect(store.get("kept")).toBeDefined();
 	});
 });
+
+describe("DeviceMailbox idempotent dedupeKey upsert", () => {
+	it("a repeat dedupeKey does not append a duplicate and returns the original seq", () => {
+		const box = new DeviceMailbox(1);
+		const a = box.append(message("s1", "hi"), "op-1");
+		const b = box.append(message("s1", "hi"), "op-1");
+		expect(a.seq).toBe(1);
+		expect(b.seq).toBe(1);
+		expect(box.size).toBe(1);
+		expect(box.highWater).toBe(1);
+	});
+
+	it("distinct dedupeKeys append distinct entries", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "a"), "op-1");
+		box.append(message("s1", "b"), "op-2");
+		expect(box.size).toBe(2);
+		expect(box.highWater).toBe(2);
+	});
+
+	it("appends without a dedupeKey are never deduped", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "a"));
+		box.append(message("s1", "a"));
+		expect(box.size).toBe(2);
+	});
+
+	it("a retry is still deduped after the original was acked and removed", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "hi"), "op-1");
+		box.drain(1, 1); // ack seq 1, removes the entry
+		expect(box.size).toBe(0);
+		const retry = box.append(message("s1", "hi"), "op-1");
+		expect(retry.seq).toBe(1); // the original seq, not a fresh one
+		expect(box.size).toBe(0); // not re-appended
+		expect(box.highWater).toBe(1); // nextSeq did not advance
+	});
+
+	it("dedup survives a snapshot/restore round trip", () => {
+		const box = new DeviceMailbox(7);
+		box.append(message("s1", "hi"), "op-1");
+		const restored = DeviceMailbox.fromSnapshot(box.snapshot());
+		const retry = restored.append(message("s1", "hi"), "op-1");
+		expect(retry.seq).toBe(1);
+		expect(restored.size).toBe(1); // still just the one entry
+		expect(restored.highWater).toBe(1);
+	});
+});

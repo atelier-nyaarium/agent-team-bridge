@@ -18,6 +18,9 @@ export interface MailboxSnapshotState {
 	dropped: number;
 	lastActivity: number;
 	entries: MailboxEntry[];
+	// dedupeKey -> seq, so idempotent append survives a restart: a relay retry
+	// after a deploy must not re-append. Optional - older snapshots omit it.
+	seenKeys?: Array<[string, number]>;
 }
 
 const DEFAULT_MAX_ENTRIES = 200;
@@ -25,6 +28,7 @@ const DEFAULT_MAX_BYTES = 30_000_000;
 const DEFAULT_TTL_MS = 3_600_000;
 const DEFAULT_SWEEP_MS = 300_000;
 const DEFAULT_MAX_DEVICES = 500;
+const DEFAULT_MAX_SEEN_KEYS = 4096;
 
 /** Cheap byte estimate for cap accounting: the body plus the base64 of every
  * attachment, which dominates. Avoids re-serializing the whole entry per append. */
@@ -66,6 +70,9 @@ export class DeviceMailbox {
 	private bytesUsed = 0;
 	private nextSeq = 1;
 	private dropped = 0;
+	// dedupeKey -> the seq it first produced. Bounds an at-least-once relay retry
+	// to a single append. FIFO-capped; persisted so dedup survives a restart.
+	private seenKeys = new Map<string, number>();
 	private maxEntries: number;
 	private maxBytes: number;
 	private waiters: Array<() => void> = [];
@@ -90,11 +97,22 @@ export class DeviceMailbox {
 		this.lastActivity = Date.now();
 	}
 
-	append(input: MailboxInput): MailboxEntry {
+	append(input: MailboxInput, dedupeKey?: string): MailboxEntry {
+		if (dedupeKey !== undefined) {
+			const seenSeq = this.seenKeys.get(dedupeKey);
+			if (seenSeq !== undefined) {
+				// Idempotent: an at-least-once relay retry of an already-appended op.
+				// Never append a duplicate; return the prior entry if still resident,
+				// else a stand-in carrying its original seq.
+				const existing = this.entries.find((e) => e.seq === seenSeq);
+				return existing ?? { ...input, seq: seenSeq, at: Date.now() };
+			}
+		}
 		const entry: MailboxEntry = { ...input, seq: this.nextSeq++, at: Date.now() };
 		this.entries.push(entry);
 		this.entryBytes.push(entryBytes(input));
 		this.bytesUsed += this.entryBytes[this.entryBytes.length - 1];
+		if (dedupeKey !== undefined) this.recordSeen(dedupeKey, entry.seq);
 		// Evict the oldest entries until both the count cap and the byte cap hold.
 		// Always keep the just-appended entry even if it alone exceeds the byte cap
 		// (a single oversized file is rejected upstream; this is only a backstop).
@@ -106,6 +124,18 @@ export class DeviceMailbox {
 		this.lastActivity = Date.now();
 		this.releaseWaiters();
 		return entry;
+	}
+
+	/** Record dedupeKey -> seq, FIFO-bounded so a flood of unique keys cannot grow
+	 * unbounded. A retry older than the cap is implausible. Map iteration is
+	 * insertion-ordered, so the first key is the oldest. */
+	private recordSeen(key: string, seq: number): void {
+		this.seenKeys.set(key, seq);
+		while (this.seenKeys.size > DEFAULT_MAX_SEEN_KEYS) {
+			const oldest = this.seenKeys.keys().next().value;
+			if (oldest === undefined) break;
+			this.seenKeys.delete(oldest);
+		}
 	}
 
 	/**
@@ -179,6 +209,7 @@ export class DeviceMailbox {
 			dropped: this.dropped,
 			lastActivity: this.lastActivity,
 			entries: [...this.entries],
+			seenKeys: [...this.seenKeys],
 		};
 	}
 
@@ -199,6 +230,7 @@ export class DeviceMailbox {
 			box.entryBytes.push(b);
 			box.bytesUsed += b;
 		}
+		if (s.seenKeys) for (const [k, v] of s.seenKeys) box.seenKeys.set(k, v);
 		return box;
 	}
 }
