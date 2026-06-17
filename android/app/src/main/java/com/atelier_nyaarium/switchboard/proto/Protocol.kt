@@ -32,7 +32,7 @@ object Protocol {
 	/** Session-id prefix for channel conversations; the target team is the tail after the LAST colon. */
 	const val CONV_SESSION_PREFIX: String = "conv:"
 
-	/** Separator in a host-qualified name (host then local name); the first one splits host from local name. */
+	/** Separator in a switch-qualified name (switch then local name); the first one splits switch from local name. */
 	const val SWITCH_QUALIFIER_SEP: String = "/"
 }
 
@@ -198,6 +198,10 @@ data class Provisioning(
 	val conversationId: String? = null,
 	val sttsUrl: String? = null,
 	val sttsKey: String? = null,
+	val identity: String? = null,
+	val switchId: String? = null,
+	val switchSignPub: String? = null,
+	val switchBoxPub: String? = null,
 )
 
 @Serializable

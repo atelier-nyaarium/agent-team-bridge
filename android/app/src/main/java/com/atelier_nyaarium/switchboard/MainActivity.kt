@@ -9,7 +9,6 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import com.atelier_nyaarium.switchboard.enroll.EnrollScreen
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -142,7 +141,6 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	val activity = context as? FragmentActivity
 	var openTeam by remember { mutableStateOf<String?>(null) }
 	var showSettings by remember { mutableStateOf(false) }
-	var showEnroll by remember { mutableStateOf(false) }
 	var unlocked by remember { mutableStateOf(false) }
 
 	// WebView pool lives at App scope (never leaves composition) so each thread's
@@ -238,9 +236,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	}
 
 	// System back navigates within the app (thread/settings -> sessions) instead of exiting.
-	BackHandler(enabled = openTeam != null || showSettings || showEnroll) {
+	BackHandler(enabled = openTeam != null || showSettings) {
 		when {
-			showEnroll -> showEnroll = false
 			openTeam != null -> openTeam = null
 			showSettings -> showSettings = false
 		}
@@ -249,21 +246,12 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	when {
 		!state.provisioned -> ProvisionScreen(onProvision = { scope.launch { repo.provision(it) } })
 		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
-		showEnroll -> {
-			val controller = repo.enrollmentController()
-			if (controller != null) {
-				EnrollScreen(controller = controller, onBack = { showEnroll = false })
-			} else {
-				LaunchedEffect(Unit) { showEnroll = false }
-			}
-		}
 		showSettings ->
 			SettingsScreen(
 				state = state,
 				repo = repo,
 				onSetDeviceName = { scope.launch { repo.setDeviceName(it) } },
 				onToggleBiometric = { repo.setBiometricLock(it) },
-				onEnroll = { showEnroll = true },
 				onClear = {
 					scope.launch { repo.clearAll() }
 					showSettings = false
@@ -556,8 +544,10 @@ fun SessionsScreen(
 fun HealthHeader(state: ChatState) {
 	val (dot, label) = when (state.health) {
 		ChatState.Health.ONLINE -> Color(0xFF2EA043) to "Bridge online"
-		ChatState.Health.DEGRADED -> Color(0xFFD29922) to "Reconnecting..."
-		ChatState.Health.OFFLINE -> Color(0xFFCF222E) to "Offline"
+		// Show the SPECIFIC classified cause (set by classifyConnError) rather than a
+		// blanket label, so the header tells the human exactly what to fix.
+		ChatState.Health.DEGRADED -> Color(0xFFD29922) to (state.error ?: "Reconnecting...")
+		ChatState.Health.OFFLINE -> Color(0xFFCF222E) to (state.error ?: "Offline")
 	}
 	Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
 		Row(
@@ -951,7 +941,6 @@ fun SettingsScreen(
 	repo: ChatRepository,
 	onSetDeviceName: (String) -> Unit,
 	onToggleBiometric: (Boolean) -> Unit,
-	onEnroll: () -> Unit,
 	onClear: () -> Unit,
 	onBack: () -> Unit,
 ) {
@@ -1000,14 +989,6 @@ fun SettingsScreen(
 
 			HorizontalDivider()
 			AppUpdateRow()
-
-			HorizontalDivider()
-			Text("Federation enrollment", style = MaterialTheme.typography.titleMedium)
-			Text(
-				"Scan an enrollment QR to root this device as the Domain owner, or to admit an arbiter or second device.",
-				style = MaterialTheme.typography.bodySmall,
-			)
-			OutlinedButton(onClick = onEnroll) { Text("Enroll by QR") }
 
 			HorizontalDivider()
 			Spacer(Modifier.width(0.dp))

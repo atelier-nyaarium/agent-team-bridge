@@ -3,7 +3,7 @@ package com.atelier_nyaarium.switchboard
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
-import com.atelier_nyaarium.switchboard.enroll.EnrollmentController
+import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.NoticeId
 import com.atelier_nyaarium.switchboard.proto.SessionId
@@ -74,8 +74,8 @@ data class ChatState(
 	val labels: Map<String, String> = emptyMap(),
 	val connected: Boolean = false,
 	val pollFailStreak: Int = 0,
-	/** Connected Host id, learned from the register result. Empty before the first
-	 * federation-aware connect; bare names resolve to the local Host in that case. */
+	/** Connected Switch id, learned from the register result. Empty before the first
+	 * federation-aware connect; bare names resolve to the local Switch in that case. */
 	val localSwitchId: String = "",
 ) {
 	/** Sessions shows live teams plus any team we already have a thread with
@@ -122,10 +122,58 @@ data class ChatState(
 		?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
 
 	/** The user's friendly name for a team, falling back to its short local name
-	 * (the tail after the host qualifier; the whole key when bare). The qualified
-	 * `host/local` key is never shown raw. */
+	 * (the tail after the switch qualifier; the whole key when bare). The qualified
+	 * `switch/local` key is never shown raw. */
 	fun label(team: String, localSwitchId: String = ""): String =
 		labels[team] ?: TeamAddress.parse(team, localSwitchId).name
+}
+
+/**
+ * Map a connect/poll failure to a SPECIFIC, actionable cause instead of a blanket
+ * "Connection issue". `transient` = retrying may clear it (a network or server blip);
+ * a non-transient cause needs the human to act, so the UI surfaces it immediately
+ * instead of waiting out a failure streak. ConsoleClient preserves the real cause in
+ * the exception message ("This device is not enrolled...", "HTTP 404: ...", a TLS
+ * exception), so this is a pure mapping - no new probing.
+ */
+internal fun classifyConnError(e: Throwable): Pair<String, Boolean> {
+	val m = e.message ?: ""
+	return when {
+		m.contains("not enrolled", ignoreCase = true) ->
+			"Not enrolled - re-run provision-console.sh and re-import the setup blob" to false
+		m.contains("not admitted", ignoreCase = true) ->
+			"Switch not admitted - re-run provision-console.sh on the server" to false
+		m.startsWith("HTTP 400") ->
+			"Protocol mismatch (400) - update the app, or re-run provision-console.sh" to false
+		m.startsWith("HTTP 401") ->
+			"Bridge token rejected (401) - re-run provision-console.sh and re-import the blob" to false
+		m.startsWith("HTTP 403") ->
+			"Not authorized (403) - cluster credentials expired, re-run provision-console.sh" to false
+		m.startsWith("HTTP 404") ->
+			"Console bridge not deployed (404) - run provision-console.sh on the server" to false
+		m.startsWith("HTTP 409") ->
+			"A previous send is still in flight - retrying" to true
+		m.startsWith("HTTP 500") ->
+			"Server error - retrying" to true
+		m.startsWith("HTTP 502") || m.startsWith("HTTP 503") ->
+			"The Switch is unreachable right now - retrying" to true
+		m.startsWith("HTTP 504") ->
+			"The server took too long to answer - retrying" to true
+		e is javax.net.ssl.SSLHandshakeException || e is java.security.cert.CertificateException ||
+			m.contains("trust anchor", ignoreCase = true) || m.contains("CertPath", ignoreCase = true) ->
+			"Cluster CA changed - re-provision (the server certificate no longer matches)" to false
+		// Sealed-channel rejection (bad signature / replayed / stale op / decrypt fail):
+		// the Switch no longer trusts this device's key. Checked AFTER the TLS branch so a
+		// handshake-signature error is not mislabeled. Re-provisioning re-admits the device.
+		m.contains("signature", ignoreCase = true) || m.contains("replay", ignoreCase = true) ||
+			m.contains("decrypt", ignoreCase = true) || m.contains("stale op", ignoreCase = true) ->
+			"Secure channel rejected - re-run provision-console.sh and re-import the blob" to false
+		e is java.net.UnknownHostException ->
+			"Offline - no network" to true
+		e is java.net.ConnectException || e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException ->
+			"Can't reach the server - retrying" to true
+		else -> "Error: ${m.take(100)}" to true
+	}
 }
 
 /**
@@ -160,7 +208,7 @@ private data class Drained(val entry: MailboxEntry) : SyncEntry {
  * tab set, and a poll loop that drains the device mailbox, dedupes by mailbox seq,
  * and routes each reply to its team (parsed from the `conv:<id>:<team>` session id
  * or the entry's `from`). Transcripts persist (encrypted) so history survives
- * restarts; the durable host-side ledger is a later phase.
+ * restarts; the durable switch-side ledger is a later phase.
  */
 class ChatRepository(
 	private val store: ProvisioningStore,
@@ -237,13 +285,6 @@ class ChatRepository(
 		client?.let { return it }
 		val blob = store.load() ?: error("not provisioned")
 		return ConsoleClient(Provisioning.parse(blob), store).also { client = it }
-	}
-
-	/** Enrollment controller over this device's identity store + bridge client, or
-	 * null when not provisioned (no bridge to reach for enroll ops). */
-	fun enrollmentController(): EnrollmentController? {
-		val c = runCatching { client() }.getOrNull() ?: return null
-		return EnrollmentController(store, c)
 	}
 
 	/** STTS client from the provisioning blob, or null when not configured.
@@ -382,6 +423,24 @@ class ChatRepository(
 			return@withContext
 		}
 		store.save(blob)
+		// If the setup script (provision-console.sh --setup) embedded a Console identity,
+		// import it into the keystore so the device is enrolled from the blob ALONE - no
+		// separate enroll/QR step. A decode/persist failure is non-fatal: re-run the setup
+		// script and re-import. A legacy blob (no identity) leaves the prior identity intact.
+		if (prov.identity.isNotEmpty()) {
+			runCatching { store.saveIdentity(wireJson.decodeFromString(Crypto.Identity.serializer(), prov.identity)) }
+				.onFailure { DebugLog.log("Provision", "identity import failed: ${it.message?.take(120)}") }
+		}
+		// The setup script also embeds the home Switch's id + keys, so the app can seal its
+		// FIRST op (register is itself sealed) without an admit-switch scan. Persist them the
+		// same way admit-switch used to. Non-fatal: a legacy blob omits these and the app then
+		// needs an interactive admit.
+		if (prov.switchId.isNotEmpty() && prov.switchSignPub.isNotEmpty() && prov.switchBoxPub.isNotEmpty()) {
+			runCatching {
+				store.saveSwitchKeys(prov.switchId, prov.switchSignPub, prov.switchBoxPub)
+				store.saveSwitchId(prov.switchId)
+			}.onFailure { DebugLog.log("Provision", "switch-keys import failed: ${it.message?.take(120)}") }
+		}
 		client = null
 		sttsClient = null
 		_state.update { it.copy(provisioned = true, error = null, deviceName = prov.device) }
@@ -389,6 +448,14 @@ class ChatRepository(
 
 	suspend fun connect() = withContext(Dispatchers.IO) {
 		try {
+			// Preflight the cluster path (API server + SA token + TLS) before blaming the
+			// bridge or enrollment, so a stale blob says "re-provision" and a missing
+			// identity says "not enrolled" - two different fixes that used to look identical.
+			runCatching { client().apiReachable() }.onFailure { e ->
+				val (cause, _) = classifyConnError(e)
+				_state.update { it.copy(status = "error", error = "Cluster: $cause", connected = false) }
+				return@withContext
+			}
 			// register's cursor/epoch are no longer adopted: MailboxSync owns the durable
 			// cursor. We still register (to learn switchId, claim the mailbox, get the epoch
 			// the box is on); the poll loop's advance() reconciles any epoch change.
@@ -399,12 +466,12 @@ class ChatRepository(
 					store.saveSwitchId(id)
 				}
 			}
-			// Repair any thread/label/unread/tab key minted under an empty/unknown host
-			// now that the real host id is known, so an inbound reply (keyed host/name)
+			// Repair any thread/label/unread/tab key minted under an empty/unknown switch
+			// now that the real switch id is known, so an inbound reply (keyed switch/name)
 			// can no longer file into a ghost "/name" thread the open tab cannot read.
 			recanonicalizeAllKeys(localSwitchId)
-			// Pin every subsequent relay to this home Host so the Router routes there
-			// even once other Hosts join the mesh.
+			// Pin every subsequent relay to this home Switch so the Switch routes there
+			// even once other Switches join the mesh.
 			client().homeSwitch = localSwitchId.ifEmpty { null }
 			// A teams refresh failure is not a connect failure: register succeeded, so we
 			// are connected. Log and proceed with the prior team list rather than masking
@@ -427,7 +494,8 @@ class ChatRepository(
 			val blob = store.load()
 			if (blob != null) runCatching { DebugLog.attachIngest(Provisioning.parse(blob)) }
 		} catch (e: Exception) {
-			_state.update { it.copy(status = "error", error = e.message, connected = false) }
+			val (cause, _) = classifyConnError(e)
+			_state.update { it.copy(status = "error", error = cause, connected = false) }
 		}
 	}
 
@@ -436,8 +504,8 @@ class ChatRepository(
 	}
 
 	/** Repair every in-memory key (threads, unread, labels, open tabs) to canonical once
-	 * the host id is known, merging any collisions, so a thread loaded under an empty or
-	 * unknown host ("/name") can no longer shadow the canonical "host/name" an inbound
+	 * the switch id is known, merging any collisions, so a thread loaded under an empty or
+	 * unknown switch ("/name") can no longer shadow the canonical "switch/name" an inbound
 	 * reply keys under. A no-op when every key is already canonical (the steady state),
 	 * so it costs nothing on a normal connect; only a one-time repair persists. The repair
 	 * lands at the startup connect() before any thread WebView is open (openTabs is not
@@ -558,7 +626,11 @@ class ChatRepository(
 				else -> setMessageStatus(team, echoId, null)
 			}
 		} catch (e: Exception) {
-			fail(e.message)
+			// Route through the same classifier the poll loop + connect use, so a send
+			// surfaces a legible cause ("Can't reach the server", "Bridge token rejected")
+			// instead of a raw "HTTP 401: {json}" exception string.
+			val (cause, _) = classifyConnError(e)
+			fail(cause)
 		}
 	}
 
@@ -735,16 +807,16 @@ class ChatRepository(
 						DebugLog.log("Poll", "hold timeout (504) treated as empty long-poll")
 						heldEmpty = true
 					} else {
-						// One blip is silent; the loop retries every cycle. Surface only
-						// after a couple of consecutive failures, cleared on next success.
+						// Name the SPECIFIC cause instead of a blanket "Connection issue". A
+						// non-transient cause (not enrolled, bridge not deployed, bad creds)
+						// cannot clear by retrying, so surface it on the first failure; a
+						// transient blip waits for a second failure so one hiccup never alarms.
+						val (cause, transient) = classifyConnError(e)
 						DebugLog.log("Poll", "error streak=${ pollFails + 1 }: ${e.message?.take(120)}")
 						failed = true
 						pollFails++
-						_state.update { it.copy(pollFailStreak = pollFails) }
-						if (pollFails >= 2) {
-							val msg =
-								if (e is java.net.UnknownHostException) "Offline. Retrying..." else "Connection issue, retrying..."
-							_state.update { it.copy(error = msg) }
+						_state.update {
+							it.copy(pollFailStreak = pollFails, error = if (!transient || pollFails >= 2) cause else it.error)
 						}
 					}
 					DebugLog.flushToIngest()
@@ -1003,7 +1075,7 @@ class ChatRepository(
 		val json = store.loadLabels() ?: return emptyMap()
 		return runCatching {
 			val root = JSONObject(json)
-			// Normalize legacy bare/empty-host keys to canonical form on load.
+			// Normalize legacy bare/empty-switch keys to canonical form on load.
 			buildMap {
 				for (rawKey in root.keys()) {
 					put(canonicalThreadKey(rawKey, localSwitchId), root.getString(rawKey))

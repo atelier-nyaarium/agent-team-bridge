@@ -353,7 +353,7 @@ ${INDENT}const val NOTICE_SESSION_PREFIX: String = ${kotlinString(NOTICE_SESSION
 ${INDENT}/** Session-id prefix for channel conversations; the target team is the tail after the LAST colon. */
 ${INDENT}const val CONV_SESSION_PREFIX: String = ${kotlinString(CONV_SESSION_PREFIX)}
 
-${INDENT}/** Separator in a host-qualified name (host then local name); the first one splits host from local name. */
+${INDENT}/** Separator in a switch-qualified name (switch then local name); the first one splits switch from local name. */
 ${INDENT}const val SWITCH_QUALIFIER_SEP: String = ${kotlinString(SWITCH_QUALIFIER_SEP)}
 }`;
 

@@ -54,6 +54,15 @@ data class Provisioning(
 	val sttsUrl: String = "",
 	/** STTS API key, sent as the vrcstt-api-key header; empty disables Play. */
 	val sttsKey: String = "",
+	/** Console identity (a JSON-encoded Crypto.Identity), minted + admitted by
+	 * provision-console.sh --setup. Empty for a legacy blob. ChatRepository.provision
+	 * imports it into the keystore so the device is enrolled from the blob alone. */
+	val identity: String = "",
+	/** The home Switch's id + public keys, set by provision-console.sh --setup so the app
+	 * can seal its first (register) op without an admit-switch scan. Empty for a legacy blob. */
+	val switchId: String = "",
+	val switchSignPub: String = "",
+	val switchBoxPub: String = "",
 ) {
 	companion object {
 		fun parse(blob: String): Provisioning {
@@ -70,6 +79,10 @@ data class Provisioning(
 				conversationId = p.conversationId ?: UUID.randomUUID().toString(),
 				sttsUrl = (p.sttsUrl ?: "").trimEnd('/'),
 				sttsKey = p.sttsKey ?: "",
+				identity = p.identity ?: "",
+				switchId = p.switchId ?: "",
+				switchSignPub = p.switchSignPub ?: "",
+				switchBoxPub = p.switchBoxPub ?: "",
 			)
 		}
 	}
@@ -77,8 +90,8 @@ data class Provisioning(
 
 /** UI model for the sessions board. Mapped one-to-one from the wire TeamInfo in
  * `teams()`; also constructed locally for ended threads whose team has left the
- * bridge (a state that never exists on the wire). `name` is the host-qualified
- * composite key (`host/local`); `displayName`/`host` derive from it. */
+ * bridge (a state that never exists on the wire). `name` is the switch-qualified
+ * composite key (`switch/local`); `displayName`/`switchId` derive from it. */
 data class Team(
 	val name: String,
 	val status: String,
@@ -100,7 +113,7 @@ data class OutgoingFile(val name: String, val mime: String, val bytes: ByteArray
 
 /** The owner enroll envelope: `enrollOp` (not `op`) routes to evie's enrollment
  * coordinator, which answers an EnrollResult directly instead of relaying to a
- * Host. */
+ * Switch. */
 @Serializable
 private data class EnrollEnvelope(
 	val device: String,
@@ -133,8 +146,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	private val proxyBase =
 		"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
 
-	/** This console's home Host id, learned at register and set by ChatRepository.
-	 * Rides every relay so the Router routes to the right Host; null until learned. */
+	/** This console's home Switch id, learned at register and set by ChatRepository.
+	 * Rides every relay so the Switch routes to the right Switch; null until learned. */
 	@Volatile
 	var homeSwitch: String? = null
 
@@ -174,7 +187,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	private fun resolveSwitchId(): String =
 		homeSwitch?.takeIf { it.isNotEmpty() }
 			?: store.loadSwitchId().takeIf { it.isNotEmpty() }
-			?: error("Home host not yet known. Complete enrollment and connect first.")
+			?: error("Home Switch not yet known. Complete enrollment and connect first.")
 
 	/** Build a sealed ConsoleRelayFrame for one op. Called fresh for every send,
 	 * including retries, so each attempt uses a new ephemeral/nonce and the
@@ -203,7 +216,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	}
 
 	/** Unseal a reply envelope using the console's box private key, verified against
-	 * the home host's signing public key. */
+	 * the home Switch's signing public key. */
 	private fun unsealReply(sealed: SealedEnvelope, identity: Crypto.Identity, hostSignPub: String): ConsoleReplyBody {
 		val plain = Crypto.unseal(sealed.toCrypto(), identity.box.priv, hostSignPub)
 		return wireJson.decodeFromString<ConsoleReplyBody>(plain.toString(Charsets.UTF_8))
@@ -248,7 +261,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 
 	/** Submit an owner enroll op directly to evie (the Domain root). evie answers
 	 * with an EnrollResult, not a console_relay_reply: enroll ops are evie-direct and
-	 * never relayed to a Host, so they succeed even with no arbiter connected. A
+	 * never relayed to a Switch, so they succeed even with no arbiter connected. A
 	 * bounce (offline / 501 / malformed) is surfaced as a failed EnrollResult. */
 	fun enroll(op: EnrollOp): EnrollResult {
 		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), op)

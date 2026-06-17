@@ -265,7 +265,7 @@ export function createConsoleHandler({
 				// CLI team is unknowable here (mode surfaces only on register), so
 				// it pays a wake and is then rejected by the route's channelOnly
 				// check instead of minting a random session id.
-				// The console may target a host-qualified name (`host/name`); strip the
+				// The console may target a switch-qualified name (`switch/name`); strip the
 				// switch for the local registry probe. Cross-switch targets are rejected
 				// by routes.send (federation routing is a later phase).
 				const localTarget = parseQualifiedTeam(op.to).name;

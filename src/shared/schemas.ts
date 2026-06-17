@@ -346,5 +346,17 @@ export const ProvisioningSchema = z
 		// STTS (TTS playback) service base URL + API key; absent disables Play.
 		sttsUrl: z.string().optional(),
 		sttsKey: z.string().optional(),
+		// Console identity: a JSON-encoded Crypto.Identity ({sign,box} keypairs) minted
+		// AND admitted by provision-console.sh --setup. When present, the app imports it
+		// on provision and is enrolled from the blob alone - no separate enroll/QR step.
+		// Absent for a legacy blob (the app then needs an interactive enroll).
+		identity: z.string().optional(),
+		// The home Switch's id + public keys, also set by provision-console.sh --setup.
+		// The app seals its FIRST op (register is itself sealed) TO the Switch's box key,
+		// so it must hold these before connecting - the admit-switch scan used to deliver
+		// them. With these in the blob, no admit-switch step is needed either.
+		switchId: z.string().optional(),
+		switchSignPub: z.string().optional(),
+		switchBoxPub: z.string().optional(),
 	})
 	.meta({ id: "Provisioning" });

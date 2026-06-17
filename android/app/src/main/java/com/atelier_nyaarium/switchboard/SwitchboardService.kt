@@ -76,9 +76,9 @@ class SwitchboardService : Service() {
 		repo.onInbound = { team, messages -> notifyBurst(repo, team, messages) }
 		// Keep the CPU awake for the poll loop while the bridge runs (background delivery).
 		acquireWakeLock()
-		// connect() runs register (which sets the Host id, cursor, epoch) and the
-		// on-device host-id migration; start the poll loop only after it, so the
-		// loop never qualifies an inbound team under an as-yet-unknown Host id and
+		// connect() runs register (which sets the Switch id, cursor, epoch) and the
+		// on-device switch-id migration; start the poll loop only after it, so the
+		// loop never qualifies an inbound team under an as-yet-unknown Switch id and
 		// strands a bare-keyed thread beside its migrated, qualified twin. connect()
 		// never throws (it catches internally), so the poll loop always starts.
 		scope.launch(Dispatchers.IO) {

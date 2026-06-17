@@ -47,7 +47,7 @@ class SessionId private constructor(val conversationId: String, val target: Team
 
 		/** Parse a channel session id, or null if it is not one. The conversation
 		 * id is between the `conv:` prefix and the LAST colon; the tail is the
-		 * target team. An already-qualified target keeps its host. */
+		 * target team. An already-qualified target keeps its switch. */
 		fun parse(wire: String, localSwitchId: String): SessionId? {
 			if (!wire.startsWith(Protocol.CONV_SESSION_PREFIX)) return null
 			val lastColon = wire.lastIndexOf(':')
