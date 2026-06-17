@@ -5,14 +5,16 @@
 #   ./provision-console.sh --setup    full bootstrap: cluster cutover + Domain root +
 #                                      admit this Switch + a Console identity, then emit
 #                                      the provisioning blob the app imports.
+#   ./provision-console.sh --qr        re-open the enrollment-QR menu for the current blob
+#                                      (display in terminal, or save as an image).
 #   ./provision-console.sh --verify    health-probe the bridge + report what is/is not set up.
 #   ./provision-console.sh --help
 #
-# There is no "ask evie in Discord" step and no QR: this script (running on the trusted
-# host with cluster access) IS the bootstrap authority. The Domain ROOT key stays here
-# (reused on later --setup runs to admit more devices); only an admitted Console identity
-# + the cluster creds ride the emitted blob, a 0600 host-local file (never a DM or QR).
-# Re-run anytime to reset - the app just re-imports.
+# There is no "ask evie in Discord" step and no SAS dance: this script (running on the
+# trusted host with cluster access) IS the bootstrap authority. The Domain ROOT key stays
+# here (reused on later --setup runs to admit more devices); only an admitted Console
+# identity + the cluster creds ride the emitted blob, a 0600 host-local file. After setup, a
+# menu offers that blob as a scannable QR (in-terminal or a saved image), or you paste it.
 #
 # Mirrors the Switch's start-arbiter.sh --setup ergonomics.
 
@@ -33,6 +35,7 @@ BRIDGE_YAML="../evie-bot/deploy/console-bridge.yaml"
 SECRETS_DIR="${HOME}/android-dev/secrets"
 OWNER_FILE="${SECRETS_DIR}/console-owner-identity.json"   # the Domain root, host-only, reused
 BLOB_FILE="${SECRETS_DIR}/console-provisioning.json"      # the artifact the app imports
+QR_GIF="${SECRETS_DIR}/console-enrollment-qr.gif"         # optional saved QR image (menu opt 2)
 SERVICE="evie-console-bridge"
 PORT=20004
 
@@ -236,13 +239,71 @@ verify() {
 		err "VERIFY: bridge probe returned HTTP $code after retries (bridge still starting / creds) - re-run --verify shortly, or --setup"; return 1; fi
 }
 
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; }
+# Render the blob as a QR in this terminal (wide - the blob is ~2.7KB, ~177 modules).
+render_qr_terminal() {
+	SB_BLOB="$BLOB_FILE" SB_QR_MODE=terminal bun scripts/render-provisioning-qr.ts ||
+		{ err "could not render the QR (is the blob present?)"; return 1; }
+}
+
+# Save the blob's QR as a 0600 GIF and echo the path. Camera-friendly at any size.
+save_qr_image() {
+	SB_BLOB="$BLOB_FILE" SB_QR_MODE=image SB_QR_OUT="$QR_GIF" bun scripts/render-provisioning-qr.ts >/dev/null 2>&1 || return 1
+	chmod 600 "$QR_GIF" 2>/dev/null
+	printf '%s' "$QR_GIF"
+}
+
+# Post-setup dial menu: show the enrollment QR in the terminal, or save it as an image.
+# Quitting deletes a saved QR (the only enrollment-process file this leaves behind); the
+# 0600 blob stays at its path. Only runs interactively (skipped when stdin is not a TTY).
+qr_menu() {
+	local choice saved=""
+	while true; do
+		echo
+		echo "  Enrollment QR  (encodes $BLOB_FILE)"
+		echo "    1) Display the QR in this terminal (wide)"
+		echo "    2) Save the QR as an image -> $QR_GIF"
+		if [ -n "$saved" ]; then
+			echo "    q) Delete the saved QR and quit"
+		else
+			echo "    q) Quit"
+		fi
+		read -rp "  > " choice || break
+		case "$choice" in
+			1) echo; render_qr_terminal; echo ;;
+			2)
+				if saved=$(save_qr_image); then
+					note "saved: $saved  (open it and scan, or send it to the phone)"
+				else
+					err "could not save the QR image"; saved=""
+				fi
+				;;
+			q | Q)
+				[ -n "$saved" ] && { rm -f "$saved" && note "deleted saved QR: $saved"; }
+				note "Done. The blob remains at $BLOB_FILE (0600) for re-display via --qr."
+				break
+				;;
+			*) err "unknown option: '$choice' (use 1, 2, or q)" ;;
+		esac
+	done
+}
+
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-}" in
 	--setup)
 		require_container
-		cutover && bootstrap_domain && emit_blob && verify &&
-			{ echo; note "DONE. Import $BLOB_FILE into the Console app (paste or file-import). No QR, no enroll step."; }
+		cutover && bootstrap_domain && emit_blob && verify || exit 1
+		echo
+		note "Setup complete. Blob: $BLOB_FILE"
+		if [ -t 0 ]; then
+			qr_menu
+		else
+			note "Import $BLOB_FILE into the Console app (paste, or scan its QR via --qr). No enroll step."
+		fi
+		;;
+	--qr)
+		[ -f "$BLOB_FILE" ] || { err "no blob at $BLOB_FILE - run --setup first"; exit 1; }
+		qr_menu
 		;;
 	--verify) require_container; verify ;;
 	--help | "" ) usage ;;
