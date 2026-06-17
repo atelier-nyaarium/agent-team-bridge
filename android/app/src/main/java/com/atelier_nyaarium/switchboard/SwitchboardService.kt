@@ -212,7 +212,7 @@ class SwitchboardService : Service() {
 	private fun notifyBurst(repo: ChatRepository, team: String, messages: List<Message>) {
 		if (repo.isVisible || !canNotify()) return
 		val state = repo.state.value
-		val label = state.label(team, state.localHostId)
+		val label = state.label(team, state.localSwitchId)
 		val unread = state.unread[team] ?: messages.size
 		val style = NotificationCompat.InboxStyle()
 		for (m in messages.takeLast(5)) {

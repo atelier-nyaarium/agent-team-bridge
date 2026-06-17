@@ -9,7 +9,7 @@ const host = generateIdentity();
 describe("enrollment", () => {
 	it("parses each enrollment payload type and rejects an unknown one", () => {
 		expect(
-			EnrollmentPayloadSchema.safeParse({ type: "admit-host", hostId: "laptop", signPub: "a", boxPub: "b" })
+			EnrollmentPayloadSchema.safeParse({ type: "admit-switch", switchId: "laptop", signPub: "a", boxPub: "b" })
 				.success,
 		).toBe(true);
 		expect(
@@ -26,16 +26,26 @@ describe("enrollment", () => {
 	});
 
 	it("derives the SAS from the confirmed signing key", () => {
-		const payload = { type: "admit-host" as const, hostId: "laptop", signPub: host.sign.pub, boxPub: host.box.pub };
+		const payload = {
+			type: "admit-switch" as const,
+			switchId: "laptop",
+			signPub: host.sign.pub,
+			boxPub: host.box.pub,
+		};
 		expect(payloadSas(payload)).toBe(fingerprint(host.sign.pub));
 	});
 
-	it("admits a scanned Host into the allowlist", () => {
-		const payload = { type: "admit-host" as const, hostId: "laptop", signPub: host.sign.pub, boxPub: host.box.pub };
+	it("admits a scanned Switch into the allowlist", () => {
+		const payload = {
+			type: "admit-switch" as const,
+			switchId: "laptop",
+			signPub: host.sign.pub,
+			boxPub: host.box.pub,
+		};
 		const signed = admissionFromScan(payload, owner.sign.priv, owner.sign.pub, 1000, "bg==");
 		expect(verifyAdmission(signed, owner.sign.pub)).toBe(true);
 		const got = resolveAdmitted([signed], [], owner.sign.pub, host.sign.pub);
-		expect(got).toMatchObject({ kind: "host", hostId: "laptop", boxPub: host.box.pub });
+		expect(got).toMatchObject({ kind: "switch", switchId: "laptop", boxPub: host.box.pub });
 	});
 
 	it("parses each enroll op and rejects an unfilled redeem", () => {
@@ -45,10 +55,10 @@ describe("enrollment", () => {
 		).toBe(true);
 		const signed = signAdmission(
 			{
-				kind: "host",
+				kind: "switch",
 				signPub: host.sign.pub,
 				boxPub: host.box.pub,
-				hostId: "laptop",
+				switchId: "laptop",
 				issuedAt: 1,
 				nonce: "bg==",
 			},
@@ -60,7 +70,7 @@ describe("enrollment", () => {
 		expect(EnrollOpSchema.safeParse({ kind: "enroll_redeem", nonce: "n" }).success).toBe(false);
 	});
 
-	it("admits a scanned phone with kind phone (no hostId)", () => {
+	it("admits a scanned phone with kind phone (no switchId)", () => {
 		const phone = generateIdentity();
 		const payload = {
 			type: "authorize-phone" as const,
@@ -70,7 +80,7 @@ describe("enrollment", () => {
 		};
 		const signed = admissionFromScan(payload, owner.sign.priv, owner.sign.pub, 2000, "cg==");
 		expect(signed.admission.kind).toBe("phone");
-		expect(signed.admission.hostId).toBeUndefined();
+		expect(signed.admission.switchId).toBeUndefined();
 		expect(resolveAdmitted([signed], [], owner.sign.pub, phone.sign.pub)?.kind).toBe("phone");
 	});
 });

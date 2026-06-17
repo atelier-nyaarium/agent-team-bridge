@@ -30,21 +30,21 @@ type AllowlistFile = z.infer<typeof AllowlistFileSchema>;
 
 const ALLOWLIST_FILE = "federation-allowlist.json";
 
-/** The mirrored Domain allowlist on a Host (audit R3): the owner root plus the
- * owner-signed admissions / revocations, persisted to the Host's volume so a
- * revocation bites even while evie is unreachable. Resolution maps a Host id to
+/** The mirrored Domain allowlist on a Switch (audit R3): the owner root plus the
+ * owner-signed admissions / revocations, persisted to the Switch's volume so a
+ * revocation bites even while evie is unreachable. Resolution maps a Switch id to
  * its admitted keys for sealing, and a sender key to its admission for unsealing. */
 export class Allowlist {
 	private file: string;
 	private state: AllowlistFile;
 	// The owner root pinned out-of-band (FEDERATION_OWNER_SIGN_PUB). When set, a
 	// snapshot rooted at any other key is refused - so a malicious / token-holding
-	// evie cannot root a fresh Host at an attacker key (the snapshot is relayed
+	// evie cannot root a fresh Switch at an attacker key (the snapshot is relayed
 	// through untrusted evie). Null = trust-on-first-use (convenient, but trusts
 	// evie at the bootstrap; pinning is recommended for the untrusted-evie model).
 	private readonly pinnedOwner: string | null;
 	// Strict mode (FEDERATION_REQUIRE_OWNER_PIN): when set without an out-of-band pin,
-	// the Host refuses to root at all rather than trust-on-first-use. For the
+	// the Switch refuses to root at all rather than trust-on-first-use. For the
 	// untrusted-evie model where TOFU is unacceptable.
 	private readonly requireOwnerPin: boolean;
 
@@ -53,7 +53,7 @@ export class Allowlist {
 		this.pinnedOwner = pinnedOwner ?? null;
 		this.requireOwnerPin = requireOwnerPin;
 		this.state = this.read();
-		// A pin that disagrees with a persisted root means the Host was previously
+		// A pin that disagrees with a persisted root means the Switch was previously
 		// rooted at a different key; refuse to serve the stale root.
 		if (this.pinnedOwner && this.state.ownerSignPub && this.state.ownerSignPub !== this.pinnedOwner) {
 			console.warn(`[allowlist] persisted owner root != pinned owner; clearing the stale root`);
@@ -81,7 +81,7 @@ export class Allowlist {
 	}
 
 	/** Set the Domain root once, at enrollment. Refuses to silently re-root an
-	 * already-enrolled Host (recovery is a deliberate, separate path). */
+	 * already-enrolled Switch (recovery is a deliberate, separate path). */
 	setOwner(ownerSignPubB64: string): void {
 		if (this.requireOwnerPin && !this.pinnedOwner) {
 			throw new Error("FEDERATION_REQUIRE_OWNER_PIN is set but no owner pin is configured; refusing to root");
@@ -105,10 +105,10 @@ export class Allowlist {
 	 * allowlist with the snapshot's owner-verified entries, so a re-sync converges
 	 * rather than accumulating duplicates. Refuses to ROOT at a key other than the
 	 * out-of-band pin (untrusted-evie defense), and refuses to silently re-root an
-	 * already-rooted Host (recovery is a deliberate, separate path). */
+	 * already-rooted Switch (recovery is a deliberate, separate path). */
 	applySnapshot(snapshot: DomainSnapshot): void {
 		// The snapshot arrives through untrusted evie. If an owner is pinned, the
-		// root MUST match it; otherwise evie could root a fresh Host at any key.
+		// root MUST match it; otherwise evie could root a fresh Switch at any key.
 		if (this.pinnedOwner && snapshot.ownerSignPub !== this.pinnedOwner) {
 			console.warn(`[allowlist] ignoring domain sync: root does not match the pinned owner key`);
 			return;
@@ -154,7 +154,7 @@ export class Allowlist {
 		return true;
 	}
 
-	/** This Host's own owner-signed admission (newest verified for its signing
+	/** This Switch's own owner-signed admission (newest verified for its signing
 	 * key), to present at registration so evie can gate it. Null pre-enrollment. */
 	selfAdmission(signPubB64: string): SignedAdmission | null {
 		if (!this.state.ownerSignPub) return null;
@@ -173,14 +173,14 @@ export class Allowlist {
 		return resolveAdmitted(this.state.admissions, this.state.revocations, this.state.ownerSignPub, signPubB64);
 	}
 
-	/** The admitted keys for a Host id (its newest non-revoked host admission), for
-	 * sealing a cross-Host frame to it. */
-	resolveHost(hostId: string): { signPub: string; boxPub: string } | null {
+	/** The admitted keys for a Switch id (its newest non-revoked switch admission), for
+	 * sealing a cross-Switch frame to it. */
+	resolveSwitch(switchId: string): { signPub: string; boxPub: string } | null {
 		if (!this.state.ownerSignPub) return null;
 		let best: Admission | null = null;
 		for (const s of this.state.admissions) {
 			const a = s.admission;
-			if (a.kind !== "host" || a.hostId !== hostId) continue;
+			if (a.kind !== "switch" || a.switchId !== switchId) continue;
 			if (!verifyAdmission(s, this.state.ownerSignPub)) continue;
 			if (!best || a.issuedAt > best.issuedAt) best = a;
 		}

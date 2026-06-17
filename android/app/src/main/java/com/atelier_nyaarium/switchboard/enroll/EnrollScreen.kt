@@ -38,7 +38,7 @@ import kotlinx.coroutines.withContext
 /**
  * The owner-device enrollment screen: scan a typed QR, confirm its SAS
  * fingerprint out-of-band, then redeem (enroll-owner) or owner-sign + submit an
- * admission (admit-host / authorize-phone). The signing happens locally; only the
+ * admission (admit-switch / authorize-phone). The signing happens locally; only the
  * signed artifact + the device's public keys leave the phone.
  */
 @Composable
@@ -94,7 +94,7 @@ fun EnrollScreen(controller: EnrollmentController, onBack: () -> Unit) {
 					runCatching {
 						when (payload) {
 							is EnrollmentPayload.EnrollOwner -> controller.redeemOwner(payload)
-							is EnrollmentPayload.AdmitHost -> controller.admitHost(payload)
+							is EnrollmentPayload.AdmitSwitch -> controller.admitSwitch(payload)
 							is EnrollmentPayload.AuthorizePhone -> controller.authorizePhone(payload)
 						}
 					}
@@ -179,13 +179,13 @@ fun EnrollScreen(controller: EnrollmentController, onBack: () -> Unit) {
 private fun payloadTitle(payload: EnrollmentPayload): String =
 	when (payload) {
 		is EnrollmentPayload.EnrollOwner -> "Become the Domain owner"
-		is EnrollmentPayload.AdmitHost -> "Admit Host \"${payload.hostId}\""
+		is EnrollmentPayload.AdmitSwitch -> "Admit Switch \"${payload.switchId}\""
 		is EnrollmentPayload.AuthorizePhone -> "Authorize a second owner device"
 	}
 
 private fun payloadDetail(payload: EnrollmentPayload): String? =
 	when (payload) {
 		is EnrollmentPayload.EnrollOwner -> "Domain ${payload.domainId} at ${payload.evieAddr}"
-		is EnrollmentPayload.AdmitHost -> null
+		is EnrollmentPayload.AdmitSwitch -> null
 		is EnrollmentPayload.AuthorizePhone -> "Domain ${payload.domainId}"
 	}

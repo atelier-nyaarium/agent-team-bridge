@@ -1,71 +1,77 @@
 {
-	"_comment": "Cross-runtime vectors for the Session Identity value objects. Read by src/__tests__/session-id.test.ts (TS) AND android/.../SessionIdVectorsTest.kt (Kotlin) so the twin cannot drift. The REMOTE sessionId case pins localHostId != host: a twin that re-resolves a qualified host to local would change the key and false-pass if localHostId == host.",
+	"_comment": "Cross-runtime vectors for the Session Identity value objects. Read by src/__tests__/session-id.test.ts (TS) AND android/.../SessionIdVectorsTest.kt (Kotlin) so the twin cannot drift. The REMOTE sessionId case pins localSwitchId != switchId: a twin that re-resolves a qualified switch to local would change the key and false-pass if localSwitchId == switchId.",
 	"teamAddress": [
 		{
 			"input": "9cb5b9",
-			"localHostId": "switchboard",
-			"host": "switchboard",
+			"localSwitchId": "switchboard",
+			"switchId": "switchboard",
 			"name": "9cb5b9",
 			"canonical": "switchboard/9cb5b9"
 		},
 		{
 			"input": "arbiter",
-			"localHostId": "switchboard",
-			"host": "switchboard",
+			"localSwitchId": "switchboard",
+			"switchId": "switchboard",
 			"name": "arbiter",
 			"canonical": "switchboard/arbiter"
 		},
 		{
 			"input": "switchboard/9cb5b9",
-			"localHostId": "switchboard",
-			"host": "switchboard",
+			"localSwitchId": "switchboard",
+			"switchId": "switchboard",
 			"name": "9cb5b9",
 			"canonical": "switchboard/9cb5b9"
 		},
-		{ "input": "hostb/api", "localHostId": "hosta", "host": "hostb", "name": "api", "canonical": "hostb/api" },
-		{ "input": "a/b/c", "localHostId": "x", "host": "a", "name": "b/c", "canonical": "a/b/c" },
-		{ "input": "", "localHostId": "x", "host": "x", "name": "", "canonical": "x/" },
-		{ "input": "h😀/n😀", "localHostId": "x", "host": "h😀", "name": "n😀", "canonical": "h😀/n😀" }
+		{
+			"input": "hostb/api",
+			"localSwitchId": "hosta",
+			"switchId": "hostb",
+			"name": "api",
+			"canonical": "hostb/api"
+		},
+		{ "input": "a/b/c", "localSwitchId": "x", "switchId": "a", "name": "b/c", "canonical": "a/b/c" },
+		{ "input": "", "localSwitchId": "x", "switchId": "x", "name": "", "canonical": "x/" },
+		{ "input": "h😀/n😀", "localSwitchId": "x", "switchId": "h😀", "name": "n😀", "canonical": "h😀/n😀" }
 	],
 	"sessionId": [
 		{
 			"input": "conv:c:api",
-			"localHostId": "hosta",
+			"localSwitchId": "hosta",
 			"conversationId": "c",
 			"targetCanonical": "hosta/api",
 			"key": "conv:c:hosta/api"
 		},
 		{
 			"input": "conv:c:hostb/api",
-			"localHostId": "hosta",
+			"localSwitchId": "hosta",
 			"conversationId": "c",
 			"targetCanonical": "hostb/api",
 			"key": "conv:c:hostb/api"
 		},
 		{
 			"input": "conv:phone-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4:switchboard/9cb5b9",
-			"localHostId": "switchboard",
+			"localSwitchId": "switchboard",
 			"conversationId": "phone-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4",
 			"targetCanonical": "switchboard/9cb5b9",
 			"key": "conv:phone-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4:switchboard/9cb5b9"
 		},
 		{
 			"input": "conv:phone-x:9cb5b9",
-			"localHostId": "switchboard",
+			"localSwitchId": "switchboard",
 			"conversationId": "phone-x",
 			"targetCanonical": "switchboard/9cb5b9",
 			"key": "conv:phone-x:switchboard/9cb5b9"
 		},
 		{
 			"input": "conv:c:a/b/c",
-			"localHostId": "x",
+			"localSwitchId": "x",
 			"conversationId": "c",
 			"targetCanonical": "a/b/c",
 			"key": "conv:c:a/b/c"
 		},
 		{
 			"input": "conv:a/b:host/team",
-			"localHostId": "x",
+			"localSwitchId": "x",
 			"conversationId": "a/b",
 			"targetCanonical": "host/team",
 			"key": "conv:a/b:host/team"
@@ -74,13 +80,13 @@
 	"notice": [
 		{
 			"input": "notice:arbiter",
-			"localHostId": "switchboard",
+			"localSwitchId": "switchboard",
 			"senderCanonical": "switchboard/arbiter",
 			"key": "notice:switchboard/arbiter"
 		},
 		{
 			"input": "notice:hostb/agent",
-			"localHostId": "hosta",
+			"localSwitchId": "hosta",
 			"senderCanonical": "hostb/agent",
 			"key": "notice:hostb/agent"
 		}

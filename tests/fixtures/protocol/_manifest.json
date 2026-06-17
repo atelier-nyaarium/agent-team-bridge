@@ -20,7 +20,7 @@
 		{ "file": "relay-reply.json", "schema": "PhoneRelayReply", "expect": "pass" },
 		{ "file": "relay-reply-error.json", "schema": "PhoneRelayReply", "expect": "pass" },
 		{ "file": "register-result.json", "schema": "PhoneRegisterResult", "expect": "pass" },
-		{ "file": "register-result-host.json", "schema": "PhoneRegisterResult", "expect": "pass" },
+		{ "file": "register-result-switch.json", "schema": "PhoneRegisterResult", "expect": "pass" },
 		{ "file": "send-result.json", "schema": "PhoneSendResult", "expect": "pass" },
 		{ "file": "list-teams-result.json", "schema": "PhoneListTeamsResult", "expect": "pass" }
 	]

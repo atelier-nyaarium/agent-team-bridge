@@ -1,5 +1,5 @@
 services:
-  router:
+  switch:
     build: .
     hostname: switchboard
     container_name: switchboard
@@ -7,10 +7,10 @@ services:
       - "20000:20000"
     environment:
       - PORT=20000
-      # One arbiter per machine. start-arbiter.sh sets HOST_ID to the machine
+      # One arbiter per machine. start-arbiter.sh sets SWITCH_ID to the machine
       # hostname (and --setup writes it to .env); the "switchboard" fallback only
-      # applies to a bare `docker compose up` that set no HOST_ID anywhere.
-      - HOST_ID=${HOST_ID:-switchboard}
+      # applies to a bare `docker compose up` that set no SWITCH_ID anywhere.
+      - SWITCH_ID=${SWITCH_ID:-switchboard}
       - RESPONSE_TIMEOUT_MS=600000
       - BRIDGE_TOKEN=${BRIDGE_TOKEN:-}
       - FEDERATION_OWNER_SIGN_PUB=${FEDERATION_OWNER_SIGN_PUB:-}

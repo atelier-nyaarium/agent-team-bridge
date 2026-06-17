@@ -9,10 +9,10 @@
 //  own the ONE canonical string, so a store key and a lookup key are the same value
 //  by construction, not by two builders happening to agree.
 //
-//  Boundary rule: a BARE wire name resolves to the local host AT the boundary
-//  (`parse`/`local`), never stored bare. An explicit, possibly-remote host is KEPT
-//  (`remote`, and `parse` of an already-qualified string) so cross-Host session ids
-//  stay byte-stable across two arbiters with different local host ids.
+//  Boundary rule: a BARE wire name resolves to the local Switch AT the boundary
+//  (`parse`/`local`), never stored bare. An explicit, possibly-remote Switch id is KEPT
+//  (`remote`, and `parse` of an already-qualified string) so cross-Switch session ids
+//  stay byte-stable across two arbiters with different local Switch ids.
 //
 //  The Kotlin twin lives at android/.../proto/SessionId.kt; the two are kept
 //  equivalent by the shared vectors in tests/fixtures/session-id/vectors.json,
@@ -29,48 +29,48 @@ export const CONV_SESSION_PREFIX = "conv:";
 /** Session-id prefix for broadcast notices; the sender follows it. */
 export const NOTICE_SESSION_PREFIX = "notice:";
 
-/** Separator in a host-qualified name (host then local name); the FIRST one splits host from local name. */
-export const HOST_QUALIFIER_SEP = "/";
+/** Separator in a switch-qualified name (switchId then local name); the FIRST one splits Switch id from local name. */
+export const SWITCH_QUALIFIER_SEP = "/";
 
 ////////////////////////////////
 //  Class: TeamAddress
 
-/** A team's address: an explicit host plus a local name. */
+/** A team's address: an explicit Switch id plus a local name. */
 export class TeamAddress {
 	private constructor(
-		readonly host: string,
+		readonly switchId: string,
 		readonly name: string,
 	) {}
 
-	/** A local team. A bare name resolves to localHostId; an already-qualified
-	 * name keeps its (possibly remote) host. Idempotent, like the old qualifyTeam. */
-	static local(localHostId: string, name: string): TeamAddress {
-		return TeamAddress.parse(name, localHostId);
+	/** A local team. A bare name resolves to localSwitchId; an already-qualified
+	 * name keeps its (possibly remote) Switch id. Idempotent, like the old qualifyTeam. */
+	static local(localSwitchId: string, name: string): TeamAddress {
+		return TeamAddress.parse(name, localSwitchId);
 	}
 
-	/** An explicit, possibly-remote host. The host is NOT re-resolved to local;
-	 * used for a cross-Host target where the destination host is known. */
-	static remote(host: string, name: string): TeamAddress {
-		return new TeamAddress(host, name);
+	/** An explicit, possibly-remote Switch id. The Switch id is NOT re-resolved to
+	 * local; used for a cross-Switch target where the destination Switch is known. */
+	static remote(switchId: string, name: string): TeamAddress {
+		return new TeamAddress(switchId, name);
 	}
 
-	/** Parse a wire team string. The FIRST separator splits host from name; a bare
-	 * name (no separator) resolves to localHostId. An explicit host is preserved. */
-	static parse(team: string, localHostId: string): TeamAddress {
-		const i = team.indexOf(HOST_QUALIFIER_SEP);
-		if (i === -1) return new TeamAddress(localHostId, team);
+	/** Parse a wire team string. The FIRST separator splits Switch id from name; a bare
+	 * name (no separator) resolves to localSwitchId. An explicit Switch id is preserved. */
+	static parse(team: string, localSwitchId: string): TeamAddress {
+		const i = team.indexOf(SWITCH_QUALIFIER_SEP);
+		if (i === -1) return new TeamAddress(localSwitchId, team);
 		// `i + SEP.length` (not a hardcoded `+ 1`) so the twin stays equivalent if the
 		// separator ever changes; the Kotlin side already splits this way.
-		return new TeamAddress(team.slice(0, i), team.slice(i + HOST_QUALIFIER_SEP.length));
+		return new TeamAddress(team.slice(0, i), team.slice(i + SWITCH_QUALIFIER_SEP.length));
 	}
 
-	/** The one canonical string form: host + SEP + name. */
+	/** The one canonical string form: switchId + SEP + name. */
 	get canonical(): string {
-		return `${this.host}${HOST_QUALIFIER_SEP}${this.name}`;
+		return `${this.switchId}${SWITCH_QUALIFIER_SEP}${this.name}`;
 	}
 
 	equals(other: TeamAddress): boolean {
-		return this.host === other.host && this.name === other.name;
+		return this.switchId === other.switchId && this.name === other.name;
 	}
 }
 
@@ -91,8 +91,8 @@ export class SessionId {
 	/** Parse a channel session id, or null if it is not one (a notice, a CLI uuid,
 	 * etc.). The conversation id is everything between the `conv:` prefix and the
 	 * LAST colon; the tail is the target team (conversation ids and team names
-	 * never contain a colon). An already-qualified target keeps its host. */
-	static parse(wire: string, localHostId: string): SessionId | null {
+	 * never contain a colon). An already-qualified target keeps its Switch id. */
+	static parse(wire: string, localSwitchId: string): SessionId | null {
 		if (!wire.startsWith(CONV_SESSION_PREFIX)) return null;
 		const lastColon = wire.lastIndexOf(":");
 		// Need a second colon after the `conv:` prefix to separate conv id from team.
@@ -104,7 +104,7 @@ export class SessionId {
 		// would otherwise absorb the extra colon). This keeps parse injective on the
 		// legal alphabet, so an untrusted respond id cannot alias another session's key.
 		if (conversationId.length === 0 || team.length === 0 || conversationId.includes(":")) return null;
-		return new SessionId(conversationId, TeamAddress.parse(team, localHostId));
+		return new SessionId(conversationId, TeamAddress.parse(team, localSwitchId));
 	}
 
 	/** The ONLY producer of the `conv:...` wire/store string. */
@@ -130,11 +130,11 @@ export class NoticeId {
 	}
 
 	/** Parse a notice session id, or null if it is not one. */
-	static parse(wire: string, localHostId: string): NoticeId | null {
+	static parse(wire: string, localSwitchId: string): NoticeId | null {
 		if (!wire.startsWith(NOTICE_SESSION_PREFIX)) return null;
 		const sender = wire.slice(NOTICE_SESSION_PREFIX.length);
 		if (sender.length === 0) return null;
-		return new NoticeId(TeamAddress.parse(sender, localHostId));
+		return new NoticeId(TeamAddress.parse(sender, localSwitchId));
 	}
 
 	get key(): string {

@@ -1,4 +1,4 @@
-// SYNC-HASH: d1d87ce0b09167ca159bdc51517bccc3
+// SYNC-HASH: f1cf985a63cf9d7656f14bde5413ba2a
 // SYNCED MODULE - source of truth: switchboard/src/shared/admission.ts
 // Copied verbatim into: evie-bot/app/features/bridge/admission.ts
 // MUST re-copy on change: cp src/shared/admission.ts ../evie-bot/app/features/bridge/admission.ts
@@ -9,13 +9,13 @@ import { sign, verify } from "./crypto.js";
 //  Domain admission + allowlist (the trust model)
 //
 //  Membership in the Domain is an allowlist of OWNER-SIGNED admissions: the owner
-//  device attests a subject's keys (a Host or a phone) into the Domain. evie AND
-//  each Host hold the allowlist, so a revocation bites even while evie is
+//  device attests a subject's keys (a Switch or a phone) into the Domain. evie AND
+//  each Switch hold the allowlist, so a revocation bites even while evie is
 //  unreachable (audit R3). The owner is the single root of trust; an admission /
 //  revocation is only honored if it verifies under the expected owner key.
 //
 //  The SIGNING BYTES are a versioned, newline-joined, fixed-order encoding. Every
-//  field is base64 (keys, nonce), a slug (hostId), or a decimal int (issuedAt) -
+//  field is base64 (keys, nonce), a slug (switchId), or a decimal int (issuedAt) -
 //  none can contain a newline - so the encoding is unambiguous and reproduces
 //  byte-for-byte on switchboard, evie, and Android. Do NOT sign raw JSON (key
 //  order is not canonical).
@@ -23,7 +23,7 @@ import { sign, verify } from "./crypto.js";
 ////////////////////////////////
 //  Schemas
 
-export const AdmissionKindSchema = z.enum(["host", "phone"]);
+export const AdmissionKindSchema = z.enum(["switch", "phone"]);
 
 export const AdmissionSchema = z
 	.object({
@@ -32,8 +32,8 @@ export const AdmissionSchema = z
 		signPub: z.string().min(1),
 		// Raw X25519 box public key of the subject (base64).
 		boxPub: z.string().min(1),
-		// The Host id this admission grants (host admissions only).
-		hostId: z.string().optional(),
+		// The Switch id this admission grants (switch admissions only).
+		switchId: z.string().optional(),
 		// Issue time (epoch ms); a later revocation with issuedAt >= this wins.
 		issuedAt: z.number().int().nonnegative(),
 		// Single-use random (base64), so a re-issued admission is a distinct bytestring.
@@ -69,7 +69,7 @@ export const SignedRevocationSchema = z
 	})
 	.meta({ id: "SignedRevocation" });
 
-/** The mirrored Domain state evie pushes to each Host so a revocation bites even
+/** The mirrored Domain state evie pushes to each Switch so a revocation bites even
  * while evie is unreachable (audit R3): the owner root plus the owner-signed
  * allowlist. Only present once the Domain is rooted. */
 export const DomainSnapshotSchema = z
@@ -95,7 +95,7 @@ export type DomainSnapshot = z.infer<typeof DomainSnapshotSchema>;
 
 export function admissionSigningBytes(a: Admission): Buffer {
 	return Buffer.from(
-		["ADMISSION_V1", a.kind, a.signPub, a.boxPub, a.hostId ?? "", String(a.issuedAt), a.nonce].join("\n"),
+		["ADMISSION_V1", a.kind, a.signPub, a.boxPub, a.switchId ?? "", String(a.issuedAt), a.nonce].join("\n"),
 		"utf8",
 	);
 }
@@ -144,7 +144,7 @@ export function verifyRevocation(s: SignedRevocation, expectedOwnerSignPubB64: s
 
 /** Resolve a subject's admission from the allowlist: the newest owner-verified
  * admission for `subjectSignPub` that is not overridden by a later owner-verified
- * revocation. Returns the admitted Admission (carrying its boxPub / hostId) or
+ * revocation. Returns the admitted Admission (carrying its boxPub / switchId) or
  * null when not admitted or revoked. */
 export function resolveAdmitted(
 	allowlist: SignedAdmission[],
@@ -172,8 +172,8 @@ export function resolveAdmitted(
 //  Registration proof-of-possession
 //
 //  An admission is owner-signed but not secret: it rides every registration, so
-//  an observer could replay one to impersonate the admitted Host. The registering
-//  Host therefore PROVES it holds the admitted signing key by signing a
+//  an observer could replay one to impersonate the admitted Switch. The registering
+//  Switch therefore PROVES it holds the admitted signing key by signing a
 //  self-timestamped challenge carrying a fresh random NONCE; the verifier checks
 //  the signature against the admission's signPub, that the timestamp is fresh, AND
 //  (statefully, on evie) that the nonce has not been seen within the window - so a
@@ -185,27 +185,27 @@ export function resolveAdmitted(
  * needs to remember this long). */
 export const REGISTER_MAX_SKEW_MS = 120_000;
 
-export function registerSigningBytes(hostId: string, proofAt: number, nonce: string): Buffer {
-	return Buffer.from(["REGISTER_V1", hostId, String(proofAt), nonce].join("\n"), "utf8");
+export function registerSigningBytes(switchId: string, proofAt: number, nonce: string): Buffer {
+	return Buffer.from(["REGISTER_V1", switchId, String(proofAt), nonce].join("\n"), "utf8");
 }
 
-/** Sign a fresh registration proof with the Host's raw Ed25519 private key. */
-export function signRegister(hostId: string, proofAt: number, nonce: string, signPrivB64: string): string {
-	return sign(registerSigningBytes(hostId, proofAt, nonce), signPrivB64);
+/** Sign a fresh registration proof with the Switch's raw Ed25519 private key. */
+export function signRegister(switchId: string, proofAt: number, nonce: string, signPrivB64: string): string {
+	return sign(registerSigningBytes(switchId, proofAt, nonce), signPrivB64);
 }
 
 export function verifyRegister(
-	hostId: string,
+	switchId: string,
 	proofAt: number,
 	nonce: string,
 	sigB64: string,
 	signPubB64: string,
 ): boolean {
-	return verify(registerSigningBytes(hostId, proofAt, nonce), sigB64, signPubB64);
+	return verify(registerSigningBytes(switchId, proofAt, nonce), sigB64, signPubB64);
 }
 
 export interface RegistrationClaim {
-	hostId: string;
+	switchId: string;
 	signPub: string;
 	boxPub: string;
 	admission: SignedAdmission;
@@ -221,22 +221,22 @@ export interface RegistrationTrust {
 	maxSkewMs?: number;
 }
 
-/** Verify an admitted Host's registration end to end: the admission is
- * owner-signed and not revoked, binds this Host id + both keys + a `host` kind, and
- * the proof shows the connection holds the admitted signing key freshly. Returns
+/** Verify an admitted Switch's registration end to end: the admission is
+ * owner-signed and not revoked, binds this Switch id + both keys + a `switch` kind,
+ * and the proof shows the connection holds the admitted signing key freshly. Returns
  * null on success, or a short rejection reason. The caller (evie) ALSO rejects a
  * replayed `nonce` within the window - this pure check cannot dedup statefully. */
 export function verifyRegistration(claim: RegistrationClaim, trust: RegistrationTrust): string | null {
 	const admitted = resolveAdmitted([claim.admission], trust.revocations ?? [], trust.ownerSignPub, claim.signPub);
 	if (!admitted) return "admission not owner-signed or revoked";
-	if (admitted.kind !== "host") return "admission is not a host admission";
-	if (admitted.hostId !== claim.hostId) return "admission hostId does not match";
+	if (admitted.kind !== "switch") return "admission is not a switch admission";
+	if (admitted.switchId !== claim.switchId) return "admission switchId does not match";
 	// Bind the box key too: the admission attests both keys, so a registration may
 	// not present a different boxPub than the owner signed.
 	if (admitted.boxPub !== claim.boxPub) return "admission boxPub does not match";
 	const skew = Math.abs(trust.nowMs - claim.proofAt);
 	if (skew > (trust.maxSkewMs ?? REGISTER_MAX_SKEW_MS)) return "registration proof is stale";
-	if (!verifyRegister(claim.hostId, claim.proofAt, claim.nonce, claim.proof, claim.signPub)) {
+	if (!verifyRegister(claim.switchId, claim.proofAt, claim.nonce, claim.proof, claim.signPub)) {
 		return "registration proof invalid";
 	}
 	return null;

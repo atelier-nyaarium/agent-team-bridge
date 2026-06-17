@@ -34,7 +34,7 @@ wait_health() {
 	return 1
 }
 
-# Print the admit-host QR if the arbiter is showing one, else say why it isn't.
+# Print the admit-switch QR if the arbiter is showing one, else say why it isn't.
 print_qr() {
 	local qr
 	qr="$(docker logs switchboard 2>&1 | sed -n '/open Enroll by QR/,/Confirm this fingerprint/p')"
@@ -43,7 +43,7 @@ print_qr() {
 		echo "Admit-host QR (scan with the owner phone, confirm the fingerprint):"
 		echo "$qr"
 	else
-		echo "No admit-host QR (Host already admitted, or no BRIDGE_TOKEN set)."
+		echo "No admit-switch QR (Switch already admitted, or no BRIDGE_TOKEN set)."
 	fi
 }
 
@@ -59,11 +59,11 @@ wipe_state() {
 configure() {
 	local id token pin cur_id cur_token cur_pin raw host
 	host="$(hostname)"
-	cur_id="$(env_get HOST_ID)"
+	cur_id="$(env_get SWITCH_ID)"
 	cur_token="$(env_get BRIDGE_TOKEN)"
 	cur_pin="$(env_get FEDERATION_OWNER_SIGN_PUB)"
 
-	read -rp "HOST_ID (this arbiter's name) [${cur_id:-$host}]: " raw
+	read -rp "SWITCH_ID (this Switch's name) [${cur_id:-$host}]: " raw
 	id="${raw:-${cur_id:-$host}}"
 	if [ -n "$cur_token" ]; then
 		read -rp "BRIDGE_TOKEN [keep existing]: " raw; token="${raw:-$cur_token}"
@@ -73,7 +73,7 @@ configure() {
 	read -rp "Owner key pin (optional) [${cur_pin:-none}]: " raw
 	pin="${raw:-$cur_pin}"
 
-	env_set HOST_ID "$id" || return 1
+	env_set SWITCH_ID "$id" || return 1
 	env_set BRIDGE_TOKEN "$token" || return 1
 	env_set FEDERATION_OWNER_SIGN_PUB "$pin" || return 1
 	chmod 600 "$ENV_FILE" 2>/dev/null || true
@@ -92,10 +92,10 @@ configure() {
 
 purge() {
 	echo "Purge wipes this machine's arbiter setup back to nothing:"
-	echo "  - .env (HOST_ID, BRIDGE_TOKEN, owner pin)"
+	echo "  - .env (SWITCH_ID, BRIDGE_TOKEN, owner pin)"
 	echo "  - volumes/arbiter (keypair, admissions, mailboxes)"
-	echo "Configure afterward mints a NEW keypair + admit-host QR, so the owner phone"
-	echo "must re-scan to re-admit this Host."
+	echo "Configure afterward mints a NEW keypair + admit-switch QR, so the owner phone"
+	echo "must re-scan to re-admit this Switch."
 	local ok; read -rp "Purge everything? [y/N]: " ok
 	[ "$ok" = y ] || return 0
 	docker compose down --remove-orphans 2>/dev/null || true
@@ -130,11 +130,11 @@ fi
 git fetch --prune || true
 git pull || true
 
-# Default HOST_ID to this machine's hostname when .env sets none, so two machines
+# Default SWITCH_ID to this machine's hostname when .env sets none, so two machines
 # never both silently fall back to "switchboard". docker compose reads .env on its
-# own; this export only fills the gap when .env has no HOST_ID.
-grep -qE '^HOST_ID=' "$ENV_FILE" 2>/dev/null || export HOST_ID="$(hostname)"
-EFF_ID="$(env_get HOST_ID)"; EFF_ID="${EFF_ID:-${HOST_ID:-switchboard}}"
+# own; this export only fills the gap when .env has no SWITCH_ID.
+grep -qE '^SWITCH_ID=' "$ENV_FILE" 2>/dev/null || export SWITCH_ID="$(hostname)"
+EFF_ID="$(env_get SWITCH_ID)"; EFF_ID="${EFF_ID:-${SWITCH_ID:-switchboard}}"
 
 docker compose down --remove-orphans 2>/dev/null || true
 docker compose up --build -d

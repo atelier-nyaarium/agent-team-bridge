@@ -24,7 +24,7 @@ sealed class EnrollmentPayload {
 		val nonce: String,
 	) : EnrollmentPayload()
 
-	data class AdmitHost(val hostId: String, val signPub: String, val boxPub: String) : EnrollmentPayload()
+	data class AdmitSwitch(val switchId: String, val signPub: String, val boxPub: String) : EnrollmentPayload()
 
 	data class AuthorizePhone(val domainId: String, val signPub: String, val boxPub: String) : EnrollmentPayload()
 
@@ -32,7 +32,7 @@ sealed class EnrollmentPayload {
 	fun sas(): String =
 		when (this) {
 			is EnrollOwner -> Crypto.fingerprint(evieSignPub)
-			is AdmitHost -> Crypto.fingerprint(signPub)
+			is AdmitSwitch -> Crypto.fingerprint(signPub)
 			is AuthorizePhone -> Crypto.fingerprint(signPub)
 		}
 }
@@ -54,12 +54,12 @@ fun parseEnrollmentPayload(raw: String): EnrollmentPayload? {
 				EnrollmentPayload.EnrollOwner(domainId, evieAddr, evieSignPub, evieBoxPub, nonce)
 			}
 		}
-		"admit-host" -> {
-			val hostId = field(obj, "hostId")
+		"admit-switch" -> {
+			val switchId = field(obj, "switchId")
 			val signPub = b64Field(obj, "signPub")
 			val boxPub = b64Field(obj, "boxPub")
-			if (hostId == null || signPub == null || boxPub == null) null
-			else EnrollmentPayload.AdmitHost(hostId, signPub, boxPub)
+			if (switchId == null || signPub == null || boxPub == null) null
+			else EnrollmentPayload.AdmitSwitch(switchId, signPub, boxPub)
 		}
 		"authorize-phone" -> {
 			val domainId = field(obj, "domainId")

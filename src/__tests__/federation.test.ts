@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Allowlist } from "../arbiter/federation/allowlist.js";
-import { createHostRelayHandler } from "../arbiter/federation/hostRelay.js";
+import { createSwitchRelayHandler } from "../arbiter/federation/hostRelay.js";
 import { createSealer, type Sealer } from "../arbiter/federation/sealer.js";
 import { createRoutes, type RoutesDeps } from "../arbiter/routes.js";
 import { generateIdentity, type Identity, type SealedEnvelope } from "../shared/crypto.js";
@@ -11,15 +11,15 @@ import type { ResponsePayload } from "../shared/types.js";
 ////////////////////////////////
 //  Harness
 
-// Two admitted Hosts: each seals to the other (the allowlist resolution is mocked
+// Two admitted Switches: each seals to the other (the allowlist resolution is mocked
 // to the peer's keys; the trust model itself is tested in admission.test.ts).
 const A = generateIdentity();
 const B = generateIdentity();
-function sealerFor(self: Identity, localHostId: string, peers: Record<string, Identity>): Sealer {
+function sealerFor(self: Identity, localSwitchId: string, peers: Record<string, Identity>): Sealer {
 	const allowlist = {
-		resolveHost: (h: string) => (peers[h] ? { signPub: peers[h].sign.pub, boxPub: peers[h].box.pub } : null),
+		resolveSwitch: (h: string) => (peers[h] ? { signPub: peers[h].sign.pub, boxPub: peers[h].box.pub } : null),
 	} as unknown as Allowlist;
-	return createSealer(self, allowlist, localHostId);
+	return createSealer(self, allowlist, localSwitchId);
 }
 const sealerA = sealerFor(A, "hosta", { hostb: B });
 const sealerB = sealerFor(B, "hostb", { hosta: A });
@@ -29,11 +29,11 @@ interface FakeEvie {
 	calls: { action: string; params: Record<string, unknown> }[];
 }
 
-/** A mock evie that, for host_relay, plays the DESTINATION Host: opens the sealed
+/** A mock evie that, for switch_relay, plays the DESTINATION Switch: opens the sealed
  * op with the destination's sealer, runs `handle`, and seals the result back. */
 function fakeEvie(opts: {
 	destSealer?: Sealer;
-	srcHost?: string;
+	srcSwitch?: string;
 	handle?: (op: FederatedOp) => unknown;
 	onCall?: (action: string, params: Record<string, unknown>) => unknown;
 }): FakeEvie {
@@ -44,11 +44,11 @@ function fakeEvie(opts: {
 		stop: () => {},
 		callTool: async (action: string, params: Record<string, unknown>) => {
 			calls.push({ action, params });
-			if (action === "host_relay" && opts.destSealer && opts.srcHost && opts.handle) {
+			if (action === "switch_relay" && opts.destSealer && opts.srcSwitch && opts.handle) {
 				const sealed = (params.payload as { sealed: SealedEnvelope }).sealed;
-				const op = FederatedOpSchema.parse(opts.destSealer.open(opts.srcHost, sealed));
+				const op = FederatedOpSchema.parse(opts.destSealer.open(opts.srcSwitch, sealed));
 				const result = opts.handle(op);
-				return { callId: "fake", result: { ok: true, result: opts.destSealer.seal(opts.srcHost, result) } };
+				return { callId: "fake", result: { ok: true, result: opts.destSealer.seal(opts.srcSwitch, result) } };
 			}
 			return { callId: "fake", result: opts.onCall?.(action, params) ?? { ok: true } };
 		},
@@ -56,12 +56,12 @@ function fakeEvie(opts: {
 	return { client, calls };
 }
 
-function makeCtx(localHostId: string, over: Partial<RoutesDeps> = {}): RoutesDeps {
+function makeCtx(localSwitchId: string, over: Partial<RoutesDeps> = {}): RoutesDeps {
 	return {
 		registry: new Map() as RoutesDeps["registry"],
 		conversationRegistry: new Map() as RoutesDeps["conversationRegistry"],
 		store: new PendingJobStore<ResponsePayload>(),
-		config: { LOG_PATH: "/tmp/fed-test.log", RESPONSE_TIMEOUT_MS: 500, localHostId },
+		config: { LOG_PATH: "/tmp/fed-test.log", RESPONSE_TIMEOUT_MS: 500, localSwitchId },
 		tryWakeTeam: () => Promise.resolve(false),
 		offlineCatalog: new Map(),
 		knownTeamPaths: new Map(),
@@ -86,11 +86,11 @@ function registryWith(entries: Record<string, unknown>): RoutesDeps["registry"] 
 //  Tests
 
 describe("federation routing (E2E sealed)", () => {
-	it("ORIGIN: seals a cross-Host send with the return-route and keeps a local anchor", async () => {
+	it("ORIGIN: seals a cross-Switch send with the return-route and keeps a local anchor", async () => {
 		let seen: FederatedOp | undefined;
 		const evie = fakeEvie({
 			destSealer: sealerB,
-			srcHost: "hosta",
+			srcSwitch: "hosta",
 			handle: (op) => {
 				seen = op;
 				return { session_id: "conv:conv-1:hostb/api", status: "running" };
@@ -113,10 +113,10 @@ describe("federation routing (E2E sealed)", () => {
 			kind: "send",
 			to: "api",
 			from: "hosta/recipe-app",
-			returnRoute: { srcHost: "hosta", srcSession: "conv:conv-1:hostb/api" },
+			returnRoute: { srcSwitch: "hosta", srcSession: "conv:conv-1:hostb/api" },
 		});
 		// evie only ever saw an opaque sealed envelope, never the op.
-		const relay = evie.calls.find((c) => c.action === "host_relay");
+		const relay = evie.calls.find((c) => c.action === "switch_relay");
 		expect((relay?.params.payload as { sealed: SealedEnvelope }).sealed.ciphertext).toBeTruthy();
 		expect(JSON.stringify(relay?.params.payload)).not.toContain("recipe-app");
 		expect(ctx.store.has("conv:conv-1:hostb/api")).toBe(true);
@@ -140,7 +140,7 @@ describe("federation routing (E2E sealed)", () => {
 		let pinned: FederatedOp | undefined;
 		const evie = fakeEvie({
 			destSealer: sealerA,
-			srcHost: "hostb",
+			srcSwitch: "hostb",
 			handle: (op) => {
 				pinned = op;
 				return { ok: true };
@@ -153,7 +153,7 @@ describe("federation routing (E2E sealed)", () => {
 			registry: registryWith({ api: channelWs(pushed) }),
 		});
 		const routes = createRoutes(ctx);
-		const handler = createHostRelayHandler({ routes, tryWakeTeam: ctx.tryWakeTeam });
+		const handler = createSwitchRelayHandler({ routes, tryWakeTeam: ctx.tryWakeTeam });
 
 		const srcSession = "conv:conv-1:hostb/api";
 		const result = (await handler.handleOp(
@@ -162,7 +162,7 @@ describe("federation routing (E2E sealed)", () => {
 				from: "hosta/recipe-app",
 				to: "api",
 				body: "status?",
-				returnRoute: { srcHost: "hosta", srcConversationId: "conv-1", srcSession },
+				returnRoute: { srcSwitch: "hosta", srcConversationId: "conv-1", srcSession },
 			},
 			"hosta",
 		)) as { session_id: string };
@@ -187,7 +187,7 @@ describe("federation routing (E2E sealed)", () => {
 		const srcSession = "conv:conv-1:hostb/api";
 		ctx.store.create(srcSession, "recipe-app", "hostb/api", { persistent: true, fromConversationId: "conv-1" });
 		const routes = createRoutes(ctx);
-		const handler = createHostRelayHandler({ routes, tryWakeTeam: ctx.tryWakeTeam });
+		const handler = createSwitchRelayHandler({ routes, tryWakeTeam: ctx.tryWakeTeam });
 
 		const result = (await handler.handleOp(
 			{ kind: "response_push", session_id: srcSession, status: "completed", response: "all good" },
@@ -200,12 +200,12 @@ describe("federation routing (E2E sealed)", () => {
 	it("DISCOVERY: fans out a sealed list_teams over the evie roster and merges", async () => {
 		const evie = fakeEvie({
 			destSealer: sealerB,
-			srcHost: "hosta",
+			srcSwitch: "hosta",
 			handle: () => ({
-				teams: [{ team: "api", host: "hostb", status: "online", mode: "channel", queue_depth: 0 }],
+				teams: [{ team: "api", switchId: "hostb", status: "online", mode: "channel", queue_depth: 0 }],
 			}),
 			onCall: (action) =>
-				action === "list_hosts" ? { hosts: [{ hostId: "hostb", online: true }] } : { ok: true },
+				action === "list_switches" ? { switches: [{ switchId: "hostb", online: true }] } : { ok: true },
 		});
 		const ctx = makeCtx("hosta", {
 			evieClient: evie.client,
@@ -215,8 +215,8 @@ describe("federation routing (E2E sealed)", () => {
 		});
 		const { discover } = createRoutes(ctx);
 
-		const teams = (await (await discover()).json()) as { team: string; host?: string }[];
-		expect(teams.find((t) => t.team === "recipe-app")?.host).toBe("hosta");
-		expect(teams.find((t) => t.team === "api")?.host).toBe("hostb");
+		const teams = (await (await discover()).json()) as { team: string; switchId?: string }[];
+		expect(teams.find((t) => t.team === "recipe-app")?.switchId).toBe("hosta");
+		expect(teams.find((t) => t.team === "api")?.switchId).toBe("hostb");
 	});
 });

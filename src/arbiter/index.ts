@@ -5,15 +5,15 @@ import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DurableStore } from "../shared/durable-store.js";
-import { resolveLocalHostId } from "../shared/host-id.js";
+import { resolveLocalSwitchId } from "../shared/host-id.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { startEvieClient } from "./evie/evieClient.js";
 import { startPortForward } from "./evie/portForward.js";
 import { Allowlist } from "./federation/allowlist.js";
-import { logAdmitHostQr } from "./federation/enrollQr.js";
-import { createHostRelayHandler, createHostRelayPump } from "./federation/hostRelay.js";
+import { logAdmitSwitchQr } from "./federation/enrollQr.js";
+import { createSwitchRelayHandler, createSwitchRelayPump } from "./federation/hostRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
 import { ReplayGuard } from "./federation/replayGuard.js";
 import { createSealer, type Sealer } from "./federation/sealer.js";
@@ -40,8 +40,8 @@ export async function startArbiter(): Promise<void> {
 
 	const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "600000", 10);
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);
-	const localHostId = resolveLocalHostId();
-	console.log(`[arbiter] Host id: ${localHostId}`);
+	const localSwitchId = resolveLocalSwitchId();
+	console.log(`[arbiter] Switch id: ${localSwitchId}`);
 	const HEARTBEAT_INTERVAL_MS = 30000;
 	const MISSED_PINGS_LIMIT = 2;
 
@@ -58,9 +58,9 @@ export async function startArbiter(): Promise<void> {
 	const mailboxStore = new DeviceMailboxStore();
 	// Takes unknown: the relay pump owns the full frame validation.
 	let handlePhoneRelay: ((frame: unknown) => void) | null = null;
-	// Cross-Host frames the Router switched to this Host; the host-relay pump owns
+	// Cross-Switch frames the Router switched to this Switch; the switch-relay pump owns
 	// full validation.
-	let handleHostRelay: ((frame: unknown) => void) | null = null;
+	let handleSwitchRelay: ((frame: unknown) => void) | null = null;
 	let evictPhonePeer: ((conversationId: string) => void) | null = null;
 
 	store.startCleanup();
@@ -157,11 +157,11 @@ export async function startArbiter(): Promise<void> {
 	let phoneSealer: PhoneSealer | null = null;
 
 	if (evieAuthToken) {
-		// Load this Host's federation identity + mirrored allowlist from its volume,
-		// and build the E2E sealer (cross-Host frames are sealed peer-to-peer).
+		// Load this Switch's federation identity + mirrored allowlist from its volume,
+		// and build the E2E sealer (cross-Switch frames are sealed peer-to-peer).
 		const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
 		// Pin the owner root out-of-band so a malicious/token-holding evie cannot root
-		// this Host at an attacker key via the mirror (the snapshot is relayed through
+		// this Switch at an attacker key via the mirror (the snapshot is relayed through
 		// untrusted evie). Unset = trust-on-first-use.
 		const allowlist = new Allowlist(
 			federationDir,
@@ -178,14 +178,14 @@ export async function startArbiter(): Promise<void> {
 			if (Array.isArray(persisted)) replayGuard.restore(persisted as Array<[string, number]>);
 		}
 		replayPersist = () => replayDurable.save(replayGuard.snapshot());
-		sealer = createSealer(identity, allowlist, localHostId, replayGuard);
+		sealer = createSealer(identity, allowlist, localSwitchId, replayGuard);
 		// The phone channel rides the SAME durable replay guard + allowlist: a phone
 		// frame is sealed to this arbiter and signed by an admitted phone key.
 		phoneSealer = createPhoneSealer(identity, allowlist, replayGuard);
 		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);
-		// Not admitted yet: print the admit-host QR so the owner can scan this Host
+		// Not admitted yet: print the admit-switch QR so the owner can scan this Switch
 		// into the Domain. Once admitted (mirrored from evie), this falls silent.
-		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitHostQr(identity, localHostId);
+		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitSwitchQr(identity, localSwitchId);
 
 		const portForward = startPortForward({
 			kubeconfig: evieKubeconfig,
@@ -201,16 +201,16 @@ export async function startArbiter(): Promise<void> {
 		evieClient = startEvieClient({
 			url: `ws://localhost:${evieLocalPort}`,
 			authToken: evieAuthToken,
-			hostId: localHostId,
+			switchId: localSwitchId,
 			onPhoneRelay: (frame) => {
 				handlePhoneRelay?.(frame);
 			},
-			onHostRelay: (frame) => {
-				handleHostRelay?.(frame);
+			onSwitchRelay: (frame) => {
+				handleSwitchRelay?.(frame);
 			},
 			onDomainSync: (domain) => {
 				// evie mirrors the owner root + allowlist on each register reply; apply
-				// the owner-verified snapshot so this Host enforces revocations locally.
+				// the owner-verified snapshot so this Switch enforces revocations locally.
 				const parsed = DomainSnapshotSchema.safeParse(domain);
 				if (!parsed.success) {
 					console.warn(`[federation] dropped malformed domain sync: ${parsed.error.issues[0]?.message}`);
@@ -220,7 +220,7 @@ export async function startArbiter(): Promise<void> {
 				console.log(`[federation] domain sync applied (${parsed.data.admissions.length} admissions)`);
 			},
 			buildRegisterAuth: () => {
-				// Present this Host's owner-signed admission + a fresh possession proof,
+				// Present this Switch's owner-signed admission + a fresh possession proof,
 				// so evie can gate registration once a Domain owner exists. Null (token
 				// only) until enrollment writes the self-admission into the allowlist.
 				const self = allowlist.selfAdmission(identity.sign.pub);
@@ -231,7 +231,7 @@ export async function startArbiter(): Promise<void> {
 					signPub: identity.sign.pub,
 					boxPub: identity.box.pub,
 					admission: JSON.stringify(self),
-					proof: signRegister(localHostId, proofAt, proofNonce, identity.sign.priv),
+					proof: signRegister(localSwitchId, proofAt, proofNonce, identity.sign.priv),
 					proofAt,
 					proofNonce,
 				};
@@ -263,7 +263,7 @@ export async function startArbiter(): Promise<void> {
 		registry,
 		conversationRegistry,
 		store,
-		config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localHostId },
+		config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localSwitchId },
 		tryWakeTeam,
 		offlineCatalog,
 		knownTeamPaths,
@@ -279,7 +279,7 @@ export async function startArbiter(): Promise<void> {
 			conversationRegistry,
 			mailboxStore,
 			routes,
-			localHostId,
+			localSwitchId,
 			isProjectName: (name) => offlineCatalog.has(name) || knownTeamPaths.has(name),
 		});
 		handlePhoneRelay = createPhoneRelayPump({
@@ -290,13 +290,14 @@ export async function startArbiter(): Promise<void> {
 		});
 		evictPhonePeer = (conversationId) => phoneHandler.removePeer(conversationId);
 
-		// Federation: a peer Host's frames land here, run against the local routes,
+		// Federation: a peer Switch's frames land here, run against the local routes,
 		// and the reply routes home through the Router.
-		const hostRelayHandler = createHostRelayHandler({ routes, tryWakeTeam });
-		handleHostRelay = createHostRelayPump({
+		const switchRelayHandler = createSwitchRelayHandler({ routes, tryWakeTeam });
+		handleSwitchRelay = createSwitchRelayPump({
 			sealer: sealer!,
-			handleOp: hostRelayHandler.handleOp,
-			sendReply: (reply) => evieClient!.callTool("host_relay_reply", reply as unknown as Record<string, unknown>),
+			handleOp: switchRelayHandler.handleOp,
+			sendReply: (reply) =>
+				evieClient!.callTool("switch_relay_reply", reply as unknown as Record<string, unknown>),
 		});
 	}
 

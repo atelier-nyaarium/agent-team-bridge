@@ -8,7 +8,7 @@ import { ReplayGuard } from "../federation/replayGuard.js";
 //  Interfaces & Types
 
 /** Opens an inbound sealed phone frame and seals a reply back to the phone. The
- * phone-channel twin of the cross-Host Sealer: confidentiality + authenticity are
+ * phone-channel twin of the cross-Switch Sealer: confidentiality + authenticity are
  * E2E (phone <-> this arbiter), so evie relays an opaque blob it cannot read or
  * forge. The phone's keys resolve through the owner-signed allowlist (an admitted
  * kind:phone subject - the owner's own device self-admits as one), so a frame is

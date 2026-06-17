@@ -16,10 +16,10 @@ const host = generateIdentity();
 
 function admission(over: Partial<Admission> = {}): Admission {
 	return {
-		kind: "host",
+		kind: "switch",
 		signPub: host.sign.pub,
 		boxPub: host.box.pub,
-		hostId: "laptop",
+		switchId: "laptop",
 		issuedAt: 1000,
 		nonce: "bm9uY2Ux",
 		...over,
@@ -39,9 +39,9 @@ describe("domain admission", () => {
 		expect(verifyAdmission(s, owner.sign.pub)).toBe(false);
 	});
 
-	it("rejects a tampered admission (e.g. swapped hostId)", () => {
+	it("rejects a tampered admission (e.g. swapped switchId)", () => {
 		const s = signAdmission(admission(), owner.sign.priv, owner.sign.pub);
-		const tampered = { ...s, admission: { ...s.admission, hostId: "evil" } };
+		const tampered = { ...s, admission: { ...s.admission, switchId: "evil" } };
 		expect(verifyAdmission(tampered, owner.sign.pub)).toBe(false);
 	});
 
@@ -57,7 +57,7 @@ describe("domain admission", () => {
 		const list = [signAdmission(admission(), owner.sign.priv, owner.sign.pub)];
 		const got = resolveAdmitted(list, [], owner.sign.pub, host.sign.pub);
 		expect(got?.boxPub).toBe(host.box.pub);
-		expect(got?.hostId).toBe("laptop");
+		expect(got?.switchId).toBe("laptop");
 	});
 
 	it("returns null for an unknown subject", () => {
@@ -115,7 +115,7 @@ describe("registration proof-of-possession", () => {
 		const proofAt = over.proofAt ?? now;
 		const nonce = "cHJvb2Y=";
 		return {
-			hostId: "laptop",
+			switchId: "laptop",
 			signPub: host.sign.pub,
 			boxPub: host.box.pub,
 			admission: signAdmission(admission(), owner.sign.priv, owner.sign.pub),
@@ -125,7 +125,7 @@ describe("registration proof-of-possession", () => {
 		};
 	}
 
-	it("accepts an admitted Host that proves possession freshly", () => {
+	it("accepts an admitted Switch that proves possession freshly", () => {
 		expect(verifyRegistration(claim(), { ownerSignPub: owner.sign.pub, nowMs: now })).toBeNull();
 	});
 
@@ -147,12 +147,12 @@ describe("registration proof-of-possession", () => {
 		expect(verifyRegistration(c, { ownerSignPub: owner.sign.pub, nowMs: now })).toMatch(/stale/);
 	});
 
-	it("rejects an admission that grants a different hostId", () => {
-		const c = { ...claim(), hostId: "desktop" };
+	it("rejects an admission that grants a different switchId", () => {
+		const c = { ...claim(), switchId: "desktop" };
 		// The proof is over "desktop" but the admission binds "laptop".
 		const proof = signRegister("desktop", now, c.nonce, host.sign.priv);
 		expect(verifyRegistration({ ...c, proof }, { ownerSignPub: owner.sign.pub, nowMs: now })).toMatch(
-			/hostId does not match/,
+			/switchId does not match/,
 		);
 	});
 

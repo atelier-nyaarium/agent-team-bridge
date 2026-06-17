@@ -13,7 +13,7 @@ import java.util.Base64
 /**
  * Drives the three enrollment flows after the human has confirmed the scanned
  * payload's SAS. The owner device's identity (minted once, persisted) is the
- * Domain root: enroll-owner redeems with its public keys, and admit-host /
+ * Domain root: enroll-owner redeems with its public keys, and admit-switch /
  * authorize-phone sign an owner admission with its private signing key. The
  * signed artifacts are submitted to evie, which verifies them against the rooted
  * owner key (never trusting the wire).
@@ -48,7 +48,7 @@ class EnrollmentController(
 					kind = "phone",
 					signPub = identity.sign.pub,
 					boxPub = identity.box.pub,
-					hostId = null,
+					switchId = null,
 					issuedAt = System.currentTimeMillis(),
 					nonce = freshNonce(),
 				)
@@ -60,17 +60,17 @@ class EnrollmentController(
 	}
 
 	/** Owner-sign a Host admission for a scanned arbiter and submit it to evie.
-	 * On success, persist the host's keys so seal/unseal can resolve them by hostId,
-	 * AND seed the home host id so the FIRST register (which is itself sealed) can
-	 * resolve a host to seal to before it learns homeHost from the register reply. A
+	 * On success, persist the host's keys so seal/unseal can resolve them by switchId,
+	 * AND seed the home Switch id so the FIRST register (which is itself sealed) can
+	 * resolve a Switch to seal to before it learns homeSwitch from the register reply. A
 	 * later register persists the authoritative id and takes precedence. */
-	fun admitHost(payload: EnrollmentPayload.AdmitHost): EnrollResult {
+	fun admitSwitch(payload: EnrollmentPayload.AdmitSwitch): EnrollResult {
 		val identity = requireOwner()
 		val admission = Admission(
-			kind = "host",
+			kind = "switch",
 			signPub = payload.signPub,
 			boxPub = payload.boxPub,
-			hostId = payload.hostId,
+			switchId = payload.switchId,
 			issuedAt = System.currentTimeMillis(),
 			nonce = freshNonce(),
 		)
@@ -78,8 +78,8 @@ class EnrollmentController(
 		val result = client.enroll(EnrollOp.SubmitAdmission(signed))
 		if (result.ok) {
 			runCatching {
-				store.saveHostKeys(payload.hostId, payload.signPub, payload.boxPub)
-				if (store.loadHostId().isEmpty()) store.saveHostId(payload.hostId)
+				store.saveSwitchKeys(payload.switchId, payload.signPub, payload.boxPub)
+				if (store.loadSwitchId().isEmpty()) store.saveSwitchId(payload.switchId)
 			}
 		}
 		return result
@@ -92,7 +92,7 @@ class EnrollmentController(
 			kind = "phone",
 			signPub = payload.signPub,
 			boxPub = payload.boxPub,
-			hostId = null,
+			switchId = null,
 			issuedAt = System.currentTimeMillis(),
 			nonce = freshNonce(),
 		)

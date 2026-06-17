@@ -16,7 +16,7 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 		async () => {
 			try {
 				// /discover fans out across the mesh: local teams plus every online
-				// peer Host's teams (evie stays content-blind). Remote teams carry a
+				// peer Switch's teams (evie stays content-blind). Remote teams carry a
 				// different `host`, shown as `host/team` so they are addressable.
 				const teams = (await routerGet("/discover")) as Array<{
 					team: string;

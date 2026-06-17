@@ -1,12 +1,12 @@
-import type { HostRelayReplyParams } from "../../shared/evie-protocol.js";
-import { type FederatedOp, FederatedOpSchema, HostRelayFrameSchema } from "../../shared/federation-protocol.js";
+import type { SwitchRelayReplyParams } from "../../shared/evie-protocol.js";
+import { type FederatedOp, FederatedOpSchema, SwitchRelayFrameSchema } from "../../shared/federation-protocol.js";
 import type { TeamInfo } from "../../shared/types.js";
 import type { Sealer } from "./sealer.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
-/** The subset of arbiter HTTP routes the host-relay handler reuses, exactly the
+/** The subset of arbiter HTTP routes the switch-relay handler reuses, exactly the
  * surface the phone handler uses - a federated op runs against the same local
  * routes a local sender would hit. */
 export interface FederationRoutes {
@@ -15,17 +15,17 @@ export interface FederationRoutes {
 	teams: () => Response;
 }
 
-export interface HostRelayHandlerDeps {
+export interface SwitchRelayHandlerDeps {
 	routes: FederationRoutes;
 	tryWakeTeam: (team: string) => Promise<boolean>;
 }
 
-export interface HostRelayPumpDeps {
-	handleOp: (op: FederatedOp, srcHost: string) => Promise<unknown>;
-	/** Opens the inbound sealed op and seals the result back to the origin Host. */
+export interface SwitchRelayPumpDeps {
+	handleOp: (op: FederatedOp, srcSwitch: string) => Promise<unknown>;
+	/** Opens the inbound sealed op and seals the result back to the origin Switch. */
 	sealer: Sealer;
-	/** Sends a host_relay_reply tool call back to the Router (correlated by relayId). */
-	sendReply: (reply: HostRelayReplyParams) => Promise<{ error?: string }>;
+	/** Sends a switch_relay_reply tool call back to the Router (correlated by relayId). */
+	sendReply: (reply: SwitchRelayReplyParams) => Promise<{ error?: string }>;
 }
 
 ////////////////////////////////
@@ -33,14 +33,14 @@ export interface HostRelayPumpDeps {
 
 const FAKE_REQ = new Request("http://arbiter/federation");
 
-/** Runs a federated op a peer Host asked this Host to perform, against the local
- * routes. The reply value becomes the host_relay_reply `result`, routed home by
+/** Runs a federated op a peer Switch asked this Switch to perform, against the local
+ * routes. The reply value becomes the switch_relay_reply `result`, routed home by
  * the Router. */
-export function createHostRelayHandler({ routes, tryWakeTeam }: HostRelayHandlerDeps) {
-	async function handleOp(op: FederatedOp, srcHost: string): Promise<unknown> {
+export function createSwitchRelayHandler({ routes, tryWakeTeam }: SwitchRelayHandlerDeps) {
+	async function handleOp(op: FederatedOp, srcSwitch: string): Promise<unknown> {
 		switch (op.kind) {
 			case "send": {
-				// Land the cross-Host send on the local team, keyed by the origin's
+				// Land the cross-Switch send on the local team, keyed by the origin's
 				// session id, with the return-route pinned so respond forwards home.
 				const res = await routes.send(FAKE_REQ, {
 					from: op.from,
@@ -54,7 +54,7 @@ export function createHostRelayHandler({ routes, tryWakeTeam }: HostRelayHandler
 					returnRoute: op.returnRoute,
 				});
 				const json = (await res.json()) as { session_id?: string; status?: string; error?: string };
-				if (!res.ok) throw new Error(json.error ?? `send from Host ${srcHost} failed`);
+				if (!res.ok) throw new Error(json.error ?? `send from Switch ${srcSwitch} failed`);
 				return { session_id: json.session_id ?? op.returnRoute.srcSession, status: json.status ?? "running" };
 			}
 			case "list_teams": {
@@ -88,32 +88,32 @@ export function createHostRelayHandler({ routes, tryWakeTeam }: HostRelayHandler
 	return { handleOp };
 }
 
-/** Validates an inbound host_relay frame, runs its op, and ships the reply back
+/** Validates an inbound switch_relay frame, runs its op, and ships the reply back
  * to the Router. Mirrors the phone relay pump: one parse, one error surface. */
-export function createHostRelayPump({ handleOp, sealer, sendReply }: HostRelayPumpDeps) {
+export function createSwitchRelayPump({ handleOp, sealer, sendReply }: SwitchRelayPumpDeps) {
 	return function pump(raw: unknown): void {
 		void (async () => {
-			const parsed = HostRelayFrameSchema.safeParse(raw);
+			const parsed = SwitchRelayFrameSchema.safeParse(raw);
 			if (!parsed.success) {
 				const relayId = (raw as { relayId?: unknown } | null)?.relayId;
 				if (typeof relayId === "string" && relayId.length > 0) {
 					await sendReply({
 						relayId,
 						ok: false,
-						error: `invalid host_relay: ${parsed.error.issues[0]?.message ?? "malformed"}`,
+						error: `invalid switch_relay: ${parsed.error.issues[0]?.message ?? "malformed"}`,
 					});
 				} else {
-					console.error(`[host-relay] dropping malformed frame with no relayId`);
+					console.error(`[switch-relay] dropping malformed frame with no relayId`);
 				}
 				return;
 			}
 			const frame = parsed.data;
-			// Open the E2E seal (verifies the origin Host's signature against the
+			// Open the E2E seal (verifies the origin Switch's signature against the
 			// allowlist + decrypts) and parse the inner op. A non-admitted sender or a
 			// tampered seal is rejected without dispatching.
 			let op: FederatedOp;
 			try {
-				op = FederatedOpSchema.parse(sealer.open(frame.srcHost, frame.payload.sealed));
+				op = FederatedOpSchema.parse(sealer.open(frame.srcSwitch, frame.payload.sealed));
 			} catch (err) {
 				await sendReply({
 					relayId: frame.relayId,
@@ -123,14 +123,14 @@ export function createHostRelayPump({ handleOp, sealer, sendReply }: HostRelayPu
 				return;
 			}
 			try {
-				const result = await handleOp(op, frame.srcHost);
-				// Seal the result back to the origin Host (E2E both directions).
-				await sendReply({ relayId: frame.relayId, ok: true, result: sealer.seal(frame.srcHost, result) });
+				const result = await handleOp(op, frame.srcSwitch);
+				// Seal the result back to the origin Switch (E2E both directions).
+				await sendReply({ relayId: frame.relayId, ok: true, result: sealer.seal(frame.srcSwitch, result) });
 			} catch (err) {
 				await sendReply({ relayId: frame.relayId, ok: false, error: (err as Error).message });
 			}
 		})().catch((err: Error) => {
-			console.error(`[host-relay] pump error: ${err.message}`);
+			console.error(`[switch-relay] pump error: ${err.message}`);
 		});
 	};
 }

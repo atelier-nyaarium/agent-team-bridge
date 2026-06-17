@@ -14,7 +14,7 @@ import com.atelier_nyaarium.switchboard.proto.SignedRevocation
  */
 object AdmissionCrypto {
 	fun admissionSigningBytes(a: Admission): ByteArray =
-		listOf("ADMISSION_V1", a.kind, a.signPub, a.boxPub, a.hostId ?: "", a.issuedAt.toString(), a.nonce)
+		listOf("ADMISSION_V1", a.kind, a.signPub, a.boxPub, a.switchId ?: "", a.issuedAt.toString(), a.nonce)
 			.joinToString("\n")
 			.toByteArray(Charsets.UTF_8)
 

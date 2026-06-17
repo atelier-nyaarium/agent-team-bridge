@@ -90,11 +90,11 @@ class ProvisioningStore(context: Context) {
 
 	fun loadLabels(): String? = prefs.getString(KEY_LABELS, null)
 
-	/** The connected Host's id, learned from the register result. Anchors the
-	 * composite (host, name) key; empty until a federation-aware arbiter reports it. */
-	fun saveHostId(id: String) = prefs.edit().putString(KEY_HOST_ID, id).apply()
+	/** The connected Switch's id, learned from the register result. Anchors the
+	 * composite (switchId, name) key; empty until a federation-aware Switch reports it. */
+	fun saveSwitchId(id: String) = prefs.edit().putString(KEY_SWITCH_ID, id).apply()
 
-	fun loadHostId(): String = prefs.getString(KEY_HOST_ID, "") ?: ""
+	fun loadSwitchId(): String = prefs.getString(KEY_SWITCH_ID, "") ?: ""
 
 	/** The phone-owned mailbox consumption cursor, durable across app restarts. The phone
 	 * resumes from its OWN cursor instead of re-adopting a server-dictated one, so the
@@ -141,24 +141,24 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putBoolean(KEY_ROOTED, value).apply()
 		}
 
-	/** Store the admitted host's signing + box public keys (resolved at seal/unseal
+	/** Store the admitted Switch's signing + box public keys (resolved at seal/unseal
 	 * time). Keys are persisted ONLY under the Keystore-backed store for the same
 	 * reason as the identity: they authorize sealing ops and must not be in cleartext.
-	 * hostId is the arbiter's id (e.g. "laptop"), not the full session qualifier. */
-	fun saveHostKeys(hostId: String, signPub: String, boxPub: String) {
-		check(encrypted) { "secure storage unavailable; refusing to persist host keys in cleartext" }
+	 * switchId is the Switch's id (e.g. "laptop"), not the full session qualifier. */
+	fun saveSwitchKeys(switchId: String, signPub: String, boxPub: String) {
+		check(encrypted) { "secure storage unavailable; refusing to persist switch keys in cleartext" }
 		prefs.edit()
-			.putString(KEY_HOST_SIGN_PUB_PREFIX + hostId, signPub)
-			.putString(KEY_HOST_BOX_PUB_PREFIX + hostId, boxPub)
+			.putString(KEY_SWITCH_SIGN_PUB_PREFIX + switchId, signPub)
+			.putString(KEY_SWITCH_BOX_PUB_PREFIX + switchId, boxPub)
 			.apply()
 	}
 
-	data class HostKeys(val signPub: String, val boxPub: String)
+	data class SwitchKeys(val signPub: String, val boxPub: String)
 
-	fun loadHostKeys(hostId: String): HostKeys? {
-		val sign = prefs.getString(KEY_HOST_SIGN_PUB_PREFIX + hostId, null) ?: return null
-		val box = prefs.getString(KEY_HOST_BOX_PUB_PREFIX + hostId, null) ?: return null
-		return HostKeys(sign, box)
+	fun loadSwitchKeys(switchId: String): SwitchKeys? {
+		val sign = prefs.getString(KEY_SWITCH_SIGN_PUB_PREFIX + switchId, null) ?: return null
+		val box = prefs.getString(KEY_SWITCH_BOX_PUB_PREFIX + switchId, null) ?: return null
+		return SwitchKeys(sign, box)
 	}
 
 	private companion object {
@@ -166,11 +166,11 @@ class ProvisioningStore(context: Context) {
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"
 		const val KEY_LABELS = "labels"
-		const val KEY_HOST_ID = "host_id"
+		const val KEY_SWITCH_ID = "switch_id"
 		const val KEY_IDENTITY = "federation_identity"
 		const val KEY_ROOTED = "federation_rooted"
-		const val KEY_HOST_SIGN_PUB_PREFIX = "host_sign_pub."
-		const val KEY_HOST_BOX_PUB_PREFIX = "host_box_pub."
+		const val KEY_SWITCH_SIGN_PUB_PREFIX = "switch_sign_pub."
+		const val KEY_SWITCH_BOX_PUB_PREFIX = "switch_box_pub."
 		const val KEY_STTS_PROVIDER = "stts_provider"
 		const val KEY_STTS_VOICE = "stts_voice"
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."

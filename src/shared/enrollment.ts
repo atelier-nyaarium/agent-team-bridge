@@ -1,4 +1,4 @@
-// SYNC-HASH: 9d20dbf367b2af6154835e6c440c32b4
+// SYNC-HASH: b7a55c684fc7fa2fcbc95bf79ff62eb3
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -23,7 +23,7 @@ import { fingerprint } from "./crypto.js";
 //
 //  - enroll-owner: evie admin command -> owner phone. Roots the owner device at
 //    the Domain; the owner confirms evie's signing fingerprint from the terminal.
-//  - admit-host: an arbiter -> owner phone. The owner confirms the Host
+//  - admit-switch: an arbiter -> owner phone. The owner confirms the Switch
 //    fingerprint on the arbiter console, then signs an admission for it.
 //  - authorize-phone: owner phone -> a second owner device.
 
@@ -51,8 +51,8 @@ export const EnrollmentPayloadSchema = z
 			bundle: ServiceBundleSchema.optional(),
 		}),
 		z.object({
-			type: z.literal("admit-host"),
-			hostId: z.string().min(1),
+			type: z.literal("admit-switch"),
+			switchId: z.string().min(1),
 			signPub: z.string().min(1),
 			boxPub: z.string().min(1),
 		}),
@@ -65,7 +65,7 @@ export const EnrollmentPayloadSchema = z
 	])
 	.meta({ id: "EnrollmentPayload" });
 
-/** The owner device's enrollment requests to evie (NOT relayed to a Host - evie
+/** The owner device's enrollment requests to evie (NOT relayed to a Switch - evie
  * is the Domain root). All three are self-authenticating: `enroll_redeem` is
  * authorized by the single-use nonce evie minted, and the submit ops carry an
  * owner-signed artifact evie verifies against the rooted owner key. The phone
@@ -90,7 +90,7 @@ export const EnrollResultSchema = z
 
 export type EnrollmentPayload = z.infer<typeof EnrollmentPayloadSchema>;
 export type EnrollOwnerPayload = Extract<EnrollmentPayload, { type: "enroll-owner" }>;
-export type AdmitHostPayload = Extract<EnrollmentPayload, { type: "admit-host" }>;
+export type AdmitSwitchPayload = Extract<EnrollmentPayload, { type: "admit-switch" }>;
 export type AuthorizePhonePayload = Extract<EnrollmentPayload, { type: "authorize-phone" }>;
 export type EnrollOp = z.infer<typeof EnrollOpSchema>;
 export type EnrollResult = z.infer<typeof EnrollResultSchema>;
@@ -104,29 +104,29 @@ export function payloadSas(payload: EnrollmentPayload): string {
 	switch (payload.type) {
 		case "enroll-owner":
 			return fingerprint(payload.evieSignPub);
-		case "admit-host":
+		case "admit-switch":
 		case "authorize-phone":
 			return fingerprint(payload.signPub);
 	}
 }
 
-/** Build the owner-signed admission for a scanned admit-host / authorize-phone
+/** Build the owner-signed admission for a scanned admit-switch / authorize-phone
  * payload, AFTER the human has confirmed the SAS. `nowMs` + `nonce` are passed in
  * (the caller owns time + randomness). */
 export function admissionFromScan(
-	payload: AdmitHostPayload | AuthorizePhonePayload,
+	payload: AdmitSwitchPayload | AuthorizePhonePayload,
 	ownerSignPrivB64: string,
 	ownerSignPubB64: string,
 	nowMs: number,
 	nonceB64: string,
 ): SignedAdmission {
 	const admission: Admission =
-		payload.type === "admit-host"
+		payload.type === "admit-switch"
 			? {
-					kind: "host",
+					kind: "switch",
 					signPub: payload.signPub,
 					boxPub: payload.boxPub,
-					hostId: payload.hostId,
+					switchId: payload.switchId,
 					issuedAt: nowMs,
 					nonce: nonceB64,
 				}

@@ -86,11 +86,11 @@ data class Team(
 	val queueDepth: Int,
 	val kind: String = "loose",
 ) {
-	/** Short local name shown in the UI: the tail after the host qualifier. */
+	/** Short local name shown in the UI: the tail after the switch qualifier. */
 	val displayName: String get() = TeamAddress.parse(name, "").name
 
-	/** Owning Host id (the segment before the qualifier), or "" for a bare name. */
-	val host: String get() = TeamAddress.parse(name, "").host
+	/** Owning Switch id (the segment before the qualifier), or "" for a bare name. */
+	val switchId: String get() = TeamAddress.parse(name, "").switchId
 }
 
 data class SendResult(val ok: Boolean, val status: String, val error: String?)
@@ -136,7 +136,7 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 	/** This phone's home Host id, learned at register and set by ChatRepository.
 	 * Rides every relay so the Router routes to the right Host; null until learned. */
 	@Volatile
-	var homeHost: String? = null
+	var homeSwitch: String? = null
 
 	/**
 	 * Direct CA-pinned GET to the API server with the SA token. Proves the tunnel
@@ -161,19 +161,19 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 	private fun requirePhoneIdentity(): Crypto.Identity =
 		store.loadIdentity() ?: error("This device is not enrolled. Scan evie's enroll-owner QR first.")
 
-	/** Resolve host keys by id. On first boot homeHost is null; register resolves
-	 * via the persisted host id so enrollment is a prerequisite, not an after-thought.
-	 * Throws a clear "admit the host first" message when absent. */
-	private fun requireHostKeys(hostId: String): ProvisioningStore.HostKeys =
-		store.loadHostKeys(hostId)
-			?: error("Home host \"$hostId\" is not admitted. Scan the host's QR code to admit it.")
+	/** Resolve Switch keys by id. On first boot homeSwitch is null; register resolves
+	 * via the persisted Switch id so enrollment is a prerequisite, not an after-thought.
+	 * Throws a clear "admit the Switch first" message when absent. */
+	private fun requireSwitchKeys(switchId: String): ProvisioningStore.SwitchKeys =
+		store.loadSwitchKeys(switchId)
+			?: error("Home Switch \"$switchId\" is not admitted. Scan the Switch's QR code to admit it.")
 
-	/** The host id to use for sealing, in priority order: (1) the live homeHost set
-	 * after register, (2) the persisted host id from a previous session. Throws when
+	/** The Switch id to use for sealing, in priority order: (1) the live homeSwitch set
+	 * after register, (2) the persisted Switch id from a previous session. Throws when
 	 * neither is available (fresh install before any register or enrollment). */
-	private fun resolveHostId(): String =
-		homeHost?.takeIf { it.isNotEmpty() }
-			?: store.loadHostId().takeIf { it.isNotEmpty() }
+	private fun resolveSwitchId(): String =
+		homeSwitch?.takeIf { it.isNotEmpty() }
+			?: store.loadSwitchId().takeIf { it.isNotEmpty() }
 			?: error("Home host not yet known. Complete enrollment and connect first.")
 
 	/** Build a sealed PhoneRelayFrame for one op. Called fresh for every send,
@@ -218,8 +218,8 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 	 * and the replay guard never rejects a legitimate retry. */
 	private fun relay(op: PhoneOp, opId: String = UUID.randomUUID().toString(), readTimeoutMs: Long? = null): PhoneReplyBody {
 		val identity = requirePhoneIdentity()
-		val hostId = resolveHostId()
-		val hostKeys = requireHostKeys(hostId)
+		val switchId = resolveSwitchId()
+		val hostKeys = requireSwitchKeys(switchId)
 
 		val frame = buildSealedFrame(op, opId, identity, hostKeys.boxPub)
 		val req = Request.Builder()
@@ -292,11 +292,11 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 		"register",
 	)
 
-	/** List the bridge's sessions, each keyed by its host-qualified name. A
-	 * session's Host comes from the wire (`TeamInfo.host`); when a pre-federation
-	 * arbiter omits it, `localHostId` (this connection's Host, learned at register)
-	 * is the fallback. Both empty leaves the name bare (single implicit Host). */
-	fun teams(localHostId: String = ""): List<Team> {
+	/** List the bridge's sessions, each keyed by its switch-qualified name. A
+	 * session's Switch comes from the wire (`TeamInfo.switchId`); when a pre-federation
+	 * Switch omits it, `localSwitchId` (this connection's Switch, learned at register)
+	 * is the fallback. Both empty leaves the name bare (single implicit Switch). */
+	fun teams(localSwitchId: String = ""): List<Team> {
 		val body = relay(PhoneOp.ListTeams)
 		// Surface a relay failure instead of blanking the board with an empty list; the
 		// callers (connect, refreshTeams) wrap this in runCatching and keep the prior list.
@@ -304,9 +304,9 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 		val result =
 			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.PhoneListTeamsResult>(body.result)
 		return result.teams.map {
-			val host = it.host?.ifEmpty { null } ?: localHostId
+			val switchId = it.switchId?.ifEmpty { null } ?: localSwitchId
 			Team(
-				name = TeamAddress.parse(it.team, host).canonical,
+				name = TeamAddress.parse(it.team, switchId).canonical,
 				status = it.status,
 				mode = it.mode ?: "",
 				queueDepth = it.queue_depth.toInt(),

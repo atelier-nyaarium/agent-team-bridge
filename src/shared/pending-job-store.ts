@@ -10,8 +10,8 @@ interface JobEntry<T> {
 	from: string;
 	to: string;
 	fromConversationId: string | null;
-	// Set on a job the destination Host created for a cross-Host send: where its
-	// reply must be forwarded (back to the origin Host's session). Null for a
+	// Set on a job the destination Switch created for a cross-Switch send: where its
+	// reply must be forwarded (back to the origin Switch's session). Null for a
 	// local job, so `respond` knows to deliver locally instead of forwarding.
 	returnRoute: ReturnRoute | null;
 	persistent: boolean;

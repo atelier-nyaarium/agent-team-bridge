@@ -17,9 +17,9 @@ import type {
 // The session-id grammar constants are OWNED by session-id.ts now; imported for
 // the wire helpers below and re-exported so existing importers of this module
 // (codegen, host-id, un-migrated callers) keep resolving from here.
-import { CONV_SESSION_PREFIX, HOST_QUALIFIER_SEP, NOTICE_SESSION_PREFIX } from "./session-id.js";
+import { CONV_SESSION_PREFIX, NOTICE_SESSION_PREFIX, SWITCH_QUALIFIER_SEP } from "./session-id.js";
 
-export { CONV_SESSION_PREFIX, HOST_QUALIFIER_SEP, NOTICE_SESSION_PREFIX };
+export { CONV_SESSION_PREFIX, NOTICE_SESSION_PREFIX, SWITCH_QUALIFIER_SEP };
 
 ////////////////////////////////
 //  Phone bridge protocol
@@ -115,29 +115,29 @@ export function parseConvSessionTeam(sessionId: string): string | null {
 }
 
 ////////////////////////////////
-//  Host qualification
+//  Switch qualification
 //
-//  A session's address is host-qualified as `<hostId>/<name>` so the phone (and,
-//  in later federation phases, evie) can tell two Hosts' identically-named
-//  sessions apart. A BARE name (no separator) resolves to the local Host: the
+//  A session's address is host-qualified as `<switchId>/<name>` so the phone (and,
+//  in later federation phases, evie) can tell two Switches' identically-named
+//  sessions apart. A BARE name (no separator) resolves to the local Switch: the
 //  arbiter canonicalizes an inbound target to the qualified form before keying
 //  the channel job, and the phone normalizes a bare name off the wire to its
-//  connected Host. The separator is emitted into the generated Kotlin so the
-//  phone never hand-mirrors it. Host ids and local names never contain the
-//  separator, so the FIRST separator splits host from name unambiguously.
+//  connected Switch. The separator is emitted into the generated Kotlin so the
+//  phone never hand-mirrors it. Switch ids and local names never contain the
+//  separator, so the FIRST separator splits Switch id from name unambiguously.
 
-/** Qualify a bare local name under a host; a name that is already qualified
+/** Qualify a bare local name under a Switch id; a name that is already qualified
  * (contains the separator) is returned unchanged. */
-export function qualifyTeam(host: string, name: string): string {
-	return name.includes(HOST_QUALIFIER_SEP) ? name : `${host}${HOST_QUALIFIER_SEP}${name}`;
+export function qualifyTeam(switchId: string, name: string): string {
+	return name.includes(SWITCH_QUALIFIER_SEP) ? name : `${switchId}${SWITCH_QUALIFIER_SEP}${name}`;
 }
 
-/** Split a (possibly qualified) team into its host and local name. A bare name
- * yields a null host (caller resolves it to the local Host). */
-export function parseQualifiedTeam(team: string): { host: string | null; name: string } {
-	const i = team.indexOf(HOST_QUALIFIER_SEP);
-	if (i === -1) return { host: null, name: team };
-	return { host: team.slice(0, i), name: team.slice(i + 1) };
+/** Split a (possibly qualified) team into its Switch id and local name. A bare name
+ * yields a null switchId (caller resolves it to the local Switch). */
+export function parseQualifiedTeam(team: string): { switchId: string | null; name: string } {
+	const i = team.indexOf(SWITCH_QUALIFIER_SEP);
+	if (i === -1) return { switchId: null, name: team };
+	return { switchId: team.slice(0, i), name: team.slice(i + 1) };
 }
 
 ////////////////////////////////

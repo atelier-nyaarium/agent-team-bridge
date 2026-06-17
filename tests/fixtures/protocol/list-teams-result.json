@@ -2,7 +2,7 @@
 	"teams": [
 		{
 			"team": "switchboard",
-			"host": "laptop",
+			"switchId": "laptop",
 			"status": "online",
 			"mode": "channel",
 			"kind": "devcontainer",

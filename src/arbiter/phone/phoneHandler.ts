@@ -20,8 +20,8 @@ export interface PhoneRoutes {
 	send: (req: Request, body: Record<string, unknown>) => Promise<Response>;
 	respond: (req: Request, body: Record<string, unknown>) => Response;
 	teams: () => Response;
-	// Mesh-wide team list (local + every online peer Host); the phone is a
-	// roaming console and sees all Hosts, not just its home Host.
+	// Mesh-wide team list (local + every online peer Switch); the phone is a
+	// roaming console and sees all Switches, not just its home Switch.
 	discover: () => Promise<Response>;
 }
 
@@ -40,10 +40,10 @@ export interface PhoneHandlerDeps {
 	conversationRegistry: ConversationRegistry;
 	mailboxStore: DeviceMailboxStore;
 	routes: PhoneRoutes;
-	/** This Host's id, returned on register so the phone anchors its composite
-	 * (host, name) key, and used to canonicalize a send target to the qualified
+	/** This Switch's id, returned on register so the phone anchors its composite
+	 * (switchId, name) key, and used to canonicalize a send target to the qualified
 	 * session-id form (matching routes.send). */
-	localHostId: string;
+	localSwitchId: string;
 	sendBoundMs?: number;
 	/** True when the name belongs to a devcontainer project (catalog or known
 	 * paths). A device must not take such a name: while the project sleeps, the
@@ -85,7 +85,7 @@ export function createPhoneHandler({
 	conversationRegistry,
 	mailboxStore,
 	routes,
-	localHostId,
+	localSwitchId,
 	sendBoundMs = SEND_BOUND_MS,
 	isProjectName,
 }: PhoneHandlerDeps) {
@@ -110,7 +110,7 @@ export function createPhoneHandler({
 		// Canonicalize so the gate in respond can always compare canonical form
 		// against canonical form, whether the session id arrived bare or qualified.
 		// Recorded on the durable mailbox so respondability survives a restart.
-		const canonical = SessionId.parse(sessionId, localHostId)?.key ?? sessionId;
+		const canonical = SessionId.parse(sessionId, localSwitchId)?.key ?? sessionId;
 		mailboxStore.get(conversationId)?.recordSession(canonical);
 	}
 
@@ -239,16 +239,16 @@ export function createPhoneHandler({
 				console.log(
 					`[phone register] conv=${conversationId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
 				);
-				return { device, hostId: localHostId, cursor: box.highWater, epoch: box.epoch };
+				return { device, switchId: localSwitchId, cursor: box.highWater, epoch: box.epoch };
 			}
 
 			case "list_teams": {
-				// Fan out across the mesh so the phone sees every Host's sessions, each
-				// carrying its own `host` (the phone keys threads by host/name).
+				// Fan out across the mesh so the phone sees every Switch's sessions, each
+				// carrying its own `switchId` (the phone keys threads by switch/name).
 				const teams = (await (await routes.discover()).json()) as TeamInfo[];
 				// A phone does not list other phones as send targets, and excludes
 				// itself. teams() already drops the cli "host" daemon; the "arbiter"
-				// host-agent of each Host stays (kind "host"), reachable from the phone.
+				// host-agent of each Switch stays (kind "switch"), reachable from the phone.
 				return {
 					teams: teams.filter((t) => t.team !== device && t.kind !== "phone"),
 				};
@@ -261,7 +261,7 @@ export function createPhoneHandler({
 				// it pays a wake and is then rejected by the route's channelOnly
 				// check instead of minting a random session id.
 				// The phone may target a host-qualified name (`host/name`); strip the
-				// host for the local registry probe. Cross-host targets are rejected
+				// switch for the local registry probe. Cross-switch targets are rejected
 				// by routes.send (federation routing is a later phase).
 				const localTarget = parseQualifiedTeam(op.to).name;
 				const targetSubs = registry.get(localTarget);
@@ -279,7 +279,7 @@ export function createPhoneHandler({
 				// backgrounded-send path hands back the same id the in-time path would.
 				const expectedSession = SessionId.channel(
 					conversationId,
-					TeamAddress.local(localHostId, localTarget),
+					TeamAddress.local(localSwitchId, localTarget),
 				).key;
 				const sendPromise = routes.send(FAKE_REQ, {
 					from: device,
@@ -332,7 +332,7 @@ export function createPhoneHandler({
 				// op.session_id away from resolveHandshake (handshake ids are never
 				// recorded as inbound). Canonicalize via SessionId.parse so a bare
 				// session id matches the qualified key recorded on inbound delivery.
-				const canonicalRespondId = SessionId.parse(op.session_id, localHostId)?.key ?? op.session_id;
+				const canonicalRespondId = SessionId.parse(op.session_id, localSwitchId)?.key ?? op.session_id;
 				if (!mailboxStore.get(conversationId)?.canRespond(canonicalRespondId)) {
 					throw new Error(`Unknown session_id; you can only respond to a thread delivered to this device`);
 				}

@@ -33,7 +33,7 @@ object Protocol {
 	const val CONV_SESSION_PREFIX: String = "conv:"
 
 	/** Separator in a host-qualified name (host then local name); the first one splits host from local name. */
-	const val HOST_QUALIFIER_SEP: String = "/"
+	const val SWITCH_QUALIFIER_SEP: String = "/"
 }
 
 @Serializable
@@ -48,7 +48,7 @@ data class ChannelFile(
 @Serializable
 data class TeamInfo(
 	val team: String,
-	val host: String? = null,
+	val switchId: String? = null,
 	val status: String,
 	val mode: String? = null,
 	val kind: String? = null,
@@ -156,7 +156,7 @@ data class PhoneReplyBody(
 @Serializable
 data class PhoneRegisterResult(
 	val device: String,
-	val hostId: String? = null,
+	val switchId: String? = null,
 	val cursor: Long,
 	val epoch: Long,
 )
@@ -210,7 +210,7 @@ data class Admission(
 	val kind: String,
 	val signPub: String,
 	val boxPub: String,
-	val hostId: String? = null,
+	val switchId: String? = null,
 	val issuedAt: Long,
 	val nonce: String,
 )

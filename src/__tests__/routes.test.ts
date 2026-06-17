@@ -25,7 +25,7 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		registry,
 		conversationRegistry,
 		store,
-		config: { LOG_PATH: "/tmp/test-debug.log", RESPONSE_TIMEOUT_MS: 500, localHostId: "test-host" },
+		config: { LOG_PATH: "/tmp/test-debug.log", RESPONSE_TIMEOUT_MS: 500, localSwitchId: "test-host" },
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
 		offlineCatalog,
 		knownTeamPaths,
@@ -67,7 +67,7 @@ describe("routes", () => {
 			const { teams } = createRoutes(ctx);
 			const res = teams();
 			expect(await res.json()).toEqual([
-				{ team: "proj-a", host: "test-host", status: "available", kind: "devcontainer", queue_depth: 0 },
+				{ team: "proj-a", switchId: "test-host", status: "available", kind: "devcontainer", queue_depth: 0 },
 			]);
 		});
 
@@ -83,13 +83,13 @@ describe("routes", () => {
 			expect(json).toEqual([
 				{
 					team: "proj-a",
-					host: "test-host",
+					switchId: "test-host",
 					status: "online",
 					mode: "cli",
 					kind: "devcontainer",
 					queue_depth: 0,
 				},
-				{ team: "proj-b", host: "test-host", status: "available", kind: "devcontainer", queue_depth: 0 },
+				{ team: "proj-b", switchId: "test-host", status: "available", kind: "devcontainer", queue_depth: 0 },
 			]);
 		});
 
@@ -107,13 +107,20 @@ describe("routes", () => {
 			expect(json).toEqual([
 				{
 					team: "proj-a",
-					host: "test-host",
+					switchId: "test-host",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
 					queue_depth: 0,
 				},
-				{ team: "2fb1f8", host: "test-host", status: "online", mode: "channel", kind: "loose", queue_depth: 0 },
+				{
+					team: "2fb1f8",
+					switchId: "test-host",
+					status: "online",
+					mode: "channel",
+					kind: "loose",
+					queue_depth: 0,
+				},
 			]);
 		});
 
@@ -128,17 +135,24 @@ describe("routes", () => {
 			expect(json).toEqual([
 				{
 					team: "proj-a",
-					host: "test-host",
+					switchId: "test-host",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
 					queue_depth: 0,
 				},
-				{ team: "Aqua", host: "test-host", status: "online", mode: "channel", kind: "phone", queue_depth: 0 },
+				{
+					team: "Aqua",
+					switchId: "test-host",
+					status: "online",
+					mode: "channel",
+					kind: "phone",
+					queue_depth: 0,
+				},
 			]);
 		});
 
-		it("marks the arbiter channel identity as kind host (the host-agent)", async () => {
+		it("marks the arbiter channel identity as kind switch (the host-agent)", async () => {
 			const registry = makeRegistry({
 				arbiter: { readyState: 1, data: { mode: "channel" } },
 				"proj-a": { readyState: 1, data: { mode: "channel" } },
@@ -147,10 +161,17 @@ describe("routes", () => {
 			const ctx = makeCtx({ registry, knownTeamPaths });
 			const json = await createRoutes(ctx).teams().json();
 			expect(json).toEqual([
-				{ team: "arbiter", host: "test-host", status: "online", mode: "channel", kind: "host", queue_depth: 0 },
+				{
+					team: "arbiter",
+					switchId: "test-host",
+					status: "online",
+					mode: "channel",
+					kind: "switch",
+					queue_depth: 0,
+				},
 				{
 					team: "proj-a",
-					host: "test-host",
+					switchId: "test-host",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
@@ -461,7 +482,7 @@ describe("routes", () => {
 			});
 			const json = await res.json();
 			// The channel session id carries the canonical host-qualified target so
-			// the phone threads the reply under (host, name).
+			// the phone threads the reply under (switchId, name).
 			expect(json.session_id).toBe("conv:conv-1:test-host/proj-a");
 			expect(json.status).toBe("running");
 			expect(pushed.length).toBe(1);
@@ -496,10 +517,10 @@ describe("routes", () => {
 			expect(pushed.length).toBe(1);
 		});
 
-		it("routes a target qualified with a different Host, 503 when the Router is down", async () => {
+		it("routes a target qualified with a different Switch, 503 when the Router is down", async () => {
 			const fakeWs = { readyState: 1, data: { mode: "channel" }, send() {} };
 			const registry = makeRegistry({ "proj-a": fakeWs });
-			// No evieClient in this ctx: the Router is unavailable, so a cross-Host
+			// No evieClient in this ctx: the Router is unavailable, so a cross-Switch
 			// target reports 503 rather than misresolving to the same-named local
 			// session.
 			const ctx = makeCtx({ registry });

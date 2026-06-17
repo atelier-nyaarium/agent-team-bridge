@@ -273,7 +273,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			)
 		openTeam != null -> {
 			// Devcontainer names are the project identity; only loose peers take labels.
-			val session = state.sessions(state.localHostId).firstOrNull { it.name == openTeam }
+			val session = state.sessions(state.localSwitchId).firstOrNull { it.name == openTeam }
 			val kind = session?.kind
 			// Rename only when positively known loose; an unknown kind (team gone
 			// from the list) stays un-renameable rather than defaulting open.
@@ -285,10 +285,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			}
 			ThreadScreen(
 				team = openTeam!!,
-				label = state.label(openTeam!!, state.localHostId),
+				label = state.label(openTeam!!, state.localSwitchId),
 				presence = presence,
 				tabs = state.openTabs,
-				tabLabel = { state.label(it, state.localHostId) },
+				tabLabel = { state.label(it, state.localSwitchId) },
 				messages = state.threads[openTeam].orEmpty(),
 				error = state.error,
 				rendererPool = rendererPool,
@@ -430,8 +430,8 @@ fun SessionsScreen(
 
 	actionTeam?.let { team ->
 		SessionActionsDialog(
-			label = state.label(team.name, state.localHostId),
-			canRename = team.kind != "devcontainer" && team.kind != "host",
+			label = state.label(team.name, state.localSwitchId),
+			canRename = team.kind != "devcontainer" && team.kind != "switch",
 			onRename = {
 				actionTeam = null
 				renameTeam = team
@@ -446,7 +446,7 @@ fun SessionsScreen(
 	renameTeam?.let { team ->
 		RenameDialog(
 			team = team.displayName,
-			current = state.label(team.name, state.localHostId),
+			current = state.label(team.name, state.localSwitchId),
 			onSave = {
 				onRename(team.name, it)
 				renameTeam = null
@@ -456,7 +456,7 @@ fun SessionsScreen(
 	}
 	forgetTeam?.let { team ->
 		ConfirmDialog(
-			title = "Forget ${state.label(team.name, state.localHostId)}?",
+			title = "Forget ${state.label(team.name, state.localSwitchId)}?",
 			body = "Drops this thread, its label, and unread state from this device.",
 			confirmText = "Forget",
 			onConfirm = {
@@ -494,7 +494,7 @@ fun SessionsScreen(
 					)
 				}
 			}
-			if (state.sessions(state.localHostId).isEmpty()) {
+			if (state.sessions(state.localSwitchId).isEmpty()) {
 				if (!state.connected) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
 				Text(
 					state.error ?: state.status.ifEmpty { "Connecting..." },
@@ -503,10 +503,10 @@ fun SessionsScreen(
 				)
 			}
 			val order = sessionOrder(state)
-			val sessions = state.sessions(state.localHostId)
-			val hostAgents = sessions.filter { it.kind == "host" }.sortedWith(order)
+			val sessions = state.sessions(state.localSwitchId)
+			val switchAgents = sessions.filter { it.kind == "switch" }.sortedWith(order)
 			val projects = sessions.filter { it.kind == "devcontainer" }.sortedWith(order)
-			val windows = sessions.filter { it.kind != "devcontainer" && it.kind != "host" }.sortedWith(order)
+			val windows = sessions.filter { it.kind != "devcontainer" && it.kind != "switch" }.sortedWith(order)
 			LazyColumn(
 				Modifier.fillMaxSize(),
 				contentPadding = PaddingValues(12.dp),
@@ -514,9 +514,9 @@ fun SessionsScreen(
 			) {
 				// Keys are namespaced so a team literally named "hdr-projects"
 				// cannot collide with the header items.
-				if (hostAgents.isNotEmpty()) {
-					item(key = "hdr-host") { SectionLabel("Host") }
-					items(hostAgents, key = { "team:${it.name}" }) { team ->
+				if (switchAgents.isNotEmpty()) {
+					item(key = "hdr-switch") { SectionLabel("Switch") }
+					items(switchAgents, key = { "team:${it.name}" }) { team ->
 						SessionCard(
 							state = state,
 							team = team,
@@ -614,7 +614,7 @@ fun SectionLabel(text: String) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: () -> Unit) {
-	val display = if (team.kind == "host") "Host" else state.label(team.name, state.localHostId)
+	val display = if (team.kind == "switch") "Switch" else state.label(team.name, state.localSwitchId)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
 	val isCli = team.mode == "cli"
@@ -647,7 +647,7 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 			// Under a custom label, surface the session's short local name so the user
 			// can still tell which session it maps to. label() falls back to the short
 			// name, so an unlabeled session adds nothing here.
-			if (display != team.displayName && team.kind != "host") {
+			if (display != team.displayName && team.kind != "switch") {
 				Text(
 					team.displayName,
 					style = MaterialTheme.typography.labelSmall,

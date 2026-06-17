@@ -31,9 +31,9 @@ import {
 import { EnrollOpSchema, EnrollResultSchema } from "../src/shared/enrollment.js";
 import {
 	CONV_SESSION_PREFIX,
-	HOST_QUALIFIER_SEP,
 	NOTICE_SESSION_PREFIX,
 	PHONE_PROTOCOL_VERSION,
+	SWITCH_QUALIFIER_SEP,
 } from "../src/shared/phone-protocol.js";
 import {
 	ChannelFileSchema,
@@ -354,7 +354,7 @@ ${INDENT}/** Session-id prefix for channel conversations; the target team is the
 ${INDENT}const val CONV_SESSION_PREFIX: String = ${kotlinString(CONV_SESSION_PREFIX)}
 
 ${INDENT}/** Separator in a host-qualified name (host then local name); the first one splits host from local name. */
-${INDENT}const val HOST_QUALIFIER_SEP: String = ${kotlinString(HOST_QUALIFIER_SEP)}
+${INDENT}const val SWITCH_QUALIFIER_SEP: String = ${kotlinString(SWITCH_QUALIFIER_SEP)}
 }`;
 
 const output = `${[header, ...blocks].join("\n\n")}\n`;

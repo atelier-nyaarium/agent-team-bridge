@@ -51,7 +51,7 @@ describe("evieClient phone relay", () => {
 			client = startEvieClient({
 				url: `ws://localhost:${evie?.port}`,
 				authToken: "test-token",
-				hostId: "test-host",
+				switchId: "test-host",
 				onPhoneRelay: resolve,
 			});
 		});
@@ -93,8 +93,8 @@ describe("evieClient phone relay", () => {
 		const result = await client!.callTool("phone_relay_reply", reply);
 		expect(result.error).toBeUndefined();
 		expect(result.result).toEqual({ consumed: true });
-		// The client registers its Host on connect, then answers the relay.
-		expect(toolCalls[0]).toMatchObject({ action: "arbiter_register", params: { hostId: "test-host" } });
+		// The client registers its Switch on connect, then answers the relay.
+		expect(toolCalls[0]).toMatchObject({ action: "switch_register", params: { switchId: "test-host" } });
 		expect(toolCalls.find((c) => c.action === "phone_relay_reply")).toMatchObject({
 			action: "phone_relay_reply",
 			params: reply,
@@ -106,7 +106,11 @@ describe("evieClient phone relay", () => {
 			// Never reply; the close should settle the call.
 		});
 
-		client = startEvieClient({ url: `ws://localhost:${evie.port}`, authToken: "test-token", hostId: "test-host" });
+		client = startEvieClient({
+			url: `ws://localhost:${evie.port}`,
+			authToken: "test-token",
+			switchId: "test-host",
+		});
 		await new Promise<void>((resolve) => {
 			const t = setInterval(() => {
 				if (client?.isConnected()) {

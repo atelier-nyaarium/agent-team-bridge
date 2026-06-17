@@ -22,11 +22,11 @@ const owner = generateIdentity();
 const A = generateIdentity();
 const B = generateIdentity();
 
-function hostAdmission(hostId: string, id: { sign: { pub: string }; box: { pub: string } }): Admission {
-	return { kind: "host", signPub: id.sign.pub, boxPub: id.box.pub, hostId, issuedAt: 1, nonce: "bg==" };
+function hostAdmission(switchId: string, id: { sign: { pub: string }; box: { pub: string } }): Admission {
+	return { kind: "switch", signPub: id.sign.pub, boxPub: id.box.pub, switchId, issuedAt: 1, nonce: "bg==" };
 }
 
-/** An allowlist rooted at `owner` admitting both Host A and Host B. */
+/** An allowlist rooted at `owner` admitting both Switch A and Switch B. */
 function allowlistWithBoth(): Allowlist {
 	const a = new Allowlist(tmp());
 	a.setOwner(owner.sign.pub);
@@ -36,7 +36,7 @@ function allowlistWithBoth(): Allowlist {
 }
 
 describe("sealer", () => {
-	it("round-trips a sealed object between two admitted Hosts", () => {
+	it("round-trips a sealed object between two admitted Switches", () => {
 		const aSealer = createSealer(A, allowlistWithBoth(), "A");
 		const bSealer = createSealer(B, allowlistWithBoth(), "B");
 		const env = aSealer.seal("B", { hello: "world", n: 7 });
@@ -51,7 +51,7 @@ describe("sealer", () => {
 		expect(() => bSealer.open("A", env)).toThrow(/replay/);
 	});
 
-	it("rejects an envelope naming an unadmitted source Host", () => {
+	it("rejects an envelope naming an unadmitted source Switch", () => {
 		const aSealer = createSealer(A, allowlistWithBoth(), "A");
 		const bSealer = createSealer(B, allowlistWithBoth(), "B");
 		const env = aSealer.seal("B", { x: 1 });
@@ -66,10 +66,10 @@ describe("sealer", () => {
 		expect(() => bSealer.open("A", tampered)).toThrow();
 	});
 
-	it("rejects a relabeled source (signed-in src must match the claimed srcHost)", () => {
+	it("rejects a relabeled source (signed-in src must match the claimed srcSwitch)", () => {
 		// A seals to B, but evie relabels the frame as if it came from a third admitted
-		// Host. The signature verifies under A's key only if open() is told srcHost=A;
-		// told srcHost=B it fails to verify, told the truth it fails the src cross-check
+		// Switch. The signature verifies under A's key only if open() is told srcSwitch=A;
+		// told srcSwitch=B it fails to verify, told the truth it fails the src cross-check
 		// when the cleartext label is forged. Here the label disagrees with the seal.
 		const aSealer = createSealer(A, allowlistWithBoth(), "A");
 		const bSealer = createSealer(B, allowlistWithBoth(), "B");
@@ -78,12 +78,12 @@ describe("sealer", () => {
 		expect(() => bSealer.open("B", env)).toThrow();
 	});
 
-	it("rejects a frame addressed to a different Host", () => {
+	it("rejects a frame addressed to a different Switch", () => {
 		const aSealer = createSealer(A, allowlistWithBoth(), "A");
-		// A seals to B, but a Host that believes itself "C" opens it.
+		// A seals to B, but a Switch that believes itself "C" opens it.
 		const cSealer = createSealer(B, allowlistWithBoth(), "C");
 		const env = aSealer.seal("B", { x: 1 });
-		expect(() => cSealer.open("A", env)).toThrow(/not addressed to this Host/);
+		expect(() => cSealer.open("A", env)).toThrow(/not addressed to this Switch/);
 	});
 
 	it("rejects a stale envelope past the freshness window", () => {

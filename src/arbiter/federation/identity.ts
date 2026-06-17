@@ -12,9 +12,9 @@ function isIdentity(v: unknown): v is Identity {
 	return Boolean(id?.sign?.pub && id?.sign?.priv && id?.box?.pub && id?.box?.priv);
 }
 
-/** Load this Host's federation identity from its volume, minting + persisting one
+/** Load this Switch's federation identity from its volume, minting + persisting one
  * (tight perms, private keys never leaving the file) on first boot. Stable across
- * restarts so the Host keeps its admitted key. */
+ * restarts so the Switch keeps its admitted key. */
 export function loadOrCreateIdentity(dataDir: string): Identity {
 	const file = path.join(dataDir, IDENTITY_FILE);
 	try {

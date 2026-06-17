@@ -4,11 +4,11 @@ import { fingerprint, type Identity } from "../../shared/crypto.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** The admit-host enrollment payload this Host presents for the owner to scan
- * (matches switchboard's EnrollmentPayloadSchema admit-host member). */
-export interface AdmitHostPayload {
-	type: "admit-host";
-	hostId: string;
+/** The admit-switch enrollment payload this Switch presents for the owner to scan
+ * (matches switchboard's EnrollmentPayloadSchema admit-switch member). */
+export interface AdmitSwitchPayload {
+	type: "admit-switch";
+	switchId: string;
 	signPub: string;
 	boxPub: string;
 }
@@ -16,8 +16,8 @@ export interface AdmitHostPayload {
 ////////////////////////////////
 //  Functions & Helpers
 
-export function admitHostPayload(identity: Identity, hostId: string): AdmitHostPayload {
-	return { type: "admit-host", hostId, signPub: identity.sign.pub, boxPub: identity.box.pub };
+export function admitSwitchPayload(identity: Identity, switchId: string): AdmitSwitchPayload {
+	return { type: "admit-switch", switchId, signPub: identity.sign.pub, boxPub: identity.box.pub };
 }
 
 /** Render a QR as ANSI background-colored cells - forced black-on-white so it
@@ -43,11 +43,11 @@ export function terminalQr(text: string): string {
 	return lines.join("\n");
 }
 
-/** Print the admit-host QR + SAS to the arbiter console on startup, so the owner
- * can scan an un-admitted Host into the Domain. No-op once admitted. */
-export function logAdmitHostQr(identity: Identity, hostId: string): void {
-	const payload = admitHostPayload(identity, hostId);
-	console.log(`\n[federation] Host "${hostId}" is not yet admitted to a Domain.`);
+/** Print the admit-switch QR + SAS to the arbiter console on startup, so the owner
+ * can scan an un-admitted Switch into the Domain. No-op once admitted. */
+export function logAdmitSwitchQr(identity: Identity, switchId: string): void {
+	const payload = admitSwitchPayload(identity, switchId);
+	console.log(`\n[federation] Switch "${switchId}" is not yet admitted to a Domain.`);
 	console.log(`[federation] On the owner device, open Enroll by QR and scan:\n`);
 	console.log(terminalQr(JSON.stringify(payload)));
 	console.log(`\n[federation] Confirm this fingerprint on the owner device: ${fingerprint(identity.sign.pub)}\n`);

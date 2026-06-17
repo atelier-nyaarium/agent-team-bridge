@@ -87,7 +87,7 @@ function makeHarness(overrides: Partial<PhoneRoutes> = {}): Harness {
 		registry,
 		conversationRegistry,
 		mailboxStore,
-		localHostId: "test-host",
+		localSwitchId: "test-host",
 		routes,
 	});
 	return { registry, conversationRegistry, mailboxStore, sendCalls, respondCalls, handler };
@@ -142,9 +142,9 @@ describe("createPhoneHandler", () => {
 		const h = makeHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "register" }));
 		expect(reply.ok).toBe(true);
-		// register hands back the connected Host id so the phone anchors its
-		// composite (host, name) key and migrates bare-keyed threads onto it.
-		expect(reply.result).toMatchObject({ device: "pixel", hostId: "test-host", cursor: 0 });
+		// register hands back the connected Switch id so the phone anchors its
+		// composite (switchId, name) key and migrates bare-keyed threads onto it.
+		expect(reply.result).toMatchObject({ device: "pixel", switchId: "test-host", cursor: 0 });
 		expect((reply.result as { epoch: number }).epoch).toBeGreaterThan(0);
 
 		const peer = h.registry.get("pixel")?.get("conv-pixel") as unknown as ServerWebSocket<WsData>;
@@ -175,7 +175,7 @@ describe("createPhoneHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
-			localHostId: "test-host",
+			localSwitchId: "test-host",
 			routes: {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
@@ -481,7 +481,7 @@ describe("createPhoneHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
-			localHostId: "test-host",
+			localSwitchId: "test-host",
 			sendBoundMs: 50,
 			routes: {
 				send: () => new Promise<Response>(() => {}),
@@ -560,7 +560,7 @@ describe("createPhoneHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
-			localHostId: "test-host",
+			localSwitchId: "test-host",
 			sendBoundMs: 20,
 			routes: {
 				send: () =>
@@ -602,7 +602,7 @@ describe("createPhoneHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
-			localHostId: "test-host",
+			localSwitchId: "test-host",
 			sendBoundMs: 20,
 			routes: {
 				send: () =>
@@ -689,7 +689,7 @@ describe("createPhoneHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
-			localHostId: "test-host",
+			localSwitchId: "test-host",
 			sendBoundMs: 20,
 			routes: {
 				send: () => new Promise<Response>((resolve) => (resolveSend = resolve)),

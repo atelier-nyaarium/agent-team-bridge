@@ -78,7 +78,7 @@ function makePump(phone: Identity, replies: PhoneRelayReply[]) {
 		registry,
 		conversationRegistry,
 		mailboxStore: new DeviceMailboxStore(),
-		localHostId: "test-host",
+		localSwitchId: "test-host",
 		routes: {
 			send: async () => jsonRes({}),
 			respond: () => jsonRes({}),
@@ -194,7 +194,7 @@ describe("createPhoneRelayPump (sealed)", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore: new DeviceMailboxStore(),
-			localHostId: "test-host",
+			localSwitchId: "test-host",
 			routes: {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
