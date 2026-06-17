@@ -12,6 +12,7 @@ temp/
 /ssl/
 /volumes/
 /.env*
+/.instances/
 /compose*.yml
 /next-env.d.ts
 /.playwright-mcp/
