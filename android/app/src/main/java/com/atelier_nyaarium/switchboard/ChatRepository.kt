@@ -236,7 +236,7 @@ class ChatRepository(
 	private fun client(): PhoneClient {
 		client?.let { return it }
 		val blob = store.load() ?: error("not provisioned")
-		return PhoneClient(Provisioning.parse(blob)).also { client = it }
+		return PhoneClient(Provisioning.parse(blob), store).also { client = it }
 	}
 
 	/** Enrollment controller over this device's identity store + bridge client, or

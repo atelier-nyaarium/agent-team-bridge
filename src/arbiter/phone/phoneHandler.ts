@@ -1,11 +1,10 @@
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import {
 	type MailboxInput,
-	PHONE_PROTOCOL_VERSION,
+	type OpenedPhoneFrame,
 	type PhoneOp,
 	type PhoneOpResult,
-	type PhoneRelayFrame,
-	type PhoneRelayReply,
+	type PhoneReplyBody,
 	parseQualifiedTeam,
 } from "../../shared/phone-protocol.js";
 import { SessionId, TeamAddress } from "../../shared/session-id.js";
@@ -95,8 +94,13 @@ export function createPhoneHandler({
 	// name is a display/target label only, so two devices sharing a name never
 	// share a slot, and a conversation cannot silently switch names.
 	const bindings = new Map<string, string>();
-	// conversationId -> (opId -> in-flight/settled reply) for mutating-op idempotency.
-	const opCache = new Map<string, Map<string, Promise<PhoneRelayReply>>>();
+	// conversationId -> the phone signing key bound to that install. A frame whose
+	// signerSignPub differs from the binding cannot operate this conversation (so a
+	// phone cannot poll or settle another install's mailbox by borrowing its
+	// conversationId). A register op may rebind (re-enrollment with a new key).
+	const signers = new Map<string, string>();
+	// conversationId -> (opId -> in-flight/settled reply body) for mutating-op idempotency.
+	const opCache = new Map<string, Map<string, Promise<PhoneReplyBody>>>();
 
 	// Peer lifetime equals mailbox lifetime: when a mailbox is evicted (idle
 	// sweep or store cap), the registry/conversation entries and binding go too.
@@ -145,7 +149,7 @@ export function createPhoneHandler({
 		}
 	}
 
-	function ensurePeer(device: string, conversationId: string, allowRebind = false): PhonePeer {
+	function ensurePeer(device: string, conversationId: string, signerSignPub: string, allowRebind = false): PhonePeer {
 		// A register op may rename the device: migrate the registry sub off the
 		// old name (mailbox and binding are conversation-keyed, so they carry
 		// over) before the identity checks see the stale binding.
@@ -160,8 +164,18 @@ export function createPhoneHandler({
 			bindings.delete(conversationId);
 		}
 
+		// Cryptographic install binding: the conversation is owned by the first
+		// signing key seen for it; a later frame with a different key is rejected
+		// unless this is a (re-enrolling) register. Blocks a phone from operating
+		// another install's mailbox by borrowing its conversationId.
+		const boundSigner = signers.get(conversationId);
+		if (boundSigner && boundSigner !== signerSignPub && !allowRebind) {
+			throw new Error(`conversationId is bound to a different device key`);
+		}
+
 		assertValidIdentity(device, conversationId);
 		mailboxStore.ensure(conversationId);
+		signers.set(conversationId, signerSignPub);
 
 		let subs = registry.get(device);
 		if (!subs) {
@@ -194,6 +208,7 @@ export function createPhoneHandler({
 	function removePeer(conversationId: string): void {
 		const device = bindings.get(conversationId);
 		bindings.delete(conversationId);
+		signers.delete(conversationId);
 		opCache.delete(conversationId);
 		mailboxStore.delete(conversationId);
 
@@ -360,26 +375,20 @@ export function createPhoneHandler({
 		}
 	}
 
-	async function runFrame(frame: PhoneRelayFrame): Promise<PhoneRelayReply> {
+	async function runFrame(frame: OpenedPhoneFrame): Promise<PhoneReplyBody> {
 		try {
 			// Bind/refresh the peer on every frame so a send arriving before an
 			// explicit register still routes its replies back to the mailbox.
-			// Only a register op may rebind an install to a new device name.
-			ensurePeer(frame.device, frame.conversationId, frame.op.kind === "register");
+			// Only a register op may rebind an install to a new device name / key.
+			ensurePeer(frame.device, frame.conversationId, frame.signerSignPub, frame.op.kind === "register");
 			const result = await dispatch(frame.op, frame.device, frame.conversationId);
-			return { type: "phone_relay_reply", v: PHONE_PROTOCOL_VERSION, opId: frame.opId, ok: true, result };
+			return { ok: true, result };
 		} catch (err) {
-			return {
-				type: "phone_relay_reply",
-				v: PHONE_PROTOCOL_VERSION,
-				opId: frame.opId,
-				ok: false,
-				error: (err as Error).message,
-			};
+			return { ok: false, error: (err as Error).message };
 		}
 	}
 
-	function handleFrame(frame: PhoneRelayFrame): Promise<PhoneRelayReply> {
+	function handleFrame(frame: OpenedPhoneFrame): Promise<PhoneReplyBody> {
 		// Reads (register/poll/list_teams) run fresh every call: they have no side
 		// effect to dedupe and must reflect live state (e.g. the current epoch).
 		if (!isMutatingOp(frame.op)) return runFrame(frame);

@@ -3,10 +3,12 @@ package com.atelier_nyaarium.switchboard
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.PhoneListTeamsResult
 import com.atelier_nyaarium.switchboard.proto.PhoneOp
+import com.atelier_nyaarium.switchboard.proto.PhoneOpEnvelope
 import com.atelier_nyaarium.switchboard.proto.PhonePollResult
 import com.atelier_nyaarium.switchboard.proto.PhoneRegisterResult
 import com.atelier_nyaarium.switchboard.proto.PhoneRelayFrame
 import com.atelier_nyaarium.switchboard.proto.PhoneRelayReply
+import com.atelier_nyaarium.switchboard.proto.PhoneReplyBody
 import com.atelier_nyaarium.switchboard.proto.PhoneRespondResult
 import com.atelier_nyaarium.switchboard.proto.PhoneSendResult
 import kotlinx.serialization.SerializationException
@@ -34,8 +36,10 @@ class ProtocolFixturesTest {
 
 	private fun decodeAs(schema: String, body: String) {
 		when (schema) {
+			"PhoneOpEnvelope" -> json.decodeFromString<PhoneOpEnvelope>(body)
 			"PhoneRelayFrame" -> json.decodeFromString<PhoneRelayFrame>(body)
 			"PhoneRelayReply" -> json.decodeFromString<PhoneRelayReply>(body)
+			"PhoneReplyBody" -> json.decodeFromString<PhoneReplyBody>(body)
 			"MailboxEntry" -> json.decodeFromString<MailboxEntry>(body)
 			"PhoneRegisterResult" -> json.decodeFromString<PhoneRegisterResult>(body)
 			"PhoneListTeamsResult" -> json.decodeFromString<PhoneListTeamsResult>(body)
@@ -67,23 +71,23 @@ class ProtocolFixturesTest {
 	@Test
 	fun decodesEveryOpKindThroughTheFrame() {
 		val ops = mapOf(
-			"frame-register.json" to PhoneOp.Register::class,
-			"frame-list-teams.json" to PhoneOp.ListTeams::class,
-			"frame-send.json" to PhoneOp.Send::class,
-			"frame-respond.json" to PhoneOp.Respond::class,
-			"frame-poll.json" to PhoneOp.Poll::class,
+			"op-envelope-register.json" to PhoneOp.Register::class,
+			"op-envelope-list-teams.json" to PhoneOp.ListTeams::class,
+			"op-envelope-send.json" to PhoneOp.Send::class,
+			"op-envelope-respond.json" to PhoneOp.Respond::class,
+			"op-envelope-poll.json" to PhoneOp.Poll::class,
 		)
 		for ((name, expected) in ops) {
-			val frame = json.decodeFromString<PhoneRelayFrame>(fixture(name))
-			assertEquals(name, expected, frame.op::class)
+			val envelope = json.decodeFromString<PhoneOpEnvelope>(fixture(name))
+			assertEquals(name, expected, envelope.op::class)
 		}
 	}
 
 	@Test
 	fun frameRoundTripsThroughEncode() {
-		val frame = json.decodeFromString<PhoneRelayFrame>(fixture("frame-send.json"))
-		val redecoded = json.decodeFromString<PhoneRelayFrame>(json.encodeToString(PhoneRelayFrame.serializer(), frame))
-		assertEquals(frame, redecoded)
+		val envelope = json.decodeFromString<PhoneOpEnvelope>(fixture("op-envelope-send.json"))
+		val redecoded = json.decodeFromString<PhoneOpEnvelope>(json.encodeToString(PhoneOpEnvelope.serializer(), envelope))
+		assertEquals(envelope, redecoded)
 	}
 
 	@Test
@@ -116,11 +120,12 @@ class ProtocolFixturesTest {
 
 	@Test
 	fun decodesNestedRelayReplyResultPerOp() {
-		val reply = json.decodeFromString<PhoneRelayReply>(fixture("relay-reply.json"))
-		assertTrue(reply.ok)
-		assertNull(reply.error)
+		// reply-body.json holds the sealed inner reply as PhoneReplyBody (plaintext fixture).
+		val body = json.decodeFromString<PhoneReplyBody>(fixture("reply-body.json"))
+		assertTrue(body.ok)
+		assertNull(body.error)
 		// The untyped result payload decodes per-op; here it is a poll result.
-		val nested = json.decodeFromString<PhonePollResult>(reply.result.toString())
+		val nested = json.decodeFromString<PhonePollResult>(body.result.toString())
 		assertEquals(0, nested.entries.size)
 	}
 }

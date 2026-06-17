@@ -15,8 +15,10 @@ import { Allowlist } from "./federation/allowlist.js";
 import { logAdmitHostQr } from "./federation/enrollQr.js";
 import { createHostRelayHandler, createHostRelayPump } from "./federation/hostRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
+import { ReplayGuard } from "./federation/replayGuard.js";
 import { createSealer, type Sealer } from "./federation/sealer.js";
 import { createPhoneHandler } from "./phone/phoneHandler.js";
+import { createPhoneSealer, type PhoneSealer } from "./phone/phoneSealer.js";
 import { createPhoneRelayPump } from "./phone/relayPump.js";
 import { createRoutes } from "./routes.js";
 import { WakeCoordinator } from "./wake.js";
@@ -79,9 +81,13 @@ export async function startArbiter(): Promise<void> {
 			mailboxStore.restore(boxes as Parameters<typeof mailboxStore.restore>[0]);
 		console.log(`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size}`);
 	}
+	// The federation replay-guard wires its own persistence here once built (it only
+	// exists when the evie bridge is configured); null-safe until then.
+	let replayPersist: (() => void) | null = null;
 	const persistDelivery = () => {
 		jobsDurable.save(store.snapshot());
 		mailboxDurable.save(mailboxStore.snapshot());
+		replayPersist?.();
 	};
 	const persistTimer = setInterval(persistDelivery, 3_000);
 	persistTimer.unref?.();
@@ -148,6 +154,7 @@ export async function startArbiter(): Promise<void> {
 
 	let evieClient: ReturnType<typeof startEvieClient> | null = null;
 	let sealer: Sealer | null = null;
+	let phoneSealer: PhoneSealer | null = null;
 
 	if (evieAuthToken) {
 		// Load this Host's federation identity + mirrored allowlist from its volume,
@@ -156,9 +163,25 @@ export async function startArbiter(): Promise<void> {
 		// Pin the owner root out-of-band so a malicious/token-holding evie cannot root
 		// this Host at an attacker key via the mirror (the snapshot is relayed through
 		// untrusted evie). Unset = trust-on-first-use.
-		const allowlist = new Allowlist(federationDir, process.env.FEDERATION_OWNER_SIGN_PUB);
+		const allowlist = new Allowlist(
+			federationDir,
+			process.env.FEDERATION_OWNER_SIGN_PUB,
+			process.env.FEDERATION_REQUIRE_OWNER_PIN === "true",
+		);
 		const identity = loadOrCreateIdentity(federationDir);
-		sealer = createSealer(identity, allowlist, localHostId);
+		// Durable replay-guard: persisted across restarts so an authentic sealed frame
+		// captured inside the 120s freshness window cannot replay once after a deploy.
+		const replayDurable = new DurableStore(path.dirname(LOG_PATH), "replay-guard");
+		const replayGuard = new ReplayGuard();
+		{
+			const persisted = replayDurable.load();
+			if (Array.isArray(persisted)) replayGuard.restore(persisted as Array<[string, number]>);
+		}
+		replayPersist = () => replayDurable.save(replayGuard.snapshot());
+		sealer = createSealer(identity, allowlist, localHostId, replayGuard);
+		// The phone channel rides the SAME durable replay guard + allowlist: a phone
+		// frame is sealed to this arbiter and signed by an admitted phone key.
+		phoneSealer = createPhoneSealer(identity, allowlist, replayGuard);
 		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);
 		// Not admitted yet: print the admit-host QR so the owner can scan this Host
 		// into the Domain. Once admitted (mirrored from evie), this falls silent.
@@ -260,6 +283,7 @@ export async function startArbiter(): Promise<void> {
 			isProjectName: (name) => offlineCatalog.has(name) || knownTeamPaths.has(name),
 		});
 		handlePhoneRelay = createPhoneRelayPump({
+			sealer: phoneSealer!,
 			handleFrame: phoneHandler.handleFrame,
 			sendReply: (reply) =>
 				evieClient!.callTool("phone_relay_reply", reply as unknown as Record<string, unknown>),

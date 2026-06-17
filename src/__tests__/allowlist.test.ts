@@ -160,4 +160,33 @@ describe("Allowlist", () => {
 		const reopened = new Allowlist(dir, other.sign.pub);
 		expect(reopened.ownerSignPub).toBeNull();
 	});
+
+	it("strict mode without a pin refuses to root from a snapshot (no trust-on-first-use)", () => {
+		// requireOwnerPin = true, but FEDERATION_OWNER_SIGN_PUB unset: the Host must
+		// not trust the first owner key evie relays.
+		const a = new Allowlist(tmpDir(), null, true);
+		a.applySnapshot({
+			ownerSignPub: owner.sign.pub,
+			admissions: [signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub)],
+			revocations: [],
+		});
+		expect(a.ownerSignPub).toBeNull();
+		expect(a.resolveHost("laptop")).toBeNull();
+	});
+
+	it("strict mode without a pin refuses setOwner", () => {
+		const a = new Allowlist(tmpDir(), null, true);
+		expect(() => a.setOwner(owner.sign.pub)).toThrow(/REQUIRE_OWNER_PIN/);
+	});
+
+	it("strict mode WITH a matching pin still roots normally", () => {
+		const a = new Allowlist(tmpDir(), owner.sign.pub, true);
+		a.applySnapshot({
+			ownerSignPub: owner.sign.pub,
+			admissions: [signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub)],
+			revocations: [],
+		});
+		expect(a.ownerSignPub).toBe(owner.sign.pub);
+		expect(a.resolveHost("laptop")?.boxPub).toBe(host.box.pub);
+	});
 });

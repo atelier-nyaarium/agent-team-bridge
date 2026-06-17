@@ -1,7 +1,8 @@
 {
-	"type": "phone_relay_reply",
+	"type": "phone_relay",
 	"v": 1,
-	"opId": "op-poll-1",
+	"opId": "op-sealed-1",
+	"signerSignPub": "cGhvbmUtc2lnbi1wdWI=",
 	"sealed": {
 		"ephemeralPub": "ZXBoZW1lcmFsLXB1Yg==",
 		"nonce": "bm9uY2UtMTI=",

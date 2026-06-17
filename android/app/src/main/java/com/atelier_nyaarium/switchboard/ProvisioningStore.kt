@@ -141,6 +141,26 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putBoolean(KEY_ROOTED, value).apply()
 		}
 
+	/** Store the admitted host's signing + box public keys (resolved at seal/unseal
+	 * time). Keys are persisted ONLY under the Keystore-backed store for the same
+	 * reason as the identity: they authorize sealing ops and must not be in cleartext.
+	 * hostId is the arbiter's id (e.g. "laptop"), not the full session qualifier. */
+	fun saveHostKeys(hostId: String, signPub: String, boxPub: String) {
+		check(encrypted) { "secure storage unavailable; refusing to persist host keys in cleartext" }
+		prefs.edit()
+			.putString(KEY_HOST_SIGN_PUB_PREFIX + hostId, signPub)
+			.putString(KEY_HOST_BOX_PUB_PREFIX + hostId, boxPub)
+			.apply()
+	}
+
+	data class HostKeys(val signPub: String, val boxPub: String)
+
+	fun loadHostKeys(hostId: String): HostKeys? {
+		val sign = prefs.getString(KEY_HOST_SIGN_PUB_PREFIX + hostId, null) ?: return null
+		val box = prefs.getString(KEY_HOST_BOX_PUB_PREFIX + hostId, null) ?: return null
+		return HostKeys(sign, box)
+	}
+
 	private companion object {
 		const val KEY_BLOB = "provisioning"
 		const val KEY_BIO = "biometric_lock"
@@ -149,6 +169,8 @@ class ProvisioningStore(context: Context) {
 		const val KEY_HOST_ID = "host_id"
 		const val KEY_IDENTITY = "federation_identity"
 		const val KEY_ROOTED = "federation_rooted"
+		const val KEY_HOST_SIGN_PUB_PREFIX = "host_sign_pub."
+		const val KEY_HOST_BOX_PUB_PREFIX = "host_box_pub."
 		const val KEY_STTS_PROVIDER = "stts_provider"
 		const val KEY_STTS_VOICE = "stts_voice"
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."

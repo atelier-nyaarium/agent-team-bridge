@@ -12,6 +12,7 @@ import {
 	verifyAdmission,
 	verifyRevocation,
 } from "../../shared/admission.js";
+import { fingerprint } from "../../shared/crypto.js";
 
 ////////////////////////////////
 //  Schemas
@@ -42,10 +43,15 @@ export class Allowlist {
 	// through untrusted evie). Null = trust-on-first-use (convenient, but trusts
 	// evie at the bootstrap; pinning is recommended for the untrusted-evie model).
 	private readonly pinnedOwner: string | null;
+	// Strict mode (FEDERATION_REQUIRE_OWNER_PIN): when set without an out-of-band pin,
+	// the Host refuses to root at all rather than trust-on-first-use. For the
+	// untrusted-evie model where TOFU is unacceptable.
+	private readonly requireOwnerPin: boolean;
 
-	constructor(dataDir: string, pinnedOwner?: string | null) {
+	constructor(dataDir: string, pinnedOwner?: string | null, requireOwnerPin = false) {
 		this.file = path.join(dataDir, ALLOWLIST_FILE);
 		this.pinnedOwner = pinnedOwner ?? null;
+		this.requireOwnerPin = requireOwnerPin;
 		this.state = this.read();
 		// A pin that disagrees with a persisted root means the Host was previously
 		// rooted at a different key; refuse to serve the stale root.
@@ -77,8 +83,19 @@ export class Allowlist {
 	/** Set the Domain root once, at enrollment. Refuses to silently re-root an
 	 * already-enrolled Host (recovery is a deliberate, separate path). */
 	setOwner(ownerSignPubB64: string): void {
+		if (this.requireOwnerPin && !this.pinnedOwner) {
+			throw new Error("FEDERATION_REQUIRE_OWNER_PIN is set but no owner pin is configured; refusing to root");
+		}
+		if (this.pinnedOwner && ownerSignPubB64 !== this.pinnedOwner) {
+			throw new Error("owner key does not match the pinned owner");
+		}
 		if (this.state.ownerSignPub && this.state.ownerSignPub !== ownerSignPubB64) {
 			throw new Error("allowlist already rooted at a different owner key");
+		}
+		if (!this.pinnedOwner && !this.state.ownerSignPub) {
+			console.warn(
+				`[allowlist] trust-on-first-use: rooting at an owner key with no pin (set FEDERATION_OWNER_SIGN_PUB to verify it out-of-band)`,
+			);
 		}
 		this.state.ownerSignPub = ownerSignPubB64;
 		this.persist();
@@ -96,9 +113,25 @@ export class Allowlist {
 			console.warn(`[allowlist] ignoring domain sync: root does not match the pinned owner key`);
 			return;
 		}
+		// Strict mode: without a pin there is no way to know the snapshot's root is the
+		// real owner (it arrived through untrusted evie), so refuse to root at all.
+		if (this.requireOwnerPin && !this.pinnedOwner) {
+			console.warn(
+				`[allowlist] FEDERATION_REQUIRE_OWNER_PIN set but FEDERATION_OWNER_SIGN_PUB is not; refusing to root at an unverified owner key`,
+			);
+			return;
+		}
 		if (this.state.ownerSignPub && this.state.ownerSignPub !== snapshot.ownerSignPub) {
 			console.warn(`[allowlist] ignoring domain sync rooted at a different owner key`);
 			return;
+		}
+		if (!this.pinnedOwner && !this.state.ownerSignPub) {
+			// Auto-capture-then-lock: the captured key becomes the effective pin (a
+			// later re-root is refused above). Surface its fingerprint so the operator
+			// can optionally promote it to an explicit FEDERATION_OWNER_SIGN_PUB pin.
+			console.warn(
+				`[allowlist] trust-on-first-use: rooting the Domain at owner key ${fingerprint(snapshot.ownerSignPub)} relayed by evie (now locked; set FEDERATION_OWNER_SIGN_PUB=${snapshot.ownerSignPub} to pin it out-of-band)`,
+			);
 		}
 		this.state.ownerSignPub = snapshot.ownerSignPub;
 		this.state.admissions = snapshot.admissions.filter((s) => verifyAdmission(s, snapshot.ownerSignPub));

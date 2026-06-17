@@ -151,16 +151,51 @@ export const PhoneOpSchema = z
 	])
 	.meta({ id: "PhoneOp" });
 
+////////////////////////////////
+//  Sealed envelope (the E2E crypto wrapper - shared/crypto.ts)
+//
+//  Confidentiality (ephemeral X25519 box) + authenticity (Ed25519 signature).
+//  Codegen'd to Kotlin so the phone seals/opens with the byte-identical Crypto.kt.
+
+export const SealedEnvelopeSchema = z
+	.object({
+		ephemeralPub: z.string(),
+		nonce: z.string(),
+		ciphertext: z.string(),
+		signature: z.string(),
+	})
+	.meta({ id: "SealedEnvelope" });
+
 export const PhoneRelayFrameSchema = z
 	.object({
 		type: z.literal("phone_relay"),
 		v: z.number().int().positive(),
-		device: z.string().min(1).max(64),
-		conversationId: z.string().min(1).max(128),
 		opId: z.string().min(1).max(128),
-		op: PhoneOpSchema,
+		// The phone's raw Ed25519 signing public key (base64). Selects the key the
+		// arbiter verifies the seal against, then checked against the owner-signed
+		// allowlist (must be an admitted kind:phone subject). Cleartext: it is a
+		// public key, not a secret. conversationId + device + the op move INSIDE the
+		// seal, so evie sees only this opaque blob - it cannot read or forge the op.
+		signerSignPub: z.string().min(1),
+		sealed: SealedEnvelopeSchema,
 	})
 	.meta({ id: "PhoneRelayFrame" });
+
+////////////////////////////////
+//  Phone Op Envelope (the sealed inner body)
+//
+//  What the phone seals and the arbiter opens. `at` bounds freshness; the seal's
+//  random nonce bounds replay; the seal's ECDH binds it to this arbiter's box key.
+
+export const PhoneOpEnvelopeSchema = z
+	.object({
+		v: z.number().int().positive(),
+		conversationId: z.string().min(1).max(128),
+		device: z.string().min(1).max(64),
+		at: z.number().int().nonnegative(),
+		op: PhoneOpSchema,
+	})
+	.meta({ id: "PhoneOpEnvelope" });
 
 ////////////////////////////////
 //  Mailbox Entry Schema (arbiter -> phone)
@@ -260,13 +295,31 @@ export const PhoneOpResultSchema = z.union([
 	PhonePollResultSchema,
 ]);
 
+////////////////////////////////
+//  Phone Reply Body (the sealed inner reply)
+//
+//  The arbiter seals this to the phone's box key; the phone unseals and decodes
+//  the result for its op (correlated by opId).
+
+export const PhoneReplyBodySchema = z
+	.object({
+		ok: z.boolean(),
+		result: PhoneOpResultSchema.optional(),
+		error: z.string().optional(),
+	})
+	.meta({ id: "PhoneReplyBody" });
+
 export const PhoneRelayReplySchema = z
 	.object({
 		type: z.literal("phone_relay_reply"),
 		v: z.number().int().positive(),
 		opId: z.string().min(1).max(128),
-		ok: z.boolean(),
-		result: PhoneOpResultSchema.optional(),
+		// The sealed PhoneReplyBody (normal path). Absent ONLY when the arbiter could
+		// not seal because the frame was unverifiable (malformed, or the signer is not
+		// an admitted phone) - then `error` carries a cleartext reason so the phone can
+		// surface "enroll this device". A pre-seal error is the only cleartext that
+		// ever leaves the arbiter on the phone reply path.
+		sealed: SealedEnvelopeSchema.optional(),
 		error: z.string().optional(),
 	})
 	.meta({ id: "PhoneRelayReply" });

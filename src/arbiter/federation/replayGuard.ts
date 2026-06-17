@@ -39,4 +39,31 @@ export class ReplayGuard {
 	public get size(): number {
 		return this.seen.size;
 	}
+
+	/** The live (non-expired) seen-set, for persisting across a restart so an
+	 * authentic frame captured inside the freshness window cannot replay once after a
+	 * deploy. Expired entries are dropped (they would be re-accepted anyway). */
+	public snapshot(): Array<[string, number]> {
+		const t = this.now();
+		const out: Array<[string, number]> = [];
+		for (const [key, expiry] of this.seen) {
+			if (expiry > t) out.push([key, expiry]);
+		}
+		return out;
+	}
+
+	/** Reload a persisted seen-set on boot, keeping only entries still within their
+	 * window. Idempotent and bounded by the same hard cap. */
+	public restore(entries: Array<[string, number]>): void {
+		const t = this.now();
+		for (const [key, expiry] of entries) {
+			if (typeof key !== "string" || typeof expiry !== "number") continue;
+			if (expiry <= t) continue;
+			this.seen.set(key, expiry);
+			if (this.seen.size > this.maxEntries) {
+				const oldest = this.seen.keys().next().value;
+				if (oldest !== undefined) this.seen.delete(oldest);
+			}
+		}
+	}
 }
