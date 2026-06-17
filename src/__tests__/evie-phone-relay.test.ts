@@ -69,21 +69,27 @@ describe("evieClient phone relay", () => {
 			JSON.stringify({
 				type: "phone_relay",
 				v: 1,
-				device: "pixel",
-				conversationId: "conv-1",
 				opId: "op-abc",
-				op: { kind: "register" },
+				signerSignPub: "phone-key",
+				sealed: { ephemeralPub: "a", nonce: "b", ciphertext: "c", signature: "d" },
 			}),
 		);
 
 		// The handler receives the frame as unknown (the relay pump owns full
-		// validation in production); the test re-parses to assert the shape.
+		// validation + the seal-open in production); the test re-parses to assert the
+		// transport carried the sealed envelope intact.
 		const frame = PhoneRelayFrameSchema.parse(await relayed);
 		expect(frame.opId).toBe("op-abc");
-		expect(frame.op.kind).toBe("register");
+		expect(frame.signerSignPub).toBe("phone-key");
+		expect(frame.sealed.ciphertext).toBe("c");
 
 		// The arbiter-side wiring answers via callTool; assert the round trip resolves.
-		const reply = { type: "phone_relay_reply", v: 1, opId: frame.opId, ok: true, result: { device: "pixel" } };
+		const reply = {
+			type: "phone_relay_reply",
+			v: 1,
+			opId: frame.opId,
+			sealed: { ephemeralPub: "a", nonce: "b", ciphertext: "c", signature: "d" },
+		};
 		const result = await client!.callTool("phone_relay_reply", reply);
 		expect(result.error).toBeUndefined();
 		expect(result.result).toEqual({ consumed: true });

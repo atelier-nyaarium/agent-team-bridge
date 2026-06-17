@@ -18,6 +18,7 @@ import { loadOrCreateIdentity } from "./federation/identity.js";
 import { ReplayGuard } from "./federation/replayGuard.js";
 import { createSealer, type Sealer } from "./federation/sealer.js";
 import { createPhoneHandler } from "./phone/phoneHandler.js";
+import { createPhoneSealer, type PhoneSealer } from "./phone/phoneSealer.js";
 import { createPhoneRelayPump } from "./phone/relayPump.js";
 import { createRoutes } from "./routes.js";
 import { WakeCoordinator } from "./wake.js";
@@ -153,6 +154,7 @@ export async function startArbiter(): Promise<void> {
 
 	let evieClient: ReturnType<typeof startEvieClient> | null = null;
 	let sealer: Sealer | null = null;
+	let phoneSealer: PhoneSealer | null = null;
 
 	if (evieAuthToken) {
 		// Load this Host's federation identity + mirrored allowlist from its volume,
@@ -177,6 +179,9 @@ export async function startArbiter(): Promise<void> {
 		}
 		replayPersist = () => replayDurable.save(replayGuard.snapshot());
 		sealer = createSealer(identity, allowlist, localHostId, replayGuard);
+		// The phone channel rides the SAME durable replay guard + allowlist: a phone
+		// frame is sealed to this arbiter and signed by an admitted phone key.
+		phoneSealer = createPhoneSealer(identity, allowlist, replayGuard);
 		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);
 		// Not admitted yet: print the admit-host QR so the owner can scan this Host
 		// into the Domain. Once admitted (mirrored from evie), this falls silent.
@@ -278,6 +283,7 @@ export async function startArbiter(): Promise<void> {
 			isProjectName: (name) => offlineCatalog.has(name) || knownTeamPaths.has(name),
 		});
 		handlePhoneRelay = createPhoneRelayPump({
+			sealer: phoneSealer!,
 			handleFrame: phoneHandler.handleFrame,
 			sendReply: (reply) =>
 				evieClient!.callTool("phone_relay_reply", reply as unknown as Record<string, unknown>),

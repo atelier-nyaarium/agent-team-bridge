@@ -5,10 +5,12 @@ import type { z } from "zod";
 import {
 	MailboxEntrySchema,
 	PhoneListTeamsResultSchema,
+	PhoneOpEnvelopeSchema,
 	PhonePollResultSchema,
 	PhoneRegisterResultSchema,
 	PhoneRelayFrameSchema,
 	PhoneRelayReplySchema,
+	PhoneReplyBodySchema,
 	PhoneRespondResultSchema,
 	PhoneSendResultSchema,
 } from "../shared/schemas.js";
@@ -26,8 +28,10 @@ import {
 const FIXTURES = path.join(__dirname, "../../tests/fixtures/protocol");
 
 const SCHEMAS: Record<string, z.ZodType> = {
+	PhoneOpEnvelope: PhoneOpEnvelopeSchema,
 	PhoneRelayFrame: PhoneRelayFrameSchema,
 	PhoneRelayReply: PhoneRelayReplySchema,
+	PhoneReplyBody: PhoneReplyBodySchema,
 	MailboxEntry: MailboxEntrySchema,
 	PhoneRegisterResult: PhoneRegisterResultSchema,
 	PhoneListTeamsResult: PhoneListTeamsResultSchema,

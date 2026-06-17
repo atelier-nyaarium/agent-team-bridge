@@ -120,13 +120,21 @@ sealed class PhoneOp {
 }
 
 @Serializable
+data class PhoneOpEnvelope(
+	val v: Long,
+	val conversationId: String,
+	val device: String,
+	val at: Long,
+	val op: PhoneOp,
+)
+
+@Serializable
 data class PhoneRelayFrame(
 	val type: String = "phone_relay",
 	val v: Long,
-	val device: String,
-	val conversationId: String,
 	val opId: String,
-	val op: PhoneOp,
+	val signerSignPub: String,
+	val sealed: SealedEnvelope,
 )
 
 @Serializable
@@ -134,6 +142,12 @@ data class PhoneRelayReply(
 	val type: String = "phone_relay_reply",
 	val v: Long,
 	val opId: String,
+	val sealed: SealedEnvelope? = null,
+	val error: String? = null,
+)
+
+@Serializable
+data class PhoneReplyBody(
 	val ok: Boolean,
 	val result: JsonElement? = null,
 	val error: String? = null,
@@ -251,6 +265,14 @@ sealed class EnrollOp {
 data class EnrollResult(
 	val ok: Boolean,
 	val error: String? = null,
+)
+
+@Serializable
+data class SealedEnvelope(
+	val ephemeralPub: String,
+	val nonce: String,
+	val ciphertext: String,
+	val signature: String,
 )
 
 @Serializable

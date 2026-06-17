@@ -1,4 +1,4 @@
-// SYNC-HASH: 04105779c0a213007b344953f4a07598
+// SYNC-HASH: 607c1f7ace92aad031f7cf34f21d6e1f
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -96,8 +96,8 @@ export const ToolCallFrameSchema = z.object({
 //  connect, then reaches another Host by calling evie's `host_relay` tool; evie
 //  switches the frame to the destination Host's socket by `dstHost` alone and
 //  correlates the eventual `host_relay_reply` by `relayId`. The `payload` is
-//  opaque to evie (cleartext op in the plaintext spike; a sealed blob once the
-//  crypto phase lands), so these schemas validate only the routing envelope.
+//  opaque to evie (a sealed blob only the destination Host can open), so these
+//  schemas validate only the routing envelope.
 
 /** Bumped when a federation wire shape changes. evie rejects a Host registering
  * below its own floor with a typed close; the Host then degrades to single-Host. */

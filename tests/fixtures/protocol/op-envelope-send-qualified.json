@@ -1,9 +1,8 @@
 {
-	"type": "phone_relay",
 	"v": 1,
-	"device": "pixel-test",
 	"conversationId": "11111111-2222-3333-4444-555555555555",
-	"opId": "op-send-q1",
+	"device": "pixel-test",
+	"at": 1700000000000,
 	"op": {
 		"kind": "send",
 		"to": "laptop/switchboard",

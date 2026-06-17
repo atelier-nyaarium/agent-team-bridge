@@ -4,14 +4,23 @@ import { createPhoneHandler, type PhoneRoutes } from "../arbiter/phone/phoneHand
 import { PhonePeer } from "../arbiter/phone/phonePeer.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../arbiter/websocket.js";
 import { DeviceMailbox, DeviceMailboxStore } from "../shared/device-mailbox.js";
-import type { PhoneOp, PhoneRelayFrame } from "../shared/phone-protocol.js";
+import type { OpenedPhoneFrame, PhoneOp } from "../shared/phone-protocol.js";
 
 function jsonRes(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function frame(op: PhoneOp, opId = "op1", device = "pixel", conversationId = "conv-pixel"): PhoneRelayFrame {
-	return { type: "phone_relay", v: 1, device, conversationId, opId, op };
+// The handler operates on an OPENED frame (the pump unseals the wire frame first),
+// so tests construct that directly. A stable signer per conversation satisfies the
+// install binding; tests that exercise the binding pass an explicit signer.
+function frame(
+	op: PhoneOp,
+	opId = "op1",
+	device = "pixel",
+	conversationId = "conv-pixel",
+	signerSignPub = `signer-${conversationId}`,
+): OpenedPhoneFrame {
+	return { opId, signerSignPub, conversationId, device, op };
 }
 
 /** A minimal non-virtual socket standing in for a real devcontainer connection. */
@@ -721,7 +730,7 @@ describe("createPhoneHandler", () => {
 		if (box) box.lastActivity = Date.now() - 7_200_000;
 		h.mailboxStore.sweepExpired();
 
-		const peer2 = h.handler.ensurePeer("pixel", "conv-pixel");
+		const peer2 = h.handler.ensurePeer("pixel", "conv-pixel", "signer-conv-pixel");
 		peer2.send(JSON.stringify({ type: "response_push", session_id: "s", response: "post-reset" }));
 
 		// A stale cursor (3) must NOT ack away the new instance's seq=1 entry.

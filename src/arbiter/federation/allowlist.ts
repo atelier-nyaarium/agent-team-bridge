@@ -12,6 +12,7 @@ import {
 	verifyAdmission,
 	verifyRevocation,
 } from "../../shared/admission.js";
+import { fingerprint } from "../../shared/crypto.js";
 
 ////////////////////////////////
 //  Schemas
@@ -125,8 +126,11 @@ export class Allowlist {
 			return;
 		}
 		if (!this.pinnedOwner && !this.state.ownerSignPub) {
+			// Auto-capture-then-lock: the captured key becomes the effective pin (a
+			// later re-root is refused above). Surface its fingerprint so the operator
+			// can optionally promote it to an explicit FEDERATION_OWNER_SIGN_PUB pin.
 			console.warn(
-				`[allowlist] trust-on-first-use: rooting the Domain at an owner key relayed by evie (set FEDERATION_OWNER_SIGN_PUB to pin it)`,
+				`[allowlist] trust-on-first-use: rooting the Domain at owner key ${fingerprint(snapshot.ownerSignPub)} relayed by evie (now locked; set FEDERATION_OWNER_SIGN_PUB=${snapshot.ownerSignPub} to pin it out-of-band)`,
 			);
 		}
 		this.state.ownerSignPub = snapshot.ownerSignPub;

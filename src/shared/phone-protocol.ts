@@ -2,14 +2,17 @@ import type { z } from "zod";
 import type {
 	MailboxEntrySchema,
 	PhoneListTeamsResultSchema,
+	PhoneOpEnvelopeSchema,
 	PhoneOpResultSchema,
 	PhoneOpSchema,
 	PhonePollResultSchema,
 	PhoneRegisterResultSchema,
 	PhoneRelayFrameSchema,
 	PhoneRelayReplySchema,
+	PhoneReplyBodySchema,
 	PhoneRespondResultSchema,
 	PhoneSendResultSchema,
+	SealedEnvelopeSchema,
 } from "./schemas.js";
 // The session-id grammar constants are OWNED by session-id.ts now; imported for
 // the wire helpers below and re-exported so existing importers of this module
@@ -46,9 +49,28 @@ export type PhonePollOp = Extract<PhoneOp, { kind: "poll" }>;
 
 ////////////////////////////////
 //  Relay frames (carried over the arbiter<->evie WebSocket)
+//
+//  The wire frame is sealed: only opId + signerSignPub are cleartext, the op rides
+//  inside `sealed` as a PhoneOpEnvelope. The arbiter opens the seal into an
+//  OpenedPhoneFrame (the flattened op + its verified signer) before dispatch, and
+//  seals a PhoneReplyBody back. evie sees neither.
 
+export type SealedEnvelope = z.infer<typeof SealedEnvelopeSchema>;
 export type PhoneRelayFrame = z.infer<typeof PhoneRelayFrameSchema>;
+export type PhoneOpEnvelope = z.infer<typeof PhoneOpEnvelopeSchema>;
 export type PhoneRelayReply = z.infer<typeof PhoneRelayReplySchema>;
+export type PhoneReplyBody = z.infer<typeof PhoneReplyBodySchema>;
+
+/** An inbound phone op AFTER the arbiter has opened + verified its seal: the
+ * flattened op carried by the envelope plus the cleartext correlation/signer. The
+ * handler operates on this, never on the raw sealed frame. */
+export interface OpenedPhoneFrame {
+	opId: string;
+	signerSignPub: string;
+	conversationId: string;
+	device: string;
+	op: PhoneOp;
+}
 
 ////////////////////////////////
 //  Op results (arbiter -> phone)
