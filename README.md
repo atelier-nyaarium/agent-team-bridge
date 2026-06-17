@@ -1,6 +1,6 @@
 # Switchboard
 
-Cross-team communication, devcontainer orchestration, and tool proxying for agent teams. Connects Claude Code, Cursor, Copilot, and Codex agents running in separate DevContainers through a central router.
+Cross-team communication, devcontainer orchestration, and tool proxying for agent teams. Connects Claude Code, Cursor, Copilot, and Codex agents running in separate DevContainers through a central arbiter (a Switch).
 
 ## Who it's for
 
@@ -8,10 +8,10 @@ This is aimed at people who already use **Dev Containers** and want agent teams 
 
 ## How it works
 
-Teams register with a central router (the arbiter) over WebSocket. Any agent can call `crosstalk_send` to reach another team. The router handles message delivery, response lifecycle, and request serialization.
+Teams register with the arbiter (a Switch) over WebSocket. Any agent can call `crosstalk_send` to reach another team. The arbiter handles message delivery, response lifecycle, and request serialization.
 
 - **Claude agents** use channel mode: messages arrive as push notifications, responses are pushed back automatically.
-- **CLI agents** (cursor, copilot, codex) use inject mode: the router spawns agent processes, sends prompts, and waits for completion.
+- **CLI agents** (cursor, copilot, codex) use inject mode: the arbiter spawns agent processes, sends prompts, and waits for completion.
 
 The arbiter also bridges to **evie-bot** (a Discord bot running in Kubernetes), proxying its 46 action tools as MCP tools and forwarding Discord DMs into the host Claude session.
 
@@ -50,13 +50,13 @@ DevContainers (one per project)
 | 20001 | Evie bridge server (tool call WS)    |
 | 20002 | MCP Connector (game client WS)       |
 
-## Starting the router
+## Starting the arbiter
 
 ```bash
 docker compose up -d
 ```
 
-The router listens on port 20000 and uses the external network `switchboard`.
+The arbiter listens on port 20000 and uses the external network `switchboard`.
 
 ## Setup
 

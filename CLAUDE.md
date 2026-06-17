@@ -5,7 +5,7 @@
 - `src/` - Main source code
   - `main-mcp.ts` - MCP plugin entry point (loaded by Claude Code / IDE plugins)
   - `main-arbiter.ts` - Arbiter server entry point (runs in Docker)
-  - `arbiter/` - **Arbiter server** - Central HTTP + WebSocket router running in Docker
+  - `arbiter/` - **Arbiter server** - A Switch: the central HTTP + WebSocket router for one machine's teams, running in Docker
     - `index.ts` - Server setup: Bun.serve, routes, WebSocket handlers, evie client init, port-forward
     - `routes.ts` - HTTP route handlers (send, respond, poll, teams, health, evie tool-call, ingest, human notify broadcast)
     - `websocket.ts` - WebSocket connection handlers, team registry, heartbeat, wake coordination
@@ -109,7 +109,7 @@ Two separate entry points, two different runtime contexts:
 
 **MCP Plugin** (`main-mcp.ts`) - Loaded by Claude Code or IDE plugins via `.mcp.json`. Runs in the user's process. Provides tools for cross-team communication, devcontainer dispatch, and game client connectors.
 
-**Arbiter** (`main-arbiter.ts`) - Runs in a Docker container. Central HTTP + WebSocket router that all teams connect to. Handles message routing, request/response lifecycle, and the evie-bot bridge.
+**Arbiter** (`main-arbiter.ts`) - Runs in a Docker container. A Switch (one of many in the Mesh): the central HTTP + WebSocket router that all local teams connect to. Handles message routing, request/response lifecycle, and the evie-bot bridge (evie is the content-blind Router that forwards between Switches).
 
 ### Connection Modes
 
