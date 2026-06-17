@@ -33,15 +33,37 @@ class EnrollmentController(
 	fun isEnrolledOwner(): Boolean = store.federationRooted
 
 	/** Redeem evie's enroll-owner nonce, rooting the Domain at this device's keys. The
-	 * local rooted flag flips only on evie's ok, not on minting the keypair. */
+	 * local rooted flag flips only on evie's ok, not on minting the keypair.
+	 * After rooting, self-submit a kind:"phone" admission so the arbiter can resolve
+	 * this device's box key and seal replies back to it. A self-admission failure is
+	 * non-fatal: the owner can retry by scanning a future admit-phone QR. */
 	fun redeemOwner(payload: EnrollmentPayload.EnrollOwner): EnrollResult {
 		val identity = ownerIdentity()
 		val result = client.enroll(EnrollOp.EnrollRedeem(payload.nonce, identity.sign.pub, identity.box.pub))
-		if (result.ok) store.federationRooted = true
+		if (result.ok) {
+			store.federationRooted = true
+			// Self-admit the owner device as a phone so the arbiter resolves its boxPub.
+			runCatching {
+				val selfAdmission = Admission(
+					kind = "phone",
+					signPub = identity.sign.pub,
+					boxPub = identity.box.pub,
+					hostId = null,
+					issuedAt = System.currentTimeMillis(),
+					nonce = freshNonce(),
+				)
+				val signed = AdmissionCrypto.signAdmission(selfAdmission, identity.sign.priv, identity.sign.pub)
+				client.enroll(EnrollOp.SubmitAdmission(signed))
+			}
+		}
 		return result
 	}
 
-	/** Owner-sign a Host admission for a scanned arbiter and submit it to evie. */
+	/** Owner-sign a Host admission for a scanned arbiter and submit it to evie.
+	 * On success, persist the host's keys so seal/unseal can resolve them by hostId,
+	 * AND seed the home host id so the FIRST register (which is itself sealed) can
+	 * resolve a host to seal to before it learns homeHost from the register reply. A
+	 * later register persists the authoritative id and takes precedence. */
 	fun admitHost(payload: EnrollmentPayload.AdmitHost): EnrollResult {
 		val identity = requireOwner()
 		val admission = Admission(
@@ -53,7 +75,14 @@ class EnrollmentController(
 			nonce = freshNonce(),
 		)
 		val signed = AdmissionCrypto.signAdmission(admission, identity.sign.priv, identity.sign.pub)
-		return client.enroll(EnrollOp.SubmitAdmission(signed))
+		val result = client.enroll(EnrollOp.SubmitAdmission(signed))
+		if (result.ok) {
+			runCatching {
+				store.saveHostKeys(payload.hostId, payload.signPub, payload.boxPub)
+				if (store.loadHostId().isEmpty()) store.saveHostId(payload.hostId)
+			}
+		}
+		return result
 	}
 
 	/** Owner-sign a phone admission for a second owner device and submit it. */
