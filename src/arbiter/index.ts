@@ -6,7 +6,6 @@ import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalHostId } from "../shared/host-id.js";
-import { getMutex, type Mutex } from "../shared/mutex.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
@@ -22,14 +21,6 @@ import { createPhoneRelayPump } from "./phone/relayPump.js";
 import { createRoutes } from "./routes.js";
 import { WakeCoordinator } from "./wake.js";
 import { createWebSocketHandlers, type WsData } from "./websocket.js";
-
-////////////////////////////////
-//  Interfaces & Types
-
-interface MutexAccessor {
-	(team: string): Mutex;
-	peek: (team: string) => Mutex | undefined;
-}
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -55,7 +46,6 @@ export async function startArbiter(): Promise<void> {
 	const registry = new Map<string, Map<string, ServerWebSocket<WsData>>>();
 	const conversationRegistry = new Map<string, ServerWebSocket<WsData>>();
 	const store = new PendingJobStore<ResponsePayload>();
-	const targetLocks = new Map<string, Mutex>();
 	const knownTeamPaths = new Map<string, string>();
 	const offlineCatalog = new Map<string, string>();
 	const wakeCoordinator = new WakeCoordinator();
@@ -97,10 +87,6 @@ export async function startArbiter(): Promise<void> {
 	persistTimer.unref?.();
 	process.on("SIGTERM", persistDelivery);
 	process.on("SIGINT", persistDelivery);
-
-	const getMutexForTeam: MutexAccessor = Object.assign((team: string) => getMutex(targetLocks, team), {
-		peek: (team: string) => targetLocks.get(team),
-	});
 
 	// Concurrent sends to the same sleeping team must share ONE wake: two
 	// parallel `devcontainer up` runs for the same project race each other and
@@ -241,8 +227,6 @@ export async function startArbiter(): Promise<void> {
 	const wsHandlers = createWebSocketHandlers({
 		registry,
 		conversationRegistry,
-		store,
-		targetLocks,
 		config: { HEARTBEAT_INTERVAL_MS, MISSED_PINGS_LIMIT },
 		knownTeamPaths,
 		offlineCatalog,
@@ -256,7 +240,6 @@ export async function startArbiter(): Promise<void> {
 		registry,
 		conversationRegistry,
 		store,
-		getMutex: getMutexForTeam,
 		config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localHostId },
 		tryWakeTeam,
 		offlineCatalog,

@@ -12,7 +12,7 @@ services:
     networks:
       - switchboard-network
     volumes:
-      - .cursor:/app/log
+      - ./volumes/arbiter:/app/log
       - ${HOME}/projects/evie-bot/kubeconfig.yaml:/app/kubeconfig.yaml:ro
 networks:
   switchboard-network:

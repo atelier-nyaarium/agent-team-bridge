@@ -18,13 +18,30 @@ export interface MailboxSnapshotState {
 	dropped: number;
 	lastActivity: number;
 	entries: MailboxEntry[];
+	// dedupeKey -> seq, so idempotent append survives a restart: a relay retry
+	// after a deploy must not re-append. Optional - older snapshots omit it.
+	seenKeys?: Array<[string, number]>;
+	// deviceId -> acked seq, so the slowest-device watermark survives a deploy
+	// (else a restart resets it and re-broadens retention). Optional.
+	consumerCursors?: Array<[string, number]>;
+	// session ids the device received and may therefore respond to. Persisted so a
+	// thread delivered before a restart stays respondable after it. Optional.
+	respondableSessions?: string[];
 }
 
-const DEFAULT_MAX_ENTRIES = 200;
-const DEFAULT_MAX_BYTES = 30_000_000;
+// The cap is the OOM BACKSTOP, not the primary compactor: the watermark
+// (trimToMinCursor) removes entries every device has acked on each drain, so a
+// regularly-polled inbox stays small regardless of the cap. The cap only bounds
+// UNACKED accumulation for a dark/slow device, so it is generous - a slow phone
+// keeps its mail instead of silently losing it to LRU (the dropped-gap bug). An
+// eviction here is logged, since it is now an exceptional backstop event.
+const DEFAULT_MAX_ENTRIES = 10_000;
+const DEFAULT_MAX_BYTES = 100_000_000;
 const DEFAULT_TTL_MS = 3_600_000;
 const DEFAULT_SWEEP_MS = 300_000;
 const DEFAULT_MAX_DEVICES = 500;
+const DEFAULT_MAX_SEEN_KEYS = 4096;
+const DEFAULT_MAX_RESPONDABLE_SESSIONS = 500;
 
 /** Cheap byte estimate for cap accounting: the body plus the base64 of every
  * attachment, which dominates. Avoids re-serializing the whole entry per append. */
@@ -66,6 +83,17 @@ export class DeviceMailbox {
 	private bytesUsed = 0;
 	private nextSeq = 1;
 	private dropped = 0;
+	// dedupeKey -> the seq it first produced. Bounds an at-least-once relay retry
+	// to a single append. FIFO-capped; persisted so dedup survives a restart.
+	private seenKeys = new Map<string, number>();
+	// deviceId -> acked seq. The slowest-device watermark: trimToMinCursor compacts
+	// only to min(consumerCursors), so a faster device cannot ack away entries a
+	// slower device of the same recipient has not yet drained. Persisted.
+	private consumerCursors = new Map<string, number>();
+	// session ids this device received, so the phone may only respond to a thread
+	// actually delivered to it. Durable (in the snapshot) so respondability survives
+	// a restart, instead of the phone being told "Unknown session_id" after a deploy.
+	private respondableSessions = new Set<string>();
 	private maxEntries: number;
 	private maxBytes: number;
 	private waiters: Array<() => void> = [];
@@ -90,22 +118,55 @@ export class DeviceMailbox {
 		this.lastActivity = Date.now();
 	}
 
-	append(input: MailboxInput): MailboxEntry {
+	append(input: MailboxInput, dedupeKey?: string): MailboxEntry {
+		if (dedupeKey !== undefined) {
+			const seenSeq = this.seenKeys.get(dedupeKey);
+			if (seenSeq !== undefined) {
+				// Idempotent: an at-least-once relay retry of an already-appended op.
+				// Never append a duplicate; return the prior entry if still resident,
+				// else a stand-in carrying its original seq.
+				const existing = this.entries.find((e) => e.seq === seenSeq);
+				return existing ?? { ...input, seq: seenSeq, at: Date.now() };
+			}
+		}
 		const entry: MailboxEntry = { ...input, seq: this.nextSeq++, at: Date.now() };
 		this.entries.push(entry);
 		this.entryBytes.push(entryBytes(input));
 		this.bytesUsed += this.entryBytes[this.entryBytes.length - 1];
+		if (dedupeKey !== undefined) this.recordSeen(dedupeKey, entry.seq);
 		// Evict the oldest entries until both the count cap and the byte cap hold.
 		// Always keep the just-appended entry even if it alone exceeds the byte cap
 		// (a single oversized file is rejected upstream; this is only a backstop).
+		let evicted = 0;
 		while (this.entries.length > this.maxEntries || (this.bytesUsed > this.maxBytes && this.entries.length > 1)) {
 			this.bytesUsed -= this.entryBytes.shift() ?? 0;
 			this.entries.shift();
 			this.dropped += 1;
+			evicted++;
+		}
+		if (evicted > 0) {
+			// The watermark is the primary compactor; the cap is an OOM backstop. An
+			// eviction here means a device fell far enough behind to drop UNACKED mail
+			// (a real gap the phone will see), so it is logged, not silent.
+			console.warn(
+				`[mailbox] OOM backstop evicted ${evicted} unacked entr${evicted === 1 ? "y" : "ies"} (dropped total ${this.dropped})`,
+			);
 		}
 		this.lastActivity = Date.now();
 		this.releaseWaiters();
 		return entry;
+	}
+
+	/** Record dedupeKey -> seq, FIFO-bounded so a flood of unique keys cannot grow
+	 * unbounded. A retry older than the cap is implausible. Map iteration is
+	 * insertion-ordered, so the first key is the oldest. */
+	private recordSeen(key: string, seq: number): void {
+		this.seenKeys.set(key, seq);
+		while (this.seenKeys.size > DEFAULT_MAX_SEEN_KEYS) {
+			const oldest = this.seenKeys.keys().next().value;
+			if (oldest === undefined) break;
+			this.seenKeys.delete(oldest);
+		}
 	}
 
 	/**
@@ -147,14 +208,75 @@ export class DeviceMailbox {
 	 * lost in transit cannot hide a gap. The phone detects new gaps by comparing
 	 * against the previous total (or by any non-contiguous seq jump).
 	 */
-	drain(cursor = 0, epoch?: number): MailboxSnapshot {
+	drain(cursor = 0, epoch?: number, consumerId?: string): MailboxSnapshot {
 		// A cursor beyond highWater is proof of a stale instance no matter what
 		// the epoch claims (this instance never issued it); honoring it would ack
 		// away entries the phone has never seen.
 		const epochOk = (epoch === undefined || epoch === this.epoch) && cursor <= this.highWater;
-		if (cursor > 0 && epochOk) this.ack(cursor);
+		if (cursor > 0 && epochOk) {
+			if (consumerId !== undefined) {
+				// Watermark path: record this device's progress and compact only to the
+				// slowest registered device of this recipient, so a faster device cannot
+				// ack away entries a slower one has not yet drained. For a single device
+				// this is exactly ack(cursor).
+				this.advanceConsumer(consumerId, cursor);
+				this.trimToMinCursor();
+			} else {
+				this.ack(cursor);
+			}
+		}
 		this.lastActivity = Date.now();
 		return { entries: [...this.entries], cursor: this.highWater, dropped: this.dropped, epoch: this.epoch };
+	}
+
+	/** Record a device's acked seq (monotonic). One entry per device sharing this
+	 * recipient inbox; the min across them drives compaction. */
+	advanceConsumer(consumerId: string, seq: number): void {
+		this.consumerCursors.set(consumerId, Math.max(this.consumerCursors.get(consumerId) ?? 0, seq));
+	}
+
+	/** The low watermark: the slowest registered device. 0 when no device has acked
+	 * (trim nothing - undelivered mail is retained until a device drains it or the
+	 * whole inbox is TTL-evicted). */
+	minCursor(): number {
+		if (this.consumerCursors.size === 0) return 0;
+		let m = Number.POSITIVE_INFINITY;
+		for (const c of this.consumerCursors.values()) if (c < m) m = c;
+		return m;
+	}
+
+	/** Compact entries every device has acked. Not a gap: these reached all devices,
+	 * so `dropped` is untouched (unlike the OOM-backstop eviction in append). */
+	trimToMinCursor(): void {
+		const min = this.minCursor();
+		if (min <= 0) return;
+		let i = 0;
+		while (i < this.entries.length && this.entries[i].seq <= min) i++;
+		if (i > 0) {
+			for (const b of this.entryBytes.splice(0, i)) this.bytesUsed -= b;
+			this.entries.splice(0, i);
+		}
+	}
+
+	/** Drop a device's cursor when it goes stale past the TTL, so the watermark can
+	 * advance past it instead of being pinned forever by an abandoned device. */
+	forgetConsumer(consumerId: string): void {
+		this.consumerCursors.delete(consumerId);
+	}
+
+	/** Remember a session id delivered to this device (FIFO-capped) so a later
+	 * respond op for it is authorized. Survives a restart via the snapshot. */
+	recordSession(sessionId: string): void {
+		this.respondableSessions.add(sessionId);
+		while (this.respondableSessions.size > DEFAULT_MAX_RESPONDABLE_SESSIONS) {
+			const oldest = this.respondableSessions.values().next().value;
+			if (oldest === undefined) break;
+			this.respondableSessions.delete(oldest);
+		}
+	}
+
+	canRespond(sessionId: string): boolean {
+		return this.respondableSessions.has(sessionId);
 	}
 
 	ack(cursor: number): void {
@@ -179,6 +301,9 @@ export class DeviceMailbox {
 			dropped: this.dropped,
 			lastActivity: this.lastActivity,
 			entries: [...this.entries],
+			seenKeys: [...this.seenKeys],
+			consumerCursors: [...this.consumerCursors],
+			respondableSessions: [...this.respondableSessions],
 		};
 	}
 
@@ -199,6 +324,9 @@ export class DeviceMailbox {
 			box.entryBytes.push(b);
 			box.bytesUsed += b;
 		}
+		if (s.seenKeys) for (const [k, v] of s.seenKeys) box.seenKeys.set(k, v);
+		if (s.consumerCursors) for (const [k, v] of s.consumerCursors) box.consumerCursors.set(k, v);
+		if (s.respondableSessions) for (const id of s.respondableSessions) box.respondableSessions.add(id);
 		return box;
 	}
 }

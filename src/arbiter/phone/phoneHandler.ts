@@ -76,8 +76,6 @@ const HOLD_CAP_MS = 45_000;
 // (a failed op had no side effect and must be retriable), and the cache is
 // keyed per conversation so one install cannot evict or read another's entry.
 const MAX_OPS_PER_CONVERSATION = 256;
-// Per-conversation cap on remembered inbound session ids the phone may respond to.
-const MAX_INBOUND_SESSIONS = 500;
 
 function isMutatingOp(op: PhoneOp): boolean {
 	return op.kind === "send" || op.kind === "respond";
@@ -97,9 +95,6 @@ export function createPhoneHandler({
 	// name is a display/target label only, so two devices sharing a name never
 	// share a slot, and a conversation cannot silently switch names.
 	const bindings = new Map<string, string>();
-	// conversationId -> session ids of agent messages delivered to this device.
-	// A phone may only respond to a thread it actually received.
-	const inboundSessions = new Map<string, Set<string>>();
 	// conversationId -> (opId -> in-flight/settled reply) for mutating-op idempotency.
 	const opCache = new Map<string, Map<string, Promise<PhoneRelayReply>>>();
 
@@ -110,17 +105,9 @@ export function createPhoneHandler({
 	function recordInbound(conversationId: string, sessionId: string): void {
 		// Canonicalize so the gate in respond can always compare canonical form
 		// against canonical form, whether the session id arrived bare or qualified.
+		// Recorded on the durable mailbox so respondability survives a restart.
 		const canonical = SessionId.parse(sessionId, localHostId)?.key ?? sessionId;
-		let set = inboundSessions.get(conversationId);
-		if (!set) {
-			set = new Set();
-			inboundSessions.set(conversationId, set);
-		}
-		set.add(canonical);
-		if (set.size > MAX_INBOUND_SESSIONS) {
-			const oldest = set.values().next().value;
-			if (oldest !== undefined) set.delete(oldest);
-		}
+		mailboxStore.get(conversationId)?.recordSession(canonical);
 	}
 
 	/** Append only if the conversation is still live, so a late continuation
@@ -207,7 +194,6 @@ export function createPhoneHandler({
 	function removePeer(conversationId: string): void {
 		const device = bindings.get(conversationId);
 		bindings.delete(conversationId);
-		inboundSessions.delete(conversationId);
 		opCache.delete(conversationId);
 		mailboxStore.delete(conversationId);
 
@@ -332,7 +318,7 @@ export function createPhoneHandler({
 				// recorded as inbound). Canonicalize via SessionId.parse so a bare
 				// session id matches the qualified key recorded on inbound delivery.
 				const canonicalRespondId = SessionId.parse(op.session_id, localHostId)?.key ?? op.session_id;
-				if (!inboundSessions.get(conversationId)?.has(canonicalRespondId)) {
+				if (!mailboxStore.get(conversationId)?.canRespond(canonicalRespondId)) {
 					throw new Error(`Unknown session_id; you can only respond to a thread delivered to this device`);
 				}
 				const res = routes.respond(FAKE_REQ, {
@@ -354,16 +340,16 @@ export function createPhoneHandler({
 				// and retried polls just become additional waiters (reads are not
 				// opId-cached; the phone dedupes entries by seq).
 				const box = mailboxStore.ensure(conversationId);
-				let snap = box.drain(op.cursor ?? 0, op.epoch);
+				let snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				const hold = Math.min(op.holdMs ?? 0, HOLD_CAP_MS);
 				if (snap.entries.length === 0 && hold > 0) {
 					await box.waitForAppend(hold);
-					snap = box.drain(op.cursor ?? 0, op.epoch);
+					snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				}
 				// Permanent low-noise delivery observability: log only a poll that actually
 				// hands entries to the phone or signals a dropped-entry gap, never the
 				// steady stream of empty held polls. This is the one window into whether a
-				// reply reached the phone's poll (the blind spot that hid the Track A/C bugs).
+				// reply reached the phone's poll (the blind spot that hid the earlier delivery bugs).
 				if (snap.entries.length > 0 || snap.dropped > 0) {
 					console.log(
 						`[phone poll] conv=${conversationId.slice(0, 12)} reqCursor=${op.cursor ?? 0} reqEpoch=${op.epoch ?? "none"} -> drained=${snap.entries.length} retCursor=${snap.cursor} retEpoch=${snap.epoch} dropped=${snap.dropped}`,

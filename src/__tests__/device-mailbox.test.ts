@@ -233,3 +233,131 @@ describe("DeviceMailboxStore", () => {
 		expect(store.get("kept")).toBeDefined();
 	});
 });
+
+describe("DeviceMailbox idempotent dedupeKey upsert", () => {
+	it("a repeat dedupeKey does not append a duplicate and returns the original seq", () => {
+		const box = new DeviceMailbox(1);
+		const a = box.append(message("s1", "hi"), "op-1");
+		const b = box.append(message("s1", "hi"), "op-1");
+		expect(a.seq).toBe(1);
+		expect(b.seq).toBe(1);
+		expect(box.size).toBe(1);
+		expect(box.highWater).toBe(1);
+	});
+
+	it("distinct dedupeKeys append distinct entries", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "a"), "op-1");
+		box.append(message("s1", "b"), "op-2");
+		expect(box.size).toBe(2);
+		expect(box.highWater).toBe(2);
+	});
+
+	it("appends without a dedupeKey are never deduped", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "a"));
+		box.append(message("s1", "a"));
+		expect(box.size).toBe(2);
+	});
+
+	it("a retry is still deduped after the original was acked and removed", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "hi"), "op-1");
+		box.drain(1, 1); // ack seq 1, removes the entry
+		expect(box.size).toBe(0);
+		const retry = box.append(message("s1", "hi"), "op-1");
+		expect(retry.seq).toBe(1); // the original seq, not a fresh one
+		expect(box.size).toBe(0); // not re-appended
+		expect(box.highWater).toBe(1); // nextSeq did not advance
+	});
+
+	it("dedup survives a snapshot/restore round trip", () => {
+		const box = new DeviceMailbox(7);
+		box.append(message("s1", "hi"), "op-1");
+		const restored = DeviceMailbox.fromSnapshot(box.snapshot());
+		const retry = restored.append(message("s1", "hi"), "op-1");
+		expect(retry.seq).toBe(1);
+		expect(restored.size).toBe(1); // still just the one entry
+		expect(restored.highWater).toBe(1);
+	});
+});
+
+describe("DeviceMailbox slowest-device watermark", () => {
+	it("minCursor is 0 with no registered device (trim nothing)", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "a"));
+		expect(box.minCursor()).toBe(0);
+		box.trimToMinCursor();
+		expect(box.size).toBe(1);
+	});
+
+	it("a single device drain via consumerId trims to that device's cursor", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "a"));
+		box.append(message("s1", "b"));
+		box.append(message("s1", "c"));
+		box.drain(2, 1, "phoneA"); // ack up to seq 2 on the watermark path
+		expect(box.size).toBe(1); // seq 3 retained, 1 and 2 compacted
+		expect(box.drain(0).dropped).toBe(0); // watermark trim is not a gap
+	});
+
+	it("trims only to the slowest of several devices", () => {
+		const box = new DeviceMailbox(1);
+		for (const b of ["a", "b", "c", "d", "e"]) box.append(message("s1", b));
+		box.advanceConsumer("phoneA", 5); // caught up
+		box.advanceConsumer("phoneB", 2); // slow
+		expect(box.minCursor()).toBe(2);
+		box.trimToMinCursor();
+		expect(box.size).toBe(3); // seq 3,4,5 retained for the slow phone
+		expect(box.drain(0).dropped).toBe(0);
+	});
+
+	it("forgetting the slow device advances the watermark", () => {
+		const box = new DeviceMailbox(1);
+		for (const b of ["a", "b", "c", "d", "e"]) box.append(message("s1", b));
+		box.advanceConsumer("phoneA", 5);
+		box.advanceConsumer("phoneB", 2);
+		box.forgetConsumer("phoneB"); // slow device evicted past its TTL
+		expect(box.minCursor()).toBe(5);
+		box.trimToMinCursor();
+		expect(box.size).toBe(0);
+	});
+
+	it("advanceConsumer is monotonic (a stale lower ack cannot rewind)", () => {
+		const box = new DeviceMailbox(1);
+		box.advanceConsumer("phoneA", 5);
+		box.advanceConsumer("phoneA", 3); // out-of-order/stale
+		expect(box.minCursor()).toBe(5);
+	});
+
+	it("consumerCursors survive a snapshot/restore round trip", () => {
+		const box = new DeviceMailbox(9);
+		for (const b of ["a", "b", "c"]) box.append(message("s1", b));
+		box.advanceConsumer("phoneA", 3);
+		box.advanceConsumer("phoneB", 1);
+		const restored = DeviceMailbox.fromSnapshot(box.snapshot());
+		expect(restored.minCursor()).toBe(1); // the slow phone still pins it
+		restored.trimToMinCursor();
+		expect(restored.size).toBe(2); // seq 2,3 retained
+	});
+});
+
+describe("DeviceMailbox durable respondability", () => {
+	it("records and checks respondable sessions", () => {
+		const box = new DeviceMailbox(1);
+		expect(box.canRespond("conv:x:host/team")).toBe(false);
+		box.recordSession("conv:x:host/team");
+		expect(box.canRespond("conv:x:host/team")).toBe(true);
+	});
+
+	it("respondability survives a snapshot/restore (the class-10 fix)", () => {
+		const box = new DeviceMailbox(5);
+		box.recordSession("conv:a:host/team");
+		box.recordSession("conv:b:host/team");
+		const restored = DeviceMailbox.fromSnapshot(box.snapshot());
+		// After a restart the phone can still respond to a thread it received before.
+		expect(restored.canRespond("conv:a:host/team")).toBe(true);
+		expect(restored.canRespond("conv:b:host/team")).toBe(true);
+		expect(restored.canRespond("conv:never:host/team")).toBe(false);
+	});
+});

@@ -6,8 +6,8 @@ import { z } from "zod";
 //  The single truth for the wire enums; the TS types in types.ts derive from
 //  these via z.infer. Decode-side tolerance note: these closed enums validate
 //  what OUR side composes or what a closed protocol surface accepts. Fields a
-//  phone DECODES (e.g. MailboxEntry.request_type) stay open strings - see the
-//  schema-first plan's additive rule.
+//  phone DECODES (e.g. MailboxEntry.request_type) stay open strings, per the
+//  additive decode-tolerance rule.
 
 export const ConnectionModeSchema = z.enum(["cli", "channel"]).meta({ id: "ConnectionMode" });
 export const EffortLevelSchema = z.enum(["simple", "standard", "complex"]).meta({ id: "EffortLevel" });
@@ -16,45 +16,6 @@ export const TeamKindSchema = z.enum(["devcontainer", "loose", "phone", "host"])
 export const ResponseStatusSchema = z
 	.enum(["completed", "clarification", "deferred", "needs_human", "error", "timeout", "running"])
 	.meta({ id: "ResponseStatus" });
-
-////////////////////////////////
-//  CLI Reply Schema
-//
-//  CLI-mode replies are one-shot: the request arrives, the agent does work, it
-//  replies exactly once with a terminal status. status is required.
-
-export const CliReplySchema = z
-	.object({
-		session_id: z.string().describe(`The session_id for this request. Required to route the reply correctly.`),
-		status: z.enum(["completed", "clarification", "deferred", "needs_human"]).describe(`The outcome of your work.`),
-		respondAsMarkdownString: z
-			.string()
-			.optional()
-			.describe(
-				`Your prose reply for the HUMAN to read, as a markdown string - put your message here. It renders as fully-featured markdown (headings, lists, tables, fenced code) AND mermaid diagrams, so use them when they help. Lead with the answer itself: no lead-in labels ("Short answer:", "TLDR:") and no restating the question; replies often render on a phone. Mutually exclusive with respondAsStructuredData.`,
-			),
-		respondAsStructuredData: z
-			.string()
-			.optional()
-			.describe(
-				`Your structured reply, as a JSON string (object/array). Use ONLY when the request specifies a Reply Schema; pass valid JSON matching it. For ordinary prose use respondAsMarkdownString instead. Mutually exclusive with respondAsMarkdownString.`,
-			),
-		question: z
-			.string()
-			.optional()
-			.describe(`The specific question you need answered. Required when status is clarification.`),
-		reason: z.string().optional().describe(`Why you are deferred or need a human. Required for those statuses.`),
-		estimated_minutes: z.number().optional().describe(`Estimated minutes until you can handle this. For deferred.`),
-		what_to_decide: z
-			.string()
-			.optional()
-			.describe(`The specific decision or approval a human must make. Required for needs_human.`),
-	})
-	.refine((data) => !(data.respondAsMarkdownString && data.respondAsStructuredData), {
-		message: "Provide respondAsMarkdownString or respondAsStructuredData, not both.",
-	});
-
-export type CliReplyArgs = z.infer<typeof CliReplySchema>;
 
 ////////////////////////////////
 //  Channel Reply Schema
@@ -86,6 +47,7 @@ export const ChannelReplySchema = z
 				`Optional absolute file paths to attach to this reply (e.g. screenshots, logs). Images render inline on the phone; other files appear as download chips.`,
 			),
 	})
+	.strict()
 	.refine((data) => !(data.respondAsMarkdownString && data.respondAsStructuredData), {
 		message: "Provide respondAsMarkdownString or respondAsStructuredData, not both.",
 	});

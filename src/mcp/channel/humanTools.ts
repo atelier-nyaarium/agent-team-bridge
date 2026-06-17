@@ -10,18 +10,21 @@ import { readReplyAttachment } from "../bridge/replyTool.js";
 
 // title is optional ONLY to accept the legacy `tiny` alias during the rename
 // transition; the handler requires one of the two. summary/full stay required
-// (no ghost ping that is only a bar headline). Plain z.object (no
-// refine/preprocess) so the MCP registration keeps its `.shape`.
-const NotifyHumanSchema = z.object({
-	title: NoticeTitle.optional(),
-	tiny: NoticeLegacyTiny,
-	summary: NoticeSummary,
-	full: NoticeFull,
-	attachments: z
-		.array(z.string())
-		.optional()
-		.describe(`Optional absolute file paths to attach (screenshots, logs). Images render inline on the phone.`),
-});
+// (no ghost ping that is only a bar headline). `.strict()` rejects a typo'd
+// field instead of silently dropping it, and it preserves `.shape`, so the MCP
+// registration is unaffected (unlike `.refine`/`.preprocess`, which drop shape).
+const NotifyHumanSchema = z
+	.object({
+		title: NoticeTitle.optional(),
+		tiny: NoticeLegacyTiny,
+		summary: NoticeSummary,
+		full: NoticeFull,
+		attachments: z
+			.array(z.string())
+			.optional()
+			.describe(`Optional absolute file paths to attach (screenshots, logs). Images render inline on the phone.`),
+	})
+	.strict();
 type NotifyHumanArgs = z.infer<typeof NotifyHumanSchema>;
 
 ////////////////////////////////

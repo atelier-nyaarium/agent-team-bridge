@@ -4,6 +4,7 @@ node_modules/
 # Development
 _test/
 temp/
+/.cursor/*.log
 /.swc/
 /.vscode-server/
 /.vscode/

@@ -6,7 +6,7 @@
 //  result advances the cursor, how an epoch flip resets it, which entries are genuinely
 //  fresh, whether a gap opened) so the two runtimes (this arbiter-side TS and the phone's
 //  Kotlin twin) cannot disagree about consumption the way they disagreed about the
-//  address before SessionId. See plans/mailbox-sync-contract.md for the design.
+//  address before SessionId.
 //
 //  Invariant: the cursor is PHONE-OWNED and DURABLE. The arbiter never dictates it; the
 //  arbiter's register returns the epoch + an informational high-water only, and the phone

@@ -3,15 +3,8 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import WebSocket from "ws";
 import { debugLog } from "../../shared/debug-log.js";
 import { createReconnector } from "../../shared/reconnect.js";
-import type {
-	ChannelPushPayload,
-	ConnectionMode,
-	EffortEnv,
-	InjectPayload,
-	ResponsePushPayload,
-} from "../../shared/types.js";
+import type { ChannelPushPayload, ConnectionMode, ResponsePushPayload } from "../../shared/types.js";
 import { emitChannelNotification, emitResponseNotification } from "../channel/channelNotify.js";
-import { handleInject } from "../cli/handleInject.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -20,7 +13,6 @@ export interface BridgeConfig {
 	routerUrl: string;
 	projectName: string;
 	agentType: string;
-	effortEnv: EffortEnv;
 }
 
 interface RouterPostOptions {
@@ -35,7 +27,6 @@ interface RouterPostOptions {
 let ROUTER_URL = "";
 let PROJECT_NAME = "";
 let AGENT_TYPE = "";
-let EFFORT_ENV: EffortEnv = {};
 
 // Stable conversation id for the life of this MCP process. Regenerated on process start,
 // reused across WebSocket reconnects so the arbiter can keep the conversation tied to the
@@ -58,7 +49,6 @@ export function initBridge(config: BridgeConfig): void {
 	ROUTER_URL = config.routerUrl;
 	PROJECT_NAME = config.projectName;
 	AGENT_TYPE = config.agentType;
-	EFFORT_ENV = config.effortEnv;
 }
 
 export function setChannelServer(server: Server): void {
@@ -225,13 +215,6 @@ export function connectToRouter(): void {
 		if (msg.type === "response_push" && isChannel && channelServer) {
 			emitResponseNotification(channelServer, msg as unknown as ResponsePushPayload).catch((err: Error) => {
 				console.error(`[channel] response notification error: ${err.message}`);
-			});
-		}
-
-		// CLI mode: receive inject messages for non-Claude agents
-		if (msg.type === "inject" && !isChannel) {
-			handleInject(msg as unknown as InjectPayload, AGENT_TYPE, EFFORT_ENV).catch((err: Error) => {
-				console.error(`[bridge] handleInject error: ${err.message}`);
 			});
 		}
 	});

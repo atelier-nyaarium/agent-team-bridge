@@ -53,6 +53,11 @@ data class Message(
 	/** The Short tier of a notice, persisted for an upcoming feature; no UI
 	 * reads it yet. */
 	val summary: String? = null,
+	/** Mailbox coordinates of the entry that produced this row. Used to dedupe an
+	 * at-least-once re-drain so the same (epoch, seq) renders exactly once. 0 for
+	 * local/optimistic rows and legacy persisted rows from before this field. */
+	val epoch: Long = 0,
+	val seq: Long = 0,
 )
 
 data class ChatState(
@@ -678,10 +683,13 @@ class ChatRepository(
 						if (bodyText.isNotEmpty() || files.isNotEmpty() || e.status != null) {
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team status=${e.status} files=${files.size} \"$snippet\"")
 							val msg =
-								Message(false, bodyText, e.at, files = files, status = e.status, title = e.title, summary = e.summary)
-							appendInbound(team, msg)
-							bumpUnread(team)
-							burst.getOrPut(team) { mutableListOf() }.add(msg)
+								Message(false, bodyText, e.at, files = files, status = e.status, title = e.title, summary = e.summary, epoch = mb.epoch, seq = e.seq)
+							// appendInbound folds an at-least-once re-drain in place and returns
+							// false, so a redelivered entry never re-bumps unread or re-notifies.
+							if (appendInbound(team, msg)) {
+								bumpUnread(team)
+								burst.getOrPut(team) { mutableListOf() }.add(msg)
+							}
 						} else {
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team SKIPPED (no body, no files, no status)")
 						}
@@ -861,7 +869,29 @@ class ChatRepository(
 	 * waking placeholder (wherever it sits - a second send may have landed after
 	 * it), the first real word from the team resolves it in place (same row id),
 	 * so the placeholder never lingers in the transcript. */
-	private fun appendInbound(team: String, msg: Message) {
+	private fun appendInbound(team: String, msg: Message): Boolean {
+		// At-least-once dedup: an entry with the same mailbox (epoch, seq) was already
+		// rendered, so fold it in place and report no new render (no re-notify/TTS).
+		// seq 0 is a local or legacy row that never re-drains, so it is exempt.
+		if (msg.seq > 0) {
+			var folded = false
+			val updated = _state.updateAndGet { s ->
+				val thread = s.threads[team].orEmpty()
+				val idx = thread.indexOfFirst { it.seq == msg.seq && it.epoch == msg.epoch }
+				if (idx >= 0) {
+					folded = true
+					val next = thread.toMutableList().also { it[idx] = msg.copy(id = thread[idx].id) }
+					s.copy(threads = s.threads + (team to next))
+				} else {
+					folded = false
+					s
+				}
+			}
+			if (folded) {
+				persistThreads(updated.threads)
+				return false
+			}
+		}
 		var replaced = true
 		val threads = _state.updateAndGet { s ->
 			val thread = s.threads[team].orEmpty()
@@ -879,6 +909,7 @@ class ChatRepository(
 		} else {
 			append(team, msg)
 		}
+		return true
 	}
 
 	private fun bumpUnread(team: String) {
@@ -893,6 +924,8 @@ class ChatRepository(
 				val obj = JSONObject().put("me", m.fromMe).put("text", m.text).put("at", m.at)
 				obj.putOpt("status", m.status)
 				obj.putOpt("opId", m.opId)
+				if (m.epoch != 0L) obj.put("epoch", m.epoch)
+				if (m.seq != 0L) obj.put("seq", m.seq)
 				obj.putOpt("title", m.title)
 				obj.putOpt("summary", m.summary)
 				// Persist local paths (the decoded files survive on disk), never base64.
@@ -933,6 +966,8 @@ class ChatRepository(
 						m.optString("opId").takeIf { s -> s.isNotEmpty() },
 						title = m.optString("title").takeIf { s -> s.isNotEmpty() },
 						summary = m.optString("summary").takeIf { s -> s.isNotEmpty() },
+						epoch = m.optLong("epoch", 0L),
+						seq = m.optLong("seq", 0L),
 					)
 				}
 					// A "waking" placeholder has no resolution coming after a process
