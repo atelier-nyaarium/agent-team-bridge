@@ -81,6 +81,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.launch
 
 /** Process-lifetime repository so chat state survives Activity recreation. */
@@ -361,17 +363,36 @@ fun ProvisionScreen(onProvision: (String) -> Unit) {
 		tryProvision(text, "File")
 	}
 
+	// QR scan: the host's enrollment QR carries the blob JSON verbatim, so the scanned
+	// contents are exactly what tryProvision expects. zxing's ScanContract owns the camera
+	// + the runtime permission prompt; a cancel returns null contents.
+	val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+		if (result.contents != null) tryProvision(result.contents, "QR") else status = "Scan cancelled."
+	}
+
 	Scaffold(topBar = { TopAppBar(title = { Text("Provision Switchboard") }) }) { pad ->
 		Column(
 			Modifier.padding(pad).padding(24.dp).fillMaxSize(),
 			verticalArrangement = Arrangement.spacedBy(16.dp),
 		) {
-			Text("Load the provisioning blob the host generated for you.")
+			Text("Scan the enrollment QR the host shows (./provision-console.sh --qr), or paste/import the blob.")
 			Button(
+				onClick = {
+					scanLauncher.launch(
+						ScanOptions()
+							.setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+							.setOrientationLocked(false)
+							.setBeepEnabled(false)
+							.setPrompt("Point at the host's enrollment QR"),
+					)
+				},
+				modifier = Modifier.fillMaxWidth(),
+			) { Text("Scan enrollment QR") }
+			OutlinedButton(
 				onClick = { tryProvision(readClipboard(context), "Clipboard") },
 				modifier = Modifier.fillMaxWidth(),
 			) { Text("Paste from clipboard") }
-			Button(
+			OutlinedButton(
 				onClick = { fileLauncher.launch(arrayOf("*/*")) },
 				modifier = Modifier.fillMaxWidth(),
 			) { Text("Import from file") }
