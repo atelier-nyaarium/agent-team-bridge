@@ -20,7 +20,7 @@ export interface WebSocketDeps {
 	config: WebSocketConfig;
 	onTeamConnect?: (team: string, ws: ServerWebSocket<WsData>) => void;
 	onTeamDisconnect?: (team: string) => void;
-	// Fired when a real registration evicts a virtual phone peer, so the phone
+	// Fired when a real registration evicts a virtual console peer, so the console
 	// handler can clear its binding/mailbox and let the device re-register.
 	onVirtualPeerEvicted?: (conversationId: string) => void;
 }
@@ -35,8 +35,8 @@ export interface WsData {
 	handshakeConfirmed: boolean;
 	proxyProject?: string;
 	proxyAuth?: string;
-	// True for a phone mailbox peer: a duck-typed socket whose send() appends to a
-	// DeviceMailbox instead of writing a wire. Liveness comes from the phone<->evie
+	// True for a console mailbox peer: a duck-typed socket whose send() appends to a
+	// DeviceMailbox instead of writing a wire. Liveness comes from the console<->evie
 	// connection, so it is excluded from the ping/pong heartbeat.
 	virtual?: boolean;
 }
@@ -55,7 +55,7 @@ export function getAllActiveWs(subs: Map<string, ServerWebSocket<WsData>>): Serv
 }
 
 /**
- * Active sockets excluding virtual phone peers, whose readyState is hardwired
+ * Active sockets excluding virtual console peers, whose readyState is hardwired
  * open. Use this wherever "online" must mean a live process that can act (DM
  * holder selection, liveness checks), not a passive mailbox.
  */
@@ -151,9 +151,9 @@ export function createWebSocketHandlers({
 				registry.set(team, subs);
 			}
 
-			// A real registration claims the name over any virtual phone peers
-			// squatting it: evict them so a phone can never absorb a real team's
-			// traffic. The phone's next frame gets the name-taken rejection.
+			// A real registration claims the name over any virtual console peers
+			// squatting it: evict them so a console can never absorb a real team's
+			// traffic. The console's next frame gets the name-taken rejection.
 			for (const [virtualSubId, virtualWs] of [...subs]) {
 				if (virtualWs.data.virtual) {
 					subs.delete(virtualSubId);
@@ -328,7 +328,7 @@ export function createWebSocketHandlers({
 			conversationRegistry.delete(closingConversationId);
 		}
 
-		// If team has no more live sub-sessions, clean up fully. Virtual phone
+		// If team has no more live sub-sessions, clean up fully. Virtual console
 		// peers do not count as liveness; they must not suppress disconnect
 		// cleanup (pin clearing, job cancellation).
 		const hasRealSubs = [...subs.values()].some((s) => !s.data.virtual);

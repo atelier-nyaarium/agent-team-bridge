@@ -1,10 +1,10 @@
 import type { ServerWebSocket } from "bun";
 import { describe, expect, it } from "vitest";
-import { createPhoneHandler, type PhoneRoutes } from "../arbiter/phone/phoneHandler.js";
-import { PhonePeer } from "../arbiter/phone/phonePeer.js";
+import { type ConsoleRoutes, createConsoleHandler } from "../arbiter/console/consoleHandler.js";
+import { ConsolePeer } from "../arbiter/console/consolePeer.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../arbiter/websocket.js";
+import type { ConsoleOp, OpenedConsoleFrame } from "../shared/console-protocol.js";
 import { DeviceMailbox, DeviceMailboxStore } from "../shared/device-mailbox.js";
-import type { OpenedPhoneFrame, PhoneOp } from "../shared/phone-protocol.js";
 
 function jsonRes(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -14,12 +14,12 @@ function jsonRes(body: unknown, status = 200): Response {
 // so tests construct that directly. A stable signer per conversation satisfies the
 // install binding; tests that exercise the binding pass an explicit signer.
 function frame(
-	op: PhoneOp,
+	op: ConsoleOp,
 	opId = "op1",
 	device = "pixel",
 	conversationId = "conv-pixel",
 	signerSignPub = `signer-${conversationId}`,
-): OpenedPhoneFrame {
+): OpenedConsoleFrame {
 	return { opId, signerSignPub, conversationId, device, op };
 }
 
@@ -48,17 +48,17 @@ interface Harness {
 	mailboxStore: DeviceMailboxStore;
 	sendCalls: Record<string, unknown>[];
 	respondCalls: Record<string, unknown>[];
-	handler: ReturnType<typeof createPhoneHandler>;
+	handler: ReturnType<typeof createConsoleHandler>;
 }
 
-function makeHarness(overrides: Partial<PhoneRoutes> = {}): Harness {
+function makeHarness(overrides: Partial<ConsoleRoutes> = {}): Harness {
 	const registry: TeamRegistry = new Map();
 	const conversationRegistry: ConversationRegistry = new Map();
 	const mailboxStore = new DeviceMailboxStore();
 	const sendCalls: Record<string, unknown>[] = [];
 	const respondCalls: Record<string, unknown>[] = [];
 
-	const routes: PhoneRoutes = {
+	const routes: ConsoleRoutes = {
 		send: async (_req, body) => {
 			sendCalls.push(body);
 			return jsonRes({ session_id: "conv:host:team-a", status: "running" });
@@ -83,7 +83,7 @@ function makeHarness(overrides: Partial<PhoneRoutes> = {}): Harness {
 		...overrides,
 	};
 
-	const handler = createPhoneHandler({
+	const handler = createConsoleHandler({
 		registry,
 		conversationRegistry,
 		mailboxStore,
@@ -93,10 +93,10 @@ function makeHarness(overrides: Partial<PhoneRoutes> = {}): Harness {
 	return { registry, conversationRegistry, mailboxStore, sendCalls, respondCalls, handler };
 }
 
-describe("PhonePeer", () => {
+describe("ConsolePeer", () => {
 	it("channel_push lands as a message entry", () => {
 		const box = new DeviceMailbox(1);
-		const peer = new PhonePeer(() => box, "pixel", "conv-pixel", "conv-pixel");
+		const peer = new ConsolePeer(() => box, "pixel", "conv-pixel", "conv-pixel");
 		peer.send(
 			JSON.stringify({
 				type: "channel_push",
@@ -115,7 +115,7 @@ describe("PhonePeer", () => {
 
 	it("response_push lands as a reply entry", () => {
 		const box = new DeviceMailbox(1);
-		const peer = new PhonePeer(() => box, "pixel", "conv-pixel", "conv-pixel");
+		const peer = new ConsolePeer(() => box, "pixel", "conv-pixel", "conv-pixel");
 		peer.send(
 			JSON.stringify({
 				type: "response_push",
@@ -130,19 +130,19 @@ describe("PhonePeer", () => {
 
 	it("non-delivery frame types and garbage are ignored", () => {
 		const box = new DeviceMailbox(1);
-		const peer = new PhonePeer(() => box, "pixel", "conv-pixel", "conv-pixel");
+		const peer = new ConsolePeer(() => box, "pixel", "conv-pixel", "conv-pixel");
 		peer.send("not json");
 		peer.send(JSON.stringify({ type: "evie_tools", tools: [] }));
 		expect(box.size).toBe(0);
 	});
 });
 
-describe("createPhoneHandler", () => {
+describe("createConsoleHandler", () => {
 	it("register inserts a virtual peer keyed by conversationId and returns the cursor", async () => {
 		const h = makeHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "register" }));
 		expect(reply.ok).toBe(true);
-		// register hands back the connected Switch id so the phone anchors its
+		// register hands back the connected Switch id so the console anchors its
 		// composite (switchId, name) key and migrates bare-keyed threads onto it.
 		expect(reply.result).toMatchObject({ device: "pixel", switchId: "test-host", cursor: 0 });
 		expect((reply.result as { epoch: number }).epoch).toBeGreaterThan(0);
@@ -165,13 +165,13 @@ describe("createPhoneHandler", () => {
 	});
 
 	it("rejects a device name that matches a devcontainer project, even a sleeping one", async () => {
-		// Without this, a phone named after a sleeping catalog project squats its
-		// registry slot: teams() shows it online, sends land in the phone mailbox,
+		// Without this, a console named after a sleeping catalog project squats its
+		// registry slot: teams() shows it online, sends land in the console mailbox,
 		// and the real project's wake is suppressed.
 		const registry: TeamRegistry = new Map();
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
-		const handler = createPhoneHandler({
+		const handler = createConsoleHandler({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -235,7 +235,7 @@ describe("createPhoneHandler", () => {
 			fromConversationId: "conv-pixel",
 			to: "team-a",
 			body: "hello",
-			// Phone sends must never enter the route's CLI branch (random session ids).
+			// Console sends must never enter the route's CLI branch (random session ids).
 			channelOnly: true,
 		});
 	});
@@ -311,7 +311,7 @@ describe("createPhoneHandler", () => {
 		const h = makeHarness();
 		await h.handler.handleFrame(frame({ kind: "register" }));
 
-		// Simulate routes.send broadcasting a channel_push to the phone as target.
+		// Simulate routes.send broadcasting a channel_push to the console as target.
 		const peer = h.registry.get("pixel")?.get("conv-pixel") as unknown as ServerWebSocket<WsData>;
 		peer.send(
 			JSON.stringify({
@@ -477,7 +477,7 @@ describe("createPhoneHandler", () => {
 		const registry: TeamRegistry = new Map();
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
-		const handler = createPhoneHandler({
+		const handler = createConsoleHandler({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -556,7 +556,7 @@ describe("createPhoneHandler", () => {
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
 		let resolveSend: ((res: Response) => void) | undefined;
-		const handler = createPhoneHandler({
+		const handler = createConsoleHandler({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -598,7 +598,7 @@ describe("createPhoneHandler", () => {
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
 		let resolveSend: ((res: Response) => void) | undefined;
-		const handler = createPhoneHandler({
+		const handler = createConsoleHandler({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -620,7 +620,7 @@ describe("createPhoneHandler", () => {
 
 		resolveSend?.(
 			jsonRes(
-				{ error: '"sleepy-cli" is a CLI-mode agent; phone chat supports channel-mode (Claude) teams only' },
+				{ error: '"sleepy-cli" is a CLI-mode agent; console chat supports channel-mode (Claude) teams only' },
 				409,
 			),
 		);
@@ -685,7 +685,7 @@ describe("createPhoneHandler", () => {
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
 		let resolveSend: ((res: Response) => void) | undefined;
-		const handler = createPhoneHandler({
+		const handler = createConsoleHandler({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -764,7 +764,7 @@ describe("DeviceMailboxStore caps", () => {
 	});
 
 	it("a fresh instance gets a new epoch", () => {
-		// Epochs are random (the phone compares them only for equality), so the
+		// Epochs are random (the console compares them only for equality), so the
 		// contract is "different", not "greater" - greater was the old counter
 		// semantics that collided across arbiter restarts.
 		const store = new DeviceMailboxStore();

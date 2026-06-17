@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { MailboxInput } from "../shared/console-protocol.js";
 import { DeviceMailbox, DeviceMailboxStore } from "../shared/device-mailbox.js";
-import type { MailboxInput } from "../shared/phone-protocol.js";
 
 function message(session_id: string, body: string): MailboxInput {
 	return { kind: "message", session_id, from: "team-a", body };
@@ -80,7 +80,7 @@ describe("DeviceMailbox", () => {
 
 	it("a cursor beyond highWater never acks, even when the epoch matches", () => {
 		// The arbiter-restart trap: if a new instance ever minted an epoch the
-		// phone still held, the phone's stale (larger) cursor must not be able to
+		// console still held, the console's stale (larger) cursor must not be able to
 		// ack away entries this instance never issued.
 		const box = new DeviceMailbox(7);
 		box.append(message("s1", "fresh-1"));
@@ -200,9 +200,9 @@ describe("DeviceMailboxStore", () => {
 	});
 
 	it("a recreated store mints a different epoch for the same device", () => {
-		// Simulates an arbiter restart with a phone that kept running: the new
-		// store's mailbox must carry an epoch the phone cannot already hold, or
-		// the phone never detects the new instance and goes silently deaf. A
+		// Simulates an arbiter restart with a console that kept running: the new
+		// store's mailbox must carry an epoch the console cannot already hold, or
+		// the console never detects the new instance and goes silently deaf. A
 		// deterministic counter base re-minted colliding epochs across restarts.
 		const before = new DeviceMailboxStore().ensure("aqua").epoch;
 		const after = new DeviceMailboxStore().ensure("aqua").epoch;
@@ -296,7 +296,7 @@ describe("DeviceMailbox slowest-device watermark", () => {
 		box.append(message("s1", "a"));
 		box.append(message("s1", "b"));
 		box.append(message("s1", "c"));
-		box.drain(2, 1, "phoneA"); // ack up to seq 2 on the watermark path
+		box.drain(2, 1, "consoleA"); // ack up to seq 2 on the watermark path
 		expect(box.size).toBe(1); // seq 3 retained, 1 and 2 compacted
 		expect(box.drain(0).dropped).toBe(0); // watermark trim is not a gap
 	});
@@ -304,20 +304,20 @@ describe("DeviceMailbox slowest-device watermark", () => {
 	it("trims only to the slowest of several devices", () => {
 		const box = new DeviceMailbox(1);
 		for (const b of ["a", "b", "c", "d", "e"]) box.append(message("s1", b));
-		box.advanceConsumer("phoneA", 5); // caught up
-		box.advanceConsumer("phoneB", 2); // slow
+		box.advanceConsumer("consoleA", 5); // caught up
+		box.advanceConsumer("consoleB", 2); // slow
 		expect(box.minCursor()).toBe(2);
 		box.trimToMinCursor();
-		expect(box.size).toBe(3); // seq 3,4,5 retained for the slow phone
+		expect(box.size).toBe(3); // seq 3,4,5 retained for the slow console
 		expect(box.drain(0).dropped).toBe(0);
 	});
 
 	it("forgetting the slow device advances the watermark", () => {
 		const box = new DeviceMailbox(1);
 		for (const b of ["a", "b", "c", "d", "e"]) box.append(message("s1", b));
-		box.advanceConsumer("phoneA", 5);
-		box.advanceConsumer("phoneB", 2);
-		box.forgetConsumer("phoneB"); // slow device evicted past its TTL
+		box.advanceConsumer("consoleA", 5);
+		box.advanceConsumer("consoleB", 2);
+		box.forgetConsumer("consoleB"); // slow device evicted past its TTL
 		expect(box.minCursor()).toBe(5);
 		box.trimToMinCursor();
 		expect(box.size).toBe(0);
@@ -325,18 +325,18 @@ describe("DeviceMailbox slowest-device watermark", () => {
 
 	it("advanceConsumer is monotonic (a stale lower ack cannot rewind)", () => {
 		const box = new DeviceMailbox(1);
-		box.advanceConsumer("phoneA", 5);
-		box.advanceConsumer("phoneA", 3); // out-of-order/stale
+		box.advanceConsumer("consoleA", 5);
+		box.advanceConsumer("consoleA", 3); // out-of-order/stale
 		expect(box.minCursor()).toBe(5);
 	});
 
 	it("consumerCursors survive a snapshot/restore round trip", () => {
 		const box = new DeviceMailbox(9);
 		for (const b of ["a", "b", "c"]) box.append(message("s1", b));
-		box.advanceConsumer("phoneA", 3);
-		box.advanceConsumer("phoneB", 1);
+		box.advanceConsumer("consoleA", 3);
+		box.advanceConsumer("consoleB", 1);
 		const restored = DeviceMailbox.fromSnapshot(box.snapshot());
-		expect(restored.minCursor()).toBe(1); // the slow phone still pins it
+		expect(restored.minCursor()).toBe(1); // the slow console still pins it
 		restored.trimToMinCursor();
 		expect(restored.size).toBe(2); // seq 2,3 retained
 	});
@@ -355,7 +355,7 @@ describe("DeviceMailbox durable respondability", () => {
 		box.recordSession("conv:a:host/team");
 		box.recordSession("conv:b:host/team");
 		const restored = DeviceMailbox.fromSnapshot(box.snapshot());
-		// After a restart the phone can still respond to a thread it received before.
+		// After a restart the console can still respond to a thread it received before.
 		expect(restored.canRespond("conv:a:host/team")).toBe(true);
 		expect(restored.canRespond("conv:b:host/team")).toBe(true);
 		expect(restored.canRespond("conv:never:host/team")).toBe(false);

@@ -20,5 +20,5 @@ dependencyResolutionManagement {
 	}
 }
 
-rootProject.name = "SwitchboardPhone"
+rootProject.name = "SwitchboardConsole"
 include(":app")

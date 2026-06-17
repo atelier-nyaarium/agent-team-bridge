@@ -70,7 +70,7 @@ class SessionId private constructor(val conversationId: String, val target: Team
 	override fun hashCode(): Int = 31 * conversationId.hashCode() + target.hashCode()
 }
 
-/** A broadcast notice session id, scoped to its sender. No conversation; the phone
+/** A broadcast notice session id, scoped to its sender. No conversation; the console
  * threads the notice under the sender. */
 class NoticeId private constructor(val sender: TeamAddress) {
 	companion object {

@@ -37,8 +37,8 @@ export interface RoutesDeps {
 	// empties when the host daemon disconnects). Membership in either marks a
 	// team as devcontainer-backed.
 	knownTeamPaths: Map<string, string>;
-	// Phone mailboxes, for broadcast notices (notify_human). Optional so test
-	// harnesses without a phone bridge need not supply one.
+	// Console mailboxes, for broadcast notices (notify_human). Optional so test
+	// harnesses without a console bridge need not supply one.
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
 	config: ArbiterConfig;
 	evieClient?: import("./evie/evieClient.js").EvieClient | null;
@@ -58,8 +58,8 @@ const SendRequestSchema = z.object({
 	debug: z.boolean().optional(),
 	replyJsonSchema: z.string().optional(),
 	files: ChannelFilesSchema.optional(),
-	// Phone-originated sends: reject CLI-mode targets instead of entering the
-	// CLI branch, which mints a random session id the phone can never thread.
+	// Console-originated sends: reject CLI-mode targets instead of entering the
+	// CLI branch, which mints a random session id the console can never thread.
 	channelOnly: z.boolean().optional(),
 	// Cross-Switch INBOUND send (the switch-relay handler): use this exact session id
 	// as the channel job key (the origin owns it) and pin the reply via returnRoute
@@ -140,7 +140,7 @@ function getFirstWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket
 	return undefined;
 }
 
-/** Get the mode of a team, preferring real sockets over virtual phone peers
+/** Get the mode of a team, preferring real sockets over virtual console peers
  * (which are always channel mode and could otherwise misroute a CLI team). */
 function getTeamMode(subs: Map<string, ServerWebSocket<WsData>>): ConnectionMode {
 	let virtualMode: ConnectionMode | null = null;
@@ -315,9 +315,9 @@ export function createRoutes({
 		for (const [name, subs] of registry) {
 			if (name === "host") continue;
 			seen.add(name);
-			// A team whose only live sockets are virtual phone peers is the human's
+			// A team whose only live sockets are virtual console peers is the human's
 			// device, not a crosstalk peer - mark it so the agent-facing listing hides it.
-			const isPhone = getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0;
+			const isConsole = getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0;
 			// The host orchestrator registers its channel identity as "arbiter"; surface
 			// it as the "host" agent, the machine's primary session (shown first).
 			teamsList.push({
@@ -326,7 +326,13 @@ export function createRoutes({
 				status: "online",
 				mode: getTeamMode(subs),
 				kind:
-					name === "arbiter" ? "switch" : isPhone ? "phone" : isDevcontainer(name) ? "devcontainer" : "loose",
+					name === "arbiter"
+						? "switch"
+						: isConsole
+							? "console"
+							: isDevcontainer(name)
+								? "devcontainer"
+								: "loose",
 				queue_depth: 0,
 			});
 		}
@@ -424,7 +430,7 @@ export function createRoutes({
 		const qualifiedTo = target.qualified;
 
 		// The "host" cli wake-daemon is never a direct target. The "arbiter" channel
-		// identity (the host-agent) is reachable ONLY from the phone (channelOnly): a
+		// identity (the host-agent) is reachable ONLY from the console (channelOnly): a
 		// send injects a channel message into the host orchestrator. Cross-session
 		// (container -> host-agent) sends are deferred to the federation phases that
 		// design that trust boundary.
@@ -468,20 +474,20 @@ export function createRoutes({
 
 		const targetMode = getTeamMode(subs);
 
-		// channelOnly senders (the phone) must never reach the CLI branch below:
+		// channelOnly senders (the console) must never reach the CLI branch below:
 		// it mints a fresh random session id that can never join the sender's
 		// deterministic conversation threads. Checked post-wake, so even a
 		// sleeping CLI team that this send just woke gets a clean error instead
 		// of an orphan session.
 		if (channelOnly && targetMode !== "channel") {
 			return jsonResponse(
-				{ error: `"${localName}" is a CLI-mode agent; phone chat supports channel-mode (Claude) teams only` },
+				{ error: `"${localName}" is a CLI-mode agent; console chat supports channel-mode (Claude) teams only` },
 				409,
 			);
 		}
 
 		// Channel mode: stable job id per (sender_conversation_id, target_team) pair.
-		// The target is the canonical qualified name, so the phone threads the reply
+		// The target is the canonical qualified name, so the console threads the reply
 		// under (switchId, name). Same pair reuses the same store entry forever; entries
 		// are persistent.
 		if (targetMode === "channel") {
@@ -644,12 +650,12 @@ export function createRoutes({
 
 		let pushedViaConversation = false;
 		if (deliverResult.fromConversationId) {
-			// A phone-bound reply is delivered by APPENDING to the device's durable
-			// mailbox by data, independent of any live PhonePeer. After an arbiter
+			// A console-bound reply is delivered by APPENDING to the device's durable
+			// mailbox by data, independent of any live ConsolePeer. After an arbiter
 			// restart the mailbox is restored but the virtual peer is rebuilt only on
-			// the phone's next frame, so routing the reply through the live peer would
+			// the console's next frame, so routing the reply through the live peer would
 			// drop it. The mailbox is the delivery truth; the peer is a wake hint. A
-			// mailbox existing for this conversation is the phone signal (a real
+			// mailbox existing for this conversation is the console signal (a real
 			// channel agent has none and takes the live-WS branch below).
 			const mailbox = mailboxStore?.get(deliverResult.fromConversationId);
 			if (mailbox) {
@@ -665,7 +671,7 @@ export function createRoutes({
 				});
 				pushedViaConversation = true;
 				console.log(
-					`[respond] appended to phone mailbox ${deliverResult.fromConversationId.slice(0, 8)}... [${respondSessionId}]`,
+					`[respond] appended to console mailbox ${deliverResult.fromConversationId.slice(0, 8)}... [${respondSessionId}]`,
 				);
 			} else {
 				const senderWs = conversationRegistry.get(deliverResult.fromConversationId);
@@ -685,7 +691,7 @@ export function createRoutes({
 
 		// Conversation-routed sends never degrade to name-based broadcast: the
 		// sender team name may since have been claimed by an unrelated identity
-		// (e.g. a real team replacing an evicted phone peer), and the result
+		// (e.g. a real team replacing an evicted console peer), and the result
 		// stays poll-recoverable in the store regardless.
 		if (!pushedViaConversation && !deliverResult.fromConversationId) {
 			const fromSubs = registry.get(deliverResult.from);
@@ -757,8 +763,8 @@ export function createRoutes({
 		return jsonResponse(result, result.error ? 500 : 200);
 	}
 
-	/** Broadcast a notice to every registered phone mailbox. Notices thread under
-	 * the sender on the phone and are never respondable: they are appended
+	/** Broadcast a notice to every registered console mailbox. Notices thread under
+	 * the sender on the console and are never respondable: they are appended
 	 * directly here (not via a peer push), so no inbound session is recorded. */
 	function humanNotify(body: Record<string, unknown>): Response {
 		const parsed = HumanNotifySchema.safeParse(body);
@@ -777,7 +783,7 @@ export function createRoutes({
 			}
 		}
 		if (!mailboxStore) {
-			return jsonResponse({ error: "phone bridge is not enabled on this arbiter" }, 503);
+			return jsonResponse({ error: "console bridge is not enabled on this arbiter" }, 503);
 		}
 		let delivered = 0;
 		mailboxStore.forEach((_conversationId, box) => {
@@ -792,7 +798,7 @@ export function createRoutes({
 			});
 			delivered++;
 		});
-		console.log(`[notify] notice from ${from} delivered to ${delivered} phone(s)`);
+		console.log(`[notify] notice from ${from} delivered to ${delivered} console(s)`);
 		return jsonResponse({ delivered });
 	}
 

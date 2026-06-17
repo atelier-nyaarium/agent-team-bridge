@@ -1,5 +1,5 @@
 {
-	"type": "phone_relay",
+	"type": "console_relay",
 	"v": 1,
 	"opId": "op-sealed-1",
 	"signerSignPub": "cGhvbmUtc2lnbi1wdWI=",

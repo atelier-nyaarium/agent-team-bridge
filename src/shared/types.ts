@@ -16,7 +16,7 @@ import type {
 //  truth). Local-only types (payloads, config) stay hand-written here.
 
 /**
- * Channel attachment metadata carried over the bridge (phone-origin files).
+ * Channel attachment metadata carried over the bridge (console-origin files).
  *
  * Presence of `base64` means the sender included the bytes and the host MCP
  * plugin should materialize the file under /tmp/evie-files/<msgId>/. Absence

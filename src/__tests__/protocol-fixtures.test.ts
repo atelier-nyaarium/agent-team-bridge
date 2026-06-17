@@ -3,16 +3,16 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import {
+	ConsoleListTeamsResultSchema,
+	ConsoleOpEnvelopeSchema,
+	ConsolePollResultSchema,
+	ConsoleRegisterResultSchema,
+	ConsoleRelayFrameSchema,
+	ConsoleRelayReplySchema,
+	ConsoleReplyBodySchema,
+	ConsoleRespondResultSchema,
+	ConsoleSendResultSchema,
 	MailboxEntrySchema,
-	PhoneListTeamsResultSchema,
-	PhoneOpEnvelopeSchema,
-	PhonePollResultSchema,
-	PhoneRegisterResultSchema,
-	PhoneRelayFrameSchema,
-	PhoneRelayReplySchema,
-	PhoneReplyBodySchema,
-	PhoneRespondResultSchema,
-	PhoneSendResultSchema,
 } from "../shared/schemas.js";
 
 ////////////////////////////////
@@ -28,16 +28,16 @@ import {
 const FIXTURES = path.join(__dirname, "../../tests/fixtures/protocol");
 
 const SCHEMAS: Record<string, z.ZodType> = {
-	PhoneOpEnvelope: PhoneOpEnvelopeSchema,
-	PhoneRelayFrame: PhoneRelayFrameSchema,
-	PhoneRelayReply: PhoneRelayReplySchema,
-	PhoneReplyBody: PhoneReplyBodySchema,
+	ConsoleOpEnvelope: ConsoleOpEnvelopeSchema,
+	ConsoleRelayFrame: ConsoleRelayFrameSchema,
+	ConsoleRelayReply: ConsoleRelayReplySchema,
+	ConsoleReplyBody: ConsoleReplyBodySchema,
 	MailboxEntry: MailboxEntrySchema,
-	PhoneRegisterResult: PhoneRegisterResultSchema,
-	PhoneListTeamsResult: PhoneListTeamsResultSchema,
-	PhoneSendResult: PhoneSendResultSchema,
-	PhoneRespondResult: PhoneRespondResultSchema,
-	PhonePollResult: PhonePollResultSchema,
+	ConsoleRegisterResult: ConsoleRegisterResultSchema,
+	ConsoleListTeamsResult: ConsoleListTeamsResultSchema,
+	ConsoleSendResult: ConsoleSendResultSchema,
+	ConsoleRespondResult: ConsoleRespondResultSchema,
+	ConsolePollResult: ConsolePollResultSchema,
 };
 
 interface ManifestEntry {
@@ -90,7 +90,7 @@ describe("protocol fixtures", () => {
 	});
 
 	it("tolerates an old-arbiter team without kind", () => {
-		const result = PhoneListTeamsResultSchema.parse(fixture("list-teams-result.json"));
+		const result = ConsoleListTeamsResultSchema.parse(fixture("list-teams-result.json"));
 		expect(result.teams).toHaveLength(2);
 		expect(result.teams[0].kind).toBe("devcontainer");
 		expect(result.teams[1].kind).toBeUndefined();

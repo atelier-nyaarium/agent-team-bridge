@@ -4,14 +4,14 @@ import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
-import com.atelier_nyaarium.switchboard.proto.PhoneOp
-import com.atelier_nyaarium.switchboard.proto.PhoneOpEnvelope
-import com.atelier_nyaarium.switchboard.proto.PhonePollResult
-import com.atelier_nyaarium.switchboard.proto.PhoneRegisterResult
-import com.atelier_nyaarium.switchboard.proto.PhoneRelayFrame
-import com.atelier_nyaarium.switchboard.proto.PhoneRelayReply
-import com.atelier_nyaarium.switchboard.proto.PhoneReplyBody
-import com.atelier_nyaarium.switchboard.proto.PhoneSendResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleOp
+import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
+import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleRegisterResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleRelayFrame
+import com.atelier_nyaarium.switchboard.proto.ConsoleRelayReply
+import com.atelier_nyaarium.switchboard.proto.ConsoleReplyBody
+import com.atelier_nyaarium.switchboard.proto.ConsoleSendResult
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
 import java.io.ByteArrayInputStream
@@ -31,7 +31,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
- * Credential blob the phone holds (pasted once). Reaches the phone bridge through
+ * Credential blob the console holds (pasted once). Reaches the console bridge through
  * the k8s API service-proxy: the SA token authenticates to the API server, the app
  * token (a separate forwarded header) authenticates to evie.
  *
@@ -64,7 +64,7 @@ data class Provisioning(
 				saToken = p.saToken,
 				appToken = p.appToken ?: "",
 				namespace = p.namespace ?: "evie-bot",
-				service = p.service ?: "evie-phone-bridge",
+				service = p.service ?: "evie-console-bridge",
 				port = p.port?.toInt() ?: 20004,
 				device = p.device ?: (android.os.Build.MODEL ?: "android"),
 				conversationId = p.conversationId ?: UUID.randomUUID().toString(),
@@ -127,20 +127,20 @@ private fun Crypto.SealedEnvelope.toProto(): SealedEnvelope =
 private fun SealedEnvelope.toCrypto(): Crypto.SealedEnvelope =
 	Crypto.SealedEnvelope(ephemeralPub, nonce, ciphertext, signature)
 
-/** Talks to the phone bridge through the CA-pinned k8s API service-proxy. */
-class PhoneClient(private val prov: Provisioning, private val store: ProvisioningStore) {
+/** Talks to the console bridge through the CA-pinned k8s API service-proxy. */
+class ConsoleClient(private val prov: Provisioning, private val store: ProvisioningStore) {
 	private val client = buildPinnedClient(prov.caPem)
 	private val proxyBase =
 		"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
 
-	/** This phone's home Host id, learned at register and set by ChatRepository.
+	/** This console's home Host id, learned at register and set by ChatRepository.
 	 * Rides every relay so the Router routes to the right Host; null until learned. */
 	@Volatile
 	var homeSwitch: String? = null
 
 	/**
 	 * Direct CA-pinned GET to the API server with the SA token. Proves the tunnel
-	 * (TLS pinning, reachability, auth) works before the phone bridge is deployed.
+	 * (TLS pinning, reachability, auth) works before the console bridge is deployed.
 	 */
 	fun apiReachable(): String {
 		val req = Request.Builder()
@@ -155,10 +155,10 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 		}
 	}
 
-	/** Resolve the phone identity from the store. Throws a clear error when the
+	/** Resolve the console identity from the store. Throws a clear error when the
 	 * identity is absent (device not enrolled), so callers see "enroll first" rather
 	 * than a NullPointerException. */
-	private fun requirePhoneIdentity(): Crypto.Identity =
+	private fun requireConsoleIdentity(): Crypto.Identity =
 		store.loadIdentity() ?: error("This device is not enrolled. Scan evie's enroll-owner QR first.")
 
 	/** Resolve Switch keys by id. On first boot homeSwitch is null; register resolves
@@ -176,25 +176,25 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 			?: store.loadSwitchId().takeIf { it.isNotEmpty() }
 			?: error("Home host not yet known. Complete enrollment and connect first.")
 
-	/** Build a sealed PhoneRelayFrame for one op. Called fresh for every send,
+	/** Build a sealed ConsoleRelayFrame for one op. Called fresh for every send,
 	 * including retries, so each attempt uses a new ephemeral/nonce and the
 	 * server's replay guard never sees duplicate nonces. */
 	private fun buildSealedFrame(
-		op: PhoneOp,
+		op: ConsoleOp,
 		opId: String,
 		identity: Crypto.Identity,
 		hostBoxPub: String,
-	): PhoneRelayFrame {
-		val envelope = PhoneOpEnvelope(
+	): ConsoleRelayFrame {
+		val envelope = ConsoleOpEnvelope(
 			v = 1L,
 			conversationId = prov.conversationId,
 			device = prov.device,
 			at = System.currentTimeMillis(),
 			op = op,
 		)
-		val plaintext = wireJson.encodeToString(PhoneOpEnvelope.serializer(), envelope).toByteArray(Charsets.UTF_8)
+		val plaintext = wireJson.encodeToString(ConsoleOpEnvelope.serializer(), envelope).toByteArray(Charsets.UTF_8)
 		val cryptoEnv = Crypto.seal(plaintext, hostBoxPub, identity.sign.priv)
-		return PhoneRelayFrame(
+		return ConsoleRelayFrame(
 			v = 1L,
 			opId = opId,
 			signerSignPub = identity.sign.pub,
@@ -202,22 +202,22 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 		)
 	}
 
-	/** Unseal a reply envelope using the phone's box private key, verified against
+	/** Unseal a reply envelope using the console's box private key, verified against
 	 * the home host's signing public key. */
-	private fun unsealReply(sealed: SealedEnvelope, identity: Crypto.Identity, hostSignPub: String): PhoneReplyBody {
+	private fun unsealReply(sealed: SealedEnvelope, identity: Crypto.Identity, hostSignPub: String): ConsoleReplyBody {
 		val plain = Crypto.unseal(sealed.toCrypto(), identity.box.priv, hostSignPub)
-		return wireJson.decodeFromString<PhoneReplyBody>(plain.toString(Charsets.UTF_8))
+		return wireJson.decodeFromString<ConsoleReplyBody>(plain.toString(Charsets.UTF_8))
 	}
 
-	/** Send a phone op through the service-proxy to the phone bridge. Mutating ops
+	/** Send a console op through the service-proxy to the console bridge. Mutating ops
 	 * pass their own stable opId so a retry after a lost reply replays the cached
 	 * result server-side instead of running the op twice (the protocol contract).
 	 * A held op (long-poll) passes a read timeout above its server-side hold.
 	 *
 	 * Every call builds a fresh sealed frame so retries produce a new ephemeral/nonce
 	 * and the replay guard never rejects a legitimate retry. */
-	private fun relay(op: PhoneOp, opId: String = UUID.randomUUID().toString(), readTimeoutMs: Long? = null): PhoneReplyBody {
-		val identity = requirePhoneIdentity()
+	private fun relay(op: ConsoleOp, opId: String = UUID.randomUUID().toString(), readTimeoutMs: Long? = null): ConsoleReplyBody {
+		val identity = requireConsoleIdentity()
 		val switchId = resolveSwitchId()
 		val hostKeys = requireSwitchKeys(switchId)
 
@@ -225,8 +225,8 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 		val req = Request.Builder()
 			.url("$proxyBase/relay")
 			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Android-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(PhoneRelayFrame.serializer(), frame).toRequestBody(JSON))
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(wireJson.encodeToString(ConsoleRelayFrame.serializer(), frame).toRequestBody(JSON))
 			.build()
 		val callClient = if (readTimeoutMs != null) {
 			client.newBuilder().readTimeout(readTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS).build()
@@ -236,8 +236,8 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 		callClient.newCall(req).execute().use { resp ->
 			val text = resp.body?.string().orEmpty()
 			if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(500)}")
-			val reply = wireJson.decodeFromString<PhoneRelayReply>(text)
-			// Cleartext error path: phone not admitted or pre-seal failure; surface it
+			val reply = wireJson.decodeFromString<ConsoleRelayReply>(text)
+			// Cleartext error path: console not admitted or pre-seal failure; surface it
 			// so the UI can prompt enrollment rather than showing a generic network error.
 			if (reply.sealed == null) {
 				error(reply.error ?: "relay error (no sealed payload)")
@@ -247,7 +247,7 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 	}
 
 	/** Submit an owner enroll op directly to evie (the Domain root). evie answers
-	 * with an EnrollResult, not a phone_relay_reply: enroll ops are evie-direct and
+	 * with an EnrollResult, not a console_relay_reply: enroll ops are evie-direct and
 	 * never relayed to a Host, so they succeed even with no arbiter connected. A
 	 * bounce (offline / 501 / malformed) is surfaced as a failed EnrollResult. */
 	fun enroll(op: EnrollOp): EnrollResult {
@@ -255,7 +255,7 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 		val req = Request.Builder()
 			.url("$proxyBase/relay")
 			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Android-Bridge-Token", "Bearer ${prov.appToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
 			.post(wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON))
 			.build()
 		client.newCall(req).execute().use { resp ->
@@ -274,17 +274,17 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 	}
 
 	/** The reply's result payload decoded as T, or an error for a failed op. */
-	private inline fun <reified T> resultOf(body: PhoneReplyBody, op: String): T {
+	private inline fun <reified T> resultOf(body: ConsoleReplyBody, op: String): T {
 		if (!body.ok) error("$op failed: ${body.error ?: "unknown error"}")
 		val result = body.result ?: error("$op: no result")
 		return wireJson.decodeFromJsonElement(result)
 	}
 
 	/** Claim this device's mailbox. Returns the starting cursor + epoch. Carries this
-	 * build's identity so the arbiter logs which version/variant the phone runs. */
-	fun register(): PhoneRegisterResult = resultOf(
+	 * build's identity so the arbiter logs which version/variant the console runs. */
+	fun register(): ConsoleRegisterResult = resultOf(
 		relay(
-			PhoneOp.Register(
+			ConsoleOp.Register(
 				clientVersion = "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}",
 				clientVariant = if (BuildConfig.DEBUG) "debug" else "release",
 			),
@@ -297,12 +297,12 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 	 * Switch omits it, `localSwitchId` (this connection's Switch, learned at register)
 	 * is the fallback. Both empty leaves the name bare (single implicit Switch). */
 	fun teams(localSwitchId: String = ""): List<Team> {
-		val body = relay(PhoneOp.ListTeams)
+		val body = relay(ConsoleOp.ListTeams)
 		// Surface a relay failure instead of blanking the board with an empty list; the
 		// callers (connect, refreshTeams) wrap this in runCatching and keep the prior list.
 		if (!body.ok || body.result == null) error("list_teams relay failed: ${body.error ?: "no result"}")
 		val result =
-			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.PhoneListTeamsResult>(body.result)
+			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult>(body.result)
 		return result.teams.map {
 			val switchId = it.switchId?.ifEmpty { null } ?: localSwitchId
 			Team(
@@ -339,10 +339,10 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 				base64 = android.util.Base64.encodeToString(f.bytes, android.util.Base64.NO_WRAP),
 			)
 		}
-		val op = PhoneOp.Send(to = to, body = body, files = wireFiles.ifEmpty { null })
+		val op = ConsoleOp.Send(to = to, body = body, files = wireFiles.ifEmpty { null })
 		val replyBody = relay(op, opId)
 		val status = replyBody.result?.let {
-			runCatching { wireJson.decodeFromJsonElement<PhoneSendResult>(it).status }.getOrNull()
+			runCatching { wireJson.decodeFromJsonElement<ConsoleSendResult>(it).status }.getOrNull()
 		}
 		return SendResult(ok = replyBody.ok, status = status.orEmpty(), error = replyBody.error)
 	}
@@ -351,8 +351,8 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 	 * server long-polls: an empty mailbox holds the request open until a message
 	 * arrives or the hold expires, so delivery is near-instant at ~1 request per
 	 * hold window instead of constant fast polling. */
-	fun poll(cursor: Long, epoch: Long, holdMs: Long = 0): PhonePollResult {
-		val op = PhoneOp.Poll(cursor = cursor, epoch = epoch, holdMs = if (holdMs > 0) holdMs else null)
+	fun poll(cursor: Long, epoch: Long, holdMs: Long = 0): ConsolePollResult {
+		val op = ConsoleOp.Poll(cursor = cursor, epoch = epoch, holdMs = if (holdMs > 0) holdMs else null)
 		// Ordered timeout chain for a held poll: arbiter replies by holdMs (40s),
 		// evie's relay hold fires at 55s if the arbiter vanished, this read timeout
 		// at holdMs+18s (58s) catches a vanished evie, and the apiserver proxy's
@@ -363,7 +363,7 @@ class PhoneClient(private val prov: Provisioning, private val store: Provisionin
 		// a spurious epoch flip on the next real poll. Throw so the poll loop's catch
 		// counts the failure and shows the offline banner.
 		if (!body.ok || body.result == null) error("poll relay failed: ${body.error ?: "no result"}")
-		return wireJson.decodeFromJsonElement<PhonePollResult>(body.result)
+		return wireJson.decodeFromJsonElement<ConsolePollResult>(body.result)
 	}
 
 	companion object {

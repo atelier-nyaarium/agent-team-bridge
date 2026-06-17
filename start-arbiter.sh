@@ -40,7 +40,7 @@ print_qr() {
 	qr="$(docker logs switchboard 2>&1 | sed -n '/open Enroll by QR/,/Confirm this fingerprint/p')"
 	echo
 	if [ -n "$qr" ]; then
-		echo "Admit-host QR (scan with the owner phone, confirm the fingerprint):"
+		echo "Admit-host QR (scan with the owner console, confirm the fingerprint):"
 		echo "$qr"
 	else
 		echo "No admit-switch QR (Switch already admitted, or no BRIDGE_TOKEN set)."
@@ -94,7 +94,7 @@ purge() {
 	echo "Purge wipes this machine's arbiter setup back to nothing:"
 	echo "  - .env (SWITCH_ID, BRIDGE_TOKEN, owner pin)"
 	echo "  - volumes/arbiter (keypair, admissions, mailboxes)"
-	echo "Configure afterward mints a NEW keypair + admit-switch QR, so the owner phone"
+	echo "Configure afterward mints a NEW keypair + admit-switch QR, so the owner console"
 	echo "must re-scan to re-admit this Switch."
 	local ok; read -rp "Purge everything? [y/N]: " ok
 	[ "$ok" = y ] || return 0

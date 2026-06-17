@@ -4,7 +4,7 @@ import { EvieInboundFrameSchema, ToolCallFrameSchema } from "../shared/evie-prot
 ////////////////////////////////
 //  Evie bridge frame schemas
 //
-//  The boundary union evieClient parses inbound frames with. The phone_relay
+//  The boundary union evieClient parses inbound frames with. The console_relay
 //  member is deliberately loose (the relay pump owns full validation); the
 //  rest are exact decode shapes.
 
@@ -32,9 +32,9 @@ describe("evie inbound frame union", () => {
 		expect(result.success).toBe(true);
 	});
 
-	it("keeps phone_relay loose - the relay pump owns full validation", () => {
+	it("keeps console_relay loose - the relay pump owns full validation", () => {
 		const result = EvieInboundFrameSchema.safeParse({
-			type: "phone_relay",
+			type: "console_relay",
 			v: 1,
 			device: "pixel",
 			conversationId: "conv-1",
@@ -68,9 +68,9 @@ describe("tool_call frame", () => {
 		const frame = ToolCallFrameSchema.parse({
 			type: "tool_call",
 			callId: "c2",
-			action: "phone_relay_reply",
+			action: "console_relay_reply",
 			params: { opId: "op-1", ok: true },
 		});
-		expect(frame.action).toBe("phone_relay_reply");
+		expect(frame.action).toBe("console_relay_reply");
 	});
 });

@@ -1,6 +1,6 @@
 package com.atelier_nyaarium.switchboard.enroll
 
-import com.atelier_nyaarium.switchboard.PhoneClient
+import com.atelier_nyaarium.switchboard.ConsoleClient
 import com.atelier_nyaarium.switchboard.ProvisioningStore
 import com.atelier_nyaarium.switchboard.crypto.AdmissionCrypto
 import com.atelier_nyaarium.switchboard.crypto.Crypto
@@ -14,13 +14,13 @@ import java.util.Base64
  * Drives the three enrollment flows after the human has confirmed the scanned
  * payload's SAS. The owner device's identity (minted once, persisted) is the
  * Domain root: enroll-owner redeems with its public keys, and admit-switch /
- * authorize-phone sign an owner admission with its private signing key. The
+ * authorize-console sign an owner admission with its private signing key. The
  * signed artifacts are submitted to evie, which verifies them against the rooted
  * owner key (never trusting the wire).
  */
 class EnrollmentController(
 	private val store: ProvisioningStore,
-	private val client: PhoneClient,
+	private val client: ConsoleClient,
 ) {
 	private val random = SecureRandom()
 
@@ -34,18 +34,18 @@ class EnrollmentController(
 
 	/** Redeem evie's enroll-owner nonce, rooting the Domain at this device's keys. The
 	 * local rooted flag flips only on evie's ok, not on minting the keypair.
-	 * After rooting, self-submit a kind:"phone" admission so the arbiter can resolve
+	 * After rooting, self-submit a kind:"console" admission so the arbiter can resolve
 	 * this device's box key and seal replies back to it. A self-admission failure is
-	 * non-fatal: the owner can retry by scanning a future admit-phone QR. */
+	 * non-fatal: the owner can retry by scanning a future admit-console QR. */
 	fun redeemOwner(payload: EnrollmentPayload.EnrollOwner): EnrollResult {
 		val identity = ownerIdentity()
 		val result = client.enroll(EnrollOp.EnrollRedeem(payload.nonce, identity.sign.pub, identity.box.pub))
 		if (result.ok) {
 			store.federationRooted = true
-			// Self-admit the owner device as a phone so the arbiter resolves its boxPub.
+			// Self-admit the owner device as a console so the arbiter resolves its boxPub.
 			runCatching {
 				val selfAdmission = Admission(
-					kind = "phone",
+					kind = "console",
 					signPub = identity.sign.pub,
 					boxPub = identity.box.pub,
 					switchId = null,
@@ -85,11 +85,11 @@ class EnrollmentController(
 		return result
 	}
 
-	/** Owner-sign a phone admission for a second owner device and submit it. */
-	fun authorizePhone(payload: EnrollmentPayload.AuthorizePhone): EnrollResult {
+	/** Owner-sign a console admission for a second owner device and submit it. */
+	fun authorizeConsole(payload: EnrollmentPayload.AuthorizeConsole): EnrollResult {
 		val identity = requireOwner()
 		val admission = Admission(
-			kind = "phone",
+			kind = "console",
 			signPub = payload.signPub,
 			boxPub = payload.boxPub,
 			switchId = null,

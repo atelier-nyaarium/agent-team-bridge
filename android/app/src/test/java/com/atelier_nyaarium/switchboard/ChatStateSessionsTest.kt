@@ -116,7 +116,7 @@ class ChatStateSessionsTest {
 		// the session tail is the device name (qualified).
 		val localSwitchId = "switchboard"
 		val deviceName = "Pixel9"
-		// An agent sends to the phone's own session: conv:<conv>:switchboard/Pixel9
+		// An agent sends to the console's own session: conv:<conv>:switchboard/Pixel9
 		val sessionId = "conv:abc123:switchboard/Pixel9"
 		val sid = SessionId.parse(sessionId, localSwitchId)
 		assertNotNull(sid)
@@ -127,7 +127,7 @@ class ChatStateSessionsTest {
 
 	@Test
 	fun face4_sessionTailIsOtherTeam_targetNotLocal() {
-		// A normal agent->phone conversation: the session tail is the agent team,
+		// A normal agent->console conversation: the session tail is the agent team,
 		// not this device. The Face-4 branch must NOT fire.
 		val localSwitchId = "switchboard"
 		val deviceName = "Pixel9"

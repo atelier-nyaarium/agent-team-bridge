@@ -1,9 +1,9 @@
 package com.atelier_nyaarium.switchboard.proto
 
 /**
- * The phone's mailbox CONSUMPTION cursor: the epoch, the acked sequence, and the
+ * The console's mailbox CONSUMPTION cursor: the epoch, the acked sequence, and the
  * dropped-gap baseline, plus the transition rules (epoch flip, dedupe, gap delta,
- * fresh-set). The cursor is phone-OWNED and persisted (see MailboxSync); the arbiter
+ * fresh-set). The cursor is console-OWNED and persisted (see MailboxSync); the arbiter
  * never dictates it.
  *
  * Hand-authored twin of src/shared/sync-cursor.ts, kept equivalent by the shared vectors

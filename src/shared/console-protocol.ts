@@ -1,17 +1,17 @@
 import type { z } from "zod";
 import type {
+	ConsoleListTeamsResultSchema,
+	ConsoleOpEnvelopeSchema,
+	ConsoleOpResultSchema,
+	ConsoleOpSchema,
+	ConsolePollResultSchema,
+	ConsoleRegisterResultSchema,
+	ConsoleRelayFrameSchema,
+	ConsoleRelayReplySchema,
+	ConsoleReplyBodySchema,
+	ConsoleRespondResultSchema,
+	ConsoleSendResultSchema,
 	MailboxEntrySchema,
-	PhoneListTeamsResultSchema,
-	PhoneOpEnvelopeSchema,
-	PhoneOpResultSchema,
-	PhoneOpSchema,
-	PhonePollResultSchema,
-	PhoneRegisterResultSchema,
-	PhoneRelayFrameSchema,
-	PhoneRelayReplySchema,
-	PhoneReplyBodySchema,
-	PhoneRespondResultSchema,
-	PhoneSendResultSchema,
 	SealedEnvelopeSchema,
 } from "./schemas.js";
 // The session-id grammar constants are OWNED by session-id.ts now; imported for
@@ -22,73 +22,73 @@ import { CONV_SESSION_PREFIX, NOTICE_SESSION_PREFIX, SWITCH_QUALIFIER_SEP } from
 export { CONV_SESSION_PREFIX, NOTICE_SESSION_PREFIX, SWITCH_QUALIFIER_SEP };
 
 ////////////////////////////////
-//  Phone bridge protocol
+//  Console bridge protocol
 //
 //  The Android app reaches the arbiter through evie, which relays opaque
-//  envelopes between the phone connection and the existing arbiter<->evie
+//  envelopes between the console connection and the existing arbiter<->evie
 //  WebSocket. Evie understands none of these shapes; it pipes by (device, opId).
-//  All phone/chat semantics live in the arbiter.
+//  All console/chat semantics live in the arbiter.
 //
 //  The wire SHAPES live as zod schemas in shared/schemas.ts (the single
 //  truth); this module derives the TS types from them and owns the protocol
 //  CONSTANTS and session-id grammars. The Kotlin side consumes generated
 //  types + constants from scripts/codegen-kotlin.ts.
 
-export const PHONE_PROTOCOL_VERSION = 1;
+export const CONSOLE_PROTOCOL_VERSION = 1;
 
 ////////////////////////////////
-//  Ops (phone -> arbiter)
+//  Ops (console -> arbiter)
 
-export type PhoneOp = z.infer<typeof PhoneOpSchema>;
-export type PhoneOpKind = PhoneOp["kind"];
-export type PhoneRegisterOp = Extract<PhoneOp, { kind: "register" }>;
-export type PhoneListTeamsOp = Extract<PhoneOp, { kind: "list_teams" }>;
-export type PhoneSendOp = Extract<PhoneOp, { kind: "send" }>;
-export type PhoneRespondOp = Extract<PhoneOp, { kind: "respond" }>;
-export type PhonePollOp = Extract<PhoneOp, { kind: "poll" }>;
+export type ConsoleOp = z.infer<typeof ConsoleOpSchema>;
+export type ConsoleOpKind = ConsoleOp["kind"];
+export type ConsoleRegisterOp = Extract<ConsoleOp, { kind: "register" }>;
+export type ConsoleListTeamsOp = Extract<ConsoleOp, { kind: "list_teams" }>;
+export type ConsoleSendOp = Extract<ConsoleOp, { kind: "send" }>;
+export type ConsoleRespondOp = Extract<ConsoleOp, { kind: "respond" }>;
+export type ConsolePollOp = Extract<ConsoleOp, { kind: "poll" }>;
 
 ////////////////////////////////
 //  Relay frames (carried over the arbiter<->evie WebSocket)
 //
 //  The wire frame is sealed: only opId + signerSignPub are cleartext, the op rides
-//  inside `sealed` as a PhoneOpEnvelope. The arbiter opens the seal into an
-//  OpenedPhoneFrame (the flattened op + its verified signer) before dispatch, and
-//  seals a PhoneReplyBody back. evie sees neither.
+//  inside `sealed` as a ConsoleOpEnvelope. The arbiter opens the seal into an
+//  OpenedConsoleFrame (the flattened op + its verified signer) before dispatch, and
+//  seals a ConsoleReplyBody back. evie sees neither.
 
 export type SealedEnvelope = z.infer<typeof SealedEnvelopeSchema>;
-export type PhoneRelayFrame = z.infer<typeof PhoneRelayFrameSchema>;
-export type PhoneOpEnvelope = z.infer<typeof PhoneOpEnvelopeSchema>;
-export type PhoneRelayReply = z.infer<typeof PhoneRelayReplySchema>;
-export type PhoneReplyBody = z.infer<typeof PhoneReplyBodySchema>;
+export type ConsoleRelayFrame = z.infer<typeof ConsoleRelayFrameSchema>;
+export type ConsoleOpEnvelope = z.infer<typeof ConsoleOpEnvelopeSchema>;
+export type ConsoleRelayReply = z.infer<typeof ConsoleRelayReplySchema>;
+export type ConsoleReplyBody = z.infer<typeof ConsoleReplyBodySchema>;
 
-/** An inbound phone op AFTER the arbiter has opened + verified its seal: the
+/** An inbound console op AFTER the arbiter has opened + verified its seal: the
  * flattened op carried by the envelope plus the cleartext correlation/signer. The
  * handler operates on this, never on the raw sealed frame. */
-export interface OpenedPhoneFrame {
+export interface OpenedConsoleFrame {
 	opId: string;
 	signerSignPub: string;
 	conversationId: string;
 	device: string;
-	op: PhoneOp;
+	op: ConsoleOp;
 }
 
 ////////////////////////////////
-//  Op results (arbiter -> phone)
+//  Op results (arbiter -> console)
 
-export type PhoneRegisterResult = z.infer<typeof PhoneRegisterResultSchema>;
-export type PhoneListTeamsResult = z.infer<typeof PhoneListTeamsResultSchema>;
-export type PhoneSendResult = z.infer<typeof PhoneSendResultSchema>;
-export type PhoneRespondResult = z.infer<typeof PhoneRespondResultSchema>;
-export type PhonePollResult = z.infer<typeof PhonePollResultSchema>;
-export type PhoneOpResult = z.infer<typeof PhoneOpResultSchema>;
+export type ConsoleRegisterResult = z.infer<typeof ConsoleRegisterResultSchema>;
+export type ConsoleListTeamsResult = z.infer<typeof ConsoleListTeamsResultSchema>;
+export type ConsoleSendResult = z.infer<typeof ConsoleSendResultSchema>;
+export type ConsoleRespondResult = z.infer<typeof ConsoleRespondResultSchema>;
+export type ConsolePollResult = z.infer<typeof ConsolePollResultSchema>;
+export type ConsoleOpResult = z.infer<typeof ConsoleOpResultSchema>;
 
 ////////////////////////////////
 //  Session-id grammars
 //
 //  Two grammars cross the language boundary; both constants are emitted into
-//  the generated Kotlin so the phone never hand-mirrors them.
+//  the generated Kotlin so the console never hand-mirrors them.
 
-// Broadcast notices: the phone parses the sender out of the session id to
+// Broadcast notices: the console parses the sender out of the session id to
 // thread the notice under the sender's name. Never respondable.
 export function noticeSessionId(from: string): string {
 	return `${NOTICE_SESSION_PREFIX}${from}`;
@@ -100,7 +100,7 @@ export function parseNoticeSession(sessionId: string): string | null {
 }
 
 // Channel conversations: one string serves as the pending-job store key, the
-// wire session_id, and the phone's thread-attribution tail-parse. The tail
+// wire session_id, and the console's thread-attribution tail-parse. The tail
 // after the LAST colon is the target team (conversation ids never contain
 // colons; team names may not either, but last-colon parsing matches the
 // Kotlin client's substringAfterLast).
@@ -117,13 +117,13 @@ export function parseConvSessionTeam(sessionId: string): string | null {
 ////////////////////////////////
 //  Switch qualification
 //
-//  A session's address is host-qualified as `<switchId>/<name>` so the phone (and,
+//  A session's address is host-qualified as `<switchId>/<name>` so the console (and,
 //  in later federation phases, evie) can tell two Switches' identically-named
 //  sessions apart. A BARE name (no separator) resolves to the local Switch: the
 //  arbiter canonicalizes an inbound target to the qualified form before keying
-//  the channel job, and the phone normalizes a bare name off the wire to its
+//  the channel job, and the console normalizes a bare name off the wire to its
 //  connected Switch. The separator is emitted into the generated Kotlin so the
-//  phone never hand-mirrors it. Switch ids and local names never contain the
+//  console never hand-mirrors it. Switch ids and local names never contain the
 //  separator, so the FIRST separator splits Switch id from name unambiguously.
 
 /** Qualify a bare local name under a Switch id; a name that is already qualified

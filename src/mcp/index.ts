@@ -39,7 +39,7 @@ const CHANNEL_INSTRUCTIONS = [
 	"When finished, call the channel_reply tool with the session_id from the tag attributes.",
 ].join(" ");
 
-/** Random 6-char id for an unnamed peer session. The phone gives it a friendly label. */
+/** Random 6-char id for an unnamed peer session. The console gives it a friendly label. */
 function randomTeamId(): string {
 	return crypto.randomBytes(3).toString("hex");
 }
@@ -47,9 +47,9 @@ function randomTeamId(): string {
 export async function startMcp(): Promise<void> {
 	const inContainer = isInsideContainer();
 	// The orchestrator is the single host session started by start-host-daemon (it sets the
-	// flag); it stays the reserved, phone-hidden coordinator. Every other session is a bridge
+	// flag); it stays the reserved, console-hidden coordinator. Every other session is a bridge
 	// peer: a devcontainer (PROJECT_NAME set) or a host/ad-hoc Claude that joins under a random
-	// id the phone can rename. Peers reach the arbiter on the docker network inside a container
+	// id the console can rename. Peers reach the arbiter on the docker network inside a container
 	// or the forwarded localhost port elsewhere.
 	const isOrchestrator = !inContainer && !!process.env.SWITCHBOARD_ORCHESTRATOR;
 	if (!isOrchestrator) {

@@ -26,14 +26,14 @@ sealed class EnrollmentPayload {
 
 	data class AdmitSwitch(val switchId: String, val signPub: String, val boxPub: String) : EnrollmentPayload()
 
-	data class AuthorizePhone(val domainId: String, val signPub: String, val boxPub: String) : EnrollmentPayload()
+	data class AuthorizeConsole(val domainId: String, val signPub: String, val boxPub: String) : EnrollmentPayload()
 
 	/** The short authentication string: the fingerprint of the key being trusted. */
 	fun sas(): String =
 		when (this) {
 			is EnrollOwner -> Crypto.fingerprint(evieSignPub)
 			is AdmitSwitch -> Crypto.fingerprint(signPub)
-			is AuthorizePhone -> Crypto.fingerprint(signPub)
+			is AuthorizeConsole -> Crypto.fingerprint(signPub)
 		}
 }
 
@@ -61,12 +61,12 @@ fun parseEnrollmentPayload(raw: String): EnrollmentPayload? {
 			if (switchId == null || signPub == null || boxPub == null) null
 			else EnrollmentPayload.AdmitSwitch(switchId, signPub, boxPub)
 		}
-		"authorize-phone" -> {
+		"authorize-console" -> {
 			val domainId = field(obj, "domainId")
 			val signPub = b64Field(obj, "signPub")
 			val boxPub = b64Field(obj, "boxPub")
 			if (domainId == null || signPub == null || boxPub == null) null
-			else EnrollmentPayload.AuthorizePhone(domainId, signPub, boxPub)
+			else EnrollmentPayload.AuthorizeConsole(domainId, signPub, boxPub)
 		}
 		else -> null
 	}

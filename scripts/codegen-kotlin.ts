@@ -5,11 +5,11 @@
 //   bun scripts/codegen-kotlin.ts
 //
 // Emission rules:
-// - Sealed classes ONLY for encode-side discriminated unions (the phone
+// - Sealed classes ONLY for encode-side discriminated unions (the console
 //   composes them, closure is safe). The list is hardcoded below. Everything
-//   else the phone DECODES stays forward-compatible: enums emit as open
+//   else the console DECODES stays forward-compatible: enums emit as open
 //   String, unknown discriminator values can never throw.
-// - Non-discriminated unions (PhoneOpResult) emit as JsonElement; the per-op
+// - Non-discriminated unions (ConsoleOpResult) emit as JsonElement; the per-op
 //   decode mapping stays in client code, correlated by opId.
 // - integer -> Long (at/seq/cursor are epoch-ms and monotonic counters),
 //   record/unknown -> JsonObject/JsonElement, optional -> nullable = null.
@@ -28,26 +28,26 @@ import {
 	SignedAdmissionSchema,
 	SignedRevocationSchema,
 } from "../src/shared/admission.js";
-import { EnrollOpSchema, EnrollResultSchema } from "../src/shared/enrollment.js";
 import {
+	CONSOLE_PROTOCOL_VERSION,
 	CONV_SESSION_PREFIX,
 	NOTICE_SESSION_PREFIX,
-	PHONE_PROTOCOL_VERSION,
 	SWITCH_QUALIFIER_SEP,
-} from "../src/shared/phone-protocol.js";
+} from "../src/shared/console-protocol.js";
+import { EnrollOpSchema, EnrollResultSchema } from "../src/shared/enrollment.js";
 import {
 	ChannelFileSchema,
+	ConsoleListTeamsResultSchema,
+	ConsoleOpEnvelopeSchema,
+	ConsoleOpSchema,
+	ConsolePollResultSchema,
+	ConsoleRegisterResultSchema,
+	ConsoleRelayFrameSchema,
+	ConsoleRelayReplySchema,
+	ConsoleReplyBodySchema,
+	ConsoleRespondResultSchema,
+	ConsoleSendResultSchema,
 	MailboxEntrySchema,
-	PhoneListTeamsResultSchema,
-	PhoneOpEnvelopeSchema,
-	PhoneOpSchema,
-	PhonePollResultSchema,
-	PhoneRegisterResultSchema,
-	PhoneRelayFrameSchema,
-	PhoneRelayReplySchema,
-	PhoneReplyBodySchema,
-	PhoneRespondResultSchema,
-	PhoneSendResultSchema,
 	ProvisioningSchema,
 	TeamInfoSchema,
 } from "../src/shared/schemas.js";
@@ -66,16 +66,16 @@ const ROOTS: z.ZodType[] = [
 	ChannelFileSchema,
 	TeamInfoSchema,
 	MailboxEntrySchema,
-	PhoneOpSchema,
-	PhoneOpEnvelopeSchema,
-	PhoneRelayFrameSchema,
-	PhoneRelayReplySchema,
-	PhoneReplyBodySchema,
-	PhoneRegisterResultSchema,
-	PhoneListTeamsResultSchema,
-	PhoneSendResultSchema,
-	PhoneRespondResultSchema,
-	PhonePollResultSchema,
+	ConsoleOpSchema,
+	ConsoleOpEnvelopeSchema,
+	ConsoleRelayFrameSchema,
+	ConsoleRelayReplySchema,
+	ConsoleReplyBodySchema,
+	ConsoleRegisterResultSchema,
+	ConsoleListTeamsResultSchema,
+	ConsoleSendResultSchema,
+	ConsoleRespondResultSchema,
+	ConsolePollResultSchema,
 	ProvisioningSchema,
 	SttsProvidersSchema,
 	AdmissionSchema,
@@ -89,9 +89,9 @@ const ROOTS: z.ZodType[] = [
 // Encode-side discriminated unions that may emit as sealed classes. Anything
 // not listed emits open (decode-side rule). Maps schema id -> nothing needed;
 // the discriminator key is read from zod internals. EnrollOp is composed by the
-// phone (owner enroll requests), so closure is safe; the scanned EnrollmentPayload
+// console (owner enroll requests), so closure is safe; the scanned EnrollmentPayload
 // is DECODED and stays hand-parsed (forward-compatible) in the Android client.
-const SEALED_ROOTS = new Set(["PhoneOp", "EnrollOp"]);
+const SEALED_ROOTS = new Set(["ConsoleOp", "EnrollOp"]);
 
 ////////////////////////////////
 //  zod -> cleaned JSON Schema (evie's conversion hygiene)
@@ -319,20 +319,20 @@ for (const name of order) {
 	}
 }
 
-const header = `// generated from src/shared/schemas.ts + src/shared/phone-protocol.ts - DO NOT EDIT.
+const header = `// generated from src/shared/schemas.ts + src/shared/console-protocol.ts - DO NOT EDIT.
 // Regenerate: bun scripts/codegen-kotlin.ts
 //
 // Decode with Json { ignoreUnknownKeys = true } (the additive-protocol
-// posture). Enum-like fields are open Strings on purpose: the phone must
+// posture). Enum-like fields are open Strings on purpose: the console must
 // tolerate values newer than this build.
 //
 // ENCODE config is load-bearing: the default Json (encodeDefaults = false)
 // omits null-defaulted optionals, which is exactly what the arbiter's zod
 // schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
-// is ever enabled (e.g. to emit a defaulted const like PhoneRelayFrame.type),
-// it MUST pair with explicitNulls = false. Note the phone's POST body is the
+// is ever enabled (e.g. to emit a defaulted const like ConsoleRelayFrame.type),
+// it MUST pair with explicitNulls = false. Note the console's POST body is the
 // op-only envelope {device, conversationId, opId, op}; evie composes the full
-// phone_relay frame, so PhoneRelayFrame is decode-side here.
+// console_relay frame, so ConsoleRelayFrame is decode-side here.
 @file:Suppress("unused")
 
 package com.atelier_nyaarium.switchboard.proto
@@ -345,7 +345,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
 object Protocol {
-${INDENT}const val PHONE_PROTOCOL_VERSION: Int = ${PHONE_PROTOCOL_VERSION}
+${INDENT}const val CONSOLE_PROTOCOL_VERSION: Int = ${CONSOLE_PROTOCOL_VERSION}
 
 ${INDENT}/** Session-id prefix for broadcast notices; the sender follows it. */
 ${INDENT}const val NOTICE_SESSION_PREFIX: String = ${kotlinString(NOTICE_SESSION_PREFIX)}

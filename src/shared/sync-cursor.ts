@@ -1,17 +1,17 @@
 ////////////////////////////////
 //  Mailbox sync cursor value object
 //
-//  The single owner of the phone's mailbox CONSUMPTION state: the epoch, the acked
+//  The single owner of the console's mailbox CONSUMPTION state: the epoch, the acked
 //  sequence, and the dropped-gap baseline. It owns the TRANSITION RULES (how a poll
 //  result advances the cursor, how an epoch flip resets it, which entries are genuinely
-//  fresh, whether a gap opened) so the two runtimes (this arbiter-side TS and the phone's
+//  fresh, whether a gap opened) so the two runtimes (this arbiter-side TS and the console's
 //  Kotlin twin) cannot disagree about consumption the way they disagreed about the
 //  address before SessionId.
 //
-//  Invariant: the cursor is PHONE-OWNED and DURABLE. The arbiter never dictates it; the
-//  arbiter's register returns the epoch + an informational high-water only, and the phone
-//  keeps its own cursor across restarts (MailboxSync, phone side). advance() is PURE - the
-//  phone renders and persists threads FIRST, then commits the cursor LAST, so a crash
+//  Invariant: the cursor is CONSOLE-OWNED and DURABLE. The arbiter never dictates it; the
+//  arbiter's register returns the epoch + an informational high-water only, and the console
+//  keeps its own cursor across restarts (MailboxSync, console side). advance() is PURE - the
+//  console renders and persists threads FIRST, then commits the cursor LAST, so a crash
 //  between the two re-delivers (dedupe absorbs) rather than skips (red-team F1).
 //
 //  The Kotlin twin lives at android/.../proto/SyncCursor.kt; the two are held equivalent
@@ -41,7 +41,7 @@ export interface SyncAdvance<E extends SyncEntry = SyncEntry> {
 	gap: boolean;
 }
 
-/** The poll-op params the cursor produces; the ONLY producer, so the phone cannot
+/** The poll-op params the cursor produces; the ONLY producer, so the console cannot
  *  hand-build a {cursor, epoch} pair. */
 export interface PollParams {
 	cursor: number;

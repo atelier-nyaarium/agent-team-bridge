@@ -1,13 +1,13 @@
 {
-	"_comment": "Single inventory of the golden protocol fixtures. BOTH test suites (vitest protocol-fixtures.test.ts and Android ProtocolFixturesTest.kt) iterate this file, so a fixture cannot be covered by one runtime and forgotten by the other. schema names the parse target; expect is pass or fail. Phone ops are sealed on the wire: the op shapes are pinned at the PhoneOpEnvelope (the sealed inner body), the wire frame is PhoneRelayFrame (opaque sealed blob), and a reply's per-op result is pinned at PhoneReplyBody (the sealed inner reply).",
+	"_comment": "Single inventory of the golden protocol fixtures. BOTH test suites (vitest protocol-fixtures.test.ts and Android ProtocolFixturesTest.kt) iterate this file, so a fixture cannot be covered by one runtime and forgotten by the other. schema names the parse target; expect is pass or fail. Console ops are sealed on the wire: the op shapes are pinned at the ConsoleOpEnvelope (the sealed inner body), the wire frame is ConsoleRelayFrame (opaque sealed blob), and a reply's per-op result is pinned at ConsoleReplyBody (the sealed inner reply).",
 	"fixtures": [
-		{ "file": "op-envelope-register.json", "schema": "PhoneOpEnvelope", "expect": "pass" },
-		{ "file": "op-envelope-list-teams.json", "schema": "PhoneOpEnvelope", "expect": "pass" },
-		{ "file": "op-envelope-send.json", "schema": "PhoneOpEnvelope", "expect": "pass" },
-		{ "file": "op-envelope-send-qualified.json", "schema": "PhoneOpEnvelope", "expect": "pass" },
-		{ "file": "op-envelope-respond.json", "schema": "PhoneOpEnvelope", "expect": "pass" },
-		{ "file": "op-envelope-poll.json", "schema": "PhoneOpEnvelope", "expect": "pass" },
-		{ "file": "frame-sealed.json", "schema": "PhoneRelayFrame", "expect": "pass" },
+		{ "file": "op-envelope-register.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
+		{ "file": "op-envelope-list-teams.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
+		{ "file": "op-envelope-send.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
+		{ "file": "op-envelope-send-qualified.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
+		{ "file": "op-envelope-respond.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
+		{ "file": "op-envelope-poll.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
+		{ "file": "frame-sealed.json", "schema": "ConsoleRelayFrame", "expect": "pass" },
 		{ "file": "mailbox-message.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "mailbox-reply.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "mailbox-notice.json", "schema": "MailboxEntry", "expect": "pass" },
@@ -15,13 +15,13 @@
 		{ "file": "mailbox-reply-files.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "tolerance-extra-field.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "invalid-missing-required.json", "schema": "MailboxEntry", "expect": "fail" },
-		{ "file": "poll-result.json", "schema": "PhonePollResult", "expect": "pass" },
-		{ "file": "reply-body.json", "schema": "PhoneReplyBody", "expect": "pass" },
-		{ "file": "relay-reply.json", "schema": "PhoneRelayReply", "expect": "pass" },
-		{ "file": "relay-reply-error.json", "schema": "PhoneRelayReply", "expect": "pass" },
-		{ "file": "register-result.json", "schema": "PhoneRegisterResult", "expect": "pass" },
-		{ "file": "register-result-switch.json", "schema": "PhoneRegisterResult", "expect": "pass" },
-		{ "file": "send-result.json", "schema": "PhoneSendResult", "expect": "pass" },
-		{ "file": "list-teams-result.json", "schema": "PhoneListTeamsResult", "expect": "pass" }
+		{ "file": "poll-result.json", "schema": "ConsolePollResult", "expect": "pass" },
+		{ "file": "reply-body.json", "schema": "ConsoleReplyBody", "expect": "pass" },
+		{ "file": "relay-reply.json", "schema": "ConsoleRelayReply", "expect": "pass" },
+		{ "file": "relay-reply-error.json", "schema": "ConsoleRelayReply", "expect": "pass" },
+		{ "file": "register-result.json", "schema": "ConsoleRegisterResult", "expect": "pass" },
+		{ "file": "register-result-switch.json", "schema": "ConsoleRegisterResult", "expect": "pass" },
+		{ "file": "send-result.json", "schema": "ConsoleSendResult", "expect": "pass" },
+		{ "file": "list-teams-result.json", "schema": "ConsoleListTeamsResult", "expect": "pass" }
 	]
 }

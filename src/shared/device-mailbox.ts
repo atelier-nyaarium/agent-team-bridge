@@ -1,4 +1,4 @@
-import type { MailboxEntry, MailboxInput } from "./phone-protocol.js";
+import type { MailboxEntry, MailboxInput } from "./console-protocol.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -11,7 +11,7 @@ export interface MailboxSnapshot {
 }
 
 /** A box's full serializable state for durability across an arbiter restart. The epoch is
- * preserved on reload so the phone's persisted cursor still matches (no spurious flip). */
+ * preserved on reload so the console's persisted cursor still matches (no spurious flip). */
 export interface MailboxSnapshotState {
 	epoch: number;
 	nextSeq: number;
@@ -32,7 +32,7 @@ export interface MailboxSnapshotState {
 // The cap is the OOM BACKSTOP, not the primary compactor: the watermark
 // (trimToMinCursor) removes entries every device has acked on each drain, so a
 // regularly-polled inbox stays small regardless of the cap. The cap only bounds
-// UNACKED accumulation for a dark/slow device, so it is generous - a slow phone
+// UNACKED accumulation for a dark/slow device, so it is generous - a slow console
 // keeps its mail instead of silently losing it to LRU (the dropped-gap bug). An
 // eviction here is logged, since it is now an exceptional backstop event.
 const DEFAULT_MAX_ENTRIES = 10_000;
@@ -51,10 +51,10 @@ function entryBytes(input: MailboxInput): number {
 	return n;
 }
 
-/** Random positive Int31 (the phone parses epoch as a signed 32-bit int). The
- * phone only compares epochs for equality, so what matters is that a mailbox
- * instance from a restarted arbiter can never re-mint an epoch a phone still
- * holds from the previous process. A counter base did exactly that: the phone
+/** Random positive Int31 (the console parses epoch as a signed 32-bit int). The
+ * console only compares epochs for equality, so what matters is that a mailbox
+ * instance from a restarted arbiter can never re-mint an epoch a console still
+ * holds from the previous process. A counter base did exactly that: the console
  * could not detect the new instance, its stale cursor acked away every fresh
  * entry, and its seq dedupe silently ate the rest. */
 function mintEpoch(): number {
@@ -65,16 +65,16 @@ function mintEpoch(): number {
 //  Class
 
 /**
- * Per-device inbound queue drained by the phone's poll op. There is no live
- * socket to the phone, so delivery (agent message or reply) is always an append
- * here; the phone catches up by polling. Append assigns a monotonic seq used as
+ * Per-device inbound queue drained by the console's poll op. There is no live
+ * socket to the console, so delivery (agent message or reply) is always an append
+ * here; the console catches up by polling. Append assigns a monotonic seq used as
  * the poll cursor. When the queue exceeds maxEntries the oldest entries are
- * evicted and counted in `dropped`, so a phone that polls too slowly can detect
+ * evicted and counted in `dropped`, so a console that polls too slowly can detect
  * the gap.
  *
  * `epoch` distinguishes one mailbox instance from a later one created for the
  * same conversation after eviction. Seq restarts at 1 in a new instance, so a
- * phone holding a stale (larger) cursor must reset it when the epoch changes;
+ * console holding a stale (larger) cursor must reset it when the epoch changes;
  * otherwise its cursor would silently ack away the new instance's first entries.
  */
 export class DeviceMailbox {
@@ -90,9 +90,9 @@ export class DeviceMailbox {
 	// only to min(consumerCursors), so a faster device cannot ack away entries a
 	// slower device of the same recipient has not yet drained. Persisted.
 	private consumerCursors = new Map<string, number>();
-	// session ids this device received, so the phone may only respond to a thread
+	// session ids this device received, so the console may only respond to a thread
 	// actually delivered to it. Durable (in the snapshot) so respondability survives
-	// a restart, instead of the phone being told "Unknown session_id" after a deploy.
+	// a restart, instead of the console being told "Unknown session_id" after a deploy.
 	private respondableSessions = new Set<string>();
 	private maxEntries: number;
 	private maxBytes: number;
@@ -147,7 +147,7 @@ export class DeviceMailbox {
 		if (evicted > 0) {
 			// The watermark is the primary compactor; the cap is an OOM backstop. An
 			// eviction here means a device fell far enough behind to drop UNACKED mail
-			// (a real gap the phone will see), so it is logged, not silent.
+			// (a real gap the console will see), so it is logged, not silent.
 			console.warn(
 				`[mailbox] OOM backstop evicted ${evicted} unacked entr${evicted === 1 ? "y" : "ies"} (dropped total ${this.dropped})`,
 			);
@@ -196,7 +196,7 @@ export class DeviceMailbox {
 	/**
 	 * Ack everything at or below `cursor`, then return the entries above it
 	 * without removing them. Returned entries are dropped on the next drain whose
-	 * cursor covers them, giving at-least-once delivery (the phone dedupes by seq).
+	 * cursor covers them, giving at-least-once delivery (the console dedupes by seq).
 	 *
 	 * Acking is epoch-gated: a cursor is only honored when `epoch` matches this
 	 * instance, because seq restarts at 1 in each instance, so a cursor carried
@@ -205,13 +205,13 @@ export class DeviceMailbox {
 	 * is omitted, fall back to a magnitude guard (only ack within range).
 	 *
 	 * `dropped` is a cumulative total, never reset server-side: a poll response
-	 * lost in transit cannot hide a gap. The phone detects new gaps by comparing
+	 * lost in transit cannot hide a gap. The console detects new gaps by comparing
 	 * against the previous total (or by any non-contiguous seq jump).
 	 */
 	drain(cursor = 0, epoch?: number, consumerId?: string): MailboxSnapshot {
 		// A cursor beyond highWater is proof of a stale instance no matter what
 		// the epoch claims (this instance never issued it); honoring it would ack
-		// away entries the phone has never seen.
+		// away entries the console has never seen.
 		const epochOk = (epoch === undefined || epoch === this.epoch) && cursor <= this.highWater;
 		if (cursor > 0 && epochOk) {
 			if (consumerId !== undefined) {
@@ -293,7 +293,7 @@ export class DeviceMailbox {
 	}
 
 	/** Serializable state for durability. Held polls (waiters) are transient and omitted;
-	 * the phone simply re-polls after the restart. */
+	 * the console simply re-polls after the restart. */
 	snapshot(): MailboxSnapshotState {
 		return {
 			epoch: this.epoch,
@@ -307,7 +307,7 @@ export class DeviceMailbox {
 		};
 	}
 
-	/** Rebuild a box from a snapshot, keeping its epoch + seq so the phone resumes without
+	/** Rebuild a box from a snapshot, keeping its epoch + seq so the console resumes without
 	 * a spurious epoch flip and without re-seeing acked entries. */
 	static fromSnapshot(
 		s: MailboxSnapshotState,
@@ -390,7 +390,7 @@ export class DeviceMailboxStore {
 		return out;
 	}
 
-	/** Re-hydrate mailboxes on boot. A box that beat the load (a phone polled before the
+	/** Re-hydrate mailboxes on boot. A box that beat the load (a console polled before the
 	 * restore ran) wins, so a live epoch is never replaced by a stale snapshot. */
 	restore(data: Record<string, MailboxSnapshotState>): void {
 		for (const [conv, s] of Object.entries(data)) {

@@ -17,7 +17,7 @@
 //  The Kotlin twin lives at android/.../proto/SessionId.kt; the two are kept
 //  equivalent by the shared vectors in tests/fixtures/session-id/vectors.json,
 //  read by both runtimes. This module OWNS the session-id grammar constants below;
-//  phone-protocol.ts re-exports them for its wire helpers, and codegen emits them
+//  console-protocol.ts re-exports them for its wire helpers, and codegen emits them
 //  into Protocol.kt (the Kotlin twin reads them from there).
 
 ////////////////////////////////
@@ -121,7 +121,7 @@ export class SessionId {
 //  Class: NoticeId
 
 /** A broadcast notice session id, scoped to its sender. Never respondable, so it
- * has no conversation; the phone threads the notice under the sender. */
+ * has no conversation; the console threads the notice under the sender. */
 export class NoticeId {
 	private constructor(readonly sender: TeamAddress) {}
 

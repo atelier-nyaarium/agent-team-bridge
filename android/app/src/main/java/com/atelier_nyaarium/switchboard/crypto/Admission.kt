@@ -7,7 +7,7 @@ import com.atelier_nyaarium.switchboard.proto.SignedRevocation
 
 /**
  * Owner-signed admission / revocation, the byte-exact Kotlin counterpart of
- * switchboard's `src/shared/admission.ts`. The owner device (this phone) signs
+ * switchboard's `src/shared/admission.ts`. The owner device (this console) signs
  * admissions that Hosts and evie verify, so the canonical signing bytes - a
  * versioned, newline-joined, fixed-order encoding - must reproduce exactly. The
  * cross-platform vector in AdmissionTest pins it. Never sign raw JSON.

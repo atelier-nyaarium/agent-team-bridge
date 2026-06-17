@@ -8,7 +8,7 @@ import { SttsProvidersSchema } from "../shared/stts-providers.js";
 //
 //  The asset ships in the APK but is schema-checked here on every push, so a
 //  malformed provider edit fails CI instead of breaking Play silently on the
-//  phone. Also asserts the template invariant the substitution engine relies
+//  console. Also asserts the template invariant the substitution engine relies
 //  on: each request carries exactly one "$text" somewhere.
 
 const ASSET = path.join(__dirname, "../../android/app/src/main/assets/stts-providers.json");

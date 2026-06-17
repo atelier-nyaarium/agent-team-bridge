@@ -9,6 +9,9 @@ import { resolveLocalSwitchId } from "../shared/host-id.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
+import { createConsoleHandler } from "./console/consoleHandler.js";
+import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer.js";
+import { createConsoleRelayPump } from "./console/relayPump.js";
 import { startEvieClient } from "./evie/evieClient.js";
 import { startPortForward } from "./evie/portForward.js";
 import { Allowlist } from "./federation/allowlist.js";
@@ -17,9 +20,6 @@ import { createSwitchRelayHandler, createSwitchRelayPump } from "./federation/ho
 import { loadOrCreateIdentity } from "./federation/identity.js";
 import { ReplayGuard } from "./federation/replayGuard.js";
 import { createSealer, type Sealer } from "./federation/sealer.js";
-import { createPhoneHandler } from "./phone/phoneHandler.js";
-import { createPhoneSealer, type PhoneSealer } from "./phone/phoneSealer.js";
-import { createPhoneRelayPump } from "./phone/relayPump.js";
 import { createRoutes } from "./routes.js";
 import { WakeCoordinator } from "./wake.js";
 import { createWebSocketHandlers, type WsData } from "./websocket.js";
@@ -52,16 +52,16 @@ export async function startArbiter(): Promise<void> {
 	const offlineCatalog = new Map<string, string>();
 	const wakeCoordinator = new WakeCoordinator();
 
-	// Phone bridge: per-install mailboxes drained by the phone's poll op. The
+	// Console bridge: per-install mailboxes drained by the console's poll op. The
 	// handler is constructed after routes exist; relay frames arriving before
-	// that are dropped (the phone re-polls).
+	// that are dropped (the console re-polls).
 	const mailboxStore = new DeviceMailboxStore();
 	// Takes unknown: the relay pump owns the full frame validation.
-	let handlePhoneRelay: ((frame: unknown) => void) | null = null;
+	let handleConsoleRelay: ((frame: unknown) => void) | null = null;
 	// Cross-Switch frames the Router switched to this Switch; the switch-relay pump owns
 	// full validation.
 	let handleSwitchRelay: ((frame: unknown) => void) | null = null;
-	let evictPhonePeer: ((conversationId: string) => void) | null = null;
+	let evictConsolePeer: ((conversationId: string) => void) | null = null;
 
 	store.startCleanup();
 	mailboxStore.startCleanup();
@@ -69,7 +69,7 @@ export async function startArbiter(): Promise<void> {
 	// Durability: the in-memory delivery state otherwise vanishes on a restart/deploy -
 	// 404ing a reply ("no pending request") and losing queued mail. Snapshot the
 	// persistent job anchors + the device mailboxes (each box keeps its epoch, so the
-	// phone's durable cursor still matches) to /app/log (a bind-mount that survives the
+	// console's durable cursor still matches) to /app/log (a bind-mount that survives the
 	// container rebuild); reload on boot; re-save on a timer and on shutdown.
 	const jobsDurable = new DurableStore(path.dirname(LOG_PATH), "pending-jobs");
 	const mailboxDurable = new DurableStore(path.dirname(LOG_PATH), "mailboxes");
@@ -154,7 +154,7 @@ export async function startArbiter(): Promise<void> {
 
 	let evieClient: ReturnType<typeof startEvieClient> | null = null;
 	let sealer: Sealer | null = null;
-	let phoneSealer: PhoneSealer | null = null;
+	let consoleSealer: ConsoleSealer | null = null;
 
 	if (evieAuthToken) {
 		// Load this Switch's federation identity + mirrored allowlist from its volume,
@@ -179,9 +179,9 @@ export async function startArbiter(): Promise<void> {
 		}
 		replayPersist = () => replayDurable.save(replayGuard.snapshot());
 		sealer = createSealer(identity, allowlist, localSwitchId, replayGuard);
-		// The phone channel rides the SAME durable replay guard + allowlist: a phone
-		// frame is sealed to this arbiter and signed by an admitted phone key.
-		phoneSealer = createPhoneSealer(identity, allowlist, replayGuard);
+		// The console channel rides the SAME durable replay guard + allowlist: a console
+		// frame is sealed to this arbiter and signed by an admitted console key.
+		consoleSealer = createConsoleSealer(identity, allowlist, replayGuard);
 		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);
 		// Not admitted yet: print the admit-switch QR so the owner can scan this Switch
 		// into the Domain. Once admitted (mirrored from evie), this falls silent.
@@ -202,8 +202,8 @@ export async function startArbiter(): Promise<void> {
 			url: `ws://localhost:${evieLocalPort}`,
 			authToken: evieAuthToken,
 			switchId: localSwitchId,
-			onPhoneRelay: (frame) => {
-				handlePhoneRelay?.(frame);
+			onConsoleRelay: (frame) => {
+				handleConsoleRelay?.(frame);
 			},
 			onSwitchRelay: (frame) => {
 				handleSwitchRelay?.(frame);
@@ -255,7 +255,7 @@ export async function startArbiter(): Promise<void> {
 		offlineCatalog,
 		wakeCoordinator,
 		onVirtualPeerEvicted: (conversationId) => {
-			evictPhonePeer?.(conversationId);
+			evictConsolePeer?.(conversationId);
 		},
 	});
 
@@ -274,7 +274,7 @@ export async function startArbiter(): Promise<void> {
 	});
 
 	if (evieClient) {
-		const phoneHandler = createPhoneHandler({
+		const consoleHandler = createConsoleHandler({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -282,13 +282,13 @@ export async function startArbiter(): Promise<void> {
 			localSwitchId,
 			isProjectName: (name) => offlineCatalog.has(name) || knownTeamPaths.has(name),
 		});
-		handlePhoneRelay = createPhoneRelayPump({
-			sealer: phoneSealer!,
-			handleFrame: phoneHandler.handleFrame,
+		handleConsoleRelay = createConsoleRelayPump({
+			sealer: consoleSealer!,
+			handleFrame: consoleHandler.handleFrame,
 			sendReply: (reply) =>
-				evieClient!.callTool("phone_relay_reply", reply as unknown as Record<string, unknown>),
+				evieClient!.callTool("console_relay_reply", reply as unknown as Record<string, unknown>),
 		});
-		evictPhonePeer = (conversationId) => phoneHandler.removePeer(conversationId);
+		evictConsolePeer = (conversationId) => consoleHandler.removePeer(conversationId);
 
 		// Federation: a peer Switch's frames land here, run against the local routes,
 		// and the reply routes home through the Router.

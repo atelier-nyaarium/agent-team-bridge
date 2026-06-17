@@ -30,7 +30,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
  * header. The descriptor's `container` field records the verified container
  * where known, but it is documentation; the player sniffs regardless.
  *
- * Blocking OkHttp like PhoneClient: callers own the dispatcher boundary.
+ * Blocking OkHttp like ConsoleClient: callers own the dispatcher boundary.
  */
 class SttsClient(private val baseUrl: String, private val apiKey: String) {
 	private val client = OkHttpClient.Builder()

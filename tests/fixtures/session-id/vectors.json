@@ -49,18 +49,18 @@
 			"key": "conv:c:hostb/api"
 		},
 		{
-			"input": "conv:phone-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4:switchboard/9cb5b9",
+			"input": "conv:console-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4:switchboard/9cb5b9",
 			"localSwitchId": "switchboard",
-			"conversationId": "phone-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4",
+			"conversationId": "console-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4",
 			"targetCanonical": "switchboard/9cb5b9",
-			"key": "conv:phone-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4:switchboard/9cb5b9"
+			"key": "conv:console-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4:switchboard/9cb5b9"
 		},
 		{
-			"input": "conv:phone-x:9cb5b9",
+			"input": "conv:console-x:9cb5b9",
 			"localSwitchId": "switchboard",
-			"conversationId": "phone-x",
+			"conversationId": "console-x",
 			"targetCanonical": "switchboard/9cb5b9",
-			"key": "conv:phone-x:switchboard/9cb5b9"
+			"key": "conv:console-x:switchboard/9cb5b9"
 		},
 		{
 			"input": "conv:c:a/b/c",

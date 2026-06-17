@@ -1,26 +1,26 @@
-import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import {
+	type ConsoleOp,
+	type ConsoleOpResult,
+	type ConsoleReplyBody,
 	type MailboxInput,
-	type OpenedPhoneFrame,
-	type PhoneOp,
-	type PhoneOpResult,
-	type PhoneReplyBody,
+	type OpenedConsoleFrame,
 	parseQualifiedTeam,
-} from "../../shared/phone-protocol.js";
+} from "../../shared/console-protocol.js";
+import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import { SessionId, TeamAddress } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
-import { PhonePeer } from "./phonePeer.js";
+import { ConsolePeer } from "./consolePeer.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
-/** The subset of arbiter HTTP routes the phone handler reuses. */
-export interface PhoneRoutes {
+/** The subset of arbiter HTTP routes the console handler reuses. */
+export interface ConsoleRoutes {
 	send: (req: Request, body: Record<string, unknown>) => Promise<Response>;
 	respond: (req: Request, body: Record<string, unknown>) => Response;
 	teams: () => Response;
-	// Mesh-wide team list (local + every online peer Switch); the phone is a
+	// Mesh-wide team list (local + every online peer Switch); the console is a
 	// roaming console and sees all Switches, not just its home Switch.
 	discover: () => Promise<Response>;
 }
@@ -35,19 +35,19 @@ interface SendRouteJson {
 	error?: string;
 }
 
-export interface PhoneHandlerDeps {
+export interface ConsoleHandlerDeps {
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
 	mailboxStore: DeviceMailboxStore;
-	routes: PhoneRoutes;
-	/** This Switch's id, returned on register so the phone anchors its composite
+	routes: ConsoleRoutes;
+	/** This Switch's id, returned on register so the console anchors its composite
 	 * (switchId, name) key, and used to canonicalize a send target to the qualified
 	 * session-id form (matching routes.send). */
 	localSwitchId: string;
 	sendBoundMs?: number;
 	/** True when the name belongs to a devcontainer project (catalog or known
 	 * paths). A device must not take such a name: while the project sleeps, the
-	 * phone's virtual peer would squat the registry slot, absorb sends meant for
+	 * console's virtual peer would squat the registry slot, absorb sends meant for
 	 * the project, and suppress its wake. */
 	isProjectName?: (name: string) => boolean;
 }
@@ -55,9 +55,9 @@ export interface PhoneHandlerDeps {
 ////////////////////////////////
 //  Functions & Helpers
 
-const FAKE_REQ = new Request("http://arbiter/phone");
+const FAKE_REQ = new Request("http://arbiter/console");
 
-// Bound on how long a phone send op may block inside the relay. The arbiter's
+// Bound on how long a console send op may block inside the relay. The arbiter's
 // own wake path can hold /send for up to WAKE_TIMEOUT_MS (10 min), far past
 // evie's opId hold; past this bound the op returns the deterministic session id
 // and the wake/send continues in the background, with the eventual answer
@@ -65,22 +65,22 @@ const FAKE_REQ = new Request("http://arbiter/phone");
 const SEND_BOUND_MS = 25_000;
 
 // Ceiling on a poll's long-poll hold. Must clear the relay chain with headroom:
-// evie holds the phone's HTTP request 55s and the apiserver proxy allows 60s.
+// evie holds the console's HTTP request 55s and the apiserver proxy allows 60s.
 const HOLD_CAP_MS = 45_000;
 
-// At-most-once side effects: the phone->evie->arbiter path is at-least-once
-// (a lost reply makes the phone retry the same opId), so a seen opId replays its
+// At-most-once side effects: the console->evie->arbiter path is at-least-once
+// (a lost reply makes the console retry the same opId), so a seen opId replays its
 // cached reply instead of re-running the op (which would duplicate a
 // channel_push / response_push). Only mutating ops are cached, only on success
 // (a failed op had no side effect and must be retriable), and the cache is
 // keyed per conversation so one install cannot evict or read another's entry.
 const MAX_OPS_PER_CONVERSATION = 256;
 
-function isMutatingOp(op: PhoneOp): boolean {
+function isMutatingOp(op: ConsoleOp): boolean {
 	return op.kind === "send" || op.kind === "respond";
 }
 
-export function createPhoneHandler({
+export function createConsoleHandler({
 	registry,
 	conversationRegistry,
 	mailboxStore,
@@ -88,19 +88,19 @@ export function createPhoneHandler({
 	localSwitchId,
 	sendBoundMs = SEND_BOUND_MS,
 	isProjectName,
-}: PhoneHandlerDeps) {
+}: ConsoleHandlerDeps) {
 	// The per-install conversationId is the real identity: it keys the mailbox,
 	// the registry sub, and this binding to the human-facing device name. The
 	// name is a display/target label only, so two devices sharing a name never
 	// share a slot, and a conversation cannot silently switch names.
 	const bindings = new Map<string, string>();
-	// conversationId -> the phone signing key bound to that install. A frame whose
+	// conversationId -> the console signing key bound to that install. A frame whose
 	// signerSignPub differs from the binding cannot operate this conversation (so a
-	// phone cannot poll or settle another install's mailbox by borrowing its
+	// console cannot poll or settle another install's mailbox by borrowing its
 	// conversationId). A register op may rebind (re-enrollment with a new key).
 	const signers = new Map<string, string>();
 	// conversationId -> (opId -> in-flight/settled reply body) for mutating-op idempotency.
-	const opCache = new Map<string, Map<string, Promise<PhoneReplyBody>>>();
+	const opCache = new Map<string, Map<string, Promise<ConsoleReplyBody>>>();
 
 	// Peer lifetime equals mailbox lifetime: when a mailbox is evicted (idle
 	// sweep or store cap), the registry/conversation entries and binding go too.
@@ -149,7 +149,12 @@ export function createPhoneHandler({
 		}
 	}
 
-	function ensurePeer(device: string, conversationId: string, signerSignPub: string, allowRebind = false): PhonePeer {
+	function ensurePeer(
+		device: string,
+		conversationId: string,
+		signerSignPub: string,
+		allowRebind = false,
+	): ConsolePeer {
 		// A register op may rename the device: migrate the registry sub off the
 		// old name (mailbox and binding are conversation-keyed, so they carry
 		// over) before the identity checks see the stale binding.
@@ -166,7 +171,7 @@ export function createPhoneHandler({
 
 		// Cryptographic install binding: the conversation is owned by the first
 		// signing key seen for it; a later frame with a different key is rejected
-		// unless this is a (re-enrolling) register. Blocks a phone from operating
+		// unless this is a (re-enrolling) register. Blocks a console from operating
 		// another install's mailbox by borrowing its conversationId.
 		const boundSigner = signers.get(conversationId);
 		if (boundSigner && boundSigner !== signerSignPub && !allowRebind) {
@@ -183,7 +188,7 @@ export function createPhoneHandler({
 			registry.set(device, subs);
 		}
 
-		const existing = subs.get(conversationId) as unknown as PhonePeer | undefined;
+		const existing = subs.get(conversationId) as unknown as ConsolePeer | undefined;
 		if (existing) {
 			existing.data.isStale = false;
 			// Self-heal the conversation pointer if a (since closed) real socket
@@ -192,7 +197,7 @@ export function createPhoneHandler({
 			return existing;
 		}
 
-		const peer = new PhonePeer(
+		const peer = new ConsolePeer(
 			() => mailboxStore.ensure(conversationId),
 			device,
 			conversationId,
@@ -232,25 +237,25 @@ export function createPhoneHandler({
 		}
 	}
 
-	async function dispatch(op: PhoneOp, device: string, conversationId: string): Promise<PhoneOpResult> {
+	async function dispatch(op: ConsoleOp, device: string, conversationId: string): Promise<ConsoleOpResult> {
 		switch (op.kind) {
 			case "register": {
 				const box = mailboxStore.ensure(conversationId);
 				console.log(
-					`[phone register] conv=${conversationId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
+					`[console register] conv=${conversationId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
 				);
 				return { device, switchId: localSwitchId, cursor: box.highWater, epoch: box.epoch };
 			}
 
 			case "list_teams": {
-				// Fan out across the mesh so the phone sees every Switch's sessions, each
-				// carrying its own `switchId` (the phone keys threads by switch/name).
+				// Fan out across the mesh so the console sees every Switch's sessions, each
+				// carrying its own `switchId` (the console keys threads by switch/name).
 				const teams = (await (await routes.discover()).json()) as TeamInfo[];
-				// A phone does not list other phones as send targets, and excludes
+				// A console does not list other consoles as send targets, and excludes
 				// itself. teams() already drops the cli "host" daemon; the "arbiter"
-				// host-agent of each Switch stays (kind "switch"), reachable from the phone.
+				// host-agent of each Switch stays (kind "switch"), reachable from the console.
 				return {
-					teams: teams.filter((t) => t.team !== device && t.kind !== "phone"),
+					teams: teams.filter((t) => t.team !== device && t.kind !== "console"),
 				};
 			}
 
@@ -260,7 +265,7 @@ export function createPhoneHandler({
 				// CLI team is unknowable here (mode surfaces only on register), so
 				// it pays a wake and is then rejected by the route's channelOnly
 				// check instead of minting a random session id.
-				// The phone may target a host-qualified name (`host/name`); strip the
+				// The console may target a host-qualified name (`host/name`); strip the
 				// switch for the local registry probe. Cross-switch targets are rejected
 				// by routes.send (federation routing is a later phase).
 				const localTarget = parseQualifiedTeam(op.to).name;
@@ -269,7 +274,7 @@ export function createPhoneHandler({
 					for (const [, ws] of targetSubs) {
 						if (!ws.data.virtual && ws.readyState === 1 && ws.data.mode === "cli") {
 							throw new Error(
-								`"${localTarget}" is a CLI-mode agent; phone chat supports channel-mode (Claude) teams only`,
+								`"${localTarget}" is a CLI-mode agent; console chat supports channel-mode (Claude) teams only`,
 							);
 						}
 					}
@@ -327,7 +332,7 @@ export function createPhoneHandler({
 			}
 
 			case "respond": {
-				// A phone may only settle a thread that was delivered to it. This
+				// A console may only settle a thread that was delivered to it. This
 				// blocks forging another conversation's reply and, critically, keeps
 				// op.session_id away from resolveHandshake (handshake ids are never
 				// recorded as inbound). Canonicalize via SessionId.parse so a bare
@@ -353,7 +358,7 @@ export function createPhoneHandler({
 				// relay-chain timeouts) until an append wakes it, then drains again.
 				// The pump runs frames concurrently, so a held poll blocks nothing,
 				// and retried polls just become additional waiters (reads are not
-				// opId-cached; the phone dedupes entries by seq).
+				// opId-cached; the console dedupes entries by seq).
 				const box = mailboxStore.ensure(conversationId);
 				let snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				const hold = Math.min(op.holdMs ?? 0, HOLD_CAP_MS);
@@ -362,12 +367,12 @@ export function createPhoneHandler({
 					snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				}
 				// Permanent low-noise delivery observability: log only a poll that actually
-				// hands entries to the phone or signals a dropped-entry gap, never the
+				// hands entries to the console or signals a dropped-entry gap, never the
 				// steady stream of empty held polls. This is the one window into whether a
-				// reply reached the phone's poll (the blind spot that hid the earlier delivery bugs).
+				// reply reached the console's poll (the blind spot that hid the earlier delivery bugs).
 				if (snap.entries.length > 0 || snap.dropped > 0) {
 					console.log(
-						`[phone poll] conv=${conversationId.slice(0, 12)} reqCursor=${op.cursor ?? 0} reqEpoch=${op.epoch ?? "none"} -> drained=${snap.entries.length} retCursor=${snap.cursor} retEpoch=${snap.epoch} dropped=${snap.dropped}`,
+						`[console poll] conv=${conversationId.slice(0, 12)} reqCursor=${op.cursor ?? 0} reqEpoch=${op.epoch ?? "none"} -> drained=${snap.entries.length} retCursor=${snap.cursor} retEpoch=${snap.epoch} dropped=${snap.dropped}`,
 					);
 				}
 				return { entries: snap.entries, cursor: snap.cursor, dropped: snap.dropped, epoch: snap.epoch };
@@ -375,7 +380,7 @@ export function createPhoneHandler({
 		}
 	}
 
-	async function runFrame(frame: OpenedPhoneFrame): Promise<PhoneReplyBody> {
+	async function runFrame(frame: OpenedConsoleFrame): Promise<ConsoleReplyBody> {
 		try {
 			// Bind/refresh the peer on every frame so a send arriving before an
 			// explicit register still routes its replies back to the mailbox.
@@ -388,7 +393,7 @@ export function createPhoneHandler({
 		}
 	}
 
-	function handleFrame(frame: OpenedPhoneFrame): Promise<PhoneReplyBody> {
+	function handleFrame(frame: OpenedConsoleFrame): Promise<ConsoleReplyBody> {
 		// Reads (register/poll/list_teams) run fresh every call: they have no side
 		// effect to dedupe and must reflect live state (e.g. the current epoch).
 		if (!isMutatingOp(frame.op)) return runFrame(frame);

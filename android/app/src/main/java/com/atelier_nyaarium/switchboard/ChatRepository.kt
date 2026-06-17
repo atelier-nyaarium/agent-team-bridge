@@ -45,7 +45,7 @@ data class Message(
 	val status: String? = null,
 	/** The relay opId this send was first delivered under. A retry reuses it so
 	 * the arbiter's idempotency cache replays a lost reply instead of double-
-	 * delivering to the agent (the phone protocol contract). */
+	 * delivering to the agent (the console protocol contract). */
 	val opId: String? = null,
 	/** Notification-bar line for broadcast notices. Notification-only: the thread
 	 * renders the body as usual and never shows this. */
@@ -156,7 +156,7 @@ private data class Drained(val entry: MailboxEntry) : SyncEntry {
 }
 
 /**
- * Chat state over a PhoneClient. Holds per-team threads, an unread tally, the open
+ * Chat state over a ConsoleClient. Holds per-team threads, an unread tally, the open
  * tab set, and a poll loop that drains the device mailbox, dedupes by mailbox seq,
  * and routes each reply to its team (parsed from the `conv:<id>:<team>` session id
  * or the entry's `from`). Transcripts persist (encrypted) so history survives
@@ -189,9 +189,9 @@ class ChatRepository(
 	// Lazy clients are read and invalidated across threads (poll loop, main,
 	// the player's daemon thread); @Volatile gives the writes visibility. A
 	// rare double-construct race is harmless (last writer wins, cheap build).
-	@Volatile private var client: PhoneClient? = null
-	// The mailbox cursor is phone-owned and durable: MailboxSync loads it from the store
-	// and the phone resumes from its own consumption point, never re-adopting a server-
+	@Volatile private var client: ConsoleClient? = null
+	// The mailbox cursor is console-owned and durable: MailboxSync loads it from the store
+	// and the console resumes from its own consumption point, never re-adopting a server-
 	// dictated cursor that would ack away the offline backlog on the next poll.
 	private val mailboxSync = MailboxSync(store)
 	private var pollFails = 0
@@ -233,10 +233,10 @@ class ChatRepository(
 		visible = false
 	}
 
-	private fun client(): PhoneClient {
+	private fun client(): ConsoleClient {
 		client?.let { return it }
 		val blob = store.load() ?: error("not provisioned")
-		return PhoneClient(Provisioning.parse(blob), store).also { client = it }
+		return ConsoleClient(Provisioning.parse(blob), store).also { client = it }
 	}
 
 	/** Enrollment controller over this device's identity store + bridge client, or

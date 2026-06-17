@@ -670,7 +670,7 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 			}
 			if (isCli) {
 				Text(
-					"CLI agent - phone chat is not supported",
+					"CLI agent - console chat is not supported",
 					style = MaterialTheme.typography.bodySmall,
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 				)

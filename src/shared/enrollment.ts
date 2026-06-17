@@ -1,4 +1,4 @@
-// SYNC-HASH: b7a55c684fc7fa2fcbc95bf79ff62eb3
+// SYNC-HASH: 10c8ae9687851b0324a30a57369147da
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -21,11 +21,11 @@ import { fingerprint } from "./crypto.js";
 //  the evie admin terminal), and the human confirms they match - a relayed or
 //  screenshotted QR cannot forge the out-of-band side.
 //
-//  - enroll-owner: evie admin command -> owner phone. Roots the owner device at
+//  - enroll-owner: evie admin command -> owner console. Roots the owner device at
 //    the Domain; the owner confirms evie's signing fingerprint from the terminal.
-//  - admit-switch: an arbiter -> owner phone. The owner confirms the Switch
+//  - admit-switch: an arbiter -> owner console. The owner confirms the Switch
 //    fingerprint on the arbiter console, then signs an admission for it.
-//  - authorize-phone: owner phone -> a second owner device.
+//  - authorize-console: owner console -> a second owner device.
 
 ////////////////////////////////
 //  Schemas
@@ -57,7 +57,7 @@ export const EnrollmentPayloadSchema = z
 			boxPub: z.string().min(1),
 		}),
 		z.object({
-			type: z.literal("authorize-phone"),
+			type: z.literal("authorize-console"),
 			domainId: z.string().min(1),
 			signPub: z.string().min(1),
 			boxPub: z.string().min(1),
@@ -68,7 +68,7 @@ export const EnrollmentPayloadSchema = z
 /** The owner device's enrollment requests to evie (NOT relayed to a Switch - evie
  * is the Domain root). All three are self-authenticating: `enroll_redeem` is
  * authorized by the single-use nonce evie minted, and the submit ops carry an
- * owner-signed artifact evie verifies against the rooted owner key. The phone
+ * owner-signed artifact evie verifies against the rooted owner key. The console
  * sends them over the same app-token-gated bridge as its arbiter ops. */
 export const EnrollOpSchema = z
 	.discriminatedUnion("kind", [
@@ -91,7 +91,7 @@ export const EnrollResultSchema = z
 export type EnrollmentPayload = z.infer<typeof EnrollmentPayloadSchema>;
 export type EnrollOwnerPayload = Extract<EnrollmentPayload, { type: "enroll-owner" }>;
 export type AdmitSwitchPayload = Extract<EnrollmentPayload, { type: "admit-switch" }>;
-export type AuthorizePhonePayload = Extract<EnrollmentPayload, { type: "authorize-phone" }>;
+export type AuthorizeConsolePayload = Extract<EnrollmentPayload, { type: "authorize-console" }>;
 export type EnrollOp = z.infer<typeof EnrollOpSchema>;
 export type EnrollResult = z.infer<typeof EnrollResultSchema>;
 
@@ -105,16 +105,16 @@ export function payloadSas(payload: EnrollmentPayload): string {
 		case "enroll-owner":
 			return fingerprint(payload.evieSignPub);
 		case "admit-switch":
-		case "authorize-phone":
+		case "authorize-console":
 			return fingerprint(payload.signPub);
 	}
 }
 
-/** Build the owner-signed admission for a scanned admit-switch / authorize-phone
+/** Build the owner-signed admission for a scanned admit-switch / authorize-console
  * payload, AFTER the human has confirmed the SAS. `nowMs` + `nonce` are passed in
  * (the caller owns time + randomness). */
 export function admissionFromScan(
-	payload: AdmitSwitchPayload | AuthorizePhonePayload,
+	payload: AdmitSwitchPayload | AuthorizeConsolePayload,
 	ownerSignPrivB64: string,
 	ownerSignPubB64: string,
 	nowMs: number,
@@ -130,6 +130,6 @@ export function admissionFromScan(
 					issuedAt: nowMs,
 					nonce: nonceB64,
 				}
-			: { kind: "phone", signPub: payload.signPub, boxPub: payload.boxPub, issuedAt: nowMs, nonce: nonceB64 };
+			: { kind: "console", signPub: payload.signPub, boxPub: payload.boxPub, issuedAt: nowMs, nonce: nonceB64 };
 	return signAdmission(admission, ownerSignPrivB64, ownerSignPubB64);
 }

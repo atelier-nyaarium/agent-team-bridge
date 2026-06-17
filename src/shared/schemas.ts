@@ -6,13 +6,13 @@ import { z } from "zod";
 //  The single truth for the wire enums; the TS types in types.ts derive from
 //  these via z.infer. Decode-side tolerance note: these closed enums validate
 //  what OUR side composes or what a closed protocol surface accepts. Fields a
-//  phone DECODES (e.g. MailboxEntry.request_type) stay open strings, per the
+//  console DECODES (e.g. MailboxEntry.request_type) stay open strings, per the
 //  additive decode-tolerance rule.
 
 export const ConnectionModeSchema = z.enum(["cli", "channel"]).meta({ id: "ConnectionMode" });
 export const EffortLevelSchema = z.enum(["simple", "standard", "complex"]).meta({ id: "EffortLevel" });
 export const RequestTypeSchema = z.enum(["feature", "bugfix", "question"]).meta({ id: "RequestType" });
-export const TeamKindSchema = z.enum(["devcontainer", "loose", "phone", "switch"]).meta({ id: "TeamKind" });
+export const TeamKindSchema = z.enum(["devcontainer", "loose", "console", "switch"]).meta({ id: "TeamKind" });
 export const ResponseStatusSchema = z
 	.enum(["completed", "clarification", "deferred", "needs_human", "error", "timeout", "running"])
 	.meta({ id: "ResponseStatus" });
@@ -32,7 +32,7 @@ export const ChannelReplySchema = z
 			.string()
 			.optional()
 			.describe(
-				`Your prose reply for the HUMAN to read, as a markdown string - put your message here. It renders as fully-featured markdown (headings, lists, tables, fenced code) AND mermaid diagrams, so use them when they help. Lead with the answer itself: no lead-in labels ("Short answer:", "TLDR:") and no restating the question; replies often render on a phone. Mutually exclusive with respondAsStructuredData.`,
+				`Your prose reply for the HUMAN to read, as a markdown string - put your message here. It renders as fully-featured markdown (headings, lists, tables, fenced code) AND mermaid diagrams, so use them when they help. Lead with the answer itself: no lead-in labels ("Short answer:", "TLDR:") and no restating the question; replies often render on a console. Mutually exclusive with respondAsStructuredData.`,
 			),
 		respondAsStructuredData: z
 			.string()
@@ -44,7 +44,7 @@ export const ChannelReplySchema = z
 			.array(z.string())
 			.optional()
 			.describe(
-				`Optional absolute file paths to attach to this reply (e.g. screenshots, logs). Images render inline on the phone; other files appear as download chips.`,
+				`Optional absolute file paths to attach to this reply (e.g. screenshots, logs). Images render inline on the console; other files appear as download chips.`,
 			),
 	})
 	.strict()
@@ -58,7 +58,7 @@ export type ChannelReplyArgs = z.infer<typeof ChannelReplySchema>;
 //  Channel File Schema (inbound from evie-bot bridge)
 //
 //  Owned by evie-protocol.ts (the self-contained module synced into
-//  evie-bot); re-exported here so the phone-protocol schemas and existing
+//  evie-bot); re-exported here so the console-protocol schemas and existing
 //  importers keep one import surface.
 
 import { ChannelFilesSchema } from "./evie-protocol.js";
@@ -92,9 +92,9 @@ export const TeamInfoSchema = z
 	.object({
 		team: z.string(),
 		// The id of the Switch that owns this session. `team` stays the bare local
-		// name; the phone composes the qualified key `switch/team` to keep two
+		// name; the console composes the qualified key `switch/team` to keep two
 		// Switches' identically-named sessions apart. Optional for decode tolerance:
-		// a pre-federation Switch omits it and the phone falls back to its connected
+		// a pre-federation Switch omits it and the console falls back to its connected
 		// Switch id (bare resolves local).
 		switchId: z.string().optional(),
 		status: z.enum(["online", "available"]),
@@ -107,20 +107,20 @@ export const TeamInfoSchema = z
 	.meta({ id: "TeamInfo" });
 
 ////////////////////////////////
-//  Phone Relay Frame Schema
+//  Console Relay Frame Schema
 //
-//  Validates phone_relay frames at the arbiter trust boundary. The frame body
-//  is phone-authored and evie relays it opaquely, so the arbiter must not
-//  blind-cast it. The phone-protocol.ts types derive from these schemas via
-//  z.infer - this file is the single truth for the phone wire.
+//  Validates console_relay frames at the arbiter trust boundary. The frame body
+//  is console-authored and evie relays it opaquely, so the arbiter must not
+//  blind-cast it. The console-protocol.ts types derive from these schemas via
+//  z.infer - this file is the single truth for the console wire.
 
-export const PhoneOpSchema = z
+export const ConsoleOpSchema = z
 	.discriminatedUnion("kind", [
 		z.object({
 			kind: z.literal("register"),
 			// Build identity for server-side observability: the arbiter logs these at
 			// register so the operator never has to guess which build (and debug-vs-
-			// release variant) a phone is running. Optional + additive: an older phone
+			// release variant) a console is running. Optional + additive: an older console
 			// that omits them still registers.
 			clientVersion: z.string().max(64).optional(),
 			clientVariant: z.string().max(16).optional(),
@@ -149,13 +149,13 @@ export const PhoneOpSchema = z
 			holdMs: z.number().int().nonnegative().max(45_000).optional(),
 		}),
 	])
-	.meta({ id: "PhoneOp" });
+	.meta({ id: "ConsoleOp" });
 
 ////////////////////////////////
 //  Sealed envelope (the E2E crypto wrapper - shared/crypto.ts)
 //
 //  Confidentiality (ephemeral X25519 box) + authenticity (Ed25519 signature).
-//  Codegen'd to Kotlin so the phone seals/opens with the byte-identical Crypto.kt.
+//  Codegen'd to Kotlin so the console seals/opens with the byte-identical Crypto.kt.
 
 export const SealedEnvelopeSchema = z
 	.object({
@@ -166,41 +166,41 @@ export const SealedEnvelopeSchema = z
 	})
 	.meta({ id: "SealedEnvelope" });
 
-export const PhoneRelayFrameSchema = z
+export const ConsoleRelayFrameSchema = z
 	.object({
-		type: z.literal("phone_relay"),
+		type: z.literal("console_relay"),
 		v: z.number().int().positive(),
 		opId: z.string().min(1).max(128),
-		// The phone's raw Ed25519 signing public key (base64). Selects the key the
+		// The console's raw Ed25519 signing public key (base64). Selects the key the
 		// arbiter verifies the seal against, then checked against the owner-signed
-		// allowlist (must be an admitted kind:phone subject). Cleartext: it is a
+		// allowlist (must be an admitted kind:console subject). Cleartext: it is a
 		// public key, not a secret. conversationId + device + the op move INSIDE the
 		// seal, so evie sees only this opaque blob - it cannot read or forge the op.
 		signerSignPub: z.string().min(1),
 		sealed: SealedEnvelopeSchema,
 	})
-	.meta({ id: "PhoneRelayFrame" });
+	.meta({ id: "ConsoleRelayFrame" });
 
 ////////////////////////////////
-//  Phone Op Envelope (the sealed inner body)
+//  Console Op Envelope (the sealed inner body)
 //
-//  What the phone seals and the arbiter opens. `at` bounds freshness; the seal's
+//  What the console seals and the arbiter opens. `at` bounds freshness; the seal's
 //  random nonce bounds replay; the seal's ECDH binds it to this arbiter's box key.
 
-export const PhoneOpEnvelopeSchema = z
+export const ConsoleOpEnvelopeSchema = z
 	.object({
 		v: z.number().int().positive(),
 		conversationId: z.string().min(1).max(128),
 		device: z.string().min(1).max(64),
 		at: z.number().int().nonnegative(),
-		op: PhoneOpSchema,
+		op: ConsoleOpSchema,
 	})
-	.meta({ id: "PhoneOpEnvelope" });
+	.meta({ id: "ConsoleOpEnvelope" });
 
 ////////////////////////////////
-//  Mailbox Entry Schema (arbiter -> phone)
+//  Mailbox Entry Schema (arbiter -> console)
 //
-//  Composed by the arbiter, decoded by the phone. `kind` is closed here
+//  Composed by the arbiter, decoded by the console. `kind` is closed here
 //  because the arbiter owns composition; the GENERATED Kotlin keeps it an
 //  open String (decode-side rule). `request_type` is open even here: the
 //  arbiter itself composes out-of-union values (e.g. "handoff" on transfer
@@ -216,7 +216,7 @@ export const MailboxEntrySchema = z
 		// Notification-bar line for notices; the body carries the full report.
 		title: z.string().optional(),
 		// The Short tier of a notice (4-6 sentences), addressable on its own so
-		// phone features never parse it back out of the body. Always sent by
+		// console features never parse it back out of the body. Always sent by
 		// current arbiters; optional for decode tolerance of older wires.
 		summary: z.string().optional(),
 		body: z.string().optional(),
@@ -232,102 +232,102 @@ export const MailboxEntrySchema = z
 	.meta({ id: "MailboxEntry" });
 
 ////////////////////////////////
-//  Op result schemas (arbiter -> phone)
+//  Op result schemas (arbiter -> console)
 //
 //  No wire discriminator: the reply is correlated to its op by opId and the
-//  phone decodes the result it expects per op. These generate as independent
+//  console decodes the result it expects per op. These generate as independent
 //  Kotlin data classes, never a sealed hierarchy.
 
-export const PhoneRegisterResultSchema = z
+export const ConsoleRegisterResultSchema = z
 	.object({
 		device: z.string(),
-		// The id of the Switch this phone is connected to. The phone anchors its
+		// The id of the Switch this console is connected to. The console anchors its
 		// composite (switchId, name) key to this: it qualifies bare names to this
 		// Switch and migrates pre-federation bare-keyed threads onto it. Optional
 		// for decode tolerance of a pre-federation Switch.
 		switchId: z.string().optional(),
-		// Current mailbox high-water seq so a reconnecting phone can resync its cursor.
+		// Current mailbox high-water seq so a reconnecting console can resync its cursor.
 		cursor: z.number().int().nonnegative(),
-		// Mailbox instance id. If it differs from the phone's stored epoch, the
-		// mailbox was recreated and the phone must reset its cursor to 0.
+		// Mailbox instance id. If it differs from the console's stored epoch, the
+		// mailbox was recreated and the console must reset its cursor to 0.
 		epoch: z.number().int().nonnegative(),
 	})
-	.meta({ id: "PhoneRegisterResult" });
+	.meta({ id: "ConsoleRegisterResult" });
 
-export const PhoneListTeamsResultSchema = z
+export const ConsoleListTeamsResultSchema = z
 	.object({
 		teams: z.array(TeamInfoSchema),
 	})
-	.meta({ id: "PhoneListTeamsResult" });
+	.meta({ id: "ConsoleListTeamsResult" });
 
-export const PhoneSendResultSchema = z
+export const ConsoleSendResultSchema = z
 	.object({
 		session_id: z.string(),
 		status: z.string(),
 	})
-	.meta({ id: "PhoneSendResult" });
+	.meta({ id: "ConsoleSendResult" });
 
-export const PhoneRespondResultSchema = z
+export const ConsoleRespondResultSchema = z
 	.object({
 		delivered: z.boolean(),
 	})
-	.meta({ id: "PhoneRespondResult" });
+	.meta({ id: "ConsoleRespondResult" });
 
-export const PhonePollResultSchema = z
+export const ConsolePollResultSchema = z
 	.object({
 		entries: z.array(MailboxEntrySchema),
 		cursor: z.number().int().nonnegative(),
-		// Cumulative count of entries evicted by the cap before the phone read
-		// them. Never reset server-side; the phone detects a new gap by comparing
+		// Cumulative count of entries evicted by the cap before the console read
+		// them. Never reset server-side; the console detects a new gap by comparing
 		// against the previous total (or by a non-contiguous seq jump).
 		dropped: z.number().int().nonnegative(),
-		// Mailbox instance id. On change the phone resets its cursor to 0 (the
+		// Mailbox instance id. On change the console resets its cursor to 0 (the
 		// prior mailbox was evicted and a new one started seq at 1).
 		epoch: z.number().int().nonnegative(),
 	})
-	.meta({ id: "PhonePollResult" });
+	.meta({ id: "ConsolePollResult" });
 
-export const PhoneOpResultSchema = z.union([
-	PhoneRegisterResultSchema,
-	PhoneListTeamsResultSchema,
-	PhoneSendResultSchema,
-	PhoneRespondResultSchema,
-	PhonePollResultSchema,
+export const ConsoleOpResultSchema = z.union([
+	ConsoleRegisterResultSchema,
+	ConsoleListTeamsResultSchema,
+	ConsoleSendResultSchema,
+	ConsoleRespondResultSchema,
+	ConsolePollResultSchema,
 ]);
 
 ////////////////////////////////
-//  Phone Reply Body (the sealed inner reply)
+//  Console Reply Body (the sealed inner reply)
 //
-//  The arbiter seals this to the phone's box key; the phone unseals and decodes
+//  The arbiter seals this to the console's box key; the console unseals and decodes
 //  the result for its op (correlated by opId).
 
-export const PhoneReplyBodySchema = z
+export const ConsoleReplyBodySchema = z
 	.object({
 		ok: z.boolean(),
-		result: PhoneOpResultSchema.optional(),
+		result: ConsoleOpResultSchema.optional(),
 		error: z.string().optional(),
 	})
-	.meta({ id: "PhoneReplyBody" });
+	.meta({ id: "ConsoleReplyBody" });
 
-export const PhoneRelayReplySchema = z
+export const ConsoleRelayReplySchema = z
 	.object({
-		type: z.literal("phone_relay_reply"),
+		type: z.literal("console_relay_reply"),
 		v: z.number().int().positive(),
 		opId: z.string().min(1).max(128),
-		// The sealed PhoneReplyBody (normal path). Absent ONLY when the arbiter could
+		// The sealed ConsoleReplyBody (normal path). Absent ONLY when the arbiter could
 		// not seal because the frame was unverifiable (malformed, or the signer is not
-		// an admitted phone) - then `error` carries a cleartext reason so the phone can
+		// an admitted console) - then `error` carries a cleartext reason so the console can
 		// surface "enroll this device". A pre-seal error is the only cleartext that
-		// ever leaves the arbiter on the phone reply path.
+		// ever leaves the arbiter on the console reply path.
 		sealed: SealedEnvelopeSchema.optional(),
 		error: z.string().optional(),
 	})
-	.meta({ id: "PhoneRelayReply" });
+	.meta({ id: "ConsoleRelayReply" });
 
 ////////////////////////////////
 //  Provisioning Schema
 //
-//  The blob the user pastes at phone setup. Credentials + endpoints only;
+//  The blob the user pastes at console setup. Credentials + endpoints only;
 //  user taste lives in prefs. Runtime defaulting stays app-side (device from
 //  Build.MODEL, conversationId minting a UUID, trimEnd('/') URL normalization)
 //  - the schema carries the shape, the Kotlin wrapper owns those behaviors.

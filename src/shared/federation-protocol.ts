@@ -9,7 +9,7 @@ import { ChannelFilesSchema } from "./evie-protocol.js";
 //  arbiters share and evie does not: the federated op a Switch runs on a peer's
 //  behalf, the return-route that pins a reply back to the origin session, and the
 //  crypto-aware payload wrapper. It is NOT codegen'd to Kotlin - cross-Switch
-//  traffic is arbiter-to-arbiter; the phone reaches the mesh through its home
+//  traffic is arbiter-to-arbiter; the console reaches the mesh through its home
 //  Switch. Re-export `FEDERATION_PROTOCOL_VERSION` from the synced leaf so both the
 //  wire version and the inner ops travel from one import surface.
 
@@ -94,7 +94,7 @@ export const SwitchRelayFrameSchema = z.object({
 //
 //  Op RESULTS are sealed back to the origin Switch too (hostRelay.ts seals the reply
 //  leg), then parsed loosely by the origin: a peer Switch is semi-trusted, and the
-//  phone's tolerant decode plus the existing route validation handle shape, so no
+//  console's tolerant decode plus the existing route validation handle shape, so no
 //  result schema is enforced here.
 
 export type ReturnRoute = z.infer<typeof ReturnRouteSchema>;

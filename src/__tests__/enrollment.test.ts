@@ -70,17 +70,17 @@ describe("enrollment", () => {
 		expect(EnrollOpSchema.safeParse({ kind: "enroll_redeem", nonce: "n" }).success).toBe(false);
 	});
 
-	it("admits a scanned phone with kind phone (no switchId)", () => {
-		const phone = generateIdentity();
+	it("admits a scanned console with kind console (no switchId)", () => {
+		const device = generateIdentity();
 		const payload = {
-			type: "authorize-phone" as const,
+			type: "authorize-console" as const,
 			domainId: "d",
-			signPub: phone.sign.pub,
-			boxPub: phone.box.pub,
+			signPub: device.sign.pub,
+			boxPub: device.box.pub,
 		};
 		const signed = admissionFromScan(payload, owner.sign.priv, owner.sign.pub, 2000, "cg==");
-		expect(signed.admission.kind).toBe("phone");
+		expect(signed.admission.kind).toBe("console");
 		expect(signed.admission.switchId).toBeUndefined();
-		expect(resolveAdmitted([signed], [], owner.sign.pub, phone.sign.pub)?.kind).toBe("phone");
+		expect(resolveAdmitted([signed], [], owner.sign.pub, device.sign.pub)?.kind).toBe("console");
 	});
 });

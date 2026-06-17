@@ -77,7 +77,7 @@ export function registerReplyTool<S extends z.ZodTypeAny>(
 					args as ReplyArgsBase & Record<string, unknown>;
 
 				// A reply with no prose, no structured data, no attachments, and no status
-				// produces an empty entry the consumer (the phone) silently skips - the exact
+				// produces an empty entry the consumer (the console) silently skips - the exact
 				// failure that let a wrong body-field name pass unnoticed for a whole session.
 				// Reject it loudly instead of returning "Reply sent." over an empty message.
 				if (

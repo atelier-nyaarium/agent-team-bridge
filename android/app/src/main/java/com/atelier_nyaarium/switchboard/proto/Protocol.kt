@@ -1,17 +1,17 @@
-// generated from src/shared/schemas.ts + src/shared/phone-protocol.ts - DO NOT EDIT.
+// generated from src/shared/schemas.ts + src/shared/console-protocol.ts - DO NOT EDIT.
 // Regenerate: bun scripts/codegen-kotlin.ts
 //
 // Decode with Json { ignoreUnknownKeys = true } (the additive-protocol
-// posture). Enum-like fields are open Strings on purpose: the phone must
+// posture). Enum-like fields are open Strings on purpose: the console must
 // tolerate values newer than this build.
 //
 // ENCODE config is load-bearing: the default Json (encodeDefaults = false)
 // omits null-defaulted optionals, which is exactly what the arbiter's zod
 // schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
-// is ever enabled (e.g. to emit a defaulted const like PhoneRelayFrame.type),
-// it MUST pair with explicitNulls = false. Note the phone's POST body is the
+// is ever enabled (e.g. to emit a defaulted const like ConsoleRelayFrame.type),
+// it MUST pair with explicitNulls = false. Note the console's POST body is the
 // op-only envelope {device, conversationId, opId, op}; evie composes the full
-// phone_relay frame, so PhoneRelayFrame is decode-side here.
+// console_relay frame, so ConsoleRelayFrame is decode-side here.
 @file:Suppress("unused")
 
 package com.atelier_nyaarium.switchboard.proto
@@ -24,7 +24,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
 object Protocol {
-	const val PHONE_PROTOCOL_VERSION: Int = 1
+	const val CONSOLE_PROTOCOL_VERSION: Int = 1
 
 	/** Session-id prefix for broadcast notices; the sender follows it. */
 	const val NOTICE_SESSION_PREFIX: String = "notice:"
@@ -78,17 +78,17 @@ data class MailboxEntry(
 @Serializable
 @OptIn(ExperimentalSerializationApi::class)
 @JsonClassDiscriminator("kind")
-sealed class PhoneOp {
+sealed class ConsoleOp {
 	@Serializable
 	@SerialName("register")
 	data class Register(
 		val clientVersion: String? = null,
 		val clientVariant: String? = null,
-	) : PhoneOp()
+	) : ConsoleOp()
 
 	@Serializable
 	@SerialName("list_teams")
-	data object ListTeams : PhoneOp()
+	data object ListTeams : ConsoleOp()
 
 	@Serializable
 	@SerialName("send")
@@ -98,7 +98,7 @@ sealed class PhoneOp {
 		val effort: String? = null,
 		val body: String,
 		val files: List<ChannelFile>? = null,
-	) : PhoneOp()
+	) : ConsoleOp()
 
 	@Serializable
 	@SerialName("respond")
@@ -108,7 +108,7 @@ sealed class PhoneOp {
 		val response: String? = null,
 		val replyAsJson: JsonObject? = null,
 		val files: List<ChannelFile>? = null,
-	) : PhoneOp()
+	) : ConsoleOp()
 
 	@Serializable
 	@SerialName("poll")
@@ -116,21 +116,21 @@ sealed class PhoneOp {
 		val cursor: Long? = null,
 		val epoch: Long? = null,
 		val holdMs: Long? = null,
-	) : PhoneOp()
+	) : ConsoleOp()
 }
 
 @Serializable
-data class PhoneOpEnvelope(
+data class ConsoleOpEnvelope(
 	val v: Long,
 	val conversationId: String,
 	val device: String,
 	val at: Long,
-	val op: PhoneOp,
+	val op: ConsoleOp,
 )
 
 @Serializable
-data class PhoneRelayFrame(
-	val type: String = "phone_relay",
+data class ConsoleRelayFrame(
+	val type: String = "console_relay",
 	val v: Long,
 	val opId: String,
 	val signerSignPub: String,
@@ -138,8 +138,8 @@ data class PhoneRelayFrame(
 )
 
 @Serializable
-data class PhoneRelayReply(
-	val type: String = "phone_relay_reply",
+data class ConsoleRelayReply(
+	val type: String = "console_relay_reply",
 	val v: Long,
 	val opId: String,
 	val sealed: SealedEnvelope? = null,
@@ -147,14 +147,14 @@ data class PhoneRelayReply(
 )
 
 @Serializable
-data class PhoneReplyBody(
+data class ConsoleReplyBody(
 	val ok: Boolean,
 	val result: JsonElement? = null,
 	val error: String? = null,
 )
 
 @Serializable
-data class PhoneRegisterResult(
+data class ConsoleRegisterResult(
 	val device: String,
 	val switchId: String? = null,
 	val cursor: Long,
@@ -162,23 +162,23 @@ data class PhoneRegisterResult(
 )
 
 @Serializable
-data class PhoneListTeamsResult(
+data class ConsoleListTeamsResult(
 	val teams: List<TeamInfo>,
 )
 
 @Serializable
-data class PhoneSendResult(
+data class ConsoleSendResult(
 	val session_id: String,
 	val status: String,
 )
 
 @Serializable
-data class PhoneRespondResult(
+data class ConsoleRespondResult(
 	val delivered: Boolean,
 )
 
 @Serializable
-data class PhonePollResult(
+data class ConsolePollResult(
 	val entries: List<MailboxEntry>,
 	val cursor: Long,
 	val dropped: Long,

@@ -7,16 +7,16 @@ import type { WsData } from "../websocket.js";
 //  Class
 
 /**
- * Duck-typed bridge socket for a phone device. It exposes only the surface the
+ * Duck-typed bridge socket for a console device. It exposes only the surface the
  * arbiter uses on registry sockets (send / readyState / data / ping / close).
- * Because the phone has no live connection, send() appends inbound frames to the
- * device's mailbox instead of writing a wire; the phone drains it by polling.
+ * Because the console has no live connection, send() appends inbound frames to the
+ * device's mailbox instead of writing a wire; the console drains it by polling.
  * Inserted into the team registry + conversation registry via asWs().
  *
  * The mailbox is resolved through an accessor at append time, never captured,
  * so a TTL-swept-and-recreated store entry cannot orphan deliveries.
  */
-export class PhonePeer {
+export class ConsolePeer {
 	readonly data: WsData;
 	readonly readyState = 1;
 
@@ -26,7 +26,7 @@ export class PhonePeer {
 		conversationId: string,
 		subId: string,
 		// Notified with the session_id of each inbound agent message, so the
-		// handler can scope the phone's respond op to threads it actually received.
+		// handler can scope the console's respond op to threads it actually received.
 		private onInboundSession?: (sessionId: string) => void,
 	) {
 		this.data = {

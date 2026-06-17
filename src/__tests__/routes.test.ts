@@ -124,7 +124,7 @@ describe("routes", () => {
 			]);
 		});
 
-		it("marks a team whose only socket is a virtual phone peer as kind phone", async () => {
+		it("marks a team whose only socket is a virtual console peer as kind console", async () => {
 			const registry = makeRegistry({
 				"proj-a": { readyState: 1, data: { mode: "channel" } },
 				Aqua: { readyState: 1, data: { virtual: true, mode: "channel" } },
@@ -146,7 +146,7 @@ describe("routes", () => {
 					switchId: "test-host",
 					status: "online",
 					mode: "channel",
-					kind: "phone",
+					kind: "console",
 					queue_depth: 0,
 				},
 			]);
@@ -192,20 +192,20 @@ describe("routes", () => {
 	});
 
 	describe("/human/notify", () => {
-		async function makeStoreWithPhones(): Promise<{
+		async function makeStoreWithConsoles(): Promise<{
 			ctx: RoutesDeps;
 			mailboxStore: import("../shared/device-mailbox.js").DeviceMailboxStore;
 		}> {
 			const { DeviceMailboxStore } = await import("../shared/device-mailbox.js");
 			const mailboxStore = new DeviceMailboxStore();
-			mailboxStore.ensure("phone-a");
-			mailboxStore.ensure("phone-b");
+			mailboxStore.ensure("console-a");
+			mailboxStore.ensure("console-b");
 			const ctx = { ...makeCtx(), mailboxStore };
 			return { ctx, mailboxStore };
 		}
 
-		it("broadcasts a notice to every phone mailbox, threaded under the sender", async () => {
-			const { ctx, mailboxStore } = await makeStoreWithPhones();
+		it("broadcasts a notice to every console mailbox, threaded under the sender", async () => {
+			const { ctx, mailboxStore } = await makeStoreWithConsoles();
 			const { humanNotify } = createRoutes(ctx);
 			const res = humanNotify({
 				from: "recipe-app",
@@ -214,7 +214,7 @@ describe("routes", () => {
 				full: "# report\n\nall good",
 			});
 			expect((await res.json()).delivered).toBe(2);
-			for (const conv of ["phone-a", "phone-b"]) {
+			for (const conv of ["console-a", "console-b"]) {
 				const snap = mailboxStore.get(conv)!.drain();
 				expect(snap.entries).toHaveLength(1);
 				expect(snap.entries[0]).toMatchObject({
@@ -229,20 +229,20 @@ describe("routes", () => {
 		});
 
 		it("accepts the new title key and rejects a notice carrying neither title nor tiny", async () => {
-			const { ctx, mailboxStore } = await makeStoreWithPhones();
+			const { ctx, mailboxStore } = await makeStoreWithConsoles();
 			const { humanNotify } = createRoutes(ctx);
 			humanNotify({ from: "recipe-app", title: "via title", summary: "s", full: "body" });
-			expect(mailboxStore.get("phone-a")!.drain().entries[0]).toMatchObject({ title: "via title" });
+			expect(mailboxStore.get("console-a")!.drain().entries[0]).toMatchObject({ title: "via title" });
 			expect(humanNotify({ from: "t", summary: "s", full: "body" }).status).toBe(400);
 		});
 
 		it("requires summary and full (no ghost pings) and wakes a held poll", async () => {
-			const { ctx, mailboxStore } = await makeStoreWithPhones();
+			const { ctx, mailboxStore } = await makeStoreWithConsoles();
 			const { humanNotify } = createRoutes(ctx);
 			// Tiny-only notices are rejected outright.
 			expect(humanNotify({ from: "t", tiny: "ping" }).status).toBe(400);
 			expect(humanNotify({ from: "t", tiny: "ping", summary: "s" }).status).toBe(400);
-			const box = mailboxStore.get("phone-a")!;
+			const box = mailboxStore.get("console-a")!;
 			const start = Date.now();
 			const held = box.waitForAppend(10_000);
 			humanNotify({ from: "t", tiny: "ping", summary: "s", full: "body" });
@@ -252,7 +252,7 @@ describe("routes", () => {
 		});
 
 		it("rejects oversized attachments with 413 and missing store with 503", async () => {
-			const { ctx } = await makeStoreWithPhones();
+			const { ctx } = await makeStoreWithConsoles();
 			const { humanNotify } = createRoutes(ctx);
 			const huge = "A".repeat(14_000_001);
 			const res = humanNotify({
@@ -313,7 +313,7 @@ describe("routes", () => {
 
 		it("rejects an oversized attachment payload with 413", () => {
 			const store = new PendingJobStore<ResponsePayload>();
-			store.create("sess-files", "agent", "phone");
+			store.create("sess-files", "agent", "console");
 			const ctx = makeCtx({ store });
 			const { respond } = createRoutes(ctx);
 			const huge = "A".repeat(14_000_001); // ~10.5 MB decoded, over the 10 MB cap
@@ -335,7 +335,7 @@ describe("routes", () => {
 
 		it("stores file metadata without base64 but pushes the full bytes", async () => {
 			const store = new PendingJobStore<ResponsePayload>();
-			store.create("sess-files", "agent", "phone");
+			store.create("sess-files", "agent", "console");
 			await store.waitForResult("sess-files", 1); // settle so the result is poll-recoverable
 			const ctx = makeCtx({ store });
 			const { respond, poll } = createRoutes(ctx);
@@ -423,7 +423,7 @@ describe("routes", () => {
 			expect((await res.json()).error).toContain("not connected");
 		});
 
-		it("blocks a non-phone (crosstalk) send to the host-agent with 400", async () => {
+		it("blocks a non-console (crosstalk) send to the host-agent with 400", async () => {
 			const ctx = makeCtx();
 			const { send } = createRoutes(ctx);
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
@@ -434,7 +434,7 @@ describe("routes", () => {
 			expect(res.status).toBe(400);
 		});
 
-		it("lets a phone (channelOnly) send past the reserved guard to the host-agent", async () => {
+		it("lets a console (channelOnly) send past the reserved guard to the host-agent", async () => {
 			// channelOnly send to "arbiter" clears the 400 guard; with no arbiter
 			// registered here it then 404s, proving it got past the reserved block.
 			const ctx = makeCtx();
@@ -482,7 +482,7 @@ describe("routes", () => {
 			});
 			const json = await res.json();
 			// The channel session id carries the canonical host-qualified target so
-			// the phone threads the reply under (switchId, name).
+			// the console threads the reply under (switchId, name).
 			expect(json.session_id).toBe("conv:conv-1:test-host/proj-a");
 			expect(json.status).toBe("running");
 			expect(pushed.length).toBe(1);
@@ -503,7 +503,7 @@ describe("routes", () => {
 			const ctx = makeCtx({ registry });
 			const { send } = createRoutes(ctx);
 
-			// The phone targets the qualified name; the arbiter strips the local
+			// The console targets the qualified name; the arbiter strips the local
 			// host and resolves to the bare registry entry.
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
 				from: "pixel",
@@ -538,23 +538,23 @@ describe("routes", () => {
 		});
 	});
 
-	describe("/respond phone durability", () => {
+	describe("/respond console durability", () => {
 		const req = new Request("http://arbiter/respond");
 
 		it("appends a reply to the device mailbox even when no live peer exists", () => {
 			// The class-4 case: after a restart the mailbox is restored but the virtual
-			// peer is not rehydrated, so conversationRegistry has no entry for the phone.
+			// peer is not rehydrated, so conversationRegistry has no entry for the console.
 			const store = new PendingJobStore<ResponsePayload>();
-			store.create("sess-1", "team-a", "phone", { persistent: true, fromConversationId: "phone-conv" });
+			store.create("sess-1", "team-a", "console", { persistent: true, fromConversationId: "console-conv" });
 			const mailboxStore = new DeviceMailboxStore();
-			mailboxStore.ensure("phone-conv"); // mailbox restored, no conversationRegistry peer
+			mailboxStore.ensure("console-conv"); // mailbox restored, no conversationRegistry peer
 			const ctx = makeCtx({ store, mailboxStore });
 			const { respond } = createRoutes(ctx);
 
 			const res = respond(req, { session_id: "sess-1", status: "completed", response: "the answer" });
 			expect(res.status).toBe(200);
 
-			const drained = mailboxStore.get("phone-conv")?.drain(0);
+			const drained = mailboxStore.get("console-conv")?.drain(0);
 			expect(drained?.entries.length).toBe(1);
 			expect(drained?.entries[0]).toMatchObject({ kind: "reply", body: "the answer", status: "completed" });
 		});

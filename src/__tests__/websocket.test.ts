@@ -264,7 +264,7 @@ describe("virtual peer awareness", () => {
 		return ws;
 	}
 
-	it("a real registration evicts virtual phone squatters and their conversation pointers", () => {
+	it("a real registration evicts virtual console squatters and their conversation pointers", () => {
 		const { handlers, registry, conversationRegistry, evicted } = setup();
 		const squatter = createVirtualWs("teamx", "conv-1");
 		registry.set("teamx", new Map([["conv-1", squatter]]));

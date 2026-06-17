@@ -7,7 +7,7 @@ import type { Sealer } from "./sealer.js";
 //  Interfaces & Types
 
 /** The subset of arbiter HTTP routes the switch-relay handler reuses, exactly the
- * surface the phone handler uses - a federated op runs against the same local
+ * surface the console handler uses - a federated op runs against the same local
  * routes a local sender would hit. */
 export interface FederationRoutes {
 	send: (req: Request, body: Record<string, unknown>) => Promise<Response>;
@@ -89,7 +89,7 @@ export function createSwitchRelayHandler({ routes, tryWakeTeam }: SwitchRelayHan
 }
 
 /** Validates an inbound switch_relay frame, runs its op, and ships the reply back
- * to the Router. Mirrors the phone relay pump: one parse, one error surface. */
+ * to the Router. Mirrors the console relay pump: one parse, one error surface. */
 export function createSwitchRelayPump({ handleOp, sealer, sendReply }: SwitchRelayPumpDeps) {
 	return function pump(raw: unknown): void {
 		void (async () => {

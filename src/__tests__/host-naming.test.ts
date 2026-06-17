@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeSwitchId } from "../shared/host-id.js";
 import {
 	composeConvSessionId,
 	parseConvSessionTeam,
 	parseQualifiedTeam,
 	qualifyTeam,
-} from "../shared/phone-protocol.js";
+} from "../shared/console-protocol.js";
+import { sanitizeSwitchId } from "../shared/host-id.js";
 
 describe("switch qualification", () => {
 	it("qualifies a bare name under a Switch id", () => {

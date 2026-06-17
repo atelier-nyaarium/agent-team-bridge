@@ -1,4 +1,4 @@
-// SYNC-HASH: 3c71e132b12e49a1bff14e85514b9ba2
+// SYNC-HASH: 3be1990ab4fe3f36ac9ecf34d1d011a0
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -11,8 +11,8 @@ import { z } from "zod";
 //  purpose: this module imports nothing but zod, so the verbatim copy needs
 //  no import surgery; sibling shared modules import FROM it, never into it.
 //
-//  The phone_relay member stays loose: the arbiter's relay pump runs the
-//  full PhoneRelayFrameSchema parse (shared/schemas.ts) with its own error
+//  The console_relay member stays loose: the arbiter's relay pump runs the
+//  full ConsoleRelayFrameSchema parse (shared/schemas.ts) with its own error
 //  path, so the envelope union only routes by type - one parse, one error
 //  surface, no divergent double-validation.
 
@@ -20,7 +20,7 @@ import { z } from "zod";
 //  Schemas
 
 /**
- * Channel attachment metadata carried over the bridge (phone-origin files).
+ * Channel attachment metadata carried over the bridge (console-origin files).
  *
  * Presence of `base64` means the sender included the bytes and the host MCP
  * plugin should materialize the file; absence means metadata-only (no re-fetch
@@ -70,7 +70,7 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 	}),
 	// Loose: the relay pump owns full validation (see module header).
 	z.looseObject({
-		type: z.literal("phone_relay"),
+		type: z.literal("console_relay"),
 	}),
 	// Loose: a cross-Switch frame evie routed to this Switch. The switch-relay pump runs
 	// the full federation parse (federation-protocol.ts); evie only switched it
@@ -80,7 +80,7 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 	}),
 ]);
 
-/** The one frame the arbiter SENDS (besides phone_relay_reply, which travels
+/** The one frame the arbiter SENDS (besides console_relay_reply, which travels
  * AS a tool_call and is intercepted by tool name on the evie side). */
 export const ToolCallFrameSchema = z.object({
 	type: z.literal("tool_call"),

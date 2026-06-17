@@ -107,7 +107,7 @@ export function renderFilesBlock({ discordMessageId, files }: RenderFilesBlockPa
 	if (files.length === 0) return "";
 
 	const opener = discordMessageId ? `[FILES messageId="${discordMessageId}"]` : `[FILES]`;
-	// Phone files always arrive with bytes and are materialized to disk. A
+	// Console files always arrive with bytes and are materialized to disk. A
 	// metadata-only entry (no bytes) has no re-fetch path - the evie tool proxy
 	// that once re-served them is retired - so it is surfaced as not-transferred.
 	const hasMetadataOnly = files.some((f) => !f.path);

@@ -15,7 +15,7 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * On-device debug log the user can pull off the phone. Writes to the shared
+ * On-device debug log the user can pull off the console. Writes to the shared
  * Downloads folder as `switchboard-debug.log` (Downloads/switchboard-debug.log)
  * via MediaStore on API 29+, with no storage permission. The file is truncated at
  * each app start, then appended to, so a sent log is one session.
@@ -125,7 +125,7 @@ object DebugLog {
 				conn.requestMethod = "POST"
 				conn.setRequestProperty("Content-Type", "application/json")
 				conn.setRequestProperty("Authorization", "Bearer $saToken")
-				conn.setRequestProperty("X-Android-Bridge-Token", "Bearer $appToken")
+				conn.setRequestProperty("X-Console-Bridge-Token", "Bearer $appToken")
 				conn.connectTimeout = 8_000
 				conn.readTimeout = 8_000
 				conn.doOutput = true

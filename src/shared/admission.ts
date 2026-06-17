@@ -1,4 +1,4 @@
-// SYNC-HASH: f1cf985a63cf9d7656f14bde5413ba2a
+// SYNC-HASH: 68a289ace733450ddcdb59a519565af4
 // SYNCED MODULE - source of truth: switchboard/src/shared/admission.ts
 // Copied verbatim into: evie-bot/app/features/bridge/admission.ts
 // MUST re-copy on change: cp src/shared/admission.ts ../evie-bot/app/features/bridge/admission.ts
@@ -9,7 +9,7 @@ import { sign, verify } from "./crypto.js";
 //  Domain admission + allowlist (the trust model)
 //
 //  Membership in the Domain is an allowlist of OWNER-SIGNED admissions: the owner
-//  device attests a subject's keys (a Switch or a phone) into the Domain. evie AND
+//  device attests a subject's keys (a Switch or a console) into the Domain. evie AND
 //  each Switch hold the allowlist, so a revocation bites even while evie is
 //  unreachable (audit R3). The owner is the single root of trust; an admission /
 //  revocation is only honored if it verifies under the expected owner key.
@@ -23,7 +23,7 @@ import { sign, verify } from "./crypto.js";
 ////////////////////////////////
 //  Schemas
 
-export const AdmissionKindSchema = z.enum(["switch", "phone"]);
+export const AdmissionKindSchema = z.enum(["switch", "console"]);
 
 export const AdmissionSchema = z
 	.object({

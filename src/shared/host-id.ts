@@ -1,5 +1,5 @@
 import os from "node:os";
-import { SWITCH_QUALIFIER_SEP } from "./phone-protocol.js";
+import { SWITCH_QUALIFIER_SEP } from "./console-protocol.js";
 
 ////////////////////////////////
 //  Functions & Helpers

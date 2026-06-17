@@ -22,7 +22,9 @@ const NotifyHumanSchema = z
 		attachments: z
 			.array(z.string())
 			.optional()
-			.describe(`Optional absolute file paths to attach (screenshots, logs). Images render inline on the phone.`),
+			.describe(
+				`Optional absolute file paths to attach (screenshots, logs). Images render inline on the console.`,
+			),
 	})
 	.strict();
 type NotifyHumanArgs = z.infer<typeof NotifyHumanSchema>;
@@ -31,7 +33,7 @@ type NotifyHumanArgs = z.infer<typeof NotifyHumanSchema>;
 //  Functions & Helpers
 
 const NOTIFY_DESCRIPTION = `
-Push a notification to the human's phone(s). Broadcasts to every registered phone device: \`title\` becomes the notification-bar line, \`summary\` rides as its own short tier (phone features read it directly), and \`full\` the message body, threaded under your team's name. title, summary, and full are all required - a notice must always carry a real body. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply for those).
+Push a notification to the human's console(s). Broadcasts to every registered console device: \`title\` becomes the notification-bar line, \`summary\` rides as its own short tier (console features read it directly), and \`full\` the message body, threaded under your team's name. title, summary, and full are all required - a notice must always carry a real body. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply for those).
 `.trim();
 
 export function registerHumanTools(mcpServer: McpServer): void {
@@ -84,7 +86,7 @@ export function registerHumanTools(mcpServer: McpServer): void {
 					content: [
 						{
 							type: "text" as const,
-							text: `Notice delivered to ${delivered} phone(s).${delivered === 0 ? " No phones are currently registered; it was not queued." : ""}`,
+							text: `Notice delivered to ${delivered} console(s).${delivered === 0 ? " No consoles are currently registered; it was not queued." : ""}`,
 						},
 					],
 				};

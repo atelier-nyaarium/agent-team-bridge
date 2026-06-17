@@ -96,7 +96,7 @@ class ProvisioningStore(context: Context) {
 
 	fun loadSwitchId(): String = prefs.getString(KEY_SWITCH_ID, "") ?: ""
 
-	/** The phone-owned mailbox consumption cursor, durable across app restarts. The phone
+	/** The console-owned mailbox consumption cursor, durable across app restarts. The console
 	 * resumes from its OWN cursor instead of re-adopting a server-dictated one, so the
 	 * backlog that piled up while the app was closed is never acked away on the next poll.
 	 * Null until the first commit (a fresh install). */

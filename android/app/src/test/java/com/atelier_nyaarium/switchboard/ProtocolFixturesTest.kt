@@ -1,16 +1,16 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
-import com.atelier_nyaarium.switchboard.proto.PhoneListTeamsResult
-import com.atelier_nyaarium.switchboard.proto.PhoneOp
-import com.atelier_nyaarium.switchboard.proto.PhoneOpEnvelope
-import com.atelier_nyaarium.switchboard.proto.PhonePollResult
-import com.atelier_nyaarium.switchboard.proto.PhoneRegisterResult
-import com.atelier_nyaarium.switchboard.proto.PhoneRelayFrame
-import com.atelier_nyaarium.switchboard.proto.PhoneRelayReply
-import com.atelier_nyaarium.switchboard.proto.PhoneReplyBody
-import com.atelier_nyaarium.switchboard.proto.PhoneRespondResult
-import com.atelier_nyaarium.switchboard.proto.PhoneSendResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleOp
+import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
+import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleRegisterResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleRelayFrame
+import com.atelier_nyaarium.switchboard.proto.ConsoleRelayReply
+import com.atelier_nyaarium.switchboard.proto.ConsoleReplyBody
+import com.atelier_nyaarium.switchboard.proto.ConsoleRespondResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleSendResult
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -36,16 +36,16 @@ class ProtocolFixturesTest {
 
 	private fun decodeAs(schema: String, body: String) {
 		when (schema) {
-			"PhoneOpEnvelope" -> json.decodeFromString<PhoneOpEnvelope>(body)
-			"PhoneRelayFrame" -> json.decodeFromString<PhoneRelayFrame>(body)
-			"PhoneRelayReply" -> json.decodeFromString<PhoneRelayReply>(body)
-			"PhoneReplyBody" -> json.decodeFromString<PhoneReplyBody>(body)
+			"ConsoleOpEnvelope" -> json.decodeFromString<ConsoleOpEnvelope>(body)
+			"ConsoleRelayFrame" -> json.decodeFromString<ConsoleRelayFrame>(body)
+			"ConsoleRelayReply" -> json.decodeFromString<ConsoleRelayReply>(body)
+			"ConsoleReplyBody" -> json.decodeFromString<ConsoleReplyBody>(body)
 			"MailboxEntry" -> json.decodeFromString<MailboxEntry>(body)
-			"PhoneRegisterResult" -> json.decodeFromString<PhoneRegisterResult>(body)
-			"PhoneListTeamsResult" -> json.decodeFromString<PhoneListTeamsResult>(body)
-			"PhoneSendResult" -> json.decodeFromString<PhoneSendResult>(body)
-			"PhoneRespondResult" -> json.decodeFromString<PhoneRespondResult>(body)
-			"PhonePollResult" -> json.decodeFromString<PhonePollResult>(body)
+			"ConsoleRegisterResult" -> json.decodeFromString<ConsoleRegisterResult>(body)
+			"ConsoleListTeamsResult" -> json.decodeFromString<ConsoleListTeamsResult>(body)
+			"ConsoleSendResult" -> json.decodeFromString<ConsoleSendResult>(body)
+			"ConsoleRespondResult" -> json.decodeFromString<ConsoleRespondResult>(body)
+			"ConsolePollResult" -> json.decodeFromString<ConsolePollResult>(body)
 			else -> throw AssertionError("unknown manifest schema: $schema")
 		}
 	}
@@ -71,22 +71,22 @@ class ProtocolFixturesTest {
 	@Test
 	fun decodesEveryOpKindThroughTheFrame() {
 		val ops = mapOf(
-			"op-envelope-register.json" to PhoneOp.Register::class,
-			"op-envelope-list-teams.json" to PhoneOp.ListTeams::class,
-			"op-envelope-send.json" to PhoneOp.Send::class,
-			"op-envelope-respond.json" to PhoneOp.Respond::class,
-			"op-envelope-poll.json" to PhoneOp.Poll::class,
+			"op-envelope-register.json" to ConsoleOp.Register::class,
+			"op-envelope-list-teams.json" to ConsoleOp.ListTeams::class,
+			"op-envelope-send.json" to ConsoleOp.Send::class,
+			"op-envelope-respond.json" to ConsoleOp.Respond::class,
+			"op-envelope-poll.json" to ConsoleOp.Poll::class,
 		)
 		for ((name, expected) in ops) {
-			val envelope = json.decodeFromString<PhoneOpEnvelope>(fixture(name))
+			val envelope = json.decodeFromString<ConsoleOpEnvelope>(fixture(name))
 			assertEquals(name, expected, envelope.op::class)
 		}
 	}
 
 	@Test
 	fun frameRoundTripsThroughEncode() {
-		val envelope = json.decodeFromString<PhoneOpEnvelope>(fixture("op-envelope-send.json"))
-		val redecoded = json.decodeFromString<PhoneOpEnvelope>(json.encodeToString(PhoneOpEnvelope.serializer(), envelope))
+		val envelope = json.decodeFromString<ConsoleOpEnvelope>(fixture("op-envelope-send.json"))
+		val redecoded = json.decodeFromString<ConsoleOpEnvelope>(json.encodeToString(ConsoleOpEnvelope.serializer(), envelope))
 		assertEquals(envelope, redecoded)
 	}
 
@@ -112,7 +112,7 @@ class ProtocolFixturesTest {
 
 	@Test
 	fun toleratesOldArbiterTeamWithoutKind() {
-		val result = json.decodeFromString<PhoneListTeamsResult>(fixture("list-teams-result.json"))
+		val result = json.decodeFromString<ConsoleListTeamsResult>(fixture("list-teams-result.json"))
 		assertEquals(2, result.teams.size)
 		assertEquals("devcontainer", result.teams[0].kind)
 		assertNull(result.teams[1].kind)
@@ -120,12 +120,12 @@ class ProtocolFixturesTest {
 
 	@Test
 	fun decodesNestedRelayReplyResultPerOp() {
-		// reply-body.json holds the sealed inner reply as PhoneReplyBody (plaintext fixture).
-		val body = json.decodeFromString<PhoneReplyBody>(fixture("reply-body.json"))
+		// reply-body.json holds the sealed inner reply as ConsoleReplyBody (plaintext fixture).
+		val body = json.decodeFromString<ConsoleReplyBody>(fixture("reply-body.json"))
 		assertTrue(body.ok)
 		assertNull(body.error)
 		// The untyped result payload decodes per-op; here it is a poll result.
-		val nested = json.decodeFromString<PhonePollResult>(body.result.toString())
+		val nested = json.decodeFromString<ConsolePollResult>(body.result.toString())
 		assertEquals(0, nested.entries.size)
 	}
 }

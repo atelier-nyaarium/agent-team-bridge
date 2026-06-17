@@ -1,4 +1,4 @@
-// SYNC-HASH: 9577ef18ac53bfbb0582abe6978c8f04
+// SYNC-HASH: 812ec8428b0dc6cd624730b140383bb5
 // SYNCED MODULE - source of truth: switchboard/src/shared/notice.ts
 // Copied verbatim into: nyaaskills/src/shared/notice.ts
 // MUST re-copy on change: cp src/shared/notice.ts ../nyaaskills/src/shared/notice.ts
@@ -7,9 +7,9 @@ import { z } from "zod";
 ////////////////////////////////
 //  Human notification contract
 //
-//  The three-tier notice a milestone report carries to the phone:
+//  The three-tier notice a milestone report carries to the console:
 //  - title:   the notification-bar headline (one short phrase)
-//  - summary: a short standalone tier phone features read directly
+//  - summary: a short standalone tier console features read directly
 //  - full:    the message body (full markdown report)
 //
 //  The SINGLE TRUTH for the notify_human tool param and the /human/notify
@@ -35,7 +35,9 @@ export const NoticeSummary = z
 export const NoticeFull = z
 	.string()
 	.min(1)
-	.describe(`Full markdown report (mermaid renders too). Shown as the message body on the phone; no lead-in labels.`);
+	.describe(
+		`Full markdown report (mermaid renders too). Shown as the message body on the console; no lead-in labels.`,
+	);
 
 /** Deprecated alias for `title`. Accepted for one transition release so an
  * older caller (or a relay instruction minted before the rename) still

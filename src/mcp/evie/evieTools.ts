@@ -8,7 +8,7 @@ import { routerPost } from "../bridge/helpers.js";
 
 // @unused - DETACHED. The evie tool proxy is no longer wired into the host MCP:
 // src/mcp/index.ts dropped the acquisition block, so nothing imports this. Kept
-// for history. The human now reaches agents through the phone channel and
+// for history. The human now reaches agents through the console channel and
 // notify_human, not evie's Discord tool registry. Re-attach by restoring the
 // evie-tool acquisition block in mcp/index.ts.
 

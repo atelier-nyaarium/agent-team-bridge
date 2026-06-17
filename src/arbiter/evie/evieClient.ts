@@ -25,9 +25,9 @@ export interface EvieClientConfig {
 	// can be switched to this Switch.
 	switchId: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
-	// The relay pump owns full PhoneRelayFrameSchema validation; the envelope
+	// The relay pump owns full ConsoleRelayFrameSchema validation; the envelope
 	// union only routes by type, so the frame travels as unknown.
-	onPhoneRelay?: (frame: unknown) => void;
+	onConsoleRelay?: (frame: unknown) => void;
 	// A cross-Switch frame the Router switched to this Switch; the switch-relay pump owns
 	// full SwitchRelayFrameSchema validation, so the frame travels as unknown.
 	onSwitchRelay?: (frame: unknown) => void;
@@ -128,8 +128,8 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					config.onToolRegistry?.(cachedTools);
 					break;
 				}
-				case "phone_relay": {
-					config.onPhoneRelay?.(frame);
+				case "console_relay": {
+					config.onConsoleRelay?.(frame);
 					break;
 				}
 				case "switch_relay": {
