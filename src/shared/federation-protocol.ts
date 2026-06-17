@@ -29,8 +29,8 @@ export const ReturnRouteSchema = z.object({
 	srcSession: z.string().min(1).max(256),
 });
 
-/** The op a Host executes on a peer's behalf. Plaintext spike: travels in the
- * clear inside the host_relay payload; the crypto phase moves it inside `sealed`. */
+/** The op a Host executes on a peer's behalf. Always carried E2E-sealed inside the
+ * host_relay payload (`sealer.ts`); evie relays the envelope but never sees the op. */
 export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	z.object({
 		kind: z.literal("send"),
@@ -92,10 +92,10 @@ export const HostRelayFrameSchema = z.object({
 ////////////////////////////////
 //  Types
 //
-//  Op RESULTS travel back in host_relay_reply.result as plain objects the origin
-//  reads loosely (a peer Host is semi-trusted; the phone's tolerant decode and
-//  the existing route validation handle shape). No result schemas here until the
-//  crypto phase needs to validate an unsealed result.
+//  Op RESULTS are sealed back to the origin Host too (hostRelay.ts seals the reply
+//  leg), then parsed loosely by the origin: a peer Host is semi-trusted, and the
+//  phone's tolerant decode plus the existing route validation handle shape, so no
+//  result schema is enforced here.
 
 export type ReturnRoute = z.infer<typeof ReturnRouteSchema>;
 export type FederatedOp = z.infer<typeof FederatedOpSchema>;

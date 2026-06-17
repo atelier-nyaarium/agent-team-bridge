@@ -26,4 +26,33 @@ describe("ReplayGuard", () => {
 		for (let i = 0; i < 100; i++) g.check("h", `n${i}`);
 		expect(g.size).toBeLessThanOrEqual(10);
 	});
+
+	it("survives a restart: a snapshot restored into a fresh guard still rejects the replay", () => {
+		const now = 1000;
+		const g = new ReplayGuard(300_000, 50_000, () => now);
+		expect(g.check("hostA", "n1")).toBe(true);
+		const snap = g.snapshot();
+		expect(snap).toContainEqual(["hostA\nn1", 1000 + 300_000]);
+
+		// Simulate a restart: a brand-new guard loads the persisted seen-set.
+		const revived = new ReplayGuard(300_000, 50_000, () => now);
+		revived.restore(snap);
+		// The captured nonce is still a replay AFTER the restart (the bug this fixes).
+		expect(revived.check("hostA", "n1")).toBe(false);
+		// A fresh nonce is still accepted.
+		expect(revived.check("hostA", "n2")).toBe(true);
+	});
+
+	it("drops expired entries from the snapshot and on restore", () => {
+		let now = 1000;
+		const g = new ReplayGuard(100, 50_000, () => now);
+		g.check("h", "stale");
+		now = 1200; // past the 100ms window
+		// The expired entry is not carried forward.
+		expect(g.snapshot()).toEqual([]);
+
+		const revived = new ReplayGuard(100, 50_000, () => now);
+		revived.restore([["h\nstale", 1100]]); // already expired at now=1200
+		expect(revived.check("h", "stale")).toBe(true); // forgotten, fresh again
+	});
 });
