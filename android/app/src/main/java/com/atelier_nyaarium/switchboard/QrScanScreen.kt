@@ -6,6 +6,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
 import androidx.camera.core.ExperimentalGetImage
+import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.Arrangement
@@ -35,13 +38,20 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Full-screen QR scanner: a CameraX preview feeding ML Kit barcode decode. ML Kit (the
- * engine most dedicated scanner apps use) reads dense v40 QRs reliably, and feeding each
- * frame WITH `imageProxy.imageInfo.rotationDegrees` fixes the sideways/distorted preview
- * that broke the old zxing capture Activity. `onResult` fires exactly once with the
- * decoded text; `onCancel` backs out. Camera permission is requested on entry.
+ * Full-screen QR scanner: CameraX preview feeding ML Kit barcode decode. Two things make a
+ * DENSE v40 enrollment QR (177 modules, ~2.7 KB) decode reliably:
+ *  1. RESOLUTION. A hand-rolled analyzer runs at CameraX's 640x480 default, which gives
+ *     under ML Kit's >=2 px/module floor for 177 modules, so it never decodes. We request
+ *     the highest analysis resolution (capped ~1080p) via a ResolutionSelector BEFORE bind.
+ *  2. FOCUS. A QR on a glossy screen at close range can sit in the macro dead-zone, so we
+ *     kick a center focus-metering action once the preview lays out.
+ * Frame is fed WITH `rotationDegrees` so orientation is correct. `onResult` fires once.
+ * DebugLog traces (debug build flushes them to evie) confirm the analysis size + decode.
  */
 @OptIn(ExperimentalGetImage::class)
 @Composable
@@ -70,12 +80,15 @@ fun QrScanScreen(onResult: (String) -> Unit, onCancel: () -> Unit) {
 		BarcodeScanning.getClient(BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
 	}
 	val controller = remember { LifecycleCameraController(context) }
-	var handled by remember { mutableStateOf(false) }
+	val analysisExec = remember { Executors.newSingleThreadExecutor() }
+	val handled = remember { AtomicBoolean(false) }
+	val frames = remember { AtomicLong(0L) }
 
 	DisposableEffect(Unit) {
 		onDispose {
 			runCatching { controller.unbind() }
 			runCatching { scanner.close() }
+			runCatching { analysisExec.shutdown() }
 		}
 	}
 
@@ -84,27 +97,52 @@ fun QrScanScreen(onResult: (String) -> Unit, onCancel: () -> Unit) {
 			modifier = Modifier.fillMaxSize(),
 			factory = { ctx ->
 				val view = PreviewView(ctx)
-				val exec = ContextCompat.getMainExecutor(ctx)
-				controller.setImageAnalysisAnalyzer(exec) { proxy ->
+
+				// THE fix: lift analysis off the 640x480 default so a 177-module QR resolves.
+				controller.setImageAnalysisResolutionSelector(
+					ResolutionSelector.Builder()
+						.setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+						.setAllowedResolutionMode(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE)
+						.build(),
+				)
+				controller.setImageAnalysisAnalyzer(analysisExec) { proxy ->
 					val media = proxy.image
-					if (media == null || handled) {
+					if (media == null || handled.get()) {
 						proxy.close()
 						return@setImageAnalysisAnalyzer
 					}
-					val input = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
-					scanner.process(input)
-						.addOnSuccessListener { codes ->
-							val raw = codes.firstOrNull()?.rawValue
-							if (!handled && raw != null) {
-								handled = true
-								runCatching { controller.unbind() }
-								onResult(raw)
+					val n = frames.incrementAndGet()
+					if (n == 1L) DebugLog.log("QrScan", "analysis ${proxy.width}x${proxy.height} rot=${proxy.imageInfo.rotationDegrees}")
+					val started = runCatching {
+						scanner.process(InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees))
+							.addOnSuccessListener { codes ->
+								if (codes.isNotEmpty() || n % 60L == 0L) DebugLog.log("QrScan", "frame $n: ${codes.size} code(s)")
+								val raw = codes.firstOrNull()?.rawValue
+								if (raw != null && handled.compareAndSet(false, true)) {
+									DebugLog.log("QrScan", "decoded ${raw.length} chars")
+									runCatching { controller.unbind() }
+									onResult(raw)
+								}
 							}
-						}
-						.addOnCompleteListener { proxy.close() }
+							.addOnFailureListener { e -> DebugLog.log("QrScan", "process failed: ${e.message}") }
+							.addOnCompleteListener { proxy.close() }
+					}
+					if (started.isFailure) {
+						DebugLog.log("QrScan", "analyze threw: ${started.exceptionOrNull()?.message}")
+						proxy.close()
+					}
 				}
+
 				controller.bindToLifecycle(lifecycleOwner)
 				view.controller = controller
+
+				// Screen QRs at close range can park AF at infinity; nudge focus to center.
+				view.post {
+					runCatching {
+						val point = view.meteringPointFactory.createPoint(view.width / 2f, view.height / 2f)
+						controller.cameraControl?.startFocusAndMetering(FocusMeteringAction.Builder(point).build())
+					}
+				}
 				view
 			},
 		)
