@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # No args:  pull and start this machine's arbiter.
-# --setup:  menu to start, stop, or purge it.
+# --setup:  menu to configure or purge it.
 # One arbiter per machine, configured by .env.
 
 set -uo pipefail
@@ -56,7 +56,7 @@ wipe_state() {
 		|| { err "could not erase volumes/arbiter (is docker running?)"; return 1; }
 }
 
-start() {
+configure() {
 	local id token pin cur_id cur_token cur_pin raw host
 	host="$(hostname)"
 	cur_id="$(env_get HOST_ID)"
@@ -90,36 +90,33 @@ start() {
 	fi
 }
 
-stop() {
-	docker compose down --remove-orphans 2>/dev/null || true
-	echo "Stopped (identity + data kept). Resume: ./start-arbiter.sh"
-}
-
 purge() {
-	echo "Erase this arbiter's identity + data (keypair, admissions, mailboxes)?"
-	echo "On its next start it mints a NEW keypair + admit-host QR, so the owner"
-	echo "phone must re-scan it to re-admit this Host."
-	local ok; read -rp "Erase and stop? [y/N]: " ok
+	echo "Purge wipes this machine's arbiter setup back to nothing:"
+	echo "  - .env (HOST_ID, BRIDGE_TOKEN, owner pin)"
+	echo "  - volumes/arbiter (keypair, admissions, mailboxes)"
+	echo "Configure afterward mints a NEW keypair + admit-host QR, so the owner phone"
+	echo "must re-scan to re-admit this Host."
+	local ok; read -rp "Purge everything? [y/N]: " ok
 	[ "$ok" = y ] || return 0
 	docker compose down --remove-orphans 2>/dev/null || true
-	wipe_state && echo "Erased. Run Start (option 1) to bring it up fresh."
+	wipe_state
+	rm -f "$ENV_FILE"
+	echo "Purged. Run Configure (option 1) to set it up fresh."
 }
 
 menu() {
 	while true; do
 		echo
-		echo "switchboard arbiter on $(hostname)"
-		echo "  1) Start  - configure .env and run"
-		echo "  2) Stop   - stop, keep identity"
-		echo "  3) Purge  - stop, erase identity"
+		echo "switchboard arbiter setup on $(hostname)"
+		echo "  1) Configure     - set up .env and (re)start the arbiter"
+		echo "  2) Purge configs - erase .env + identity/data (start over)"
 		echo "  q) Quit"
 		local c; read -rp "> " c
 		case "$c" in
-			1) start ;;
-			2) stop ;;
-			3) purge ;;
+			1) configure ;;
+			2) purge ;;
 			q | Q | "") break ;;
-			*) echo "Enter 1, 2, 3, or q." ;;
+			*) echo "Enter 1, 2, or q." ;;
 		esac
 	done
 }
