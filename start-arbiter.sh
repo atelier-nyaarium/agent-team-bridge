@@ -40,6 +40,16 @@ show_qr() {
 	echo "(empty above = no QR; it prints only when BRIDGE_TOKEN is set and the Host is un-admitted)"
 }
 
+# Empty volumes/arbiter. The arbiter writes these files as the in-container user,
+# so the host-side rm is "Permission denied"; wipe them with a throwaway root
+# container that has the same bind mount.
+wipe_state() {
+	[ -d volumes/arbiter ] || return 0
+	docker run --rm -u 0 -v "$(pwd)/volumes/arbiter:/w" busybox \
+		sh -c 'cd /w && rm -rf -- ..?* .[!.]* * 2>/dev/null; true' \
+		|| { err "could not wipe volumes/arbiter (is docker up?)"; return 1; }
+}
+
 configure() {
 	local cur_id cur_token cur_pin def_id raw
 	cur_id="$(env_get HOST_ID)"
@@ -83,7 +93,7 @@ teardown() {
 	docker compose down --remove-orphans 2>/dev/null || true
 	echo "Arbiter stopped."
 	local w; read -rp "Wipe its state volume volumes/arbiter (identity + allowlist)? [y/N]: " w
-	[ "$w" = y ] && rm -rf volumes/arbiter && echo "wiped volumes/arbiter"
+	[ "$w" = y ] && wipe_state && echo "wiped volumes/arbiter"
 }
 
 re_setup() {
@@ -91,7 +101,7 @@ re_setup() {
 	echo "It re-mints its identity and prints a fresh admit-host QR for re-enrollment."
 	local ok; read -rp "Proceed? [y/N]: " ok; [ "$ok" = y ] || return 0
 	docker compose down --remove-orphans 2>/dev/null || true
-	rm -rf volumes/arbiter
+	wipe_state || return 1
 	docker compose up --build -d || { err "compose up failed"; return 1; }
 	if wait_health; then
 		echo "Arbiter healthy."
