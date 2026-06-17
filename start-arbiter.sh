@@ -1,225 +1,117 @@
 #!/usr/bin/env bash
 #
-# No args:   quick-start the primary "switchboard" arbiter (git pull + compose up).
-# --setup:   interactive wizard to provision / tear down / clean-re-setup an arbiter
-#            instance (for rolling a second Host into the federation).
+# No args:   quick-start this machine's arbiter (git pull + compose up).
+# --setup:   interactive .env configure / teardown / clean re-setup for this
+#            machine's single arbiter. One arbiter per machine.
 
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
 
-INSTANCES_DIR=".instances"
-
-####################
-# Helpers
+ENV_FILE=".env"
 
 err() { echo "ERROR: $*" >&2; }
 
-# Sanitize an instance id to the same [a-z0-9-] slug the arbiter enforces (host-id.ts).
-sanitize_id() {
-	local s
-	s="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9-' '-')"
-	s="${s#-}"
-	s="${s%-}"
-	printf '%s' "$s"
-}
+# Value of KEY in .env (everything after the first '='), or empty.
+env_get() { [ -f "$ENV_FILE" ] && sed -n "s/^$1=//p" "$ENV_FILE" | head -1; }
 
-# The BRIDGE_TOKEN from .env (the legacy primary source), or empty.
-env_token() {
-	[ -f .env ] && sed -n 's/^BRIDGE_TOKEN=//p' .env | head -1
-}
-
-# Is a host TCP port free (not bound by a container or a local listener)?
-port_free() {
-	local p="$1"
-	if docker ps --format '{{.Ports}}' 2>/dev/null | grep -qE "(:|>)${p}->"; then return 1; fi
-	if command -v ss >/dev/null 2>&1 && ss -ltnH 2>/dev/null | grep -qE "[:.]${p}[[:space:]]"; then return 1; fi
-	return 0
-}
-
-next_free_port() {
-	local p=20010
-	while ! port_free "$p"; do p=$((p + 10)); done
-	printf '%s' "$p"
-}
-
-# Read a single field out of an instance env file.
-env_field() {
-	sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1
-}
-
-# Compose invocation for an instance (its own project + env-file).
-dc() {
-	local id="$1"; shift
-	docker compose -p "$id" --env-file "$INSTANCES_DIR/$id.env" "$@"
+# Set KEY=VALUE in .env, replacing an existing line or appending, keeping the rest.
+env_set() {
+	local key="$1" val="$2" tmp
+	touch "$ENV_FILE"
+	tmp="$(mktemp)"
+	grep -vE "^${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || true
+	printf '%s=%s\n' "$key" "$val" >> "$tmp"
+	mv "$tmp" "$ENV_FILE"
 }
 
 wait_health() {
-	local port="$1"
-	echo "Waiting for the arbiter on :$port ..."
+	echo "Waiting for the arbiter on :20000 ..."
 	for _ in $(seq 1 30); do
-		if curl -sf "http://localhost:$port/health" >/dev/null 2>&1; then return 0; fi
+		if curl -sf http://localhost:20000/health >/dev/null 2>&1; then return 0; fi
 		sleep 2
 	done
 	return 1
 }
 
 show_qr() {
-	local container="$1"
 	echo
-	echo "=== Admit-host QR (scan with the owner phone, then confirm the SAS below) ==="
-	docker logs "$container" 2>&1 | sed -n '/open Enroll by QR/,/Confirm this fingerprint/p' || true
-	echo "(empty above = no QR; it only prints when a BRIDGE_TOKEN is set and the Host is un-admitted)"
+	echo "=== Admit-host QR (scan with the owner phone, then confirm the SAS) ==="
+	docker logs switchboard 2>&1 | sed -n '/open Enroll by QR/,/Confirm this fingerprint/p' || true
+	echo "(empty above = no QR; it prints only when BRIDGE_TOKEN is set and the Host is un-admitted)"
 }
 
-list_ids() {
-	local f
-	for f in "$INSTANCES_DIR"/*.env; do [ -e "$f" ] && basename "$f" .env; done
-}
+configure() {
+	local cur_id cur_token cur_pin def_id raw
+	cur_id="$(env_get HOST_ID)"
+	cur_token="$(env_get BRIDGE_TOKEN)"
+	cur_pin="$(env_get FEDERATION_OWNER_SIGN_PUB)"
+	def_id="${cur_id:-$(hostname)}"
 
-# Prompt the user to choose a configured instance; echoes the id on stdout.
-pick_instance() {
-	local ids; mapfile -t ids < <(list_ids)
-	if [ "${#ids[@]}" -eq 0 ]; then err "no configured instances under $INSTANCES_DIR/"; return 1; fi
-	local i=1 x
-	for x in "${ids[@]}"; do echo "  $i) $x" >&2; i=$((i + 1)); done
-	local n; read -rp "Pick #: " n
-	if ! [[ "$n" =~ ^[0-9]+$ ]] || [ "$n" -lt 1 ] || [ "$n" -gt "${#ids[@]}" ]; then err "invalid choice"; return 1; fi
-	printf '%s' "${ids[$((n - 1))]}"
-}
-
-####################
-# Actions
-
-provision() {
-	mkdir -p "$INSTANCES_DIR"
-
-	local id raw
-	read -rp "Instance id [switchboard]: " raw
-	id="$(sanitize_id "${raw:-switchboard}")"
-	[ -n "$id" ] || { err "empty id"; return 1; }
-	local envf="$INSTANCES_DIR/$id.env"
-
-	local port volume network container
-	if [ "$id" = "switchboard" ]; then
-		port=20000; volume="arbiter"; network="switchboard"; container="switchboard"
-	else
-		port="$(next_free_port)"; volume="arbiter-$id"; container="$id"
-		# Avoid a doubled "switchboard-switchboard-2" when the id already carries the prefix.
-		case "$id" in switchboard-*) network="$id" ;; *) network="switchboard-$id" ;; esac
-	fi
-	read -rp "Host port [$port]: " raw; port="${raw:-$port}"
-
-	local deftoken token
-	deftoken="$(env_token)"
-	if [ -n "$deftoken" ]; then
-		read -rp "Bridge token [reuse .env]: " raw; token="${raw:-$deftoken}"
-	else
-		read -rp "Bridge token (REQUIRED for evie/federation + the admit-host QR): " token
-	fi
-	[ -n "$token" ] || echo "WARNING: empty token -> the evie bridge will not start (local-only, no QR)."
-
-	local pin
-	read -rp "Owner pin FEDERATION_OWNER_SIGN_PUB (optional, Enter to skip): " pin
-
+	echo "Current .env:"
+	echo "  HOST_ID                   : ${cur_id:-(unset -> switchboard)}"
+	echo "  BRIDGE_TOKEN              : ${cur_token:+set}${cur_token:-(unset)}"
+	echo "  FEDERATION_OWNER_SIGN_PUB : ${cur_pin:-(none)}"
 	echo
-	echo "Will create instance '$id':"
-	echo "  HOST_ID / hostname : $id"
-	echo "  container          : $container"
-	echo "  host port          : $port -> 20000 (in-container)"
-	echo "  state volume       : ./volumes/$volume"
-	echo "  docker network     : $network"
-	echo "  bridge token       : ${token:+set}${token:-EMPTY (no evie bridge, no QR)}"
-	echo "  owner pin          : ${pin:-none}"
-	local go; read -rp "Create + start this? [Y/n]: " go
-	case "$go" in n | N) echo "aborted"; return 0 ;; esac
 
-	umask 077
-	cat > "$envf" <<EOF
-# switchboard arbiter instance "$id" (generated by start-arbiter.sh --setup)
-ARBITER_ID=$id
-ARBITER_CONTAINER=$container
-ARBITER_PORT=$port
-ARBITER_VOLUME=$volume
-ARBITER_NETWORK=$network
-BRIDGE_TOKEN=$token
-FEDERATION_OWNER_SIGN_PUB=$pin
-EOF
-	echo "Wrote $envf"
-
-	echo "Building + starting '$id' ..."
-	dc "$id" up --build -d || { err "compose up failed for '$id'"; return 1; }
-
-	if wait_health "$port"; then
-		echo "Arbiter '$id' is healthy on :$port (HOST_ID=$id)."
-		if [ -n "$token" ]; then sleep 6; show_qr "$container"; fi
+	local id token pin
+	read -rp "HOST_ID (unique per machine) [$def_id]: " raw; id="${raw:-$def_id}"
+	if [ -n "$cur_token" ]; then
+		read -rp "BRIDGE_TOKEN [keep current]: " raw; token="${raw:-$cur_token}"
 	else
-		err "'$id' did not become healthy in 60s; check: docker logs $container"
+		read -rp "BRIDGE_TOKEN (required for evie/federation + the admit-host QR): " token
+	fi
+	read -rp "FEDERATION_OWNER_SIGN_PUB pin (optional) [${cur_pin:-none}]: " raw; pin="${raw:-$cur_pin}"
+
+	env_set HOST_ID "$id"
+	env_set BRIDGE_TOKEN "$token"
+	env_set FEDERATION_OWNER_SIGN_PUB "$pin"
+	chmod 600 "$ENV_FILE" 2>/dev/null || true
+	echo "Wrote $ENV_FILE (HOST_ID=$id, token ${token:+set}${token:-EMPTY})."
+	[ -n "$token" ] || echo "WARNING: empty token -> the evie bridge will not start (no QR)."
+
+	echo "Building + starting the arbiter ..."
+	docker compose up --build -d || { err "compose up failed"; return 1; }
+	if wait_health; then
+		echo "Arbiter healthy on :20000 (HOST_ID=$id)."
+		[ -n "$token" ] && { sleep 6; show_qr; }
+	else
+		err "arbiter did not become healthy in 60s; check: docker logs switchboard"
 	fi
 }
 
 teardown() {
-	echo "Tear down which instance?"
-	local id; id="$(pick_instance)" || return 0
-	local envf="$INSTANCES_DIR/$id.env"
-
-	dc "$id" down --remove-orphans 2>/dev/null || docker rm -f "$id" 2>/dev/null || true
-	echo "Stopped '$id'."
-
-	local volume; volume="$(env_field "$envf" ARBITER_VOLUME)"
-	if [ -n "$volume" ] && [ -d "volumes/$volume" ]; then
-		read -rp "Wipe its state volume volumes/$volume (identity + allowlist)? [y/N]: " w
-		[ "$w" = y ] && rm -rf "volumes/${volume:?}" && echo "wiped volumes/$volume"
-	fi
-	read -rp "Delete its config $envf? [y/N]: " d
-	[ "$d" = y ] && rm -f "$envf" && echo "deleted $envf"
+	docker compose down --remove-orphans 2>/dev/null || true
+	echo "Arbiter stopped."
+	local w; read -rp "Wipe its state volume volumes/arbiter (identity + allowlist)? [y/N]: " w
+	[ "$w" = y ] && rm -rf volumes/arbiter && echo "wiped volumes/arbiter"
 }
 
-# Clean re-setup: stop, WIPE the state volume (fresh identity = fresh admit-host QR),
-# and restart with the same config. For when an enrollment got into a bad state.
 re_setup() {
-	echo "Clean re-setup which instance?"
-	local id; id="$(pick_instance)" || return 0
-	local envf="$INSTANCES_DIR/$id.env"
-	[ -f "$envf" ] || { err "no config for '$id'"; return 1; }
-
-	local volume port container
-	volume="$(env_field "$envf" ARBITER_VOLUME)"
-	port="$(env_field "$envf" ARBITER_PORT)"
-	container="$(env_field "$envf" ARBITER_CONTAINER)"
-	# A truncated/corrupt config would otherwise wipe nothing and health-check the
-	# wrong port, false-reporting failure. Require the fields we are about to act on.
-	if [ -z "$volume" ] || [ -z "$port" ] || [ -z "$container" ]; then
-		err "config $envf is missing ARBITER_VOLUME/PORT/CONTAINER; re-run option 1 to reprovision"
-		return 1
-	fi
-
-	echo "This stops '$id', WIPES volumes/$volume (its keypair + allowlist), and restarts it."
-	echo "It will re-mint its identity and print a fresh admit-host QR for re-enrollment."
-	read -rp "Proceed? [y/N]: " ok; [ "$ok" = y ] || return 0
-
-	dc "$id" down --remove-orphans 2>/dev/null || true
-	[ -n "$volume" ] && rm -rf "volumes/${volume:?}"
-	dc "$id" up --build -d || { err "compose up failed"; return 1; }
-
-	if wait_health "$port"; then
-		echo "'$id' is healthy."
-		sleep 6; show_qr "$container"
+	echo "This stops the arbiter, WIPES volumes/arbiter (keypair + allowlist), and restarts it."
+	echo "It re-mints its identity and prints a fresh admit-host QR for re-enrollment."
+	local ok; read -rp "Proceed? [y/N]: " ok; [ "$ok" = y ] || return 0
+	docker compose down --remove-orphans 2>/dev/null || true
+	rm -rf volumes/arbiter
+	docker compose up --build -d || { err "compose up failed"; return 1; }
+	if wait_health; then
+		echo "Arbiter healthy."
+		sleep 6; show_qr
 	else
-		err "'$id' did not become healthy; check: docker logs $container"
+		err "arbiter did not become healthy; check: docker logs switchboard"
 	fi
 }
 
 setup_menu() {
 	while true; do
 		echo
-		echo "switchboard arbiter setup"
-		echo "  1) Provision / reconfigure an arbiter"
-		echo "  2) Tear down an arbiter"
+		echo "switchboard arbiter setup (this machine)"
+		echo "  1) Configure .env + (re)start the arbiter"
+		echo "  2) Tear down (stop; optional state wipe)"
 		echo "  3) Clean re-setup (wipe identity + restart, fresh enrollment)"
 		echo "  q) quit"
 		local c; read -rp "> " c
 		case "$c" in
-			1) provision ;;
+			1) configure ;;
 			2) teardown ;;
 			3) re_setup ;;
 			q | Q | "") break ;;
@@ -228,15 +120,12 @@ setup_menu() {
 	done
 }
 
-####################
-# Entry
-
 if [ "${1:-}" = "--setup" ]; then
 	setup_menu
 	exit 0
 fi
 
-# Default: quick-start the primary instance (unchanged behavior).
+# Default: quick-start the arbiter (unchanged behavior).
 git fetch --prune || true
 git pull || true
 

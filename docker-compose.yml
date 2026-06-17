@@ -1,26 +1,23 @@
 services:
   router:
     build: .
-    # All ${ARBITER_*} default to the primary "switchboard" instance, so a plain
-    # `docker compose up` (and start-arbiter.sh with no args) is unchanged. A second
-    # instance overrides them via an --env-file (see start-arbiter.sh --setup).
-    hostname: ${ARBITER_ID:-switchboard}
-    container_name: ${ARBITER_CONTAINER:-switchboard}
+    hostname: switchboard
+    container_name: switchboard
     ports:
-      - "${ARBITER_PORT:-20000}:20000"
+      - "20000:20000"
     environment:
       - PORT=20000
-      # Set explicitly (was the hostname fallback) so two instances on one machine
-      # cannot both resolve to "switchboard" and collide in evie's router table.
-      - HOST_ID=${ARBITER_ID:-switchboard}
+      # One arbiter per machine; set a UNIQUE HOST_ID per machine in .env so two
+      # Hosts cannot both fall back to "switchboard" and collide in evie's router.
+      - HOST_ID=${HOST_ID:-switchboard}
       - RESPONSE_TIMEOUT_MS=600000
       - BRIDGE_TOKEN=${BRIDGE_TOKEN:-}
       - FEDERATION_OWNER_SIGN_PUB=${FEDERATION_OWNER_SIGN_PUB:-}
     networks:
       - switchboard-network
     volumes:
-      - ./volumes/${ARBITER_VOLUME:-arbiter}:/app/log
+      - ./volumes/arbiter:/app/log
       - ${HOME}/projects/evie-bot/kubeconfig.yaml:/app/kubeconfig.yaml:ro
 networks:
   switchboard-network:
-    name: ${ARBITER_NETWORK:-switchboard}
+    name: switchboard
