@@ -7,8 +7,9 @@ services:
       - "20000:20000"
     environment:
       - PORT=20000
-      # One arbiter per machine; set a UNIQUE HOST_ID per machine in .env so two
-      # Hosts cannot both fall back to "switchboard" and collide in evie's router.
+      # One arbiter per machine. start-arbiter.sh sets HOST_ID to the machine
+      # hostname (and --setup writes it to .env); the "switchboard" fallback only
+      # applies to a bare `docker compose up` that set no HOST_ID anywhere.
       - HOST_ID=${HOST_ID:-switchboard}
       - RESPONSE_TIMEOUT_MS=600000
       - BRIDGE_TOKEN=${BRIDGE_TOKEN:-}
