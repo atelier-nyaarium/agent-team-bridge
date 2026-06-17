@@ -81,8 +81,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.launch
 
 /** Process-lifetime repository so chat state survives Activity recreation. */
@@ -364,10 +362,17 @@ fun ProvisionScreen(onProvision: (String) -> Unit) {
 	}
 
 	// QR scan: the host's enrollment QR carries the blob JSON verbatim, so the scanned
-	// contents are exactly what tryProvision expects. zxing's ScanContract owns the camera
-	// + the runtime permission prompt; a cancel returns null contents.
-	val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
-		if (result.contents != null) tryProvision(result.contents, "QR") else status = "Scan cancelled."
+	// text is exactly what tryProvision expects. Full-screen CameraX + ML Kit scanner.
+	var scanning by remember { mutableStateOf(false) }
+	if (scanning) {
+		QrScanScreen(
+			onResult = {
+				scanning = false
+				tryProvision(it, "QR")
+			},
+			onCancel = { scanning = false },
+		)
+		return
 	}
 
 	Scaffold(topBar = { TopAppBar(title = { Text("Provision Switchboard") }) }) { pad ->
@@ -377,15 +382,7 @@ fun ProvisionScreen(onProvision: (String) -> Unit) {
 		) {
 			Text("Scan the enrollment QR the host shows (./provision-console.sh --qr), or paste/import the blob.")
 			Button(
-				onClick = {
-					scanLauncher.launch(
-						ScanOptions()
-							.setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-							.setOrientationLocked(false)
-							.setBeepEnabled(false)
-							.setPrompt("Point at the host's enrollment QR"),
-					)
-				},
+				onClick = { scanning = true },
 				modifier = Modifier.fillMaxWidth(),
 			) { Text("Scan enrollment QR") }
 			OutlinedButton(

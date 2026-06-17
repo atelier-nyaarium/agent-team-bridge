@@ -16,9 +16,12 @@ kotlinxSerialization = "1.7.3"
 # Federation crypto (X25519 / Ed25519 / AES-256-GCM / HKDF) via the low-level
 # BC API, so no Security provider is registered and there is no Android BC conflict.
 bouncycastle = "1.79"
-# GMS-free QR scanner (bundles its own capture Activity); avoids a Play Services
-# dependency. Mature release, satisfies the package-maturity window.
-zxingEmbedded = "4.3.0"
+# CameraX preview + analysis, and ML Kit's BUNDLED barcode model (GMS-free, no Play
+# Services), the modern robust QR path. Both are long-stable Google Maven artifacts well
+# past the package-maturity window. Replaced zxing-android-embedded, whose old capture
+# Activity mis-rotated the preview and choked on dense (v40) QRs.
+camerax = "1.4.1"
+mlkitBarcode = "17.3.0"
 junit = "4.13.2"
 
 [libraries]
@@ -38,7 +41,12 @@ androidx-fragment = { group = "androidx.fragment", name = "fragment-ktx", versio
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 bouncycastle = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
-zxing-android-embedded = { group = "com.journeyapps", name = "zxing-android-embedded", version.ref = "zxingEmbedded" }
+androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
+mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning", version.ref = "mlkitBarcode" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

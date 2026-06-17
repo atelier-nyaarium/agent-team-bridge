@@ -110,7 +110,14 @@ dependencies {
 	implementation(libs.androidx.webkit)
 	implementation(libs.kotlinx.serialization.json)
 	implementation(libs.bouncycastle)
-	implementation(libs.zxing.android.embedded)
+	// QR enrollment scan: CameraX preview/analysis + ML Kit's bundled (GMS-free) barcode
+	// model. ML Kit reads dense v40 QRs and rotationDegrees fixes the preview orientation.
+	implementation(libs.androidx.camera.core)
+	implementation(libs.androidx.camera.camera2)
+	implementation(libs.androidx.camera.lifecycle)
+	implementation(libs.androidx.camera.view)
+	implementation(libs.androidx.lifecycle.runtime.compose)
+	implementation(libs.mlkit.barcode.scanning)
 
 	testImplementation(libs.junit)
 }
