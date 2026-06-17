@@ -169,17 +169,19 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	}
 
 	/** Resolve the console identity from the store. Throws a clear error when the
-	 * identity is absent (device not enrolled), so callers see "enroll first" rather
-	 * than a NullPointerException. */
+	 * identity is absent (device not provisioned), so callers see a re-provision hint
+	 * rather than a NullPointerException. Wording avoids the retired in-app QR flow. */
 	private fun requireConsoleIdentity(): Crypto.Identity =
-		store.loadIdentity() ?: error("This device is not enrolled. Scan evie's enroll-owner QR first.")
+		store.loadIdentity() ?: error("This device is not enrolled. Re-run provision-console.sh and re-import the setup blob.")
 
-	/** Resolve Switch keys by id. On first boot homeSwitch is null; register resolves
-	 * via the persisted Switch id so enrollment is a prerequisite, not an after-thought.
-	 * Throws a clear "admit the Switch first" message when absent. */
+	/** Resolve Switch keys by id. On first boot homeSwitch is null; register resolves via
+	 * the persisted Switch id, learned from the provisioning blob. The message deliberately
+	 * does NOT contain "not admitted" - that token is reserved for the SERVER-side sync-lag
+	 * rejection (a transient "finishing enrollment"), so a missing-local-keys gap (genuinely
+	 * terminal: re-provision) can never be mislabeled as that transient state. */
 	private fun requireSwitchKeys(switchId: String): ProvisioningStore.SwitchKeys =
 		store.loadSwitchKeys(switchId)
-			?: error("Home Switch \"$switchId\" is not admitted. Scan the Switch's QR code to admit it.")
+			?: error("Home Switch \"$switchId\" keys are missing. Re-run provision-console.sh and re-import the setup blob.")
 
 	/** The Switch id to use for sealing, in priority order: (1) the live homeSwitch set
 	 * after register, (2) the persisted Switch id from a previous session. Throws when
@@ -187,7 +189,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	private fun resolveSwitchId(): String =
 		homeSwitch?.takeIf { it.isNotEmpty() }
 			?: store.loadSwitchId().takeIf { it.isNotEmpty() }
-			?: error("Home Switch not yet known. Complete enrollment and connect first.")
+			?: error("Home Switch not provisioned. Re-run provision-console.sh and re-import the setup blob.")
 
 	/** Build a sealed ConsoleRelayFrame for one op. Called fresh for every send,
 	 * including retries, so each attempt uses a new ephemeral/nonce and the

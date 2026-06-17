@@ -77,6 +77,10 @@ data class ChatState(
 	/** Connected Switch id, learned from the register result. Empty before the first
 	 * federation-aware connect; bare names resolve to the local Switch in that case. */
 	val localSwitchId: String = "",
+	/** Non-zero (epoch ms) while a post-enrollment allowlist sync is in progress: the device
+	 * is admitted but the home Switch has not re-synced yet, so sealed ops transiently reject.
+	 * Drives the calm SYNCING header; cleared the moment an op succeeds or the grace lapses. */
+	val enrollingSince: Long = 0L,
 ) {
 	/** Sessions shows live teams plus any team we already have a thread with
 	 * (agent-initiated). A thread-only peer is gone from the bridge and cannot be
@@ -101,12 +105,14 @@ data class ChatState(
 	}
 
 	/** Bridge link health for the dashboard header: green once registered and polling
-	 * cleanly, amber while a poll-failure streak is building, red when offline. */
-	enum class Health { ONLINE, DEGRADED, OFFLINE }
+	 * cleanly, blue while finishing enrollment (allowlist syncing), amber while a poll-failure
+	 * streak is building, red when offline. */
+	enum class Health { ONLINE, SYNCING, DEGRADED, OFFLINE }
 
 	val health: Health
 		get() = when {
 			connected && pollFailStreak == 0 -> Health.ONLINE
+			enrollingSince != 0L && !connected -> Health.SYNCING
 			pollFailStreak >= 2 -> Health.OFFLINE
 			connected -> Health.DEGRADED
 			else -> Health.OFFLINE
@@ -128,51 +134,92 @@ data class ChatState(
 		labels[team] ?: TeamAddress.parse(team, localSwitchId).name
 }
 
+/** A just-enrolled device's first ops can transiently reject while the home Switch
+ * re-syncs the new admission from evie (it only re-syncs on its next re-register). We
+ * show a calm "Finishing up enrollment..." and retry, escalating to a real error only if
+ * the sync never lands within this grace window. */
+private const val ENROLL_GRACE_MS = 90_000L
+
+/** Three-way classification of a connect/poll/relay failure. */
+internal enum class ConnKind {
+	/** Needs human action (re-provision, bad creds, app update); surface immediately. */
+	TERMINAL,
+
+	/** A network or server blip; retry quietly (one hiccup never alarms). */
+	TRANSIENT,
+
+	/** The device IS admitted, but this Switch has not re-synced its allowlist yet, so a
+	 * sealed op rejects with "...is not admitted to the Domain". Self-heals on the next
+	 * re-register; show "Finishing up enrollment..." and escalate only past the grace window. */
+	ENROLLING,
+}
+
 /**
- * Map a connect/poll failure to a SPECIFIC, actionable cause instead of a blanket
- * "Connection issue". `transient` = retrying may clear it (a network or server blip);
- * a non-transient cause needs the human to act, so the UI surfaces it immediately
- * instead of waiting out a failure streak. ConsoleClient preserves the real cause in
- * the exception message ("This device is not enrolled...", "HTTP 404: ...", a TLS
- * exception), so this is a pure mapping - no new probing.
+ * Map a connect/poll failure to a SPECIFIC, actionable cause + its kind, instead of a
+ * blanket "Connection issue". ConsoleClient preserves the real cause in the exception
+ * message ("This device is not enrolled...", "HTTP 404: ...", a TLS exception), so this is
+ * a pure mapping - no new probing.
  */
-internal fun classifyConnError(e: Throwable): Pair<String, Boolean> {
+internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 	val m = e.message ?: ""
 	return when {
+		// The server sealer rejecting an admitted device whose admission this Switch has not
+		// synced yet (console OR cross-Switch federation). NOT terminal - it converges. Kept
+		// first, and distinct from the local "keys are missing" terminal below, so a normal
+		// sync lag can never be mislabeled "re-run the script".
+		m.contains("is not admitted to the Domain", ignoreCase = true) ->
+			"Finishing up enrollment..." to ConnKind.ENROLLING
 		m.contains("not enrolled", ignoreCase = true) ->
-			"Not enrolled - re-run provision-console.sh and re-import the setup blob" to false
-		m.contains("not admitted", ignoreCase = true) ->
-			"Switch not admitted - re-run provision-console.sh on the server" to false
+			"Not enrolled - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
+		// A local provisioning gap (the blob did not carry the Switch keys/id). Worded in
+		// ConsoleClient WITHOUT the "not admitted" token so it cannot collide with ENROLLING.
+		m.contains("keys are missing", ignoreCase = true) || m.contains("not provisioned", ignoreCase = true) ->
+			"Home Switch not provisioned - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
 		m.startsWith("HTTP 400") ->
-			"Protocol mismatch (400) - update the app, or re-run provision-console.sh" to false
+			"Protocol mismatch (400) - update the app, or re-run provision-console.sh" to ConnKind.TERMINAL
 		m.startsWith("HTTP 401") ->
-			"Bridge token rejected (401) - re-run provision-console.sh and re-import the blob" to false
+			"Bridge token rejected (401) - re-run provision-console.sh and re-import the blob" to ConnKind.TERMINAL
 		m.startsWith("HTTP 403") ->
-			"Not authorized (403) - cluster credentials expired, re-run provision-console.sh" to false
+			"Not authorized (403) - cluster credentials expired, re-run provision-console.sh" to ConnKind.TERMINAL
 		m.startsWith("HTTP 404") ->
-			"Console bridge not deployed (404) - run provision-console.sh on the server" to false
+			"Console bridge not deployed (404) - run provision-console.sh on the server" to ConnKind.TERMINAL
 		m.startsWith("HTTP 409") ->
-			"A previous send is still in flight - retrying" to true
+			"A previous send is still in flight - retrying" to ConnKind.TRANSIENT
 		m.startsWith("HTTP 500") ->
-			"Server error - retrying" to true
+			"Server error - retrying" to ConnKind.TRANSIENT
 		m.startsWith("HTTP 502") || m.startsWith("HTTP 503") ->
-			"The Switch is unreachable right now - retrying" to true
+			"The server is unreachable right now - retrying" to ConnKind.TRANSIENT
 		m.startsWith("HTTP 504") ->
-			"The server took too long to answer - retrying" to true
+			"The server took too long to answer - retrying" to ConnKind.TRANSIENT
 		e is javax.net.ssl.SSLHandshakeException || e is java.security.cert.CertificateException ||
 			m.contains("trust anchor", ignoreCase = true) || m.contains("CertPath", ignoreCase = true) ->
-			"Cluster CA changed - re-provision (the server certificate no longer matches)" to false
-		// Sealed-channel rejection (bad signature / replayed / stale op / decrypt fail):
-		// the Switch no longer trusts this device's key. Checked AFTER the TLS branch so a
-		// handshake-signature error is not mislabeled. Re-provisioning re-admits the device.
-		m.contains("signature", ignoreCase = true) || m.contains("replay", ignoreCase = true) ||
-			m.contains("decrypt", ignoreCase = true) || m.contains("stale op", ignoreCase = true) ->
-			"Secure channel rejected - re-run provision-console.sh and re-import the blob" to false
+			"Cluster CA changed - re-provision (the server certificate no longer matches)" to ConnKind.TERMINAL
+		// Freshness/replay rejects clear on the next attempt (a retry carries a fresh
+		// timestamp + new nonce), so they are transient. Checked AFTER the TLS branch so a
+		// handshake-signature error is not mislabeled.
+		m.contains("stale", ignoreCase = true) || m.contains("replay", ignoreCase = true) ->
+			"Re-syncing the secure channel - retrying" to ConnKind.TRANSIENT
+		// A genuine key mismatch (bad signature / cannot decrypt) is terminal.
+		m.contains("signature", ignoreCase = true) || m.contains("decrypt", ignoreCase = true) ->
+			"Secure channel rejected - re-run provision-console.sh and re-import the blob" to ConnKind.TERMINAL
 		e is java.net.UnknownHostException ->
-			"Offline - no network" to true
+			"Offline - no network" to ConnKind.TRANSIENT
 		e is java.net.ConnectException || e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException ->
-			"Can't reach the server - retrying" to true
-		else -> "Error: ${m.take(100)}" to true
+			"Can't reach the server - retrying" to ConnKind.TRANSIENT
+		else -> "Error: ${m.take(100)}" to ConnKind.TRANSIENT
+	}
+}
+
+/** Fold an ENROLLING (sync-lag) failure: start/keep the grace timer so we keep showing the
+ * calm "Finishing up enrollment..." cause, but once the window lapses return a terminal
+ * override message (and clear the timer) so a sync that never lands surfaces a real error.
+ * Returns (overrideMessage-or-null, enrollingSince-to-persist). */
+private fun enrollFold(prevSince: Long): Pair<String?, Long> {
+	val since = if (prevSince == 0L) System.currentTimeMillis() else prevSince
+	return if (System.currentTimeMillis() - since > ENROLL_GRACE_MS) {
+		"Enrollment did not finish - re-run provision-console.sh and re-import the setup blob." to 0L
+	} else {
+		null to since
 	}
 }
 
@@ -272,7 +319,7 @@ class ChatRepository(
 	fun onForeground() {
 		visible = true
 		pollFails = 0
-		_state.update { it.copy(error = null, pollFailStreak = 0) }
+		_state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L) }
 		forceTeamsRefresh = true
 		kick.trySend(Unit)
 	}
@@ -452,8 +499,14 @@ class ChatRepository(
 			// bridge or enrollment, so a stale blob says "re-provision" and a missing
 			// identity says "not enrolled" - two different fixes that used to look identical.
 			runCatching { client().apiReachable() }.onFailure { e ->
-				val (cause, _) = classifyConnError(e)
-				_state.update { it.copy(status = "error", error = "Cluster: $cause", connected = false) }
+				val (cause, kind) = classifyConnError(e)
+				_state.update {
+					if (kind == ConnKind.TERMINAL) {
+						it.copy(status = "error", error = "Cluster: $cause", connected = false, enrollingSince = 0L)
+					} else {
+						it.copy(status = "connecting", error = cause, connected = false, enrollingSince = 0L)
+					}
+				}
 				return@withContext
 			}
 			// register's cursor/epoch are no longer adopted: MailboxSync owns the durable
@@ -488,14 +541,31 @@ class ChatRepository(
 					connected = true,
 					pollFailStreak = 0,
 					localSwitchId = localSwitchId,
+					enrollingSince = 0L,
 				)
 			}
 			// Attach ingest now that we have the provisioning. DEBUG-only inside attachIngest.
 			val blob = store.load()
 			if (blob != null) runCatching { DebugLog.attachIngest(Provisioning.parse(blob)) }
 		} catch (e: Exception) {
-			val (cause, _) = classifyConnError(e)
-			_state.update { it.copy(status = "error", error = cause, connected = false) }
+			val (cause, kind) = classifyConnError(e)
+			_state.update { s ->
+				when (kind) {
+					// Post-enroll sync lag: calm "Finishing up enrollment..." (the poll loop
+					// keeps retrying + clears it on the first success), escalating past the grace.
+					ConnKind.ENROLLING -> {
+						val (override, since) = enrollFold(s.enrollingSince)
+						s.copy(
+							status = if (override != null) "error" else "connecting",
+							error = override ?: cause,
+							connected = false,
+							enrollingSince = since,
+						)
+					}
+					ConnKind.TERMINAL -> s.copy(status = "error", error = cause, connected = false, enrollingSince = 0L)
+					ConnKind.TRANSIENT -> s.copy(status = "connecting", error = cause, connected = false, enrollingSince = 0L)
+				}
+			}
 		}
 	}
 
@@ -795,7 +865,7 @@ class ChatRepository(
 					mailboxSync.commit(adv.next)
 					pollFails = 0
 					if (_state.value.error != null || _state.value.pollFailStreak != 0) {
-						_state.update { it.copy(error = null, pollFailStreak = 0, connected = true) }
+						_state.update { it.copy(error = null, pollFailStreak = 0, connected = true, enrollingSince = 0L) }
 					}
 					// Flush buffered debug lines to the ingest endpoint once per cycle.
 					DebugLog.flushToIngest()
@@ -808,15 +878,25 @@ class ChatRepository(
 						heldEmpty = true
 					} else {
 						// Name the SPECIFIC cause instead of a blanket "Connection issue". A
-						// non-transient cause (not enrolled, bridge not deployed, bad creds)
-						// cannot clear by retrying, so surface it on the first failure; a
-						// transient blip waits for a second failure so one hiccup never alarms.
-						val (cause, transient) = classifyConnError(e)
-						DebugLog.log("Poll", "error streak=${ pollFails + 1 }: ${e.message?.take(120)}")
+						// TERMINAL cause (not enrolled, bridge not deployed, bad creds) cannot
+						// clear by retrying, so surface it on the first failure; a TRANSIENT blip
+						// waits for a second failure so one hiccup never alarms; an ENROLLING
+						// sync-lag shows the calm "Finishing up enrollment..." at once and the
+						// poll loop's own retry clears it the moment an op succeeds.
+						val (cause, kind) = classifyConnError(e)
+						DebugLog.log("Poll", "error streak=${ pollFails + 1 } [$kind]: ${e.message?.take(120)}")
 						failed = true
 						pollFails++
-						_state.update {
-							it.copy(pollFailStreak = pollFails, error = if (!transient || pollFails >= 2) cause else it.error)
+						_state.update { s ->
+							when (kind) {
+								ConnKind.ENROLLING -> {
+									val (override, since) = enrollFold(s.enrollingSince)
+									s.copy(pollFailStreak = pollFails, error = override ?: cause, enrollingSince = since)
+								}
+								ConnKind.TERMINAL -> s.copy(pollFailStreak = pollFails, error = cause, enrollingSince = 0L)
+								ConnKind.TRANSIENT ->
+									s.copy(pollFailStreak = pollFails, error = if (pollFails >= 2) cause else s.error, enrollingSince = 0L)
+							}
 						}
 					}
 					DebugLog.flushToIngest()

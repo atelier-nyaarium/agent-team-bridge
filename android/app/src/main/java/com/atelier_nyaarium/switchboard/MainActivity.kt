@@ -562,6 +562,9 @@ fun SessionsScreen(
 fun HealthHeader(state: ChatState) {
 	val (dot, label) = when (state.health) {
 		ChatState.Health.ONLINE -> Color(0xFF2EA043) to "Bridge online"
+		// Calm blue while a fresh enrollment's allowlist is still syncing to its Switch -
+		// a normal, self-healing window, not an error.
+		ChatState.Health.SYNCING -> Color(0xFF0969DA) to (state.error ?: "Finishing up enrollment...")
 		// Show the SPECIFIC classified cause (set by classifyConnError) rather than a
 		// blanket label, so the header tells the human exactly what to fix.
 		ChatState.Health.DEGRADED -> Color(0xFFD29922) to (state.error ?: "Reconnecting...")

@@ -197,6 +197,7 @@ class SwitchboardService : Service() {
 	private fun updateStatusNotification(health: ChatState.Health, unread: Int) {
 		val line = when (health) {
 			ChatState.Health.ONLINE -> "Bridge online"
+			ChatState.Health.SYNCING -> "Finishing up enrollment..."
 			ChatState.Health.DEGRADED -> "Reconnecting..."
 			ChatState.Health.OFFLINE -> "Offline"
 		}
