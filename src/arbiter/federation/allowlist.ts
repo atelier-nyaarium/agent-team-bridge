@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
 	type Admission,
 	type DomainSnapshot,
+	findAdmission,
 	resolveAdmitted,
 	type SignedAdmission,
 	SignedAdmissionSchema,
@@ -197,15 +198,13 @@ export class Allowlist {
 	 * sealing a cross-Switch frame to it. */
 	resolveSwitch(switchId: string): { signPub: string; boxPub: string } | null {
 		if (!this.state.ownerSignPub) return null;
-		let best: Admission | null = null;
-		for (const s of this.state.admissions) {
-			const a = s.admission;
-			if (a.kind !== "switch" || a.switchId !== switchId) continue;
-			if (!verifyAdmission(s, this.state.ownerSignPub)) continue;
-			if (!best || a.issuedAt > best.issuedAt) best = a;
-		}
+		const best = findAdmission(
+			this.state.admissions,
+			this.state.ownerSignPub,
+			(a) => a.kind === "switch" && a.switchId === switchId,
+		);
 		if (!best) return null;
-		// Confirm it is not revoked (resolveBySignPub applies the revocation rule).
+		// Confirm it is not revoked (resolveAdmitted applies the revocation rule).
 		const live = resolveAdmitted(
 			this.state.admissions,
 			this.state.revocations,

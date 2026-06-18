@@ -1,4 +1,4 @@
-// SYNC-HASH: 68a289ace733450ddcdb59a519565af4
+// SYNC-HASH: 30f4a02192a3da591c44be9924e75da0
 // SYNCED MODULE - source of truth: switchboard/src/shared/admission.ts
 // Copied verbatim into: evie-bot/app/features/bridge/admission.ts
 // MUST re-copy on change: cp src/shared/admission.ts ../evie-bot/app/features/bridge/admission.ts
@@ -142,6 +142,25 @@ export function verifyRevocation(s: SignedRevocation, expectedOwnerSignPubB64: s
 	return verify(revocationSigningBytes(s.revocation), s.signature, expectedOwnerSignPubB64);
 }
 
+/** The newest owner-verified admission matching `match`, BEFORE revocations are applied.
+ * The one selection step behind both `resolveAdmitted` (match by signing key) and the
+ * arbiter's `resolveSwitch` (match by switch id), so the iterate / verify-owner /
+ * newest-wins rule lives in exactly one place (the Kotlin `Keyring` factors it the same
+ * way). Callers apply the revocation rule themselves. */
+export function findAdmission(
+	allowlist: SignedAdmission[],
+	expectedOwnerSignPubB64: string,
+	match: (admission: Admission) => boolean,
+): Admission | null {
+	let best: Admission | null = null;
+	for (const s of allowlist) {
+		if (!match(s.admission)) continue;
+		if (!verifyAdmission(s, expectedOwnerSignPubB64)) continue;
+		if (!best || s.admission.issuedAt > best.issuedAt) best = s.admission;
+	}
+	return best;
+}
+
 /** Resolve a subject's admission from the allowlist: the newest owner-verified
  * admission for `subjectSignPub` that is not overridden by a later owner-verified
  * revocation. Returns the admitted Admission (carrying its boxPub / switchId) or
@@ -152,12 +171,7 @@ export function resolveAdmitted(
 	expectedOwnerSignPubB64: string,
 	subjectSignPubB64: string,
 ): Admission | null {
-	let best: Admission | null = null;
-	for (const s of allowlist) {
-		if (s.admission.signPub !== subjectSignPubB64) continue;
-		if (!verifyAdmission(s, expectedOwnerSignPubB64)) continue;
-		if (!best || s.admission.issuedAt > best.issuedAt) best = s.admission;
-	}
+	const best = findAdmission(allowlist, expectedOwnerSignPubB64, (a) => a.signPub === subjectSignPubB64);
 	if (!best) return null;
 	for (const r of revocations) {
 		if (r.revocation.signPub !== subjectSignPubB64) continue;
