@@ -15,8 +15,8 @@ import java.util.Locale
 /**
  * On-device debug log the user can pull off the console. Writes to the shared
  * Downloads folder as `switchboard-debug.log` (Downloads/switchboard-debug.log)
- * via MediaStore on API 29+, with no storage permission. The file is truncated at
- * each app start, then appended to, so a sent log is one session.
+ * via MediaStore, with no storage permission. The file is truncated at each app
+ * start, then appended to, so a sent log is one session.
  *
  * Logging must never crash the app, so every sink call is wrapped and a failure is
  * swallowed. Lines also go to logcat under the `sb/<tag>` tag.
