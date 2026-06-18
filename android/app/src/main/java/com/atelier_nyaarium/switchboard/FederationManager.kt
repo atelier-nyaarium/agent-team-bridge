@@ -4,6 +4,7 @@ import com.atelier_nyaarium.switchboard.crypto.AdmissionCrypto
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.crypto.OwnerBackup
+import com.atelier_nyaarium.switchboard.crypto.canonicalSnapshot
 import com.atelier_nyaarium.switchboard.proto.Admission
 import com.atelier_nyaarium.switchboard.proto.DomainSnapshot
 import com.atelier_nyaarium.switchboard.proto.Revocation
@@ -137,13 +138,11 @@ class FederationManager(private val store: ProvisioningStore) {
 		val ownerPub = store.loadOwnerIdentity()?.sign?.pub ?: return false
 		if (snapshot.ownerSignPub != ownerPub) return false
 		val current = keyring().snapshot
-		val mergedAdmissions = (snapshot.admissions + current.admissions)
-			.distinctBy { "${it.admission.signPub}:${it.admission.nonce}" }
-			.sortedBy { it.admission.issuedAt }
-		val mergedRevocations = (snapshot.revocations + current.revocations)
-			.distinctBy { "${it.revocation.signPub}:${it.revocation.nonce}" }
-			.sortedBy { it.revocation.issuedAt }
-		val next = snapshot.copy(admissions = mergedAdmissions, revocations = mergedRevocations)
+		val next = canonicalSnapshot(
+			snapshot.ownerSignPub,
+			snapshot.admissions + current.admissions,
+			snapshot.revocations + current.revocations,
+		)
 		store.saveDomain(json.encodeToString(DomainSnapshot.serializer(), next), version)
 		return true
 	}
@@ -169,10 +168,7 @@ class FederationManager(private val store: ProvisioningStore) {
 	@Synchronized
 	fun mergeAdmission(signed: SignedAdmission) {
 		val current = keyring().snapshot
-		val deduped = current.admissions.filterNot {
-			it.admission.signPub == signed.admission.signPub && it.admission.nonce == signed.admission.nonce
-		}
-		val next = current.copy(admissions = deduped + signed)
+		val next = canonicalSnapshot(current.ownerSignPub, current.admissions + signed, current.revocations)
 		store.saveDomain(json.encodeToString(DomainSnapshot.serializer(), next), store.loadDomainVersion())
 	}
 
@@ -183,10 +179,7 @@ class FederationManager(private val store: ProvisioningStore) {
 	@Synchronized
 	fun mergeRevocation(signed: SignedRevocation) {
 		val current = keyring().snapshot
-		val deduped = current.revocations.filterNot {
-			it.revocation.signPub == signed.revocation.signPub && it.revocation.nonce == signed.revocation.nonce
-		}
-		val next = current.copy(revocations = deduped + signed)
+		val next = canonicalSnapshot(current.ownerSignPub, current.admissions, current.revocations + signed)
 		store.saveDomain(json.encodeToString(DomainSnapshot.serializer(), next), store.loadDomainVersion())
 	}
 }

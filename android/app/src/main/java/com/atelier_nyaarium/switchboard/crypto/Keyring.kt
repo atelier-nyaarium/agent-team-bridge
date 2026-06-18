@@ -64,3 +64,19 @@ class Keyring(val snapshot: DomainSnapshot) {
 			}
 	}
 }
+
+/** The canonical form of a Domain snapshot. Admissions and revocations are append-only
+ * owner-signed facts, so they are deduped by signing key + nonce and ordered by issue time.
+ * Every snapshot merge (a sync from a Switch, or a local admit/revoke folded in before evie
+ * rebroadcasts it) routes through here, so the same set of facts always yields identical
+ * bytes and resolve() sees each fact exactly once. */
+internal fun canonicalSnapshot(
+	ownerSignPub: String,
+	admissions: List<SignedAdmission>,
+	revocations: List<SignedRevocation>,
+): DomainSnapshot =
+	DomainSnapshot(
+		ownerSignPub = ownerSignPub,
+		admissions = admissions.distinctBy { "${it.admission.signPub}:${it.admission.nonce}" }.sortedBy { it.admission.issuedAt },
+		revocations = revocations.distinctBy { "${it.revocation.signPub}:${it.revocation.nonce}" }.sortedBy { it.revocation.issuedAt },
+	)

@@ -629,6 +629,26 @@ class ChatRepository(
 	suspend fun importOwnerBackup(blob: String, passphrase: String): OwnerRestoreResult =
 		withContext(Dispatchers.IO) { federation.importOwnerBackup(blob, passphrase) }
 
+	/** Submit an owner-signed fact to evie and fold it into the local keyring ONLY if evie
+	 * accepted it, surfacing the error otherwise. The merge-iff-accepted invariant lives in
+	 * this one place so an owner action cannot submit without the matching local merge (the
+	 * class of bug that once left a revoked member on the board). Secondary effects (the
+	 * home-switch pin, the console-admitted gate) stay at the call site after a true return. */
+	private fun <T> submitOwnerFact(
+		signed: T,
+		submit: (T) -> EnrollResult,
+		merge: (T) -> Unit,
+		failLabel: String,
+	): Boolean {
+		val result = runCatching { submit(signed) }.getOrElse { EnrollResult(ok = false, error = it.message) }
+		if (!result.ok) {
+			_state.update { it.copy(error = "$failLabel: ${result.error?.take(120) ?: "unknown"}") }
+			return false
+		}
+		merge(signed)
+		return true
+	}
+
 	/** Submit this Console's own owner-signed admission to evie so a Switch trusts its
 	 * sealed ops. The enroll op is bearer-gated (not sealed), so it lands before the
 	 * Console is admitted; gated by a flag so connect does not re-issue it every cycle.
@@ -636,15 +656,12 @@ class ChatRepository(
 	private fun submitConsoleAdmission() {
 		if (store.consoleAdmitted) return
 		val signed = federation.consoleAdmission(System.currentTimeMillis())
-		val result = client().enroll(EnrollOp.SubmitAdmission(signed))
-		if (result.ok) {
-			federation.mergeAdmission(signed)
+		// submitOwnerFact surfaces the real cause (e.g. evie rooted at a different owner key)
+		// so it does not hide behind the generic "finishing enrollment" the register hits next.
+		if (submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitAdmission(it)) }, federation::mergeAdmission, "Console admission rejected")) {
 			store.consoleAdmitted = true
 		} else {
-			// Surface the real cause (e.g. evie rooted at a different owner key) instead of
-			// letting it hide behind the generic "finishing enrollment" the register hits next.
-			_state.update { it.copy(error = "Console admission rejected: ${result.error?.take(120) ?: "unknown"}") }
-			DebugLog.log("Federation", "console admission submit failed: ${result.error?.take(120)}")
+			DebugLog.log("Federation", "console admission submit failed")
 		}
 	}
 
@@ -655,13 +672,9 @@ class ChatRepository(
 	suspend fun admitSwitch(switchId: String, signPub: String, boxPub: String): SignedAdmission? =
 		withContext(Dispatchers.IO) {
 			val signed = federation.admitSwitch(switchId, signPub, boxPub, System.currentTimeMillis())
-			val result = runCatching { client().enroll(EnrollOp.SubmitAdmission(signed)) }
-				.getOrElse { EnrollResult(ok = false, error = it.message) }
-			if (!result.ok) {
-				_state.update { it.copy(error = "Admit failed: ${result.error?.take(120)}") }
+			if (!submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitAdmission(it)) }, federation::mergeAdmission, "Admit failed")) {
 				return@withContext null
 			}
-			federation.mergeAdmission(signed)
 			// The first admitted Switch becomes the home Switch the Console seals to.
 			if (store.loadSwitchId().isEmpty()) {
 				store.saveSwitchId(switchId)
@@ -674,15 +687,9 @@ class ChatRepository(
 	 * and drop the member from the local keyring. */
 	suspend fun revokeMember(signPub: String) = withContext(Dispatchers.IO) {
 		val signed = federation.revoke(signPub, System.currentTimeMillis())
-		val result = runCatching { client().enroll(EnrollOp.SubmitRevocation(signed)) }
-			.getOrElse { EnrollResult(ok = false, error = it.message) }
-		if (!result.ok) {
-			_state.update { it.copy(error = "Revoke failed: ${result.error?.take(120)}") }
-			return@withContext
-		}
-		// Fold the revocation in locally so the member drops off the board now, before
-		// evie rebroadcasts it. Mirrors admitSwitch's merge-after-success ordering.
-		federation.mergeRevocation(signed)
+		// The local merge folds the revocation into the keyring on success, so the member
+		// drops off the board now instead of waiting for evie to rebroadcast it.
+		submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitRevocation(it)) }, federation::mergeRevocation, "Revoke failed")
 	}
 
 	/** The admitted members of the keyring, for the management board. */
