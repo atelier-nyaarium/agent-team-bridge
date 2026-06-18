@@ -292,18 +292,31 @@ export async function startArbiter(): Promise<void> {
 				port: PORT,
 				nonce: enrollNonce,
 			});
+			// The enrollment window closes after a bounded time; the nonce dies with it so a
+			// captured QR cannot be redeemed later. Re-run --enroll for a fresh nonce.
+			let enrollTimer: ReturnType<typeof setTimeout> | null = null;
 			enrollInstall = (frame) => {
 				const bundle = openBootstrapBundle(frame, enrollIdentity, enrollNonce, localSwitchId);
+				// Persist the owner-signed admission FIRST, then the transport creds: a failure
+				// must never leave creds installed without the admission that authorizes them.
+				enrollAllowlist.applySnapshot(bundle.domain);
 				fs.writeFileSync(path.join(federationDir, "transport.json"), JSON.stringify(bundle.transport), {
 					mode: 0o600,
 				});
-				enrollAllowlist.applySnapshot(bundle.domain);
 				enrollInstall = null;
+				if (enrollTimer) clearTimeout(enrollTimer);
 				console.log(
 					`[enroll] installed credentials for Switch "${localSwitchId}". Restart the arbiter to connect.`,
 				);
 				return localSwitchId;
 			};
+			enrollTimer = setTimeout(() => {
+				if (enrollInstall) {
+					enrollInstall = null;
+					console.log("[enroll] enrollment window expired (~10 min); re-run start-arbiter.sh --enroll");
+				}
+			}, 600_000);
+			enrollTimer.unref?.();
 		}
 	}
 
