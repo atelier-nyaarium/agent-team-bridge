@@ -94,11 +94,12 @@ export class Allowlist {
 	}
 
 	/** A short stable version hash of the snapshot, for the Console's poll-based keyring
-	 * sync. "" before rooting. Content-addressed, so any admit/revoke changes it. */
+	 * sync. "" before rooting. Content-addressed, so any admit/revoke changes it. 128 bits
+	 * so two distinct keyrings cannot collide and silently skip a revocation. */
 	version(): string {
 		const snap = this.getSnapshot();
 		if (!snap) return "";
-		return createHash("sha256").update(JSON.stringify(snap)).digest("hex").slice(0, 16);
+		return createHash("sha256").update(JSON.stringify(snap)).digest("hex").slice(0, 32);
 	}
 
 	/** Set the Domain root once, at enrollment. Refuses to silently re-root an

@@ -132,7 +132,11 @@ class FederationManager(private val store: ProvisioningStore) {
 		val ownerPub = store.loadOwnerIdentity()?.sign?.pub ?: return false
 		if (snapshot.ownerSignPub != ownerPub) return false
 		val local = keyring().snapshot.admissions
-		val mergedAdmissions = (snapshot.admissions + local).distinctBy { "${it.admission.signPub}:${it.admission.nonce}" }
+		// Sort the merge by issue time so the same set of admissions always yields the same
+		// canonical order (the merge order would otherwise depend on when each was added).
+		val mergedAdmissions = (snapshot.admissions + local)
+			.distinctBy { "${it.admission.signPub}:${it.admission.nonce}" }
+			.sortedBy { it.admission.issuedAt }
 		val next = snapshot.copy(admissions = mergedAdmissions)
 		store.saveDomain(json.encodeToString(DomainSnapshot.serializer(), next), version)
 		return true
