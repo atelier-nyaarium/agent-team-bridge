@@ -160,15 +160,6 @@ class ProvisioningStore(context: Context) {
 
 	fun loadDomainVersion(): String = prefs.getString(KEY_DOMAIN_VERSION, "") ?: ""
 
-	/** Whether evie has ROOTED the Domain at this device (set only on a successful
-	 * enroll_redeem). Distinct from holding a keypair: a minted-but-not-redeemed
-	 * identity must not present as an enrolled owner. */
-	var federationRooted: Boolean
-		get() = prefs.getBoolean(KEY_ROOTED, false)
-		set(value) {
-			prefs.edit().putBoolean(KEY_ROOTED, value).apply()
-		}
-
 	/** Whether this Console's own admission has been submitted to evie. Gates the
 	 * one-time submit so connect does not re-issue a fresh-nonce admission each cycle. */
 	var consoleAdmitted: Boolean
@@ -191,7 +182,6 @@ class ProvisioningStore(context: Context) {
 		const val KEY_OWNER_IDENTITY = "federation_owner_identity"
 		const val KEY_DOMAIN = "federation_domain"
 		const val KEY_DOMAIN_VERSION = "federation_domain_version"
-		const val KEY_ROOTED = "federation_rooted"
 		const val KEY_CONSOLE_ADMITTED = "federation_console_admitted"
 		const val KEY_STTS_PROVIDER = "stts_provider"
 		const val KEY_STTS_VOICE = "stts_voice"
