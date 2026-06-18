@@ -3,7 +3,7 @@
 // Phone-anchored trust: the OWNER root keypair is generated on the admin Console and
 // never leaves it. This helper roots evie's Domain at the Console's owner PUBLIC keys
 // (read by the operator from the app) - it mints nothing and signs nothing, so no
-// private key is created or held host-side. The Console admits every Switch and Console
+// private key is created or held host-side. The Console admits every Gateway and Console
 // itself afterward (owner-signed submit_admission), so this runs once to seat the root.
 //
 // Preserves evie's own identity verbatim (rooting must not change evie's SAS). Prior

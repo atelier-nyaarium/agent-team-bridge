@@ -111,7 +111,7 @@ class ProtocolFixturesTest {
 	}
 
 	@Test
-	fun toleratesOldArbiterTeamWithoutKind() {
+	fun toleratesOldGatewayTeamWithoutKind() {
 		val result = json.decodeFromString<ConsoleListTeamsResult>(fixture("list-teams-result.json"))
 		assertEquals(2, result.teams.size)
 		assertEquals("devcontainer", result.teams[0].kind)

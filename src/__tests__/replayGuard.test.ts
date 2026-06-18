@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ReplayGuard } from "../arbiter/federation/replayGuard.js";
+import { ReplayGuard } from "../gateway/federation/replayGuard.js";
 
 describe("ReplayGuard", () => {
 	it("accepts a fresh (scope, nonce) and rejects an immediate replay", () => {

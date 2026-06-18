@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WakeCoordinator } from "../arbiter/wake.js";
+import { WakeCoordinator } from "../gateway/wake.js";
 import {
 	type ConversationRegistry,
 	createWebSocketHandlers,
 	type TeamRegistry,
 	type WsData,
-} from "../arbiter/websocket.js";
+} from "../gateway/websocket.js";
 
 function createMockWs() {
 	return {
@@ -63,9 +63,9 @@ describe("createWebSocketHandlers", () => {
 		const ws2 = createMockWs();
 		handlers.open(ws1);
 		handlers.open(ws2);
-		handlers.message(ws1, JSON.stringify({ type: "register", team: "arbiter", subId: "a1" }));
-		handlers.message(ws2, JSON.stringify({ type: "register", team: "arbiter", subId: "a2" }));
-		const subs = registry.get("arbiter");
+		handlers.message(ws1, JSON.stringify({ type: "register", team: "gateway", subId: "a1" }));
+		handlers.message(ws2, JSON.stringify({ type: "register", team: "gateway", subId: "a2" }));
+		const subs = registry.get("gateway");
 		expect(subs!.size).toBe(1);
 		expect(subs!.get("a1")).toBe(ws1);
 		expect(ws2.close).toHaveBeenCalled();

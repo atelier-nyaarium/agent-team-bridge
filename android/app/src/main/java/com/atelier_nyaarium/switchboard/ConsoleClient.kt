@@ -56,15 +56,15 @@ data class Provisioning(
 	/** STTS API key, sent as the vrcstt-api-key header; empty disables Play. */
 	val sttsKey: String = "",
 	/** Carried by a legacy host-minted-identity blob and IGNORED in the phone-anchored
-	 * model: the Console generates its own identity and resolves Switch keys from the synced
+	 * model: the Console generates its own identity and resolves Gateway keys from the synced
 	 * keyring, so these never drive enrollment. Kept only so an old blob still decodes. */
 	val identity: String = "",
-	val switchId: String = "",
-	val switchSignPub: String = "",
-	val switchBoxPub: String = "",
-	/** JSON-encoded SwitchTransport (the switch-bridge creds), sealed into a bootstrap
-	 * bundle when this Console enrolls a creds-less Switch. Empty for a legacy blob. */
-	val switchTransport: String = "",
+	val gatewayId: String = "",
+	val gatewaySignPub: String = "",
+	val gatewayBoxPub: String = "",
+	/** JSON-encoded GatewayTransport (the gateway-bridge creds), sealed into a bootstrap
+	 * bundle when this Console enrolls a creds-less Gateway. Empty for a legacy blob. */
+	val gatewayTransport: String = "",
 ) {
 	companion object {
 		fun parse(blob: String): Provisioning {
@@ -82,10 +82,10 @@ data class Provisioning(
 				sttsUrl = (p.sttsUrl ?: "").trimEnd('/'),
 				sttsKey = p.sttsKey ?: "",
 				identity = p.identity ?: "",
-				switchId = p.switchId ?: "",
-				switchSignPub = p.switchSignPub ?: "",
-				switchBoxPub = p.switchBoxPub ?: "",
-				switchTransport = p.switchTransport ?: "",
+				gatewayId = p.gatewayId ?: "",
+				gatewaySignPub = p.gatewaySignPub ?: "",
+				gatewayBoxPub = p.gatewayBoxPub ?: "",
+				gatewayTransport = p.gatewayTransport ?: "",
 			)
 		}
 	}
@@ -93,8 +93,8 @@ data class Provisioning(
 
 /** UI model for the sessions board. Mapped one-to-one from the wire TeamInfo in
  * `teams()`; also constructed locally for ended threads whose team has left the
- * bridge (a state that never exists on the wire). `name` is the switch-qualified
- * composite key (`switch/local`); `displayName`/`switchId` derive from it. */
+ * bridge (a state that never exists on the wire). `name` is the gateway-qualified
+ * composite key (`gateway/local`); `displayName`/`gatewayId` derive from it. */
 data class Team(
 	val name: String,
 	val status: String,
@@ -102,11 +102,11 @@ data class Team(
 	val queueDepth: Int,
 	val kind: String = "loose",
 ) {
-	/** Short local name shown in the UI: the tail after the switch qualifier. */
+	/** Short local name shown in the UI: the tail after the gateway qualifier. */
 	val displayName: String get() = TeamAddress.parse(name, "").name
 
-	/** Owning Switch id (the segment before the qualifier), or "" for a bare name. */
-	val switchId: String get() = TeamAddress.parse(name, "").switchId
+	/** Owning Gateway id (the segment before the qualifier), or "" for a bare name. */
+	val gatewayId: String get() = TeamAddress.parse(name, "").gatewayId
 }
 
 data class SendResult(val ok: Boolean, val status: String, val error: String?)
@@ -116,7 +116,7 @@ data class OutgoingFile(val name: String, val mime: String, val bytes: ByteArray
 
 /** The owner enroll envelope: `enrollOp` (not `op`) routes to evie's enrollment
  * coordinator, which answers an EnrollResult directly instead of relaying to a
- * Switch. */
+ * Gateway. */
 @Serializable
 private data class EnrollEnvelope(
 	val device: String,
@@ -131,7 +131,7 @@ private data class BounceBody(val error: String? = null, val retryable: Boolean 
 
 /** Decode posture for everything off the wire: unknown fields are tolerated
  * (additive protocol). Encode posture: the default config omits null-defaulted
- * optionals, which is exactly what the arbiter's schemas accept. */
+ * optionals, which is exactly what the gateway's schemas accept. */
 internal val wireJson = Json { ignoreUnknownKeys = true }
 
 /** Map a Crypto.SealedEnvelope to the proto.SealedEnvelope wire type. Fields
@@ -149,10 +149,10 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	private val proxyBase =
 		"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
 
-	/** This console's home Switch id, learned at register and set by ChatRepository.
-	 * Rides every relay so the Switch routes to the right Switch; null until learned. */
+	/** This console's home Gateway id, learned at register and set by ChatRepository.
+	 * Rides every relay so the Gateway routes to the right Gateway; null until learned. */
 	@Volatile
-	var homeSwitch: String? = null
+	var homeGateway: String? = null
 
 	/**
 	 * Direct CA-pinned GET to the API server with the SA token. Proves the tunnel
@@ -177,27 +177,27 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	private fun requireConsoleIdentity(): Crypto.Identity =
 		store.loadIdentity() ?: error("This device is not enrolled. Re-run provision-console.sh and re-import the setup blob.")
 
-	/** Resolve a Switch's keys from the owner-rooted keyring, verifying its admission
+	/** Resolve a Gateway's keys from the owner-rooted keyring, verifying its admission
 	 * before sealing to it. This is the device side of symmetric trust: the Console
-	 * seals to a Switch because the owner admitted that Switch's keys, never because a
-	 * provisioning blob named them. A Switch absent from the keyring is a terminal gap
+	 * seals to a Gateway because the owner admitted that Gateway's keys, never because a
+	 * provisioning blob named them. A Gateway absent from the keyring is a terminal gap
 	 * (admit it), worded with "not in the keyring" so it cannot collide with the
 	 * server-side "is not admitted to the Domain" sync-lag token. */
-	private fun requireSwitchKeys(switchId: String): ProvisioningStore.SwitchKeys {
-		val keyring = Keyring.parse(store.loadDomain()) ?: error("Switch \"$switchId\" is not in the keyring.")
-		val admission = keyring.resolveSwitch(switchId) ?: error("Switch \"$switchId\" is not in the keyring.")
-		return ProvisioningStore.SwitchKeys(admission.signPub, admission.boxPub)
+	private fun requireGatewayKeys(gatewayId: String): ProvisioningStore.GatewayKeys {
+		val keyring = Keyring.parse(store.loadDomain()) ?: error("Gateway \"$gatewayId\" is not in the keyring.")
+		val admission = keyring.resolveGateway(gatewayId) ?: error("Gateway \"$gatewayId\" is not in the keyring.")
+		return ProvisioningStore.GatewayKeys(admission.signPub, admission.boxPub)
 	}
 
-	/** The Switch id to use for sealing, in priority order: (1) the live homeSwitch set
-	 * after register, (2) the persisted Switch id from a previous session. Throws when
-	 * neither is available - a fresh install before the owner has admitted any Switch, where
-	 * the fix is to admit one (not re-provision); the "no switch admitted" token routes the
+	/** The Gateway id to use for sealing, in priority order: (1) the live homeGateway set
+	 * after register, (2) the persisted Gateway id from a previous session. Throws when
+	 * neither is available - a fresh install before the owner has admitted any Gateway, where
+	 * the fix is to admit one (not re-provision); the "no gateway admitted" token routes the
 	 * banner to that guidance. */
-	private fun resolveSwitchId(): String =
-		homeSwitch?.takeIf { it.isNotEmpty() }
-			?: store.loadSwitchId().takeIf { it.isNotEmpty() }
-			?: error("No Switch admitted yet - add one from Manage networks.")
+	private fun resolveGatewayId(): String =
+		homeGateway?.takeIf { it.isNotEmpty() }
+			?: store.loadGatewayId().takeIf { it.isNotEmpty() }
+			?: error("No Gateway admitted yet - add one from Manage networks.")
 
 	/** Build a sealed ConsoleRelayFrame for one op. Called fresh for every send,
 	 * including retries, so each attempt uses a new ephemeral/nonce and the
@@ -206,7 +206,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		op: ConsoleOp,
 		opId: String,
 		identity: Crypto.Identity,
-		targetSwitch: String,
+		targetGateway: String,
 		hostBoxPub: String,
 	): ConsoleRelayFrame {
 		val envelope = ConsoleOpEnvelope(
@@ -222,13 +222,13 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			v = 1L,
 			opId = opId,
 			signerSignPub = identity.sign.pub,
-			targetSwitch = targetSwitch,
+			targetGateway = targetGateway,
 			sealed = cryptoEnv.toProto(),
 		)
 	}
 
 	/** Unseal a reply envelope using the console's box private key, verified against
-	 * the home Switch's signing public key. */
+	 * the home Gateway's signing public key. */
 	private fun unsealReply(sealed: SealedEnvelope, identity: Crypto.Identity, hostSignPub: String): ConsoleReplyBody {
 		val plain = Crypto.unseal(sealed.toCrypto(), identity.box.priv, hostSignPub)
 		return wireJson.decodeFromString<ConsoleReplyBody>(plain.toString(Charsets.UTF_8))
@@ -245,16 +245,16 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		op: ConsoleOp,
 		opId: String = UUID.randomUUID().toString(),
 		readTimeoutMs: Long? = null,
-		targetSwitch: String? = null,
+		targetGateway: String? = null,
 	): ConsoleReplyBody {
 		val identity = requireConsoleIdentity()
-		// Direct multi-home: an op seals to the Switch hosting its session (resolved from
+		// Direct multi-home: an op seals to the Gateway hosting its session (resolved from
 		// the keyring), naming it so evie routes there. Register/poll/list default to the
-		// home Switch.
-		val switchId = targetSwitch?.takeIf { it.isNotEmpty() } ?: resolveSwitchId()
-		val hostKeys = requireSwitchKeys(switchId)
+		// home Gateway.
+		val gatewayId = targetGateway?.takeIf { it.isNotEmpty() } ?: resolveGatewayId()
+		val hostKeys = requireGatewayKeys(gatewayId)
 
-		val frame = buildSealedFrame(op, opId, identity, switchId, hostKeys.boxPub)
+		val frame = buildSealedFrame(op, opId, identity, gatewayId, hostKeys.boxPub)
 		val req = Request.Builder()
 			.url("$proxyBase/relay")
 			.header("Authorization", "Bearer ${prov.saToken}")
@@ -281,7 +281,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 
 	/** Submit an owner enroll op directly to evie (the Domain root). evie answers
 	 * with an EnrollResult, not a console_relay_reply: enroll ops are evie-direct and
-	 * never relayed to a Switch, so they succeed even with no arbiter connected. A
+	 * never relayed to a Gateway, so they succeed even with no gateway connected. A
 	 * bounce (offline / 501 / malformed) is surfaced as a failed EnrollResult. */
 	fun enroll(op: EnrollOp): EnrollResult {
 		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), op)
@@ -314,7 +314,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	}
 
 	/** Claim this device's mailbox. Returns the starting cursor + epoch. Carries this
-	 * build's identity so the arbiter logs which version/variant the console runs. */
+	 * build's identity so the gateway logs which version/variant the console runs. */
 	fun register(): ConsoleRegisterResult = resultOf(
 		relay(
 			ConsoleOp.Register(
@@ -325,11 +325,11 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		"register",
 	)
 
-	/** List the bridge's sessions, each keyed by its switch-qualified name. A
-	 * session's Switch comes from the wire (`TeamInfo.switchId`); when a pre-federation
-	 * Switch omits it, `localSwitchId` (this connection's Switch, learned at register)
-	 * is the fallback. Both empty leaves the name bare (single implicit Switch). */
-	fun teams(localSwitchId: String = ""): List<Team> {
+	/** List the bridge's sessions, each keyed by its gateway-qualified name. A
+	 * session's Gateway comes from the wire (`TeamInfo.gatewayId`); when a pre-federation
+	 * Gateway omits it, `localGatewayId` (this connection's Gateway, learned at register)
+	 * is the fallback. Both empty leaves the name bare (single implicit Gateway). */
+	fun teams(localGatewayId: String = ""): List<Team> {
 		val body = relay(ConsoleOp.ListTeams)
 		// Surface a relay failure instead of blanking the board with an empty list; the
 		// callers (connect, refreshTeams) wrap this in runCatching and keep the prior list.
@@ -337,9 +337,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		val result =
 			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult>(body.result)
 		return result.teams.map {
-			val switchId = it.switchId?.ifEmpty { null } ?: localSwitchId
+			val gatewayId = it.gatewayId?.ifEmpty { null } ?: localGatewayId
 			Team(
-				name = TeamAddress.parse(it.team, switchId).canonical,
+				name = TeamAddress.parse(it.team, gatewayId).canonical,
 				status = it.status,
 				mode = it.mode ?: "",
 				queueDepth = it.queue_depth.toInt(),
@@ -373,11 +373,11 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			)
 		}
 		val op = ConsoleOp.Send(to = to, body = body, files = wireFiles.ifEmpty { null })
-		// Seal directly to the Switch hosting the target team (a bare name resolves to home),
-		// so a cross-Switch send goes E2E to that Switch rather than relaying through home.
-		val home = homeSwitch?.takeIf { it.isNotEmpty() } ?: store.loadSwitchId()
-		val target = TeamAddress.parse(to, home).switchId
-		val replyBody = relay(op, opId, targetSwitch = target)
+		// Seal directly to the Gateway hosting the target team (a bare name resolves to home),
+		// so a cross-Gateway send goes E2E to that Gateway rather than relaying through home.
+		val home = homeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()
+		val target = TeamAddress.parse(to, home).gatewayId
+		val replyBody = relay(op, opId, targetGateway = target)
 		val status = replyBody.result?.let {
 			runCatching { wireJson.decodeFromJsonElement<ConsoleSendResult>(it).status }.getOrNull()
 		}
@@ -389,7 +389,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	 * arrives or the hold expires, so delivery is near-instant at ~1 request per
 	 * hold window instead of constant fast polling. */
 	fun poll(cursor: Long, epoch: Long, holdMs: Long = 0): ConsolePollResult {
-		// Carry the synced keyring version so the home Switch returns the snapshot only when
+		// Carry the synced keyring version so the home Gateway returns the snapshot only when
 		// it changed (a revocation made elsewhere reaches this Console within one cycle).
 		val knownVersion = store.loadDomainVersion().ifEmpty { null }
 		val op = ConsoleOp.Poll(
@@ -398,8 +398,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			holdMs = if (holdMs > 0) holdMs else null,
 			knownDomainVersion = knownVersion,
 		)
-		// Ordered timeout chain for a held poll: arbiter replies by holdMs (40s),
-		// evie's relay hold fires at 55s if the arbiter vanished, this read timeout
+		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s),
+		// evie's relay hold fires at 55s if the gateway vanished, this read timeout
 		// at holdMs+18s (58s) catches a vanished evie, and the apiserver proxy's
 		// 60s outranks them all. Each failure layer returns before the next races it.
 		val body = relay(op, readTimeoutMs = if (holdMs > 0) holdMs + 18_000 else null)
@@ -424,7 +424,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(ks) }
 			val tm = tmf.trustManagers.first { it is X509TrustManager } as X509TrustManager
 			val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), SecureRandom()) }
-			// The relay holds a send op server-side for up to 25s (the arbiter's
+			// The relay holds a send op server-side for up to 25s (the gateway's
 			// send bound) before answering "running", so OkHttp's 10s default read
 			// timeout would mislabel every cold-wake send as failed. Write gets
 			// headroom for 10 MB attachment uploads on slow links.

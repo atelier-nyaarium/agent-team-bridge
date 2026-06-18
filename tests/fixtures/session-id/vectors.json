@@ -1,77 +1,77 @@
 {
-	"_comment": "Cross-runtime vectors for the Session Identity value objects. Read by src/__tests__/session-id.test.ts (TS) AND android/.../SessionIdVectorsTest.kt (Kotlin) so the twin cannot drift. The REMOTE sessionId case pins localSwitchId != switchId: a twin that re-resolves a qualified switch to local would change the key and false-pass if localSwitchId == switchId.",
+	"_comment": "Cross-runtime vectors for the Session Identity value objects. Read by src/__tests__/session-id.test.ts (TS) AND android/.../SessionIdVectorsTest.kt (Kotlin) so the twin cannot drift. The REMOTE sessionId case pins localGatewayId != gatewayId: a twin that re-resolves a qualified gateway to local would change the key and false-pass if localGatewayId == gatewayId.",
 	"teamAddress": [
 		{
 			"input": "9cb5b9",
-			"localSwitchId": "switchboard",
-			"switchId": "switchboard",
+			"localGatewayId": "switchboard",
+			"gatewayId": "switchboard",
 			"name": "9cb5b9",
 			"canonical": "switchboard/9cb5b9"
 		},
 		{
-			"input": "arbiter",
-			"localSwitchId": "switchboard",
-			"switchId": "switchboard",
-			"name": "arbiter",
-			"canonical": "switchboard/arbiter"
+			"input": "gateway",
+			"localGatewayId": "switchboard",
+			"gatewayId": "switchboard",
+			"name": "gateway",
+			"canonical": "switchboard/gateway"
 		},
 		{
 			"input": "switchboard/9cb5b9",
-			"localSwitchId": "switchboard",
-			"switchId": "switchboard",
+			"localGatewayId": "switchboard",
+			"gatewayId": "switchboard",
 			"name": "9cb5b9",
 			"canonical": "switchboard/9cb5b9"
 		},
 		{
 			"input": "hostb/api",
-			"localSwitchId": "hosta",
-			"switchId": "hostb",
+			"localGatewayId": "hosta",
+			"gatewayId": "hostb",
 			"name": "api",
 			"canonical": "hostb/api"
 		},
-		{ "input": "a/b/c", "localSwitchId": "x", "switchId": "a", "name": "b/c", "canonical": "a/b/c" },
-		{ "input": "", "localSwitchId": "x", "switchId": "x", "name": "", "canonical": "x/" },
-		{ "input": "h😀/n😀", "localSwitchId": "x", "switchId": "h😀", "name": "n😀", "canonical": "h😀/n😀" }
+		{ "input": "a/b/c", "localGatewayId": "x", "gatewayId": "a", "name": "b/c", "canonical": "a/b/c" },
+		{ "input": "", "localGatewayId": "x", "gatewayId": "x", "name": "", "canonical": "x/" },
+		{ "input": "h😀/n😀", "localGatewayId": "x", "gatewayId": "h😀", "name": "n😀", "canonical": "h😀/n😀" }
 	],
 	"sessionId": [
 		{
 			"input": "conv:c:api",
-			"localSwitchId": "hosta",
+			"localGatewayId": "hosta",
 			"conversationId": "c",
 			"targetCanonical": "hosta/api",
 			"key": "conv:c:hosta/api"
 		},
 		{
 			"input": "conv:c:hostb/api",
-			"localSwitchId": "hosta",
+			"localGatewayId": "hosta",
 			"conversationId": "c",
 			"targetCanonical": "hostb/api",
 			"key": "conv:c:hostb/api"
 		},
 		{
 			"input": "conv:console-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4:switchboard/9cb5b9",
-			"localSwitchId": "switchboard",
+			"localGatewayId": "switchboard",
 			"conversationId": "console-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4",
 			"targetCanonical": "switchboard/9cb5b9",
 			"key": "conv:console-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4:switchboard/9cb5b9"
 		},
 		{
 			"input": "conv:console-x:9cb5b9",
-			"localSwitchId": "switchboard",
+			"localGatewayId": "switchboard",
 			"conversationId": "console-x",
 			"targetCanonical": "switchboard/9cb5b9",
 			"key": "conv:console-x:switchboard/9cb5b9"
 		},
 		{
 			"input": "conv:c:a/b/c",
-			"localSwitchId": "x",
+			"localGatewayId": "x",
 			"conversationId": "c",
 			"targetCanonical": "a/b/c",
 			"key": "conv:c:a/b/c"
 		},
 		{
 			"input": "conv:a/b:host/team",
-			"localSwitchId": "x",
+			"localGatewayId": "x",
 			"conversationId": "a/b",
 			"targetCanonical": "host/team",
 			"key": "conv:a/b:host/team"
@@ -79,20 +79,20 @@
 	],
 	"notice": [
 		{
-			"input": "notice:arbiter",
-			"localSwitchId": "switchboard",
-			"senderCanonical": "switchboard/arbiter",
-			"key": "notice:switchboard/arbiter"
+			"input": "notice:gateway",
+			"localGatewayId": "switchboard",
+			"senderCanonical": "switchboard/gateway",
+			"key": "notice:switchboard/gateway"
 		},
 		{
 			"input": "notice:hostb/agent",
-			"localSwitchId": "hosta",
+			"localGatewayId": "hosta",
 			"senderCanonical": "hostb/agent",
 			"key": "notice:hostb/agent"
 		}
 	],
 	"notSession": [
-		"notice:arbiter",
+		"notice:gateway",
 		"5f3a9c12",
 		"conv:",
 		"conv:onlyconv",
@@ -101,5 +101,5 @@
 		"conv:a:conv:b:team",
 		"conv:c:team:withcolon"
 	],
-	"notNotice": ["conv:c:api", "arbiter", "notice:", ""]
+	"notNotice": ["conv:c:api", "gateway", "notice:", ""]
 }

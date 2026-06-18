@@ -32,21 +32,21 @@ type AllowlistFile = z.infer<typeof AllowlistFileSchema>;
 
 const ALLOWLIST_FILE = "federation-allowlist.json";
 
-/** The mirrored Domain allowlist on a Switch (audit R3): the owner root plus the
- * owner-signed admissions / revocations, persisted to the Switch's volume so a
- * revocation bites even while evie is unreachable. Resolution maps a Switch id to
+/** The mirrored Domain allowlist on a Gateway (audit R3): the owner root plus the
+ * owner-signed admissions / revocations, persisted to the Gateway's volume so a
+ * revocation bites even while evie is unreachable. Resolution maps a Gateway id to
  * its admitted keys for sealing, and a sender key to its admission for unsealing. */
 export class Allowlist {
 	private file: string;
 	private state: AllowlistFile;
 	// The owner root pinned out-of-band (FEDERATION_OWNER_SIGN_PUB). When set, a
 	// snapshot rooted at any other key is refused - so a malicious / token-holding
-	// evie cannot root a fresh Switch at an attacker key (the snapshot is relayed
+	// evie cannot root a fresh Gateway at an attacker key (the snapshot is relayed
 	// through untrusted evie). Null = trust-on-first-use (convenient, but trusts
 	// evie at the bootstrap; pinning is recommended for the untrusted-evie model).
 	private readonly pinnedOwner: string | null;
 	// Strict mode (FEDERATION_REQUIRE_OWNER_PIN): when set without an out-of-band pin,
-	// the Switch refuses to root at all rather than trust-on-first-use. For the
+	// the Gateway refuses to root at all rather than trust-on-first-use. For the
 	// untrusted-evie model where TOFU is unacceptable.
 	private readonly requireOwnerPin: boolean;
 
@@ -55,7 +55,7 @@ export class Allowlist {
 		this.pinnedOwner = pinnedOwner ?? null;
 		this.requireOwnerPin = requireOwnerPin;
 		this.state = this.read();
-		// A pin that disagrees with a persisted root means the Switch was previously
+		// A pin that disagrees with a persisted root means the Gateway was previously
 		// rooted at a different key; refuse to serve the stale root.
 		if (this.pinnedOwner && this.state.ownerSignPub && this.state.ownerSignPub !== this.pinnedOwner) {
 			console.warn(`[allowlist] persisted owner root != pinned owner; clearing the stale root`);
@@ -83,7 +83,7 @@ export class Allowlist {
 	}
 
 	/** The current owner-rooted snapshot, or null before rooting. Mirrors evie's
-	 * canonical keyring (the Console syncs it through its home Switch's poll reply). */
+	 * canonical keyring (the Console syncs it through its home Gateway's poll reply). */
 	getSnapshot(): DomainSnapshot | null {
 		if (!this.state.ownerSignPub) return null;
 		return {
@@ -103,7 +103,7 @@ export class Allowlist {
 	}
 
 	/** Set the Domain root once, at enrollment. Refuses to silently re-root an
-	 * already-enrolled Switch (recovery is a deliberate, separate path). */
+	 * already-enrolled Gateway (recovery is a deliberate, separate path). */
 	setOwner(ownerSignPubB64: string): void {
 		if (this.requireOwnerPin && !this.pinnedOwner) {
 			throw new Error("FEDERATION_REQUIRE_OWNER_PIN is set but no owner pin is configured; refusing to root");
@@ -127,10 +127,10 @@ export class Allowlist {
 	 * allowlist with the snapshot's owner-verified entries, so a re-sync converges
 	 * rather than accumulating duplicates. Refuses to ROOT at a key other than the
 	 * out-of-band pin (untrusted-evie defense), and refuses to silently re-root an
-	 * already-rooted Switch (recovery is a deliberate, separate path). */
+	 * already-rooted Gateway (recovery is a deliberate, separate path). */
 	applySnapshot(snapshot: DomainSnapshot): void {
 		// The snapshot arrives through untrusted evie. If an owner is pinned, the
-		// root MUST match it; otherwise evie could root a fresh Switch at any key.
+		// root MUST match it; otherwise evie could root a fresh Gateway at any key.
 		if (this.pinnedOwner && snapshot.ownerSignPub !== this.pinnedOwner) {
 			console.warn(`[allowlist] ignoring domain sync: root does not match the pinned owner key`);
 			return;
@@ -176,7 +176,7 @@ export class Allowlist {
 		return true;
 	}
 
-	/** This Switch's own owner-signed admission (newest verified for its signing
+	/** This Gateway's own owner-signed admission (newest verified for its signing
 	 * key), to present at registration so evie can gate it. Null pre-enrollment. */
 	selfAdmission(signPubB64: string): SignedAdmission | null {
 		if (!this.state.ownerSignPub) return null;
@@ -195,14 +195,14 @@ export class Allowlist {
 		return resolveAdmitted(this.state.admissions, this.state.revocations, this.state.ownerSignPub, signPubB64);
 	}
 
-	/** The admitted keys for a Switch id (its newest non-revoked switch admission), for
-	 * sealing a cross-Switch frame to it. */
-	resolveSwitch(switchId: string): { signPub: string; boxPub: string } | null {
+	/** The admitted keys for a Gateway id (its newest non-revoked gateway admission), for
+	 * sealing a cross-Gateway frame to it. */
+	resolveGateway(gatewayId: string): { signPub: string; boxPub: string } | null {
 		if (!this.state.ownerSignPub) return null;
 		const best = findAdmission(
 			this.state.admissions,
 			this.state.ownerSignPub,
-			(a) => a.kind === "switch" && a.switchId === switchId,
+			(a) => a.kind === "gateway" && a.gatewayId === gatewayId,
 		);
 		if (!best) return null;
 		// Confirm it is not revoked (resolveAdmitted applies the revocation rule).

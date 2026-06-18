@@ -3,7 +3,7 @@ package com.atelier_nyaarium.switchboard.proto
 /**
  * The console's mailbox CONSUMPTION cursor: the epoch, the acked sequence, and the
  * dropped-gap baseline, plus the transition rules (epoch flip, dedupe, gap delta,
- * fresh-set). The cursor is console-OWNED and persisted (see MailboxSync); the arbiter
+ * fresh-set). The cursor is console-OWNED and persisted (see MailboxSync); the gateway
  * never dictates it.
  *
  * Hand-authored twin of src/shared/sync-cursor.ts, kept equivalent by the shared vectors
@@ -43,7 +43,7 @@ class SyncCursor private constructor(
 ) {
 	companion object {
 		/** The initial cursor for a never-synced device. Epoch 0 is a reserved sentinel
-		 * the arbiter never mints, so the first poll against any real box always flips. */
+		 * the gateway never mints, so the first poll against any real box always flips. */
 		fun initial() = SyncCursor(0, 0, 0)
 
 		fun of(epoch: Long, ackedSeq: Long, droppedBaseline: Long) = SyncCursor(epoch, ackedSeq, droppedBaseline)

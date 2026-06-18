@@ -2,15 +2,15 @@ import { z } from "zod";
 import { ChannelFilesSchema } from "./evie-protocol.js";
 
 ////////////////////////////////
-//  Federation inner protocol (arbiter <-> arbiter, via evie)
+//  Federation inner protocol (gateway <-> gateway, via evie)
 //
-//  evie routes the OUTER envelope (evie-protocol.ts: relayId / srcSwitch / dstSwitch)
+//  evie routes the OUTER envelope (evie-protocol.ts: relayId / srcGateway / dstGateway)
 //  and never reads the payload. THIS module is the inner vocabulary the two
-//  arbiters share and evie does not: the federated op a Switch runs on a peer's
+//  gateways share and evie does not: the federated op a Gateway runs on a peer's
 //  behalf, the return-route that pins a reply back to the origin session, and the
-//  crypto-aware payload wrapper. It is NOT codegen'd to Kotlin - cross-Switch
-//  traffic is arbiter-to-arbiter; the console reaches the mesh through its home
-//  Switch. Re-export `FEDERATION_PROTOCOL_VERSION` from the synced leaf so both the
+//  crypto-aware payload wrapper. It is NOT codegen'd to Kotlin - cross-Gateway
+//  traffic is gateway-to-gateway; the console reaches the mesh through its home
+//  Gateway. Re-export `FEDERATION_PROTOCOL_VERSION` from the synced leaf so both the
 //  wire version and the inner ops travel from one import surface.
 
 export { FEDERATION_PROTOCOL_VERSION } from "./evie-protocol.js";
@@ -18,25 +18,25 @@ export { FEDERATION_PROTOCOL_VERSION } from "./evie-protocol.js";
 ////////////////////////////////
 //  Schemas
 
-/** How a destination Switch pins a reply back to the originating Switch's exact
- * session. Carried on a cross-Switch `send`, stored on the destination job, and
+/** How a destination Gateway pins a reply back to the originating Gateway's exact
+ * session. Carried on a cross-Gateway `send`, stored on the destination job, and
  * read by `respond` to forward the response_push back across evie. `srcSession`
- * is the origin's channel job key (`conv:<srcConversationId>:<dstSwitch>/<name>`),
- * used as the job key on BOTH Switches so neither side has to translate. */
+ * is the origin's channel job key (`conv:<srcConversationId>:<dstGateway>/<name>`),
+ * used as the job key on BOTH Gatewayes so neither side has to translate. */
 export const ReturnRouteSchema = z.object({
-	srcSwitch: z.string().min(1).max(64),
+	srcGateway: z.string().min(1).max(64),
 	srcConversationId: z.string().min(1).max(128),
 	srcSession: z.string().min(1).max(256),
 });
 
-/** The op a Switch executes on a peer's behalf. Always carried E2E-sealed inside the
- * switch_relay payload (`sealer.ts`); evie relays the envelope but never sees the op. */
+/** The op a Gateway executes on a peer's behalf. Always carried E2E-sealed inside the
+ * gateway_relay payload (`sealer.ts`); evie relays the envelope but never sees the op. */
 export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	z.object({
 		kind: z.literal("send"),
-		// The qualified sender (srcSwitch/name) for display on the destination.
+		// The qualified sender (srcGateway/name) for display on the destination.
 		from: z.string().min(1).max(128),
-		// The BARE local team name on the destination Switch.
+		// The BARE local team name on the destination Gateway.
 		to: z.string().min(1).max(128),
 		request_type: z.string().optional(),
 		effort: z.string().optional(),
@@ -44,9 +44,9 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 		files: ChannelFilesSchema.optional(),
 		returnRoute: ReturnRouteSchema,
 	}),
-	// Discovery fan-out: the asking Switch queries each online peer for its teams.
+	// Discovery fan-out: the asking Gateway queries each online peer for its teams.
 	z.object({ kind: z.literal("list_teams") }),
-	// Wake-across-Switches: bring up a sleeping devcontainer on the destination.
+	// Wake-across-Gatewayes: bring up a sleeping devcontainer on the destination.
 	z.object({ kind: z.literal("wake"), team: z.string().min(1).max(128) }),
 	// The destination's reply, pinned home: delivered to `session_id` on the origin.
 	z.object({
@@ -71,34 +71,34 @@ export const SealedEnvelopeSchema = z.object({
 	signature: z.string(),
 });
 
-/** The switch_relay payload. Clean cutover: cross-Switch traffic is ALWAYS E2E-sealed
+/** The gateway_relay payload. Clean cutover: cross-Gateway traffic is ALWAYS E2E-sealed
  * (the plaintext spike's cleartext `op` is retired), so evie sees only this opaque
  * sealed blob - it cannot read or forge the op. */
-export const SwitchRelayPayloadSchema = z.object({
+export const GatewayRelayPayloadSchema = z.object({
 	sealed: SealedEnvelopeSchema,
 });
 
-/** The full switch_relay frame the destination arbiter's relay pump validates (the
- * loose `switch_relay` member of EvieInboundFrameSchema parses to this). */
-export const SwitchRelayFrameSchema = z.object({
-	type: z.literal("switch_relay"),
+/** The full gateway_relay frame the destination gateway's relay pump validates (the
+ * loose `gateway_relay` member of EvieInboundFrameSchema parses to this). */
+export const GatewayRelayFrameSchema = z.object({
+	type: z.literal("gateway_relay"),
 	v: z.number().int().positive(),
 	relayId: z.string().min(1).max(128),
-	srcSwitch: z.string().min(1).max(64),
-	dstSwitch: z.string().min(1).max(64),
-	payload: SwitchRelayPayloadSchema,
+	srcGateway: z.string().min(1).max(64),
+	dstGateway: z.string().min(1).max(64),
+	payload: GatewayRelayPayloadSchema,
 });
 
 ////////////////////////////////
 //  Types
 //
-//  Op RESULTS are sealed back to the origin Switch too (hostRelay.ts seals the reply
-//  leg), then parsed loosely by the origin: a peer Switch is semi-trusted, and the
+//  Op RESULTS are sealed back to the origin Gateway too (hostRelay.ts seals the reply
+//  leg), then parsed loosely by the origin: a peer Gateway is semi-trusted, and the
 //  console's tolerant decode plus the existing route validation handle shape, so no
 //  result schema is enforced here.
 
 export type ReturnRoute = z.infer<typeof ReturnRouteSchema>;
 export type FederatedOp = z.infer<typeof FederatedOpSchema>;
 export type FederatedOpKind = FederatedOp["kind"];
-export type SwitchRelayPayload = z.infer<typeof SwitchRelayPayloadSchema>;
-export type SwitchRelayFrame = z.infer<typeof SwitchRelayFrameSchema>;
+export type GatewayRelayPayload = z.infer<typeof GatewayRelayPayloadSchema>;
+export type GatewayRelayFrame = z.infer<typeof GatewayRelayFrameSchema>;

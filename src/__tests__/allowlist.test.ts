@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Allowlist } from "../arbiter/federation/allowlist.js";
+import { Allowlist } from "../gateway/federation/allowlist.js";
 import { type Admission, signAdmission, signRevocation } from "../shared/admission.js";
 import { generateIdentity } from "../shared/crypto.js";
 
@@ -20,10 +20,10 @@ const owner = generateIdentity();
 const host = generateIdentity();
 function hostAdmission(over: Partial<Admission> = {}): Admission {
 	return {
-		kind: "switch",
+		kind: "gateway",
 		signPub: host.sign.pub,
 		boxPub: host.box.pub,
-		switchId: "laptop",
+		gatewayId: "laptop",
 		issuedAt: 1000,
 		nonce: "bg==",
 		...over,
@@ -36,13 +36,13 @@ describe("Allowlist", () => {
 		expect(a.addAdmission(signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub))).toBe(false);
 	});
 
-	it("admits a Switch and resolves it by id and by key", () => {
+	it("admits a Gateway and resolves it by id and by key", () => {
 		const a = new Allowlist(tmpDir());
 		a.setOwner(owner.sign.pub);
 		expect(a.addAdmission(signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub))).toBe(true);
-		expect(a.resolveSwitch("laptop")).toEqual({ signPub: host.sign.pub, boxPub: host.box.pub });
-		expect(a.resolveBySignPub(host.sign.pub)?.switchId).toBe("laptop");
-		expect(a.resolveSwitch("desktop")).toBeNull();
+		expect(a.resolveGateway("laptop")).toEqual({ signPub: host.sign.pub, boxPub: host.box.pub });
+		expect(a.resolveBySignPub(host.sign.pub)?.gatewayId).toBe("laptop");
+		expect(a.resolveGateway("desktop")).toBeNull();
 	});
 
 	it("rejects an admission forged by a non-owner", () => {
@@ -50,7 +50,7 @@ describe("Allowlist", () => {
 		a.setOwner(owner.sign.pub);
 		const attacker = generateIdentity();
 		expect(a.addAdmission(signAdmission(hostAdmission(), attacker.sign.priv, attacker.sign.pub))).toBe(false);
-		expect(a.resolveSwitch("laptop")).toBeNull();
+		expect(a.resolveGateway("laptop")).toBeNull();
 	});
 
 	it("refuses to re-root at a different owner", () => {
@@ -60,14 +60,14 @@ describe("Allowlist", () => {
 		expect(() => a.setOwner(other.sign.pub)).toThrow(/different owner/);
 	});
 
-	it("a revocation removes the Switch from resolution", () => {
+	it("a revocation removes the Gateway from resolution", () => {
 		const a = new Allowlist(tmpDir());
 		a.setOwner(owner.sign.pub);
 		a.addAdmission(signAdmission(hostAdmission({ issuedAt: 1000 }), owner.sign.priv, owner.sign.pub));
 		a.addRevocation(
 			signRevocation({ signPub: host.sign.pub, issuedAt: 2000, nonce: "cg==" }, owner.sign.priv, owner.sign.pub),
 		);
-		expect(a.resolveSwitch("laptop")).toBeNull();
+		expect(a.resolveGateway("laptop")).toBeNull();
 		expect(a.resolveBySignPub(host.sign.pub)).toBeNull();
 	});
 
@@ -79,10 +79,10 @@ describe("Allowlist", () => {
 		// A fresh instance reads the same file.
 		const b = new Allowlist(dir);
 		expect(b.ownerSignPub).toBe(owner.sign.pub);
-		expect(b.resolveSwitch("laptop")?.boxPub).toBe(host.box.pub);
+		expect(b.resolveGateway("laptop")?.boxPub).toBe(host.box.pub);
 	});
 
-	it("mirrors a Domain snapshot and surfaces the arbiter's own admission", () => {
+	it("mirrors a Domain snapshot and surfaces the gateway's own admission", () => {
 		const a = new Allowlist(tmpDir());
 		a.applySnapshot({
 			ownerSignPub: owner.sign.pub,
@@ -90,8 +90,8 @@ describe("Allowlist", () => {
 			revocations: [],
 		});
 		expect(a.ownerSignPub).toBe(owner.sign.pub);
-		expect(a.resolveSwitch("laptop")?.boxPub).toBe(host.box.pub);
-		expect(a.selfAdmission(host.sign.pub)?.admission.switchId).toBe("laptop");
+		expect(a.resolveGateway("laptop")?.boxPub).toBe(host.box.pub);
+		expect(a.selfAdmission(host.sign.pub)?.admission.gatewayId).toBe("laptop");
 	});
 
 	it("applySnapshot is idempotent and drops non-owner entries", () => {
@@ -102,15 +102,15 @@ describe("Allowlist", () => {
 			admissions: [
 				signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub),
 				// A forged admission in the sync is filtered out, not stored.
-				signAdmission(hostAdmission({ switchId: "evil" }), attacker.sign.priv, attacker.sign.pub),
+				signAdmission(hostAdmission({ gatewayId: "evil" }), attacker.sign.priv, attacker.sign.pub),
 			],
 			revocations: [],
 		};
 		a.applySnapshot(snapshot);
 		a.applySnapshot(snapshot);
 		// Re-sync converged (no duplicate), and the forged "evil" admission never landed.
-		expect(a.resolveSwitch("evil")).toBeNull();
-		expect(a.resolveSwitch("laptop")?.boxPub).toBe(host.box.pub);
+		expect(a.resolveGateway("evil")).toBeNull();
+		expect(a.resolveGateway("laptop")?.boxPub).toBe(host.box.pub);
 	});
 
 	it("ignores a snapshot rooted at a different owner", () => {
@@ -123,7 +123,7 @@ describe("Allowlist", () => {
 	});
 
 	it("refuses to root at a non-pinned owner (untrusted-evie defense)", () => {
-		// A malicious evie relays a snapshot rooting a fresh Switch at an attacker key.
+		// A malicious evie relays a snapshot rooting a fresh Gateway at an attacker key.
 		const attacker = generateIdentity();
 		const a = new Allowlist(tmpDir(), owner.sign.pub);
 		a.applySnapshot({
@@ -131,9 +131,9 @@ describe("Allowlist", () => {
 			admissions: [signAdmission(hostAdmission(), attacker.sign.priv, attacker.sign.pub)],
 			revocations: [],
 		});
-		// The pinned owner did not sign this; the Switch stays unrooted.
+		// The pinned owner did not sign this; the Gateway stays unrooted.
 		expect(a.ownerSignPub).toBeNull();
-		expect(a.resolveSwitch("laptop")).toBeNull();
+		expect(a.resolveGateway("laptop")).toBeNull();
 	});
 
 	it("adopts a snapshot that matches the pinned owner", () => {
@@ -144,7 +144,7 @@ describe("Allowlist", () => {
 			revocations: [],
 		});
 		expect(a.ownerSignPub).toBe(owner.sign.pub);
-		expect(a.resolveSwitch("laptop")?.boxPub).toBe(host.box.pub);
+		expect(a.resolveGateway("laptop")?.boxPub).toBe(host.box.pub);
 	});
 
 	it("clears a persisted root that disagrees with a newly-set pin", () => {
@@ -162,7 +162,7 @@ describe("Allowlist", () => {
 	});
 
 	it("strict mode without a pin refuses to root from a snapshot (no trust-on-first-use)", () => {
-		// requireOwnerPin = true, but FEDERATION_OWNER_SIGN_PUB unset: the Switch must
+		// requireOwnerPin = true, but FEDERATION_OWNER_SIGN_PUB unset: the Gateway must
 		// not trust the first owner key evie relays.
 		const a = new Allowlist(tmpDir(), null, true);
 		a.applySnapshot({
@@ -171,7 +171,7 @@ describe("Allowlist", () => {
 			revocations: [],
 		});
 		expect(a.ownerSignPub).toBeNull();
-		expect(a.resolveSwitch("laptop")).toBeNull();
+		expect(a.resolveGateway("laptop")).toBeNull();
 	});
 
 	it("strict mode without a pin refuses setOwner", () => {
@@ -187,6 +187,6 @@ describe("Allowlist", () => {
 			revocations: [],
 		});
 		expect(a.ownerSignPub).toBe(owner.sign.pub);
-		expect(a.resolveSwitch("laptop")?.boxPub).toBe(host.box.pub);
+		expect(a.resolveGateway("laptop")?.boxPub).toBe(host.box.pub);
 	});
 });

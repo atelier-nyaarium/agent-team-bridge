@@ -29,7 +29,7 @@ let PROJECT_NAME = "";
 let AGENT_TYPE = "";
 
 // Stable conversation id for the life of this MCP process. Regenerated on process start,
-// reused across WebSocket reconnects so the arbiter can keep the conversation tied to the
+// reused across WebSocket reconnects so the gateway can keep the conversation tied to the
 // same agent window / container instance.
 const CONVERSATION_ID: string = crypto.randomUUID();
 
@@ -171,8 +171,8 @@ export function connectToRouter(): void {
 			return;
 		}
 
-		// Handshake from arbiter: auto-reply if we know the answer, otherwise let the LLM decide
-		if (msg.type === "channel_push" && msg.from === "arbiter" && msg.replyJsonSchema) {
+		// Handshake from gateway: auto-reply if we know the answer, otherwise let the LLM decide
+		if (msg.type === "channel_push" && msg.from === "gateway" && msg.replyJsonSchema) {
 			if (isMainOrLeadAgent !== null) {
 				const hsSessionId = msg.session_id as string;
 				console.error(`[bridge] handshake auto-reply [${hsSessionId}], isMainOrLead=${isMainOrLeadAgent}`);
@@ -220,7 +220,7 @@ export function connectToRouter(): void {
 	});
 
 	routerWs.on("close", () => {
-		// #region Hypothesis F: log disconnect with subId that arbiter should clean up
+		// #region Hypothesis F: log disconnect with subId that gateway should clean up
 		debugLog("F", "src/mcp/bridge/helpers.ts:connectToRouter", "disconnected", {
 			pid: process.pid,
 			team: PROJECT_NAME,

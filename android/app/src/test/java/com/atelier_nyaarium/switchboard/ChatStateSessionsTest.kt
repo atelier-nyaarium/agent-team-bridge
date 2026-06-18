@@ -29,11 +29,11 @@ class ChatStateSessionsTest {
 	private fun stateWith(
 		teams: List<Team>,
 		threads: Map<String, List<Message>>,
-		localSwitchId: String = "",
+		localGatewayId: String = "",
 	) = ChatState(
 		teams = teams,
 		threads = threads,
-		localSwitchId = localSwitchId,
+		localGatewayId = localGatewayId,
 	)
 
 	// -- Presence join tests --
@@ -41,14 +41,14 @@ class ChatStateSessionsTest {
 	@Test
 	fun sessionsDoesNotSynthesizeEndedForLiveTeam_qualifiedMatch() {
 		// Both team list and thread key use the same canonical qualified form.
-		val localSwitchId = "switchboard"
+		val localGatewayId = "switchboard"
 		val canonical = "switchboard/api"
 		val state = stateWith(
 			teams = listOf(makeTeam(canonical, "online")),
 			threads = mapOf(canonical to listOf(makeMsg())),
-			localSwitchId = localSwitchId,
+			localGatewayId = localGatewayId,
 		)
-		val sessions = state.sessions(localSwitchId)
+		val sessions = state.sessions(localGatewayId)
 		assertEquals(1, sessions.size)
 		assertEquals("online", sessions[0].status)
 		assertFalse("live session must never be synthesized as ended",
@@ -60,13 +60,13 @@ class ChatStateSessionsTest {
 		// Bug scenario: thread key was stored bare ("api") but the team list carries
 		// the qualified form ("switchboard/api"). Without the canonical join these two
 		// disagree, producing a phantom "ended" entry. FAILS on the old raw-string getter.
-		val localSwitchId = "switchboard"
+		val localGatewayId = "switchboard"
 		val state = stateWith(
 			teams = listOf(makeTeam("switchboard/api", "online")),
 			threads = mapOf("api" to listOf(makeMsg())),
-			localSwitchId = localSwitchId,
+			localGatewayId = localGatewayId,
 		)
-		val sessions = state.sessions(localSwitchId)
+		val sessions = state.sessions(localGatewayId)
 		assertEquals(1, sessions.size)
 		assertEquals("online", sessions[0].status)
 		assertFalse("live session must never be synthesized as ended",
@@ -79,14 +79,14 @@ class ChatStateSessionsTest {
 		// team carrying the qualified name. The canonical join resolves the bare thread
 		// key to the live team's value, so no phantom "ended". The load-normalize
 		// primitive that upgrades the persisted key is asserted alongside.
-		val localSwitchId = "switchboard"
-		assertEquals("switchboard/api", TeamAddress.parse("api", localSwitchId).canonical)
+		val localGatewayId = "switchboard"
+		assertEquals("switchboard/api", TeamAddress.parse("api", localGatewayId).canonical)
 		val state = stateWith(
 			teams = listOf(makeTeam("switchboard/api", "online")),
 			threads = mapOf("api" to listOf(makeMsg())),
-			localSwitchId = localSwitchId,
+			localGatewayId = localGatewayId,
 		)
-		val sessions = state.sessions(localSwitchId)
+		val sessions = state.sessions(localGatewayId)
 		assertEquals("must be exactly 1 session (no phantom ended)", 1, sessions.size)
 		assertEquals("online", sessions[0].status)
 		assertFalse("bare thread key must not synthesize ended against a qualified live team",
@@ -96,13 +96,13 @@ class ChatStateSessionsTest {
 	@Test
 	fun sessionsDoSynthesizeEndedForTrulyGoneTeam() {
 		// A thread with no matching live team should still produce an "ended" entry.
-		val localSwitchId = "switchboard"
+		val localGatewayId = "switchboard"
 		val state = stateWith(
 			teams = emptyList(),
 			threads = mapOf("switchboard/gone" to listOf(makeMsg())),
-			localSwitchId = localSwitchId,
+			localGatewayId = localGatewayId,
 		)
-		val sessions = state.sessions(localSwitchId)
+		val sessions = state.sessions(localGatewayId)
 		assertEquals(1, sessions.size)
 		assertEquals("ended", sessions[0].status)
 	}
@@ -114,13 +114,13 @@ class ChatStateSessionsTest {
 		// When the session tail resolves to the device itself, the Face-4 rule kicks in.
 		// Verify that SessionId.parse produces a target equal to TeamAddress.local when
 		// the session tail is the device name (qualified).
-		val localSwitchId = "switchboard"
+		val localGatewayId = "switchboard"
 		val deviceName = "Pixel9"
 		// An agent sends to the console's own session: conv:<conv>:switchboard/Pixel9
 		val sessionId = "conv:abc123:switchboard/Pixel9"
-		val sid = SessionId.parse(sessionId, localSwitchId)
+		val sid = SessionId.parse(sessionId, localGatewayId)
 		assertNotNull(sid)
-		val thisDevice = TeamAddress.local(localSwitchId, deviceName)
+		val thisDevice = TeamAddress.local(localGatewayId, deviceName)
 		assertEquals("session tail must equal this device's TeamAddress",
 			thisDevice, sid!!.target)
 	}
@@ -129,12 +129,12 @@ class ChatStateSessionsTest {
 	fun face4_sessionTailIsOtherTeam_targetNotLocal() {
 		// A normal agent->console conversation: the session tail is the agent team,
 		// not this device. The Face-4 branch must NOT fire.
-		val localSwitchId = "switchboard"
+		val localGatewayId = "switchboard"
 		val deviceName = "Pixel9"
 		val sessionId = "conv:abc123:switchboard/my-project"
-		val sid = SessionId.parse(sessionId, localSwitchId)
+		val sid = SessionId.parse(sessionId, localGatewayId)
 		assertNotNull(sid)
-		val thisDevice = TeamAddress.local(localSwitchId, deviceName)
+		val thisDevice = TeamAddress.local(localGatewayId, deviceName)
 		assertFalse("session tail must not equal this device",
 			sid!!.target == thisDevice)
 	}
@@ -144,15 +144,15 @@ class ChatStateSessionsTest {
 		// Confirms the fix: a bare deviceName string-equals check against a
 		// qualified tail ("switchboard/Pixel9" vs "Pixel9") would silently miss.
 		// The value-equals check via TeamAddress is correct; this test documents why.
-		val localSwitchId = "switchboard"
+		val localGatewayId = "switchboard"
 		val deviceName = "Pixel9"
 		val sessionId = "conv:abc123:switchboard/Pixel9"
-		val sid = SessionId.parse(sessionId, localSwitchId)!!
+		val sid = SessionId.parse(sessionId, localGatewayId)!!
 		val tailLiteral = sessionId.substringAfterLast(':')
 		assertFalse("bare deviceName must NOT equal the qualified tail string",
 			tailLiteral == deviceName)
 		// But value-compare via TeamAddress DOES match:
-		val thisDevice = TeamAddress.local(localSwitchId, deviceName)
+		val thisDevice = TeamAddress.local(localGatewayId, deviceName)
 		assertEquals(thisDevice, sid.target)
 	}
 
@@ -160,9 +160,9 @@ class ChatStateSessionsTest {
 
 	@Test
 	fun noticeIdParsesAndProducesCanonicalSender() {
-		val localSwitchId = "switchboard"
+		val localGatewayId = "switchboard"
 		val wire = "notice:switchboard/host-agent"
-		val n = NoticeId.parse(wire, localSwitchId)
+		val n = NoticeId.parse(wire, localGatewayId)
 		assertNotNull(n)
 		assertEquals("switchboard/host-agent", n!!.sender.canonical)
 		assertEquals(wire, n.key)
@@ -170,45 +170,45 @@ class ChatStateSessionsTest {
 
 	@Test
 	fun noticeIdBareFromIsNormalizedToCanonical() {
-		val localSwitchId = "switchboard"
+		val localGatewayId = "switchboard"
 		val wire = "notice:host-agent"
-		val n = NoticeId.parse(wire, localSwitchId)
+		val n = NoticeId.parse(wire, localGatewayId)
 		assertNotNull(n)
-		// Bare sender normalizes to canonical under localSwitchId
+		// Bare sender normalizes to canonical under localGatewayId
 		assertEquals("switchboard/host-agent", n!!.sender.canonical)
 	}
 
 	@Test
 	fun sessionIdIsNotParsedAsNotice() {
-		val localSwitchId = "switchboard"
-		assertNull(NoticeId.parse("conv:c:switchboard/api", localSwitchId))
+		val localGatewayId = "switchboard"
+		assertNull(NoticeId.parse("conv:c:switchboard/api", localGatewayId))
 	}
 
 	@Test
 	fun noticeIdIsNotParsedAsSession() {
-		val localSwitchId = "switchboard"
-		assertNull(SessionId.parse("notice:switchboard/host-agent", localSwitchId))
+		val localGatewayId = "switchboard"
+		assertNull(SessionId.parse("notice:switchboard/host-agent", localGatewayId))
 	}
 
 	// -- TeamAddress load-normalize round-trip --
 
 	@Test
 	fun teamAddressNormalizeBareKey() {
-		val localSwitchId = "switchboard"
+		val localGatewayId = "switchboard"
 		val bare = "my-project"
-		val canonical = TeamAddress.parse(bare, localSwitchId).canonical
+		val canonical = TeamAddress.parse(bare, localGatewayId).canonical
 		assertEquals("switchboard/my-project", canonical)
 		// Idempotent: re-parsing the canonical produces the same result
-		assertEquals(canonical, TeamAddress.parse(canonical, localSwitchId).canonical)
+		assertEquals(canonical, TeamAddress.parse(canonical, localGatewayId).canonical)
 	}
 
 	@Test
 	fun sessionIdNormalizeBareThreadKey() {
-		val localSwitchId = "switchboard"
+		val localGatewayId = "switchboard"
 		// A bare session key from a pre-migration persist (hypothetical; actual
 		// persisted keys are team keys not session keys, but confirms the parser).
 		val bare = "conv:abc:my-project"
-		val sid = SessionId.parse(bare, localSwitchId)
+		val sid = SessionId.parse(bare, localGatewayId)
 		assertNotNull(sid)
 		assertEquals("conv:abc:switchboard/my-project", sid!!.key)
 	}

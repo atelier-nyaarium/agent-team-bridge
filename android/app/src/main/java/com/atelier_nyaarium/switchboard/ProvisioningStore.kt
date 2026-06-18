@@ -90,11 +90,11 @@ class ProvisioningStore(context: Context) {
 
 	fun loadLabels(): String? = prefs.getString(KEY_LABELS, null)
 
-	/** The connected Switch's id, learned from the register result. Anchors the
-	 * composite (switchId, name) key; empty until a federation-aware Switch reports it. */
-	fun saveSwitchId(id: String) = prefs.edit().putString(KEY_SWITCH_ID, id).apply()
+	/** The connected Gateway's id, learned from the register result. Anchors the
+	 * composite (gatewayId, name) key; empty until a federation-aware Gateway reports it. */
+	fun saveGatewayId(id: String) = prefs.edit().putString(KEY_GATEWAY_ID, id).apply()
 
-	fun loadSwitchId(): String = prefs.getString(KEY_SWITCH_ID, "") ?: ""
+	fun loadGatewayId(): String = prefs.getString(KEY_GATEWAY_ID, "") ?: ""
 
 	/** The console-owned mailbox consumption cursor, durable across app restarts. The console
 	 * resumes from its OWN cursor instead of re-adopting a server-dictated one, so the
@@ -118,7 +118,7 @@ class ProvisioningStore(context: Context) {
 	}
 
 	/** This Console's member identity (signing + box keypairs), admitted as
-	 * kind:console so a Switch trusts its sealed ops. Persisted ONLY under the
+	 * kind:console so a Gateway trusts its sealed ops. Persisted ONLY under the
 	 * Keystore-backed store: if encryption is unavailable this throws rather than write
 	 * the private key in cleartext (the caller surfaces the error and retries when the
 	 * keystore is healthy). */
@@ -168,16 +168,16 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putBoolean(KEY_CONSOLE_ADMITTED, value).apply()
 		}
 
-	/** A Switch's signing + box public keys, resolved from the owner-verified keyring at
-	 * seal time (the phone-anchored model does not persist per-Switch keys). */
-	data class SwitchKeys(val signPub: String, val boxPub: String)
+	/** A Gateway's signing + box public keys, resolved from the owner-verified keyring at
+	 * seal time (the phone-anchored model does not persist per-Gateway keys). */
+	data class GatewayKeys(val signPub: String, val boxPub: String)
 
 	private companion object {
 		const val KEY_BLOB = "provisioning"
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"
 		const val KEY_LABELS = "labels"
-		const val KEY_SWITCH_ID = "switch_id"
+		const val KEY_GATEWAY_ID = "gateway_id"
 		const val KEY_IDENTITY = "federation_identity"
 		const val KEY_OWNER_IDENTITY = "federation_owner_identity"
 		const val KEY_DOMAIN = "federation_domain"

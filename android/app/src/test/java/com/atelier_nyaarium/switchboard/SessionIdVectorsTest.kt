@@ -30,12 +30,12 @@ class SessionIdVectorsTest {
 		for (v in vectors()["teamAddress"]!!.jsonArray) {
 			val o = v.jsonObject
 			val input = o["input"]!!.jsonPrimitive.content
-			val localSwitchId = o["localSwitchId"]!!.jsonPrimitive.content
-			val a = TeamAddress.parse(input, localSwitchId)
-			assertEquals(input, o["switchId"]!!.jsonPrimitive.content, a.switchId)
+			val localGatewayId = o["localGatewayId"]!!.jsonPrimitive.content
+			val a = TeamAddress.parse(input, localGatewayId)
+			assertEquals(input, o["gatewayId"]!!.jsonPrimitive.content, a.gatewayId)
 			assertEquals(input, o["name"]!!.jsonPrimitive.content, a.name)
 			assertEquals(input, o["canonical"]!!.jsonPrimitive.content, a.canonical)
-			assertEquals(input, o["canonical"]!!.jsonPrimitive.content, TeamAddress.local(localSwitchId, input).canonical)
+			assertEquals(input, o["canonical"]!!.jsonPrimitive.content, TeamAddress.local(localGatewayId, input).canonical)
 		}
 	}
 
@@ -44,8 +44,8 @@ class SessionIdVectorsTest {
 		for (v in vectors()["sessionId"]!!.jsonArray) {
 			val o = v.jsonObject
 			val input = o["input"]!!.jsonPrimitive.content
-			val localSwitchId = o["localSwitchId"]!!.jsonPrimitive.content
-			val s = SessionId.parse(input, localSwitchId)
+			val localGatewayId = o["localGatewayId"]!!.jsonPrimitive.content
+			val s = SessionId.parse(input, localGatewayId)
 			assertNotNull(input, s)
 			assertEquals(input, o["conversationId"]!!.jsonPrimitive.content, s!!.conversationId)
 			assertEquals(input, o["targetCanonical"]!!.jsonPrimitive.content, s.target.canonical)
@@ -59,8 +59,8 @@ class SessionIdVectorsTest {
 		for (v in vectors()["notice"]!!.jsonArray) {
 			val o = v.jsonObject
 			val input = o["input"]!!.jsonPrimitive.content
-			val localSwitchId = o["localSwitchId"]!!.jsonPrimitive.content
-			val n = NoticeId.parse(input, localSwitchId)
+			val localGatewayId = o["localGatewayId"]!!.jsonPrimitive.content
+			val n = NoticeId.parse(input, localGatewayId)
 			assertNotNull(input, n)
 			assertEquals(input, o["senderCanonical"]!!.jsonPrimitive.content, n!!.sender.canonical)
 			assertEquals(input, o["key"]!!.jsonPrimitive.content, n.key)
@@ -82,8 +82,8 @@ class SessionIdVectorsTest {
 	@Test
 	fun crossHostKeyIsByteStable() {
 		val wire = "conv:c:hostb/api"
-		for (localSwitchId in listOf("hosta", "hostb", "whatever")) {
-			assertEquals(wire, SessionId.parse(wire, localSwitchId)!!.key)
+		for (localGatewayId in listOf("hosta", "hostb", "whatever")) {
+			assertEquals(wire, SessionId.parse(wire, localGatewayId)!!.key)
 		}
 	}
 

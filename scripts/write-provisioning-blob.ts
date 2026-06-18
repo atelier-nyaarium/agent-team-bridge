@@ -6,8 +6,8 @@
 // inputs ride the ENVIRONMENT so the saToken/appToken/console identity stay out of argv.
 //   env in: SB_API SB_CA SB_SA SB_APP (cluster creds), SB_NS SB_SVC SB_PORT, SB_BLOB
 //           (output path). In the phone-anchored model the blob is transport-only: the
-//           Console generates its own identity and resolves Switch keys from the synced
-//           keyring, so the identity/switch fields are omitted.
+//           Console generates its own identity and resolves Gateway keys from the synced
+//           keyring, so the identity/gateway fields are omitted.
 
 import { ProvisioningSchema } from "../src/shared/schemas.js";
 
@@ -28,12 +28,12 @@ const blob = {
 	// Optional: a legacy host-minted-identity blob still carries these, but the
 	// phone-anchored flow omits them (the Console owns its identity + keyring).
 	identity: process.env.SB_CONSOLE_ID || undefined,
-	switchId: process.env.SB_SWID || undefined,
-	switchSignPub: process.env.SB_SSIGN || undefined,
-	switchBoxPub: process.env.SB_SBOX || undefined,
-	// A JSON-encoded SwitchTransport: the switch-bridge creds the owner Console seals into
-	// a bootstrap bundle when it enrolls a creds-less Switch.
-	switchTransport: process.env.SB_SWTRANSPORT || undefined,
+	gatewayId: process.env.SB_SWID || undefined,
+	gatewaySignPub: process.env.SB_SSIGN || undefined,
+	gatewayBoxPub: process.env.SB_SBOX || undefined,
+	// A JSON-encoded GatewayTransport: the gateway-bridge creds the owner Console seals into
+	// a bootstrap bundle when it enrolls a creds-less Gateway.
+	gatewayTransport: process.env.SB_SWTRANSPORT || undefined,
 };
 
 // .parse throws (non-zero exit) on any type/shape mismatch and strips unknown keys, so the

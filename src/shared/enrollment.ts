@@ -1,4 +1,4 @@
-// SYNC-HASH: 605795cd741395f037d2b4893f70b115
+// SYNC-HASH: 49d3f003add4ee0c49da3c9fa23ad763
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -17,14 +17,14 @@ import { fingerprint } from "./crypto.js";
 //
 //  One Android scanner decodes a TYPE-tagged payload and routes by type. Three
 //  flows, each anti-MITM via a short-authentication-string (SAS): the same key
-//  fingerprint is shown on the scanner AND out-of-band (the arbiter's console /
+//  fingerprint is shown on the scanner AND out-of-band (the gateway's console /
 //  the evie admin terminal), and the human confirms they match - a relayed or
 //  screenshotted QR cannot forge the out-of-band side.
 //
 //  - enroll-owner: evie admin command -> owner console. Roots the owner device at
 //    the Domain; the owner confirms evie's signing fingerprint from the terminal.
-//  - admit-switch: an arbiter -> owner console. The owner confirms the Switch
-//    fingerprint on the arbiter console, then signs an admission for it.
+//  - admit-gateway: an gateway -> owner console. The owner confirms the Gateway
+//    fingerprint on the gateway console, then signs an admission for it.
 //  - authorize-console: owner console -> a second owner device.
 
 ////////////////////////////////
@@ -51,12 +51,12 @@ export const EnrollmentPayloadSchema = z
 			bundle: ServiceBundleSchema.optional(),
 		}),
 		z.object({
-			type: z.literal("admit-switch"),
-			switchId: z.string().min(1),
+			type: z.literal("admit-gateway"),
+			gatewayId: z.string().min(1),
 			signPub: z.string().min(1),
 			boxPub: z.string().min(1),
 			// Where the Console delivers the sealed bootstrap bundle. Present when the
-			// Switch opened a LAN listener; absent when the operator chose manual paste.
+			// Gateway opened a LAN listener; absent when the operator chose manual paste.
 			lan: z.object({ host: z.string().min(1), port: z.number().int().positive() }).optional(),
 			// One-time nonce gating that listener; the Console echoes it inside the sealed
 			// bundle so a stale or cross-window delivery is rejected.
@@ -71,11 +71,11 @@ export const EnrollmentPayloadSchema = z
 	])
 	.meta({ id: "EnrollmentPayload" });
 
-/** The owner device's enrollment requests to evie (NOT relayed to a Switch - evie
+/** The owner device's enrollment requests to evie (NOT relayed to a Gateway - evie
  * is the Domain root). All three are self-authenticating: `enroll_redeem` is
  * authorized by the single-use nonce evie minted, and the submit ops carry an
  * owner-signed artifact evie verifies against the rooted owner key. The console
- * sends them over the same app-token-gated bridge as its arbiter ops. */
+ * sends them over the same app-token-gated bridge as its gateway ops. */
 export const EnrollOpSchema = z
 	.discriminatedUnion("kind", [
 		z.object({
@@ -96,7 +96,7 @@ export const EnrollResultSchema = z
 
 export type EnrollmentPayload = z.infer<typeof EnrollmentPayloadSchema>;
 export type EnrollOwnerPayload = Extract<EnrollmentPayload, { type: "enroll-owner" }>;
-export type AdmitSwitchPayload = Extract<EnrollmentPayload, { type: "admit-switch" }>;
+export type AdmitGatewayPayload = Extract<EnrollmentPayload, { type: "admit-gateway" }>;
 export type AuthorizeConsolePayload = Extract<EnrollmentPayload, { type: "authorize-console" }>;
 export type EnrollOp = z.infer<typeof EnrollOpSchema>;
 export type EnrollResult = z.infer<typeof EnrollResultSchema>;
@@ -110,29 +110,29 @@ export function payloadSas(payload: EnrollmentPayload): string {
 	switch (payload.type) {
 		case "enroll-owner":
 			return fingerprint(payload.evieSignPub);
-		case "admit-switch":
+		case "admit-gateway":
 		case "authorize-console":
 			return fingerprint(payload.signPub);
 	}
 }
 
-/** Build the owner-signed admission for a scanned admit-switch / authorize-console
+/** Build the owner-signed admission for a scanned admit-gateway / authorize-console
  * payload, AFTER the human has confirmed the SAS. `nowMs` + `nonce` are passed in
  * (the caller owns time + randomness). */
 export function admissionFromScan(
-	payload: AdmitSwitchPayload | AuthorizeConsolePayload,
+	payload: AdmitGatewayPayload | AuthorizeConsolePayload,
 	ownerSignPrivB64: string,
 	ownerSignPubB64: string,
 	nowMs: number,
 	nonceB64: string,
 ): SignedAdmission {
 	const admission: Admission =
-		payload.type === "admit-switch"
+		payload.type === "admit-gateway"
 			? {
-					kind: "switch",
+					kind: "gateway",
 					signPub: payload.signPub,
 					boxPub: payload.boxPub,
-					switchId: payload.switchId,
+					gatewayId: payload.gatewayId,
 					issuedAt: nowMs,
 					nonce: nonceB64,
 				}

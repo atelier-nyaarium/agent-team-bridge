@@ -16,7 +16,7 @@ interface ReplyArgsBase {
 	attachments?: string[];
 }
 
-// Advisory per-file cap on the agent side. The arbiter enforces the real backstop
+// Advisory per-file cap on the agent side. The gateway enforces the real backstop
 // (a buggy agent on a trusted machine is not the threat model, but a clear error
 // beats a silent 10 MB push).
 const MAX_ATTACHMENT_BYTES = 10_000_000;

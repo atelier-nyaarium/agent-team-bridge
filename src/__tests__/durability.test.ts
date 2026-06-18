@@ -5,7 +5,7 @@ import { PendingJobStore } from "../shared/pending-job-store.js";
 ////////////////////////////////
 //  Delivery-state durability
 //
-//  The arbiter snapshots its in-memory delivery state to disk and reloads it on boot so a
+//  The gateway snapshots its in-memory delivery state to disk and reloads it on boot so a
 //  restart/deploy no longer 404s a reply ("no pending request") or loses queued mail.
 //  These pin the snapshot/restore round-trips the DurableStore wires to disk.
 

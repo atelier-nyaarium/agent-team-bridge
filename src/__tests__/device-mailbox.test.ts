@@ -79,7 +79,7 @@ describe("DeviceMailbox", () => {
 	});
 
 	it("a cursor beyond highWater never acks, even when the epoch matches", () => {
-		// The arbiter-restart trap: if a new instance ever minted an epoch the
+		// The gateway-restart trap: if a new instance ever minted an epoch the
 		// console still held, the console's stale (larger) cursor must not be able to
 		// ack away entries this instance never issued.
 		const box = new DeviceMailbox(7);
@@ -200,7 +200,7 @@ describe("DeviceMailboxStore", () => {
 	});
 
 	it("a recreated store mints a different epoch for the same device", () => {
-		// Simulates an arbiter restart with a console that kept running: the new
+		// Simulates an gateway restart with a console that kept running: the new
 		// store's mailbox must carry an epoch the console cannot already hold, or
 		// the console never detects the new instance and goes silently deaf. A
 		// deterministic counter base re-minted colliding epochs across restarts.

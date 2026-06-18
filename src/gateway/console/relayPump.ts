@@ -23,7 +23,7 @@ export interface RelayPumpDeps {
 
 /**
  * Production glue between the evie WebSocket and the console handler. A console frame
- * is sealed end to end (evie relays it opaquely), so the arbiter schema-validates
+ * is sealed end to end (evie relays it opaquely), so the gateway schema-validates
  * the envelope, OPENS the seal (verifying the console's signature against the
  * owner-signed allowlist + decrypting), dispatches the inner op, and seals the
  * reply back. A malformed or unverifiable frame settles the held console request

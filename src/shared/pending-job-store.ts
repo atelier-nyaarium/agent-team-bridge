@@ -10,8 +10,8 @@ interface JobEntry<T> {
 	from: string;
 	to: string;
 	fromConversationId: string | null;
-	// Set on a job the destination Switch created for a cross-Switch send: where its
-	// reply must be forwarded (back to the origin Switch's session). Null for a
+	// Set on a job the destination Gateway created for a cross-Gateway send: where its
+	// reply must be forwarded (back to the origin Gateway's session). Null for a
 	// local job, so `respond` knows to deliver locally instead of forwarding.
 	returnRoute: ReturnRoute | null;
 	persistent: boolean;
@@ -43,7 +43,7 @@ export interface DeliverMeta {
 	persistent: boolean;
 }
 
-/** A persistent entry in serializable form, for surviving an arbiter restart. The
+/** A persistent entry in serializable form, for surviving an gateway restart. The
  * transient waiter (resolve/timer) is omitted - it re-arms when a client retries. */
 export interface PersistentJobSnapshot<T> {
 	id: string;

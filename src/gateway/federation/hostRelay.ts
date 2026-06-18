@@ -1,12 +1,12 @@
-import type { SwitchRelayReplyParams } from "../../shared/evie-protocol.js";
-import { type FederatedOp, FederatedOpSchema, SwitchRelayFrameSchema } from "../../shared/federation-protocol.js";
+import type { GatewayRelayReplyParams } from "../../shared/evie-protocol.js";
+import { type FederatedOp, FederatedOpSchema, GatewayRelayFrameSchema } from "../../shared/federation-protocol.js";
 import type { TeamInfo } from "../../shared/types.js";
 import type { Sealer } from "./sealer.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
-/** The subset of arbiter HTTP routes the switch-relay handler reuses, exactly the
+/** The subset of gateway HTTP routes the gateway-relay handler reuses, exactly the
  * surface the console handler uses - a federated op runs against the same local
  * routes a local sender would hit. */
 export interface FederationRoutes {
@@ -15,32 +15,32 @@ export interface FederationRoutes {
 	teams: () => Response;
 }
 
-export interface SwitchRelayHandlerDeps {
+export interface GatewayRelayHandlerDeps {
 	routes: FederationRoutes;
 	tryWakeTeam: (team: string) => Promise<boolean>;
 }
 
-export interface SwitchRelayPumpDeps {
-	handleOp: (op: FederatedOp, srcSwitch: string) => Promise<unknown>;
-	/** Opens the inbound sealed op and seals the result back to the origin Switch. */
+export interface GatewayRelayPumpDeps {
+	handleOp: (op: FederatedOp, srcGateway: string) => Promise<unknown>;
+	/** Opens the inbound sealed op and seals the result back to the origin Gateway. */
 	sealer: Sealer;
-	/** Sends a switch_relay_reply tool call back to the Router (correlated by relayId). */
-	sendReply: (reply: SwitchRelayReplyParams) => Promise<{ error?: string }>;
+	/** Sends a gateway_relay_reply tool call back to the Router (correlated by relayId). */
+	sendReply: (reply: GatewayRelayReplyParams) => Promise<{ error?: string }>;
 }
 
 ////////////////////////////////
 //  Functions & Helpers
 
-const FAKE_REQ = new Request("http://arbiter/federation");
+const FAKE_REQ = new Request("http://gateway/federation");
 
-/** Runs a federated op a peer Switch asked this Switch to perform, against the local
- * routes. The reply value becomes the switch_relay_reply `result`, routed home by
+/** Runs a federated op a peer Gateway asked this Gateway to perform, against the local
+ * routes. The reply value becomes the gateway_relay_reply `result`, routed home by
  * the Router. */
-export function createSwitchRelayHandler({ routes, tryWakeTeam }: SwitchRelayHandlerDeps) {
-	async function handleOp(op: FederatedOp, srcSwitch: string): Promise<unknown> {
+export function createGatewayRelayHandler({ routes, tryWakeTeam }: GatewayRelayHandlerDeps) {
+	async function handleOp(op: FederatedOp, srcGateway: string): Promise<unknown> {
 		switch (op.kind) {
 			case "send": {
-				// Land the cross-Switch send on the local team, keyed by the origin's
+				// Land the cross-Gateway send on the local team, keyed by the origin's
 				// session id, with the return-route pinned so respond forwards home.
 				const res = await routes.send(FAKE_REQ, {
 					from: op.from,
@@ -54,7 +54,7 @@ export function createSwitchRelayHandler({ routes, tryWakeTeam }: SwitchRelayHan
 					returnRoute: op.returnRoute,
 				});
 				const json = (await res.json()) as { session_id?: string; status?: string; error?: string };
-				if (!res.ok) throw new Error(json.error ?? `send from Switch ${srcSwitch} failed`);
+				if (!res.ok) throw new Error(json.error ?? `send from Gateway ${srcGateway} failed`);
 				return { session_id: json.session_id ?? op.returnRoute.srcSession, status: json.status ?? "running" };
 			}
 			case "list_teams": {
@@ -88,32 +88,32 @@ export function createSwitchRelayHandler({ routes, tryWakeTeam }: SwitchRelayHan
 	return { handleOp };
 }
 
-/** Validates an inbound switch_relay frame, runs its op, and ships the reply back
+/** Validates an inbound gateway_relay frame, runs its op, and ships the reply back
  * to the Router. Mirrors the console relay pump: one parse, one error surface. */
-export function createSwitchRelayPump({ handleOp, sealer, sendReply }: SwitchRelayPumpDeps) {
+export function createGatewayRelayPump({ handleOp, sealer, sendReply }: GatewayRelayPumpDeps) {
 	return function pump(raw: unknown): void {
 		void (async () => {
-			const parsed = SwitchRelayFrameSchema.safeParse(raw);
+			const parsed = GatewayRelayFrameSchema.safeParse(raw);
 			if (!parsed.success) {
 				const relayId = (raw as { relayId?: unknown } | null)?.relayId;
 				if (typeof relayId === "string" && relayId.length > 0) {
 					await sendReply({
 						relayId,
 						ok: false,
-						error: `invalid switch_relay: ${parsed.error.issues[0]?.message ?? "malformed"}`,
+						error: `invalid gateway_relay: ${parsed.error.issues[0]?.message ?? "malformed"}`,
 					});
 				} else {
-					console.error(`[switch-relay] dropping malformed frame with no relayId`);
+					console.error(`[gateway-relay] dropping malformed frame with no relayId`);
 				}
 				return;
 			}
 			const frame = parsed.data;
-			// Open the E2E seal (verifies the origin Switch's signature against the
+			// Open the E2E seal (verifies the origin Gateway's signature against the
 			// allowlist + decrypts) and parse the inner op. A non-admitted sender or a
 			// tampered seal is rejected without dispatching.
 			let op: FederatedOp;
 			try {
-				op = FederatedOpSchema.parse(sealer.open(frame.srcSwitch, frame.payload.sealed));
+				op = FederatedOpSchema.parse(sealer.open(frame.srcGateway, frame.payload.sealed));
 			} catch (err) {
 				await sendReply({
 					relayId: frame.relayId,
@@ -123,14 +123,14 @@ export function createSwitchRelayPump({ handleOp, sealer, sendReply }: SwitchRel
 				return;
 			}
 			try {
-				const result = await handleOp(op, frame.srcSwitch);
-				// Seal the result back to the origin Switch (E2E both directions).
-				await sendReply({ relayId: frame.relayId, ok: true, result: sealer.seal(frame.srcSwitch, result) });
+				const result = await handleOp(op, frame.srcGateway);
+				// Seal the result back to the origin Gateway (E2E both directions).
+				await sendReply({ relayId: frame.relayId, ok: true, result: sealer.seal(frame.srcGateway, result) });
 			} catch (err) {
 				await sendReply({ relayId: frame.relayId, ok: false, error: (err as Error).message });
 			}
 		})().catch((err: Error) => {
-			console.error(`[switch-relay] pump error: ${err.message}`);
+			console.error(`[gateway-relay] pump error: ${err.message}`);
 		});
 	};
 }

@@ -4,12 +4,12 @@ import { fingerprint, type Identity } from "../../shared/crypto.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** The admit-switch enrollment payload this Switch presents for the owner to scan
- * (matches switchboard's EnrollmentPayloadSchema admit-switch member). `lan` + `nonce`
- * are present when the Switch opened a nonce-gated LAN listener for bundle delivery. */
-export interface AdmitSwitchPayload {
-	type: "admit-switch";
-	switchId: string;
+/** The admit-gateway enrollment payload this Gateway presents for the owner to scan
+ * (matches switchboard's EnrollmentPayloadSchema admit-gateway member). `lan` + `nonce`
+ * are present when the Gateway opened a nonce-gated LAN listener for bundle delivery. */
+export interface AdmitGatewayPayload {
+	type: "admit-gateway";
+	gatewayId: string;
 	signPub: string;
 	boxPub: string;
 	lan?: { host: string; port: number };
@@ -25,14 +25,14 @@ export interface EnrollDelivery {
 ////////////////////////////////
 //  Functions & Helpers
 
-export function admitSwitchPayload(
+export function admitGatewayPayload(
 	identity: Identity,
-	switchId: string,
+	gatewayId: string,
 	delivery?: EnrollDelivery,
-): AdmitSwitchPayload {
+): AdmitGatewayPayload {
 	return {
-		type: "admit-switch",
-		switchId,
+		type: "admit-gateway",
+		gatewayId,
 		signPub: identity.sign.pub,
 		boxPub: identity.box.pub,
 		...(delivery ? { lan: { host: delivery.host, port: delivery.port }, nonce: delivery.nonce } : {}),
@@ -62,12 +62,12 @@ export function terminalQr(text: string): string {
 	return lines.join("\n");
 }
 
-/** Print the admit-switch QR + SAS to the arbiter console on startup, so the owner
- * can scan an un-admitted Switch into the Domain. No-op once admitted. */
-export function logAdmitSwitchQr(identity: Identity, switchId: string, delivery?: EnrollDelivery): void {
-	const payload = admitSwitchPayload(identity, switchId, delivery);
-	console.log(`\n[federation] Switch "${switchId}" is not yet admitted to a Domain.`);
-	console.log(`[federation] On the owner device, open Add Switch and scan:\n`);
+/** Print the admit-gateway QR + SAS to the gateway console on startup, so the owner
+ * can scan an un-admitted Gateway into the Domain. No-op once admitted. */
+export function logAdmitGatewayQr(identity: Identity, gatewayId: string, delivery?: EnrollDelivery): void {
+	const payload = admitGatewayPayload(identity, gatewayId, delivery);
+	console.log(`\n[federation] Gateway "${gatewayId}" is not yet admitted to a Domain.`);
+	console.log(`[federation] On the owner device, open Add Gateway and scan:\n`);
 	console.log(terminalQr(JSON.stringify(payload)));
 	console.log(`\n[federation] Confirm this fingerprint on the owner device: ${fingerprint(identity.sign.pub)}`);
 	if (delivery) {

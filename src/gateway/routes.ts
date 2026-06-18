@@ -9,9 +9,9 @@ import type { PendingJobStore } from "../shared/pending-job-store.js";
 import { ChannelFilesSchema } from "../shared/schemas.js";
 import { NoticeId, SessionId, TeamAddress } from "../shared/session-id.js";
 import type {
-	ArbiterConfig,
 	ChannelFile,
 	ConnectionMode,
+	GatewayConfig,
 	ResponsePayload,
 	ResponsePushPayload,
 	TeamInfo,
@@ -40,9 +40,9 @@ export interface RoutesDeps {
 	// Console mailboxes, for broadcast notices (notify_human). Optional so test
 	// harnesses without a console bridge need not supply one.
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
-	config: ArbiterConfig;
+	config: GatewayConfig;
 	evieClient?: import("./evie/evieClient.js").EvieClient | null;
-	// E2E seal/open for cross-Switch frames; absent when federation crypto is off.
+	// E2E seal/open for cross-Gateway frames; absent when federation crypto is off.
 	sealer?: import("./federation/sealer.js").Sealer | null;
 	resolveHandshake?: (sessionId: string, replyAsJson?: Record<string, unknown>, response?: string) => boolean;
 }
@@ -61,7 +61,7 @@ const SendRequestSchema = z.object({
 	// Console-originated sends: reject CLI-mode targets instead of entering the
 	// CLI branch, which mints a random session id the console can never thread.
 	channelOnly: z.boolean().optional(),
-	// Cross-Switch INBOUND send (the switch-relay handler): use this exact session id
+	// Cross-Gateway INBOUND send (the gateway-relay handler): use this exact session id
 	// as the channel job key (the origin owns it) and pin the reply via returnRoute
 	// instead of composing a local key from fromConversationId.
 	sessionId: z.string().optional(),
@@ -164,67 +164,67 @@ export function createRoutes({
 	sealer,
 	resolveHandshake,
 }: RoutesDeps) {
-	const { LOG_PATH, localSwitchId } = config;
+	const { LOG_PATH, localGatewayId } = config;
 
 	/** Resolve a wire target (bare or host-qualified) to a local registry name.
-	 * A bare name or one qualified with this Switch resolves locally; a name
-	 * qualified with a DIFFERENT Switch has no local route yet (federation routing
+	 * A bare name or one qualified with this Gateway resolves locally; a name
+	 * qualified with a DIFFERENT Gateway has no local route yet (federation routing
 	 * lands in a later phase), so it returns null. `qualified` is the canonical
-	 * `localSwitchId/name` form used as the channel session-id target. */
+	 * `localGatewayId/name` form used as the channel session-id target. */
 	function resolveLocalTarget(to: string): { name: string; qualified: string } | null {
-		const addr = TeamAddress.parse(to, localSwitchId);
-		if (addr.switchId !== localSwitchId) return null;
+		const addr = TeamAddress.parse(to, localGatewayId);
+		if (addr.gatewayId !== localGatewayId) return null;
 		return { name: addr.name, qualified: addr.canonical };
 	}
 
-	/** Forward a federated op to another Switch through the Router and unwrap the
-	 * reply. evie holds the call until the destination Switch answers (or times
+	/** Forward a federated op to another Gateway through the Router and unwrap the
+	 * reply. evie holds the call until the destination Gateway answers (or times
 	 * out), so a resolved result means the destination handled the op. */
-	async function relayToSwitch(
-		dstSwitch: string,
+	async function relayToGateway(
+		dstGateway: string,
 		op: FederatedOp,
 	): Promise<{ ok: boolean; result?: unknown; error?: string }> {
 		if (!evieClient?.isConnected())
-			return { ok: false, error: `Router unavailable; cannot reach Switch "${dstSwitch}"` };
+			return { ok: false, error: `Router unavailable; cannot reach Gateway "${dstGateway}"` };
 		if (!sealer) return { ok: false, error: `federation crypto is not configured` };
 		let sealed: SealedEnvelope;
 		try {
-			sealed = sealer.seal(dstSwitch, op);
+			sealed = sealer.seal(dstGateway, op);
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };
 		}
 		const relayId = crypto.randomUUID();
-		const call = await evieClient.callTool("switch_relay", {
+		const call = await evieClient.callTool("gateway_relay", {
 			relayId,
-			srcSwitch: localSwitchId,
-			dstSwitch,
+			srcGateway: localGatewayId,
+			dstGateway,
 			payload: { sealed },
 		});
 		if (call.error) return { ok: false, error: call.error };
 		const reply = call.result as { ok?: boolean; result?: unknown; error?: string } | undefined;
-		if (!reply || reply.ok === false) return { ok: false, error: reply?.error ?? "cross-Switch relay failed" };
-		// The reply result is sealed by the destination Switch back to us; open it.
+		if (!reply || reply.ok === false) return { ok: false, error: reply?.error ?? "cross-Gateway relay failed" };
+		// The reply result is sealed by the destination Gateway back to us; open it.
 		try {
-			return { ok: true, result: sealer.open(dstSwitch, reply.result as SealedEnvelope) };
+			return { ok: true, result: sealer.open(dstGateway, reply.result as SealedEnvelope) };
 		} catch (err) {
-			return { ok: false, error: `bad sealed reply from "${dstSwitch}": ${(err as Error).message}` };
+			return { ok: false, error: `bad sealed reply from "${dstGateway}": ${(err as Error).message}` };
 		}
 	}
 
-	/** Relay a cross-Switch op in the background, retrying on transient failure (evie
-	 * reconnecting, the origin Switch restarting) with exponential backoff. The reply
+	/** Relay a cross-Gateway op in the background, retrying on transient failure (evie
+	 * reconnecting, the origin Gateway restarting) with exponential backoff. The reply
 	 * it carries is already durable in the local anchor (poll-recoverable), so a
 	 * dropped first attempt no longer strands the origin's request the way the old
 	 * fire-and-forget did. */
-	function relayWithRetry(dstSwitch: string, op: FederatedOp, label: string): void {
+	function relayWithRetry(dstGateway: string, op: FederatedOp, label: string): void {
 		const maxAttempts = 5;
 		let attempt = 0;
 		const tryOnce = async (): Promise<void> => {
-			const r = await relayToSwitch(dstSwitch, op);
+			const r = await relayToGateway(dstGateway, op);
 			if (r.ok) return;
 			attempt += 1;
 			if (attempt >= maxAttempts) {
-				console.error(`[respond] ${label} to ${dstSwitch} failed after ${maxAttempts} attempts: ${r.error}`);
+				console.error(`[respond] ${label} to ${dstGateway} failed after ${maxAttempts} attempts: ${r.error}`);
 				return;
 			}
 			setTimeout(() => void tryOnce(), Math.min(2000 * 2 ** (attempt - 1), 30_000));
@@ -232,12 +232,12 @@ export function createRoutes({
 		void tryOnce();
 	}
 
-	/** Origin side of a cross-Switch channel send. Keeps a local pollable anchor keyed
+	/** Origin side of a cross-Gateway channel send. Keeps a local pollable anchor keyed
 	 * by the canonical session id (so the sender can poll and the eventual
 	 * response_push delivers back to its conversation), forwards the send to the
-	 * destination Switch with a return-route, and hands the session id back. */
-	async function sendCrossSwitch(args: {
-		targetSwitch: string;
+	 * destination Gateway with a return-route, and hands the session id back. */
+	async function sendCrossGateway(args: {
+		targetGateway: string;
 		targetName: string;
 		from: string;
 		fromConversationId: string | undefined;
@@ -246,31 +246,31 @@ export function createRoutes({
 		body?: string;
 		files?: ChannelFile[];
 	}): Promise<Response> {
-		const { targetSwitch, targetName, from, fromConversationId, type, effort, body, files } = args;
+		const { targetGateway, targetName, from, fromConversationId, type, effort, body, files } = args;
 		if (!evieClient?.isConnected()) {
-			return jsonResponse({ error: `Router unavailable; cannot reach Switch "${targetSwitch}"` }, 503);
+			return jsonResponse({ error: `Router unavailable; cannot reach Gateway "${targetGateway}"` }, 503);
 		}
 		if (!fromConversationId) {
-			return jsonResponse({ error: `fromConversationId is required for a cross-Switch send` }, 400);
+			return jsonResponse({ error: `fromConversationId is required for a cross-Gateway send` }, 400);
 		}
-		const targetAddr = TeamAddress.remote(targetSwitch, targetName);
+		const targetAddr = TeamAddress.remote(targetGateway, targetName);
 		const qualifiedTo = targetAddr.canonical;
 		const srcSession = SessionId.channel(fromConversationId, targetAddr).key;
 		const op: FederatedOp = {
 			kind: "send",
-			from: TeamAddress.local(localSwitchId, from).canonical,
+			from: TeamAddress.local(localGatewayId, from).canonical,
 			to: targetName,
 			request_type: type,
 			effort,
 			body: body ?? "",
 			...(files && files.length > 0 ? { files } : {}),
-			returnRoute: { srcSwitch: localSwitchId, srcConversationId: fromConversationId, srcSession },
+			returnRoute: { srcGateway: localGatewayId, srcConversationId: fromConversationId, srcSession },
 		};
-		const relay = await relayToSwitch(targetSwitch, op);
+		const relay = await relayToGateway(targetGateway, op);
 		if (!relay.ok)
-			return jsonResponse({ error: relay.error ?? `cross-Switch send to "${qualifiedTo}" failed` }, 502);
+			return jsonResponse({ error: relay.error ?? `cross-Gateway send to "${qualifiedTo}" failed` }, 502);
 		// Keep a local pollable anchor ONLY once the destination accepted the send, so
-		// a failed send (offline / timed-out Switch) never leaves a dangling persistent
+		// a failed send (offline / timed-out Gateway) never leaves a dangling persistent
 		// entry. The destination's reply is asynchronous (its agent answers later), so
 		// the anchor is always present before any response_push arrives.
 		store.create(srcSession, from, qualifiedTo, { persistent: true, fromConversationId });
@@ -318,16 +318,16 @@ export function createRoutes({
 			// A team whose only live sockets are virtual console peers is the human's
 			// device, not a crosstalk peer - mark it so the agent-facing listing hides it.
 			const isConsole = getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0;
-			// The host orchestrator registers its channel identity as "arbiter"; surface
+			// The host orchestrator registers its channel identity as "gateway"; surface
 			// it as the "host" agent, the machine's primary session (shown first).
 			teamsList.push({
 				team: name,
-				switchId: localSwitchId,
+				gatewayId: localGatewayId,
 				status: "online",
 				mode: getTeamMode(subs),
 				kind:
-					name === "arbiter"
-						? "switch"
+					name === "gateway"
+						? "gateway"
 						: isConsole
 							? "console"
 							: isDevcontainer(name)
@@ -341,7 +341,7 @@ export function createRoutes({
 			if (seen.has(name)) continue;
 			teamsList.push({
 				team: name,
-				switchId: localSwitchId,
+				gatewayId: localGatewayId,
 				status: "available",
 				kind: "devcontainer",
 				queue_depth: 0,
@@ -352,18 +352,18 @@ export function createRoutes({
 	}
 
 	/** Discovery across the mesh: local teams plus a fan-out to every online peer
-	 * Switch. evie supplies only the presence roster (content-blind); each peer's
-	 * team list is fetched directly via a switch_relay list_teams, so evie never sees
+	 * Gateway. evie supplies only the presence roster (content-blind); each peer's
+	 * team list is fetched directly via a gateway_relay list_teams, so evie never sees
 	 * who runs what. A peer that errors or times out is simply omitted. */
 	async function discover(): Promise<Response> {
 		const local = (await teams().json()) as TeamInfo[];
 		if (!evieClient?.isConnected()) return jsonResponse(local);
-		const rosterCall = await evieClient.callTool("list_switches", {});
-		const roster = (rosterCall.result as { switches?: { switchId: string }[] } | undefined)?.switches ?? [];
+		const rosterCall = await evieClient.callTool("list_gatewayes", {});
+		const roster = (rosterCall.result as { gatewayes?: { gatewayId: string }[] } | undefined)?.gatewayes ?? [];
 		if (roster.length === 0) return jsonResponse(local);
 		const remote = await Promise.all(
 			roster.map(async (h) => {
-				const r = await relayToSwitch(h.switchId, { kind: "list_teams" });
+				const r = await relayToGateway(h.gatewayId, { kind: "list_teams" });
 				if (!r.ok) return [] as TeamInfo[];
 				return (r.result as { teams?: TeamInfo[] } | undefined)?.teams ?? [];
 			}),
@@ -401,13 +401,13 @@ export function createRoutes({
 			}
 		}
 
-		// Cross-Switch OUTBOUND: a target qualified with another Switch routes through
-		// the Router. An INBOUND federated send (the switch-relay handler) arrives with
+		// Cross-Gateway OUTBOUND: a target qualified with another Gateway routes through
+		// the Router. An INBOUND federated send (the gateway-relay handler) arrives with
 		// a bare `to` plus an explicit sessionId, so it skips this and lands locally.
-		const parsedTarget = TeamAddress.parse(to, localSwitchId);
-		if (!inboundSessionId && parsedTarget.switchId !== localSwitchId) {
-			return await sendCrossSwitch({
-				targetSwitch: parsedTarget.switchId,
+		const parsedTarget = TeamAddress.parse(to, localGatewayId);
+		if (!inboundSessionId && parsedTarget.gatewayId !== localGatewayId) {
+			return await sendCrossGateway({
+				targetGateway: parsedTarget.gatewayId,
 				targetName: parsedTarget.name,
 				from,
 				fromConversationId,
@@ -420,21 +420,21 @@ export function createRoutes({
 
 		// Resolve the (bare or host-qualified) target to a local registry name. A
 		// local-qualified or bare name resolves here; a remote-qualified name was
-		// handled by the cross-Switch branch above. `qualifiedTo` is the canonical
+		// handled by the cross-Gateway branch above. `qualifiedTo` is the canonical
 		// local form used as the channel session-id target.
 		const target = resolveLocalTarget(to);
 		if (!target) {
-			return jsonResponse({ error: `Switch for "${to}" is not reachable from this Switch` }, 404);
+			return jsonResponse({ error: `Gateway for "${to}" is not reachable from this Gateway` }, 404);
 		}
 		const localName = target.name;
 		const qualifiedTo = target.qualified;
 
-		// The "host" cli wake-daemon is never a direct target. The "arbiter" channel
+		// The "host" cli wake-daemon is never a direct target. The "gateway" channel
 		// identity (the host-agent) is reachable ONLY from the console (channelOnly): a
 		// send injects a channel message into the host orchestrator. Cross-session
 		// (container -> host-agent) sends are deferred to the federation phases that
 		// design that trust boundary.
-		if (localName === "host" || (localName === "arbiter" && !channelOnly)) {
+		if (localName === "host" || (localName === "gateway" && !channelOnly)) {
 			return jsonResponse(
 				{
 					error: `"${localName}" is a reserved name; crosstalk_send targets container teams only.`,
@@ -446,10 +446,10 @@ export function createRoutes({
 		let subs = registry.get(localName);
 		let targetWs = subs ? getFirstWs(subs) : undefined;
 
-		// If offline, attempt to wake the container. The "arbiter" host-agent is
+		// If offline, attempt to wake the container. The "gateway" host-agent is
 		// never a wakeable devcontainer (it is the host process itself), so an
 		// offline host-agent goes straight to the 404 below.
-		if (!targetWs && localName !== "arbiter") {
+		if (!targetWs && localName !== "gateway") {
 			const woken = await tryWakeTeam(localName);
 			if (woken) {
 				// Claude Code needs time after MCP connect to initialize its channel listener.
@@ -466,7 +466,7 @@ export function createRoutes({
 					error: `Team "${qualifiedTo}" is not connected`,
 					available: [...registry.keys()]
 						.filter((k) => k !== "host")
-						.map((k) => TeamAddress.local(localSwitchId, k).canonical),
+						.map((k) => TeamAddress.local(localGatewayId, k).canonical),
 				},
 				404,
 			);
@@ -488,7 +488,7 @@ export function createRoutes({
 
 		// Channel mode: stable job id per (sender_conversation_id, target_team) pair.
 		// The target is the canonical qualified name, so the console threads the reply
-		// under (switchId, name). Same pair reuses the same store entry forever; entries
+		// under (gatewayId, name). Same pair reuses the same store entry forever; entries
 		// are persistent.
 		if (targetMode === "channel") {
 			try {
@@ -497,7 +497,7 @@ export function createRoutes({
 				const channelJobId =
 					inboundSessionId ??
 					(fromConversationId
-						? SessionId.channel(fromConversationId, TeamAddress.parse(qualifiedTo, localSwitchId)).key
+						? SessionId.channel(fromConversationId, TeamAddress.parse(qualifiedTo, localGatewayId)).key
 						: null);
 				if (!channelJobId) {
 					return jsonResponse({ error: `fromConversationId is required for channel-mode targets` }, 400);
@@ -595,7 +595,7 @@ export function createRoutes({
 			}
 		}
 
-		const canonicalSessionId = SessionId.parse(respondSessionId, localSwitchId)?.key ?? respondSessionId;
+		const canonicalSessionId = SessionId.parse(respondSessionId, localGatewayId)?.key ?? respondSessionId;
 		const deliverResult = store.deliver(canonicalSessionId, response);
 		if (!deliverResult) {
 			console.log(
@@ -606,14 +606,14 @@ export function createRoutes({
 
 		console.log(`[respond] ${respondSessionId}${response.status ? ` → ${response.status}` : ""}`);
 
-		// Cross-Switch reply-pinning: a job created by a federated send belongs to the
-		// ORIGIN Switch's session, not a local conversation. Forward a response_push
+		// Cross-Gateway reply-pinning: a job created by a federated send belongs to the
+		// ORIGIN Gateway's session, not a local conversation. Forward a response_push
 		// back through the Router (carrying the full file bytes) and stop here - the
 		// local conversationRegistry has no entry for the remote sender.
 		if (deliverResult.returnRoute) {
 			const rr = deliverResult.returnRoute;
 			relayWithRetry(
-				rr.srcSwitch,
+				rr.srcGateway,
 				{
 					kind: "response_push",
 					session_id: rr.srcSession,
@@ -624,9 +624,9 @@ export function createRoutes({
 					...(response.reason ? { reason: response.reason } : {}),
 					...(files && files.length > 0 ? { files } : {}),
 				},
-				"cross-Switch reply-pin",
+				"cross-Gateway reply-pin",
 			);
-			console.log(`[respond] ${respondSessionId} pinned to Switch ${rr.srcSwitch} via the Router`);
+			console.log(`[respond] ${respondSessionId} pinned to Gateway ${rr.srcGateway} via the Router`);
 			return jsonResponse({ delivered: true, federated: true });
 		}
 
@@ -651,7 +651,7 @@ export function createRoutes({
 		let pushedViaConversation = false;
 		if (deliverResult.fromConversationId) {
 			// A console-bound reply is delivered by APPENDING to the device's durable
-			// mailbox by data, independent of any live ConsolePeer. After an arbiter
+			// mailbox by data, independent of any live ConsolePeer. After an gateway
 			// restart the mailbox is restored but the virtual peer is rebuilt only on
 			// the console's next frame, so routing the reply through the live peer would
 			// drop it. The mailbox is the delivery truth; the peer is a wake hint. A
@@ -783,13 +783,13 @@ export function createRoutes({
 			}
 		}
 		if (!mailboxStore) {
-			return jsonResponse({ error: "console bridge is not enabled on this arbiter" }, 503);
+			return jsonResponse({ error: "console bridge is not enabled on this gateway" }, 503);
 		}
 		let delivered = 0;
 		mailboxStore.forEach((_conversationId, box) => {
 			box.append({
 				kind: "notice",
-				session_id: NoticeId.of(TeamAddress.local(localSwitchId, from)).key,
+				session_id: NoticeId.of(TeamAddress.local(localGatewayId, from)).key,
 				from,
 				title,
 				summary,

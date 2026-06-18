@@ -31,8 +31,8 @@ import {
 import {
 	CONSOLE_PROTOCOL_VERSION,
 	CONV_SESSION_PREFIX,
+	GATEWAY_QUALIFIER_SEP,
 	NOTICE_SESSION_PREFIX,
-	SWITCH_QUALIFIER_SEP,
 } from "../src/shared/console-protocol.js";
 import { EnrollOpSchema, EnrollResultSchema } from "../src/shared/enrollment.js";
 import {
@@ -47,11 +47,11 @@ import {
 	ConsoleReplyBodySchema,
 	ConsoleRespondResultSchema,
 	ConsoleSendResultSchema,
+	GatewayBootstrapBundleSchema,
+	GatewayBootstrapFrameSchema,
+	GatewayTransportSchema,
 	MailboxEntrySchema,
 	ProvisioningSchema,
-	SwitchBootstrapBundleSchema,
-	SwitchBootstrapFrameSchema,
-	SwitchTransportSchema,
 	TeamInfoSchema,
 } from "../src/shared/schemas.js";
 import { SttsProvidersSchema } from "../src/shared/stts-providers.js";
@@ -87,9 +87,9 @@ const ROOTS: z.ZodType[] = [
 	SignedRevocationSchema,
 	EnrollOpSchema,
 	EnrollResultSchema,
-	SwitchTransportSchema,
-	SwitchBootstrapBundleSchema,
-	SwitchBootstrapFrameSchema,
+	GatewayTransportSchema,
+	GatewayBootstrapBundleSchema,
+	GatewayBootstrapFrameSchema,
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything
@@ -333,7 +333,7 @@ const header = `// generated from src/shared/schemas.ts + src/shared/console-pro
 // tolerate values newer than this build.
 //
 // ENCODE config is load-bearing: the default Json (encodeDefaults = false)
-// omits null-defaulted optionals, which is exactly what the arbiter's zod
+// omits null-defaulted optionals, which is exactly what the gateway's zod
 // schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
 // is ever enabled (e.g. to emit a defaulted const like ConsoleRelayFrame.type),
 // it MUST pair with explicitNulls = false. Note the console's POST body is the
@@ -359,8 +359,8 @@ ${INDENT}const val NOTICE_SESSION_PREFIX: String = ${kotlinString(NOTICE_SESSION
 ${INDENT}/** Session-id prefix for channel conversations; the target team is the tail after the LAST colon. */
 ${INDENT}const val CONV_SESSION_PREFIX: String = ${kotlinString(CONV_SESSION_PREFIX)}
 
-${INDENT}/** Separator in a switch-qualified name (switch then local name); the first one splits switch from local name. */
-${INDENT}const val SWITCH_QUALIFIER_SEP: String = ${kotlinString(SWITCH_QUALIFIER_SEP)}
+${INDENT}/** Separator in a gateway-qualified name (gateway then local name); the first one splits gateway from local name. */
+${INDENT}const val GATEWAY_QUALIFIER_SEP: String = ${kotlinString(GATEWAY_QUALIFIER_SEP)}
 }`;
 
 const output = `${[header, ...blocks].join("\n\n")}\n`;

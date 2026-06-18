@@ -49,7 +49,7 @@ export async function startMcp(): Promise<void> {
 	// The orchestrator is the single host session started by start-host-daemon (it sets the
 	// flag); it stays the reserved, console-hidden coordinator. Every other session is a bridge
 	// peer: a devcontainer (PROJECT_NAME set) or a host/ad-hoc Claude that joins under a random
-	// id the console can rename. Peers reach the arbiter on the docker network inside a container
+	// id the console can rename. Peers reach the gateway on the docker network inside a container
 	// or the forwarded localhost port elsewhere.
 	const isOrchestrator = !inContainer && !!process.env.SWITCHBOARD_ORCHESTRATOR;
 	if (!isOrchestrator) {
@@ -139,7 +139,7 @@ export async function startMcp(): Promise<void> {
 		// Init bridge for HTTP-only access (no WebSocket, just routerPost/routerGet)
 		initBridge({
 			routerUrl: process.env.BRIDGE_ROUTER_URL || "http://localhost:20000",
-			projectName: "arbiter",
+			projectName: "gateway",
 			agentType: "claude",
 		});
 		setIsMainOrLeadAgent(true);
@@ -158,7 +158,7 @@ export async function startMcp(): Promise<void> {
 
 		const projectDirs = [path.join(os.homedir(), "projects")];
 		startHostWakeListener(projectDirs, (msg) => {
-			// Fallback: if arbiter bridge is down, host daemon still delivers DMs
+			// Fallback: if gateway bridge is down, host daemon still delivers DMs
 			const server = mcpServer.server;
 			if (server) {
 				emitChannelNotification(server, msg as unknown as ChannelPushPayload).catch((err: Error) => {

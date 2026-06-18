@@ -20,7 +20,7 @@
 		{ "file": "relay-reply.json", "schema": "ConsoleRelayReply", "expect": "pass" },
 		{ "file": "relay-reply-error.json", "schema": "ConsoleRelayReply", "expect": "pass" },
 		{ "file": "register-result.json", "schema": "ConsoleRegisterResult", "expect": "pass" },
-		{ "file": "register-result-switch.json", "schema": "ConsoleRegisterResult", "expect": "pass" },
+		{ "file": "register-result-gateway.json", "schema": "ConsoleRegisterResult", "expect": "pass" },
 		{ "file": "send-result.json", "schema": "ConsoleSendResult", "expect": "pass" },
 		{ "file": "list-teams-result.json", "schema": "ConsoleListTeamsResult", "expect": "pass" }
 	]

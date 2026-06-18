@@ -7,7 +7,7 @@ import androidx.core.content.FileProvider
 /**
  * Holds one ThreadRenderer (one WebView) per open thread, keyed by team. The pool
  * lives outside composition so a WebView survives ThreadScreen leaving the tree
- * (back to Sessions, tab switches), keeping each thread's scroll position and
+ * (back to Sessions, tab gatewayes), keeping each thread's scroll position and
  * rendered DOM. The owner prunes it to the open-tab set; closing a tab destroys
  * that WebView. The pool is Activity-scoped, so it and its WebViews are released
  * with the Activity (no leak of a stale context across recreation).

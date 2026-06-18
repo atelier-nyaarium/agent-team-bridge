@@ -6,7 +6,7 @@
 // tolerate values newer than this build.
 //
 // ENCODE config is load-bearing: the default Json (encodeDefaults = false)
-// omits null-defaulted optionals, which is exactly what the arbiter's zod
+// omits null-defaulted optionals, which is exactly what the gateway's zod
 // schemas accept - zod .optional() REJECTS explicit nulls. If encodeDefaults
 // is ever enabled (e.g. to emit a defaulted const like ConsoleRelayFrame.type),
 // it MUST pair with explicitNulls = false. Note the console's POST body is the
@@ -32,8 +32,8 @@ object Protocol {
 	/** Session-id prefix for channel conversations; the target team is the tail after the LAST colon. */
 	const val CONV_SESSION_PREFIX: String = "conv:"
 
-	/** Separator in a switch-qualified name (switch then local name); the first one splits switch from local name. */
-	const val SWITCH_QUALIFIER_SEP: String = "/"
+	/** Separator in a gateway-qualified name (gateway then local name); the first one splits gateway from local name. */
+	const val GATEWAY_QUALIFIER_SEP: String = "/"
 }
 
 @Serializable
@@ -48,7 +48,7 @@ data class ChannelFile(
 @Serializable
 data class TeamInfo(
 	val team: String,
-	val switchId: String? = null,
+	val gatewayId: String? = null,
 	val status: String,
 	val mode: String? = null,
 	val kind: String? = null,
@@ -135,7 +135,7 @@ data class ConsoleRelayFrame(
 	val v: Long,
 	val opId: String,
 	val signerSignPub: String,
-	val targetSwitch: String? = null,
+	val targetGateway: String? = null,
 	val sealed: SealedEnvelope,
 )
 
@@ -158,7 +158,7 @@ data class ConsoleReplyBody(
 @Serializable
 data class ConsoleRegisterResult(
 	val device: String,
-	val switchId: String? = null,
+	val gatewayId: String? = null,
 	val cursor: Long,
 	val epoch: Long,
 )
@@ -203,10 +203,10 @@ data class Provisioning(
 	val sttsUrl: String? = null,
 	val sttsKey: String? = null,
 	val identity: String? = null,
-	val switchId: String? = null,
-	val switchSignPub: String? = null,
-	val switchBoxPub: String? = null,
-	val switchTransport: String? = null,
+	val gatewayId: String? = null,
+	val gatewaySignPub: String? = null,
+	val gatewayBoxPub: String? = null,
+	val gatewayTransport: String? = null,
 )
 
 @Serializable
@@ -219,7 +219,7 @@ data class Admission(
 	val kind: String,
 	val signPub: String,
 	val boxPub: String,
-	val switchId: String? = null,
+	val gatewayId: String? = null,
 	val issuedAt: Long,
 	val nonce: String,
 )
@@ -277,7 +277,7 @@ data class EnrollResult(
 )
 
 @Serializable
-data class SwitchTransport(
+data class GatewayTransport(
 	val apiUrl: String,
 	val saToken: String,
 	val caPem: String,
@@ -285,15 +285,15 @@ data class SwitchTransport(
 )
 
 @Serializable
-data class SwitchBootstrapBundle(
+data class GatewayBootstrapBundle(
 	val nonce: String,
-	val transport: SwitchTransport,
+	val transport: GatewayTransport,
 	val admission: SignedAdmission,
 	val domain: DomainSnapshot,
 )
 
 @Serializable
-data class SwitchBootstrapFrame(
+data class GatewayBootstrapFrame(
 	val v: Long,
 	val signerSignPub: String,
 	val sealed: SealedEnvelope,

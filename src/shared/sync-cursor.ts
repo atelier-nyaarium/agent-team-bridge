@@ -4,12 +4,12 @@
 //  The single owner of the console's mailbox CONSUMPTION state: the epoch, the acked
 //  sequence, and the dropped-gap baseline. It owns the TRANSITION RULES (how a poll
 //  result advances the cursor, how an epoch flip resets it, which entries are genuinely
-//  fresh, whether a gap opened) so the two runtimes (this arbiter-side TS and the console's
+//  fresh, whether a gap opened) so the two runtimes (this gateway-side TS and the console's
 //  Kotlin twin) cannot disagree about consumption the way they disagreed about the
 //  address before SessionId.
 //
-//  Invariant: the cursor is CONSOLE-OWNED and DURABLE. The arbiter never dictates it; the
-//  arbiter's register returns the epoch + an informational high-water only, and the console
+//  Invariant: the cursor is CONSOLE-OWNED and DURABLE. The gateway never dictates it; the
+//  gateway's register returns the epoch + an informational high-water only, and the console
 //  keeps its own cursor across restarts (MailboxSync, console side). advance() is PURE - the
 //  console renders and persists threads FIRST, then commits the cursor LAST, so a crash
 //  between the two re-delivers (dedupe absorbs) rather than skips (red-team F1).
@@ -59,7 +59,7 @@ export class SyncCursor {
 	) {}
 
 	/** The initial cursor for a never-synced device. Epoch 0 is a reserved sentinel the
-	 *  arbiter never mints (mintEpoch's range is [1, 2^31-1]), so the first poll against
+	 *  gateway never mints (mintEpoch's range is [1, 2^31-1]), so the first poll against
 	 *  any real box always flips, resetting cleanly. */
 	static initial(): SyncCursor {
 		return new SyncCursor(0, 0, 0);
@@ -79,7 +79,7 @@ export class SyncCursor {
 	 * whether a real gap opened. PURE: no persistence (the caller commits next AFTER the
 	 * entries are durable).
 	 *
-	 * Epoch flip (result.epoch != epoch): the box is a NEW instance - arbiter eviction
+	 * Epoch flip (result.epoch != epoch): the box is a NEW instance - gateway eviction
 	 * destroyed the old entries before minting the new epoch, so every entry is genuinely
 	 * new content. Reset ackedSeq to the result's high-water, baseline to the result's
 	 * dropped, and treat all entries as fresh; a fresh instance has no prior baseline so

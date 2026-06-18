@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateMessageParts } from "../arbiter/discord/validateMessageParts.js";
+import { validateMessageParts } from "../gateway/discord/validateMessageParts.js";
 
 describe(`validateMessageParts`, () => {
 	describe(`valid cases`, () => {

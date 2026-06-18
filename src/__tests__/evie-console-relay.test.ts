@@ -1,7 +1,7 @@
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { type EvieClient, startEvieClient } from "../arbiter/evie/evieClient.js";
+import { type EvieClient, startEvieClient } from "../gateway/evie/evieClient.js";
 import { ConsoleRelayFrameSchema } from "../shared/schemas.js";
 
 interface FakeEvie {
@@ -51,7 +51,7 @@ describe("evieClient console relay", () => {
 			client = startEvieClient({
 				url: `ws://localhost:${evie?.port}`,
 				headers: { Authorization: "Bearer test-token" },
-				switchId: "test-host",
+				gatewayId: "test-host",
 				onConsoleRelay: resolve,
 			});
 		});
@@ -83,7 +83,7 @@ describe("evieClient console relay", () => {
 		expect(frame.signerSignPub).toBe("console-key");
 		expect(frame.sealed.ciphertext).toBe("c");
 
-		// The arbiter-side wiring answers via callTool; assert the round trip resolves.
+		// The gateway-side wiring answers via callTool; assert the round trip resolves.
 		const reply = {
 			type: "console_relay_reply",
 			v: 1,
@@ -93,8 +93,8 @@ describe("evieClient console relay", () => {
 		const result = await client!.callTool("console_relay_reply", reply);
 		expect(result.error).toBeUndefined();
 		expect(result.result).toEqual({ consumed: true });
-		// The client registers its Switch on connect, then answers the relay.
-		expect(toolCalls[0]).toMatchObject({ action: "switch_register", params: { switchId: "test-host" } });
+		// The client registers its Gateway on connect, then answers the relay.
+		expect(toolCalls[0]).toMatchObject({ action: "gateway_register", params: { gatewayId: "test-host" } });
 		expect(toolCalls.find((c) => c.action === "console_relay_reply")).toMatchObject({
 			action: "console_relay_reply",
 			params: reply,
@@ -109,7 +109,7 @@ describe("evieClient console relay", () => {
 		client = startEvieClient({
 			url: `ws://localhost:${evie.port}`,
 			headers: { Authorization: "Bearer test-token" },
-			switchId: "test-host",
+			gatewayId: "test-host",
 		});
 		await new Promise<void>((resolve) => {
 			const t = setInterval(() => {

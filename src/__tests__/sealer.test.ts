@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Allowlist } from "../arbiter/federation/allowlist.js";
-import { ReplayGuard } from "../arbiter/federation/replayGuard.js";
-import { createSealer } from "../arbiter/federation/sealer.js";
+import { Allowlist } from "../gateway/federation/allowlist.js";
+import { ReplayGuard } from "../gateway/federation/replayGuard.js";
+import { createSealer } from "../gateway/federation/sealer.js";
 import { type Admission, signAdmission } from "../shared/admission.js";
 import { generateIdentity } from "../shared/crypto.js";
 
@@ -22,11 +22,11 @@ const owner = generateIdentity();
 const A = generateIdentity();
 const B = generateIdentity();
 
-function hostAdmission(switchId: string, id: { sign: { pub: string }; box: { pub: string } }): Admission {
-	return { kind: "switch", signPub: id.sign.pub, boxPub: id.box.pub, switchId, issuedAt: 1, nonce: "bg==" };
+function hostAdmission(gatewayId: string, id: { sign: { pub: string }; box: { pub: string } }): Admission {
+	return { kind: "gateway", signPub: id.sign.pub, boxPub: id.box.pub, gatewayId, issuedAt: 1, nonce: "bg==" };
 }
 
-/** An allowlist rooted at `owner` admitting both Switch A and Switch B. */
+/** An allowlist rooted at `owner` admitting both Gateway A and Gateway B. */
 function allowlistWithBoth(): Allowlist {
 	const a = new Allowlist(tmp());
 	a.setOwner(owner.sign.pub);
@@ -36,7 +36,7 @@ function allowlistWithBoth(): Allowlist {
 }
 
 describe("sealer", () => {
-	it("round-trips a sealed object between two admitted Switches", () => {
+	it("round-trips a sealed object between two admitted Gatewayes", () => {
 		const aSealer = createSealer(A, allowlistWithBoth(), "A");
 		const bSealer = createSealer(B, allowlistWithBoth(), "B");
 		const env = aSealer.seal("B", { hello: "world", n: 7 });
@@ -51,7 +51,7 @@ describe("sealer", () => {
 		expect(() => bSealer.open("A", env)).toThrow(/replay/);
 	});
 
-	it("rejects an envelope naming an unadmitted source Switch", () => {
+	it("rejects an envelope naming an unadmitted source Gateway", () => {
 		const aSealer = createSealer(A, allowlistWithBoth(), "A");
 		const bSealer = createSealer(B, allowlistWithBoth(), "B");
 		const env = aSealer.seal("B", { x: 1 });
@@ -66,10 +66,10 @@ describe("sealer", () => {
 		expect(() => bSealer.open("A", tampered)).toThrow();
 	});
 
-	it("rejects a relabeled source (signed-in src must match the claimed srcSwitch)", () => {
+	it("rejects a relabeled source (signed-in src must match the claimed srcGateway)", () => {
 		// A seals to B, but evie relabels the frame as if it came from a third admitted
-		// Switch. The signature verifies under A's key only if open() is told srcSwitch=A;
-		// told srcSwitch=B it fails to verify, told the truth it fails the src cross-check
+		// Gateway. The signature verifies under A's key only if open() is told srcGateway=A;
+		// told srcGateway=B it fails to verify, told the truth it fails the src cross-check
 		// when the cleartext label is forged. Here the label disagrees with the seal.
 		const aSealer = createSealer(A, allowlistWithBoth(), "A");
 		const bSealer = createSealer(B, allowlistWithBoth(), "B");
@@ -78,12 +78,12 @@ describe("sealer", () => {
 		expect(() => bSealer.open("B", env)).toThrow();
 	});
 
-	it("rejects a frame addressed to a different Switch", () => {
+	it("rejects a frame addressed to a different Gateway", () => {
 		const aSealer = createSealer(A, allowlistWithBoth(), "A");
-		// A seals to B, but a Switch that believes itself "C" opens it.
+		// A seals to B, but a Gateway that believes itself "C" opens it.
 		const cSealer = createSealer(B, allowlistWithBoth(), "C");
 		const env = aSealer.seal("B", { x: 1 });
-		expect(() => cSealer.open("A", env)).toThrow(/not addressed to this Switch/);
+		expect(() => cSealer.open("A", env)).toThrow(/not addressed to this Gateway/);
 	});
 
 	it("rejects a stale envelope past the freshness window", () => {

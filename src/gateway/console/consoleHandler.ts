@@ -16,13 +16,13 @@ import { ConsolePeer } from "./consolePeer.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** The subset of arbiter HTTP routes the console handler reuses. */
+/** The subset of gateway HTTP routes the console handler reuses. */
 export interface ConsoleRoutes {
 	send: (req: Request, body: Record<string, unknown>) => Promise<Response>;
 	respond: (req: Request, body: Record<string, unknown>) => Response;
 	teams: () => Response;
-	// Mesh-wide team list (local + every online peer Switch); the console is a
-	// roaming console and sees all Switches, not just its home Switch.
+	// Mesh-wide team list (local + every online peer Gateway); the console is a
+	// roaming console and sees all Gatewayes, not just its home Gateway.
 	discover: () => Promise<Response>;
 }
 
@@ -41,10 +41,10 @@ export interface ConsoleHandlerDeps {
 	conversationRegistry: ConversationRegistry;
 	mailboxStore: DeviceMailboxStore;
 	routes: ConsoleRoutes;
-	/** This Switch's id, returned on register so the console anchors its composite
-	 * (switchId, name) key, and used to canonicalize a send target to the qualified
+	/** This Gateway's id, returned on register so the console anchors its composite
+	 * (gatewayId, name) key, and used to canonicalize a send target to the qualified
 	 * session-id form (matching routes.send). */
-	localSwitchId: string;
+	localGatewayId: string;
 	sendBoundMs?: number;
 	/** True when the name belongs to a devcontainer project (catalog or known
 	 * paths). A device must not take such a name: while the project sleeps, the
@@ -59,9 +59,9 @@ export interface ConsoleHandlerDeps {
 ////////////////////////////////
 //  Functions & Helpers
 
-const FAKE_REQ = new Request("http://arbiter/console");
+const FAKE_REQ = new Request("http://gateway/console");
 
-// Bound on how long a console send op may block inside the relay. The arbiter's
+// Bound on how long a console send op may block inside the relay. The gateway's
 // own wake path can hold /send for up to WAKE_TIMEOUT_MS (10 min), far past
 // evie's opId hold; past this bound the op returns the deterministic session id
 // and the wake/send continues in the background, with the eventual answer
@@ -72,7 +72,7 @@ const SEND_BOUND_MS = 25_000;
 // evie holds the console's HTTP request 55s and the apiserver proxy allows 60s.
 const HOLD_CAP_MS = 45_000;
 
-// At-most-once side effects: the console->evie->arbiter path is at-least-once
+// At-most-once side effects: the console->evie->gateway path is at-least-once
 // (a lost reply makes the console retry the same opId), so a seen opId replays its
 // cached reply instead of re-running the op (which would duplicate a
 // channel_push / response_push). Only mutating ops are cached, only on success
@@ -89,7 +89,7 @@ export function createConsoleHandler({
 	conversationRegistry,
 	mailboxStore,
 	routes,
-	localSwitchId,
+	localGatewayId,
 	sendBoundMs = SEND_BOUND_MS,
 	isProjectName,
 	domain,
@@ -97,7 +97,7 @@ export function createConsoleHandler({
 	// The per-install conversationId is the real identity: it keys the mailbox,
 	// the registry sub, and this binding to the human-facing device name. The
 	// name is a display/target label only, so two devices sharing a name never
-	// share a slot, and a conversation cannot silently switch names.
+	// share a slot, and a conversation cannot silently gateway names.
 	const bindings = new Map<string, string>();
 	// conversationId -> the console signing key bound to that install. A frame whose
 	// signerSignPub differs from the binding cannot operate this conversation (so a
@@ -115,7 +115,7 @@ export function createConsoleHandler({
 		// Canonicalize so the gate in respond can always compare canonical form
 		// against canonical form, whether the session id arrived bare or qualified.
 		// Recorded on the durable mailbox so respondability survives a restart.
-		const canonical = SessionId.parse(sessionId, localSwitchId)?.key ?? sessionId;
+		const canonical = SessionId.parse(sessionId, localGatewayId)?.key ?? sessionId;
 		mailboxStore.get(conversationId)?.recordSession(canonical);
 	}
 
@@ -249,16 +249,16 @@ export function createConsoleHandler({
 				console.log(
 					`[console register] conv=${conversationId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
 				);
-				return { device, switchId: localSwitchId, cursor: box.highWater, epoch: box.epoch };
+				return { device, gatewayId: localGatewayId, cursor: box.highWater, epoch: box.epoch };
 			}
 
 			case "list_teams": {
-				// Fan out across the mesh so the console sees every Switch's sessions, each
-				// carrying its own `switchId` (the console keys threads by switch/name).
+				// Fan out across the mesh so the console sees every Gateway's sessions, each
+				// carrying its own `gatewayId` (the console keys threads by gateway/name).
 				const teams = (await (await routes.discover()).json()) as TeamInfo[];
 				// A console does not list other consoles as send targets, and excludes
-				// itself. teams() already drops the cli "host" daemon; the "arbiter"
-				// host-agent of each Switch stays (kind "switch"), reachable from the console.
+				// itself. teams() already drops the cli "host" daemon; the "gateway"
+				// host-agent of each Gateway stays (kind "gateway"), reachable from the console.
 				return {
 					teams: teams.filter((t) => t.team !== device && t.kind !== "console"),
 				};
@@ -270,8 +270,8 @@ export function createConsoleHandler({
 				// CLI team is unknowable here (mode surfaces only on register), so
 				// it pays a wake and is then rejected by the route's channelOnly
 				// check instead of minting a random session id.
-				// The console may target a switch-qualified name (`switch/name`); strip the
-				// switch for the local registry probe. Cross-switch targets are rejected
+				// The console may target a gateway-qualified name (`gateway/name`); strip the
+				// gateway for the local registry probe. Cross-gateway targets are rejected
 				// by routes.send (federation routing is a later phase).
 				const localTarget = parseQualifiedTeam(op.to).name;
 				const targetSubs = registry.get(localTarget);
@@ -289,7 +289,7 @@ export function createConsoleHandler({
 				// backgrounded-send path hands back the same id the in-time path would.
 				const expectedSession = SessionId.channel(
 					conversationId,
-					TeamAddress.local(localSwitchId, localTarget),
+					TeamAddress.local(localGatewayId, localTarget),
 				).key;
 				const sendPromise = routes.send(FAKE_REQ, {
 					from: device,
@@ -342,7 +342,7 @@ export function createConsoleHandler({
 				// op.session_id away from resolveHandshake (handshake ids are never
 				// recorded as inbound). Canonicalize via SessionId.parse so a bare
 				// session id matches the qualified key recorded on inbound delivery.
-				const canonicalRespondId = SessionId.parse(op.session_id, localSwitchId)?.key ?? op.session_id;
+				const canonicalRespondId = SessionId.parse(op.session_id, localGatewayId)?.key ?? op.session_id;
 				if (!mailboxStore.get(conversationId)?.canRespond(canonicalRespondId)) {
 					throw new Error(`Unknown session_id; you can only respond to a thread delivered to this device`);
 				}

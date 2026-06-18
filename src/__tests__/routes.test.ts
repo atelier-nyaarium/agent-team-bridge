@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRoutes, type RoutesDeps } from "../arbiter/routes.js";
+import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
@@ -25,7 +25,7 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		registry,
 		conversationRegistry,
 		store,
-		config: { LOG_PATH: "/tmp/test-debug.log", RESPONSE_TIMEOUT_MS: 500, localSwitchId: "test-host" },
+		config: { LOG_PATH: "/tmp/test-debug.log", RESPONSE_TIMEOUT_MS: 500, localGatewayId: "test-host" },
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
 		offlineCatalog,
 		knownTeamPaths,
@@ -67,7 +67,7 @@ describe("routes", () => {
 			const { teams } = createRoutes(ctx);
 			const res = teams();
 			expect(await res.json()).toEqual([
-				{ team: "proj-a", switchId: "test-host", status: "available", kind: "devcontainer", queue_depth: 0 },
+				{ team: "proj-a", gatewayId: "test-host", status: "available", kind: "devcontainer", queue_depth: 0 },
 			]);
 		});
 
@@ -83,13 +83,13 @@ describe("routes", () => {
 			expect(json).toEqual([
 				{
 					team: "proj-a",
-					switchId: "test-host",
+					gatewayId: "test-host",
 					status: "online",
 					mode: "cli",
 					kind: "devcontainer",
 					queue_depth: 0,
 				},
-				{ team: "proj-b", switchId: "test-host", status: "available", kind: "devcontainer", queue_depth: 0 },
+				{ team: "proj-b", gatewayId: "test-host", status: "available", kind: "devcontainer", queue_depth: 0 },
 			]);
 		});
 
@@ -107,7 +107,7 @@ describe("routes", () => {
 			expect(json).toEqual([
 				{
 					team: "proj-a",
-					switchId: "test-host",
+					gatewayId: "test-host",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
@@ -115,7 +115,7 @@ describe("routes", () => {
 				},
 				{
 					team: "2fb1f8",
-					switchId: "test-host",
+					gatewayId: "test-host",
 					status: "online",
 					mode: "channel",
 					kind: "loose",
@@ -135,7 +135,7 @@ describe("routes", () => {
 			expect(json).toEqual([
 				{
 					team: "proj-a",
-					switchId: "test-host",
+					gatewayId: "test-host",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
@@ -143,7 +143,7 @@ describe("routes", () => {
 				},
 				{
 					team: "Aqua",
-					switchId: "test-host",
+					gatewayId: "test-host",
 					status: "online",
 					mode: "channel",
 					kind: "console",
@@ -152,9 +152,9 @@ describe("routes", () => {
 			]);
 		});
 
-		it("marks the arbiter channel identity as kind switch (the host-agent)", async () => {
+		it("marks the gateway channel identity as kind switch (the host-agent)", async () => {
 			const registry = makeRegistry({
-				arbiter: { readyState: 1, data: { mode: "channel" } },
+				gateway: { readyState: 1, data: { mode: "channel" } },
 				"proj-a": { readyState: 1, data: { mode: "channel" } },
 			});
 			const knownTeamPaths = new Map<string, string>([["proj-a", "/home/user/proj-a"]]);
@@ -162,16 +162,16 @@ describe("routes", () => {
 			const json = await createRoutes(ctx).teams().json();
 			expect(json).toEqual([
 				{
-					team: "arbiter",
-					switchId: "test-host",
+					team: "gateway",
+					gatewayId: "test-host",
 					status: "online",
 					mode: "channel",
-					kind: "switch",
+					kind: "gateway",
 					queue_depth: 0,
 				},
 				{
 					team: "proj-a",
-					switchId: "test-host",
+					gatewayId: "test-host",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
@@ -428,20 +428,20 @@ describe("routes", () => {
 			const { send } = createRoutes(ctx);
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
 				from: "proj-a",
-				to: "arbiter",
+				to: "gateway",
 				body: "hi",
 			});
 			expect(res.status).toBe(400);
 		});
 
 		it("lets a console (channelOnly) send past the reserved guard to the host-agent", async () => {
-			// channelOnly send to "arbiter" clears the 400 guard; with no arbiter
+			// channelOnly send to "gateway" clears the 400 guard; with no gateway
 			// registered here it then 404s, proving it got past the reserved block.
 			const ctx = makeCtx();
 			const { send } = createRoutes(ctx);
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
 				from: "pixel",
-				to: "arbiter",
+				to: "gateway",
 				channelOnly: true,
 				body: "hi",
 			});
@@ -482,7 +482,7 @@ describe("routes", () => {
 			});
 			const json = await res.json();
 			// The channel session id carries the canonical host-qualified target so
-			// the console threads the reply under (switchId, name).
+			// the console threads the reply under (gatewayId, name).
 			expect(json.session_id).toBe("conv:conv-1:test-host/proj-a");
 			expect(json.status).toBe("running");
 			expect(pushed.length).toBe(1);
@@ -503,7 +503,7 @@ describe("routes", () => {
 			const ctx = makeCtx({ registry });
 			const { send } = createRoutes(ctx);
 
-			// The console targets the qualified name; the arbiter strips the local
+			// The console targets the qualified name; the gateway strips the local
 			// host and resolves to the bare registry entry.
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
 				from: "pixel",
@@ -517,10 +517,10 @@ describe("routes", () => {
 			expect(pushed.length).toBe(1);
 		});
 
-		it("routes a target qualified with a different Switch, 503 when the Router is down", async () => {
+		it("routes a target qualified with a different Gateway, 503 when the Router is down", async () => {
 			const fakeWs = { readyState: 1, data: { mode: "channel" }, send() {} };
 			const registry = makeRegistry({ "proj-a": fakeWs });
-			// No evieClient in this ctx: the Router is unavailable, so a cross-Switch
+			// No evieClient in this ctx: the Router is unavailable, so a cross-Gateway
 			// target reports 503 rather than misresolving to the same-named local
 			// session.
 			const ctx = makeCtx({ registry });
@@ -539,7 +539,7 @@ describe("routes", () => {
 	});
 
 	describe("/respond console durability", () => {
-		const req = new Request("http://arbiter/respond");
+		const req = new Request("http://gateway/respond");
 
 		it("appends a reply to the device mailbox even when no live peer exists", () => {
 			// The class-4 case: after a restart the mailbox is restored but the virtual
