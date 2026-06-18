@@ -36,7 +36,11 @@ android {
 
 	defaultConfig {
 		applicationId = "com.atelier_nyaarium.switchboard"
-		minSdk = 26
+		// Android 13 (API 33) floor: the owner's device runs Android 16, this is a
+		// personal console app, and 33 is the point above which the codebase carries zero
+		// version-gated branches. compileSdk/targetSdk stay at 35 until the toolchain
+		// (AGP + platform-36) is upgraded online; targetSdk 35 already runs on Android 16.
+		minSdk = 33
 		targetSdk = 35
 		// Monotonic in CI (build number) so updates are never seen as a downgrade.
 		versionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1

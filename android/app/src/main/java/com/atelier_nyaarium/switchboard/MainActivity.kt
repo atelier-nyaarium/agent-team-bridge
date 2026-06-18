@@ -194,7 +194,6 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		if (state.provisioned) {
 			SwitchboardService.start(context)
 			if (
-				android.os.Build.VERSION.SDK_INT >= 33 &&
 				context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
 				android.content.pm.PackageManager.PERMISSION_GRANTED
 			) {
@@ -283,7 +282,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			}
 			ThreadScreen(
 				team = openTeam!!,
-				label = state.label(openTeam!!, state.localSwitchId),
+				label = state.titleLabel(openTeam!!, state.localSwitchId),
 				presence = presence,
 				tabs = state.openTabs,
 				tabLabel = { state.label(it, state.localSwitchId) },

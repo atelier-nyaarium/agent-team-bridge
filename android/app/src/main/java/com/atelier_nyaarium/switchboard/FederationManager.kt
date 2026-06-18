@@ -123,21 +123,27 @@ class FederationManager(private val store: ProvisioningStore) {
 	 * own owner key. A relay that tampered with the root (to seat an attacker owner) is
 	 * rejected, so the pinned owner can never be swapped out from under the Console. Read
 	 * the owner key WITHOUT generating one: a sync arriving before this device has an owner
-	 * cannot be verified and must not seat a throwaway root. Locally-merged admissions (a
-	 * member the owner just admitted, before evie rebroadcast it) are preserved by folding
-	 * the server snapshot over the current one, deduped by signing key + nonce; revocations
-	 * are taken canonical from the server. */
+	 * cannot be verified and must not seat a throwaway root. The server snapshot is folded
+	 * OVER the current one for BOTH admissions and revocations, deduped by signing key +
+	 * nonce and ordered by issue time. Both are append-only owner-signed facts (a revocation
+	 * is never undone - a later admission supersedes it by timestamp), so the union is safe
+	 * and convergent: a member the owner just admitted OR revoked locally survives until evie
+	 * rebroadcasts it, then the dedupe makes the rebroadcast idempotent. Taking revocations
+	 * canonical-from-server alone would drop a locally-merged revocation on the next poll,
+	 * letting a just-revoked member reappear on the board (and be sealed to) until evie caught
+	 * up. */
 	@Synchronized
 	fun applyDomainSync(snapshot: DomainSnapshot, version: String): Boolean {
 		val ownerPub = store.loadOwnerIdentity()?.sign?.pub ?: return false
 		if (snapshot.ownerSignPub != ownerPub) return false
-		val local = keyring().snapshot.admissions
-		// Sort the merge by issue time so the same set of admissions always yields the same
-		// canonical order (the merge order would otherwise depend on when each was added).
-		val mergedAdmissions = (snapshot.admissions + local)
+		val current = keyring().snapshot
+		val mergedAdmissions = (snapshot.admissions + current.admissions)
 			.distinctBy { "${it.admission.signPub}:${it.admission.nonce}" }
 			.sortedBy { it.admission.issuedAt }
-		val next = snapshot.copy(admissions = mergedAdmissions)
+		val mergedRevocations = (snapshot.revocations + current.revocations)
+			.distinctBy { "${it.revocation.signPub}:${it.revocation.nonce}" }
+			.sortedBy { it.revocation.issuedAt }
+		val next = snapshot.copy(admissions = mergedAdmissions, revocations = mergedRevocations)
 		store.saveDomain(json.encodeToString(DomainSnapshot.serializer(), next), version)
 		return true
 	}
@@ -167,6 +173,20 @@ class FederationManager(private val store: ProvisioningStore) {
 			it.admission.signPub == signed.admission.signPub && it.admission.nonce == signed.admission.nonce
 		}
 		val next = current.copy(admissions = deduped + signed)
+		store.saveDomain(json.encodeToString(DomainSnapshot.serializer(), next), store.loadDomainVersion())
+	}
+
+	/** Fold a freshly owner-signed revocation into the local keyring so the revoked member
+	 * drops off the board immediately, before evie rebroadcasts it. members() honors
+	 * revocations, so the member disappears on the next read. Synchronized with
+	 * applyDomainSync so a concurrent poll cannot overwrite the merge. */
+	@Synchronized
+	fun mergeRevocation(signed: SignedRevocation) {
+		val current = keyring().snapshot
+		val deduped = current.revocations.filterNot {
+			it.revocation.signPub == signed.revocation.signPub && it.revocation.nonce == signed.revocation.nonce
+		}
+		val next = current.copy(revocations = deduped + signed)
 		store.saveDomain(json.encodeToString(DomainSnapshot.serializer(), next), store.loadDomainVersion())
 	}
 }

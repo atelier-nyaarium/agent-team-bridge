@@ -84,6 +84,11 @@ data class Message(
 	 * local/optimistic rows and legacy persisted rows from before this field. */
 	val epoch: Long = 0,
 	val seq: Long = 0,
+	/** The qualified `switch/name` author header shown for an inbound (agent) row. Null
+	 * for our own rows (rendered as "you") and legacy rows. Not persisted: every row in a
+	 * thread shares the thread's one peer today, so it is re-derived from the thread key on
+	 * load; persisting it is what a future multiple-agents-in-one-chat would add. */
+	val from: String? = null,
 )
 
 data class ChatState(
@@ -158,6 +163,17 @@ data class ChatState(
 	 * `switch/local` key is never shown raw. */
 	fun label(team: String, localSwitchId: String = ""): String =
 		labels[team] ?: TeamAddress.parse(team, localSwitchId).name
+
+	/** Drill-down / title-bar label: a user's custom name if set, else the qualified
+	 * `switch/name` for a REMOTE session (the originating Switch is not otherwise on screen
+	 * here) and the bare name for a local one (its Switch is the implicit home). The grouped
+	 * session board uses [label]; this is the flat-context form per the rendering rules. */
+	fun titleLabel(team: String, localSwitchId: String = ""): String {
+		labels[team]?.let { return it }
+		val addr = TeamAddress.parse(team, localSwitchId)
+		val remote = addr.switchId.isNotEmpty() && localSwitchId.isNotEmpty() && addr.switchId != localSwitchId
+		return if (remote) addr.canonical else addr.name
+	}
 }
 
 /** A just-enrolled device's first ops can transiently reject while the home Switch
@@ -603,7 +619,10 @@ class ChatRepository(
 	fun ownerBoxPub(): String = federation.ownerBoxPub()
 
 	/** A passphrase-encrypted backup of the owner root key for offline safekeeping. */
-	fun exportOwnerBackup(passphrase: String): String = federation.exportOwnerBackup(passphrase)
+	// Runs the scrypt KDF, so it stays off the main thread (the UI dispatches it from a
+	// coroutine) - the same posture as importOwnerBackup.
+	suspend fun exportOwnerBackup(passphrase: String): String =
+		withContext(Dispatchers.IO) { federation.exportOwnerBackup(passphrase) }
 
 	/** Restore the owner root key from a backup blob. The result lets the UI distinguish a
 	 * wrong passphrase from a different-owner rejection. */
@@ -657,7 +676,13 @@ class ChatRepository(
 		val signed = federation.revoke(signPub, System.currentTimeMillis())
 		val result = runCatching { client().enroll(EnrollOp.SubmitRevocation(signed)) }
 			.getOrElse { EnrollResult(ok = false, error = it.message) }
-		if (!result.ok) _state.update { it.copy(error = "Revoke failed: ${result.error?.take(120)}") }
+		if (!result.ok) {
+			_state.update { it.copy(error = "Revoke failed: ${result.error?.take(120)}") }
+			return@withContext
+		}
+		// Fold the revocation in locally so the member drops off the board now, before
+		// evie rebroadcasts it. Mirrors admitSwitch's merge-after-success ordering.
+		federation.mergeRevocation(signed)
 	}
 
 	/** The admitted members of the keyring, for the management board. */
@@ -702,7 +727,7 @@ class ChatRepository(
 			?: return@withContext EnrollDelivery(true, "Admitted, but the switch transport creds are unreadable.", null)
 		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub)
 		val frameJson = wireJson.encodeToString(SwitchBootstrapFrame.serializer(), frame)
-		if (scanned.lanHost != null && scanned.lanPort != null) {
+		if (scanned.lanHost != null && scanned.lanPort != null && isPrivateLanHost(scanned.lanHost)) {
 			val ok = runCatching { postBundle(scanned.lanHost, scanned.lanPort, frameJson) }.getOrDefault(false)
 			if (ok) {
 				return@withContext EnrollDelivery(true, "Delivered over the LAN. The Switch is coming online.", null)
@@ -727,6 +752,17 @@ class ChatRepository(
 			.build()
 		client.newCall(req).execute().use { return it.isSuccessful }
 	}
+
+	/** True only for a private / loopback / link-local IP LITERAL. The admit-switch QR
+	 * carries the Switch's LAN address and we POST the sealed bundle there, so restricting
+	 * the target to an actual LAN address stops a tampered QR from redirecting the bundle
+	 * (and the console's plaintext identity metadata) to a public attacker host - a non-LAN
+	 * value falls through to the paste path instead. Numeric only: a QR-supplied hostname is
+	 * never resolved, since that resolution is itself an attacker-chosen network call. */
+	private fun isPrivateLanHost(host: String): Boolean = runCatching {
+		android.net.InetAddresses.isNumericAddress(host) &&
+			java.net.InetAddress.getByName(host).let { it.isLoopbackAddress || it.isSiteLocalAddress || it.isLinkLocalAddress }
+	}.getOrDefault(false)
 
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
 		runCatching { client().teams(localSwitchId) }.onSuccess { t -> _state.update { it.copy(teams = t) } }
@@ -987,7 +1023,7 @@ class ChatRepository(
 						if (bodyText.isNotEmpty() || files.isNotEmpty() || e.status != null) {
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team status=${e.status} files=${files.size} \"$snippet\"")
 							val msg =
-								Message(false, bodyText, e.at, files = files, status = e.status, title = e.title, summary = e.summary, epoch = mb.epoch, seq = e.seq)
+								Message(false, bodyText, e.at, files = files, status = e.status, title = e.title, summary = e.summary, epoch = mb.epoch, seq = e.seq, from = team)
 							// appendInbound folds an at-least-once re-drain in place and returns
 							// false, so a redelivered entry never re-bumps unread or re-notifies.
 							if (appendInbound(team, msg)) {
@@ -1282,6 +1318,8 @@ class ChatRepository(
 						summary = m.optString("summary").takeIf { s -> s.isNotEmpty() },
 						epoch = m.optLong("epoch", 0L),
 						seq = m.optLong("seq", 0L),
+						// Re-derive the author from the thread key (the one peer of this thread).
+						from = if (m.optBoolean("me")) null else canonicalKey,
 					)
 				}
 					// A "waking" placeholder has no resolution coming after a process

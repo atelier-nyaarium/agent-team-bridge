@@ -121,8 +121,11 @@ fun OwnerBackupCard(repo: ChatRepository) {
 			Button(
 				enabled = pass1.length >= 8 && pass1 == pass2,
 				onClick = {
-					shareText(context, "Switchboard owner key backup", repo.exportOwnerBackup(pass1))
-					status = "Save the backup to a file or password manager, then keep it offline."
+					scope.launch {
+						val blob = repo.exportOwnerBackup(pass1)
+						shareText(context, "Switchboard owner key backup", blob)
+						status = "Save the backup to a file or password manager, then keep it offline."
+					}
 				},
 				modifier = Modifier.fillMaxWidth(),
 			) { Text("Export backup") }
