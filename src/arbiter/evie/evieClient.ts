@@ -20,7 +20,14 @@ export interface EvieToolCallResult {
 
 export interface EvieClientConfig {
 	url: string;
-	authToken: string;
+	// WebSocket handshake headers. Legacy (kubectl port-forward) carries the bridge
+	// token as Authorization; the service-proxy transport carries the SA token as
+	// Authorization (consumed by the API server) plus the bridge token in a forwarded
+	// header, so the auth shape lives with the caller, not here.
+	headers: Record<string, string>;
+	// Cluster CA (PEM) to pin TLS against when dialing the service-proxy (wss://). Unset
+	// for the legacy plaintext localhost tunnel.
+	tls?: { ca: string };
 	// This Switch's id, registered with the Router on connect so cross-Switch frames
 	// can be switched to this Switch.
 	switchId: string;
@@ -55,11 +62,20 @@ export interface EvieClient {
 
 const RECONNECT_DELAY_MS = 5_000;
 const TOOL_CALL_TIMEOUT_MS = 120_000;
+// Application-level keepalive over the link. The k8s API service-proxy (and any LB in
+// front of the apiserver) drops idle upgraded connections, so a ping well under that
+// idle window keeps the tunnel warm AND detects a silently-dropped path: two missed
+// pongs terminate the socket and trigger the normal reconnect. Mirrors the arbiter's
+// own team-socket heartbeat.
+const HEARTBEAT_INTERVAL_MS = 20_000;
+const MISSED_PONGS_LIMIT = 2;
 
 export function startEvieClient(config: EvieClientConfig): EvieClient {
 	let ws: WebSocket | null = null;
 	let stopped = false;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+	let missedPongs = 0;
 	let cachedTools: EvieToolSchema[] = [];
 	let droppedFrames = 0;
 	const pendingCalls = new Map<
@@ -73,11 +89,14 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		console.log(`[evie-client] connecting to ${config.url}...`);
 
 		ws = new WebSocket(config.url, {
-			headers: { Authorization: `Bearer ${config.authToken}` },
+			headers: config.headers,
+			...(config.tls ? { ca: config.tls.ca } : {}),
 		});
 
 		ws.on("open", () => {
 			console.log(`[evie-client] connected`);
+			missedPongs = 0;
+			startHeartbeat();
 			// Register this Switch with the Router so cross-Switch frames can find it.
 			// Re-runs on every reconnect (the Router re-keys switch id -> socket).
 			void callTool("switch_register", {
@@ -136,6 +155,12 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					config.onSwitchRelay?.(frame);
 					break;
 				}
+				case "domain_update": {
+					// evie pushed an updated keyring (an owner admit/revoke). Apply it
+					// immediately so a revocation bites without waiting for the next register.
+					config.onDomainSync?.(frame.domain);
+					break;
+				}
 				case "tool_result": {
 					const pending = pendingCalls.get(frame.callId);
 					if (pending) {
@@ -163,8 +188,13 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			}
 		});
 
+		ws.on("pong", () => {
+			missedPongs = 0;
+		});
+
 		ws.on("close", () => {
 			ws = null;
+			stopHeartbeat();
 			// Fail in-flight calls now rather than letting each wait out its 120s
 			// timer across a reconnect; callers see a fast retryable error.
 			for (const [callId, pending] of pendingCalls) {
@@ -188,6 +218,32 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		if (stopped) return;
 		if (reconnectTimer) clearTimeout(reconnectTimer);
 		reconnectTimer = setTimeout(connect, RECONNECT_DELAY_MS);
+	}
+
+	function startHeartbeat(): void {
+		stopHeartbeat();
+		heartbeatTimer = setInterval(() => {
+			if (!ws || ws.readyState !== WebSocket.OPEN) return;
+			// Increment first, then check (a pong resets the count to 0), so two
+			// consecutive unanswered pings terminate - matching the arbiter's team socket.
+			missedPongs++;
+			if (missedPongs >= MISSED_PONGS_LIMIT) {
+				console.error(`[evie-client] no pong for ${missedPongs} beats, terminating to reconnect`);
+				ws.terminate();
+				return;
+			}
+			try {
+				ws.ping();
+			} catch {}
+		}, HEARTBEAT_INTERVAL_MS);
+		heartbeatTimer.unref?.();
+	}
+
+	function stopHeartbeat(): void {
+		if (heartbeatTimer) {
+			clearInterval(heartbeatTimer);
+			heartbeatTimer = null;
+		}
 	}
 
 	async function callTool(action: string, params: Record<string, unknown>): Promise<EvieToolCallResult> {
@@ -220,6 +276,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 
 	function stop(): void {
 		stopped = true;
+		stopHeartbeat();
 		if (reconnectTimer) clearTimeout(reconnectTimer);
 		for (const [, pending] of pendingCalls) {
 			clearTimeout(pending.timer);

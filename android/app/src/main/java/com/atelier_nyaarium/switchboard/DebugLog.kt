@@ -7,8 +7,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import java.io.File
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
 import java.util.Date
@@ -17,8 +15,8 @@ import java.util.Locale
 /**
  * On-device debug log the user can pull off the console. Writes to the shared
  * Downloads folder as `switchboard-debug.log` (Downloads/switchboard-debug.log)
- * via MediaStore on API 29+, with no storage permission. The file is truncated at
- * each app start, then appended to, so a sent log is one session.
+ * via MediaStore, with no storage permission. The file is truncated at each app
+ * start, then appended to, so a sent log is one session.
  *
  * Logging must never crash the app, so every sink call is wrapped and a failure is
  * swallowed. Lines also go to logcat under the `sb/<tag>` tag.
@@ -149,23 +147,17 @@ object DebugLog {
 			}
 			runCatching {
 				val uri = fileUri
-				if (uri != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+				if (uri != null) {
 					ctx.contentResolver.openOutputStream(uri, "wa")?.use { it.write(line.toByteArray()) }
-				} else {
-					legacyAppend(line)
 				}
 			}
 		}
 	}
 
 	/** Create (or replace) the log file and write the session header; returns its
-	 * MediaStore uri on API 29+, or null when the legacy file path is used. */
+	 * MediaStore uri, or null if it could not be created. */
 	private fun freshSink(ctx: Context): Uri? {
 		val header = "=== switchboard debug log; session start ${fmt.format(Date())} ===\n"
-		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-			legacyAppend(header, truncate = true)
-			return null
-		}
 		val resolver = ctx.contentResolver
 		val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
 
@@ -191,14 +183,6 @@ object DebugLog {
 		val uri = resolver.insert(collection, values) ?: return null
 		resolver.openOutputStream(uri, "wt")?.use { it.write(header.toByteArray()) }
 		return uri
-	}
-
-	/** Pre-29 fallback: the app's external files dir needs no permission. Not the
-	 * public Downloads folder, but reachable and keeps old devices from crashing. */
-	private fun legacyAppend(text: String, truncate: Boolean = false) {
-		val ctx = appContext ?: return
-		val dir = ctx.getExternalFilesDir(null) ?: return
-		FileOutputStream(File(dir, FILE_NAME), !truncate).use { it.write(text.toByteArray()) }
 	}
 
 	/** A TLS socket factory trusting ONLY the cluster CA, matching the relay's pinned

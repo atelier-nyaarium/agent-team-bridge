@@ -63,8 +63,9 @@ configure() {
 	cur_token="$(env_get BRIDGE_TOKEN)"
 	cur_pin="$(env_get FEDERATION_OWNER_SIGN_PUB)"
 
-	read -rp "SWITCH_ID (this Switch's name) [${cur_id:-$host}]: " raw
-	id="${raw:-${cur_id:-$host}}"
+	# The Switch is named by the device hostname; a pre-set SWITCH_ID stays as the
+	# escape hatch for duplicate hostnames, but there is no nickname prompt.
+	id="${cur_id:-$host}"
 	if [ -n "$cur_token" ]; then
 		read -rp "BRIDGE_TOKEN [keep existing]: " raw; token="${raw:-$cur_token}"
 	else
@@ -104,6 +105,28 @@ purge() {
 	echo "Purged. Run Configure (option 1) to set it up fresh."
 }
 
+# Creds-less LAN enrollment: arm a one-time nonce + advertise this host's LAN address, start
+# the arbiter so it prints the admit-switch QR, and wait for the admin Console to deliver a
+# sealed bundle to POST /enroll. After delivery, a plain restart connects via the installed
+# service-proxy transport.
+enroll() {
+	local nonce host
+	nonce="$(openssl rand -hex 16)"
+	host="$(hostname -I 2>/dev/null | awk '{print $1}')"
+	[ -n "$host" ] || host="0.0.0.0"
+	echo "Arming one-time LAN enrollment on ${host}:20000 (nonce ${nonce:0:8}...)."
+	docker compose down --remove-orphans 2>/dev/null || true
+	ENROLL_NONCE="$nonce" ENROLL_LAN_HOST="$host" docker compose up --build -d ||
+		{ err "docker compose up failed"; return 1; }
+	if ! wait_health; then err "did not come up in 60s - run: docker logs switchboard"; return 1; fi
+	sleep 4
+	echo
+	echo "Scan this with the admin Console (Add Switch). It carries the LAN target + nonce:"
+	docker logs switchboard 2>&1 | sed -n '/is not yet admitted/,/Waiting for the admin Console/p'
+	echo
+	echo "When the Console reports the Switch delivered, run ./start-arbiter.sh to connect."
+}
+
 menu() {
 	while true; do
 		echo
@@ -126,6 +149,11 @@ if [ "${1:-}" = "--setup" ]; then
 	exit 0
 fi
 
+if [ "${1:-}" = "--enroll" ]; then
+	enroll
+	exit $?
+fi
+
 # Default: pull and start the arbiter.
 git fetch --prune || true
 git pull || true
@@ -134,7 +162,7 @@ git pull || true
 # never both silently fall back to "switchboard". docker compose reads .env on its
 # own; this export only fills the gap when .env has no SWITCH_ID.
 grep -qE '^SWITCH_ID=' "$ENV_FILE" 2>/dev/null || export SWITCH_ID="$(hostname)"
-EFF_ID="$(env_get SWITCH_ID)"; EFF_ID="${EFF_ID:-${SWITCH_ID:-switchboard}}"
+EFF_ID="$(env_get SWITCH_ID)"; EFF_ID="${EFF_ID:-${SWITCH_ID:-$(hostname)}}"
 
 docker compose down --remove-orphans 2>/dev/null || true
 docker compose up --build -d

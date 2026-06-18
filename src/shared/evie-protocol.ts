@@ -1,4 +1,4 @@
-// SYNC-HASH: 3be1990ab4fe3f36ac9ecf34d1d011a0
+// SYNC-HASH: 90603d5172907dacc35dc24c58dd58bf
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -77,6 +77,16 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 	// here by destination Switch, never reading the inner payload.
 	z.looseObject({
 		type: z.literal("switch_relay"),
+	}),
+	// The mirrored Domain pushed live when the owner admits or revokes a member, so a
+	// revocation bites a connected Switch within seconds instead of at its next
+	// register. `domain` stays opaque here (this leaf imports nothing but zod); the
+	// Switch validates it with DomainSnapshotSchema. `version` is the keyring hash the
+	// Switch can echo to skip a redundant apply.
+	z.object({
+		type: z.literal("domain_update"),
+		domain: z.unknown(),
+		version: z.string().optional(),
 	}),
 ]);
 

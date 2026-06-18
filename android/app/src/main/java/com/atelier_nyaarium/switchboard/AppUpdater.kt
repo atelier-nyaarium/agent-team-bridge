@@ -70,10 +70,5 @@ object AppUpdater {
 	fun installedVersionCode(context: Context): Long =
 		versionCodeOf(context.packageManager.getPackageInfo(context.packageName, 0))
 
-	private fun versionCodeOf(info: PackageInfo): Long =
-		if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-			info.longVersionCode
-		} else {
-			@Suppress("DEPRECATION") info.versionCode.toLong()
-		}
+	private fun versionCodeOf(info: PackageInfo): Long = info.longVersionCode
 }

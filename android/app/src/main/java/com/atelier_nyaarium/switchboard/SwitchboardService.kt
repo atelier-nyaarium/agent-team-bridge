@@ -9,7 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
-import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
@@ -114,11 +113,7 @@ class SwitchboardService : Service() {
 
 	private fun startInForeground() {
 		val notification = buildStatusNotification("Connecting...", 0)
-		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-			startForeground(STATUS_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
-		} else {
-			startForeground(STATUS_NOTIFICATION_ID, notification)
-		}
+		startForeground(STATUS_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
 	}
 
 	private fun createChannels() {
@@ -243,8 +238,7 @@ class SwitchboardService : Service() {
 	}
 
 	private fun canNotify(): Boolean =
-		Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-			checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+		checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
 	companion object {
 		const val CHANNEL_STATUS = "status"

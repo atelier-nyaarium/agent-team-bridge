@@ -50,7 +50,7 @@ describe("evieClient console relay", () => {
 		const relayed = new Promise<unknown>((resolve) => {
 			client = startEvieClient({
 				url: `ws://localhost:${evie?.port}`,
-				authToken: "test-token",
+				headers: { Authorization: "Bearer test-token" },
 				switchId: "test-host",
 				onConsoleRelay: resolve,
 			});
@@ -108,7 +108,7 @@ describe("evieClient console relay", () => {
 
 		client = startEvieClient({
 			url: `ws://localhost:${evie.port}`,
-			authToken: "test-token",
+			headers: { Authorization: "Bearer test-token" },
 			switchId: "test-host",
 		});
 		await new Promise<void>((resolve) => {

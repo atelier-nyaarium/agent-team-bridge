@@ -1,3 +1,4 @@
+import type { DomainSnapshot } from "../../shared/admission.js";
 import {
 	type ConsoleOp,
 	type ConsoleOpResult,
@@ -50,6 +51,9 @@ export interface ConsoleHandlerDeps {
 	 * console's virtual peer would squat the registry slot, absorb sends meant for
 	 * the project, and suppress its wake. */
 	isProjectName?: (name: string) => boolean;
+	/** The current keyring + its version hash, for the Console's poll-based sync. The
+	 * poll reply carries the snapshot only when the Console's known version differs. */
+	domain?: () => { version: string; snapshot: DomainSnapshot } | null;
 }
 
 ////////////////////////////////
@@ -88,6 +92,7 @@ export function createConsoleHandler({
 	localSwitchId,
 	sendBoundMs = SEND_BOUND_MS,
 	isProjectName,
+	domain,
 }: ConsoleHandlerDeps) {
 	// The per-install conversationId is the real identity: it keys the mailbox,
 	// the registry sub, and this binding to the human-facing device name. The
@@ -375,7 +380,14 @@ export function createConsoleHandler({
 						`[console poll] conv=${conversationId.slice(0, 12)} reqCursor=${op.cursor ?? 0} reqEpoch=${op.epoch ?? "none"} -> drained=${snap.entries.length} retCursor=${snap.cursor} retEpoch=${snap.epoch} dropped=${snap.dropped}`,
 					);
 				}
-				return { entries: snap.entries, cursor: snap.cursor, dropped: snap.dropped, epoch: snap.epoch };
+				const base = { entries: snap.entries, cursor: snap.cursor, dropped: snap.dropped, epoch: snap.epoch };
+				// Piggyback the keyring: hand the Console the snapshot only when its known
+				// version differs, so it stays fresh within one cycle at near-zero steady cost.
+				const dom = domain?.();
+				if (dom && op.knownDomainVersion !== dom.version) {
+					return { ...base, domainVersion: dom.version, domain: dom.snapshot };
+				}
+				return base;
 			}
 		}
 	}

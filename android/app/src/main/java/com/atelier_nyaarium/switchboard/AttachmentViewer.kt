@@ -4,9 +4,6 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.MediaScannerConnection
-import android.os.Build
-import android.os.Environment
 import android.provider.MediaStore
 import android.widget.MediaController
 import android.widget.Toast
@@ -74,32 +71,21 @@ private fun decodeBounded(file: File, maxDim: Int = 4096): Bitmap? = runCatching
 	BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
 }.getOrNull()
 
-/** Copy the attachment into the public Downloads collection. Pre-Q devices fall
- * back to the legacy public directory (no runtime permission path here; this is
- * a personal app on modern devices, and "Open with" remains available). */
+/** Copy the attachment into the public Downloads collection via MediaStore (no runtime
+ * permission needed, and "Open with" remains available as well). */
 private fun saveToDownloads(context: Context, att: OpenAttachment): Boolean = runCatching {
-	if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-		val resolver = context.contentResolver
-		val values = ContentValues().apply {
-			put(MediaStore.Downloads.DISPLAY_NAME, att.name)
-			put(MediaStore.Downloads.MIME_TYPE, att.mime)
-			put(MediaStore.Downloads.IS_PENDING, 1)
-		}
-		val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
-		resolver.openOutputStream(uri)?.use { out -> att.file.inputStream().use { it.copyTo(out) } } ?: return false
-		values.clear()
-		values.put(MediaStore.Downloads.IS_PENDING, 0)
-		resolver.update(uri, values, null, null)
-		true
-	} else {
-		@Suppress("DEPRECATION")
-		val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-		dir.mkdirs()
-		val dest = File(dir, att.name)
-		att.file.inputStream().use { input -> dest.outputStream().use { input.copyTo(it) } }
-		MediaScannerConnection.scanFile(context, arrayOf(dest.path), arrayOf(att.mime), null)
-		true
+	val resolver = context.contentResolver
+	val values = ContentValues().apply {
+		put(MediaStore.Downloads.DISPLAY_NAME, att.name)
+		put(MediaStore.Downloads.MIME_TYPE, att.mime)
+		put(MediaStore.Downloads.IS_PENDING, 1)
 	}
+	val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
+	resolver.openOutputStream(uri)?.use { out -> att.file.inputStream().use { it.copyTo(out) } } ?: return false
+	values.clear()
+	values.put(MediaStore.Downloads.IS_PENDING, 0)
+	resolver.update(uri, values, null, null)
+	true
 }.getOrDefault(false)
 
 private fun prettySize(bytes: Long): String = when {

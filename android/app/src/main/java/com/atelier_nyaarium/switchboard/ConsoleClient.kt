@@ -1,6 +1,7 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
@@ -54,15 +55,16 @@ data class Provisioning(
 	val sttsUrl: String = "",
 	/** STTS API key, sent as the vrcstt-api-key header; empty disables Play. */
 	val sttsKey: String = "",
-	/** Console identity (a JSON-encoded Crypto.Identity), minted + admitted by
-	 * provision-console.sh --setup. Empty for a legacy blob. ChatRepository.provision
-	 * imports it into the keystore so the device is enrolled from the blob alone. */
+	/** Carried by a legacy host-minted-identity blob and IGNORED in the phone-anchored
+	 * model: the Console generates its own identity and resolves Switch keys from the synced
+	 * keyring, so these never drive enrollment. Kept only so an old blob still decodes. */
 	val identity: String = "",
-	/** The home Switch's id + public keys, set by provision-console.sh --setup so the app
-	 * can seal its first (register) op without an admit-switch scan. Empty for a legacy blob. */
 	val switchId: String = "",
 	val switchSignPub: String = "",
 	val switchBoxPub: String = "",
+	/** JSON-encoded SwitchTransport (the switch-bridge creds), sealed into a bootstrap
+	 * bundle when this Console enrolls a creds-less Switch. Empty for a legacy blob. */
+	val switchTransport: String = "",
 ) {
 	companion object {
 		fun parse(blob: String): Provisioning {
@@ -83,6 +85,7 @@ data class Provisioning(
 				switchId = p.switchId ?: "",
 				switchSignPub = p.switchSignPub ?: "",
 				switchBoxPub = p.switchBoxPub ?: "",
+				switchTransport = p.switchTransport ?: "",
 			)
 		}
 	}
@@ -174,22 +177,27 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	private fun requireConsoleIdentity(): Crypto.Identity =
 		store.loadIdentity() ?: error("This device is not enrolled. Re-run provision-console.sh and re-import the setup blob.")
 
-	/** Resolve Switch keys by id. On first boot homeSwitch is null; register resolves via
-	 * the persisted Switch id, learned from the provisioning blob. The message deliberately
-	 * does NOT contain "not admitted" - that token is reserved for the SERVER-side sync-lag
-	 * rejection (a transient "finishing enrollment"), so a missing-local-keys gap (genuinely
-	 * terminal: re-provision) can never be mislabeled as that transient state. */
-	private fun requireSwitchKeys(switchId: String): ProvisioningStore.SwitchKeys =
-		store.loadSwitchKeys(switchId)
-			?: error("Home Switch \"$switchId\" keys are missing. Re-run provision-console.sh and re-import the setup blob.")
+	/** Resolve a Switch's keys from the owner-rooted keyring, verifying its admission
+	 * before sealing to it. This is the device side of symmetric trust: the Console
+	 * seals to a Switch because the owner admitted that Switch's keys, never because a
+	 * provisioning blob named them. A Switch absent from the keyring is a terminal gap
+	 * (admit it), worded with "not in the keyring" so it cannot collide with the
+	 * server-side "is not admitted to the Domain" sync-lag token. */
+	private fun requireSwitchKeys(switchId: String): ProvisioningStore.SwitchKeys {
+		val keyring = Keyring.parse(store.loadDomain()) ?: error("Switch \"$switchId\" is not in the keyring.")
+		val admission = keyring.resolveSwitch(switchId) ?: error("Switch \"$switchId\" is not in the keyring.")
+		return ProvisioningStore.SwitchKeys(admission.signPub, admission.boxPub)
+	}
 
 	/** The Switch id to use for sealing, in priority order: (1) the live homeSwitch set
 	 * after register, (2) the persisted Switch id from a previous session. Throws when
-	 * neither is available (fresh install before any register or enrollment). */
+	 * neither is available - a fresh install before the owner has admitted any Switch, where
+	 * the fix is to admit one (not re-provision); the "no switch admitted" token routes the
+	 * banner to that guidance. */
 	private fun resolveSwitchId(): String =
 		homeSwitch?.takeIf { it.isNotEmpty() }
 			?: store.loadSwitchId().takeIf { it.isNotEmpty() }
-			?: error("Home Switch not provisioned. Re-run provision-console.sh and re-import the setup blob.")
+			?: error("No Switch admitted yet - add one from Manage networks.")
 
 	/** Build a sealed ConsoleRelayFrame for one op. Called fresh for every send,
 	 * including retries, so each attempt uses a new ephemeral/nonce and the
@@ -198,6 +206,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		op: ConsoleOp,
 		opId: String,
 		identity: Crypto.Identity,
+		targetSwitch: String,
 		hostBoxPub: String,
 	): ConsoleRelayFrame {
 		val envelope = ConsoleOpEnvelope(
@@ -213,6 +222,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			v = 1L,
 			opId = opId,
 			signerSignPub = identity.sign.pub,
+			targetSwitch = targetSwitch,
 			sealed = cryptoEnv.toProto(),
 		)
 	}
@@ -231,12 +241,20 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	 *
 	 * Every call builds a fresh sealed frame so retries produce a new ephemeral/nonce
 	 * and the replay guard never rejects a legitimate retry. */
-	private fun relay(op: ConsoleOp, opId: String = UUID.randomUUID().toString(), readTimeoutMs: Long? = null): ConsoleReplyBody {
+	private fun relay(
+		op: ConsoleOp,
+		opId: String = UUID.randomUUID().toString(),
+		readTimeoutMs: Long? = null,
+		targetSwitch: String? = null,
+	): ConsoleReplyBody {
 		val identity = requireConsoleIdentity()
-		val switchId = resolveSwitchId()
+		// Direct multi-home: an op seals to the Switch hosting its session (resolved from
+		// the keyring), naming it so evie routes there. Register/poll/list default to the
+		// home Switch.
+		val switchId = targetSwitch?.takeIf { it.isNotEmpty() } ?: resolveSwitchId()
 		val hostKeys = requireSwitchKeys(switchId)
 
-		val frame = buildSealedFrame(op, opId, identity, hostKeys.boxPub)
+		val frame = buildSealedFrame(op, opId, identity, switchId, hostKeys.boxPub)
 		val req = Request.Builder()
 			.url("$proxyBase/relay")
 			.header("Authorization", "Bearer ${prov.saToken}")
@@ -355,7 +373,11 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			)
 		}
 		val op = ConsoleOp.Send(to = to, body = body, files = wireFiles.ifEmpty { null })
-		val replyBody = relay(op, opId)
+		// Seal directly to the Switch hosting the target team (a bare name resolves to home),
+		// so a cross-Switch send goes E2E to that Switch rather than relaying through home.
+		val home = homeSwitch?.takeIf { it.isNotEmpty() } ?: store.loadSwitchId()
+		val target = TeamAddress.parse(to, home).switchId
+		val replyBody = relay(op, opId, targetSwitch = target)
 		val status = replyBody.result?.let {
 			runCatching { wireJson.decodeFromJsonElement<ConsoleSendResult>(it).status }.getOrNull()
 		}
@@ -367,7 +389,15 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	 * arrives or the hold expires, so delivery is near-instant at ~1 request per
 	 * hold window instead of constant fast polling. */
 	fun poll(cursor: Long, epoch: Long, holdMs: Long = 0): ConsolePollResult {
-		val op = ConsoleOp.Poll(cursor = cursor, epoch = epoch, holdMs = if (holdMs > 0) holdMs else null)
+		// Carry the synced keyring version so the home Switch returns the snapshot only when
+		// it changed (a revocation made elsewhere reaches this Console within one cycle).
+		val knownVersion = store.loadDomainVersion().ifEmpty { null }
+		val op = ConsoleOp.Poll(
+			cursor = cursor,
+			epoch = epoch,
+			holdMs = if (holdMs > 0) holdMs else null,
+			knownDomainVersion = knownVersion,
+		)
 		// Ordered timeout chain for a held poll: arbiter replies by holdMs (40s),
 		// evie's relay hold fires at 55s if the arbiter vanished, this read timeout
 		// at holdMs+18s (58s) catches a vanished evie, and the apiserver proxy's

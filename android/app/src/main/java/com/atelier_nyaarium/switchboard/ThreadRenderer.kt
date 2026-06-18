@@ -210,7 +210,7 @@ class ThreadRenderer(context: Context) {
 			val obj = JSONObject()
 				.put("id", m.id)
 				.put("role", if (m.fromMe) "user" else "agent")
-				.put("from", if (m.fromMe) "you" else "")
+				.put("from", if (m.fromMe) "you" else (m.from ?: ""))
 				.put("at", m.at)
 				.put("body", m.text)
 			if (playEnabled && !m.fromMe) obj.put("canPlay", true)

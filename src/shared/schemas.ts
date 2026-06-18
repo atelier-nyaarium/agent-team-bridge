@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DomainSnapshotSchema, SignedAdmissionSchema } from "./admission.js";
 
 ////////////////////////////////
 //  Shared enum schemas
@@ -147,6 +148,10 @@ export const ConsoleOpSchema = z
 			cursor: z.number().int().nonnegative().optional(),
 			epoch: z.number().int().nonnegative().optional(),
 			holdMs: z.number().int().nonnegative().max(45_000).optional(),
+			// The keyring version the Console last synced; the Switch returns the snapshot in
+			// the poll reply only when it differs, so the Console stays fresh within one poll
+			// cycle at near-zero steady cost.
+			knownDomainVersion: z.string().optional(),
 		}),
 	])
 	.meta({ id: "ConsoleOp" });
@@ -177,6 +182,10 @@ export const ConsoleRelayFrameSchema = z
 		// public key, not a secret. conversationId + device + the op move INSIDE the
 		// seal, so evie sees only this opaque blob - it cannot read or forge the op.
 		signerSignPub: z.string().min(1),
+		// The Switch this op targets, so evie routes per-target under direct multi-home
+		// (the Console seals to each Switch directly). Plaintext routing metadata, like
+		// signerSignPub; absent falls back to evie's latest-Switch routing (single-home).
+		targetSwitch: z.string().optional(),
 		sealed: SealedEnvelopeSchema,
 	})
 	.meta({ id: "ConsoleRelayFrame" });
@@ -284,6 +293,11 @@ export const ConsolePollResultSchema = z
 		// Mailbox instance id. On change the console resets its cursor to 0 (the
 		// prior mailbox was evicted and a new one started seq at 1).
 		epoch: z.number().int().nonnegative(),
+		// The keyring version, and the snapshot itself, present only when it changed from
+		// the Console's knownDomainVersion. The Console applies it (owner-pinned) and
+		// re-verifies its peers, so a revocation made elsewhere reaches it within a cycle.
+		domainVersion: z.string().optional(),
+		domain: DomainSnapshotSchema.optional(),
 	})
 	.meta({ id: "ConsolePollResult" });
 
@@ -358,5 +372,61 @@ export const ProvisioningSchema = z
 		switchId: z.string().optional(),
 		switchSignPub: z.string().optional(),
 		switchBoxPub: z.string().optional(),
+		// A JSON-encoded SwitchTransport (the switch-bridge SA-token creds), set by
+		// provision-console.sh. The owner Console seals it into a SwitchBootstrapBundle when
+		// it enrolls a creds-less Switch, so the new Switch can reach evie. Encoded as a
+		// string for the same reason as `identity` (it nests inside this blob).
+		switchTransport: z.string().optional(),
 	})
 	.meta({ id: "Provisioning" });
+
+////////////////////////////////
+//  Switch bootstrap bundle (Console -> creds-less Switch, LAN/paste delivered)
+//
+//  The owner Console mints this for a Switch it just admitted and seals it to the
+//  Switch's box key (so plain-HTTP LAN delivery or a pasted blob stays confidential
+//  and tamper-evident). It never crosses evie: the Console carries it to the Switch
+//  directly. `transport` is the same SA-token-over-service-proxy shape the Console
+//  uses, so one credential mechanism serves both member kinds. `admission` is this
+//  Switch's own owner-signed admission; `domain` mirrors the keyring so the Switch
+//  can verify peers from its first boot.
+
+export const SwitchTransportSchema = z
+	.object({
+		apiUrl: z.string().min(1),
+		saToken: z.string().min(1),
+		caPem: z.string().min(1),
+		appToken: z.string().min(1),
+	})
+	.meta({ id: "SwitchTransport" });
+
+export const SwitchBootstrapBundleSchema = z
+	.object({
+		// Echoes the one-time nonce from the admit-switch QR; the Switch installs the
+		// bundle only if it matches the listener it opened, so a bundle cannot be
+		// replayed into a later enrollment window.
+		nonce: z.string().min(1),
+		transport: SwitchTransportSchema,
+		admission: SignedAdmissionSchema,
+		domain: DomainSnapshotSchema,
+	})
+	.meta({ id: "SwitchBootstrapBundle" });
+
+export type SwitchTransport = z.infer<typeof SwitchTransportSchema>;
+export type SwitchBootstrapBundle = z.infer<typeof SwitchBootstrapBundleSchema>;
+
+////////////////////////////////
+//  Switch bootstrap delivery frame (the sealed wrapper on the wire)
+//
+//  What the Console POSTs to the Switch's LAN listener (or hands over as paste). The
+//  Switch verifies the seal against `signerSignPub`, opens it with its box key, then
+//  pins the owner key from the enclosed snapshot - trust-on-first-use gated by the SAS
+//  the human confirmed, the one-time nonce, and LAN proximity.
+
+export const SwitchBootstrapFrameSchema = z
+	.object({
+		v: z.number().int().positive(),
+		signerSignPub: z.string().min(1),
+		sealed: SealedEnvelopeSchema,
+	})
+	.meta({ id: "SwitchBootstrapFrame" });
