@@ -1,18 +1,17 @@
 [versions]
-agp = "8.7.3"
-kotlin = "2.0.21"
+agp = "9.2.1"
+kotlin = "2.4.0"
 coreKtx = "1.15.0"
 lifecycle = "2.8.7"
 activityCompose = "1.9.3"
-composeBom = "2024.12.01"
+composeBom = "2026.05.01"
 okhttp = "4.12.0"
 coroutines = "1.9.0"
 securityCrypto = "1.1.0-alpha06"
 biometric = "1.1.0"
 fragment = "1.8.5"
 webkit = "1.12.1"
-# Built against Kotlin 2.0.x; 1.8.x+ requires Kotlin 2.1+. Bump only with a Kotlin upgrade.
-kotlinxSerialization = "1.7.3"
+kotlinxSerialization = "1.9.0"
 # Federation crypto (X25519 / Ed25519 / AES-256-GCM / HKDF) via the low-level
 # BC API, so no Security provider is registered and there is no Android BC conflict.
 bouncycastle = "1.79"

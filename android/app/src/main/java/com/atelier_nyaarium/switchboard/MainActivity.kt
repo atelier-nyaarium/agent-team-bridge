@@ -48,12 +48,12 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -892,7 +892,7 @@ fun ThreadScreen(
 		Column(Modifier.padding(pad).fillMaxSize().imePadding()) {
 			if (tabs.size > 1) {
 				val selected = tabs.indexOf(team).coerceAtLeast(0)
-				ScrollableTabRow(selectedTabIndex = selected, edgePadding = 8.dp) {
+				PrimaryScrollableTabRow(selectedTabIndex = selected, edgePadding = 8.dp) {
 					tabs.forEachIndexed { i, t ->
 						Tab(selected = i == selected, onClick = { onSwitch(t) }, text = { Text(tabLabel(t)) })
 					}
@@ -1108,7 +1108,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 				label = { Text(current?.voiceHint?.let { "$it (blank = default)" } ?: "Voice (blank = default)") },
 				trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = voiceMenuOpen) },
 				singleLine = true,
-				modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryEditable),
+				modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable),
 			)
 			// The catalog ships the provider's full voice list (hundreds for some),
 			// so the field text filters the menu by id or label. A Default entry

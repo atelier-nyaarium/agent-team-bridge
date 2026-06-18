@@ -1,13 +1,12 @@
 plugins {
 	alias(libs.plugins.android.application)
-	alias(libs.plugins.kotlin.android)
 	alias(libs.plugins.kotlin.compose)
 	alias(libs.plugins.kotlin.serialization)
 }
 
 android {
 	namespace = "com.atelier_nyaarium.switchboard"
-	compileSdk = 35
+	compileSdk = 36
 
 	signingConfigs {
 		// CI supplies one stable keystore via env so every build shares a signature.
@@ -36,12 +35,11 @@ android {
 
 	defaultConfig {
 		applicationId = "com.atelier_nyaarium.switchboard"
-		// Android 13 (API 33) floor: the owner's device runs Android 16, this is a
-		// personal console app, and 33 is the point above which the codebase carries zero
-		// version-gated branches. compileSdk/targetSdk stay at 35 until the toolchain
-		// (AGP + platform-36) is upgraded online; targetSdk 35 already runs on Android 16.
+		// Android 13 (API 33) floor: the owner's device runs Android 16, this is a personal
+		// console app, and 33 is the point above which the codebase carries zero version-gated
+		// branches. compile/targetSdk track the latest API (36 / Android 16).
 		minSdk = 33
-		targetSdk = 35
+		targetSdk = 36
 		// Monotonic in CI (build number) so updates are never seen as a downgrade.
 		versionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1
 		// Track the plugin version (single bump ritual covers the app too).
@@ -67,10 +65,6 @@ android {
 		targetCompatibility = JavaVersion.VERSION_17
 	}
 
-	kotlinOptions {
-		jvmTarget = "17"
-	}
-
 	buildFeatures {
 		compose = true
 		buildConfig = true
@@ -80,17 +74,20 @@ android {
 		// Golden protocol fixtures live at the repo root (shared with vitest);
 		// exposing them as test resources keeps the path stable across local
 		// runs and CI working dirs.
-		getByName("test").resources.srcDir("../../tests/fixtures")
+		getByName("test").resources.directories.add("../../tests/fixtures")
 	}
 
-	// Name the built APKs switchboard-<variant>.apk instead of the module-default
-	// app-<variant>.apk, so the GitHub release assets, the sideload instructions,
-	// and the in-app self-updater all share the product name.
-	applicationVariants.all {
-		val variantName = name
-		outputs.all {
-			(this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
-				"switchboard-$variantName.apk"
+}
+
+// Name the built APKs switchboard-<variant>.apk instead of the module-default
+// app-<variant>.apk, so the GitHub release assets, the sideload instructions, and the
+// in-app self-updater all share the product name.
+androidComponents {
+	onVariants { variant ->
+		variant.outputs.forEach { output ->
+			(output as? com.android.build.api.variant.impl.VariantOutputImpl)
+				?.outputFileName
+				?.set("switchboard-${variant.name}.apk")
 		}
 	}
 }
