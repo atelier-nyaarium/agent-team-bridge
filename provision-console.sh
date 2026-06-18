@@ -156,10 +156,12 @@ emit_blob() {
 	swSa=$(k get secret switch-bridge-proxy-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d)
 	swCa=$(k get secret switch-bridge-proxy-token -o jsonpath='{.data.ca\.crt}' 2>/dev/null | base64 -d)
 	swApp=$(sed -n 's/^BRIDGE_TOKEN=//p' .env 2>/dev/null | head -1)
+	# The 4-field SwitchTransport shape (the arbiter fills namespace/service/port defaults
+	# when it installs the bundle), matching SwitchTransportSchema.
 	swTransport=""
 	if [ -n "$swSa" ] && [ -n "$swCa" ]; then
-		swTransport=$(SB_API="$apiUrl" SB_CA="$swCa" SB_SA="$swSa" SB_APP="$swApp" SB_NS="$NS" \
-			bun -e 'process.stdout.write(JSON.stringify({apiUrl:process.env.SB_API,namespace:process.env.SB_NS,saToken:process.env.SB_SA,caPem:process.env.SB_CA,appToken:process.env.SB_APP||"",service:"evie-bridge",port:20001}))')
+		swTransport=$(SB_API="$apiUrl" SB_CA="$swCa" SB_SA="$swSa" SB_APP="$swApp" \
+			bun -e 'process.stdout.write(JSON.stringify({apiUrl:process.env.SB_API,saToken:process.env.SB_SA,caPem:process.env.SB_CA,appToken:process.env.SB_APP||""}))')
 	fi
 
 	# The writer VALIDATES against the shared ProvisioningSchema before writing (a field

@@ -224,12 +224,14 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		stopHeartbeat();
 		heartbeatTimer = setInterval(() => {
 			if (!ws || ws.readyState !== WebSocket.OPEN) return;
+			// Increment first, then check (a pong resets the count to 0), so two
+			// consecutive unanswered pings terminate - matching the arbiter's team socket.
+			missedPongs++;
 			if (missedPongs >= MISSED_PONGS_LIMIT) {
 				console.error(`[evie-client] no pong for ${missedPongs} beats, terminating to reconnect`);
 				ws.terminate();
 				return;
 			}
-			missedPongs++;
 			try {
 				ws.ping();
 			} catch {}
