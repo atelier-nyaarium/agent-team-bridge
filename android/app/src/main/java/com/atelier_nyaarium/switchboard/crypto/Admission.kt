@@ -28,6 +28,13 @@ object AdmissionCrypto {
 			signature = Crypto.sign(admissionSigningBytes(admission), ownerSignPriv),
 		)
 
+	fun signRevocation(revocation: Revocation, ownerSignPriv: String, ownerSignPub: String): SignedRevocation =
+		SignedRevocation(
+			revocation = revocation,
+			ownerSignPub = ownerSignPub,
+			signature = Crypto.sign(revocationSigningBytes(revocation), ownerSignPriv),
+		)
+
 	fun verifyAdmission(s: SignedAdmission, expectedOwnerSignPub: String): Boolean =
 		s.ownerSignPub == expectedOwnerSignPub && Crypto.verify(admissionSigningBytes(s.admission), s.signature, expectedOwnerSignPub)
 

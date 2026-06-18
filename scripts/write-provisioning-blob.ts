@@ -4,9 +4,10 @@
 // producer/schema field drift (a rename here, a missing field there) fails LOUDLY at
 // provision time on the host instead of silently on the device after import. bun-only;
 // inputs ride the ENVIRONMENT so the saToken/appToken/console identity stay out of argv.
-//   env in: SB_API SB_CA SB_SA SB_APP (cluster creds), SB_CONSOLE_ID (console keypair JSON),
-//           SB_SWID SB_SSIGN SB_SBOX (home Switch id + pubkeys), SB_NS SB_SVC SB_PORT,
-//           SB_BLOB (output path)
+//   env in: SB_API SB_CA SB_SA SB_APP (cluster creds), SB_NS SB_SVC SB_PORT, SB_BLOB
+//           (output path). In the phone-anchored model the blob is transport-only: the
+//           Console generates its own identity and resolves Switch keys from the synced
+//           keyring, so the identity/switch fields are omitted.
 
 import { ProvisioningSchema } from "../src/shared/schemas.js";
 
@@ -24,10 +25,15 @@ const blob = {
 	namespace: process.env.SB_NS || undefined,
 	service: process.env.SB_SVC || undefined,
 	port: process.env.SB_PORT ? Number(process.env.SB_PORT) : undefined,
-	identity: reqEnv("SB_CONSOLE_ID"),
-	switchId: reqEnv("SB_SWID"),
-	switchSignPub: reqEnv("SB_SSIGN"),
-	switchBoxPub: reqEnv("SB_SBOX"),
+	// Optional: a legacy host-minted-identity blob still carries these, but the
+	// phone-anchored flow omits them (the Console owns its identity + keyring).
+	identity: process.env.SB_CONSOLE_ID || undefined,
+	switchId: process.env.SB_SWID || undefined,
+	switchSignPub: process.env.SB_SSIGN || undefined,
+	switchBoxPub: process.env.SB_SBOX || undefined,
+	// A JSON-encoded SwitchTransport: the switch-bridge creds the owner Console seals into
+	// a bootstrap bundle when it enrolls a creds-less Switch.
+	switchTransport: process.env.SB_SWTRANSPORT || undefined,
 };
 
 // .parse throws (non-zero exit) on any type/shape mismatch and strips unknown keys, so the

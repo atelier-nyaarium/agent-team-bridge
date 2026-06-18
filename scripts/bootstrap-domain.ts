@@ -1,46 +1,38 @@
-// Domain bootstrap for the console setup script (provision-console.sh --setup).
+// Domain rooting for the owner setup script (provision-owner.sh --setup).
 //
-// The setup script is the SOLE bootstrap authority (no evie-DM, no QR). Running on
-// the trusted host with cluster access, it roots the Domain and admits the Switch +
-// a Console identity directly, then writes evie's federation Secret. This helper is
-// the crypto core: it reuses the real crypto.ts/admission.ts so every signature
-// verifies byte-for-byte on the arbiter (Bun) and the Android app (BouncyCastle).
+// Phone-anchored trust: the OWNER root keypair is generated on the admin Console and
+// never leaves it. This helper roots evie's Domain at the Console's owner PUBLIC keys
+// (read by the operator from the app) - it mints nothing and signs nothing, so no
+// private key is created or held host-side. The Console admits every Switch and Console
+// itself afterward (owner-signed submit_admission), so this runs once to seat the root.
 //
-// Trust posture: the OWNER root key stays host-side (persisted by the script, reused
-// on later --setup runs to admit more devices). Only a CONSOLE identity rides the
-// provisioning blob to the app - so the Domain root never leaves the host.
+// Preserves evie's own identity verbatim (rooting must not change evie's SAS). Prior
+// admissions/revocations are kept ONLY when re-rooting at the SAME owner key (a Console
+// re-running setup from its backed-up owner key); a DIFFERENT owner key starts a fresh
+// Domain (old admissions were signed by a key that no longer verifies).
 //
-// I/O is bun-only (the script already requires bun; no python dependency). Inputs
-// arrive as RAW strings on the ENVIRONMENT - never argv, which is world-readable in
-// `ps` - and SB_EVIE_FED / SB_OWNER carry private keys:
-//   env in:  SB_EVIE_FED   the live evie federation.json text (we extract .identity AND
-//                          preserve its existing enrollment admissions/revocations)
-//            SB_SW_IDENT   this Switch's federation-identity.json text (sign/box keys)
-//            SB_SWITCH_ENV the container's SWITCH_ID env (authoritative id source)
-//            SB_SWITCH_HOST the container hostname (fallback id source)
-//            SB_OWNER      an existing owner identity to REUSE, or "null" to mint fresh
-//   stdout:  { ownerIdentity, ownerSignPub, federationJson, consoleIdentity, switchId,
-//             switchSignPub, switchBoxPub }
+// I/O is bun-only. Inputs arrive as RAW strings on the ENVIRONMENT (never argv, which is
+// world-readable in `ps`):
+//   env in:  SB_EVIE_FED         the live evie federation.json text (.identity preserved,
+//                                .enrollment kept iff the owner key is unchanged)
+//            SB_OWNER_SIGN_PUB    the Console owner's Ed25519 signing public key (base64)
+//            SB_OWNER_BOX_PUB     the Console owner's X25519 box public key (base64)
+//   stdout:  { ownerSignPub, federationJson }
 
-import { randomBytes } from "node:crypto";
-import { type Admission, type SignedAdmission, signAdmission } from "../src/shared/admission.js";
-import { generateIdentity, type Identity } from "../src/shared/crypto.js";
-import { sanitizeSwitchId } from "../src/shared/host-id.js";
+import type { SignedAdmission, SignedRevocation } from "../src/shared/admission.js";
+import type { Identity } from "../src/shared/crypto.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
 interface PriorEnrollment {
+	ownerSignPub?: string;
 	admissions?: SignedAdmission[];
-	revocations?: unknown[];
+	revocations?: SignedRevocation[];
 }
 
 ////////////////////////////////
 //  Functions & Helpers
-
-function nonce(): string {
-	return randomBytes(18).toString("base64");
-}
 
 function reqEnv(name: string): string {
 	const v = process.env[name];
@@ -48,94 +40,41 @@ function reqEnv(name: string): string {
 	return v;
 }
 
-/** Owner-sign an admission for a subject's keys. `now` + `nonce` are explicit so the
- * caller owns time/randomness (same contract as admissionFromScan). */
-function admit(
-	kind: "switch" | "console",
-	signPub: string,
-	boxPub: string,
-	switchId: string | undefined,
-	owner: Identity,
-	now: number,
-): SignedAdmission {
-	const admission: Admission = { kind, signPub, boxPub, switchId, issuedAt: now, nonce: nonce() };
-	return signAdmission(admission, owner.sign.priv, owner.sign.pub);
+/** A required raw-32-byte key (base64). Rejects a typo/garbage owner key here, where the
+ * error is actionable, instead of letting it root evie and then fail silently everywhere
+ * (verify() swallows a malformed key and filters out every admission). */
+function reqKey(name: string): string {
+	const v = reqEnv(name);
+	if (Buffer.from(v, "base64").length !== 32) {
+		throw new Error(`${name} is not a base64-encoded 32-byte key - re-copy it from the Console's Owner setup`);
+	}
+	return v;
 }
 
 function main(): void {
-	// evie's CURRENT identity - preserved verbatim so the write only ROOTS the Domain,
-	// never re-mints evie's keypair (which would change its SAS).
+	// evie's CURRENT identity - preserved verbatim so rooting never re-mints evie's
+	// keypair (which would change its fingerprint).
 	const evieFed = JSON.parse(reqEnv("SB_EVIE_FED")) as { identity?: Identity; enrollment?: PriorEnrollment };
 	const evieIdentity = evieFed.identity;
 	if (!evieIdentity?.sign?.pub || !evieIdentity?.box?.pub) {
 		throw new Error("evie federation Secret has no usable identity (.identity.sign/.box)");
 	}
 
-	const swIdent = JSON.parse(reqEnv("SB_SW_IDENT")) as Identity;
-	const switchSignPub = swIdent?.sign?.pub;
-	const switchBoxPub = swIdent?.box?.pub;
-	if (!switchSignPub || !switchBoxPub) throw new Error("Switch identity is missing sign/box public keys");
+	const ownerSignPub = reqKey("SB_OWNER_SIGN_PUB");
+	const ownerBoxPub = reqKey("SB_OWNER_BOX_PUB");
 
-	// Resolve the Switch id the SAME way the arbiter does (resolveLocalSwitchId): the
-	// SWITCH_ID env override, else the container hostname, run through the REAL
-	// sanitizeSwitchId. Read from the container env (never rotatable `docker logs`), so the
-	// id stamped on the admission always matches the id the arbiter registers under - a
-	// mismatch would store the Switch keys under the wrong id and brick the Console.
-	const switchId = sanitizeSwitchId(process.env.SB_SWITCH_ENV || process.env.SB_SWITCH_HOST || "switch");
-
-	const ownerRaw = process.env.SB_OWNER ?? "null";
-	const ownerReused = ownerRaw !== "null" && ownerRaw !== "";
-
-	// node clock is unavailable to the model at authoring time but fine at runtime.
-	const now = Date.now();
-
-	// Reuse the owner root if the script kept one; otherwise mint it (first setup).
-	const owner: Identity = ownerReused ? (JSON.parse(ownerRaw) as Identity) : generateIdentity();
-	// The app's Console identity - admitted as kind:"console" so the arbiter trusts its
-	// sealed ops. Fresh every run (a re-setup re-issues the console).
-	const console_: Identity = generateIdentity();
-
-	const switchAdmission = admit("switch", switchSignPub, switchBoxPub, switchId, owner, now);
-	const consoleAdmission = admit("console", console_.sign.pub, console_.box.pub, undefined, owner, now);
-
-	// Merge, do not clobber. When REUSING the owner, keep every OTHER Switch's admission +
-	// any owner-enroll records + all revocations (rebuilding the block from scratch would
-	// silently de-admit them). Drop this Switch's prior admission (the fresh one supersedes)
-	// and any prior kind:console admission (single-console model: a re-run re-provisions the
-	// one Console, and snapshot replacement de-admits the old console key). When MINTING a
-	// fresh owner, start clean - prior admissions were signed by a different root and would
-	// not verify under the new owner key anyway.
-	const priorAdmissions = ownerReused ? (evieFed.enrollment?.admissions ?? []) : [];
-	const priorRevocations = ownerReused ? (evieFed.enrollment?.revocations ?? []) : [];
-	const kept = priorAdmissions.filter((a) => {
-		const subject = a?.admission?.signPub;
-		const kind = a?.admission?.kind;
-		if (kind === "console") return false;
-		if (subject === switchSignPub) return false;
-		return true;
-	});
+	// Keep the existing allowlist only when re-rooting at the same owner; a different
+	// owner key is a fresh Domain (prior admissions would not verify under it).
+	const sameOwner = evieFed.enrollment?.ownerSignPub === ownerSignPub;
+	const admissions = sameOwner ? (evieFed.enrollment?.admissions ?? []) : [];
+	const revocations = sameOwner ? (evieFed.enrollment?.revocations ?? []) : [];
 
 	const federationJson = {
 		identity: evieIdentity,
-		enrollment: {
-			ownerSignPub: owner.sign.pub,
-			ownerBoxPub: owner.box.pub,
-			admissions: [...kept, switchAdmission, consoleAdmission],
-			revocations: priorRevocations,
-		},
+		enrollment: { ownerSignPub, ownerBoxPub, admissions, revocations },
 	};
 
-	process.stdout.write(
-		JSON.stringify({
-			ownerIdentity: owner,
-			ownerSignPub: owner.sign.pub,
-			federationJson,
-			consoleIdentity: console_,
-			switchId,
-			switchSignPub,
-			switchBoxPub,
-		}),
-	);
+	process.stdout.write(JSON.stringify({ ownerSignPub, federationJson }));
 }
 
 main();

@@ -5,19 +5,38 @@ import { fingerprint, type Identity } from "../../shared/crypto.js";
 //  Interfaces & Types
 
 /** The admit-switch enrollment payload this Switch presents for the owner to scan
- * (matches switchboard's EnrollmentPayloadSchema admit-switch member). */
+ * (matches switchboard's EnrollmentPayloadSchema admit-switch member). `lan` + `nonce`
+ * are present when the Switch opened a nonce-gated LAN listener for bundle delivery. */
 export interface AdmitSwitchPayload {
 	type: "admit-switch";
 	switchId: string;
 	signPub: string;
 	boxPub: string;
+	lan?: { host: string; port: number };
+	nonce?: string;
+}
+
+export interface EnrollDelivery {
+	host: string;
+	port: number;
+	nonce: string;
 }
 
 ////////////////////////////////
 //  Functions & Helpers
 
-export function admitSwitchPayload(identity: Identity, switchId: string): AdmitSwitchPayload {
-	return { type: "admit-switch", switchId, signPub: identity.sign.pub, boxPub: identity.box.pub };
+export function admitSwitchPayload(
+	identity: Identity,
+	switchId: string,
+	delivery?: EnrollDelivery,
+): AdmitSwitchPayload {
+	return {
+		type: "admit-switch",
+		switchId,
+		signPub: identity.sign.pub,
+		boxPub: identity.box.pub,
+		...(delivery ? { lan: { host: delivery.host, port: delivery.port }, nonce: delivery.nonce } : {}),
+	};
 }
 
 /** Render a QR as ANSI background-colored cells - forced black-on-white so it
@@ -45,10 +64,17 @@ export function terminalQr(text: string): string {
 
 /** Print the admit-switch QR + SAS to the arbiter console on startup, so the owner
  * can scan an un-admitted Switch into the Domain. No-op once admitted. */
-export function logAdmitSwitchQr(identity: Identity, switchId: string): void {
-	const payload = admitSwitchPayload(identity, switchId);
+export function logAdmitSwitchQr(identity: Identity, switchId: string, delivery?: EnrollDelivery): void {
+	const payload = admitSwitchPayload(identity, switchId, delivery);
 	console.log(`\n[federation] Switch "${switchId}" is not yet admitted to a Domain.`);
-	console.log(`[federation] On the owner device, open Enroll by QR and scan:\n`);
+	console.log(`[federation] On the owner device, open Add Switch and scan:\n`);
 	console.log(terminalQr(JSON.stringify(payload)));
-	console.log(`\n[federation] Confirm this fingerprint on the owner device: ${fingerprint(identity.sign.pub)}\n`);
+	console.log(`\n[federation] Confirm this fingerprint on the owner device: ${fingerprint(identity.sign.pub)}`);
+	if (delivery) {
+		console.log(
+			`[federation] Waiting for the admin Console to deliver credentials over the LAN (${delivery.host}:${delivery.port})...\n`,
+		);
+	} else {
+		console.log("");
+	}
 }

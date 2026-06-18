@@ -49,6 +49,9 @@ import {
 	ConsoleSendResultSchema,
 	MailboxEntrySchema,
 	ProvisioningSchema,
+	SwitchBootstrapBundleSchema,
+	SwitchBootstrapFrameSchema,
+	SwitchTransportSchema,
 	TeamInfoSchema,
 } from "../src/shared/schemas.js";
 import { SttsProvidersSchema } from "../src/shared/stts-providers.js";
@@ -84,6 +87,9 @@ const ROOTS: z.ZodType[] = [
 	SignedRevocationSchema,
 	EnrollOpSchema,
 	EnrollResultSchema,
+	SwitchTransportSchema,
+	SwitchBootstrapBundleSchema,
+	SwitchBootstrapFrameSchema,
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything

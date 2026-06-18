@@ -1,4 +1,4 @@
-// SYNC-HASH: 10c8ae9687851b0324a30a57369147da
+// SYNC-HASH: 605795cd741395f037d2b4893f70b115
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -55,6 +55,12 @@ export const EnrollmentPayloadSchema = z
 			switchId: z.string().min(1),
 			signPub: z.string().min(1),
 			boxPub: z.string().min(1),
+			// Where the Console delivers the sealed bootstrap bundle. Present when the
+			// Switch opened a LAN listener; absent when the operator chose manual paste.
+			lan: z.object({ host: z.string().min(1), port: z.number().int().positive() }).optional(),
+			// One-time nonce gating that listener; the Console echoes it inside the sealed
+			// bundle so a stale or cross-window delivery is rejected.
+			nonce: z.string().min(1).optional(),
 		}),
 		z.object({
 			type: z.literal("authorize-console"),

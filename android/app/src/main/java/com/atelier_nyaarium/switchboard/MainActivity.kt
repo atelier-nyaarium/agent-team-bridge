@@ -67,6 +67,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -141,6 +142,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	val activity = context as? FragmentActivity
 	var openTeam by remember { mutableStateOf<String?>(null) }
 	var showSettings by remember { mutableStateOf(false) }
+	var showManage by remember { mutableStateOf(false) }
+	var showAddSwitch by remember { mutableStateOf(false) }
 	var unlocked by remember { mutableStateOf(false) }
 
 	// WebView pool lives at App scope (never leaves composition) so each thread's
@@ -235,23 +238,30 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		if (locked && activity != null) promptUnlock(activity) { ok -> if (ok) unlocked = true }
 	}
 
-	// System back navigates within the app (thread/settings -> sessions) instead of exiting.
-	BackHandler(enabled = openTeam != null || showSettings) {
+	// System back navigates within the app (thread/settings/manage -> back) instead of exiting.
+	BackHandler(enabled = openTeam != null || showSettings || showManage || showAddSwitch) {
 		when {
+			showAddSwitch -> showAddSwitch = false
+			showManage -> showManage = false
 			openTeam != null -> openTeam = null
 			showSettings -> showSettings = false
 		}
 	}
 
 	when {
-		!state.provisioned -> ProvisionScreen(onProvision = { scope.launch { repo.provision(it) } })
+		!state.provisioned -> ProvisionScreen(repo = repo, onProvision = { scope.launch { repo.provision(it) } })
 		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
+		showAddSwitch ->
+			AddSwitchScreen(repo = repo, onBack = { showAddSwitch = false }, onDone = { showAddSwitch = false })
+		showManage ->
+			ManageScreen(repo = repo, onBack = { showManage = false }, onAddSwitch = { showAddSwitch = true })
 		showSettings ->
 			SettingsScreen(
 				state = state,
 				repo = repo,
 				onSetDeviceName = { scope.launch { repo.setDeviceName(it) } },
 				onToggleBiometric = { repo.setBiometricLock(it) },
+				onManage = { showManage = true },
 				onClear = {
 					scope.launch { repo.clearAll() }
 					showSettings = false
@@ -338,7 +348,7 @@ fun LockScreen(onUnlock: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProvisionScreen(onProvision: (String) -> Unit) {
+fun ProvisionScreen(repo: ChatRepository, onProvision: (String) -> Unit) {
 	val context = LocalContext.current
 	var status by remember { mutableStateOf("") }
 
@@ -377,10 +387,11 @@ fun ProvisionScreen(onProvision: (String) -> Unit) {
 
 	Scaffold(topBar = { TopAppBar(title = { Text("Provision Switchboard") }) }) { pad ->
 		Column(
-			Modifier.padding(pad).padding(24.dp).fillMaxSize(),
+			Modifier.padding(pad).padding(24.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(16.dp),
 		) {
-			Text("Scan the enrollment QR the host shows (./provision-console.sh --qr), or paste/import the blob.")
+			OwnerKeysCard(repo)
+			Text("Then scan the enrollment QR the host shows (./provision-console.sh --qr), or paste/import the blob.")
 			Button(
 				onClick = { scanning = true },
 				modifier = Modifier.fillMaxWidth(),
@@ -433,6 +444,8 @@ fun SessionsScreen(
 	var actionTeam by remember { mutableStateOf<Team?>(null) }
 	var renameTeam by remember { mutableStateOf<Team?>(null) }
 	var forgetTeam by remember { mutableStateOf<Team?>(null) }
+	// Per-Switch accordion collapse state (default expanded).
+	val collapsedSwitches = remember { mutableStateMapOf<String, Boolean>() }
 
 	actionTeam?.let { team ->
 		SessionActionsDialog(
@@ -510,47 +523,39 @@ fun SessionsScreen(
 			}
 			val order = sessionOrder(state)
 			val sessions = state.sessions(state.localSwitchId)
-			val switchAgents = sessions.filter { it.kind == "switch" }.sortedWith(order)
-			val projects = sessions.filter { it.kind == "devcontainer" }.sortedWith(order)
-			val windows = sessions.filter { it.kind != "devcontainer" && it.kind != "switch" }.sortedWith(order)
+			// Accordion grouped by owning Switch; within each: host agent, then devcontainer
+			// projects, then loose sessions. The local Switch sorts first.
+			val bySwitch = sessions
+				.groupBy { it.switchId.ifEmpty { state.localSwitchId } }
+				.toList()
+				.sortedBy { (id, _) -> if (id == state.localSwitchId) "" else id }
 			LazyColumn(
 				Modifier.fillMaxSize(),
 				contentPadding = PaddingValues(12.dp),
 				verticalArrangement = Arrangement.spacedBy(8.dp),
 			) {
-				// Keys are namespaced so a team literally named "hdr-projects"
-				// cannot collide with the header items.
-				if (switchAgents.isNotEmpty()) {
-					item(key = "hdr-switch") { SectionLabel("Switch") }
-					items(switchAgents, key = { "team:${it.name}" }) { team ->
-						SessionCard(
-							state = state,
-							team = team,
-							onClick = { onOpen(team.name) },
-							onLongPress = { actionTeam = team },
+				for ((switchId, group) in bySwitch) {
+					val collapsed = collapsedSwitches[switchId] == true
+					item(key = "sw:$switchId") {
+						SwitchHeader(
+							name = switchId,
+							online = group.any { it.status == "online" },
+							collapsed = collapsed,
+							onToggle = { collapsedSwitches[switchId] = !collapsed },
 						)
 					}
-				}
-				if (projects.isNotEmpty()) {
-					item(key = "hdr-projects") { SectionLabel("Projects") }
-					items(projects, key = { "team:${it.name}" }) { team ->
-						SessionCard(
-							state = state,
-							team = team,
-							onClick = { onOpen(team.name) },
-							onLongPress = { actionTeam = team },
-						)
-					}
-				}
-				if (windows.isNotEmpty()) {
-					item(key = "hdr-windows") { SectionLabel("Windows") }
-					items(windows, key = { "team:${it.name}" }) { team ->
-						SessionCard(
-							state = state,
-							team = team,
-							onClick = { onOpen(team.name) },
-							onLongPress = { actionTeam = team },
-						)
+					if (!collapsed) {
+						val host = group.filter { it.kind == "switch" }.sortedWith(order)
+						val projects = group.filter { it.kind == "devcontainer" }.sortedWith(order)
+						val loose = group.filter { it.kind != "switch" && it.kind != "devcontainer" }.sortedWith(order)
+						items(host + projects + loose, key = { "team:${it.name}" }) { team ->
+							SessionCard(
+								state = state,
+								team = team,
+								onClick = { onOpen(team.name) },
+								onLongPress = { actionTeam = team },
+							)
+						}
 					}
 				}
 			}
@@ -608,6 +613,29 @@ private fun StatusChip(text: String, color: Color) {
 			Spacer(Modifier.width(5.dp))
 			Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
 		}
+	}
+}
+
+@Composable
+private fun SwitchHeader(name: String, online: Boolean, collapsed: Boolean, onToggle: () -> Unit) {
+	Row(
+		Modifier
+			.fillMaxWidth()
+			.clip(MaterialTheme.shapes.small)
+			.clickable(onClick = onToggle)
+			.padding(horizontal = 4.dp, vertical = 8.dp),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
+		// The caret is the only affordance (v expanded, > collapsed); plain ASCII, no glyphs.
+		Text(if (collapsed) ">" else "v", style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace)
+		Spacer(Modifier.width(10.dp))
+		Text(name, style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace)
+		Spacer(Modifier.weight(1f))
+		Text(
+			if (online) "online" else "offline",
+			style = MaterialTheme.typography.labelSmall,
+			color = MaterialTheme.colorScheme.onSurfaceVariant,
+		)
 	}
 }
 
@@ -962,6 +990,7 @@ fun SettingsScreen(
 	repo: ChatRepository,
 	onSetDeviceName: (String) -> Unit,
 	onToggleBiometric: (Boolean) -> Unit,
+	onManage: () -> Unit,
 	onClear: () -> Unit,
 	onBack: () -> Unit,
 ) {
@@ -999,6 +1028,12 @@ fun SettingsScreen(
 				"Require fingerprint or device PIN on app open. Falls back to unlocked if nothing is enrolled.",
 				style = MaterialTheme.typography.bodySmall,
 			)
+
+			HorizontalDivider()
+			Text("Network", style = MaterialTheme.typography.titleMedium)
+			Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Manage networks") }
+			OwnerKeysCard(repo)
+			OwnerBackupCard(repo)
 
 			HorizontalDivider()
 			BatteryExemptionRow()

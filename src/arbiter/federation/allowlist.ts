@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -78,6 +79,25 @@ export class Allowlist {
 
 	get ownerSignPub(): string | null {
 		return this.state.ownerSignPub;
+	}
+
+	/** The current owner-rooted snapshot, or null before rooting. Mirrors evie's
+	 * canonical keyring (the Console syncs it through its home Switch's poll reply). */
+	getSnapshot(): DomainSnapshot | null {
+		if (!this.state.ownerSignPub) return null;
+		return {
+			ownerSignPub: this.state.ownerSignPub,
+			admissions: this.state.admissions,
+			revocations: this.state.revocations,
+		};
+	}
+
+	/** A short stable version hash of the snapshot, for the Console's poll-based keyring
+	 * sync. "" before rooting. Content-addressed, so any admit/revoke changes it. */
+	version(): string {
+		const snap = this.getSnapshot();
+		if (!snap) return "";
+		return createHash("sha256").update(JSON.stringify(snap)).digest("hex").slice(0, 16);
 	}
 
 	/** Set the Domain root once, at enrollment. Refuses to silently re-root an

@@ -14,7 +14,9 @@ import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { startEvieClient } from "./evie/evieClient.js";
 import { startPortForward } from "./evie/portForward.js";
+import { evieWsConnection, loadEvieTransport } from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
+import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
 import { logAdmitSwitchQr } from "./federation/enrollQr.js";
 import { createSwitchRelayHandler, createSwitchRelayPump } from "./federation/hostRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
@@ -155,11 +157,19 @@ export async function startArbiter(): Promise<void> {
 	let evieClient: ReturnType<typeof startEvieClient> | null = null;
 	let sealer: Sealer | null = null;
 	let consoleSealer: ConsoleSealer | null = null;
+	// Exposed to the console handler (built in a later block) so its poll reply can carry
+	// the mirrored keyring + version for the Console's keyring sync.
+	let allowlistForConsole: Allowlist | null = null;
 
-	if (evieAuthToken) {
+	// The Switch persists its federation identity + mirrored allowlist here; an enrolled
+	// Switch also drops its service-proxy transport.json here. The bridge activates on
+	// either a delivered transport or the legacy BRIDGE_TOKEN.
+	const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
+	const evieTransport = loadEvieTransport(federationDir);
+
+	if (evieAuthToken || evieTransport) {
 		// Load this Switch's federation identity + mirrored allowlist from its volume,
 		// and build the E2E sealer (cross-Switch frames are sealed peer-to-peer).
-		const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
 		// Pin the owner root out-of-band so a malicious/token-holding evie cannot root
 		// this Switch at an attacker key via the mirror (the snapshot is relayed through
 		// untrusted evie). Unset = trust-on-first-use.
@@ -168,6 +178,7 @@ export async function startArbiter(): Promise<void> {
 			process.env.FEDERATION_OWNER_SIGN_PUB,
 			process.env.FEDERATION_REQUIRE_OWNER_PIN === "true",
 		);
+		allowlistForConsole = allowlist;
 		const identity = loadOrCreateIdentity(federationDir);
 		// Durable replay-guard: persisted across restarts so an authentic sealed frame
 		// captured inside the 120s freshness window cannot replay once after a deploy.
@@ -187,20 +198,36 @@ export async function startArbiter(): Promise<void> {
 		// into the Domain. Once admitted (mirrored from evie), this falls silent.
 		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitSwitchQr(identity, localSwitchId);
 
-		const portForward = startPortForward({
-			kubeconfig: evieKubeconfig,
-			namespace: evieNamespace,
-			deploymentLabel: evieDeploymentLabel,
-			remotePort: eviePort,
-			localPort: evieLocalPort,
-		});
-
-		// Port-forward needs a moment before the tunnel is ready
-		await new Promise((r) => setTimeout(r, 3_000));
+		// Two transports: the service-proxy WS (preferred - creds are delivered by
+		// enrollment, no kubeconfig mount, reaches a home-NAT evie through the apiserver)
+		// or the legacy kubectl port-forward tunnel gated on BRIDGE_TOKEN.
+		let portForward: ReturnType<typeof startPortForward> | null = null;
+		let connection: { url: string; headers: Record<string, string>; tls?: { ca: string } };
+		if (evieTransport) {
+			connection = evieWsConnection(evieTransport);
+			console.log(
+				`[evie] service-proxy transport -> ${evieTransport.apiUrl} (${evieTransport.service}:${evieTransport.port})`,
+			);
+		} else {
+			portForward = startPortForward({
+				kubeconfig: evieKubeconfig,
+				namespace: evieNamespace,
+				deploymentLabel: evieDeploymentLabel,
+				remotePort: eviePort,
+				localPort: evieLocalPort,
+			});
+			// Port-forward needs a moment before the tunnel is ready
+			await new Promise((r) => setTimeout(r, 3_000));
+			connection = {
+				url: `ws://localhost:${evieLocalPort}`,
+				headers: { Authorization: `Bearer ${evieAuthToken}` },
+			};
+		}
 
 		evieClient = startEvieClient({
-			url: `ws://localhost:${evieLocalPort}`,
-			authToken: evieAuthToken,
+			url: connection.url,
+			headers: connection.headers,
+			tls: connection.tls,
 			switchId: localSwitchId,
 			onConsoleRelay: (frame) => {
 				handleConsoleRelay?.(frame);
@@ -243,8 +270,41 @@ export async function startArbiter(): Promise<void> {
 
 		process.on("SIGTERM", () => {
 			evieClient?.stop();
-			portForward.stop();
+			portForward?.stop();
 		});
+	}
+
+	// Creds-less enrollment: when armed with a one-time nonce (start-arbiter.sh --enroll)
+	// and not yet admitted, mint the identity, print the admit-switch QR with the LAN
+	// target, and accept exactly one sealed bootstrap bundle over POST /enroll.
+	let enrollInstall: ((frame: unknown) => string) | null = null;
+	const enrollNonce = process.env.ENROLL_NONCE;
+	if (enrollNonce && !evieAuthToken && !evieTransport) {
+		const enrollAllowlist = new Allowlist(
+			federationDir,
+			process.env.FEDERATION_OWNER_SIGN_PUB,
+			process.env.FEDERATION_REQUIRE_OWNER_PIN === "true",
+		);
+		const enrollIdentity = loadOrCreateIdentity(federationDir);
+		if (!enrollAllowlist.selfAdmission(enrollIdentity.sign.pub)) {
+			logAdmitSwitchQr(enrollIdentity, localSwitchId, {
+				host: process.env.ENROLL_LAN_HOST || "0.0.0.0",
+				port: PORT,
+				nonce: enrollNonce,
+			});
+			enrollInstall = (frame) => {
+				const bundle = openBootstrapBundle(frame, enrollIdentity, enrollNonce, localSwitchId);
+				fs.writeFileSync(path.join(federationDir, "transport.json"), JSON.stringify(bundle.transport), {
+					mode: 0o600,
+				});
+				enrollAllowlist.applySnapshot(bundle.domain);
+				enrollInstall = null;
+				console.log(
+					`[enroll] installed credentials for Switch "${localSwitchId}". Restart the arbiter to connect.`,
+				);
+				return localSwitchId;
+			};
+		}
 	}
 
 	const wsHandlers = createWebSocketHandlers({
@@ -281,6 +341,10 @@ export async function startArbiter(): Promise<void> {
 			routes,
 			localSwitchId,
 			isProjectName: (name) => offlineCatalog.has(name) || knownTeamPaths.has(name),
+			domain: () => {
+				const snapshot = allowlistForConsole?.getSnapshot() ?? null;
+				return snapshot ? { version: allowlistForConsole?.version() ?? "", snapshot } : null;
+			},
 		});
 		handleConsoleRelay = createConsoleRelayPump({
 			sealer: consoleSealer!,
@@ -317,6 +381,26 @@ export async function startArbiter(): Promise<void> {
 			}
 		}
 
+		if (method === "POST" && url.pathname === "/enroll") {
+			if (!enrollInstall) {
+				return new Response(JSON.stringify({ ok: false, error: "not in enrollment mode" }), {
+					status: 404,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			try {
+				const switchId = enrollInstall(body);
+				return new Response(JSON.stringify({ ok: true, switchId }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			} catch (e) {
+				return new Response(JSON.stringify({ ok: false, error: e instanceof Error ? e.message : String(e) }), {
+					status: 400,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+		}
 		if (method === "POST" && url.pathname === "/ingest") return routes.ingest(req, body);
 		if (method === "GET" && url.pathname === "/pending") return routes.pending();
 		if (method === "GET" && url.pathname === "/teams") return routes.teams();

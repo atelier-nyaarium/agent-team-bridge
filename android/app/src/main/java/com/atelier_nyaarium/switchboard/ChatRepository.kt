@@ -4,13 +4,23 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.proto.EnrollOp
+import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.NoticeId
+import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SessionId
+import com.atelier_nyaarium.switchboard.proto.SwitchBootstrapFrame
+import com.atelier_nyaarium.switchboard.proto.SwitchTransport
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
 import java.io.File
+import java.util.concurrent.TimeUnit
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +40,22 @@ import org.json.JSONObject
  * or an appassets-proxied local path); a null `src` renders as a download chip.
  * Real attachment plumbing decodes these to disk in a later phase. */
 data class MessageFile(val name: String, val mime: String, val src: String? = null)
+
+/** A scanned admit-switch QR: the Switch identity the owner is about to admit, plus the
+ * optional LAN target + one-time nonce for delivering the sealed bootstrap bundle. */
+data class ScannedSwitch(
+	val switchId: String,
+	val signPub: String,
+	val boxPub: String,
+	val sas: String,
+	val lanHost: String? = null,
+	val lanPort: Int? = null,
+	val nonce: String? = null,
+)
+
+/** The outcome of enrolling a Switch: whether it was admitted, a human message, and the
+ * sealed bundle to hand-carry when LAN delivery was not possible (paste fallback). */
+data class EnrollDelivery(val admitted: Boolean, val message: String, val pasteBundle: String?)
 
 /** `id` is a per-thread, local-only row key for the WebView DOM (lets the renderer
  * replace a row in place). It is NOT the mailbox seq; mailbox dedupe is owned by SyncCursor.
@@ -175,6 +201,10 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 		// ConsoleClient WITHOUT the "not admitted" token so it cannot collide with ENROLLING.
 		m.contains("keys are missing", ignoreCase = true) || m.contains("not provisioned", ignoreCase = true) ->
 			"Home Switch not provisioned - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
+		// The Console has no Switch admitted yet (fresh setup), or none for this target in its
+		// keyring. The fix is to admit a Switch from the management UI, not to re-provision.
+		m.contains("not in the keyring", ignoreCase = true) || m.contains("no switch admitted", ignoreCase = true) ->
+			"Add a Switch from Manage networks to begin" to ConnKind.TERMINAL
 		m.startsWith("HTTP 400") ->
 			"Protocol mismatch (400) - update the app, or re-run provision-console.sh" to ConnKind.TERMINAL
 		m.startsWith("HTTP 401") ->
@@ -289,6 +319,9 @@ class ChatRepository(
 	// and the console resumes from its own consumption point, never re-adopting a server-
 	// dictated cursor that would ack away the offline backlog on the next poll.
 	private val mailboxSync = MailboxSync(store)
+	// The Domain trust anchor: owner root key, console member identity, and the keyring
+	// the Console resolves every Switch against before sealing to it.
+	private val federation = FederationManager(store)
 	private var pollFails = 0
 	private var pollJob: Job? = null
 	// The poll loop's scope, reused to launch auto-TTS preloads that gate the
@@ -470,24 +503,12 @@ class ChatRepository(
 			return@withContext
 		}
 		store.save(blob)
-		// If the setup script (provision-console.sh --setup) embedded a Console identity,
-		// import it into the keystore so the device is enrolled from the blob ALONE - no
-		// separate enroll/QR step. A decode/persist failure is non-fatal: re-run the setup
-		// script and re-import. A legacy blob (no identity) leaves the prior identity intact.
-		if (prov.identity.isNotEmpty()) {
-			runCatching { store.saveIdentity(wireJson.decodeFromString(Crypto.Identity.serializer(), prov.identity)) }
-				.onFailure { DebugLog.log("Provision", "identity import failed: ${it.message?.take(120)}") }
-		}
-		// The setup script also embeds the home Switch's id + keys, so the app can seal its
-		// FIRST op (register is itself sealed) without an admit-switch scan. Persist them the
-		// same way admit-switch used to. Non-fatal: a legacy blob omits these and the app then
-		// needs an interactive admit.
-		if (prov.switchId.isNotEmpty() && prov.switchSignPub.isNotEmpty() && prov.switchBoxPub.isNotEmpty()) {
-			runCatching {
-				store.saveSwitchKeys(prov.switchId, prov.switchSignPub, prov.switchBoxPub)
-				store.saveSwitchId(prov.switchId)
-			}.onFailure { DebugLog.log("Provision", "switch-keys import failed: ${it.message?.take(120)}") }
-		}
+		// Phone-anchored model: the blob is transport-only. The Console owns its identity
+		// (generated locally) and resolves every Switch's keys from the synced keyring, so
+		// nothing cryptographic is imported from the blob. A re-import is a fresh enrollment
+		// against a possibly re-rooted Domain, so clear the console-admitted gate to re-submit
+		// this Console's admission on the next connect.
+		store.consoleAdmitted = false
 		client = null
 		sttsClient = null
 		_state.update { it.copy(provisioned = true, error = null, deviceName = prov.device) }
@@ -509,6 +530,10 @@ class ChatRepository(
 				}
 				return@withContext
 			}
+			// Submit this Console's own admission before the sealed register, so the Switch
+			// has an owner-signed reason to trust its sealed ops. Bearer-gated, so it lands
+			// even though the Console is not admitted yet.
+			runCatching { submitConsoleAdmission() }
 			// register's cursor/epoch are no longer adopted: MailboxSync owns the durable
 			// cursor. We still register (to learn switchId, claim the mailbox, get the epoch
 			// the box is on); the poll loop's advance() reconciles any epoch change.
@@ -567,6 +592,140 @@ class ChatRepository(
 				}
 			}
 		}
+	}
+
+	/** The owner key fingerprint the operator confirms when rooting the Domain on the
+	 * host. Reading it mints the owner + console identities on first call. */
+	fun ownerSas(): String = federation.ownerSas()
+
+	fun ownerSignPub(): String = federation.ownerSignPub()
+
+	fun ownerBoxPub(): String = federation.ownerBoxPub()
+
+	/** A passphrase-encrypted backup of the owner root key for offline safekeeping. */
+	fun exportOwnerBackup(passphrase: String): String = federation.exportOwnerBackup(passphrase)
+
+	/** Restore the owner root key from a backup blob. The result lets the UI distinguish a
+	 * wrong passphrase from a different-owner rejection. */
+	suspend fun importOwnerBackup(blob: String, passphrase: String): OwnerRestoreResult =
+		withContext(Dispatchers.IO) { federation.importOwnerBackup(blob, passphrase) }
+
+	/** Submit this Console's own owner-signed admission to evie so a Switch trusts its
+	 * sealed ops. The enroll op is bearer-gated (not sealed), so it lands before the
+	 * Console is admitted; gated by a flag so connect does not re-issue it every cycle.
+	 * The arbiter may still be syncing the admission - the ENROLLING grace covers that. */
+	private fun submitConsoleAdmission() {
+		if (store.consoleAdmitted) return
+		val signed = federation.consoleAdmission(System.currentTimeMillis())
+		val result = client().enroll(EnrollOp.SubmitAdmission(signed))
+		if (result.ok) {
+			federation.mergeAdmission(signed)
+			store.consoleAdmitted = true
+		} else {
+			// Surface the real cause (e.g. evie rooted at a different owner key) instead of
+			// letting it hide behind the generic "finishing enrollment" the register hits next.
+			_state.update { it.copy(error = "Console admission rejected: ${result.error?.take(120) ?: "unknown"}") }
+			DebugLog.log("Federation", "console admission submit failed: ${result.error?.take(120)}")
+		}
+	}
+
+	/** Owner-admit a scanned Switch: owner-sign its admission, submit it to evie, and
+	 * fold it into the local keyring so the Console can seal to it immediately (before
+	 * evie's snapshot syncs back). Returns the signed admission for the caller to seal
+	 * into the bootstrap bundle, or null on failure. */
+	suspend fun admitSwitch(switchId: String, signPub: String, boxPub: String): SignedAdmission? =
+		withContext(Dispatchers.IO) {
+			val signed = federation.admitSwitch(switchId, signPub, boxPub, System.currentTimeMillis())
+			val result = runCatching { client().enroll(EnrollOp.SubmitAdmission(signed)) }
+				.getOrElse { EnrollResult(ok = false, error = it.message) }
+			if (!result.ok) {
+				_state.update { it.copy(error = "Admit failed: ${result.error?.take(120)}") }
+				return@withContext null
+			}
+			federation.mergeAdmission(signed)
+			// The first admitted Switch becomes the home Switch the Console seals to.
+			if (store.loadSwitchId().isEmpty()) {
+				store.saveSwitchId(switchId)
+				localSwitchId = switchId
+			}
+			signed
+		}
+
+	/** Owner-revoke a member by its signing key: sign a revocation, submit it to evie,
+	 * and drop the member from the local keyring. */
+	suspend fun revokeMember(signPub: String) = withContext(Dispatchers.IO) {
+		val signed = federation.revoke(signPub, System.currentTimeMillis())
+		val result = runCatching { client().enroll(EnrollOp.SubmitRevocation(signed)) }
+			.getOrElse { EnrollResult(ok = false, error = it.message) }
+		if (!result.ok) _state.update { it.copy(error = "Revoke failed: ${result.error?.take(120)}") }
+	}
+
+	/** The admitted members of the keyring, for the management board. */
+	fun admittedMembers(): List<MemberInfo> = federation.members()
+
+	/** Parse a scanned admit-switch QR, or null if it is not one. The SAS is the
+	 * fingerprint of the Switch's signing key, confirmed against the Switch terminal. */
+	fun parseAdmitSwitch(scanned: String): ScannedSwitch? = runCatching {
+		val j = org.json.JSONObject(scanned.trim())
+		if (j.optString("type") != "admit-switch") return null
+		val signPub = j.getString("signPub")
+		val lan = j.optJSONObject("lan")
+		ScannedSwitch(
+			switchId = j.getString("switchId"),
+			signPub = signPub,
+			boxPub = j.getString("boxPub"),
+			sas = Crypto.fingerprint(signPub),
+			lanHost = lan?.optString("host")?.ifEmpty { null },
+			lanPort = lan?.optInt("port", 0)?.takeIf { it > 0 },
+			nonce = j.optString("nonce").ifEmpty { null },
+		)
+	}.getOrNull()
+
+	/** Enroll a scanned Switch end to end: owner-admit it, then (if it offered LAN delivery
+	 * and the blob carries switch transport creds) seal a bootstrap bundle and deliver it
+	 * over the LAN, falling back to handing the operator the sealed text to paste. A
+	 * host-configured Switch (no LAN, no nonce) just needs the admission, which reaches it
+	 * through evie's domain sync. */
+	suspend fun enrollSwitch(scanned: ScannedSwitch): EnrollDelivery = withContext(Dispatchers.IO) {
+		val signed = admitSwitch(scanned.switchId, scanned.signPub, scanned.boxPub)
+			?: return@withContext EnrollDelivery(false, "Admit failed. Try again.", null)
+		val nonce = scanned.nonce
+			?: return@withContext EnrollDelivery(true, "Admitted. This Switch will come online once it syncs the keyring.", null)
+		val transportJson = runCatching { Provisioning.parse(store.load() ?: "") }.getOrNull()
+			?.switchTransport?.ifEmpty { null }
+			?: return@withContext EnrollDelivery(
+				true,
+				"Admitted, but this blob has no switch transport creds. Re-run provision-console.sh to deliver a bundle.",
+				null,
+			)
+		val transport = runCatching { wireJson.decodeFromString(SwitchTransport.serializer(), transportJson) }.getOrNull()
+			?: return@withContext EnrollDelivery(true, "Admitted, but the switch transport creds are unreadable.", null)
+		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub)
+		val frameJson = wireJson.encodeToString(SwitchBootstrapFrame.serializer(), frame)
+		if (scanned.lanHost != null && scanned.lanPort != null) {
+			val ok = runCatching { postBundle(scanned.lanHost, scanned.lanPort, frameJson) }.getOrDefault(false)
+			if (ok) {
+				return@withContext EnrollDelivery(true, "Delivered over the LAN. The Switch is coming online.", null)
+			}
+			return@withContext EnrollDelivery(true, "LAN delivery failed. Copy this sealed bundle to the Switch terminal.", frameJson)
+		}
+		EnrollDelivery(true, "Admitted. Copy this sealed bundle to the Switch's enrollment prompt.", frameJson)
+	}
+
+	/** Plain HTTP POST of the sealed bundle to the Switch's nonce-gated LAN listener. No
+	 * TLS pinning: the bundle is already sealed to the Switch box key, so the LAN is
+	 * trusted only for reachability, not confidentiality. */
+	private fun postBundle(host: String, port: Int, frameJson: String): Boolean {
+		val client = OkHttpClient.Builder()
+			.connectTimeout(5, TimeUnit.SECONDS)
+			.writeTimeout(10, TimeUnit.SECONDS)
+			.readTimeout(10, TimeUnit.SECONDS)
+			.build()
+		val req = Request.Builder()
+			.url("http://$host:$port/enroll")
+			.post(frameJson.toRequestBody("application/json".toMediaType()))
+			.build()
+		client.newCall(req).execute().use { return it.isSuccessful }
 	}
 
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
@@ -767,6 +926,9 @@ class ChatRepository(
 					val params = mailboxSync.pollParams()
 					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms")
 					val mb = client().poll(params.cursor, params.epoch, hold)
+					// Keyring sync: the home Switch returns the snapshot only when it changed.
+					// Apply it owner-pinned so a revocation made elsewhere reaches this Console.
+					mb.domain?.let { federation.applyDomainSync(it, mb.domainVersion ?: "") }
 					// An old arbiter ignores holdMs and returns empty instantly; floor
 					// the cadence so that degradation never becomes a tight spin.
 					heldEmpty = hold > 0 && mb.entries.isEmpty() &&

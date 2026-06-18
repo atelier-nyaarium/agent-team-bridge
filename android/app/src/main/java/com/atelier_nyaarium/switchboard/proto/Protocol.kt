@@ -116,6 +116,7 @@ sealed class ConsoleOp {
 		val cursor: Long? = null,
 		val epoch: Long? = null,
 		val holdMs: Long? = null,
+		val knownDomainVersion: String? = null,
 	) : ConsoleOp()
 }
 
@@ -134,6 +135,7 @@ data class ConsoleRelayFrame(
 	val v: Long,
 	val opId: String,
 	val signerSignPub: String,
+	val targetSwitch: String? = null,
 	val sealed: SealedEnvelope,
 )
 
@@ -183,6 +185,8 @@ data class ConsolePollResult(
 	val cursor: Long,
 	val dropped: Long,
 	val epoch: Long,
+	val domainVersion: String? = null,
+	val domain: DomainSnapshot? = null,
 )
 
 @Serializable
@@ -202,6 +206,7 @@ data class Provisioning(
 	val switchId: String? = null,
 	val switchSignPub: String? = null,
 	val switchBoxPub: String? = null,
+	val switchTransport: String? = null,
 )
 
 @Serializable
@@ -272,11 +277,41 @@ data class EnrollResult(
 )
 
 @Serializable
+data class SwitchTransport(
+	val apiUrl: String,
+	val saToken: String,
+	val caPem: String,
+	val appToken: String,
+)
+
+@Serializable
+data class SwitchBootstrapBundle(
+	val nonce: String,
+	val transport: SwitchTransport,
+	val admission: SignedAdmission,
+	val domain: DomainSnapshot,
+)
+
+@Serializable
+data class SwitchBootstrapFrame(
+	val v: Long,
+	val signerSignPub: String,
+	val sealed: SealedEnvelope,
+)
+
+@Serializable
 data class SealedEnvelope(
 	val ephemeralPub: String,
 	val nonce: String,
 	val ciphertext: String,
 	val signature: String,
+)
+
+@Serializable
+data class DomainSnapshot(
+	val ownerSignPub: String,
+	val admissions: List<SignedAdmission>,
+	val revocations: List<SignedRevocation>,
 )
 
 @Serializable
