@@ -444,7 +444,7 @@ fun SessionsScreen(
 	var renameTeam by remember { mutableStateOf<Team?>(null) }
 	var forgetTeam by remember { mutableStateOf<Team?>(null) }
 	// Per-Gateway accordion collapse state (default expanded).
-	val collapsedGatewayes = remember { mutableStateMapOf<String, Boolean>() }
+	val collapsedGateways = remember { mutableStateMapOf<String, Boolean>() }
 
 	actionTeam?.let { team ->
 		SessionActionsDialog(
@@ -534,13 +534,13 @@ fun SessionsScreen(
 				verticalArrangement = Arrangement.spacedBy(8.dp),
 			) {
 				for ((gatewayId, group) in byGateway) {
-					val collapsed = collapsedGatewayes[gatewayId] == true
+					val collapsed = collapsedGateways[gatewayId] == true
 					item(key = "sw:$gatewayId") {
 						GatewayHeader(
 							name = gatewayId,
 							online = group.any { it.status == "online" },
 							collapsed = collapsed,
-							onToggle = { collapsedGatewayes[gatewayId] = !collapsed },
+							onToggle = { collapsedGateways[gatewayId] = !collapsed },
 						)
 					}
 					if (!collapsed) {
@@ -894,7 +894,7 @@ fun ThreadScreen(
 				val selected = tabs.indexOf(team).coerceAtLeast(0)
 				PrimaryScrollableTabRow(selectedTabIndex = selected, edgePadding = 8.dp) {
 					tabs.forEachIndexed { i, t ->
-						Tab(selected = i == selected, onClick = { onSwitch(t) }, text = { Text(tabLabel(t)) })
+						Tab(selected = i == selected, onClick = { onGateway(t) }, text = { Text(tabLabel(t)) })
 					}
 				}
 			}
