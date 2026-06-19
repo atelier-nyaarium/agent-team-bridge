@@ -96,8 +96,13 @@
 - `Dockerfile` - Gateway container image (Bun + kubectl + dev tools)
 - `install.sh` - Add switchboard Docker network to a devcontainer project
 - `uninstall.sh` - Remove switchboard Docker network from a devcontainer project
-- `start-gateway.sh` - Quick script to rebuild and start the gateway container
+- `start-gateway.sh` - Thin launcher: the no-arg start (git pull, rebuild, health wait) stays bash; `--setup` / `--enroll` exec `scripts/gateway-setup.ts`
+- `provision-console.sh` - Thin launcher: execs `scripts/provision.ts` (the Console bootstrap)
 - `start-host-daemon.sh` - Start Claude Code host daemon in a tmux session
+- `scripts/provision.ts` - Console bootstrap flow (the `provision-console.sh` logic, in bun): Provision/Purge menu, cluster cutover, Domain rooting at the owner key, transport-blob emit + enrollment QR, and an authenticated bridge verify
+- `scripts/gateway-setup.ts` - Gateway `--setup` (Configure / Purge menu) and `--enroll` (creds-less LAN enrollment) flow, in bun (the `start-gateway.sh` setup logic)
+- `scripts/lib/host.ts` - Shared host-orchestration primitives for the bun setup scripts: Bun.$ wrappers over docker + kubectl (`k`/`kStdin`/`dc`/`dx`, container lifecycle, base64 Secret reads + Opaque-Secret apply), the interactive menu/prompt loop, and `.env` read/write
+- `scripts/bootstrap-domain.ts` / `scripts/write-provisioning-blob.ts` / `scripts/render-provisioning-qr.ts` - Pure modules `provision.ts` composes: root evie's Domain at the owner key, assemble + schema-validate the provisioning blob, and render it as a terminal or GIF QR
 - `scripts/check-module-residue.ts` - Verify node_modules matches bun.lock (no unsanctioned nested dirs shadowing pinned versions)
 - `scripts/codegen-kotlin.ts` - Generate `android/.../proto/Protocol.kt` (kotlinx data classes + sealed `ConsoleOp` + wire constants) from the zod truth in `src/shared/schemas.ts`; committed output, drift-checked by ci.yml. Emission rules live in the script header (encode-side sealed only, open Strings for decode-side enums, integer -> Long)
 - `scripts/import-stts-voices.ts` - Normalize each TTS provider's native voice-list dump (`data/stts-voices/<provider>.json`) into the `voices` arrays of `android/.../assets/stts-providers.json`, in place. Per-provider adapters map the heterogeneous shapes (Azure `ShortName`, Google `Name`+int gender, OpenAI deduped, Amazon neural-only, IBM description-name) to `{ id, label }`, English-first. Committed output, drift-checked by ci.yml. To refresh a provider: replace its `data/stts-voices/<provider>.json` with a fresh export, run the script, commit both files. Providers with no dump (ElevenLabs, Uberduck, xAI) keep their hand-curated voices

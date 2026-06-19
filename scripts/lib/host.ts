@@ -1,6 +1,7 @@
-// Shared host-side helpers for the bun provisioning/setup orchestrators: thin typed wrappers
+// Shared host-side primitives for the bun provisioning/setup orchestrators: thin typed wrappers
 // over Bun.$ (docker, and kubectl run through the gateway container that holds the evie
-// kubeconfig), plus the interactive menu/prompt loop and the logging the orchestrators share.
+// kubeconfig) plus base64 Secret reads and Opaque-Secret apply, the interactive menu/prompt loop,
+// .env read/write, and the logging the orchestrators share.
 
 import { $ } from "bun";
 
