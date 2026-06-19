@@ -26,6 +26,7 @@ class ClearProvisioningPartitionTest {
 			"federation_console_admitted",
 			"threads",
 			"labels",
+			"drafts",
 			"gateway_id",
 			"sync_epoch",
 			"sync_acked",

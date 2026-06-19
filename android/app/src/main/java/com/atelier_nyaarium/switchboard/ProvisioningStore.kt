@@ -126,6 +126,10 @@ class ProvisioningStore(context: Context) {
 
 	fun loadLabels(): String? = prefs.getString(KEY_LABELS, null)
 
+	fun saveDrafts(json: String) = prefs.edit().putString(KEY_DRAFTS, json).apply()
+
+	fun loadDrafts(): String? = prefs.getString(KEY_DRAFTS, null)
+
 	/** The connected Gateway's id, learned from the register result. Anchors the
 	 * composite (gatewayId, name) key; empty until a federation-aware Gateway reports it. */
 	fun saveGatewayId(id: String) = prefs.edit().putString(KEY_GATEWAY_ID, id).apply()
@@ -213,6 +217,7 @@ class ProvisioningStore(context: Context) {
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"
 		const val KEY_LABELS = "labels"
+		const val KEY_DRAFTS = "drafts"
 		const val KEY_GATEWAY_ID = "gateway_id"
 		const val KEY_IDENTITY = "federation_identity"
 		const val KEY_OWNER_IDENTITY = "federation_owner_identity"
@@ -238,7 +243,7 @@ class ProvisioningStore(context: Context) {
 		 * Clear (a privacy/correctness regression). The partition is pinned by a unit test. */
 		val PROVISIONING_KEYS = listOf(
 			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
-			KEY_CONSOLE_ADMITTED, KEY_THREADS, KEY_LABELS, KEY_GATEWAY_ID,
+			KEY_CONSOLE_ADMITTED, KEY_THREADS, KEY_LABELS, KEY_DRAFTS, KEY_GATEWAY_ID,
 			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED,
 		)
 	}

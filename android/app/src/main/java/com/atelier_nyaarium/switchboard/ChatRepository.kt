@@ -1264,15 +1264,16 @@ class ChatRepository(
 		_state.update { it.copy(openTabs = it.openTabs - team) }
 	}
 
-	// Per-session composer drafts, kept in memory so leaving a thread and returning
-	// restores the half-typed message. Keyed by the same canonical team id as threads;
-	// an empty draft is dropped so the map stays sparse.
-	private val drafts = mutableMapOf<String, String>()
+	// Per-session composer drafts, persisted so a power-management kill (or any process
+	// death) never loses a half-typed message. Keyed by the same canonical team id as
+	// threads; an empty draft is dropped so the map stays sparse.
+	private val drafts: MutableMap<String, String> = loadPersistedDrafts()
 
 	fun draft(team: String): String = drafts[team] ?: ""
 
 	fun setDraft(team: String, text: String) {
 		if (text.isEmpty()) drafts.remove(team) else drafts[team] = text
+		persistDrafts()
 	}
 
 	/** Give a team a local display label (or clear it with a blank name). */
@@ -1298,6 +1299,7 @@ class ChatRepository(
 		persistThreads(next.threads)
 		persistLabels(next.labels)
 		drafts.remove(team)
+		persistDrafts()
 		stts.purge(team)
 	}
 
@@ -1489,6 +1491,23 @@ class ChatRepository(
 				}
 			}
 		}.getOrDefault(emptyMap())
+	}
+
+	private fun persistDrafts() {
+		val root = JSONObject()
+		for ((team, text) in drafts) root.put(team, text)
+		runCatching { store.saveDrafts(root.toString()) }
+	}
+
+	private fun loadPersistedDrafts(): MutableMap<String, String> {
+		val json = store.loadDrafts() ?: return mutableMapOf()
+		return runCatching {
+			val root = JSONObject(json)
+			// Normalize legacy bare/empty-gateway keys to canonical on load (mirrors labels).
+			val out = mutableMapOf<String, String>()
+			for (rawKey in root.keys()) out[canonicalThreadKey(rawKey, localGatewayId)] = root.getString(rawKey)
+			out
+		}.getOrDefault(mutableMapOf())
 	}
 
 	private companion object {
