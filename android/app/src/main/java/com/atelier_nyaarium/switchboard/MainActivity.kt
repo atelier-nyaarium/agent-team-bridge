@@ -344,6 +344,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				},
 				onSessions = { openTeam = null },
 				onSend = { text, uris -> scope.launch { repo.send(openTeam!!, text, uris) } },
+				initialDraft = repo.draft(openTeam!!),
+				onDraftChange = { repo.setDraft(openTeam!!, it) },
 				onRename = { name -> repo.setLabel(openTeam!!, name) },
 				onForget = {
 					repo.forget(openTeam!!)
@@ -804,9 +806,9 @@ private fun GatewayHeader(name: String, online: Boolean, collapsed: Boolean, onT
 			.padding(horizontal = 4.dp, vertical = 8.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
-		// The caret is the expand/collapse affordance: down when collapsed, up when open.
+		// The caret points down when open and up when collapsed.
 		Icon(
-			if (collapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+			if (collapsed) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
 			contentDescription = if (collapsed) "Expand" else "Collapse",
 			tint = MaterialTheme.colorScheme.onSurfaceVariant,
 		)
@@ -984,10 +986,15 @@ fun ThreadScreen(
 	onCloseTab: (String) -> Unit,
 	onSessions: () -> Unit,
 	onSend: (String, List<Uri>) -> Unit,
+	initialDraft: String,
+	onDraftChange: (String) -> Unit,
 	onRename: (String) -> Unit,
 	onForget: () -> Unit,
 ) {
-	var draft by remember { mutableStateOf("") }
+	// Seeded from the per-session saved draft and re-keyed on team, so switching tabs or
+	// leaving and reopening a thread restores what you were typing. onDraftChange writes
+	// every edit back to the session store.
+	var draft by remember(team) { mutableStateOf(initialDraft) }
 	var showMenu by remember { mutableStateOf(false) }
 	var showRename by remember { mutableStateOf(false) }
 	var confirmForget by remember { mutableStateOf(false) }
@@ -1153,7 +1160,7 @@ fun ThreadScreen(
 			Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
 				OutlinedTextField(
 					value = draft,
-					onValueChange = { draft = it },
+					onValueChange = { draft = it; onDraftChange(it) },
 					label = { Text("Message") },
 					modifier = Modifier.weight(1f),
 				)
@@ -1168,6 +1175,7 @@ fun ThreadScreen(
 						onClick = {
 							onSend(draft, attachments)
 							draft = ""
+							onDraftChange("")
 							attachments = emptyList()
 						},
 					) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send") }
