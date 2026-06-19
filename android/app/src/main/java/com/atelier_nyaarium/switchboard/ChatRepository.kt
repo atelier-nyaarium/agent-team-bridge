@@ -210,6 +210,11 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 		// sync lag can never be mislabeled "re-run the script".
 		m.contains("is not admitted to the Domain", ignoreCase = true) ->
 			"Finishing up enrollment..." to ConnKind.ENROLLING
+		// The Keystore-backed store failed to initialize, so the app fails closed (refuses to
+		// persist the federation key in cleartext). Re-running provision does not help; the device's
+		// secure storage must work. Distinct from "not enrolled" (which sounds fixable by re-running).
+		m.contains("secure storage unavailable", ignoreCase = true) ->
+			"Secure storage unavailable - this device can't store the app's key (check the screen lock / Keystore), then retry" to ConnKind.TERMINAL
 		m.contains("not enrolled", ignoreCase = true) ->
 			"Not enrolled - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
 		// A local provisioning gap (the blob did not carry the Gateway keys/id). Worded in
@@ -547,8 +552,21 @@ class ChatRepository(
 			}
 			// Submit this Console's own admission before the sealed register, so the Gateway
 			// has an owner-signed reason to trust its sealed ops. Bearer-gated, so it lands
-			// even though the Console is not admitted yet.
-			runCatching { submitConsoleAdmission() }
+			// even though the Console is not admitted yet. A THROW here (e.g. the Keystore-backed
+			// store is unavailable, so the member identity cannot be persisted) is the REAL cause;
+			// surface it instead of falling through to register()'s generic "not enrolled".
+			runCatching { submitConsoleAdmission() }.onFailure { e ->
+				val (cause, kind) = classifyConnError(e)
+				_state.update {
+					it.copy(
+						status = if (kind == ConnKind.TERMINAL) "error" else "connecting",
+						error = cause,
+						connected = false,
+						enrollingSince = 0L,
+					)
+				}
+				return@withContext
+			}
 			// register's cursor/epoch are no longer adopted: MailboxSync owns the durable
 			// cursor. We still register (to learn gatewayId, claim the mailbox, get the epoch
 			// the box is on); the poll loop's advance() reconciles any epoch change.
