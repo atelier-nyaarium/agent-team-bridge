@@ -21,7 +21,6 @@ import { bootstrapDomain } from "./bootstrap-domain.js";
 import {
 	applySecret,
 	ask,
-	CONTAINER,
 	confirm,
 	die,
 	dx,
@@ -36,6 +35,7 @@ import {
 	NS,
 	note,
 	readSaCreds,
+	writeGatewayFile,
 } from "./lib/host.js";
 import { fitsInQr, renderQrImageGif, renderQrTerminal } from "./render-provisioning-qr.js";
 import { writeProvisioningBlob } from "./write-provisioning-blob.js";
@@ -211,12 +211,8 @@ async function emitBlob(): Promise<void> {
 	// Hand the home Gateway these same creds as bootstrap-transport.json, so it serves them to the
 	// Console on the get_gateway_transport op (the Console fetches them when enrolling a creds-less
 	// Gateway, instead of carrying them in its blob).
-	if (gatewayTransport) {
-		// umask 077 so `cat >` creates the file 0600 from birth (no world-readable window before the
-		// chmod); the chmod stays as belt-and-suspenders. The secret rides stdin, never argv.
-		const sh = `umask 077 && mkdir -p ${FED_DIR_IN} && cat > ${FED_DIR_IN}/bootstrap-transport.json && chmod 600 ${FED_DIR_IN}/bootstrap-transport.json`;
-		const r = await $`docker exec -i ${CONTAINER} sh -c ${sh} < ${Buffer.from(gatewayTransport)}`.quiet().nothrow();
-		if (r.exitCode !== 0) note("warning: could not write bootstrap-transport.json into the Gateway");
+	if (gatewayTransport && !(await writeGatewayFile(`${FED_DIR_IN}/bootstrap-transport.json`, gatewayTransport))) {
+		note("warning: could not write bootstrap-transport.json into the Gateway");
 	}
 
 	// writeProvisioningBlob VALIDATES against the shared ProvisioningSchema before writing, so a
@@ -246,10 +242,9 @@ async function writeGatewayTransport(): Promise<void> {
 		service: "evie-bridge",
 		port: 20001,
 	});
-	const sh =
-		"umask 077 && mkdir -p /app/log/federation && cat > /app/log/federation/transport.json && chmod 600 /app/log/federation/transport.json";
-	const r = await $`docker exec -i ${CONTAINER} sh -c ${sh} < ${Buffer.from(transport)}`.quiet().nothrow();
-	if (r.exitCode !== 0) throw new Error("writing gateway transport.json failed");
+	if (!(await writeGatewayFile(`${FED_DIR_IN}/transport.json`, transport))) {
+		throw new Error("writing gateway transport.json failed");
+	}
 	note("gateway transport written: the gateway uses the service-proxy after its next restart");
 }
 

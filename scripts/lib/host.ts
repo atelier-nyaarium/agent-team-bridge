@@ -3,6 +3,7 @@
 // kubeconfig) plus base64 Secret reads and Opaque-Secret apply, the interactive menu/prompt loop,
 // .env read/write, and the logging the orchestrators share.
 
+import path from "node:path";
 import { $ } from "bun";
 
 ////////////////////////////////
@@ -47,6 +48,17 @@ export function dx(...args: string[]) {
 /** docker compose in the current project. */
 export function dc(...args: string[]) {
 	return $`docker compose ${args}`;
+}
+
+/** Write `content` to an absolute path INSIDE the gateway container as a 0600 file. The bytes ride
+ * stdin (never argv, so a secret stays out of `ps`), and `umask 077` makes the file 0600 from birth
+ * so there is no world-readable window; the explicit chmod stays belt-and-suspenders. `filePath`
+ * must be a trusted absolute container path (it is baked into the shell command). Returns success. */
+export async function writeGatewayFile(filePath: string, content: string): Promise<boolean> {
+	const dir = path.posix.dirname(filePath);
+	const sh = `umask 077 && mkdir -p ${dir} && cat > ${filePath} && chmod 600 ${filePath}`;
+	const r = await $`docker exec -i ${CONTAINER} sh -c ${sh} < ${Buffer.from(content)}`.quiet().nothrow();
+	return r.exitCode === 0;
 }
 
 /** True when the gateway container is currently running. `.nothrow()` so a down docker daemon
