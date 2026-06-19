@@ -88,6 +88,31 @@ async function readEnvValue(key: string): Promise<string> {
 	return line ? line.slice(key.length + 1).trim() : "";
 }
 
+/** Read a ServiceAccount-token Secret's (token, ca.crt) pair, base64-decoded; empty strings when absent. */
+async function readSaCreds(secret: string): Promise<{ saToken: string; caPem: string }> {
+	const saToken = await kGetB64("get", "secret", secret, "-o", "jsonpath={.data.token}");
+	const caPem = await kGetB64("get", "secret", secret, "-o", "jsonpath={.data.ca\\.crt}");
+	return { saToken, caPem };
+}
+
+/** Apply an Opaque Secret (values base64-encoded) as YAML on stdin, so values never hit argv.
+ * serverSide uses SSA + --force-conflicts (for a Secret a controller also writes). Returns whether the
+ * apply succeeded, so the caller chooses to throw or tolerate. */
+async function applySecret(name: string, data: Record<string, string>, serverSide = false): Promise<boolean> {
+	const lines = Object.entries(data)
+		.map(([key, val]) => `  ${key}: ${Buffer.from(val).toString("base64")}`)
+		.join("\n");
+	const yaml = `apiVersion: v1\nkind: Secret\nmetadata:\n  name: ${name}\n  namespace: ${NS}\ntype: Opaque\ndata:\n${lines}\n`;
+	const flags = serverSide ? ["apply", "--server-side", "--force-conflicts", "-f", "-"] : ["apply", "-f", "-"];
+	return (
+		(
+			await kStdin(yaml, ...flags)
+				.quiet()
+				.nothrow()
+		).exitCode === 0
+	);
+}
+
 ////////////////////////////////
 //  Provision steps (each throws on failure; the menu catches per-op, the top level exits)
 
@@ -112,9 +137,8 @@ async function cutover(): Promise<void> {
 			"jsonpath={.data.ANDROID_BRIDGE_TOKEN}",
 		);
 		if (!tok) tok = (await $`openssl rand -hex 32`.text()).trim();
-		// The token rides the Secret YAML on stdin (base64), never argv, like bootstrap's Secret write.
-		const tokYaml = `apiVersion: v1\nkind: Secret\nmetadata:\n  name: console-bridge-app-token\n  namespace: ${NS}\ntype: Opaque\ndata:\n  CONSOLE_BRIDGE_TOKEN: ${Buffer.from(tok).toString("base64")}\n`;
-		await kStdin(tokYaml, "apply", "-f", "-").quiet().nothrow();
+		// Applied via YAML on stdin so the token never hits argv; tolerate a non-zero exit like the bash.
+		await applySecret("console-bridge-app-token", { CONSOLE_BRIDGE_TOKEN: tok });
 		note("cutover: minted console-bridge-app-token");
 	}
 	// Tolerate a non-zero exit (e.g. an AlreadyExists race) the way the bash did; a genuinely
@@ -187,12 +211,7 @@ async function bootstrap(): Promise<void> {
 	// Server-side apply: evie's pod created this Secret via the API (no kubectl last-applied
 	// annotation), so a client-side apply warns on the first write after each purge. SSA ignores
 	// that annotation, and --force-conflicts takes the field back from evie to root cleanly.
-	const b64 = Buffer.from(JSON.stringify(federationJson)).toString("base64");
-	const secretYaml = `apiVersion: v1\nkind: Secret\nmetadata:\n  name: ${FED_SECRET}\n  namespace: ${NS}\ntype: Opaque\ndata:\n  federation.json: ${b64}\n`;
-	if (
-		(await kStdin(secretYaml, "apply", "--server-side", "--force-conflicts", "-f", "-").quiet().nothrow())
-			.exitCode !== 0
-	) {
+	if (!(await applySecret(FED_SECRET, { "federation.json": JSON.stringify(federationJson) }, true))) {
 		throw new Error("writing federation Secret failed");
 	}
 	note(`bootstrap: owner set to ${ownerPub}`);
@@ -209,8 +228,7 @@ async function bootstrap(): Promise<void> {
  * Gateway keys - the Console owns those). Also packs the gateway-bridge creds so the Console can
  * seal a bootstrap bundle for a creds-less Gateway it admits. */
 async function emitBlob(): Promise<void> {
-	const saToken = await kGetB64("get", "secret", "console-bridge-proxy-token", "-o", "jsonpath={.data.token}");
-	const caPem = await kGetB64("get", "secret", "console-bridge-proxy-token", "-o", "jsonpath={.data.ca\\.crt}");
+	const { saToken, caPem } = await readSaCreds("console-bridge-proxy-token");
 	if (!saToken || !caPem)
 		throw new Error("console-bridge SA token not populated yet - re-run --setup in a few seconds");
 	const appToken = await kGetB64(
@@ -222,8 +240,7 @@ async function emitBlob(): Promise<void> {
 	);
 	const apiUrl = await clusterApiUrl();
 
-	const swSa = await kGetB64("get", "secret", "gateway-bridge-proxy-token", "-o", "jsonpath={.data.token}");
-	const swCa = await kGetB64("get", "secret", "gateway-bridge-proxy-token", "-o", "jsonpath={.data.ca\\.crt}");
+	const { saToken: swSa, caPem: swCa } = await readSaCreds("gateway-bridge-proxy-token");
 	const swApp = await readEnvValue("BRIDGE_TOKEN");
 	// The 4-field GatewayTransport shape (the gateway fills namespace/service/port defaults when it
 	// installs the bundle). Omitted when the gateway-bridge SA is not yet populated.
@@ -243,8 +260,7 @@ async function emitBlob(): Promise<void> {
 /** Write the local Gateway's service-proxy transport.json into its federation dir, so the gateway
  * reaches evie through the apiserver (off kubectl port-forward) on its next restart. */
 async function writeGatewayTransport(): Promise<void> {
-	const saToken = await kGetB64("get", "secret", "gateway-bridge-proxy-token", "-o", "jsonpath={.data.token}");
-	const caPem = await kGetB64("get", "secret", "gateway-bridge-proxy-token", "-o", "jsonpath={.data.ca\\.crt}");
+	const { saToken, caPem } = await readSaCreds("gateway-bridge-proxy-token");
 	if (!saToken || !caPem)
 		throw new Error("gateway-bridge SA token not populated yet - re-run --setup in a few seconds");
 	const appToken = await readEnvValue("BRIDGE_TOKEN");
