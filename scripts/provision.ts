@@ -37,7 +37,7 @@ import {
 	note,
 	readSaCreds,
 } from "./lib/host.js";
-import { renderQrImageGif, renderQrTerminal } from "./render-provisioning-qr.js";
+import { fitsInQr, renderQrImageGif, renderQrTerminal } from "./render-provisioning-qr.js";
 import { writeProvisioningBlob } from "./write-provisioning-blob.js";
 
 ////////////////////////////////
@@ -308,21 +308,54 @@ async function verify(): Promise<void> {
 ////////////////////////////////
 //  QR menu
 
-/** Render the blob as a QR in this terminal (wide - the blob is ~2.7KB, ~177 modules). */
-async function showQrTerminal(): Promise<void> {
-	const text = await Bun.file(BLOB_FILE)
-		.text()
-		.catch(() => "");
-	if (!text) throw new Error("could not render the QR (is the blob present?)");
-	process.stdout.write(renderQrTerminal(text).ansi);
+const QR_OMIT_NOTE =
+	"Note: the QR omits the gateway-transport creds (a QR caps at ~2.9 KB); paste or file-import the blob to enroll a creds-less LAN Gateway.";
+
+/** The QR-encodable form of the blob. A QR maxes at ~2.9 KB (byte mode), but the full blob also
+ * carries the gateway-bridge transport creds (a second SA + token, roughly half its size). Those are
+ * optional for the Console - it uses them only to seal a LAN bootstrap bundle for a creds-less
+ * Gateway - so when the full blob overflows a QR, drop gatewayTransport and encode the rest. The
+ * file/paste import still carries the complete blob. Throws when even the trimmed blob is too big. */
+function qrPayload(blobText: string): { text: string; omitted: boolean } {
+	if (fitsInQr(blobText)) return { text: blobText, omitted: false };
+	const obj = jparse<Record<string, unknown>>(blobText);
+	if (obj && typeof obj.gatewayTransport === "string") {
+		const rest = { ...obj };
+		delete rest.gatewayTransport;
+		const trimmed = JSON.stringify(rest);
+		if (fitsInQr(trimmed)) return { text: trimmed, omitted: true };
+	}
+	throw new Error(
+		`the blob is ${blobText.length} bytes - too large for a QR even without the gateway transport; use paste or file import`,
+	);
 }
 
-/** Save the blob's QR as a 0600 GIF and return the path. Camera-friendly at any size. */
-async function saveQrImage(): Promise<string> {
-	const { gif } = renderQrImageGif(await Bun.file(BLOB_FILE).text());
+/** Render the blob's QR in this terminal (wide - a full QR runs ~170+ modules). Drops the optional
+ * gateway-transport creds when the blob overflows a QR (see qrPayload). */
+async function showQrTerminal(): Promise<void> {
+	const blob = await Bun.file(BLOB_FILE)
+		.text()
+		.catch(() => "");
+	if (!blob) throw new Error("could not render the QR (is the blob present?)");
+	const { text, omitted } = qrPayload(blob);
+	const { ansi, modules, ec } = renderQrTerminal(text);
+	process.stdout.write(ansi);
+	console.error(`${modules}x${modules} modules, EC=${ec}, needs ~${modules + 4} terminal columns`);
+	if (omitted) note(QR_OMIT_NOTE);
+}
+
+/** Save the blob's QR as a 0600 GIF. Camera-friendly at any size; drops the optional gateway-
+ * transport creds when the blob overflows a QR (see qrPayload). */
+async function saveQrImage(): Promise<{ path: string; omitted: boolean }> {
+	const blob = await Bun.file(BLOB_FILE)
+		.text()
+		.catch(() => "");
+	if (!blob) throw new Error("could not read the blob (is it present?)");
+	const { text, omitted } = qrPayload(blob);
+	const { gif } = renderQrImageGif(text);
 	await Bun.write(QR_GIF, gif);
 	await $`chmod 600 ${QR_GIF}`.quiet().nothrow();
-	return QR_GIF;
+	return { path: QR_GIF, omitted };
 }
 
 /** Post-setup dial menu: show the enrollment QR in the terminal, or save it as an image. Quitting
@@ -345,10 +378,12 @@ async function qrMenu(): Promise<void> {
 			console.log();
 		} else if (choice === "2") {
 			try {
-				saved = await saveQrImage();
+				const res = await saveQrImage();
+				saved = res.path;
 				note(`saved: ${saved}  (open it and scan, or send it to the phone)`);
-			} catch {
-				err("could not save the QR image");
+				if (res.omitted) note(QR_OMIT_NOTE);
+			} catch (e) {
+				err(e instanceof Error ? e.message : String(e));
 				saved = "";
 			}
 		} else if (choice === "" || choice.toLowerCase() === "q") {

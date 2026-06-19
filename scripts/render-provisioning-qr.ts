@@ -41,6 +41,19 @@ function buildQr(text: string): { qr: ReturnType<typeof qrcode>; modules: number
 	}
 }
 
+/** Whether `text` fits in a single QR. Checks EC level L (the most permissive, ~2953 bytes in byte
+ * mode); buildQr falls back to L when M overflows, so an L fit means a render will succeed. */
+export function fitsInQr(text: string): boolean {
+	try {
+		const qr = qrcode(0, "L");
+		qr.addData(text, "Byte");
+		qr.make();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /** ANSI half-block QR for a terminal: two module-rows per text-row, forced black/white so it scans
  * on any theme, color codes run-length-encoded to keep the output compact. Needs ~modules+4
  * terminal columns. Returns the printable string plus render stats. */
