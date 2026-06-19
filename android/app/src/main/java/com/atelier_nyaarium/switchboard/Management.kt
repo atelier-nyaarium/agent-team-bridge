@@ -68,19 +68,16 @@ fun OwnerKeysCard(repo: ChatRepository) {
 		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 			Text("Owner key (this device is the Domain root)", style = MaterialTheme.typography.titleMedium)
 			Text(
-				"Run the host setup and give it these two keys to root the network at this device. " +
-					"Confirm the fingerprint matches what the host prints.",
+				"Run the host setup, tap Copy owner keys, and paste the blob to root the network at " +
+					"this device. Confirm the fingerprint matches what the host prints.",
 				style = MaterialTheme.typography.bodySmall,
 			)
 			Text("Fingerprint: $sas", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+			// One paste for the host: both owner pubkeys as JSON. base64 values need no escaping.
 			OutlinedButton(
-				onClick = { copyToClipboard(context, "owner signing key", signPub) },
+				onClick = { copyToClipboard(context, "owner keys", """{"signPub":"$signPub","boxPub":"$boxPub"}""") },
 				modifier = Modifier.fillMaxWidth(),
-			) { Text("Copy owner signing key") }
-			OutlinedButton(
-				onClick = { copyToClipboard(context, "owner box key", boxPub) },
-				modifier = Modifier.fillMaxWidth(),
-			) { Text("Copy owner box key") }
+			) { Text("Copy owner keys") }
 		}
 	}
 }

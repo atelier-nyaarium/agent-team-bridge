@@ -99,7 +99,7 @@ cutover() {
 # crypto.ts/admission.ts) so the rooted owner verifies byte-for-byte on the gateway + app.
 bootstrap_domain() {
 	note "bootstrap: rooting the Domain at the Console owner key"
-	local evieFed ownerSign ownerBox out fedJson b64 ownerPub pin
+	local evieFed ownerSign ownerBox ownerJson out fedJson b64 ownerPub pin
 	evieFed=$(k get secret "$FED_SECRET" -o jsonpath='{.data.federation\.json}' 2>/dev/null | base64 -d) ||
 		{ err "could not read evie federation Secret (is evie federation up?)"; return 1; }
 
@@ -109,11 +109,19 @@ bootstrap_domain() {
 	ownerBox="${SB_OWNER_BOX_PUB:-}"
 	if [ -z "$ownerSign" ] || [ -z "$ownerBox" ]; then
 		[ -t 0 ] || { err "owner pubkeys required (set SB_OWNER_SIGN_PUB + SB_OWNER_BOX_PUB, or run interactively)"; return 1; }
-		echo "Open the Console app -> Owner setup. Paste its two owner public keys:"
-		[ -n "$ownerSign" ] || read -rp "  owner signing key (base64): " ownerSign
-		[ -n "$ownerBox" ] || read -rp "  owner box key (base64): " ownerBox
+		echo "Open the Console app -> Owner setup, tap 'Copy owner keys', and paste it here:"
+		read -rp "  owner keys (JSON): " ownerJson
+		if printf '%s' "$ownerJson" | grep -q '"signPub"'; then
+			ownerSign=$(printf '%s' "$ownerJson" | jget signPub)
+			ownerBox=$(printf '%s' "$ownerJson" | jget boxPub)
+		else
+			# Fallback: a bare signing key was pasted (older app or manual entry). Take it and
+			# ask for the box key the old way, so a partial paste still completes.
+			ownerSign="$ownerJson"
+			read -rp "  owner box key (base64): " ownerBox
+		fi
 	fi
-	[ -n "$ownerSign" ] && [ -n "$ownerBox" ] || { err "owner pubkeys are required"; return 1; }
+	[ -n "$ownerSign" ] && [ -n "$ownerBox" ] || { err "owner keys are required (use the app's 'Copy owner keys' button)"; return 1; }
 
 	# RAW pubkeys ride the ENVIRONMENT, never argv. The helper preserves evie's identity,
 	# roots at these owner keys, and keeps the prior allowlist only when re-rooting at the
