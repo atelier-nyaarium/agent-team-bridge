@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -1296,7 +1297,11 @@ private fun SystemSettings(onClear: () -> Unit) {
 	OutlinedButton(
 		onClick = { confirmClear = true },
 		colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-	) { Text("Clear & re-provision") }
+	) {
+		Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+		Spacer(Modifier.width(4.dp))
+		Text("Clear & re-provision")
+	}
 	Text(
 		"Removes the stored credential and chat history. Voice settings are kept.",
 		style = MaterialTheme.typography.bodySmall,
