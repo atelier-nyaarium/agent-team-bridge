@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -46,7 +47,7 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.Surface
@@ -73,6 +74,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -312,6 +314,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				state = state,
 				onRefresh = { scope.launch { repo.refreshTeams() } },
 				onSettings = { showSettings = true },
+				onManage = { showManage = true },
 				onOpen = { team ->
 					repo.openThread(team)
 					openTeam = team
@@ -493,6 +496,7 @@ fun SessionsScreen(
 	state: ChatState,
 	onRefresh: () -> Unit,
 	onSettings: () -> Unit,
+	onManage: () -> Unit,
 	onOpen: (String) -> Unit,
 	onRename: (String, String) -> Unit,
 	onForget: (String) -> Unit,
@@ -570,48 +574,46 @@ fun SessionsScreen(
 					)
 				}
 			}
-			if (state.sessions(state.localGatewayId).isEmpty()) {
-				if (!state.connected) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
-				Text(
-					state.error ?: state.status.ifEmpty { "Connecting..." },
-					Modifier.padding(16.dp),
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
-				)
-			}
-			val order = sessionOrder(state)
 			val sessions = state.sessions(state.localGatewayId)
-			// Accordion grouped by owning Gateway; within each: host agent, then devcontainer
-			// projects, then loose sessions. The local Gateway sorts first.
-			val byGateway = sessions
-				.groupBy { it.gatewayId.ifEmpty { state.localGatewayId } }
-				.toList()
-				.sortedBy { (id, _) -> if (id == state.localGatewayId) "" else id }
-			LazyColumn(
-				Modifier.fillMaxSize(),
-				contentPadding = PaddingValues(12.dp),
-				verticalArrangement = Arrangement.spacedBy(8.dp),
-			) {
-				for ((gatewayId, group) in byGateway) {
-					val collapsed = collapsedGateways[gatewayId] == true
-					item(key = "sw:$gatewayId") {
-						GatewayHeader(
-							name = gatewayId,
-							online = group.any { it.status == "online" },
-							collapsed = collapsed,
-							onToggle = { collapsedGateways[gatewayId] = !collapsed },
-						)
-					}
-					if (!collapsed) {
-						val host = group.filter { it.kind == "gateway" }.sortedWith(order)
-						val projects = group.filter { it.kind == "devcontainer" }.sortedWith(order)
-						val loose = group.filter { it.kind != "gateway" && it.kind != "devcontainer" }.sortedWith(order)
-						items(host + projects + loose, key = { "team:${it.name}" }) { team ->
-							SessionCard(
-								state = state,
-								team = team,
-								onClick = { onOpen(team.name) },
-								onLongPress = { actionTeam = team },
+			if (sessions.isEmpty()) {
+				// One settled view, never a loader layered under a duplicated error: the
+				// Add-a-Gateway onboarding CTA, a brief connecting spinner, or a calm rest state.
+				EmptyBoard(state, onManage)
+			} else {
+				val order = sessionOrder(state)
+				// Accordion grouped by owning Gateway; within each: host agent, then devcontainer
+				// projects, then loose sessions. The local Gateway sorts first.
+				val byGateway = sessions
+					.groupBy { it.gatewayId.ifEmpty { state.localGatewayId } }
+					.toList()
+					.sortedBy { (id, _) -> if (id == state.localGatewayId) "" else id }
+				LazyColumn(
+					Modifier.fillMaxSize(),
+					contentPadding = PaddingValues(12.dp),
+					verticalArrangement = Arrangement.spacedBy(8.dp),
+				) {
+					for ((gatewayId, group) in byGateway) {
+						val collapsed = collapsedGateways[gatewayId] == true
+						item(key = "sw:$gatewayId") {
+							GatewayHeader(
+								name = gatewayId,
+								online = group.any { it.status == "online" },
+								collapsed = collapsed,
+								onToggle = { collapsedGateways[gatewayId] = !collapsed },
 							)
+						}
+						if (!collapsed) {
+							val host = group.filter { it.kind == "gateway" }.sortedWith(order)
+							val projects = group.filter { it.kind == "devcontainer" }.sortedWith(order)
+							val loose = group.filter { it.kind != "gateway" && it.kind != "devcontainer" }.sortedWith(order)
+							items(host + projects + loose, key = { "team:${it.name}" }) { team ->
+								SessionCard(
+									state = state,
+									team = team,
+									onClick = { onOpen(team.name) },
+									onLongPress = { actionTeam = team },
+								)
+							}
 						}
 					}
 				}
@@ -620,17 +622,66 @@ fun SessionsScreen(
 	}
 }
 
+/** The board's empty state: exactly ONE thing, keyed on the connection state, so a terminal cause
+ * never shows a spinner layered under an error the HealthHeader already names. */
+@Composable
+private fun EmptyBoard(state: ChatState, onManage: () -> Unit) {
+	Column(
+		Modifier.fillMaxSize().padding(32.dp),
+		horizontalAlignment = Alignment.CenterHorizontally,
+		verticalArrangement = Arrangement.Center,
+	) {
+		when {
+			// Enrolled but no Gateway in the keyring yet: the primary onboarding step, with a real
+			// action instead of a sentence pointing elsewhere.
+			state.needsGateway -> {
+				Text("No Gateways yet", style = MaterialTheme.typography.titleLarge)
+				Spacer(Modifier.height(8.dp))
+				Text(
+					"Add a Gateway to start talking to your agent sessions.",
+					style = MaterialTheme.typography.bodyMedium,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+					textAlign = TextAlign.Center,
+				)
+				Spacer(Modifier.height(20.dp))
+				Button(onClick = onManage) { Text("Add a Gateway") }
+			}
+			// A terminal error (secure storage, 401, ...): the banner above already names the cause
+			// and the fix, so keep the body calm instead of repeating it under a spinner.
+			state.status == "error" -> {
+				Text(
+					"Can't connect right now - see the status banner above for what to fix.",
+					style = MaterialTheme.typography.bodyMedium,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+					textAlign = TextAlign.Center,
+				)
+			}
+			// Still establishing the connection.
+			!state.connected -> {
+				CircularProgressIndicator()
+				Spacer(Modifier.height(12.dp))
+				Text("Connecting...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+			}
+			// Connected, just nothing here yet.
+			else -> Text("No active sessions yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+		}
+	}
+}
+
 @Composable
 fun HealthHeader(state: ChatState) {
-	val (dot, label) = when (state.health) {
-		ChatState.Health.ONLINE -> Color(0xFF2EA043) to "Bridge online"
+	val (dot, label) = when {
+		// Enrolled but no Gateway admitted yet is an ONBOARDING state, not a red error: the board
+		// body owns the Add-a-Gateway CTA, so the header stays a calm positive status (no duplicate).
+		state.needsGateway -> Color(0xFF0969DA) to "Enrolled"
+		state.health == ChatState.Health.ONLINE -> Color(0xFF2EA043) to "Bridge online"
 		// Calm blue while a fresh enrollment's allowlist is still syncing to its Gateway -
 		// a normal, self-healing window, not an error.
-		ChatState.Health.SYNCING -> Color(0xFF0969DA) to (state.error ?: "Finishing up enrollment...")
+		state.health == ChatState.Health.SYNCING -> Color(0xFF0969DA) to (state.error ?: "Finishing up enrollment...")
 		// Show the SPECIFIC classified cause (set by classifyConnError) rather than a
 		// blanket label, so the header tells the human exactly what to fix.
-		ChatState.Health.DEGRADED -> Color(0xFFD29922) to (state.error ?: "Reconnecting...")
-		ChatState.Health.OFFLINE -> Color(0xFFCF222E) to (state.error ?: "Offline")
+		state.health == ChatState.Health.DEGRADED -> Color(0xFFD29922) to (state.error ?: "Reconnecting...")
+		else -> Color(0xFFCF222E) to (state.error ?: "Offline")
 	}
 	Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
 		Row(

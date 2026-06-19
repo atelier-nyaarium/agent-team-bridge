@@ -148,6 +148,13 @@ data class ChatState(
 			else -> Health.OFFLINE
 		}
 
+	/** Terminal "no Gateway admitted yet": the board shows the Add-a-Gateway onboarding CTA rather
+	 * than a connection error. Keyed off the classified cause - classifyConnError emits the
+	 * "Add a Gateway ..." message for the no-gateway / empty-keyring case; keep that prefix in sync
+	 * (one match site, the same derive-from-state pattern as health). */
+	val needsGateway: Boolean
+		get() = error?.startsWith("Add a Gateway") == true
+
 	/** Last local activity time for a thread, for the session card subtitle. */
 	fun lastActivity(team: String): Long? = threads[team]?.maxByOrNull { it.at }?.at
 
@@ -223,6 +230,7 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 			"Home Gateway not provisioned - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
 		// The Console has no Gateway admitted yet (fresh setup), or none for this target in its
 		// keyring. The fix is to admit a Gateway from the management UI, not to re-provision.
+		// ChatState.needsGateway keys the board's Add-a-Gateway CTA off this message's prefix.
 		m.contains("not in the keyring", ignoreCase = true) || m.contains("no gateway admitted", ignoreCase = true) ->
 			"Add a Gateway from Manage networks to begin" to ConnKind.TERMINAL
 		m.startsWith("HTTP 400") ->
