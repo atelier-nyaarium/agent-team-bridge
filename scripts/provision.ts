@@ -25,6 +25,7 @@ import {
 	die,
 	dx,
 	ensureContainer,
+	envGet,
 	err,
 	jparse,
 	k,
@@ -77,15 +78,6 @@ async function kGetB64(...args: string[]): Promise<string> {
 async function clusterApiUrl(): Promise<string> {
 	const r = await k("config", "view", "--minify", "-o", "jsonpath={.clusters[0].cluster.server}").quiet().nothrow();
 	return r.text().trim();
-}
-
-/** Read one KEY=value from the local .env (the host BRIDGE_TOKEN lives there). */
-async function readEnvValue(key: string): Promise<string> {
-	const env = await Bun.file(".env")
-		.text()
-		.catch(() => "");
-	const line = env.split("\n").find((l) => l.startsWith(`${key}=`));
-	return line ? line.slice(key.length + 1).trim() : "";
 }
 
 /** Read a ServiceAccount-token Secret's (token, ca.crt) pair, base64-decoded; empty strings when absent. */
@@ -241,7 +233,7 @@ async function emitBlob(): Promise<void> {
 	const apiUrl = await clusterApiUrl();
 
 	const { saToken: swSa, caPem: swCa } = await readSaCreds("gateway-bridge-proxy-token");
-	const swApp = await readEnvValue("BRIDGE_TOKEN");
+	const swApp = await envGet("BRIDGE_TOKEN");
 	// The 4-field GatewayTransport shape (the gateway fills namespace/service/port defaults when it
 	// installs the bundle). Omitted when the gateway-bridge SA is not yet populated.
 	const gatewayTransport =
@@ -263,7 +255,7 @@ async function writeGatewayTransport(): Promise<void> {
 	const { saToken, caPem } = await readSaCreds("gateway-bridge-proxy-token");
 	if (!saToken || !caPem)
 		throw new Error("gateway-bridge SA token not populated yet - re-run --setup in a few seconds");
-	const appToken = await readEnvValue("BRIDGE_TOKEN");
+	const appToken = await envGet("BRIDGE_TOKEN");
 	const apiUrl = await clusterApiUrl();
 	const transport = JSON.stringify({
 		apiUrl,

@@ -89,17 +89,3 @@ export function bootstrapDomain(evieFedJson: string, ownerSignPub: string, owner
 		},
 	};
 }
-
-////////////////////////////////
-//  CLI shim (back-compat: `bun scripts/bootstrap-domain.ts`, RAW inputs on the ENVIRONMENT so
-//  the owner keys never ride argv, which is world-readable in `ps`)
-
-if (import.meta.main) {
-	const reqEnv = (name: string): string => {
-		const v = process.env[name];
-		if (v === undefined || v === "") throw new Error(`missing required env ${name}`);
-		return v;
-	};
-	const out = bootstrapDomain(reqEnv("SB_EVIE_FED"), reqEnv("SB_OWNER_SIGN_PUB"), reqEnv("SB_OWNER_BOX_PUB"));
-	process.stdout.write(JSON.stringify(out));
-}

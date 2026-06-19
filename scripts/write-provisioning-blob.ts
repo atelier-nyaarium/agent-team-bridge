@@ -45,32 +45,3 @@ export async function writeProvisioningBlob(
 	await Bun.write(outPath, `${JSON.stringify(parsed, null, 2)}\n`);
 	return parsed;
 }
-
-////////////////////////////////
-//  CLI shim (back-compat: cluster creds + output path on the ENVIRONMENT so the saToken/appToken
-//  stay out of argv)
-
-if (import.meta.main) {
-	const reqEnv = (name: string): string => {
-		const v = process.env[name];
-		if (v === undefined || v === "") throw new Error(`missing required env ${name}`);
-		return v;
-	};
-	await writeProvisioningBlob(
-		{
-			apiUrl: reqEnv("SB_API"),
-			caPem: reqEnv("SB_CA"),
-			saToken: reqEnv("SB_SA"),
-			appToken: reqEnv("SB_APP"),
-			namespace: process.env.SB_NS || undefined,
-			service: process.env.SB_SVC || undefined,
-			port: process.env.SB_PORT ? Number(process.env.SB_PORT) : undefined,
-			identity: process.env.SB_CONSOLE_ID || undefined,
-			gatewayId: process.env.SB_SWID || undefined,
-			gatewaySignPub: process.env.SB_SSIGN || undefined,
-			gatewayBoxPub: process.env.SB_SBOX || undefined,
-			gatewayTransport: process.env.SB_SWTRANSPORT || undefined,
-		},
-		reqEnv("SB_BLOB"),
-	);
-}

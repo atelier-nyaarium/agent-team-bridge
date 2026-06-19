@@ -129,3 +129,30 @@ export function jparse<T = unknown>(s: string): T | null {
 		return null;
 	}
 }
+
+////////////////////////////////
+//  .env file (the project's gateway config)
+
+const ENV_FILE = ".env";
+
+/** Read KEY's value from .env (text after the first '=', trimmed); empty when absent. */
+export async function envGet(key: string): Promise<string> {
+	const env = await Bun.file(ENV_FILE)
+		.text()
+		.catch(() => "");
+	const line = env.split("\n").find((l) => l.startsWith(`${key}=`));
+	return line ? line.slice(key.length + 1).trim() : "";
+}
+
+/** Write KEY=value to .env, replacing any existing KEY line and keeping every other line. Blank
+ * lines are dropped: splitting a newline-terminated file yields a trailing empty element, so
+ * dropping all blanks keeps the rewrite idempotent instead of accreting a stray blank each call.
+ * Comment lines (neither KEY= nor empty) survive. */
+export async function envSet(key: string, value: string): Promise<void> {
+	const env = await Bun.file(ENV_FILE)
+		.text()
+		.catch(() => "");
+	const kept = env.split("\n").filter((l) => l !== "" && !l.startsWith(`${key}=`));
+	kept.push(`${key}=${value}`);
+	await Bun.write(ENV_FILE, `${kept.join("\n")}\n`);
+}
