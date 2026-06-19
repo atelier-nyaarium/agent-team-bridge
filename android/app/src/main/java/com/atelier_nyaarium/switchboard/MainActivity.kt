@@ -1241,9 +1241,12 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 	// an edit (or a double-tap) cannot let a stale probe revive a superseded state.
 	var probeGen by remember { mutableStateOf(0) }
 	val scope = rememberCoroutineScope()
-	LaunchedEffect(Unit) {
-		if (repo.sttsConfigured()) {
-			val gen = ++probeGen
+	// The one generation-guarded probe: go TESTING, bump the gen, probe off the main thread, and
+	// apply the result only if no newer edit/Test superseded it. Used by both the entry probe and Test.
+	val runProbe = {
+		conn = SttsConn.TESTING
+		val gen = ++probeGen
+		scope.launch {
 			val (c, r) = resolveConn(repo)
 			if (gen == probeGen) {
 				conn = c
@@ -1251,6 +1254,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 			}
 		}
 	}
+	LaunchedEffect(Unit) { if (repo.sttsConfigured()) runProbe() }
 	// The provider dialog lives below the Connected gate; if the section collapses (creds
 	// edited, or a re-Test fails), drop it so it cannot reappear unbidden on reconnect.
 	LaunchedEffect(conn) { if (conn != SttsConn.CONNECTED) pickerOpen = false }
@@ -1290,27 +1294,19 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		Button(
 			enabled = conn != SttsConn.TESTING,
 			onClick = {
-				// normalizeSttsUrl is the single validate+normalize choke (rejects userinfo /
-				// path / non-https that would send the key to the wrong host). Store the clean
-				// origin it returns, never the raw field text, and reflect it back into the field.
-				val origin = normalizeSttsUrl(url)
+				// setSttsCreds is the validate+persist choke: it normalizes the URL (rejecting
+				// userinfo / path / non-https that would send the key to the wrong host), stores the
+				// clean origin, and returns it (null = invalid, nothing persisted).
 				when {
-					origin == null -> {
-						conn = SttsConn.FAILED
-						failReason = "Use a valid https:// URL"
-					}
 					key.isBlank() -> conn = SttsConn.NOT_SET_UP
 					else -> {
-						repo.setSttsCreds(origin, key)
-						url = origin
-						conn = SttsConn.TESTING
-						val gen = ++probeGen
-						scope.launch {
-							val (c, r) = resolveConn(repo)
-							if (gen == probeGen) {
-								conn = c
-								failReason = r
-							}
+						val origin = repo.setSttsCreds(url, key)
+						if (origin == null) {
+							conn = SttsConn.FAILED
+							failReason = "Use a valid https:// URL"
+						} else {
+							url = origin
+							runProbe()
 						}
 					}
 				}

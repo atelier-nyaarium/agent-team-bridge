@@ -40,22 +40,10 @@ class ProvisioningStore(context: Context) {
 	/** Reset provisioning + identity + transcript for a re-provision, but KEEP the
 	 * settings-owned voice creds + taste (sttsUrl/sttsKey, provider/voice, auto-*) AND the
 	 * biometric-lock preference (a device setting), so re-provisioning never wipes voice or
-	 * silently disables the app lock. `clear()` stays the full factory wipe. */
+	 * silently disables the app lock. Wipes exactly PROVISIONING_KEYS; everything else is
+	 * preserved by omission. `clear()` stays the full factory wipe. */
 	fun clearProvisioning() {
-		prefs.edit()
-			.remove(KEY_BLOB)
-			.remove(KEY_IDENTITY)
-			.remove(KEY_OWNER_IDENTITY)
-			.remove(KEY_DOMAIN)
-			.remove(KEY_DOMAIN_VERSION)
-			.remove(KEY_CONSOLE_ADMITTED)
-			.remove(KEY_THREADS)
-			.remove(KEY_LABELS)
-			.remove(KEY_GATEWAY_ID)
-			.remove(KEY_SYNC_EPOCH)
-			.remove(KEY_SYNC_ACKED)
-			.remove(KEY_SYNC_DROPPED)
-			.apply()
+		prefs.edit().apply { PROVISIONING_KEYS.forEach { remove(it) } }.apply()
 	}
 
 	var biometricLock: Boolean
@@ -220,7 +208,7 @@ class ProvisioningStore(context: Context) {
 	 * seal time (the phone-anchored model does not persist per-Gateway keys). */
 	data class GatewayKeys(val signPub: String, val boxPub: String)
 
-	private companion object {
+	internal companion object {
 		const val KEY_BLOB = "provisioning"
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"
@@ -243,5 +231,15 @@ class ProvisioningStore(context: Context) {
 		const val KEY_SYNC_EPOCH = "sync_epoch"
 		const val KEY_SYNC_ACKED = "sync_acked"
 		const val KEY_SYNC_DROPPED = "sync_dropped"
+
+		/** The keys a re-provision (Clear & re-provision) wipes. EVERYTHING ELSE is preserved
+		 * by omission - voice creds + taste, the biometric lock, the migration latch - so any
+		 * NEW provisioning/identity/transcript key MUST be added here or it silently survives a
+		 * Clear (a privacy/correctness regression). The partition is pinned by a unit test. */
+		val PROVISIONING_KEYS = listOf(
+			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
+			KEY_CONSOLE_ADMITTED, KEY_THREADS, KEY_LABELS, KEY_GATEWAY_ID,
+			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED,
+		)
 	}
 }

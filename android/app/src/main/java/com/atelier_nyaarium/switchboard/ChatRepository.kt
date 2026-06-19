@@ -449,12 +449,17 @@ class ChatRepository(
 	val sttsUrl: String get() = store.sttsUrl
 	val sttsKey: String get() = store.sttsKey
 
-	/** Persist the in-app voice creds (trimmed) and invalidate the cached client so
-	 * the next sttsClient() rebuilds against them. The UI validates https first. */
-	fun setSttsCreds(url: String, key: String) {
-		store.sttsUrl = url.trim().trimEnd('/')
+	/** The single mutation choke for the in-app voice creds: validate+normalize the URL
+	 * (via normalizeSttsUrl, so the key is never persisted to an unvalidated host), store the
+	 * clean origin + trimmed key, and invalidate the cached client so the next sttsClient()
+	 * rebuilds. Returns the stored origin, or null if the URL is invalid (nothing persisted),
+	 * which the caller surfaces. Enforcing validation HERE means no caller can bypass it. */
+	fun setSttsCreds(url: String, key: String): String? {
+		val origin = normalizeSttsUrl(url) ?: return null
+		store.sttsUrl = origin
 		store.sttsKey = key.trim()
 		sttsClient = null
+		return origin
 	}
 
 	/** The provider descriptors for the settings picker. */
