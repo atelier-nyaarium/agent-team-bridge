@@ -80,7 +80,7 @@ async function clusterApiUrl(): Promise<string> {
 /** Apply the console-bridge + gateway-bridge k8s objects and ensure CONSOLE_BRIDGE_TOKEN is set so
  * evie's ConsoleBridgeServer starts on 20004. Idempotent. */
 async function cutover(): Promise<void> {
-	note("cutover: applying console-bridge + gateway-bridge objects (Services + SAs + Roles + tokens)");
+	note("Applying cluster objects (console + gateway bridges)...");
 	for (const yaml of [BRIDGE_YAML, GATEWAY_BRIDGE_YAML]) {
 		const r = await kStdin(await Bun.file(yaml).text(), "apply", "-f", "-")
 			.quiet()
@@ -100,12 +100,12 @@ async function cutover(): Promise<void> {
 		if (!tok) tok = (await $`openssl rand -hex 32`.text()).trim();
 		// Applied as YAML on stdin so the token never hits argv; a non-zero exit (an AlreadyExists race) is harmless.
 		await applySecret("console-bridge-app-token", { CONSOLE_BRIDGE_TOKEN: tok });
-		note("cutover: minted console-bridge-app-token");
+		note("Minted the console bridge token.");
 	}
 	// A non-zero exit is tolerated (e.g. an AlreadyExists race); a genuinely unwired token surfaces
 	// downstream at verify().
 	await k("set", "env", EVIE_DEPLOY, "--from=secret/console-bridge-app-token").quiet().nothrow();
-	note("cutover: CONSOLE_BRIDGE_TOKEN wired into evie; waiting for rollout");
+	note("Waiting for evie to restart...");
 	if ((await k("rollout", "status", EVIE_DEPLOY, "--timeout=120s").quiet().nothrow()).exitCode !== 0) {
 		throw new Error("evie rollout stalled");
 	}
@@ -116,7 +116,7 @@ async function cutover(): Promise<void> {
  * pubkeys from the app. The crypto is bootstrapDomain() so the rooted owner verifies byte-for-byte
  * on the gateway + app. */
 async function bootstrap(): Promise<void> {
-	note("bootstrap: setting the owner key as the mesh authority");
+	note("Rooting the Domain at your owner key...");
 	// On a clean slate the Secret was purged; evie re-creates it on boot, which can lag the rollout
 	// readiness. Wait for federation.json to appear before reading it.
 	let evieFed = "";
@@ -128,7 +128,7 @@ async function bootstrap(): Promise<void> {
 			evieFed = Buffer.from(b64, "base64").toString();
 			break;
 		}
-		if (i === 0) note("bootstrap: waiting for evie to publish the federation Secret...");
+		if (i === 0) note("Waiting for evie to publish its federation Secret...");
 		await Bun.sleep(2000);
 	}
 	if (!evieFed) throw new Error("could not read evie federation Secret (is evie federation up?)");
@@ -141,8 +141,8 @@ async function bootstrap(): Promise<void> {
 		if (!process.stdin.isTTY) {
 			throw new Error("owner pubkeys required (set SB_OWNER_SIGN_PUB + SB_OWNER_BOX_PUB, or run interactively)");
 		}
-		console.log("Open the Console app -> Owner setup, tap 'Copy owner keys', and paste it here:");
-		const ownerJson = ask("  owner keys (JSON):");
+		console.log("In the app: Owner setup -> Copy owner keys, then paste here.");
+		const ownerJson = ask("Owner keys:");
 		if (ownerJson.includes('"signPub"')) {
 			const parsed = jparse<{ signPub?: string; boxPub?: string }>(ownerJson);
 			ownerSign = parsed?.signPub ?? "";
@@ -150,7 +150,7 @@ async function bootstrap(): Promise<void> {
 		} else {
 			// Fallback: a bare signing key was pasted (older app or manual entry).
 			ownerSign = ownerJson;
-			ownerBox = ask("  owner box key (base64):");
+			ownerBox = ask("Owner box key:");
 		}
 	}
 	if (!ownerSign || !ownerBox) throw new Error("owner keys are required (use the app's 'Copy owner keys' button)");
@@ -175,7 +175,7 @@ async function bootstrap(): Promise<void> {
 	if (!(await applySecret(FED_SECRET, { "federation.json": JSON.stringify(federationJson) }, true))) {
 		throw new Error("writing federation Secret failed");
 	}
-	note(`bootstrap: owner set to ${ownerPub}`);
+	note("Domain rooted at your owner key.");
 
 	// Restart evie so it reads the rooted state. The Console then submits its own admission and
 	// admits this Gateway afterward (no host-side admit).
@@ -221,7 +221,7 @@ async function emitBlob(): Promise<void> {
 		BLOB_FILE,
 	);
 	await $`chmod 600 ${BLOB_FILE}`.quiet().nothrow();
-	note(`blob written: ${BLOB_FILE}  (console-bridge cluster creds; the Console owns its identity)`);
+	note(`Blob written: ${BLOB_FILE}`);
 }
 
 /** Write the local Gateway's service-proxy transport.json into its federation dir, so the gateway
@@ -244,7 +244,7 @@ async function writeGatewayTransport(): Promise<void> {
 	if (!(await writeGatewayFile(`${FED_DIR_IN}/transport.json`, transport))) {
 		throw new Error("writing gateway transport.json failed");
 	}
-	note("gateway transport written: the gateway uses the service-proxy after its next restart");
+	note("Gateway transport written (applies on its next restart).");
 }
 
 /** Health-probe the full service-proxy -> bridge path with the emitted creds. Uses an AUTHENTICATED
@@ -403,36 +403,34 @@ async function provision(): Promise<void> {
 /** Clean break: wipe the Console federation across all three places it lives. The gateway keypair
  * (identity.json) stays so the Gateway id is stable; only the mirrored allowlist goes. */
 async function purge(): Promise<void> {
-	console.log("Purge is a CLEAN BREAK - it wipes the Console federation back to nothing:");
-	console.log(`  - evie's owner key + every admission (the ${FED_SECRET} Secret); evie restarts with no owner`);
-	console.log(`  - this Gateway's mirrored allowlist (${FED_DIR_IN}/federation-allowlist.json; keypair kept)`);
-	console.log(`  - the host's owner identity + transport blob under ${SECRETS_DIR}`);
-	console.log("Every Gateway and Console must re-enroll afterward.");
+	console.log("Clean break - wipes the Console federation: evie's owner key + admissions, this");
+	console.log(`Gateway's mirrored allowlist (keypair kept), and the host blob under ${SECRETS_DIR}.`);
+	console.log("Everyone re-enrolls afterward.");
 	if (!confirm("Purge everything?")) {
-		note("purge cancelled");
+		note("Cancelled.");
 		return;
 	}
 
 	await k("delete", "secret", FED_SECRET, "--ignore-not-found").quiet().nothrow();
 	await k("rollout", "restart", EVIE_DEPLOY).quiet().nothrow();
-	note("evie: federation Secret deleted, evie restarting with no owner");
+	note("evie: owner + admissions wiped, restarting.");
 
 	await dx("rm", "-f", `${FED_DIR_IN}/federation-allowlist.json`).quiet().nothrow();
-	note("Gateway: mirrored allowlist wiped (keypair kept; restart the gateway to re-sync clean)");
+	note("Gateway: allowlist wiped (keypair kept; restart it to re-sync).");
 
 	await $`rm -f ${OWNER_ID_FILE} ${BLOB_FILE} ${QR_GIF}`.quiet().nothrow();
-	note("host: owner identity + blob removed");
+	note("Host: blob + identity removed.");
 
 	console.log();
-	note("Clean break done. Run Provision (option 1) with the app's owner keys to set up fresh.");
+	note("Done. Run Provision with the app's owner keys to set up fresh.");
 }
 
 /** Top dial menu (interactive --setup), mirroring start-gateway.sh's --setup. */
 async function topMenu(): Promise<void> {
-	await menu("Switchboard - Evie authority setup", [
+	await menu("Switchboard - Console setup", [
 		{
 			key: "1",
-			label: "Provision - Set the owner from the app key and emit the blob",
+			label: "Provision - Root the Domain + emit the blob",
 			run: async () => {
 				await provision();
 				await qrMenu();
@@ -440,13 +438,13 @@ async function topMenu(): Promise<void> {
 		},
 		{
 			key: "2",
-			label: "Enroll QR - Show the enrollment QR for the current blob",
+			label: "Enroll QR - Show the enrollment QR",
 			run: async () => {
 				if (await Bun.file(BLOB_FILE).exists()) await qrMenu();
-				else err("no blob yet - run Provision (1) first");
+				else err("No blob yet - run Provision first.");
 			},
 		},
-		{ key: "0", label: "Purge     - Erase identity, allowlist, blob, and k8s secret", run: purge },
+		{ key: "0", label: "Purge     - Clean break (re-enroll everything)", run: purge },
 	]);
 }
 
@@ -465,7 +463,7 @@ async function main(): Promise<void> {
 				await topMenu();
 			} else {
 				await provision();
-				note(`Import ${BLOB_FILE} into the Console app (paste, or scan its QR via --qr). No enroll step.`);
+				note(`Import ${BLOB_FILE} into the app (paste or --qr).`);
 			}
 			break;
 		}

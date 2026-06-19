@@ -90,27 +90,22 @@ async function configure(): Promise<void> {
 	// The Gateway is named by the device hostname; a pre-set GATEWAY_ID is the escape hatch for
 	// duplicate hostnames, so there is no nickname prompt.
 	const id = curId || host;
-	const token = curToken
-		? ask("BRIDGE_TOKEN [keep existing]:") || curToken
-		: ask("BRIDGE_TOKEN (shared evie token; blank = standalone):");
+	const token = curToken ? ask("Evie token [keep]:") || curToken : ask("Evie token (blank = standalone):");
 
-	// FEDERATION_OWNER_SIGN_PUB is the owner's Ed25519 signing PUBLIC key: a long base64 string from
-	// the app's owner-key screen, not a numeric code. Pinning it makes this Gateway refuse any
-	// allowlist not rooted at that owner, so a compromised evie cannot re-root it.
-	console.log("Owner signing key (optional): paste the base64 key from the app to pin which");
-	console.log("owner this Gateway trusts. Blank = trust on first enrollment.");
-	const ownerKey = ask(`Owner signing key [${curOwner || "none"}]:`) || curOwner;
+	// FEDERATION_OWNER_SIGN_PUB pins which owner this Gateway trusts (the base64 key from the app's
+	// owner screen) so a compromised evie cannot re-root it. Optional: blank = trust on first enroll.
+	const ownerKey =
+		ask(`Owner key (optional, blank = trust on first enroll)${curOwner ? " [keep]" : ""}:`) || curOwner;
 
 	await envSet("GATEWAY_ID", id);
 	await envSet("BRIDGE_TOKEN", token);
 	await envSet("FEDERATION_OWNER_SIGN_PUB", ownerKey);
 	await $`chmod 600 .env`.quiet().nothrow();
-	if (!token) console.log("Running standalone (no mesh, no QR).");
 
-	console.log("Building and starting the gateway...");
+	console.log(token ? "Building and starting..." : "Building and starting (standalone, no mesh)...");
 	if ((await dc("up", "--build", "-d").nothrow()).exitCode !== 0) throw new Error("docker compose up failed");
 	if (!(await waitHealth())) throw new Error("did not come up in 60s - run: docker logs switchboard");
-	console.log(`Gateway running on :20000 (Host: ${id}).`);
+	console.log(`Gateway "${id}" running on :20000.`);
 	if (token) {
 		await Bun.sleep(6000);
 		await printQr();
@@ -119,16 +114,13 @@ async function configure(): Promise<void> {
 
 /** Wipe this machine's gateway setup (.env + volumes/gateway) back to nothing. */
 async function purge(): Promise<void> {
-	console.log("Purge wipes this machine's gateway setup back to nothing:");
-	console.log("  - .env (GATEWAY_ID, BRIDGE_TOKEN, owner signing key)");
-	console.log("  - volumes/gateway (keypair, admissions, mailboxes)");
-	console.log("Configure afterward mints a NEW keypair + admit-gateway QR, so the owner console");
-	console.log("must re-scan to re-admit this Gateway.");
+	console.log("Wipes .env + volumes/gateway (keypair, admissions, mailboxes).");
+	console.log("Re-configuring mints a new keypair, so the owner Console must re-admit this Gateway.");
 	if (!confirm("Purge everything?")) return;
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await wipeState();
 	await $`rm -f .env`.quiet().nothrow();
-	console.log("Purged. Run Configure (option 1) to set it up fresh.");
+	console.log("Purged. Run Configure to set it up fresh.");
 }
 
 /** Creds-less LAN enrollment: arm a one-time nonce + advertise this host's LAN address, start the

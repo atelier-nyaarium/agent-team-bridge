@@ -155,9 +155,12 @@ export async function menu(title: string, items: MenuItem[]): Promise<void> {
 	}
 }
 
-/** Read one trimmed line from the operator. */
+/** Read one trimmed line from the operator. Bun's prompt() leaves the cursor on the answer's line,
+ * so the next output mashes onto it; emit the newline ourselves to keep every answer separated. */
 export function ask(label: string): string {
-	return (prompt(label) ?? "").trim();
+	const v = prompt(label) ?? "";
+	process.stdout.write("\n");
+	return v.trim();
 }
 
 /** A y/N confirmation; defaults to No. */
