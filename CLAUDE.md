@@ -193,6 +193,22 @@ Gateway side of a native Android chat client that reaches the bridge through evi
 - `bun scripts/check-module-residue.ts` - Verify the node_modules tree against bun.lock
 - `bun scripts/codegen-kotlin.ts` - Regenerate the Kotlin protocol types after editing a shared schema (CI fails on a stale `proto/Protocol.kt`)
 
+### Verify locally before pushing (especially Android)
+
+Develop and verify locally before every push. For TypeScript that is `bun run lint && bun run test`. For Android it means an ACTUAL local build, because `ci.yml` does NOT compile or test the Kotlin: it only runs the TS lint/test plus the codegen + stts drift checks. The Kotlin builds solely in `main-push.yml`, which runs on push to `main` AFTER the merge. So a Kotlin compile error or a failing Android unit test lands on `main` before any gate catches it, surfacing only as a red release build.
+
+Text and grep sweeps cannot see this. During the Gateway rename an over-matched Compose `Switch` widget (renamed to a non-existent `Gateway`), a mangled verb (`switches` became `gatewayes`), and a stale cross-platform admission vector all passed every grep and the full TS suite, then broke `compileDebugKotlin` and an Android unit test on `main`. Twice.
+
+The host has a JDK and SDK, so run the Android build before pushing anything under `android/`:
+
+```bash
+cd android
+JAVA_HOME=/home/nyaarium/android-dev/jdk ANDROID_HOME=/home/nyaarium/android-dev/sdk \
+  ./gradlew :app:testDebugUnitTest --console=plain
+```
+
+`testDebugUnitTest` compiles the Kotlin and runs the unit tests (the golden-fixture decoders, the SessionId and admission cross-platform vectors). Treat a green run as the Kotlin gate, the same way `bun run lint && bun run test` is the TypeScript gate. For a wire-shape change, regenerate `proto/Protocol.kt` with `bun scripts/codegen-kotlin.ts` first, then run the Android build so the new types are exercised.
+
 ### Dependencies
 
 Manifests use EXACT version pins, no ranges. The plugin launches via `bun --install=force run` (.mcp.json), which resolves package.json ranges directly and bypasses the lockfile - a caret range means any plugin start can pull a brand-new release. Dependabot (daily, 7-day cooldown) is the updater; the cooldown gives security audits time to flag a vulnerable release before we take it. The `overrides` block pins transitives with known advisories. After any manifest change, finish with `rm -rf node_modules && bun install --frozen-lockfile`, then run `scripts/check-module-residue.ts` - bun never prunes nested node_modules dirs the lock stopped sanctioning, and a stale nested copy silently shadows the pinned version for both tsc and runtime.
