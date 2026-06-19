@@ -148,8 +148,12 @@ bootstrap_domain() {
 	fedJson=$(printf '%s' "$out" | jget federationJson)
 	[ -n "$fedJson" ] || { err "could not extract federationJson from bootstrap output"; return 1; }
 	b64=$(printf '%s' "$fedJson" | base64 -w0)
+	# Server-side apply: evie's pod created this Secret via the API (no kubectl last-applied
+	# annotation), so a client-side apply warns on the first write after each purge. SSA does not
+	# use that annotation, and --force-conflicts takes the field back from evie to root cleanly.
 	printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: %s\ntype: Opaque\ndata:\n  federation.json: %s\n' \
-		"$FED_SECRET" "$NS" "$b64" | ki apply -f - >/dev/null || { err "writing federation Secret failed"; return 1; }
+		"$FED_SECRET" "$NS" "$b64" | ki apply --server-side --force-conflicts -f - >/dev/null ||
+		{ err "writing federation Secret failed"; return 1; }
 	note "bootstrap: owner set to $ownerPub"
 
 	# Restart evie so it reads the rooted state. The Console then submits its own admission
