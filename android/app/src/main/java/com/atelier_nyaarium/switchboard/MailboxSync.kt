@@ -32,8 +32,8 @@ class MailboxSync(private val store: ProvisioningStore) {
 		store.saveSyncCursor(next)
 	}
 
-	/** Reset to the initial sentinel in memory (clearAll calls store.clear() first, which
-	 * wipes the persisted cursor; this drops the in-memory copy to match). */
+	/** Reset to the initial sentinel in memory (clearAll calls store.clearProvisioning()
+	 * first, which wipes the persisted cursor; this drops the in-memory copy to match). */
 	fun clearInMemory() {
 		cursor = SyncCursor.initial()
 	}

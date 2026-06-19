@@ -216,6 +216,8 @@ async function emitBlob(): Promise<void> {
 
 	// writeProvisioningBlob VALIDATES against the shared ProvisioningSchema before writing, so a
 	// field drift fails loudly here, not silently on the device.
+	// NOTE: sttsUrl/sttsKey are NOT emitted. Voice creds are device-owned now (entered in the app's
+	// Voice settings, persisted on the phone), so a re-provision never wipes voice; do not re-add them.
 	await writeProvisioningBlob(
 		{ apiUrl, caPem, saToken, appToken, namespace: NS, service: SERVICE, port: PORT },
 		BLOB_FILE,

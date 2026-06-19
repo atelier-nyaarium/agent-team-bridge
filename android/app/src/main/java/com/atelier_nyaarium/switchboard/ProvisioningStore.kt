@@ -37,6 +37,27 @@ class ProvisioningStore(context: Context) {
 
 	fun clear() = prefs.edit().clear().apply()
 
+	/** Reset provisioning + identity + transcript for a re-provision, but KEEP the
+	 * settings-owned voice creds + taste (sttsUrl/sttsKey, provider/voice, auto-*) AND the
+	 * biometric-lock preference (a device setting), so re-provisioning never wipes voice or
+	 * silently disables the app lock. `clear()` stays the full factory wipe. */
+	fun clearProvisioning() {
+		prefs.edit()
+			.remove(KEY_BLOB)
+			.remove(KEY_IDENTITY)
+			.remove(KEY_OWNER_IDENTITY)
+			.remove(KEY_DOMAIN)
+			.remove(KEY_DOMAIN_VERSION)
+			.remove(KEY_CONSOLE_ADMITTED)
+			.remove(KEY_THREADS)
+			.remove(KEY_LABELS)
+			.remove(KEY_GATEWAY_ID)
+			.remove(KEY_SYNC_EPOCH)
+			.remove(KEY_SYNC_ACKED)
+			.remove(KEY_SYNC_DROPPED)
+			.apply()
+	}
+
 	var biometricLock: Boolean
 		get() = prefs.getBoolean(KEY_BIO, false)
 		set(value) {
@@ -80,6 +101,33 @@ class ProvisioningStore(context: Context) {
 		get() = prefs.getBoolean(KEY_AUTO_PLAY_SUMMARY, false)
 		set(value) {
 			prefs.edit().putBoolean(KEY_AUTO_PLAY_SUMMARY, value).apply()
+		}
+
+	/** The STTS service URL + API key. These live in app settings (NOT the
+	 * provisioning blob) so a re-provision never wipes voice. Stored via plain
+	 * putString, which already gets EncryptedSharedPreferences at rest - no
+	 * fail-closed gate (that is reserved for the signing keys). The URL defaults to
+	 * the VRCSTT endpoint so a fresh install only needs the key pasted. */
+	var sttsUrl: String
+		get() = prefs.getString(KEY_STTS_URL, null) ?: DEFAULT_STTS_URL
+		set(value) {
+			prefs.edit().putString(KEY_STTS_URL, value).apply()
+		}
+
+	var sttsKey: String
+		get() = prefs.getString(KEY_STTS_KEY, "") ?: ""
+		set(value) {
+			prefs.edit().putString(KEY_STTS_KEY, value).apply()
+		}
+
+	/** One-shot guard for the blob->store credential migration: a pre-regression
+	 * hand-pasted blob may still carry stts creds, copied into the store once, then
+	 * this flips true so a later creds-less re-provision cannot re-clobber an in-app
+	 * edit. */
+	var sttsMigrated: Boolean
+		get() = prefs.getBoolean(KEY_STTS_MIGRATED, false)
+		set(value) {
+			prefs.edit().putBoolean(KEY_STTS_MIGRATED, value).apply()
 		}
 
 	fun saveThreads(json: String) = prefs.edit().putString(KEY_THREADS, json).apply()
@@ -183,6 +231,10 @@ class ProvisioningStore(context: Context) {
 		const val KEY_DOMAIN = "federation_domain"
 		const val KEY_DOMAIN_VERSION = "federation_domain_version"
 		const val KEY_CONSOLE_ADMITTED = "federation_console_admitted"
+		const val KEY_STTS_URL = "stts_url"
+		const val KEY_STTS_KEY = "stts_key"
+		const val KEY_STTS_MIGRATED = "stts_migrated"
+		const val DEFAULT_STTS_URL = "https://vrcsttapi.azurewebsites.net"
 		const val KEY_STTS_PROVIDER = "stts_provider"
 		const val KEY_STTS_VOICE = "stts_voice"
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."

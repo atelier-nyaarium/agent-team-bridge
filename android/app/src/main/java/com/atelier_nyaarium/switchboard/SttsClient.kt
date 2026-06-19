@@ -10,7 +10,31 @@ import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+
+/** Result of an STTS liveness probe, carrying the failure cause so the settings
+ * status line shows a real reason instead of a bare "unreachable". */
+sealed interface SttsProbe {
+	data object Ok : SttsProbe
+
+	data class Unreachable(val reason: String) : SttsProbe
+}
+
+/** Validate + normalize an STTS base URL to a clean https origin (scheme://host[:port],
+ * no trailing slash), or null if invalid. The ONE choke for every write into the stored
+ * sttsUrl (the settings Test AND the blob migration). Rejects non-https, a missing host,
+ * ANY userinfo (the real-looking@evilhost host-confusion that would ship the key to an
+ * attacker), and any path/query/fragment (the base is host-rooted - requests append
+ * "$baseUrl/health" and "$baseUrl/TextToSpeech/...", so a path would corrupt the endpoint). */
+internal fun normalizeSttsUrl(raw: String): String? {
+	val u = raw.trim().toHttpUrlOrNull() ?: return null
+	if (u.scheme != "https") return null
+	if (u.host.isBlank()) return null
+	if (u.encodedUsername.isNotEmpty() || u.encodedPassword.isNotEmpty()) return null
+	if (u.encodedPath != "/" || u.encodedQuery != null || u.fragment != null) return null
+	return u.toString().trimEnd('/')
+}
 
 /**
  * Client for the VRCSTT "STTS" TTS service. Provider knowledge is DATA, not
@@ -42,11 +66,16 @@ class SttsClient(private val baseUrl: String, private val apiKey: String) {
 
 	val isConfigured: Boolean get() = baseUrl.isNotEmpty() && apiKey.isNotEmpty()
 
-	/** Service liveness; gates the Play button's enabled state. */
-	fun health(): Boolean {
-		if (!isConfigured) return false
+	/** Service liveness WITH the failure cause (gates the settings Connection status),
+	 * so a failure shows a real reason (HTTP code / exception) instead of a bare false. */
+	fun probe(): SttsProbe {
+		if (!isConfigured) return SttsProbe.Unreachable("not configured")
 		val req = Request.Builder().url("$baseUrl/health").get().build()
-		return runCatching { client.newCall(req).execute().use { it.isSuccessful } }.getOrDefault(false)
+		return runCatching {
+			client.newCall(req).execute().use { resp ->
+				if (resp.isSuccessful) SttsProbe.Ok else SttsProbe.Unreachable("HTTP ${resp.code}")
+			}
+		}.getOrElse { e -> SttsProbe.Unreachable(e.message?.take(80) ?: e.javaClass.simpleName) }
 	}
 
 	/**

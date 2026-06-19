@@ -74,6 +74,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -1171,10 +1172,8 @@ fun SettingsScreen(
 			HorizontalDivider()
 			BatteryExemptionRow()
 
-			if (repo.sttsReady()) {
-				HorizontalDivider()
-				SttsVoiceSection(repo)
-			}
+			HorizontalDivider()
+			SttsVoiceSection(repo)
 
 			HorizontalDivider()
 			AppUpdateRow()
@@ -1182,7 +1181,7 @@ fun SettingsScreen(
 			HorizontalDivider()
 			Spacer(Modifier.width(0.dp))
 			Button(onClick = onClear) { Text("Clear & re-provision") }
-			Text("Removes the stored credential and chat history from this device.", style = MaterialTheme.typography.bodySmall)
+			Text("Removes the stored credential and chat history. Voice settings are kept.", style = MaterialTheme.typography.bodySmall)
 		}
 	}
 }
@@ -1190,6 +1189,22 @@ fun SettingsScreen(
 // Cap the rendered voice menu: some providers ship hundreds of voices, and the
 // field's text filters the rest into view.
 private const val MAX_VOICE_MENU_ITEMS = 60
+
+/** The Voice connection's single honest state, shown on the settings status line.
+ * DIRTY = creds edited but not yet re-Tested (the voice/Play block stays hidden). */
+internal enum class SttsConn { NOT_SET_UP, DIRTY, TESTING, CONNECTED, NO_VOICES, FAILED }
+
+/** Pure fold of a probe + catalog presence into the honest connection state, so a JVM
+ * test pins it: Ok+voices -> CONNECTED, Ok-but-no-catalog -> NO_VOICES (a green status
+ * never sits over a dimmed picker), Unreachable -> FAILED with the reason passed through. */
+internal fun foldConn(probe: SttsProbe, hasVoices: Boolean): Pair<SttsConn, String> =
+	when (probe) {
+		is SttsProbe.Ok -> (if (hasVoices) SttsConn.CONNECTED else SttsConn.NO_VOICES) to ""
+		is SttsProbe.Unreachable -> SttsConn.FAILED to probe.reason
+	}
+
+private suspend fun resolveConn(repo: ChatRepository): Pair<SttsConn, String> =
+	foldConn(repo.sttsProbe(), repo.sttsReady())
 
 /** Voice settings for message playback: provider picker, a voice dropdown that
  * lists the selected provider's curated voices (still typeable for voices not
@@ -1204,9 +1219,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 	var voice by remember(providerId) { mutableStateOf(repo.sttsVoiceFor(providerId)) }
 	var pickerOpen by remember { mutableStateOf(false) }
 	var voiceMenuOpen by remember { mutableStateOf(false) }
-	var healthy by remember { mutableStateOf<Boolean?>(null) }
 	var sampleError by remember { mutableStateOf<String?>(null) }
-	LaunchedEffect(Unit) { healthy = repo.sttsHealth() }
 	// Failed previews surface here instead of dead-ending in the log (snapshot
 	// state writes are thread-safe, so the player thread can set it directly).
 	DisposableEffect(Unit) {
@@ -1214,15 +1227,117 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		onDispose { repo.stts.onPlaybackError = null }
 	}
 
-	Text("Voice playback", style = MaterialTheme.typography.titleMedium)
+	// CONNECTION - the single honest status. The voice + playback controls below stay
+	// hidden until a Test confirms BOTH the service and a voice catalog, so a green
+	// status can never sit over a dimmed picker. Creds live in settings, not the blob.
+	// Plain remember, NOT rememberSaveable: the store is the durable source (re-read on
+	// composition), so a config change loses nothing, and the secret never enters the
+	// saved-instance-state Bundle. A half-typed key resetting on rotation is the right trade.
+	var url by remember { mutableStateOf(repo.sttsUrl) }
+	var key by remember { mutableStateOf(repo.sttsKey) }
+	var conn by remember { mutableStateOf(if (repo.sttsConfigured()) SttsConn.TESTING else SttsConn.NOT_SET_UP) }
+	var failReason by remember { mutableStateOf("") }
+	// Bumped on every creds edit / Test; a probe ignores its result once the gen moves on, so
+	// an edit (or a double-tap) cannot let a stale probe revive a superseded state.
+	var probeGen by remember { mutableStateOf(0) }
+	val scope = rememberCoroutineScope()
+	LaunchedEffect(Unit) {
+		if (repo.sttsConfigured()) {
+			val gen = ++probeGen
+			val (c, r) = resolveConn(repo)
+			if (gen == probeGen) {
+				conn = c
+				failReason = r
+			}
+		}
+	}
+	// The provider dialog lives below the Connected gate; if the section collapses (creds
+	// edited, or a re-Test fails), drop it so it cannot reappear unbidden on reconnect.
+	LaunchedEffect(conn) { if (conn != SttsConn.CONNECTED) pickerOpen = false }
+
+	// A creds edit demotes a resolved state to DIRTY (re-arming the Connected gate so the
+	// voice/Play block hides and playback cannot use stale creds), closes the provider dialog,
+	// and invalidates any in-flight probe.
+	val onCredsEdit = {
+		if (conn != SttsConn.NOT_SET_UP && conn != SttsConn.DIRTY) conn = SttsConn.DIRTY
+		pickerOpen = false
+		probeGen++
+	}
+
+	Text("Voice", style = MaterialTheme.typography.titleMedium)
+	OutlinedTextField(
+		value = url,
+		onValueChange = {
+			url = it
+			onCredsEdit()
+		},
+		label = { Text("Service URL") },
+		singleLine = true,
+		modifier = Modifier.fillMaxWidth(),
+	)
+	Row(verticalAlignment = Alignment.CenterVertically) {
+		OutlinedTextField(
+			value = key,
+			onValueChange = {
+				key = it
+				onCredsEdit()
+			},
+			label = { Text("API key") },
+			singleLine = true,
+			visualTransformation = PasswordVisualTransformation(),
+			modifier = Modifier.weight(1f),
+		)
+		Button(
+			enabled = conn != SttsConn.TESTING,
+			onClick = {
+				// normalizeSttsUrl is the single validate+normalize choke (rejects userinfo /
+				// path / non-https that would send the key to the wrong host). Store the clean
+				// origin it returns, never the raw field text, and reflect it back into the field.
+				val origin = normalizeSttsUrl(url)
+				when {
+					origin == null -> {
+						conn = SttsConn.FAILED
+						failReason = "Use a valid https:// URL"
+					}
+					key.isBlank() -> conn = SttsConn.NOT_SET_UP
+					else -> {
+						repo.setSttsCreds(origin, key)
+						url = origin
+						conn = SttsConn.TESTING
+						val gen = ++probeGen
+						scope.launch {
+							val (c, r) = resolveConn(repo)
+							if (gen == probeGen) {
+								conn = c
+								failReason = r
+							}
+						}
+					}
+				}
+			},
+			modifier = Modifier.padding(start = 8.dp),
+		) { Text("Test") }
+	}
 	Text(
-		when (healthy) {
-			null -> "Checking speech service..."
-			true -> "Speech service online"
-			false -> "Speech service unreachable"
+		when (conn) {
+			SttsConn.NOT_SET_UP -> "Enter your key to connect"
+			SttsConn.DIRTY -> "Press Test to apply"
+			SttsConn.TESTING -> "Testing..."
+			SttsConn.CONNECTED -> "Connected"
+			SttsConn.NO_VOICES -> "Connected, but no voices available"
+			SttsConn.FAILED -> "Couldn't connect: $failReason"
 		},
 		style = MaterialTheme.typography.bodySmall,
+		color = when (conn) {
+			SttsConn.CONNECTED -> Color(0xFF1A7F37)
+			SttsConn.NO_VOICES -> Color(0xFF9A6700)
+			SttsConn.FAILED -> MaterialTheme.colorScheme.error
+			else -> MaterialTheme.colorScheme.onSurfaceVariant
+		},
 	)
+
+	// Voice + Playback unlock only when fully Connected.
+	if (conn != SttsConn.CONNECTED) return
 	Row(verticalAlignment = Alignment.CenterVertically) {
 		OutlinedButton(onClick = { pickerOpen = true }) { Text(current?.label ?: providerId.ifEmpty { "Provider" }) }
 		ExposedDropdownMenuBox(
@@ -1303,7 +1418,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
 	}
 	Button(
-		enabled = healthy == true && current != null,
+		enabled = current != null,
 		onClick = {
 			sampleError = null
 			repo.playSttsSample()

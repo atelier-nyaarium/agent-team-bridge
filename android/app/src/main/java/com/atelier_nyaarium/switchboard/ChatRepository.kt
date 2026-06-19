@@ -285,6 +285,18 @@ private fun enrollFold(prevSince: Long): Pair<String?, Long> {
 	}
 }
 
+/** What the one-time blob->store stts migration should seed: the non-empty creds from
+ * a parsed blob, or nulls for a creds-less (or absent) blob. Pure + Android-free so a
+ * JVM test pins the "copy iff non-empty, creds-less no-op" decision (the migration's
+ * store writes are trivial; this is the part worth testing). */
+internal data class SttsSeed(val url: String?, val key: String?)
+
+internal fun sttsMigrationSeed(prov: Provisioning?): SttsSeed =
+	SttsSeed(
+		url = prov?.sttsUrl?.takeIf { it.isNotEmpty() },
+		key = prov?.sttsKey?.takeIf { it.isNotEmpty() },
+	)
+
 /**
  * Repair a persisted/legacy thread or label key to canonical form under a known Gateway id.
  * A bare name ("name") and - critically - an EMPTY-gateway qualified key ("/name", minted in
@@ -364,6 +376,22 @@ class ChatRepository(
 	val stts = SttsPlayer(filesDir)
 	@Volatile private var sttsClient: SttsClient? = null
 
+	init {
+		// One-time carry-over of stts creds from a PRE-regression hand-pasted blob into the
+		// settings store. Reads via Provisioning.parse (so the URL is trimmed) and copies only
+		// non-empty values; the regressed cohort's creds-less blob is a no-op (they paste the
+		// key in settings). Guarded so a later creds-less re-provision cannot re-clobber an
+		// in-app edit. After this the blob's stts fields are ignored forever.
+		if (!store.sttsMigrated) {
+			runCatching {
+				val seed = sttsMigrationSeed(store.load()?.let { Provisioning.parse(it) })
+				seed.url?.let { normalizeSttsUrl(it) }?.let { store.sttsUrl = it }
+				seed.key?.let { store.sttsKey = it }
+			}
+			store.sttsMigrated = true
+		}
+	}
+
 	/** True while the Activity is started; drives the poll cadence (5s visible,
 	 * 60s AFK burst). The mailbox accumulates server-side either way. */
 	@Volatile private var visible = false
@@ -399,18 +427,35 @@ class ChatRepository(
 		return ConsoleClient(Provisioning.parse(blob), store).also { client = it }
 	}
 
-	/** STTS client from the provisioning blob, or null when not configured.
-	 * Rebuilt after re-provisioning (the same client=null invalidation). */
+	/** STTS client from the settings-backed creds (NOT the blob), or null when not
+	 * configured. The cache is invalidated by setSttsCreds() on an in-app edit, the
+	 * one mutation point - so an edited key takes effect without an app restart. */
 	private fun sttsClient(): SttsClient? {
 		sttsClient?.let { return it.takeIf { c -> c.isConfigured } }
-		val blob = store.load() ?: return null
-		val prov = runCatching { Provisioning.parse(blob) }.getOrNull() ?: return null
-		return SttsClient(prov.sttsUrl, prov.sttsKey).also { sttsClient = it }.takeIf { it.isConfigured }
+		// Cache only a configured client, so an unconfigured build (fresh install, no key yet)
+		// is not retained as an idle OkHttpClient until creds arrive.
+		return SttsClient(store.sttsUrl, store.sttsKey).takeIf { it.isConfigured }?.also { sttsClient = it }
 	}
 
-	/** Gates the Play surfaces; true once the blob carries sttsUrl + sttsKey AND
-	 * the bundled catalog parsed (without descriptors there is nothing to play). */
+	/** Gates the Play surfaces; true once settings carry sttsUrl + sttsKey AND the
+	 * bundled catalog parsed (without descriptors there is nothing to play). */
 	fun sttsReady(): Boolean = sttsClient() != null && sttsCatalog.isNotEmpty()
+
+	/** True when settings carry a non-empty url + key (the Connection block is
+	 * configured), independent of catalog/health. */
+	fun sttsConfigured(): Boolean = store.sttsUrl.isNotEmpty() && store.sttsKey.isNotEmpty()
+
+	/** The current in-app voice creds, for seeding the settings Connection fields. */
+	val sttsUrl: String get() = store.sttsUrl
+	val sttsKey: String get() = store.sttsKey
+
+	/** Persist the in-app voice creds (trimmed) and invalidate the cached client so
+	 * the next sttsClient() rebuilds against them. The UI validates https first. */
+	fun setSttsCreds(url: String, key: String) {
+		store.sttsUrl = url.trim().trimEnd('/')
+		store.sttsKey = key.trim()
+		sttsClient = null
+	}
 
 	/** The provider descriptors for the settings picker. */
 	fun sttsProviders(): List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = sttsCatalog
@@ -520,8 +565,9 @@ class ChatRepository(
 		}
 	}
 
-	/** STTS service liveness for the settings indicator. */
-	suspend fun sttsHealth(): Boolean = withContext(Dispatchers.IO) { sttsClient()?.health() == true }
+	/** STTS service liveness WITH the failure cause, for the settings Connection status line. */
+	suspend fun sttsProbe(): SttsProbe =
+		withContext(Dispatchers.IO) { sttsClient()?.probe() ?: SttsProbe.Unreachable("not configured") }
 
 	suspend fun provision(blob: String) = withContext(Dispatchers.IO) {
 		// Strict wire parse: reject before persisting. Surfaced as state.error
@@ -1257,7 +1303,9 @@ class ChatRepository(
 
 	suspend fun clearAll() = withContext(Dispatchers.IO) {
 		pollJob?.cancel()
-		store.clear()
+		// Preserve the settings-owned voice creds + taste: Clear & re-provision wipes
+		// provisioning/identity/history, never voice (clear() is the full factory wipe).
+		store.clearProvisioning()
 		client = null
 		sttsClient = null
 		stts.purgeAll()
