@@ -1264,6 +1264,17 @@ class ChatRepository(
 		_state.update { it.copy(openTabs = it.openTabs - team) }
 	}
 
+	// Per-session composer drafts, kept in memory so leaving a thread and returning
+	// restores the half-typed message. Keyed by the same canonical team id as threads;
+	// an empty draft is dropped so the map stays sparse.
+	private val drafts = mutableMapOf<String, String>()
+
+	fun draft(team: String): String = drafts[team] ?: ""
+
+	fun setDraft(team: String, text: String) {
+		if (text.isEmpty()) drafts.remove(team) else drafts[team] = text
+	}
+
 	/** Give a team a local display label (or clear it with a blank name). */
 	fun setLabel(team: String, name: String) {
 		val labels = _state.updateAndGet { s ->
@@ -1286,6 +1297,7 @@ class ChatRepository(
 		}
 		persistThreads(next.threads)
 		persistLabels(next.labels)
+		drafts.remove(team)
 		stts.purge(team)
 	}
 
