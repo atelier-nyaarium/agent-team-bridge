@@ -387,7 +387,10 @@ export const ProvisioningSchema = z
 		port: z.number().int().positive().optional(),
 		device: z.string().optional(),
 		conversationId: z.string().optional(),
-		// STTS (TTS playback) service base URL + API key; absent disables Play.
+		// STTS (TTS playback) creds. DEVICE-OWNED now: entered in the app's Voice settings and
+		// persisted on the phone, NOT emitted by provisioning. Kept optional only so the app's
+		// one-release blob->settings migration can read a legacy hand-pasted blob; do not re-add
+		// these to the provisioning blob writer.
 		sttsUrl: z.string().optional(),
 		sttsKey: z.string().optional(),
 		// Console identity: a JSON-encoded Crypto.Identity ({sign,box} keypairs) minted
