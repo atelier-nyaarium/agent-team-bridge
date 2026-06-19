@@ -54,30 +54,27 @@ private fun shareText(context: Context, subject: String, value: String) {
 	context.startActivity(Intent.createChooser(intent, subject))
 }
 
-/** The owner root keys + fingerprint the operator feeds to the host's provision-owner
- * setup to root the Domain. Shown before provisioning (the host needs these to root) and
- * under owner settings. Reading them mints the owner identity on first call. */
+/** The owner key + fingerprint, shown under settings so the owner can re-copy it for a host
+ * setup re-run. Reading it mints-or-loads the owner identity on first call. */
 @Composable
 fun OwnerKeysCard(repo: ChatRepository) {
 	val context = LocalContext.current
-	// Computed once: each read mints-or-loads the keystore-backed owner identity.
 	val signPub = remember { repo.ownerSignPub() }
 	val boxPub = remember { repo.ownerBoxPub() }
 	val sas = remember { repo.ownerSas() }
 	Card(Modifier.fillMaxWidth()) {
 		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			Text("Owner key (this device is the Domain root)", style = MaterialTheme.typography.titleMedium)
+			Text("Owner key", style = MaterialTheme.typography.titleMedium)
 			Text(
-				"Run the host setup, tap Copy owner keys, and paste the blob to root the network at " +
-					"this device. Confirm the fingerprint matches what the host prints.",
+				"The key your mesh trusts. Copy it if you re-run the host setup.",
 				style = MaterialTheme.typography.bodySmall,
 			)
 			Text("Fingerprint: $sas", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
-			// One paste for the host: both owner pubkeys as JSON. base64 values need no escaping.
+			// Both owner pubkeys as one JSON blob; provision-console.sh parses it. base64 needs no escaping.
 			OutlinedButton(
-				onClick = { copyToClipboard(context, "owner keys", """{"signPub":"$signPub","boxPub":"$boxPub"}""") },
+				onClick = { copyToClipboard(context, "owner key", """{"signPub":"$signPub","boxPub":"$boxPub"}""") },
 				modifier = Modifier.fillMaxWidth(),
-			) { Text("Copy owner keys") }
+			) { Text("Copy key") }
 		}
 	}
 }

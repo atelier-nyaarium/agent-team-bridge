@@ -98,7 +98,7 @@ cutover() {
 # Gateway afterward. The crypto is done by scripts/bootstrap-domain.ts (the real
 # crypto.ts/admission.ts) so the rooted owner verifies byte-for-byte on the gateway + app.
 bootstrap_domain() {
-	note "bootstrap: rooting the Domain at the Console owner key"
+	note "bootstrap: setting the owner key as the mesh authority"
 	local evieFed ownerSign ownerBox ownerJson out fedJson b64 ownerPub pin
 	evieFed=$(k get secret "$FED_SECRET" -o jsonpath='{.data.federation\.json}' 2>/dev/null | base64 -d) ||
 		{ err "could not read evie federation Secret (is evie federation up?)"; return 1; }
@@ -150,7 +150,7 @@ bootstrap_domain() {
 	b64=$(printf '%s' "$fedJson" | base64 -w0)
 	printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: %s\ntype: Opaque\ndata:\n  federation.json: %s\n' \
 		"$FED_SECRET" "$NS" "$b64" | ki apply -f - >/dev/null || { err "writing federation Secret failed"; return 1; }
-	note "bootstrap: Domain rooted at Console owner $ownerPub"
+	note "bootstrap: owner set to $ownerPub"
 
 	# Restart evie so it reads the rooted state. The Console then submits its own admission
 	# and admits this Gateway (by scanning the Gateway's admit-gateway QR) - no host-side admit.
@@ -317,7 +317,7 @@ provision() {
 # the mirrored allowlist goes. Mirrors start-gateway.sh's "Purge configs".
 purge() {
 	echo "Purge is a CLEAN BREAK - it wipes the Console federation back to nothing:"
-	echo "  - evie's Domain root + every admission (the $FED_SECRET Secret); evie restarts unrooted"
+	echo "  - evie's owner key + every admission (the $FED_SECRET Secret); evie restarts with no owner"
 	echo "  - this Gateway's mirrored allowlist ($FED_DIR_IN/federation-allowlist.json; keypair kept)"
 	echo "  - the host's owner identity + transport blob under $SECRETS_DIR"
 	echo "Every Gateway and Console must re-enroll afterward."
@@ -326,7 +326,7 @@ purge() {
 
 	k delete secret "$FED_SECRET" --ignore-not-found >/dev/null 2>&1
 	k rollout restart "$EVIE_DEPLOY" >/dev/null 2>&1 || true
-	note "evie: federation Secret deleted, evie restarting unrooted"
+	note "evie: federation Secret deleted, evie restarting with no owner"
 
 	docker exec "$CONTAINER" rm -f "$FED_DIR_IN/federation-allowlist.json" 2>/dev/null || true
 	note "Gateway: mirrored allowlist wiped (keypair kept; restart the gateway to re-sync clean)"
@@ -335,7 +335,7 @@ purge() {
 	note "host: owner identity + blob removed"
 
 	echo
-	note "Clean break done. Run Provision (option 1) with the app's owner keys to root fresh."
+	note "Clean break done. Run Provision (option 1) with the app's owner keys to set up fresh."
 }
 
 # Top-level dial menu (interactive --setup), mirroring start-gateway.sh's --setup.
@@ -343,7 +343,7 @@ menu() {
 	while true; do
 		echo
 		echo "Switchboard - Evie authority setup"
-		echo "  1) Provision - Root the Domain at the app owner key and emit the blob"
+		echo "  1) Provision - Set the owner from the app key and emit the blob"
 		echo "  2) Enroll QR - Show the enrollment QR for the current blob"
 		echo "  0) Purge     - Erase identity, allowlist, blob, and k8s secret"
 		echo "  q) Quit"
