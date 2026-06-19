@@ -75,6 +75,40 @@ export async function ensureContainer(): Promise<void> {
 	die(`the '${CONTAINER}' container started but kubectl is not reachable through it`);
 }
 
+/** A base64-decoded kubectl jsonpath read; empty string when the secret/field is absent. */
+export async function kGetB64(...args: string[]): Promise<string> {
+	const r = await k(...args)
+		.quiet()
+		.nothrow();
+	const v = r.text().trim();
+	return v ? Buffer.from(v, "base64").toString() : "";
+}
+
+/** Read a ServiceAccount-token Secret's (token, ca.crt) pair, base64-decoded; empty strings when absent. */
+export async function readSaCreds(secret: string): Promise<{ saToken: string; caPem: string }> {
+	const saToken = await kGetB64("get", "secret", secret, "-o", "jsonpath={.data.token}");
+	const caPem = await kGetB64("get", "secret", secret, "-o", "jsonpath={.data.ca\\.crt}");
+	return { saToken, caPem };
+}
+
+/** Apply an Opaque Secret (values base64-encoded) as YAML on stdin, so values never hit argv.
+ * serverSide uses SSA + --force-conflicts (for a Secret a controller also writes). Returns whether the
+ * apply succeeded, so the caller chooses to throw or tolerate. */
+export async function applySecret(name: string, data: Record<string, string>, serverSide = false): Promise<boolean> {
+	const lines = Object.entries(data)
+		.map(([key, val]) => `  ${key}: ${Buffer.from(val).toString("base64")}`)
+		.join("\n");
+	const yaml = `apiVersion: v1\nkind: Secret\nmetadata:\n  name: ${name}\n  namespace: ${NS}\ntype: Opaque\ndata:\n${lines}\n`;
+	const flags = serverSide ? ["apply", "--server-side", "--force-conflicts", "-f", "-"] : ["apply", "-f", "-"];
+	return (
+		(
+			await kStdin(yaml, ...flags)
+				.quiet()
+				.nothrow()
+		).exitCode === 0
+	);
+}
+
 ////////////////////////////////
 //  Interactive menu + prompts (Bun built-ins, zero deps)
 
