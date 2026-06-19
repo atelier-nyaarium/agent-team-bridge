@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import WebSocket from "ws";
+import packageJson from "../../../package.json";
 import { debugLog } from "../../shared/debug-log.js";
 import { createReconnector } from "../../shared/reconnect.js";
 import type { ChannelPushPayload, ConnectionMode, ResponsePushPayload } from "../../shared/types.js";
@@ -156,6 +157,7 @@ export function connectToRouter(): void {
 			mode,
 			subId,
 			conversationId: CONVERSATION_ID,
+			version: packageJson.version,
 		};
 		if (process.env.PROJECT_HOST_PATH) {
 			registerMsg.projectPath = process.env.PROJECT_HOST_PATH;

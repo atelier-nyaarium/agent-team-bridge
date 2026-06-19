@@ -80,6 +80,9 @@ export const WsRegisterSchema = z.object({
 	mode: z.string().optional(),
 	subId: z.string().optional(),
 	conversationId: z.string().optional(),
+	// The plugin version (package.json) the MCP process is running. Optional so an
+	// older plugin that predates this field still registers cleanly.
+	version: z.string().optional(),
 });
 
 ////////////////////////////////
@@ -103,6 +106,11 @@ export const TeamInfoSchema = z
 		// Optional for decode tolerance: old gateways omit kind and consumers
 		// default it to "loose" (the hand Kotlin client always did).
 		kind: TeamKindSchema.optional(),
+		// The plugin version the agent's MCP process reported at register. Optional:
+		// consoles, offline-catalog entries, and pre-feature gateways omit it. The
+		// console shows it as a chip only when it differs from the app's own expected
+		// version - a benign, self-correcting lag (the host auto-updates daily).
+		version: z.string().optional(),
 		queue_depth: z.number().int().nonnegative(),
 	})
 	.meta({ id: "TeamInfo" });

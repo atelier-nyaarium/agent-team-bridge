@@ -93,6 +93,22 @@ describe("routes", () => {
 			]);
 		});
 
+		it("surfaces the plugin version an online team reported at register", async () => {
+			const registry = makeRegistry({
+				"proj-a": { readyState: 1, data: { mode: "channel", version: "5.0.14" } },
+			});
+			const ctx = makeCtx({ registry });
+			const json = (await createRoutes(ctx).teams().json()) as { team: string; version?: string }[];
+			expect(json[0]?.version).toBe("5.0.14");
+		});
+
+		it("omits version for a team whose socket reported none (pre-feature plugin / console peer)", async () => {
+			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
+			const ctx = makeCtx({ registry });
+			const json = (await createRoutes(ctx).teams().json()) as { team: string; version?: string }[];
+			expect(json[0]?.version).toBeUndefined();
+		});
+
 		it("flags online teams as devcontainer via knownTeamPaths even when the catalog is empty", async () => {
 			// offlineCatalog clears when the host daemon disconnects; knownTeamPaths
 			// is the durable fallback, so catalog loss must not demote a project.

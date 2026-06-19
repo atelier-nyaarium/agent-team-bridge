@@ -30,6 +30,10 @@ export interface WsData {
 	subId: string;
 	conversationId: string | null;
 	mode: ConnectionMode;
+	// Plugin version (package.json) this connection reported at register, surfaced in
+	// teams() so the console can flag a version-lagging agent. Undefined for virtual
+	// console peers and pre-feature plugins.
+	version?: string;
 	missedPings: number;
 	isStale: boolean;
 	handshakeConfirmed: boolean;
@@ -189,6 +193,7 @@ export function createWebSocketHandlers({
 			ws.data.subId = subId;
 			ws.data.conversationId = conversationId;
 			ws.data.mode = mode;
+			ws.data.version = reg.data.version;
 			subs.set(subId, ws);
 
 			if (conversationId) {
