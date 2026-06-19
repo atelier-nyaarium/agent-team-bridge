@@ -50,13 +50,22 @@ android {
 
 	buildTypes {
 		release {
-			isMinifyEnabled = false
+			isMinifyEnabled = true
+			isShrinkResources = true
 			proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
 			// Sign with the stable release key only when CI provides it; a local
 			// release assembled without the env stays unsigned rather than failing.
 			if (!System.getenv("ANDROID_KEYSTORE_PATH").isNullOrBlank()) {
 				signingConfig = signingConfigs.getByName("release")
 			}
+		}
+		debug {
+			// Minify the debug build too (the owner sideloads it): R8 tree-shakes the
+			// material-icons-extended set down to only the icons actually referenced. The
+			// DebugLog ingest still runs (gated on BuildConfig.DEBUG, not on minify).
+			isMinifyEnabled = true
+			isShrinkResources = true
+			proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
 		}
 	}
 
@@ -101,7 +110,7 @@ dependencies {
 	implementation(libs.androidx.ui.graphics)
 	implementation(libs.androidx.ui.tooling.preview)
 	implementation(libs.androidx.material3)
-	implementation(libs.androidx.material.icons.core)
+	implementation(libs.androidx.material.icons.extended)
 	implementation(libs.okhttp)
 	implementation(libs.kotlinx.coroutines.android)
 	implementation(libs.androidx.security.crypto)

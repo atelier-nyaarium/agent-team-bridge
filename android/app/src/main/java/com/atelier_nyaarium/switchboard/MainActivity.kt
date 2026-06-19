@@ -47,8 +47,25 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.CircularProgressIndicator
@@ -84,6 +101,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
@@ -578,7 +596,7 @@ fun SessionsScreen(
 			TopAppBar(
 				title = { Text("Agent Sessions") },
 				actions = {
-					TextButton(onClick = onRefresh) { Text("Refresh") }
+					IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Refresh") }
 					TextButton(onClick = onSettings) { Text("Settings") }
 				},
 			)
@@ -785,8 +803,12 @@ private fun GatewayHeader(name: String, online: Boolean, collapsed: Boolean, onT
 			.padding(horizontal = 4.dp, vertical = 8.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
-		// The caret is the only affordance (v expanded, > collapsed); plain ASCII, no glyphs.
-		Text(if (collapsed) ">" else "v", style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace)
+		// The caret is the expand/collapse affordance: down when collapsed, up when open.
+		Icon(
+			if (collapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+			contentDescription = if (collapsed) "Expand" else "Collapse",
+			tint = MaterialTheme.colorScheme.onSurfaceVariant,
+		)
 		Spacer(Modifier.width(10.dp))
 		Text(name, style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace)
 		Spacer(Modifier.weight(1f))
@@ -1015,9 +1037,13 @@ fun ThreadScreen(
 						presence?.let { StatusChip(it, presenceColor(it)) }
 					}
 				},
-				navigationIcon = { TextButton(onClick = onSessions) { Text("Sessions") } },
+				navigationIcon = {
+					IconButton(onClick = onSessions) {
+						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to sessions")
+					}
+				},
 				actions = {
-					IconButton(onClick = { showMenu = true }) { Text("⋮", style = MaterialTheme.typography.titleLarge) }
+					IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "More options") }
 					DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
 						if (canRename) {
 							DropdownMenuItem(
@@ -1108,10 +1134,9 @@ fun ThreadScreen(
 									overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
 									modifier = Modifier.widthIn(max = 120.dp),
 								)
-								TextButton(
-									onClick = { attachments = attachments - uri },
-									contentPadding = PaddingValues(horizontal = 4.dp),
-								) { Text("x") }
+								IconButton(onClick = { attachments = attachments - uri }) {
+									Icon(Icons.Default.Close, contentDescription = "Remove attachment")
+								}
 							}
 						}
 					}
@@ -1127,15 +1152,17 @@ fun ThreadScreen(
 				// Attach stacks above Send in a narrow right column, handing the text
 				// field the width the inline Attach button used to occupy.
 				Column(Modifier.padding(start = 8.dp), horizontalAlignment = Alignment.End) {
-					TextButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("Attach") }
-					Button(
+					IconButton(onClick = { picker.launch(arrayOf("*/*")) }) {
+							Icon(Icons.Default.AttachFile, contentDescription = "Attach file")
+						}
+					FilledIconButton(
 						enabled = draft.isNotBlank() || attachments.isNotEmpty(),
 						onClick = {
 							onSend(draft, attachments)
 							draft = ""
 							attachments = emptyList()
 						},
-					) { Text("Send") }
+					) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send") }
 				}
 			}
 		}
@@ -1176,7 +1203,9 @@ fun SettingsScreen(
 		topBar = {
 			TopAppBar(
 				title = { Text(settingsTitle(route)) },
-				navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+				navigationIcon = {
+					IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+				},
 			)
 		},
 	) { pad ->
@@ -1186,11 +1215,11 @@ fun SettingsScreen(
 		) {
 			when (route) {
 				SettingsRoute.HUB -> {
-					SettingsRow("Profile") { onRoute(SettingsRoute.PROFILE) }
-					SettingsRow("Voice & TTS") { onRoute(SettingsRoute.VOICE) }
-					SettingsRow("Networks & Trust") { onRoute(SettingsRoute.NETWORKS) }
-					SettingsRow("Security") { onRoute(SettingsRoute.SECURITY) }
-					SettingsRow("System") { onRoute(SettingsRoute.SYSTEM) }
+					SettingsRow(Icons.Default.Person, "Profile") { onRoute(SettingsRoute.PROFILE) }
+					SettingsRow(Icons.Default.RecordVoiceOver, "Voice & TTS") { onRoute(SettingsRoute.VOICE) }
+					SettingsRow(Icons.Default.Hub, "Networks & Trust") { onRoute(SettingsRoute.NETWORKS) }
+					SettingsRow(Icons.Default.Lock, "Security") { onRoute(SettingsRoute.SECURITY) }
+					SettingsRow(Icons.Default.Tune, "System") { onRoute(SettingsRoute.SYSTEM) }
 				}
 				SettingsRoute.PROFILE -> ProfileSettings(state, onSetDeviceName)
 				SettingsRoute.VOICE -> SttsVoiceSection(repo)
@@ -1202,19 +1231,22 @@ fun SettingsScreen(
 	}
 }
 
-/** A tappable hub row: the category label and a trailing drill-in chevron. */
+/** A tappable hub row: a leading category icon, the label, and a trailing drill-in chevron.
+ * The icons are decorative (the label announces the row), so contentDescription is null. */
 @Composable
-private fun SettingsRow(label: String, onClick: () -> Unit) {
+private fun SettingsRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 	Row(
 		Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
-		Text(label, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
 		Icon(
-			Icons.AutoMirrored.Filled.KeyboardArrowRight,
+			icon,
 			contentDescription = null,
+			modifier = Modifier.padding(end = 16.dp),
 			tint = MaterialTheme.colorScheme.onSurfaceVariant,
 		)
+		Text(label, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+		Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
 	}
 }
 
@@ -1408,23 +1440,35 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 			modifier = Modifier.padding(start = 8.dp),
 		) { Text("Test") }
 	}
-	Text(
-		when (conn) {
-			SttsConn.NOT_SET_UP -> "Enter your key to connect"
-			SttsConn.DIRTY -> "Press Test to apply"
-			SttsConn.TESTING -> "Testing..."
-			SttsConn.CONNECTED -> "Connected"
-			SttsConn.NO_VOICES -> "Connected, but no voices available"
-			SttsConn.FAILED -> "Couldn't connect: $failReason"
-		},
-		style = MaterialTheme.typography.bodySmall,
-		color = when (conn) {
+	Row(verticalAlignment = Alignment.CenterVertically) {
+		val statusColor = when (conn) {
 			SttsConn.CONNECTED -> Color(0xFF1A7F37)
 			SttsConn.NO_VOICES -> Color(0xFF9A6700)
 			SttsConn.FAILED -> MaterialTheme.colorScheme.error
 			else -> MaterialTheme.colorScheme.onSurfaceVariant
-		},
-	)
+		}
+		val statusIcon = when (conn) {
+			SttsConn.CONNECTED -> Icons.Default.Check
+			SttsConn.NO_VOICES, SttsConn.FAILED -> Icons.Default.Warning
+			else -> null
+		}
+		statusIcon?.let {
+			Icon(it, contentDescription = null, tint = statusColor, modifier = Modifier.size(16.dp))
+			Spacer(Modifier.width(4.dp))
+		}
+		Text(
+			when (conn) {
+				SttsConn.NOT_SET_UP -> "Enter your key to connect"
+				SttsConn.DIRTY -> "Press Test to apply"
+				SttsConn.TESTING -> "Testing..."
+				SttsConn.CONNECTED -> "Connected"
+				SttsConn.NO_VOICES -> "Connected, but no voices available"
+				SttsConn.FAILED -> "Couldn't connect: $failReason"
+			},
+			style = MaterialTheme.typography.bodySmall,
+			color = statusColor,
+		)
+	}
 
 	// Voice + Playback unlock only when fully Connected.
 	if (conn != SttsConn.CONNECTED) return
@@ -1513,7 +1557,11 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 			sampleError = null
 			repo.playSttsSample()
 		},
-	) { Text("Play a sample") }
+	) {
+		Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+		Spacer(Modifier.width(4.dp))
+		Text("Play a sample")
+	}
 	sampleError?.let {
 		Text("Playback failed: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
 	}
