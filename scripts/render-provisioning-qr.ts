@@ -29,8 +29,15 @@ function buildQr(text: string): { qr: ReturnType<typeof qrcode>; modules: number
 		const qr = make("M");
 		return { qr, modules: qr.getModuleCount(), ec: "M" };
 	} catch {
-		const qr = make("L");
-		return { qr, modules: qr.getModuleCount(), ec: "L" };
+		try {
+			const qr = make("L");
+			return { qr, modules: qr.getModuleCount(), ec: "L" };
+		} catch {
+			// Even L overflowed: a readable error beats qrcode-generator's raw "code length overflow".
+			throw new Error(
+				`payload too large to encode as a QR (${text.length} bytes) - use paste or file import instead`,
+			);
+		}
 	}
 }
 
