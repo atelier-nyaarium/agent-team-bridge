@@ -318,6 +318,9 @@ export function createRoutes({
 			// A team whose only live sockets are virtual console peers is the human's
 			// device, not a crosstalk peer - mark it so the agent-facing listing hides it.
 			const isConsole = getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0;
+			// Plugin version reported by an active real socket (virtual console peers carry
+			// none); the same value across a team's sub-sessions in practice.
+			const version = getAllActiveRealWs(subs)[0]?.data.version;
 			// The host orchestrator registers its channel identity as "gateway"; surface
 			// it as the "host" agent, the machine's primary session (shown first).
 			teamsList.push({
@@ -333,6 +336,7 @@ export function createRoutes({
 							: isDevcontainer(name)
 								? "devcontainer"
 								: "loose",
+				version,
 				queue_depth: 0,
 			});
 		}

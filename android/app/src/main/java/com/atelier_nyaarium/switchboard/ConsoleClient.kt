@@ -99,6 +99,10 @@ data class Team(
 	val mode: String,
 	val queueDepth: Int,
 	val kind: String = "loose",
+	// Plugin version the agent's MCP process reported. Null for consoles, offline
+	// catalog entries, and pre-feature gateways. The board shows it only when it
+	// differs from this app's own expected version.
+	val version: String? = null,
 ) {
 	/** Short local name shown in the UI: the tail after the gateway qualifier. */
 	val displayName: String get() = TeamAddress.parse(name, "").name
@@ -360,6 +364,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 				mode = it.mode ?: "",
 				queueDepth = it.queue_depth.toInt(),
 				kind = it.kind ?: "loose",
+				version = it.version,
 			)
 		}
 	}

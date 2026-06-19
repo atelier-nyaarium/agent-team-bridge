@@ -878,6 +878,13 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 			}
 			Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
 				StatusChip(statusWord, statusColor)
+				// Plugin-version chip: shown only when the agent's running plugin differs from
+				// this app's expected version (BuildConfig.VERSION_NAME, derived from the same
+				// package.json the build reads). Not a warning - the host auto-updates daily, so
+				// a lag is benign and self-correcting. Neutral color, version only, no label.
+				team.version?.let { v ->
+					if (v != BuildConfig.VERSION_NAME) StatusChip("v$v", MaterialTheme.colorScheme.outline)
+				}
 				if (live && state.working(team.name)) StatusChip("working...", Color(0xFFD29922))
 				if (isCli) StatusChip("cli", MaterialTheme.colorScheme.outline)
 				Spacer(Modifier.weight(1f))

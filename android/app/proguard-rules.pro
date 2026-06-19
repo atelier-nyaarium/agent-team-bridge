@@ -1,7 +1,8 @@
-# OkHttp pulls in optional platform classes guarded by reflection; keep R8 quiet.
--dontwarn org.bouncycastle.jsse.**
--dontwarn org.conscrypt.**
--dontwarn org.openjsse.**
+# OkHttp's optional TLS-provider -dontwarn lines (org.bouncycastle.jsse / org.conscrypt /
+# org.openjsse) were removed after confirming assembleRelease stays clean without them: the
+# okhttp artifact ships its own consumer -dontwarn rules for these packages, so the app-level
+# copies were redundant. Re-add if an assembleRelease ever fails with a missing-class error for
+# one of those packages.
 
 # kotlinx.serialization (the console/gateway wire protocol) needs NO app-level keeps: the
 # artifact ships COMPLETE R8 consumer rules (META-INF/com.android.tools/r8/) that AGP
