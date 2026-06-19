@@ -208,6 +208,17 @@ async function emitBlob(): Promise<void> {
 	const gatewayTransport =
 		swSa && swCa ? JSON.stringify({ apiUrl, saToken: swSa, caPem: swCa, appToken: swApp || "" }) : undefined;
 
+	// Hand the home Gateway these same creds as bootstrap-transport.json, so it serves them to the
+	// Console on the get_gateway_transport op (the Console fetches them when enrolling a creds-less
+	// Gateway, instead of carrying them in its blob).
+	if (gatewayTransport) {
+		// umask 077 so `cat >` creates the file 0600 from birth (no world-readable window before the
+		// chmod); the chmod stays as belt-and-suspenders. The secret rides stdin, never argv.
+		const sh = `umask 077 && mkdir -p ${FED_DIR_IN} && cat > ${FED_DIR_IN}/bootstrap-transport.json && chmod 600 ${FED_DIR_IN}/bootstrap-transport.json`;
+		const r = await $`docker exec -i ${CONTAINER} sh -c ${sh} < ${Buffer.from(gatewayTransport)}`.quiet().nothrow();
+		if (r.exitCode !== 0) note("warning: could not write bootstrap-transport.json into the Gateway");
+	}
+
 	// writeProvisioningBlob VALIDATES against the shared ProvisioningSchema before writing, so a
 	// field drift fails loudly here, not silently on the device.
 	await writeProvisioningBlob(
@@ -236,7 +247,7 @@ async function writeGatewayTransport(): Promise<void> {
 		port: 20001,
 	});
 	const sh =
-		"mkdir -p /app/log/federation && cat > /app/log/federation/transport.json && chmod 600 /app/log/federation/transport.json";
+		"umask 077 && mkdir -p /app/log/federation && cat > /app/log/federation/transport.json && chmod 600 /app/log/federation/transport.json";
 	const r = await $`docker exec -i ${CONTAINER} sh -c ${sh} < ${Buffer.from(transport)}`.quiet().nothrow();
 	if (r.exitCode !== 0) throw new Error("writing gateway transport.json failed");
 	note("gateway transport written: the gateway uses the service-proxy after its next restart");

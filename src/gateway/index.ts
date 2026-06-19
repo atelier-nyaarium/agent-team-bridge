@@ -14,7 +14,7 @@ import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { startEvieClient } from "./evie/evieClient.js";
 import { startPortForward } from "./evie/portForward.js";
-import { evieWsConnection, loadEvieTransport } from "./evie/transport.js";
+import { evieWsConnection, loadBootstrapTransport, loadEvieTransport } from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
 import { logAdmitGatewayQr } from "./federation/enrollQr.js";
@@ -358,6 +358,7 @@ export async function startGateway(): Promise<void> {
 				const snapshot = allowlistForConsole?.getSnapshot() ?? null;
 				return snapshot ? { version: allowlistForConsole?.version() ?? "", snapshot } : null;
 			},
+			bootstrapTransport: () => loadBootstrapTransport(federationDir),
 		});
 		handleConsoleRelay = createConsoleRelayPump({
 			sealer: consoleSealer!,

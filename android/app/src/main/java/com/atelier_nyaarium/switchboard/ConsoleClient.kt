@@ -5,6 +5,7 @@ import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleGatewayTransportResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
 import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
@@ -13,6 +14,7 @@ import com.atelier_nyaarium.switchboard.proto.ConsoleRelayFrame
 import com.atelier_nyaarium.switchboard.proto.ConsoleRelayReply
 import com.atelier_nyaarium.switchboard.proto.ConsoleReplyBody
 import com.atelier_nyaarium.switchboard.proto.ConsoleSendResult
+import com.atelier_nyaarium.switchboard.proto.GatewayTransport
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
 import java.io.ByteArrayInputStream
@@ -410,6 +412,12 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		if (!body.ok || body.result == null) error("poll relay failed: ${body.error ?: "no result"}")
 		return wireJson.decodeFromJsonElement<ConsolePollResult>(body.result)
 	}
+
+	/** Fetch the home Gateway's bootstrap transport creds (the gateway-bridge SA + token), so this
+	 * Console can seal them into a bundle for a creds-less Gateway it is enrolling. Replaces carrying
+	 * these creds in the provisioning blob; the Console fetches them on demand. */
+	fun getGatewayTransport(): GatewayTransport =
+		resultOf<ConsoleGatewayTransportResult>(relay(ConsoleOp.GetGatewayTransport), "get_gateway_transport").transport
 
 	companion object {
 		private val JSON = "application/json".toMediaType()

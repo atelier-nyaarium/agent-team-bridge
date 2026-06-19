@@ -8,6 +8,7 @@ import {
 	parseQualifiedTeam,
 } from "../../shared/console-protocol.js";
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
+import type { GatewayTransport } from "../../shared/schemas.js";
 import { SessionId, TeamAddress } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
@@ -54,6 +55,10 @@ export interface ConsoleHandlerDeps {
 	/** The current keyring + its version hash, for the Console's poll-based sync. The
 	 * poll reply carries the snapshot only when the Console's known version differs. */
 	domain?: () => { version: string; snapshot: DomainSnapshot } | null;
+	/** The bootstrap transport creds a creds-less Gateway needs to reach evie, served to the
+	 * Console on the get_gateway_transport op (it seals them into a bundle for a Gateway it is
+	 * enrolling). Read from the federation dir's bootstrap-transport.json; null when unprovisioned. */
+	bootstrapTransport?: () => GatewayTransport | null;
 }
 
 ////////////////////////////////
@@ -93,6 +98,7 @@ export function createConsoleHandler({
 	sendBoundMs = SEND_BOUND_MS,
 	isProjectName,
 	domain,
+	bootstrapTransport,
 }: ConsoleHandlerDeps) {
 	// The per-install conversationId is the real identity: it keys the mailbox,
 	// the registry sub, and this binding to the human-facing device name. The
@@ -388,6 +394,22 @@ export function createConsoleHandler({
 					return { ...base, domainVersion: dom.version, domain: dom.snapshot };
 				}
 				return base;
+			}
+
+			case "get_gateway_transport": {
+				// The home Gateway hands the Console the bootstrap creds (gateway-bridge SA + token)
+				// so it can seal them into a bundle for a creds-less Gateway it is enrolling. Serving
+				// creds here is safe because the frame reached dispatch only after the consoleSealer
+				// opened it against an owner-signed kind:console admission at the relay boundary; the
+				// reply is sealed back to the Console's box key on the same path, so evie never sees
+				// the token. Read fresh from the federation dir (not idempotency-cached).
+				const transport = bootstrapTransport?.() ?? null;
+				if (!transport) {
+					throw new Error(
+						"gateway transport not provisioned - run provision-console.sh --setup on the home Gateway",
+					);
+				}
+				return { transport };
 			}
 		}
 	}

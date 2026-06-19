@@ -153,6 +153,11 @@ export const ConsoleOpSchema = z
 			// cycle at near-zero steady cost.
 			knownDomainVersion: z.string().optional(),
 		}),
+		// Fetch the home Gateway's bootstrap transport creds (the gateway-bridge SA + token) so
+		// the Console can seal them into a bundle for a creds-less Gateway it is enrolling. No
+		// params: the Gateway returns its own bootstrap transport. Replaces carrying these creds
+		// in the provisioning blob.
+		z.object({ kind: z.literal("get_gateway_transport") }),
 	])
 	.meta({ id: "ConsoleOp" });
 
@@ -241,6 +246,24 @@ export const MailboxEntrySchema = z
 	.meta({ id: "MailboxEntry" });
 
 ////////////////////////////////
+//  Gateway transport creds (the gateway-bridge SA token + endpoint)
+//
+//  A dep-free leaf shared by two consumers below: the get_gateway_transport op
+//  result (the Console fetches it to enroll a creds-less Gateway) and the
+//  GatewayBootstrapBundle it seals. Defined here so both can reference it.
+
+export const GatewayTransportSchema = z
+	.object({
+		apiUrl: z.string().min(1),
+		saToken: z.string().min(1),
+		caPem: z.string().min(1),
+		appToken: z.string().min(1),
+	})
+	.meta({ id: "GatewayTransport" });
+
+export type GatewayTransport = z.infer<typeof GatewayTransportSchema>;
+
+////////////////////////////////
 //  Op result schemas (gateway -> console)
 //
 //  No wire discriminator: the reply is correlated to its op by opId and the
@@ -301,12 +324,19 @@ export const ConsolePollResultSchema = z
 	})
 	.meta({ id: "ConsolePollResult" });
 
+export const ConsoleGatewayTransportResultSchema = z
+	.object({
+		transport: GatewayTransportSchema,
+	})
+	.meta({ id: "ConsoleGatewayTransportResult" });
+
 export const ConsoleOpResultSchema = z.union([
 	ConsoleRegisterResultSchema,
 	ConsoleListTeamsResultSchema,
 	ConsoleSendResultSchema,
 	ConsoleRespondResultSchema,
 	ConsolePollResultSchema,
+	ConsoleGatewayTransportResultSchema,
 ]);
 
 ////////////////////////////////
@@ -391,15 +421,6 @@ export const ProvisioningSchema = z
 //  Gateway's own owner-signed admission; `domain` mirrors the keyring so the Gateway
 //  can verify peers from its first boot.
 
-export const GatewayTransportSchema = z
-	.object({
-		apiUrl: z.string().min(1),
-		saToken: z.string().min(1),
-		caPem: z.string().min(1),
-		appToken: z.string().min(1),
-	})
-	.meta({ id: "GatewayTransport" });
-
 export const GatewayBootstrapBundleSchema = z
 	.object({
 		// Echoes the one-time nonce from the admit-gateway QR; the Gateway installs the
@@ -412,7 +433,6 @@ export const GatewayBootstrapBundleSchema = z
 	})
 	.meta({ id: "GatewayBootstrapBundle" });
 
-export type GatewayTransport = z.infer<typeof GatewayTransportSchema>;
 export type GatewayBootstrapBundle = z.infer<typeof GatewayBootstrapBundleSchema>;
 
 ////////////////////////////////

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { type GatewayTransport, GatewayTransportSchema } from "../../shared/schemas.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -54,6 +55,27 @@ export function loadEvieTransport(federationDir: string): EvieTransport | null {
 	if (!fs.existsSync(file)) return null;
 	try {
 		return normalize(JSON.parse(fs.readFileSync(file, "utf8")));
+	} catch {
+		return null;
+	}
+}
+
+/** The bootstrap transport creds (the 4-field GatewayTransport) a creds-less Gateway needs to
+ * reach evie, written into the federation dir by provision-console.sh. The Console fetches it via
+ * the get_gateway_transport op and seals it into a bundle for a Gateway it is enrolling, rather
+ * than carrying these creds in its provisioning blob. Null when absent or malformed. */
+export function loadBootstrapTransport(federationDir: string): GatewayTransport | null {
+	const file = path.join(federationDir, "bootstrap-transport.json");
+	if (!fs.existsSync(file)) return null;
+	try {
+		const parsed = GatewayTransportSchema.safeParse(JSON.parse(fs.readFileSync(file, "utf8")));
+		if (!parsed.success) {
+			// Surface schema drift instead of a silent "not provisioned": the op falls back to a
+			// cleartext error, so without this the operator cannot tell a missing file from a bad one.
+			console.warn(`[bootstrap-transport] invalid bootstrap-transport.json: ${parsed.error.issues[0]?.message}`);
+			return null;
+		}
+		return parsed.data;
 	} catch {
 		return null;
 	}

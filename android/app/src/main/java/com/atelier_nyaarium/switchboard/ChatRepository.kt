@@ -723,15 +723,17 @@ class ChatRepository(
 			?: return@withContext EnrollDelivery(false, "Admit failed. Try again.", null)
 		val nonce = scanned.nonce
 			?: return@withContext EnrollDelivery(true, "Admitted. This Gateway will come online once it syncs the keyring.", null)
-		val transportJson = runCatching { Provisioning.parse(store.load() ?: "") }.getOrNull()
-			?.gatewayTransport?.ifEmpty { null }
+		// Fetch the bootstrap transport from the home Gateway (the Console no longer carries it in
+		// its blob); fall back to a legacy blob's copy so a half-deployed state still enrolls.
+		val transport = runCatching { client().getGatewayTransport() }.getOrNull()
+			?: runCatching { Provisioning.parse(store.load() ?: "").gatewayTransport.ifEmpty { null } }
+				.getOrNull()
+				?.let { runCatching { wireJson.decodeFromString(GatewayTransport.serializer(), it) }.getOrNull() }
 			?: return@withContext EnrollDelivery(
 				true,
-				"Admitted, but this blob has no gateway transport creds. Re-run provision-console.sh to deliver a bundle.",
+				"Admitted, but could not get the gateway transport creds. Re-run provision-console.sh.",
 				null,
 			)
-		val transport = runCatching { wireJson.decodeFromString(GatewayTransport.serializer(), transportJson) }.getOrNull()
-			?: return@withContext EnrollDelivery(true, "Admitted, but the gateway transport creds are unreadable.", null)
 		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub)
 		val frameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), frame)
 		if (scanned.lanHost != null && scanned.lanPort != null && isPrivateLanHost(scanned.lanHost)) {

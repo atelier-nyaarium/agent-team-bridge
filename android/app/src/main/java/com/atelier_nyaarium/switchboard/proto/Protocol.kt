@@ -118,6 +118,10 @@ sealed class ConsoleOp {
 		val holdMs: Long? = null,
 		val knownDomainVersion: String? = null,
 	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("get_gateway_transport")
+	data object GetGatewayTransport : ConsoleOp()
 }
 
 @Serializable
@@ -312,6 +316,11 @@ data class DomainSnapshot(
 	val ownerSignPub: String,
 	val admissions: List<SignedAdmission>,
 	val revocations: List<SignedRevocation>,
+)
+
+@Serializable
+data class ConsoleGatewayTransportResult(
+	val transport: GatewayTransport,
 )
 
 @Serializable
