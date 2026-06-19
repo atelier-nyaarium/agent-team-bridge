@@ -153,12 +153,18 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	var homeGateway: String? = null
 
 	/**
-	 * Direct CA-pinned GET to the API server with the SA token. Proves the tunnel
-	 * (TLS pinning, reachability, auth) works before the console bridge is deployed.
+	 * CA-pinned preflight of the ACTUAL transport: the console-bridge liveness probe through the API
+	 * service-proxy. Proves TLS pinning, reachability, and SA auth on the same path the real ops use.
+	 *
+	 * It must NOT hit a raw cluster endpoint like `get namespace`: the console SA
+	 * (console-bridge-proxy) is scoped to the service-proxy verb only, so a namespace GET 403s and
+	 * would (and did) strand every connect before the admission submit, leaving the console forever
+	 * "not admitted". /health needs no app token, so a failure here means the cluster/tunnel is down,
+	 * cleanly separated from "the bridge rejected our creds".
 	 */
 	fun apiReachable(): String {
 		val req = Request.Builder()
-			.url("${prov.apiUrl}/api/v1/namespaces/${prov.namespace}")
+			.url("$proxyBase/health")
 			.header("Authorization", "Bearer ${prov.saToken}")
 			.get()
 			.build()
