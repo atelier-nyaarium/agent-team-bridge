@@ -54,7 +54,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.PrimaryScrollableTabRow
-import androidx.compose.material3.Gateway
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -894,7 +894,7 @@ fun ThreadScreen(
 				val selected = tabs.indexOf(team).coerceAtLeast(0)
 				PrimaryScrollableTabRow(selectedTabIndex = selected, edgePadding = 8.dp) {
 					tabs.forEachIndexed { i, t ->
-						Tab(selected = i == selected, onClick = { onGateway(t) }, text = { Text(tabLabel(t)) })
+						Tab(selected = i == selected, onClick = { onSwitch(t) }, text = { Text(tabLabel(t)) })
 					}
 				}
 			}
@@ -1021,7 +1021,7 @@ fun SettingsScreen(
 			HorizontalDivider()
 			Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 				Text("Biometric lock", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-				Gateway(checked = state.biometricLock, onCheckedChange = onToggleBiometric)
+				Switch(checked = state.biometricLock, onCheckedChange = onToggleBiometric)
 			}
 			Text(
 				"Require fingerprint or device PIN on app open. Falls back to unlocked if nothing is enrolled.",
@@ -1188,7 +1188,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 				style = MaterialTheme.typography.bodySmall,
 			)
 		}
-		Gateway(
+		Switch(
 			checked = autoTts,
 			onCheckedChange = {
 				autoTts = it
@@ -1206,7 +1206,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 				style = MaterialTheme.typography.bodySmall,
 			)
 		}
-		Gateway(
+		Switch(
 			checked = autoPlay,
 			enabled = autoTts,
 			onCheckedChange = {
