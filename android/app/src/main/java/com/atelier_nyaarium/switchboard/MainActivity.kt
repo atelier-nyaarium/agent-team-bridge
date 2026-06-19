@@ -147,7 +147,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	var unlocked by remember { mutableStateOf(false) }
 
 	// WebView pool lives at App scope (never leaves composition) so each thread's
-	// renderer survives Sessions round-trips and tab gatewayes. Pruned to open tabs;
+	// renderer survives Sessions round-trips and tab switches. Pruned to open tabs;
 	// destroyed with the Activity.
 	val rendererPool = remember { ThreadRendererPool(context.applicationContext) }
 	rendererPool.onRetry = { team, id -> scope.launch { repo.retrySend(team, id) } }
@@ -1347,7 +1347,7 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 
 /**
  * Hosts a thread's pooled WebView inside a FrameLayout. The renderer is pulled from
- * the pool (so scroll position and rendered DOM survive tab gatewayes and Sessions
+ * the pool (so scroll position and rendered DOM survive tab switches and Sessions
  * round-trips) and re-fed incrementally via sync(). A crashed renderer is swapped
  * for a fresh one and re-fed.
  */

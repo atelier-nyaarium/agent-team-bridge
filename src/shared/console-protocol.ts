@@ -118,7 +118,7 @@ export function parseConvSessionTeam(sessionId: string): string | null {
 //  Gateway qualification
 //
 //  A session's address is host-qualified as `<gatewayId>/<name>` so the console (and,
-//  in later federation phases, evie) can tell two Gatewayes' identically-named
+//  in later federation phases, evie) can tell two Gateways' identically-named
 //  sessions apart. A BARE name (no separator) resolves to the local Gateway: the
 //  gateway canonicalizes an inbound target to the qualified form before keying
 //  the channel job, and the console normalizes a bare name off the wire to its

@@ -358,8 +358,8 @@ export function createRoutes({
 	async function discover(): Promise<Response> {
 		const local = (await teams().json()) as TeamInfo[];
 		if (!evieClient?.isConnected()) return jsonResponse(local);
-		const rosterCall = await evieClient.callTool("list_gatewayes", {});
-		const roster = (rosterCall.result as { gatewayes?: { gatewayId: string }[] } | undefined)?.gatewayes ?? [];
+		const rosterCall = await evieClient.callTool("list_gateways", {});
+		const roster = (rosterCall.result as { gateways?: { gatewayId: string }[] } | undefined)?.gateways ?? [];
 		if (roster.length === 0) return jsonResponse(local);
 		const remote = await Promise.all(
 			roster.map(async (h) => {

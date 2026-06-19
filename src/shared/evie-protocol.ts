@@ -1,4 +1,4 @@
-// SYNC-HASH: cdc9792271d06e17e3717c08a4742916
+// SYNC-HASH: 856c7b0990775d94c7a66539ccae8660
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -73,7 +73,7 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 		type: z.literal("console_relay"),
 	}),
 	// Loose: a cross-Gateway frame evie routed to this Gateway. The gateway-relay pump runs
-	// the full federation parse (federation-protocol.ts); evie only gatewayed it
+	// the full federation parse (federation-protocol.ts); evie only routed it
 	// here by destination Gateway, never reading the inner payload.
 	z.looseObject({
 		type: z.literal("gateway_relay"),
@@ -104,7 +104,7 @@ export const ToolCallFrameSchema = z.object({
 //
 //  evie is the content-blind Router. A Gateway REGISTERS its gateway id on
 //  connect, then reaches another Gateway by calling evie's `gateway_relay` tool; evie
-//  gatewayes the frame to the destination Gateway's socket by `dstGateway` alone and
+//  routes the frame to the destination Gateway's socket by `dstGateway` alone and
 //  correlates the eventual `gateway_relay_reply` by `relayId`. The `payload` is
 //  opaque to evie (a sealed blob only the destination Gateway can open), so these
 //  schemas validate only the routing envelope.
@@ -135,7 +135,7 @@ export const GatewayRegisterParamsSchema = z.object({
 	proofNonce: z.string().min(1).optional(),
 });
 
-/** `gateway_relay` tool-call params: the routing envelope evie gatewayes on. */
+/** `gateway_relay` tool-call params: the routing envelope evie routes on. */
 export const GatewayRelayRouteSchema = z.object({
 	relayId: z.string().min(1).max(128),
 	srcGateway: z.string().min(1).max(64),

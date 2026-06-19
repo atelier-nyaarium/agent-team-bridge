@@ -565,7 +565,7 @@ class ChatRepository(
 			// can no longer file into a ghost "/name" thread the open tab cannot read.
 			recanonicalizeAllKeys(localGatewayId)
 			// Pin every subsequent relay to this home Gateway so the Gateway routes there
-			// even once other Gatewayes join the mesh.
+			// even once other Gateways join the mesh.
 			client().homeGateway = localGatewayId.ifEmpty { null }
 			// A teams refresh failure is not a connect failure: register succeeded, so we
 			// are connected. Log and proceed with the prior team list rather than masking

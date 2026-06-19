@@ -60,7 +60,7 @@ export async function startGateway(): Promise<void> {
 	const mailboxStore = new DeviceMailboxStore();
 	// Takes unknown: the relay pump owns the full frame validation.
 	let handleConsoleRelay: ((frame: unknown) => void) | null = null;
-	// Cross-Gateway frames the Router gatewayed to this Gateway; the gateway-relay pump owns
+	// Cross-Gateway frames the Router routed to this Gateway; the gateway-relay pump owns
 	// full validation.
 	let handleGatewayRelay: ((frame: unknown) => void) | null = null;
 	let evictConsolePeer: ((conversationId: string) => void) | null = null;

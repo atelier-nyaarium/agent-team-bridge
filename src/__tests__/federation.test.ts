@@ -11,7 +11,7 @@ import type { ResponsePayload } from "../shared/types.js";
 ////////////////////////////////
 //  Harness
 
-// Two admitted Gatewayes: each seals to the other (the allowlist resolution is mocked
+// Two admitted Gateways: each seals to the other (the allowlist resolution is mocked
 // to the peer's keys; the trust model itself is tested in admission.test.ts).
 const A = generateIdentity();
 const B = generateIdentity();
@@ -205,7 +205,7 @@ describe("federation routing (E2E sealed)", () => {
 				teams: [{ team: "api", gatewayId: "hostb", status: "online", mode: "channel", queue_depth: 0 }],
 			}),
 			onCall: (action) =>
-				action === "list_gatewayes" ? { gatewayes: [{ gatewayId: "hostb", online: true }] } : { ok: true },
+				action === "list_gateways" ? { gateways: [{ gatewayId: "hostb", online: true }] } : { ok: true },
 		});
 		const ctx = makeCtx("hosta", {
 			evieClient: evie.client,

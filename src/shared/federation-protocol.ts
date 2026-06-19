@@ -22,7 +22,7 @@ export { FEDERATION_PROTOCOL_VERSION } from "./evie-protocol.js";
  * session. Carried on a cross-Gateway `send`, stored on the destination job, and
  * read by `respond` to forward the response_push back across evie. `srcSession`
  * is the origin's channel job key (`conv:<srcConversationId>:<dstGateway>/<name>`),
- * used as the job key on BOTH Gatewayes so neither side has to translate. */
+ * used as the job key on BOTH Gateways so neither side has to translate. */
 export const ReturnRouteSchema = z.object({
 	srcGateway: z.string().min(1).max(64),
 	srcConversationId: z.string().min(1).max(128),
@@ -46,7 +46,7 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	}),
 	// Discovery fan-out: the asking Gateway queries each online peer for its teams.
 	z.object({ kind: z.literal("list_teams") }),
-	// Wake-across-Gatewayes: bring up a sleeping devcontainer on the destination.
+	// Wake-across-Gateways: bring up a sleeping devcontainer on the destination.
 	z.object({ kind: z.literal("wake"), team: z.string().min(1).max(128) }),
 	// The destination's reply, pinned home: delivered to `session_id` on the origin.
 	z.object({

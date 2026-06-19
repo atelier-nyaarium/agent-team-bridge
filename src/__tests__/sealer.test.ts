@@ -36,7 +36,7 @@ function allowlistWithBoth(): Allowlist {
 }
 
 describe("sealer", () => {
-	it("round-trips a sealed object between two admitted Gatewayes", () => {
+	it("round-trips a sealed object between two admitted Gateways", () => {
 		const aSealer = createSealer(A, allowlistWithBoth(), "A");
 		const bSealer = createSealer(B, allowlistWithBoth(), "B");
 		const env = aSealer.seal("B", { hello: "world", n: 7 });

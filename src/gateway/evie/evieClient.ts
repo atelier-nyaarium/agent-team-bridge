@@ -29,13 +29,13 @@ export interface EvieClientConfig {
 	// for the legacy plaintext localhost tunnel.
 	tls?: { ca: string };
 	// This Gateway's id, registered with the Router on connect so cross-Gateway frames
-	// can be gatewayed to this Gateway.
+	// can be routed to this Gateway.
 	gatewayId: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	// The relay pump owns full ConsoleRelayFrameSchema validation; the envelope
 	// union only routes by type, so the frame travels as unknown.
 	onConsoleRelay?: (frame: unknown) => void;
-	// A cross-Gateway frame the Router gatewayed to this Gateway; the gateway-relay pump owns
+	// A cross-Gateway frame the Router routed to this Gateway; the gateway-relay pump owns
 	// full GatewayRelayFrameSchema validation, so the frame travels as unknown.
 	onGatewayRelay?: (frame: unknown) => void;
 	// Extra `gateway_register` params (the admitted-identity proof: signPub/boxPub
@@ -105,12 +105,12 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				...(config.buildRegisterAuth?.() ?? {}),
 			}).then((res) => {
 				const r = res.result as
-					| { ok?: boolean; error?: string; gatewayes?: string[]; domain?: unknown }
+					| { ok?: boolean; error?: string; gateways?: string[]; domain?: unknown }
 					| undefined;
 				if (res.error) console.error(`[evie-client] gateway_register failed: ${res.error}`);
 				else if (r?.ok === false) console.error(`[evie-client] Router rejected registration: ${r.error}`);
 				else {
-					const peers = r?.gatewayes?.length ? `, peers: ${r.gatewayes.join(", ")}` : "";
+					const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
 					console.log(`[evie-client] registered as Gateway "${config.gatewayId}"${peers}`);
 					if (r?.domain) config.onDomainSync?.(r.domain);
 				}

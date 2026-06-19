@@ -22,7 +22,7 @@ export interface ConsoleRoutes {
 	respond: (req: Request, body: Record<string, unknown>) => Response;
 	teams: () => Response;
 	// Mesh-wide team list (local + every online peer Gateway); the console is a
-	// roaming console and sees all Gatewayes, not just its home Gateway.
+	// roaming console and sees all Gateways, not just its home Gateway.
 	discover: () => Promise<Response>;
 }
 

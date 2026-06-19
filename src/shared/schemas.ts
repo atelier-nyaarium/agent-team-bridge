@@ -94,7 +94,7 @@ export const TeamInfoSchema = z
 		team: z.string(),
 		// The id of the Gateway that owns this session. `team` stays the bare local
 		// name; the console composes the qualified key `gateway/team` to keep two
-		// Gatewayes' identically-named sessions apart. Optional for decode tolerance:
+		// Gateways' identically-named sessions apart. Optional for decode tolerance:
 		// a pre-federation Gateway omits it and the console falls back to its connected
 		// Gateway id (bare resolves local).
 		gatewayId: z.string().optional(),
