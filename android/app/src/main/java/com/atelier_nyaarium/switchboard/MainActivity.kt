@@ -559,7 +559,10 @@ fun SessionsScreen(
 		},
 	) { pad ->
 		Column(Modifier.padding(pad).fillMaxSize()) {
-			HealthHeader(state)
+			val sessions = state.sessions(state.localGatewayId)
+			// One status surface: when the board is empty, EmptyBoard owns the whole message, so the
+			// health banner shows only ALONGSIDE a session list and can never contradict the body.
+			if (sessions.isNotEmpty()) HealthHeader(state)
 			if (state.gap) {
 				Surface(
 					color = MaterialTheme.colorScheme.errorContainer,
@@ -574,11 +577,8 @@ fun SessionsScreen(
 					)
 				}
 			}
-			val sessions = state.sessions(state.localGatewayId)
 			if (sessions.isEmpty()) {
-				// One settled view, never a loader layered under a duplicated error: the
-				// Add-a-Gateway onboarding CTA, a brief connecting spinner, or a calm rest state.
-				EmptyBoard(state, onManage)
+				EmptyBoard(state, onManage, onRefresh)
 			} else {
 				val order = sessionOrder(state)
 				// Accordion grouped by owning Gateway; within each: host agent, then devcontainer
@@ -622,50 +622,75 @@ fun SessionsScreen(
 	}
 }
 
-/** The board's empty state: exactly ONE thing, keyed on the connection state, so a terminal cause
- * never shows a spinner layered under an error the HealthHeader already names. */
+/** The single status surface when the board has no sessions. The HealthHeader is hidden in this
+ * state (SessionsScreen shows it only ALONGSIDE a session list), so this is the ONLY place a status
+ * renders: exactly one mutually exclusive branch, keyed on the connection state. A terminal cause is
+ * checked before the enrolling/connecting spinners, so a hard error can never sit under a "Setting
+ * up..." spinner, and it names the actual cause with a way forward instead of pointing elsewhere. */
 @Composable
-private fun EmptyBoard(state: ChatState, onManage: () -> Unit) {
+private fun EmptyBoard(state: ChatState, onManage: () -> Unit, onRefresh: () -> Unit) {
 	Column(
 		Modifier.fillMaxSize().padding(32.dp),
 		horizontalAlignment = Alignment.CenterHorizontally,
 		verticalArrangement = Arrangement.Center,
 	) {
 		when {
-			// Enrolled but no Gateway in the keyring yet: the primary onboarding step, with a real
-			// action instead of a sentence pointing elsewhere.
+			// No Gateway admitted yet: the primary onboarding step, with a real action.
 			state.needsGateway -> {
 				Text("No Gateways yet", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
-				Text(
-					"Add a Gateway to start talking to your agent sessions.",
-					style = MaterialTheme.typography.bodyMedium,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
-					textAlign = TextAlign.Center,
-				)
+				BoardBody("Add a Gateway to start talking to your agent sessions.")
 				Spacer(Modifier.height(20.dp))
 				Button(onClick = onManage) { Text("Add a Gateway") }
 			}
-			// A terminal error (secure storage, 401, ...): the banner above already names the cause
-			// and the fix, so keep the body calm instead of repeating it under a spinner.
+			// A terminal failure that will not self-heal (secure storage, 401, admission rejected, or
+			// an enrollment that gave up past the grace window). Name the actual cause from `error`
+			// and offer a way forward - never "see the banner above", which is not on screen here.
 			state.status == "error" -> {
-				Text(
-					"Can't connect right now - see the status banner above for what to fix.",
-					style = MaterialTheme.typography.bodyMedium,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
-					textAlign = TextAlign.Center,
-				)
+				Text("Can't connect", style = MaterialTheme.typography.titleLarge)
+				Spacer(Modifier.height(8.dp))
+				BoardBody(state.error ?: "Something went wrong reaching your Gateway.")
+				Spacer(Modifier.height(20.dp))
+				Button(onClick = onRefresh) { Text("Try again") }
+				Spacer(Modifier.height(4.dp))
+				TextButton(onClick = onManage) { Text("Manage Gateways") }
 			}
-			// Still establishing the connection.
+			// Mid-enrollment, still self-healing: the poll loop keeps retrying and clears it on the
+			// first success; past the grace window it escalates into the terminal branch above.
+			state.enrollingSince != 0L -> {
+				CircularProgressIndicator()
+				Spacer(Modifier.height(12.dp))
+				Text("Setting up...", style = MaterialTheme.typography.titleMedium)
+				Spacer(Modifier.height(4.dp))
+				BoardBody("Finishing enrollment with your Gateway.")
+			}
+			// Establishing the connection for the first time.
 			!state.connected -> {
 				CircularProgressIndicator()
 				Spacer(Modifier.height(12.dp))
 				Text("Connecting...", color = MaterialTheme.colorScheme.onSurfaceVariant)
 			}
-			// Connected, just nothing here yet.
+			// Connected but the recent polls failed: online-ish, quietly reconnecting.
+			state.pollFailStreak > 0 -> {
+				CircularProgressIndicator()
+				Spacer(Modifier.height(12.dp))
+				Text("Reconnecting...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+			}
+			// Connected and healthy, just nothing here yet.
 			else -> Text("No active sessions yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
 		}
 	}
+}
+
+/** Centered, muted body copy shared by the empty-board states. */
+@Composable
+private fun BoardBody(text: String) {
+	Text(
+		text,
+		style = MaterialTheme.typography.bodyMedium,
+		color = MaterialTheme.colorScheme.onSurfaceVariant,
+		textAlign = TextAlign.Center,
+	)
 }
 
 @Composable
