@@ -94,8 +94,17 @@ export async function menu(title: string, items: MenuItem[]): Promise<void> {
 		const choice = ask(">");
 		if (choice === "" || choice.toLowerCase() === "q") return;
 		const item = items.find((i) => i.key === choice);
-		if (item) await item.run();
-		else console.log(`Enter ${items.map((i) => i.key).join(", ")}, or q.`);
+		if (!item) {
+			console.log(`Enter ${items.map((i) => i.key).join(", ")}, or q.`);
+			continue;
+		}
+		// A failed operation drops back to the menu so the operator can retry, instead of
+		// crashing the whole tool.
+		try {
+			await item.run();
+		} catch (e) {
+			err(e instanceof Error ? e.message : String(e));
+		}
 	}
 }
 

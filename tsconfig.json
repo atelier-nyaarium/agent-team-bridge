@@ -12,7 +12,7 @@
 		"isolatedModules": true,
 		"types": ["bun-types"]
 	},
-	"include": ["src"],
+	"include": ["src", "scripts"],
 	"exclude": [
 		".claude",
 		".cursor",
