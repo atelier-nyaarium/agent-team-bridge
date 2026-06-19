@@ -547,6 +547,12 @@ class ChatRepository(
 	}
 
 	suspend fun connect() = withContext(Dispatchers.IO) {
+		// DEBUG: wire the ingest sender from the blob up front, BEFORE any enroll step can fail, then
+		// flush on every exit path (the finally below). Otherwise a pre-register failure (admission
+		// submit, register) strands its trace on-device until a poll cycle that never starts. The
+		// attach + flush + every DebugLog.log here compile out of release builds (BuildConfig.DEBUG).
+		runCatching { store.load()?.let { DebugLog.attachIngest(Provisioning.parse(it)) } }
+		DebugLog.log("Connect", "start gateway=${localGatewayId.ifEmpty { "?" }} admitted=${store.consoleAdmitted}")
 		try {
 			// Preflight the cluster path (API server + SA token + TLS) before blaming the
 			// bridge or enrollment, so a stale blob says "re-provision" and a missing
@@ -562,6 +568,7 @@ class ChatRepository(
 				}
 				return@withContext
 			}
+			DebugLog.log("Connect", "apiReachable ok")
 			// Submit this Console's own admission before the sealed register, so the Gateway
 			// has an owner-signed reason to trust its sealed ops. Bearer-gated, so it lands
 			// even though the Console is not admitted yet. A THROW here (e.g. the Keystore-backed
@@ -583,6 +590,7 @@ class ChatRepository(
 			// cursor. We still register (to learn gatewayId, claim the mailbox, get the epoch
 			// the box is on); the poll loop's advance() reconciles any epoch change.
 			val reg = client().register()
+			DebugLog.log("Connect", "register ok gateway=${reg.gatewayId ?: "?"}")
 			reg.gatewayId?.let { id ->
 				if (id.isNotEmpty() && id != localGatewayId) {
 					localGatewayId = id
@@ -614,9 +622,7 @@ class ChatRepository(
 					enrollingSince = 0L,
 				)
 			}
-			// Attach ingest now that we have the provisioning. DEBUG-only inside attachIngest.
-			val blob = store.load()
-			if (blob != null) runCatching { DebugLog.attachIngest(Provisioning.parse(blob)) }
+			DebugLog.log("Connect", "connected gateway=${localGatewayId.ifEmpty { "?" }}")
 		} catch (e: Exception) {
 			val (cause, kind) = classifyConnError(e)
 			// "is not admitted" means the Gateway holds no admission for this Console. If we believed
@@ -640,6 +646,10 @@ class ChatRepository(
 					ConnKind.TRANSIENT -> s.copy(status = "connecting", error = cause, connected = false, enrollingSince = 0L)
 				}
 			}
+		} finally {
+			// DEBUG: stream whatever this attempt logged, even on the failure paths that return before
+			// the poll loop's own flush would run. No-op in release (flushToIngest is BuildConfig.DEBUG).
+			DebugLog.flushToIngest()
 		}
 	}
 
@@ -673,8 +683,12 @@ class ChatRepository(
 		merge: (T) -> Unit,
 		failLabel: String,
 	): Boolean {
-		val result = runCatching { submit(signed) }.getOrElse { EnrollResult(ok = false, error = it.message) }
+		val result = runCatching { submit(signed) }.getOrElse {
+			DebugLog.log("Enroll", "$failLabel: submit threw ${it.javaClass.simpleName}: ${it.message?.take(140)}")
+			EnrollResult(ok = false, error = it.message)
+		}
 		if (!result.ok) {
+			DebugLog.log("Enroll", "$failLabel: evie rejected: ${result.error?.take(140) ?: "unknown"}")
 			_state.update { it.copy(error = "$failLabel: ${result.error?.take(120) ?: "unknown"}") }
 			return false
 		}
@@ -687,7 +701,13 @@ class ChatRepository(
 	 * Console is admitted; gated by a flag so connect does not re-issue it every cycle.
 	 * The gateway may still be syncing the admission - the ENROLLING grace covers that. */
 	private fun submitConsoleAdmission() {
-		if (store.consoleAdmitted) return
+		if (store.consoleAdmitted) {
+			// Distinguishes "the app believes it is already admitted and never POSTs" (which would
+			// explain zero enroll ops reaching evie) from "it POSTs and the submit fails".
+			DebugLog.log("Enroll", "submit skipped: consoleAdmitted flag already set")
+			return
+		}
+		DebugLog.log("Enroll", "submitting console admission to evie")
 		val signed = federation.consoleAdmission(System.currentTimeMillis())
 		// submitOwnerFact surfaces the real cause (e.g. evie rooted at a different owner key)
 		// so it does not hide behind the generic "finishing enrollment" the register hits next.

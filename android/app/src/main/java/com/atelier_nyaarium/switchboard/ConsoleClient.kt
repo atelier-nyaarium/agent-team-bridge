@@ -289,8 +289,20 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
 			.post(wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON))
 			.build()
-		client.newCall(req).execute().use { resp ->
+		// DEBUG trace: the exact URL the device POSTs to, plus the outcome. A transport throw means
+		// the device cannot reach evie's console-bridge at all (the trace then survives only in the
+		// on-device file); an HTTP code means it reached evie, so this is the coordinator's verdict.
+		DebugLog.log("Enroll", "POST $proxyBase/relay op=${op::class.simpleName}")
+		val resp =
+			try {
+				client.newCall(req).execute()
+			} catch (e: Exception) {
+				DebugLog.log("Enroll", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+				throw e
+			}
+		resp.use {
 			val text = resp.body?.string().orEmpty()
+			DebugLog.log("Enroll", "resp HTTP ${resp.code} ${text.take(120)}")
 			// 2xx: a real EnrollResult. A coordinator rejection is 400 with an
 			// EnrollResult body; a transport bounce is {error, retryable}. Cross-check
 			// the status so a non-2xx body is never read as a successful enroll.
