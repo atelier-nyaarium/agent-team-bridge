@@ -1,42 +1,76 @@
-// Assemble + VALIDATE the provisioning blob, then write it (provision-console.sh emit_blob).
+// Assemble + VALIDATE the provisioning blob. It is validated against the SHARED ProvisioningSchema
+// before it is handed back, so a producer/schema field drift (a rename here, a missing field there)
+// fails LOUDLY at provision time on the host instead of silently on the device after import.
 //
-// The blob is validated against the SHARED ProvisioningSchema before it is written, so a
-// producer/schema field drift (a rename here, a missing field there) fails LOUDLY at
-// provision time on the host instead of silently on the device after import. bun-only;
-// inputs ride the ENVIRONMENT so the saToken/appToken/console identity stay out of argv.
-//   env in: SB_API SB_CA SB_SA SB_APP (cluster creds), SB_NS SB_SVC SB_PORT, SB_BLOB
-//           (output path). In the phone-anchored model the blob is transport-only: the
-//           Console generates its own identity and resolves Gateway keys from the synced
-//           keyring, so the identity/gateway fields are omitted.
+// Transport-only in the phone-anchored model: the Console generates its own identity and resolves
+// Gateway keys from the synced keyring, so the identity/gateway fields are omitted.
 
 import { ProvisioningSchema } from "../src/shared/schemas.js";
 
-function reqEnv(name: string): string {
-	const v = process.env[name];
-	if (v === undefined || v === "") throw new Error(`missing required env ${name}`);
-	return v;
+////////////////////////////////
+//  Interfaces & Types
+
+export interface ProvisioningBlobInput {
+	apiUrl: string;
+	caPem: string;
+	saToken: string;
+	appToken: string;
+	namespace?: string;
+	service?: string;
+	port?: number;
+	// Legacy host-minted-identity fields; the phone-anchored flow omits them (the Console owns its
+	// identity + keyring).
+	identity?: string;
+	gatewayId?: string;
+	gatewaySignPub?: string;
+	gatewayBoxPub?: string;
+	gatewayTransport?: string;
 }
 
-const blob = {
-	apiUrl: reqEnv("SB_API"),
-	caPem: reqEnv("SB_CA"),
-	saToken: reqEnv("SB_SA"),
-	appToken: reqEnv("SB_APP"),
-	namespace: process.env.SB_NS || undefined,
-	service: process.env.SB_SVC || undefined,
-	port: process.env.SB_PORT ? Number(process.env.SB_PORT) : undefined,
-	// Optional: a legacy host-minted-identity blob still carries these, but the
-	// phone-anchored flow omits them (the Console owns its identity + keyring).
-	identity: process.env.SB_CONSOLE_ID || undefined,
-	gatewayId: process.env.SB_SWID || undefined,
-	gatewaySignPub: process.env.SB_SSIGN || undefined,
-	gatewayBoxPub: process.env.SB_SBOX || undefined,
-	// A JSON-encoded GatewayTransport: the gateway-bridge creds the owner Console seals into
-	// a bootstrap bundle when it enrolls a creds-less Gateway.
-	gatewayTransport: process.env.SB_SWTRANSPORT || undefined,
-};
+////////////////////////////////
+//  Functions & Helpers
 
-// .parse throws (non-zero exit) on any type/shape mismatch and strips unknown keys, so the
-// written blob is exactly the schema's shape.
-const parsed = ProvisioningSchema.parse(blob);
-await Bun.write(reqEnv("SB_BLOB"), `${JSON.stringify(parsed, null, 2)}\n`);
+/** Validate the blob to the shared schema (strips unknown keys, throws on any shape mismatch), so
+ * the result is exactly the schema's shape. */
+export function buildProvisioningBlob(input: ProvisioningBlobInput): ReturnType<typeof ProvisioningSchema.parse> {
+	return ProvisioningSchema.parse(input);
+}
+
+/** Validate then write the blob (2-space JSON + trailing newline) to `outPath`. */
+export async function writeProvisioningBlob(
+	input: ProvisioningBlobInput,
+	outPath: string,
+): Promise<ReturnType<typeof ProvisioningSchema.parse>> {
+	const parsed = buildProvisioningBlob(input);
+	await Bun.write(outPath, `${JSON.stringify(parsed, null, 2)}\n`);
+	return parsed;
+}
+
+////////////////////////////////
+//  CLI shim (back-compat: cluster creds + output path on the ENVIRONMENT so the saToken/appToken
+//  stay out of argv)
+
+if (import.meta.main) {
+	const reqEnv = (name: string): string => {
+		const v = process.env[name];
+		if (v === undefined || v === "") throw new Error(`missing required env ${name}`);
+		return v;
+	};
+	await writeProvisioningBlob(
+		{
+			apiUrl: reqEnv("SB_API"),
+			caPem: reqEnv("SB_CA"),
+			saToken: reqEnv("SB_SA"),
+			appToken: reqEnv("SB_APP"),
+			namespace: process.env.SB_NS || undefined,
+			service: process.env.SB_SVC || undefined,
+			port: process.env.SB_PORT ? Number(process.env.SB_PORT) : undefined,
+			identity: process.env.SB_CONSOLE_ID || undefined,
+			gatewayId: process.env.SB_SWID || undefined,
+			gatewaySignPub: process.env.SB_SSIGN || undefined,
+			gatewayBoxPub: process.env.SB_SBOX || undefined,
+			gatewayTransport: process.env.SB_SWTRANSPORT || undefined,
+		},
+		reqEnv("SB_BLOB"),
+	);
+}
