@@ -208,9 +208,9 @@ async function emitBlob(): Promise<void> {
 	// home Gateway as bootstrap-transport.json, NOT carried in the blob: the Console fetches it via
 	// the get_gateway_transport op when enrolling a creds-less Gateway, so a QR-sized blob fits and
 	// the gateway-bridge token never persists on the device.
-	const gatewayTransport =
+	const bootstrapTransport =
 		swSa && swCa ? JSON.stringify({ apiUrl, saToken: swSa, caPem: swCa, appToken: swApp || "" }) : undefined;
-	if (gatewayTransport && !(await writeGatewayFile(`${FED_DIR_IN}/bootstrap-transport.json`, gatewayTransport))) {
+	if (bootstrapTransport && !(await writeGatewayFile(`${FED_DIR_IN}/bootstrap-transport.json`, bootstrapTransport))) {
 		note("warning: could not write bootstrap-transport.json into the Gateway");
 	}
 
