@@ -64,9 +64,6 @@ data class Provisioning(
 	val gatewayId: String = "",
 	val gatewaySignPub: String = "",
 	val gatewayBoxPub: String = "",
-	/** JSON-encoded GatewayTransport (the gateway-bridge creds), sealed into a bootstrap
-	 * bundle when this Console enrolls a creds-less Gateway. Empty for a legacy blob. */
-	val gatewayTransport: String = "",
 ) {
 	companion object {
 		fun parse(blob: String): Provisioning {
@@ -87,7 +84,6 @@ data class Provisioning(
 				gatewayId = p.gatewayId ?: "",
 				gatewaySignPub = p.gatewaySignPub ?: "",
 				gatewayBoxPub = p.gatewayBoxPub ?: "",
-				gatewayTransport = p.gatewayTransport ?: "",
 			)
 		}
 	}

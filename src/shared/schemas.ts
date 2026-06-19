@@ -402,11 +402,6 @@ export const ProvisioningSchema = z
 		gatewayId: z.string().optional(),
 		gatewaySignPub: z.string().optional(),
 		gatewayBoxPub: z.string().optional(),
-		// A JSON-encoded GatewayTransport (the gateway-bridge SA-token creds), set by
-		// provision-console.sh. The owner Console seals it into a GatewayBootstrapBundle when
-		// it enrolls a creds-less Gateway, so the new Gateway can reach evie. Encoded as a
-		// string for the same reason as `identity` (it nests inside this blob).
-		gatewayTransport: z.string().optional(),
 	})
 	.meta({ id: "Provisioning" });
 

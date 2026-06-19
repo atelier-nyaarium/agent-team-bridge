@@ -11,7 +11,6 @@ import com.atelier_nyaarium.switchboard.proto.NoticeId
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SessionId
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
-import com.atelier_nyaarium.switchboard.proto.GatewayTransport
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
@@ -723,15 +722,12 @@ class ChatRepository(
 			?: return@withContext EnrollDelivery(false, "Admit failed. Try again.", null)
 		val nonce = scanned.nonce
 			?: return@withContext EnrollDelivery(true, "Admitted. This Gateway will come online once it syncs the keyring.", null)
-		// Fetch the bootstrap transport from the home Gateway (the Console no longer carries it in
-		// its blob); fall back to a legacy blob's copy so a half-deployed state still enrolls.
+		// Fetch the bootstrap transport from the home Gateway. The Console no longer carries it in
+		// its blob; the Gateway holds it as bootstrap-transport.json and serves it sealed on demand.
 		val transport = runCatching { client().getGatewayTransport() }.getOrNull()
-			?: runCatching { Provisioning.parse(store.load() ?: "").gatewayTransport.ifEmpty { null } }
-				.getOrNull()
-				?.let { runCatching { wireJson.decodeFromString(GatewayTransport.serializer(), it) }.getOrNull() }
 			?: return@withContext EnrollDelivery(
 				true,
-				"Admitted, but could not get the gateway transport creds. Re-run provision-console.sh.",
+				"Admitted, but could not fetch the gateway transport creds from the home Gateway. Re-run provision-console.sh.",
 				null,
 			)
 		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub)

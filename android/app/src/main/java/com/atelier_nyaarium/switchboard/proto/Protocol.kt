@@ -210,7 +210,6 @@ data class Provisioning(
 	val gatewayId: String? = null,
 	val gatewaySignPub: String? = null,
 	val gatewayBoxPub: String? = null,
-	val gatewayTransport: String? = null,
 )
 
 @Serializable

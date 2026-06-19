@@ -24,7 +24,6 @@ export interface ProvisioningBlobInput {
 	gatewayId?: string;
 	gatewaySignPub?: string;
 	gatewayBoxPub?: string;
-	gatewayTransport?: string;
 }
 
 ////////////////////////////////

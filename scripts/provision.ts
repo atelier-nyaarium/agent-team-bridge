@@ -204,13 +204,12 @@ async function emitBlob(): Promise<void> {
 	const { saToken: swSa, caPem: swCa } = await readSaCreds("gateway-bridge-proxy-token");
 	const swApp = await envGet("BRIDGE_TOKEN");
 	// The 4-field GatewayTransport shape (the gateway fills namespace/service/port defaults when it
-	// installs the bundle). Omitted when the gateway-bridge SA is not yet populated.
+	// installs the bundle). Absent when the gateway-bridge SA is not yet populated. Handed to the
+	// home Gateway as bootstrap-transport.json, NOT carried in the blob: the Console fetches it via
+	// the get_gateway_transport op when enrolling a creds-less Gateway, so a QR-sized blob fits and
+	// the gateway-bridge token never persists on the device.
 	const gatewayTransport =
 		swSa && swCa ? JSON.stringify({ apiUrl, saToken: swSa, caPem: swCa, appToken: swApp || "" }) : undefined;
-
-	// Hand the home Gateway these same creds as bootstrap-transport.json, so it serves them to the
-	// Console on the get_gateway_transport op (the Console fetches them when enrolling a creds-less
-	// Gateway, instead of carrying them in its blob).
 	if (gatewayTransport && !(await writeGatewayFile(`${FED_DIR_IN}/bootstrap-transport.json`, gatewayTransport))) {
 		note("warning: could not write bootstrap-transport.json into the Gateway");
 	}
@@ -218,7 +217,7 @@ async function emitBlob(): Promise<void> {
 	// writeProvisioningBlob VALIDATES against the shared ProvisioningSchema before writing, so a
 	// field drift fails loudly here, not silently on the device.
 	await writeProvisioningBlob(
-		{ apiUrl, caPem, saToken, appToken, namespace: NS, service: SERVICE, port: PORT, gatewayTransport },
+		{ apiUrl, caPem, saToken, appToken, namespace: NS, service: SERVICE, port: PORT },
 		BLOB_FILE,
 	);
 	await $`chmod 600 ${BLOB_FILE}`.quiet().nothrow();
@@ -314,54 +313,38 @@ async function verify(): Promise<void> {
 ////////////////////////////////
 //  QR menu
 
-const QR_OMIT_NOTE =
-	"Note: the QR omits the gateway-transport creds (a QR caps at ~2.9 KB); paste or file-import the blob to enroll a creds-less LAN Gateway.";
-
-/** The QR-encodable form of the blob. A QR maxes at ~2.9 KB (byte mode), but the full blob also
- * carries the gateway-bridge transport creds (a second SA + token, roughly half its size). Those are
- * optional for the Console - it uses them only to seal a LAN bootstrap bundle for a creds-less
- * Gateway - so when the full blob overflows a QR, drop gatewayTransport and encode the rest. The
- * file/paste import still carries the complete blob. Throws when even the trimmed blob is too big. */
-function qrPayload(blobText: string): { text: string; omitted: boolean } {
-	if (fitsInQr(blobText)) return { text: blobText, omitted: false };
-	const obj = jparse<Record<string, unknown>>(blobText);
-	if (obj && typeof obj.gatewayTransport === "string") {
-		const rest = { ...obj };
-		delete rest.gatewayTransport;
-		const trimmed = JSON.stringify(rest);
-		if (fitsInQr(trimmed)) return { text: trimmed, omitted: true };
+/** The blob, validated to fit a single QR. The gateway-bridge transport creds (the bulky half of
+ * the old blob) are now fetched on demand via the get_gateway_transport op, not bundled, so the
+ * blob sits well under a QR's ~2.9 KB ceiling. This guards against a future field pushing it over
+ * with a clear error instead of qrcode-generator's raw overflow. */
+function qrPayload(blobText: string): string {
+	if (!fitsInQr(blobText)) {
+		throw new Error(`the blob is ${blobText.length} bytes - too large for a QR; use paste or file import`);
 	}
-	throw new Error(
-		`the blob is ${blobText.length} bytes - too large for a QR even without the gateway transport; use paste or file import`,
-	);
+	return blobText;
 }
 
-/** Render the blob's QR in this terminal (wide - a full QR runs ~170+ modules). Drops the optional
- * gateway-transport creds when the blob overflows a QR (see qrPayload). */
+/** Render the blob's QR in this terminal (wide - a full QR runs ~170+ modules). */
 async function showQrTerminal(): Promise<void> {
 	const blob = await Bun.file(BLOB_FILE)
 		.text()
 		.catch(() => "");
 	if (!blob) throw new Error("could not render the QR (is the blob present?)");
-	const { text, omitted } = qrPayload(blob);
-	const { ansi, modules, ec } = renderQrTerminal(text);
+	const { ansi, modules, ec } = renderQrTerminal(qrPayload(blob));
 	process.stdout.write(ansi);
 	console.error(`${modules}x${modules} modules, EC=${ec}, needs ~${modules + 4} terminal columns`);
-	if (omitted) note(QR_OMIT_NOTE);
 }
 
-/** Save the blob's QR as a 0600 GIF. Camera-friendly at any size; drops the optional gateway-
- * transport creds when the blob overflows a QR (see qrPayload). */
-async function saveQrImage(): Promise<{ path: string; omitted: boolean }> {
+/** Save the blob's QR as a 0600 GIF. Camera-friendly at any size. Returns the path. */
+async function saveQrImage(): Promise<string> {
 	const blob = await Bun.file(BLOB_FILE)
 		.text()
 		.catch(() => "");
 	if (!blob) throw new Error("could not read the blob (is it present?)");
-	const { text, omitted } = qrPayload(blob);
-	const { gif } = renderQrImageGif(text);
+	const { gif } = renderQrImageGif(qrPayload(blob));
 	await Bun.write(QR_GIF, gif);
 	await $`chmod 600 ${QR_GIF}`.quiet().nothrow();
-	return { path: QR_GIF, omitted };
+	return QR_GIF;
 }
 
 /** Post-setup dial menu: show the enrollment QR in the terminal, or save it as an image. Quitting
@@ -384,10 +367,8 @@ async function qrMenu(): Promise<void> {
 			console.log();
 		} else if (choice === "2") {
 			try {
-				const res = await saveQrImage();
-				saved = res.path;
+				saved = await saveQrImage();
 				note(`saved: ${saved}  (open it and scan, or send it to the phone)`);
-				if (res.omitted) note(QR_OMIT_NOTE);
 			} catch (e) {
 				err(e instanceof Error ? e.message : String(e));
 				saved = "";
