@@ -217,6 +217,10 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 		// sync lag can never be mislabeled "re-run the script".
 		m.contains("is not admitted to the Domain", ignoreCase = true) ->
 			"Finishing up enrollment..." to ConnKind.ENROLLING
+		// A rejected admission submission (e.g. the app's owner key does not match the Domain evie is
+		// rooted at) will NOT self-heal by waiting - surface it instead of the calm sync-lag above.
+		m.contains("admission rejected", ignoreCase = true) ->
+			"${m.take(120)} - re-provision with the app's owner keys, then re-import" to ConnKind.TERMINAL
 		// The Keystore-backed store failed to initialize, so the app fails closed (refuses to
 		// persist the federation key in cleartext). Re-running provision does not help; the device's
 		// secure storage must work. Distinct from "not enrolled" (which sounds fixable by re-running).
@@ -615,6 +619,10 @@ class ChatRepository(
 			if (blob != null) runCatching { DebugLog.attachIngest(Provisioning.parse(blob)) }
 		} catch (e: Exception) {
 			val (cause, kind) = classifyConnError(e)
+			// "is not admitted" means the Gateway holds no admission for this Console. If we believed
+			// we were admitted, the flag is stale (the submit never landed in evie) - clear it so the
+			// next connect re-submits the admission instead of waiting forever on a calm sync-lag.
+			if (kind == ConnKind.ENROLLING) store.consoleAdmitted = false
 			_state.update { s ->
 				when (kind) {
 					// Post-enroll sync lag: calm "Finishing up enrollment..." (the poll loop
@@ -687,6 +695,9 @@ class ChatRepository(
 			store.consoleAdmitted = true
 		} else {
 			DebugLog.log("Federation", "console admission submit failed")
+			// Throw so connect() surfaces this SPECIFIC cause and stops; otherwise register() runs
+			// next and overwrites it with the generic sync-lag "finishing enrollment", masking it.
+			error(_state.value.error ?: "Console admission rejected by evie")
 		}
 	}
 
