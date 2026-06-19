@@ -350,6 +350,11 @@ fun LockScreen(onUnlock: () -> Unit) {
 fun ProvisionScreen(repo: ChatRepository, onProvision: (String) -> Unit) {
 	val context = LocalContext.current
 	var status by remember { mutableStateOf("") }
+	var step by remember { mutableStateOf(1) }
+	// Owner identity, minted-or-loaded on first read. Shown so the host can root the mesh at it.
+	val signPub = remember { repo.ownerSignPub() }
+	val boxPub = remember { repo.ownerBoxPub() }
+	val sas = remember { repo.ownerSas() }
 
 	fun tryProvision(text: String?, source: String) {
 		val s = text?.trim().orEmpty()
@@ -357,7 +362,7 @@ fun ProvisionScreen(repo: ChatRepository, onProvision: (String) -> Unit) {
 			status = "Connecting..."
 			onProvision(s)
 		} else {
-			status = "$source did not contain provisioning JSON."
+			status = "$source did not contain a valid setup."
 		}
 	}
 
@@ -370,8 +375,8 @@ fun ProvisionScreen(repo: ChatRepository, onProvision: (String) -> Unit) {
 		tryProvision(text, "File")
 	}
 
-	// QR scan: the host's enrollment QR carries the blob JSON verbatim, so the scanned
-	// text is exactly what tryProvision expects. Full-screen CameraX + ML Kit scanner.
+	// QR scan: the host's QR carries the setup blob verbatim, so the scanned text is exactly
+	// what tryProvision expects. Full-screen CameraX + ML Kit scanner.
 	var scanning by remember { mutableStateOf(false) }
 	if (scanning) {
 		QrScanScreen(
@@ -384,29 +389,77 @@ fun ProvisionScreen(repo: ChatRepository, onProvision: (String) -> Unit) {
 		return
 	}
 
-	Scaffold(topBar = { TopAppBar(title = { Text("Provision Switchboard") }) }) { pad ->
+	// On step 2, the system back returns to step 1 rather than leaving the screen.
+	BackHandler(enabled = step == 2) {
+		step = 1
+		status = ""
+	}
+
+	Scaffold(
+		topBar = {
+			TopAppBar(
+				title = { Text("Link this phone") },
+				navigationIcon = {
+					if (step == 2) {
+						TextButton(onClick = {
+							step = 1
+							status = ""
+						}) { Text("Back") }
+					}
+				},
+			)
+		},
+	) { pad ->
 		Column(
 			Modifier.padding(pad).padding(24.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(16.dp),
 		) {
-			OwnerKeysCard(repo)
-			Text("Then scan the enrollment QR the host shows (./provision-console.sh --qr), or paste/import the blob.")
-			Button(
-				onClick = { scanning = true },
-				modifier = Modifier.fillMaxWidth(),
-			) { Text("Scan enrollment QR") }
-			OutlinedButton(
-				onClick = { tryProvision(readClipboard(context), "Clipboard") },
-				modifier = Modifier.fillMaxWidth(),
-			) { Text("Paste from clipboard") }
-			OutlinedButton(
-				onClick = { fileLauncher.launch(arrayOf("*/*")) },
-				modifier = Modifier.fillMaxWidth(),
-			) { Text("Import from file") }
-			if (status.isNotEmpty()) {
-				val color =
-					if (status.startsWith("Connecting")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-				Text(status, color = color)
+			Text(
+				"Step $step of 2",
+				style = MaterialTheme.typography.labelLarge,
+				color = MaterialTheme.colorScheme.primary,
+			)
+			if (step == 1) {
+				Text("Give your computer the key", style = MaterialTheme.typography.titleLarge)
+				Text(
+					"On your computer, run ./provision-console.sh. When it asks for the owner key, " +
+						"tap Copy key and paste it in.",
+					style = MaterialTheme.typography.bodyMedium,
+				)
+				Button(
+					onClick = { copyToClipboard(context, """{"signPub":"$signPub","boxPub":"$boxPub"}""") },
+					modifier = Modifier.fillMaxWidth(),
+				) { Text("Copy key") }
+				HorizontalDivider()
+				Text(
+					"Optional: the computer prints this code so you can confirm it matches.",
+					style = MaterialTheme.typography.bodySmall,
+				)
+				Text(sas, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+				Button(onClick = { step = 2 }, modifier = Modifier.fillMaxWidth()) { Text("Next") }
+			} else {
+				Text("Scan what it gives back", style = MaterialTheme.typography.titleLarge)
+				Text(
+					"When setup finishes, your computer shows a QR. Scan it to finish.",
+					style = MaterialTheme.typography.bodyMedium,
+				)
+				Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
+				Text("No camera on this phone?", style = MaterialTheme.typography.bodySmall)
+				Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+					OutlinedButton(
+						onClick = { tryProvision(readClipboard(context), "Clipboard") },
+						modifier = Modifier.weight(1f),
+					) { Text("Paste text") }
+					OutlinedButton(
+						onClick = { fileLauncher.launch(arrayOf("*/*")) },
+						modifier = Modifier.weight(1f),
+					) { Text("Open file") }
+				}
+				if (status.isNotEmpty()) {
+					val color =
+						if (status.startsWith("Connecting")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+					Text(status, color = color)
+				}
 			}
 		}
 	}
@@ -415,6 +468,11 @@ fun ProvisionScreen(repo: ChatRepository, onProvision: (String) -> Unit) {
 private fun readClipboard(context: Context): String? {
 	val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
 	return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+}
+
+private fun copyToClipboard(context: Context, value: String) {
+	val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+	cm.setPrimaryClip(android.content.ClipData.newPlainText("owner key", value))
 }
 
 /** True once the text is a JSON object with the fields a Provisioning needs. */
