@@ -46,6 +46,10 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -72,6 +76,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -144,7 +149,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	val context = LocalContext.current
 	val activity = context as? FragmentActivity
 	var openTeam by remember { mutableStateOf<String?>(null) }
-	var showSettings by remember { mutableStateOf(false) }
+	// Settings nav survives a config change (rotate / theme flip) so the open sub-screen is not
+	// lost two levels deep; the route enum is Serializable (so rememberSaveable bundles it).
+	var showSettings by rememberSaveable { mutableStateOf(false) }
+	var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.HUB) }
 	var showManage by remember { mutableStateOf(false) }
 	var showAddGateway by remember { mutableStateOf(false) }
 	var unlocked by remember { mutableStateOf(false) }
@@ -225,6 +233,13 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	LaunchedEffect(openTeamRequest.value) {
 		openTeamRequest.value?.let { team ->
 			repo.openThread(team)
+			// A tapped notification surfaces its thread - dismiss any settings/manage overlay so the
+			// thread is not masked (rendering shows settings before openTeam) and the next back press
+			// is not consumed invisibly clearing it.
+			showSettings = false
+			settingsRoute = SettingsRoute.HUB
+			showManage = false
+			showAddGateway = false
 			openTeam = team
 			openTeamRequest.value = null
 		}
@@ -246,6 +261,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			showAddGateway -> showAddGateway = false
 			showManage -> showManage = false
 			openTeam != null -> openTeam = null
+			showSettings && settingsRoute != SettingsRoute.HUB -> settingsRoute = SettingsRoute.HUB
 			showSettings -> showSettings = false
 		}
 	}
@@ -261,15 +277,21 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			SettingsScreen(
 				state = state,
 				repo = repo,
+				route = settingsRoute,
+				onRoute = { settingsRoute = it },
 				onSetDeviceName = { scope.launch { repo.setDeviceName(it) } },
 				onToggleBiometric = { repo.setBiometricLock(it) },
 				onManage = { showManage = true },
 				onClear = {
 					scope.launch { repo.clearAll() }
 					showSettings = false
+					settingsRoute = SettingsRoute.HUB
 					openTeam = null
 				},
-				onBack = { showSettings = false },
+				onCloseSettings = {
+					showSettings = false
+					settingsRoute = SettingsRoute.HUB
+				},
 			)
 		openTeam != null -> {
 			// Devcontainer names are the project identity; only loose peers take labels.
@@ -314,7 +336,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			SessionsScreen(
 				state = state,
 				onRefresh = { scope.launch { repo.refreshTeams() } },
-				onSettings = { showSettings = true },
+				onSettings = {
+					settingsRoute = SettingsRoute.HUB
+					showSettings = true
+				},
 				onManage = { showManage = true },
 				onOpen = { team ->
 					repo.openThread(team)
@@ -1117,72 +1142,141 @@ fun ThreadScreen(
 	}
 }
 
+/** The settings hub's routes: the hub plus one focused sub-screen each. A plain enum
+ * (Serializable), so App() holds the current route in rememberSaveable across rotation. */
+enum class SettingsRoute { HUB, PROFILE, VOICE, NETWORKS, SECURITY, SYSTEM }
+
+private fun settingsTitle(route: SettingsRoute): String = when (route) {
+	SettingsRoute.HUB -> "Settings"
+	SettingsRoute.PROFILE -> "Profile"
+	SettingsRoute.VOICE -> "Voice & TTS"
+	SettingsRoute.NETWORKS -> "Networks & Trust"
+	SettingsRoute.SECURITY -> "Security"
+	SettingsRoute.SYSTEM -> "System"
+}
+
+/** Settings hub-and-spoke: the hub lists tappable category rows; each drills into a
+ * focused sub-screen. Back pops a sub-screen to the hub, and the hub closes settings
+ * (the App-level BackHandler mirrors this for the system back button). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
 	state: ChatState,
 	repo: ChatRepository,
+	route: SettingsRoute,
+	onRoute: (SettingsRoute) -> Unit,
 	onSetDeviceName: (String) -> Unit,
 	onToggleBiometric: (Boolean) -> Unit,
 	onManage: () -> Unit,
 	onClear: () -> Unit,
-	onBack: () -> Unit,
+	onCloseSettings: () -> Unit,
 ) {
-	var name by remember { mutableStateOf(state.deviceName) }
+	val onBack = { if (route == SettingsRoute.HUB) onCloseSettings() else onRoute(SettingsRoute.HUB) }
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text("Settings") },
+				title = { Text(settingsTitle(route)) },
 				navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
 			)
 		},
 	) { pad ->
 		Column(
-			// Scrollable: the settings list outgrew one screen once the voice
-			// playback section landed.
 			Modifier.padding(pad).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(16.dp),
 		) {
-			Text("Device name", style = MaterialTheme.typography.titleMedium)
-			Row(verticalAlignment = Alignment.CenterVertically) {
-				OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.weight(1f))
-				Button(
-					enabled = name.isNotBlank() && name != state.deviceName,
-					onClick = { onSetDeviceName(name.trim()) },
-					modifier = Modifier.padding(start = 8.dp),
-				) { Text("Save") }
+			when (route) {
+				SettingsRoute.HUB -> {
+					SettingsRow("Profile") { onRoute(SettingsRoute.PROFILE) }
+					SettingsRow("Voice & TTS") { onRoute(SettingsRoute.VOICE) }
+					SettingsRow("Networks & Trust") { onRoute(SettingsRoute.NETWORKS) }
+					SettingsRow("Security") { onRoute(SettingsRoute.SECURITY) }
+					SettingsRow("System") { onRoute(SettingsRoute.SYSTEM) }
+				}
+				SettingsRoute.PROFILE -> ProfileSettings(state, onSetDeviceName)
+				SettingsRoute.VOICE -> SttsVoiceSection(repo)
+				SettingsRoute.NETWORKS -> NetworksSettings(repo, onManage)
+				SettingsRoute.SECURITY -> SecuritySettings(state, onToggleBiometric)
+				SettingsRoute.SYSTEM -> SystemSettings(onClear)
 			}
-
-			HorizontalDivider()
-			Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-				Text("Biometric lock", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-				Switch(checked = state.biometricLock, onCheckedChange = onToggleBiometric)
-			}
-			Text(
-				"Require fingerprint or device PIN on app open. Falls back to unlocked if nothing is enrolled.",
-				style = MaterialTheme.typography.bodySmall,
-			)
-
-			HorizontalDivider()
-			Text("Network", style = MaterialTheme.typography.titleMedium)
-			Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Manage networks") }
-			OwnerKeysCard(repo)
-			OwnerBackupCard(repo)
-
-			HorizontalDivider()
-			BatteryExemptionRow()
-
-			HorizontalDivider()
-			SttsVoiceSection(repo)
-
-			HorizontalDivider()
-			AppUpdateRow()
-
-			HorizontalDivider()
-			Spacer(Modifier.width(0.dp))
-			Button(onClick = onClear) { Text("Clear & re-provision") }
-			Text("Removes the stored credential and chat history. Voice settings are kept.", style = MaterialTheme.typography.bodySmall)
 		}
+	}
+}
+
+/** A tappable hub row: the category label and a trailing drill-in chevron. */
+@Composable
+private fun SettingsRow(label: String, onClick: () -> Unit) {
+	Row(
+		Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
+		Text(label, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+		Icon(
+			Icons.AutoMirrored.Filled.KeyboardArrowRight,
+			contentDescription = null,
+			tint = MaterialTheme.colorScheme.onSurfaceVariant,
+		)
+	}
+}
+
+@Composable
+private fun ProfileSettings(state: ChatState, onSetDeviceName: (String) -> Unit) {
+	var name by remember { mutableStateOf(state.deviceName) }
+	Text("Device name", style = MaterialTheme.typography.titleMedium)
+	Row(verticalAlignment = Alignment.CenterVertically) {
+		OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.weight(1f))
+		Button(
+			enabled = name.isNotBlank() && name != state.deviceName,
+			onClick = { onSetDeviceName(name.trim()) },
+			modifier = Modifier.padding(start = 8.dp),
+		) { Text("Save") }
+	}
+}
+
+@Composable
+private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit) {
+	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Manage gateways") }
+	OwnerKeysCard(repo)
+	OwnerBackupCard(repo)
+}
+
+@Composable
+private fun SecuritySettings(state: ChatState, onToggleBiometric: (Boolean) -> Unit) {
+	Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+		Text("Biometric lock", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+		Switch(checked = state.biometricLock, onCheckedChange = onToggleBiometric)
+	}
+	Text(
+		"Require fingerprint or device PIN on app open. Falls back to unlocked if nothing is enrolled.",
+		style = MaterialTheme.typography.bodySmall,
+	)
+}
+
+/** System settings; the danger action (Clear & re-provision) sits at the bottom behind a
+ * confirm, so a wipe is two levels deep (Settings -> System) plus an explicit confirmation. */
+@Composable
+private fun SystemSettings(onClear: () -> Unit) {
+	var confirmClear by remember { mutableStateOf(false) }
+	BatteryExemptionRow()
+	HorizontalDivider()
+	AppUpdateRow()
+	HorizontalDivider()
+	Text("Danger", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+	OutlinedButton(
+		onClick = { confirmClear = true },
+		colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+	) { Text("Clear & re-provision") }
+	Text(
+		"Removes the stored credential and chat history. Voice settings are kept.",
+		style = MaterialTheme.typography.bodySmall,
+	)
+	if (confirmClear) {
+		AlertDialog(
+			onDismissRequest = { confirmClear = false },
+			title = { Text("Clear & re-provision?") },
+			text = { Text("Removes the stored credential and chat history from this device. Voice settings are kept.") },
+			confirmButton = { TextButton(onClick = { confirmClear = false; onClear() }) { Text("Clear") } },
+			dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+		)
 	}
 }
 
