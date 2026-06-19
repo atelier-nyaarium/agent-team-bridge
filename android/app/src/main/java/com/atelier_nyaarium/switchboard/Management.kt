@@ -68,19 +68,16 @@ fun OwnerKeysCard(repo: ChatRepository) {
 		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 			Text("Owner key (this device is the Domain root)", style = MaterialTheme.typography.titleMedium)
 			Text(
-				"Run the host setup and give it these two keys to root the network at this device. " +
-					"Confirm the fingerprint matches what the host prints.",
+				"Run the host setup, tap Copy owner keys, and paste the blob to root the network at " +
+					"this device. Confirm the fingerprint matches what the host prints.",
 				style = MaterialTheme.typography.bodySmall,
 			)
 			Text("Fingerprint: $sas", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+			// One paste for the host: both owner pubkeys as JSON. base64 values need no escaping.
 			OutlinedButton(
-				onClick = { copyToClipboard(context, "owner signing key", signPub) },
+				onClick = { copyToClipboard(context, "owner keys", """{"signPub":"$signPub","boxPub":"$boxPub"}""") },
 				modifier = Modifier.fillMaxWidth(),
-			) { Text("Copy owner signing key") }
-			OutlinedButton(
-				onClick = { copyToClipboard(context, "owner box key", boxPub) },
-				modifier = Modifier.fillMaxWidth(),
-			) { Text("Copy owner box key") }
+			) { Text("Copy owner keys") }
 		}
 	}
 }
@@ -164,10 +161,10 @@ fun OwnerBackupCard(repo: ChatRepository) {
 	}
 }
 
-/** Manage networks: the admitted members of the keyring, with revoke, plus Add Switch. */
+/** Manage networks: the admitted members of the keyring, with revoke, plus Add Gateway. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ManageScreen(repo: ChatRepository, onBack: () -> Unit, onAddSwitch: () -> Unit) {
+fun ManageScreen(repo: ChatRepository, onBack: () -> Unit, onAddGateway: () -> Unit) {
 	val scope = rememberCoroutineScope()
 	// Re-read after an admit/revoke so the board reflects the change.
 	var refresh by remember { mutableStateOf(0) }
@@ -178,12 +175,12 @@ fun ManageScreen(repo: ChatRepository, onBack: () -> Unit, onAddSwitch: () -> Un
 			verticalArrangement = Arrangement.spacedBy(12.dp),
 		) {
 			if (members.isEmpty()) {
-				Text("No members admitted yet. Add a Switch to enroll one.", style = MaterialTheme.typography.bodyMedium)
+				Text("No members admitted yet. Add a Gateway to enroll one.", style = MaterialTheme.typography.bodyMedium)
 			}
 			for (m in members) {
 				Card(Modifier.fillMaxWidth()) {
 					Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-						val title = if (m.kind == "switch") (m.switchId ?: "switch") else "console"
+						val title = if (m.kind == "gateway") (m.gatewayId ?: "gateway") else "console"
 						Text(
 							if (m.isSelf) "$title  (this device)" else title,
 							style = MaterialTheme.typography.titleMedium,
@@ -205,23 +202,23 @@ fun ManageScreen(repo: ChatRepository, onBack: () -> Unit, onAddSwitch: () -> Un
 					}
 				}
 			}
-			Button(onClick = onAddSwitch, modifier = Modifier.fillMaxWidth()) { Text("Add Switch") }
+			Button(onClick = onAddGateway, modifier = Modifier.fillMaxWidth()) { Text("Add Gateway") }
 			OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back") }
 		}
 	}
 }
 
-/** Add Switch: scan the Switch's admit-switch QR, confirm the SAS against the Switch
- * terminal, then owner-sign + submit the admission. Bundle delivery to a remote Switch
- * (LAN/paste) is a later step; a host-configured Switch (e.g. the local one) gets its
+/** Add Gateway: scan the Gateway's admit-gateway QR, confirm the SAS against the Gateway
+ * terminal, then owner-sign + submit the admission. Bundle delivery to a remote Gateway
+ * (LAN/paste) is a later step; a host-configured Gateway (e.g. the local one) gets its
  * admission through evie's domain sync alone. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AddSwitchScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Unit) {
+fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Unit) {
 	val scope = rememberCoroutineScope()
 	val context = LocalContext.current
 	var scanning by remember { mutableStateOf(true) }
-	var scanned by remember { mutableStateOf<ScannedSwitch?>(null) }
+	var scanned by remember { mutableStateOf<ScannedGateway?>(null) }
 	var status by remember { mutableStateOf("") }
 	var busy by remember { mutableStateOf(false) }
 	var pasteBundle by remember { mutableStateOf<String?>(null) }
@@ -230,34 +227,34 @@ fun AddSwitchScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Unit
 		QrScanScreen(
 			onResult = {
 				scanning = false
-				val parsed = repo.parseAdmitSwitch(it)
-				if (parsed == null) status = "That QR is not a Switch enrollment code." else scanned = parsed
+				val parsed = repo.parseAdmitGateway(it)
+				if (parsed == null) status = "That QR is not a Gateway enrollment code." else scanned = parsed
 			},
 			onCancel = onBack,
 		)
 		return
 	}
 
-	Scaffold(topBar = { TopAppBar(title = { Text("Add Switch") }) }) { pad ->
+	Scaffold(topBar = { TopAppBar(title = { Text("Add Gateway") }) }) { pad ->
 		Column(
 			Modifier.padding(pad).padding(24.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(16.dp),
 		) {
 			val s = scanned
 			if (s == null) {
-				Text(status.ifEmpty { "No Switch scanned." }, color = MaterialTheme.colorScheme.error)
+				Text(status.ifEmpty { "No Gateway scanned." }, color = MaterialTheme.colorScheme.error)
 				Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan again") }
 				OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
 			} else {
-				Text("Scanned: ${s.switchId}", style = MaterialTheme.typography.titleMedium)
-				Text("Confirm this matches the Switch terminal:", style = MaterialTheme.typography.bodyMedium)
+				Text("Scanned: ${s.gatewayId}", style = MaterialTheme.typography.titleMedium)
+				Text("Confirm this matches the Gateway terminal:", style = MaterialTheme.typography.bodyMedium)
 				Text(s.sas, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.titleLarge)
 				if (status.isNotEmpty()) Text(status)
 				val paste = pasteBundle
 				if (paste != null) {
 					// LAN delivery was not possible: hand the operator the sealed bundle to paste.
 					Button(
-						onClick = { copyToClipboard(context, "switch bundle", paste) },
+						onClick = { copyToClipboard(context, "gateway bundle", paste) },
 						modifier = Modifier.fillMaxWidth(),
 					) { Text("Copy sealed bundle") }
 					OutlinedButton(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Done") }
@@ -270,7 +267,7 @@ fun AddSwitchScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Unit
 								busy = true
 								status = "Enrolling..."
 								scope.launch {
-									val result = repo.enrollSwitch(s)
+									val result = repo.enrollGateway(s)
 									busy = false
 									status = result.message
 									pasteBundle = result.pasteBundle

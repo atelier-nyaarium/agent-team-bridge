@@ -4,9 +4,9 @@ import path from "node:path";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** The Switch's reach-evie credentials: the same SA-token-over-service-proxy shape the
+/** The Gateway's reach-evie credentials: the same SA-token-over-service-proxy shape the
  * Console uses, so one mechanism serves both members. Delivered host-side for the local
- * Switch (provision-owner) or inside the sealed bootstrap bundle for a remote one. */
+ * Gateway (provision-owner) or inside the sealed bootstrap bundle for a remote one. */
 export interface EvieTransport {
 	apiUrl: string;
 	namespace: string;
@@ -37,7 +37,7 @@ function normalize(raw: Partial<EvieTransport> & { apiUrl?: string }): EvieTrans
 
 /** Resolve the service-proxy transport: the `EVIE_API_URL`/`EVIE_SA_TOKEN`/`EVIE_CA_PEM`
  * env trio first, else a `transport.json` written into the federation dir by enrollment.
- * Null when neither is present, which leaves the arbiter on the legacy port-forward. */
+ * Null when neither is present, which leaves the gateway on the legacy port-forward. */
 export function loadEvieTransport(federationDir: string): EvieTransport | null {
 	if (process.env.EVIE_API_URL) {
 		return normalize({

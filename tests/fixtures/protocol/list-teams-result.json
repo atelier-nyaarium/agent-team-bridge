@@ -2,14 +2,14 @@
 	"teams": [
 		{
 			"team": "switchboard",
-			"switchId": "laptop",
+			"gatewayId": "laptop",
 			"status": "online",
 			"mode": "channel",
 			"kind": "devcontainer",
 			"queue_depth": 0
 		},
 		{
-			"team": "old-arbiter-team",
+			"team": "old-gateway-team",
 			"status": "available",
 			"queue_depth": 2
 		}

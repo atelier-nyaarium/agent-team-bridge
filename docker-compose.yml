@@ -1,27 +1,27 @@
 services:
-  switch:
+  gateway:
     build: .
     container_name: switchboard
     ports:
       - "20000:20000"
     environment:
       - PORT=20000
-      # One Switch per machine, named by the device hostname. start-arbiter.sh
-      # injects the host hostname into SWITCH_ID; setting it explicitly is an escape
-      # hatch for duplicate hostnames. Unset leaves the arbiter to fall back to the
+      # One Gateway per machine, named by the device hostname. start-gateway.sh
+      # injects the host hostname into GATEWAY_ID; setting it explicitly is an escape
+      # hatch for duplicate hostnames. Unset leaves the gateway to fall back to the
       # container's own hostname.
-      - SWITCH_ID=${SWITCH_ID:-}
+      - GATEWAY_ID=${GATEWAY_ID:-}
       - RESPONSE_TIMEOUT_MS=600000
       - BRIDGE_TOKEN=${BRIDGE_TOKEN:-}
       - FEDERATION_OWNER_SIGN_PUB=${FEDERATION_OWNER_SIGN_PUB:-}
-      # Armed only by start-arbiter.sh --enroll on a creds-less Switch: a one-time nonce +
-      # the host LAN address it advertises in the admit-switch QR for bundle delivery.
+      # Armed only by start-gateway.sh --enroll on a creds-less Gateway: a one-time nonce +
+      # the host LAN address it advertises in the admit-gateway QR for bundle delivery.
       - ENROLL_NONCE=${ENROLL_NONCE:-}
       - ENROLL_LAN_HOST=${ENROLL_LAN_HOST:-}
     networks:
       - switchboard-network
     volumes:
-      - ./volumes/arbiter:/app/log
+      - ./volumes/gateway:/app/log
       - ${HOME}/projects/evie-bot/kubeconfig.yaml:/app/kubeconfig.yaml:ro
 networks:
   switchboard-network:

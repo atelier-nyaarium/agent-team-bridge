@@ -54,7 +54,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.PrimaryScrollableTabRow
-import androidx.compose.material3.Switch
+import androidx.compose.material3.Gateway
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -143,11 +143,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	var openTeam by remember { mutableStateOf<String?>(null) }
 	var showSettings by remember { mutableStateOf(false) }
 	var showManage by remember { mutableStateOf(false) }
-	var showAddSwitch by remember { mutableStateOf(false) }
+	var showAddGateway by remember { mutableStateOf(false) }
 	var unlocked by remember { mutableStateOf(false) }
 
 	// WebView pool lives at App scope (never leaves composition) so each thread's
-	// renderer survives Sessions round-trips and tab switches. Pruned to open tabs;
+	// renderer survives Sessions round-trips and tab gatewayes. Pruned to open tabs;
 	// destroyed with the Activity.
 	val rendererPool = remember { ThreadRendererPool(context.applicationContext) }
 	rendererPool.onRetry = { team, id -> scope.launch { repo.retrySend(team, id) } }
@@ -238,9 +238,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	}
 
 	// System back navigates within the app (thread/settings/manage -> back) instead of exiting.
-	BackHandler(enabled = openTeam != null || showSettings || showManage || showAddSwitch) {
+	BackHandler(enabled = openTeam != null || showSettings || showManage || showAddGateway) {
 		when {
-			showAddSwitch -> showAddSwitch = false
+			showAddGateway -> showAddGateway = false
 			showManage -> showManage = false
 			openTeam != null -> openTeam = null
 			showSettings -> showSettings = false
@@ -250,10 +250,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	when {
 		!state.provisioned -> ProvisionScreen(repo = repo, onProvision = { scope.launch { repo.provision(it) } })
 		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
-		showAddSwitch ->
-			AddSwitchScreen(repo = repo, onBack = { showAddSwitch = false }, onDone = { showAddSwitch = false })
+		showAddGateway ->
+			AddGatewayScreen(repo = repo, onBack = { showAddGateway = false }, onDone = { showAddGateway = false })
 		showManage ->
-			ManageScreen(repo = repo, onBack = { showManage = false }, onAddSwitch = { showAddSwitch = true })
+			ManageScreen(repo = repo, onBack = { showManage = false }, onAddGateway = { showAddGateway = true })
 		showSettings ->
 			SettingsScreen(
 				state = state,
@@ -270,7 +270,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			)
 		openTeam != null -> {
 			// Devcontainer names are the project identity; only loose peers take labels.
-			val session = state.sessions(state.localSwitchId).firstOrNull { it.name == openTeam }
+			val session = state.sessions(state.localGatewayId).firstOrNull { it.name == openTeam }
 			val kind = session?.kind
 			// Rename only when positively known loose; an unknown kind (team gone
 			// from the list) stays un-renameable rather than defaulting open.
@@ -282,15 +282,15 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			}
 			ThreadScreen(
 				team = openTeam!!,
-				label = state.titleLabel(openTeam!!, state.localSwitchId),
+				label = state.titleLabel(openTeam!!, state.localGatewayId),
 				presence = presence,
 				tabs = state.openTabs,
-				tabLabel = { state.label(it, state.localSwitchId) },
+				tabLabel = { state.label(it, state.localGatewayId) },
 				messages = state.threads[openTeam].orEmpty(),
 				error = state.error,
 				rendererPool = rendererPool,
 				canRename = kind == "loose",
-				onSwitch = { openTeam = it },
+				onGateway = { openTeam = it },
 				onCloseTab = { t ->
 					// Move off the closing tab before dropping it from openTabs, so the
 					// retain() pass that destroys its renderer never targets the one
@@ -443,13 +443,13 @@ fun SessionsScreen(
 	var actionTeam by remember { mutableStateOf<Team?>(null) }
 	var renameTeam by remember { mutableStateOf<Team?>(null) }
 	var forgetTeam by remember { mutableStateOf<Team?>(null) }
-	// Per-Switch accordion collapse state (default expanded).
-	val collapsedSwitches = remember { mutableStateMapOf<String, Boolean>() }
+	// Per-Gateway accordion collapse state (default expanded).
+	val collapsedGatewayes = remember { mutableStateMapOf<String, Boolean>() }
 
 	actionTeam?.let { team ->
 		SessionActionsDialog(
-			label = state.label(team.name, state.localSwitchId),
-			canRename = team.kind != "devcontainer" && team.kind != "switch",
+			label = state.label(team.name, state.localGatewayId),
+			canRename = team.kind != "devcontainer" && team.kind != "gateway",
 			onRename = {
 				actionTeam = null
 				renameTeam = team
@@ -464,7 +464,7 @@ fun SessionsScreen(
 	renameTeam?.let { team ->
 		RenameDialog(
 			team = team.displayName,
-			current = state.label(team.name, state.localSwitchId),
+			current = state.label(team.name, state.localGatewayId),
 			onSave = {
 				onRename(team.name, it)
 				renameTeam = null
@@ -474,7 +474,7 @@ fun SessionsScreen(
 	}
 	forgetTeam?.let { team ->
 		ConfirmDialog(
-			title = "Forget ${state.label(team.name, state.localSwitchId)}?",
+			title = "Forget ${state.label(team.name, state.localGatewayId)}?",
 			body = "Drops this thread, its label, and unread state from this device.",
 			confirmText = "Forget",
 			onConfirm = {
@@ -512,7 +512,7 @@ fun SessionsScreen(
 					)
 				}
 			}
-			if (state.sessions(state.localSwitchId).isEmpty()) {
+			if (state.sessions(state.localGatewayId).isEmpty()) {
 				if (!state.connected) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
 				Text(
 					state.error ?: state.status.ifEmpty { "Connecting..." },
@@ -521,32 +521,32 @@ fun SessionsScreen(
 				)
 			}
 			val order = sessionOrder(state)
-			val sessions = state.sessions(state.localSwitchId)
-			// Accordion grouped by owning Switch; within each: host agent, then devcontainer
-			// projects, then loose sessions. The local Switch sorts first.
-			val bySwitch = sessions
-				.groupBy { it.switchId.ifEmpty { state.localSwitchId } }
+			val sessions = state.sessions(state.localGatewayId)
+			// Accordion grouped by owning Gateway; within each: host agent, then devcontainer
+			// projects, then loose sessions. The local Gateway sorts first.
+			val byGateway = sessions
+				.groupBy { it.gatewayId.ifEmpty { state.localGatewayId } }
 				.toList()
-				.sortedBy { (id, _) -> if (id == state.localSwitchId) "" else id }
+				.sortedBy { (id, _) -> if (id == state.localGatewayId) "" else id }
 			LazyColumn(
 				Modifier.fillMaxSize(),
 				contentPadding = PaddingValues(12.dp),
 				verticalArrangement = Arrangement.spacedBy(8.dp),
 			) {
-				for ((switchId, group) in bySwitch) {
-					val collapsed = collapsedSwitches[switchId] == true
-					item(key = "sw:$switchId") {
-						SwitchHeader(
-							name = switchId,
+				for ((gatewayId, group) in byGateway) {
+					val collapsed = collapsedGatewayes[gatewayId] == true
+					item(key = "sw:$gatewayId") {
+						GatewayHeader(
+							name = gatewayId,
 							online = group.any { it.status == "online" },
 							collapsed = collapsed,
-							onToggle = { collapsedSwitches[switchId] = !collapsed },
+							onToggle = { collapsedGatewayes[gatewayId] = !collapsed },
 						)
 					}
 					if (!collapsed) {
-						val host = group.filter { it.kind == "switch" }.sortedWith(order)
+						val host = group.filter { it.kind == "gateway" }.sortedWith(order)
 						val projects = group.filter { it.kind == "devcontainer" }.sortedWith(order)
-						val loose = group.filter { it.kind != "switch" && it.kind != "devcontainer" }.sortedWith(order)
+						val loose = group.filter { it.kind != "gateway" && it.kind != "devcontainer" }.sortedWith(order)
 						items(host + projects + loose, key = { "team:${it.name}" }) { team ->
 							SessionCard(
 								state = state,
@@ -566,7 +566,7 @@ fun SessionsScreen(
 fun HealthHeader(state: ChatState) {
 	val (dot, label) = when (state.health) {
 		ChatState.Health.ONLINE -> Color(0xFF2EA043) to "Bridge online"
-		// Calm blue while a fresh enrollment's allowlist is still syncing to its Switch -
+		// Calm blue while a fresh enrollment's allowlist is still syncing to its Gateway -
 		// a normal, self-healing window, not an error.
 		ChatState.Health.SYNCING -> Color(0xFF0969DA) to (state.error ?: "Finishing up enrollment...")
 		// Show the SPECIFIC classified cause (set by classifyConnError) rather than a
@@ -616,7 +616,7 @@ private fun StatusChip(text: String, color: Color) {
 }
 
 @Composable
-private fun SwitchHeader(name: String, online: Boolean, collapsed: Boolean, onToggle: () -> Unit) {
+private fun GatewayHeader(name: String, online: Boolean, collapsed: Boolean, onToggle: () -> Unit) {
 	Row(
 		Modifier
 			.fillMaxWidth()
@@ -652,7 +652,7 @@ fun SectionLabel(text: String) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: () -> Unit) {
-	val display = if (team.kind == "switch") "Switch" else state.label(team.name, state.localSwitchId)
+	val display = if (team.kind == "gateway") "Gateway" else state.label(team.name, state.localGatewayId)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
 	val isCli = team.mode == "cli"
@@ -685,7 +685,7 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 			// Under a custom label, surface the session's short local name so the user
 			// can still tell which session it maps to. label() falls back to the short
 			// name, so an unlabeled session adds nothing here.
-			if (display != team.displayName && team.kind != "switch") {
+			if (display != team.displayName && team.kind != "gateway") {
 				Text(
 					team.displayName,
 					style = MaterialTheme.typography.labelSmall,
@@ -790,7 +790,7 @@ fun ThreadScreen(
 	error: String?,
 	rendererPool: ThreadRendererPool,
 	canRename: Boolean,
-	onSwitch: (String) -> Unit,
+	onGateway: (String) -> Unit,
 	onCloseTab: (String) -> Unit,
 	onSessions: () -> Unit,
 	onSend: (String, List<Uri>) -> Unit,
@@ -894,7 +894,7 @@ fun ThreadScreen(
 				val selected = tabs.indexOf(team).coerceAtLeast(0)
 				PrimaryScrollableTabRow(selectedTabIndex = selected, edgePadding = 8.dp) {
 					tabs.forEachIndexed { i, t ->
-						Tab(selected = i == selected, onClick = { onSwitch(t) }, text = { Text(tabLabel(t)) })
+						Tab(selected = i == selected, onClick = { onGateway(t) }, text = { Text(tabLabel(t)) })
 					}
 				}
 			}
@@ -1021,7 +1021,7 @@ fun SettingsScreen(
 			HorizontalDivider()
 			Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 				Text("Biometric lock", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-				Switch(checked = state.biometricLock, onCheckedChange = onToggleBiometric)
+				Gateway(checked = state.biometricLock, onCheckedChange = onToggleBiometric)
 			}
 			Text(
 				"Require fingerprint or device PIN on app open. Falls back to unlocked if nothing is enrolled.",
@@ -1188,7 +1188,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 				style = MaterialTheme.typography.bodySmall,
 			)
 		}
-		Switch(
+		Gateway(
 			checked = autoTts,
 			onCheckedChange = {
 				autoTts = it
@@ -1206,7 +1206,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 				style = MaterialTheme.typography.bodySmall,
 			)
 		}
-		Switch(
+		Gateway(
 			checked = autoPlay,
 			enabled = autoTts,
 			onCheckedChange = {
@@ -1347,7 +1347,7 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 
 /**
  * Hosts a thread's pooled WebView inside a FrameLayout. The renderer is pulled from
- * the pool (so scroll position and rendered DOM survive tab switches and Sessions
+ * the pool (so scroll position and rendered DOM survive tab gatewayes and Sessions
  * round-trips) and re-fed incrementally via sync(). A crashed renderer is swapped
  * for a fresh one and re-fed.
  */

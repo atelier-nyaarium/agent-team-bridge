@@ -9,20 +9,20 @@ import kotlinx.serialization.json.Json
 /**
  * The owner-rooted keyring: the mirrored DomainSnapshot the Console resolves peers
  * against. Every member the Console seals to is resolved here first, so it trusts a
- * Switch because the owner admitted that Switch's keys, never because a provisioning
+ * Gateway because the owner admitted that Gateway's keys, never because a provisioning
  * blob named them. This is the device side of the symmetric-trust rule and the Kotlin
  * counterpart of resolveAdmitted in src/shared/admission.ts, additionally keyed by
- * Switch id for the multi-home seal path (the Console knows a target by its Switch id,
+ * Gateway id for the multi-home seal path (the Console knows a target by its Gateway id,
  * not its signing key).
  */
 class Keyring(val snapshot: DomainSnapshot) {
 	val ownerSignPub: String get() = snapshot.ownerSignPub
 
-	/** The newest owner-verified, non-revoked kind:switch admission for switchId, or
-	 * null when no such Switch is admitted. Its boxPub is the seal recipient; its
-	 * signPub verifies that Switch's sealed replies. */
-	fun resolveSwitch(switchId: String): Admission? =
-		resolve { it.kind == "switch" && it.switchId == switchId }
+	/** The newest owner-verified, non-revoked kind:gateway admission for gatewayId, or
+	 * null when no such Gateway is admitted. Its boxPub is the seal recipient; its
+	 * signPub verifies that Gateway's sealed replies. */
+	fun resolveGateway(gatewayId: String): Admission? =
+		resolve { it.kind == "gateway" && it.gatewayId == gatewayId }
 
 	/** The admission for a subject signing key, owner-verified and non-revoked. */
 	fun resolveSubject(signPubB64: String): Admission? = resolve { it.signPub == signPubB64 }
@@ -53,7 +53,7 @@ class Keyring(val snapshot: DomainSnapshot) {
 		private val json = Json { ignoreUnknownKeys = true }
 
 		/** An owner-only keyring with no members yet - the state right after the owner
-		 * roots the Domain and before it admits any Switch. */
+		 * roots the Domain and before it admits any Gateway. */
 		fun empty(ownerSignPub: String): Keyring =
 			Keyring(DomainSnapshot(ownerSignPub = ownerSignPub, admissions = emptyList(), revocations = emptyList()))
 
@@ -67,7 +67,7 @@ class Keyring(val snapshot: DomainSnapshot) {
 
 /** The canonical form of a Domain snapshot. Admissions and revocations are append-only
  * owner-signed facts, so they are deduped by signing key + nonce and ordered by issue time.
- * Every snapshot merge (a sync from a Switch, or a local admit/revoke folded in before evie
+ * Every snapshot merge (a sync from a Gateway, or a local admit/revoke folded in before evie
  * rebroadcasts it) routes through here, so the same set of facts always yields identical
  * bytes and resolve() sees each fact exactly once. */
 internal fun canonicalSnapshot(

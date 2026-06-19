@@ -13,7 +13,7 @@ import { DomainSnapshotSchema, SignedAdmissionSchema } from "./admission.js";
 export const ConnectionModeSchema = z.enum(["cli", "channel"]).meta({ id: "ConnectionMode" });
 export const EffortLevelSchema = z.enum(["simple", "standard", "complex"]).meta({ id: "EffortLevel" });
 export const RequestTypeSchema = z.enum(["feature", "bugfix", "question"]).meta({ id: "RequestType" });
-export const TeamKindSchema = z.enum(["devcontainer", "loose", "console", "switch"]).meta({ id: "TeamKind" });
+export const TeamKindSchema = z.enum(["devcontainer", "loose", "console", "gateway"]).meta({ id: "TeamKind" });
 export const ResponseStatusSchema = z
 	.enum(["completed", "clarification", "deferred", "needs_human", "error", "timeout", "running"])
 	.meta({ id: "ResponseStatus" });
@@ -92,15 +92,15 @@ export const WsRegisterSchema = z.object({
 export const TeamInfoSchema = z
 	.object({
 		team: z.string(),
-		// The id of the Switch that owns this session. `team` stays the bare local
-		// name; the console composes the qualified key `switch/team` to keep two
-		// Switches' identically-named sessions apart. Optional for decode tolerance:
-		// a pre-federation Switch omits it and the console falls back to its connected
-		// Switch id (bare resolves local).
-		switchId: z.string().optional(),
+		// The id of the Gateway that owns this session. `team` stays the bare local
+		// name; the console composes the qualified key `gateway/team` to keep two
+		// Gatewayes' identically-named sessions apart. Optional for decode tolerance:
+		// a pre-federation Gateway omits it and the console falls back to its connected
+		// Gateway id (bare resolves local).
+		gatewayId: z.string().optional(),
 		status: z.enum(["online", "available"]),
 		mode: ConnectionModeSchema.optional(),
-		// Optional for decode tolerance: old arbiters omit kind and consumers
+		// Optional for decode tolerance: old gateways omit kind and consumers
 		// default it to "loose" (the hand Kotlin client always did).
 		kind: TeamKindSchema.optional(),
 		queue_depth: z.number().int().nonnegative(),
@@ -110,8 +110,8 @@ export const TeamInfoSchema = z
 ////////////////////////////////
 //  Console Relay Frame Schema
 //
-//  Validates console_relay frames at the arbiter trust boundary. The frame body
-//  is console-authored and evie relays it opaquely, so the arbiter must not
+//  Validates console_relay frames at the gateway trust boundary. The frame body
+//  is console-authored and evie relays it opaquely, so the gateway must not
 //  blind-cast it. The console-protocol.ts types derive from these schemas via
 //  z.infer - this file is the single truth for the console wire.
 
@@ -119,7 +119,7 @@ export const ConsoleOpSchema = z
 	.discriminatedUnion("kind", [
 		z.object({
 			kind: z.literal("register"),
-			// Build identity for server-side observability: the arbiter logs these at
+			// Build identity for server-side observability: the gateway logs these at
 			// register so the operator never has to guess which build (and debug-vs-
 			// release variant) a console is running. Optional + additive: an older console
 			// that omits them still registers.
@@ -148,7 +148,7 @@ export const ConsoleOpSchema = z
 			cursor: z.number().int().nonnegative().optional(),
 			epoch: z.number().int().nonnegative().optional(),
 			holdMs: z.number().int().nonnegative().max(45_000).optional(),
-			// The keyring version the Console last synced; the Switch returns the snapshot in
+			// The keyring version the Console last synced; the Gateway returns the snapshot in
 			// the poll reply only when it differs, so the Console stays fresh within one poll
 			// cycle at near-zero steady cost.
 			knownDomainVersion: z.string().optional(),
@@ -177,15 +177,15 @@ export const ConsoleRelayFrameSchema = z
 		v: z.number().int().positive(),
 		opId: z.string().min(1).max(128),
 		// The console's raw Ed25519 signing public key (base64). Selects the key the
-		// arbiter verifies the seal against, then checked against the owner-signed
+		// gateway verifies the seal against, then checked against the owner-signed
 		// allowlist (must be an admitted kind:console subject). Cleartext: it is a
 		// public key, not a secret. conversationId + device + the op move INSIDE the
 		// seal, so evie sees only this opaque blob - it cannot read or forge the op.
 		signerSignPub: z.string().min(1),
-		// The Switch this op targets, so evie routes per-target under direct multi-home
-		// (the Console seals to each Switch directly). Plaintext routing metadata, like
-		// signerSignPub; absent falls back to evie's latest-Switch routing (single-home).
-		targetSwitch: z.string().optional(),
+		// The Gateway this op targets, so evie routes per-target under direct multi-home
+		// (the Console seals to each Gateway directly). Plaintext routing metadata, like
+		// signerSignPub; absent falls back to evie's latest-Gateway routing (single-home).
+		targetGateway: z.string().optional(),
 		sealed: SealedEnvelopeSchema,
 	})
 	.meta({ id: "ConsoleRelayFrame" });
@@ -193,8 +193,8 @@ export const ConsoleRelayFrameSchema = z
 ////////////////////////////////
 //  Console Op Envelope (the sealed inner body)
 //
-//  What the console seals and the arbiter opens. `at` bounds freshness; the seal's
-//  random nonce bounds replay; the seal's ECDH binds it to this arbiter's box key.
+//  What the console seals and the gateway opens. `at` bounds freshness; the seal's
+//  random nonce bounds replay; the seal's ECDH binds it to this gateway's box key.
 
 export const ConsoleOpEnvelopeSchema = z
 	.object({
@@ -207,12 +207,12 @@ export const ConsoleOpEnvelopeSchema = z
 	.meta({ id: "ConsoleOpEnvelope" });
 
 ////////////////////////////////
-//  Mailbox Entry Schema (arbiter -> console)
+//  Mailbox Entry Schema (gateway -> console)
 //
-//  Composed by the arbiter, decoded by the console. `kind` is closed here
-//  because the arbiter owns composition; the GENERATED Kotlin keeps it an
+//  Composed by the gateway, decoded by the console. `kind` is closed here
+//  because the gateway owns composition; the GENERATED Kotlin keeps it an
 //  open String (decode-side rule). `request_type` is open even here: the
-//  arbiter itself composes out-of-union values (e.g. "handoff" on transfer
+//  gateway itself composes out-of-union values (e.g. "handoff" on transfer
 //  briefs), so a closed enum would reject real traffic.
 
 export const MailboxEntrySchema = z
@@ -226,7 +226,7 @@ export const MailboxEntrySchema = z
 		title: z.string().optional(),
 		// The Short tier of a notice (4-6 sentences), addressable on its own so
 		// console features never parse it back out of the body. Always sent by
-		// current arbiters; optional for decode tolerance of older wires.
+		// current gateways; optional for decode tolerance of older wires.
 		summary: z.string().optional(),
 		body: z.string().optional(),
 		status: z.string().optional(),
@@ -241,7 +241,7 @@ export const MailboxEntrySchema = z
 	.meta({ id: "MailboxEntry" });
 
 ////////////////////////////////
-//  Op result schemas (arbiter -> console)
+//  Op result schemas (gateway -> console)
 //
 //  No wire discriminator: the reply is correlated to its op by opId and the
 //  console decodes the result it expects per op. These generate as independent
@@ -250,11 +250,11 @@ export const MailboxEntrySchema = z
 export const ConsoleRegisterResultSchema = z
 	.object({
 		device: z.string(),
-		// The id of the Switch this console is connected to. The console anchors its
-		// composite (switchId, name) key to this: it qualifies bare names to this
-		// Switch and migrates pre-federation bare-keyed threads onto it. Optional
-		// for decode tolerance of a pre-federation Switch.
-		switchId: z.string().optional(),
+		// The id of the Gateway this console is connected to. The console anchors its
+		// composite (gatewayId, name) key to this: it qualifies bare names to this
+		// Gateway and migrates pre-federation bare-keyed threads onto it. Optional
+		// for decode tolerance of a pre-federation Gateway.
+		gatewayId: z.string().optional(),
 		// Current mailbox high-water seq so a reconnecting console can resync its cursor.
 		cursor: z.number().int().nonnegative(),
 		// Mailbox instance id. If it differs from the console's stored epoch, the
@@ -312,7 +312,7 @@ export const ConsoleOpResultSchema = z.union([
 ////////////////////////////////
 //  Console Reply Body (the sealed inner reply)
 //
-//  The arbiter seals this to the console's box key; the console unseals and decodes
+//  The gateway seals this to the console's box key; the console unseals and decodes
 //  the result for its op (correlated by opId).
 
 export const ConsoleReplyBodySchema = z
@@ -328,11 +328,11 @@ export const ConsoleRelayReplySchema = z
 		type: z.literal("console_relay_reply"),
 		v: z.number().int().positive(),
 		opId: z.string().min(1).max(128),
-		// The sealed ConsoleReplyBody (normal path). Absent ONLY when the arbiter could
+		// The sealed ConsoleReplyBody (normal path). Absent ONLY when the gateway could
 		// not seal because the frame was unverifiable (malformed, or the signer is not
 		// an admitted console) - then `error` carries a cleartext reason so the console can
 		// surface "enroll this device". A pre-seal error is the only cleartext that
-		// ever leaves the arbiter on the console reply path.
+		// ever leaves the gateway on the console reply path.
 		sealed: SealedEnvelopeSchema.optional(),
 		error: z.string().optional(),
 	})
@@ -365,68 +365,68 @@ export const ProvisioningSchema = z
 		// on provision and is enrolled from the blob alone - no separate enroll/QR step.
 		// Absent for a legacy blob (the app then needs an interactive enroll).
 		identity: z.string().optional(),
-		// The home Switch's id + public keys, also set by provision-console.sh --setup.
-		// The app seals its FIRST op (register is itself sealed) TO the Switch's box key,
-		// so it must hold these before connecting - the admit-switch scan used to deliver
-		// them. With these in the blob, no admit-switch step is needed either.
-		switchId: z.string().optional(),
-		switchSignPub: z.string().optional(),
-		switchBoxPub: z.string().optional(),
-		// A JSON-encoded SwitchTransport (the switch-bridge SA-token creds), set by
-		// provision-console.sh. The owner Console seals it into a SwitchBootstrapBundle when
-		// it enrolls a creds-less Switch, so the new Switch can reach evie. Encoded as a
+		// The home Gateway's id + public keys, also set by provision-console.sh --setup.
+		// The app seals its FIRST op (register is itself sealed) TO the Gateway's box key,
+		// so it must hold these before connecting - the admit-gateway scan used to deliver
+		// them. With these in the blob, no admit-gateway step is needed either.
+		gatewayId: z.string().optional(),
+		gatewaySignPub: z.string().optional(),
+		gatewayBoxPub: z.string().optional(),
+		// A JSON-encoded GatewayTransport (the gateway-bridge SA-token creds), set by
+		// provision-console.sh. The owner Console seals it into a GatewayBootstrapBundle when
+		// it enrolls a creds-less Gateway, so the new Gateway can reach evie. Encoded as a
 		// string for the same reason as `identity` (it nests inside this blob).
-		switchTransport: z.string().optional(),
+		gatewayTransport: z.string().optional(),
 	})
 	.meta({ id: "Provisioning" });
 
 ////////////////////////////////
-//  Switch bootstrap bundle (Console -> creds-less Switch, LAN/paste delivered)
+//  Gateway bootstrap bundle (Console -> creds-less Gateway, LAN/paste delivered)
 //
-//  The owner Console mints this for a Switch it just admitted and seals it to the
-//  Switch's box key (so plain-HTTP LAN delivery or a pasted blob stays confidential
-//  and tamper-evident). It never crosses evie: the Console carries it to the Switch
+//  The owner Console mints this for a Gateway it just admitted and seals it to the
+//  Gateway's box key (so plain-HTTP LAN delivery or a pasted blob stays confidential
+//  and tamper-evident). It never crosses evie: the Console carries it to the Gateway
 //  directly. `transport` is the same SA-token-over-service-proxy shape the Console
 //  uses, so one credential mechanism serves both member kinds. `admission` is this
-//  Switch's own owner-signed admission; `domain` mirrors the keyring so the Switch
+//  Gateway's own owner-signed admission; `domain` mirrors the keyring so the Gateway
 //  can verify peers from its first boot.
 
-export const SwitchTransportSchema = z
+export const GatewayTransportSchema = z
 	.object({
 		apiUrl: z.string().min(1),
 		saToken: z.string().min(1),
 		caPem: z.string().min(1),
 		appToken: z.string().min(1),
 	})
-	.meta({ id: "SwitchTransport" });
+	.meta({ id: "GatewayTransport" });
 
-export const SwitchBootstrapBundleSchema = z
+export const GatewayBootstrapBundleSchema = z
 	.object({
-		// Echoes the one-time nonce from the admit-switch QR; the Switch installs the
+		// Echoes the one-time nonce from the admit-gateway QR; the Gateway installs the
 		// bundle only if it matches the listener it opened, so a bundle cannot be
 		// replayed into a later enrollment window.
 		nonce: z.string().min(1),
-		transport: SwitchTransportSchema,
+		transport: GatewayTransportSchema,
 		admission: SignedAdmissionSchema,
 		domain: DomainSnapshotSchema,
 	})
-	.meta({ id: "SwitchBootstrapBundle" });
+	.meta({ id: "GatewayBootstrapBundle" });
 
-export type SwitchTransport = z.infer<typeof SwitchTransportSchema>;
-export type SwitchBootstrapBundle = z.infer<typeof SwitchBootstrapBundleSchema>;
+export type GatewayTransport = z.infer<typeof GatewayTransportSchema>;
+export type GatewayBootstrapBundle = z.infer<typeof GatewayBootstrapBundleSchema>;
 
 ////////////////////////////////
-//  Switch bootstrap delivery frame (the sealed wrapper on the wire)
+//  Gateway bootstrap delivery frame (the sealed wrapper on the wire)
 //
-//  What the Console POSTs to the Switch's LAN listener (or hands over as paste). The
-//  Switch verifies the seal against `signerSignPub`, opens it with its box key, then
+//  What the Console POSTs to the Gateway's LAN listener (or hands over as paste). The
+//  Gateway verifies the seal against `signerSignPub`, opens it with its box key, then
 //  pins the owner key from the enclosed snapshot - trust-on-first-use gated by the SAS
 //  the human confirmed, the one-time nonce, and LAN proximity.
 
-export const SwitchBootstrapFrameSchema = z
+export const GatewayBootstrapFrameSchema = z
 	.object({
 		v: z.number().int().positive(),
 		signerSignPub: z.string().min(1),
 		sealed: SealedEnvelopeSchema,
 	})
-	.meta({ id: "SwitchBootstrapFrame" });
+	.meta({ id: "GatewayBootstrapFrame" });

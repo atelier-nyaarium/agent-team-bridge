@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openBootstrapBundle } from "../arbiter/federation/bootstrapInstall.js";
+import { openBootstrapBundle } from "../gateway/federation/bootstrapInstall.js";
 import { type Admission, signAdmission } from "../shared/admission.js";
 import { generateIdentity, type Identity, seal } from "../shared/crypto.js";
 
@@ -8,14 +8,14 @@ function buildFrame(
 	sw: Identity,
 	console_: Identity,
 	nonce: string,
-	switchId: string,
+	gatewayId: string,
 	admissionSigner: Identity = owner,
 ): unknown {
 	const admission: Admission = {
-		kind: "switch",
+		kind: "gateway",
 		signPub: sw.sign.pub,
 		boxPub: sw.box.pub,
-		switchId,
+		gatewayId,
 		issuedAt: 1000,
 		nonce: "adm",
 	};
@@ -35,7 +35,7 @@ describe("openBootstrapBundle", () => {
 	const sw = generateIdentity();
 	const console_ = generateIdentity();
 
-	it("opens a valid bundle sealed to this Switch", () => {
+	it("opens a valid bundle sealed to this Gateway", () => {
 		const frame = buildFrame(owner, sw, console_, "n1", "sakura");
 		const bundle = openBootstrapBundle(frame, sw, "n1", "sakura");
 		expect(bundle.transport.apiUrl).toBe("https://api");
@@ -53,13 +53,13 @@ describe("openBootstrapBundle", () => {
 		expect(() => openBootstrapBundle(frame, sw, "n1", "sakura")).toThrow();
 	});
 
-	it("rejects delivery to the wrong Switch (cannot decrypt)", () => {
+	it("rejects delivery to the wrong Gateway (cannot decrypt)", () => {
 		const other = generateIdentity();
 		const frame = buildFrame(owner, sw, console_, "n1", "sakura");
 		expect(() => openBootstrapBundle(frame, other, "n1", "sakura")).toThrow();
 	});
 
-	it("rejects an admission bound to a different Switch id", () => {
+	it("rejects an admission bound to a different Gateway id", () => {
 		const frame = buildFrame(owner, sw, console_, "n1", "sakura");
 		expect(() => openBootstrapBundle(frame, sw, "n1", "willow")).toThrow();
 	});

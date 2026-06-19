@@ -12,21 +12,21 @@ import { NoticeId, SessionId, TeamAddress } from "../shared/session-id.js";
 
 interface TeamVector {
 	input: string;
-	localSwitchId: string;
-	switchId: string;
+	localGatewayId: string;
+	gatewayId: string;
 	name: string;
 	canonical: string;
 }
 interface SessionVector {
 	input: string;
-	localSwitchId: string;
+	localGatewayId: string;
 	conversationId: string;
 	targetCanonical: string;
 	key: string;
 }
 interface NoticeVector {
 	input: string;
-	localSwitchId: string;
+	localGatewayId: string;
 	senderCanonical: string;
 	key: string;
 }
@@ -43,16 +43,16 @@ const vectors = JSON.parse(
 
 describe("session identity vectors", () => {
 	it.each(vectors.teamAddress.map((v) => [v.input, v] as const))("TeamAddress.parse(%s)", (_, v) => {
-		const a = TeamAddress.parse(v.input, v.localSwitchId);
-		expect(a.switchId).toBe(v.switchId);
+		const a = TeamAddress.parse(v.input, v.localGatewayId);
+		expect(a.gatewayId).toBe(v.gatewayId);
 		expect(a.name).toBe(v.name);
 		expect(a.canonical).toBe(v.canonical);
 		// local() is the idempotent qualifier: same canonical for bare or qualified input.
-		expect(TeamAddress.local(v.localSwitchId, v.input).canonical).toBe(v.canonical);
+		expect(TeamAddress.local(v.localGatewayId, v.input).canonical).toBe(v.canonical);
 	});
 
 	it.each(vectors.sessionId.map((v) => [v.input, v] as const))("SessionId.parse(%s)", (_, v) => {
-		const s = SessionId.parse(v.input, v.localSwitchId);
+		const s = SessionId.parse(v.input, v.localGatewayId);
 		expect(s).not.toBeNull();
 		expect(s?.conversationId).toBe(v.conversationId);
 		expect(s?.target.canonical).toBe(v.targetCanonical);
@@ -62,7 +62,7 @@ describe("session identity vectors", () => {
 	});
 
 	it.each(vectors.notice.map((v) => [v.input, v] as const))("NoticeId.parse(%s)", (_, v) => {
-		const n = NoticeId.parse(v.input, v.localSwitchId);
+		const n = NoticeId.parse(v.input, v.localGatewayId);
 		expect(n).not.toBeNull();
 		expect(n?.sender.canonical).toBe(v.senderCanonical);
 		expect(n?.key).toBe(v.key);
@@ -82,10 +82,10 @@ describe("session identity vectors", () => {
 		expect(r.equals(TeamAddress.parse("hostb/api", "hosta"))).toBe(true);
 	});
 
-	it("a cross-Switch key is byte-stable regardless of the parsing host", () => {
+	it("a cross-Gateway key is byte-stable regardless of the parsing host", () => {
 		const s = "conv:c:hostb/api";
-		for (const localSwitchId of ["hosta", "hostb", "whatever"]) {
-			expect(SessionId.parse(s, localSwitchId)?.key).toBe(s);
+		for (const localGatewayId of ["hosta", "hostb", "whatever"]) {
+			expect(SessionId.parse(s, localGatewayId)?.key).toBe(s);
 		}
 	});
 

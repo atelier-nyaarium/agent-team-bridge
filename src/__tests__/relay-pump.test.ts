@@ -2,11 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createConsoleHandler } from "../arbiter/console/consoleHandler.js";
-import { createConsoleSealer } from "../arbiter/console/consoleSealer.js";
-import { createConsoleRelayPump } from "../arbiter/console/relayPump.js";
-import { Allowlist } from "../arbiter/federation/allowlist.js";
-import type { ConversationRegistry, TeamRegistry } from "../arbiter/websocket.js";
+import { createConsoleHandler } from "../gateway/console/consoleHandler.js";
+import { createConsoleSealer } from "../gateway/console/consoleSealer.js";
+import { createConsoleRelayPump } from "../gateway/console/relayPump.js";
+import { Allowlist } from "../gateway/federation/allowlist.js";
+import type { ConversationRegistry, TeamRegistry } from "../gateway/websocket.js";
 import { signAdmission } from "../shared/admission.js";
 import type { ConsoleOp, ConsoleOpEnvelope, ConsoleRelayReply, ConsoleReplyBody } from "../shared/console-protocol.js";
 import { generateIdentity, type Identity, type SealedEnvelope, seal, unseal } from "../shared/crypto.js";
@@ -33,7 +33,7 @@ function jsonRes(body: unknown, status = 200): Response {
 }
 
 const owner = generateIdentity();
-const arbiter = generateIdentity();
+const gateway = generateIdentity();
 
 /** An allowlist rooted at the owner that admits `device` as a kind:console device. */
 function admittedAllowlist(device: Identity): Allowlist {
@@ -49,7 +49,7 @@ function admittedAllowlist(device: Identity): Allowlist {
 	return a;
 }
 
-/** Seal a console op to the arbiter, exactly as the Android client does. */
+/** Seal a console op to the gateway, exactly as the Android client does. */
 function sealFrame(
 	device: Identity,
 	op: ConsoleOp,
@@ -62,13 +62,13 @@ function sealFrame(
 		at: opts.at ?? Date.now(),
 		op,
 	};
-	const sealed = seal(Buffer.from(JSON.stringify(env)), arbiter.box.pub, device.sign.priv);
+	const sealed = seal(Buffer.from(JSON.stringify(env)), gateway.box.pub, device.sign.priv);
 	return { type: "console_relay", v: 1, opId: opts.opId ?? "op-1", signerSignPub: device.sign.pub, sealed };
 }
 
 function openReply(device: Identity, reply: ConsoleRelayReply): ConsoleReplyBody {
 	if (!reply.sealed) throw new Error(`reply not sealed: ${reply.error}`);
-	return JSON.parse(unseal(reply.sealed, device.box.priv, arbiter.sign.pub).toString("utf8")) as ConsoleReplyBody;
+	return JSON.parse(unseal(reply.sealed, device.box.priv, gateway.sign.pub).toString("utf8")) as ConsoleReplyBody;
 }
 
 function makePump(device: Identity, replies: ConsoleRelayReply[]) {
@@ -78,7 +78,7 @@ function makePump(device: Identity, replies: ConsoleRelayReply[]) {
 		registry,
 		conversationRegistry,
 		mailboxStore: new DeviceMailboxStore(),
-		localSwitchId: "test-host",
+		localGatewayId: "test-host",
 		routes: {
 			send: async () => jsonRes({}),
 			respond: () => jsonRes({}),
@@ -87,7 +87,7 @@ function makePump(device: Identity, replies: ConsoleRelayReply[]) {
 		},
 	});
 	const pump = createConsoleRelayPump({
-		sealer: createConsoleSealer(arbiter, admittedAllowlist(device)),
+		sealer: createConsoleSealer(gateway, admittedAllowlist(device)),
 		handleFrame: handler.handleFrame,
 		sendReply: async (reply) => {
 			replies.push(reply);
@@ -194,7 +194,7 @@ describe("createConsoleRelayPump (sealed)", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore: new DeviceMailboxStore(),
-			localSwitchId: "test-host",
+			localGatewayId: "test-host",
 			routes: {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
@@ -203,7 +203,7 @@ describe("createConsoleRelayPump (sealed)", () => {
 			},
 		});
 		const pump = createConsoleRelayPump({
-			sealer: createConsoleSealer(arbiter, admittedAllowlist(device)),
+			sealer: createConsoleSealer(gateway, admittedAllowlist(device)),
 			handleFrame: handler.handleFrame,
 			sendReply: async () => {
 				throw new Error("evie gone");

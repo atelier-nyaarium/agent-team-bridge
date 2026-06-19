@@ -1,5 +1,5 @@
 {
-	"_comment": "Shared SyncCursor transition vectors, read by BOTH src/__tests__/sync-cursor.test.ts and android/.../SyncCursorVectorsTest.kt. A differing transition fails one runtime. epoch is a positive Int31 on the wire; 0 is the reserved initial sentinel the arbiter never mints. See plans/mailbox-sync-contract.md.",
+	"_comment": "Shared SyncCursor transition vectors, read by BOTH src/__tests__/sync-cursor.test.ts and android/.../SyncCursorVectorsTest.kt. A differing transition fails one runtime. epoch is a positive Int31 on the wire; 0 is the reserved initial sentinel the gateway never mints. See plans/mailbox-sync-contract.md.",
 	"vectors": [
 		{
 			"name": "initial epoch-0 sentinel flips on first real poll, all fresh",
@@ -87,7 +87,7 @@
 			}
 		},
 		{
-			"name": "defensive: epoch-0 result on epoch-0 start takes the same-epoch path (arbiter never mints 0)",
+			"name": "defensive: epoch-0 result on epoch-0 start takes the same-epoch path (gateway never mints 0)",
 			"start": { "epoch": 0, "ackedSeq": 0, "droppedBaseline": 0 },
 			"pollResult": { "entries": [{ "seq": 1 }], "cursor": 1, "epoch": 0, "dropped": 0 },
 			"expect": { "next": { "epoch": 0, "ackedSeq": 1, "droppedBaseline": 0 }, "freshSeqs": [1], "gap": false }

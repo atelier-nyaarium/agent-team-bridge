@@ -10,8 +10,8 @@ import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.NoticeId
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SessionId
-import com.atelier_nyaarium.switchboard.proto.SwitchBootstrapFrame
-import com.atelier_nyaarium.switchboard.proto.SwitchTransport
+import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
+import com.atelier_nyaarium.switchboard.proto.GatewayTransport
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
@@ -41,10 +41,10 @@ import org.json.JSONObject
  * Real attachment plumbing decodes these to disk in a later phase. */
 data class MessageFile(val name: String, val mime: String, val src: String? = null)
 
-/** A scanned admit-switch QR: the Switch identity the owner is about to admit, plus the
+/** A scanned admit-gateway QR: the Gateway identity the owner is about to admit, plus the
  * optional LAN target + one-time nonce for delivering the sealed bootstrap bundle. */
-data class ScannedSwitch(
-	val switchId: String,
+data class ScannedGateway(
+	val gatewayId: String,
 	val signPub: String,
 	val boxPub: String,
 	val sas: String,
@@ -53,7 +53,7 @@ data class ScannedSwitch(
 	val nonce: String? = null,
 )
 
-/** The outcome of enrolling a Switch: whether it was admitted, a human message, and the
+/** The outcome of enrolling a Gateway: whether it was admitted, a human message, and the
  * sealed bundle to hand-carry when LAN delivery was not possible (paste fallback). */
 data class EnrollDelivery(val admitted: Boolean, val message: String, val pasteBundle: String?)
 
@@ -70,7 +70,7 @@ data class Message(
 	 * and "waking" (the cold-wake placeholder), or null for a settled message. */
 	val status: String? = null,
 	/** The relay opId this send was first delivered under. A retry reuses it so
-	 * the arbiter's idempotency cache replays a lost reply instead of double-
+	 * the gateway's idempotency cache replays a lost reply instead of double-
 	 * delivering to the agent (the console protocol contract). */
 	val opId: String? = null,
 	/** Notification-bar line for broadcast notices. Notification-only: the thread
@@ -84,7 +84,7 @@ data class Message(
 	 * local/optimistic rows and legacy persisted rows from before this field. */
 	val epoch: Long = 0,
 	val seq: Long = 0,
-	/** The qualified `switch/name` author header shown for an inbound (agent) row. Null
+	/** The qualified `gateway/name` author header shown for an inbound (agent) row. Null
 	 * for our own rows (rendered as "you") and legacy rows. Not persisted: every row in a
 	 * thread shares the thread's one peer today, so it is re-derived from the thread key on
 	 * load; persisting it is what a future multiple-agents-in-one-chat would add. */
@@ -105,11 +105,11 @@ data class ChatState(
 	val labels: Map<String, String> = emptyMap(),
 	val connected: Boolean = false,
 	val pollFailStreak: Int = 0,
-	/** Connected Switch id, learned from the register result. Empty before the first
-	 * federation-aware connect; bare names resolve to the local Switch in that case. */
-	val localSwitchId: String = "",
+	/** Connected Gateway id, learned from the register result. Empty before the first
+	 * federation-aware connect; bare names resolve to the local Gateway in that case. */
+	val localGatewayId: String = "",
 	/** Non-zero (epoch ms) while a post-enrollment allowlist sync is in progress: the device
-	 * is admitted but the home Switch has not re-synced yet, so sealed ops transiently reject.
+	 * is admitted but the home Gateway has not re-synced yet, so sealed ops transiently reject.
 	 * Drives the calm SYNCING header; cleared the moment an op succeeds or the grace lapses. */
 	val enrollingSince: Long = 0L,
 ) {
@@ -118,10 +118,10 @@ data class ChatState(
 	 * woken, so it is synthesized as an ended loose session with no mode.
 	 * Both sides are compared by their canonical key so a bare vs qualified form
 	 * of the same team never produces a phantom "ended" entry. */
-	fun sessions(localSwitchId: String): List<Team> {
-		val known = teams.associateBy { TeamAddress.parse(it.name, localSwitchId).canonical }
+	fun sessions(localGatewayId: String): List<Team> {
+		val known = teams.associateBy { TeamAddress.parse(it.name, localGatewayId).canonical }
 		val extra = threads.keys
-			.filter { TeamAddress.parse(it, localSwitchId).canonical !in known }
+			.filter { TeamAddress.parse(it, localGatewayId).canonical !in known }
 			.map { Team(it, "ended", "", 0) }
 		return teams + extra
 	}
@@ -159,24 +159,24 @@ data class ChatState(
 		?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
 
 	/** The user's friendly name for a team, falling back to its short local name
-	 * (the tail after the switch qualifier; the whole key when bare). The qualified
-	 * `switch/local` key is never shown raw. */
-	fun label(team: String, localSwitchId: String = ""): String =
-		labels[team] ?: TeamAddress.parse(team, localSwitchId).name
+	 * (the tail after the gateway qualifier; the whole key when bare). The qualified
+	 * `gateway/local` key is never shown raw. */
+	fun label(team: String, localGatewayId: String = ""): String =
+		labels[team] ?: TeamAddress.parse(team, localGatewayId).name
 
 	/** Drill-down / title-bar label: a user's custom name if set, else the qualified
-	 * `switch/name` for a REMOTE session (the originating Switch is not otherwise on screen
-	 * here) and the bare name for a local one (its Switch is the implicit home). The grouped
+	 * `gateway/name` for a REMOTE session (the originating Gateway is not otherwise on screen
+	 * here) and the bare name for a local one (its Gateway is the implicit home). The grouped
 	 * session board uses [label]; this is the flat-context form per the rendering rules. */
-	fun titleLabel(team: String, localSwitchId: String = ""): String {
+	fun titleLabel(team: String, localGatewayId: String = ""): String {
 		labels[team]?.let { return it }
-		val addr = TeamAddress.parse(team, localSwitchId)
-		val remote = addr.switchId.isNotEmpty() && localSwitchId.isNotEmpty() && addr.switchId != localSwitchId
+		val addr = TeamAddress.parse(team, localGatewayId)
+		val remote = addr.gatewayId.isNotEmpty() && localGatewayId.isNotEmpty() && addr.gatewayId != localGatewayId
 		return if (remote) addr.canonical else addr.name
 	}
 }
 
-/** A just-enrolled device's first ops can transiently reject while the home Switch
+/** A just-enrolled device's first ops can transiently reject while the home Gateway
  * re-syncs the new admission from evie (it only re-syncs on its next re-register). We
  * show a calm "Finishing up enrollment..." and retry, escalating to a real error only if
  * the sync never lands within this grace window. */
@@ -190,7 +190,7 @@ internal enum class ConnKind {
 	/** A network or server blip; retry quietly (one hiccup never alarms). */
 	TRANSIENT,
 
-	/** The device IS admitted, but this Switch has not re-synced its allowlist yet, so a
+	/** The device IS admitted, but this Gateway has not re-synced its allowlist yet, so a
 	 * sealed op rejects with "...is not admitted to the Domain". Self-heals on the next
 	 * re-register; show "Finishing up enrollment..." and escalate only past the grace window. */
 	ENROLLING,
@@ -205,22 +205,22 @@ internal enum class ConnKind {
 internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 	val m = e.message ?: ""
 	return when {
-		// The server sealer rejecting an admitted device whose admission this Switch has not
-		// synced yet (console OR cross-Switch federation). NOT terminal - it converges. Kept
+		// The server sealer rejecting an admitted device whose admission this Gateway has not
+		// synced yet (console OR cross-Gateway federation). NOT terminal - it converges. Kept
 		// first, and distinct from the local "keys are missing" terminal below, so a normal
 		// sync lag can never be mislabeled "re-run the script".
 		m.contains("is not admitted to the Domain", ignoreCase = true) ->
 			"Finishing up enrollment..." to ConnKind.ENROLLING
 		m.contains("not enrolled", ignoreCase = true) ->
 			"Not enrolled - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
-		// A local provisioning gap (the blob did not carry the Switch keys/id). Worded in
+		// A local provisioning gap (the blob did not carry the Gateway keys/id). Worded in
 		// ConsoleClient WITHOUT the "not admitted" token so it cannot collide with ENROLLING.
 		m.contains("keys are missing", ignoreCase = true) || m.contains("not provisioned", ignoreCase = true) ->
-			"Home Switch not provisioned - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
-		// The Console has no Switch admitted yet (fresh setup), or none for this target in its
-		// keyring. The fix is to admit a Switch from the management UI, not to re-provision.
-		m.contains("not in the keyring", ignoreCase = true) || m.contains("no switch admitted", ignoreCase = true) ->
-			"Add a Switch from Manage networks to begin" to ConnKind.TERMINAL
+			"Home Gateway not provisioned - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
+		// The Console has no Gateway admitted yet (fresh setup), or none for this target in its
+		// keyring. The fix is to admit a Gateway from the management UI, not to re-provision.
+		m.contains("not in the keyring", ignoreCase = true) || m.contains("no gateway admitted", ignoreCase = true) ->
+			"Add a Gateway from Manage networks to begin" to ConnKind.TERMINAL
 		m.startsWith("HTTP 400") ->
 			"Protocol mismatch (400) - update the app, or re-run provision-console.sh" to ConnKind.TERMINAL
 		m.startsWith("HTTP 401") ->
@@ -270,23 +270,23 @@ private fun enrollFold(prevSince: Long): Pair<String?, Long> {
 }
 
 /**
- * Repair a persisted/legacy thread or label key to canonical form under a known Switch id.
- * A bare name ("name") and - critically - an EMPTY-switch qualified key ("/name", minted in
- * a session before the Switch id was learned) both resolve to "<switchId>/name"; an already
- * canonical "switch/name" is unchanged. When switchId is empty (Switch not yet learned) the key
+ * Repair a persisted/legacy thread or label key to canonical form under a known Gateway id.
+ * A bare name ("name") and - critically - an EMPTY-gateway qualified key ("/name", minted in
+ * a session before the Gateway id was learned) both resolve to "<gatewayId>/name"; an already
+ * canonical "gateway/name" is unchanged. When gatewayId is empty (Gateway not yet learned) the key
  * is returned unchanged and repaired later by recanonicalizeAllKeys once connect() learns
- * it. This closes the ghost-thread split where an inbound reply keys under "switch/name"
- * but the persisted/open thread is stuck at the empty-switch "/name", so the message renders
- * nowhere. `internal` so the unit test can pin the empty-switch repair.
+ * it. This closes the ghost-thread split where an inbound reply keys under "gateway/name"
+ * but the persisted/open thread is stuck at the empty-gateway "/name", so the message renders
+ * nowhere. `internal` so the unit test can pin the empty-gateway repair.
  */
-internal fun canonicalThreadKey(rawKey: String, switchId: String): String {
-	SessionId.parse(rawKey, switchId)?.let { sid ->
+internal fun canonicalThreadKey(rawKey: String, gatewayId: String): String {
+	SessionId.parse(rawKey, gatewayId)?.let { sid ->
 		val t = sid.target
-		val target = if (t.switchId.isEmpty() && switchId.isNotEmpty()) TeamAddress.remote(switchId, t.name) else t
+		val target = if (t.gatewayId.isEmpty() && gatewayId.isNotEmpty()) TeamAddress.remote(gatewayId, t.name) else t
 		return SessionId.channel(sid.conversationId, target).key
 	}
-	val a = TeamAddress.parse(rawKey, switchId)
-	val fixed = if (a.switchId.isEmpty() && switchId.isNotEmpty()) TeamAddress.remote(switchId, a.name) else a
+	val a = TeamAddress.parse(rawKey, gatewayId)
+	val fixed = if (a.gatewayId.isEmpty() && gatewayId.isNotEmpty()) TeamAddress.remote(gatewayId, a.name) else a
 	return fixed.canonical
 }
 
@@ -301,7 +301,7 @@ private data class Drained(val entry: MailboxEntry) : SyncEntry {
  * tab set, and a poll loop that drains the device mailbox, dedupes by mailbox seq,
  * and routes each reply to its team (parsed from the `conv:<id>:<team>` session id
  * or the entry's `from`). Transcripts persist (encrypted) so history survives
- * restarts; the durable switch-side ledger is a later phase.
+ * restarts; the durable gateway-side ledger is a later phase.
  */
 class ChatRepository(
 	private val store: ProvisioningStore,
@@ -313,7 +313,7 @@ class ChatRepository(
 ) {
 	// Declared before _state so loadPersistedThreads/Labels can normalize keys
 	// through TeamAddress. Kotlin initializes fields in declaration order.
-	@Volatile private var localSwitchId: String = store.loadSwitchId()
+	@Volatile private var localGatewayId: String = store.loadGatewayId()
 
 	private val _state = MutableStateFlow(
 		ChatState(
@@ -322,7 +322,7 @@ class ChatRepository(
 			biometricLock = store.biometricLock,
 			deviceName = currentDeviceName(),
 			labels = loadPersistedLabels(),
-			localSwitchId = localSwitchId,
+			localGatewayId = localGatewayId,
 		),
 	)
 	val state: StateFlow<ChatState> = _state
@@ -336,7 +336,7 @@ class ChatRepository(
 	// dictated cursor that would ack away the offline backlog on the next poll.
 	private val mailboxSync = MailboxSync(store)
 	// The Domain trust anchor: owner root key, console member identity, and the keyring
-	// the Console resolves every Switch against before sealing to it.
+	// the Console resolves every Gateway against before sealing to it.
 	private val federation = FederationManager(store)
 	private var pollFails = 0
 	private var pollJob: Job? = null
@@ -362,7 +362,7 @@ class ChatRepository(
 	 * team, so a background burst can become a notification. */
 	var onInbound: ((team: String, messages: List<Message>) -> Unit)? = null
 
-	/** The Activity came on screen: switch to the fast cadence, optimistically
+	/** The Activity came on screen: gateway to the fast cadence, optimistically
 	 * clear a doze-corpse failure banner (the kicked poll re-raises it within
 	 * seconds if the bridge is genuinely down), and poll right now. */
 	fun onForeground() {
@@ -520,7 +520,7 @@ class ChatRepository(
 		}
 		store.save(blob)
 		// Phone-anchored model: the blob is transport-only. The Console owns its identity
-		// (generated locally) and resolves every Switch's keys from the synced keyring, so
+		// (generated locally) and resolves every Gateway's keys from the synced keyring, so
 		// nothing cryptographic is imported from the blob. A re-import is a fresh enrollment
 		// against a possibly re-rooted Domain, so clear the console-admitted gate to re-submit
 		// this Console's admission on the next connect.
@@ -546,31 +546,31 @@ class ChatRepository(
 				}
 				return@withContext
 			}
-			// Submit this Console's own admission before the sealed register, so the Switch
+			// Submit this Console's own admission before the sealed register, so the Gateway
 			// has an owner-signed reason to trust its sealed ops. Bearer-gated, so it lands
 			// even though the Console is not admitted yet.
 			runCatching { submitConsoleAdmission() }
 			// register's cursor/epoch are no longer adopted: MailboxSync owns the durable
-			// cursor. We still register (to learn switchId, claim the mailbox, get the epoch
+			// cursor. We still register (to learn gatewayId, claim the mailbox, get the epoch
 			// the box is on); the poll loop's advance() reconciles any epoch change.
 			val reg = client().register()
-			reg.switchId?.let { id ->
-				if (id.isNotEmpty() && id != localSwitchId) {
-					localSwitchId = id
-					store.saveSwitchId(id)
+			reg.gatewayId?.let { id ->
+				if (id.isNotEmpty() && id != localGatewayId) {
+					localGatewayId = id
+					store.saveGatewayId(id)
 				}
 			}
-			// Repair any thread/label/unread/tab key minted under an empty/unknown switch
-			// now that the real switch id is known, so an inbound reply (keyed switch/name)
+			// Repair any thread/label/unread/tab key minted under an empty/unknown gateway
+			// now that the real gateway id is known, so an inbound reply (keyed gateway/name)
 			// can no longer file into a ghost "/name" thread the open tab cannot read.
-			recanonicalizeAllKeys(localSwitchId)
-			// Pin every subsequent relay to this home Switch so the Switch routes there
-			// even once other Switches join the mesh.
-			client().homeSwitch = localSwitchId.ifEmpty { null }
+			recanonicalizeAllKeys(localGatewayId)
+			// Pin every subsequent relay to this home Gateway so the Gateway routes there
+			// even once other Gatewayes join the mesh.
+			client().homeGateway = localGatewayId.ifEmpty { null }
 			// A teams refresh failure is not a connect failure: register succeeded, so we
 			// are connected. Log and proceed with the prior team list rather than masking
 			// the error as an empty board (which would blank live sessions).
-			val teams = runCatching { client().teams(localSwitchId) }.getOrElse {
+			val teams = runCatching { client().teams(localGatewayId) }.getOrElse {
 				DebugLog.log("Connect", "teams refresh failed: ${it.message?.take(120)}")
 				_state.value.teams
 			}
@@ -581,7 +581,7 @@ class ChatRepository(
 					error = null,
 					connected = true,
 					pollFailStreak = 0,
-					localSwitchId = localSwitchId,
+					localGatewayId = localGatewayId,
 					enrollingSince = 0L,
 				)
 			}
@@ -633,7 +633,7 @@ class ChatRepository(
 	 * accepted it, surfacing the error otherwise. The merge-iff-accepted invariant lives in
 	 * this one place so an owner action cannot submit without the matching local merge (the
 	 * class of bug that once left a revoked member on the board). Secondary effects (the
-	 * home-switch pin, the console-admitted gate) stay at the call site after a true return. */
+	 * home-gateway pin, the console-admitted gate) stay at the call site after a true return. */
 	private fun <T> submitOwnerFact(
 		signed: T,
 		submit: (T) -> EnrollResult,
@@ -649,10 +649,10 @@ class ChatRepository(
 		return true
 	}
 
-	/** Submit this Console's own owner-signed admission to evie so a Switch trusts its
+	/** Submit this Console's own owner-signed admission to evie so a Gateway trusts its
 	 * sealed ops. The enroll op is bearer-gated (not sealed), so it lands before the
 	 * Console is admitted; gated by a flag so connect does not re-issue it every cycle.
-	 * The arbiter may still be syncing the admission - the ENROLLING grace covers that. */
+	 * The gateway may still be syncing the admission - the ENROLLING grace covers that. */
 	private fun submitConsoleAdmission() {
 		if (store.consoleAdmitted) return
 		val signed = federation.consoleAdmission(System.currentTimeMillis())
@@ -665,20 +665,20 @@ class ChatRepository(
 		}
 	}
 
-	/** Owner-admit a scanned Switch: owner-sign its admission, submit it to evie, and
+	/** Owner-admit a scanned Gateway: owner-sign its admission, submit it to evie, and
 	 * fold it into the local keyring so the Console can seal to it immediately (before
 	 * evie's snapshot syncs back). Returns the signed admission for the caller to seal
 	 * into the bootstrap bundle, or null on failure. */
-	suspend fun admitSwitch(switchId: String, signPub: String, boxPub: String): SignedAdmission? =
+	suspend fun admitGateway(gatewayId: String, signPub: String, boxPub: String): SignedAdmission? =
 		withContext(Dispatchers.IO) {
-			val signed = federation.admitSwitch(switchId, signPub, boxPub, System.currentTimeMillis())
+			val signed = federation.admitGateway(gatewayId, signPub, boxPub, System.currentTimeMillis())
 			if (!submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitAdmission(it)) }, federation::mergeAdmission, "Admit failed")) {
 				return@withContext null
 			}
-			// The first admitted Switch becomes the home Switch the Console seals to.
-			if (store.loadSwitchId().isEmpty()) {
-				store.saveSwitchId(switchId)
-				localSwitchId = switchId
+			// The first admitted Gateway becomes the home Gateway the Console seals to.
+			if (store.loadGatewayId().isEmpty()) {
+				store.saveGatewayId(gatewayId)
+				localGatewayId = gatewayId
 			}
 			signed
 		}
@@ -695,15 +695,15 @@ class ChatRepository(
 	/** The admitted members of the keyring, for the management board. */
 	fun admittedMembers(): List<MemberInfo> = federation.members()
 
-	/** Parse a scanned admit-switch QR, or null if it is not one. The SAS is the
-	 * fingerprint of the Switch's signing key, confirmed against the Switch terminal. */
-	fun parseAdmitSwitch(scanned: String): ScannedSwitch? = runCatching {
+	/** Parse a scanned admit-gateway QR, or null if it is not one. The SAS is the
+	 * fingerprint of the Gateway's signing key, confirmed against the Gateway terminal. */
+	fun parseAdmitGateway(scanned: String): ScannedGateway? = runCatching {
 		val j = org.json.JSONObject(scanned.trim())
-		if (j.optString("type") != "admit-switch") return null
+		if (j.optString("type") != "admit-gateway") return null
 		val signPub = j.getString("signPub")
 		val lan = j.optJSONObject("lan")
-		ScannedSwitch(
-			switchId = j.getString("switchId"),
+		ScannedGateway(
+			gatewayId = j.getString("gatewayId"),
 			signPub = signPub,
 			boxPub = j.getString("boxPub"),
 			sas = Crypto.fingerprint(signPub),
@@ -713,39 +713,39 @@ class ChatRepository(
 		)
 	}.getOrNull()
 
-	/** Enroll a scanned Switch end to end: owner-admit it, then (if it offered LAN delivery
-	 * and the blob carries switch transport creds) seal a bootstrap bundle and deliver it
+	/** Enroll a scanned Gateway end to end: owner-admit it, then (if it offered LAN delivery
+	 * and the blob carries gateway transport creds) seal a bootstrap bundle and deliver it
 	 * over the LAN, falling back to handing the operator the sealed text to paste. A
-	 * host-configured Switch (no LAN, no nonce) just needs the admission, which reaches it
+	 * host-configured Gateway (no LAN, no nonce) just needs the admission, which reaches it
 	 * through evie's domain sync. */
-	suspend fun enrollSwitch(scanned: ScannedSwitch): EnrollDelivery = withContext(Dispatchers.IO) {
-		val signed = admitSwitch(scanned.switchId, scanned.signPub, scanned.boxPub)
+	suspend fun enrollGateway(scanned: ScannedGateway): EnrollDelivery = withContext(Dispatchers.IO) {
+		val signed = admitGateway(scanned.gatewayId, scanned.signPub, scanned.boxPub)
 			?: return@withContext EnrollDelivery(false, "Admit failed. Try again.", null)
 		val nonce = scanned.nonce
-			?: return@withContext EnrollDelivery(true, "Admitted. This Switch will come online once it syncs the keyring.", null)
+			?: return@withContext EnrollDelivery(true, "Admitted. This Gateway will come online once it syncs the keyring.", null)
 		val transportJson = runCatching { Provisioning.parse(store.load() ?: "") }.getOrNull()
-			?.switchTransport?.ifEmpty { null }
+			?.gatewayTransport?.ifEmpty { null }
 			?: return@withContext EnrollDelivery(
 				true,
-				"Admitted, but this blob has no switch transport creds. Re-run provision-console.sh to deliver a bundle.",
+				"Admitted, but this blob has no gateway transport creds. Re-run provision-console.sh to deliver a bundle.",
 				null,
 			)
-		val transport = runCatching { wireJson.decodeFromString(SwitchTransport.serializer(), transportJson) }.getOrNull()
-			?: return@withContext EnrollDelivery(true, "Admitted, but the switch transport creds are unreadable.", null)
+		val transport = runCatching { wireJson.decodeFromString(GatewayTransport.serializer(), transportJson) }.getOrNull()
+			?: return@withContext EnrollDelivery(true, "Admitted, but the gateway transport creds are unreadable.", null)
 		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub)
-		val frameJson = wireJson.encodeToString(SwitchBootstrapFrame.serializer(), frame)
+		val frameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), frame)
 		if (scanned.lanHost != null && scanned.lanPort != null && isPrivateLanHost(scanned.lanHost)) {
 			val ok = runCatching { postBundle(scanned.lanHost, scanned.lanPort, frameJson) }.getOrDefault(false)
 			if (ok) {
-				return@withContext EnrollDelivery(true, "Delivered over the LAN. The Switch is coming online.", null)
+				return@withContext EnrollDelivery(true, "Delivered over the LAN. The Gateway is coming online.", null)
 			}
-			return@withContext EnrollDelivery(true, "LAN delivery failed. Copy this sealed bundle to the Switch terminal.", frameJson)
+			return@withContext EnrollDelivery(true, "LAN delivery failed. Copy this sealed bundle to the Gateway terminal.", frameJson)
 		}
-		EnrollDelivery(true, "Admitted. Copy this sealed bundle to the Switch's enrollment prompt.", frameJson)
+		EnrollDelivery(true, "Admitted. Copy this sealed bundle to the Gateway's enrollment prompt.", frameJson)
 	}
 
-	/** Plain HTTP POST of the sealed bundle to the Switch's nonce-gated LAN listener. No
-	 * TLS pinning: the bundle is already sealed to the Switch box key, so the LAN is
+	/** Plain HTTP POST of the sealed bundle to the Gateway's nonce-gated LAN listener. No
+	 * TLS pinning: the bundle is already sealed to the Gateway box key, so the LAN is
 	 * trusted only for reachability, not confidentiality. */
 	private fun postBundle(host: String, port: Int, frameJson: String): Boolean {
 		val client = OkHttpClient.Builder()
@@ -760,8 +760,8 @@ class ChatRepository(
 		client.newCall(req).execute().use { return it.isSuccessful }
 	}
 
-	/** True only for a private / loopback / link-local IP LITERAL. The admit-switch QR
-	 * carries the Switch's LAN address and we POST the sealed bundle there, so restricting
+	/** True only for a private / loopback / link-local IP LITERAL. The admit-gateway QR
+	 * carries the Gateway's LAN address and we POST the sealed bundle there, so restricting
 	 * the target to an actual LAN address stops a tampered QR from redirecting the bundle
 	 * (and the console's plaintext identity metadata) to a public attacker host - a non-LAN
 	 * value falls through to the paste path instead. Numeric only: a QR-supplied hostname is
@@ -772,38 +772,38 @@ class ChatRepository(
 	}.getOrDefault(false)
 
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
-		runCatching { client().teams(localSwitchId) }.onSuccess { t -> _state.update { it.copy(teams = t) } }
+		runCatching { client().teams(localGatewayId) }.onSuccess { t -> _state.update { it.copy(teams = t) } }
 	}
 
 	/** Repair every in-memory key (threads, unread, labels, open tabs) to canonical once
-	 * the switch id is known, merging any collisions, so a thread loaded under an empty or
-	 * unknown switch ("/name") can no longer shadow the canonical "switch/name" an inbound
+	 * the gateway id is known, merging any collisions, so a thread loaded under an empty or
+	 * unknown switch ("/name") can no longer shadow the canonical "gateway/name" an inbound
 	 * reply keys under. A no-op when every key is already canonical (the steady state),
 	 * so it costs nothing on a normal connect; only a one-time repair persists. The repair
 	 * lands at the startup connect() before any thread WebView is open (openTabs is not
 	 * persisted, so it is empty at launch) and is a no-op on every later reconnect, so it
 	 * cannot reorder/merge a thread out from under a live renderer. */
-	private fun recanonicalizeAllKeys(switchId: String) {
-		if (switchId.isEmpty()) return
+	private fun recanonicalizeAllKeys(gatewayId: String) {
+		if (gatewayId.isEmpty()) return
 		val s0 = _state.value
-		val dirty = s0.threads.keys.any { it != canonicalThreadKey(it, switchId) } ||
-			s0.labels.keys.any { it != canonicalThreadKey(it, switchId) } ||
-			s0.unread.keys.any { it != canonicalThreadKey(it, switchId) } ||
-			s0.openTabs.any { it != canonicalThreadKey(it, switchId) }
+		val dirty = s0.threads.keys.any { it != canonicalThreadKey(it, gatewayId) } ||
+			s0.labels.keys.any { it != canonicalThreadKey(it, gatewayId) } ||
+			s0.unread.keys.any { it != canonicalThreadKey(it, gatewayId) } ||
+			s0.openTabs.any { it != canonicalThreadKey(it, gatewayId) }
 		if (!dirty) return
 		val next = _state.updateAndGet { s ->
 			val threads = LinkedHashMap<String, MutableList<Message>>()
-			for ((k, msgs) in s.threads) threads.getOrPut(canonicalThreadKey(k, switchId)) { mutableListOf() }.addAll(msgs)
+			for ((k, msgs) in s.threads) threads.getOrPut(canonicalThreadKey(k, gatewayId)) { mutableListOf() }.addAll(msgs)
 			val mergedThreads =
 				threads.mapValues { (_, m) -> m.sortedBy { it.at }.mapIndexed { i, x -> x.copy(id = i.toLong()) } }
 			val unread = LinkedHashMap<String, Int>()
 			for ((k, n) in s.unread) {
-				val ck = canonicalThreadKey(k, switchId)
+				val ck = canonicalThreadKey(k, gatewayId)
 				unread[ck] = (unread[ck] ?: 0) + n
 			}
 			val labels = LinkedHashMap<String, String>()
-			for ((k, v) in s.labels) labels[canonicalThreadKey(k, switchId)] = v
-			val openTabs = s.openTabs.map { canonicalThreadKey(it, switchId) }.distinct()
+			for ((k, v) in s.labels) labels[canonicalThreadKey(k, gatewayId)] = v
+			val openTabs = s.openTabs.map { canonicalThreadKey(it, gatewayId) }.distinct()
 			s.copy(threads = mergedThreads, unread = unread, labels = labels, openTabs = openTabs)
 		}
 		persistThreads(next.threads)
@@ -845,7 +845,7 @@ class ChatRepository(
 	/** Re-send a failed message, rebuilding attachment bytes from their local
 	 * copies. The error -> pending flip is the atomic claim: a double-tap's second
 	 * coroutine finds the row already pending and backs off, so the wire send runs
-	 * once. The original opId is reused so the arbiter dedupes a lost-reply retry. */
+	 * once. The original opId is reused so the gateway dedupes a lost-reply retry. */
 	suspend fun retrySend(team: String, messageId: Long) = withContext(Dispatchers.IO) {
 		var claimed = false
 		_state.update { s ->
@@ -958,7 +958,7 @@ class ChatRepository(
 					if (forceTeamsRefresh || now - lastTeamsAt >= TEAMS_REFRESH_MS) {
 						forceTeamsRefresh = false
 						lastTeamsAt = now
-						runCatching { client().teams(localSwitchId) }.onSuccess { t ->
+						runCatching { client().teams(localGatewayId) }.onSuccess { t ->
 							_state.update { it.copy(teams = t) }
 						}
 					}
@@ -969,10 +969,10 @@ class ChatRepository(
 					val params = mailboxSync.pollParams()
 					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms")
 					val mb = client().poll(params.cursor, params.epoch, hold)
-					// Keyring sync: the home Switch returns the snapshot only when it changed.
+					// Keyring sync: the home Gateway returns the snapshot only when it changed.
 					// Apply it owner-pinned so a revocation made elsewhere reaches this Console.
 					mb.domain?.let { federation.applyDomainSync(it, mb.domainVersion ?: "") }
-					// An old arbiter ignores holdMs and returns empty instantly; floor
+					// An old gateway ignores holdMs and returns empty instantly; floor
 					// the cadence so that degradation never becomes a tight spin.
 					heldEmpty = hold > 0 && mb.entries.isEmpty() &&
 						System.currentTimeMillis() - started < 3_000
@@ -1001,21 +1001,21 @@ class ChatRepository(
 						// Resolve the thread key for this entry; null means drop it.
 						val team: String? = if (e.kind == "notice") {
 							// Notice: prefer `from`, fall back to NoticeId parse.
-							e.from?.let { TeamAddress.parse(it, localSwitchId).canonical }
-								?: NoticeId.parse(e.session_id, localSwitchId)?.sender?.canonical
+							e.from?.let { TeamAddress.parse(it, localGatewayId).canonical }
+								?: NoticeId.parse(e.session_id, localGatewayId)?.sender?.canonical
 						} else {
-							val sid = SessionId.parse(e.session_id, localSwitchId)
+							val sid = SessionId.parse(e.session_id, localGatewayId)
 							if (sid != null) {
-								val thisDevice = TeamAddress.local(localSwitchId, currentDeviceName())
+								val thisDevice = TeamAddress.local(localGatewayId, currentDeviceName())
 								if (sid.target == thisDevice) {
 									// Face-4: session tail is this device; thread under sender.
-									e.from?.let { TeamAddress.parse(it, localSwitchId).canonical } ?: sid.target.canonical
+									e.from?.let { TeamAddress.parse(it, localGatewayId).canonical } ?: sid.target.canonical
 								} else {
 									sid.target.canonical
 								}
 							} else {
 								// Not a conv session id; fall back to `from` if present.
-								e.from?.let { TeamAddress.parse(it, localSwitchId).canonical }
+								e.from?.let { TeamAddress.parse(it, localGatewayId).canonical }
 							}
 						}
 						if (team == null) {
@@ -1078,7 +1078,7 @@ class ChatRepository(
 					if (hold > 0 && e.message?.startsWith("HTTP 504") == true) {
 						// A relay-timeout during a hold is an empty long-poll, not an
 						// outage: an evie still on the shorter hold (upgrade window) or
-						// a transient arbiter drop mid-hold. Back off, do not alarm.
+						// a transient gateway drop mid-hold. Back off, do not alarm.
 						DebugLog.log("Poll", "hold timeout (504) treated as empty long-poll")
 						heldEmpty = true
 					} else {
@@ -1120,7 +1120,7 @@ class ChatRepository(
 	}
 
 	/** Re-deliver echoes stranded "pending" (process death, doze-killed socket)
-	 * once each, using their original opId: the arbiter replays the cached result
+	 * once each, using their original opId: the gateway replays the cached result
 	 * if the send actually landed, so this can never double-deliver. A row whose
 	 * send never landed re-fails to the tap-to-retry badge. */
 	suspend fun reconcilePending() = withContext(Dispatchers.IO) {
@@ -1206,7 +1206,7 @@ class ChatRepository(
 		client = null
 		sttsClient = null
 		stts.purgeAll()
-		localSwitchId = ""
+		localGatewayId = ""
 		mailboxSync.clearInMemory()
 		_state.value = ChatState(provisioned = false)
 	}
@@ -1309,7 +1309,7 @@ class ChatRepository(
 			// the second silently dropping the first.
 			val merged = LinkedHashMap<String, MutableList<Message>>()
 			for (rawKey in root.keys()) {
-				val canonicalKey = canonicalThreadKey(rawKey, localSwitchId)
+				val canonicalKey = canonicalThreadKey(rawKey, localGatewayId)
 				val arr = root.getJSONArray(rawKey)
 				val loaded = (0 until arr.length()).map {
 					val m = arr.getJSONObject(it)
@@ -1362,10 +1362,10 @@ class ChatRepository(
 		val json = store.loadLabels() ?: return emptyMap()
 		return runCatching {
 			val root = JSONObject(json)
-			// Normalize legacy bare/empty-switch keys to canonical form on load.
+			// Normalize legacy bare/empty-gateway keys to canonical form on load.
 			buildMap {
 				for (rawKey in root.keys()) {
-					put(canonicalThreadKey(rawKey, localSwitchId), root.getString(rawKey))
+					put(canonicalThreadKey(rawKey, localGatewayId), root.getString(rawKey))
 				}
 			}
 		}.getOrDefault(emptyMap())
@@ -1375,7 +1375,7 @@ class ChatRepository(
 		const val POLL_INTERVAL_MS = 5_000L
 		// AFK cadence: one plain poll a minute drains the accumulated burst.
 		const val AFK_POLL_INTERVAL_MS = 60_000L
-		// Visible cadence: server-held long-poll (under the arbiter's 45s cap).
+		// Visible cadence: server-held long-poll (under the gateway's 45s cap).
 		const val LONG_POLL_HOLD_MS = 40_000L
 		// Refresh the team list at most this often, regardless of poll cadence.
 		const val TEAMS_REFRESH_MS = 30_000L

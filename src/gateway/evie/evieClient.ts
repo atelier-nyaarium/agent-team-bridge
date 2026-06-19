@@ -28,23 +28,23 @@ export interface EvieClientConfig {
 	// Cluster CA (PEM) to pin TLS against when dialing the service-proxy (wss://). Unset
 	// for the legacy plaintext localhost tunnel.
 	tls?: { ca: string };
-	// This Switch's id, registered with the Router on connect so cross-Switch frames
-	// can be switched to this Switch.
-	switchId: string;
+	// This Gateway's id, registered with the Router on connect so cross-Gateway frames
+	// can be gatewayed to this Gateway.
+	gatewayId: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	// The relay pump owns full ConsoleRelayFrameSchema validation; the envelope
 	// union only routes by type, so the frame travels as unknown.
 	onConsoleRelay?: (frame: unknown) => void;
-	// A cross-Switch frame the Router switched to this Switch; the switch-relay pump owns
-	// full SwitchRelayFrameSchema validation, so the frame travels as unknown.
-	onSwitchRelay?: (frame: unknown) => void;
-	// Extra `switch_register` params (the admitted-identity proof: signPub/boxPub
+	// A cross-Gateway frame the Router gatewayed to this Gateway; the gateway-relay pump owns
+	// full GatewayRelayFrameSchema validation, so the frame travels as unknown.
+	onGatewayRelay?: (frame: unknown) => void;
+	// Extra `gateway_register` params (the admitted-identity proof: signPub/boxPub
 	// + owner-signed admission + a fresh possession proof), computed at each
 	// (re)register so the proof timestamp is current. Returns null pre-enrollment,
 	// leaving registration token-only.
 	buildRegisterAuth?: () => Record<string, unknown> | null;
 	// The mirrored Domain (owner root + allowlist) evie returns in the register
-	// reply; the Switch applies it so a revocation bites even while evie is offline.
+	// reply; the Gateway applies it so a revocation bites even while evie is offline.
 	// Travels as unknown; the consumer validates with DomainSnapshotSchema.
 	onDomainSync?: (domain: unknown) => void;
 	onDisconnect?: () => void;
@@ -65,7 +65,7 @@ const TOOL_CALL_TIMEOUT_MS = 120_000;
 // Application-level keepalive over the link. The k8s API service-proxy (and any LB in
 // front of the apiserver) drops idle upgraded connections, so a ping well under that
 // idle window keeps the tunnel warm AND detects a silently-dropped path: two missed
-// pongs terminate the socket and trigger the normal reconnect. Mirrors the arbiter's
+// pongs terminate the socket and trigger the normal reconnect. Mirrors the gateway's
 // own team-socket heartbeat.
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const MISSED_PONGS_LIMIT = 2;
@@ -97,21 +97,21 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			console.log(`[evie-client] connected`);
 			missedPongs = 0;
 			startHeartbeat();
-			// Register this Switch with the Router so cross-Switch frames can find it.
-			// Re-runs on every reconnect (the Router re-keys switch id -> socket).
-			void callTool("switch_register", {
-				switchId: config.switchId,
+			// Register this Gateway with the Router so cross-Gateway frames can find it.
+			// Re-runs on every reconnect (the Router re-keys gateway id -> socket).
+			void callTool("gateway_register", {
+				gatewayId: config.gatewayId,
 				protocolVersion: FEDERATION_PROTOCOL_VERSION,
 				...(config.buildRegisterAuth?.() ?? {}),
 			}).then((res) => {
 				const r = res.result as
-					| { ok?: boolean; error?: string; switches?: string[]; domain?: unknown }
+					| { ok?: boolean; error?: string; gatewayes?: string[]; domain?: unknown }
 					| undefined;
-				if (res.error) console.error(`[evie-client] switch_register failed: ${res.error}`);
+				if (res.error) console.error(`[evie-client] gateway_register failed: ${res.error}`);
 				else if (r?.ok === false) console.error(`[evie-client] Router rejected registration: ${r.error}`);
 				else {
-					const peers = r?.switches?.length ? `, peers: ${r.switches.join(", ")}` : "";
-					console.log(`[evie-client] registered as Switch "${config.switchId}"${peers}`);
+					const peers = r?.gatewayes?.length ? `, peers: ${r.gatewayes.join(", ")}` : "";
+					console.log(`[evie-client] registered as Gateway "${config.gatewayId}"${peers}`);
 					if (r?.domain) config.onDomainSync?.(r.domain);
 				}
 			});
@@ -151,8 +151,8 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					config.onConsoleRelay?.(frame);
 					break;
 				}
-				case "switch_relay": {
-					config.onSwitchRelay?.(frame);
+				case "gateway_relay": {
+					config.onGatewayRelay?.(frame);
 					break;
 				}
 				case "domain_update": {
@@ -225,7 +225,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		heartbeatTimer = setInterval(() => {
 			if (!ws || ws.readyState !== WebSocket.OPEN) return;
 			// Increment first, then check (a pong resets the count to 0), so two
-			// consecutive unanswered pings terminate - matching the arbiter's team socket.
+			// consecutive unanswered pings terminate - matching the gateway's team socket.
 			missedPongs++;
 			if (missedPongs >= MISSED_PONGS_LIMIT) {
 				console.error(`[evie-client] no pong for ${missedPongs} beats, terminating to reconnect`);

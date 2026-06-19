@@ -17,7 +17,7 @@ export type ChannelPushHandler = (msg: Record<string, unknown>) => void;
 const HOME = os.homedir();
 
 let ws: WebSocket | null = null;
-let arbiterUrl = "ws://localhost:20000";
+let gatewayUrl = "ws://localhost:20000";
 let projectDirs: string[] = [path.join(HOME, "projects")];
 let channelPushHandler: ChannelPushHandler | null = null;
 const reconnector = createReconnector(() => connect());
@@ -31,7 +31,7 @@ export function startHostWakeListener(dirs?: string[], onChannelPush?: ChannelPu
 	}
 	const envUrl = process.env.BRIDGE_ROUTER_URL;
 	if (envUrl) {
-		arbiterUrl = envUrl.replace(/^http/, "ws");
+		gatewayUrl = envUrl.replace(/^http/, "ws");
 	}
 	connect();
 }
@@ -45,10 +45,10 @@ export function stopHostWakeListener(): void {
 }
 
 function connect(): void {
-	ws = new WebSocket(`${arbiterUrl}/bridge`);
+	ws = new WebSocket(`${gatewayUrl}/bridge`);
 
 	ws.on("open", () => {
-		console.error("[host-wake] connected to arbiter");
+		console.error("[host-wake] connected to gateway");
 		reconnector.reset();
 		ws!.send(JSON.stringify({ type: "register", team: "host" }));
 

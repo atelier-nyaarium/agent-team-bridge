@@ -1,8 +1,8 @@
 import type { ServerWebSocket } from "bun";
 import { describe, expect, it } from "vitest";
-import { type ConsoleRoutes, createConsoleHandler } from "../arbiter/console/consoleHandler.js";
-import { ConsolePeer } from "../arbiter/console/consolePeer.js";
-import type { ConversationRegistry, TeamRegistry, WsData } from "../arbiter/websocket.js";
+import { type ConsoleRoutes, createConsoleHandler } from "../gateway/console/consoleHandler.js";
+import { ConsolePeer } from "../gateway/console/consolePeer.js";
+import type { ConversationRegistry, TeamRegistry, WsData } from "../gateway/websocket.js";
 import type { ConsoleOp, OpenedConsoleFrame } from "../shared/console-protocol.js";
 import { DeviceMailbox, DeviceMailboxStore } from "../shared/device-mailbox.js";
 
@@ -71,14 +71,14 @@ function makeHarness(overrides: Partial<ConsoleRoutes> = {}): Harness {
 			jsonRes([
 				{ team: "team-a", status: "online", mode: "channel", queue_depth: 0 },
 				{ team: "pixel", status: "online", mode: "channel", queue_depth: 0 },
-				{ team: "arbiter", status: "online", mode: "channel", queue_depth: 0 },
+				{ team: "gateway", status: "online", mode: "channel", queue_depth: 0 },
 			]),
 		// list_teams fans out via discover; mirror the team list here.
 		discover: async () =>
 			jsonRes([
 				{ team: "team-a", status: "online", mode: "channel", queue_depth: 0 },
 				{ team: "pixel", status: "online", mode: "channel", queue_depth: 0 },
-				{ team: "arbiter", status: "online", mode: "channel", queue_depth: 0 },
+				{ team: "gateway", status: "online", mode: "channel", queue_depth: 0 },
 			]),
 		...overrides,
 	};
@@ -87,7 +87,7 @@ function makeHarness(overrides: Partial<ConsoleRoutes> = {}): Harness {
 		registry,
 		conversationRegistry,
 		mailboxStore,
-		localSwitchId: "test-host",
+		localGatewayId: "test-host",
 		routes,
 	});
 	return { registry, conversationRegistry, mailboxStore, sendCalls, respondCalls, handler };
@@ -142,9 +142,9 @@ describe("createConsoleHandler", () => {
 		const h = makeHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "register" }));
 		expect(reply.ok).toBe(true);
-		// register hands back the connected Switch id so the console anchors its
-		// composite (switchId, name) key and migrates bare-keyed threads onto it.
-		expect(reply.result).toMatchObject({ device: "pixel", switchId: "test-host", cursor: 0 });
+		// register hands back the connected Gateway id so the console anchors its
+		// composite (gatewayId, name) key and migrates bare-keyed threads onto it.
+		expect(reply.result).toMatchObject({ device: "pixel", gatewayId: "test-host", cursor: 0 });
 		expect((reply.result as { epoch: number }).epoch).toBeGreaterThan(0);
 
 		const peer = h.registry.get("pixel")?.get("conv-pixel") as unknown as ServerWebSocket<WsData>;
@@ -156,7 +156,7 @@ describe("createConsoleHandler", () => {
 
 	it("rejects reserved device names", async () => {
 		const h = makeHarness();
-		for (const name of ["arbiter", "host"]) {
+		for (const name of ["gateway", "host"]) {
 			const reply = await h.handler.handleFrame(frame({ kind: "register" }, "op1", name, `conv-${name}`));
 			expect(reply.ok).toBe(false);
 			expect(reply.error).toContain("reserved");
@@ -175,7 +175,7 @@ describe("createConsoleHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
-			localSwitchId: "test-host",
+			localGatewayId: "test-host",
 			routes: {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
@@ -220,9 +220,9 @@ describe("createConsoleHandler", () => {
 		const reply = await h.handler.handleFrame(frame({ kind: "list_teams" }));
 		expect(reply.ok).toBe(true);
 		const teams = (reply.result as { teams: { team: string }[] }).teams.map((t) => t.team);
-		// "arbiter" (the host-agent) is now surfaced; the cli "host" daemon and the
+		// "gateway" (the host-agent) is now surfaced; the cli "host" daemon and the
 		// device itself stay excluded.
-		expect(teams.sort()).toEqual(["arbiter", "team-a"]);
+		expect(teams.sort()).toEqual(["gateway", "team-a"]);
 	});
 
 	it("send forwards from/fromConversationId/to and returns the session", async () => {
@@ -481,7 +481,7 @@ describe("createConsoleHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
-			localSwitchId: "test-host",
+			localGatewayId: "test-host",
 			sendBoundMs: 50,
 			routes: {
 				send: () => new Promise<Response>(() => {}),
@@ -543,7 +543,7 @@ describe("createConsoleHandler", () => {
 		expect((poll.result as { entries: { body?: string }[] }).entries[0].body).toBe("kept");
 	});
 
-	it("non-register ops still cannot switch device names", async () => {
+	it("non-register ops still cannot gateway device names", async () => {
 		const h = makeHarness();
 		await h.handler.handleFrame(frame({ kind: "register" }, "op1", "pixel", "conv-1"));
 		const reply = await h.handler.handleFrame(frame({ kind: "poll" }, "op2", "tablet", "conv-1"));
@@ -560,7 +560,7 @@ describe("createConsoleHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
-			localSwitchId: "test-host",
+			localGatewayId: "test-host",
 			sendBoundMs: 20,
 			routes: {
 				send: () =>
@@ -602,7 +602,7 @@ describe("createConsoleHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
-			localSwitchId: "test-host",
+			localGatewayId: "test-host",
 			sendBoundMs: 20,
 			routes: {
 				send: () =>
@@ -689,7 +689,7 @@ describe("createConsoleHandler", () => {
 			registry,
 			conversationRegistry,
 			mailboxStore,
-			localSwitchId: "test-host",
+			localGatewayId: "test-host",
 			sendBoundMs: 20,
 			routes: {
 				send: () => new Promise<Response>((resolve) => (resolveSend = resolve)),
@@ -766,7 +766,7 @@ describe("DeviceMailboxStore caps", () => {
 	it("a fresh instance gets a new epoch", () => {
 		// Epochs are random (the console compares them only for equality), so the
 		// contract is "different", not "greater" - greater was the old counter
-		// semantics that collided across arbiter restarts.
+		// semantics that collided across gateway restarts.
 		const store = new DeviceMailboxStore();
 		const e1 = store.ensure("x").epoch;
 		store.delete("x");

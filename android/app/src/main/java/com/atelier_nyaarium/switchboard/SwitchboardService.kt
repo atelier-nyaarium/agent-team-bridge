@@ -75,9 +75,9 @@ class SwitchboardService : Service() {
 		repo.onInbound = { team, messages -> notifyBurst(repo, team, messages) }
 		// Keep the CPU awake for the poll loop while the bridge runs (background delivery).
 		acquireWakeLock()
-		// connect() runs register (which sets the Switch id, cursor, epoch) and the
-		// on-device switch-id migration; start the poll loop only after it, so the
-		// loop never qualifies an inbound team under an as-yet-unknown Switch id and
+		// connect() runs register (which sets the Gateway id, cursor, epoch) and the
+		// on-device gateway-id migration; start the poll loop only after it, so the
+		// loop never qualifies an inbound team under an as-yet-unknown Gateway id and
 		// strands a bare-keyed thread beside its migrated, qualified twin. connect()
 		// never throws (it catches internally), so the poll loop always starts.
 		scope.launch(Dispatchers.IO) {
@@ -208,7 +208,7 @@ class SwitchboardService : Service() {
 	private fun notifyBurst(repo: ChatRepository, team: String, messages: List<Message>) {
 		if (repo.isVisible || !canNotify()) return
 		val state = repo.state.value
-		val label = state.label(team, state.localSwitchId)
+		val label = state.label(team, state.localGatewayId)
 		val unread = state.unread[team] ?: messages.size
 		val style = NotificationCompat.InboxStyle()
 		for (m in messages.takeLast(5)) {

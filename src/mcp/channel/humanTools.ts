@@ -72,8 +72,8 @@ export function registerHumanTools(mcpServer: McpServer): void {
 				// the server's error message (including the 413 cap and 503 no-bridge).
 				const result = (await routerPost("/human/notify", {
 					from: bridgeProjectName() || "unknown",
-					// Send BOTH keys for the transition: an old arbiter reads `tiny`,
-					// a new one reads `title` (or `tiny`). Drop `tiny` once arbiters
+					// Send BOTH keys for the transition: an old gateway reads `tiny`,
+					// a new one reads `title` (or `tiny`). Drop `tiny` once gateways
 					// are caught up.
 					title,
 					tiny: title,

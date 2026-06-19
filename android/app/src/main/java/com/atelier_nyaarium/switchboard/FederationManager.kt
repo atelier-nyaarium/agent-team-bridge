@@ -11,9 +11,9 @@ import com.atelier_nyaarium.switchboard.proto.Revocation
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SignedRevocation
-import com.atelier_nyaarium.switchboard.proto.SwitchBootstrapBundle
-import com.atelier_nyaarium.switchboard.proto.SwitchBootstrapFrame
-import com.atelier_nyaarium.switchboard.proto.SwitchTransport
+import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapBundle
+import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
+import com.atelier_nyaarium.switchboard.proto.GatewayTransport
 import java.security.SecureRandom
 import java.util.Base64
 import kotlinx.serialization.json.Json
@@ -25,11 +25,11 @@ import kotlinx.serialization.json.Json
  * first access and never leaves the device except as a passphrase-encrypted backup.
  *
  * Admissions and revocations are signed here and submitted to evie through the
- * Console's enroll channel; the Console verifies every Switch it seals to against this
+ * Console's enroll channel; the Console verifies every Gateway it seals to against this
  * keyring, so trust is symmetric (each peer is admitted by the one owner root).
  */
 /** One admitted member, for the management board. */
-data class MemberInfo(val kind: String, val switchId: String?, val signPub: String, val boxPub: String, val isSelf: Boolean)
+data class MemberInfo(val kind: String, val gatewayId: String?, val signPub: String, val boxPub: String, val isSelf: Boolean)
 
 /** Outcome of restoring an owner backup, so the UI can tell a wrong passphrase apart from a
  * backup that belongs to a different owner (which restore refuses). */
@@ -83,7 +83,7 @@ class FederationManager(private val store: ProvisioningStore) {
 	private fun nonce(): String = Base64.getEncoder().encodeToString(ByteArray(18).also { rnd.nextBytes(it) })
 
 	/** This Console's own owner-signed kind:console admission, to submit to evie so a
-	 * Switch will trust its sealed ops. */
+	 * Gateway will trust its sealed ops. */
 	fun consoleAdmission(nowMs: Long): SignedAdmission {
 		val owner = ownerIdentity()
 		val console = consoleIdentity()
@@ -91,10 +91,10 @@ class FederationManager(private val store: ProvisioningStore) {
 		return AdmissionCrypto.signAdmission(admission, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Owner-sign a kind:switch admission for a scanned admit-switch identity. */
-	fun admitSwitch(switchId: String, signPub: String, boxPub: String, nowMs: Long): SignedAdmission {
+	/** Owner-sign a kind:gateway admission for a scanned admit-gateway identity. */
+	fun admitGateway(gatewayId: String, signPub: String, boxPub: String, nowMs: Long): SignedAdmission {
 		val owner = ownerIdentity()
-		val admission = Admission("switch", signPub, boxPub, switchId, nowMs, nonce())
+		val admission = Admission("gateway", signPub, boxPub, gatewayId, nowMs, nonce())
 		return AdmissionCrypto.signAdmission(admission, owner.sign.priv, owner.sign.pub)
 	}
 
@@ -105,22 +105,22 @@ class FederationManager(private val store: ProvisioningStore) {
 	/** The current keyring: the stored snapshot, or an owner-only one before any sync. */
 	fun keyring(): Keyring = Keyring.parse(store.loadDomain()) ?: Keyring.empty(ownerSignPub())
 
-	/** Seal a bootstrap bundle (transport + the Switch's admission + the current keyring)
-	 * to the Switch's box key, signed by this Console, wrapped in a delivery frame. The
-	 * Switch verifies the seal, opens it, checks the nonce + the owner-signed admission. */
-	fun sealBundle(nonce: String, transport: SwitchTransport, admission: SignedAdmission, recipientBoxPub: String): SwitchBootstrapFrame {
+	/** Seal a bootstrap bundle (transport + the Gateway's admission + the current keyring)
+	 * to the Gateway's box key, signed by this Console, wrapped in a delivery frame. The
+	 * Gateway verifies the seal, opens it, checks the nonce + the owner-signed admission. */
+	fun sealBundle(nonce: String, transport: GatewayTransport, admission: SignedAdmission, recipientBoxPub: String): GatewayBootstrapFrame {
 		val console = consoleIdentity()
-		val bundle = SwitchBootstrapBundle(nonce = nonce, transport = transport, admission = admission, domain = keyring().snapshot)
-		val plain = json.encodeToString(SwitchBootstrapBundle.serializer(), bundle).toByteArray(Charsets.UTF_8)
+		val bundle = GatewayBootstrapBundle(nonce = nonce, transport = transport, admission = admission, domain = keyring().snapshot)
+		val plain = json.encodeToString(GatewayBootstrapBundle.serializer(), bundle).toByteArray(Charsets.UTF_8)
 		val sealed = Crypto.seal(plain, recipientBoxPub, console.sign.priv)
-		return SwitchBootstrapFrame(
+		return GatewayBootstrapFrame(
 			v = 1L,
 			signerSignPub = console.sign.pub,
 			sealed = SealedEnvelope(sealed.ephemeralPub, sealed.nonce, sealed.ciphertext, sealed.signature),
 		)
 	}
 
-	/** Apply a snapshot synced from a Switch, but ONLY when it is rooted at this device's
+	/** Apply a snapshot synced from a Gateway, but ONLY when it is rooted at this device's
 	 * own owner key. A relay that tampered with the root (to seat an attacker owner) is
 	 * rejected, so the pinned owner can never be swapped out from under the Console. Read
 	 * the owner key WITHOUT generating one: a sync arriving before this device has an owner
@@ -157,7 +157,7 @@ class FederationManager(private val store: ProvisioningStore) {
 		for (s in k.snapshot.admissions) {
 			if (!seen.add(s.admission.signPub)) continue
 			val a = k.resolveSubject(s.admission.signPub) ?: continue
-			out.add(MemberInfo(a.kind, a.switchId, a.signPub, a.boxPub, a.signPub == mySign))
+			out.add(MemberInfo(a.kind, a.gatewayId, a.signPub, a.boxPub, a.signPub == mySign))
 		}
 		return out
 	}

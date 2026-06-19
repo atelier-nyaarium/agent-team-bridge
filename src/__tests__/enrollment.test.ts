@@ -9,7 +9,7 @@ const host = generateIdentity();
 describe("enrollment", () => {
 	it("parses each enrollment payload type and rejects an unknown one", () => {
 		expect(
-			EnrollmentPayloadSchema.safeParse({ type: "admit-switch", switchId: "laptop", signPub: "a", boxPub: "b" })
+			EnrollmentPayloadSchema.safeParse({ type: "admit-gateway", gatewayId: "laptop", signPub: "a", boxPub: "b" })
 				.success,
 		).toBe(true);
 		expect(
@@ -27,25 +27,25 @@ describe("enrollment", () => {
 
 	it("derives the SAS from the confirmed signing key", () => {
 		const payload = {
-			type: "admit-switch" as const,
-			switchId: "laptop",
+			type: "admit-gateway" as const,
+			gatewayId: "laptop",
 			signPub: host.sign.pub,
 			boxPub: host.box.pub,
 		};
 		expect(payloadSas(payload)).toBe(fingerprint(host.sign.pub));
 	});
 
-	it("admits a scanned Switch into the allowlist", () => {
+	it("admits a scanned Gateway into the allowlist", () => {
 		const payload = {
-			type: "admit-switch" as const,
-			switchId: "laptop",
+			type: "admit-gateway" as const,
+			gatewayId: "laptop",
 			signPub: host.sign.pub,
 			boxPub: host.box.pub,
 		};
 		const signed = admissionFromScan(payload, owner.sign.priv, owner.sign.pub, 1000, "bg==");
 		expect(verifyAdmission(signed, owner.sign.pub)).toBe(true);
 		const got = resolveAdmitted([signed], [], owner.sign.pub, host.sign.pub);
-		expect(got).toMatchObject({ kind: "switch", switchId: "laptop", boxPub: host.box.pub });
+		expect(got).toMatchObject({ kind: "gateway", gatewayId: "laptop", boxPub: host.box.pub });
 	});
 
 	it("parses each enroll op and rejects an unfilled redeem", () => {
@@ -55,10 +55,10 @@ describe("enrollment", () => {
 		).toBe(true);
 		const signed = signAdmission(
 			{
-				kind: "switch",
+				kind: "gateway",
 				signPub: host.sign.pub,
 				boxPub: host.box.pub,
-				switchId: "laptop",
+				gatewayId: "laptop",
 				issuedAt: 1,
 				nonce: "bg==",
 			},
@@ -70,7 +70,7 @@ describe("enrollment", () => {
 		expect(EnrollOpSchema.safeParse({ kind: "enroll_redeem", nonce: "n" }).success).toBe(false);
 	});
 
-	it("admits a scanned console with kind console (no switchId)", () => {
+	it("admits a scanned console with kind console (no gatewayId)", () => {
 		const device = generateIdentity();
 		const payload = {
 			type: "authorize-console" as const,
@@ -80,7 +80,7 @@ describe("enrollment", () => {
 		};
 		const signed = admissionFromScan(payload, owner.sign.priv, owner.sign.pub, 2000, "cg==");
 		expect(signed.admission.kind).toBe("console");
-		expect(signed.admission.switchId).toBeUndefined();
+		expect(signed.admission.gatewayId).toBeUndefined();
 		expect(resolveAdmitted([signed], [], owner.sign.pub, device.sign.pub)?.kind).toBe("console");
 	});
 });

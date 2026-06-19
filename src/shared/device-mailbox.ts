@@ -10,7 +10,7 @@ export interface MailboxSnapshot {
 	epoch: number;
 }
 
-/** A box's full serializable state for durability across an arbiter restart. The epoch is
+/** A box's full serializable state for durability across an gateway restart. The epoch is
  * preserved on reload so the console's persisted cursor still matches (no spurious flip). */
 export interface MailboxSnapshotState {
 	epoch: number;
@@ -53,7 +53,7 @@ function entryBytes(input: MailboxInput): number {
 
 /** Random positive Int31 (the console parses epoch as a signed 32-bit int). The
  * console only compares epochs for equality, so what matters is that a mailbox
- * instance from a restarted arbiter can never re-mint an epoch a console still
+ * instance from a restarted gateway can never re-mint an epoch a console still
  * holds from the previous process. A counter base did exactly that: the console
  * could not detect the new instance, its stale cursor acked away every fresh
  * entry, and its seq dedupe silently ate the rest. */

@@ -8,7 +8,7 @@ import type { WsData } from "../websocket.js";
 
 /**
  * Duck-typed bridge socket for a console device. It exposes only the surface the
- * arbiter uses on registry sockets (send / readyState / data / ping / close).
+ * gateway uses on registry sockets (send / readyState / data / ping / close).
  * Because the console has no live connection, send() appends inbound frames to the
  * device's mailbox instead of writing a wire; the console drains it by polling.
  * Inserted into the team registry + conversation registry via asWs().

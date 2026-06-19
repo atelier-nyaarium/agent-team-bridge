@@ -5,7 +5,7 @@ import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DurableStore } from "../shared/durable-store.js";
-import { resolveLocalSwitchId } from "../shared/host-id.js";
+import { resolveLocalGatewayId } from "../shared/host-id.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
@@ -17,8 +17,8 @@ import { startPortForward } from "./evie/portForward.js";
 import { evieWsConnection, loadEvieTransport } from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
-import { logAdmitSwitchQr } from "./federation/enrollQr.js";
-import { createSwitchRelayHandler, createSwitchRelayPump } from "./federation/hostRelay.js";
+import { logAdmitGatewayQr } from "./federation/enrollQr.js";
+import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/hostRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
 import { ReplayGuard } from "./federation/replayGuard.js";
 import { createSealer, type Sealer } from "./federation/sealer.js";
@@ -29,7 +29,7 @@ import { createWebSocketHandlers, type WsData } from "./websocket.js";
 ////////////////////////////////
 //  Functions & Helpers
 
-export async function startArbiter(): Promise<void> {
+export async function startGateway(): Promise<void> {
 	const PORT = parseInt(process.env.PORT || "20000", 10);
 	const LOG_PATH = path.join("/app", "log", "debug.log");
 
@@ -42,8 +42,8 @@ export async function startArbiter(): Promise<void> {
 
 	const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "600000", 10);
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);
-	const localSwitchId = resolveLocalSwitchId();
-	console.log(`[arbiter] Switch id: ${localSwitchId}`);
+	const localGatewayId = resolveLocalGatewayId();
+	console.log(`[gateway] Gateway id: ${localGatewayId}`);
 	const HEARTBEAT_INTERVAL_MS = 30000;
 	const MISSED_PINGS_LIMIT = 2;
 
@@ -60,9 +60,9 @@ export async function startArbiter(): Promise<void> {
 	const mailboxStore = new DeviceMailboxStore();
 	// Takes unknown: the relay pump owns the full frame validation.
 	let handleConsoleRelay: ((frame: unknown) => void) | null = null;
-	// Cross-Switch frames the Router switched to this Switch; the switch-relay pump owns
+	// Cross-Gateway frames the Router gatewayed to this Gateway; the gateway-relay pump owns
 	// full validation.
-	let handleSwitchRelay: ((frame: unknown) => void) | null = null;
+	let handleGatewayRelay: ((frame: unknown) => void) | null = null;
 	let evictConsolePeer: ((conversationId: string) => void) | null = null;
 
 	store.startCleanup();
@@ -161,17 +161,17 @@ export async function startArbiter(): Promise<void> {
 	// the mirrored keyring + version for the Console's keyring sync.
 	let allowlistForConsole: Allowlist | null = null;
 
-	// The Switch persists its federation identity + mirrored allowlist here; an enrolled
-	// Switch also drops its service-proxy transport.json here. The bridge activates on
+	// The Gateway persists its federation identity + mirrored allowlist here; an enrolled
+	// Gateway also drops its service-proxy transport.json here. The bridge activates on
 	// either a delivered transport or the legacy BRIDGE_TOKEN.
 	const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
 	const evieTransport = loadEvieTransport(federationDir);
 
 	if (evieAuthToken || evieTransport) {
-		// Load this Switch's federation identity + mirrored allowlist from its volume,
-		// and build the E2E sealer (cross-Switch frames are sealed peer-to-peer).
+		// Load this Gateway's federation identity + mirrored allowlist from its volume,
+		// and build the E2E sealer (cross-Gateway frames are sealed peer-to-peer).
 		// Pin the owner root out-of-band so a malicious/token-holding evie cannot root
-		// this Switch at an attacker key via the mirror (the snapshot is relayed through
+		// this Gateway at an attacker key via the mirror (the snapshot is relayed through
 		// untrusted evie). Unset = trust-on-first-use.
 		const allowlist = new Allowlist(
 			federationDir,
@@ -189,14 +189,14 @@ export async function startArbiter(): Promise<void> {
 			if (Array.isArray(persisted)) replayGuard.restore(persisted as Array<[string, number]>);
 		}
 		replayPersist = () => replayDurable.save(replayGuard.snapshot());
-		sealer = createSealer(identity, allowlist, localSwitchId, replayGuard);
+		sealer = createSealer(identity, allowlist, localGatewayId, replayGuard);
 		// The console channel rides the SAME durable replay guard + allowlist: a console
-		// frame is sealed to this arbiter and signed by an admitted console key.
+		// frame is sealed to this gateway and signed by an admitted console key.
 		consoleSealer = createConsoleSealer(identity, allowlist, replayGuard);
 		console.log(`[federation] ${allowlist.ownerSignPub ? "enrolled" : "not yet enrolled (no Domain owner)"}`);
-		// Not admitted yet: print the admit-switch QR so the owner can scan this Switch
+		// Not admitted yet: print the admit-gateway QR so the owner can scan this Gateway
 		// into the Domain. Once admitted (mirrored from evie), this falls silent.
-		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitSwitchQr(identity, localSwitchId);
+		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitGatewayQr(identity, localGatewayId);
 
 		// Two transports: the service-proxy WS (preferred - creds are delivered by
 		// enrollment, no kubeconfig mount, reaches a home-NAT evie through the apiserver)
@@ -228,16 +228,16 @@ export async function startArbiter(): Promise<void> {
 			url: connection.url,
 			headers: connection.headers,
 			tls: connection.tls,
-			switchId: localSwitchId,
+			gatewayId: localGatewayId,
 			onConsoleRelay: (frame) => {
 				handleConsoleRelay?.(frame);
 			},
-			onSwitchRelay: (frame) => {
-				handleSwitchRelay?.(frame);
+			onGatewayRelay: (frame) => {
+				handleGatewayRelay?.(frame);
 			},
 			onDomainSync: (domain) => {
 				// evie mirrors the owner root + allowlist on each register reply; apply
-				// the owner-verified snapshot so this Switch enforces revocations locally.
+				// the owner-verified snapshot so this Gateway enforces revocations locally.
 				const parsed = DomainSnapshotSchema.safeParse(domain);
 				if (!parsed.success) {
 					console.warn(`[federation] dropped malformed domain sync: ${parsed.error.issues[0]?.message}`);
@@ -247,7 +247,7 @@ export async function startArbiter(): Promise<void> {
 				console.log(`[federation] domain sync applied (${parsed.data.admissions.length} admissions)`);
 			},
 			buildRegisterAuth: () => {
-				// Present this Switch's owner-signed admission + a fresh possession proof,
+				// Present this Gateway's owner-signed admission + a fresh possession proof,
 				// so evie can gate registration once a Domain owner exists. Null (token
 				// only) until enrollment writes the self-admission into the allowlist.
 				const self = allowlist.selfAdmission(identity.sign.pub);
@@ -258,7 +258,7 @@ export async function startArbiter(): Promise<void> {
 					signPub: identity.sign.pub,
 					boxPub: identity.box.pub,
 					admission: JSON.stringify(self),
-					proof: signRegister(localSwitchId, proofAt, proofNonce, identity.sign.priv),
+					proof: signRegister(localGatewayId, proofAt, proofNonce, identity.sign.priv),
 					proofAt,
 					proofNonce,
 				};
@@ -274,8 +274,8 @@ export async function startArbiter(): Promise<void> {
 		});
 	}
 
-	// Creds-less enrollment: when armed with a one-time nonce (start-arbiter.sh --enroll)
-	// and not yet admitted, mint the identity, print the admit-switch QR with the LAN
+	// Creds-less enrollment: when armed with a one-time nonce (start-gateway.sh --enroll)
+	// and not yet admitted, mint the identity, print the admit-gateway QR with the LAN
 	// target, and accept exactly one sealed bootstrap bundle over POST /enroll.
 	let enrollInstall: ((frame: unknown) => string) | null = null;
 	const enrollNonce = process.env.ENROLL_NONCE;
@@ -287,7 +287,7 @@ export async function startArbiter(): Promise<void> {
 		);
 		const enrollIdentity = loadOrCreateIdentity(federationDir);
 		if (!enrollAllowlist.selfAdmission(enrollIdentity.sign.pub)) {
-			logAdmitSwitchQr(enrollIdentity, localSwitchId, {
+			logAdmitGatewayQr(enrollIdentity, localGatewayId, {
 				host: process.env.ENROLL_LAN_HOST || "0.0.0.0",
 				port: PORT,
 				nonce: enrollNonce,
@@ -296,7 +296,7 @@ export async function startArbiter(): Promise<void> {
 			// captured QR cannot be redeemed later. Re-run --enroll for a fresh nonce.
 			let enrollTimer: ReturnType<typeof setTimeout> | null = null;
 			enrollInstall = (frame) => {
-				const bundle = openBootstrapBundle(frame, enrollIdentity, enrollNonce, localSwitchId);
+				const bundle = openBootstrapBundle(frame, enrollIdentity, enrollNonce, localGatewayId);
 				// Persist the owner-signed admission FIRST, then the transport creds: a failure
 				// must never leave creds installed without the admission that authorizes them.
 				enrollAllowlist.applySnapshot(bundle.domain);
@@ -306,14 +306,14 @@ export async function startArbiter(): Promise<void> {
 				enrollInstall = null;
 				if (enrollTimer) clearTimeout(enrollTimer);
 				console.log(
-					`[enroll] installed credentials for Switch "${localSwitchId}". Restart the arbiter to connect.`,
+					`[enroll] installed credentials for Gateway "${localGatewayId}". Restart the gateway to connect.`,
 				);
-				return localSwitchId;
+				return localGatewayId;
 			};
 			enrollTimer = setTimeout(() => {
 				if (enrollInstall) {
 					enrollInstall = null;
-					console.log("[enroll] enrollment window expired (~10 min); re-run start-arbiter.sh --enroll");
+					console.log("[enroll] enrollment window expired (~10 min); re-run start-gateway.sh --enroll");
 				}
 			}, 600_000);
 			enrollTimer.unref?.();
@@ -336,7 +336,7 @@ export async function startArbiter(): Promise<void> {
 		registry,
 		conversationRegistry,
 		store,
-		config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localSwitchId },
+		config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localGatewayId },
 		tryWakeTeam,
 		offlineCatalog,
 		knownTeamPaths,
@@ -352,7 +352,7 @@ export async function startArbiter(): Promise<void> {
 			conversationRegistry,
 			mailboxStore,
 			routes,
-			localSwitchId,
+			localGatewayId,
 			isProjectName: (name) => offlineCatalog.has(name) || knownTeamPaths.has(name),
 			domain: () => {
 				const snapshot = allowlistForConsole?.getSnapshot() ?? null;
@@ -367,14 +367,14 @@ export async function startArbiter(): Promise<void> {
 		});
 		evictConsolePeer = (conversationId) => consoleHandler.removePeer(conversationId);
 
-		// Federation: a peer Switch's frames land here, run against the local routes,
+		// Federation: a peer Gateway's frames land here, run against the local routes,
 		// and the reply routes home through the Router.
-		const switchRelayHandler = createSwitchRelayHandler({ routes, tryWakeTeam });
-		handleSwitchRelay = createSwitchRelayPump({
+		const gatewayRelayHandler = createGatewayRelayHandler({ routes, tryWakeTeam });
+		handleGatewayRelay = createGatewayRelayPump({
 			sealer: sealer!,
-			handleOp: switchRelayHandler.handleOp,
+			handleOp: gatewayRelayHandler.handleOp,
 			sendReply: (reply) =>
-				evieClient!.callTool("switch_relay_reply", reply as unknown as Record<string, unknown>),
+				evieClient!.callTool("gateway_relay_reply", reply as unknown as Record<string, unknown>),
 		});
 	}
 
@@ -402,8 +402,8 @@ export async function startArbiter(): Promise<void> {
 				});
 			}
 			try {
-				const switchId = enrollInstall(body);
-				return new Response(JSON.stringify({ ok: true, switchId }), {
+				const gatewayId = enrollInstall(body);
+				return new Response(JSON.stringify({ ok: true, gatewayId }), {
 					status: 200,
 					headers: { "Content-Type": "application/json" },
 				});

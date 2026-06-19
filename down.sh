@@ -12,8 +12,8 @@ else
 	echo "No tmux session '${TMUX_SESSION}' running."
 fi
 
-# Take down the arbiter container
-echo "Taking down arbiter..."
+# Take down the gateway container
+echo "Taking down gateway..."
 docker compose down --remove-orphans 2>/dev/null || true
 
 # Remove the switchboard network (may fail if devcontainers are still attached)

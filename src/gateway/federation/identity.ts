@@ -12,9 +12,9 @@ function isIdentity(v: unknown): v is Identity {
 	return Boolean(id?.sign?.pub && id?.sign?.priv && id?.box?.pub && id?.box?.priv);
 }
 
-/** Load this Switch's federation identity from its volume, minting + persisting one
+/** Load this Gateway's federation identity from its volume, minting + persisting one
  * (tight perms, private keys never leaving the file) on first boot. Stable across
- * restarts so the Switch keeps its admitted key. */
+ * restarts so the Gateway keeps its admitted key. */
 export function loadOrCreateIdentity(dataDir: string): Identity {
 	const file = path.join(dataDir, IDENTITY_FILE);
 	try {

@@ -44,7 +44,7 @@ export interface WsData {
 ////////////////////////////////
 //  Functions & Helpers
 
-export const RESERVED_TEAM_NAMES = new Set(["arbiter", "host"]);
+export const RESERVED_TEAM_NAMES = new Set(["gateway", "host"]);
 
 export function getAllActiveWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData>[] {
 	const result: ServerWebSocket<WsData>[] = [];
@@ -84,7 +84,7 @@ export function createWebSocketHandlers({
 				data.missedPings = (data.missedPings || 0) + 1;
 				if (data.missedPings >= MISSED_PINGS_LIMIT) {
 					// #region Hypothesis E: heartbeat evicting stale socket
-					debugLog("E", "src/arbiter/websocket.ts:heartbeat", "evicting stale socket", {
+					debugLog("E", "src/gateway/websocket.ts:heartbeat", "evicting stale socket", {
 						team: teamName,
 						subId,
 						missedPings: data.missedPings,
@@ -130,7 +130,7 @@ export function createWebSocketHandlers({
 			const conversationId = reg.data.conversationId ?? null;
 
 			// Reserved-name protection: first live registration wins. A second process
-			// trying to claim "arbiter" or "host" is rejected so a stray container project
+			// trying to claim "gateway" or "host" is rejected so a stray container project
 			// cannot squat on the host's slots.
 			if (RESERVED_TEAM_NAMES.has(team)) {
 				const existingSubs = registry.get(team);
@@ -174,7 +174,7 @@ export function createWebSocketHandlers({
 			}
 
 			// #region Hypothesis D/F: log register with pre-existing sub-session state
-			debugLog("D", "src/arbiter/websocket.ts:register", "team registered", {
+			debugLog("D", "src/gateway/websocket.ts:register", "team registered", {
 				team,
 				subId,
 				mode,
@@ -214,7 +214,7 @@ export function createWebSocketHandlers({
 				ws.send(
 					JSON.stringify({
 						type: "channel_push",
-						from: "arbiter",
+						from: "gateway",
 						request_type: "question",
 						body: `This is the initial bridge handshake. Reply with the \`channel_reply\` tool using the session_id shown above, setting \`respondAsStructuredData\` to a JSON string.\n\nUse respondAsStructuredData: '{ "isMainOrLead": true }' if you are the primary session or team lead, or '{ "isMainOrLead": false }' if you are a worker agent spawned by another agent.\n\nDo not use \`crosstalk_send\`.`,
 						effort: "simple",
@@ -231,9 +231,9 @@ export function createWebSocketHandlers({
 			onTeamConnect?.(team, ws);
 		}
 
-		// #region Hypothesis M: log all wake_results (arbiter only handles success=false)
+		// #region Hypothesis M: log all wake_results (gateway only handles success=false)
 		if (msg.type === "wake_result" && typeof msg.team === "string") {
-			debugLog("M", "src/arbiter/websocket.ts:wake_result", "wake_result received", {
+			debugLog("M", "src/gateway/websocket.ts:wake_result", "wake_result received", {
 				team: msg.team as string,
 				success: msg.success as boolean,
 				error: (msg.error as string) ?? null,
@@ -272,7 +272,7 @@ export function createWebSocketHandlers({
 		// #region Hypothesis D: log close event with registry state
 		if (teamName && teamName !== "host") {
 			const subs = registry.get(teamName);
-			debugLog("D", "src/arbiter/websocket.ts:close", "socket closing", {
+			debugLog("D", "src/gateway/websocket.ts:close", "socket closing", {
 				team: teamName,
 				subId,
 				isStale: ws.data.isStale,
@@ -357,7 +357,7 @@ export function createWebSocketHandlers({
 		}
 
 		// #region Hypothesis G: log resolveHandshake inputs and result
-		debugLog("G", "src/arbiter/websocket.ts:resolveHandshake", "handshake resolution", {
+		debugLog("G", "src/gateway/websocket.ts:resolveHandshake", "handshake resolution", {
 			sessionId,
 			team: pending.team,
 			subId: pending.subId,

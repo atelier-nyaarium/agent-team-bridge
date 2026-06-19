@@ -17,17 +17,17 @@ import type {
 // The session-id grammar constants are OWNED by session-id.ts now; imported for
 // the wire helpers below and re-exported so existing importers of this module
 // (codegen, host-id, un-migrated callers) keep resolving from here.
-import { CONV_SESSION_PREFIX, NOTICE_SESSION_PREFIX, SWITCH_QUALIFIER_SEP } from "./session-id.js";
+import { CONV_SESSION_PREFIX, GATEWAY_QUALIFIER_SEP, NOTICE_SESSION_PREFIX } from "./session-id.js";
 
-export { CONV_SESSION_PREFIX, NOTICE_SESSION_PREFIX, SWITCH_QUALIFIER_SEP };
+export { CONV_SESSION_PREFIX, GATEWAY_QUALIFIER_SEP, NOTICE_SESSION_PREFIX };
 
 ////////////////////////////////
 //  Console bridge protocol
 //
-//  The Android app reaches the arbiter through evie, which relays opaque
-//  envelopes between the console connection and the existing arbiter<->evie
+//  The Android app reaches the gateway through evie, which relays opaque
+//  envelopes between the console connection and the existing gateway<->evie
 //  WebSocket. Evie understands none of these shapes; it pipes by (device, opId).
-//  All console/chat semantics live in the arbiter.
+//  All console/chat semantics live in the gateway.
 //
 //  The wire SHAPES live as zod schemas in shared/schemas.ts (the single
 //  truth); this module derives the TS types from them and owns the protocol
@@ -37,7 +37,7 @@ export { CONV_SESSION_PREFIX, NOTICE_SESSION_PREFIX, SWITCH_QUALIFIER_SEP };
 export const CONSOLE_PROTOCOL_VERSION = 1;
 
 ////////////////////////////////
-//  Ops (console -> arbiter)
+//  Ops (console -> gateway)
 
 export type ConsoleOp = z.infer<typeof ConsoleOpSchema>;
 export type ConsoleOpKind = ConsoleOp["kind"];
@@ -48,10 +48,10 @@ export type ConsoleRespondOp = Extract<ConsoleOp, { kind: "respond" }>;
 export type ConsolePollOp = Extract<ConsoleOp, { kind: "poll" }>;
 
 ////////////////////////////////
-//  Relay frames (carried over the arbiter<->evie WebSocket)
+//  Relay frames (carried over the gateway<->evie WebSocket)
 //
 //  The wire frame is sealed: only opId + signerSignPub are cleartext, the op rides
-//  inside `sealed` as a ConsoleOpEnvelope. The arbiter opens the seal into an
+//  inside `sealed` as a ConsoleOpEnvelope. The gateway opens the seal into an
 //  OpenedConsoleFrame (the flattened op + its verified signer) before dispatch, and
 //  seals a ConsoleReplyBody back. evie sees neither.
 
@@ -61,7 +61,7 @@ export type ConsoleOpEnvelope = z.infer<typeof ConsoleOpEnvelopeSchema>;
 export type ConsoleRelayReply = z.infer<typeof ConsoleRelayReplySchema>;
 export type ConsoleReplyBody = z.infer<typeof ConsoleReplyBodySchema>;
 
-/** An inbound console op AFTER the arbiter has opened + verified its seal: the
+/** An inbound console op AFTER the gateway has opened + verified its seal: the
  * flattened op carried by the envelope plus the cleartext correlation/signer. The
  * handler operates on this, never on the raw sealed frame. */
 export interface OpenedConsoleFrame {
@@ -73,7 +73,7 @@ export interface OpenedConsoleFrame {
 }
 
 ////////////////////////////////
-//  Op results (arbiter -> console)
+//  Op results (gateway -> console)
 
 export type ConsoleRegisterResult = z.infer<typeof ConsoleRegisterResultSchema>;
 export type ConsoleListTeamsResult = z.infer<typeof ConsoleListTeamsResultSchema>;
@@ -115,29 +115,29 @@ export function parseConvSessionTeam(sessionId: string): string | null {
 }
 
 ////////////////////////////////
-//  Switch qualification
+//  Gateway qualification
 //
-//  A session's address is host-qualified as `<switchId>/<name>` so the console (and,
-//  in later federation phases, evie) can tell two Switches' identically-named
-//  sessions apart. A BARE name (no separator) resolves to the local Switch: the
-//  arbiter canonicalizes an inbound target to the qualified form before keying
+//  A session's address is host-qualified as `<gatewayId>/<name>` so the console (and,
+//  in later federation phases, evie) can tell two Gatewayes' identically-named
+//  sessions apart. A BARE name (no separator) resolves to the local Gateway: the
+//  gateway canonicalizes an inbound target to the qualified form before keying
 //  the channel job, and the console normalizes a bare name off the wire to its
-//  connected Switch. The separator is emitted into the generated Kotlin so the
-//  console never hand-mirrors it. Switch ids and local names never contain the
-//  separator, so the FIRST separator splits Switch id from name unambiguously.
+//  connected Gateway. The separator is emitted into the generated Kotlin so the
+//  console never hand-mirrors it. Gateway ids and local names never contain the
+//  separator, so the FIRST separator splits Gateway id from name unambiguously.
 
-/** Qualify a bare local name under a Switch id; a name that is already qualified
+/** Qualify a bare local name under a Gateway id; a name that is already qualified
  * (contains the separator) is returned unchanged. */
-export function qualifyTeam(switchId: string, name: string): string {
-	return name.includes(SWITCH_QUALIFIER_SEP) ? name : `${switchId}${SWITCH_QUALIFIER_SEP}${name}`;
+export function qualifyTeam(gatewayId: string, name: string): string {
+	return name.includes(GATEWAY_QUALIFIER_SEP) ? name : `${gatewayId}${GATEWAY_QUALIFIER_SEP}${name}`;
 }
 
-/** Split a (possibly qualified) team into its Switch id and local name. A bare name
- * yields a null switchId (caller resolves it to the local Switch). */
-export function parseQualifiedTeam(team: string): { switchId: string | null; name: string } {
-	const i = team.indexOf(SWITCH_QUALIFIER_SEP);
-	if (i === -1) return { switchId: null, name: team };
-	return { switchId: team.slice(0, i), name: team.slice(i + 1) };
+/** Split a (possibly qualified) team into its Gateway id and local name. A bare name
+ * yields a null gatewayId (caller resolves it to the local Gateway). */
+export function parseQualifiedTeam(team: string): { gatewayId: string | null; name: string } {
+	const i = team.indexOf(GATEWAY_QUALIFIER_SEP);
+	if (i === -1) return { gatewayId: null, name: team };
+	return { gatewayId: team.slice(0, i), name: team.slice(i + 1) };
 }
 
 ////////////////////////////////

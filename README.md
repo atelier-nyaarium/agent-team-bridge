@@ -1,6 +1,6 @@
 # Switchboard
 
-Cross-team communication, devcontainer orchestration, and tool proxying for agent teams. Connects Claude Code, Cursor, Copilot, and Codex agents running in separate DevContainers through a central arbiter (a Switch).
+Cross-team communication, devcontainer orchestration, and tool proxying for agent teams. Connects Claude Code, Cursor, Copilot, and Codex agents running in separate DevContainers through a central gateway (a Gateway).
 
 ## Who it's for
 
@@ -8,12 +8,12 @@ This is aimed at people who already use **Dev Containers** and want agent teams 
 
 ## How it works
 
-Teams register with the arbiter (a Switch) over WebSocket. Any agent can call `crosstalk_send` to reach another team. The arbiter handles message delivery, response lifecycle, and request serialization.
+Teams register with the gateway (a Gateway) over WebSocket. Any agent can call `crosstalk_send` to reach another team. The gateway handles message delivery, response lifecycle, and request serialization.
 
 - **Claude agents** use channel mode: messages arrive as push notifications, responses are pushed back automatically.
-- **CLI agents** (cursor, copilot, codex) use inject mode: the arbiter spawns agent processes, sends prompts, and waits for completion.
+- **CLI agents** (cursor, copilot, codex) use inject mode: the gateway spawns agent processes, sends prompts, and waits for completion.
 
-The arbiter also bridges to **evie-bot** (a Discord bot running in Kubernetes), proxying its 46 action tools as MCP tools and forwarding Discord DMs into the host Claude session.
+The gateway also bridges to **evie-bot** (a Discord bot running in Kubernetes), proxying its 46 action tools as MCP tools and forwarding Discord DMs into the host Claude session.
 
 See `skills/crosstalk/SKILL.md` for the full tool reference and response format.
 
@@ -30,7 +30,7 @@ Host Machine
         evie_* tools (46 proxied from evie-bot)
 
 Docker: switchboard (port 20000)
-  Arbiter (main-arbiter.ts)
+  Gateway (main-gateway.ts)
     HTTP routes + WebSocket hub
     kubectl port-forward to evie K8s pod (port 20001)
     Evie WS client (tool calls, DM forwarding)
@@ -46,17 +46,17 @@ DevContainers (one per project)
 
 | Port  | Service                              |
 |-------|--------------------------------------|
-| 20000 | Arbiter (HTTP + WS bridge)           |
+| 20000 | Gateway (HTTP + WS bridge)           |
 | 20001 | Evie bridge server (tool call WS)    |
 | 20002 | MCP Connector (game client WS)       |
 
-## Starting the arbiter
+## Starting the gateway
 
 ```bash
 docker compose up -d
 ```
 
-The arbiter listens on port 20000 and uses the external network `switchboard`.
+The gateway listens on port 20000 and uses the external network `switchboard`.
 
 ## Setup
 
@@ -121,7 +121,7 @@ This adds `switchboard-network` to your `.devcontainer/compose.yml`.
 
 ## Evie Bridge
 
-When `BRIDGE_TOKEN` is set in the arbiter's environment, it establishes a kubectl port-forward tunnel to evie-bot's Kubernetes pod and connects via WebSocket with bearer auth. This enables:
+When `BRIDGE_TOKEN` is set in the gateway's environment, it establishes a kubectl port-forward tunnel to evie-bot's Kubernetes pod and connects via WebSocket with bearer auth. This enables:
 
 - **Tool proxying**: Evie's action registry (46 tools) is exported as JSON Schema and dynamically registered as MCP tools on the host, prefixed with `evie_`.
 - **DM forwarding**: Discord DMs from the bot owner are forwarded to the host orchestrator as channel push notifications.

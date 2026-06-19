@@ -117,12 +117,12 @@ export interface CatalogMessage {
 ////////////////////////////////
 //  Config Types
 
-export interface ArbiterConfig {
+export interface GatewayConfig {
 	LOG_PATH: string;
 	RESPONSE_TIMEOUT_MS: number;
-	// This Switch's id, qualifying every local session name on the wire (SWITCH_ID
+	// This Gateway's id, qualifying every local session name on the wire (GATEWAY_ID
 	// env override, else the sanitized machine hostname).
-	localSwitchId: string;
+	localGatewayId: string;
 }
 
 export interface WebSocketConfig {
