@@ -84,8 +84,8 @@ export interface MenuItem {
 	run: () => Promise<void> | void;
 }
 
-/** Numbered dial menu, looping until the operator quits (q or empty). Mirrors the bash `menu()`
- * the scripts used. TTY only - a non-TTY caller drives the flow directly instead. */
+/** Numbered dial menu, looping until the operator quits (q or empty). TTY only - a non-TTY caller
+ * drives the flow directly instead. */
 export async function menu(title: string, items: MenuItem[]): Promise<void> {
 	for (;;) {
 		console.log(`\n${title}`);

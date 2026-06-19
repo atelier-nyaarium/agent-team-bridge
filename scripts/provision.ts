@@ -1,5 +1,5 @@
 // Console setup - the SINGLE bootstrap for the Android Console. Driven by provision-console.sh,
-// which is now a thin launcher that execs this.
+// a thin launcher that execs this.
 //
 //   --setup              interactive menu: Provision (cutover + root the Domain at the CONSOLE
 //                        owner key + emit the transport blob) or Purge (clean-break wipe).
@@ -137,12 +137,12 @@ async function cutover(): Promise<void> {
 			"jsonpath={.data.ANDROID_BRIDGE_TOKEN}",
 		);
 		if (!tok) tok = (await $`openssl rand -hex 32`.text()).trim();
-		// Applied via YAML on stdin so the token never hits argv; tolerate a non-zero exit like the bash.
+		// Applied as YAML on stdin so the token never hits argv; a non-zero exit (an AlreadyExists race) is harmless.
 		await applySecret("console-bridge-app-token", { CONSOLE_BRIDGE_TOKEN: tok });
 		note("cutover: minted console-bridge-app-token");
 	}
-	// Tolerate a non-zero exit (e.g. an AlreadyExists race) the way the bash did; a genuinely
-	// unwired token surfaces downstream at verify().
+	// A non-zero exit is tolerated (e.g. an AlreadyExists race); a genuinely unwired token surfaces
+	// downstream at verify().
 	await k("set", "env", EVIE_DEPLOY, "--from=secret/console-bridge-app-token").quiet().nothrow();
 	note("cutover: CONSOLE_BRIDGE_TOKEN wired into evie; waiting for rollout");
 	if ((await k("rollout", "status", EVIE_DEPLOY, "--timeout=120s").quiet().nothrow()).exitCode !== 0) {
@@ -292,8 +292,8 @@ async function verify(): Promise<void> {
 	);
 	if (!blob) throw new Error(`could not read blob ${BLOB_FILE}`);
 	const apiUrl = blob.apiUrl ?? "";
-	// Unpredictable names (like the bash mktemp): the cfg holds the bearer tokens, so a guessable
-	// path would let a local attacker pre-seed a symlink and capture them.
+	// Unpredictable names: the cfg holds the bearer tokens, so a guessable path would let a local
+	// attacker pre-seed a symlink and capture them.
 	const rnd = crypto.randomUUID();
 	const ca = `/tmp/sb-verify-${rnd}-ca.pem`;
 	const cfg = `/tmp/sb-verify-${rnd}-cfg.conf`;
