@@ -712,9 +712,9 @@ class ChatRepository(
 		)
 	}.getOrNull()
 
-	/** Enroll a scanned Gateway end to end: owner-admit it, then (if it offered LAN delivery
-	 * and the blob carries gateway transport creds) seal a bootstrap bundle and deliver it
-	 * over the LAN, falling back to handing the operator the sealed text to paste. A
+	/** Enroll a scanned Gateway end to end: owner-admit it, then (if it offered LAN delivery)
+	 * fetch the bootstrap transport from the home Gateway, seal a bootstrap bundle, and deliver
+	 * it over the LAN, falling back to handing the operator the sealed text to paste. A
 	 * host-configured Gateway (no LAN, no nonce) just needs the admission, which reaches it
 	 * through evie's domain sync. */
 	suspend fun enrollGateway(scanned: ScannedGateway): EnrollDelivery = withContext(Dispatchers.IO) {

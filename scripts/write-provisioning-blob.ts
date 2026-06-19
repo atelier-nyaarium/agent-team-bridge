@@ -3,7 +3,8 @@
 // fails LOUDLY at provision time on the host instead of silently on the device after import.
 //
 // Transport-only in the phone-anchored model: the Console generates its own identity and resolves
-// Gateway keys from the synced keyring, so the identity/gateway fields are omitted.
+// Gateway keys from the synced keyring, so the identity/gateway fields stay unpopulated. The
+// gateway-bridge transport creds are fetched on demand (the get_gateway_transport op), never bundled here.
 
 import { ProvisioningSchema } from "../src/shared/schemas.js";
 
