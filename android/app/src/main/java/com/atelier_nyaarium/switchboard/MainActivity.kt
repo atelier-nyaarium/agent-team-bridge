@@ -763,6 +763,14 @@ fun HealthHeader(state: ChatState) {
 			Box(Modifier.size(10.dp).clip(CircleShape).background(dot))
 			Spacer(Modifier.width(8.dp))
 			Text(label, style = MaterialTheme.typography.labelLarge)
+			Spacer(Modifier.width(6.dp))
+			// This app's own version, right by the status, so the running build is visible at a glance.
+			Text(
+				"v${BuildConfig.VERSION_NAME}",
+				style = MaterialTheme.typography.labelSmall,
+				color = MaterialTheme.colorScheme.onSurfaceVariant,
+				fontFamily = FontFamily.Monospace,
+			)
 			Spacer(Modifier.weight(1f))
 			if (state.deviceName.isNotEmpty()) {
 				Text(
