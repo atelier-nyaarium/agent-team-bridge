@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +28,7 @@ import { registerSessionAwaitIdle } from "./devcontainer/sessionAwaitIdle.js";
 import { registerSessionPeek } from "./devcontainer/sessionPeek.js";
 import { registerSessionSend } from "./devcontainer/sessionSend.js";
 import { registerSetEffortLevel } from "./devcontainer/setEffortLevel.js";
+import { randomTeamId, stableTeamName } from "./team-name.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -39,11 +39,6 @@ const CHANNEL_INSTRUCTIONS = [
 	"When finished, call the channel_reply tool with the session_id from the tag attributes.",
 ].join(" ");
 
-/** Random 6-char id for an unnamed peer session. The console gives it a friendly label. */
-function randomTeamId(): string {
-	return crypto.randomBytes(3).toString("hex");
-}
-
 export async function startMcp(): Promise<void> {
 	const inContainer = isInsideContainer();
 	// The orchestrator is the single host session started by start-host-daemon (it sets the
@@ -53,7 +48,14 @@ export async function startMcp(): Promise<void> {
 	// or the forwarded localhost port elsewhere.
 	const isOrchestrator = !inContainer && !!process.env.SWITCHBOARD_ORCHESTRATOR;
 	if (!isOrchestrator) {
-		if (!process.env.PROJECT_NAME) process.env.PROJECT_NAME = randomTeamId();
+		if (!process.env.PROJECT_NAME) {
+			// An unstable session derives a STABLE per-window name from the harness session id so a
+			// reload / restart+/resume re-registers the same name and the phone thread resumes;
+			// subagents and missing-env fall back to a fresh random name (see stableTeamName).
+			process.env.PROJECT_NAME =
+				stableTeamName(process.env.CLAUDE_CODE_SESSION_ID, !!process.env.CLAUDE_CODE_CHILD_SESSION) ??
+				randomTeamId();
+		}
 		if (!process.env.BRIDGE_ROUTER_URL) {
 			process.env.BRIDGE_ROUTER_URL = inContainer ? "http://switchboard:20000" : "http://localhost:20000";
 		}
