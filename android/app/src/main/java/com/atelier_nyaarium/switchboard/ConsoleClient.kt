@@ -8,6 +8,7 @@ import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleGatewayTransportResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
+import com.atelier_nyaarium.switchboard.proto.ConsolePeekResult
 import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleRegisterResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleRelayFrame
@@ -437,6 +438,23 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	 * these creds in the provisioning blob; the Console fetches them on demand. */
 	fun getGatewayTransport(): GatewayTransport =
 		resultOf<ConsoleGatewayTransportResult>(relay(ConsoleOp.GetGatewayTransport), "get_gateway_transport").transport
+
+	/** The Gateway that hosts a target session (a bare name resolves to home), so a peek/send
+	 * seals E2E to that Gateway. Mirrors send(). */
+	private fun targetGatewayOf(target: String): String =
+		TeamAddress.parse(target, homeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()).gatewayId
+
+	/** Capture the target's visible tmux pane for the terminal view. Pass the last hash so the
+	 * Gateway returns unchanged=true (no ansi) for an idle pane. */
+	fun peek(target: String, sinceHash: String? = null): ConsolePeekResult =
+		resultOf(relay(ConsoleOp.Peek(target = target, sinceHash = sinceHash), targetGateway = targetGatewayOf(target)), "peek")
+
+	/** Send literal text (submitted with Enter) OR a named control key to the target's tmux pane.
+	 * Idempotent per opId (the host replays a re-relayed send instead of re-injecting). */
+	fun tmuxSend(target: String, text: String? = null, key: String? = null, opId: String = UUID.randomUUID().toString()) {
+		val body = relay(ConsoleOp.TmuxSend(target = target, text = text, key = key), opId, targetGateway = targetGatewayOf(target))
+		if (!body.ok) error("tmux_send failed: ${body.error ?: "unknown error"}")
+	}
 
 	companion object {
 		private val JSON = "application/json".toMediaType()

@@ -46,6 +46,7 @@ class ClearProvisioningPartitionTest {
 			"auto_tts",
 			"auto_play_summary",
 			"biometric_lock",
+			"terminal_refresh_ms",
 		)
 		for (k in mustKeep) assertFalse("$k must survive clearProvisioning (preserved by omission)", k in wiped)
 	}

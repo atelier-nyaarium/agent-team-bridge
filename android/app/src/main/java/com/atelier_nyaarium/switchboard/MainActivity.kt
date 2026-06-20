@@ -59,7 +59,9 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
@@ -351,6 +353,13 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					repo.forget(openTeam!!)
 					openTeam = null
 				},
+				// Only a LOCAL host-agent or devcontainer has a tmux pane this Gateway can drive;
+				// a remote-Gateway session is gated off in v1 (the cross-Gateway terminal is deferred).
+				terminalEligible = (kind == "gateway" || kind == "devcontainer") &&
+					(session?.gatewayId.isNullOrEmpty() || session?.gatewayId == state.localGatewayId),
+				terminalRefreshMs = repo.terminalRefreshMs,
+				onTerminalPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
+				onTerminalSend = { text, key -> repo.tmuxSend(openTeam!!, text, key) },
 			)
 		}
 		else ->
@@ -998,6 +1007,12 @@ fun ThreadScreen(
 	onDraftChange: (String) -> Unit,
 	onRename: (String) -> Unit,
 	onForget: () -> Unit,
+	// Terminal view: only the host-agent and devcontainers are eligible. The peek/send are
+	// team-bound suspend closures (the screen supplies the team).
+	terminalEligible: Boolean,
+	terminalRefreshMs: Long,
+	onTerminalPeek: suspend (sinceHash: String?) -> Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult>,
+	onTerminalSend: suspend (text: String?, key: String?) -> Unit,
 ) {
 	// Seeded from the per-session saved draft and re-keyed on team, so switching tabs or
 	// leaving and reopening a thread restores what you were typing. onDraftChange writes
@@ -1007,6 +1022,9 @@ fun ThreadScreen(
 	var showRename by remember { mutableStateOf(false) }
 	var confirmForget by remember { mutableStateOf(false) }
 	var attachments by remember { mutableStateOf<List<Uri>>(emptyList()) }
+	// The raw-tmux terminal view, toggled from the top bar; re-keyed off when switching session.
+	var terminalMode by remember(team) { mutableStateOf(false) }
+	if (terminalMode) BackHandler { terminalMode = false }
 	val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
 		if (uris.isNotEmpty()) attachments = attachments + uris
 	}
@@ -1066,6 +1084,15 @@ fun ThreadScreen(
 					}
 				},
 				actions = {
+					if (terminalEligible) {
+						IconButton(onClick = { terminalMode = !terminalMode }) {
+							if (terminalMode) {
+								Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Back to chat")
+							} else {
+								Icon(Icons.Default.Terminal, contentDescription = "Terminal view")
+							}
+						}
+					}
 					IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "More options") }
 					DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
 						if (canRename) {
@@ -1107,6 +1134,15 @@ fun ThreadScreen(
 					}
 				}
 			}
+			if (terminalMode) {
+				TerminalView(
+					team = team,
+					refreshMs = terminalRefreshMs,
+					onPeek = onTerminalPeek,
+					onSend = onTerminalSend,
+					modifier = Modifier.weight(1f).fillMaxWidth(),
+				)
+			} else {
 			if (messages.isEmpty()) {
 				Column(
 					Modifier.weight(1f).fillMaxWidth().padding(32.dp),
@@ -1189,6 +1225,7 @@ fun ThreadScreen(
 					) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send") }
 				}
 			}
+			}
 		}
 	}
 }
@@ -1249,7 +1286,7 @@ fun SettingsScreen(
 				SettingsRoute.VOICE -> SttsVoiceSection(repo)
 				SettingsRoute.NETWORKS -> NetworksSettings(repo, onManage)
 				SettingsRoute.SECURITY -> SecuritySettings(state, onToggleBiometric)
-				SettingsRoute.SYSTEM -> SystemSettings(onClear)
+				SettingsRoute.SYSTEM -> SystemSettings(repo, onClear)
 			}
 		}
 	}
@@ -1310,11 +1347,34 @@ private fun SecuritySettings(state: ChatState, onToggleBiometric: (Boolean) -> U
 /** System settings; the danger action (Clear & re-provision) sits at the bottom behind a
  * confirm, so a wipe is two levels deep (Settings -> System) plus an explicit confirmation. */
 @Composable
-private fun SystemSettings(onClear: () -> Unit) {
+private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 	var confirmClear by remember { mutableStateOf(false) }
+	var refreshText by remember { mutableStateOf((repo.terminalRefreshMs / 1000.0).toString()) }
 	BatteryExemptionRow()
 	HorizontalDivider()
 	AppUpdateRow()
+	HorizontalDivider()
+	Text("Terminal", style = MaterialTheme.typography.titleSmall)
+	OutlinedTextField(
+		value = refreshText,
+		onValueChange = { refreshText = it },
+		label = { Text("Refresh speed (seconds)") },
+		singleLine = true,
+		trailingIcon = {
+			TextButton(onClick = {
+				val secs = refreshText.toDoubleOrNull()
+				if (secs != null) repo.setTerminalRefreshMs((secs * 1000).toLong())
+				// Always re-seed from the stored value: a valid entry reflects the clamp, and
+				// invalid input visibly reverts to the last-saved value instead of looking saved.
+				refreshText = (repo.terminalRefreshMs / 1000.0).toString()
+			}) { Text("Save") }
+		},
+	)
+	Text(
+		"How often the terminal view re-captures the pane. Minimum 0.3s.",
+		style = MaterialTheme.typography.bodySmall,
+		color = MaterialTheme.colorScheme.onSurfaceVariant,
+	)
 	HorizontalDivider()
 	Text("Danger", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
 	OutlinedButton(

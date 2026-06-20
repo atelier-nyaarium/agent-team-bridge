@@ -91,6 +91,15 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putBoolean(KEY_AUTO_PLAY_SUMMARY, value).apply()
 		}
 
+	/** How often the terminal view re-captures the pane, in ms. A device setting (not the
+	 * blob), default 2s; clamped to the server's floor (the gateway re-uses a capture within
+	 * ~300ms regardless, so a smaller value only adds round-trips). */
+	var terminalRefreshMs: Long
+		get() = prefs.getLong(KEY_TERMINAL_REFRESH_MS, 2000L).coerceAtLeast(TERMINAL_REFRESH_FLOOR_MS)
+		set(value) {
+			prefs.edit().putLong(KEY_TERMINAL_REFRESH_MS, value.coerceAtLeast(TERMINAL_REFRESH_FLOOR_MS)).apply()
+		}
+
 	/** The STTS service URL + API key. These live in app settings (NOT the
 	 * provisioning blob) so a re-provision never wipes voice. Stored via plain
 	 * putString, which already gets EncryptedSharedPreferences at rest - no
@@ -233,6 +242,8 @@ class ProvisioningStore(context: Context) {
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."
 		const val KEY_AUTO_TTS = "auto_tts"
 		const val KEY_AUTO_PLAY_SUMMARY = "auto_play_summary"
+		const val KEY_TERMINAL_REFRESH_MS = "terminal_refresh_ms"
+		const val TERMINAL_REFRESH_FLOOR_MS = 300L
 		const val KEY_SYNC_EPOCH = "sync_epoch"
 		const val KEY_SYNC_ACKED = "sync_acked"
 		const val KEY_SYNC_DROPPED = "sync_dropped"
