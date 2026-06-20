@@ -8,6 +8,13 @@ import {
 	parseQualifiedTeam,
 } from "../../shared/console-protocol.js";
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
+import {
+	ALLOWED_KEYS,
+	type HostOp,
+	type HostOpResult,
+	type HostPeekResult,
+	type TmuxTarget,
+} from "../../shared/host-op.js";
 import type { GatewayTransport } from "../../shared/schemas.js";
 import { SessionId, TeamAddress } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
@@ -59,6 +66,10 @@ export interface ConsoleHandlerDeps {
 	 * Console on the get_gateway_transport op (it seals them into a bundle for a Gateway it is
 	 * enrolling). Read from the federation dir's bootstrap-transport.json; null when unprovisioned. */
 	bootstrapTransport?: () => GatewayTransport | null;
+	/** Relay a tmux op (peek/sendText/sendKey) to the local host daemon and await its reply.
+	 * Drives the console terminal view; absent when no host daemon is wired (the op then errors
+	 * "terminal unavailable"). */
+	relayToHost?: (op: HostOp) => Promise<HostOpResult>;
 }
 
 ////////////////////////////////
@@ -86,7 +97,9 @@ const HOLD_CAP_MS = 45_000;
 const MAX_OPS_PER_CONVERSATION = 256;
 
 function isMutatingOp(op: ConsoleOp): boolean {
-	return op.kind === "send" || op.kind === "respond";
+	// tmux_send injects keystrokes (a real side effect), so a retried opId must replay
+	// the cached ack, not re-send the keys. peek is a fresh read (never cached).
+	return op.kind === "send" || op.kind === "respond" || op.kind === "tmux_send";
 }
 
 export function createConsoleHandler({
@@ -99,7 +112,20 @@ export function createConsoleHandler({
 	isProjectName,
 	domain,
 	bootstrapTransport,
+	relayToHost,
 }: ConsoleHandlerDeps) {
+	/** Resolve a console terminal target (the gateway-qualified session name) to the host
+	 * tmux it maps to: the host-agent's own session for "gateway", a devcontainer for a known
+	 * project. A cross-Gateway target (v1 is local-only) or an unknown/loose name is rejected. */
+	function resolveTmuxTarget(qualifiedTarget: string): TmuxTarget {
+		const { gatewayId, name } = parseQualifiedTeam(qualifiedTarget);
+		if (gatewayId && gatewayId !== localGatewayId) {
+			throw new Error(`terminal view is not available for a session on another Gateway`);
+		}
+		if (name === "gateway") return { kind: "gateway", name };
+		if (isProjectName?.(name)) return { kind: "devcontainer", name };
+		throw new Error(`terminal view is not available for "${name}" (only the host agent and devcontainers)`);
+	}
 	// The per-install conversationId is the real identity: it keys the mailbox,
 	// the registry sub, and this binding to the human-facing device name. The
 	// name is a display/target label only, so two devices sharing a name never
@@ -248,7 +274,12 @@ export function createConsoleHandler({
 		}
 	}
 
-	async function dispatch(op: ConsoleOp, device: string, conversationId: string): Promise<ConsoleOpResult> {
+	async function dispatch(
+		op: ConsoleOp,
+		device: string,
+		conversationId: string,
+		opId: string,
+	): Promise<ConsoleOpResult> {
 		switch (op.kind) {
 			case "register": {
 				const box = mailboxStore.ensure(conversationId);
@@ -411,6 +442,43 @@ export function createConsoleHandler({
 				}
 				return { transport };
 			}
+
+			case "peek": {
+				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
+				const target = resolveTmuxTarget(op.target);
+				const r = await relayToHost({ kind: "peek", target });
+				if (!r.ok) throw new Error(r.error ?? "peek failed");
+				const { ansi, hash } = r.result as HostPeekResult;
+				// 304-style short-circuit: an idle pane the console already has costs only the hash.
+				if (op.sinceHash && op.sinceHash === hash) return { hash, unchanged: true };
+				return { ansi, hash };
+			}
+
+			case "tmux_send": {
+				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
+				// Exactly one of text/key. Reject neither (would inject a stray Enter) and both
+				// (ambiguous) before anything reaches the pane.
+				if ((op.text == null) === (op.key == null)) {
+					throw new Error("tmux_send requires exactly one of text or key");
+				}
+				const target = resolveTmuxTarget(op.target);
+				// The host replays a completed send for this dedupKey instead of re-injecting, so a
+				// relay timeout or a gateway restart that drops the gateway-side opCache cannot
+				// double-type. (The gateway opCache still single-flights concurrent same-opId.)
+				const dedupKey = `${conversationId}:${opId}`;
+				let hostOp: HostOp;
+				if (op.key != null) {
+					// Whitelist the key at the gateway too (fail fast, no host round-trip); the host
+					// executor is the second gate.
+					if (!ALLOWED_KEYS.has(op.key)) throw new Error(`disallowed key "${op.key}"`);
+					hostOp = { kind: "sendKey", target, key: op.key, dedupKey };
+				} else {
+					hostOp = { kind: "sendText", target, text: op.text ?? "", dedupKey };
+				}
+				const r = await relayToHost(hostOp);
+				if (!r.ok) throw new Error(r.error ?? "send failed");
+				return { sent: true };
+			}
 		}
 	}
 
@@ -420,7 +488,7 @@ export function createConsoleHandler({
 			// explicit register still routes its replies back to the mailbox.
 			// Only a register op may rebind an install to a new device name / key.
 			ensurePeer(frame.device, frame.conversationId, frame.signerSignPub, frame.op.kind === "register");
-			const result = await dispatch(frame.op, frame.device, frame.conversationId);
+			const result = await dispatch(frame.op, frame.device, frame.conversationId, frame.opId);
 			return { ok: true, result };
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };
