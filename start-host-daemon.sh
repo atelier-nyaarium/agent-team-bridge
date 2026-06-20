@@ -56,8 +56,14 @@ for plugin in "${PLUGINS[@]}"; do
 done
 
 
+# Read the host-daemon WS token start-gateway.sh provisioned into .env, so the host daemon
+# authenticates to the gateway's reserved "host" slot (passed into the tmux session's env, since a
+# pre-existing tmux server would not inherit this shell's environment).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOST_WS_TOKEN="$(sed -n 's/^HOST_WS_TOKEN=//p' "${SCRIPT_DIR}/.env" 2>/dev/null | head -1)"
+
 echo "Starting claude on ${HOST_NAME}..."
-tmux new-session -d -s "$TMUX_SESSION" "bash -c 'source ~/.bashrc; SWITCHBOARD_ORCHESTRATOR=1 claude --name ${HOST_NAME} --model default --effort low --dangerously-skip-permissions --dangerously-load-development-channels plugin:switchboard@atelier-nyaarium; exec bash'"
+tmux new-session -d -s "$TMUX_SESSION" "bash -c 'source ~/.bashrc; SWITCHBOARD_ORCHESTRATOR=1 HOST_WS_TOKEN=${HOST_WS_TOKEN} claude --name ${HOST_NAME} --model default --effort low --dangerously-skip-permissions --dangerously-load-development-channels plugin:switchboard@atelier-nyaarium; exec bash'"
 
 # Wait for Claude to start, auto-accept dev channels prompt if it appears
 for i in $(seq 1 10); do

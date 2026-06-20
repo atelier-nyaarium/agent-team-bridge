@@ -6,6 +6,7 @@ import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/host-id.js";
+import type { HostOp, HostOpResult } from "../shared/host-op.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
@@ -22,6 +23,7 @@ import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/
 import { loadOrCreateIdentity } from "./federation/identity.js";
 import { ReplayGuard } from "./federation/replayGuard.js";
 import { createSealer, type Sealer } from "./federation/sealer.js";
+import { HostOpCoordinator } from "./hostOpCoordinator.js";
 import { createRoutes } from "./routes.js";
 import { WakeCoordinator } from "./wake.js";
 import { createWebSocketHandlers, type WsData } from "./websocket.js";
@@ -53,6 +55,7 @@ export async function startGateway(): Promise<void> {
 	const knownTeamPaths = new Map<string, string>();
 	const offlineCatalog = new Map<string, string>();
 	const wakeCoordinator = new WakeCoordinator();
+	const hostOpCoordinator = new HostOpCoordinator();
 
 	// Console bridge: per-install mailboxes drained by the console's poll op. The
 	// handler is constructed after routes exist; relay frames arriving before
@@ -144,6 +147,21 @@ export async function startGateway(): Promise<void> {
 		const success = await wakeCoordinator.waitFor(team, WAKE_TIMEOUT_MS);
 		console.log(`[wake] ${team} ${success ? "is now online" : "failed to come online"}`);
 		return success;
+	}
+
+	// The host op timeout must EXCEED the host's worst-case work so a succeeding-but-slow op
+	// never spuriously times out (a sendText runs two sequential 8s execs = up to 16s, and a
+	// timeout on a keystroke send is indeterminate - the retry would re-inject). 20s clears that
+	// with margin and still nests well under the console relay hold (evie ~55s, apiserver 60s).
+	const HOST_OP_TIMEOUT_MS = 20_000;
+
+	async function relayToHost(op: HostOp): Promise<HostOpResult> {
+		const hostSubs = registry.get("host");
+		const hostWs = hostSubs ? [...hostSubs.values()].find((ws) => ws.readyState === 1) : undefined;
+		if (!hostWs) return { ok: false, error: "host daemon offline - terminal unavailable" };
+		const reqId = randomBytes(8).toString("hex");
+		hostWs.send(JSON.stringify({ type: "host_op", reqId, op }));
+		return hostOpCoordinator.wait(reqId, HOST_OP_TIMEOUT_MS);
 	}
 
 	// Start evie-bot bridge if config is present
@@ -323,10 +341,11 @@ export async function startGateway(): Promise<void> {
 	const wsHandlers = createWebSocketHandlers({
 		registry,
 		conversationRegistry,
-		config: { HEARTBEAT_INTERVAL_MS, MISSED_PINGS_LIMIT },
+		config: { HEARTBEAT_INTERVAL_MS, MISSED_PINGS_LIMIT, hostWsToken: process.env.HOST_WS_TOKEN },
 		knownTeamPaths,
 		offlineCatalog,
 		wakeCoordinator,
+		hostOpCoordinator,
 		onVirtualPeerEvicted: (conversationId) => {
 			evictConsolePeer?.(conversationId);
 		},
@@ -359,6 +378,7 @@ export async function startGateway(): Promise<void> {
 				return snapshot ? { version: allowlistForConsole?.version() ?? "", snapshot } : null;
 			},
 			bootstrapTransport: () => loadBootstrapTransport(federationDir),
+			relayToHost,
 		});
 		handleConsoleRelay = createConsoleRelayPump({
 			sealer: consoleSealer!,

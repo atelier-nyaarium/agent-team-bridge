@@ -61,7 +61,7 @@
       - `hostSessionSend.ts` - `host_session_send` tool: send input to the host's own tmux session
       - `reloadPlugins.ts` - `reload_plugins` tool: automated plugin update and MCP reconnect sequence
       - `helpers.ts` - Project resolution, container lifecycle, devcontainer CLI discovery
-      - `hostWakeListener.ts` - Host-side `host` WebSocket: catalog scan, on-demand container waking
+      - `hostWakeListener.ts` - Host-side `host` WebSocket: catalog scan, on-demand container waking, and the `host_op` handler that runs console terminal ops via `hostOpRunner.ts` + `tmuxCore.ts` (see Console terminal view)
     - `evie/` - **Evie tool proxy** - Dynamic MCP tool registration from evie-bot's action registry
       - `evieTools.ts` - Converts evie's JSON Schema tool definitions to Zod via `z.fromJSONSchema()`
     - `resolve-model.ts` - Model resolution by agent type and effort level
@@ -173,10 +173,18 @@ Gateway side of a native Android chat client that reaches the bridge through evi
 
 - **Identity:** keyed by the console's per-install `conversationId` (the human Device Name is a display label). `consoleHandler.ts:assertValidIdentity` rejects reserved names, a name already held by a real team, and a conversation already owned by a live socket.
 - **Virtual peer:** `ConsolePeer` is inserted into the team + conversation registries like a real bridge peer, so existing crosstalk routing (wake, persistent conversations, `channel_push`/`response_push` delivery) is reused unchanged. Its `send()` appends to the device's `DeviceMailbox` instead of a wire; the console drains it with the `poll` op. Virtual peers are excluded from the heartbeat and from DM-holder selection (`getAllActiveRealWs`), and a real registration evicts a squatting virtual peer.
-- **Ops:** `register`, `list_teams`, `send` (to a devcontainer or the host-agent), `respond` (only to a thread delivered to this device), `poll`, `get_gateway_transport` (the home Gateway's bootstrap transport creds, served sealed from its `bootstrap-transport.json` so the Console can seal them into a bundle when enrolling a creds-less Gateway). `send`/`respond` are idempotent per `(conversationId, opId)`; reads run fresh.
+- **Ops:** `register`, `list_teams`, `send` (to a devcontainer or the host-agent), `respond` (only to a thread delivered to this device), `poll`, `get_gateway_transport` (the home Gateway's bootstrap transport creds, served sealed from its `bootstrap-transport.json` so the Console can seal them into a bundle when enrolling a creds-less Gateway), `peek` + `tmux_send` (the terminal view: see Console terminal view below). `send`/`respond`/`tmux_send` are idempotent per `(conversationId, opId)`; reads (`poll`/`peek`) run fresh.
 - **Host-agent:** the host orchestrator's `gateway` channel identity is surfaced to the console as `kind: "gateway"` (shown first), reachable by `send` from the console only (`channelOnly`). A send injects a `channel_push` into the orchestrator, which can dispatch to its devcontainers. The cli `host` wake-daemon stays hidden; container crosstalk to the host-agent is deferred to the federation phases.
 - **Mailbox:** `DeviceMailbox` is bounded (entry cap with cumulative `dropped` gap signal, 1h idle TTL, store-wide LRU device cap). Each instance carries an `epoch`; `poll` is epoch-gated so a cursor from an evicted instance cannot ack away a new instance's entries.
 - **Trust:** frames are zod-validated at the boundary (`ConsoleRelayFrameSchema`) AND E2E sealed: the gateway opens each frame through the `consoleSealer` (verifies the console's signature against an owner-signed `kind:console` admission, decrypts with its box key, replay- and freshness-checks) before dispatch, so it trusts a frame because it is signed by an admitted console, not because it arrived on the evie WS. Each conversationId is bound to its first signing key (a console cannot operate another install's mailbox by borrowing its conversationId). The bearer token is the coexistence-window relay gate at evie, retired by W5. Adds no new HTTP surface.
+
+### Console terminal view (peek + tmux_send)
+
+A power-user view in the Console that drives an agent's RAW tmux pane (distinct from the chat): the `peek` op captures the visible ANSI screen and `tmux_send` injects literal text or a whitelisted control key (Enter/Escape/C-c/arrows/Tab). Both are sealed `ConsoleOp` variants on the same trust path as the chat ops, and reach the host machine through a gateway<->host-daemon RPC layered on the existing host WebSocket:
+
+- **Host RPC:** the gateway sends a `host_op` frame (a `reqId` + a `HostOp`) and correlates the reply by `reqId` through `HostOpCoordinator` (`gateway/hostOpCoordinator.ts`, mirroring `evieClient`'s pending-calls; `failAll` on a host disconnect), via `relayToHost` in `gateway/index.ts`. The host daemon (`hostWakeListener.ts`) runs it through `createHostOpRunner` (`mcp/devcontainer/hostOpRunner.ts`: peek single-flight + a cadence floor + a concurrency cap; send dedup by `(conversationId, opId)` so a relay timeout or gateway restart replays the ack instead of re-typing). The tmux primitives live in `mcp/devcontainer/tmuxCore.ts` (spawn argv - no shell; `--`-guarded literal text submitted atomically with a trailing CR; a slug-validated target name; an ANSI visible-pane capture with a byte cap + content hash). The wire vocabulary is the type-only `shared/host-op.ts` (deliberately no zod/codegen - it rides the trusted, token-authenticated host link, not the untrusted evie relay).
+- **Targets:** `kind: "gateway"` (the host-agent's own tmux) and locally-backed `kind: "devcontainer"` (`docker exec` into `<name>_devcontainer-dev-1`). `loose` and cross-Gateway sessions are gated off (`resolveTmuxTarget` in `consoleHandler.ts`).
+- **Auth:** the reserved `host` WS slot is authenticated with `HOST_WS_TOKEN` (auto-provisioned into `.env` by `start-gateway.sh`, read by `start-host-daemon.sh`) so a LAN peer cannot squat it to read/forge panes or capture keystrokes.
 
 ### Port Map
 
@@ -265,6 +273,7 @@ File structure follows categorized sections:
 - `PORT` - HTTP/WS port (default: 20000)
 - `GATEWAY_ID` - This Gateway's id, qualifying every local session name on the wire (default: the sanitized machine hostname)
 - `RESPONSE_TIMEOUT_MS` - How long to wait for a team response (default: 600000)
+- `HOST_WS_TOKEN` - Shared secret the host daemon presents to claim the reserved `host` WS slot (which drives the console terminal view). Auto-provisioned into `.env` by `start-gateway.sh`; enforced only when set (a LAN peer otherwise could squat the slot). See Console terminal view above.
 - `BRIDGE_TOKEN` - Bearer token for evie bridge auth (activates evie bridge when set)
 - `EVIE_KUBECONFIG` - Path to kubeconfig (default: /app/kubeconfig.yaml)
 - `EVIE_NAMESPACE` - K8s namespace (default: evie-bot)

@@ -123,6 +123,21 @@ sealed class ConsoleOp {
 	@Serializable
 	@SerialName("get_gateway_transport")
 	data object GetGatewayTransport : ConsoleOp()
+
+	@Serializable
+	@SerialName("peek")
+	data class Peek(
+		val target: String,
+		val sinceHash: String? = null,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("tmux_send")
+	data class TmuxSend(
+		val target: String,
+		val text: String? = null,
+		val key: String? = null,
+	) : ConsoleOp()
 }
 
 @Serializable
@@ -192,6 +207,18 @@ data class ConsolePollResult(
 	val epoch: Long,
 	val domainVersion: String? = null,
 	val domain: DomainSnapshot? = null,
+)
+
+@Serializable
+data class ConsolePeekResult(
+	val ansi: String? = null,
+	val hash: String,
+	val unchanged: Boolean? = null,
+)
+
+@Serializable
+data class ConsoleTmuxSendResult(
+	val sent: Boolean,
 )
 
 @Serializable

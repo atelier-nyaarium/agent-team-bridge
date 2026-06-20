@@ -774,3 +774,136 @@ describe("DeviceMailboxStore caps", () => {
 		expect(e2).not.toBe(e1);
 	});
 });
+
+describe("console terminal ops (peek / tmux_send)", () => {
+	function makeTerminalHarness() {
+		const hostOps: Record<string, unknown>[] = [];
+		const routes: ConsoleRoutes = {
+			send: async () => jsonRes({ session_id: "s", status: "running" }),
+			respond: () => jsonRes({ delivered: true }),
+			teams: () => jsonRes([]),
+			discover: async () => jsonRes([]),
+		};
+		const handler = createConsoleHandler({
+			registry: new Map(),
+			conversationRegistry: new Map(),
+			mailboxStore: new DeviceMailboxStore(),
+			localGatewayId: "test-host",
+			routes,
+			isProjectName: (n) => n === "recipe-app",
+			relayToHost: async (op) => {
+				hostOps.push(op as unknown as Record<string, unknown>);
+				if (op.kind === "peek") return { ok: true, result: { ansi: "SCREEN", hash: "h1" } };
+				return { ok: true, result: { sent: true } };
+			},
+		});
+		return { handler, hostOps };
+	}
+
+	it("peek resolves a devcontainer target and returns the captured pane + hash", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app" }, "p1"));
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toEqual({ ansi: "SCREEN", hash: "h1" });
+		expect(h.hostOps[0]).toEqual({ kind: "peek", target: { kind: "devcontainer", name: "recipe-app" } });
+	});
+
+	it("peek resolves the host-agent 'gateway' to its local tmux", async () => {
+		const h = makeTerminalHarness();
+		await h.handler.handleFrame(frame({ kind: "peek", target: "gateway" }, "p2"));
+		expect(h.hostOps[0]).toMatchObject({ kind: "peek", target: { kind: "gateway", name: "gateway" } });
+	});
+
+	it("peek with a matching sinceHash returns unchanged and drops the body", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app", sinceHash: "h1" }, "p3"));
+		expect(reply.result).toEqual({ hash: "h1", unchanged: true });
+	});
+
+	it("rejects a loose session name (only host-agent + devcontainers are terminal-eligible)", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "some-loose" }, "p4"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("not available");
+		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("rejects a cross-Gateway target", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "other-gw/recipe-app" }, "p5"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("another Gateway");
+		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("tmux_send with text relays sendText", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "tmux_send", target: "recipe-app", text: "/model opus" }, "s1"),
+		);
+		expect(reply.result).toEqual({ sent: true });
+		// dedupKey = `${conversationId}:${opId}` so the host can replay a re-relayed send.
+		expect(h.hostOps[0]).toEqual({
+			kind: "sendText",
+			target: { kind: "devcontainer", name: "recipe-app" },
+			text: "/model opus",
+			dedupKey: "conv-pixel:s1",
+		});
+	});
+
+	it("tmux_send with a named key relays sendKey", async () => {
+		const h = makeTerminalHarness();
+		await h.handler.handleFrame(frame({ kind: "tmux_send", target: "gateway", key: "C-c" }, "s2"));
+		expect(h.hostOps[0]).toEqual({
+			kind: "sendKey",
+			target: { kind: "gateway", name: "gateway" },
+			key: "C-c",
+			dedupKey: "conv-pixel:s2",
+		});
+	});
+
+	it("a retried tmux_send with the same opId relays once (idempotent)", async () => {
+		const h = makeTerminalHarness();
+		const f = frame({ kind: "tmux_send", target: "recipe-app", key: "Enter" }, "dup");
+		const [r1, r2] = await Promise.all([h.handler.handleFrame(f), h.handler.handleFrame(f)]);
+		const r3 = await h.handler.handleFrame(f);
+		expect(r1.ok && r2.ok && r3.ok).toBe(true);
+		expect(h.hostOps).toHaveLength(1);
+	});
+
+	it("peek is a fresh read: a retried opId relays again (not idempotency-cached)", async () => {
+		const h = makeTerminalHarness();
+		const f = frame({ kind: "peek", target: "recipe-app" }, "samepeek");
+		await h.handler.handleFrame(f);
+		await h.handler.handleFrame(f);
+		expect(h.hostOps).toHaveLength(2);
+	});
+
+	it("rejects a tmux_send with neither text nor key (no stray keystroke)", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "tmux_send", target: "recipe-app" }, "n1"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("exactly one");
+		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("rejects a tmux_send with both text and key", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "tmux_send", target: "recipe-app", text: "x", key: "Enter" }, "b1"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("exactly one");
+		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("rejects a key not on the whitelist at the gateway (fail fast, no host round-trip)", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "tmux_send", target: "recipe-app", key: "rm -rf" }, "k1"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("disallowed key");
+		expect(h.hostOps).toHaveLength(0);
+	});
+});

@@ -128,4 +128,7 @@ export interface GatewayConfig {
 export interface WebSocketConfig {
 	HEARTBEAT_INTERVAL_MS: number;
 	MISSED_PINGS_LIMIT: number;
+	// When set, a register for the reserved "host" team must present a matching token.
+	// Unset (default) keeps the existing unauthenticated host registration.
+	hostWsToken?: string;
 }

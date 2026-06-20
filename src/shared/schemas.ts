@@ -83,6 +83,10 @@ export const WsRegisterSchema = z.object({
 	// The plugin version (package.json) the MCP process is running. Optional so an
 	// older plugin that predates this field still registers cleanly.
 	version: z.string().optional(),
+	// Shared secret the host daemon presents so a LAN peer cannot squat the reserved
+	// "host" slot and drive agent terminals. Optional + only enforced when the gateway
+	// has HOST_WS_TOKEN set (coexistence: an un-configured deploy is unchanged).
+	token: z.string().optional(),
 });
 
 ////////////////////////////////
@@ -166,6 +170,25 @@ export const ConsoleOpSchema = z
 		// params: the Gateway returns its own bootstrap transport. Replaces carrying these creds
 		// in the provisioning blob.
 		z.object({ kind: z.literal("get_gateway_transport") }),
+		// Capture an agent's VISIBLE tmux pane for the console terminal view. `target` is the
+		// gateway-qualified session name; the gateway resolves it to the host-agent's own
+		// tmux or a devcontainer and relays to the host daemon. `sinceHash` lets the console
+		// skip an unchanged frame (the result returns unchanged=true with no ansi). (Scrollback
+		// browsing is deferred: a per-request line count would be an unbounded cache/exec key.)
+		z.object({
+			kind: z.literal("peek"),
+			target: z.string().min(1).max(128),
+			sinceHash: z.string().max(64).optional(),
+		}),
+		// Send input to an agent's tmux pane: a literal text line (sent with a trailing Enter)
+		// OR a single named control key (Enter, Escape, C-c, Up, Down, Left, Right, Tab, BTab).
+		// Exactly one of text/key; the gateway whitelists the key name. Idempotent per opId.
+		z.object({
+			kind: z.literal("tmux_send"),
+			target: z.string().min(1).max(128),
+			text: z.string().max(4096).optional(),
+			key: z.string().max(32).optional(),
+		}),
 	])
 	.meta({ id: "ConsoleOp" });
 
@@ -338,6 +361,23 @@ export const ConsoleGatewayTransportResultSchema = z
 	})
 	.meta({ id: "ConsoleGatewayTransportResult" });
 
+export const ConsolePeekResultSchema = z
+	.object({
+		// The captured pane, ANSI-colored. Absent when unchanged (the console's sinceHash
+		// matched), so an idle terminal costs only the hash round-trip.
+		ansi: z.string().optional(),
+		// Short content hash of the pane; the console sends it back as sinceHash next cycle.
+		hash: z.string(),
+		unchanged: z.boolean().optional(),
+	})
+	.meta({ id: "ConsolePeekResult" });
+
+export const ConsoleTmuxSendResultSchema = z
+	.object({
+		sent: z.boolean(),
+	})
+	.meta({ id: "ConsoleTmuxSendResult" });
+
 export const ConsoleOpResultSchema = z.union([
 	ConsoleRegisterResultSchema,
 	ConsoleListTeamsResultSchema,
@@ -345,6 +385,8 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleRespondResultSchema,
 	ConsolePollResultSchema,
 	ConsoleGatewayTransportResultSchema,
+	ConsolePeekResultSchema,
+	ConsoleTmuxSendResultSchema,
 ]);
 
 ////////////////////////////////

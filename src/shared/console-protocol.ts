@@ -4,6 +4,7 @@ import type {
 	ConsoleOpEnvelopeSchema,
 	ConsoleOpResultSchema,
 	ConsoleOpSchema,
+	ConsolePeekResultSchema,
 	ConsolePollResultSchema,
 	ConsoleRegisterResultSchema,
 	ConsoleRelayFrameSchema,
@@ -11,6 +12,7 @@ import type {
 	ConsoleReplyBodySchema,
 	ConsoleRespondResultSchema,
 	ConsoleSendResultSchema,
+	ConsoleTmuxSendResultSchema,
 	MailboxEntrySchema,
 	SealedEnvelopeSchema,
 } from "./schemas.js";
@@ -46,6 +48,8 @@ export type ConsoleListTeamsOp = Extract<ConsoleOp, { kind: "list_teams" }>;
 export type ConsoleSendOp = Extract<ConsoleOp, { kind: "send" }>;
 export type ConsoleRespondOp = Extract<ConsoleOp, { kind: "respond" }>;
 export type ConsolePollOp = Extract<ConsoleOp, { kind: "poll" }>;
+export type ConsolePeekOp = Extract<ConsoleOp, { kind: "peek" }>;
+export type ConsoleTmuxSendOp = Extract<ConsoleOp, { kind: "tmux_send" }>;
 
 ////////////////////////////////
 //  Relay frames (carried over the gateway<->evie WebSocket)
@@ -80,6 +84,8 @@ export type ConsoleListTeamsResult = z.infer<typeof ConsoleListTeamsResultSchema
 export type ConsoleSendResult = z.infer<typeof ConsoleSendResultSchema>;
 export type ConsoleRespondResult = z.infer<typeof ConsoleRespondResultSchema>;
 export type ConsolePollResult = z.infer<typeof ConsolePollResultSchema>;
+export type ConsolePeekResult = z.infer<typeof ConsolePeekResultSchema>;
+export type ConsoleTmuxSendResult = z.infer<typeof ConsoleTmuxSendResultSchema>;
 export type ConsoleOpResult = z.infer<typeof ConsoleOpResultSchema>;
 
 ////////////////////////////////

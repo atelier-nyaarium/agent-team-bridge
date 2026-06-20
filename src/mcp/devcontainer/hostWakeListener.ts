@@ -3,8 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
 import { debugLog } from "../../shared/debug-log.js";
+import type { HostOp } from "../../shared/host-op.js";
 import { createReconnector } from "../../shared/reconnect.js";
 import { ensureContainerUpAsync, execInContainer, resolveProject } from "./helpers.js";
+import { createHostOpRunner } from "./hostOpRunner.js";
+import { peekPane, sendKey, sendText } from "./tmuxCore.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -50,7 +53,10 @@ function connect(): void {
 	ws.on("open", () => {
 		console.error("[host-wake] connected to gateway");
 		reconnector.reset();
-		ws!.send(JSON.stringify({ type: "register", team: "host" }));
+		// Present the host-daemon token when configured (the gateway enforces it only
+		// when it too has HOST_WS_TOKEN set).
+		const hostToken = process.env.HOST_WS_TOKEN;
+		ws!.send(JSON.stringify({ type: "register", team: "host", ...(hostToken ? { token: hostToken } : {}) }));
 
 		const projects = scanDevcontainerProjects();
 		ws!.send(JSON.stringify({ type: "catalog", projects }));
@@ -67,6 +73,10 @@ function connect(): void {
 
 		if (msg.type === "wake") {
 			handleWake(msg as unknown as WakeMessage);
+		}
+
+		if (msg.type === "host_op" && typeof msg.reqId === "string") {
+			void handleHostOp(msg.reqId as string, msg.op as HostOp);
 		}
 
 		if (msg.type === "channel_push") {
@@ -274,5 +284,21 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		if (ws?.readyState === WebSocket.OPEN) {
 			ws.send(JSON.stringify({ type: "wake_result", team: msg.team, success: false, error: message }));
 		}
+	}
+}
+
+////////////////////////////////
+//  Host op handler (console terminal view)
+
+// The executor owns single-flight + the peek cadence floor; this module only relays the
+// reply onto the host WS, correlated by reqId.
+const hostOpRunner = createHostOpRunner({ peekPane, sendText, sendKey });
+
+async function handleHostOp(reqId: string, op: HostOp): Promise<void> {
+	try {
+		const result = await hostOpRunner.run(op);
+		ws?.send(JSON.stringify({ type: "host_op_reply", reqId, ok: true, result }));
+	} catch (err) {
+		ws?.send(JSON.stringify({ type: "host_op_reply", reqId, ok: false, error: (err as Error).message }));
 	}
 }

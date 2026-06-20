@@ -17,6 +17,12 @@ export interface WebSocketDeps {
 	knownTeamPaths: Map<string, string>;
 	offlineCatalog: Map<string, string>;
 	wakeCoordinator: WakeCoordinator;
+	// Settles a host_op (peek/send) reply by reqId, and fails all in-flight ops when the host
+	// drops. Absent in tests that do not exercise the console terminal relay.
+	hostOpCoordinator?: {
+		settle: (reqId: string, result: { ok: boolean; result?: unknown; error?: string }) => void;
+		failAll: (error: string) => void;
+	};
 	config: WebSocketConfig;
 	onTeamConnect?: (team: string, ws: ServerWebSocket<WsData>) => void;
 	onTeamDisconnect?: (team: string) => void;
@@ -73,6 +79,7 @@ export function createWebSocketHandlers({
 	knownTeamPaths,
 	offlineCatalog,
 	wakeCoordinator,
+	hostOpCoordinator,
 	config,
 	onTeamConnect,
 	onTeamDisconnect,
@@ -132,6 +139,17 @@ export function createWebSocketHandlers({
 			const subId = reg.data.subId || crypto.randomUUID().slice(0, 8);
 			const mode: ConnectionMode = reg.data.mode === "channel" ? "channel" : "cli";
 			const conversationId = reg.data.conversationId ?? null;
+
+			// Host-daemon auth: when a token is configured, the reserved "host" slot (which
+			// drives agent terminals and receives wakes) requires it, so a LAN peer cannot
+			// claim it. Unset = unchanged. Other teams are unaffected.
+			if (team === "host" && config.hostWsToken && reg.data.token !== config.hostWsToken) {
+				console.log(`[ws] rejected host register - bad or missing token`);
+				ws.send(JSON.stringify({ type: "register_reject", team, reason: "unauthorized" }));
+				ws.data.isStale = true;
+				ws.close();
+				return;
+			}
 
 			// Reserved-name protection: first live registration wins. A second process
 			// trying to claim "gateway" or "host" is rejected so a stray container project
@@ -250,6 +268,16 @@ export function createWebSocketHandlers({
 		}
 		// #endregion
 
+		// The host daemon's reply to a peek/send relay, correlated by reqId. Only the
+		// authenticated host socket may settle a host op (matching the catalog branch).
+		if (msg.type === "host_op_reply" && ws.data.teamName === "host" && typeof msg.reqId === "string") {
+			hostOpCoordinator?.settle(msg.reqId, {
+				ok: msg.ok === true,
+				result: msg.result,
+				error: typeof msg.error === "string" ? msg.error : undefined,
+			});
+		}
+
 		if (msg.type === "catalog" && ws.data.teamName === "host") {
 			const projects = msg.projects;
 			if (Array.isArray(projects)) {
@@ -302,6 +330,9 @@ export function createWebSocketHandlers({
 				if (subs.size === 0) {
 					registry.delete(teamName);
 					offlineCatalog.clear();
+					// Fail in-flight terminal ops now so a console peek/send returns at once instead
+					// of waiting out its full timeout across the host restart.
+					hostOpCoordinator?.failAll("host daemon disconnected");
 					console.log(`[ws] host disconnected - offline catalog cleared`);
 					onTeamDisconnect?.(teamName);
 				} else {

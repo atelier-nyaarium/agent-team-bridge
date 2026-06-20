@@ -27,6 +27,11 @@ git pull || true
 grep -qE '^GATEWAY_ID=' .env 2>/dev/null || export GATEWAY_ID="$(hostname)"
 EFF_ID="$(sed -n 's/^GATEWAY_ID=//p' .env 2>/dev/null | head -1)"; EFF_ID="${EFF_ID:-${GATEWAY_ID:-$(hostname)}}"
 
+# Auto-provision the host-daemon WS token into .env so the reserved "host" slot (which the
+# console drives agent terminals through) is authenticated by default. The host daemon reads
+# the same value from .env; compose reads .env on its own for the gateway side.
+grep -qE '^HOST_WS_TOKEN=' .env 2>/dev/null || echo "HOST_WS_TOKEN=$(openssl rand -hex 32)" >> .env
+
 docker compose down --remove-orphans 2>/dev/null || true
 docker compose up --build -d
 
