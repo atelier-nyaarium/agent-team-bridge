@@ -1,6 +1,6 @@
 {
 	"name": "switchboard",
-	"version": "5.0.17",
+	"version": "5.0.18",
 	"type": "module",
 	"scripts": {
 		"start:gateway": "bun run src/main-gateway.ts",
