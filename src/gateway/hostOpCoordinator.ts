@@ -38,4 +38,15 @@ export class HostOpCoordinator {
 		this.pending.delete(reqId);
 		waiter.resolve(result);
 	}
+
+	/** Fail every in-flight op now (the host socket dropped), so a console peek/send returns a
+	 * fast retryable error instead of waiting out its full timeout across a host restart. Mirrors
+	 * evieClient's fail-in-flight-on-close behaviour. */
+	failAll(error: string): void {
+		for (const [, waiter] of this.pending) {
+			clearTimeout(waiter.timer);
+			waiter.resolve({ ok: false, error });
+		}
+		this.pending.clear();
+	}
 }

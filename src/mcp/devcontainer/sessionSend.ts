@@ -40,6 +40,9 @@ export function registerSessionSend(mcpServer: McpServer): void {
 
 				const container = `${args.team}_devcontainer-dev-1`;
 
+				// This agent-facing tool keeps its own recipe; the hardened, atomic send used by the
+				// console terminal view lives in tmuxCore.ts (the canonical recipe). Keep the two in
+				// mind together if the send-keys construction ever changes.
 				// Use base64 encoding to avoid shell escaping issues
 				const b64 = Buffer.from(args.command).toString("base64");
 				execSync(

@@ -17,9 +17,12 @@ export interface WebSocketDeps {
 	knownTeamPaths: Map<string, string>;
 	offlineCatalog: Map<string, string>;
 	wakeCoordinator: WakeCoordinator;
-	// Settles a host_op (peek/send) reply by reqId. Absent in tests that do not exercise
-	// the console terminal relay.
-	hostOpCoordinator?: { settle: (reqId: string, result: { ok: boolean; result?: unknown; error?: string }) => void };
+	// Settles a host_op (peek/send) reply by reqId, and fails all in-flight ops when the host
+	// drops. Absent in tests that do not exercise the console terminal relay.
+	hostOpCoordinator?: {
+		settle: (reqId: string, result: { ok: boolean; result?: unknown; error?: string }) => void;
+		failAll: (error: string) => void;
+	};
 	config: WebSocketConfig;
 	onTeamConnect?: (team: string, ws: ServerWebSocket<WsData>) => void;
 	onTeamDisconnect?: (team: string) => void;
@@ -327,6 +330,9 @@ export function createWebSocketHandlers({
 				if (subs.size === 0) {
 					registry.delete(teamName);
 					offlineCatalog.clear();
+					// Fail in-flight terminal ops now so a console peek/send returns at once instead
+					// of waiting out its full timeout across the host restart.
+					hostOpCoordinator?.failAll("host daemon disconnected");
 					console.log(`[ws] host disconnected - offline catalog cleared`);
 					onTeamDisconnect?.(teamName);
 				} else {

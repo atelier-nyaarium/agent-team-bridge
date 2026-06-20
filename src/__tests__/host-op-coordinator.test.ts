@@ -32,4 +32,13 @@ describe("HostOpCoordinator", () => {
 		const coord = new HostOpCoordinator();
 		await expect(coord.wait("slow", 10)).resolves.toEqual({ ok: false, error: "host op timed out" });
 	});
+
+	it("failAll resolves every in-flight op with an error (host disconnect)", async () => {
+		const coord = new HostOpCoordinator();
+		const a = coord.wait("a", 10_000);
+		const b = coord.wait("b", 10_000);
+		coord.failAll("host daemon disconnected");
+		await expect(a).resolves.toEqual({ ok: false, error: "host daemon disconnected" });
+		await expect(b).resolves.toEqual({ ok: false, error: "host daemon disconnected" });
+	});
 });

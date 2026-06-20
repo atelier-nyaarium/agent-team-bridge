@@ -39,6 +39,8 @@ export function registerHostSessionSend(mcpServer: McpServer): void {
 			try {
 				assertNotContainer();
 
+				// This agent-facing tool keeps its own recipe; tmuxCore.ts holds the hardened, atomic
+				// send used by the console terminal view (the canonical recipe to mirror on a change).
 				const b64 = Buffer.from(args.command).toString("base64");
 				execSync(
 					`bash -c "tmux send-keys -t ${TMUX_TARGET} -l \\"\\$(echo '${b64}' | base64 -d)\\" && tmux send-keys -t ${TMUX_TARGET} Enter"`,

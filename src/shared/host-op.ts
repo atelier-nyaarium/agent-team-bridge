@@ -6,6 +6,11 @@
 //  facing): the gateway builds a HostOp and correlates the reply by reqId; the host
 //  daemon executes it against tmux. Type-only, no runtime deps, so both the gateway
 //  and the host MCP can import it without pulling node:child_process across the line.
+//
+//  Deliberately type-only (no zod schema, unlike the evie/console frames): this RPC
+//  rides the DIRECT, token-authenticated host WS, not the untrusted evie relay, so it
+//  follows the same hand-typed + field-guard convention as the wake/catalog frames on
+//  that channel rather than the zod-at-the-boundary ethos reserved for the evie link.
 
 /** Which tmux a host op targets: the orchestrator's own session, or a devcontainer's. */
 export interface TmuxTarget {

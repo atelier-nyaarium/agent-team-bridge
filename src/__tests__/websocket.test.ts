@@ -32,7 +32,7 @@ describe("createWebSocketHandlers", () => {
 			offlineCatalog?: Map<string, string>;
 			wakeCoordinator?: WakeCoordinator;
 			hostWsToken?: string;
-			hostOpCoordinator?: { settle: ReturnType<typeof vi.fn> };
+			hostOpCoordinator?: { settle: ReturnType<typeof vi.fn>; failAll: ReturnType<typeof vi.fn> };
 		} = {},
 	) {
 		const registry: TeamRegistry = overrides.registry || new Map();
@@ -48,7 +48,10 @@ describe("createWebSocketHandlers", () => {
 			offlineCatalog,
 			wakeCoordinator,
 			hostOpCoordinator: overrides.hostOpCoordinator as
-				| { settle: (reqId: string, result: { ok: boolean; result?: unknown; error?: string }) => void }
+				| {
+						settle: (reqId: string, result: { ok: boolean; result?: unknown; error?: string }) => void;
+						failAll: (error: string) => void;
+				  }
 				| undefined,
 		});
 		intervals.push(handlers.heartbeatInterval);
@@ -103,7 +106,7 @@ describe("createWebSocketHandlers", () => {
 	});
 
 	it("a host_op_reply from the host socket settles the coordinator by reqId", () => {
-		const hostOpCoordinator = { settle: vi.fn() };
+		const hostOpCoordinator = { settle: vi.fn(), failAll: vi.fn() };
 		const { handlers } = setup({ hostOpCoordinator });
 		const ws = createMockWs();
 		handlers.open(ws);
@@ -117,13 +120,23 @@ describe("createWebSocketHandlers", () => {
 	});
 
 	it("a host_op_reply from a NON-host socket is ignored (cannot settle a terminal op)", () => {
-		const hostOpCoordinator = { settle: vi.fn() };
+		const hostOpCoordinator = { settle: vi.fn(), failAll: vi.fn() };
 		const { handlers } = setup({ hostOpCoordinator });
 		const ws = createMockWs();
 		handlers.open(ws);
 		handlers.message(ws, JSON.stringify({ type: "register", team: "alpha", subId: "s1" }));
 		handlers.message(ws, JSON.stringify({ type: "host_op_reply", reqId: "r1", ok: true }));
 		expect(hostOpCoordinator.settle).not.toHaveBeenCalled();
+	});
+
+	it("fails all in-flight host ops when the host socket disconnects", () => {
+		const hostOpCoordinator = { settle: vi.fn(), failAll: vi.fn() };
+		const { handlers } = setup({ hostOpCoordinator });
+		const ws = createMockWs();
+		handlers.open(ws);
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1" }));
+		handlers.close(ws);
+		expect(hostOpCoordinator.failAll).toHaveBeenCalledWith("host daemon disconnected");
 	});
 
 	it("register message adds team to registry", () => {
