@@ -881,6 +881,22 @@ class ChatRepository(
 		runCatching { client().teams(localGatewayId) }.onSuccess { t -> _state.update { it.copy(teams = t) } }
 	}
 
+	/** Capture an agent's tmux pane for the terminal view. Returns a Result so the caller can keep
+	 * the last frame on a transient failure yet surface the backend's reason (container/host offline)
+	 * when the pane never loaded. */
+	suspend fun peekTerminal(team: String, sinceHash: String?): Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult> =
+		withContext(Dispatchers.IO) { runCatching { client().peek(team, sinceHash) } }
+
+	/** Send text (submitted with Enter) or a named control key to an agent's tmux pane. */
+	suspend fun tmuxSend(team: String, text: String? = null, key: String? = null) =
+		withContext(Dispatchers.IO) { client().tmuxSend(team, text, key) }
+
+	val terminalRefreshMs: Long get() = store.terminalRefreshMs
+
+	fun setTerminalRefreshMs(ms: Long) {
+		store.terminalRefreshMs = ms
+	}
+
 	/** Repair every in-memory key (threads, unread, labels, open tabs) to canonical once
 	 * the gateway id is known, merging any collisions, so a thread loaded under an empty or
 	 * unknown switch ("/name") can no longer shadow the canonical "gateway/name" an inbound
