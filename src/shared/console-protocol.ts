@@ -71,6 +71,9 @@ export type ConsoleReplyBody = z.infer<typeof ConsoleReplyBodySchema>;
 export interface OpenedConsoleFrame {
 	opId: string;
 	signerSignPub: string;
+	/** The Domain owner that admitted this console (the allowlist root). All of an
+	 * owner's devices resolve to the same value, which keys their shared inbox. */
+	ownerSignPub: string;
 	conversationId: string;
 	device: string;
 	op: ConsoleOp;

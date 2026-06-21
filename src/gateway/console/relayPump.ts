@@ -52,8 +52,9 @@ export function createConsoleRelayPump({ sealer, handleFrame, sendReply }: Relay
 
 			const frame = parsed.data;
 			let env: ConsoleOpEnvelope;
+			let ownerSignPub: string;
 			try {
-				env = sealer.open(frame.signerSignPub, frame.sealed);
+				({ env, ownerSignPub } = sealer.open(frame.signerSignPub, frame.sealed));
 			} catch (err) {
 				await sendReply({
 					type: "console_relay_reply",
@@ -67,6 +68,7 @@ export function createConsoleRelayPump({ sealer, handleFrame, sendReply }: Relay
 			const opened: OpenedConsoleFrame = {
 				opId: frame.opId,
 				signerSignPub: frame.signerSignPub,
+				ownerSignPub,
 				conversationId: env.conversationId,
 				device: env.device,
 				op: env.op,

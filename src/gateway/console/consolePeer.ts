@@ -21,7 +21,9 @@ export class ConsolePeer {
 	readonly readyState = 1;
 
 	constructor(
-		private getMailbox: () => DeviceMailbox,
+		// Returns undefined once the device is torn down, so a late delivery no-ops
+		// instead of resurrecting an owner inbox the handler's index no longer tracks.
+		private getMailbox: () => DeviceMailbox | undefined,
 		device: string,
 		conversationId: string,
 		subId: string,
@@ -50,8 +52,10 @@ export class ConsolePeer {
 		}
 
 		if (msg.type === "channel_push") {
+			const box = this.getMailbox();
+			if (!box) return;
 			const p = msg as unknown as ChannelPushPayload;
-			this.getMailbox().append({
+			box.append({
 				kind: "message",
 				session_id: p.session_id,
 				from: p.from,
@@ -66,8 +70,10 @@ export class ConsolePeer {
 		}
 
 		if (msg.type === "response_push") {
+			const box = this.getMailbox();
+			if (!box) return;
 			const p = msg as unknown as ResponsePushPayload;
-			this.getMailbox().append({
+			box.append({
 				kind: "reply",
 				session_id: p.session_id,
 				body: p.response,

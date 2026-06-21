@@ -255,9 +255,13 @@ export const MailboxEntrySchema = z
 	.object({
 		seq: z.number().int().nonnegative(),
 		at: z.number().int().nonnegative(),
-		kind: z.enum(["message", "reply", "notice"]),
+		kind: z.enum(["message", "reply", "notice", "sent"]),
 		session_id: z.string(),
 		from: z.string().optional(),
+		// The originating send's opId on a `sent` echo (an owner's own outgoing message
+		// mirrored to all their devices). The sending device matches it to its optimistic
+		// row and settles it instead of double-rendering; other devices render it fresh.
+		opId: z.string().optional(),
 		// Notification-bar line for notices; the body carries the full report.
 		title: z.string().optional(),
 		// The Short tier of a notice (4-6 sentences), addressable on its own so
@@ -265,6 +269,8 @@ export const MailboxEntrySchema = z
 		// current gateways; optional for decode tolerance of older wires.
 		summary: z.string().optional(),
 		body: z.string().optional(),
+		// Reply/notice state on the wire (e.g. "running"/"error"). A `sent` echo never
+		// carries it: an owner's own outgoing message is always settled (status null).
 		status: z.string().optional(),
 		replyAsJson: z.record(z.string(), z.unknown()).optional(),
 		question: z.string().optional(),

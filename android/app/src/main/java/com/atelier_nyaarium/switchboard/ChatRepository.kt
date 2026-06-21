@@ -90,6 +90,21 @@ data class Message(
 	val from: String? = null,
 )
 
+/** The thread index a `sent` echo should replace, or -1 to append it as a new row. Folds an
+ * at-least-once re-drain by (epoch, seq), then on the sending device matches this owner-message's
+ * row by opId whatever its current seq. Matching by opId alone (not just the seq-0 optimistic row)
+ * means a duplicate echo - same opId, a fresh seq from a reconcile re-send across a gateway restart
+ * - folds onto the already-upgraded row instead of stranding a second copy. Pure, so the reconcile
+ * decision is unit-tested in isolation. */
+internal fun sentEchoMatch(thread: List<Message>, echo: Message): Int {
+	if (echo.seq > 0) {
+		val bySeq = thread.indexOfFirst { it.seq == echo.seq && it.epoch == echo.epoch }
+		if (bySeq >= 0) return bySeq
+	}
+	if (echo.opId != null) return thread.indexOfFirst { it.fromMe && it.opId == echo.opId }
+	return -1
+}
+
 data class ChatState(
 	val provisioned: Boolean = false,
 	val teams: List<Team> = emptyList(),
@@ -1149,6 +1164,13 @@ class ChatRepository(
 						// with no body would otherwise vanish).
 						val bodyText = e.body.orEmpty()
 						val snippet = bodyText.replace(Regex("\\s+"), " ").trim().take(80)
+						if (e.kind == "sent") {
+							// The owner's own outgoing message, mirrored to all their devices.
+							DebugLog.log("Drain", "seq=${e.seq} kind=sent session=${e.session_id} -> thread=$team (own mirror) opId=${e.opId} \"$snippet\"")
+							val echo = Message(true, bodyText, e.at, files = files, status = null, opId = e.opId, epoch = mb.epoch, seq = e.seq)
+							reconcileSent(team, echo)
+							continue
+						}
 						if (bodyText.isNotEmpty() || files.isNotEmpty() || e.status != null) {
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team status=${e.status} files=${files.size} \"$snippet\"")
 							val msg =
@@ -1405,6 +1427,27 @@ class ChatRepository(
 			append(team, msg)
 		}
 		return true
+	}
+
+	/** Fold a `sent` echo: an owner's own outgoing message mirrored to all their devices. On the
+	 * SENDING device it upgrades the optimistic pending row (matched by opId) in place and settles
+	 * it; on the owner's OTHER devices it appends a fresh settled row. An at-least-once re-drain
+	 * folds by (epoch, seq). Never bumps unread or notifies: it is the owner's own message, so the
+	 * sender does not double-render and the other devices just reflect it. */
+	private fun reconcileSent(team: String, echo: Message) {
+		var handled = false
+		val threads = _state.updateAndGet { s ->
+			val thread = s.threads[team].orEmpty()
+			val idx = sentEchoMatch(thread, echo)
+			if (idx >= 0) {
+				handled = true
+				val next = thread.toMutableList().also { it[idx] = echo.copy(id = thread[idx].id) }
+				s.copy(threads = s.threads + (team to next))
+			} else {
+				s
+			}
+		}.threads
+		if (handled) persistThreads(threads) else append(team, echo)
 	}
 
 	private fun bumpUnread(team: String) {

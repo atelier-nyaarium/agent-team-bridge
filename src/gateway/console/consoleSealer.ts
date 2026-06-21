@@ -17,8 +17,9 @@ import { ReplayGuard } from "../federation/replayGuard.js";
 export interface ConsoleSealer {
 	/** Verify the signer is an admitted console, verify its signature + decrypt with
 	 * this gateway's box key, replay-check, freshness-check; return the inner op
-	 * envelope. Throws (never dispatches) on any failure. */
-	open(signerSignPub: string, sealed: SealedEnvelope): ConsoleOpEnvelope;
+	 * envelope plus the Domain owner that admitted it (the allowlist root, which keys
+	 * the owner's shared inbox). Throws (never dispatches) on any failure. */
+	open(signerSignPub: string, sealed: SealedEnvelope): { env: ConsoleOpEnvelope; ownerSignPub: string };
 	/** Seal a reply body to the console's box key (resolved from its admission),
 	 * signed by this gateway. Throws if the signer is not an admitted console. */
 	seal(signerSignPub: string, body: ConsoleReplyBody): SealedEnvelope;
@@ -51,6 +52,10 @@ export function createConsoleSealer(
 		open(signerSignPub, sealed) {
 			// Authorize the signer (cheap map lookup) before spending a decrypt on it.
 			resolveConsoleBoxPub(signerSignPub);
+			// The owner that admitted this console is the Domain root; it is set
+			// whenever an admission resolves, so this is non-null past the auth check.
+			const ownerSignPub = allowlist.ownerSignPub;
+			if (!ownerSignPub) throw new Error("Domain is not rooted");
 			// Verify the console's signature against its admitted signing key, then
 			// decrypt with this gateway's box private key.
 			const plain = unseal(sealed, identity.box.priv, signerSignPub);
@@ -61,7 +66,7 @@ export function createConsoleSealer(
 			}
 			const env = ConsoleOpEnvelopeSchema.parse(JSON.parse(plain.toString("utf8")));
 			if (Math.abs(now() - env.at) > CONSOLE_SEAL_MAX_AGE_MS) throw new Error("stale console frame");
-			return env;
+			return { env, ownerSignPub };
 		},
 		seal(signerSignPub, body) {
 			const boxPub = resolveConsoleBoxPub(signerSignPub);

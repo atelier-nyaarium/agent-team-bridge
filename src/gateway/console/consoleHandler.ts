@@ -15,6 +15,7 @@ import {
 	type HostPeekResult,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
+import { ownerKeyId } from "../../shared/owner-id.js";
 import type { GatewayTransport } from "../../shared/schemas.js";
 import { SessionId, TeamAddress } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
@@ -126,10 +127,10 @@ export function createConsoleHandler({
 		if (isProjectName?.(name)) return { kind: "devcontainer", name };
 		throw new Error(`terminal view is not available for "${name}" (only the host agent and devcontainers)`);
 	}
-	// The per-install conversationId is the real identity: it keys the mailbox,
-	// the registry sub, and this binding to the human-facing device name. The
-	// name is a display/target label only, so two devices sharing a name never
-	// share a slot, and a conversation cannot silently gateway names.
+	// The per-install conversationId is the DEVICE identity: it keys the registry sub,
+	// the signing-key binding, the idempotency cache, and the device-name binding. The
+	// MAILBOX is keyed by OWNER (below), so an owner's devices share one inbox while
+	// each keeps its own registry slot and key binding.
 	const bindings = new Map<string, string>();
 	// conversationId -> the console signing key bound to that install. A frame whose
 	// signerSignPub differs from the binding cannot operate this conversation (so a
@@ -138,27 +139,34 @@ export function createConsoleHandler({
 	const signers = new Map<string, string>();
 	// conversationId -> (opId -> in-flight/settled reply body) for mutating-op idempotency.
 	const opCache = new Map<string, Map<string, Promise<ConsoleReplyBody>>>();
+	// conversationId -> ownerId, and ownerId -> its device conversationIds. The mailbox
+	// store is keyed by ownerId, so these map a device to its shared owner inbox and let
+	// teardown release the inbox only when the owner's last device is gone.
+	const deviceOwner = new Map<string, string>();
+	const ownerDevices = new Map<string, Set<string>>();
 
-	// Peer lifetime equals mailbox lifetime: when a mailbox is evicted (idle
-	// sweep or store cap), the registry/conversation entries and binding go too.
-	mailboxStore.setOnEvict((conversationId) => removePeer(conversationId));
+	// Owner-inbox lifetime: when the store evicts an owner inbox (idle sweep or cap),
+	// tear down every device peer that shared it. The box is already gone, so this only
+	// clears the device-side state (teardownDevice never re-deletes the box).
+	mailboxStore.setOnEvict((ownerId) => {
+		for (const conversationId of [...(ownerDevices.get(ownerId) ?? [])]) teardownDevice(conversationId);
+	});
 
-	function recordInbound(conversationId: string, sessionId: string): void {
+	function recordInbound(ownerId: string, sessionId: string): void {
 		// Canonicalize so the gate in respond can always compare canonical form
 		// against canonical form, whether the session id arrived bare or qualified.
-		// Recorded on the durable mailbox so respondability survives a restart.
+		// Recorded on the durable owner inbox so respondability survives a restart.
 		const canonical = SessionId.parse(sessionId, localGatewayId)?.key ?? sessionId;
-		mailboxStore.get(conversationId)?.recordSession(canonical);
+		mailboxStore.get(ownerId)?.recordSession(canonical);
 	}
 
-	/** Append only if the conversation is still live, so a late continuation
-	 * cannot resurrect a torn-down (evicted) mailbox. Gated on conversation
-	 * liveness, not the device name: a rename keeps the same conversation, so its
-	 * in-flight reply still belongs here. */
-	function appendIfLive(conversationId: string, entry: MailboxInput): void {
-		const box = mailboxStore.get(conversationId);
-		if (!box || !bindings.has(conversationId)) return;
-		box.append(entry);
+	/** Append only if the device is still live, so a late continuation cannot
+	 * resurrect a torn-down install. Routes to the owner inbox the device shares;
+	 * gated on device liveness, so a rename (same conversation) still delivers. */
+	function appendIfLive(conversationId: string, entry: MailboxInput, dedupeKey?: string): void {
+		const ownerId = deviceOwner.get(conversationId);
+		if (!ownerId || !bindings.has(conversationId)) return;
+		mailboxStore.get(ownerId)?.append(entry, dedupeKey);
 	}
 
 	function assertValidIdentity(device: string, conversationId: string): void {
@@ -190,11 +198,12 @@ export function createConsoleHandler({
 		device: string,
 		conversationId: string,
 		signerSignPub: string,
+		ownerId: string,
 		allowRebind = false,
 	): ConsolePeer {
 		// A register op may rename the device: migrate the registry sub off the
-		// old name (mailbox and binding are conversation-keyed, so they carry
-		// over) before the identity checks see the stale binding.
+		// old name (the owner inbox and binding carry over) before the identity
+		// checks see the stale binding.
 		const bound = bindings.get(conversationId);
 		if (allowRebind && bound && bound !== device) {
 			const oldSubs = registry.get(bound);
@@ -216,8 +225,15 @@ export function createConsoleHandler({
 		}
 
 		assertValidIdentity(device, conversationId);
-		mailboxStore.ensure(conversationId);
+		mailboxStore.ensure(ownerId);
 		signers.set(conversationId, signerSignPub);
+		deviceOwner.set(conversationId, ownerId);
+		let siblings = ownerDevices.get(ownerId);
+		if (!siblings) {
+			siblings = new Set();
+			ownerDevices.set(ownerId, siblings);
+		}
+		siblings.add(conversationId);
 
 		let subs = registry.get(device);
 		if (!subs) {
@@ -235,11 +251,14 @@ export function createConsoleHandler({
 		}
 
 		const peer = new ConsolePeer(
-			() => mailboxStore.ensure(conversationId),
+			// While the device is live, re-create an evicted box (deliveries survive a
+			// store sweep); once torn down, return undefined so a late push cannot
+			// resurrect an owner inbox the index no longer tracks.
+			() => (bindings.has(conversationId) ? mailboxStore.ensure(ownerId) : undefined),
 			device,
 			conversationId,
 			conversationId,
-			(sessionId) => recordInbound(conversationId, sessionId),
+			(sessionId) => recordInbound(ownerId, sessionId),
 		);
 		subs.set(conversationId, peer.asWs());
 		conversationRegistry.set(conversationId, peer.asWs());
@@ -247,12 +266,22 @@ export function createConsoleHandler({
 		return peer;
 	}
 
-	function removePeer(conversationId: string): void {
+	// Tear down a single device's peer state (registry sub, bindings, key, idempotency
+	// cache, conversation pointer, owner index). Does NOT touch the shared owner inbox;
+	// removePeer and the evict callback own the inbox lifecycle.
+	function teardownDevice(conversationId: string): void {
 		const device = bindings.get(conversationId);
 		bindings.delete(conversationId);
 		signers.delete(conversationId);
 		opCache.delete(conversationId);
-		mailboxStore.delete(conversationId);
+
+		const ownerId = deviceOwner.get(conversationId);
+		deviceOwner.delete(conversationId);
+		if (ownerId) {
+			const siblings = ownerDevices.get(ownerId);
+			siblings?.delete(conversationId);
+			if (siblings && siblings.size === 0) ownerDevices.delete(ownerId);
+		}
 
 		const conversationWs = conversationRegistry.get(conversationId);
 		if (conversationWs?.data.virtual) {
@@ -274,17 +303,29 @@ export function createConsoleHandler({
 		}
 	}
 
+	function removePeer(conversationId: string): void {
+		const ownerId = deviceOwner.get(conversationId);
+		teardownDevice(conversationId);
+		if (ownerId) {
+			// Release this device's watermark from the shared inbox, and delete the
+			// inbox only once its last device is gone (teardownDevice drops the entry).
+			mailboxStore.get(ownerId)?.forgetConsumer(conversationId);
+			if (!ownerDevices.has(ownerId)) mailboxStore.delete(ownerId);
+		}
+	}
+
 	async function dispatch(
 		op: ConsoleOp,
 		device: string,
 		conversationId: string,
+		ownerId: string,
 		opId: string,
 	): Promise<ConsoleOpResult> {
 		switch (op.kind) {
 			case "register": {
-				const box = mailboxStore.ensure(conversationId);
+				const box = mailboxStore.ensure(ownerId);
 				console.log(
-					`[console register] conv=${conversationId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
+					`[console register] conv=${conversationId.slice(0, 12)} owner=${ownerId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
 				);
 				return { device, gatewayId: localGatewayId, cursor: box.highWater, epoch: box.epoch };
 			}
@@ -324,13 +365,11 @@ export function createConsoleHandler({
 
 				// Canonical session id matching what routes.send composes, so the
 				// backgrounded-send path hands back the same id the in-time path would.
-				const expectedSession = SessionId.channel(
-					conversationId,
-					TeamAddress.local(localGatewayId, localTarget),
-				).key;
+				// Keyed by ownerId, so every device of the owner shares the one thread.
+				const expectedSession = SessionId.channel(ownerId, TeamAddress.local(localGatewayId, localTarget)).key;
 				const sendPromise = routes.send(FAKE_REQ, {
 					from: device,
-					fromConversationId: conversationId,
+					fromConversationId: ownerId,
 					to: op.to,
 					type: op.request_type,
 					effort: op.effort,
@@ -355,7 +394,15 @@ export function createConsoleHandler({
 					// a since-evicted conversation drops cleanly.
 					void sendPromise
 						.then(async (res) => {
-							if (res.ok) return;
+							if (res.ok) {
+								// Backgrounded success: mirror the sent message like the in-time path.
+								appendIfLive(
+									conversationId,
+									{ kind: "sent", session_id: expectedSession, opId, body: op.body, files: op.files },
+									`sent:${conversationId}:${opId}`,
+								);
+								return;
+							}
 							const json = (await res.json().catch(() => ({}))) as SendRouteJson;
 							appendIfLive(conversationId, {
 								kind: "reply",
@@ -370,6 +417,16 @@ export function createConsoleHandler({
 
 				const json = (await winner.json()) as SendRouteJson;
 				if (!winner.ok) throw new Error(json.error ?? "send failed");
+				// Mirror the owner's own outgoing message to all their devices (full two-way
+				// sync). The sender reconciles it against its optimistic row by opId; the
+				// owner's other devices render it under the same thread. The dedupeKey makes the
+				// echo idempotent across a gateway restart (the persisted seenKeys absorbs a
+				// reconcile re-send of the same opId), so no duplicate "you" row.
+				appendIfLive(
+					conversationId,
+					{ kind: "sent", session_id: expectedSession, opId, body: op.body, files: op.files },
+					`sent:${conversationId}:${opId}`,
+				);
 				return { session_id: json.session_id ?? "", status: json.status ?? "running" };
 			}
 
@@ -380,8 +437,8 @@ export function createConsoleHandler({
 				// recorded as inbound). Canonicalize via SessionId.parse so a bare
 				// session id matches the qualified key recorded on inbound delivery.
 				const canonicalRespondId = SessionId.parse(op.session_id, localGatewayId)?.key ?? op.session_id;
-				if (!mailboxStore.get(conversationId)?.canRespond(canonicalRespondId)) {
-					throw new Error(`Unknown session_id; you can only respond to a thread delivered to this device`);
+				if (!mailboxStore.get(ownerId)?.canRespond(canonicalRespondId)) {
+					throw new Error(`Unknown session_id; you can only respond to a thread delivered to you`);
 				}
 				const res = routes.respond(FAKE_REQ, {
 					session_id: canonicalRespondId,
@@ -401,7 +458,7 @@ export function createConsoleHandler({
 				// The pump runs frames concurrently, so a held poll blocks nothing,
 				// and retried polls just become additional waiters (reads are not
 				// opId-cached; the console dedupes entries by seq).
-				const box = mailboxStore.ensure(conversationId);
+				const box = mailboxStore.ensure(ownerId);
 				let snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				const hold = Math.min(op.holdMs ?? 0, HOLD_CAP_MS);
 				if (snap.entries.length === 0 && hold > 0) {
@@ -487,8 +544,9 @@ export function createConsoleHandler({
 			// Bind/refresh the peer on every frame so a send arriving before an
 			// explicit register still routes its replies back to the mailbox.
 			// Only a register op may rebind an install to a new device name / key.
-			ensurePeer(frame.device, frame.conversationId, frame.signerSignPub, frame.op.kind === "register");
-			const result = await dispatch(frame.op, frame.device, frame.conversationId, frame.opId);
+			const ownerId = ownerKeyId(frame.ownerSignPub);
+			ensurePeer(frame.device, frame.conversationId, frame.signerSignPub, ownerId, frame.op.kind === "register");
+			const result = await dispatch(frame.op, frame.device, frame.conversationId, ownerId, frame.opId);
 			return { ok: true, result };
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };

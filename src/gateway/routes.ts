@@ -654,13 +654,14 @@ export function createRoutes({
 
 		let pushedViaConversation = false;
 		if (deliverResult.fromConversationId) {
-			// A console-bound reply is delivered by APPENDING to the device's durable
-			// mailbox by data, independent of any live ConsolePeer. After an gateway
+			// A console-bound reply is delivered by APPENDING to the owner's durable
+			// mailbox by data, independent of any live ConsolePeer. For a console job
+			// `fromConversationId` is the OWNER id (the inbox is shared by all the
+			// owner's devices); a real channel agent's is its device conversation id,
+			// which has no mailbox and takes the live-WS branch below. After a gateway
 			// restart the mailbox is restored but the virtual peer is rebuilt only on
 			// the console's next frame, so routing the reply through the live peer would
-			// drop it. The mailbox is the delivery truth; the peer is a wake hint. A
-			// mailbox existing for this conversation is the console signal (a real
-			// channel agent has none and takes the live-WS branch below).
+			// drop it. The mailbox is the delivery truth; the peer is a wake hint.
 			const mailbox = mailboxStore?.get(deliverResult.fromConversationId);
 			if (mailbox) {
 				mailbox.append({

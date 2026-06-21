@@ -75,6 +75,13 @@
 			"conversationId": "a/b",
 			"targetCanonical": "host/team",
 			"key": "conv:a/b:host/team"
+		},
+		{
+			"input": "conv:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae:switchboard/gateway",
+			"localGatewayId": "switchboard",
+			"conversationId": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+			"targetCanonical": "switchboard/gateway",
+			"key": "conv:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae:switchboard/gateway"
 		}
 	],
 	"notice": [
