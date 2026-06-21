@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
+import { resolveLocalDomainId } from "../shared/domain-id.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/host-id.js";
 import type { HostOp, HostOpResult } from "../shared/host-op.js";
@@ -46,6 +47,8 @@ export async function startGateway(): Promise<void> {
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);
 	const localGatewayId = resolveLocalGatewayId();
 	console.log(`[gateway] Gateway id: ${localGatewayId}`);
+	const localDomainId = resolveLocalDomainId();
+	console.log(`[gateway] Domain id: ${localDomainId}`);
 	const HEARTBEAT_INTERVAL_MS = 30000;
 	const MISSED_PINGS_LIMIT = 2;
 
@@ -247,6 +250,7 @@ export async function startGateway(): Promise<void> {
 			headers: connection.headers,
 			tls: connection.tls,
 			gatewayId: localGatewayId,
+			domainId: localDomainId,
 			onConsoleRelay: (frame) => {
 				handleConsoleRelay?.(frame);
 			},
@@ -355,7 +359,7 @@ export async function startGateway(): Promise<void> {
 		registry,
 		conversationRegistry,
 		store,
-		config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localGatewayId },
+		config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localGatewayId, localDomainId },
 		tryWakeTeam,
 		offlineCatalog,
 		knownTeamPaths,

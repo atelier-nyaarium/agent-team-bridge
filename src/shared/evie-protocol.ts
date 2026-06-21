@@ -1,4 +1,4 @@
-// SYNC-HASH: 856c7b0990775d94c7a66539ccae8660
+// SYNC-HASH: 93d8340ee6fd08b0888edc444eec5e33
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -122,6 +122,10 @@ export const FEDERATION_PROTOCOL_VERSION = 1;
  * a Domain trust anchor. */
 export const GatewayRegisterParamsSchema = z.object({
 	gatewayId: z.string().min(1).max(64),
+	// This Gateway's Domain id (multi-tenant evie). Optional and min(1) when present; an
+	// ABSENT value resolves to the "home" Domain at the consumer, so a pre-multi-tenant
+	// Gateway that sends none lands in "home" unchanged.
+	domainId: z.string().min(1).max(64).optional(),
 	protocolVersion: z.number().int().positive(),
 	signPub: z.string().min(1).optional(),
 	boxPub: z.string().min(1).optional(),

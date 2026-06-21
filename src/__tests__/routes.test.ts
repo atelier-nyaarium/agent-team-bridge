@@ -25,7 +25,12 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		registry,
 		conversationRegistry,
 		store,
-		config: { LOG_PATH: "/tmp/test-debug.log", RESPONSE_TIMEOUT_MS: 500, localGatewayId: "test-host" },
+		config: {
+			LOG_PATH: "/tmp/test-debug.log",
+			RESPONSE_TIMEOUT_MS: 500,
+			localGatewayId: "test-host",
+			localDomainId: "home",
+		},
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
 		offlineCatalog,
 		knownTeamPaths,

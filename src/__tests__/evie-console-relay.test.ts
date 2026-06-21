@@ -52,6 +52,7 @@ describe("evieClient console relay", () => {
 				url: `ws://localhost:${evie?.port}`,
 				headers: { Authorization: "Bearer test-token" },
 				gatewayId: "test-host",
+				domainId: "home",
 				onConsoleRelay: resolve,
 			});
 		});
@@ -110,6 +111,7 @@ describe("evieClient console relay", () => {
 			url: `ws://localhost:${evie.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",
+			domainId: "home",
 		});
 		await new Promise<void>((resolve) => {
 			const t = setInterval(() => {

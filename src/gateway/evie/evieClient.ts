@@ -31,6 +31,9 @@ export interface EvieClientConfig {
 	// This Gateway's id, registered with the Router on connect so cross-Gateway frames
 	// can be routed to this Gateway.
 	gatewayId: string;
+	// This Gateway's Domain id (multi-tenant evie), sent on register so the Router keys
+	// the connection by (domainId, gatewayId). "home" for a single-tenant Gateway.
+	domainId: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	// The relay pump owns full ConsoleRelayFrameSchema validation; the envelope
 	// union only routes by type, so the frame travels as unknown.
@@ -101,6 +104,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			// Re-runs on every reconnect (the Router re-keys gateway id -> socket).
 			void callTool("gateway_register", {
 				gatewayId: config.gatewayId,
+				domainId: config.domainId,
 				protocolVersion: FEDERATION_PROTOCOL_VERSION,
 				...(config.buildRegisterAuth?.() ?? {}),
 			}).then((res) => {
