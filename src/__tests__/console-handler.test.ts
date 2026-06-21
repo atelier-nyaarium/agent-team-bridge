@@ -5,22 +5,31 @@ import { ConsolePeer } from "../gateway/console/consolePeer.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../gateway/websocket.js";
 import type { ConsoleOp, OpenedConsoleFrame } from "../shared/console-protocol.js";
 import { DeviceMailbox, DeviceMailboxStore } from "../shared/device-mailbox.js";
+import { ownerKeyId } from "../shared/owner-id.js";
 
 function jsonRes(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+// The default owner for test frames. The mailbox is keyed by this (via ownerKeyId),
+// so every default frame shares one owner inbox; pass a different ownerSignPub to
+// simulate a second owner.
+const OWNER_PUB = "owner-pub";
+const OWNER = ownerKeyId(OWNER_PUB);
+
 // The handler operates on an OPENED frame (the pump unseals the wire frame first),
 // so tests construct that directly. A stable signer per conversation satisfies the
-// install binding; tests that exercise the binding pass an explicit signer.
+// install binding; tests that exercise the binding pass an explicit signer. All
+// frames share one owner by default (the inbox is owner-keyed).
 function frame(
 	op: ConsoleOp,
 	opId = "op1",
 	device = "pixel",
 	conversationId = "conv-pixel",
 	signerSignPub = `signer-${conversationId}`,
+	ownerSignPub = OWNER_PUB,
 ): OpenedConsoleFrame {
-	return { opId, signerSignPub, conversationId, device, op };
+	return { opId, signerSignPub, ownerSignPub, conversationId, device, op };
 }
 
 /** A minimal non-virtual socket standing in for a real devcontainer connection. */
@@ -203,16 +212,48 @@ describe("createConsoleHandler", () => {
 		expect(subs.size).toBe(1);
 	});
 
-	it("two devices with the same name get separate subs and mailboxes", async () => {
+	it("two installs of one owner share the owner inbox but keep separate subs", async () => {
 		const h = makeHarness();
 		await h.handler.handleFrame(frame({ kind: "register" }, "op1", "pixel", "conv-1"));
 		await h.handler.handleFrame(frame({ kind: "register" }, "op2", "pixel", "conv-2"));
 
 		const subs = h.registry.get("pixel");
 		expect(subs?.size).toBe(2);
-		expect(h.mailboxStore.get("conv-1")).toBeDefined();
-		expect(h.mailboxStore.get("conv-2")).toBeDefined();
-		expect(h.mailboxStore.get("conv-1")).not.toBe(h.mailboxStore.get("conv-2"));
+		// One owner -> one shared inbox, not one box per install.
+		expect(h.mailboxStore.size).toBe(1);
+		expect(h.mailboxStore.get(OWNER)).toBeDefined();
+	});
+
+	it("a reply appended once to the owner inbox is drained by every device of that owner", async () => {
+		const h = makeHarness();
+		await h.handler.handleFrame(frame({ kind: "register" }, "op1", "pixel", "conv-1"));
+		await h.handler.handleFrame(frame({ kind: "register" }, "op2", "tablet", "conv-2", "signer-conv-2"));
+
+		// The agent's reply lands once in the shared owner inbox.
+		h.mailboxStore.get(OWNER)?.append({ kind: "reply", session_id: "s", body: "answer" });
+
+		const a = (await h.handler.handleFrame(frame({ kind: "poll" }, "pa", "pixel", "conv-1"))).result as {
+			entries: { body?: string }[];
+		};
+		const b = (await h.handler.handleFrame(frame({ kind: "poll" }, "pb", "tablet", "conv-2", "signer-conv-2")))
+			.result as { entries: { body?: string }[] };
+		// Both phones see it, each draining with its own cursor.
+		expect(a.entries.map((e) => e.body)).toEqual(["answer"]);
+		expect(b.entries.map((e) => e.body)).toEqual(["answer"]);
+	});
+
+	it("a different owner gets a separate inbox and never sees another owner's reply", async () => {
+		const h = makeHarness();
+		await h.handler.handleFrame(frame({ kind: "register" }, "op1", "pixel", "conv-1"));
+		await h.handler.handleFrame(frame({ kind: "register" }, "op2", "nexus", "conv-2", "signer-conv-2", "owner-2"));
+		expect(h.mailboxStore.size).toBe(2);
+
+		h.mailboxStore.get(OWNER)?.append({ kind: "reply", session_id: "s", body: "for-owner-1" });
+
+		const poll2 = (
+			await h.handler.handleFrame(frame({ kind: "poll" }, "p2", "nexus", "conv-2", "signer-conv-2", "owner-2"))
+		).result as { entries: unknown[] };
+		expect(poll2.entries).toHaveLength(0);
 	});
 
 	it("list_teams surfaces the host-agent, excludes the device and the cli host daemon", async () => {
@@ -232,7 +273,7 @@ describe("createConsoleHandler", () => {
 		expect(reply.result).toEqual({ session_id: "conv:host:team-a", status: "running" });
 		expect(h.sendCalls[0]).toMatchObject({
 			from: "pixel",
-			fromConversationId: "conv-pixel",
+			fromConversationId: OWNER,
 			to: "team-a",
 			body: "hello",
 			// Console sends must never enter the route's CLI branch (random session ids).
@@ -383,7 +424,7 @@ describe("createConsoleHandler", () => {
 		await h.handler.handleFrame(frame({ kind: "register" }));
 		// Notices are appended directly to the mailbox (broadcast route), never via
 		// the peer push path, so they are not recorded as inbound sessions.
-		h.mailboxStore.get("conv-pixel")?.append({
+		h.mailboxStore.get(OWNER)?.append({
 			kind: "notice",
 			session_id: "notice:recipe-app",
 			from: "recipe-app",
@@ -415,7 +456,7 @@ describe("createConsoleHandler", () => {
 		expect(second.entries).toHaveLength(0);
 	});
 
-	it("removePeer tears down only this install", async () => {
+	it("removePeer tears down one install; the owner inbox goes with the last device", async () => {
 		const h = makeHarness();
 		await h.handler.handleFrame(frame({ kind: "register" }, "op1", "pixel", "conv-1"));
 		await h.handler.handleFrame(frame({ kind: "register" }, "op2", "pixel", "conv-2"));
@@ -423,11 +464,13 @@ describe("createConsoleHandler", () => {
 		h.handler.removePeer("conv-1");
 		expect(h.registry.get("pixel")?.size).toBe(1);
 		expect(h.conversationRegistry.get("conv-1")).toBeUndefined();
-		expect(h.mailboxStore.get("conv-1")).toBeUndefined();
-		expect(h.mailboxStore.get("conv-2")).toBeDefined();
+		// The shared owner inbox survives while conv-2 still uses it.
+		expect(h.mailboxStore.get(OWNER)).toBeDefined();
 
 		h.handler.removePeer("conv-2");
 		expect(h.registry.get("pixel")).toBeUndefined();
+		// Last device gone -> the owner inbox is released.
+		expect(h.mailboxStore.get(OWNER)).toBeUndefined();
 	});
 
 	it("removePeer never evicts a co-resident real team", async () => {
@@ -494,18 +537,18 @@ describe("createConsoleHandler", () => {
 		const reply = await handler.handleFrame(frame({ kind: "send", to: "asleep-team", body: "hi" }));
 		expect(reply.ok).toBe(true);
 		// The deterministic session id carries the canonical host-qualified target.
-		expect(reply.result).toEqual({ session_id: "conv:conv-pixel:test-host/asleep-team", status: "running" });
+		expect(reply.result).toEqual({ session_id: `conv:${OWNER}:test-host/asleep-team`, status: "running" });
 	});
 
 	it("TTL sweep evicts the peer together with its mailbox", async () => {
 		const h = makeHarness();
 		await h.handler.handleFrame(frame({ kind: "register" }));
 
-		const box = h.mailboxStore.get("conv-pixel");
+		const box = h.mailboxStore.get(OWNER);
 		if (box) box.lastActivity = Date.now() - 7_200_000;
 		h.mailboxStore.sweepExpired();
 
-		expect(h.mailboxStore.get("conv-pixel")).toBeUndefined();
+		expect(h.mailboxStore.get(OWNER)).toBeUndefined();
 		expect(h.registry.get("pixel")).toBeUndefined();
 		expect(h.conversationRegistry.get("conv-pixel")).toBeUndefined();
 
@@ -520,7 +563,7 @@ describe("createConsoleHandler", () => {
 		const peer = h.registry.get("pixel")?.get("conv-pixel") as unknown as ServerWebSocket<WsData>;
 
 		// Simulate the store entry vanishing out from under a live peer.
-		h.mailboxStore.delete("conv-pixel");
+		h.mailboxStore.delete(OWNER);
 		peer.send(JSON.stringify({ type: "response_push", session_id: "s", response: "after-sweep" }));
 
 		const reply = await h.handler.handleFrame(frame({ kind: "poll" }, "op2"));
@@ -529,10 +572,25 @@ describe("createConsoleHandler", () => {
 		expect(result.entries[0].body).toBe("after-sweep");
 	});
 
+	it("a delivery after removePeer does not resurrect an orphan owner inbox", async () => {
+		const h = makeHarness();
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const peer = h.registry.get("pixel")?.get("conv-pixel") as unknown as ServerWebSocket<WsData>;
+
+		h.handler.removePeer("conv-pixel"); // last device gone -> owner inbox released
+		expect(h.mailboxStore.get(OWNER)).toBeUndefined();
+
+		// A late push to the now-stale peer must not re-create the box (the index would
+		// never reap it), so the accessor returns undefined and the append no-ops.
+		peer.send(JSON.stringify({ type: "response_push", session_id: "s", response: "late" }));
+		expect(h.mailboxStore.get(OWNER)).toBeUndefined();
+		expect(h.mailboxStore.size).toBe(0);
+	});
+
 	it("a register op renames the device, preserving the mailbox", async () => {
 		const h = makeHarness();
 		await h.handler.handleFrame(frame({ kind: "register" }, "op1", "pixel", "conv-1"));
-		h.mailboxStore.get("conv-1")?.append({ kind: "message", session_id: "s", body: "kept" });
+		h.mailboxStore.get(OWNER)?.append({ kind: "message", session_id: "s", body: "kept" });
 
 		const reply = await h.handler.handleFrame(frame({ kind: "register" }, "op2", "pixel-9", "conv-1"));
 		expect(reply.ok).toBe(true);
@@ -574,7 +632,7 @@ describe("createConsoleHandler", () => {
 		});
 
 		const reply = await handler.handleFrame(frame({ kind: "send", to: "asleep", body: "hi" }));
-		expect(reply.result).toEqual({ session_id: "conv:conv-pixel:test-host/asleep", status: "running" });
+		expect(reply.result).toEqual({ session_id: `conv:${OWNER}:test-host/asleep`, status: "running" });
 
 		resolveSend?.(jsonRes({ error: 'Team "asleep" is not connected' }, 404));
 		await new Promise((r) => setTimeout(r, 10));
@@ -584,7 +642,7 @@ describe("createConsoleHandler", () => {
 		expect(entries).toHaveLength(1);
 		expect(entries[0]).toMatchObject({
 			status: "error",
-			session_id: "conv:conv-pixel:test-host/asleep",
+			session_id: `conv:${OWNER}:test-host/asleep`,
 		});
 		expect(entries[0].body).toContain("not connected");
 	});
@@ -616,7 +674,7 @@ describe("createConsoleHandler", () => {
 		});
 
 		const reply = await handler.handleFrame(frame({ kind: "send", to: "sleepy-cli", body: "hi" }));
-		expect(reply.result).toEqual({ session_id: "conv:conv-pixel:test-host/sleepy-cli", status: "running" });
+		expect(reply.result).toEqual({ session_id: `conv:${OWNER}:test-host/sleepy-cli`, status: "running" });
 
 		resolveSend?.(
 			jsonRes(
@@ -629,7 +687,7 @@ describe("createConsoleHandler", () => {
 		const poll = await handler.handleFrame(frame({ kind: "poll" }, "op2"));
 		const entries = (poll.result as { entries: { body?: string; status?: string; session_id: string }[] }).entries;
 		expect(entries).toHaveLength(1);
-		expect(entries[0]).toMatchObject({ session_id: "conv:conv-pixel:test-host/sleepy-cli", status: "error" });
+		expect(entries[0]).toMatchObject({ session_id: `conv:${OWNER}:test-host/sleepy-cli`, status: "error" });
 		expect(entries[0].body).toContain("CLI-mode");
 	});
 
@@ -659,9 +717,11 @@ describe("createConsoleHandler", () => {
 			frame({ kind: "send", to: "team-a", body: "B" }, "op-x", "tablet", "conv-b"),
 		);
 		expect(a.ok && b.ok).toBe(true);
+		// opCache is per device-conversation, so the same opId on two installs does not
+		// cross-replay even though both installs share the one owner inbox key.
 		expect(h.sendCalls).toHaveLength(2);
-		expect(h.sendCalls[0]).toMatchObject({ fromConversationId: "conv-a", body: "A" });
-		expect(h.sendCalls[1]).toMatchObject({ fromConversationId: "conv-b", body: "B" });
+		expect(h.sendCalls[0]).toMatchObject({ fromConversationId: OWNER, body: "A" });
+		expect(h.sendCalls[1]).toMatchObject({ fromConversationId: OWNER, body: "B" });
 	});
 
 	it("a failed send is not cached; a retry re-runs once the target is back", async () => {
@@ -726,11 +786,11 @@ describe("createConsoleHandler", () => {
 		expect(first.cursor).toBe(3);
 
 		// The mailbox is evicted (idle) and a new instance is created on the next frame.
-		const box = h.mailboxStore.get("conv-pixel");
+		const box = h.mailboxStore.get(OWNER);
 		if (box) box.lastActivity = Date.now() - 7_200_000;
 		h.mailboxStore.sweepExpired();
 
-		const peer2 = h.handler.ensurePeer("pixel", "conv-pixel", "signer-conv-pixel");
+		const peer2 = h.handler.ensurePeer("pixel", "conv-pixel", "signer-conv-pixel", OWNER);
 		peer2.send(JSON.stringify({ type: "response_push", session_id: "s", response: "post-reset" }));
 
 		// A stale cursor (3) must NOT ack away the new instance's seq=1 entry.

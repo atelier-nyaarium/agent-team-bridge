@@ -312,6 +312,19 @@ describe("DeviceMailbox slowest-device watermark", () => {
 		expect(box.drain(0).dropped).toBe(0);
 	});
 
+	it("a freshly-joined consumer's unacked mail is not trimmed by a sibling's ack", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "r1"));
+		// Device B's first poll (cursor 0) receives r1 but acks nothing yet.
+		expect(box.drain(0, 1, "B").entries.map((e) => e.body)).toEqual(["r1"]);
+		// Device A drains and acks r1. Without B's floor registered, this would trim r1.
+		box.drain(1, 1, "A");
+		// r1 is retained for B and re-handed on its retry, with no dropped-gap.
+		const b2 = box.drain(0, 1, "B");
+		expect(b2.entries.map((e) => e.body)).toEqual(["r1"]);
+		expect(b2.dropped).toBe(0);
+	});
+
 	it("forgetting the slow device advances the watermark", () => {
 		const box = new DeviceMailbox(1);
 		for (const b of ["a", "b", "c", "d", "e"]) box.append(message("s1", b));

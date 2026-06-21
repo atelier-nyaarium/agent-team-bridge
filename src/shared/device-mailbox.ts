@@ -223,7 +223,13 @@ export class DeviceMailbox {
 	drain(cursor = 0, epoch?: number, consumerId?: string): MailboxSnapshot {
 		// Mark the device alive on every poll (even a cursor-0 first poll that does not
 		// yet advance a watermark), so sweepIdleConsumers only forgets a truly silent one.
-		if (consumerId !== undefined) this.consumerLastSeen.set(consumerId, Date.now());
+		// Register its watermark floor at 0 on first sight too: a freshly-joined consumer
+		// has acked nothing, so a sibling consumer's ack must not trim past mail this one
+		// received but has not yet acked. advanceConsumer raises the floor as it acks.
+		if (consumerId !== undefined) {
+			this.consumerLastSeen.set(consumerId, Date.now());
+			if (!this.consumerCursors.has(consumerId)) this.consumerCursors.set(consumerId, 0);
+		}
 		// A cursor beyond highWater is proof of a stale instance no matter what
 		// the epoch claims (this instance never issued it); honoring it would ack
 		// away entries the console has never seen.
@@ -371,10 +377,12 @@ export class DeviceMailbox {
 }
 
 /**
- * Owns one DeviceMailbox per per-install conversation id. Bounded two ways so an
- * attacker minting distinct ids cannot exhaust memory: a store-wide device cap
- * (LRU eviction beyond it) and an idle TTL sweep. Both eviction paths fire
- * onEvict so the owner tears down the associated peer state in lockstep.
+ * Owns one DeviceMailbox per opaque recipient key. The console handler keys it by the
+ * Domain ownerId, so one inbox serves all an owner's devices, each tracked as a
+ * `consumerId` cursor within the box. Bounded two ways so an attacker minting distinct
+ * keys cannot exhaust memory: a store-wide cap (LRU eviction beyond it) and an idle TTL
+ * sweep. Both eviction paths fire onEvict so the handler tears down the associated peer
+ * state in lockstep.
  */
 export class DeviceMailboxStore {
 	private mailboxes = new Map<string, DeviceMailbox>();
