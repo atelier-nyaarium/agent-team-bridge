@@ -163,10 +163,10 @@ export function createConsoleHandler({
 	/** Append only if the device is still live, so a late continuation cannot
 	 * resurrect a torn-down install. Routes to the owner inbox the device shares;
 	 * gated on device liveness, so a rename (same conversation) still delivers. */
-	function appendIfLive(conversationId: string, entry: MailboxInput): void {
+	function appendIfLive(conversationId: string, entry: MailboxInput, dedupeKey?: string): void {
 		const ownerId = deviceOwner.get(conversationId);
 		if (!ownerId || !bindings.has(conversationId)) return;
-		mailboxStore.get(ownerId)?.append(entry);
+		mailboxStore.get(ownerId)?.append(entry, dedupeKey);
 	}
 
 	function assertValidIdentity(device: string, conversationId: string): void {
@@ -394,7 +394,15 @@ export function createConsoleHandler({
 					// a since-evicted conversation drops cleanly.
 					void sendPromise
 						.then(async (res) => {
-							if (res.ok) return;
+							if (res.ok) {
+								// Backgrounded success: mirror the sent message like the in-time path.
+								appendIfLive(
+									conversationId,
+									{ kind: "sent", session_id: expectedSession, opId, body: op.body, files: op.files },
+									`sent:${conversationId}:${opId}`,
+								);
+								return;
+							}
 							const json = (await res.json().catch(() => ({}))) as SendRouteJson;
 							appendIfLive(conversationId, {
 								kind: "reply",
@@ -409,6 +417,16 @@ export function createConsoleHandler({
 
 				const json = (await winner.json()) as SendRouteJson;
 				if (!winner.ok) throw new Error(json.error ?? "send failed");
+				// Mirror the owner's own outgoing message to all their devices (full two-way
+				// sync). The sender reconciles it against its optimistic row by opId; the
+				// owner's other devices render it under the same thread. The dedupeKey makes the
+				// echo idempotent across a gateway restart (the persisted seenKeys absorbs a
+				// reconcile re-send of the same opId), so no duplicate "you" row.
+				appendIfLive(
+					conversationId,
+					{ kind: "sent", session_id: expectedSession, opId, body: op.body, files: op.files },
+					`sent:${conversationId}:${opId}`,
+				);
 				return { session_id: json.session_id ?? "", status: json.status ?? "running" };
 			}
 

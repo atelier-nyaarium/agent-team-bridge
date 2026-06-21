@@ -256,6 +256,25 @@ describe("createConsoleHandler", () => {
 		expect(poll2.entries).toHaveLength(0);
 	});
 
+	it("a send mirrors a `sent` echo to the owner inbox for every device of the owner", async () => {
+		const h = makeHarness();
+		await h.handler.handleFrame(frame({ kind: "register" }, "op1", "pixel", "conv-1"));
+		await h.handler.handleFrame(frame({ kind: "register" }, "op2", "tablet", "conv-2", "signer-conv-2"));
+
+		await h.handler.handleFrame(frame({ kind: "send", to: "team-a", body: "hi all" }, "send-1", "pixel", "conv-1"));
+
+		// The sending device sees its own echo, tagged with the originating opId so it can
+		// reconcile its optimistic row instead of double-rendering.
+		const a = (await h.handler.handleFrame(frame({ kind: "poll" }, "pa", "pixel", "conv-1"))).result as {
+			entries: { kind: string; body?: string; opId?: string }[];
+		};
+		expect(a.entries.at(-1)).toMatchObject({ kind: "sent", body: "hi all", opId: "send-1" });
+		// The owner's other device sees the same outgoing message.
+		const b = (await h.handler.handleFrame(frame({ kind: "poll" }, "pb", "tablet", "conv-2", "signer-conv-2")))
+			.result as { entries: { kind: string; body?: string }[] };
+		expect(b.entries.some((e) => e.kind === "sent" && e.body === "hi all")).toBe(true);
+	});
+
 	it("list_teams surfaces the host-agent, excludes the device and the cli host daemon", async () => {
 		const h = makeHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "list_teams" }));
