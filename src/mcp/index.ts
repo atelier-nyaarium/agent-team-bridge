@@ -12,6 +12,7 @@ import { registerBridgeSend } from "./bridge/bridgeSend.js";
 import { closeRouter, connectToRouter, initBridge, setChannelServer, setIsMainOrLeadAgent } from "./bridge/helpers.js";
 import { detectAgentType, registerBridgeTools } from "./bridge/registerBridgeTools.js";
 import { emitChannelNotification } from "./channel/channelNotify.js";
+import { registerChannelReply } from "./channel/channelReply.js";
 import { registerHumanTools } from "./channel/humanTools.js";
 import { registerConnectorTools } from "./connector/connectorTools.js";
 import { setAuthToken, startListener, stopListener } from "./connector/listener.js";
@@ -150,6 +151,10 @@ export async function startMcp(): Promise<void> {
 		registerBridgeSend(mcpServer);
 		registerBridgeDiscover(mcpServer);
 		registerHumanTools(mcpServer);
+		// The console reaches the host-agent (the "gateway" channel identity) by send. The host
+		// receives the channel_push and is told to answer with channel_reply, so it must register
+		// that tool too - without it the orchestrator gets the message but cannot reply.
+		registerChannelReply(mcpServer);
 		setChannelServer(mcpServer.server);
 
 		// Evie tool proxy detached (see src/mcp/evie/evieTools.ts, kept @unused for
