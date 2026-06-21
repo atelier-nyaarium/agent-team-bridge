@@ -361,3 +361,98 @@ describe("DeviceMailbox durable respondability", () => {
 		expect(restored.canRespond("conv:never:host/team")).toBe(false);
 	});
 });
+
+describe("DeviceMailbox idle-consumer sweep", () => {
+	it("forgets nothing while every consumer is recent", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "a"));
+		box.drain(1, 1, "consoleA");
+		expect(box.sweepIdleConsumers(Date.now(), 60_000)).toBe(0);
+		expect(box.minCursor()).toBe(1);
+	});
+
+	it("releases a dead consumer while keeping a recently active one, resuming compaction", async () => {
+		const box = new DeviceMailbox(1);
+		for (const b of ["a", "b", "c", "d", "e"]) box.append(message("s1", b));
+		box.drain(2, 1, "consoleB"); // slow; about to go silent, pins minCursor at 2
+		await new Promise((r) => setTimeout(r, 30));
+		box.drain(5, 1, "consoleA"); // active, caught up
+		// ttl shorter than B's idle gap (~30ms) but longer than A's (~0ms): only B goes.
+		expect(box.sweepIdleConsumers(Date.now(), 15)).toBe(1);
+		expect(box.minCursor()).toBe(5); // A is now the slowest live consumer
+		expect(box.size).toBe(0); // sweep re-trims once the dead consumer is released
+	});
+
+	it("a forgotten consumer is re-tracked on its next poll", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "a"));
+		box.drain(1, 1, "consoleA");
+		expect(box.sweepIdleConsumers(Date.now() + 120_000, 60_000)).toBe(1);
+		// It comes back: a fresh poll re-registers its cursor and idle clock.
+		box.append(message("s1", "b"));
+		box.drain(2, 1, "consoleA");
+		expect(box.minCursor()).toBe(2);
+		expect(box.sweepIdleConsumers(Date.now(), 60_000)).toBe(0);
+	});
+
+	it("a cursor-0 first poll registers the idle clock without a watermark", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "a"));
+		box.drain(0, 1, "consoleA"); // first poll: marks alive but acks nothing
+		expect(box.minCursor()).toBe(0); // no watermark cursor registered yet
+		// The idle clock WAS registered, so a far-future sweep still forgets it.
+		expect(box.sweepIdleConsumers(Date.now() + 120_000, 60_000)).toBe(1);
+	});
+
+	it("forgetConsumer clears the idle clock too, so a later sweep does not re-forget it", () => {
+		const box = new DeviceMailbox(1);
+		box.append(message("s1", "a"));
+		box.drain(1, 1, "consoleA"); // sets both the cursor and the idle clock
+		box.forgetConsumer("consoleA");
+		expect(box.sweepIdleConsumers(Date.now() + 120_000, 60_000)).toBe(0);
+	});
+
+	it("snapshot writes consumerLastSeen and fromSnapshot honors it over the seed fallback", () => {
+		const box = new DeviceMailbox(3);
+		box.append(message("s1", "a"));
+		box.drain(1, 3, "consoleA"); // sets the cursor and the idle clock
+		const snap = box.snapshot();
+		expect(snap.consumerLastSeen?.some(([k]) => k === "consoleA")).toBe(true);
+		// Diverge the persisted clock (ancient) from lastActivity (now). If fromSnapshot
+		// honors the persisted value, consoleA is idle and gets forgotten; if it wrongly
+		// seeded from lastActivity it would look fresh and survive. Asserting it is
+		// forgotten pins the round-trip, which an equal lastSeen==lastActivity could not.
+		snap.consumerLastSeen = [["consoleA", 1000]];
+		snap.lastActivity = Date.now();
+		const restored = DeviceMailbox.fromSnapshot(snap);
+		expect(restored.sweepIdleConsumers(Date.now(), 3_600_000)).toBe(1);
+	});
+
+	it("an older snapshot without consumerLastSeen seeds the clock from lastActivity", () => {
+		const box = new DeviceMailbox(3);
+		box.append(message("s1", "a"));
+		box.advanceConsumer("consoleA", 1);
+		const snap = box.snapshot();
+		snap.consumerLastSeen = undefined; // simulate a pre-upgrade snapshot
+		const restored = DeviceMailbox.fromSnapshot(snap);
+		// Seeded ~now, so not idle yet, but idle far in the future.
+		expect(restored.sweepIdleConsumers(Date.now(), 60_000)).toBe(0);
+		expect(restored.sweepIdleConsumers(Date.now() + 120_000, 60_000)).toBe(1);
+	});
+});
+
+describe("DeviceMailboxStore idle-consumer sweep", () => {
+	it("sweepExpired releases idle consumers on a still-live inbox", async () => {
+		const store = new DeviceMailboxStore({ ttlMs: 20 });
+		const box = store.ensure("ownerX");
+		box.append(message("s1", "a"));
+		box.append(message("s1", "b"));
+		box.drain(1, box.epoch, "consoleB"); // slow; will go idle
+		await new Promise((r) => setTimeout(r, 40));
+		box.drain(2, box.epoch, "consoleA"); // active
+		box.touch(); // keep the whole inbox alive so it is not evicted outright
+		expect(store.sweepExpired()).toBe(0); // box itself not expired
+		expect(store.get("ownerX")).toBe(box);
+		expect(box.minCursor()).toBe(2); // consoleB forgotten, consoleA is the watermark
+	});
+});

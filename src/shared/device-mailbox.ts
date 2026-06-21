@@ -24,6 +24,9 @@ export interface MailboxSnapshotState {
 	// deviceId -> acked seq, so the slowest-device watermark survives a deploy
 	// (else a restart resets it and re-broadens retention). Optional.
 	consumerCursors?: Array<[string, number]>;
+	// deviceId -> last drain time (ms), so a consumer's idle clock survives a restart
+	// instead of resetting (which would delay forgetting a dead device). Optional.
+	consumerLastSeen?: Array<[string, number]>;
 	// session ids the device received and may therefore respond to. Persisted so a
 	// thread delivered before a restart stays respondable after it. Optional.
 	respondableSessions?: string[];
@@ -76,6 +79,11 @@ function mintEpoch(): number {
  * same conversation after eviction. Seq restarts at 1 in a new instance, so a
  * console holding a stale (larger) cursor must reset it when the epoch changes;
  * otherwise its cursor would silently ack away the new instance's first entries.
+ *
+ * One inbox can be drained by several devices, each a consumer with its own acked
+ * cursor. Compaction (trimToMinCursor) only removes entries the slowest consumer
+ * has acked, so a fast device never strands a slow one. A consumer idle past its
+ * TTL is released by sweepIdleConsumers so a departed device cannot pin compaction.
  */
 export class DeviceMailbox {
 	private entries: MailboxEntry[] = [];
@@ -90,6 +98,10 @@ export class DeviceMailbox {
 	// only to min(consumerCursors), so a faster device cannot ack away entries a
 	// slower device of the same recipient has not yet drained. Persisted.
 	private consumerCursors = new Map<string, number>();
+	// deviceId -> last drain time (ms). A consumer idle past the store TTL is dropped
+	// by sweepIdleConsumers so a departed device stops pinning the watermark forever.
+	// Persisted so the idle clock is not reset to "fresh" by a gateway restart.
+	private consumerLastSeen = new Map<string, number>();
 	// session ids this device received, so the console may only respond to a thread
 	// actually delivered to it. Durable (in the snapshot) so respondability survives
 	// a restart, instead of the console being told "Unknown session_id" after a deploy.
@@ -209,6 +221,9 @@ export class DeviceMailbox {
 	 * against the previous total (or by any non-contiguous seq jump).
 	 */
 	drain(cursor = 0, epoch?: number, consumerId?: string): MailboxSnapshot {
+		// Mark the device alive on every poll (even a cursor-0 first poll that does not
+		// yet advance a watermark), so sweepIdleConsumers only forgets a truly silent one.
+		if (consumerId !== undefined) this.consumerLastSeen.set(consumerId, Date.now());
 		// A cursor beyond highWater is proof of a stale instance no matter what
 		// the epoch claims (this instance never issued it); honoring it would ack
 		// away entries the console has never seen.
@@ -262,6 +277,22 @@ export class DeviceMailbox {
 	 * advance past it instead of being pinned forever by an abandoned device. */
 	forgetConsumer(consumerId: string): void {
 		this.consumerCursors.delete(consumerId);
+		this.consumerLastSeen.delete(consumerId);
+	}
+
+	/** Forget every consumer idle past ttlMs, then re-trim. A departed device
+	 * otherwise pins minCursor() at its last (or zero) cursor and stops compaction
+	 * for the live devices that share this inbox. Returns how many were forgotten. */
+	sweepIdleConsumers(now: number, ttlMs: number): number {
+		let forgotten = 0;
+		for (const [consumerId, lastSeen] of this.consumerLastSeen) {
+			if (now - lastSeen > ttlMs) {
+				this.forgetConsumer(consumerId);
+				forgotten++;
+			}
+		}
+		if (forgotten > 0) this.trimToMinCursor();
+		return forgotten;
 	}
 
 	/** Remember a session id delivered to this device (FIFO-capped) so a later
@@ -303,6 +334,7 @@ export class DeviceMailbox {
 			entries: [...this.entries],
 			seenKeys: [...this.seenKeys],
 			consumerCursors: [...this.consumerCursors],
+			consumerLastSeen: [...this.consumerLastSeen],
 			respondableSessions: [...this.respondableSessions],
 		};
 	}
@@ -326,6 +358,13 @@ export class DeviceMailbox {
 		}
 		if (s.seenKeys) for (const [k, v] of s.seenKeys) box.seenKeys.set(k, v);
 		if (s.consumerCursors) for (const [k, v] of s.consumerCursors) box.consumerCursors.set(k, v);
+		if (s.consumerLastSeen) {
+			for (const [k, v] of s.consumerLastSeen) box.consumerLastSeen.set(k, v);
+		} else {
+			// An older snapshot has no idle clock; seed it from lastActivity so a
+			// restored consumer is not immediately swept as idle on the next sweep.
+			for (const k of box.consumerCursors.keys()) box.consumerLastSeen.set(k, box.lastActivity);
+		}
 		if (s.respondableSessions) for (const id of s.respondableSessions) box.respondableSessions.add(id);
 		return box;
 	}
@@ -425,6 +464,9 @@ export class DeviceMailboxStore {
 				this.mailboxes.delete(device);
 				removed++;
 				this.onEvictCb?.(device);
+			} else {
+				// A still-live inbox may hold a departed consumer pinning its watermark.
+				box.sweepIdleConsumers(now, this.ttlMs);
 			}
 		}
 		return removed;
