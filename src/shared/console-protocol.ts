@@ -13,6 +13,10 @@ import type {
 	ConsoleRespondResultSchema,
 	ConsoleSendResultSchema,
 	ConsoleTmuxSendResultSchema,
+	CrossDomainCancelResultSchema,
+	CrossDomainConfirmResultSchema,
+	CrossDomainListenResultSchema,
+	CrossDomainRequestResultSchema,
 	MailboxEntrySchema,
 	SealedEnvelopeSchema,
 } from "./schemas.js";
@@ -50,6 +54,10 @@ export type ConsoleRespondOp = Extract<ConsoleOp, { kind: "respond" }>;
 export type ConsolePollOp = Extract<ConsoleOp, { kind: "poll" }>;
 export type ConsolePeekOp = Extract<ConsoleOp, { kind: "peek" }>;
 export type ConsoleTmuxSendOp = Extract<ConsoleOp, { kind: "tmux_send" }>;
+export type CrossDomainListenOp = Extract<ConsoleOp, { kind: "cross_domain_listen" }>;
+export type CrossDomainRequestOp = Extract<ConsoleOp, { kind: "cross_domain_request" }>;
+export type CrossDomainConfirmOp = Extract<ConsoleOp, { kind: "cross_domain_confirm" }>;
+export type CrossDomainCancelOp = Extract<ConsoleOp, { kind: "cross_domain_cancel" }>;
 
 ////////////////////////////////
 //  Relay frames (carried over the gateway<->evie WebSocket)
@@ -89,6 +97,10 @@ export type ConsoleRespondResult = z.infer<typeof ConsoleRespondResultSchema>;
 export type ConsolePollResult = z.infer<typeof ConsolePollResultSchema>;
 export type ConsolePeekResult = z.infer<typeof ConsolePeekResultSchema>;
 export type ConsoleTmuxSendResult = z.infer<typeof ConsoleTmuxSendResultSchema>;
+export type CrossDomainListenResult = z.infer<typeof CrossDomainListenResultSchema>;
+export type CrossDomainRequestResult = z.infer<typeof CrossDomainRequestResultSchema>;
+export type CrossDomainConfirmResult = z.infer<typeof CrossDomainConfirmResultSchema>;
+export type CrossDomainCancelResult = z.infer<typeof CrossDomainCancelResultSchema>;
 export type ConsoleOpResult = z.infer<typeof ConsoleOpResultSchema>;
 
 ////////////////////////////////

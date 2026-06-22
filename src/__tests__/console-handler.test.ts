@@ -986,3 +986,174 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(h.hostOps).toHaveLength(0);
 	});
 });
+
+describe("console cross-Domain handshake ops", () => {
+	function makeCrossDomainHarness() {
+		const calls: Record<string, unknown[]> = { listen: [], request: [], confirm: [], cancel: [] };
+		const routes: ConsoleRoutes = {
+			send: async () => jsonRes({ session_id: "s", status: "running" }),
+			respond: () => jsonRes({ delivered: true }),
+			teams: () => jsonRes([]),
+			discover: async () => jsonRes([]),
+		};
+		const crossDomain = {
+			listen: () => {
+				calls.listen.push({});
+				return {
+					listeningToken: "test-host.tok",
+					receiverOwnerSignPub: "recv-owner",
+					receiverGatewaySignPub: "recv-gw-sign",
+					receiverGatewayBoxPub: "recv-gw-box",
+					receiverDomainId: "home",
+					receiverGatewayId: "test-host",
+					expiresAt: 123,
+				};
+			},
+			request: async (args: Record<string, unknown>) => {
+				calls.request.push(args);
+				return {
+					sas: "421717930842",
+					requesterOwnerSignPub: args.requesterOwnerSignPub as string,
+					receiverOwnerSignPub: "recv-owner",
+					receiverDomainId: "bob",
+					receiverGatewayId: "bob-desktop",
+					receiverGatewaySignPub: "recv-gw-sign",
+					receiverGatewayBoxPub: "recv-gw-box",
+				};
+			},
+			confirm: (args: Record<string, unknown>) => {
+				calls.confirm.push(args);
+				return { ok: true };
+			},
+			cancel: (args: Record<string, unknown>) => {
+				calls.cancel.push(args);
+				return true;
+			},
+		};
+		const handler = createConsoleHandler({
+			registry: new Map(),
+			conversationRegistry: new Map(),
+			mailboxStore: new DeviceMailboxStore(),
+			localGatewayId: "test-host",
+			routes,
+			crossDomain,
+		});
+		return { handler, calls };
+	}
+
+	const link = {
+		link: {
+			myOwnerSignPub: "mo",
+			peerOwnerSignPub: "po",
+			peerDomainId: "bob",
+			peerGatewayId: "bob-desktop",
+			peerSignPub: "ps",
+			peerBoxPub: "pb",
+			issuedAt: 1,
+			nonce: "n",
+		},
+		ownerSignPub: "mo",
+		signature: "sig",
+	};
+
+	it("cross_domain_listen returns the minted token + receiver keys", async () => {
+		const h = makeCrossDomainHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "cross_domain_listen" }, "l1"));
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toMatchObject({ listeningToken: "test-host.tok", receiverGatewayId: "test-host" });
+		expect(h.calls.listen).toHaveLength(1);
+	});
+
+	it("cross_domain_request passes the VERIFIED owner key (the frame's), not the op's, to the coordinator", async () => {
+		const h = makeCrossDomainHarness();
+		const reply = await h.handler.handleFrame(
+			frame(
+				{
+					kind: "cross_domain_request",
+					listeningToken: "bob-desktop.tok",
+					pin: "thepin",
+					// A console could LIE here; the gateway must ignore it and use the verified owner.
+					requesterOwnerSignPub: "ATTACKER-CLAIMED-OWNER",
+					requesterDomainId: "home",
+					requesterGatewayId: "test-host",
+				},
+				"rq1",
+			),
+		);
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toMatchObject({ sas: "421717930842" });
+		// The dispatch forwarded the FRAME's ownerSignPub (OWNER_PUB), never the op's claim.
+		expect(h.calls.request[0]).toMatchObject({
+			listeningToken: "bob-desktop.tok",
+			pin: "thepin",
+			requesterOwnerSignPub: OWNER_PUB,
+			requesterDomainId: "home",
+			requesterGatewayId: "test-host",
+		});
+	});
+
+	it("cross_domain_confirm forwards both link sides and returns ok", async () => {
+		const h = makeCrossDomainHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_confirm", pin: "thepin", mySignedLink: link, friendSignedLink: link }, "cf1"),
+		);
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toEqual({ ok: true });
+		expect(h.calls.confirm[0]).toMatchObject({ pin: "thepin" });
+	});
+
+	it("a bare cross_domain_cancel stays a sweep-only no-op (no token/pin forwarded)", async () => {
+		const h = makeCrossDomainHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "cross_domain_cancel" }, "cx1"));
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toEqual({ cancelled: true });
+		expect(h.calls.cancel).toHaveLength(1);
+		// Backward behavior: a bare cancel carries neither field, so the coordinator only sweeps.
+		expect(h.calls.cancel[0]).toEqual({ listeningToken: undefined, pin: undefined });
+	});
+
+	it("cross_domain_cancel forwards the listening token + pin so the named window is invalidated", async () => {
+		const h = makeCrossDomainHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_cancel", listeningToken: "test-host.tok", pin: "thepin" }, "cx2"),
+		);
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toEqual({ cancelled: true });
+		expect(h.calls.cancel).toHaveLength(1);
+		// The token/pin reach the coordinator, which invalidates that window (so a subsequent
+		// request to the token is rejected; see the coordinator's own cancel tests).
+		expect(h.calls.cancel[0]).toEqual({ listeningToken: "test-host.tok", pin: "thepin" });
+	});
+
+	it("a retried cross_domain_confirm opId replays the cached reply without re-running", async () => {
+		const h = makeCrossDomainHarness();
+		const f = frame(
+			{ kind: "cross_domain_confirm", pin: "thepin", mySignedLink: link, friendSignedLink: link },
+			"dup-cf",
+		);
+		const r1 = await h.handler.handleFrame(f);
+		const r2 = await h.handler.handleFrame(f);
+		expect(r1).toEqual(r2);
+		// The coordinator's confirm ran ONCE (the opId cache absorbed the retry), so a
+		// single-use pairing is never double-consumed by an honest retry.
+		expect(h.calls.confirm).toHaveLength(1);
+	});
+
+	it("the cross_domain_* ops error cleanly when federation is not wired", async () => {
+		const handler = createConsoleHandler({
+			registry: new Map(),
+			conversationRegistry: new Map(),
+			mailboxStore: new DeviceMailboxStore(),
+			localGatewayId: "test-host",
+			routes: {
+				send: async () => jsonRes({}),
+				respond: () => jsonRes({}),
+				teams: () => jsonRes([]),
+				discover: async () => jsonRes([]),
+			},
+		});
+		const reply = await handler.handleFrame(frame({ kind: "cross_domain_listen" }, "nf1"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("not available");
+	});
+});

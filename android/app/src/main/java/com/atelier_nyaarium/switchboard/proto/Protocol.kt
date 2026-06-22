@@ -139,6 +139,35 @@ sealed class ConsoleOp {
 		val text: String? = null,
 		val key: String? = null,
 	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_listen")
+	data object CrossDomainListen : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_request")
+	data class CrossDomainRequest(
+		val listeningToken: String,
+		val pin: String,
+		val requesterOwnerSignPub: String,
+		val requesterDomainId: String,
+		val requesterGatewayId: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_confirm")
+	data class CrossDomainConfirm(
+		val pin: String,
+		val mySignedLink: SignedXDomainLink,
+		val friendSignedLink: SignedXDomainLink,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_cancel")
+	data class CrossDomainCancel(
+		val listeningToken: String? = null,
+		val pin: String? = null,
+	) : ConsoleOp()
 }
 
 @Serializable
@@ -332,6 +361,25 @@ data class GatewayBootstrapFrame(
 )
 
 @Serializable
+data class SignedXDomainLink(
+	val link: XDomainLink,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class XDomainLink(
+	val myOwnerSignPub: String,
+	val peerOwnerSignPub: String,
+	val peerDomainId: String,
+	val peerGatewayId: String,
+	val peerSignPub: String,
+	val peerBoxPub: String,
+	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
 data class SealedEnvelope(
 	val ephemeralPub: String,
 	val nonce: String,
@@ -349,6 +397,38 @@ data class DomainSnapshot(
 @Serializable
 data class ConsoleGatewayTransportResult(
 	val transport: GatewayTransport,
+)
+
+@Serializable
+data class CrossDomainListenResult(
+	val listeningToken: String,
+	val receiverOwnerSignPub: String,
+	val receiverGatewaySignPub: String,
+	val receiverGatewayBoxPub: String,
+	val receiverDomainId: String,
+	val receiverGatewayId: String,
+	val expiresAt: Long,
+)
+
+@Serializable
+data class CrossDomainRequestResult(
+	val sas: String,
+	val requesterOwnerSignPub: String,
+	val receiverOwnerSignPub: String,
+	val receiverDomainId: String,
+	val receiverGatewayId: String,
+	val receiverGatewaySignPub: String,
+	val receiverGatewayBoxPub: String,
+)
+
+@Serializable
+data class CrossDomainConfirmResult(
+	val ok: Boolean,
+)
+
+@Serializable
+data class CrossDomainCancelResult(
+	val cancelled: Boolean,
 )
 
 @Serializable

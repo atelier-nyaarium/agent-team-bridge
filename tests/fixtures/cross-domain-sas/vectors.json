@@ -1,0 +1,129 @@
+{
+	"_comment": "Cross-runtime vectors for the cross-Domain commit-reveal SAS-AKE (cross-domain-sas.ts). Read by src/__tests__/cross-domain-sas.test.ts (TS) AND, in the Phase F Android pass, by SasCryptoTest.kt (Kotlin), so the hand-authored Kotlin twin (SasCrypto.kt) cannot drift from this TS reference. Each `a`/`b` is a CrossDomainParty (ownerSignPub, gatewaySignPub, gatewayBoxPub, domainId, gatewayId). `sas` is the 12 decimal digits (SHA-256 of the SAS_V1 preimage -> first 8 bytes big-endian BigInt -> mod 10^12 -> zero-pad 12). A `commitment` is base64 SHA-256 of the SAS_COMMIT_V1 preimage over one party + salt.",
+	"cases": [
+		{
+			"a": {
+				"ownerSignPub": "+mRd4cnxQyU4HHf7SE936HUaIW3oFjo9Z/qB5SGfEHI=",
+				"gatewaySignPub": "f1P87g04wWvICVjMvvJ7U3k71Cb8EhY8LeUYrPwSFIg=",
+				"gatewayBoxPub": "zdPKc9sA2rc9VdoNw/TpKVymj6vpblNQvDeaWG9tEAE=",
+				"domainId": "home",
+				"gatewayId": "sakura-laptop"
+			},
+			"b": {
+				"ownerSignPub": "j7vRiYPAM+KxLAjSrd23T2OKWL2XXPQL/kdT65DNqXk=",
+				"gatewaySignPub": "Pek0ozpE9yi0Zor0Mb/20VUV3GOc/FXWDpZoT0k9v6Y=",
+				"gatewayBoxPub": "INvjp/3UUvZLt/A4LO8SMSDVsehdsuciRxY+xrcvk0o=",
+				"domainId": "bob",
+				"gatewayId": "bob-desktop"
+			},
+			"pin": "ZiZ95K8yhZn3RLpuzJIeyCcO",
+			"sas": "498160867634"
+		},
+		{
+			"a": {
+				"ownerSignPub": "cY9om7x1qLgpUVjrHkJIeNhQmMTRTJvy07E9NIP6D4A=",
+				"gatewaySignPub": "6i3n0w6E62ZmJCj7IBQWWDSGP3lCybtTsKLc0KaYWLE=",
+				"gatewayBoxPub": "FlH4uOHAxAAzphoYZ6viw9RusorH1ZvwGMmr5263RlA=",
+				"domainId": "carol",
+				"gatewayId": "carol-pc"
+			},
+			"b": {
+				"ownerSignPub": "3CxfrQcnB1Rnm8cY/KkI3g3yC1MfHmZvbS5aXCAvEyQ=",
+				"gatewaySignPub": "fEa8CJOYxUrTLQK8JezCokakcdR1YWvRamq3ywtKP98=",
+				"gatewayBoxPub": "Y17shsE09FTzWukKcB0aMalSHOt2KVOY8iKHBeiCvRA=",
+				"domainId": "dave",
+				"gatewayId": "dave-box"
+			},
+			"pin": "MYzMrkOPapBUPlQDihf6iE3D",
+			"sas": "101310561505"
+		}
+	],
+	"orderIndependent": {
+		"_comment": "Swapping party a and b yields the SAME SAS as cases[0]: the preimage sorts all ten identity fields as a flat list, so each side derives the same code regardless of which side it is.",
+		"a": {
+			"ownerSignPub": "j7vRiYPAM+KxLAjSrd23T2OKWL2XXPQL/kdT65DNqXk=",
+			"gatewaySignPub": "Pek0ozpE9yi0Zor0Mb/20VUV3GOc/FXWDpZoT0k9v6Y=",
+			"gatewayBoxPub": "INvjp/3UUvZLt/A4LO8SMSDVsehdsuciRxY+xrcvk0o=",
+			"domainId": "bob",
+			"gatewayId": "bob-desktop"
+		},
+		"b": {
+			"ownerSignPub": "+mRd4cnxQyU4HHf7SE936HUaIW3oFjo9Z/qB5SGfEHI=",
+			"gatewaySignPub": "f1P87g04wWvICVjMvvJ7U3k71Cb8EhY8LeUYrPwSFIg=",
+			"gatewayBoxPub": "zdPKc9sA2rc9VdoNw/TpKVymj6vpblNQvDeaWG9tEAE=",
+			"domainId": "home",
+			"gatewayId": "sakura-laptop"
+		},
+		"pin": "ZiZ95K8yhZn3RLpuzJIeyCcO",
+		"sas": "498160867634",
+		"equalsCase": 0
+	},
+	"substitution": {
+		"_comment": "cases[0] with party a's gatewayBoxPub swapped for an unrelated key -> the SAS MUST differ from cases[0].sas. A committed-to substitution still yields a different code, which is the residual MITM detector once the commitment closes the offline grind.",
+		"a": {
+			"ownerSignPub": "+mRd4cnxQyU4HHf7SE936HUaIW3oFjo9Z/qB5SGfEHI=",
+			"gatewaySignPub": "f1P87g04wWvICVjMvvJ7U3k71Cb8EhY8LeUYrPwSFIg=",
+			"gatewayBoxPub": "y4SQn7uDaMSAzR8fl/RhvGvWmLS0L6obrOzKqvfwKos=",
+			"domainId": "home",
+			"gatewayId": "sakura-laptop"
+		},
+		"b": {
+			"ownerSignPub": "j7vRiYPAM+KxLAjSrd23T2OKWL2XXPQL/kdT65DNqXk=",
+			"gatewaySignPub": "Pek0ozpE9yi0Zor0Mb/20VUV3GOc/FXWDpZoT0k9v6Y=",
+			"gatewayBoxPub": "INvjp/3UUvZLt/A4LO8SMSDVsehdsuciRxY+xrcvk0o=",
+			"domainId": "bob",
+			"gatewayId": "bob-desktop"
+		},
+		"pin": "ZiZ95K8yhZn3RLpuzJIeyCcO",
+		"sas": "402326187126",
+		"differsFrom": "498160867634"
+	},
+	"commitment": {
+		"_comment": "SHA-256(base64) of the SAS_COMMIT_V1 preimage over party a + salt. The peer re-derives this from the revealed party+salt and aborts on a mismatch (the commit-reveal binding).",
+		"a": {
+			"ownerSignPub": "+mRd4cnxQyU4HHf7SE936HUaIW3oFjo9Z/qB5SGfEHI=",
+			"gatewaySignPub": "f1P87g04wWvICVjMvvJ7U3k71Cb8EhY8LeUYrPwSFIg=",
+			"gatewayBoxPub": "zdPKc9sA2rc9VdoNw/TpKVymj6vpblNQvDeaWG9tEAE=",
+			"domainId": "home",
+			"gatewayId": "sakura-laptop"
+		},
+		"salt": "c2FsdC1hbHBoYQ",
+		"commitment": "rMTg7lUozjzHdTWuVktbgm93aT7+dZGXr3MuCFpoRH8="
+	},
+	"commitmentSaltBinding": {
+		"_comment": "The SAME party with a DIFFERENT salt yields a DIFFERENT commitment, so the salt is load-bearing (it hides the public keys).",
+		"a": {
+			"ownerSignPub": "+mRd4cnxQyU4HHf7SE936HUaIW3oFjo9Z/qB5SGfEHI=",
+			"gatewaySignPub": "f1P87g04wWvICVjMvvJ7U3k71Cb8EhY8LeUYrPwSFIg=",
+			"gatewayBoxPub": "zdPKc9sA2rc9VdoNw/TpKVymj6vpblNQvDeaWG9tEAE=",
+			"domainId": "home",
+			"gatewayId": "sakura-laptop"
+		},
+		"salt": "c2FsdC1icmF2bw",
+		"commitment": "P4ofFylXrJXHbN5MNBeJYdE8/ilJRggGSTZr9WSdlmg=",
+		"differsFrom": "rMTg7lUozjzHdTWuVktbgm93aT7+dZGXr3MuCFpoRH8="
+	},
+	"handComputed": {
+		"_comment": "Tiny non-key strings so the test can assert the EXACT canonical preimages and recompute by hand. The SAS preimage sorts the ten fields lexicographically; the commitment preimage is fixed-order.",
+		"a": {
+			"ownerSignPub": "Ao",
+			"gatewaySignPub": "As",
+			"gatewayBoxPub": "Ab",
+			"domainId": "ad",
+			"gatewayId": "ag"
+		},
+		"b": {
+			"ownerSignPub": "Bo",
+			"gatewaySignPub": "Bs",
+			"gatewayBoxPub": "Bb",
+			"domainId": "bd",
+			"gatewayId": "bg"
+		},
+		"pin": "pin-123",
+		"salt": "salt-xyz",
+		"sasPreimage": "SAS_V1\nAb\nAo\nAs\nBb\nBo\nBs\nad\nag\nbd\nbg\npin-123",
+		"sas": "320441685346",
+		"commitmentPreimage": "SAS_COMMIT_V1\nAo\nAs\nAb\nad\nag\nsalt-xyz",
+		"commitment": "6XsEt16MGtHTNXlQy/yhJdEe1plE8dWAvOI0JYwBSvo="
+	}
+}

@@ -41,6 +41,9 @@ export interface EvieClientConfig {
 	// A cross-Gateway frame the Router routed to this Gateway; the gateway-relay pump owns
 	// full GatewayRelayFrameSchema validation, so the frame travels as unknown.
 	onGatewayRelay?: (frame: unknown) => void;
+	// A pre-trust cross-Domain handshake frame the Router routed to this Gateway (the
+	// receiver leg); the handshake pump owns full validation, so it travels as unknown.
+	onCrossDomainHandshake?: (frame: unknown) => void;
 	// Extra `gateway_register` params (the admitted-identity proof: signPub/boxPub
 	// + owner-signed admission + a fresh possession proof), computed at each
 	// (re)register so the proof timestamp is current. Returns null pre-enrollment,
@@ -157,6 +160,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				}
 				case "gateway_relay": {
 					config.onGatewayRelay?.(frame);
+					break;
+				}
+				case "cross_domain_handshake": {
+					config.onCrossDomainHandshake?.(frame);
 					break;
 				}
 				case "domain_update": {

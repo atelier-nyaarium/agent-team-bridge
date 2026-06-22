@@ -1,0 +1,140 @@
+import crypto from "node:crypto";
+
+////////////////////////////////
+//  Cross-Domain pairing SAS + commitment (commit-reveal SAS-AKE)
+//
+//  The cross-Domain listening-mode handshake (cross-domain-federation.md) is an
+//  unauthenticated key exchange between two owners' Gateways relayed by the
+//  content-blind Router. A bare SAS over only the public keys + the pin is offline
+//  grindable: a malicious Router substitutes its own keys on BOTH legs and searches
+//  for a key set that yields the SAME short code on the two phones, defeating the
+//  out-of-band compare. The fix is commit-then-reveal: each side publishes a HIDING
+//  commitment to its own keys+ids BEFORE either side reveals them, so the Router can
+//  no longer grind (it must pick its substituted keys before it learns the peer's,
+//  collapsing the attack to a single online 1-in-10^12 guess bounded by the attempt
+//  cap). The SAS then binds the COMMITTED keys + both sides' ids + the pin.
+//
+//  Two primitives live here:
+//  - crossDomainCommitment: the hiding commitment a side sends first (SHA-256 over
+//    its own keys + ids + a random salt). The peer re-derives it after the reveal and
+//    aborts if it does not match what was committed.
+//  - crossDomainSas: the safety code over the COMMITTED keys + both ids + the pin, the
+//    code the humans compare out of band.
+//
+//  switchboard-only, NOT a SYNC-HASH leaf: the Router never computes either value
+//  (content-blind), and the keys/pin are phone-held + gateway-carried. The Android Kotlin
+//  twin (SasCrypto.kt) hand-authors the SAME formulas and is pinned
+//  against this reference by tests/fixtures/cross-domain-sas/vectors.json, exactly as
+//  SessionId.kt is pinned by the session-id vectors. Because the twin must reproduce
+//  these byte-for-byte under BouncyCastle, the derivation uses ONLY SHA-256 + big-endian
+//  BigInt math (no language-specific quirks): see crossDomainSas below.
+
+////////////////////////////////
+//  Interfaces & Types
+
+/** One side's committed identity: the keys + ids the side binds into the link and the
+ * SAS. Both the commitment and the SAS are computed over these fields in this exact
+ * order, so the two runtimes must assemble them identically. */
+export interface CrossDomainParty {
+	ownerSignPub: string;
+	gatewaySignPub: string;
+	gatewayBoxPub: string;
+	domainId: string;
+	gatewayId: string;
+}
+
+////////////////////////////////
+//  Commitment
+
+/** The canonical commitment preimage for one side: the literal `SAS_COMMIT_V1`, then
+ * that side's five identity fields in fixed order, then the side's random salt - all
+ * newline-joined. The salt hides the committed values (the keys are public, so a bare
+ * hash of them would be guessable). */
+export function crossDomainCommitmentPreimage(party: CrossDomainParty, salt: string): Buffer {
+	return Buffer.from(
+		[
+			"SAS_COMMIT_V1",
+			party.ownerSignPub,
+			party.gatewaySignPub,
+			party.gatewayBoxPub,
+			party.domainId,
+			party.gatewayId,
+			salt,
+		].join("\n"),
+		"utf8",
+	);
+}
+
+/** A side's hiding commitment to its own keys+ids, sent BEFORE either side reveals
+ * keys: SHA-256 of the canonical commitment preimage, base64. The peer re-derives it
+ * from the revealed keys+ids+salt and aborts the handshake on a mismatch, which is what
+ * makes the offline grind impossible. */
+export function crossDomainCommitment(party: CrossDomainParty, salt: string): string {
+	return crypto.createHash("sha256").update(crossDomainCommitmentPreimage(party, salt)).digest("base64");
+}
+
+/** True iff `commitment` is the commitment a side would have produced for these
+ * revealed keys+ids+salt. A reveal whose values do not reproduce the earlier commitment
+ * is rejected (the commit-reveal binding). */
+export function verifyCrossDomainCommitment(commitment: string, party: CrossDomainParty, salt: string): boolean {
+	return crossDomainCommitment(party, salt) === commitment;
+}
+
+////////////////////////////////
+//  SAS
+
+// The displayed safety code is this many decimal digits. Widened from 8 so the residual
+// online-guess space (after the commitment closes the offline grind) is 1-in-10^12.
+const SAS_DIGITS = 12;
+
+// 10^12, the modulus the digest reduces to. A BigInt because it exceeds 2^32.
+const SAS_MODULUS = 1_000_000_000_000n;
+
+/** The canonical SAS preimage: the literal `SAS_V1`, then BOTH sides' five identity
+ * fields SORTED lexicographically by their string value, then the pin - all
+ * newline-joined.
+ *
+ * The fields are sorted as a flat list so the result is order-independent: each side
+ * holds the same ten identity fields (its own five + the peer's five) and sorts them to
+ * the same sequence regardless of which side it is. base64 keys and slug ids contain no
+ * newline, so the joined fields can never merge ambiguously. Substituting ANY committed
+ * key or mislabeling either id changes the sorted sequence and therefore the SAS, which
+ * is what makes it the residual MITM detector once the commitment closes the grind. */
+export function crossDomainSasPreimage(a: CrossDomainParty, b: CrossDomainParty, pin: string): Buffer {
+	const fields = [
+		a.ownerSignPub,
+		a.gatewaySignPub,
+		a.gatewayBoxPub,
+		a.domainId,
+		a.gatewayId,
+		b.ownerSignPub,
+		b.gatewaySignPub,
+		b.gatewayBoxPub,
+		b.domainId,
+		b.gatewayId,
+	].sort();
+	return Buffer.from(["SAS_V1", ...fields, pin].join("\n"), "utf8");
+}
+
+/** The displayed safety code: SHA-256 the canonical preimage, read the FIRST 8 digest
+ * bytes as a big-endian unsigned BigInt, reduce mod 10^12, and zero-pad to 12 decimal
+ * digits.
+ *
+ * Derivation (the Kotlin twin must mirror exactly):
+ *   1. preimage = crossDomainSasPreimage(a, b, pin)   (UTF-8 bytes)
+ *   2. digest   = SHA-256(preimage)                   (32 bytes)
+ *   3. n        = digest[0..7] as a big-endian unsigned BigInt
+ *   4. code     = (n mod 10^12) zero-padded to 12 digits
+ *
+ * Eight bytes (a 64-bit value, max ~1.8e19) comfortably exceed 10^12, so the modulus is
+ * load-bearing: it bounds the value to exactly 12 digits with a near-uniform
+ * distribution. Width is fixed at 12 so the two phones compare equal-length strings. */
+export function crossDomainSas(a: CrossDomainParty, b: CrossDomainParty, pin: string): string {
+	const buf = crypto
+		.createHash("sha256")
+		.update(crossDomainSasPreimage(a, b, pin))
+		.digest();
+	let n = 0n;
+	for (let i = 0; i < 8; i++) n = (n << 8n) | BigInt(buf[i]);
+	return (n % SAS_MODULUS).toString(10).padStart(SAS_DIGITS, "0");
+}

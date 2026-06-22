@@ -3,11 +3,15 @@ import {
 	type ConsoleOp,
 	type ConsoleOpResult,
 	type ConsoleReplyBody,
+	type CrossDomainConfirmResult,
+	type CrossDomainListenResult,
+	type CrossDomainRequestResult,
 	type MailboxInput,
 	type OpenedConsoleFrame,
 	parseQualifiedTeam,
 } from "../../shared/console-protocol.js";
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
+import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
 import {
 	ALLOWED_KEYS,
 	type HostOp,
@@ -71,6 +75,29 @@ export interface ConsoleHandlerDeps {
 	 * Drives the console terminal view; absent when no host daemon is wired (the op then errors
 	 * "terminal unavailable"). */
 	relayToHost?: (op: HostOp) => Promise<HostOpResult>;
+	/** The cross-Domain listening-mode handshake coordinator. Absent when federation is not
+	 * wired (the cross_domain_* ops then error "not available"). The console drives the
+	 * mutual pairing through these; the gateway owns the listening window + writes the peer. */
+	crossDomain?: CrossDomainConsoleHandlers;
+}
+
+/** The subset of the cross-Domain handshake coordinator the console handler drives. A
+ * narrow seam so the handler stays mockable and never imports the coordinator class. */
+export interface CrossDomainConsoleHandlers {
+	listen: () => CrossDomainListenResult;
+	request: (args: {
+		listeningToken: string;
+		pin: string;
+		requesterOwnerSignPub: string;
+		requesterDomainId: string;
+		requesterGatewayId: string;
+	}) => Promise<CrossDomainRequestResult>;
+	confirm: (args: {
+		pin: string;
+		mySignedLink: SignedXDomainLink;
+		friendSignedLink: SignedXDomainLink;
+	}) => CrossDomainConfirmResult;
+	cancel: (args: { listeningToken?: string; pin?: string }) => boolean;
 }
 
 ////////////////////////////////
@@ -99,8 +126,19 @@ const MAX_OPS_PER_CONVERSATION = 256;
 
 function isMutatingOp(op: ConsoleOp): boolean {
 	// tmux_send injects keystrokes (a real side effect), so a retried opId must replay
-	// the cached ack, not re-send the keys. peek is a fresh read (never cached).
-	return op.kind === "send" || op.kind === "respond" || op.kind === "tmux_send";
+	// the cached ack, not re-send the keys. peek is a fresh read (never cached). The
+	// cross_domain_* ops all carry state (a minted window, a routed request, a written
+	// peer, a cancellation), so a retried opId replays the cached reply rather than
+	// minting a second window, re-routing, or re-writing the peer.
+	return (
+		op.kind === "send" ||
+		op.kind === "respond" ||
+		op.kind === "tmux_send" ||
+		op.kind === "cross_domain_listen" ||
+		op.kind === "cross_domain_request" ||
+		op.kind === "cross_domain_confirm" ||
+		op.kind === "cross_domain_cancel"
+	);
 }
 
 export function createConsoleHandler({
@@ -114,6 +152,7 @@ export function createConsoleHandler({
 	domain,
 	bootstrapTransport,
 	relayToHost,
+	crossDomain,
 }: ConsoleHandlerDeps) {
 	/** Resolve a console terminal target (the gateway-qualified session name) to the host
 	 * tmux it maps to: the host-agent's own session for "gateway", a devcontainer for a known
@@ -320,6 +359,7 @@ export function createConsoleHandler({
 		conversationId: string,
 		ownerId: string,
 		opId: string,
+		ownerSignPub: string,
 	): Promise<ConsoleOpResult> {
 		switch (op.kind) {
 			case "register": {
@@ -536,6 +576,44 @@ export function createConsoleHandler({
 				if (!r.ok) throw new Error(r.error ?? "send failed");
 				return { sent: true };
 			}
+
+			case "cross_domain_listen": {
+				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
+				return crossDomain.listen();
+			}
+
+			case "cross_domain_request": {
+				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
+				// The requester's OWN owner key is this console's verified Domain owner (the
+				// allowlist root the seal was checked against), NOT the op-supplied value: a
+				// console is admitted under that owner, so it cannot claim another. The
+				// op's requesterOwnerSignPub stays advisory (phone display only).
+				return crossDomain.request({
+					listeningToken: op.listeningToken,
+					pin: op.pin,
+					requesterOwnerSignPub: ownerSignPub,
+					requesterDomainId: op.requesterDomainId,
+					requesterGatewayId: op.requesterGatewayId,
+				});
+			}
+
+			case "cross_domain_confirm": {
+				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
+				return crossDomain.confirm({
+					pin: op.pin,
+					mySignedLink: op.mySignedLink,
+					friendSignedLink: op.friendSignedLink,
+				});
+			}
+
+			case "cross_domain_cancel": {
+				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
+				// Leaving the trust screen closes the listening window: forward the phone's
+				// listening token (receiver side) and/or pin (requester side) so the coordinator
+				// invalidates that window. A bare cancel (neither present) only sweeps expired
+				// windows, so it stays a no-op success.
+				return { cancelled: crossDomain.cancel({ listeningToken: op.listeningToken, pin: op.pin }) };
+			}
 		}
 	}
 
@@ -546,7 +624,14 @@ export function createConsoleHandler({
 			// Only a register op may rebind an install to a new device name / key.
 			const ownerId = ownerKeyId(frame.ownerSignPub);
 			ensurePeer(frame.device, frame.conversationId, frame.signerSignPub, ownerId, frame.op.kind === "register");
-			const result = await dispatch(frame.op, frame.device, frame.conversationId, ownerId, frame.opId);
+			const result = await dispatch(
+				frame.op,
+				frame.device,
+				frame.conversationId,
+				ownerId,
+				frame.opId,
+				frame.ownerSignPub,
+			);
 			return { ok: true, result };
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };

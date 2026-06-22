@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DomainSnapshotSchema, SignedAdmissionSchema } from "./admission.js";
+import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 
 ////////////////////////////////
 //  Shared enum schemas
@@ -188,6 +189,62 @@ export const ConsoleOpSchema = z
 			target: z.string().min(1).max(128),
 			text: z.string().max(4096).optional(),
 			key: z.string().max(32).optional(),
+		}),
+		// Cross-Domain listening-mode handshake (cross-domain-federation.md). These four
+		// ops drive the mutual pairing that links two Gateways owned by DIFFERENT owners.
+		// The owner root key is phone-held, so each side SIGNS its link on the phone; the
+		// Gateway mints/holds the listening window + pin pairing and writes the confirmed
+		// peer. The Console only accepts a request while its listening window is open, so
+		// there is no unsolicited cross-Domain surface.
+
+		// Open a listening window: the Gateway mints a single-use listening token and returns
+		// its own owner + gateway keys for the SAS. The phone shows the token to the other
+		// owner out of band. No parameters.
+		z.object({ kind: z.literal("cross_domain_listen") }),
+		// The requester's leg: pair against the OTHER side's listening token. The Gateway
+		// runs the full commit-reveal exchange with the receiver internally (it holds the
+		// keys + salts), so the phone supplies only the rendezvous inputs. The token prefix
+		// names the receiver's Gateway so the relay can route it.
+		z.object({
+			kind: z.literal("cross_domain_request"),
+			// The single-use listening token the RECEIVER minted (format
+			// `<receiverGatewayId>.<random>`), naming the receiver's Gateway for routing.
+			listeningToken: z.string().min(1),
+			// The requester-minted single-use rendezvous pin (base64url). Pairs the two
+			// listening sessions; consumed once. Not the trust root - the SAS is.
+			pin: z.string().min(1),
+			// The requesting owner's root signing public key (base64). Advisory only (phone
+			// display): the Gateway uses the owner key the console was admitted under, not
+			// this op-supplied value.
+			requesterOwnerSignPub: z.string().min(1),
+			// The requester's Domain + Gateway ids (slugs), recorded on the receiver's pairing
+			// so the confirmed peer is keyed by `(domainId, gatewayId)`.
+			requesterDomainId: z.string().min(1).max(64),
+			requesterGatewayId: z.string().min(1).max(64),
+		}),
+		// Confirm the SAS match (run on BOTH sides after the humans compared codes). Carries
+		// this owner's OWN signed link side (the phone signed it, binding the friend's keys),
+		// which the Gateway verifies and stores as the cross-Domain peer. `pin` looks up the
+		// pairing; `friendSignedLink` is the friend owner's side, verified under the friend
+		// owner key from the pairing before the peer is written.
+		z.object({
+			kind: z.literal("cross_domain_confirm"),
+			pin: z.string().min(1),
+			// This owner's own signed link side (owner-signed on the phone). Binds the FRIEND
+			// Gateway's keys; the confirming Gateway verifies it under its own owner key.
+			mySignedLink: SignedXDomainLinkSchema,
+			// The friend owner's signed link side, verified under the friend owner key from the
+			// pairing. Its bound keys (the friend Gateway's) become the stored peer.
+			friendSignedLink: SignedXDomainLinkSchema,
+		}),
+		// Cancel a listening window (the owner left the pairing screen). Invalidates the
+		// token + any pairing so a stale request cannot complete. The phone passes the
+		// listening token (receiver side) and/or the pin (requester side) so the cancel
+		// targets that window; absent both, it is a sweep-only no-op success.
+		z.object({
+			kind: z.literal("cross_domain_cancel"),
+			listeningToken: z.string().optional(),
+			pin: z.string().optional(),
 		}),
 	])
 	.meta({ id: "ConsoleOp" });
@@ -384,6 +441,61 @@ export const ConsoleTmuxSendResultSchema = z
 	})
 	.meta({ id: "ConsoleTmuxSendResult" });
 
+////////////////////////////////
+//  Cross-Domain handshake op results (gateway -> console)
+//
+//  The replies for the four cross_domain_* ops. cross_domain_listen returns the minted
+//  token + this Gateway's own owner/gateway keys (the requester needs them for the SAS).
+//  cross_domain_request returns the SAS the phone displays (computed over the six bound
+//  keys + the pin) so the human can read it out. confirm/cancel are simple acks.
+
+export const CrossDomainListenResultSchema = z
+	.object({
+		// The minted single-use listening token (format `<gatewayId>.<random>`); the owner
+		// reads it to the other owner out of band.
+		listeningToken: z.string(),
+		// This Gateway's owner root + gateway keys, so the requester can build the link and
+		// compute the SAS over both sides' keys.
+		receiverOwnerSignPub: z.string(),
+		receiverGatewaySignPub: z.string(),
+		receiverGatewayBoxPub: z.string(),
+		receiverDomainId: z.string(),
+		receiverGatewayId: z.string(),
+		// When the window closes (epoch ms); the phone shows the countdown.
+		expiresAt: z.number().int(),
+	})
+	.meta({ id: "CrossDomainListenResult" });
+
+export const CrossDomainRequestResultSchema = z
+	.object({
+		// The safety code the phone displays for the human to read aloud; both phones derive
+		// the same value when no key was substituted in transit.
+		sas: z.string(),
+		// Echoed so the requester phone can render the pairing: both owner keys plus the
+		// receiver's Domain/Gateway it just paired with.
+		requesterOwnerSignPub: z.string(),
+		receiverOwnerSignPub: z.string(),
+		receiverDomainId: z.string(),
+		receiverGatewayId: z.string(),
+		// The receiver Gateway's keys, so the requester phone can owner-sign its link side
+		// (the link binds the friend Gateway's keys) for the confirm leg.
+		receiverGatewaySignPub: z.string(),
+		receiverGatewayBoxPub: z.string(),
+	})
+	.meta({ id: "CrossDomainRequestResult" });
+
+export const CrossDomainConfirmResultSchema = z
+	.object({
+		ok: z.boolean(),
+	})
+	.meta({ id: "CrossDomainConfirmResult" });
+
+export const CrossDomainCancelResultSchema = z
+	.object({
+		cancelled: z.boolean(),
+	})
+	.meta({ id: "CrossDomainCancelResult" });
+
 export const ConsoleOpResultSchema = z.union([
 	ConsoleRegisterResultSchema,
 	ConsoleListTeamsResultSchema,
@@ -393,6 +505,10 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleGatewayTransportResultSchema,
 	ConsolePeekResultSchema,
 	ConsoleTmuxSendResultSchema,
+	CrossDomainListenResultSchema,
+	CrossDomainRequestResultSchema,
+	CrossDomainConfirmResultSchema,
+	CrossDomainCancelResultSchema,
 ]);
 
 ////////////////////////////////

@@ -19,6 +19,12 @@ import { startPortForward } from "./evie/portForward.js";
 import { evieWsConnection, loadBootstrapTransport, loadEvieTransport } from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
+import {
+	CrossDomainHandshakeCoordinator,
+	createCrossDomainHandshakePump,
+	parseCommitReply,
+	parseRevealReply,
+} from "./federation/crossDomainHandshake.js";
 import { CrossDomainPeers } from "./federation/crossDomainPeers.js";
 import { logAdmitGatewayQr } from "./federation/enrollQr.js";
 import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/hostRelay.js";
@@ -70,6 +76,9 @@ export async function startGateway(): Promise<void> {
 	// Cross-Gateway frames the Router routed to this Gateway; the gateway-relay pump owns
 	// full validation.
 	let handleGatewayRelay: ((frame: unknown) => void) | null = null;
+	// Pre-trust cross-Domain handshake frames the Router routed to this Gateway (the
+	// receiver leg); the handshake pump owns full validation.
+	let handleCrossDomainHandshake: ((frame: unknown) => void) | null = null;
 	let evictConsolePeer: ((conversationId: string) => void) | null = null;
 
 	store.startCleanup();
@@ -182,6 +191,10 @@ export async function startGateway(): Promise<void> {
 	// Exposed to the console handler (built in a later block) so its poll reply can carry
 	// the mirrored keyring + version for the Console's keyring sync.
 	let allowlistForConsole: Allowlist | null = null;
+	// The cross-Domain listening-mode handshake coordinator (built in the federation block),
+	// exposed to the console handler so the cross_domain_* ops drive the mutual pairing. The
+	// ONLY writer of the disjoint CrossDomainPeers store.
+	let crossDomainCoordinator: CrossDomainHandshakeCoordinator | null = null;
 
 	// The Gateway persists its federation identity + mirrored allowlist here; an enrolled
 	// Gateway also drops its service-proxy transport.json here. The bridge activates on
@@ -217,6 +230,50 @@ export async function startGateway(): Promise<void> {
 		}
 		replayPersist = () => replayDurable.save(replayGuard.snapshot());
 		sealer = createSealer(identity, allowlist, localGatewayId, crossDomainPeers, localDomainId, replayGuard);
+		// The cross-Domain listening-mode handshake: the ONLY writer of crossDomainPeers. It
+		// carries this Gateway's keys + ids into the SAS/link and reads the phone-held owner
+		// root from the allowlist. The requester leg routes both commit-reveal rounds through
+		// the Router seam below; evie (content-blind) forwards each frame to the receiver
+		// Gateway and holds the reply. evieClient is assigned further down in this block, so
+		// the seam reads it lazily at request time.
+		const routeHandshake = async (
+			action: string,
+			receiverGatewayId: string,
+			payload: unknown,
+		): Promise<unknown> => {
+			if (!evieClient) throw new Error("the Router is not connected; cannot reach the friend's Gateway");
+			const res = await evieClient.callTool(action, {
+				handshakeId: randomBytes(18).toString("base64url"),
+				srcDomain: localDomainId,
+				srcGateway: localGatewayId,
+				dstGateway: receiverGatewayId,
+				payload,
+			});
+			if (res.error) throw new Error(res.error);
+			const r = res.result as { ok?: boolean; error?: string; result?: unknown } | undefined;
+			if (!r?.ok) throw new Error(r?.error ?? "the friend's Gateway did not complete the handshake");
+			return r.result;
+		};
+		crossDomainCoordinator = new CrossDomainHandshakeCoordinator({
+			self: {
+				ownerSignPub: () => allowlist.ownerSignPub,
+				gatewaySignPub: identity.sign.pub,
+				gatewayBoxPub: identity.box.pub,
+				domainId: localDomainId,
+				gatewayId: localGatewayId,
+			},
+			peers: crossDomainPeers,
+			route: {
+				sendCommit: async (receiverGatewayId, req) => {
+					const r = await routeHandshake("cross_domain_handshake", receiverGatewayId, req);
+					return parseCommitReply(r);
+				},
+				sendReveal: async (receiverGatewayId, req) => {
+					const r = await routeHandshake("cross_domain_handshake_reveal", receiverGatewayId, req);
+					return parseRevealReply(r);
+				},
+			},
+		});
 		// The console channel rides the SAME durable replay guard + allowlist: a console
 		// frame is sealed to this gateway and signed by an admitted console key.
 		consoleSealer = createConsoleSealer(identity, allowlist, replayGuard);
@@ -262,6 +319,9 @@ export async function startGateway(): Promise<void> {
 			},
 			onGatewayRelay: (frame) => {
 				handleGatewayRelay?.(frame);
+			},
+			onCrossDomainHandshake: (frame) => {
+				handleCrossDomainHandshake?.(frame);
 			},
 			onDomainSync: (domain) => {
 				// evie mirrors the owner root + allowlist on each register reply; apply
@@ -389,6 +449,14 @@ export async function startGateway(): Promise<void> {
 			},
 			bootstrapTransport: () => loadBootstrapTransport(federationDir),
 			relayToHost,
+			crossDomain: crossDomainCoordinator
+				? {
+						listen: () => crossDomainCoordinator!.listen(),
+						request: (args) => crossDomainCoordinator!.request(args),
+						confirm: (args) => crossDomainCoordinator!.confirm(args),
+						cancel: (args) => crossDomainCoordinator!.cancel(args),
+					}
+				: undefined,
 		});
 		handleConsoleRelay = createConsoleRelayPump({
 			sealer: consoleSealer!,
@@ -407,6 +475,24 @@ export async function startGateway(): Promise<void> {
 			sendReply: (reply) =>
 				evieClient!.callTool("gateway_relay_reply", reply as unknown as Record<string, unknown>),
 		});
+
+		// Cross-Domain handshake (receiver leg): a pre-trust handshake frame the Router
+		// routed here runs through the coordinator's receiver leg, and the reply routes back
+		// to the requester Gateway through the Router.
+		if (crossDomainCoordinator) {
+			const coordinator = crossDomainCoordinator;
+			handleCrossDomainHandshake = createCrossDomainHandshakePump({
+				handleIncomingCommit: (req) => coordinator.handleIncomingCommit(req),
+				handleIncomingReveal: (req) => coordinator.handleIncomingReveal(req),
+				sendCommitReply: (reply) =>
+					evieClient!.callTool("cross_domain_handshake_reply", reply as unknown as Record<string, unknown>),
+				sendRevealReply: (reply) =>
+					evieClient!.callTool(
+						"cross_domain_handshake_reveal_reply",
+						reply as unknown as Record<string, unknown>,
+					),
+			});
+		}
 	}
 
 	async function router(req: Request): Promise<Response> {
