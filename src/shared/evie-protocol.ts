@@ -1,4 +1,4 @@
-// SYNC-HASH: 1cd16cdf6cd65936b0a45a766362e8a2
+// SYNC-HASH: 480dacf23463d6d1155f6cf7ab04b356
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -155,6 +155,12 @@ export const GatewayRelayRouteSchema = z.object({
 	relayId: z.string().min(1).max(128),
 	srcGateway: z.string().min(1).max(64),
 	dstGateway: z.string().min(1).max(64),
+	// The sender's Domain id. The Router stamps it from the SENDER connection's
+	// registered Domain (content-blind) so the destination resolves the source by the
+	// full (domainId, gatewayId) pair - a gateway id is not globally unique across
+	// Domains. Optional and min(1) when present; an ABSENT value resolves to the "home"
+	// Domain at the consumer, so a pre-multi-tenant relay still routes within "home".
+	srcDomain: z.string().min(1).max(64).optional(),
 	// Opaque to evie. The destination gateway parses/unseals it.
 	payload: z.unknown(),
 });

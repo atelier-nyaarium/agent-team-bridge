@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Allowlist } from "../gateway/federation/allowlist.js";
 import { type CrossDomainPeer, CrossDomainPeers } from "../gateway/federation/crossDomainPeers.js";
 import { ReplayGuard } from "../gateway/federation/replayGuard.js";
-import { createSealer } from "../gateway/federation/sealer.js";
+import { createSealer, type Sealer } from "../gateway/federation/sealer.js";
 import { type Admission, signAdmission } from "../shared/admission.js";
 import { generateIdentity, type Identity, seal, unseal } from "../shared/crypto.js";
 import { signXDomainLink, type XDomainLink } from "../shared/federation-protocol.js";
@@ -254,5 +254,98 @@ describe("sealer (cross-Domain v2)", () => {
 		const env = aSealer.seal("B", { ok: true });
 		const inner = JSON.parse(unseal(env, B.box.priv, A.sign.pub).toString("utf8"));
 		expect(inner.v).toBe(1);
+	});
+});
+
+////////////////////////////////
+//  Cross-Domain srcDomain disambiguation
+//
+//  Two friend Domains share the SAME gateway id ("shared"). The receiver holds both as
+//  cross-Domain peers. Pre-unseal, the cleartext frame names only the gateway id, so
+//  without the Router-stamped srcDomain the receiver cannot tell the two peers apart.
+//  The srcDomain on the relay frame resolves the right peer by the full (domain, gateway)
+//  pair - the gap the bare-id scan left open.
+
+const ownerP = generateIdentity(); // Domain "pat"
+const ownerQ = generateIdentity(); // Domain "quinn"
+const recvOwner = generateIdentity(); // the receiving Domain "rcv"
+const P = generateIdentity(); // gateway "shared" in Domain "pat"
+const Q = generateIdentity(); // gateway "shared" in Domain "quinn" (same id!)
+const R = generateIdentity(); // the receiving gateway "gw-r" in Domain "rcv"
+
+/** The receiver's peers: BOTH friend Domains run a gateway whose id is "shared". */
+function recvPeersWithCollision(): CrossDomainPeers {
+	const s = new CrossDomainPeers(tmp());
+	s.add(crossPeer(ownerP, "pat", "shared", P, recvOwner));
+	s.add(crossPeer(ownerQ, "quinn", "shared", Q, recvOwner));
+	return s;
+}
+
+/** A friend's OWN peer set: it knows the receiver (Domain "rcv", gateway "gw-r"), so its
+ * seal to the receiver resolves the receiver's keys + emits v2. */
+function friendPeersKnowingReceiver(friendOwner: Identity): CrossDomainPeers {
+	const s = new CrossDomainPeers(tmp());
+	s.add(crossPeer(recvOwner, "rcv", "gw-r", R, friendOwner));
+	return s;
+}
+
+describe("sealer (cross-Domain srcDomain disambiguation)", () => {
+	function receiverSealer(): Sealer {
+		return createSealer(R, soloAllowlist(recvOwner, "gw-r", R), "gw-r", recvPeersWithCollision(), "rcv");
+	}
+
+	it("resolves a same-id-two-Domains peer when srcDomain names the sender's Domain", () => {
+		// P (Domain "pat", gateway "shared") seals to the receiver. The receiver opens
+		// with srcDomain="pat" and resolves P's peer despite "quinn" also running "shared".
+		const pSealer = createSealer(
+			P,
+			soloAllowlist(ownerP, "shared", P),
+			"shared",
+			friendPeersKnowingReceiver(ownerP),
+			"pat",
+		);
+		const env = pSealer.seal({ domainId: "rcv", gatewayId: "gw-r" }, { who: "pat" });
+		expect(receiverSealer().open("shared", env, "pat")).toEqual({ who: "pat" });
+	});
+
+	it("resolves the OTHER same-id peer when srcDomain names the other Domain", () => {
+		// Q (Domain "quinn", same gateway id "shared") seals to the receiver; srcDomain="quinn"
+		// must select Q's peer, proving the pair - not the bare id - drives resolution.
+		const qSealer = createSealer(
+			Q,
+			soloAllowlist(ownerQ, "shared", Q),
+			"shared",
+			friendPeersKnowingReceiver(ownerQ),
+			"quinn",
+		);
+		const env = qSealer.seal({ domainId: "rcv", gatewayId: "gw-r" }, { who: "quinn" });
+		expect(receiverSealer().open("shared", env, "quinn")).toEqual({ who: "quinn" });
+	});
+
+	it("rejects a srcDomain that does not match any peer for the gateway id", () => {
+		const pSealer = createSealer(
+			P,
+			soloAllowlist(ownerP, "shared", P),
+			"shared",
+			friendPeersKnowingReceiver(ownerP),
+			"pat",
+		);
+		const env = pSealer.seal({ domainId: "rcv", gatewayId: "gw-r" }, { who: "pat" });
+		expect(() => receiverSealer().open("shared", env, "nobody")).toThrow(/not admitted/);
+	});
+
+	it("without srcDomain, a colliding gateway id stays ambiguous (back-compat null)", () => {
+		// The pre-multi-tenant fallback: no srcDomain + two peers sharing the id -> the
+		// scan refuses (the safe interim), so the authentic frame fails to open rather
+		// than being attributed to the wrong peer.
+		const pSealer = createSealer(
+			P,
+			soloAllowlist(ownerP, "shared", P),
+			"shared",
+			friendPeersKnowingReceiver(ownerP),
+			"pat",
+		);
+		const env = pSealer.seal({ domainId: "rcv", gatewayId: "gw-r" }, { who: "pat" });
+		expect(() => receiverSealer().open("shared", env)).toThrow(/not admitted/);
 	});
 });

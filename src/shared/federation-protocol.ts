@@ -87,6 +87,10 @@ export const GatewayRelayFrameSchema = z.object({
 	relayId: z.string().min(1).max(128),
 	srcGateway: z.string().min(1).max(64),
 	dstGateway: z.string().min(1).max(64),
+	// The sender's Domain id, stamped by the Router. Lets the open path resolve a
+	// cross-Domain peer by the full (domainId, gatewayId) pair. Absent on a frame from a
+	// pre-multi-tenant Router; the open path then falls back to the bare-gatewayId scan.
+	srcDomain: z.string().min(1).max(64).optional(),
 	payload: GatewayRelayPayloadSchema,
 });
 

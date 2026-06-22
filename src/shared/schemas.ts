@@ -246,6 +246,31 @@ export const ConsoleOpSchema = z
 			listeningToken: z.string().optional(),
 			pin: z.string().optional(),
 		}),
+		// Per-session sharing (cross-domain-federation.md). These three ops manage which of
+		// THIS owner's local sessions are offered to a LINKED friend Domain. Checking a share
+		// IS the consent (no double-confirm); the friend's agents may then reach the shared
+		// session. Only devcontainer/loose sessions may be shared - never the host-agent, the
+		// cli host, or a console - which the gateway enforces against its local team registry.
+		// Authenticated by the existing console seal (the frame is opened + the signer verified
+		// before dispatch), so there is no second signature scheme.
+
+		// Mark a local session shared to a friend Domain. Idempotent on `(sessionTarget,
+		// domainId)`: a re-share refreshes the share rather than duplicating it.
+		z.object({
+			kind: z.literal("cross_domain_share"),
+			// The canonical `gateway/name` target of the local session to share.
+			sessionTarget: z.string().min(1).max(128),
+			// The friend Domain (slug) this session is shared TO. Must be a linked Domain.
+			domainId: z.string().min(1).max(64),
+		}),
+		// Withdraw a local session's share to a friend Domain.
+		z.object({
+			kind: z.literal("cross_domain_unshare"),
+			sessionTarget: z.string().min(1).max(128),
+			domainId: z.string().min(1).max(64),
+		}),
+		// Read this owner's current shares (so the console can render the share checkmarks).
+		z.object({ kind: z.literal("cross_domain_list_shares") }),
 	])
 	.meta({ id: "ConsoleOp" });
 
@@ -496,6 +521,40 @@ export const CrossDomainCancelResultSchema = z
 	})
 	.meta({ id: "CrossDomainCancelResult" });
 
+////////////////////////////////
+//  Per-session share op results (gateway -> console)
+//
+//  share/unshare are simple acks; list_shares returns this owner's current shares so
+//  the console can render the per-session checkmarks (one entry per session per Domain).
+
+export const CrossDomainShareResultSchema = z
+	.object({
+		ok: z.boolean(),
+	})
+	.meta({ id: "CrossDomainShareResult" });
+
+export const CrossDomainUnshareResultSchema = z
+	.object({
+		ok: z.boolean(),
+	})
+	.meta({ id: "CrossDomainUnshareResult" });
+
+// One share row in a list_shares result: a local session offered to one friend Domain.
+// Named (.meta id) so the codegen emits it as a Kotlin nested class instead of erroring
+// on an inline array-of-object.
+export const CrossDomainShareEntrySchema = z
+	.object({
+		sessionTarget: z.string(),
+		domainId: z.string(),
+	})
+	.meta({ id: "CrossDomainShareEntry" });
+
+export const CrossDomainListSharesResultSchema = z
+	.object({
+		shares: z.array(CrossDomainShareEntrySchema),
+	})
+	.meta({ id: "CrossDomainListSharesResult" });
+
 export const ConsoleOpResultSchema = z.union([
 	ConsoleRegisterResultSchema,
 	ConsoleListTeamsResultSchema,
@@ -509,6 +568,9 @@ export const ConsoleOpResultSchema = z.union([
 	CrossDomainRequestResultSchema,
 	CrossDomainConfirmResultSchema,
 	CrossDomainCancelResultSchema,
+	CrossDomainShareResultSchema,
+	CrossDomainUnshareResultSchema,
+	CrossDomainListSharesResultSchema,
 ]);
 
 ////////////////////////////////

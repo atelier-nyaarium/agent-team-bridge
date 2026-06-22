@@ -1,4 +1,4 @@
-// SYNC-HASH: 49d3f003add4ee0c49da3c9fa23ad763
+// SYNC-HASH: 76a5e741bb1f9752dc86026ea91ea4f8
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -10,7 +10,7 @@ import {
 	SignedRevocationSchema,
 	signAdmission,
 } from "./admission.js";
-import { fingerprint } from "./crypto.js";
+import { fingerprint, sign, verify } from "./crypto.js";
 
 ////////////////////////////////
 //  Enrollment payloads (the unified QR) + the SAS confirm
@@ -71,11 +71,44 @@ export const EnrollmentPayloadSchema = z
 	])
 	.meta({ id: "EnrollmentPayload" });
 
+/** A content-blind cross-Domain link edge: an owner attests that traffic from its
+ * Domain (`srcDomainId`) may relay to a friend Domain (`dstDomainId`) it has linked
+ * with. evie's relay-affinity gate honors a cross-Domain `gateway_relay` only when such
+ * an owner-signed edge exists for the pair. Content-blind: it names only the two Domain
+ * ids, never a session or a key. Both ids are slug-constrained so neither can carry a
+ * newline that would make the signing bytes ambiguous against the other. */
+export const XDomainLinkEdgeSchema = z
+	.object({
+		srcDomainId: z
+			.string()
+			.regex(/^[a-z0-9-]+$/)
+			.max(64),
+		dstDomainId: z
+			.string()
+			.regex(/^[a-z0-9-]+$/)
+			.max(64),
+		issuedAt: z.number().int().nonnegative(),
+		nonce: z.string().min(1),
+	})
+	.meta({ id: "XDomainLinkEdge" });
+
+export const SignedXDomainLinkEdgeSchema = z
+	.object({
+		edge: XDomainLinkEdgeSchema,
+		// The linking owner's root key (base64). evie checks it against the srcDomain's
+		// rooted owner key (the owner of the Domain the edge authorizes traffic FROM),
+		// never trusting this field alone.
+		ownerSignPub: z.string().min(1),
+		// The owner's Ed25519 signature over xDomainLinkEdgeSigningBytes (base64).
+		signature: z.string().min(1),
+	})
+	.meta({ id: "SignedXDomainLinkEdge" });
+
 /** The owner device's enrollment requests to evie (NOT relayed to a Gateway - evie
- * is the Domain root). All three are self-authenticating: `enroll_redeem` is
- * authorized by the single-use nonce evie minted, and the submit ops carry an
- * owner-signed artifact evie verifies against the rooted owner key. The console
- * sends them over the same app-token-gated bridge as its gateway ops. */
+ * is the Domain root). All are self-authenticating: `enroll_redeem` is authorized by
+ * the single-use nonce evie minted, and the submit ops carry an owner-signed artifact
+ * evie verifies against the rooted owner key. The console sends them over the same
+ * app-token-gated bridge as its gateway ops. */
 export const EnrollOpSchema = z
 	.discriminatedUnion("kind", [
 		z.object({
@@ -86,6 +119,7 @@ export const EnrollOpSchema = z
 		}),
 		z.object({ kind: z.literal("submit_admission"), admission: SignedAdmissionSchema }),
 		z.object({ kind: z.literal("submit_revocation"), revocation: SignedRevocationSchema }),
+		z.object({ kind: z.literal("submit_xdomain_link"), edge: SignedXDomainLinkEdgeSchema }),
 	])
 	.meta({ id: "EnrollOp" });
 
@@ -100,6 +134,8 @@ export type AdmitGatewayPayload = Extract<EnrollmentPayload, { type: "admit-gate
 export type AuthorizeConsolePayload = Extract<EnrollmentPayload, { type: "authorize-console" }>;
 export type EnrollOp = z.infer<typeof EnrollOpSchema>;
 export type EnrollResult = z.infer<typeof EnrollResultSchema>;
+export type XDomainLinkEdge = z.infer<typeof XDomainLinkEdgeSchema>;
+export type SignedXDomainLinkEdge = z.infer<typeof SignedXDomainLinkEdgeSchema>;
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -138,4 +174,43 @@ export function admissionFromScan(
 				}
 			: { kind: "console", signPub: payload.signPub, boxPub: payload.boxPub, issuedAt: nowMs, nonce: nonceB64 };
 	return signAdmission(admission, ownerSignPrivB64, ownerSignPubB64);
+}
+
+/** Versioned, newline-joined signing bytes for a cross-Domain link edge. Mirrors
+ * `admissionSigningBytes` in shape; every field is base64 or a slug, so the encoding is
+ * unambiguous and reproduces byte-for-byte on switchboard, evie, and Android. Do NOT
+ * sign raw JSON. */
+export function xDomainLinkEdgeSigningBytes(edge: XDomainLinkEdge, ownerSignPubB64: string): Buffer {
+	return Buffer.from(
+		[
+			"XDOMAIN_RELAY_GATE_V1",
+			ownerSignPubB64,
+			edge.srcDomainId,
+			edge.dstDomainId,
+			String(edge.issuedAt),
+			edge.nonce,
+		].join("\n"),
+		"utf8",
+	);
+}
+
+/** Owner-sign a cross-Domain link edge (the owner device holds the signing key). */
+export function signXDomainLinkEdge(
+	edge: XDomainLinkEdge,
+	ownerSignPrivB64: string,
+	ownerSignPubB64: string,
+): SignedXDomainLinkEdge {
+	return {
+		edge,
+		ownerSignPub: ownerSignPubB64,
+		signature: sign(xDomainLinkEdgeSigningBytes(edge, ownerSignPubB64), ownerSignPrivB64),
+	};
+}
+
+/** True if the link edge verifies under the EXPECTED owner key (the rooted owner of the
+ * edge's srcDomain). The claimed ownerSignPub must equal the expected key AND the
+ * signature must check. */
+export function verifyXDomainLinkEdge(s: SignedXDomainLinkEdge, expectedOwnerSignPubB64: string): boolean {
+	if (s.ownerSignPub !== expectedOwnerSignPubB64) return false;
+	return verify(xDomainLinkEdgeSigningBytes(s.edge, expectedOwnerSignPubB64), s.signature, expectedOwnerSignPubB64);
 }

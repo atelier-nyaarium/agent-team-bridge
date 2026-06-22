@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { resolveAdmitted, signAdmission, verifyAdmission } from "../shared/admission.js";
 import { fingerprint, generateIdentity } from "../shared/crypto.js";
-import { admissionFromScan, EnrollmentPayloadSchema, EnrollOpSchema, payloadSas } from "../shared/enrollment.js";
+import {
+	admissionFromScan,
+	EnrollmentPayloadSchema,
+	EnrollOpSchema,
+	payloadSas,
+	signXDomainLinkEdge,
+	verifyXDomainLinkEdge,
+	type XDomainLinkEdge,
+} from "../shared/enrollment.js";
 
 const owner = generateIdentity();
 const host = generateIdentity();
@@ -82,5 +90,47 @@ describe("enrollment", () => {
 		expect(signed.admission.kind).toBe("console");
 		expect(signed.admission.gatewayId).toBeUndefined();
 		expect(resolveAdmitted([signed], [], owner.sign.pub, device.sign.pub)?.kind).toBe("console");
+	});
+});
+
+describe("cross-Domain link edge", () => {
+	const edge: XDomainLinkEdge = { srcDomainId: "home", dstDomainId: "carol", issuedAt: 1000, nonce: "bm9uY2U=" };
+
+	it("owner-signs and verifies a link edge under the owner key", () => {
+		const signed = signXDomainLinkEdge(edge, owner.sign.priv, owner.sign.pub);
+		expect(verifyXDomainLinkEdge(signed, owner.sign.pub)).toBe(true);
+	});
+
+	it("rejects a link edge under a different owner key", () => {
+		const attacker = generateIdentity();
+		const signed = signXDomainLinkEdge(edge, owner.sign.priv, owner.sign.pub);
+		expect(verifyXDomainLinkEdge(signed, attacker.sign.pub)).toBe(false);
+	});
+
+	it("rejects a tampered Domain id (the signature covers both ids)", () => {
+		const signed = signXDomainLinkEdge(edge, owner.sign.priv, owner.sign.pub);
+		const tampered = { ...signed, edge: { ...signed.edge, dstDomainId: "mallory" } };
+		expect(verifyXDomainLinkEdge(tampered, owner.sign.pub)).toBe(false);
+	});
+
+	it("rejects a claimed ownerSignPub that disagrees with the verifier key", () => {
+		const attacker = generateIdentity();
+		// Signed by the real owner but the artifact claims the attacker's key: the claimed
+		// key must equal the verifier key, so this fails before the signature even checks.
+		const signed = signXDomainLinkEdge(edge, owner.sign.priv, owner.sign.pub);
+		const relabeled = { ...signed, ownerSignPub: attacker.sign.pub };
+		expect(verifyXDomainLinkEdge(relabeled, attacker.sign.pub)).toBe(false);
+	});
+
+	it("parses a submit_xdomain_link enroll op and rejects a non-slug Domain id", () => {
+		const signed = signXDomainLinkEdge(edge, owner.sign.priv, owner.sign.pub);
+		expect(EnrollOpSchema.safeParse({ kind: "submit_xdomain_link", edge: signed }).success).toBe(true);
+		// Domain ids are slug-constrained so the signing bytes stay unambiguous.
+		const badSlug = signXDomainLinkEdge(
+			{ ...edge, srcDomainId: "Has Spaces" } as XDomainLinkEdge,
+			owner.sign.priv,
+			owner.sign.pub,
+		);
+		expect(EnrollOpSchema.safeParse({ kind: "submit_xdomain_link", edge: badSlug }).success).toBe(false);
 	});
 });

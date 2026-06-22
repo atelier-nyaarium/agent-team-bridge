@@ -5,6 +5,7 @@ import {
 	type ConsoleReplyBody,
 	type CrossDomainConfirmResult,
 	type CrossDomainListenResult,
+	type CrossDomainListSharesResult,
 	type CrossDomainRequestResult,
 	type MailboxInput,
 	type OpenedConsoleFrame,
@@ -79,6 +80,11 @@ export interface ConsoleHandlerDeps {
 	 * wired (the cross_domain_* ops then error "not available"). The console drives the
 	 * mutual pairing through these; the gateway owns the listening window + writes the peer. */
 	crossDomain?: CrossDomainConsoleHandlers;
+	/** The per-session share manager. Absent when federation is not wired (the
+	 * cross_domain_share/unshare/list_shares ops then error "not available"). Backed by the
+	 * gateway's CrossDomainShareState store; `isLinkedDomain` reads the cross-Domain peer set
+	 * so a share can only target a Domain the owner has actually linked. */
+	crossDomainShare?: CrossDomainShareHandlers;
 }
 
 /** The subset of the cross-Domain handshake coordinator the console handler drives. A
@@ -98,6 +104,18 @@ export interface CrossDomainConsoleHandlers {
 		friendSignedLink: SignedXDomainLink;
 	}) => CrossDomainConfirmResult;
 	cancel: (args: { listeningToken?: string; pin?: string }) => boolean;
+}
+
+/** The subset of the per-session share state the console handler drives. A narrow seam
+ * so the handler stays mockable and never imports the store class. `sessionTarget` is the
+ * canonical `gateway/name` of a LOCAL session; `domainId` is a linked friend Domain. */
+export interface CrossDomainShareHandlers {
+	share: (sessionTarget: string, domainId: string) => void;
+	unshare: (sessionTarget: string, domainId: string) => void;
+	listShares: () => CrossDomainListSharesResult["shares"];
+	/** Whether the owner has a linked cross-Domain peer in this Domain (a share can only
+	 * target a Domain that has been linked through the handshake). */
+	isLinkedDomain: (domainId: string) => boolean;
 }
 
 ////////////////////////////////
@@ -127,9 +145,10 @@ const MAX_OPS_PER_CONVERSATION = 256;
 function isMutatingOp(op: ConsoleOp): boolean {
 	// tmux_send injects keystrokes (a real side effect), so a retried opId must replay
 	// the cached ack, not re-send the keys. peek is a fresh read (never cached). The
-	// cross_domain_* ops all carry state (a minted window, a routed request, a written
-	// peer, a cancellation), so a retried opId replays the cached reply rather than
-	// minting a second window, re-routing, or re-writing the peer.
+	// cross_domain_* handshake ops all carry state (a minted window, a routed request, a
+	// written peer, a cancellation), so a retried opId replays the cached reply rather than
+	// minting a second window, re-routing, or re-writing the peer. share/unshare mutate the
+	// share store; a retried opId replays the cached ack. list_shares is a fresh read.
 	return (
 		op.kind === "send" ||
 		op.kind === "respond" ||
@@ -137,7 +156,9 @@ function isMutatingOp(op: ConsoleOp): boolean {
 		op.kind === "cross_domain_listen" ||
 		op.kind === "cross_domain_request" ||
 		op.kind === "cross_domain_confirm" ||
-		op.kind === "cross_domain_cancel"
+		op.kind === "cross_domain_cancel" ||
+		op.kind === "cross_domain_share" ||
+		op.kind === "cross_domain_unshare"
 	);
 }
 
@@ -153,6 +174,7 @@ export function createConsoleHandler({
 	bootstrapTransport,
 	relayToHost,
 	crossDomain,
+	crossDomainShare,
 }: ConsoleHandlerDeps) {
 	/** Resolve a console terminal target (the gateway-qualified session name) to the host
 	 * tmux it maps to: the host-agent's own session for "gateway", a devcontainer for a known
@@ -614,7 +636,59 @@ export function createConsoleHandler({
 				// windows, so it stays a no-op success.
 				return { cancelled: crossDomain.cancel({ listeningToken: op.listeningToken, pin: op.pin }) };
 			}
+
+			case "cross_domain_share": {
+				if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
+				// Store under the CANONICAL gateway/name key, the same form the relay gate, the
+				// sweep, and discovery compare against; a bare-name share would otherwise never
+				// match and silently never take effect.
+				const canonicalTarget = await assertShareable(op.sessionTarget, op.domainId);
+				crossDomainShare.share(canonicalTarget, op.domainId);
+				return { ok: true };
+			}
+
+			case "cross_domain_unshare": {
+				if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
+				// An unshare is always allowed (it only revokes): no kind/linked gate, so a
+				// session whose kind changed or a now-unlinked Domain can still be cleaned up.
+				// Canonicalize so an unshare keys identically to the share it withdraws.
+				crossDomainShare.unshare(canonicalShareTarget(op.sessionTarget), op.domainId);
+				return { ok: true };
+			}
+
+			case "cross_domain_list_shares": {
+				if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
+				return { shares: crossDomainShare.listShares() };
+			}
 		}
+	}
+
+	/** The canonical `gateway/name` key a session is shared under, the single form every
+	 * read path (the relay gate, the sweep, discovery) compares against. A bare name resolves
+	 * to this Gateway; an already-qualified local name is preserved. */
+	function canonicalShareTarget(sessionTarget: string): string {
+		return TeamAddress.local(localGatewayId, parseQualifiedTeam(sessionTarget).name).canonical;
+	}
+
+	/** Gate a share request and return the CANONICAL key to store it under: the session must
+	 * be a LOCAL session of a shareable kind (devcontainer or loose ONLY - never the host-agent
+	 * "gateway", the cli "host", or a console-kind team) and the friend Domain must be one the
+	 * owner has actually linked. Resolves the kind from the local team registry the way teams()
+	 * classifies them. */
+	async function assertShareable(sessionTarget: string, domainId: string): Promise<string> {
+		if (!crossDomainShare?.isLinkedDomain(domainId)) {
+			throw new Error(`cannot share to "${domainId}": not a linked Domain`);
+		}
+		const { gatewayId, name } = parseQualifiedTeam(sessionTarget);
+		if (gatewayId && gatewayId !== localGatewayId) {
+			throw new Error(`cannot share "${sessionTarget}": only local sessions can be shared`);
+		}
+		const teams = (await routes.teams().json()) as TeamInfo[];
+		const target = teams.find((t) => t.team === name);
+		if (!target || (target.kind !== "devcontainer" && target.kind !== "loose")) {
+			throw new Error(`cannot share "${name}": only devcontainer and loose sessions can be shared`);
+		}
+		return TeamAddress.local(localGatewayId, name).canonical;
 	}
 
 	async function runFrame(frame: OpenedConsoleFrame): Promise<ConsoleReplyBody> {

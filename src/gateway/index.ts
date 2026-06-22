@@ -26,6 +26,7 @@ import {
 	parseRevealReply,
 } from "./federation/crossDomainHandshake.js";
 import { CrossDomainPeers } from "./federation/crossDomainPeers.js";
+import { CrossDomainShareState } from "./federation/crossDomainShareState.js";
 import { logAdmitGatewayQr } from "./federation/enrollQr.js";
 import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/hostRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
@@ -195,6 +196,12 @@ export async function startGateway(): Promise<void> {
 	// exposed to the console handler so the cross_domain_* ops drive the mutual pairing. The
 	// ONLY writer of the disjoint CrossDomainPeers store.
 	let crossDomainCoordinator: CrossDomainHandshakeCoordinator | null = null;
+	// The per-session share state (built in the federation block alongside crossDomainPeers),
+	// exposed to the console handler so the cross_domain_share/unshare/list_shares ops manage
+	// which local sessions are offered to a linked friend Domain. `isLinkedDomain` reads the
+	// peer set so a share can only target a Domain the owner has actually linked.
+	let crossDomainShareState: CrossDomainShareState | null = null;
+	let crossDomainPeersForConsole: CrossDomainPeers | null = null;
 
 	// The Gateway persists its federation identity + mirrored allowlist here; an enrolled
 	// Gateway also drops its service-proxy transport.json here. The bridge activates on
@@ -219,6 +226,12 @@ export async function startGateway(): Promise<void> {
 		// so a home-Domain sync can never wipe it and it never contaminates intra-Domain
 		// resolution. The sealer resolves home peers first, then this set.
 		const crossDomainPeers = new CrossDomainPeers(federationDir);
+		crossDomainPeersForConsole = crossDomainPeers;
+		// Per-session share state: which local sessions are offered to which linked friend
+		// Domains, persisted alongside the peer set. Plain gateway-local state (the device's
+		// submit op is authenticated by the existing console seal), read by discovery and the
+		// relay so an un-share bites without evie.
+		crossDomainShareState = new CrossDomainShareState(federationDir);
 		const identity = loadOrCreateIdentity(federationDir);
 		// Durable replay-guard: persisted across restarts so an authentic sealed frame
 		// captured inside the 120s freshness window cannot replay once after a deploy.
@@ -432,6 +445,16 @@ export async function startGateway(): Promise<void> {
 		mailboxStore,
 		evieClient,
 		sealer,
+		crossDomainPeers: crossDomainPeersForConsole,
+		// Home-first seal-target resolution on the send side: a target gateway the home
+		// allowlist admits seals v1 to home, mirroring the sealer's open-side ordering, so a
+		// home/friend gateway-id collision never routes a home send to the friend.
+		resolvesHomeGateway: allowlistForConsole
+			? (gatewayId) => allowlistForConsole!.resolveGateway(gatewayId) !== null
+			: null,
+		// teams() refreshes each online session's cross-Domain shares so presence keeps a
+		// share from auto-forgetting; the periodic sweep below reaps only absent sessions.
+		touchShares: crossDomainShareState ? (sessionTarget) => crossDomainShareState!.touch(sessionTarget) : null,
 		resolveHandshake: wsHandlers.resolveHandshake,
 	});
 
@@ -457,6 +480,22 @@ export async function startGateway(): Promise<void> {
 						cancel: (args) => crossDomainCoordinator!.cancel(args),
 					}
 				: undefined,
+			crossDomainShare:
+				crossDomainShareState && crossDomainPeersForConsole
+					? {
+							share: (sessionTarget, domainId) => crossDomainShareState!.share(sessionTarget, domainId),
+							unshare: (sessionTarget, domainId) =>
+								crossDomainShareState!.unshare(sessionTarget, domainId),
+							listShares: () =>
+								crossDomainShareState!
+									.all()
+									.map((s) => ({ sessionTarget: s.sessionTarget, domainId: s.toDomainId })),
+							// A share may only target a Domain the owner has actually linked: the peer
+							// set has at least one entry for that friendDomainId.
+							isLinkedDomain: (domainId) =>
+								crossDomainPeersForConsole!.all().some((p) => p.friendDomainId === domainId),
+						}
+					: undefined,
 		});
 		handleConsoleRelay = createConsoleRelayPump({
 			sealer: consoleSealer!,
@@ -467,8 +506,27 @@ export async function startGateway(): Promise<void> {
 		evictConsolePeer = (conversationId) => consoleHandler.removePeer(conversationId);
 
 		// Federation: a peer Gateway's frames land here, run against the local routes,
-		// and the reply routes home through the Router.
-		const gatewayRelayHandler = createGatewayRelayHandler({ routes, tryWakeTeam });
+		// and the reply routes home through the Router. The share state gates a
+		// cross-Domain op to a shared devcontainer/loose session and filters a
+		// cross-Domain caller's list_teams to shared sessions only.
+		const gatewayRelayHandler = createGatewayRelayHandler({
+			routes,
+			tryWakeTeam,
+			localGatewayId,
+			shareState: crossDomainShareState
+				? {
+						isSharedTo: (sessionTarget, domainId) =>
+							crossDomainShareState!.isSharedTo(sessionTarget, domainId),
+						sharesFor: (domainId) => crossDomainShareState!.sharesFor(domainId),
+						touch: (sessionTarget) => crossDomainShareState!.touch(sessionTarget),
+					}
+				: undefined,
+			// An inbound cross-Domain reply / colliding re-send is gated on the binding this
+			// Gateway recorded when IT created the job (the friend Domain it was routed to /
+			// came from), not on the friend-controlled bare gateway id, so a friend cannot
+			// forge a reply into another friend's job or hijack an unrelated job's reply route.
+			crossDomainBinding: (sessionId) => store.crossDomainBinding(sessionId, localGatewayId),
+		});
 		handleGatewayRelay = createGatewayRelayPump({
 			sealer: sealer!,
 			handleOp: gatewayRelayHandler.handleOp,
@@ -493,6 +551,31 @@ export async function startGateway(): Promise<void> {
 					),
 			});
 		}
+	}
+
+	// Per-session share auto-forget: a share whose session has not been seen online for a
+	// month is dropped, UNLESS a live cross-Domain thread to that session still exists (a
+	// running collaboration must not lose its share mid-stream). teams() touches every live
+	// session's shares so presence keeps a share fresh; this timer reaps the absent ones.
+	if (crossDomainShareState && crossDomainPeersForConsole) {
+		const share = crossDomainShareState;
+		const peers = crossDomainPeersForConsole;
+		const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+		// "Live" means RECENTLY ACTIVE, not "ever touched": a persistent anchor refreshes its
+		// createdAt on every create + deliver, so a thread idle past this window stops
+		// suppressing the auto-forget (otherwise a single stale anchor pins a share forever).
+		const isLive = (sessionTarget: string): boolean =>
+			store.hasLiveCrossDomainThread(
+				sessionTarget,
+				(gatewayId) => peers.all().some((p) => p.friendGatewayId === gatewayId),
+				localGatewayId,
+				THIRTY_DAYS_MS,
+			);
+		const shareSweepTimer = setInterval(() => {
+			const dropped = share.sweep(Date.now(), THIRTY_DAYS_MS, isLive);
+			if (dropped > 0) console.log(`[federation] auto-forgot ${dropped} stale cross-Domain share(s)`);
+		}, 3_600_000);
+		shareSweepTimer.unref?.();
 	}
 
 	async function router(req: Request): Promise<Response> {

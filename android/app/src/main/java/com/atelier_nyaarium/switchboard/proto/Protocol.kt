@@ -168,6 +168,24 @@ sealed class ConsoleOp {
 		val listeningToken: String? = null,
 		val pin: String? = null,
 	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_share")
+	data class CrossDomainShare(
+		val sessionTarget: String,
+		val domainId: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_unshare")
+	data class CrossDomainUnshare(
+		val sessionTarget: String,
+		val domainId: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_list_shares")
+	data object CrossDomainListShares : ConsoleOp()
 }
 
 @Serializable
@@ -329,6 +347,12 @@ sealed class EnrollOp {
 	data class SubmitRevocation(
 		val revocation: SignedRevocation,
 	) : EnrollOp()
+
+	@Serializable
+	@SerialName("submit_xdomain_link")
+	data class SubmitXdomainLink(
+		val edge: SignedXDomainLinkEdge,
+	) : EnrollOp()
 }
 
 @Serializable
@@ -432,6 +456,27 @@ data class CrossDomainCancelResult(
 )
 
 @Serializable
+data class CrossDomainShareResult(
+	val ok: Boolean,
+)
+
+@Serializable
+data class CrossDomainUnshareResult(
+	val ok: Boolean,
+)
+
+@Serializable
+data class CrossDomainListSharesResult(
+	val shares: List<CrossDomainShareEntry>,
+)
+
+@Serializable
+data class CrossDomainShareEntry(
+	val sessionTarget: String,
+	val domainId: String,
+)
+
+@Serializable
 data class SttsProvider(
 	val id: String,
 	val label: String,
@@ -454,4 +499,19 @@ data class SttsDefaults(
 data class SttsVoice(
 	val id: String,
 	val label: String? = null,
+)
+
+@Serializable
+data class SignedXDomainLinkEdge(
+	val edge: XDomainLinkEdge,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class XDomainLinkEdge(
+	val srcDomainId: String,
+	val dstDomainId: String,
+	val issuedAt: Long,
+	val nonce: String,
 )

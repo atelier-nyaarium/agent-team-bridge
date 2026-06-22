@@ -1157,3 +1157,229 @@ describe("console cross-Domain handshake ops", () => {
 		expect(reply.error).toContain("not available");
 	});
 });
+
+describe("console cross-Domain share ops", () => {
+	// A team list mixing every kind, so the kind gate can be exercised: a devcontainer and a
+	// loose session are shareable; the host-agent ("gateway"), a console-kind device, and an
+	// unknown name are not. teams() carries each team's gatewayId (the canonical target's gw).
+	function teamsList(): Response {
+		return jsonRes([
+			{ team: "app", gatewayId: "test-host", status: "online", kind: "devcontainer", queue_depth: 0 },
+			{ team: "scratch-1", gatewayId: "test-host", status: "online", kind: "loose", queue_depth: 0 },
+			{ team: "gateway", gatewayId: "test-host", status: "online", kind: "gateway", queue_depth: 0 },
+			{ team: "pixel", gatewayId: "test-host", status: "online", kind: "console", queue_depth: 0 },
+		]);
+	}
+
+	function makeShareHarness(opts: { linkedDomains?: string[] } = {}) {
+		const linked = new Set(opts.linkedDomains ?? ["carol"]);
+		const calls: Record<string, unknown[]> = { share: [], unshare: [], listShares: [] };
+		// An in-memory share set so the dispatch's effect is observable end to end.
+		const set = new Set<string>();
+		const key = (sessionTarget: string, domainId: string) => `${sessionTarget} ${domainId}`;
+		const crossDomainShare = {
+			share: (sessionTarget: string, domainId: string) => {
+				calls.share.push({ sessionTarget, domainId });
+				set.add(key(sessionTarget, domainId));
+			},
+			unshare: (sessionTarget: string, domainId: string) => {
+				calls.unshare.push({ sessionTarget, domainId });
+				set.delete(key(sessionTarget, domainId));
+			},
+			listShares: () => {
+				calls.listShares.push({});
+				return [...set].map((k) => {
+					const [sessionTarget, domainId] = k.split(" ");
+					return { sessionTarget, domainId };
+				});
+			},
+			isLinkedDomain: (domainId: string) => linked.has(domainId),
+		};
+		const routes: ConsoleRoutes = {
+			send: async () => jsonRes({ session_id: "s", status: "running" }),
+			respond: () => jsonRes({ delivered: true }),
+			teams: teamsList,
+			discover: async () => teamsList(),
+		};
+		const handler = createConsoleHandler({
+			registry: new Map(),
+			conversationRegistry: new Map(),
+			mailboxStore: new DeviceMailboxStore(),
+			localGatewayId: "test-host",
+			routes,
+			crossDomainShare,
+		});
+		return { handler, calls, set };
+	}
+
+	it("cross_domain_share marks a devcontainer session shared (hits the store)", async () => {
+		const h = makeShareHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "test-host/app", domainId: "carol" }, "s1"),
+		);
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toEqual({ ok: true });
+		expect(h.calls.share).toEqual([{ sessionTarget: "test-host/app", domainId: "carol" }]);
+	});
+
+	it("cross_domain_share allows a loose session", async () => {
+		const h = makeShareHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "test-host/scratch-1", domainId: "carol" }, "s2"),
+		);
+		expect(reply.ok).toBe(true);
+		expect(h.calls.share).toHaveLength(1);
+	});
+
+	it("cross_domain_unshare withdraws a share (hits the store)", async () => {
+		const h = makeShareHarness();
+		await h.handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "test-host/app", domainId: "carol" }, "s1"),
+		);
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_unshare", sessionTarget: "test-host/app", domainId: "carol" }, "u1"),
+		);
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toEqual({ ok: true });
+		expect(h.calls.unshare).toEqual([{ sessionTarget: "test-host/app", domainId: "carol" }]);
+		expect(h.set.size).toBe(0);
+	});
+
+	it("cross_domain_list_shares returns the current shares (hits the store)", async () => {
+		const h = makeShareHarness();
+		await h.handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "test-host/app", domainId: "carol" }, "s1"),
+		);
+		const reply = await h.handler.handleFrame(frame({ kind: "cross_domain_list_shares" }, "ls1"));
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toEqual({ shares: [{ sessionTarget: "test-host/app", domainId: "carol" }] });
+		expect(h.calls.listShares).toHaveLength(1);
+	});
+
+	it("rejects sharing the host-agent (kind gateway) and never hits the store", async () => {
+		const h = makeShareHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "test-host/gateway", domainId: "carol" }, "g1"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("only devcontainer and loose");
+		expect(h.calls.share).toHaveLength(0);
+	});
+
+	it("rejects sharing a console-kind team", async () => {
+		const h = makeShareHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "test-host/pixel", domainId: "carol" }, "c1"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("only devcontainer and loose");
+		expect(h.calls.share).toHaveLength(0);
+	});
+
+	it("rejects sharing an unknown session", async () => {
+		const h = makeShareHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "test-host/nope", domainId: "carol" }, "n1"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("only devcontainer and loose");
+		expect(h.calls.share).toHaveLength(0);
+	});
+
+	it("rejects sharing a session on another Gateway (only local sessions)", async () => {
+		const h = makeShareHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "other-gw/app", domainId: "carol" }, "x1"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("only local sessions");
+		expect(h.calls.share).toHaveLength(0);
+	});
+
+	it("rejects sharing to an unlinked Domain and never hits the store", async () => {
+		const h = makeShareHarness({ linkedDomains: ["carol"] });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "test-host/app", domainId: "dave" }, "d1"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("not a linked Domain");
+		expect(h.calls.share).toHaveLength(0);
+	});
+
+	it("a retried cross_domain_share opId replays the cached ack without re-running", async () => {
+		const h = makeShareHarness();
+		const f = frame({ kind: "cross_domain_share", sessionTarget: "test-host/app", domainId: "carol" }, "dup-s");
+		const r1 = await h.handler.handleFrame(f);
+		const r2 = await h.handler.handleFrame(f);
+		expect(r1).toEqual(r2);
+		// The opId cache absorbed the retry, so the store saw exactly one share.
+		expect(h.calls.share).toHaveLength(1);
+	});
+
+	it("a retried cross_domain_unshare opId replays the cached ack without re-running", async () => {
+		const h = makeShareHarness();
+		await h.handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "test-host/app", domainId: "carol" }, "s1"),
+		);
+		const f = frame({ kind: "cross_domain_unshare", sessionTarget: "test-host/app", domainId: "carol" }, "dup-u");
+		const r1 = await h.handler.handleFrame(f);
+		const r2 = await h.handler.handleFrame(f);
+		expect(r1).toEqual(r2);
+		expect(h.calls.unshare).toHaveLength(1);
+	});
+
+	it("the share ops error cleanly when federation is not wired", async () => {
+		const handler = createConsoleHandler({
+			registry: new Map(),
+			conversationRegistry: new Map(),
+			mailboxStore: new DeviceMailboxStore(),
+			localGatewayId: "test-host",
+			routes: {
+				send: async () => jsonRes({}),
+				respond: () => jsonRes({}),
+				teams: () => jsonRes([]),
+				discover: async () => jsonRes([]),
+			},
+		});
+		const reply = await handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "test-host/app", domainId: "carol" }, "nf-s"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("not available");
+		const lr = await handler.handleFrame(frame({ kind: "cross_domain_list_shares" }, "nf-ls"));
+		expect(lr.ok).toBe(false);
+		expect(lr.error).toContain("not available");
+	});
+
+	// Fix 5 regression: a BARE-name share must be stored under the CANONICAL gateway/name key,
+	// the same form the relay gate / sweep / discovery compare against. The OLD code stored the
+	// raw op.sessionTarget, so a bare-name share ("app") was filed as "app" and the relay's
+	// "test-host/app" lookup never matched - the share silently never took effect (fail-closed).
+	it("a bare-name share is stored under the canonical gateway/name key the relay looks up", async () => {
+		const h = makeShareHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "app", domainId: "carol" }, "bare-s"),
+		);
+		expect(reply.ok).toBe(true);
+		// The store was handed the CANONICAL "test-host/app", not the raw bare "app" - so the
+		// relay gate, which looks up "test-host/app", will actually find it.
+		expect(h.calls.share).toEqual([{ sessionTarget: "test-host/app", domainId: "carol" }]);
+		// And the canonical form is what list_shares (the console's read) reports.
+		const lr = await h.handler.handleFrame(frame({ kind: "cross_domain_list_shares" }, "bare-ls"));
+		expect(lr.result).toEqual({ shares: [{ sessionTarget: "test-host/app", domainId: "carol" }] });
+	});
+
+	it("a bare-name unshare withdraws the canonical share it created", async () => {
+		const h = makeShareHarness();
+		await h.handler.handleFrame(
+			frame({ kind: "cross_domain_share", sessionTarget: "app", domainId: "carol" }, "bare-s"),
+		);
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_unshare", sessionTarget: "app", domainId: "carol" }, "bare-u"),
+		);
+		expect(reply.ok).toBe(true);
+		// The unshare canonicalizes too, so it keys identically to the share and removes it.
+		expect(h.calls.unshare).toEqual([{ sessionTarget: "test-host/app", domainId: "carol" }]);
+		expect(h.set.size).toBe(0);
+	});
+});
