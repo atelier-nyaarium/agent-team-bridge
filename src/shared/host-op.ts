@@ -31,6 +31,8 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
 	"Right",
 	"Tab",
 	"BTab",
+	"BSpace",
+	"M-BSpace",
 ]);
 
 export type HostOp =
