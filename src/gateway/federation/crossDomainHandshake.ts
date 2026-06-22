@@ -209,7 +209,8 @@ export interface CrossDomainHandshakeDeps {
 	/** The Router routing seam (requester role). Absent when the Router is not wired, in
 	 * which case `request` errors instead of routing. */
 	route?: CrossDomainRouter;
-	/** Listening-window TTL (default 600s, matching the enrollment nonce window). */
+	/** Listening-window TTL (default 1 hour, intentionally long so a friend installing the app
+	 * from scratch does not time out mid-pairing). */
 	ttlMs?: number;
 	/** Hard cap on pairing attempts per listening token before it is invalidated. */
 	maxAttempts?: number;
@@ -219,9 +220,9 @@ export interface CrossDomainHandshakeDeps {
 ////////////////////////////////
 //  Constants
 
-// The listening window: ~10 minutes, matching the enrollment nonce TTL. The owner is
-// on the pairing screen the whole time; leaving cancels it.
-const DEFAULT_TTL_MS = 600_000;
+// The listening window is intentionally long (1 hour) so a friend installing the app from
+// scratch does not time out mid-pairing. Leaving the pairing screen still cancels it.
+const DEFAULT_TTL_MS = 3_600_000;
 
 // Tight single-digit cap on pairing attempts against one listening token (plan: "tight
 // single-digit, global per requester-owner within the window"). On cap-exceeded the token
