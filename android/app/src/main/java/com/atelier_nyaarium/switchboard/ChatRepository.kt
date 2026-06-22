@@ -578,13 +578,22 @@ class ChatRepository(
 			store.autoTts = value
 		}
 
-	/** When on (with sttsAutoGen), the summary plays aloud automatically once it
-	 * is synthesized. Persisted in prefs. */
-	var sttsAutoPlaySummary: Boolean
-		get() = store.autoPlaySummary
+	/** Which tier of a new message plays aloud automatically the moment it
+	 * arrives. One of "off", "title", "summary", "full". Independent of
+	 * sttsAutoGen. Persisted in prefs. */
+	var sttsAutoPlay: String
+		get() = store.autoPlay
 		set(value) {
-			store.autoPlaySummary = value
+			store.autoPlay = value
 		}
+
+	/** Map the autoPlay pref string to its tier, or null for "off"/unknown. */
+	private fun autoPlayTier(value: String): SttsPlayer.Tier? = when (value) {
+		"title" -> SttsPlayer.Tier.TITLE
+		"summary" -> SttsPlayer.Tier.SUMMARY
+		"full" -> SttsPlayer.Tier.FULL
+		else -> null
+	}
 
 	/** Pre-synthesize both tiers of a message into the cache so a later Play is
 	 * instant. Blocking; runs off the poll loop on an IO thread. Silent on any
@@ -1483,20 +1492,24 @@ class ChatRepository(
 						// notifies without preloading.
 						val followed = team in _state.value.openTabs
 						val scope = pollScope
-						if (scope != null && lastAgent != null && sttsAutoGen && sttsReady() && followed) {
+						// Pre-generate and auto-play are independent: enter the launch
+						// path when either is active for this followed thread.
+						val autoTier = autoPlayTier(sttsAutoPlay)
+						if (scope != null && lastAgent != null && sttsReady() && followed && (sttsAutoGen || autoTier != null)) {
 							val t = team
 							val ms = msgs
 							val at = lastAgent.at
 							scope.launch(Dispatchers.IO) {
-								// Wait fully for synthesis so the cache is warm when the
-								// notification lands. preloadMessage never throws and is
-								// bounded by the STTS client's own timeouts, so a failed or
-								// slow synth still falls through and the notification fires.
-								preloadMessage(t, at)
+								// When pre-generate is on, wait fully for synthesis so the
+								// cache is warm when the notification lands. preloadMessage
+								// never throws and is bounded by the STTS client's own
+								// timeouts, so a failed or slow synth still falls through and
+								// the notification fires.
+								if (sttsAutoGen) preloadMessage(t, at)
 								onInbound?.invoke(t, ms)
-								// Hands-free: speak the summary the moment it is ready (a
-								// cache hit from the preload above).
-								if (sttsAutoPlaySummary) playMessage(t, at, SttsPlayer.Tier.SUMMARY)
+								// Hands-free: speak the chosen tier the moment it arrives. A
+								// tier not pre-synthesized is synthesized on demand here.
+								if (autoTier != null) playMessage(t, at, autoTier)
 							}
 						} else {
 							onInbound?.invoke(team, msgs)

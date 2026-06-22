@@ -23,7 +23,7 @@ import java.util.concurrent.Executors
  * impatient multi-taps can never fire a second request.
  */
 class SttsPlayer(private val root: File) {
-	enum class Tier(val suffix: String) { FULL("full"), SUMMARY("summary") }
+	enum class Tier(val suffix: String) { FULL("full"), SUMMARY("summary"), TITLE("title") }
 
 	private val exec = Executors.newSingleThreadExecutor { r -> Thread(r, "stts").apply { isDaemon = true } }
 	private val inFlight = Collections.synchronizedSet(mutableSetOf<String>())
@@ -263,6 +263,7 @@ class SttsPlayer(private val root: File) {
 		 * is the sanitized body. */
 		fun ttsText(m: Message, tier: Tier): String = when (tier) {
 			Tier.SUMMARY -> m.summary ?: m.title ?: sanitize(m.text)
+			Tier.TITLE -> m.title ?: m.summary ?: sanitize(m.text)
 			Tier.FULL -> sanitize(m.text)
 		}
 
