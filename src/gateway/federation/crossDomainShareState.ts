@@ -73,13 +73,17 @@ export class CrossDomainShareState {
 		this.persist();
 	}
 
-	/** Withdraw a session's share to a friend Domain. */
-	unshare(sessionTarget: string, toDomainId: string): void {
+	/** Withdraw a session's share to a friend Domain. Returns whether a record was actually
+	 * removed, so the caller can skip the follow-on in-flight-job expiry when the share was
+	 * already absent (an idempotent re-unshare does no work). */
+	unshare(sessionTarget: string, toDomainId: string): boolean {
 		const before = this.state.shares.length;
 		this.state.shares = this.state.shares.filter(
 			(s) => !(s.sessionTarget === sessionTarget && s.toDomainId === toDomainId),
 		);
-		if (this.state.shares.length !== before) this.persist();
+		const removed = this.state.shares.length !== before;
+		if (removed) this.persist();
+		return removed;
 	}
 
 	/** Whether a session is currently shared to a given friend Domain. */
@@ -107,6 +111,18 @@ export class CrossDomainShareState {
 			}
 		}
 		if (changed) this.persist();
+	}
+
+	/** Drop EVERY share offered to a friend Domain, returning the number dropped. The
+	 * immediate unlink path: forgetting what was shared to a Domain when its link is pulled,
+	 * so a re-link starts from share-nothing. Distinct from the absence sweep, which is the
+	 * automatic per-session auto-forget; this is the manual, immediate, whole-Domain drop. */
+	dropDomain(toDomainId: string): number {
+		const before = this.state.shares.length;
+		this.state.shares = this.state.shares.filter((s) => s.toDomainId !== toDomainId);
+		const removed = before - this.state.shares.length;
+		if (removed > 0) this.persist();
+		return removed;
 	}
 
 	/** A copy of all share records. */

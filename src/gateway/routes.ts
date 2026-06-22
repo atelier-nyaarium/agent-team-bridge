@@ -57,6 +57,12 @@ export interface RoutesDeps {
 	// called from teams() per online team so a session's presence keeps its shares from
 	// auto-forgetting. Absent when federation sharing is not wired.
 	touchShares?: ((sessionTarget: string) => void) | null;
+	// Whether a local session (canonical gateway/name) is still shared to a friend Domain,
+	// re-read on the destination cross-Domain reply forward: an already-accepted send whose
+	// session was un-shared has its in-flight reply DROPPED here rather than relayed home. The
+	// share state is the single source both the inbound gate and this reply gate read, so an
+	// un-share bites without evie. Absent when federation sharing is not wired (no recheck).
+	isSharedToForReply?: ((sessionTarget: string, domainId: string) => boolean) | null;
 	resolveHandshake?: (sessionId: string, replyAsJson?: Record<string, unknown>, response?: string) => boolean;
 }
 
@@ -182,6 +188,7 @@ export function createRoutes({
 	crossDomainPeers,
 	resolvesHomeGateway,
 	touchShares,
+	isSharedToForReply,
 	resolveHandshake,
 }: RoutesDeps) {
 	const { LOG_PATH, localGatewayId, localDomainId } = config;
@@ -723,6 +730,22 @@ export function createRoutes({
 		// local conversationRegistry has no entry for the remote sender.
 		if (deliverResult.returnRoute) {
 			const rr = deliverResult.returnRoute;
+			// Re-check the per-session share on a CROSS-DOMAIN reply (a destination job carries the
+			// verified friend Domain): an already-accepted send whose session was un-shared after it
+			// landed must have its in-flight reply DROPPED, not relayed home. The share state is the
+			// same source the inbound op gate reads, so an un-share bites every direction without
+			// evie. The session target is the canonical gateway/name parsed from the job's own
+			// (origin-set) session key, the form the share is keyed by. A same-Domain federated reply
+			// (dstDomainId null) skips the gate, unchanged.
+			if (deliverResult.dstDomainId) {
+				const sessionTarget = SessionId.parse(rr.srcSession, localGatewayId)?.target.canonical;
+				if (!sessionTarget || !isSharedToForReply?.(sessionTarget, deliverResult.dstDomainId)) {
+					console.log(
+						`[respond] ${respondSessionId} DROPPED: session no longer shared to Domain "${deliverResult.dstDomainId}"`,
+					);
+					return jsonResponse({ delivered: false, dropped: "unshared" });
+				}
+			}
 			relayWithRetry(
 				rr.srcGateway,
 				{

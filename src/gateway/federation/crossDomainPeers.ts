@@ -103,10 +103,23 @@ export class CrossDomainPeers {
 	}
 
 	/** Drop every peer with this friend gateway id (across any Domain), returning the
-	 * number removed. Lifecycle / unlink. */
+	 * number removed. A targeted per-gateway remove; an unlink drops the whole Domain
+	 * via removeByDomain. */
 	remove(friendGatewayId: string): number {
 		const before = this.state.peers.length;
 		this.state.peers = this.state.peers.filter((e) => e.friendGatewayId !== friendGatewayId);
+		const removed = before - this.state.peers.length;
+		if (removed > 0) this.persist();
+		return removed;
+	}
+
+	/** Drop EVERY peer of a friend Domain, across all its gateways (a Domain may run more
+	 * than one), returning the number removed. This is the unlink granularity: pulling
+	 * trust from a friend forgets all their gateways at once, so the sealer's
+	 * resolveByGateway then returns null for any of them and both seal legs refuse. */
+	removeByDomain(friendDomainId: string): number {
+		const before = this.state.peers.length;
+		this.state.peers = this.state.peers.filter((e) => e.friendDomainId !== friendDomainId);
 		const removed = before - this.state.peers.length;
 		if (removed > 0) this.persist();
 		return removed;

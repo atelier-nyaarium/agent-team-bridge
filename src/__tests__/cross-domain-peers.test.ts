@@ -118,6 +118,31 @@ describe("CrossDomainPeers store", () => {
 		expect(reloaded.resolveByGateway("dave", "dave-laptop")).not.toBeNull();
 	});
 
+	it("removeByDomain drops every gateway of a Domain, leaves others, returns the count, and persists", () => {
+		const dir = tmp();
+		const store = new CrossDomainPeers(dir);
+		// Carol runs two gateways; Dave one.
+		store.add(peer({ friendDomainId: "carol", friendGatewayId: "carol-laptop" }));
+		store.add(peer({ friendDomainId: "carol", friendGatewayId: "carol-desktop" }));
+		store.add(peer({ friendDomainId: "dave", friendGatewayId: "dave-laptop" }));
+
+		// Unlinking Carol drops BOTH her gateways at once and reports the count.
+		expect(store.removeByDomain("carol")).toBe(2);
+		expect(store.all()).toHaveLength(1);
+		expect(store.resolveByGateway("carol", "carol-laptop")).toBeNull();
+		expect(store.resolveByGateway("carol", "carol-desktop")).toBeNull();
+		// Dave is untouched.
+		expect(store.resolveByGateway("dave", "dave-laptop")).not.toBeNull();
+
+		// A second unlink of an already-gone Domain removes nothing.
+		expect(store.removeByDomain("carol")).toBe(0);
+
+		// The removal persisted: a fresh instance over the same dir sees only Dave.
+		const reloaded = new CrossDomainPeers(dir);
+		expect(reloaded.all()).toHaveLength(1);
+		expect(reloaded.resolveByGateway("dave", "dave-laptop")).not.toBeNull();
+	});
+
 	it("rejects a malformed peer (missing required field)", () => {
 		const store = new CrossDomainPeers(tmp());
 		const bad = { ...peer(), friendSignPub: "" };

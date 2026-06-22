@@ -19,6 +19,7 @@ import type {
 	CrossDomainListSharesResultSchema,
 	CrossDomainRequestResultSchema,
 	CrossDomainShareResultSchema,
+	CrossDomainUnlinkResultSchema,
 	CrossDomainUnshareResultSchema,
 	MailboxEntrySchema,
 	SealedEnvelopeSchema,
@@ -64,6 +65,7 @@ export type CrossDomainCancelOp = Extract<ConsoleOp, { kind: "cross_domain_cance
 export type CrossDomainShareOp = Extract<ConsoleOp, { kind: "cross_domain_share" }>;
 export type CrossDomainUnshareOp = Extract<ConsoleOp, { kind: "cross_domain_unshare" }>;
 export type CrossDomainListSharesOp = Extract<ConsoleOp, { kind: "cross_domain_list_shares" }>;
+export type CrossDomainUnlinkOp = Extract<ConsoleOp, { kind: "cross_domain_unlink" }>;
 
 ////////////////////////////////
 //  Relay frames (carried over the gateway<->evie WebSocket)
@@ -110,6 +112,7 @@ export type CrossDomainCancelResult = z.infer<typeof CrossDomainCancelResultSche
 export type CrossDomainShareResult = z.infer<typeof CrossDomainShareResultSchema>;
 export type CrossDomainUnshareResult = z.infer<typeof CrossDomainUnshareResultSchema>;
 export type CrossDomainListSharesResult = z.infer<typeof CrossDomainListSharesResultSchema>;
+export type CrossDomainUnlinkResult = z.infer<typeof CrossDomainUnlinkResultSchema>;
 export type ConsoleOpResult = z.infer<typeof ConsoleOpResultSchema>;
 
 ////////////////////////////////

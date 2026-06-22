@@ -7,6 +7,7 @@ import {
 	type CrossDomainListenResult,
 	type CrossDomainListSharesResult,
 	type CrossDomainRequestResult,
+	type CrossDomainUnlinkResult,
 	type MailboxInput,
 	type OpenedConsoleFrame,
 	parseQualifiedTeam,
@@ -85,6 +86,13 @@ export interface ConsoleHandlerDeps {
 	 * gateway's CrossDomainShareState store; `isLinkedDomain` reads the cross-Domain peer set
 	 * so a share can only target a Domain the owner has actually linked. */
 	crossDomainShare?: CrossDomainShareHandlers;
+	/** Drop ALL local trust + share state for a linked friend Domain (the cross_domain_unlink
+	 * op). Absent when federation is not wired (the op then errors "not available"). Performs
+	 * the local cleanup - forget every peer gateway of the Domain, every share offered to it,
+	 * and settle any in-flight job bound to it - and returns the counts. Idempotent: unlinking
+	 * an already-unlinked Domain returns zero counts with no error. The Router-side relay-edge
+	 * revocation is the phone's separate owner-signed submit, not this gateway-local cleanup. */
+	unlinkDomain?: (domainId: string) => CrossDomainUnlinkResult;
 }
 
 /** The subset of the cross-Domain handshake coordinator the console handler drives. A
@@ -111,8 +119,15 @@ export interface CrossDomainConsoleHandlers {
  * canonical `gateway/name` of a LOCAL session; `domainId` is a linked friend Domain. */
 export interface CrossDomainShareHandlers {
 	share: (sessionTarget: string, domainId: string) => void;
-	unshare: (sessionTarget: string, domainId: string) => void;
+	/** Withdraw a session's share to a friend Domain, returning whether a record was removed
+	 * (so the handler only expires in-flight jobs when the share actually changed). */
+	unshare: (sessionTarget: string, domainId: string) => boolean;
 	listShares: () => CrossDomainListSharesResult["shares"];
+	/** Actively settle any in-flight cross-Domain job for this (canonical session, friend
+	 * Domain) pair, so an already-accepted send's reply stops at the destination instead of
+	 * forwarding home after the share is withdrawn (the per-session counterpart of the
+	 * whole-Domain unlink expiry). Called after a successful unshare. */
+	expireSessionJobs: (sessionTarget: string, domainId: string) => void;
 	/** Whether the owner has a linked cross-Domain peer in this Domain (a share can only
 	 * target a Domain that has been linked through the handshake). */
 	isLinkedDomain: (domainId: string) => boolean;
@@ -148,7 +163,9 @@ function isMutatingOp(op: ConsoleOp): boolean {
 	// cross_domain_* handshake ops all carry state (a minted window, a routed request, a
 	// written peer, a cancellation), so a retried opId replays the cached reply rather than
 	// minting a second window, re-routing, or re-writing the peer. share/unshare mutate the
-	// share store; a retried opId replays the cached ack. list_shares is a fresh read.
+	// share store; a retried opId replays the cached ack. list_shares is a fresh read. unlink
+	// drops the peer/share/job state for a Domain; a retried opId replays the cached counts
+	// rather than re-running the (already idempotent) cleanup and reporting zero the second time.
 	return (
 		op.kind === "send" ||
 		op.kind === "respond" ||
@@ -158,7 +175,8 @@ function isMutatingOp(op: ConsoleOp): boolean {
 		op.kind === "cross_domain_confirm" ||
 		op.kind === "cross_domain_cancel" ||
 		op.kind === "cross_domain_share" ||
-		op.kind === "cross_domain_unshare"
+		op.kind === "cross_domain_unshare" ||
+		op.kind === "cross_domain_unlink"
 	);
 }
 
@@ -175,6 +193,7 @@ export function createConsoleHandler({
 	relayToHost,
 	crossDomain,
 	crossDomainShare,
+	unlinkDomain,
 }: ConsoleHandlerDeps) {
 	/** Resolve a console terminal target (the gateway-qualified session name) to the host
 	 * tmux it maps to: the host-agent's own session for "gateway", a devcontainer for a known
@@ -652,13 +671,29 @@ export function createConsoleHandler({
 				// An unshare is always allowed (it only revokes): no kind/linked gate, so a
 				// session whose kind changed or a now-unlinked Domain can still be cleaned up.
 				// Canonicalize so an unshare keys identically to the share it withdraws.
-				crossDomainShare.unshare(canonicalShareTarget(op.sessionTarget), op.domainId);
+				const canonicalTarget = canonicalShareTarget(op.sessionTarget);
+				const removed = crossDomainShare.unshare(canonicalTarget, op.domainId);
+				// Un-share must bite in-flight too, not just on the next fresh send: settle any
+				// already-accepted cross-Domain job for this (session, friend) pair so its reply is
+				// dropped at the destination rather than forwarded home. Only when the share
+				// actually changed (an idempotent re-unshare has nothing in flight to close).
+				if (removed) crossDomainShare.expireSessionJobs(canonicalTarget, op.domainId);
 				return { ok: true };
 			}
 
 			case "cross_domain_list_shares": {
 				if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
 				return { shares: crossDomainShare.listShares() };
+			}
+
+			case "cross_domain_unlink": {
+				if (!unlinkDomain) throw new Error("cross-Domain linking is not available on this Gateway");
+				// Local cleanup only: forget every peer gateway of the Domain, every share to
+				// it, and settle its in-flight jobs (so they fail fast instead of stalling to
+				// TTL once the sealer refuses the unlinked peer). Idempotent - an already-unlinked
+				// Domain returns zero counts, no error. The phone separately owner-signs + submits
+				// the link-edge revocation so the Router drops its relay-affinity edge.
+				return unlinkDomain(op.domainId);
 			}
 		}
 	}

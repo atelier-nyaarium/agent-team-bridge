@@ -137,6 +137,28 @@ describe("CrossDomainShareState store", () => {
 		expect(reloaded.isSharedTo("alpha/lib", "carol")).toBe(true);
 	});
 
+	it("dropDomain drops only that Domain's shares, returns the count, and persists", () => {
+		const dir = tmp();
+		const store = new CrossDomainShareState(dir);
+		store.share("alpha/app", "carol");
+		store.share("alpha/lib", "carol");
+		store.share("alpha/app", "dave");
+
+		// Unlinking Carol forgets only what was shared to Carol; Dave's share survives.
+		expect(store.dropDomain("carol")).toBe(2);
+		expect(store.isSharedTo("alpha/app", "carol")).toBe(false);
+		expect(store.isSharedTo("alpha/lib", "carol")).toBe(false);
+		expect(store.isSharedTo("alpha/app", "dave")).toBe(true);
+
+		// Dropping an already-gone Domain removes nothing.
+		expect(store.dropDomain("carol")).toBe(0);
+
+		// The drop persisted: a fresh instance over the same dir keeps only Dave's share.
+		const reloaded = new CrossDomainShareState(dir);
+		expect(reloaded.all()).toHaveLength(1);
+		expect(reloaded.isSharedTo("alpha/app", "dave")).toBe(true);
+	});
+
 	it("unshare on a missing record is a no-op", () => {
 		const store = new CrossDomainShareState(tmp());
 		store.share("alpha/app", "carol");

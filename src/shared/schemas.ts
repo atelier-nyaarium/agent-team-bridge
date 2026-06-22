@@ -271,6 +271,17 @@ export const ConsoleOpSchema = z
 		}),
 		// Read this owner's current shares (so the console can render the share checkmarks).
 		z.object({ kind: z.literal("cross_domain_list_shares") }),
+		// Unlink a linked friend Domain: drop the LOCAL trust + share state for it (every
+		// peer gateway of that Domain, every share offered to it, and any in-flight job bound
+		// to it). Keyed by `domainId` (a Domain may run more than one gateway), so the whole
+		// Domain is forgotten at once. After this the sealer can no longer resolve that peer,
+		// so outbound seals + inbound opens to it fail closed. The owner's phone separately
+		// owner-signs + submits the link-edge revocation so the Router drops its relay edge.
+		z.object({
+			kind: z.literal("cross_domain_unlink"),
+			// The friend Domain (slug) to unlink.
+			domainId: z.string().min(1).max(64),
+		}),
 	])
 	.meta({ id: "ConsoleOp" });
 
@@ -555,6 +566,19 @@ export const CrossDomainListSharesResultSchema = z
 	})
 	.meta({ id: "CrossDomainListSharesResult" });
 
+// The local unlink cleanup counts, so the console can confirm what was forgotten
+// (and render a clean zero-count result when the Domain was already unlinked).
+export const CrossDomainUnlinkResultSchema = z
+	.object({
+		// Peer gateways of the Domain dropped from the cross-Domain peer set.
+		peersRemoved: z.number().int().nonnegative(),
+		// Per-session shares to the Domain forgotten.
+		sharesDropped: z.number().int().nonnegative(),
+		// In-flight jobs bound to the Domain settled (failed fast) instead of stalling to TTL.
+		jobsExpired: z.number().int().nonnegative(),
+	})
+	.meta({ id: "CrossDomainUnlinkResult" });
+
 export const ConsoleOpResultSchema = z.union([
 	ConsoleRegisterResultSchema,
 	ConsoleListTeamsResultSchema,
@@ -571,6 +595,7 @@ export const ConsoleOpResultSchema = z.union([
 	CrossDomainShareResultSchema,
 	CrossDomainUnshareResultSchema,
 	CrossDomainListSharesResultSchema,
+	CrossDomainUnlinkResultSchema,
 ]);
 
 ////////////////////////////////

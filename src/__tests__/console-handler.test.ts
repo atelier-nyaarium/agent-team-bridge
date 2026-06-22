@@ -1173,7 +1173,7 @@ describe("console cross-Domain share ops", () => {
 
 	function makeShareHarness(opts: { linkedDomains?: string[] } = {}) {
 		const linked = new Set(opts.linkedDomains ?? ["carol"]);
-		const calls: Record<string, unknown[]> = { share: [], unshare: [], listShares: [] };
+		const calls: Record<string, unknown[]> = { share: [], unshare: [], listShares: [], expireSessionJobs: [] };
 		// An in-memory share set so the dispatch's effect is observable end to end.
 		const set = new Set<string>();
 		const key = (sessionTarget: string, domainId: string) => `${sessionTarget} ${domainId}`;
@@ -1182,9 +1182,12 @@ describe("console cross-Domain share ops", () => {
 				calls.share.push({ sessionTarget, domainId });
 				set.add(key(sessionTarget, domainId));
 			},
-			unshare: (sessionTarget: string, domainId: string) => {
+			unshare: (sessionTarget: string, domainId: string): boolean => {
 				calls.unshare.push({ sessionTarget, domainId });
-				set.delete(key(sessionTarget, domainId));
+				return set.delete(key(sessionTarget, domainId));
+			},
+			expireSessionJobs: (sessionTarget: string, domainId: string) => {
+				calls.expireSessionJobs.push({ sessionTarget, domainId });
 			},
 			listShares: () => {
 				calls.listShares.push({});
@@ -1231,7 +1234,7 @@ describe("console cross-Domain share ops", () => {
 		expect(h.calls.share).toHaveLength(1);
 	});
 
-	it("cross_domain_unshare withdraws a share (hits the store)", async () => {
+	it("cross_domain_unshare withdraws a share AND expires its in-flight jobs (hits the store)", async () => {
 		const h = makeShareHarness();
 		await h.handler.handleFrame(
 			frame({ kind: "cross_domain_share", sessionTarget: "test-host/app", domainId: "carol" }, "s1"),
@@ -1243,6 +1246,20 @@ describe("console cross-Domain share ops", () => {
 		expect(reply.result).toEqual({ ok: true });
 		expect(h.calls.unshare).toEqual([{ sessionTarget: "test-host/app", domainId: "carol" }]);
 		expect(h.set.size).toBe(0);
+		// The un-share also settled any in-flight cross-Domain job for this (session, friend)
+		// pair so an already-accepted send's reply stops at the destination, not just fresh sends.
+		expect(h.calls.expireSessionJobs).toEqual([{ sessionTarget: "test-host/app", domainId: "carol" }]);
+	});
+
+	it("cross_domain_unshare on an absent share does NOT expire jobs (no-op stays cheap)", async () => {
+		const h = makeShareHarness();
+		// Nothing shared yet: the unshare removes nothing, so it must skip the job expiry.
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_unshare", sessionTarget: "test-host/app", domainId: "carol" }, "u1"),
+		);
+		expect(reply.ok).toBe(true);
+		expect(h.calls.unshare).toHaveLength(1);
+		expect(h.calls.expireSessionJobs).toHaveLength(0);
 	});
 
 	it("cross_domain_list_shares returns the current shares (hits the store)", async () => {
@@ -1381,5 +1398,82 @@ describe("console cross-Domain share ops", () => {
 		// The unshare canonicalizes too, so it keys identically to the share and removes it.
 		expect(h.calls.unshare).toEqual([{ sessionTarget: "test-host/app", domainId: "carol" }]);
 		expect(h.set.size).toBe(0);
+	});
+});
+
+describe("console cross-Domain unlink op", () => {
+	// The unlink dep fans out to the three local cleanup primitives (peers / shares / jobs)
+	// and returns their counts. The harness stands in a fake that records the domainId it was
+	// called with and returns canned counts, so the dispatch wiring is observable end to end.
+	function makeUnlinkHarness(
+		opts: { counts?: Record<string, { peers: number; shares: number; jobs: number }> } = {},
+	) {
+		const calls: string[] = [];
+		const counts = opts.counts ?? { carol: { peers: 1, shares: 2, jobs: 3 } };
+		const routes: ConsoleRoutes = {
+			send: async () => jsonRes({ session_id: "s", status: "running" }),
+			respond: () => jsonRes({ delivered: true }),
+			teams: () => jsonRes([]),
+			discover: async () => jsonRes([]),
+		};
+		const handler = createConsoleHandler({
+			registry: new Map(),
+			conversationRegistry: new Map(),
+			mailboxStore: new DeviceMailboxStore(),
+			localGatewayId: "test-host",
+			routes,
+			// An unknown/already-unlinked Domain yields zero counts (the real primitives return 0).
+			unlinkDomain: (domainId) => {
+				calls.push(domainId);
+				const c = counts[domainId] ?? { peers: 0, shares: 0, jobs: 0 };
+				return { peersRemoved: c.peers, sharesDropped: c.shares, jobsExpired: c.jobs };
+			},
+		});
+		return { handler, calls };
+	}
+
+	it("cross_domain_unlink runs the local cleanup and returns the counts", async () => {
+		const h = makeUnlinkHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "cross_domain_unlink", domainId: "carol" }, "ul1"));
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toEqual({ peersRemoved: 1, sharesDropped: 2, jobsExpired: 3 });
+		expect(h.calls).toEqual(["carol"]);
+	});
+
+	it("unlinking an unknown/already-unlinked Domain is a clean zero-count success", async () => {
+		const h = makeUnlinkHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "cross_domain_unlink", domainId: "ghost" }, "ul2"));
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toEqual({ peersRemoved: 0, sharesDropped: 0, jobsExpired: 0 });
+		expect(h.calls).toEqual(["ghost"]);
+	});
+
+	it("a retried cross_domain_unlink opId replays the cached counts without re-running", async () => {
+		const h = makeUnlinkHarness();
+		const f = frame({ kind: "cross_domain_unlink", domainId: "carol" }, "dup-ul");
+		const r1 = await h.handler.handleFrame(f);
+		const r2 = await h.handler.handleFrame(f);
+		expect(r1).toEqual(r2);
+		// The opId cache absorbed the retry, so the cleanup ran exactly once - the second call
+		// replays the first non-zero counts rather than re-running and reporting zero.
+		expect(h.calls).toEqual(["carol"]);
+	});
+
+	it("cross_domain_unlink errors cleanly when federation is not wired", async () => {
+		const handler = createConsoleHandler({
+			registry: new Map(),
+			conversationRegistry: new Map(),
+			mailboxStore: new DeviceMailboxStore(),
+			localGatewayId: "test-host",
+			routes: {
+				send: async () => jsonRes({}),
+				respond: () => jsonRes({}),
+				teams: () => jsonRes([]),
+				discover: async () => jsonRes([]),
+			},
+		});
+		const reply = await handler.handleFrame(frame({ kind: "cross_domain_unlink", domainId: "carol" }, "nf-ul"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("not available");
 	});
 });

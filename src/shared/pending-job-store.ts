@@ -32,6 +32,10 @@ interface JobEntry<T> {
 export interface WaitResult<T> {
 	delivered: boolean;
 	result?: T;
+	// Set when the wait was settled by an active expiry (the link to the job's remote Domain
+	// was pulled) rather than by a delivery or a plain TTL timeout, so the waiter can report a
+	// clear reason instead of an indistinguishable not-delivered.
+	error?: string;
 }
 
 export interface CreateOptions {
@@ -63,6 +67,11 @@ export interface DeliverMeta {
 	fromConversationId: string | null;
 	returnRoute: ReturnRoute | null;
 	persistent: boolean;
+	// The verified friend Domain a cross-Domain job is bound to (null for a local /
+	// same-Domain job). On a destination job (returnRoute set) the reply forward re-checks
+	// the session is still shared to THIS Domain before relaying home, so a withdrawn share
+	// drops an already-accepted send's in-flight reply.
+	dstDomainId: string | null;
 }
 
 /** A persistent entry in serializable form, for surviving an gateway restart. The
@@ -166,6 +175,16 @@ export class PendingJobStore<T> {
 		const entry = this.entries.get(id);
 		if (!entry) return false;
 
+		const meta = (): DeliverMeta => ({
+			delivered: true,
+			from: entry.from,
+			to: entry.to,
+			fromConversationId: entry.fromConversationId,
+			returnRoute: entry.returnRoute,
+			persistent: entry.persistent,
+			dstDomainId: entry.dstDomainId,
+		});
+
 		if (entry.state === "waiting" && entry.resolve) {
 			// Synchronous delivery: someone is waiting via waitForResult()
 			if (entry.timer) clearTimeout(entry.timer);
@@ -180,14 +199,7 @@ export class PendingJobStore<T> {
 				entry.storedResult = result;
 				entry.createdAt = Date.now();
 			}
-			return {
-				delivered: true,
-				from: entry.from,
-				to: entry.to,
-				fromConversationId: entry.fromConversationId,
-				returnRoute: entry.returnRoute,
-				persistent: entry.persistent,
-			};
+			return meta();
 		}
 
 		if (entry.state === "waiting" && !entry.resolve) {
@@ -195,42 +207,21 @@ export class PendingJobStore<T> {
 			entry.state = "stored";
 			entry.storedResult = result;
 			entry.createdAt = Date.now();
-			return {
-				delivered: true,
-				from: entry.from,
-				to: entry.to,
-				fromConversationId: entry.fromConversationId,
-				returnRoute: entry.returnRoute,
-				persistent: entry.persistent,
-			};
+			return meta();
 		}
 
 		if (entry.state === "timed_out") {
 			entry.state = "stored";
 			entry.storedResult = result;
 			entry.createdAt = Date.now();
-			return {
-				delivered: true,
-				from: entry.from,
-				to: entry.to,
-				fromConversationId: entry.fromConversationId,
-				returnRoute: entry.returnRoute,
-				persistent: entry.persistent,
-			};
+			return meta();
 		}
 
 		if (entry.state === "stored") {
 			// Re-delivery: channel sessions may receive multiple replies
 			entry.storedResult = result;
 			entry.createdAt = Date.now();
-			return {
-				delivered: true,
-				from: entry.from,
-				to: entry.to,
-				fromConversationId: entry.fromConversationId,
-				returnRoute: entry.returnRoute,
-				persistent: entry.persistent,
-			};
+			return meta();
 		}
 
 		return false;
@@ -240,6 +231,71 @@ export class PendingJobStore<T> {
 		const entry = this.entries.get(id);
 		if (entry?.timer) clearTimeout(entry.timer);
 		this.entries.delete(id);
+	}
+
+	/**
+	 * Actively expire every open job bound to a remote Domain (the jobs created with
+	 * `dstDomainId === dstDomainId`), settling each the same way its TTL timeout would and
+	 * removing it, returning the number expired. Used when a cross-Domain link is pulled: the
+	 * matching jobs would otherwise stall their waiter until the TTL fires, since no reply can
+	 * arrive once the sealer refuses the unlinked peer. A waiting `waitForResult` is resolved
+	 * with `{ delivered: false, error }` (the timeout settle path, with an explicit reason);
+	 * its timer is cleared and the entry removed. Same-Domain and local jobs (dstDomainId null
+	 * or a different Domain) are untouched.
+	 */
+	expireByDomain(dstDomainId: string, error = "cross-domain link unlinked"): number {
+		let expired = 0;
+		for (const [id, entry] of this.entries) {
+			if (entry.dstDomainId !== dstDomainId) continue;
+			// The TTL timeout's settle path (see waitForResult): clear the timer, drop the
+			// waiter, and resolve it not-delivered. Here we attach an explicit reason and then
+			// remove the entry outright (an unlinked job has no reply to poll for later).
+			if (entry.timer) clearTimeout(entry.timer);
+			entry.timer = null;
+			entry.state = "timed_out";
+			const resolve = entry.resolve;
+			entry.resolve = null;
+			resolve?.({ delivered: false, error });
+			this.entries.delete(id);
+			expired++;
+		}
+		return expired;
+	}
+
+	/**
+	 * Actively expire every open job bound to ONE cross-Domain session-and-friend pair: a job
+	 * whose `dstDomainId === dstDomainId` AND whose session id resolves to the canonical
+	 * `sessionTarget` (`gateway/name`). The per-session counterpart of expireByDomain, used
+	 * when a SINGLE session's share to a friend Domain is withdrawn (the friend-wide unlink
+	 * uses expireByDomain). Match is on the job's own session-id target, not `entry.to`: a
+	 * destination job created for a cross-Domain send stores `entry.to` as the BARE local name
+	 * while its id (the origin-set session key) carries the canonical `gateway/name` the share
+	 * is keyed by, so the parsed target is the form that lines up with the share key. Each
+	 * match is settled through the same not-delivered path the TTL timeout uses (timer cleared,
+	 * waiter resolved with `error`) and removed, so an in-flight reply that the sealer would
+	 * still forward can no longer strand its waiter. Other sessions and other Domains are
+	 * untouched.
+	 */
+	expireBySession(
+		sessionTarget: string,
+		dstDomainId: string,
+		localGatewayId: string,
+		error = "cross-domain session unshared",
+	): number {
+		let expired = 0;
+		for (const [id, entry] of this.entries) {
+			if (entry.dstDomainId !== dstDomainId) continue;
+			if (SessionId.parse(entry.id, localGatewayId)?.target.canonical !== sessionTarget) continue;
+			if (entry.timer) clearTimeout(entry.timer);
+			entry.timer = null;
+			entry.state = "timed_out";
+			const resolve = entry.resolve;
+			entry.resolve = null;
+			resolve?.({ delivered: false, error });
+			this.entries.delete(id);
+			expired++;
+		}
+		return expired;
 	}
 
 	/**

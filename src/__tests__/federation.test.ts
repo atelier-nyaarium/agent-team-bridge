@@ -263,6 +263,14 @@ function memShareState(shared: Array<[string, string]> = []): RelayShareState & 
 	};
 }
 
+/** A REAL CrossDomainShareState (the unlink path needs dropDomain/all, which the
+ * RelayShareState mock above does not have) in a fresh tmp dir, seeded with shares. */
+function memShareStateStore(shared: Array<[string, string]> = []): CrossDomainShareState {
+	const s = new CrossDomainShareState(path.join(os.tmpdir(), `fed-xd-share-${Math.random().toString(36).slice(2)}`));
+	for (const [sessionTarget, domainId] of shared) s.share(sessionTarget, domainId);
+	return s;
+}
+
 /** An in-memory crossDomainBinding lookup, the relay handler's window into the
  * PendingJobStore. A recorded session maps to its `{dstDomainId, keyGateway, returnGateway}`
  * binding (the verified Domain + gateways the local Gateway stamped at create); an unknown
@@ -1108,6 +1116,98 @@ describe("Phase D cross-Domain send flow (E2E sealed v2)", () => {
 });
 
 ////////////////////////////////
+//  Cross-Domain unlink: the gateway-local cleanup (the cross_domain_unlink op's dep)
+//
+//  The unlink dep wires the three local primitives - CrossDomainPeers.removeByDomain,
+//  CrossDomainShareState.dropDomain, PendingJobStore.expireByDomain - over the REAL stores.
+//  After it runs, the sealer can no longer resolve the unlinked peer, so an inbound open
+//  (and a would-be outbound seal) to that Domain fails closed with no sealer change.
+
+describe("cross-Domain unlink local cleanup (the dep over the real stores)", () => {
+	// The dep exactly as index.ts composes it: drop the peers, shares, and in-flight jobs of a
+	// friend Domain and report the counts.
+	function unlinkDep(
+		peers: CrossDomainPeers,
+		shares: CrossDomainShareState,
+		store: PendingJobStore<ResponsePayload>,
+	) {
+		return (domainId: string) => ({
+			peersRemoved: peers.removeByDomain(domainId),
+			sharesDropped: shares.dropDomain(domainId),
+			jobsExpired: store.expireByDomain(domainId),
+		});
+	}
+
+	it("drops the peers, shares, and in-flight jobs of the Domain and returns the counts", () => {
+		// bob has alice as a cross-Domain peer, two shares offered to alice, and two in-flight
+		// jobs bound to alice (created with dstDomainId "alice").
+		const peers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
+		const shares = memShareStateStore([
+			["bob-gw/lib", "alice"],
+			["bob-gw/api", "alice"],
+		]);
+		const store = new PendingJobStore<ResponsePayload>();
+		store.create("conv:c1:alice-gw/lib", "alice-gw/lib", "alice-gw", { persistent: true, dstDomainId: "alice" });
+		store.create("conv:c2:alice-gw/api", "alice-gw/api", "alice-gw", { persistent: true, dstDomainId: "alice" });
+		// A DIFFERENT Domain's job must survive the alice unlink.
+		store.create("conv:c3:carol-gw/docs", "carol-gw/docs", "carol-gw", { persistent: true, dstDomainId: "carol" });
+
+		const counts = unlinkDep(peers, shares, store)("alice");
+		expect(counts).toEqual({ peersRemoved: 1, sharesDropped: 2, jobsExpired: 2 });
+		// The peer set, the shares to alice, and alice's jobs are gone; carol's job is untouched.
+		expect(peers.all()).toHaveLength(0);
+		expect(shares.all()).toHaveLength(0);
+		expect(store.has("conv:c1:alice-gw/lib")).toBe(false);
+		expect(store.has("conv:c3:carol-gw/docs")).toBe(true);
+	});
+
+	it("unlinking an unknown / already-unlinked Domain is a clean zero-count no-op", () => {
+		const peers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
+		const shares = memShareStateStore([["bob-gw/lib", "alice"]]);
+		const store = new PendingJobStore<ResponsePayload>();
+		const dep = unlinkDep(peers, shares, store);
+
+		// A Domain that was never linked.
+		expect(dep("ghost")).toEqual({ peersRemoved: 0, sharesDropped: 0, jobsExpired: 0 });
+		// And a SECOND unlink of alice (idempotent: the first already forgot everything).
+		expect(dep("alice")).toEqual({ peersRemoved: 1, sharesDropped: 1, jobsExpired: 0 });
+		expect(dep("alice")).toEqual({ peersRemoved: 0, sharesDropped: 0, jobsExpired: 0 });
+	});
+
+	it("after unlink the sealer no longer resolves the peer: an inbound open fails closed", () => {
+		// bob's peer set knows alice; bob's sealer resolves alice's frames against it.
+		const bobPeers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
+		const bobSealer = createSealer(bobGw, soloAllowlist(bobOwner, "bob-gw", bobGw), "bob-gw", bobPeers, "bob");
+		// alice's sealer knows bob, so she can seal a v2 frame addressed to bob's Domain.
+		const alicePeers = peersOf(xdPeer(bobOwner, "bob", "bob-gw", bobGw, aliceOwner));
+		const aliceSealer = createSealer(
+			aliceGw,
+			soloAllowlist(aliceOwner, "alice-gw", aliceGw),
+			"alice-gw",
+			alicePeers,
+			"alice",
+		);
+		const sealed = aliceSealer.seal({ domainId: "bob", gatewayId: "bob-gw" }, { hello: "world" });
+
+		// Before unlink: bob opens alice's frame, resolving the peer by the (domain, gateway) pair.
+		const opened = bobSealer.openWithSource("alice-gw", sealed, "alice");
+		expect(opened.srcDomainId).toBe("alice");
+
+		// The unlink cleanup forgets alice on bob's side (the gateway-local effect).
+		const shares = memShareStateStore();
+		const store = new PendingJobStore<ResponsePayload>();
+		unlinkDep(bobPeers, shares, store)("alice");
+
+		// After unlink: the verify-key resolution finds no peer, so the open throws BEFORE unseal -
+		// in-flight frames from the unlinked Domain drop at key resolution (fail closed). A fresh
+		// frame (re-sealed by alice) is rejected the same way; the captured one above is too.
+		const fresh = aliceSealer.seal({ domainId: "bob", gatewayId: "bob-gw" }, { hello: "again" });
+		expect(() => bobSealer.openWithSource("alice-gw", fresh, "alice")).toThrow(/not admitted/);
+		expect(() => bobSealer.openWithSource("alice-gw", sealed, "alice")).toThrow(/not admitted/);
+	});
+});
+
+////////////////////////////////
 //  sealTargetFor is home-first (a home/friend gateway-id collision)
 //
 //  sealer.open resolves a peer home-first; the SEND side (sealTargetFor) must match, or a
@@ -1368,5 +1468,97 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 		store.create("conv:c1:bob-gw/lib", "x", "lib", { persistent: true, fromConversationId: "c1" });
 		const peers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
 		expect(isLiveFor(store, peers, "bob-gw")("bob-gw/lib")).toBe(false);
+	});
+});
+
+////////////////////////////////
+//  Per-session un-share enforced on the destination reply forward (response_push)
+//
+//  The leak: B shares lib to Domain A; A sends to B/lib (accepted, B creates a destination
+//  job bound to A, returnRoute home, dstDomainId A); B un-shares lib from A; B's agent's
+//  in-flight reply must NOT still forward home, because the share is gone. routes.respond
+//  re-reads the share on the cross-Domain reply forward and DROPS it when no longer shared.
+
+describe("destination reply forward re-checks the per-session share (cross-Domain)", () => {
+	const SRC_SESSION = "conv:c1:hostb/lib"; // B's own gateway id in the origin-set key
+	const RETURN_ROUTE = { srcGateway: "hosta", srcConversationId: "c1", srcSession: SRC_SESSION };
+
+	/** Seed a DESTINATION job on B exactly as the cross-Domain inbound send path does: id is
+	 * the origin-set canonical session key, `to` the bare local name, with the verified friend
+	 * Domain + return-route pinned. */
+	function seedDestJob(store: PendingJobStore<ResponsePayload>): void {
+		store.create(SRC_SESSION, "alice/app", "lib", {
+			persistent: true,
+			fromConversationId: "c1",
+			returnRoute: RETURN_ROUTE,
+			dstDomainId: "alice",
+		});
+	}
+
+	function respondOnB(isShared: boolean) {
+		// Records gateway_relay so we can assert the response_push DID or did NOT forward.
+		const evie = fakeEvie({ onCall: () => ({ ok: true }) });
+		const ctx = makeCtx("hostb", {
+			evieClient: evie.client,
+			sealer: sealerB,
+			isSharedToForReply: (sessionTarget, domainId) =>
+				isShared && sessionTarget === "hostb/lib" && domainId === "alice",
+		});
+		seedDestJob(ctx.store);
+		const routes = createRoutes(ctx);
+		return { routes, evie };
+	}
+
+	it("DROPS the response_push for a session that was un-shared (does not forward home)", async () => {
+		const { routes, evie } = respondOnB(false);
+		const res = routes.respond(new Request("http://gateway/respond", { method: "POST" }), {
+			session_id: SRC_SESSION,
+			status: "completed",
+			response: "leaked?",
+		});
+		const json = await res.json();
+		expect(json).toEqual({ delivered: false, dropped: "unshared" });
+		// Let any (erroneous) background relay attempt flush, then assert NONE happened.
+		await new Promise((r) => setTimeout(r, 0));
+		expect(evie.calls.find((c) => c.action === "gateway_relay")).toBeUndefined();
+	});
+
+	it("FORWARDS the response_push normally for a session that is still shared", async () => {
+		const { routes, evie } = respondOnB(true);
+		const res = routes.respond(new Request("http://gateway/respond", { method: "POST" }), {
+			session_id: SRC_SESSION,
+			status: "completed",
+			response: "all good",
+		});
+		expect((await res.json()).federated).toBe(true);
+		// The forward is fire-and-forget; let it run, then assert it relayed home.
+		await new Promise((r) => setTimeout(r, 0));
+		expect(evie.calls.find((c) => c.action === "gateway_relay")).toBeDefined();
+	});
+
+	it("a SAME-DOMAIN federated reply (dstDomainId null) is never gated, even with no share", async () => {
+		// The reply gate fires only on a cross-Domain job (dstDomainId set). A same-Domain
+		// federated job has a returnRoute but null Domain binding, so it forwards unchanged.
+		const evie = fakeEvie({ onCall: () => ({ ok: true }) });
+		const ctx = makeCtx("hostb", {
+			evieClient: evie.client,
+			sealer: sealerB,
+			isSharedToForReply: () => false, // would drop IF consulted
+		});
+		ctx.store.create(SRC_SESSION, "peer/app", "lib", {
+			persistent: true,
+			fromConversationId: "c1",
+			returnRoute: RETURN_ROUTE,
+			// no dstDomainId -> same-Domain federated
+		});
+		const routes = createRoutes(ctx);
+		const res = routes.respond(new Request("http://gateway/respond", { method: "POST" }), {
+			session_id: SRC_SESSION,
+			status: "completed",
+			response: "all good",
+		});
+		expect((await res.json()).federated).toBe(true);
+		await new Promise((r) => setTimeout(r, 0));
+		expect(evie.calls.find((c) => c.action === "gateway_relay")).toBeDefined();
 	});
 });

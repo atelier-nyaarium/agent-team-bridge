@@ -186,6 +186,12 @@ sealed class ConsoleOp {
 	@Serializable
 	@SerialName("cross_domain_list_shares")
 	data object CrossDomainListShares : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_unlink")
+	data class CrossDomainUnlink(
+		val domainId: String,
+	) : ConsoleOp()
 }
 
 @Serializable
@@ -353,6 +359,12 @@ sealed class EnrollOp {
 	data class SubmitXdomainLink(
 		val edge: SignedXDomainLinkEdge,
 	) : EnrollOp()
+
+	@Serializable
+	@SerialName("revoke_xdomain_link")
+	data class RevokeXdomainLink(
+		val revocation: SignedXDomainLinkRevocation,
+	) : EnrollOp()
 }
 
 @Serializable
@@ -477,6 +489,13 @@ data class CrossDomainShareEntry(
 )
 
 @Serializable
+data class CrossDomainUnlinkResult(
+	val peersRemoved: Long,
+	val sharesDropped: Long,
+	val jobsExpired: Long,
+)
+
+@Serializable
 data class SttsProvider(
 	val id: String,
 	val label: String,
@@ -513,5 +532,20 @@ data class XDomainLinkEdge(
 	val srcDomainId: String,
 	val dstDomainId: String,
 	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
+data class SignedXDomainLinkRevocation(
+	val revocation: XDomainLinkRevocation,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class XDomainLinkRevocation(
+	val srcDomainId: String,
+	val dstDomainId: String,
+	val revokedAt: Long,
 	val nonce: String,
 )

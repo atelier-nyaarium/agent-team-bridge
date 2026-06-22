@@ -455,6 +455,12 @@ export async function startGateway(): Promise<void> {
 		// teams() refreshes each online session's cross-Domain shares so presence keeps a
 		// share from auto-forgetting; the periodic sweep below reaps only absent sessions.
 		touchShares: crossDomainShareState ? (sessionTarget) => crossDomainShareState!.touch(sessionTarget) : null,
+		// respond re-reads the per-session share on a cross-Domain reply forward: a send
+		// accepted while shared, then un-shared, has its in-flight reply dropped here instead
+		// of relayed home (the un-share bites every direction, not just fresh sends).
+		isSharedToForReply: crossDomainShareState
+			? (sessionTarget, domainId) => crossDomainShareState!.isSharedTo(sessionTarget, domainId)
+			: null,
 		resolveHandshake: wsHandlers.resolveHandshake,
 	});
 
@@ -486,6 +492,12 @@ export async function startGateway(): Promise<void> {
 							share: (sessionTarget, domainId) => crossDomainShareState!.share(sessionTarget, domainId),
 							unshare: (sessionTarget, domainId) =>
 								crossDomainShareState!.unshare(sessionTarget, domainId),
+							// After a successful unshare, settle any in-flight cross-Domain job for that
+							// (session, friend) pair so an already-accepted send's reply stops at the
+							// destination instead of forwarding home. Keyed by the same canonical
+							// gateway/name the share uses, scoped to the friend Domain.
+							expireSessionJobs: (sessionTarget, domainId) =>
+								store.expireBySession(sessionTarget, domainId, localGatewayId),
 							listShares: () =>
 								crossDomainShareState!
 									.all()
@@ -495,6 +507,20 @@ export async function startGateway(): Promise<void> {
 							isLinkedDomain: (domainId) =>
 								crossDomainPeersForConsole!.all().some((p) => p.friendDomainId === domainId),
 						}
+					: undefined,
+			// Unlink a linked friend Domain: drop the LOCAL trust + share + in-flight state for
+			// it. Forgetting the peer makes the sealer refuse both legs to that Domain on the
+			// next frame; dropping the shares makes a re-link start from share-nothing; expiring
+			// the in-flight jobs settles them fast instead of stalling to TTL. Idempotent - an
+			// already-unlinked Domain returns zero counts. The phone separately submits the
+			// owner-signed link-edge revocation so the Router drops its relay-affinity edge.
+			unlinkDomain:
+				crossDomainShareState && crossDomainPeersForConsole
+					? (domainId) => ({
+							peersRemoved: crossDomainPeersForConsole!.removeByDomain(domainId),
+							sharesDropped: crossDomainShareState!.dropDomain(domainId),
+							jobsExpired: store.expireByDomain(domainId),
+						})
 					: undefined,
 		});
 		handleConsoleRelay = createConsoleRelayPump({
