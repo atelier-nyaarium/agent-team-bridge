@@ -74,6 +74,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -1727,7 +1730,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 	var autoTts by remember { mutableStateOf(repo.sttsAutoGen) }
 	Row(verticalAlignment = Alignment.CenterVertically) {
 		Column(Modifier.weight(1f)) {
-			Text("Auto-generate voice", style = MaterialTheme.typography.titleSmall)
+			Text("Pre-generate voice", style = MaterialTheme.typography.titleSmall)
 			Text(
 				"Pre-synthesize incoming messages for threads you have open, so Play is instant. Adds about 10s to the notification.",
 				style = MaterialTheme.typography.bodySmall,
@@ -1742,23 +1745,29 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		)
 	}
 
-	var autoPlay by remember { mutableStateOf(repo.sttsAutoPlaySummary) }
-	Row(verticalAlignment = Alignment.CenterVertically) {
-		Column(Modifier.weight(1f)) {
-			Text("Auto-play summary", style = MaterialTheme.typography.titleSmall)
-			Text(
-				"Speak the summary aloud the moment it is ready, hands-free. Requires auto-generate voice.",
-				style = MaterialTheme.typography.bodySmall,
-			)
-		}
-		Switch(
-			checked = autoPlay,
-			enabled = autoTts,
-			onCheckedChange = {
-				autoPlay = it
-				repo.sttsAutoPlaySummary = it
-			},
+	var autoPlay by remember { mutableStateOf(repo.sttsAutoPlay) }
+	Column {
+		Text("Auto-play new messages", style = MaterialTheme.typography.titleSmall)
+		Text(
+			"Speak a new message aloud the moment it arrives. Off is silent.",
+			style = MaterialTheme.typography.bodySmall,
 		)
+		Spacer(Modifier.height(4.dp))
+		val autoPlayOptions = listOf("off" to "Off", "title" to "Title", "summary" to "Summary", "full" to "Full")
+		SingleChoiceSegmentedButtonRow {
+			autoPlayOptions.forEachIndexed { index, (value, label) ->
+				SegmentedButton(
+					selected = autoPlay == value,
+					onClick = {
+						autoPlay = value
+						repo.sttsAutoPlay = value
+					},
+					shape = SegmentedButtonDefaults.itemShape(index = index, count = autoPlayOptions.size),
+				) {
+					Text(label)
+				}
+			}
+		}
 	}
 
 	if (pickerOpen) {

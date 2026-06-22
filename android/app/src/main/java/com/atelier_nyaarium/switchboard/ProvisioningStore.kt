@@ -83,12 +83,23 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putBoolean(KEY_AUTO_TTS, value).apply()
 		}
 
-	/** When on (with autoTts), the summary is played aloud automatically once it
-	 * is synthesized, hands-free. */
-	var autoPlaySummary: Boolean
-		get() = prefs.getBoolean(KEY_AUTO_PLAY_SUMMARY, false)
+	/** Which tier of a new message is spoken aloud the moment it arrives, hands-free.
+	 * One of "off", "title", "summary", "full". Independent of autoTts (pre-generate):
+	 * a tier not pre-synthesized is synthesized on demand at play time.
+	 *
+	 * Migrates the retired boolean autoPlaySummary once: if the new key is absent
+	 * but the old key exists, true maps to "summary" and false to "off". */
+	var autoPlay: String
+		get() {
+			if (!prefs.contains(KEY_AUTO_PLAY) && prefs.contains(KEY_AUTO_PLAY_SUMMARY)) {
+				val migrated = if (prefs.getBoolean(KEY_AUTO_PLAY_SUMMARY, false)) "summary" else "off"
+				prefs.edit().putString(KEY_AUTO_PLAY, migrated).apply()
+				return migrated
+			}
+			return prefs.getString(KEY_AUTO_PLAY, "off") ?: "off"
+		}
 		set(value) {
-			prefs.edit().putBoolean(KEY_AUTO_PLAY_SUMMARY, value).apply()
+			prefs.edit().putString(KEY_AUTO_PLAY, value).apply()
 		}
 
 	/** How often the terminal view re-captures the pane, in ms. A device setting (not the
@@ -242,6 +253,7 @@ class ProvisioningStore(context: Context) {
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."
 		const val KEY_AUTO_TTS = "auto_tts"
 		const val KEY_AUTO_PLAY_SUMMARY = "auto_play_summary"
+		const val KEY_AUTO_PLAY = "auto_play_tier"
 		const val KEY_TERMINAL_REFRESH_MS = "terminal_refresh_ms"
 		const val TERMINAL_REFRESH_FLOOR_MS = 300L
 		const val KEY_SYNC_EPOCH = "sync_epoch"
