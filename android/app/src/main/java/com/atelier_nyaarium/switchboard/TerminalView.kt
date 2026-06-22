@@ -1,6 +1,9 @@
 package com.atelier_nyaarium.switchboard
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,16 +11,20 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -29,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -216,6 +224,49 @@ private val PALETTE_KEYS = listOf(
 // One-tap slash commands (sent as literal text + Enter) for the agent's TUI.
 private val PALETTE_SLASH = listOf("/model", "/effort", "/usage", "/workflows", "/plugin", "/mcp")
 
+// Backspace press-and-hold: the delay before a hold starts repeating, then the repeat cadence.
+private const val BACKSPACE_HOLD_MS = 350L
+private const val BACKSPACE_REPEAT_MS = 120L
+
+/**
+ * A filled key that fires `onTap` once on a tap, and on a press-and-hold starts repeat-firing
+ * `onHoldRepeat` after a short threshold (at a steady cadence) until release. Backspace uses it: a tap
+ * erases one char, a hold spams Alt+Backspace (delete-word). Tonal, so it reads distinct from the
+ * primary Send button it sits above.
+ */
+@Composable
+private fun BackspaceKey(onTap: () -> Unit, onHoldRepeat: () -> Unit, modifier: Modifier = Modifier) {
+	val scope = rememberCoroutineScope()
+	Surface(
+		shape = CircleShape,
+		color = MaterialTheme.colorScheme.secondaryContainer,
+		contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+		modifier = modifier
+			.size(48.dp)
+			.pointerInput(Unit) {
+				awaitEachGesture {
+					awaitFirstDown(requireUnconsumed = false)
+					var repeated = false
+					val job = scope.launch {
+						delay(BACKSPACE_HOLD_MS)
+						repeated = true
+						while (true) {
+							onHoldRepeat()
+							delay(BACKSPACE_REPEAT_MS)
+						}
+					}
+					waitForUpOrCancellation()
+					job.cancel()
+					if (!repeated) onTap()
+				}
+			},
+	) {
+		Box(contentAlignment = Alignment.Center) {
+			Icon(Icons.AutoMirrored.Filled.Backspace, contentDescription = "Backspace (hold to delete words)")
+		}
+	}
+}
+
 /**
  * The terminal view: a live ANSI pane (auto-refreshed while the screen is RESUMED, so it pauses on
  * background and when toggled off) over a fixed palette (control keys + curated text) + a text input
@@ -296,19 +347,31 @@ fun TerminalView(
 				label = { Text("Type into the terminal") },
 				modifier = Modifier.weight(1f),
 			)
-			FilledIconButton(
-				// Empty input sends a bare Enter (the Enter chip is retired in favor of this).
-				onClick = {
-					if (input.isEmpty()) {
-						fire(null, "Enter")
-					} else {
-						fire(input, null)
-						input = ""
-					}
-				},
-				modifier = Modifier.padding(start = 8.dp).widthIn(min = 48.dp),
+			Column(
+				Modifier.padding(start = 8.dp),
+				verticalArrangement = Arrangement.spacedBy(8.dp),
+				horizontalAlignment = Alignment.CenterHorizontally,
 			) {
-				Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send to terminal")
+				// Backspace sits directly above Send: a tap erases one char; press-and-hold
+				// repeat-fires Alt+Backspace (delete-word) until release.
+				BackspaceKey(
+					onTap = { fire(null, "BSpace") },
+					onHoldRepeat = { fire(null, "M-BSpace") },
+				)
+				FilledIconButton(
+					// Empty input sends a bare Enter (the Enter chip is retired in favor of this).
+					onClick = {
+						if (input.isEmpty()) {
+							fire(null, "Enter")
+						} else {
+							fire(input, null)
+							input = ""
+						}
+					},
+					modifier = Modifier.widthIn(min = 48.dp),
+				) {
+					Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send to terminal")
+				}
 			}
 		}
 	}
