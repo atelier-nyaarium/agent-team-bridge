@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { NoticeFull, NoticeLegacyTiny, NoticeSummary, NoticeTitle } from "../../shared/notice.js";
+import { NoticeFull, NoticeSummary, NoticeTitle } from "../../shared/notice.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { bridgeProjectName, routerPost } from "../bridge/helpers.js";
 import { readReplyAttachment } from "../bridge/replyTool.js";
@@ -8,25 +8,18 @@ import { readReplyAttachment } from "../bridge/replyTool.js";
 ////////////////////////////////
 //  Schemas
 
-// title is optional ONLY to accept the legacy `tiny` alias during the rename
-// transition; the handler requires one of the two. summary/full stay required
-// (no ghost ping that is only a bar headline). `.strict()` rejects a typo'd
-// field instead of silently dropping it, and it preserves `.shape`, so the MCP
-// registration is unaffected (unlike `.refine`/`.preprocess`, which drop shape).
-const NotifyHumanSchema = z
-	.object({
-		title: NoticeTitle.optional(),
-		tiny: NoticeLegacyTiny,
-		summary: NoticeSummary,
-		full: NoticeFull,
-		attachments: z
-			.array(z.string())
-			.optional()
-			.describe(
-				`Optional absolute file paths to attach (screenshots, logs). Images render inline on the console.`,
-			),
-	})
-	.strict();
+// title, summary, and full are all required (no ghost ping that is only a bar
+// headline). The object stays NON-strict so a stray `tiny` from a not-yet-updated
+// caller is silently stripped rather than rejected during the deploy window.
+const NotifyHumanSchema = z.object({
+	title: NoticeTitle,
+	summary: NoticeSummary,
+	full: NoticeFull,
+	attachments: z
+		.array(z.string())
+		.optional()
+		.describe(`Optional absolute file paths to attach (screenshots, logs). Images render inline on the console.`),
+});
 type NotifyHumanArgs = z.infer<typeof NotifyHumanSchema>;
 
 ////////////////////////////////
@@ -48,14 +41,7 @@ export function registerHumanTools(mcpServer: McpServer): void {
 			inputSchema: notifySchema,
 		},
 		async (args: NotifyHumanArgs) => {
-			const { summary, full, attachments } = args;
-			const title = args.title ?? args.tiny;
-			if (!title) {
-				return {
-					content: [{ type: "text" as const, text: `Notify failed: title is required.` }],
-					isError: true,
-				};
-			}
+			const { title, summary, full, attachments } = args;
 			let files: ChannelFile[] | undefined;
 			if (attachments?.length) {
 				try {
@@ -72,11 +58,7 @@ export function registerHumanTools(mcpServer: McpServer): void {
 				// the server's error message (including the 413 cap and 503 no-bridge).
 				const result = (await routerPost("/human/notify", {
 					from: bridgeProjectName() || "unknown",
-					// Send BOTH keys for the transition: an old gateway reads `tiny`,
-					// a new one reads `title` (or `tiny`). Drop `tiny` once gateways
-					// are caught up.
 					title,
-					tiny: title,
 					summary,
 					full,
 					...(files ? { files } : {}),

@@ -1,4 +1,4 @@
-// SYNC-HASH: 812ec8428b0dc6cd624730b140383bb5
+// SYNC-HASH: f7eda2380c551a6d50e50106b263093a
 // SYNCED MODULE - source of truth: switchboard/src/shared/notice.ts
 // Copied verbatim into: nyaaskills/src/shared/notice.ts
 // MUST re-copy on change: cp src/shared/notice.ts ../nyaaskills/src/shared/notice.ts
@@ -38,16 +38,6 @@ export const NoticeFull = z
 	.describe(
 		`Full markdown report (mermaid renders too). Shown as the message body on the console; no lead-in labels.`,
 	);
-
-/** Deprecated alias for `title`. Accepted for one transition release so an
- * older caller (or a relay instruction minted before the rename) still
- * lands; resolve `title ?? tiny` and drop this once all callers send title. */
-export const NoticeLegacyTiny = z
-	.string()
-	.min(1)
-	.max(200)
-	.optional()
-	.describe(`Deprecated alias for \`title\`; use \`title\` instead.`);
 
 ////////////////////////////////
 //  Schema + type
