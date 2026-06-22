@@ -1,6 +1,6 @@
 {
 	"name": "switchboard",
-	"version": "5.0.22",
+	"version": "5.0.23",
 	"description": "Cross-team communication, devcontainer orchestration, and tool proxying for agent teams. Provides crosstalk, dispatch, connector, and evie-bot bridge tools via MCP.",
 	"author": {
 		"name": "Nyaarium"
