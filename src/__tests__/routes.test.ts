@@ -265,7 +265,7 @@ describe("routes", () => {
 			const { humanNotify } = createRoutes(ctx);
 			const res = humanNotify({
 				from: "recipe-app",
-				tiny: "cycle done",
+				title: "cycle done",
 				summary: "All phases shipped. Nothing is blocked.",
 				full: "# report\n\nall good",
 			});
@@ -284,7 +284,7 @@ describe("routes", () => {
 			}
 		});
 
-		it("accepts the new title key and rejects a notice carrying neither title nor tiny", async () => {
+		it("accepts the title key and rejects a notice carrying no title", async () => {
 			const { ctx, mailboxStore } = await makeStoreWithConsoles();
 			const { humanNotify } = createRoutes(ctx);
 			humanNotify({ from: "recipe-app", title: "via title", summary: "s", full: "body" });
@@ -292,16 +292,16 @@ describe("routes", () => {
 			expect(humanNotify({ from: "t", summary: "s", full: "body" }).status).toBe(400);
 		});
 
-		it("requires summary and full (no ghost pings) and wakes a held poll", async () => {
+		it("requires title, summary, and full (no ghost pings) and wakes a held poll", async () => {
 			const { ctx, mailboxStore } = await makeStoreWithConsoles();
 			const { humanNotify } = createRoutes(ctx);
-			// Tiny-only notices are rejected outright.
-			expect(humanNotify({ from: "t", tiny: "ping" }).status).toBe(400);
-			expect(humanNotify({ from: "t", tiny: "ping", summary: "s" }).status).toBe(400);
+			// Notices missing summary/full are rejected outright.
+			expect(humanNotify({ from: "t", title: "ping" }).status).toBe(400);
+			expect(humanNotify({ from: "t", title: "ping", summary: "s" }).status).toBe(400);
 			const box = mailboxStore.get("console-a")!;
 			const start = Date.now();
 			const held = box.waitForAppend(10_000);
-			humanNotify({ from: "t", tiny: "ping", summary: "s", full: "body" });
+			humanNotify({ from: "t", title: "ping", summary: "s", full: "body" });
 			await held;
 			expect(Date.now() - start).toBeLessThan(2_000);
 			expect(box.drain().entries[0].body).toBe("body");
@@ -313,7 +313,7 @@ describe("routes", () => {
 			const huge = "A".repeat(14_000_001);
 			const res = humanNotify({
 				from: "t",
-				tiny: "big",
+				title: "big",
 				summary: "s",
 				full: "body",
 				files: [
@@ -323,7 +323,7 @@ describe("routes", () => {
 			expect(res.status).toBe(413);
 
 			const { humanNotify: noStore } = createRoutes(makeCtx());
-			expect(noStore({ from: "t", tiny: "x", summary: "s", full: "body" }).status).toBe(503);
+			expect(noStore({ from: "t", title: "x", summary: "s", full: "body" }).status).toBe(503);
 		});
 	});
 

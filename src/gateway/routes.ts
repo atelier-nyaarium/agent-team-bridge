@@ -135,20 +135,16 @@ const EvieToolCallSchema = z.object({
 	params: z.record(z.string(), z.unknown()),
 });
 
-// summary and full are REQUIRED: a notice must always carry an addressable
-// short tier and a real body (no ghost pings that are only a bar headline).
-// title accepts the legacy `tiny` key during the rename transition; the
-// handler resolves `title ?? tiny`.
-const HumanNotifySchema = z
-	.object({
-		from: z.string().min(1).max(128),
-		title: z.string().min(1).max(200).optional(),
-		tiny: z.string().min(1).max(200).optional(),
-		summary: z.string().min(1),
-		full: z.string().min(1),
-		files: ChannelFilesSchema.optional(),
-	})
-	.refine((d) => Boolean(d.title || d.tiny), { message: "title (or legacy tiny) is required" });
+// title, summary, and full are REQUIRED: a notice must always carry a headline,
+// an addressable short tier, and a real body (no ghost pings). The object stays
+// NON-strict so a stray `tiny` from a not-yet-updated caller is silently stripped.
+const HumanNotifySchema = z.object({
+	from: z.string().min(1).max(128),
+	title: z.string().min(1).max(200),
+	summary: z.string().min(1),
+	full: z.string().min(1),
+	files: ChannelFilesSchema.optional(),
+});
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -937,8 +933,7 @@ export function createRoutes({
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
-		const { from, summary, full, files } = parsed.data;
-		const title = parsed.data.title ?? parsed.data.tiny;
+		const { from, title, summary, full, files } = parsed.data;
 		if (files && files.length > 0) {
 			const total = fileBytes(files);
 			if (total > MAX_RESPONSE_FILE_BYTES) {
