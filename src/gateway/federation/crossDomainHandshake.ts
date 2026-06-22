@@ -3,6 +3,7 @@ import { z } from "zod";
 import type {
 	CrossDomainConfirmResult,
 	CrossDomainListenResult,
+	CrossDomainListenStateResult,
 	CrossDomainRequestResult,
 } from "../../shared/console-protocol.js";
 import {
@@ -53,10 +54,12 @@ import type { CrossDomainPeer, CrossDomainPeers } from "./crossDomainPeers.js";
 //    to the receiver Gateway through the `route` seam, then on the human's SAS match writes
 //    the friend as a peer (`confirm`).
 //
-//  Both confirms are symmetric: look the pairing up by pin, verify the FRIEND's owner-signed
-//  link side under the friend owner key (the SAS confirmed out of band), and store the friend
-//  with that link. The pin pairs the two listening sessions; the SAS - over both committed
-//  parties + the pin - is the residual anti-MITM detector once the commitment closes the grind.
+//  Both confirms are INDEPENDENT and symmetric: each owner signs ONE link attesting the OTHER's
+//  keys (which both sides hold from the SAS-verified reveal), and each Gateway stores its OWN
+//  owner's attestation - no cross-Gateway link exchange, because the seal only uses the friend's
+//  box key from the pairing, so whose signature is on the stored link does not affect seal
+//  security. The pin pairs the two listening sessions; the SAS - over both committed parties + the
+//  pin - is the residual anti-MITM detector once the commitment closes the grind.
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -452,18 +455,18 @@ export class CrossDomainHandshakeCoordinator {
 		};
 	}
 
-	/** EITHER ROLE: the human matched the SAS on the phone, which then owner-signed both
-	 * link sides and submitted them. Look the pairing up by pin, verify the FRIEND's
-	 * owner-signed link side under the friend owner key (and that it binds THIS Gateway's
-	 * keys), then write the friend as a cross-Domain peer with that link side. The pairing
-	 * is consumed once, so a retried confirm at THIS layer errors ("no pending pairing");
-	 * the console's opId cache replays the original success reply for an honest retry. The
-	 * peer store itself is idempotent on `(domain, gateway)` (a re-link replaces). */
-	public confirm(args: {
-		pin: string;
-		mySignedLink: SignedXDomainLink;
-		friendSignedLink: SignedXDomainLink;
-	}): CrossDomainConfirmResult {
+	/** EITHER ROLE: the human matched the SAS on the phone, which then owner-signed THIS
+	 * side's link and submitted it. Each owner confirms independently: look the pairing up
+	 * by pin, verify the owner-signed link under THIS Domain's owner key (and that it binds
+	 * the FRIEND's keys from the SAS-verified pairing), then write the friend as a
+	 * cross-Domain peer with this owner's own attestation as the stored link. No friend-link
+	 * exchange is needed: the seal uses only the friend's box key from the pairing, so the
+	 * stored link is an audit artifact and the local owner's signature on it is the
+	 * locally-verifiable authority. The pairing is consumed once, so a retried confirm at THIS
+	 * layer errors ("no pending pairing"); the console's opId cache replays the original
+	 * success reply for an honest retry. The peer store itself is idempotent on
+	 * `(domain, gateway)` (a re-link replaces). */
+	public confirm(args: { pin: string; mySignedLink: SignedXDomainLink }): CrossDomainConfirmResult {
 		this.sweep();
 		const ownerSignPub = this.self.ownerSignPub();
 		if (!ownerSignPub) throw new Error("this Gateway has no Domain owner yet");
@@ -471,26 +474,9 @@ export class CrossDomainHandshakeCoordinator {
 		const pairing = this.takePairing(args.pin);
 		if (!pairing) throw new Error("no pending pairing for this pin");
 
-		// The friend's link side must verify under the friend owner key (confirmed out of
-		// band via the SAS) AND bind THIS Gateway's keys, so a friend cannot owner-sign a
-		// link to a different Gateway and have us store it as ours.
-		const friend = args.friendSignedLink;
-		if (!verifyXDomainLink(friend, pairing.friendOwnerSignPub)) {
-			throw new Error("friend link signature did not verify under the friend owner key");
-		}
-		if (
-			friend.link.peerOwnerSignPub !== ownerSignPub ||
-			friend.link.peerDomainId !== this.self.domainId ||
-			friend.link.peerGatewayId !== this.self.gatewayId ||
-			friend.link.peerSignPub !== this.self.gatewaySignPub ||
-			friend.link.peerBoxPub !== this.self.gatewayBoxPub
-		) {
-			throw new Error("friend link does not bind this Gateway's keys");
-		}
-
-		// Our own side must be signed by our owner and bind the FRIEND's keys (defense in
-		// depth: the gateway never minted the link, so it checks the phone signed the channel
-		// it intended). It is the OTHER Gateway that persists this side.
+		// This owner's link side must be signed by our owner and bind the FRIEND's keys the SAS
+		// confirmed out of band, so the gateway (which never minted the link) checks the phone
+		// signed the exact channel it intended. The bound friend keys become the stored peer.
 		const mine = args.mySignedLink;
 		if (!verifyXDomainLink(mine, ownerSignPub)) {
 			throw new Error("own link signature did not verify under this Domain's owner key");
@@ -511,11 +497,38 @@ export class CrossDomainHandshakeCoordinator {
 			friendGatewayId: pairing.friendGatewayId,
 			friendSignPub: pairing.friendGatewaySignPub,
 			friendBoxPub: pairing.friendGatewayBoxPub,
-			link: friend,
+			link: mine,
 		};
 		if (!this.peers.add(peer)) throw new Error("failed to store the cross-Domain peer");
 
 		return { ok: true };
+	}
+
+	/** RECEIVER: read a listening window's pairing state so the receiver phone learns a
+	 * pairing arrived. Before round 2 lands the pairing this returns pairingArrived=false
+	 * (with the window's expiry); once the requester's reveal records `session.pairing` it
+	 * returns the SAS the receiver computed plus the friend's keys the phone must owner-sign
+	 * a link over. Read-only: it does NOT consume or advance the window (confirm consumes it),
+	 * so the receiver can poll repeatedly. An unknown / swept token returns expired=true. */
+	public listenState(listeningToken: string): CrossDomainListenStateResult {
+		this.sweep();
+		const session = this.listening.get(listeningToken);
+		if (!session) return { pairingArrived: false, expired: true };
+		const pairing = session.pairing;
+		if (!pairing) return { pairingArrived: false, expiresAt: session.expiresAt };
+		return {
+			pairingArrived: true,
+			// The requester minted the pin; the receiver needs it to confirm its pairing, and a
+			// pairing always has the round-1 commit (which carries the pin) on its session.
+			pin: session.commit?.pin,
+			sas: pairing.sas,
+			friendOwnerSignPub: pairing.friendOwnerSignPub,
+			friendGatewaySignPub: pairing.friendGatewaySignPub,
+			friendGatewayBoxPub: pairing.friendGatewayBoxPub,
+			friendDomainId: pairing.friendDomainId,
+			friendGatewayId: pairing.friendGatewayId,
+			expiresAt: session.expiresAt,
+		};
 	}
 
 	/** EITHER ROLE: cancel the listening window and/or a pending pairing for this token /

@@ -5,6 +5,8 @@ import {
 	type ConsoleReplyBody,
 	type CrossDomainConfirmResult,
 	type CrossDomainListenResult,
+	type CrossDomainListenStateResult,
+	type CrossDomainListPeersResult,
 	type CrossDomainListSharesResult,
 	type CrossDomainRequestResult,
 	type CrossDomainUnlinkResult,
@@ -106,12 +108,15 @@ export interface CrossDomainConsoleHandlers {
 		requesterDomainId: string;
 		requesterGatewayId: string;
 	}) => Promise<CrossDomainRequestResult>;
-	confirm: (args: {
-		pin: string;
-		mySignedLink: SignedXDomainLink;
-		friendSignedLink: SignedXDomainLink;
-	}) => CrossDomainConfirmResult;
+	confirm: (args: { pin: string; mySignedLink: SignedXDomainLink }) => CrossDomainConfirmResult;
 	cancel: (args: { listeningToken?: string; pin?: string }) => boolean;
+	/** RECEIVER read: the listening window's pairing state, so the receiver phone learns a
+	 * pairing arrived + the SAS + the friend keys. Read-only (does not consume the window). */
+	listenState: (listeningToken: string) => CrossDomainListenStateResult;
+	/** The linked friend Domains from the cross-Domain peer set, projected to `(domainId,
+	 * gatewayId)` per peer. Read-only roster: a peer is listed once linked, regardless of online /
+	 * shared-back state, so a freshly-linked peer is visible before any session crosses. */
+	listPeers: () => CrossDomainListPeersResult;
 }
 
 /** The subset of the per-session share state the console handler drives. A narrow seam
@@ -160,12 +165,13 @@ const MAX_OPS_PER_CONVERSATION = 256;
 function isMutatingOp(op: ConsoleOp): boolean {
 	// tmux_send injects keystrokes (a real side effect), so a retried opId must replay
 	// the cached ack, not re-send the keys. peek is a fresh read (never cached). The
-	// cross_domain_* handshake ops all carry state (a minted window, a routed request, a
-	// written peer, a cancellation), so a retried opId replays the cached reply rather than
-	// minting a second window, re-routing, or re-writing the peer. share/unshare mutate the
-	// share store; a retried opId replays the cached ack. list_shares is a fresh read. unlink
-	// drops the peer/share/job state for a Domain; a retried opId replays the cached counts
-	// rather than re-running the (already idempotent) cleanup and reporting zero the second time.
+	// stateful cross_domain_* handshake ops (a minted window, a routed request, a written
+	// peer, a cancellation) cache so a retried opId replays the cached reply rather than
+	// minting a second window, re-routing, or re-writing the peer; listen_state is a fresh
+	// read (the receiver polls it, so it must run live, never cached). share/unshare mutate
+	// the share store; a retried opId replays the cached ack. list_shares and list_peers are fresh
+	// reads. unlink drops the peer/share/job state for a Domain; a retried opId replays the cached
+	// counts rather than re-running the (already idempotent) cleanup and reporting zero again.
 	return (
 		op.kind === "send" ||
 		op.kind === "respond" ||
@@ -452,6 +458,9 @@ export function createConsoleHandler({
 					from: device,
 					fromConversationId: ownerId,
 					to: op.to,
+					// Forward the selected session's Domain so a cross-Domain send resolves its seal
+					// target by the full (domainId, gatewayId) pair; absent for a home/cross-Gateway send.
+					targetDomainId: op.domainId,
 					type: op.request_type,
 					effort: op.effort,
 					body: op.body,
@@ -640,11 +649,18 @@ export function createConsoleHandler({
 
 			case "cross_domain_confirm": {
 				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
+				// Model A: each owner confirms independently with only its OWN signed link side
+				// (binding the friend keys from the SAS-verified pairing). No friend-link exchange.
 				return crossDomain.confirm({
 					pin: op.pin,
 					mySignedLink: op.mySignedLink,
-					friendSignedLink: op.friendSignedLink,
 				});
+			}
+
+			case "cross_domain_listen_state": {
+				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
+				// A receiver read: the listening window's pairing state. Not cached (read-only).
+				return crossDomain.listenState(op.listeningToken);
 			}
 
 			case "cross_domain_cancel": {
@@ -684,6 +700,13 @@ export function createConsoleHandler({
 			case "cross_domain_list_shares": {
 				if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
 				return { shares: crossDomainShare.listShares() };
+			}
+
+			case "cross_domain_list_peers": {
+				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
+				// A fresh read of the peer set (not cached): the console unions these with its
+				// discovery-derived Domains so a just-linked peer appears even while offline.
+				return crossDomain.listPeers();
 			}
 
 			case "cross_domain_unlink": {

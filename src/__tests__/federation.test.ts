@@ -312,7 +312,14 @@ function gateRoutes(teams: TeamInfoLite[]) {
 	return { routes, sendCalls, respondCalls };
 }
 
-type TeamInfoLite = { team: string; gatewayId?: string; status: string; kind?: string; queue_depth: number };
+type TeamInfoLite = {
+	team: string;
+	gatewayId?: string;
+	domainId?: string;
+	status: string;
+	kind?: string;
+	queue_depth: number;
+};
 
 // The bare teams a routes.teams() stub returns. gw matches the handler's localGatewayId
 // (routes.teams() always stamps the local gateway id), so the list_teams share filter -
@@ -1111,7 +1118,14 @@ describe("Phase D cross-Domain send flow (E2E sealed v2)", () => {
 		const teams = (await (await discover()).json()) as TeamInfoLite[];
 		// alice's own app (local) + bob's shared lib; bob's scratch + host-agent are NOT shared.
 		expect(teams.map((t) => t.team).sort()).toEqual(["app", "lib"]);
-		expect(teams.find((t) => t.team === "lib")?.gatewayId).toBe("bob-gw");
+		const libEntry = teams.find((t) => t.team === "lib");
+		expect(libEntry?.gatewayId).toBe("bob-gw");
+		// The cross-Domain entry is tagged with the PEER's Domain id (bob), authoritative from
+		// alice's own peer set - so the console groups it under bob, not alice's home Domain,
+		// even if bob ran an older build that stamped no domainId. alice's local app carries her
+		// own Domain id.
+		expect(libEntry?.domainId).toBe("bob");
+		expect(teams.find((t) => t.team === "app")?.domainId).toBe("alice");
 	});
 });
 
@@ -1348,6 +1362,97 @@ describe("sealTargetFor home-first (gateway-id collision)", () => {
 			"friend",
 		);
 		expect(() => friendGw1Sealer.openWithSource("sender-gw", sealedToOpen as SealedEnvelope, "home")).toThrow();
+	});
+});
+
+////////////////////////////////
+//  sealTargetFor (domainId, gatewayId): the same-id-two-Domains disambiguation
+//
+//  Two LINKED friend Domains may run an identically-named gateway. A bare-gatewayId send is
+//  ambiguous (the sealer refuses rather than guess); a send carrying the selected session's
+//  Domain resolves the right peer by the full (domainId, gatewayId) pair and seals v2 to it.
+
+describe("sealTargetFor (domainId, gatewayId) disambiguation", () => {
+	const senderOwner = generateIdentity();
+	const senderGw = generateIdentity();
+	const friend1Owner = generateIdentity();
+	const friend1Gw = generateIdentity(); // gateway id "shared-gw" in Domain "friend1"
+	const friend2Owner = generateIdentity();
+	const friend2Gw = generateIdentity(); // gateway id "shared-gw" in Domain "friend2"
+
+	// The sender links BOTH friends, whose gateway ids collide ("shared-gw").
+	function senderCtx(over: Partial<RoutesDeps> = {}) {
+		const senderPeers = peersOf(
+			xdPeer(friend1Owner, "friend1", "shared-gw", friend1Gw, senderOwner),
+			xdPeer(friend2Owner, "friend2", "shared-gw", friend2Gw, senderOwner),
+		);
+		const senderSealer = createSealer(
+			senderGw,
+			soloAllowlist(senderOwner, "sender-gw", senderGw),
+			"sender-gw",
+			senderPeers,
+			"home",
+		);
+		const ctx = makeCtx("sender-gw", { sealer: senderSealer, crossDomainPeers: senderPeers, ...over });
+		ctx.config.localDomainId = "home";
+		return { ctx, senderPeers };
+	}
+
+	it("a bare cross-Domain send to a gateway id shared by two linked Domains is ambiguous (no seal)", async () => {
+		const { ctx } = senderCtx({ evieClient: fakeEvie({}).client });
+		const { send } = createRoutes(ctx);
+		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
+			from: "app",
+			fromConversationId: "c1",
+			to: "shared-gw/lib",
+			body: "collab?",
+			channelOnly: true,
+		});
+		expect(res.status).toBe(502);
+		expect((await res.json()).error).toMatch(/ambiguous across linked Domains/);
+		expect(ctx.store.has("conv:c1:shared-gw/lib")).toBe(false);
+	});
+
+	it("a send carrying targetDomainId resolves the right peer and seals v2 to that Domain", async () => {
+		// friend2's gateway opens the frame; only friend2's box key can, proving the send went
+		// to friend2 (not friend1, which shares the gateway id) once the Domain disambiguated it.
+		let openedByFriend2: { srcDomainId: string | null } | undefined;
+		const friend2Sealer = createSealer(
+			friend2Gw,
+			soloAllowlist(friend2Owner, "shared-gw", friend2Gw),
+			"shared-gw",
+			peersOf(xdPeer(senderOwner, "home", "sender-gw", senderGw, friend2Owner)),
+			"friend2",
+		);
+		const evie = fakeEvie({
+			onCall: (action, params) => {
+				if (action !== "gateway_relay") return { ok: true };
+				expect(params.srcDomain).toBe("home");
+				const sealed = (params.payload as { sealed: SealedEnvelope }).sealed;
+				openedByFriend2 = friend2Sealer.openWithSource("sender-gw", sealed, "home");
+				expect(openedByFriend2.srcDomainId).toBe("home");
+				return {
+					ok: true,
+					result: friend2Sealer.seal({ domainId: "home", gatewayId: "sender-gw" }, { ok: true }),
+				};
+			},
+		});
+		const { ctx } = senderCtx({ evieClient: evie.client });
+		const { send } = createRoutes(ctx);
+
+		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
+			from: "app",
+			fromConversationId: "c1",
+			to: "shared-gw/lib",
+			targetDomainId: "friend2",
+			body: "collab?",
+			channelOnly: true,
+		});
+		expect(res.status).toBe(200);
+		expect((await res.json()).session_id).toBe("conv:c1:shared-gw/lib");
+		expect(openedByFriend2).toBeDefined();
+		// The anchor records the resolved target Domain so a reply is bound to friend2.
+		expect(ctx.store.crossDomainBinding("conv:c1:shared-gw/lib", "sender-gw")?.dstDomainId).toBe("friend2");
 	});
 });
 

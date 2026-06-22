@@ -282,18 +282,17 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 		expect(coord.openCount).toBe(0);
 	});
 
-	it("confirm writes the friend as a cross-Domain peer after both links verify", () => {
+	it("confirm writes the friend as a cross-Domain peer after the local link verifies (Model A)", () => {
 		const recv = makeDomain("home", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		const peers = new CrossDomainPeers(tmp());
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers });
 		runReceiverRounds(coord, recv, req, PIN);
 
-		// The receiver phone signs ITS side (binding the friend's keys); the friend phone
-		// signed the receiver's keys.
+		// The receiver phone signs only ITS OWN side (binding the friend's keys from the pairing);
+		// the friend confirms independently with their own side. No friend-link is exchanged.
 		const mySide = signLinkSide(recv, req);
-		const friendSide = signLinkSide(req, recv);
-		const result = coord.confirm({ pin: PIN, mySignedLink: mySide, friendSignedLink: friendSide });
+		const result = coord.confirm({ pin: PIN, mySignedLink: mySide });
 		expect(result.ok).toBe(true);
 
 		const stored = peers.resolveByGateway("bob", "bob-desktop");
@@ -301,38 +300,34 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 		expect(stored?.friendOwnerSignPub).toBe(req.owner.sign.pub);
 		expect(stored?.friendSignPub).toBe(req.gateway.sign.pub);
 		expect(stored?.friendBoxPub).toBe(req.gateway.box.pub);
-		// The stored link is the FRIEND's side (verifiable under friendOwnerSignPub).
-		expect(stored?.link).toEqual(friendSide);
+		// The stored link is the LOCAL owner's own side (verifiable under THIS owner's key).
+		expect(stored?.link).toEqual(mySide);
 		// The pairing was consumed: the window is closed.
 		expect(coord.openCount).toBe(0);
 	});
 
-	it("confirm rejects a friend link not signed by the paired friend owner", () => {
+	it("confirm rejects an own link not signed by this Domain's owner", () => {
 		const recv = makeDomain("home", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
-		const imposter = makeDomain("bob", "bob-desktop"); // same ids, different keys
+		const imposter = makeDomain("home", "sakura-laptop"); // same ids, different owner key
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		runReceiverRounds(coord, recv, req, PIN);
-		// The friend side is signed by an IMPOSTER owner, not the owner key in the pairing.
-		const mySide = signLinkSide(recv, req);
-		const friendSide = signLinkSide(imposter, recv);
-		expect(() => coord.confirm({ pin: PIN, mySignedLink: mySide, friendSignedLink: friendSide })).toThrow(
-			/did not verify under the friend owner key/,
+		// The "own" side is signed by an IMPOSTER owner, not this Gateway's admitted owner key.
+		const mySide = signLinkSide(imposter, req);
+		expect(() => coord.confirm({ pin: PIN, mySignedLink: mySide })).toThrow(
+			/did not verify under this Domain's owner key/,
 		);
 	});
 
-	it("confirm rejects a friend link that does not bind THIS Gateway's keys", () => {
+	it("confirm rejects an own link that does not bind the friend's keys", () => {
 		const recv = makeDomain("home", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
-		const otherTarget = makeDomain("home", "sakura-laptop"); // friend signed a DIFFERENT gateway's keys
+		const otherFriend = makeDomain("bob", "bob-desktop"); // owner-signed, but binds the WRONG gateway keys
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		runReceiverRounds(coord, recv, req, PIN);
-		const mySide = signLinkSide(recv, req);
-		// friend correctly signs under their owner, but binds otherTarget's gateway keys.
-		const friendSide = signLinkSide(req, otherTarget);
-		expect(() => coord.confirm({ pin: PIN, mySignedLink: mySide, friendSignedLink: friendSide })).toThrow(
-			/does not bind this Gateway's keys/,
-		);
+		// Correctly signed by our owner, but binds otherFriend's keys, not the paired friend's.
+		const mySide = signLinkSide(recv, otherFriend);
+		expect(() => coord.confirm({ pin: PIN, mySignedLink: mySide })).toThrow(/does not bind the friend's keys/);
 	});
 
 	it("confirm without a pairing for the pin is rejected (single-use)", () => {
@@ -340,10 +335,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 		const req = makeDomain("bob", "bob-desktop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		const mySide = signLinkSide(recv, req);
-		const friendSide = signLinkSide(req, recv);
-		expect(() => coord.confirm({ pin: "no-such-pin", mySignedLink: mySide, friendSignedLink: friendSide })).toThrow(
-			/no pending pairing/,
-		);
+		expect(() => coord.confirm({ pin: "no-such-pin", mySignedLink: mySide })).toThrow(/no pending pairing/);
 	});
 
 	it("a confirmed pin cannot be confirmed twice (the pairing is consumed)", () => {
@@ -352,11 +344,8 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		runReceiverRounds(coord, recv, req, PIN);
 		const mySide = signLinkSide(recv, req);
-		const friendSide = signLinkSide(req, recv);
-		coord.confirm({ pin: PIN, mySignedLink: mySide, friendSignedLink: friendSide });
-		expect(() => coord.confirm({ pin: PIN, mySignedLink: mySide, friendSignedLink: friendSide })).toThrow(
-			/no pending pairing/,
-		);
+		coord.confirm({ pin: PIN, mySignedLink: mySide });
+		expect(() => coord.confirm({ pin: PIN, mySignedLink: mySide })).toThrow(/no pending pairing/);
 	});
 });
 
@@ -400,10 +389,9 @@ describe("CrossDomainHandshakeCoordinator - requester role", () => {
 		expect(result.receiverGatewaySignPub).toBe(receiver.gateway.sign.pub);
 		expect(coord.openCount).toBe(1); // the pending pairing
 
-		// And the requester can confirm: it stores the receiver as a peer.
+		// And the requester can confirm independently with only its own link side.
 		const mySide = signLinkSide(requester, receiver);
-		const friendSide = signLinkSide(receiver, requester);
-		const confirmResult = coord.confirm({ pin: PIN, mySignedLink: mySide, friendSignedLink: friendSide });
+		const confirmResult = coord.confirm({ pin: PIN, mySignedLink: mySide });
 		expect(confirmResult.ok).toBe(true);
 		expect(peers.resolveByGateway("home", "sakura-laptop")?.friendOwnerSignPub).toBe(receiver.owner.sign.pub);
 	});
@@ -524,7 +512,7 @@ describe("CrossDomainHandshakeCoordinator - requester role", () => {
 //  End-to-end: two coordinators (one per Domain) pair through a shared Router
 
 describe("CrossDomainHandshakeCoordinator - two-Gateway end to end", () => {
-	it("listen on A, request from B, both confirm, both peer sets populated", async () => {
+	it("the link COMPLETES on both sides: B drives the exchange, A learns the pairing via listenState, both confirm independently and both peer sets populate", async () => {
 		const a = makeDomain("home", "sakura-laptop"); // receiver / listener
 		const b = makeDomain("bob", "bob-desktop"); // requester
 		const peersA = new CrossDomainPeers(tmp());
@@ -541,6 +529,12 @@ describe("CrossDomainHandshakeCoordinator - two-Gateway end to end", () => {
 		// A opens a window and reads the token to B out of band.
 		const token = coordA.listen().listeningToken;
 
+		// Before B pairs, A's poll sees nothing yet (the receiver is blind until round 2 lands).
+		const beforePairing = coordA.listenState(token);
+		expect(beforePairing.pairingArrived).toBe(false);
+		expect(beforePairing.sas).toBeUndefined();
+		expect(beforePairing.expiresAt).toBeGreaterThan(0);
+
 		// B requests against A's token (the gateway drives the full commit-reveal exchange).
 		const bResult = await coordB.request({
 			listeningToken: token,
@@ -552,15 +546,43 @@ describe("CrossDomainHandshakeCoordinator - two-Gateway end to end", () => {
 		// Both sides see the SAME SAS (the anti-MITM property).
 		expect(bResult.sas).toBe(expectedSas(a, b, PIN));
 
-		// The humans matched; each phone signs both link sides and confirms.
-		coordA.confirm({ pin: PIN, mySignedLink: signLinkSide(a, b), friendSignedLink: signLinkSide(b, a) });
-		coordB.confirm({ pin: PIN, mySignedLink: signLinkSide(b, a), friendSignedLink: signLinkSide(a, b) });
+		// THE RECEIVER LEARNS THE PAIRING: A polls listenState and now sees the SAS + B's keys, so
+		// the receiver phone can show the SAS and owner-sign its own link over B's keys.
+		const arrived = coordA.listenState(token);
+		expect(arrived.pairingArrived).toBe(true);
+		// The receiver's SAS matches what the requester computed (the two humans compare one code).
+		expect(arrived.sas).toBe(bResult.sas);
+		// listenState surfaces exactly the friend keys A must sign its link over.
+		expect(arrived.friendOwnerSignPub).toBe(b.owner.sign.pub);
+		expect(arrived.friendGatewaySignPub).toBe(b.gateway.sign.pub);
+		expect(arrived.friendGatewayBoxPub).toBe(b.gateway.box.pub);
+		expect(arrived.friendDomainId).toBe("bob");
+		expect(arrived.friendGatewayId).toBe("bob-desktop");
+		// The receiver learns the (requester-minted) pin so it can confirm its own pairing.
+		expect(arrived.pin).toBe(PIN);
+		// listenState is read-only: a second poll still shows the pairing (it did not consume it).
+		expect(coordA.listenState(token).pairingArrived).toBe(true);
 
-		// A now trusts B; B now trusts A. The disjoint peer sets are the handshake's only writes.
-		expect(peersA.resolveByGateway("bob", "bob-desktop")?.friendOwnerSignPub).toBe(b.owner.sign.pub);
-		expect(peersB.resolveByGateway("home", "sakura-laptop")?.friendOwnerSignPub).toBe(a.owner.sign.pub);
+		// The humans matched; each owner confirms INDEPENDENTLY with only its OWN signed link side.
+		// A signs over B's keys (which it got from listenState) and confirms with the pin it learned;
+		// B signs over A's keys (from request) and confirms with the pin it minted.
+		if (!arrived.pin) throw new Error("receiver did not learn the pin");
+		expect(coordA.confirm({ pin: arrived.pin, mySignedLink: signLinkSide(a, b) }).ok).toBe(true);
+		expect(coordB.confirm({ pin: PIN, mySignedLink: signLinkSide(b, a) }).ok).toBe(true);
+
+		// A now trusts B; B now trusts A. The disjoint peer sets are the handshake's only writes,
+		// and each stores its OWN owner's attestation (Model A).
+		const aPeer = peersA.resolveByGateway("bob", "bob-desktop");
+		const bPeer = peersB.resolveByGateway("home", "sakura-laptop");
+		expect(aPeer?.friendOwnerSignPub).toBe(b.owner.sign.pub);
+		expect(aPeer?.link.link.myOwnerSignPub).toBe(a.owner.sign.pub); // A stored A's own side
+		expect(bPeer?.friendOwnerSignPub).toBe(a.owner.sign.pub);
+		expect(bPeer?.link.link.myOwnerSignPub).toBe(b.owner.sign.pub); // B stored B's own side
 		expect(coordA.openCount).toBe(0);
 		expect(coordB.openCount).toBe(0);
+
+		// The window is consumed by confirm: a later poll reports it gone.
+		expect(coordA.listenState(token)).toEqual({ pairingArrived: false, expired: true });
 	});
 });
 

@@ -111,11 +111,15 @@ class ProtocolFixturesTest {
 	}
 
 	@Test
-	fun toleratesOldGatewayTeamWithoutKind() {
+	fun toleratesOldGatewayTeamWithoutKindAndCarriesDomainId() {
 		val result = json.decodeFromString<ConsoleListTeamsResult>(fixture("list-teams-result.json"))
 		assertEquals(2, result.teams.size)
 		assertEquals("devcontainer", result.teams[0].kind)
+		assertEquals("home", result.teams[0].domainId)
 		assertNull(result.teams[1].kind)
+		// A pre-federation team omits the Domain id; it decodes as null (consumers fall back
+		// to the home Domain).
+		assertNull(result.teams[1].domainId)
 	}
 
 	@Test

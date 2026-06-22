@@ -89,10 +89,14 @@ describe("protocol fixtures", () => {
 		expect(entry.request_type).toBe("handoff");
 	});
 
-	it("tolerates an old-gateway team without kind", () => {
+	it("tolerates an old-gateway team without kind and carries the owning Domain id", () => {
 		const result = ConsoleListTeamsResultSchema.parse(fixture("list-teams-result.json"));
 		expect(result.teams).toHaveLength(2);
 		expect(result.teams[0].kind).toBe("devcontainer");
+		expect(result.teams[0].domainId).toBe("home");
 		expect(result.teams[1].kind).toBeUndefined();
+		// A pre-federation team omits the Domain id; it decodes as absent (consumers fall
+		// back to the home Domain).
+		expect(result.teams[1].domainId).toBeUndefined();
 	});
 });

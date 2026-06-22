@@ -49,6 +49,7 @@ data class ChannelFile(
 data class TeamInfo(
 	val team: String,
 	val gatewayId: String? = null,
+	val domainId: String? = null,
 	val status: String,
 	val mode: String? = null,
 	val kind: String? = null,
@@ -96,6 +97,7 @@ sealed class ConsoleOp {
 	@SerialName("send")
 	data class Send(
 		val to: String,
+		val domainId: String? = null,
 		val request_type: String? = null,
 		val effort: String? = null,
 		val body: String,
@@ -159,7 +161,12 @@ sealed class ConsoleOp {
 	data class CrossDomainConfirm(
 		val pin: String,
 		val mySignedLink: SignedXDomainLink,
-		val friendSignedLink: SignedXDomainLink,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_listen_state")
+	data class CrossDomainListenState(
+		val listeningToken: String,
 	) : ConsoleOp()
 
 	@Serializable
@@ -186,6 +193,10 @@ sealed class ConsoleOp {
 	@Serializable
 	@SerialName("cross_domain_list_shares")
 	data object CrossDomainListShares : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_list_peers")
+	data object CrossDomainListPeers : ConsoleOp()
 
 	@Serializable
 	@SerialName("cross_domain_unlink")
@@ -468,6 +479,20 @@ data class CrossDomainCancelResult(
 )
 
 @Serializable
+data class CrossDomainListenStateResult(
+	val pairingArrived: Boolean,
+	val pin: String? = null,
+	val sas: String? = null,
+	val friendOwnerSignPub: String? = null,
+	val friendGatewaySignPub: String? = null,
+	val friendGatewayBoxPub: String? = null,
+	val friendDomainId: String? = null,
+	val friendGatewayId: String? = null,
+	val expiresAt: Long? = null,
+	val expired: Boolean? = null,
+)
+
+@Serializable
 data class CrossDomainShareResult(
 	val ok: Boolean,
 )
@@ -486,6 +511,17 @@ data class CrossDomainListSharesResult(
 data class CrossDomainShareEntry(
 	val sessionTarget: String,
 	val domainId: String,
+)
+
+@Serializable
+data class CrossDomainListPeersResult(
+	val peers: List<CrossDomainPeerEntry>,
+)
+
+@Serializable
+data class CrossDomainPeerEntry(
+	val domainId: String,
+	val gatewayId: String,
 )
 
 @Serializable

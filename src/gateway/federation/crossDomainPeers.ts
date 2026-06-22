@@ -9,9 +9,11 @@ import { SignedXDomainLinkSchema } from "../../shared/federation-protocol.js";
 /** A single cross-Domain peer: a Gateway owned by a DIFFERENT owner (a different
  * Domain) that this Gateway has linked with. Keyed by `(friendDomainId,
  * friendGatewayId)` because a gateway id is NOT globally unique across Domains.
- * Carries the friend gateway's keys for the seal plus the owner-signed link that
- * authorized the channel (the friend owner's side, verifiable under
- * `friendOwnerSignPub`). */
+ * Carries the friend gateway's keys for the seal plus the LOCAL owner's signed link
+ * attesting those keys (each owner confirms independently, signing its own side, so
+ * the link verifies under THIS Domain's owner key, not the friend's). The link is an
+ * audit artifact: the seal trust root is `friendBoxPub`, which came from the
+ * SAS-verified reveal. */
 const CrossDomainPeerSchema = z.object({
 	// The friend's owner root key (base64) - the trust anchor for this peer.
 	friendOwnerSignPub: z.string().min(1),
@@ -23,7 +25,8 @@ const CrossDomainPeerSchema = z.object({
 	friendSignPub: z.string().min(1),
 	// The friend gateway's raw X25519 box public key (base64).
 	friendBoxPub: z.string().min(1),
-	// The friend owner's signed link side (binds the keys above to the friend owner).
+	// The LOCAL owner's signed link side, attesting the friend keys above (verifiable
+	// under this Domain's own owner key).
 	link: SignedXDomainLinkSchema,
 });
 export type CrossDomainPeer = z.infer<typeof CrossDomainPeerSchema>;

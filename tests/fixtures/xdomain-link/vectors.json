@@ -1,0 +1,48 @@
+{
+	"_comment": "Cross-runtime vectors for the owner-signed cross-Domain link edge + its revocation (src/shared/enrollment.ts). Read by src/__tests__/xdomain-link.test.ts (TS) AND XDomainLinkTest.kt (Kotlin), so the hand-authored Kotlin twin (XDomainLinkCrypto.kt) cannot drift from this TS reference. signingBytes is the canonical XDOMAIN_RELAY_GATE_V1 / XDOMAIN_REVOKE_V1 newline-joined encoding the owner signs (utf8 preimage + hex + base64); signature is a node Ed25519 (RFC 8032 deterministic) signature over those bytes by the fixed ownerSignPub. Generated from the TS reference; never hand-authored.",
+	"ownerSignPub": "F51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=",
+	"ownerSignPriv": "zwAUh+WAfzZ5yWSxEtR7mRk9fIIzLTtwo4SsbeEAzLA=",
+	"edge": {
+		"_comment": "xDomainLinkEdgeSigningBytes + signXDomainLinkEdge over the fixed owner key.",
+		"value": {
+			"srcDomainId": "home",
+			"dstDomainId": "bob",
+			"issuedAt": 1717171717171,
+			"nonce": "bm9uY2U="
+		},
+		"signingBytes": "XDOMAIN_RELAY_GATE_V1\nF51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=\nhome\nbob\n1717171717171\nbm9uY2U=",
+		"signingBytesHex": "58444f4d41494e5f52454c41595f474154455f56310a46353166375a4b305a575672474a583836517352776e343045654e5a674942492b5a4c2f5677376a786f493d0a686f6d650a626f620a313731373137313731373137310a626d39755932553d",
+		"signingBytesBase64": "WERPTUFJTl9SRUxBWV9HQVRFX1YxCkY1MWY3WkswWldWckdKWDg2UXNSd240MEVlTlpnSUJJK1pML1Z3N2p4b0k9CmhvbWUKYm9iCjE3MTcxNzE3MTcxNzEKYm05dVkyVT0=",
+		"signature": "on2ALuSZQu8Hmouyl9ywC2jjil+XsPnaCUD1tpoOtW/dDHRkW0FcpY3t0MzAn//uzwb5R5FYYdTZNYGIfH6fBQ=="
+	},
+	"revocation": {
+		"_comment": "xDomainLinkRevocationSigningBytes + signXDomainLinkRevocation over the fixed owner key.",
+		"value": {
+			"srcDomainId": "home",
+			"dstDomainId": "bob",
+			"revokedAt": 1717171800000,
+			"nonce": "cmV2LW5vbmNl"
+		},
+		"signingBytes": "XDOMAIN_REVOKE_V1\nF51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=\nhome\nbob\n1717171800000\ncmV2LW5vbmNl",
+		"signingBytesHex": "58444f4d41494e5f5245564f4b455f56310a46353166375a4b305a575672474a583836517352776e343045654e5a674942492b5a4c2f5677376a786f493d0a686f6d650a626f620a313731373137313830303030300a636d56324c573576626d4e6c",
+		"signingBytesBase64": "WERPTUFJTl9SRVZPS0VfVjEKRjUxZjdaSzBaV1ZyR0pYODZRc1J3bjQwRWVOWmdJQkkrWkwvVnc3anhvST0KaG9tZQpib2IKMTcxNzE3MTgwMDAwMApjbVYyTFc1dmJtTmw=",
+		"signature": "WdxmE+J/KfaZb19rcjZYLhvhzAZ290XmK0XqC+bemyQbUdSZ/p+GKCz8lu2Jl+9D/vUWwjqINEFpcJCUlvsXDg=="
+	},
+	"link": {
+		"_comment": "xDomainLinkSigningBytes + signXDomainLink (federation-protocol.ts) over the fixed owner key: the full gateway-key XDomainLink artifact the handshake confirm binds, distinct from the relay-affinity edge above.",
+		"value": {
+			"myOwnerSignPub": "F51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=",
+			"peerOwnerSignPub": "cGVlci1vd25lci1zaWduLXB1Yg==",
+			"peerDomainId": "bob",
+			"peerGatewayId": "bob-desktop",
+			"peerSignPub": "cGVlci1nYXRld2F5LXNpZ24=",
+			"peerBoxPub": "cGVlci1nYXRld2F5LWJveA==",
+			"issuedAt": 1717171717171,
+			"nonce": "bGluay1ub25jZQ=="
+		},
+		"signingBytes": "XDOMAIN_LINK_V1\nF51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=\ncGVlci1vd25lci1zaWduLXB1Yg==\nbob\nbob-desktop\ncGVlci1nYXRld2F5LXNpZ24=\ncGVlci1nYXRld2F5LWJveA==\n1717171717171\nbGluay1ub25jZQ==",
+		"signingBytesHex": "58444f4d41494e5f4c494e4b5f56310a46353166375a4b305a575672474a583836517352776e343045654e5a674942492b5a4c2f5677376a786f493d0a6347566c636931766432356c6369317a615764754c58423159673d3d0a626f620a626f622d6465736b746f700a6347566c6369316e5958526c643246354c584e705a32343d0a6347566c6369316e5958526c643246354c574a7665413d3d0a313731373137313731373137310a62476c75617931756232356a5a513d3d",
+		"signingBytesBase64": "WERPTUFJTl9MSU5LX1YxCkY1MWY3WkswWldWckdKWDg2UXNSd240MEVlTlpnSUJJK1pML1Z3N2p4b0k9CmNHVmxjaTF2ZDI1bGNpMXphV2R1TFhCMVlnPT0KYm9iCmJvYi1kZXNrdG9wCmNHVmxjaTFuWVhSbGQyRjVMWE5wWjI0PQpjR1ZsY2kxbllYUmxkMkY1TFdKdmVBPT0KMTcxNzE3MTcxNzE3MQpiR2x1YXkxdWIyNWpaUT09",
+		"signature": "7dM4BiNa2ku68BjxWfVZsnM/xvbeZPbaYrZLH48aGW8N1FArH/vOkfvAsIkSzsHl3P22oN66Nv+Gg8gNykw5CQ=="
+	}
+}

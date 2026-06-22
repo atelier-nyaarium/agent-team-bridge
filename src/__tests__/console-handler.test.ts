@@ -988,8 +988,22 @@ describe("console terminal ops (peek / tmux_send)", () => {
 });
 
 describe("console cross-Domain handshake ops", () => {
+	// A linked-but-offline peer: written into the peer set by a confirmed link, but its gateway is
+	// not online and it has shared nothing back, so it never enters discovery. list_peers must still
+	// report it (the roster read the post-link sharing flow depends on).
+	const PEER_SET = [
+		{ domainId: "bob", gatewayId: "bob-desktop" },
+		{ domainId: "carol", gatewayId: "carol-laptop" },
+	];
 	function makeCrossDomainHarness() {
-		const calls: Record<string, unknown[]> = { listen: [], request: [], confirm: [], cancel: [] };
+		const calls: Record<string, unknown[]> = {
+			listen: [],
+			request: [],
+			confirm: [],
+			cancel: [],
+			listenState: [],
+			listPeers: [],
+		};
 		const routes: ConsoleRoutes = {
 			send: async () => jsonRes({ session_id: "s", status: "running" }),
 			respond: () => jsonRes({ delivered: true }),
@@ -1028,6 +1042,24 @@ describe("console cross-Domain handshake ops", () => {
 			cancel: (args: Record<string, unknown>) => {
 				calls.cancel.push(args);
 				return true;
+			},
+			listenState: (listeningToken: string) => {
+				calls.listenState.push({ listeningToken });
+				return {
+					pairingArrived: true,
+					pin: "thepin",
+					sas: "421717930842",
+					friendOwnerSignPub: "friend-owner",
+					friendGatewaySignPub: "friend-gw-sign",
+					friendGatewayBoxPub: "friend-gw-box",
+					friendDomainId: "bob",
+					friendGatewayId: "bob-desktop",
+					expiresAt: 123,
+				};
+			},
+			listPeers: () => {
+				calls.listPeers.push({});
+				return { peers: PEER_SET };
 			},
 		};
 		const handler = createConsoleHandler({
@@ -1092,14 +1124,61 @@ describe("console cross-Domain handshake ops", () => {
 		});
 	});
 
-	it("cross_domain_confirm forwards both link sides and returns ok", async () => {
+	it("cross_domain_confirm forwards only this owner's link side and returns ok (Model A)", async () => {
 		const h = makeCrossDomainHarness();
 		const reply = await h.handler.handleFrame(
-			frame({ kind: "cross_domain_confirm", pin: "thepin", mySignedLink: link, friendSignedLink: link }, "cf1"),
+			frame({ kind: "cross_domain_confirm", pin: "thepin", mySignedLink: link }, "cf1"),
 		);
 		expect(reply.ok).toBe(true);
 		expect(reply.result).toEqual({ ok: true });
-		expect(h.calls.confirm[0]).toMatchObject({ pin: "thepin" });
+		expect(h.calls.confirm[0]).toEqual({ pin: "thepin", mySignedLink: link });
+	});
+
+	it("cross_domain_listen_state forwards the token and returns the receiver's pairing state", async () => {
+		const h = makeCrossDomainHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "cross_domain_listen_state", listeningToken: "test-host.tok" }, "ls1"),
+		);
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toMatchObject({
+			pairingArrived: true,
+			sas: "421717930842",
+			friendGatewayId: "bob-desktop",
+		});
+		expect(h.calls.listenState[0]).toEqual({ listeningToken: "test-host.tok" });
+	});
+
+	it("cross_domain_listen_state is a fresh read: a retried opId re-runs (never cached)", async () => {
+		const h = makeCrossDomainHarness();
+		const f = frame({ kind: "cross_domain_listen_state", listeningToken: "test-host.tok" }, "dup-ls");
+		await h.handler.handleFrame(f);
+		await h.handler.handleFrame(f);
+		// The receiver polls this, so each call must hit the coordinator (not replay a cached reply).
+		expect(h.calls.listenState).toHaveLength(2);
+	});
+
+	it("cross_domain_list_peers returns the peer set, listing a linked-but-offline peer", async () => {
+		const h = makeCrossDomainHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "cross_domain_list_peers" }, "lp1"));
+		expect(reply.ok).toBe(true);
+		// The roster carries every linked peer projected to (domainId, gatewayId), regardless of
+		// online / shared-back state, so the offline peer is present and PeerDetail is reachable.
+		expect(reply.result).toEqual({
+			peers: [
+				{ domainId: "bob", gatewayId: "bob-desktop" },
+				{ domainId: "carol", gatewayId: "carol-laptop" },
+			],
+		});
+		expect(h.calls.listPeers).toHaveLength(1);
+	});
+
+	it("cross_domain_list_peers is a fresh read: a retried opId re-runs (never cached)", async () => {
+		const h = makeCrossDomainHarness();
+		const f = frame({ kind: "cross_domain_list_peers" }, "dup-lp");
+		await h.handler.handleFrame(f);
+		await h.handler.handleFrame(f);
+		// A roster read must reflect live peer-set state, so each poll hits the coordinator.
+		expect(h.calls.listPeers).toHaveLength(2);
 	});
 
 	it("a bare cross_domain_cancel stays a sweep-only no-op (no token/pin forwarded)", async () => {
@@ -1127,10 +1206,7 @@ describe("console cross-Domain handshake ops", () => {
 
 	it("a retried cross_domain_confirm opId replays the cached reply without re-running", async () => {
 		const h = makeCrossDomainHarness();
-		const f = frame(
-			{ kind: "cross_domain_confirm", pin: "thepin", mySignedLink: link, friendSignedLink: link },
-			"dup-cf",
-		);
+		const f = frame({ kind: "cross_domain_confirm", pin: "thepin", mySignedLink: link }, "dup-cf");
 		const r1 = await h.handler.handleFrame(f);
 		const r2 = await h.handler.handleFrame(f);
 		expect(r1).toEqual(r2);

@@ -176,6 +176,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.HUB) }
 	var showManage by remember { mutableStateOf(false) }
 	var showAddGateway by remember { mutableStateOf(false) }
+	// Cross-Domain trust overlays: the Federation hub, the open peer's detail (its domainId, or
+	// null), and the transient link wizard (leaving it cancels the pairing windows).
+	var showFederation by remember { mutableStateOf(false) }
+	var federationPeer by remember { mutableStateOf<String?>(null) }
+	var showLinkWizard by remember { mutableStateOf(false) }
 	var unlocked by remember { mutableStateOf(false) }
 
 	// WebView pool lives at App scope (never leaves composition) so each thread's
@@ -261,6 +266,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			settingsRoute = SettingsRoute.HUB
 			showManage = false
 			showAddGateway = false
+			showFederation = false
+			federationPeer = null
+			showLinkWizard = false
 			openTeam = team
 			openTeamRequest.value = null
 		}
@@ -277,8 +285,14 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	}
 
 	// System back navigates within the app (thread/settings/manage -> back) instead of exiting.
-	BackHandler(enabled = openTeam != null || showSettings || showManage || showAddGateway) {
+	BackHandler(
+		enabled = openTeam != null || showSettings || showManage || showAddGateway ||
+			showFederation || federationPeer != null || showLinkWizard,
+	) {
 		when {
+			showLinkWizard -> showLinkWizard = false
+			federationPeer != null -> federationPeer = null
+			showFederation -> showFederation = false
 			showAddGateway -> showAddGateway = false
 			showManage -> showManage = false
 			openTeam != null -> openTeam = null
@@ -290,6 +304,26 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	when {
 		!state.provisioned -> ProvisionScreen(repo = repo, onProvision = { scope.launch { repo.provision(it) } })
 		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
+		showLinkWizard ->
+			LinkWizard(
+				repo = repo,
+				onDone = { showLinkWizard = false },
+				onCancel = { showLinkWizard = false },
+			)
+		federationPeer != null ->
+			PeerDetailScreen(
+				repo = repo,
+				domainId = federationPeer!!,
+				onBack = { federationPeer = null },
+				onUnlinked = { federationPeer = null },
+			)
+		showFederation ->
+			FederationScreen(
+				repo = repo,
+				onBack = { showFederation = false },
+				onLink = { showLinkWizard = true },
+				onPeer = { federationPeer = it },
+			)
 		showAddGateway ->
 			AddGatewayScreen(repo = repo, onBack = { showAddGateway = false }, onDone = { showAddGateway = false })
 		showManage ->
@@ -303,6 +337,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onSetDeviceName = { scope.launch { repo.setDeviceName(it) } },
 				onToggleBiometric = { repo.setBiometricLock(it) },
 				onManage = { showManage = true },
+				onFederation = {
+					showSettings = false
+					settingsRoute = SettingsRoute.HUB
+					showFederation = true
+				},
 				onClear = {
 					scope.launch { repo.clearAll() }
 					showSettings = false
@@ -540,6 +579,11 @@ private fun looksProvisionable(s: String): Boolean = runCatching {
 	j.has("apiUrl") && j.has("saToken") && j.has("caPem")
 }.getOrDefault(false)
 
+/** The session-board grouping key: the full (Domain, Gateway) pair. A gateway id is
+ * unique only within a Domain, so two linked friend Domains running an identically-named
+ * gateway must group separately rather than merge. */
+private data class GatewayGroupKey(val domainId: String, val gatewayId: String)
+
 /** Live first, then most recent activity, then name, within each section. */
 private fun sessionOrder(state: ChatState): Comparator<Team> =
 	compareByDescending<Team> { it.status == "online" }
@@ -637,25 +681,38 @@ fun SessionsScreen(
 				EmptyBoard(state, onManage, onRefresh)
 			} else {
 				val order = sessionOrder(state)
-				// Accordion grouped by owning Gateway; within each: host agent, then devcontainer
-				// projects, then loose sessions. The local Gateway sorts first.
+				// My own Domain id, learned from a local session (one owned by the connected
+				// Gateway): the local listing stamps it, so I can tell a peer Domain apart
+				// without threading a separate localDomainId through state. Empty until known.
+				val homeDomainId = sessions.firstOrNull { it.gatewayId == state.localGatewayId }?.domainId.orEmpty()
+				// Accordion grouped by the owning (Domain, Gateway) pair - a gateway id is unique
+				// only within a Domain, so two linked friend Domains sharing an id must not merge
+				// into one group. Within each: host agent, then devcontainer projects, then loose
+				// sessions. The local Gateway sorts first; peer Domains follow, ordered by Domain.
 				val byGateway = sessions
-					.groupBy { it.gatewayId.ifEmpty { state.localGatewayId } }
+					.groupBy { GatewayGroupKey(it.domainId.orEmpty().ifEmpty { homeDomainId }, it.gatewayId.ifEmpty { state.localGatewayId }) }
 					.toList()
-					.sortedBy { (id, _) -> if (id == state.localGatewayId) "" else id }
+					.sortedBy { (key, _) ->
+						if (key.domainId == homeDomainId && key.gatewayId == state.localGatewayId) "" else "${key.domainId}/${key.gatewayId}"
+					}
 				LazyColumn(
 					Modifier.fillMaxSize(),
 					contentPadding = PaddingValues(12.dp),
 					verticalArrangement = Arrangement.spacedBy(8.dp),
 				) {
-					for ((gatewayId, group) in byGateway) {
-						val collapsed = collapsedGateways[gatewayId] == true
-						item(key = "sw:$gatewayId") {
+					for ((key, group) in byGateway) {
+						val composite = "${key.domainId}/${key.gatewayId}"
+						val collapsed = collapsedGateways[composite] == true
+						// A peer Domain (a linked friend's) is labeled domain/gateway so a colliding
+						// gateway id reads distinctly; my own Domain shows the bare gateway id.
+						val isPeer = key.domainId.isNotEmpty() && homeDomainId.isNotEmpty() && key.domainId != homeDomainId
+						val headerName = if (isPeer) composite else key.gatewayId
+						item(key = "sw:$composite") {
 							GatewayHeader(
-								name = gatewayId,
+								name = headerName,
 								online = group.any { it.status == "online" },
 								collapsed = collapsed,
-								onToggle = { collapsedGateways[gatewayId] = !collapsed },
+								onToggle = { collapsedGateways[composite] = !collapsed },
 							)
 						}
 						if (!collapsed) {
@@ -1256,6 +1313,7 @@ fun SettingsScreen(
 	onSetDeviceName: (String) -> Unit,
 	onToggleBiometric: (Boolean) -> Unit,
 	onManage: () -> Unit,
+	onFederation: () -> Unit,
 	onClear: () -> Unit,
 	onCloseSettings: () -> Unit,
 ) {
@@ -1284,7 +1342,7 @@ fun SettingsScreen(
 				}
 				SettingsRoute.PROFILE -> ProfileSettings(state, onSetDeviceName)
 				SettingsRoute.VOICE -> SttsVoiceSection(repo)
-				SettingsRoute.NETWORKS -> NetworksSettings(repo, onManage)
+				SettingsRoute.NETWORKS -> NetworksSettings(repo, onManage, onFederation)
 				SettingsRoute.SECURITY -> SecuritySettings(state, onToggleBiometric)
 				SettingsRoute.SYSTEM -> SystemSettings(repo, onClear)
 			}
@@ -1326,8 +1384,20 @@ private fun ProfileSettings(state: ChatState, onSetDeviceName: (String) -> Unit)
 }
 
 @Composable
-private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit) {
+private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onFederation: () -> Unit) {
+	// Two distinct concerns kept apart: managing gateways within YOUR network, and linking with a
+	// friend's separate network (cross-Domain trust).
+	Text("Your network", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Manage gateways") }
+	HorizontalDivider()
+	Text("Friends' networks", style = MaterialTheme.typography.titleSmall)
+	Text(
+		"Link with a friend's network so your agents can collaborate, isolated by default.",
+		style = MaterialTheme.typography.bodySmall,
+		color = MaterialTheme.colorScheme.onSurfaceVariant,
+	)
+	Button(onClick = onFederation, modifier = Modifier.fillMaxWidth()) { Text("Federation") }
+	HorizontalDivider()
 	OwnerKeysCard(repo)
 	OwnerBackupCard(repo)
 }

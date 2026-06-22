@@ -106,6 +106,14 @@ export const TeamInfoSchema = z
 		// a pre-federation Gateway omits it and the console falls back to its connected
 		// Gateway id (bare resolves local).
 		gatewayId: z.string().optional(),
+		// The Domain id of the Gateway that owns this session. A gateway id is unique only
+		// within a Domain, so the full (domainId, gatewayId) pair is what addresses a
+		// session unambiguously: two linked friend Domains may run a gateway whose id
+		// collides with the local or each other's. The local listing stamps the local
+		// Domain id; a cross-Domain discovery entry is tagged with the peer's Domain id.
+		// Optional for decode tolerance: a pre-federation Gateway omits it and consumers
+		// fall back to the home Domain.
+		domainId: z.string().optional(),
 		status: z.enum(["online", "available"]),
 		mode: ConnectionModeSchema.optional(),
 		// Optional for decode tolerance: old gateways omit kind and consumers
@@ -143,6 +151,11 @@ export const ConsoleOpSchema = z
 		z.object({
 			kind: z.literal("send"),
 			to: z.string().min(1).max(128),
+			// The Domain id of the target session, present only for a cross-Domain send (a session
+			// from a linked friend Domain). A gateway id is unique only within a Domain, so the
+			// gateway resolves the seal target by the full (domainId, gatewayId) pair when this is
+			// set; absent (or the local Domain) keeps the existing home/cross-Gateway resolution.
+			domainId: z.string().min(1).max(64).optional(),
 			request_type: RequestTypeSchema.optional(),
 			effort: z.enum(["simple", "standard", "complex", "auto"]).optional(),
 			body: z.string().min(1),
@@ -222,20 +235,31 @@ export const ConsoleOpSchema = z
 			requesterDomainId: z.string().min(1).max(64),
 			requesterGatewayId: z.string().min(1).max(64),
 		}),
-		// Confirm the SAS match (run on BOTH sides after the humans compared codes). Carries
-		// this owner's OWN signed link side (the phone signed it, binding the friend's keys),
-		// which the Gateway verifies and stores as the cross-Domain peer. `pin` looks up the
-		// pairing; `friendSignedLink` is the friend owner's side, verified under the friend
-		// owner key from the pairing before the peer is written.
+		// Confirm the SAS match (run on BOTH sides after the humans compared codes). Each owner
+		// confirms INDEPENDENTLY, carrying only its OWN signed link side: the phone signed it,
+		// binding the FRIEND Gateway's keys it already learned from the SAS-verified pairing. The
+		// Gateway verifies that one link under its own owner key and writes the friend as the
+		// cross-Domain peer. `pin` looks up the pairing. There is no friend-link exchange: the seal
+		// uses only the friend's box key from the pairing, so the stored link is the local owner's
+		// own attestation, and whose signature is on it does not affect seal security.
 		z.object({
 			kind: z.literal("cross_domain_confirm"),
 			pin: z.string().min(1),
 			// This owner's own signed link side (owner-signed on the phone). Binds the FRIEND
 			// Gateway's keys; the confirming Gateway verifies it under its own owner key.
 			mySignedLink: SignedXDomainLinkSchema,
-			// The friend owner's signed link side, verified under the friend owner key from the
-			// pairing. Its bound keys (the friend Gateway's) become the stored peer.
-			friendSignedLink: SignedXDomainLinkSchema,
+		}),
+		// Poll a receiver's listening window so the receiver phone learns a pairing arrived. The
+		// receiver opens a window with cross_domain_listen, reads the token to the friend, then
+		// calls this on a short interval while on the link screen: the requester drives the
+		// commit-reveal, which lands the pairing on the receiver's window SILENTLY, so this read is
+		// the receiver's only path to the SAS + the friend's keys it must owner-sign a link over.
+		// Read-only: it does not advance or consume the window. An unknown / expired token returns
+		// pairingArrived=false (with expired=true) rather than an error.
+		z.object({
+			kind: z.literal("cross_domain_listen_state"),
+			// The listening token cross_domain_listen minted (names this window).
+			listeningToken: z.string().min(1),
 		}),
 		// Cancel a listening window (the owner left the pairing screen). Invalidates the
 		// token + any pairing so a stale request cannot complete. The phone passes the
@@ -271,6 +295,11 @@ export const ConsoleOpSchema = z
 		}),
 		// Read this owner's current shares (so the console can render the share checkmarks).
 		z.object({ kind: z.literal("cross_domain_list_shares") }),
+		// Read the linked friend Domains from the gateway's cross-Domain peer set. Distinct from
+		// discovery: a peer is listed the moment it is linked, regardless of whether its gateway is
+		// online or has shared anything back, so the freshly-linked peer is visible (and its detail
+		// reachable) before any session crosses. Read-only roster; presence comes from discovery.
+		z.object({ kind: z.literal("cross_domain_list_peers") }),
 		// Unlink a linked friend Domain: drop the LOCAL trust + share state for it (every
 		// peer gateway of that Domain, every share offered to it, and any in-flight job bound
 		// to it). Keyed by `domainId` (a Domain may run more than one gateway), so the whole
@@ -532,6 +561,39 @@ export const CrossDomainCancelResultSchema = z
 	})
 	.meta({ id: "CrossDomainCancelResult" });
 
+// The receiver's view of its listening window (the cross_domain_listen_state poll). Before a
+// pairing arrives it carries only pairingArrived=false (+ the window's expiry, or expired=true
+// once the window is gone). Once the requester's commit-reveal lands the pairing, it carries the
+// SAS the receiver computed (the same 12-digit value the requester sees) plus the friend's keys
+// the receiver phone must owner-sign its link over: the four friend* keys + the friend Domain /
+// Gateway ids. The phone transitions to the type-the-code compare on pairingArrived.
+export const CrossDomainListenStateResultSchema = z
+	.object({
+		// True once a requester paired against this window (the SAS + friend keys are then present).
+		pairingArrived: z.boolean(),
+		// The requester-minted rendezvous pin (present only when arrived). The receiver passes it
+		// back to cross_domain_confirm so the gateway resolves this window's pairing (the receiver
+		// never minted it; it learns it here, E2E sealed). Single-use, consumed at confirm.
+		pin: z.string().optional(),
+		// The 12-digit safety code, present only when pairingArrived. Identical to the requester's
+		// so the two humans compare the same value.
+		sas: z.string().optional(),
+		// The friend's keys the receiver must owner-sign a link over (present only when arrived):
+		// the friend owner root + the friend Gateway's sign/box keys, plus the friend Domain /
+		// Gateway ids. The receiver phone signs mySignedLink binding these for cross_domain_confirm.
+		friendOwnerSignPub: z.string().optional(),
+		friendGatewaySignPub: z.string().optional(),
+		friendGatewayBoxPub: z.string().optional(),
+		friendDomainId: z.string().optional(),
+		friendGatewayId: z.string().optional(),
+		// When the window closes (epoch ms); the phone shows the countdown. Absent once the window
+		// no longer exists (expired/cancelled).
+		expiresAt: z.number().int().optional(),
+		// True when the window is gone (unknown token, expired, or cancelled): the phone restarts.
+		expired: z.boolean().optional(),
+	})
+	.meta({ id: "CrossDomainListenStateResult" });
+
 ////////////////////////////////
 //  Per-session share op results (gateway -> console)
 //
@@ -566,6 +628,26 @@ export const CrossDomainListSharesResultSchema = z
 	})
 	.meta({ id: "CrossDomainListSharesResult" });
 
+// One peer row in a list_peers result: a linked friend Domain projected from the gateway's
+// cross-Domain peer set. A Domain may run more than one gateway, so the same domainId can repeat
+// once per gateway; the console groups by domainId. Named (.meta id) so the codegen emits it as a
+// Kotlin nested class instead of erroring on an inline array-of-object.
+export const CrossDomainPeerEntrySchema = z
+	.object({
+		domainId: z.string(),
+		gatewayId: z.string(),
+	})
+	.meta({ id: "CrossDomainPeerEntry" });
+
+// The linked friend Domains the gateway has a cross-Domain peer for (the link is written; presence
+// and shared-back state are NOT implied). The console unions these domainIds with the discovery-
+// derived ones so a just-linked peer appears immediately, even while its gateway is offline.
+export const CrossDomainListPeersResultSchema = z
+	.object({
+		peers: z.array(CrossDomainPeerEntrySchema),
+	})
+	.meta({ id: "CrossDomainListPeersResult" });
+
 // The local unlink cleanup counts, so the console can confirm what was forgotten
 // (and render a clean zero-count result when the Domain was already unlinked).
 export const CrossDomainUnlinkResultSchema = z
@@ -592,9 +674,11 @@ export const ConsoleOpResultSchema = z.union([
 	CrossDomainRequestResultSchema,
 	CrossDomainConfirmResultSchema,
 	CrossDomainCancelResultSchema,
+	CrossDomainListenStateResultSchema,
 	CrossDomainShareResultSchema,
 	CrossDomainUnshareResultSchema,
 	CrossDomainListSharesResultSchema,
+	CrossDomainListPeersResultSchema,
 	CrossDomainUnlinkResultSchema,
 ]);
 

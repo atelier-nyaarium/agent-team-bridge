@@ -484,6 +484,16 @@ export async function startGateway(): Promise<void> {
 						request: (args) => crossDomainCoordinator!.request(args),
 						confirm: (args) => crossDomainCoordinator!.confirm(args),
 						cancel: (args) => crossDomainCoordinator!.cancel(args),
+						listenState: (listeningToken) => crossDomainCoordinator!.listenState(listeningToken),
+						// The linked-peer roster read from the disjoint cross-Domain peer set, so a
+						// freshly-linked peer is listed regardless of online / shared-back state (the
+						// console unions these with the discovery-derived Domains). Read fresh each call.
+						listPeers: () => ({
+							peers: crossDomainPeersForConsole!.all().map((p) => ({
+								domainId: p.friendDomainId,
+								gatewayId: p.friendGatewayId,
+							})),
+						}),
 					}
 				: undefined,
 			crossDomainShare:
