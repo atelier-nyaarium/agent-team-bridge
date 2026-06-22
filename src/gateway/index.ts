@@ -19,6 +19,7 @@ import { startPortForward } from "./evie/portForward.js";
 import { evieWsConnection, loadBootstrapTransport, loadEvieTransport } from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
+import { CrossDomainPeers } from "./federation/crossDomainPeers.js";
 import { logAdmitGatewayQr } from "./federation/enrollQr.js";
 import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/hostRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
@@ -200,6 +201,11 @@ export async function startGateway(): Promise<void> {
 			process.env.FEDERATION_REQUIRE_OWNER_PIN === "true",
 		);
 		allowlistForConsole = allowlist;
+		// Cross-Domain peers (other owners' Gateways this Gateway has linked with): a
+		// DISJOINT store from the single-owner allowlist, written only by the handshake,
+		// so a home-Domain sync can never wipe it and it never contaminates intra-Domain
+		// resolution. The sealer resolves home peers first, then this set.
+		const crossDomainPeers = new CrossDomainPeers(federationDir);
 		const identity = loadOrCreateIdentity(federationDir);
 		// Durable replay-guard: persisted across restarts so an authentic sealed frame
 		// captured inside the 120s freshness window cannot replay once after a deploy.
@@ -210,7 +216,7 @@ export async function startGateway(): Promise<void> {
 			if (Array.isArray(persisted)) replayGuard.restore(persisted as Array<[string, number]>);
 		}
 		replayPersist = () => replayDurable.save(replayGuard.snapshot());
-		sealer = createSealer(identity, allowlist, localGatewayId, replayGuard);
+		sealer = createSealer(identity, allowlist, localGatewayId, crossDomainPeers, localDomainId, replayGuard);
 		// The console channel rides the SAME durable replay guard + allowlist: a console
 		// frame is sealed to this gateway and signed by an admitted console key.
 		consoleSealer = createConsoleSealer(identity, allowlist, replayGuard);

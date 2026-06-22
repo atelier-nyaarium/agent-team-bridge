@@ -1,5 +1,8 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Allowlist } from "../gateway/federation/allowlist.js";
+import { CrossDomainPeers } from "../gateway/federation/crossDomainPeers.js";
 import { createGatewayRelayHandler } from "../gateway/federation/hostRelay.js";
 import { createSealer, type Sealer } from "../gateway/federation/sealer.js";
 import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
@@ -19,7 +22,10 @@ function sealerFor(self: Identity, localGatewayId: string, peers: Record<string,
 	const allowlist = {
 		resolveGateway: (h: string) => (peers[h] ? { signPub: peers[h].sign.pub, boxPub: peers[h].box.pub } : null),
 	} as unknown as Allowlist;
-	return createSealer(self, allowlist, localGatewayId);
+	// These Gateways are same-Domain (the home v1 path); an empty cross-Domain set
+	// (never written - no `add` here) keeps resolution on the allowlist.
+	const noCrossPeers = new CrossDomainPeers(path.join(os.tmpdir(), "federation-test-no-peers"));
+	return createSealer(self, allowlist, localGatewayId, noCrossPeers, "home");
 }
 const sealerA = sealerFor(A, "hosta", { hostb: B });
 const sealerB = sealerFor(B, "hostb", { hosta: A });

@@ -1,15 +1,22 @@
 import { type Identity, type SealedEnvelope, seal, unseal } from "../../shared/crypto.js";
 import type { Allowlist } from "./allowlist.js";
+import type { CrossDomainPeers } from "./crossDomainPeers.js";
 import { ReplayGuard } from "./replayGuard.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
+/** A seal destination: a bare string is the existing home shorthand (a home
+ * gatewayId resolved through the allowlist), an object is an explicit cross-Domain
+ * target keyed by `(domainId, gatewayId)` (a gateway id is not globally unique). */
+export type SealTarget = string | { domainId: string; gatewayId: string };
+
 /** Seals an object to a peer Gateway and opens a peer Gateway's sealed object, resolving
- * the peer's keys through the allowlist. The seal is E2E (gateway to gateway); evie
- * never holds either Gateway's private keys. */
+ * the peer's keys home-first (the single-owner allowlist) then the disjoint
+ * cross-Domain peer set. The seal is E2E (gateway to gateway); evie never holds either
+ * Gateway's private keys. */
 export interface Sealer {
-	seal(dstGateway: string, obj: unknown): SealedEnvelope;
+	seal(dst: SealTarget, obj: unknown): SealedEnvelope;
 	open(srcGateway: string, env: SealedEnvelope): unknown;
 }
 
@@ -21,11 +28,23 @@ export interface Sealer {
 // Above evie's gateway_relay hold (70s) plus relay latency.
 const SEAL_MAX_AGE_MS = 120_000;
 
-/** The signed-and-encrypted inner frame. Carrying `src`/`dst`/`at` INSIDE the
- * seal binds them cryptographically (the seal signature covers the ciphertext),
- * so evie - which controls the cleartext routing fields - cannot relabel the
- * origin/destination or replay a stale frame past the freshness window. */
-interface SealedBody {
+/** Resolve a cross-Domain peer by the cleartext frame's gateway id (the only
+ * identifier present pre-unseal until the relay frame carries a `srcDomain`). Returns
+ * null when no peer matches OR when the id is ambiguous across two friend Domains - in
+ * the ambiguous case we refuse rather than guess, so a frame is never attributed to the
+ * wrong peer. A `srcDomain` on the relay frame would let this resolve by the full
+ * `(domainId, gatewayId)` pair and remove the ambiguity. */
+function resolveCrossByGateway(crossDomainPeers: CrossDomainPeers, gatewayId: string) {
+	const matches = crossDomainPeers.all().filter((p) => p.friendGatewayId === gatewayId);
+	return matches.length === 1 ? matches[0] : null;
+}
+
+/** The HOME (single-owner, intra-Domain) signed-and-encrypted inner frame. Carrying
+ * `src`/`dst`/`at` INSIDE the seal binds them cryptographically (the seal signature
+ * covers the ciphertext), so evie - which controls the cleartext routing fields -
+ * cannot relabel the origin/destination or replay a stale frame past the freshness
+ * window. UNCHANGED: a home peer still produces this exact v1 body byte-for-byte. */
+interface SealedBodyV1 {
 	v: 1;
 	src: string;
 	dst: string;
@@ -33,26 +52,76 @@ interface SealedBody {
 	body: unknown;
 }
 
+/** The CROSS-DOMAIN signed-and-encrypted inner frame. Adds the source + destination
+ * Domain ids alongside the gateway ids, because a gateway id is not globally unique
+ * across Domains: open() cross-checks the full `(domain, gateway)` pair on both ends,
+ * so an evie relabel across Domains cannot misattribute an authentic frame. */
+interface SealedBodyV2 {
+	v: 2;
+	src: string;
+	dst: string;
+	srcDomain: string;
+	dstDomain: string;
+	at: number;
+	body: unknown;
+}
+
+type SealedBody = SealedBodyV1 | SealedBodyV2;
+
 export function createSealer(
 	identity: Identity,
 	allowlist: Allowlist,
 	localGatewayId: string,
+	crossDomainPeers: CrossDomainPeers,
+	localDomainId: string,
 	replayGuard: ReplayGuard = new ReplayGuard(),
 	now: () => number = Date.now,
 ): Sealer {
 	return {
-		seal(dstGateway, obj) {
-			const peer = allowlist.resolveGateway(dstGateway);
-			if (!peer) throw new Error(`Gateway "${dstGateway}" is not admitted to the Domain`);
-			const wrapped: SealedBody = { v: 1, src: localGatewayId, dst: dstGateway, at: now(), body: obj };
-			return seal(Buffer.from(JSON.stringify(wrapped)), peer.boxPub, identity.sign.priv);
+		seal(dst, obj) {
+			// A bare string is the home shorthand: resolve home FIRST and emit the
+			// byte-identical v1 body. Only when home cannot resolve the target (or the
+			// caller named an explicit cross-Domain target) do we fall through to the
+			// disjoint cross-Domain set and emit v2.
+			const bareGateway = typeof dst === "string" ? dst : dst.gatewayId;
+			if (typeof dst === "string") {
+				const homePeer = allowlist.resolveGateway(dst);
+				if (homePeer) {
+					const wrapped: SealedBodyV1 = { v: 1, src: localGatewayId, dst, at: now(), body: obj };
+					return seal(Buffer.from(JSON.stringify(wrapped)), homePeer.boxPub, identity.sign.priv);
+				}
+			}
+			// Cross-Domain: resolve the friend gateway's keys from the disjoint store.
+			if (typeof dst !== "string") {
+				const peer = crossDomainPeers.resolveByGateway(dst.domainId, dst.gatewayId);
+				if (peer) {
+					const wrapped: SealedBodyV2 = {
+						v: 2,
+						src: localGatewayId,
+						dst: dst.gatewayId,
+						srcDomain: localDomainId,
+						dstDomain: peer.friendDomainId,
+						at: now(),
+						body: obj,
+					};
+					return seal(Buffer.from(JSON.stringify(wrapped)), peer.friendBoxPub, identity.sign.priv);
+				}
+			}
+			throw new Error(`Gateway "${bareGateway}" is not admitted to the Domain`);
 		},
 		open(srcGateway, env) {
-			const peer = allowlist.resolveGateway(srcGateway);
-			if (!peer) throw new Error(`Gateway "${srcGateway}" is not admitted to the Domain`);
+			// Resolve the verify key home-first (the single-owner allowlist), then the
+			// disjoint cross-Domain set. A home peer keeps the exact existing path. The
+			// cleartext relay frame carries only the gateway id (no Domain pre-unseal),
+			// so a cross-Domain peer is matched by its gateway id; the signed-in srcDomain
+			// is cross-checked against the resolved peer AFTER unseal (below).
+			const homePeer = allowlist.resolveGateway(srcGateway);
+			const crossPeer = homePeer ? null : resolveCrossByGateway(crossDomainPeers, srcGateway);
+			const verifyKey = homePeer ? homePeer.signPub : crossPeer?.friendSignPub;
+			if (!verifyKey) throw new Error(`Gateway "${srcGateway}" is not admitted to the Domain`);
 			// Verify authenticity first; only then guard against a replay of an
 			// authentic frame (so a forged nonce can never poison the seen-set).
-			const plain = unseal(env, identity.box.priv, peer.signPub);
+			const plain = unseal(env, identity.box.priv, verifyKey);
 			if (!replayGuard.check(srcGateway, env.nonce)) {
 				throw new Error(`seal: replayed envelope from "${srcGateway}"`);
 			}
@@ -62,7 +131,25 @@ export function createSealer(
 			if (wrapped?.src !== srcGateway) throw new Error(`seal: source mismatch (claimed "${srcGateway}")`);
 			if (wrapped.dst !== localGatewayId) throw new Error(`seal: not addressed to this Gateway`);
 			if (Math.abs(now() - (wrapped.at ?? 0)) > SEAL_MAX_AGE_MS) throw new Error(`seal: stale envelope`);
-			return wrapped.body;
+			if (wrapped.v === 1) {
+				// Home / legacy intra-Domain frame: src/dst/at already checked above. A v1 body
+				// MUST come from a home peer (symmetric to the v2 guard below): a cross-Domain
+				// peer that crafted a v1 body would otherwise strip the (srcDomain, dstDomain)
+				// binding the v2 envelope exists to enforce.
+				if (crossPeer) throw new Error(`seal: v1 frame from a cross-Domain Gateway`);
+				return wrapped.body;
+			}
+			if (wrapped.v === 2) {
+				// Cross-Domain frame: the verify key MUST be a cross-Domain peer (a home
+				// peer never emits v2), and the full (domain, gateway) pair must match.
+				if (!crossPeer) throw new Error(`seal: v2 frame from a non-cross-Domain Gateway`);
+				if (wrapped.srcDomain !== crossPeer.friendDomainId) {
+					throw new Error(`seal: srcDomain mismatch (claimed "${wrapped.srcDomain}")`);
+				}
+				if (wrapped.dstDomain !== localDomainId) throw new Error(`seal: not addressed to this Domain`);
+				return wrapped.body;
+			}
+			throw new Error(`seal: unknown sealed body version`);
 		},
 	};
 }
