@@ -204,7 +204,6 @@ private fun TerminalPane(ansi: String, modifier: Modifier = Modifier) {
 
 // The fixed control-key palette: a label shown on the chip and the tmux key name sent.
 private val PALETTE_KEYS = listOf(
-	"Enter" to "Enter",
 	"Esc" to "Escape",
 	"^C" to "C-c",
 	"Tab" to "Tab",
@@ -214,8 +213,8 @@ private val PALETTE_KEYS = listOf(
 	"Right" to "Right",
 )
 
-// One-tap curated text (sent as literal text + Enter), for the common prompt answers.
-private val PALETTE_TEXT = listOf("y", "n")
+// One-tap slash commands (sent as literal text + Enter) for the agent's TUI.
+private val PALETTE_SLASH = listOf("/model", "/effort", "/usage", "/workflows", "/plugin", "/mcp")
 
 /**
  * The terminal view: a live ANSI pane (auto-refreshed while the screen is RESUMED, so it pauses on
@@ -278,11 +277,16 @@ fun TerminalView(
 			Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
 			horizontalArrangement = Arrangement.spacedBy(6.dp),
 		) {
+			PALETTE_SLASH.forEach { cmd ->
+				AssistChip(onClick = { fire(cmd, null) }, label = { Text(cmd, fontFamily = FontFamily.Monospace) })
+			}
+		}
+		Row(
+			Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+			horizontalArrangement = Arrangement.spacedBy(6.dp),
+		) {
 			PALETTE_KEYS.forEach { (label, key) ->
 				AssistChip(onClick = { fire(null, key) }, label = { Text(label, fontFamily = FontFamily.Monospace) })
-			}
-			PALETTE_TEXT.forEach { t ->
-				AssistChip(onClick = { fire(t, null) }, label = { Text(t, fontFamily = FontFamily.Monospace) })
 			}
 		}
 		Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
@@ -293,10 +297,14 @@ fun TerminalView(
 				modifier = Modifier.weight(1f),
 			)
 			FilledIconButton(
-				enabled = input.isNotEmpty(),
+				// Empty input sends a bare Enter (the Enter chip is retired in favor of this).
 				onClick = {
-					fire(input, null)
-					input = ""
+					if (input.isEmpty()) {
+						fire(null, "Enter")
+					} else {
+						fire(input, null)
+						input = ""
+					}
 				},
 				modifier = Modifier.padding(start = 8.dp).widthIn(min = 48.dp),
 			) {
