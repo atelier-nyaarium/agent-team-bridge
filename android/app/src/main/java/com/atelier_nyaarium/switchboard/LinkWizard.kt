@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
+import android.content.ClipData
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +36,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -48,11 +51,11 @@ import kotlinx.coroutines.launch
 
 /**
  * The mutual link ceremony, a transient overlay (leaving it cancels the pairing windows, so
- * there is no passive cross-Domain surface). Both owners are on this screen at once and
- * coordinate over a call. The flow is a clean two-step: a RENDEZVOUS (one owner reads a code,
- * the other enters it) then a VERIFY (both compute a safety code; each TYPES the code the other
- * reads aloud, and Confirm unlocks ONLY on an exact local match - the anti-MITM gate). Either
- * owner can be the one who reads or the one who enters.
+ * there is no passive cross-Domain surface). Both owners coordinate however works (text, etc).
+ * The flow is a clean two-step: a RENDEZVOUS (one owner shares a code, the other enters it) then
+ * a VERIFY (both compute a safety code; each TYPES the code the other sends, and Confirm unlocks
+ * ONLY on an exact local match - the anti-MITM gate). Either owner can be the one who shares or
+ * the one who enters.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -273,7 +276,8 @@ private fun RendezvousPanel(
 	onRequest: () -> Unit,
 ) {
 	Text(
-		"Both phones must be on this screen at once. One of you reads their code; the other enters it.",
+		"One of you shares a code; the other enters it. Send it however works - text, etc. " +
+			"Installing the app can take a while, so there's no rush.",
 		style = MaterialTheme.typography.bodyMedium,
 	)
 	if (note.isNotEmpty()) InfoSurface(note)
@@ -281,7 +285,7 @@ private fun RendezvousPanel(
 	when (role) {
 		null -> {
 			Spacer(Modifier.height(8.dp))
-			Button(onClick = onPickReceiver, modifier = Modifier.fillMaxWidth()) { Text("Show my code (I read it)") }
+			Button(onClick = onPickReceiver, modifier = Modifier.fillMaxWidth()) { Text("Show my code (I send it)") }
 			OutlinedButton(onClick = onPickRequester, modifier = Modifier.fillMaxWidth()) { Text("Enter my friend's code") }
 		}
 
@@ -289,19 +293,19 @@ private fun RendezvousPanel(
 			if (busy || listening == null) {
 				Busy("Opening a listening window...")
 			} else {
-				Text("Read this code to your friend:", style = MaterialTheme.typography.titleMedium)
+				Text("Send this code to your friend:", style = MaterialTheme.typography.titleMedium)
 				CodeBlock(listening.listeningToken)
-				CountdownLine(listening.expiresAt)
+				CopyButton(listening.listeningToken)
 				InfoSurface(
-					"Your friend enters this on their phone. Once they do, both phones show a safety code " +
-						"to compare. Keep this screen open until then.",
+					"Copy it and send it to your friend (a text works). When they enter it, both phones show " +
+						"a safety code to compare. You can leave to send it and come back - this stays open.",
 				)
 				Busy("Waiting for your friend to enter the code...")
 			}
 		}
 
 		LinkRole.REQUESTER -> {
-			Text("Enter the code your friend reads to you:", style = MaterialTheme.typography.titleMedium)
+			Text("Enter the code your friend sent you:", style = MaterialTheme.typography.titleMedium)
 			OutlinedTextField(
 				value = enteredToken,
 				onValueChange = onTokenChange,
@@ -331,12 +335,13 @@ private fun VerifyPanel(
 ) {
 	Text("Confirm the safety code", style = MaterialTheme.typography.titleLarge)
 	Text(
-		"Read YOUR code aloud to your friend, and type the code they read to you. Confirm unlocks " +
+		"Send YOUR code to your friend, and type the code they send you. Confirm unlocks " +
 			"ONLY on an exact match - a mismatch means a key was tampered with, so abort.",
 		style = MaterialTheme.typography.bodyMedium,
 	)
-	Text("Yours (read aloud):", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+	Text("Yours (copy + send):", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 	CodeBlock(grouped(mySas))
+	CopyButton(mySas)
 	OutlinedTextField(
 		value = typed,
 		onValueChange = onTypedChange,
@@ -416,23 +421,15 @@ private fun FailedPanel(reason: String, onRestart: () -> Unit, onClose: () -> Un
 ////////////////////////////////
 //  Bits
 
+// Copy a code to the clipboard so the owner can paste it into a text. Copies the raw value
+// (no spacing) so it pastes cleanly; the displayed CodeBlock keeps the grouped/spaced form.
 @Composable
-private fun CountdownLine(expiresAt: Long) {
-	var remaining by remember { mutableStateOf(expiresAt - System.currentTimeMillis()) }
-	LaunchedEffect(expiresAt) {
-		while (remaining > 0) {
-			remaining = expiresAt - System.currentTimeMillis()
-			delay(1000)
-		}
-	}
-	val total = (remaining / 1000).coerceAtLeast(0)
-	val mm = total / 60
-	val ss = total % 60
-	Text(
-		if (total > 0) "Listening... %d:%02d".format(mm, ss) else "Window expired - start over",
-		style = MaterialTheme.typography.bodyMedium,
-		color = if (total > 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-	)
+private fun CopyButton(value: String) {
+	val clipboard = LocalClipboard.current
+	val scope = rememberCoroutineScope()
+	OutlinedButton(onClick = {
+		scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", value))) }
+	}) { Text("Copy") }
 }
 
 @Composable
@@ -457,7 +454,7 @@ private fun InfoSurface(text: String) {
 // (the requester's exchange completes in one round trip) without hammering the relay.
 private const val LISTEN_POLL_MS = 2000L
 
-/** Group a 12-digit code into pairs for easy reading aloud ("42 17 93 ..."). */
+/** Group a 12-digit code into pairs for easy comparison ("42 17 93 ..."). */
 private fun grouped(code: String): String = code.chunked(2).joinToString(" ")
 
 /** Map a raw handshake error to a calmer, actionable line for the failed panel. */
@@ -471,7 +468,7 @@ private fun humanizeHandshakeError(message: String?): String {
 		m.contains("safety code mismatch", ignoreCase = true) || m.contains("substituted in transit", ignoreCase = true) ->
 			"The keys did not match (possible tampering). The link was refused - do not retry blindly."
 		m.contains("malformed listening token", ignoreCase = true) ->
-			"That code is not a valid link code. Re-enter the code your friend reads to you."
+			"That code is not a valid link code. Re-enter the code your friend sent you."
 		m.contains("must name a different Gateway", ignoreCase = true) ->
 			"That is your own code. Enter your friend's code instead."
 		else -> m.take(180)
