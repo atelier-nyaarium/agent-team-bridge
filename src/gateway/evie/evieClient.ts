@@ -31,6 +31,9 @@ export interface EvieClientConfig {
 	// This Gateway's id, registered with the Router on connect so cross-Gateway frames
 	// can be routed to this Gateway.
 	gatewayId: string;
+	// This Gateway's Domain id (multi-tenant evie), sent on register so the Router keys
+	// the connection by (domainId, gatewayId). "home" for a single-tenant Gateway.
+	domainId: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	// The relay pump owns full ConsoleRelayFrameSchema validation; the envelope
 	// union only routes by type, so the frame travels as unknown.
@@ -38,6 +41,9 @@ export interface EvieClientConfig {
 	// A cross-Gateway frame the Router routed to this Gateway; the gateway-relay pump owns
 	// full GatewayRelayFrameSchema validation, so the frame travels as unknown.
 	onGatewayRelay?: (frame: unknown) => void;
+	// A pre-trust cross-Domain handshake frame the Router routed to this Gateway (the
+	// receiver leg); the handshake pump owns full validation, so it travels as unknown.
+	onCrossDomainHandshake?: (frame: unknown) => void;
 	// Extra `gateway_register` params (the admitted-identity proof: signPub/boxPub
 	// + owner-signed admission + a fresh possession proof), computed at each
 	// (re)register so the proof timestamp is current. Returns null pre-enrollment,
@@ -101,6 +107,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			// Re-runs on every reconnect (the Router re-keys gateway id -> socket).
 			void callTool("gateway_register", {
 				gatewayId: config.gatewayId,
+				domainId: config.domainId,
 				protocolVersion: FEDERATION_PROTOCOL_VERSION,
 				...(config.buildRegisterAuth?.() ?? {}),
 			}).then((res) => {
@@ -153,6 +160,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				}
 				case "gateway_relay": {
 					config.onGatewayRelay?.(frame);
+					break;
+				}
+				case "cross_domain_handshake": {
+					config.onCrossDomainHandshake?.(frame);
 					break;
 				}
 				case "domain_update": {

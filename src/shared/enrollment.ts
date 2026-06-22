@@ -1,4 +1,4 @@
-// SYNC-HASH: 49d3f003add4ee0c49da3c9fa23ad763
+// SYNC-HASH: 4cf3b8fadcb86483795a7dd0b2af2df1
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -10,7 +10,7 @@ import {
 	SignedRevocationSchema,
 	signAdmission,
 } from "./admission.js";
-import { fingerprint } from "./crypto.js";
+import { fingerprint, sign, verify } from "./crypto.js";
 
 ////////////////////////////////
 //  Enrollment payloads (the unified QR) + the SAS confirm
@@ -71,11 +71,78 @@ export const EnrollmentPayloadSchema = z
 	])
 	.meta({ id: "EnrollmentPayload" });
 
+/** A content-blind cross-Domain link edge: an owner attests that traffic from its
+ * Domain (`srcDomainId`) may relay to a friend Domain (`dstDomainId`) it has linked
+ * with. evie's relay-affinity gate honors a cross-Domain `gateway_relay` only when such
+ * an owner-signed edge exists for the pair. Content-blind: it names only the two Domain
+ * ids, never a session or a key. Both ids are slug-constrained so neither can carry a
+ * newline that would make the signing bytes ambiguous against the other. */
+export const XDomainLinkEdgeSchema = z
+	.object({
+		srcDomainId: z
+			.string()
+			.regex(/^[a-z0-9-]+$/)
+			.max(64),
+		dstDomainId: z
+			.string()
+			.regex(/^[a-z0-9-]+$/)
+			.max(64),
+		issuedAt: z.number().int().nonnegative(),
+		nonce: z.string().min(1),
+	})
+	.meta({ id: "XDomainLinkEdge" });
+
+export const SignedXDomainLinkEdgeSchema = z
+	.object({
+		edge: XDomainLinkEdgeSchema,
+		// The linking owner's root key (base64). evie checks it against the srcDomain's
+		// rooted owner key (the owner of the Domain the edge authorizes traffic FROM),
+		// never trusting this field alone.
+		ownerSignPub: z.string().min(1),
+		// The owner's Ed25519 signature over xDomainLinkEdgeSigningBytes (base64).
+		signature: z.string().min(1),
+	})
+	.meta({ id: "SignedXDomainLinkEdge" });
+
+/** The owner-signed revocation of a cross-Domain link edge: it withdraws the owner's
+ * attestation that traffic from its Domain (`srcDomainId`) may relay to a friend Domain
+ * (`dstDomainId`). evie drops every matching edge for the pair, so its relay-affinity gate
+ * refuses the cross-Domain `gateway_relay` again. Content-blind: it names only the two
+ * Domain ids, never a session or a key, and both ids are slug-constrained so neither can
+ * carry a newline that would make the signing bytes ambiguous against the other. The shape
+ * mirrors the edge it revokes plus the admission Revocation's revoke-time/nonce fields. */
+export const XDomainLinkRevocationSchema = z
+	.object({
+		srcDomainId: z
+			.string()
+			.regex(/^[a-z0-9-]+$/)
+			.max(64),
+		dstDomainId: z
+			.string()
+			.regex(/^[a-z0-9-]+$/)
+			.max(64),
+		revokedAt: z.number().int().nonnegative(),
+		nonce: z.string().min(1),
+	})
+	.meta({ id: "XDomainLinkRevocation" });
+
+export const SignedXDomainLinkRevocationSchema = z
+	.object({
+		revocation: XDomainLinkRevocationSchema,
+		// The revoking owner's root key (base64). evie checks it against the srcDomain's
+		// rooted owner key (the owner of the Domain whose edge is being revoked), never
+		// trusting this field alone.
+		ownerSignPub: z.string().min(1),
+		// The owner's Ed25519 signature over xDomainLinkRevocationSigningBytes (base64).
+		signature: z.string().min(1),
+	})
+	.meta({ id: "SignedXDomainLinkRevocation" });
+
 /** The owner device's enrollment requests to evie (NOT relayed to a Gateway - evie
- * is the Domain root). All three are self-authenticating: `enroll_redeem` is
- * authorized by the single-use nonce evie minted, and the submit ops carry an
- * owner-signed artifact evie verifies against the rooted owner key. The console
- * sends them over the same app-token-gated bridge as its gateway ops. */
+ * is the Domain root). All are self-authenticating: `enroll_redeem` is authorized by
+ * the single-use nonce evie minted, and the submit ops carry an owner-signed artifact
+ * evie verifies against the rooted owner key. The console sends them over the same
+ * app-token-gated bridge as its gateway ops. */
 export const EnrollOpSchema = z
 	.discriminatedUnion("kind", [
 		z.object({
@@ -86,6 +153,8 @@ export const EnrollOpSchema = z
 		}),
 		z.object({ kind: z.literal("submit_admission"), admission: SignedAdmissionSchema }),
 		z.object({ kind: z.literal("submit_revocation"), revocation: SignedRevocationSchema }),
+		z.object({ kind: z.literal("submit_xdomain_link"), edge: SignedXDomainLinkEdgeSchema }),
+		z.object({ kind: z.literal("revoke_xdomain_link"), revocation: SignedXDomainLinkRevocationSchema }),
 	])
 	.meta({ id: "EnrollOp" });
 
@@ -100,6 +169,10 @@ export type AdmitGatewayPayload = Extract<EnrollmentPayload, { type: "admit-gate
 export type AuthorizeConsolePayload = Extract<EnrollmentPayload, { type: "authorize-console" }>;
 export type EnrollOp = z.infer<typeof EnrollOpSchema>;
 export type EnrollResult = z.infer<typeof EnrollResultSchema>;
+export type XDomainLinkEdge = z.infer<typeof XDomainLinkEdgeSchema>;
+export type SignedXDomainLinkEdge = z.infer<typeof SignedXDomainLinkEdgeSchema>;
+export type XDomainLinkRevocation = z.infer<typeof XDomainLinkRevocationSchema>;
+export type SignedXDomainLinkRevocation = z.infer<typeof SignedXDomainLinkRevocationSchema>;
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -138,4 +211,82 @@ export function admissionFromScan(
 				}
 			: { kind: "console", signPub: payload.signPub, boxPub: payload.boxPub, issuedAt: nowMs, nonce: nonceB64 };
 	return signAdmission(admission, ownerSignPrivB64, ownerSignPubB64);
+}
+
+/** Versioned, newline-joined signing bytes for a cross-Domain link edge. Mirrors
+ * `admissionSigningBytes` in shape; every field is base64 or a slug, so the encoding is
+ * unambiguous and reproduces byte-for-byte on switchboard, evie, and Android. Do NOT
+ * sign raw JSON. */
+export function xDomainLinkEdgeSigningBytes(edge: XDomainLinkEdge, ownerSignPubB64: string): Buffer {
+	return Buffer.from(
+		[
+			"XDOMAIN_RELAY_GATE_V1",
+			ownerSignPubB64,
+			edge.srcDomainId,
+			edge.dstDomainId,
+			String(edge.issuedAt),
+			edge.nonce,
+		].join("\n"),
+		"utf8",
+	);
+}
+
+/** Owner-sign a cross-Domain link edge (the owner device holds the signing key). */
+export function signXDomainLinkEdge(
+	edge: XDomainLinkEdge,
+	ownerSignPrivB64: string,
+	ownerSignPubB64: string,
+): SignedXDomainLinkEdge {
+	return {
+		edge,
+		ownerSignPub: ownerSignPubB64,
+		signature: sign(xDomainLinkEdgeSigningBytes(edge, ownerSignPubB64), ownerSignPrivB64),
+	};
+}
+
+/** True if the link edge verifies under the EXPECTED owner key (the rooted owner of the
+ * edge's srcDomain). The claimed ownerSignPub must equal the expected key AND the
+ * signature must check. */
+export function verifyXDomainLinkEdge(s: SignedXDomainLinkEdge, expectedOwnerSignPubB64: string): boolean {
+	if (s.ownerSignPub !== expectedOwnerSignPubB64) return false;
+	return verify(xDomainLinkEdgeSigningBytes(s.edge, expectedOwnerSignPubB64), s.signature, expectedOwnerSignPubB64);
+}
+
+/** Versioned, newline-joined signing bytes for a cross-Domain link-edge revocation.
+ * The prefix is distinct from the link edge's, so a captured edge signature can never be
+ * replayed as a revocation (or the reverse). Every field is base64 or a slug, so the
+ * encoding is unambiguous and reproduces byte-for-byte on switchboard, evie, and Android.
+ * Do NOT sign raw JSON. */
+export function xDomainLinkRevocationSigningBytes(rev: XDomainLinkRevocation, ownerSignPubB64: string): Buffer {
+	return Buffer.from(
+		["XDOMAIN_REVOKE_V1", ownerSignPubB64, rev.srcDomainId, rev.dstDomainId, String(rev.revokedAt), rev.nonce].join(
+			"\n",
+		),
+		"utf8",
+	);
+}
+
+/** Owner-sign a cross-Domain link-edge revocation (the owner device holds the signing key). */
+export function signXDomainLinkRevocation(
+	rev: XDomainLinkRevocation,
+	ownerSignPrivB64: string,
+	ownerSignPubB64: string,
+): SignedXDomainLinkRevocation {
+	return {
+		revocation: rev,
+		ownerSignPub: ownerSignPubB64,
+		signature: sign(xDomainLinkRevocationSigningBytes(rev, ownerSignPubB64), ownerSignPrivB64),
+	};
+}
+
+/** True if the revocation verifies under the EXPECTED owner key (the rooted owner of the
+ * revocation's srcDomain). The claimed ownerSignPub must equal the expected key AND the
+ * signature must check. */
+export function verifyXDomainLinkRevocation(s: SignedXDomainLinkRevocation, expectedOwnerSignPubB64: string): boolean {
+	if (s.ownerSignPub !== expectedOwnerSignPubB64) return false;
+	return verify(
+		xDomainLinkRevocationSigningBytes(s.revocation, expectedOwnerSignPubB64),
+		s.signature,
+		expectedOwnerSignPubB64,
+	);
 }

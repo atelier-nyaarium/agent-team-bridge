@@ -1,4 +1,4 @@
-// SYNC-HASH: 856c7b0990775d94c7a66539ccae8660
+// SYNC-HASH: 480dacf23463d6d1155f6cf7ab04b356
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -78,6 +78,17 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 	z.looseObject({
 		type: z.literal("gateway_relay"),
 	}),
+	// Loose: a pre-trust cross-Domain handshake frame the Router routed to this Gateway by
+	// destination Gateway id (round 1, the requester's commitment). The handshake pump runs
+	// its own validation; the Router never read the inner payload.
+	z.looseObject({
+		type: z.literal("cross_domain_handshake"),
+	}),
+	// Loose: the round-2 reveal frame, routed the same way (the requester's revealed keys +
+	// salt). The handshake pump validates and matches it to the round-1 pairing.
+	z.looseObject({
+		type: z.literal("cross_domain_handshake_reveal"),
+	}),
 	// The mirrored Domain pushed live when the owner admits or revokes a member, so a
 	// revocation bites a connected Gateway within seconds instead of at its next
 	// register. `domain` stays opaque here (this leaf imports nothing but zod); the
@@ -122,6 +133,10 @@ export const FEDERATION_PROTOCOL_VERSION = 1;
  * a Domain trust anchor. */
 export const GatewayRegisterParamsSchema = z.object({
 	gatewayId: z.string().min(1).max(64),
+	// This Gateway's Domain id (multi-tenant evie). Optional and min(1) when present; an
+	// ABSENT value resolves to the "home" Domain at the consumer, so a pre-multi-tenant
+	// Gateway that sends none lands in "home" unchanged.
+	domainId: z.string().min(1).max(64).optional(),
 	protocolVersion: z.number().int().positive(),
 	signPub: z.string().min(1).optional(),
 	boxPub: z.string().min(1).optional(),
@@ -140,6 +155,12 @@ export const GatewayRelayRouteSchema = z.object({
 	relayId: z.string().min(1).max(128),
 	srcGateway: z.string().min(1).max(64),
 	dstGateway: z.string().min(1).max(64),
+	// The sender's Domain id. The Router stamps it from the SENDER connection's
+	// registered Domain (content-blind) so the destination resolves the source by the
+	// full (domainId, gatewayId) pair - a gateway id is not globally unique across
+	// Domains. Optional and min(1) when present; an ABSENT value resolves to the "home"
+	// Domain at the consumer, so a pre-multi-tenant relay still routes within "home".
+	srcDomain: z.string().min(1).max(64).optional(),
 	// Opaque to evie. The destination gateway parses/unseals it.
 	payload: z.unknown(),
 });
@@ -148,6 +169,80 @@ export const GatewayRelayRouteSchema = z.object({
  * back to the originating Gateway's held `gateway_relay` call by `relayId`. */
 export const GatewayRelayReplyParamsSchema = z.object({
 	relayId: z.string().min(1).max(128),
+	ok: z.boolean(),
+	result: z.unknown().optional(),
+	error: z.string().optional(),
+});
+
+////////////////////////////////
+//  Cross-Domain handshake rendezvous (pre-trust, content-blind, commit-reveal)
+//
+//  The both-present pairing that links two Gateways owned by DIFFERENT owners runs
+//  BEFORE either side is in the other's trust, so it cannot ride the allowlist-gated
+//  gateway_relay (which routes within ONE Domain). It is a commit-reveal exchange over
+//  two round trips so the SAS cannot be offline-grinded by the Router: each side first
+//  publishes a hiding commitment to its keys, then reveals them. Both round trips route
+//  the same way - the requester Gateway calls a tool, the Router forwards the frame to
+//  the receiver Gateway named by `dstGateway` and holds the call open until the receiver
+//  answers (correlated by `handshakeId`). The Router never reads `payload`.
+//
+//  Round 1 is `cross_domain_handshake` (the requester's commitment) ->
+//  `cross_domain_handshake_reply` (the receiver's commitment). Round 2 is
+//  `cross_domain_handshake_reveal` (the requester's revealed keys + salt) ->
+//  `cross_domain_handshake_reveal_reply` (the receiver's revealed keys + salt + the SAS).
+//
+//  These are the ONLY ops that may cross Domains pre-trust, so they are NOT
+//  allowlist-gated; the Router rate-limits the round-1 call (a pre-trust surface) with a
+//  hard attempt cap. The receiver Gateway accepts the inner frames only while its
+//  listening window is open, bound to a single-use token, so the routing being open does
+//  not create an unsolicited surface.
+
+/** `cross_domain_handshake` tool-call params: the routing envelope the Router routes on.
+ * The requester knows the receiver's Gateway id (the listening-token prefix) but not its
+ * Domain pre-trust, so the Router locates `dstGateway` across Domains (the pre-trust
+ * exception). `srcDomain`/`srcGateway` are the requester's own ids. */
+export const CrossDomainHandshakeRouteSchema = z.object({
+	// Correlates the held reply (mirrors gateway_relay's relayId).
+	handshakeId: z.string().min(1).max(128),
+	srcDomain: z.string().min(1).max(64),
+	srcGateway: z.string().min(1).max(64),
+	// The receiver Gateway id (from the listening-token prefix); the Router resolves it
+	// across Domains since the requester does not know the receiver's Domain yet.
+	dstGateway: z.string().min(1).max(64),
+	// Opaque to the Router: the requester's commitment frame (round 1). The SAS over the
+	// committed keys is the MITM defense, so this carries no keys and is not sealed to a
+	// not-yet-known peer.
+	payload: z.unknown(),
+});
+
+/** `cross_domain_handshake_reply` tool-call params: the receiver Gateway's answer to
+ * round 1 (its own commitment), routed back to the originating Gateway's held
+ * `cross_domain_handshake` call by `handshakeId`. */
+export const CrossDomainHandshakeReplyParamsSchema = z.object({
+	handshakeId: z.string().min(1).max(128),
+	ok: z.boolean(),
+	result: z.unknown().optional(),
+	error: z.string().optional(),
+});
+
+/** `cross_domain_handshake_reveal` tool-call params: round 2's routing envelope (the
+ * requester's revealed keys + salt). Identical routing shape to round 1; the Router
+ * forwards `payload` verbatim to `dstGateway` and holds for the reveal reply. A distinct
+ * `handshakeId` correlates this round's held call. */
+export const CrossDomainHandshakeRevealRouteSchema = z.object({
+	handshakeId: z.string().min(1).max(128),
+	srcDomain: z.string().min(1).max(64),
+	srcGateway: z.string().min(1).max(64),
+	dstGateway: z.string().min(1).max(64),
+	// Opaque to the Router: the requester's reveal frame (keys + ids + salt). The receiver
+	// checks it against the round-1 commitment before computing the SAS.
+	payload: z.unknown(),
+});
+
+/** `cross_domain_handshake_reveal_reply` tool-call params: the receiver Gateway's round-2
+ * answer (its revealed keys + salt + the SAS), routed home by `handshakeId`. */
+export const CrossDomainHandshakeRevealReplyParamsSchema = z.object({
+	handshakeId: z.string().min(1).max(128),
 	ok: z.boolean(),
 	result: z.unknown().optional(),
 	error: z.string().optional(),
@@ -163,3 +258,7 @@ export type ToolCallFrame = z.infer<typeof ToolCallFrameSchema>;
 export type GatewayRegisterParams = z.infer<typeof GatewayRegisterParamsSchema>;
 export type GatewayRelayRoute = z.infer<typeof GatewayRelayRouteSchema>;
 export type GatewayRelayReplyParams = z.infer<typeof GatewayRelayReplyParamsSchema>;
+export type CrossDomainHandshakeRoute = z.infer<typeof CrossDomainHandshakeRouteSchema>;
+export type CrossDomainHandshakeReplyParams = z.infer<typeof CrossDomainHandshakeReplyParamsSchema>;
+export type CrossDomainHandshakeRevealRoute = z.infer<typeof CrossDomainHandshakeRevealRouteSchema>;
+export type CrossDomainHandshakeRevealReplyParams = z.infer<typeof CrossDomainHandshakeRevealReplyParamsSchema>;

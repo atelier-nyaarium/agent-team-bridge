@@ -49,6 +49,7 @@ data class ChannelFile(
 data class TeamInfo(
 	val team: String,
 	val gatewayId: String? = null,
+	val domainId: String? = null,
 	val status: String,
 	val mode: String? = null,
 	val kind: String? = null,
@@ -96,6 +97,7 @@ sealed class ConsoleOp {
 	@SerialName("send")
 	data class Send(
 		val to: String,
+		val domainId: String? = null,
 		val request_type: String? = null,
 		val effort: String? = null,
 		val body: String,
@@ -138,6 +140,68 @@ sealed class ConsoleOp {
 		val target: String,
 		val text: String? = null,
 		val key: String? = null,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_listen")
+	data object CrossDomainListen : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_request")
+	data class CrossDomainRequest(
+		val listeningToken: String,
+		val pin: String,
+		val requesterOwnerSignPub: String,
+		val requesterDomainId: String,
+		val requesterGatewayId: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_confirm")
+	data class CrossDomainConfirm(
+		val pin: String,
+		val mySignedLink: SignedXDomainLink,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_listen_state")
+	data class CrossDomainListenState(
+		val listeningToken: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_cancel")
+	data class CrossDomainCancel(
+		val listeningToken: String? = null,
+		val pin: String? = null,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_share")
+	data class CrossDomainShare(
+		val sessionTarget: String,
+		val domainId: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_unshare")
+	data class CrossDomainUnshare(
+		val sessionTarget: String,
+		val domainId: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_list_shares")
+	data object CrossDomainListShares : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_list_peers")
+	data object CrossDomainListPeers : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_unlink")
+	data class CrossDomainUnlink(
+		val domainId: String,
 	) : ConsoleOp()
 }
 
@@ -300,6 +364,18 @@ sealed class EnrollOp {
 	data class SubmitRevocation(
 		val revocation: SignedRevocation,
 	) : EnrollOp()
+
+	@Serializable
+	@SerialName("submit_xdomain_link")
+	data class SubmitXdomainLink(
+		val edge: SignedXDomainLinkEdge,
+	) : EnrollOp()
+
+	@Serializable
+	@SerialName("revoke_xdomain_link")
+	data class RevokeXdomainLink(
+		val revocation: SignedXDomainLinkRevocation,
+	) : EnrollOp()
 }
 
 @Serializable
@@ -332,6 +408,25 @@ data class GatewayBootstrapFrame(
 )
 
 @Serializable
+data class SignedXDomainLink(
+	val link: XDomainLink,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class XDomainLink(
+	val myOwnerSignPub: String,
+	val peerOwnerSignPub: String,
+	val peerDomainId: String,
+	val peerGatewayId: String,
+	val peerSignPub: String,
+	val peerBoxPub: String,
+	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
 data class SealedEnvelope(
 	val ephemeralPub: String,
 	val nonce: String,
@@ -349,6 +444,91 @@ data class DomainSnapshot(
 @Serializable
 data class ConsoleGatewayTransportResult(
 	val transport: GatewayTransport,
+)
+
+@Serializable
+data class CrossDomainListenResult(
+	val listeningToken: String,
+	val receiverOwnerSignPub: String,
+	val receiverGatewaySignPub: String,
+	val receiverGatewayBoxPub: String,
+	val receiverDomainId: String,
+	val receiverGatewayId: String,
+	val expiresAt: Long,
+)
+
+@Serializable
+data class CrossDomainRequestResult(
+	val sas: String,
+	val requesterOwnerSignPub: String,
+	val receiverOwnerSignPub: String,
+	val receiverDomainId: String,
+	val receiverGatewayId: String,
+	val receiverGatewaySignPub: String,
+	val receiverGatewayBoxPub: String,
+)
+
+@Serializable
+data class CrossDomainConfirmResult(
+	val ok: Boolean,
+)
+
+@Serializable
+data class CrossDomainCancelResult(
+	val cancelled: Boolean,
+)
+
+@Serializable
+data class CrossDomainListenStateResult(
+	val pairingArrived: Boolean,
+	val pin: String? = null,
+	val sas: String? = null,
+	val friendOwnerSignPub: String? = null,
+	val friendGatewaySignPub: String? = null,
+	val friendGatewayBoxPub: String? = null,
+	val friendDomainId: String? = null,
+	val friendGatewayId: String? = null,
+	val expiresAt: Long? = null,
+	val expired: Boolean? = null,
+)
+
+@Serializable
+data class CrossDomainShareResult(
+	val ok: Boolean,
+)
+
+@Serializable
+data class CrossDomainUnshareResult(
+	val ok: Boolean,
+)
+
+@Serializable
+data class CrossDomainListSharesResult(
+	val shares: List<CrossDomainShareEntry>,
+)
+
+@Serializable
+data class CrossDomainShareEntry(
+	val sessionTarget: String,
+	val domainId: String,
+)
+
+@Serializable
+data class CrossDomainListPeersResult(
+	val peers: List<CrossDomainPeerEntry>,
+)
+
+@Serializable
+data class CrossDomainPeerEntry(
+	val domainId: String,
+	val gatewayId: String,
+)
+
+@Serializable
+data class CrossDomainUnlinkResult(
+	val peersRemoved: Long,
+	val sharesDropped: Long,
+	val jobsExpired: Long,
 )
 
 @Serializable
@@ -374,4 +554,34 @@ data class SttsDefaults(
 data class SttsVoice(
 	val id: String,
 	val label: String? = null,
+)
+
+@Serializable
+data class SignedXDomainLinkEdge(
+	val edge: XDomainLinkEdge,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class XDomainLinkEdge(
+	val srcDomainId: String,
+	val dstDomainId: String,
+	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
+data class SignedXDomainLinkRevocation(
+	val revocation: XDomainLinkRevocation,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class XDomainLinkRevocation(
+	val srcDomainId: String,
+	val dstDomainId: String,
+	val revokedAt: Long,
+	val nonce: String,
 )

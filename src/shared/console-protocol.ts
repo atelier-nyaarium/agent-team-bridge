@@ -13,6 +13,16 @@ import type {
 	ConsoleRespondResultSchema,
 	ConsoleSendResultSchema,
 	ConsoleTmuxSendResultSchema,
+	CrossDomainCancelResultSchema,
+	CrossDomainConfirmResultSchema,
+	CrossDomainListenResultSchema,
+	CrossDomainListenStateResultSchema,
+	CrossDomainListPeersResultSchema,
+	CrossDomainListSharesResultSchema,
+	CrossDomainRequestResultSchema,
+	CrossDomainShareResultSchema,
+	CrossDomainUnlinkResultSchema,
+	CrossDomainUnshareResultSchema,
 	MailboxEntrySchema,
 	SealedEnvelopeSchema,
 } from "./schemas.js";
@@ -50,6 +60,16 @@ export type ConsoleRespondOp = Extract<ConsoleOp, { kind: "respond" }>;
 export type ConsolePollOp = Extract<ConsoleOp, { kind: "poll" }>;
 export type ConsolePeekOp = Extract<ConsoleOp, { kind: "peek" }>;
 export type ConsoleTmuxSendOp = Extract<ConsoleOp, { kind: "tmux_send" }>;
+export type CrossDomainListenOp = Extract<ConsoleOp, { kind: "cross_domain_listen" }>;
+export type CrossDomainRequestOp = Extract<ConsoleOp, { kind: "cross_domain_request" }>;
+export type CrossDomainConfirmOp = Extract<ConsoleOp, { kind: "cross_domain_confirm" }>;
+export type CrossDomainCancelOp = Extract<ConsoleOp, { kind: "cross_domain_cancel" }>;
+export type CrossDomainListenStateOp = Extract<ConsoleOp, { kind: "cross_domain_listen_state" }>;
+export type CrossDomainShareOp = Extract<ConsoleOp, { kind: "cross_domain_share" }>;
+export type CrossDomainUnshareOp = Extract<ConsoleOp, { kind: "cross_domain_unshare" }>;
+export type CrossDomainListSharesOp = Extract<ConsoleOp, { kind: "cross_domain_list_shares" }>;
+export type CrossDomainListPeersOp = Extract<ConsoleOp, { kind: "cross_domain_list_peers" }>;
+export type CrossDomainUnlinkOp = Extract<ConsoleOp, { kind: "cross_domain_unlink" }>;
 
 ////////////////////////////////
 //  Relay frames (carried over the gateway<->evie WebSocket)
@@ -89,6 +109,16 @@ export type ConsoleRespondResult = z.infer<typeof ConsoleRespondResultSchema>;
 export type ConsolePollResult = z.infer<typeof ConsolePollResultSchema>;
 export type ConsolePeekResult = z.infer<typeof ConsolePeekResultSchema>;
 export type ConsoleTmuxSendResult = z.infer<typeof ConsoleTmuxSendResultSchema>;
+export type CrossDomainListenResult = z.infer<typeof CrossDomainListenResultSchema>;
+export type CrossDomainRequestResult = z.infer<typeof CrossDomainRequestResultSchema>;
+export type CrossDomainConfirmResult = z.infer<typeof CrossDomainConfirmResultSchema>;
+export type CrossDomainCancelResult = z.infer<typeof CrossDomainCancelResultSchema>;
+export type CrossDomainListenStateResult = z.infer<typeof CrossDomainListenStateResultSchema>;
+export type CrossDomainShareResult = z.infer<typeof CrossDomainShareResultSchema>;
+export type CrossDomainUnshareResult = z.infer<typeof CrossDomainUnshareResultSchema>;
+export type CrossDomainListSharesResult = z.infer<typeof CrossDomainListSharesResultSchema>;
+export type CrossDomainListPeersResult = z.infer<typeof CrossDomainListPeersResultSchema>;
+export type CrossDomainUnlinkResult = z.infer<typeof CrossDomainUnlinkResultSchema>;
 export type ConsoleOpResult = z.infer<typeof ConsoleOpResultSchema>;
 
 ////////////////////////////////

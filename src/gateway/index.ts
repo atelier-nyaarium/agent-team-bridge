@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
+import { resolveLocalDomainId } from "../shared/domain-id.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/host-id.js";
 import type { HostOp, HostOpResult } from "../shared/host-op.js";
@@ -18,6 +19,14 @@ import { startPortForward } from "./evie/portForward.js";
 import { evieWsConnection, loadBootstrapTransport, loadEvieTransport } from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
+import {
+	CrossDomainHandshakeCoordinator,
+	createCrossDomainHandshakePump,
+	parseCommitReply,
+	parseRevealReply,
+} from "./federation/crossDomainHandshake.js";
+import { CrossDomainPeers } from "./federation/crossDomainPeers.js";
+import { CrossDomainShareState } from "./federation/crossDomainShareState.js";
 import { logAdmitGatewayQr } from "./federation/enrollQr.js";
 import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/hostRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
@@ -46,6 +55,8 @@ export async function startGateway(): Promise<void> {
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);
 	const localGatewayId = resolveLocalGatewayId();
 	console.log(`[gateway] Gateway id: ${localGatewayId}`);
+	const localDomainId = resolveLocalDomainId();
+	console.log(`[gateway] Domain id: ${localDomainId}`);
 	const HEARTBEAT_INTERVAL_MS = 30000;
 	const MISSED_PINGS_LIMIT = 2;
 
@@ -66,6 +77,9 @@ export async function startGateway(): Promise<void> {
 	// Cross-Gateway frames the Router routed to this Gateway; the gateway-relay pump owns
 	// full validation.
 	let handleGatewayRelay: ((frame: unknown) => void) | null = null;
+	// Pre-trust cross-Domain handshake frames the Router routed to this Gateway (the
+	// receiver leg); the handshake pump owns full validation.
+	let handleCrossDomainHandshake: ((frame: unknown) => void) | null = null;
 	let evictConsolePeer: ((conversationId: string) => void) | null = null;
 
 	store.startCleanup();
@@ -178,6 +192,16 @@ export async function startGateway(): Promise<void> {
 	// Exposed to the console handler (built in a later block) so its poll reply can carry
 	// the mirrored keyring + version for the Console's keyring sync.
 	let allowlistForConsole: Allowlist | null = null;
+	// The cross-Domain listening-mode handshake coordinator (built in the federation block),
+	// exposed to the console handler so the cross_domain_* ops drive the mutual pairing. The
+	// ONLY writer of the disjoint CrossDomainPeers store.
+	let crossDomainCoordinator: CrossDomainHandshakeCoordinator | null = null;
+	// The per-session share state (built in the federation block alongside crossDomainPeers),
+	// exposed to the console handler so the cross_domain_share/unshare/list_shares ops manage
+	// which local sessions are offered to a linked friend Domain. `isLinkedDomain` reads the
+	// peer set so a share can only target a Domain the owner has actually linked.
+	let crossDomainShareState: CrossDomainShareState | null = null;
+	let crossDomainPeersForConsole: CrossDomainPeers | null = null;
 
 	// The Gateway persists its federation identity + mirrored allowlist here; an enrolled
 	// Gateway also drops its service-proxy transport.json here. The bridge activates on
@@ -197,6 +221,17 @@ export async function startGateway(): Promise<void> {
 			process.env.FEDERATION_REQUIRE_OWNER_PIN === "true",
 		);
 		allowlistForConsole = allowlist;
+		// Cross-Domain peers (other owners' Gateways this Gateway has linked with): a
+		// DISJOINT store from the single-owner allowlist, written only by the handshake,
+		// so a home-Domain sync can never wipe it and it never contaminates intra-Domain
+		// resolution. The sealer resolves home peers first, then this set.
+		const crossDomainPeers = new CrossDomainPeers(federationDir);
+		crossDomainPeersForConsole = crossDomainPeers;
+		// Per-session share state: which local sessions are offered to which linked friend
+		// Domains, persisted alongside the peer set. Plain gateway-local state (the device's
+		// submit op is authenticated by the existing console seal), read by discovery and the
+		// relay so an un-share bites without evie.
+		crossDomainShareState = new CrossDomainShareState(federationDir);
 		const identity = loadOrCreateIdentity(federationDir);
 		// Durable replay-guard: persisted across restarts so an authentic sealed frame
 		// captured inside the 120s freshness window cannot replay once after a deploy.
@@ -207,7 +242,51 @@ export async function startGateway(): Promise<void> {
 			if (Array.isArray(persisted)) replayGuard.restore(persisted as Array<[string, number]>);
 		}
 		replayPersist = () => replayDurable.save(replayGuard.snapshot());
-		sealer = createSealer(identity, allowlist, localGatewayId, replayGuard);
+		sealer = createSealer(identity, allowlist, localGatewayId, crossDomainPeers, localDomainId, replayGuard);
+		// The cross-Domain listening-mode handshake: the ONLY writer of crossDomainPeers. It
+		// carries this Gateway's keys + ids into the SAS/link and reads the phone-held owner
+		// root from the allowlist. The requester leg routes both commit-reveal rounds through
+		// the Router seam below; evie (content-blind) forwards each frame to the receiver
+		// Gateway and holds the reply. evieClient is assigned further down in this block, so
+		// the seam reads it lazily at request time.
+		const routeHandshake = async (
+			action: string,
+			receiverGatewayId: string,
+			payload: unknown,
+		): Promise<unknown> => {
+			if (!evieClient) throw new Error("the Router is not connected; cannot reach the friend's Gateway");
+			const res = await evieClient.callTool(action, {
+				handshakeId: randomBytes(18).toString("base64url"),
+				srcDomain: localDomainId,
+				srcGateway: localGatewayId,
+				dstGateway: receiverGatewayId,
+				payload,
+			});
+			if (res.error) throw new Error(res.error);
+			const r = res.result as { ok?: boolean; error?: string; result?: unknown } | undefined;
+			if (!r?.ok) throw new Error(r?.error ?? "the friend's Gateway did not complete the handshake");
+			return r.result;
+		};
+		crossDomainCoordinator = new CrossDomainHandshakeCoordinator({
+			self: {
+				ownerSignPub: () => allowlist.ownerSignPub,
+				gatewaySignPub: identity.sign.pub,
+				gatewayBoxPub: identity.box.pub,
+				domainId: localDomainId,
+				gatewayId: localGatewayId,
+			},
+			peers: crossDomainPeers,
+			route: {
+				sendCommit: async (receiverGatewayId, req) => {
+					const r = await routeHandshake("cross_domain_handshake", receiverGatewayId, req);
+					return parseCommitReply(r);
+				},
+				sendReveal: async (receiverGatewayId, req) => {
+					const r = await routeHandshake("cross_domain_handshake_reveal", receiverGatewayId, req);
+					return parseRevealReply(r);
+				},
+			},
+		});
 		// The console channel rides the SAME durable replay guard + allowlist: a console
 		// frame is sealed to this gateway and signed by an admitted console key.
 		consoleSealer = createConsoleSealer(identity, allowlist, replayGuard);
@@ -247,11 +326,15 @@ export async function startGateway(): Promise<void> {
 			headers: connection.headers,
 			tls: connection.tls,
 			gatewayId: localGatewayId,
+			domainId: localDomainId,
 			onConsoleRelay: (frame) => {
 				handleConsoleRelay?.(frame);
 			},
 			onGatewayRelay: (frame) => {
 				handleGatewayRelay?.(frame);
+			},
+			onCrossDomainHandshake: (frame) => {
+				handleCrossDomainHandshake?.(frame);
 			},
 			onDomainSync: (domain) => {
 				// evie mirrors the owner root + allowlist on each register reply; apply
@@ -355,13 +438,29 @@ export async function startGateway(): Promise<void> {
 		registry,
 		conversationRegistry,
 		store,
-		config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localGatewayId },
+		config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localGatewayId, localDomainId },
 		tryWakeTeam,
 		offlineCatalog,
 		knownTeamPaths,
 		mailboxStore,
 		evieClient,
 		sealer,
+		crossDomainPeers: crossDomainPeersForConsole,
+		// Home-first seal-target resolution on the send side: a target gateway the home
+		// allowlist admits seals v1 to home, mirroring the sealer's open-side ordering, so a
+		// home/friend gateway-id collision never routes a home send to the friend.
+		resolvesHomeGateway: allowlistForConsole
+			? (gatewayId) => allowlistForConsole!.resolveGateway(gatewayId) !== null
+			: null,
+		// teams() refreshes each online session's cross-Domain shares so presence keeps a
+		// share from auto-forgetting; the periodic sweep below reaps only absent sessions.
+		touchShares: crossDomainShareState ? (sessionTarget) => crossDomainShareState!.touch(sessionTarget) : null,
+		// respond re-reads the per-session share on a cross-Domain reply forward: a send
+		// accepted while shared, then un-shared, has its in-flight reply dropped here instead
+		// of relayed home (the un-share bites every direction, not just fresh sends).
+		isSharedToForReply: crossDomainShareState
+			? (sessionTarget, domainId) => crossDomainShareState!.isSharedTo(sessionTarget, domainId)
+			: null,
 		resolveHandshake: wsHandlers.resolveHandshake,
 	});
 
@@ -379,6 +478,60 @@ export async function startGateway(): Promise<void> {
 			},
 			bootstrapTransport: () => loadBootstrapTransport(federationDir),
 			relayToHost,
+			crossDomain: crossDomainCoordinator
+				? {
+						listen: () => crossDomainCoordinator!.listen(),
+						request: (args) => crossDomainCoordinator!.request(args),
+						confirm: (args) => crossDomainCoordinator!.confirm(args),
+						cancel: (args) => crossDomainCoordinator!.cancel(args),
+						listenState: (listeningToken) => crossDomainCoordinator!.listenState(listeningToken),
+						// The linked-peer roster read from the disjoint cross-Domain peer set, so a
+						// freshly-linked peer is listed regardless of online / shared-back state (the
+						// console unions these with the discovery-derived Domains). Read fresh each call.
+						listPeers: () => ({
+							peers: crossDomainPeersForConsole!.all().map((p) => ({
+								domainId: p.friendDomainId,
+								gatewayId: p.friendGatewayId,
+							})),
+						}),
+					}
+				: undefined,
+			crossDomainShare:
+				crossDomainShareState && crossDomainPeersForConsole
+					? {
+							share: (sessionTarget, domainId) => crossDomainShareState!.share(sessionTarget, domainId),
+							unshare: (sessionTarget, domainId) =>
+								crossDomainShareState!.unshare(sessionTarget, domainId),
+							// After a successful unshare, settle any in-flight cross-Domain job for that
+							// (session, friend) pair so an already-accepted send's reply stops at the
+							// destination instead of forwarding home. Keyed by the same canonical
+							// gateway/name the share uses, scoped to the friend Domain.
+							expireSessionJobs: (sessionTarget, domainId) =>
+								store.expireBySession(sessionTarget, domainId, localGatewayId),
+							listShares: () =>
+								crossDomainShareState!
+									.all()
+									.map((s) => ({ sessionTarget: s.sessionTarget, domainId: s.toDomainId })),
+							// A share may only target a Domain the owner has actually linked: the peer
+							// set has at least one entry for that friendDomainId.
+							isLinkedDomain: (domainId) =>
+								crossDomainPeersForConsole!.all().some((p) => p.friendDomainId === domainId),
+						}
+					: undefined,
+			// Unlink a linked friend Domain: drop the LOCAL trust + share + in-flight state for
+			// it. Forgetting the peer makes the sealer refuse both legs to that Domain on the
+			// next frame; dropping the shares makes a re-link start from share-nothing; expiring
+			// the in-flight jobs settles them fast instead of stalling to TTL. Idempotent - an
+			// already-unlinked Domain returns zero counts. The phone separately submits the
+			// owner-signed link-edge revocation so the Router drops its relay-affinity edge.
+			unlinkDomain:
+				crossDomainShareState && crossDomainPeersForConsole
+					? (domainId) => ({
+							peersRemoved: crossDomainPeersForConsole!.removeByDomain(domainId),
+							sharesDropped: crossDomainShareState!.dropDomain(domainId),
+							jobsExpired: store.expireByDomain(domainId),
+						})
+					: undefined,
 		});
 		handleConsoleRelay = createConsoleRelayPump({
 			sealer: consoleSealer!,
@@ -389,14 +542,76 @@ export async function startGateway(): Promise<void> {
 		evictConsolePeer = (conversationId) => consoleHandler.removePeer(conversationId);
 
 		// Federation: a peer Gateway's frames land here, run against the local routes,
-		// and the reply routes home through the Router.
-		const gatewayRelayHandler = createGatewayRelayHandler({ routes, tryWakeTeam });
+		// and the reply routes home through the Router. The share state gates a
+		// cross-Domain op to a shared devcontainer/loose session and filters a
+		// cross-Domain caller's list_teams to shared sessions only.
+		const gatewayRelayHandler = createGatewayRelayHandler({
+			routes,
+			tryWakeTeam,
+			localGatewayId,
+			shareState: crossDomainShareState
+				? {
+						isSharedTo: (sessionTarget, domainId) =>
+							crossDomainShareState!.isSharedTo(sessionTarget, domainId),
+						sharesFor: (domainId) => crossDomainShareState!.sharesFor(domainId),
+						touch: (sessionTarget) => crossDomainShareState!.touch(sessionTarget),
+					}
+				: undefined,
+			// An inbound cross-Domain reply / colliding re-send is gated on the binding this
+			// Gateway recorded when IT created the job (the friend Domain it was routed to /
+			// came from), not on the friend-controlled bare gateway id, so a friend cannot
+			// forge a reply into another friend's job or hijack an unrelated job's reply route.
+			crossDomainBinding: (sessionId) => store.crossDomainBinding(sessionId, localGatewayId),
+		});
 		handleGatewayRelay = createGatewayRelayPump({
 			sealer: sealer!,
 			handleOp: gatewayRelayHandler.handleOp,
 			sendReply: (reply) =>
 				evieClient!.callTool("gateway_relay_reply", reply as unknown as Record<string, unknown>),
 		});
+
+		// Cross-Domain handshake (receiver leg): a pre-trust handshake frame the Router
+		// routed here runs through the coordinator's receiver leg, and the reply routes back
+		// to the requester Gateway through the Router.
+		if (crossDomainCoordinator) {
+			const coordinator = crossDomainCoordinator;
+			handleCrossDomainHandshake = createCrossDomainHandshakePump({
+				handleIncomingCommit: (req) => coordinator.handleIncomingCommit(req),
+				handleIncomingReveal: (req) => coordinator.handleIncomingReveal(req),
+				sendCommitReply: (reply) =>
+					evieClient!.callTool("cross_domain_handshake_reply", reply as unknown as Record<string, unknown>),
+				sendRevealReply: (reply) =>
+					evieClient!.callTool(
+						"cross_domain_handshake_reveal_reply",
+						reply as unknown as Record<string, unknown>,
+					),
+			});
+		}
+	}
+
+	// Per-session share auto-forget: a share whose session has not been seen online for a
+	// month is dropped, UNLESS a live cross-Domain thread to that session still exists (a
+	// running collaboration must not lose its share mid-stream). teams() touches every live
+	// session's shares so presence keeps a share fresh; this timer reaps the absent ones.
+	if (crossDomainShareState && crossDomainPeersForConsole) {
+		const share = crossDomainShareState;
+		const peers = crossDomainPeersForConsole;
+		const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+		// "Live" means RECENTLY ACTIVE, not "ever touched": a persistent anchor refreshes its
+		// createdAt on every create + deliver, so a thread idle past this window stops
+		// suppressing the auto-forget (otherwise a single stale anchor pins a share forever).
+		const isLive = (sessionTarget: string): boolean =>
+			store.hasLiveCrossDomainThread(
+				sessionTarget,
+				(gatewayId) => peers.all().some((p) => p.friendGatewayId === gatewayId),
+				localGatewayId,
+				THIRTY_DAYS_MS,
+			);
+		const shareSweepTimer = setInterval(() => {
+			const dropped = share.sweep(Date.now(), THIRTY_DAYS_MS, isLive);
+			if (dropped > 0) console.log(`[federation] auto-forgot ${dropped} stale cross-Domain share(s)`);
+		}, 3_600_000);
+		shareSweepTimer.unref?.();
 	}
 
 	async function router(req: Request): Promise<Response> {

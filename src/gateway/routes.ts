@@ -44,6 +44,25 @@ export interface RoutesDeps {
 	evieClient?: import("./evie/evieClient.js").EvieClient | null;
 	// E2E seal/open for cross-Gateway frames; absent when federation crypto is off.
 	sealer?: import("./federation/sealer.js").Sealer | null;
+	// The disjoint cross-Domain peer set. A cross-Domain send resolves its target's Domain
+	// here (the SealTarget is keyed by the full (domainId, gatewayId) pair, never the bare
+	// id), and discovery fans a list_teams to each linked peer. Absent when federation is off.
+	crossDomainPeers?: import("./federation/crossDomainPeers.js").CrossDomainPeers | null;
+	// Whether a gateway id resolves to a HOME (single-owner allowlist) peer. Mirrors the
+	// sealer's home-first resolution on the SEND side, so a send to your own home Gateway
+	// whose id collides with a friend's gateway id is sealed v1 to home (the bare-string
+	// shorthand) rather than hijacked to the friend. Absent when federation crypto is off.
+	resolvesHomeGateway?: ((gatewayId: string) => boolean) | null;
+	// Refresh the share lastSeenAt for a live local session (its canonical gateway/name),
+	// called from teams() per online team so a session's presence keeps its shares from
+	// auto-forgetting. Absent when federation sharing is not wired.
+	touchShares?: ((sessionTarget: string) => void) | null;
+	// Whether a local session (canonical gateway/name) is still shared to a friend Domain,
+	// re-read on the destination cross-Domain reply forward: an already-accepted send whose
+	// session was un-shared has its in-flight reply DROPPED here rather than relayed home. The
+	// share state is the single source both the inbound gate and this reply gate read, so an
+	// un-share bites without evie. Absent when federation sharing is not wired (no recheck).
+	isSharedToForReply?: ((sessionTarget: string, domainId: string) => boolean) | null;
 	resolveHandshake?: (sessionId: string, replyAsJson?: Record<string, unknown>, response?: string) => boolean;
 }
 
@@ -51,6 +70,11 @@ const SendRequestSchema = z.object({
 	from: z.string(),
 	fromConversationId: z.string().optional(),
 	to: z.string(),
+	// The Domain id of a cross-Domain target (a session from a linked friend Domain). A
+	// gateway id is unique only within a Domain, so when this is set the seal target is
+	// resolved by the full (domainId, gatewayId) pair; absent keeps the home/cross-Gateway
+	// (bare gateway id) resolution. Console-supplied from the selected session's Domain.
+	targetDomainId: z.string().optional(),
 	type: z.string().optional(),
 	effort: z.string().optional(),
 	body: z.string().optional(),
@@ -66,6 +90,10 @@ const SendRequestSchema = z.object({
 	// instead of composing a local key from fromConversationId.
 	sessionId: z.string().optional(),
 	returnRoute: ReturnRouteSchema.optional(),
+	// The verified origin Domain of a cross-Domain inbound send, set ONLY by the gateway-relay
+	// handler (never client-supplied over /send): recorded on the destination job so a reply
+	// and any colliding re-send are bound to the friend Domain that actually originated it.
+	dstDomainId: z.string().optional(),
 });
 
 const RespondBodySchema = z.object({
@@ -162,9 +190,61 @@ export function createRoutes({
 	config,
 	evieClient,
 	sealer,
+	crossDomainPeers,
+	resolvesHomeGateway,
+	touchShares,
+	isSharedToForReply,
 	resolveHandshake,
 }: RoutesDeps) {
-	const { LOG_PATH, localGatewayId } = config;
+	const { LOG_PATH, localGatewayId, localDomainId } = config;
+
+	/** Resolve a target Gateway id to a SealTarget, HOME-FIRST (mirroring the sealer's own
+	 * resolution order). A gateway id the home single-owner allowlist resolves is the
+	 * bare-string shorthand and seals v1 - checked BEFORE the cross-Domain scan, so a send to
+	 * your OWN home Gateway whose id collides with a friend's gateway id is never hijacked to
+	 * the friend. Only a gateway id NOT in the home Domain is matched against the disjoint
+	 * cross-Domain peer set: a single peer resolves to an explicit `(domainId, gatewayId)`
+	 * SealTarget (v2, the Addressing decision's separate domainId field, never folded into the
+	 * id string); a gateway id ambiguous across two friend Domains throws rather than guess. */
+	function sealTargetFor(targetGateway: string, targetDomain?: string): import("./federation/sealer.js").SealTarget {
+		// Home first: a gateway the home allowlist admits is the bare-string v1 shorthand, so a
+		// home/friend gateway-id collision can never route a home send to the friend. A caller
+		// that named an explicit cross-Domain target still falls to the cross-Domain resolution
+		// below (a friend gateway is never in the home allowlist), so the home check is safe.
+		if (resolvesHomeGateway?.(targetGateway)) return targetGateway;
+		// An explicit (domainId, gatewayId) from the caller resolves the peer unambiguously,
+		// closing the same-id-two-Domains case the bare scan refuses: two linked friends running
+		// an identically-named gateway are told apart by the Domain the console selected.
+		if (targetDomain) {
+			const peer = crossDomainPeers?.resolveByGateway(targetDomain, targetGateway);
+			if (peer) return { domainId: targetDomain, gatewayId: targetGateway };
+			// The named Domain is not a linked peer for this gateway id: fall through to the bare
+			// resolution so the error surfaces as "not admitted" rather than silently misrouting.
+		}
+		const peers = crossDomainPeers?.all().filter((p) => p.friendGatewayId === targetGateway) ?? [];
+		if (peers.length === 1) return { domainId: peers[0].friendDomainId, gatewayId: targetGateway };
+		if (peers.length > 1) {
+			throw new Error(`Gateway "${targetGateway}" is ambiguous across linked Domains; cannot route`);
+		}
+		// Neither a known home gateway nor a cross-Domain peer: fall back to the bare string,
+		// which the sealer resolves against the home allowlist (and emits v1) or rejects as
+		// "not admitted". This preserves the prior behavior when no home predicate is wired.
+		return targetGateway;
+	}
+
+	/** The resolved target Domain id for a cross-Gateway send, or null for a home /
+	 * same-Domain (bare-string) target. Recorded on the origin anchor so the reply gate can
+	 * require a response_push's verified Domain to match the Domain the send was routed to. A
+	 * resolution error (an ambiguous gateway id) surfaces on the relay path first, so this
+	 * just falls back to null. */
+	function targetDomainId(targetGateway: string, targetDomain?: string): string | null {
+		try {
+			const target = sealTargetFor(targetGateway, targetDomain);
+			return typeof target === "string" ? null : target.domainId;
+		} catch {
+			return null;
+		}
+	}
 
 	/** Resolve a wire target (bare or host-qualified) to a local registry name.
 	 * A bare name or one qualified with this Gateway resolves locally; a name
@@ -183,29 +263,42 @@ export function createRoutes({
 	async function relayToGateway(
 		dstGateway: string,
 		op: FederatedOp,
+		dstDomain?: string,
 	): Promise<{ ok: boolean; result?: unknown; error?: string }> {
 		if (!evieClient?.isConnected())
 			return { ok: false, error: `Router unavailable; cannot reach Gateway "${dstGateway}"` };
 		if (!sealer) return { ok: false, error: `federation crypto is not configured` };
+		// Resolve the target to a SealTarget once: a home peer is the bare string (v1); a
+		// cross-Domain peer becomes an explicit (domainId, gatewayId) target (v2). An explicit
+		// dstDomain disambiguates a gateway id shared across two linked Domains. The destination's
+		// Domain (if any) also lets us open its v2 reply by the full pair.
+		let target: import("./federation/sealer.js").SealTarget;
 		let sealed: SealedEnvelope;
 		try {
-			sealed = sealer.seal(dstGateway, op);
+			target = sealTargetFor(dstGateway, dstDomain);
+			sealed = sealer.seal(target, op);
 		} catch (err) {
 			return { ok: false, error: (err as Error).message };
 		}
+		// The Domain the target actually resolved to (authoritative over the caller's hint),
+		// used to open the destination's v2 reply by the full (domainId, gatewayId) pair.
+		const resolvedDstDomain = typeof target === "string" ? undefined : target.domainId;
 		const relayId = crypto.randomUUID();
 		const call = await evieClient.callTool("gateway_relay", {
 			relayId,
 			srcGateway: localGatewayId,
 			dstGateway,
+			srcDomain: localDomainId,
 			payload: { sealed },
 		});
 		if (call.error) return { ok: false, error: call.error };
 		const reply = call.result as { ok?: boolean; result?: unknown; error?: string } | undefined;
 		if (!reply || reply.ok === false) return { ok: false, error: reply?.error ?? "cross-Gateway relay failed" };
-		// The reply result is sealed by the destination Gateway back to us; open it.
+		// The reply result is sealed by the destination Gateway back to us; open it. A
+		// cross-Domain reply is v2, so pass the destination's Domain to resolve the peer by
+		// the full pair (a bare-id scan would be ambiguous if two friends share an id).
 		try {
-			return { ok: true, result: sealer.open(dstGateway, reply.result as SealedEnvelope) };
+			return { ok: true, result: sealer.open(dstGateway, reply.result as SealedEnvelope, resolvedDstDomain) };
 		} catch (err) {
 			return { ok: false, error: `bad sealed reply from "${dstGateway}": ${(err as Error).message}` };
 		}
@@ -239,6 +332,7 @@ export function createRoutes({
 	async function sendCrossGateway(args: {
 		targetGateway: string;
 		targetName: string;
+		targetDomain?: string;
 		from: string;
 		fromConversationId: string | undefined;
 		type?: string;
@@ -246,7 +340,7 @@ export function createRoutes({
 		body?: string;
 		files?: ChannelFile[];
 	}): Promise<Response> {
-		const { targetGateway, targetName, from, fromConversationId, type, effort, body, files } = args;
+		const { targetGateway, targetName, targetDomain, from, fromConversationId, type, effort, body, files } = args;
 		if (!evieClient?.isConnected()) {
 			return jsonResponse({ error: `Router unavailable; cannot reach Gateway "${targetGateway}"` }, 503);
 		}
@@ -266,14 +360,20 @@ export function createRoutes({
 			...(files && files.length > 0 ? { files } : {}),
 			returnRoute: { srcGateway: localGatewayId, srcConversationId: fromConversationId, srcSession },
 		};
-		const relay = await relayToGateway(targetGateway, op);
+		const relay = await relayToGateway(targetGateway, op, targetDomain);
 		if (!relay.ok)
 			return jsonResponse({ error: relay.error ?? `cross-Gateway send to "${qualifiedTo}" failed` }, 502);
 		// Keep a local pollable anchor ONLY once the destination accepted the send, so
 		// a failed send (offline / timed-out Gateway) never leaves a dangling persistent
 		// entry. The destination's reply is asynchronous (its agent answers later), so
-		// the anchor is always present before any response_push arrives.
-		store.create(srcSession, from, qualifiedTo, { persistent: true, fromConversationId });
+		// the anchor is always present before any response_push arrives. Record the resolved
+		// target Domain so the reply gate binds the response_push to THIS friend Domain (a
+		// reply from any other Domain, even one sharing the bare gateway id, is rejected).
+		store.create(srcSession, from, qualifiedTo, {
+			persistent: true,
+			fromConversationId,
+			dstDomainId: targetDomainId(targetGateway, targetDomain) ?? undefined,
+		});
 		return jsonResponse({
 			session_id: srcSession,
 			status: "running",
@@ -315,6 +415,10 @@ export function createRoutes({
 		for (const [name, subs] of registry) {
 			if (name === "host") continue;
 			seen.add(name);
+			// An online local session keeps its cross-Domain shares fresh: refresh lastSeenAt
+			// so a session that is actively connected is never auto-forgotten by the absence
+			// sweep, even with no live thread. No-op when sharing is not wired.
+			touchShares?.(TeamAddress.local(localGatewayId, name).canonical);
 			// A team whose only live sockets are virtual console peers is the human's
 			// device, not a crosstalk peer - mark it so the agent-facing listing hides it.
 			const isConsole = getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0;
@@ -326,6 +430,7 @@ export function createRoutes({
 			teamsList.push({
 				team: name,
 				gatewayId: localGatewayId,
+				domainId: localDomainId,
 				status: "online",
 				mode: getTeamMode(subs),
 				kind:
@@ -346,6 +451,7 @@ export function createRoutes({
 			teamsList.push({
 				team: name,
 				gatewayId: localGatewayId,
+				domainId: localDomainId,
 				status: "available",
 				kind: "devcontainer",
 				queue_depth: 0,
@@ -355,24 +461,50 @@ export function createRoutes({
 		return jsonResponse(teamsList);
 	}
 
-	/** Discovery across the mesh: local teams plus a fan-out to every online peer
-	 * Gateway. evie supplies only the presence roster (content-blind); each peer's
-	 * team list is fetched directly via a gateway_relay list_teams, so evie never sees
-	 * who runs what. A peer that errors or times out is simply omitted. */
+	/** Discovery across the mesh: local teams, a fan-out to every online SAME-Domain peer
+	 * Gateway (the evie roster is Domain-scoped), and a fan-out to every LINKED cross-Domain
+	 * peer. evie supplies only the presence roster (content-blind); each peer's team list is
+	 * fetched directly via a gateway_relay list_teams, so evie never sees who runs what. A
+	 * cross-Domain peer returns ONLY the sessions it has shared to this Domain (its own
+	 * relay handler applies the share filter), so an unshared friend session never appears.
+	 * A peer that errors or times out is simply omitted. */
 	async function discover(): Promise<Response> {
 		const local = (await teams().json()) as TeamInfo[];
 		if (!evieClient?.isConnected()) return jsonResponse(local);
 		const rosterCall = await evieClient.callTool("list_gateways", {});
 		const roster = (rosterCall.result as { gateways?: { gatewayId: string }[] } | undefined)?.gateways ?? [];
-		if (roster.length === 0) return jsonResponse(local);
-		const remote = await Promise.all(
+		const sameDomain = await Promise.all(
 			roster.map(async (h) => {
 				const r = await relayToGateway(h.gatewayId, { kind: "list_teams" });
 				if (!r.ok) return [] as TeamInfo[];
 				return (r.result as { teams?: TeamInfo[] } | undefined)?.teams ?? [];
 			}),
 		);
-		return jsonResponse([...local, ...remote.flat()]);
+		// Cross-Domain leg: query each linked peer for its shared sessions. The returned
+		// TeamInfo carries the peer's own gatewayId, which the send path resolves back to the
+		// peer's Domain via crossDomainPeers (the SealTarget's separate domainId field, per the
+		// Addressing decision - the Domain is never folded into the gateway/name string). One
+		// gateway is queried once even if a Domain runs several gateways, keyed by its
+		// (domainId, gatewayId) pair (a gateway id is unique within a Domain).
+		const peers = crossDomainPeers?.all() ?? [];
+		const seenPeerGateways = new Set<string>();
+		const crossDomain = await Promise.all(
+			peers.map(async (peer) => {
+				const key = `${peer.friendDomainId}/${peer.friendGatewayId}`;
+				if (seenPeerGateways.has(key)) return [] as TeamInfo[];
+				seenPeerGateways.add(key);
+				const r = await relayToGateway(peer.friendGatewayId, { kind: "list_teams" });
+				if (!r.ok) return [] as TeamInfo[];
+				const peerTeams = (r.result as { teams?: TeamInfo[] } | undefined)?.teams ?? [];
+				// Tag each shared session with the peer's Domain id (authoritative HERE: this
+				// Gateway knows which Domain it linked, while a friend on an older build might
+				// stamp none). The (domainId, gatewayId) pair is what the console groups by and
+				// the send path resolves the seal target from, since a gateway id collides
+				// across Domains.
+				return peerTeams.map((t) => ({ ...t, domainId: peer.friendDomainId }));
+			}),
+		);
+		return jsonResponse([...local, ...sameDomain.flat(), ...crossDomain.flat()]);
 	}
 
 	async function send(req: Request, body: Record<string, unknown>): Promise<Response> {
@@ -384,6 +516,7 @@ export function createRoutes({
 			from,
 			fromConversationId,
 			to,
+			targetDomainId: targetDomain,
 			type,
 			effort,
 			body: msgBody,
@@ -392,6 +525,7 @@ export function createRoutes({
 			channelOnly,
 			sessionId: inboundSessionId,
 			returnRoute,
+			dstDomainId,
 		} = parsed.data;
 
 		// Raw-bytes backstop at the trust boundary before the payload is pushed.
@@ -413,6 +547,7 @@ export function createRoutes({
 			return await sendCrossGateway({
 				targetGateway: parsedTarget.gatewayId,
 				targetName: parsedTarget.name,
+				targetDomain,
 				from,
 				fromConversationId,
 				type,
@@ -508,7 +643,17 @@ export function createRoutes({
 				}
 
 				const isFollowUp = store.has(channelJobId);
-				store.create(channelJobId, from, localName, { persistent: true, fromConversationId, returnRoute });
+				// Honor a Domain binding ONLY on an inbound federated send (the gateway-relay
+				// handler sets inboundSessionId + dstDomainId together from the verified seal). A
+				// plain local /send must never stamp it from the request body, or a local caller
+				// could forge a binding that lets a cross-Domain reply land in a local job.
+				const inboundDstDomainId = inboundSessionId ? dstDomainId : undefined;
+				store.create(channelJobId, from, localName, {
+					persistent: true,
+					fromConversationId,
+					returnRoute,
+					dstDomainId: inboundDstDomainId,
+				});
 
 				const messageId = crypto.randomUUID();
 				const channelPayload: Record<string, unknown> = {
@@ -616,6 +761,22 @@ export function createRoutes({
 		// local conversationRegistry has no entry for the remote sender.
 		if (deliverResult.returnRoute) {
 			const rr = deliverResult.returnRoute;
+			// Re-check the per-session share on a CROSS-DOMAIN reply (a destination job carries the
+			// verified friend Domain): an already-accepted send whose session was un-shared after it
+			// landed must have its in-flight reply DROPPED, not relayed home. The share state is the
+			// same source the inbound op gate reads, so an un-share bites every direction without
+			// evie. The session target is the canonical gateway/name parsed from the job's own
+			// (origin-set) session key, the form the share is keyed by. A same-Domain federated reply
+			// (dstDomainId null) skips the gate, unchanged.
+			if (deliverResult.dstDomainId) {
+				const sessionTarget = SessionId.parse(rr.srcSession, localGatewayId)?.target.canonical;
+				if (!sessionTarget || !isSharedToForReply?.(sessionTarget, deliverResult.dstDomainId)) {
+					console.log(
+						`[respond] ${respondSessionId} DROPPED: session no longer shared to Domain "${deliverResult.dstDomainId}"`,
+					);
+					return jsonResponse({ delivered: false, dropped: "unshared" });
+				}
+			}
 			relayWithRetry(
 				rr.srcGateway,
 				{

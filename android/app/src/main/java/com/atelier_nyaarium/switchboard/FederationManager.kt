@@ -4,6 +4,7 @@ import com.atelier_nyaarium.switchboard.crypto.AdmissionCrypto
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.crypto.OwnerBackup
+import com.atelier_nyaarium.switchboard.crypto.XDomainLinkCrypto
 import com.atelier_nyaarium.switchboard.crypto.canonicalSnapshot
 import com.atelier_nyaarium.switchboard.proto.Admission
 import com.atelier_nyaarium.switchboard.proto.DomainSnapshot
@@ -11,6 +12,12 @@ import com.atelier_nyaarium.switchboard.proto.Revocation
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SignedRevocation
+import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
+import com.atelier_nyaarium.switchboard.proto.SignedXDomainLinkEdge
+import com.atelier_nyaarium.switchboard.proto.SignedXDomainLinkRevocation
+import com.atelier_nyaarium.switchboard.proto.XDomainLink
+import com.atelier_nyaarium.switchboard.proto.XDomainLinkEdge
+import com.atelier_nyaarium.switchboard.proto.XDomainLinkRevocation
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapBundle
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
 import com.atelier_nyaarium.switchboard.proto.GatewayTransport
@@ -101,6 +108,61 @@ class FederationManager(private val store: ProvisioningStore) {
 	/** Owner-sign a revocation for a member's signing key. */
 	fun revoke(signPub: String, nowMs: Long): SignedRevocation =
 		AdmissionCrypto.signRevocation(Revocation(signPub, nowMs, nonce()), ownerIdentity().sign.priv, ownerIdentity().sign.pub)
+
+	/** Owner-sign a cross-Domain link edge: an attestation that traffic from this owner's
+	 * Domain (`srcDomainId`) may relay to a friend Domain (`dstDomainId`) it has linked with.
+	 * evie's relay-affinity gate honors a cross-Domain gateway_relay only when this edge
+	 * exists. Content-blind: it names only the two Domain ids. */
+	fun signXdomainLinkEdge(srcDomainId: String, dstDomainId: String, nowMs: Long): SignedXDomainLinkEdge {
+		val owner = ownerIdentity()
+		val edge = XDomainLinkEdge(srcDomainId, dstDomainId, nowMs, nonce())
+		return XDomainLinkCrypto.signEdge(edge, owner.sign.priv, owner.sign.pub)
+	}
+
+	/** Owner-sign a cross-Domain link-edge revocation: withdraws the attestation above so
+	 * evie drops the edge and its relay-affinity gate refuses the cross-Domain relay again.
+	 * The revocation prefix is distinct from the edge's, so neither signature replays as the
+	 * other. */
+	fun signXdomainLinkRevocation(srcDomainId: String, dstDomainId: String, nowMs: Long): SignedXDomainLinkRevocation {
+		val owner = ownerIdentity()
+		val rev = XDomainLinkRevocation(srcDomainId, dstDomainId, nowMs, nonce())
+		return XDomainLinkCrypto.signRevocation(rev, owner.sign.priv, owner.sign.pub)
+	}
+
+	/** Owner-sign THIS owner's side of a cross-Domain link, binding the FRIEND Gateway's keys
+	 * the SAS confirmed out of band. The owner private key is phone-held, so only the phone can
+	 * produce this; the confirming Gateway verifies it under this owner key and the friend's
+	 * Gateway persists it as its cross-Domain peer. The friend phone likewise signs THEIR side
+	 * (binding this Gateway's keys) - the two sides are symmetric, each signed by its own owner.
+	 * `nonce` is supplied (not minted here) so a retried confirm reuses the same signed link
+	 * rather than a fresh one the Gateway has not seen. */
+	fun signMyLink(
+		peerOwnerSignPub: String,
+		peerDomainId: String,
+		peerGatewayId: String,
+		peerSignPub: String,
+		peerBoxPub: String,
+		nowMs: Long,
+		nonce: String,
+	): SignedXDomainLink {
+		val owner = ownerIdentity()
+		val link = XDomainLink(
+			myOwnerSignPub = owner.sign.pub,
+			peerOwnerSignPub = peerOwnerSignPub,
+			peerDomainId = peerDomainId,
+			peerGatewayId = peerGatewayId,
+			peerSignPub = peerSignPub,
+			peerBoxPub = peerBoxPub,
+			issuedAt = nowMs,
+			nonce = nonce,
+		)
+		return XDomainLinkCrypto.signLink(link, owner.sign.priv, owner.sign.pub)
+	}
+
+	/** A fresh base64 nonce for an owner-signed link side, minted once per confirm so a retry
+	 * reuses it (the signed link stays byte-stable across the retry). Exposed so the wizard can
+	 * pin it for the lifetime of one pairing. */
+	fun freshLinkNonce(): String = nonce()
 
 	/** The current keyring: the stored snapshot, or an owner-only one before any sync. */
 	fun keyring(): Keyring = Keyring.parse(store.loadDomain()) ?: Keyring.empty(ownerSignPub())

@@ -15,8 +15,19 @@ import com.atelier_nyaarium.switchboard.proto.ConsoleRelayFrame
 import com.atelier_nyaarium.switchboard.proto.ConsoleRelayReply
 import com.atelier_nyaarium.switchboard.proto.ConsoleReplyBody
 import com.atelier_nyaarium.switchboard.proto.ConsoleSendResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainCancelResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainConfirmResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainListPeersResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainListSharesResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainListenResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainListenStateResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainRequestResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainShareResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainUnlinkResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainUnshareResult
 import com.atelier_nyaarium.switchboard.proto.GatewayTransport
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
+import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
 import java.io.ByteArrayInputStream
 import java.security.KeyStore
@@ -104,6 +115,13 @@ data class Team(
 	// catalog entries, and pre-feature gateways. The board shows it only when it
 	// differs from this app's own expected version.
 	val version: String? = null,
+	// The owning Gateway's Domain id (a separate typed field, NOT folded into `name`:
+	// the gateway/name address grammar stays two-part, so the Domain never aliases as
+	// a third segment). A gateway id is unique only within a Domain, so the board groups
+	// by the (domainId, gatewayId) pair and a cross-Domain (peer) group is shown under
+	// its Domain. Null for a pre-federation Gateway and for the locally-synthesized ended
+	// session (it has no live wire record).
+	val domainId: String? = null,
 ) {
 	/** Short local name shown in the UI: the tail after the gateway qualifier. */
 	val displayName: String get() = TeamAddress.parse(name, "").name
@@ -366,6 +384,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 				queueDepth = it.queue_depth.toInt(),
 				kind = it.kind ?: "loose",
 				version = it.version,
+				domainId = it.domainId,
 			)
 		}
 	}
@@ -384,6 +403,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		body: String,
 		files: List<OutgoingFile> = emptyList(),
 		opId: String = UUID.randomUUID().toString(),
+		domainId: String? = null,
 	): SendResult {
 		val wireFiles = files.map { f ->
 			ChannelFile(
@@ -394,11 +414,16 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 				base64 = android.util.Base64.encodeToString(f.bytes, android.util.Base64.NO_WRAP),
 			)
 		}
-		val op = ConsoleOp.Send(to = to, body = body, files = wireFiles.ifEmpty { null })
-		// Seal directly to the Gateway hosting the target team (a bare name resolves to home),
-		// so a cross-Gateway send goes E2E to that Gateway rather than relaying through home.
+		// Carry the selected session's Domain so the Gateway resolves a cross-Domain seal target
+		// by the full (domainId, gatewayId) pair; null/home keeps the existing home resolution.
+		val crossDomain = domainId?.ifEmpty { null }
+		val op = ConsoleOp.Send(to = to, domainId = crossDomain, body = body, files = wireFiles.ifEmpty { null })
+		// A same-Domain send seals directly to the Gateway hosting the target team (a bare name
+		// resolves to home), so a cross-Gateway send goes E2E to that Gateway. A CROSS-Domain send
+		// must instead seal to HOME: the friend Gateway's keys are not in this owner's keyring (it
+		// is a separate Domain), so home opens the op and relays it on to the friend over the mesh.
 		val home = homeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()
-		val target = TeamAddress.parse(to, home).gatewayId
+		val target = if (crossDomain != null) home else TeamAddress.parse(to, home).gatewayId
 		val replyBody = relay(op, opId, targetGateway = target)
 		val status = replyBody.result?.let {
 			runCatching { wireJson.decodeFromJsonElement<ConsoleSendResult>(it).status }.getOrNull()
@@ -455,6 +480,91 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		val body = relay(ConsoleOp.TmuxSend(target = target, text = text, key = key), opId, targetGateway = targetGatewayOf(target))
 		if (!body.ok) error("tmux_send failed: ${body.error ?: "unknown error"}")
 	}
+
+	////////////////////////////////
+	//  Cross-Domain trust ops
+	//
+	//  Thin convenience wrappers over the same seal/relay/poll path as the ops above. All
+	//  default to the HOME Gateway: the cross-Domain handshake coordinator, the per-session
+	//  share state, and the unlink cleanup all run on this owner's home Gateway (the friend
+	//  Gateway is reached through the mesh, not sealed to directly). The reads (list/listen)
+	//  run fresh; the mutating ops carry a stable opId so a lost-reply retry replays the cached
+	//  result server-side rather than re-running, exactly like send/tmux_send.
+
+	/** RECEIVER: open a listening window. Returns the short token to read to the friend plus
+	 * this Gateway's keys (for the SAS) and the window's expiry. */
+	fun crossDomainListen(): CrossDomainListenResult =
+		resultOf(relay(ConsoleOp.CrossDomainListen), "cross_domain_listen")
+
+	/** REQUESTER: pair against the friend's listening token. The Gateway runs the full
+	 * commit-reveal exchange and returns the 12-digit SAS plus both sides' keys. */
+	fun crossDomainRequest(
+		listeningToken: String,
+		pin: String,
+		requesterOwnerSignPub: String,
+		requesterDomainId: String,
+		requesterGatewayId: String,
+		opId: String = UUID.randomUUID().toString(),
+	): CrossDomainRequestResult =
+		resultOf(
+			relay(
+				ConsoleOp.CrossDomainRequest(
+					listeningToken = listeningToken,
+					pin = pin,
+					requesterOwnerSignPub = requesterOwnerSignPub,
+					requesterDomainId = requesterDomainId,
+					requesterGatewayId = requesterGatewayId,
+				),
+				opId,
+			),
+			"cross_domain_request",
+		)
+
+	/** EITHER ROLE: confirm the SAS match. Each owner confirms INDEPENDENTLY, submitting only its
+	 * OWN signed link side (binding the friend keys from the SAS-verified pairing); the Gateway
+	 * verifies it under this owner's key and writes the cross-Domain peer. No friend-link exchange. */
+	fun crossDomainConfirm(
+		pin: String,
+		mySignedLink: SignedXDomainLink,
+		opId: String = UUID.randomUUID().toString(),
+	): CrossDomainConfirmResult =
+		resultOf(
+			relay(ConsoleOp.CrossDomainConfirm(pin = pin, mySignedLink = mySignedLink), opId),
+			"cross_domain_confirm",
+		)
+
+	/** RECEIVER: poll the listening window's pairing state. Before a pairing arrives this reports
+	 * pairingArrived=false; once the requester's exchange lands, it carries the SAS + the friend's
+	 * keys the receiver phone owner-signs its link over. A fresh read each call (never cached). */
+	fun crossDomainListenState(listeningToken: String): CrossDomainListenStateResult =
+		resultOf(relay(ConsoleOp.CrossDomainListenState(listeningToken = listeningToken)), "cross_domain_listen_state")
+
+	/** EITHER ROLE: cancel a listening window (receiver token) and/or a pending pairing (pin)
+	 * when the owner leaves the pairing screen, so a stale request cannot complete. */
+	fun crossDomainCancel(listeningToken: String? = null, pin: String? = null): CrossDomainCancelResult =
+		resultOf(relay(ConsoleOp.CrossDomainCancel(listeningToken = listeningToken, pin = pin)), "cross_domain_cancel")
+
+	/** Mark a local session shared to a linked friend Domain (the checkmark IS the consent). */
+	fun crossDomainShare(sessionTarget: String, domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainShareResult =
+		resultOf(relay(ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, domainId = domainId), opId), "cross_domain_share")
+
+	/** Withdraw a local session's share to a friend Domain. */
+	fun crossDomainUnshare(sessionTarget: String, domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnshareResult =
+		resultOf(relay(ConsoleOp.CrossDomainUnshare(sessionTarget = sessionTarget, domainId = domainId), opId), "cross_domain_unshare")
+
+	/** This owner's current shares, so the UI can render the per-session checkmarks. */
+	fun crossDomainListShares(): CrossDomainListSharesResult =
+		resultOf(relay(ConsoleOp.CrossDomainListShares), "cross_domain_list_shares")
+
+	/** The linked friend Domains from the home Gateway's cross-Domain peer set, so a just-linked
+	 * peer is visible (and its detail reachable) before any of its sessions surface in discovery. A
+	 * fresh read each call (never cached). */
+	fun crossDomainListPeers(): CrossDomainListPeersResult =
+		resultOf(relay(ConsoleOp.CrossDomainListPeers), "cross_domain_list_peers")
+
+	/** Unlink a friend Domain: drop the local trust + share state for it. */
+	fun crossDomainUnlink(domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
+		resultOf(relay(ConsoleOp.CrossDomainUnlink(domainId = domainId), opId), "cross_domain_unlink")
 
 	companion object {
 		private val JSON = "application/json".toMediaType()

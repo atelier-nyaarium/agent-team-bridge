@@ -56,6 +56,27 @@ data class ScannedGateway(
  * sealed bundle to hand-carry when LAN delivery was not possible (paste fallback). */
 data class EnrollDelivery(val admitted: Boolean, val message: String, val pasteBundle: String?)
 
+/** A linked friend Domain row for the Federation hub: the Domain id (also its label until the
+ * owner renames it), how many of its sessions are visible to me, and whether any is online. */
+data class LinkedDomain(val domainId: String, val sessionCount: Int, val online: Boolean)
+
+/** A requester-side pairing in flight: the one-time pin the requester minted (passed back to
+ * confirm) and the Gateway's request result (the SAS + both sides' keys). */
+data class CrossDomainPairing(val pin: String, val result: com.atelier_nyaarium.switchboard.proto.CrossDomainRequestResult)
+
+/** A receiver-side pairing learned from a cross_domain_listen_state poll: the SAS to compare and
+ * the friend (requester) keys the receiver owner-signs its own link over for confirm. The pin is
+ * NOT here (the requester minted it); the receiver passes its own listening token, which the
+ * gateway resolves to the pairing's pin. */
+data class CrossDomainReceiverPairing(
+	val sas: String,
+	val friendOwnerSignPub: String,
+	val friendDomainId: String,
+	val friendGatewayId: String,
+	val friendGatewaySignPub: String,
+	val friendGatewayBoxPub: String,
+)
+
 /** `id` is a per-thread, local-only row key for the WebView DOM (lets the renderer
  * replace a row in place). It is NOT the mailbox seq; mailbox dedupe is owned by SyncCursor.
  * Stamped on append; reassigned from list order on load so old transcripts still work. */
@@ -126,6 +147,12 @@ data class ChatState(
 	 * is admitted but the home Gateway has not re-synced yet, so sealed ops transiently reject.
 	 * Drives the calm SYNCING header; cleared the moment an op succeeds or the grace lapses. */
 	val enrollingSince: Long = 0L,
+	/** The linked friend Domains the home Gateway reports from its cross-Domain peer set (the
+	 * cross_domain_list_peers roster). UNIONed with the discovery-derived Domains in linkedDomains()
+	 * so a freshly-linked peer is visible (and its detail reachable) even while its gateway is
+	 * offline and has shared nothing back - the gap that otherwise dead-locks the post-link sharing
+	 * flow. Refreshed alongside teams; an empty set just falls back to discovery-only. */
+	val linkedPeerDomains: Set<String> = emptySet(),
 ) {
 	/** Sessions shows live teams plus any team we already have a thread with
 	 * (agent-initiated). A thread-only peer is gone from the bridge and cannot be
@@ -381,6 +408,10 @@ class ChatRepository(
 	// The Domain trust anchor: owner root key, console member identity, and the keyring
 	// the Console resolves every Gateway against before sealing to it.
 	private val federation = FederationManager(store)
+	// RECEIVER link state: the requester-minted pin learned from a listen-state poll, keyed by the
+	// receiver's listening token. The receiver needs it to confirm its pairing (the gateway resolves
+	// the window by the pin), but the wizard only holds the token, so the poll stashes it here.
+	private val receiverPin = mutableMapOf<String, String>()
 	private var pollFails = 0
 	private var pollJob: Job? = null
 	// The poll loop's scope, reused to launch auto-TTS preloads that gate the
@@ -814,8 +845,256 @@ class ChatRepository(
 		submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitRevocation(it)) }, federation::mergeRevocation, "Revoke failed")
 	}
 
+	/** Owner-sign a cross-Domain link edge (this Domain -> a linked friend Domain) and submit
+	 * it to evie so its relay-affinity gate permits the cross-Domain crosstalk. Called on a
+	 * link-handshake confirm. Returns true iff evie accepted it. There is no local keyring
+	 * merge: the edge lives only in evie's edge set (the cross-Domain peer + its keys are
+	 * written by the handshake confirm, not by this edge). */
+	suspend fun submitXdomainLink(srcDomainId: String, dstDomainId: String): Boolean = withContext(Dispatchers.IO) {
+		val signed = federation.signXdomainLinkEdge(srcDomainId, dstDomainId, System.currentTimeMillis())
+		submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitXdomainLink(it)) }, {}, "Link failed")
+	}
+
+	/** Owner-sign a cross-Domain link-edge revocation and submit it to evie so its
+	 * relay-affinity gate refuses the cross-Domain crosstalk again. Called on unlink. Returns
+	 * true iff evie accepted it. No local keyring merge, for the same reason as the edge. */
+	suspend fun revokeXdomainLink(srcDomainId: String, dstDomainId: String): Boolean = withContext(Dispatchers.IO) {
+		val signed = federation.signXdomainLinkRevocation(srcDomainId, dstDomainId, System.currentTimeMillis())
+		submitOwnerFact(signed, { client().enroll(EnrollOp.RevokeXdomainLink(it)) }, {}, "Unlink failed")
+	}
+
 	/** The admitted members of the keyring, for the management board. */
 	fun admittedMembers(): List<MemberInfo> = federation.members()
+
+	////////////////////////////////
+	//  Cross-Domain trust (the link/share/unlink surface the Federation UI drives)
+
+	/** This owner's own Domain id, learned from a LOCAL session in the current board (the local
+	 * listing stamps domainId = the connected Gateway's Domain). Defaults to the constant "home"
+	 * before any local session is known, matching the gateway's absent-domainId default, so the
+	 * requester leg + the link edge always name a Domain. */
+	fun localDomainId(): String {
+		val gw = localGatewayId
+		val fromLocal = _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
+		return fromLocal?.ifEmpty { null } ?: "home"
+	}
+
+	/** The linked friend Domains. The trust roster comes from the home Gateway's cross-Domain peer
+	 * set (state.linkedPeerDomains, fetched by refreshLinkedPeers): a peer is listed the moment it
+	 * is linked, regardless of whether its gateway is online or has shared anything back. That set
+	 * is UNIONed with the discovery-derived Domains so a just-linked peer is immediately visible
+	 * (and its detail reachable to start sharing) before any of its sessions surface in discovery -
+	 * the gap that otherwise dead-locked the post-link sharing flow. Discovery still supplies the
+	 * session count + presence; a peer present only in the peer set shows zero sessions / offline. */
+	fun linkedDomains(): List<LinkedDomain> =
+		CrossDomainLink.mergeLinkedDomains(_state.value.teams, _state.value.linkedPeerDomains, localDomainId())
+
+	/** Refresh the linked-peer roster from the home Gateway's cross-Domain peer set into state, so
+	 * linkedDomains() can union it with discovery. Best-effort: a relay failure keeps the prior set
+	 * (the Federation screen never blanks its PEERS list on a blip). Folds the per-gateway peer rows
+	 * to their distinct Domain ids (a Domain may run more than one gateway). */
+	suspend fun refreshLinkedPeers() = withContext(Dispatchers.IO) {
+		runCatching { client().crossDomainListPeers() }
+			.onSuccess { result ->
+				val domains = result.peers.map { it.domainId }.filter { it.isNotEmpty() }.toSet()
+				_state.update { it.copy(linkedPeerDomains = domains) }
+			}
+	}
+
+	/** A friend Domain's sessions visible to me (shared to my Domain): the peer's discovery
+	 * entries tagged with its domainId. Each is a candidate "their session my agents can reach". */
+	fun peerSessions(domainId: String): List<Team> =
+		_state.value.teams.filter { it.domainId == domainId }.sortedBy { it.displayName }
+
+	/** My LOCAL devcontainer/loose sessions, the only kinds shareable to a friend Domain (never
+	 * the host-agent, the cli host, or a console). Drives the per-session share checkmarks. */
+	fun shareableSessions(): List<Team> {
+		val home = localDomainId()
+		val gw = localGatewayId
+		return _state.value.teams
+			.filter { (it.domainId.isNullOrEmpty() || it.domainId == home) && (it.gatewayId.isEmpty() || it.gatewayId == gw) }
+			.filter { it.kind == "devcontainer" || it.kind == "loose" }
+			.sortedBy { it.displayName }
+	}
+
+	/** RECEIVER: open a listening window, returning the token to read to the friend + this
+	 * Gateway's keys + the expiry. */
+	suspend fun crossDomainListen(): Result<com.atelier_nyaarium.switchboard.proto.CrossDomainListenResult> =
+		withContext(Dispatchers.IO) { runCatching { client().crossDomainListen() } }
+
+	/** REQUESTER: mint a one-time rendezvous pin, pair against the friend's token, and run the
+	 * commit-reveal exchange. Returns the SAS + both sides' keys (and the pin, so confirm can pass
+	 * it back). The Gateway uses this owner's admitted owner key, not the advisory value sent. */
+	suspend fun crossDomainRequest(listeningToken: String): Result<CrossDomainPairing> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				val pin = newRendezvousPin()
+				val result = client().crossDomainRequest(
+					listeningToken = listeningToken.trim(),
+					pin = pin,
+					requesterOwnerSignPub = federation.ownerSignPub(),
+					requesterDomainId = localDomainId(),
+					requesterGatewayId = localGatewayId,
+				)
+				CrossDomainPairing(pin = pin, result = result)
+			}
+		}
+
+	/** RECEIVER: poll the listening window's pairing state. Returns null until a requester pairs;
+	 * once the exchange lands, returns the SAS + the friend (requester) keys the receiver
+	 * owner-signs its own link over, plus the pin to pass to confirm. The receiver polls this on a
+	 * short interval while on the link screen (its only path out of "awaiting request"). */
+	suspend fun crossDomainListenState(listeningToken: String): Result<CrossDomainReceiverPairing?> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				val state = client().crossDomainListenState(listeningToken)
+				if (!state.pairingArrived) {
+					return@runCatching null
+				}
+				// pairingArrived implies the SAS + all friend keys + the pin are present (the gateway
+				// only sets pairingArrived once round 2 records them); guard so a partial reply fails
+				// loudly rather than signing a link over blanks.
+				CrossDomainReceiverPairing(
+					sas = state.sas ?: error("pairing arrived without a SAS"),
+					friendOwnerSignPub = state.friendOwnerSignPub ?: error("pairing arrived without the friend owner key"),
+					friendDomainId = state.friendDomainId ?: error("pairing arrived without the friend Domain id"),
+					friendGatewayId = state.friendGatewayId ?: error("pairing arrived without the friend Gateway id"),
+					friendGatewaySignPub = state.friendGatewaySignPub ?: error("pairing arrived without the friend sign key"),
+					friendGatewayBoxPub = state.friendGatewayBoxPub ?: error("pairing arrived without the friend box key"),
+				).also { receiverPin[listeningToken] = state.pin ?: error("pairing arrived without the pin") }
+			}
+		}
+
+	/** REQUESTER confirm: owner-sign this owner's link over the RECEIVER's keys (from the request
+	 * pairing the SAS just verified) and submit it. Model A: only this owner's side is sent; the
+	 * receiver confirms its own side independently. `linkNonce` is pinned by the wizard so a retry
+	 * reuses the same signed link. */
+	suspend fun crossDomainConfirmRequester(pairing: CrossDomainPairing, linkNonce: String): Result<ConfirmOutcome> =
+		withContext(Dispatchers.IO) {
+			val r = pairing.result
+			confirmWithMyLink(
+				pin = pairing.pin,
+				peerOwnerSignPub = r.receiverOwnerSignPub,
+				peerDomainId = r.receiverDomainId,
+				peerGatewayId = r.receiverGatewayId,
+				peerSignPub = r.receiverGatewaySignPub,
+				peerBoxPub = r.receiverGatewayBoxPub,
+				linkNonce = linkNonce,
+			)
+		}
+
+	/** RECEIVER confirm: owner-sign this owner's link over the FRIEND (requester) keys learned from
+	 * the listen-state poll and submit it. Uses the pin the poll surfaced (the requester minted it;
+	 * the gateway resolves this window's pairing by it). Model A: only this owner's side is sent. */
+	suspend fun crossDomainConfirmReceiver(
+		listeningToken: String,
+		friend: CrossDomainReceiverPairing,
+		linkNonce: String,
+	): Result<ConfirmOutcome> = withContext(Dispatchers.IO) {
+		val pin = receiverPin[listeningToken] ?: return@withContext Result.failure(
+			IllegalStateException("no pairing pin for this listening window; poll the link state first"),
+		)
+		confirmWithMyLink(
+			pin = pin,
+			peerOwnerSignPub = friend.friendOwnerSignPub,
+			peerDomainId = friend.friendDomainId,
+			peerGatewayId = friend.friendGatewayId,
+			peerSignPub = friend.friendGatewaySignPub,
+			peerBoxPub = friend.friendGatewayBoxPub,
+			linkNonce = linkNonce,
+		)
+	}
+
+	/** Shared confirm core: owner-sign this owner's link over the friend Gateway's keys, submit it
+	 * (the gateway verifies it under this owner's key + writes the cross-Domain peer), then
+	 * owner-sign + submit the relay-affinity edge so the Router permits the crosstalk. The local peer
+	 * write must succeed (it THROWS otherwise -> Result.failure -> the wizard restarts). The edge
+	 * submit RETURNS false (not throws) on a Router rejection: the peer is then linked locally but
+	 * cross-Domain sends to it would be DENIED, so the outcome distinguishes the two (RelayEdgeRejected
+	 * carries the peer Domain for an edge-only retry) instead of silently reporting a full link. */
+	private suspend fun confirmWithMyLink(
+		pin: String,
+		peerOwnerSignPub: String,
+		peerDomainId: String,
+		peerGatewayId: String,
+		peerSignPub: String,
+		peerBoxPub: String,
+		linkNonce: String,
+	): Result<ConfirmOutcome> = runCatching {
+		val mySignedLink = federation.signMyLink(
+			peerOwnerSignPub = peerOwnerSignPub,
+			peerDomainId = peerDomainId,
+			peerGatewayId = peerGatewayId,
+			peerSignPub = peerSignPub,
+			peerBoxPub = peerBoxPub,
+			nowMs = System.currentTimeMillis(),
+			nonce = linkNonce,
+		)
+		client().crossDomainConfirm(pin, mySignedLink)
+		// The local peer is now written. The relay-affinity edge is a separate Router submit that
+		// returns false on rejection; surface that as RelayEdgeRejected (recoverable by retrying the
+		// edge alone) rather than letting the wizard show a false "Linked".
+		if (submitXdomainLink(localDomainId(), peerDomainId)) {
+			ConfirmOutcome.Linked
+		} else {
+			ConfirmOutcome.RelayEdgeRejected(peerDomainId)
+		}
+	}
+
+	/** Re-submit ONLY the relay-affinity edge for an already-linked peer (the local peer write
+	 * happened at confirm; only the Router edge failed). Idempotent at evie (it dedups by nonce), so
+	 * this needs no unlink+relink. Returns the same outcome shape so the wizard can loop on a repeat
+	 * failure or advance to Done. */
+	suspend fun retryXdomainLinkEdge(peerDomainId: String): Result<ConfirmOutcome> = withContext(Dispatchers.IO) {
+		runCatching {
+			if (submitXdomainLink(localDomainId(), peerDomainId)) {
+				ConfirmOutcome.Linked
+			} else {
+				ConfirmOutcome.RelayEdgeRejected(peerDomainId)
+			}
+		}
+	}
+
+	/** A fresh owner-link nonce, pinned by the wizard for one pairing so a confirm retry reuses
+	 * the same signed link bytes. */
+	fun freshLinkNonce(): String = federation.freshLinkNonce()
+
+	/** Cancel the pairing windows when the owner leaves the link screen (no passive surface). */
+	suspend fun crossDomainCancel(listeningToken: String?, pin: String?) = withContext(Dispatchers.IO) {
+		runCatching { client().crossDomainCancel(listeningToken, pin) }
+	}
+
+	/** This owner's current per-session shares as (sessionTarget, domainId) pairs, so the UI can
+	 * render the share checkmarks. */
+	suspend fun crossDomainShares(): Result<Set<Pair<String, String>>> = withContext(Dispatchers.IO) {
+		runCatching { client().crossDomainListShares().shares.map { it.sessionTarget to it.domainId }.toSet() }
+	}
+
+	/** Toggle a local session's share to a friend Domain (the checkmark IS the consent). */
+	suspend fun setCrossDomainShare(sessionTarget: String, domainId: String, shared: Boolean): Result<Unit> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				if (shared) client().crossDomainShare(sessionTarget, domainId) else client().crossDomainUnshare(sessionTarget, domainId)
+				Unit
+			}
+		}
+
+	/** Unlink a friend Domain: forget the local trust + shares for it, then owner-sign + submit
+	 * the link-edge revocation so the Router drops its relay-affinity edge. */
+	suspend fun unlinkDomain(domainId: String): Result<Unit> = withContext(Dispatchers.IO) {
+		runCatching {
+			client().crossDomainUnlink(domainId)
+			revokeXdomainLink(localDomainId(), domainId)
+			refreshTeams()
+			Unit
+		}
+	}
+
+	private fun newRendezvousPin(): String {
+		val bytes = ByteArray(18)
+		java.security.SecureRandom().nextBytes(bytes)
+		return android.util.Base64.encodeToString(bytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+	}
 
 	/** Parse a scanned admit-gateway QR, or null if it is not one. The SAS is the
 	 * fingerprint of the Gateway's signing key, confirmed against the Gateway terminal. */
@@ -894,6 +1173,10 @@ class ChatRepository(
 
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
 		runCatching { client().teams(localGatewayId) }.onSuccess { t -> _state.update { it.copy(teams = t) } }
+		// Also refresh the cross-Domain peer roster so the Federation PEERS list shows a freshly-linked
+		// peer that has no discovery sessions yet. Best-effort + only when federation is reachable;
+		// folded into the same refresh so a board update and the peer set stay consistent.
+		refreshLinkedPeers()
 	}
 
 	/** Capture an agent's tmux pane for the terminal view. Returns a Result so the caller can keep
@@ -1029,7 +1312,15 @@ class ChatRepository(
 			if (placeholderId != null) removeMessage(team, placeholderId)
 		}
 		try {
-			val r = client().send(team, text, picked, opId)
+			// A cross-Domain target carries the friend Domain id from its discovery entry, so the
+			// gateway resolves the seal target by the full (domainId, gatewayId) pair; a home /
+			// same-Domain session resolves to null and keeps the existing routing.
+			val home = localDomainId()
+			val targetDomain = _state.value.teams
+				.firstOrNull { TeamAddress.parse(it.name, localGatewayId).canonical == TeamAddress.parse(team, localGatewayId).canonical }
+				?.domainId
+				?.takeIf { it.isNotEmpty() && it != home }
+			val r = client().send(team, text, picked, opId, targetDomain)
 			when {
 				!r.ok -> fail(r.error)
 				else -> setMessageStatus(team, echoId, null)

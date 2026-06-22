@@ -3,6 +3,7 @@
 		{
 			"team": "switchboard",
 			"gatewayId": "laptop",
+			"domainId": "home",
 			"status": "online",
 			"mode": "channel",
 			"kind": "devcontainer",

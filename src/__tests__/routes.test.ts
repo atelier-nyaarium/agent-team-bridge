@@ -25,7 +25,12 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		registry,
 		conversationRegistry,
 		store,
-		config: { LOG_PATH: "/tmp/test-debug.log", RESPONSE_TIMEOUT_MS: 500, localGatewayId: "test-host" },
+		config: {
+			LOG_PATH: "/tmp/test-debug.log",
+			RESPONSE_TIMEOUT_MS: 500,
+			localGatewayId: "test-host",
+			localDomainId: "home",
+		},
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
 		offlineCatalog,
 		knownTeamPaths,
@@ -67,7 +72,14 @@ describe("routes", () => {
 			const { teams } = createRoutes(ctx);
 			const res = teams();
 			expect(await res.json()).toEqual([
-				{ team: "proj-a", gatewayId: "test-host", status: "available", kind: "devcontainer", queue_depth: 0 },
+				{
+					team: "proj-a",
+					gatewayId: "test-host",
+					domainId: "home",
+					status: "available",
+					kind: "devcontainer",
+					queue_depth: 0,
+				},
 			]);
 		});
 
@@ -84,12 +96,20 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
+					domainId: "home",
 					status: "online",
 					mode: "cli",
 					kind: "devcontainer",
 					queue_depth: 0,
 				},
-				{ team: "proj-b", gatewayId: "test-host", status: "available", kind: "devcontainer", queue_depth: 0 },
+				{
+					team: "proj-b",
+					gatewayId: "test-host",
+					domainId: "home",
+					status: "available",
+					kind: "devcontainer",
+					queue_depth: 0,
+				},
 			]);
 		});
 
@@ -124,6 +144,7 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
+					domainId: "home",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
@@ -132,6 +153,7 @@ describe("routes", () => {
 				{
 					team: "2fb1f8",
 					gatewayId: "test-host",
+					domainId: "home",
 					status: "online",
 					mode: "channel",
 					kind: "loose",
@@ -152,6 +174,7 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
+					domainId: "home",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
@@ -160,6 +183,7 @@ describe("routes", () => {
 				{
 					team: "Aqua",
 					gatewayId: "test-host",
+					domainId: "home",
 					status: "online",
 					mode: "channel",
 					kind: "console",
@@ -180,6 +204,7 @@ describe("routes", () => {
 				{
 					team: "gateway",
 					gatewayId: "test-host",
+					domainId: "home",
 					status: "online",
 					mode: "channel",
 					kind: "gateway",
@@ -188,11 +213,26 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
+					domainId: "home",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
 					queue_depth: 0,
 				},
+			]);
+		});
+
+		it("stamps the local Domain id on every team (the (domainId, gatewayId) pair addresses a session)", async () => {
+			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
+			const offlineCatalog = new Map<string, string>([["proj-b", "/home/user/proj-b"]]);
+			const ctx = makeCtx({ registry, offlineCatalog });
+			ctx.config.localDomainId = "sakura";
+			const json = (await createRoutes(ctx).teams().json()) as { team: string; domainId?: string }[];
+			// Both the online registry team and the offline-catalog team carry the configured
+			// local Domain id; a colliding friend gateway id is disambiguated by this pair.
+			expect(json.map((t) => [t.team, t.domainId])).toEqual([
+				["proj-a", "sakura"],
+				["proj-b", "sakura"],
 			]);
 		});
 
