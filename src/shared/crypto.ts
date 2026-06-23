@@ -1,8 +1,9 @@
-// SYNC-HASH: 98cc2e10343696a465266f86710725f7
+// SYNC-HASH: ae53009273813baa24aa068aaabedc0f
 // SYNCED MODULE - source of truth: switchboard/src/shared/crypto.ts
 // Copied verbatim into: evie-bot/app/features/bridge/crypto.ts
 // MUST re-copy on change: cp src/shared/crypto.ts ../evie-bot/app/features/bridge/crypto.ts
 import crypto from "node:crypto";
+import { z } from "zod";
 
 ////////////////////////////////
 //  Federation crypto (node:crypto only - no third-party dependency)
@@ -169,4 +170,41 @@ export function fingerprint(pubB64: string): string {
 	const hash = crypto.createHash("sha256").update(Buffer.from(pubB64, "base64")).digest();
 	const hex = hash.subarray(0, 8).toString("hex").toUpperCase();
 	return (hex.match(/.{1,4}/g) ?? []).join("-");
+}
+
+////////////////////////////////
+//  Signing-safe field constraints
+//
+//  The signing-bytes preimages join their fields with "\n" in a fixed order, so a
+//  newline inside any field would shift the boundary between two fields and make
+//  the encoding ambiguous (one value's tail could read as the next value's head).
+//  These factories pin the CHARSET of a field so it can never carry that newline,
+//  enforcing the no-ambiguous-preimage invariant at the schema boundary - the
+//  verifier always reads from the parsed object, never by re-splitting the preimage.
+
+/** A base64 field (raw key / nonce / signature): the base64 alphabet only, so it
+ * holds no newline that could blur a signing-bytes boundary. */
+export function b64Field(): z.ZodString {
+	return z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/);
+}
+
+/** A slug field (an opaque id like a domainId): lowercase alphanumerics + dashes,
+ * bounded length, so it holds no newline that could blur a signing-bytes boundary. */
+export function slugField(): z.ZodString {
+	return z
+		.string()
+		.regex(/^[a-z0-9-]+$/)
+		.max(64);
+}
+
+/** A free-text display label bounded only in length and the no-newline rule, so it
+ * holds no newline that could blur a signing-bytes boundary. Under the cooperative
+ * threat model the label carries no trust weight; this only keeps the preimage
+ * unambiguous. */
+export function displayField(max: number): z.ZodString {
+	return z
+		.string()
+		.min(1)
+		.max(max)
+		.regex(/^[^\n\r]+$/);
 }

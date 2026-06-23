@@ -66,8 +66,7 @@ class ProvisionOpsTest {
 		val operatorSignPub = v["operatorSignPub"]!!.jsonPrimitive.content
 		val vec = v["provision"]!!.jsonObject
 		val bytes = ProvisionOpsCrypto.provisionSigningBytes(provision(vec["value"]!!.jsonObject), operatorSignPub)
-		assertEquals(vec["signingBytes"]!!.jsonPrimitive.content, bytes.toString(Charsets.UTF_8))
-		assertEquals(vec["signingBytesHex"]!!.jsonPrimitive.content, bytes.joinToString("") { "%02x".format(it) })
+		CanonicalBytes.assertCanonicalBytes(bytes, vec)
 	}
 
 	@Test
@@ -76,8 +75,7 @@ class ProvisionOpsTest {
 		val operatorSignPub = v["operatorSignPub"]!!.jsonPrimitive.content
 		val vec = v["removal"]!!.jsonObject
 		val bytes = ProvisionOpsCrypto.removeSigningBytes(removal(vec["value"]!!.jsonObject), operatorSignPub)
-		assertEquals(vec["signingBytes"]!!.jsonPrimitive.content, bytes.toString(Charsets.UTF_8))
-		assertEquals(vec["signingBytesHex"]!!.jsonPrimitive.content, bytes.joinToString("") { "%02x".format(it) })
+		CanonicalBytes.assertCanonicalBytes(bytes, vec)
 	}
 
 	@Test
@@ -85,8 +83,7 @@ class ProvisionOpsTest {
 		val v = vectors()
 		val vec = v["firstRoot"]!!.jsonObject
 		val bytes = ProvisionOpsCrypto.firstRootSigningBytes(firstRoot(vec["value"]!!.jsonObject))
-		assertEquals(vec["signingBytes"]!!.jsonPrimitive.content, bytes.toString(Charsets.UTF_8))
-		assertEquals(vec["signingBytesHex"]!!.jsonPrimitive.content, bytes.joinToString("") { "%02x".format(it) })
+		CanonicalBytes.assertCanonicalBytes(bytes, vec)
 	}
 
 	@Test
@@ -95,8 +92,7 @@ class ProvisionOpsTest {
 		val ownerSignPub = v["friendOwnerSignPub"]!!.jsonPrimitive.content
 		val vec = v["rename"]!!.jsonObject
 		val bytes = ProvisionOpsCrypto.setOperatorNameSigningBytes(rename(vec["value"]!!.jsonObject), ownerSignPub)
-		assertEquals(vec["signingBytes"]!!.jsonPrimitive.content, bytes.toString(Charsets.UTF_8))
-		assertEquals(vec["signingBytesHex"]!!.jsonPrimitive.content, bytes.joinToString("") { "%02x".format(it) })
+		CanonicalBytes.assertCanonicalBytes(bytes, vec)
 	}
 
 	@Test

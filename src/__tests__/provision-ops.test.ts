@@ -22,6 +22,7 @@ import {
 	verifySetOperatorName,
 } from "../shared/enrollment.js";
 import { ConsoleOpSchema } from "../shared/schemas.js";
+import { assertCanonicalBytes } from "./_canonical-bytes.js";
 
 ////////////////////////////////
 //  Friend cross-Domain onboarding signing-bytes vectors
@@ -63,9 +64,7 @@ describe("provision_tenant vectors (operator-signed)", () => {
 
 	it("reproduces the canonical PROVISION_TENANT_V1 signing bytes", () => {
 		const bytes = provisionTenantSigningBytes(vectors.provision.value, operatorSignPub);
-		expect(bytes.toString("utf8")).toBe(vectors.provision.signingBytes);
-		expect(bytes.toString("hex")).toBe(vectors.provision.signingBytesHex);
-		expect(bytes.toString("base64")).toBe(vectors.provision.signingBytesBase64);
+		assertCanonicalBytes(bytes, vectors.provision);
 	});
 
 	it("embeds the operator fingerprint in the signing bytes", () => {
@@ -108,9 +107,7 @@ describe("remove_tenant vectors (operator-signed)", () => {
 
 	it("reproduces the canonical REMOVE_TENANT_V1 signing bytes", () => {
 		const bytes = removeTenantSigningBytes(vectors.removal.value, operatorSignPub);
-		expect(bytes.toString("utf8")).toBe(vectors.removal.signingBytes);
-		expect(bytes.toString("hex")).toBe(vectors.removal.signingBytesHex);
-		expect(bytes.toString("base64")).toBe(vectors.removal.signingBytesBase64);
+		assertCanonicalBytes(bytes, vectors.removal);
 	});
 
 	it("reproduces the recorded signature and verifies it", () => {
@@ -143,9 +140,7 @@ describe("first_root vectors (self-signed by the fresh owner key)", () => {
 
 	it("reproduces the canonical FIRST_ROOT_V1 signing bytes", () => {
 		const bytes = firstRootSigningBytes(vectors.firstRoot.value);
-		expect(bytes.toString("utf8")).toBe(vectors.firstRoot.signingBytes);
-		expect(bytes.toString("hex")).toBe(vectors.firstRoot.signingBytesHex);
-		expect(bytes.toString("base64")).toBe(vectors.firstRoot.signingBytesBase64);
+		assertCanonicalBytes(bytes, vectors.firstRoot);
 	});
 
 	it("reproduces the recorded self-signature and verifies it against the rooted key", () => {
@@ -185,9 +180,7 @@ describe("set_operator_name vectors (owner-signed)", () => {
 
 	it("reproduces the canonical SET_OPERATOR_NAME_V1 signing bytes", () => {
 		const bytes = setOperatorNameSigningBytes(vectors.rename.value, friendOwnerSignPub);
-		expect(bytes.toString("utf8")).toBe(vectors.rename.signingBytes);
-		expect(bytes.toString("hex")).toBe(vectors.rename.signingBytesHex);
-		expect(bytes.toString("base64")).toBe(vectors.rename.signingBytesBase64);
+		assertCanonicalBytes(bytes, vectors.rename);
 	});
 
 	it("reproduces the recorded signature and verifies it", () => {

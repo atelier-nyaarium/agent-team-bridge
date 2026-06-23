@@ -1,4 +1,4 @@
-// SYNC-HASH: 3cb0f1e98b008c482fd2d12b1d476289
+// SYNC-HASH: 81fdcac659382561dd6547714faab729
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -10,7 +10,7 @@ import {
 	SignedRevocationSchema,
 	signAdmission,
 } from "./admission.js";
-import { fingerprint, sign, verify } from "./crypto.js";
+import { b64Field, displayField, fingerprint, sign, slugField, verify } from "./crypto.js";
 
 ////////////////////////////////
 //  Enrollment payloads (the unified QR) + the SAS confirm
@@ -176,22 +176,13 @@ export const SignedXDomainLinkRevocationSchema = z
  * and `rooted` flipped true once a friend's first_root spends the nonce. */
 export const PendingTenantSchema = z
 	.object({
-		// The opaque Domain id (slug; never shown to the human - pure plumbing). Slug so it
-		// can never carry a newline that would make the signing bytes ambiguous.
-		domainId: z
-			.string()
-			.regex(/^[a-z0-9-]+$/)
-			.max(64),
+		// The opaque Domain id (slug; never shown to the human - pure plumbing).
+		domainId: slugField(),
 		// The friendly NETWORK display name (one per owner/Domain). Free text the operator
-		// pre-sets and the friend edits from their profile once in (no newline - it joins
-		// the newline-delimited signing bytes).
-		operatorName: z
-			.string()
-			.min(1)
-			.max(128)
-			.regex(/^[^\n\r]+$/),
+		// pre-sets and the friend edits from their profile once in.
+		operatorName: displayField(128),
 		// The one-time invite nonce (base64), spent on the first successful first-root.
-		nonce: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
+		nonce: b64Field(),
 		// When the invite was minted (epoch ms); the TTL is measured from this.
 		issuedAt: z.number().int().nonnegative(),
 		// Invite lifetime (ms); evie sweeps an unredeemed pending tenant at issuedAt + ttlMs.
@@ -205,17 +196,10 @@ export const PendingTenantSchema = z
  * bind the operator's own fingerprint, so evie can pin the request to the operator's key. */
 export const ProvisionTenantSchema = z
 	.object({
-		domainId: z
-			.string()
-			.regex(/^[a-z0-9-]+$/)
-			.max(64),
-		operatorName: z
-			.string()
-			.min(1)
-			.max(128)
-			.regex(/^[^\n\r]+$/),
+		domainId: slugField(),
+		operatorName: displayField(128),
 		issuedAt: z.number().int().nonnegative(),
-		nonce: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
+		nonce: b64Field(),
 	})
 	.meta({ id: "ProvisionTenant" });
 
@@ -225,29 +209,26 @@ export const SignedProvisionTenantSchema = z
 		// The operator's root signing public key (base64). evie checks it against the
 		// operator's known key, never trusting this field alone; the signing bytes carry
 		// its fingerprint.
-		operatorSignPub: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
+		operatorSignPub: b64Field(),
 		// The operator's Ed25519 signature over provisionTenantSigningBytes (base64).
-		signature: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
+		signature: b64Field(),
 	})
 	.meta({ id: "SignedProvisionTenant" });
 
 /** The operator's request to drop a pending tenant (operator-signed). */
 export const RemoveTenantSchema = z
 	.object({
-		domainId: z
-			.string()
-			.regex(/^[a-z0-9-]+$/)
-			.max(64),
+		domainId: slugField(),
 		issuedAt: z.number().int().nonnegative(),
-		nonce: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
+		nonce: b64Field(),
 	})
 	.meta({ id: "RemoveTenant" });
 
 export const SignedRemoveTenantSchema = z
 	.object({
 		removal: RemoveTenantSchema,
-		operatorSignPub: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
-		signature: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
+		operatorSignPub: b64Field(),
+		signature: b64Field(),
 	})
 	.meta({ id: "SignedRemoveTenant" });
 
@@ -257,15 +238,12 @@ export const SignedRemoveTenantSchema = z
  * authorization, the self-signature only proves possession of the submitted owner key. */
 export const FirstRootSchema = z
 	.object({
-		domainId: z
-			.string()
-			.regex(/^[a-z0-9-]+$/)
-			.max(64),
+		domainId: slugField(),
 		// The friend's silently-generated owner root keys (base64) the Domain roots at.
-		ownerSignPub: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
-		ownerBoxPub: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
+		ownerSignPub: b64Field(),
+		ownerBoxPub: b64Field(),
 		// The one-time invite nonce from the QR (base64); evie roots only if it is unspent.
-		nonce: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
+		nonce: b64Field(),
 		issuedAt: z.number().int().nonnegative(),
 	})
 	.meta({ id: "FirstRoot" });
@@ -276,7 +254,7 @@ export const SignedFirstRootSchema = z
 		// The owner's self-signature over firstRootSigningBytes (base64), verified against
 		// firstRoot.ownerSignPub (the key being rooted). No separate ownerSignPub field: the
 		// signer IS the subject, so the key lives inside `firstRoot`.
-		signature: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
+		signature: b64Field(),
 	})
 	.meta({ id: "SignedFirstRoot" });
 
@@ -284,17 +262,10 @@ export const SignedFirstRootSchema = z
  * CAS-merges it and fans a domain_update to linked Peers, so a rename dispatches live. */
 export const SetOperatorNameSchema = z
 	.object({
-		domainId: z
-			.string()
-			.regex(/^[a-z0-9-]+$/)
-			.max(64),
-		operatorName: z
-			.string()
-			.min(1)
-			.max(128)
-			.regex(/^[^\n\r]+$/),
+		domainId: slugField(),
+		operatorName: displayField(128),
 		issuedAt: z.number().int().nonnegative(),
-		nonce: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
+		nonce: b64Field(),
 	})
 	.meta({ id: "SetOperatorName" });
 
@@ -304,9 +275,9 @@ export const SignedSetOperatorNameSchema = z
 		// The rooted owner's root signing public key (base64). evie checks it against the
 		// Domain's rooted owner key, never trusting this field alone; the signing bytes carry
 		// its fingerprint.
-		ownerSignPub: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
+		ownerSignPub: b64Field(),
 		// The owner's Ed25519 signature over setOperatorNameSigningBytes (base64).
-		signature: z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/),
+		signature: b64Field(),
 	})
 	.meta({ id: "SignedSetOperatorName" });
 
