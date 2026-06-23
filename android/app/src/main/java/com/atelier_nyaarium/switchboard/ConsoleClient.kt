@@ -251,7 +251,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	private fun resolveGatewayId(): String =
 		homeGateway?.takeIf { it.isNotEmpty() }
 			?: store.loadGatewayId().takeIf { it.isNotEmpty() }
-			?: error("No Gateway admitted yet - add one from Manage networks.")
+			?: error("No Gateway admitted yet - add one from Manage Gateways.")
 
 	/** Build a sealed ConsoleRelayFrame for one op. Called fresh for every send,
 	 * including retries, so each attempt uses a new ephemeral/nonce and the

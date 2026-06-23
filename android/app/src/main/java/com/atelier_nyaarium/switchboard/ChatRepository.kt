@@ -278,42 +278,42 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 		// A rejected admission submission (e.g. the app's owner key does not match the Domain evie is
 		// rooted at) will NOT self-heal by waiting - surface it instead of the calm sync-lag above.
 		m.contains("admission rejected", ignoreCase = true) ->
-			"${m.take(120)} - re-provision with the app's owner keys, then re-import" to ConnKind.TERMINAL
+			"${m.take(100)} - re-run provision-console.sh, then re-import the setup blob" to ConnKind.TERMINAL
 		// The Keystore-backed store failed to initialize, so the app fails closed (refuses to
 		// persist the federation key in cleartext). Re-running provision does not help; the device's
 		// secure storage must work. Distinct from "not enrolled" (which sounds fixable by re-running).
 		m.contains("secure storage unavailable", ignoreCase = true) ->
-			"Secure storage unavailable - this device can't store the app's key (check the screen lock / Keystore), then retry" to ConnKind.TERMINAL
+			"Secure storage unavailable - turn on a screen lock, then retry" to ConnKind.TERMINAL
 		m.contains("not enrolled", ignoreCase = true) ->
 			"Not enrolled - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
 		// A local provisioning gap (the blob did not carry the Gateway keys/id). Worded in
 		// ConsoleClient WITHOUT the "not admitted" token so it cannot collide with ENROLLING.
 		m.contains("keys are missing", ignoreCase = true) || m.contains("not provisioned", ignoreCase = true) ->
-			"Home Gateway not provisioned - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
+			"Gateway not provisioned - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
 		// The Console has no Gateway admitted yet (fresh setup), or none for this target in its
 		// keyring. The fix is to admit a Gateway from the management UI, not to re-provision.
 		// ChatState.needsGateway keys the board's Add-a-Gateway CTA off this message's prefix.
 		m.contains("not in the keyring", ignoreCase = true) || m.contains("no gateway admitted", ignoreCase = true) ->
-			"Add a Gateway from Manage networks to begin" to ConnKind.TERMINAL
+			"Add a Gateway from Manage Gateways to begin" to ConnKind.TERMINAL
 		m.startsWith("HTTP 400") ->
-			"Protocol mismatch (400) - update the app, or re-run provision-console.sh" to ConnKind.TERMINAL
+			"App is out of date - update the app, or re-run provision-console.sh" to ConnKind.TERMINAL
 		m.startsWith("HTTP 401") ->
-			"Bridge token rejected (401) - re-run provision-console.sh and re-import the blob" to ConnKind.TERMINAL
+			"Sign-in rejected - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
 		m.startsWith("HTTP 403") ->
-			"Not authorized (403) - cluster credentials expired, re-run provision-console.sh" to ConnKind.TERMINAL
+			"Access expired - re-run provision-console.sh" to ConnKind.TERMINAL
 		m.startsWith("HTTP 404") ->
-			"Console bridge not deployed (404) - run provision-console.sh on the server" to ConnKind.TERMINAL
+			"Server not set up - run provision-console.sh on the server" to ConnKind.TERMINAL
 		m.startsWith("HTTP 409") ->
-			"A previous send is still in flight - retrying" to ConnKind.TRANSIENT
+			"A previous send is still finishing - retrying" to ConnKind.TRANSIENT
 		m.startsWith("HTTP 500") ->
 			"Server error - retrying" to ConnKind.TRANSIENT
 		m.startsWith("HTTP 502") || m.startsWith("HTTP 503") ->
-			"The server is unreachable right now - retrying" to ConnKind.TRANSIENT
+			"Can't reach the server - retrying" to ConnKind.TRANSIENT
 		m.startsWith("HTTP 504") ->
-			"The server took too long to answer - retrying" to ConnKind.TRANSIENT
+			"Server timed out - retrying" to ConnKind.TRANSIENT
 		e is javax.net.ssl.SSLHandshakeException || e is java.security.cert.CertificateException ||
 			m.contains("trust anchor", ignoreCase = true) || m.contains("CertPath", ignoreCase = true) ->
-			"Cluster CA changed - re-provision (the server certificate no longer matches)" to ConnKind.TERMINAL
+			"Server certificate changed - re-run provision-console.sh" to ConnKind.TERMINAL
 		// Freshness/replay rejects clear on the next attempt (a retry carries a fresh
 		// timestamp + new nonce), so they are transient. Checked AFTER the TLS branch so a
 		// handshake-signature error is not mislabeled.
@@ -321,7 +321,7 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 			"Re-syncing the secure channel - retrying" to ConnKind.TRANSIENT
 		// A genuine key mismatch (bad signature / cannot decrypt) is terminal.
 		m.contains("signature", ignoreCase = true) || m.contains("decrypt", ignoreCase = true) ->
-			"Secure channel rejected - re-run provision-console.sh and re-import the blob" to ConnKind.TERMINAL
+			"Secure channel rejected - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
 		e is java.net.UnknownHostException ->
 			"Offline - no network" to ConnKind.TRANSIENT
 		e is java.net.ConnectException || e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException ->
@@ -902,7 +902,7 @@ class ChatRepository(
 			DebugLog.log("Federation", "console admission submit failed")
 			// Throw so connect() surfaces this SPECIFIC cause and stops; otherwise register() runs
 			// next and overwrites it with the generic sync-lag "finishing enrollment", masking it.
-			error(_state.value.error ?: "Console admission rejected by evie")
+			error(_state.value.error ?: "Console admission rejected by the server")
 		}
 	}
 
@@ -965,6 +965,17 @@ class ChatRepository(
 		val gw = localGatewayId
 		val fromLocal = _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
 		return fromLocal?.ifEmpty { null } ?: FriendOnboarding.DEFAULT_DOMAIN_ID
+	}
+
+	/** True only when a LOCAL session confirms this device owns the home (operator) Domain, so it can
+	 * host guest networks. A friend (a non-home Domain) returns false, and so does a device whose home
+	 * Domain is not yet confirmed (still the [FriendOnboarding.DEFAULT_DOMAIN_ID] fallback) - so the
+	 * Guest-networks admin section is hidden rather than shown as a dead button that evie would reject
+	 * (provision_tenant is gated on the home operator key, so "not operator-signed" for anyone else). */
+	fun isHomeOperator(): Boolean {
+		val gw = localGatewayId
+		val confirmed = _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
+		return confirmed == FriendOnboarding.DEFAULT_DOMAIN_ID
 	}
 
 	////////////////////////////////
@@ -1361,15 +1372,15 @@ class ChatRepository(
 	 * through evie's domain sync. */
 	suspend fun enrollGateway(scanned: ScannedGateway): EnrollDelivery = withContext(Dispatchers.IO) {
 		val signed = admitGateway(scanned.gatewayId, scanned.signPub, scanned.boxPub)
-			?: return@withContext EnrollDelivery(false, "Admit failed. Try again.", null)
+			?: return@withContext EnrollDelivery(false, "Couldn't add the Gateway. Try again.", null)
 		val nonce = scanned.nonce
-			?: return@withContext EnrollDelivery(true, "Admitted. This Gateway will come online once it syncs the keyring.", null)
+			?: return@withContext EnrollDelivery(true, "Added. This Gateway will come online shortly.", null)
 		// Fetch the bootstrap transport from the home Gateway. The Console no longer carries it in
 		// its blob; the Gateway holds it as bootstrap-transport.json and serves it sealed on demand.
 		val transport = runCatching { client().getGatewayTransport() }.getOrNull()
 			?: return@withContext EnrollDelivery(
 				true,
-				"Admitted, but could not fetch the gateway transport creds from the home Gateway. Re-run provision-console.sh.",
+				"Added, but couldn't reach the Gateway to set it up. Re-run provision-console.sh.",
 				null,
 			)
 		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub)
@@ -1377,11 +1388,11 @@ class ChatRepository(
 		if (scanned.lanHost != null && scanned.lanPort != null && isPrivateLanHost(scanned.lanHost)) {
 			val ok = runCatching { postBundle(scanned.lanHost, scanned.lanPort, frameJson) }.getOrDefault(false)
 			if (ok) {
-				return@withContext EnrollDelivery(true, "Delivered over the LAN. The Gateway is coming online.", null)
+				return@withContext EnrollDelivery(true, "Sent to the Gateway. It's coming online.", null)
 			}
-			return@withContext EnrollDelivery(true, "LAN delivery failed. Copy this sealed bundle to the Gateway terminal.", frameJson)
+			return@withContext EnrollDelivery(true, "Couldn't reach the Gateway. Copy the bundle to its terminal instead.", frameJson)
 		}
-		EnrollDelivery(true, "Admitted. Copy this sealed bundle to the Gateway's enrollment prompt.", frameJson)
+		EnrollDelivery(true, "Added. Copy the bundle to the Gateway's enrollment prompt.", frameJson)
 	}
 
 	/** Plain HTTP POST of the sealed bundle to the Gateway's nonce-gated LAN listener. No

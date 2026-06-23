@@ -189,7 +189,7 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 							val confirm: Result<ConfirmOutcome> = when (role) {
 								LinkRole.REQUESTER -> {
 									val p = pairing
-									if (p == null) Result.failure(IllegalStateException("The pairing was lost; restart the link."))
+									if (p == null) Result.failure(IllegalStateException("The pairing was lost; start over."))
 									else repo.crossDomainConfirmRequester(p, linkNonce)
 								}
 
@@ -197,13 +197,13 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 									val token = listening?.listeningToken
 									val friend = receiverPairing
 									if (token == null || friend == null) {
-										Result.failure(IllegalStateException("The pairing was lost; restart the link."))
+										Result.failure(IllegalStateException("The pairing was lost; start over."))
 									} else {
 										repo.crossDomainConfirmReceiver(token, friend, linkNonce)
 									}
 								}
 
-								null -> Result.failure(IllegalStateException("No role selected; restart the link."))
+								null -> Result.failure(IllegalStateException("No role selected; start over."))
 							}
 							// The local peer write succeeded on a success; the edge submit may still have been
 							// rejected by the Router (RelayEdgeRejected), in which case the peer is linked
@@ -276,8 +276,7 @@ private fun RendezvousPanel(
 	onRequest: () -> Unit,
 ) {
 	Text(
-		"One of you shares a code; the other enters it. Send it however works - text, etc. " +
-			"Installing the app can take a while, so there's no rush.",
+		"One of you shares a code; the other enters it. Send it however works (text, etc).",
 		style = MaterialTheme.typography.bodyMedium,
 	)
 	if (note.isNotEmpty()) InfoSurface(note)
@@ -285,20 +284,19 @@ private fun RendezvousPanel(
 	when (role) {
 		null -> {
 			Spacer(Modifier.height(8.dp))
-			Button(onClick = onPickReceiver, modifier = Modifier.fillMaxWidth()) { Text("Show my code (I send it)") }
+			Button(onClick = onPickReceiver, modifier = Modifier.fillMaxWidth()) { Text("Show my code") }
 			OutlinedButton(onClick = onPickRequester, modifier = Modifier.fillMaxWidth()) { Text("Enter my friend's code") }
 		}
 
 		LinkRole.RECEIVER -> {
 			if (busy || listening == null) {
-				Busy("Opening a listening window...")
+				Busy("Generating your code...")
 			} else {
 				Text("Send this code to your friend:", style = MaterialTheme.typography.titleMedium)
 				CodeBlock(listening.listeningToken)
 				CopyButton(listening.listeningToken)
 				InfoSurface(
-					"Copy it and send it to your friend (a text works). When they enter it, both phones show " +
-						"a safety code to compare. You can leave to send it and come back - this stays open.",
+					"You can send it and come back - this stays open.",
 				)
 				Busy("Waiting for your friend to enter the code...")
 			}
@@ -335,8 +333,7 @@ private fun VerifyPanel(
 ) {
 	Text("Confirm the safety code", style = MaterialTheme.typography.titleLarge)
 	Text(
-		"Send YOUR code to your friend, and type the code they send you. Confirm unlocks " +
-			"ONLY on an exact match - a mismatch means a key was tampered with, so abort.",
+		"Compare codes with your friend. They must match exactly - a mismatch means a key was tampered with, so abort.",
 		style = MaterialTheme.typography.bodyMedium,
 	)
 	Text("Yours (copy + send):", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -370,8 +367,7 @@ private fun VerifyPanel(
 private fun DonePanel(onDone: () -> Unit) {
 	Text("Linked", style = MaterialTheme.typography.titleLarge)
 	InfoSurface(
-		"Trust is established on both sides. Choose which sessions to share from the peer's detail; " +
-			"nothing is shared until you check it.",
+		"Linked on both sides. Choose what to share from the peer's detail; nothing is shared until you pick it.",
 	)
 	Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Done") }
 }
@@ -384,8 +380,8 @@ private fun LinkedNoRelayPanel(busy: Boolean, note: String, onRetry: () -> Unit,
 	Text("Linked locally - relay not authorized", style = MaterialTheme.typography.titleLarge)
 	Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
 		Text(
-			"Trust is saved on both phones, but the Router did not authorize relay between your networks, " +
-				"so your agents cannot reach this peer yet. Retry to finish - you do not need to unlink.",
+			"The link is saved, but the Router hasn't authorized relay between your networks, " +
+				"so your agents can't reach this peer yet. Retry - no need to unlink.",
 			Modifier.padding(16.dp).fillMaxWidth(),
 			color = MaterialTheme.colorScheme.onErrorContainer,
 			style = MaterialTheme.typography.bodyMedium,
@@ -462,13 +458,13 @@ private fun humanizeHandshakeError(message: String?): String {
 	val m = message ?: "Something went wrong."
 	return when {
 		m.contains("too many pairing attempts", ignoreCase = true) ->
-			"Too many tries on that code. Ask your friend to show a fresh code (Start over)."
+			"Too many tries on that code. Ask your friend for a fresh code, then Start over."
 		m.contains("no open listening window", ignoreCase = true) ->
-			"That code is not active. Ask your friend to open their code again, then retry."
+			"That code is no longer active. Ask your friend to show their code again, then start over."
 		m.contains("safety code mismatch", ignoreCase = true) || m.contains("substituted in transit", ignoreCase = true) ->
 			"The keys did not match (possible tampering). The link was refused - do not retry blindly."
 		m.contains("malformed listening token", ignoreCase = true) ->
-			"That code is not a valid link code. Re-enter the code your friend sent you."
+			"That isn't a valid code. Re-enter the one your friend sent you."
 		m.contains("must name a different Gateway", ignoreCase = true) ->
 			"That is your own code. Enter your friend's code instead."
 		else -> m.take(180)

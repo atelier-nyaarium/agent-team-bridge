@@ -75,6 +75,8 @@ fun FederationScreen(
 	val peers = remember(state.teams, state.linkedPeerDomains) { repo.linkedDomains() }
 	val myName = state.operatorName.ifEmpty { repo.localDomainId() }
 	val ownerFp = remember { repo.ownerSas() }
+	// Operator-only gate for the GUEST NETWORKS section: only the home Domain owner can host guests.
+	val isOperator = remember(state.teams) { repo.isHomeOperator() }
 
 	// Pull the cross-Domain peer roster on entry so a peer just linked in another screen is listed
 	// immediately, without waiting for the next periodic board refresh. Best-effort (see the repo).
@@ -97,8 +99,7 @@ fun FederationScreen(
 			verticalArrangement = Arrangement.spacedBy(20.dp),
 		) {
 			Text(
-				"Link with a friend's network to let your agents collaborate. Linking is mutual and " +
-					"verified by a safety code; nothing is shared until you check a session.",
+				"Link with a friend's network so your agents can collaborate. Nothing is shared until you choose a session.",
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
@@ -114,24 +115,27 @@ fun FederationScreen(
 
 			// Hosting != linking: a separate section for guest networks YOU run for friends. Lives
 			// apart from PEERS so cross-network access is never granted by simply hosting someone.
-			SectionLabel("NETWORKS YOU HOST")
-			Text(
-				"Set up a network for a friend who has no host of their own. They scan a one-time invite " +
-					"and run their own agents; hosting does not link you.",
-				style = MaterialTheme.typography.bodySmall,
-				color = MaterialTheme.colorScheme.onSurfaceVariant,
-			)
-			Button(onClick = onHostNetworks, modifier = Modifier.fillMaxWidth()) { Text("Networks you host") }
+			// Operator-only: provision_tenant is gated on the home operator key, so a friend (a non-home
+			// Domain) would only get an error-bounce here. Hide the section rather than show a dead button.
+			if (isOperator) {
+				SectionLabel("GUEST NETWORKS")
+				Text(
+					"Set up a network for a friend who has none. They get a one-time invite and run their own agents on their own computer.",
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+				)
+				Button(onClick = onHostNetworks, modifier = Modifier.fillMaxWidth()) { Text("Guest networks") }
+			}
 
 			SectionLabel("PEERS")
 			Text(
-				"Friend networks you have linked. Tap one to choose which sessions are shared.",
+				"Networks you've linked. Tap one to choose what's shared.",
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
 			if (peers.isEmpty()) {
 				Text(
-					"No linked peers yet. Use Link with a peer below (both phones on this screen at once).",
+					"No peers yet. Tap Link with a peer below (both phones on this screen).",
 					style = MaterialTheme.typography.bodyMedium,
 				)
 			}
@@ -158,7 +162,7 @@ private fun PeerRow(peer: LinkedDomain, onClick: () -> Unit) {
 			Column(Modifier.weight(1f)) {
 				Text(peer.operatorName ?: peer.domainId, style = MaterialTheme.typography.titleMedium)
 				Text(
-					if (peer.online) "online - ${peer.sessionCount} shared session(s)" else "offline",
+					if (peer.online) "${peer.sessionCount} shared sessions" else "offline",
 					style = MaterialTheme.typography.bodySmall,
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 				)
@@ -202,8 +206,7 @@ fun PeerDetailScreen(repo: ChatRepository, domainId: String, onBack: () -> Unit,
 	if (confirmUnlink) {
 		ConfirmDialog(
 			title = "Unlink $peerName?",
-			body = "$peerName loses access immediately, and your shared sessions stop being reachable from it. " +
-				"You can re-link later (both phones on the Link screen).",
+			body = "$peerName loses access immediately. You can re-link later (both phones on the Link screen).",
 			confirmText = "Unlink",
 			onConfirm = {
 				confirmUnlink = false
@@ -248,15 +251,14 @@ fun PeerDetailScreen(repo: ChatRepository, domainId: String, onBack: () -> Unit,
 				}
 			}
 
-			SectionLabel("THEIR SHARED SESSIONS")
+			SectionLabel("SHARED WITH YOU")
 			Text(
-				"Sessions $peerName has shared to you. The gateway is the trust boundary; these are " +
-					"the curated targets your agents may reach.",
+				"Sessions $peerName shared to you. Your agents can reach these.",
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
 			if (theirSessions.isEmpty()) {
-				Text("$peerName has not shared any sessions with you yet.", style = MaterialTheme.typography.bodyMedium)
+				Text("$peerName hasn't shared any sessions yet.", style = MaterialTheme.typography.bodyMedium)
 			}
 			for (s in theirSessions) {
 				Card(Modifier.fillMaxWidth()) {
@@ -275,14 +277,13 @@ fun PeerDetailScreen(repo: ChatRepository, domainId: String, onBack: () -> Unit,
 
 			SectionLabel("YOU SHARE WITH $peerName")
 			Text(
-				"Check a session to offer it to $peerName. Checking IS the consent - their agents can " +
-					"reach it with no further approval.",
+				"Check a session to share it with $peerName. Their agents can reach it immediately - no second confirmation.",
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
 			if (mySessions.isEmpty()) {
 				Text(
-					"No shareable sessions. Only your devcontainer and loose sessions can be shared.",
+					"No shareable sessions. Only devcontainer and loose sessions can be shared.",
 					style = MaterialTheme.typography.bodyMedium,
 				)
 			}
