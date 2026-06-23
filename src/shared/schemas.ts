@@ -765,6 +765,22 @@ export const PendingTenantRefSchema = z
 	})
 	.meta({ id: "PendingTenantRef" });
 
+// The admin-enroll handshake seed the QR carries (present only on an ADMIN-ENROLL invite
+// blob). Named (.meta id) so the codegen emits it as a nested Kotlin class.
+export const EnrollHandshakeRefSchema = z
+	.object({
+		// The admin's OWNER keys + Domain, OOB-authenticated by the in-person scan; the friend
+		// folds them into its local enroll SAS (ENROLL_SAS_V1).
+		adminOwnerSignPub: b64Field(),
+		adminOwnerBoxPub: b64Field(),
+		adminDomainId: slugField(),
+		// The unguessable id naming the evie broker window both phones drive.
+		handshakeId: b64Field(),
+		// The one-time shared secret both phones fold into the SAS but NEVER send to evie.
+		pin: b64Field(),
+	})
+	.meta({ id: "EnrollHandshakeRef" });
+
 export const ProvisioningSchema = z
 	.object({
 		apiUrl: z.string().min(1),
@@ -800,6 +816,10 @@ export const ProvisioningSchema = z
 		// nonce) iff it is present, else it just provisions the console. Absent for a re-provision
 		// of an already-rooted Domain.
 		pendingTenant: PendingTenantRefSchema.optional(),
+		// Present only on an ADMIN-ENROLL invite blob: the seed for the in-person mutual 6-digit
+		// compare the friend runs AFTER first-root (see EnrollHandshakeRef). Absent for a plain
+		// provision / re-provision.
+		enrollHandshake: EnrollHandshakeRefSchema.optional(),
 	})
 	.meta({ id: "Provisioning" });
 

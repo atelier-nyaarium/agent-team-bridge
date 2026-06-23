@@ -34,7 +34,13 @@ import {
 	GATEWAY_QUALIFIER_SEP,
 	NOTICE_SESSION_PREFIX,
 } from "../src/shared/console-protocol.js";
-import { EnrollOpSchema, EnrollResultSchema, PendingTenantSchema } from "../src/shared/enrollment.js";
+import {
+	EnrollHandshakeOpSchema,
+	EnrollHandshakeResultSchema,
+	EnrollOpSchema,
+	EnrollResultSchema,
+	PendingTenantSchema,
+} from "../src/shared/enrollment.js";
 import {
 	ChannelFileSchema,
 	ConsoleListTeamsResultSchema,
@@ -91,6 +97,8 @@ const ROOTS: z.ZodType[] = [
 	SignedRevocationSchema,
 	EnrollOpSchema,
 	EnrollResultSchema,
+	EnrollHandshakeOpSchema,
+	EnrollHandshakeResultSchema,
 	PendingTenantSchema,
 	GatewayTransportSchema,
 	GatewayBootstrapBundleSchema,
@@ -102,7 +110,7 @@ const ROOTS: z.ZodType[] = [
 // the discriminator key is read from zod internals. EnrollOp is composed by the
 // console (owner enroll requests), so closure is safe; the scanned EnrollmentPayload
 // is DECODED and stays hand-parsed (forward-compatible) in the Android client.
-const SEALED_ROOTS = new Set(["ConsoleOp", "EnrollOp"]);
+const SEALED_ROOTS = new Set(["ConsoleOp", "EnrollOp", "EnrollHandshakeOp"]);
 
 ////////////////////////////////
 //  zod -> cleaned JSON Schema (evie's conversion hygiene)

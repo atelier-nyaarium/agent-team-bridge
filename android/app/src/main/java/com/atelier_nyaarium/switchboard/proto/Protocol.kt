@@ -312,6 +312,7 @@ data class Provisioning(
 	val gatewaySignPub: String? = null,
 	val gatewayBoxPub: String? = null,
 	val pendingTenant: PendingTenantRef? = null,
+	val enrollHandshake: EnrollHandshakeRef? = null,
 )
 
 @Serializable
@@ -409,6 +410,42 @@ sealed class EnrollOp {
 data class EnrollResult(
 	val ok: Boolean,
 	val error: String? = null,
+)
+
+@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("step")
+sealed class EnrollHandshakeOp {
+	@Serializable
+	@SerialName("commit")
+	data class Commit(
+		val handshakeId: String,
+		val role: String,
+		val commitment: String,
+	) : EnrollHandshakeOp()
+
+	@Serializable
+	@SerialName("reveal")
+	data class Reveal(
+		val handshakeId: String,
+		val role: String,
+		val reveal: EnrollReveal,
+	) : EnrollHandshakeOp()
+
+	@Serializable
+	@SerialName("cancel")
+	data class Cancel(
+		val handshakeId: String,
+		val role: String,
+	) : EnrollHandshakeOp()
+}
+
+@Serializable
+data class EnrollHandshakeResult(
+	val ok: Boolean,
+	val error: String? = null,
+	val peerCommitment: String? = null,
+	val peerReveal: EnrollReveal? = null,
 )
 
 @Serializable
@@ -591,6 +628,15 @@ data class PendingTenantRef(
 )
 
 @Serializable
+data class EnrollHandshakeRef(
+	val adminOwnerSignPub: String,
+	val adminOwnerBoxPub: String,
+	val adminDomainId: String,
+	val handshakeId: String,
+	val pin: String,
+)
+
+@Serializable
 data class SttsProvider(
 	val id: String,
 	val label: String,
@@ -687,4 +733,12 @@ data class SetOperatorName(
 	val operatorName: String,
 	val issuedAt: Long,
 	val nonce: String,
+)
+
+@Serializable
+data class EnrollReveal(
+	val ownerSignPub: String,
+	val ownerBoxPub: String,
+	val domainId: String,
+	val salt: String,
 )

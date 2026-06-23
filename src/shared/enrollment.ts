@@ -1,4 +1,4 @@
-// SYNC-HASH: 61a169549b3e5b9d24866737cb551981
+// SYNC-HASH: 60696f328a8e0380a1ee15859f50e5f6
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -319,12 +319,78 @@ export const EnrollResultSchema = z
 	.object({ ok: z.boolean(), error: z.string().optional() })
 	.meta({ id: "EnrollResult" });
 
+////////////////////////////////
+//  Enroll handshake (the FLOW-1 in-person mutual 6-digit compare)
+//
+//  A fresh enrollee has no gateway, so the commit-reveal that confirms the admin's + the
+//  enrollee's OWNER keys is brokered by evie as an UNTRUSTED DUMB BROKER: evie relays the two
+//  phones' commit then reveal frames by handshakeId and NEVER computes the SAS (the phones
+//  compute it locally - SasCrypto.enrollSas - and the humans compare). These frames carry NO
+//  pin (it rides the QR out of band) and NO signature (only the resulting cross-Domain link
+//  edge is owner-signed). Each role slot is bound to its first committer; a second, different
+//  commitment for the same (handshakeId, role) is rejected (anti-hijack). The phone POSTs the
+//  frame DIRECTLY to evie's console-bridge enrollHandshake intake (pre-admission, app-token
+//  gated), re-POSTing the same step to poll for the peer's frame.
+
+/** One revealed enroll party on the wire: the owner keys + Domain + the round-1 salt. The peer
+ * re-hashes these (ENROLL_COMMIT_V1) against the round-1 commitment, then folds them into its
+ * local enroll SAS. */
+export const EnrollRevealSchema = z
+	.object({
+		ownerSignPub: b64Field(),
+		ownerBoxPub: b64Field(),
+		domainId: slugField(),
+		salt: b64Field(),
+	})
+	.meta({ id: "EnrollReveal" });
+
+/** A phone's frame to evie's enroll-handshake broker, by step: `commit` (round-1 hiding
+ * commitment to this side's owner keys), `reveal` (round-2 owner keys + salt, sent once the
+ * peer's commitment is in), `cancel` (abort + evict on [No] / timeout). `handshakeId`
+ * (unguessable, from the QR) names the window; `role` is ADMIN (showed the QR) or ENROLLEE
+ * (scanned). NO pin (out of band), NO signature (the trust artifact is the later link edge). */
+export const EnrollHandshakeOpSchema = z
+	.discriminatedUnion("step", [
+		z.object({
+			step: z.literal("commit"),
+			handshakeId: b64Field(),
+			role: z.enum(["ADMIN", "ENROLLEE"]),
+			commitment: b64Field(),
+		}),
+		z.object({
+			step: z.literal("reveal"),
+			handshakeId: b64Field(),
+			role: z.enum(["ADMIN", "ENROLLEE"]),
+			reveal: EnrollRevealSchema,
+		}),
+		z.object({ step: z.literal("cancel"), handshakeId: b64Field(), role: z.enum(["ADMIN", "ENROLLEE"]) }),
+	])
+	.meta({ id: "EnrollHandshakeOp" });
+
+/** evie's reply to an enroll-handshake frame. `ok:false` + `error` is terminal (the window
+ * expired, hit the attempt cap, or a role-slot conflict). Otherwise the PEER's frame is
+ * included once it lands so the phone can verify + compute the SAS locally; absent means keep
+ * polling (re-POST the same step). */
+export const EnrollHandshakeResultSchema = z
+	.object({
+		ok: z.boolean(),
+		error: z.string().optional(),
+		// Present on a commit reply once the PEER has committed (round 1 done on both sides).
+		peerCommitment: b64Field().optional(),
+		// Present on a reveal reply once the PEER has revealed (round 2 done on both sides).
+		peerReveal: EnrollRevealSchema.optional(),
+	})
+	.meta({ id: "EnrollHandshakeResult" });
+
 export type EnrollmentPayload = z.infer<typeof EnrollmentPayloadSchema>;
 export type EnrollOwnerPayload = Extract<EnrollmentPayload, { type: "enroll-owner" }>;
 export type AdmitGatewayPayload = Extract<EnrollmentPayload, { type: "admit-gateway" }>;
 export type AuthorizeConsolePayload = Extract<EnrollmentPayload, { type: "authorize-console" }>;
 export type EnrollOp = z.infer<typeof EnrollOpSchema>;
 export type EnrollResult = z.infer<typeof EnrollResultSchema>;
+export type EnrollReveal = z.infer<typeof EnrollRevealSchema>;
+export type EnrollHandshakeOp = z.infer<typeof EnrollHandshakeOpSchema>;
+export type EnrollHandshakeResult = z.infer<typeof EnrollHandshakeResultSchema>;
 export type PendingTenant = z.infer<typeof PendingTenantSchema>;
 export type ProvisionTenant = z.infer<typeof ProvisionTenantSchema>;
 export type SignedProvisionTenant = z.infer<typeof SignedProvisionTenantSchema>;
