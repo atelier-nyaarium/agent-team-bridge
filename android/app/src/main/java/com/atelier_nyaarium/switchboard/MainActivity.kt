@@ -65,6 +65,7 @@ import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ButtonDefaults
@@ -319,8 +320,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	}
 
 	when {
-		!state.provisioned ->
-			ProvisionScreen(repo = repo, state = state, onProvision = { scope.launch { repo.provision(it) } })
+		// Lock wins over everything (a provisioned + locked session must show the lock, never a
+		// leftover overlay underneath it). An unprovisioned session is never locked.
 		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
 		showHostHelp -> HostSetupHelpScreen(onBack = { showHostHelp = false })
 		showLinkWizard ->
@@ -362,6 +363,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			AddGatewayScreen(repo = repo, onBack = { showAddGateway = false }, onDone = { showAddGateway = false })
 		showManage ->
 			ManageScreen(repo = repo, onBack = { showManage = false }, onAddGateway = { showAddGateway = true })
+		// Settings is reachable from ANY state, so this branch is evaluated BEFORE the unprovisioned
+		// ProvisionScreen below: an unprovisioned user opens it from the setup screen's gear. It sits
+		// below the overlay branches above (showManage/showAddGateway are entered from Settings without
+		// clearing showSettings, so they must still win). SettingsScreen gates its provisioned-only
+		// rows on state.provisioned, so the unprovisioned hub shows only the System section.
 		showSettings ->
 			SettingsScreen(
 				state = state,
@@ -386,6 +392,13 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					showSettings = false
 					settingsRoute = SettingsRoute.HUB
 				},
+			)
+		!state.provisioned ->
+			ProvisionScreen(
+				repo = repo,
+				state = state,
+				onProvision = { scope.launch { repo.provision(it) } },
+				onSettings = { showSettings = true },
 			)
 		openTeam != null -> {
 			// Devcontainer names are the project identity; only loose peers take labels.
@@ -485,7 +498,7 @@ fun LockScreen(onUnlock: () -> Unit) {
  * The host-setup instructions live behind a tucked "Setting up a host?" link a friend never needs. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String) -> Unit) {
+fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String) -> Unit, onSettings: () -> Unit) {
 	val context = LocalContext.current
 	var status by remember { mutableStateOf("") }
 	var scanning by remember { mutableStateOf(false) }
@@ -537,7 +550,14 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 	}
 
 	Scaffold(
-		topBar = { TopAppBar(title = { Text("Set up") }) },
+		topBar = {
+			TopAppBar(
+				title = { Text("Set up") },
+				actions = {
+					IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, contentDescription = "Settings") }
+				},
+			)
+		},
 	) { pad ->
 		Column(
 			Modifier.padding(pad).padding(24.dp).fillMaxSize().verticalScroll(rememberScrollState()),
@@ -1398,11 +1418,23 @@ fun SettingsScreen(
 	onClear: () -> Unit,
 	onCloseSettings: () -> Unit,
 ) {
-	val onBack = { if (route == SettingsRoute.HUB) onCloseSettings() else onRoute(SettingsRoute.HUB) }
+	// Settings opens from the pre-provision setup screen too. Before provisioning, the repo is not
+	// loaded, so the categories that read provisioned state (Profile, Voice, Networks, Security)
+	// would NPE or route into provisioned-only screens. Show ONLY the System section then (the
+	// updater + Clear & re-provision both work with no provisioning), and treat a stale saved
+	// sub-route as the hub so it can never render (or title) a provisioned-only screen unprovisioned.
+	val provisioned = state.provisioned
+	val effectiveRoute =
+		if (!provisioned && route != SettingsRoute.HUB && route != SettingsRoute.SYSTEM) {
+			SettingsRoute.HUB
+		} else {
+			route
+		}
+	val onBack = { if (effectiveRoute == SettingsRoute.HUB) onCloseSettings() else onRoute(SettingsRoute.HUB) }
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text(settingsTitle(route)) },
+				title = { Text(settingsTitle(effectiveRoute)) },
 				navigationIcon = {
 					IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
 				},
@@ -1413,12 +1445,14 @@ fun SettingsScreen(
 			Modifier.padding(pad).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(16.dp),
 		) {
-			when (route) {
+			when (effectiveRoute) {
 				SettingsRoute.HUB -> {
-					SettingsRow(Icons.Default.Person, "Profile") { onRoute(SettingsRoute.PROFILE) }
-					SettingsRow(Icons.Default.RecordVoiceOver, "Voice & TTS") { onRoute(SettingsRoute.VOICE) }
-					SettingsRow(Icons.Default.Hub, "Networks & Trust") { onRoute(SettingsRoute.NETWORKS) }
-					SettingsRow(Icons.Default.Lock, "Security") { onRoute(SettingsRoute.SECURITY) }
+					if (provisioned) {
+						SettingsRow(Icons.Default.Person, "Profile") { onRoute(SettingsRoute.PROFILE) }
+						SettingsRow(Icons.Default.RecordVoiceOver, "Voice & TTS") { onRoute(SettingsRoute.VOICE) }
+						SettingsRow(Icons.Default.Hub, "Networks & Trust") { onRoute(SettingsRoute.NETWORKS) }
+						SettingsRow(Icons.Default.Lock, "Security") { onRoute(SettingsRoute.SECURITY) }
+					}
 					SettingsRow(Icons.Default.Tune, "System") { onRoute(SettingsRoute.SYSTEM) }
 				}
 				SettingsRoute.PROFILE -> ProfileSettings(state, repo, onSetDeviceName)
@@ -1913,14 +1947,21 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 	}
 }
 
-/** One-press self-update: download the latest APK straight from the public
- * GitHub release, then launch the installer if it is newer than this build. */
+/** One-press self-update: download the chosen variant's APK straight from the public
+ * GitHub release, then launch the installer. The variant dropdown lets the user
+ * deliberately cross-flash debug <-> release (same signing key, so it is a reinstall);
+ * a same-variant pick is the normal newer-only update. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppUpdateRow() {
 	val context = LocalContext.current
 	val scope = rememberCoroutineScope()
 	var status by remember { mutableStateOf("") }
 	var busy by remember { mutableStateOf(false) }
+	// Defaults to the running variant; switching it and pressing Update cross-flashes.
+	var variant by remember { mutableStateOf(AppUpdater.currentVariant()) }
+	var variantMenuOpen by remember { mutableStateOf(false) }
+	val variants = listOf("debug", "release")
 	Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 		Column(Modifier.weight(1f)) {
 			Text("App update", style = MaterialTheme.typography.titleMedium)
@@ -1930,13 +1971,42 @@ private fun AppUpdateRow() {
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
 		}
+		// Variant selector to the left of the Update button.
+		ExposedDropdownMenuBox(
+			expanded = variantMenuOpen,
+			onExpandedChange = { if (!busy) variantMenuOpen = it },
+			modifier = Modifier.padding(end = 8.dp).widthIn(max = 130.dp),
+		) {
+			OutlinedTextField(
+				value = variant,
+				onValueChange = {},
+				readOnly = true,
+				enabled = !busy,
+				label = { Text("Variant") },
+				trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = variantMenuOpen) },
+				singleLine = true,
+				modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
+			)
+			ExposedDropdownMenu(expanded = variantMenuOpen, onDismissRequest = { variantMenuOpen = false }) {
+				for (v in variants) {
+					DropdownMenuItem(
+						text = { Text(v) },
+						onClick = {
+							variant = v
+							variantMenuOpen = false
+						},
+					)
+				}
+			}
+		}
 		Button(
 			enabled = !busy,
 			onClick = {
 				busy = true
 				status = "Checking for updates..."
+				val chosen = variant
 				scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-					val result = AppUpdater.downloadAndStage(context)
+					val result = AppUpdater.downloadAndStage(context, chosen)
 					kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
 						when (result) {
 							is AppUpdater.Result.Newer -> {
