@@ -311,6 +311,7 @@ data class Provisioning(
 	val gatewayId: String? = null,
 	val gatewaySignPub: String? = null,
 	val gatewayBoxPub: String? = null,
+	val pendingTenant: PendingTenantRef? = null,
 )
 
 @Serializable
@@ -581,6 +582,12 @@ data class CrossDomainUnlinkResult(
 	val peersRemoved: Long,
 	val sharesDropped: Long,
 	val jobsExpired: Long,
+)
+
+@Serializable
+data class PendingTenantRef(
+	val domainId: String,
+	val nonce: String,
 )
 
 @Serializable

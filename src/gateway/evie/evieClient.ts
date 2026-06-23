@@ -53,6 +53,17 @@ export interface EvieClientConfig {
 	// reply; the Gateway applies it so a revocation bites even while evie is offline.
 	// Travels as unknown; the consumer validates with DomainSnapshotSchema.
 	onDomainSync?: (domain: unknown) => void;
+	// This Gateway's own Domain lifecycle metadata from the register reply: its status
+	// ("pending"/"rooted"/"unrooted") and the operator/network display name. The Gateway
+	// surfaces these to its console (the register reply's domainStatus + the discovery
+	// roster's operatorName). Re-applied on every reconnect, so a rename made elsewhere
+	// reaches the Gateway at its next register. Fields absent against a pre-feature evie.
+	onDomainMeta?: (meta: { domainStatus?: string; operatorName?: string | null }) => void;
+	// A live operator-name refresh from a domain_update push (the owner renamed THIS Domain's
+	// network). Refreshes the held operatorName without a reconnect, so teams()/discover reflect
+	// the rename immediately. The allowlist the domain_update's snapshot feeds drops operatorName,
+	// so this is the only path that updates it between registers. Absent against a pre-feature evie.
+	onDomainUpdate?: (meta: { operatorName?: string | null }) => void;
 	onDisconnect?: () => void;
 }
 
@@ -112,7 +123,14 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				...(config.buildRegisterAuth?.() ?? {}),
 			}).then((res) => {
 				const r = res.result as
-					| { ok?: boolean; error?: string; gateways?: string[]; domain?: unknown }
+					| {
+							ok?: boolean;
+							error?: string;
+							gateways?: string[];
+							domain?: unknown;
+							domainStatus?: string;
+							operatorName?: string | null;
+					  }
 					| undefined;
 				if (res.error) console.error(`[evie-client] gateway_register failed: ${res.error}`);
 				else if (r?.ok === false) console.error(`[evie-client] Router rejected registration: ${r.error}`);
@@ -120,6 +138,11 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
 					console.log(`[evie-client] registered as Gateway "${config.gatewayId}"${peers}`);
 					if (r?.domain) config.onDomainSync?.(r.domain);
+					// Surface the Gateway's own Domain status + operator name to the console
+					// register reply / discovery roster. Sent only by a federation-aware evie.
+					if (r?.domainStatus !== undefined || r?.operatorName !== undefined) {
+						config.onDomainMeta?.({ domainStatus: r.domainStatus, operatorName: r.operatorName });
+					}
 				}
 			});
 		});
@@ -170,6 +193,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					// evie pushed an updated keyring (an owner admit/revoke). Apply it
 					// immediately so a revocation bites without waiting for the next register.
 					config.onDomainSync?.(frame.domain);
+					// A rename rides the same push: refresh the held operatorName so the owner's
+					// OWN Gateway reflects it in teams()/discover at once (applySnapshot drops it).
+					// Only sent by a federation-aware evie, only to the renamed Domain's gateways.
+					if (frame.operatorName !== undefined) config.onDomainUpdate?.({ operatorName: frame.operatorName });
 					break;
 				}
 				case "tool_result": {

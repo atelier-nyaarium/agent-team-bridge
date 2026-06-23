@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DomainSnapshotSchema, SignedAdmissionSchema } from "./admission.js";
+import { b64Field, slugField } from "./crypto.js";
 import { SignedFirstRootSchema } from "./enrollment.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 
@@ -19,11 +20,12 @@ export const TeamKindSchema = z.enum(["devcontainer", "loose", "console", "gatew
 export const ResponseStatusSchema = z
 	.enum(["completed", "clarification", "deferred", "needs_human", "error", "timeout", "running"])
 	.meta({ id: "ResponseStatus" });
-// Whether the console's Domain is rooted yet. `unrooted` is a fresh, never-provisioned home
-// (no owner, no pending tenant); `pending` is an operator-staged tenant the friend has not yet
-// first-rooted (tells the app to submit its owner pubkey via first_root); `rooted` just
-// provisions the console. Mirrors evie's getDomainStatus 3-value union exactly, so the register
-// reply parses strictly. Decode-side this stays an open String in Kotlin.
+// Whether a console's Domain is rooted yet. `unrooted` is a fresh, never-provisioned home (no
+// owner, no pending tenant); `pending` is an operator-staged tenant the friend has not yet
+// first-rooted; `rooted` just provisions the console. Mirrors evie's getDomainStatus 3-value
+// union. The gateway register reply only ever carries `rooted`/`unrooted` (a pending Domain has
+// no gateway to register against); `pending` reaches the app via the provisioning blob's
+// `pendingTenant` instead. Decode-side this stays an open String in Kotlin.
 export const DomainStatusSchema = z.enum(["unrooted", "pending", "rooted"]).meta({ id: "DomainStatus" });
 
 ////////////////////////////////
@@ -159,12 +161,14 @@ export const ConsoleOpSchema = z
 			clientVersion: z.string().max(64).optional(),
 			clientVariant: z.string().max(16).optional(),
 		}),
-		// First-root a PENDING (rootless) Domain at this console's silently-generated owner
-		// key. The friend's app sends it when register reports `domainStatus: "pending"`; the
-		// gateway's PENDING_ENROLL path accepts it (the ONE op allowed before the Domain is
-		// rooted) by verifying the SELF-signature inside `firstRoot` against its own
-		// ownerSignPub plus the one-time QR nonce, then relays the root to evie. Every other
-		// op stays rejected until the Domain is rooted.
+		// First-root a PENDING (rootless) Domain at the friend's silently-generated owner key.
+		// A pending Domain has NO gateway, so first-rooting does NOT travel this op: the app
+		// learns it is pending plus the one-time invite nonce from the provisioning blob's
+		// `pendingTenant` (a register reply can never report pending - a sealed register to a
+		// gateway-less pending Domain 503s before any reply), then POSTs the SignedFirstRoot
+		// DIRECTLY to evie's console-bridge firstRoot intake. This gateway-side variant is a
+		// defensive reject: a gateway only exists once the Domain is already rooted, so a
+		// first_root reaching it is rejected (the Domain is past rooting).
 		z.object({ kind: z.literal("first_root"), firstRoot: SignedFirstRootSchema }),
 		z.object({ kind: z.literal("list_teams") }),
 		z.object({
@@ -461,9 +465,12 @@ export const ConsoleRegisterResultSchema = z
 		// Mailbox instance id. If it differs from the console's stored epoch, the
 		// mailbox was recreated and the console must reset its cursor to 0.
 		epoch: z.number().int().nonnegative(),
-		// Whether this console's Domain is rooted yet. `pending` (an operator-staged tenant the
-		// friend has not first-rooted) tells the app to submit its owner pubkey via first_root;
-		// `rooted` just provisions the console. Optional for decode tolerance: a pre-feature
+		// Whether this console's Domain is rooted yet, as the connected gateway sees it. A
+		// gateway only exists for a Domain that is already past rooting, so this register reply
+		// only ever reports `rooted` (or `unrooted` for a fresh, never-provisioned home); it can
+		// NEVER report `pending`, because a pending Domain has no gateway to register against. The
+		// pending case is learned earlier, from the provisioning blob's `pendingTenant`, and the
+		// app first-roots DIRECTLY against evie. Optional for decode tolerance: a pre-feature
 		// Gateway omits it and the app treats the Domain as already rooted (the legacy path).
 		domainStatus: DomainStatusSchema.optional(),
 	})
@@ -743,6 +750,21 @@ export const ConsoleRelayReplySchema = z
 //  Build.MODEL, conversationId minting a UUID, trimEnd('/') URL normalization)
 //  - the schema carries the shape, the Kotlin wrapper owns those behaviors.
 
+// The pending-Domain discriminator carried inside a provisioning blob. Present iff the blob is
+// for a PENDING (unrooted) Domain - both a friend invite AND the operator's own fresh-home
+// (R1) setup. A pending Domain has no gateway, so the app cannot learn it is pending from a
+// register reply; it reads this off the blob and first-roots DIRECTLY against evie with the
+// nonce. Absent for a re-provision of an already-rooted Domain (which just provisions the
+// console). Named (.meta id) so the codegen emits it as a nested Kotlin class.
+export const PendingTenantRefSchema = z
+	.object({
+		// The opaque pending Domain id the friend's first_root roots.
+		domainId: slugField(),
+		// The one-time invite nonce (base64) evie checks unspent before rooting.
+		nonce: b64Field(),
+	})
+	.meta({ id: "PendingTenantRef" });
+
 export const ProvisioningSchema = z
 	.object({
 		apiUrl: z.string().min(1),
@@ -772,6 +794,12 @@ export const ProvisioningSchema = z
 		gatewayId: z.string().optional(),
 		gatewaySignPub: z.string().optional(),
 		gatewayBoxPub: z.string().optional(),
+		// Set only for a PENDING (unrooted) Domain blob (a friend invite or the operator's own
+		// fresh-home setup): the pending Domain id + the one-time invite nonce. Its presence is
+		// the discriminator - the app first-roots (POSTs the SignedFirstRoot to evie with this
+		// nonce) iff it is present, else it just provisions the console. Absent for a re-provision
+		// of an already-rooted Domain.
+		pendingTenant: PendingTenantRefSchema.optional(),
 	})
 	.meta({ id: "Provisioning" });
 

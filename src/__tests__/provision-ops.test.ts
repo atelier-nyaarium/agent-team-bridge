@@ -21,7 +21,7 @@ import {
 	verifyRemoveTenant,
 	verifySetOperatorName,
 } from "../shared/enrollment.js";
-import { ConsoleOpSchema } from "../shared/schemas.js";
+import { ConsoleOpSchema, ProvisioningSchema } from "../shared/schemas.js";
 import { assertCanonicalBytes } from "./_canonical-bytes.js";
 
 ////////////////////////////////
@@ -167,10 +167,12 @@ describe("first_root vectors (self-signed by the fresh owner key)", () => {
 		expect(verifyFirstRoot(tampered)).toBe(false);
 	});
 
-	it("is a console op, not an enroll op (the gateway PENDING_ENROLL path consumes it)", () => {
+	it("parses as a console op (a defensive reject), never an enroll op", () => {
 		const signed = signFirstRoot(vectors.firstRoot.value, friendOwnerSignPriv);
+		// first_root stays a ConsoleOp variant the gateway can defensively reject; the live
+		// first-root POSTs DIRECTLY to evie (a pending Domain has no gateway), and it is NOT on
+		// the evie enroll surface either (pre-root, the friend has no admission to authenticate).
 		expect(ConsoleOpSchema.safeParse({ kind: "first_root", firstRoot: signed }).success).toBe(true);
-		// first_root is NOT on the evie enroll surface (pre-root, the friend has no admission).
 		expect(EnrollOpSchema.safeParse({ kind: "first_root", firstRoot: signed }).success).toBe(false);
 	});
 });
@@ -198,5 +200,43 @@ describe("set_operator_name vectors (owner-signed)", () => {
 	it("parses a set_operator_name enroll op", () => {
 		const signed = signSetOperatorName(vectors.rename.value, friendOwnerSignPriv, friendOwnerSignPub);
 		expect(EnrollOpSchema.safeParse({ kind: "set_operator_name", rename: signed }).success).toBe(true);
+	});
+});
+
+describe("ProvisioningSchema pendingTenant (the pending-Domain discriminator)", () => {
+	const base = {
+		apiUrl: "https://k8s.example:6443",
+		caPem: "-----BEGIN CERTIFICATE-----\nMII...\n-----END CERTIFICATE-----",
+		saToken: "sa-token-value",
+	};
+
+	it("round-trips a blob carrying pendingTenant", () => {
+		const blob = {
+			...base,
+			pendingTenant: { domainId: "guest-network-7", nonce: "bm9uY2UtdmFsdWU=" },
+		};
+		const parsed = ProvisioningSchema.safeParse(blob);
+		expect(parsed.success).toBe(true);
+		expect(parsed.success && parsed.data.pendingTenant).toEqual({
+			domainId: "guest-network-7",
+			nonce: "bm9uY2UtdmFsdWU=",
+		});
+	});
+
+	it("stays optional: a rooted-Domain blob omits pendingTenant", () => {
+		const parsed = ProvisioningSchema.safeParse(base);
+		expect(parsed.success).toBe(true);
+		expect(parsed.success && parsed.data.pendingTenant).toBeUndefined();
+	});
+
+	it("rejects a non-slug domainId and a non-base64 nonce inside pendingTenant", () => {
+		expect(
+			ProvisioningSchema.safeParse({ ...base, pendingTenant: { domainId: "Bad Domain", nonce: "bm9uY2U=" } })
+				.success,
+		).toBe(false);
+		expect(
+			ProvisioningSchema.safeParse({ ...base, pendingTenant: { domainId: "ok-domain", nonce: "not base64!" } })
+				.success,
+		).toBe(false);
 	});
 });

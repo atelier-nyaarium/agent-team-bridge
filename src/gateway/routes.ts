@@ -48,6 +48,10 @@ export interface RoutesDeps {
 	// here (the SealTarget is keyed by the full (domainId, gatewayId) pair, never the bare
 	// id), and discovery fans a list_teams to each linked peer. Absent when federation is off.
 	crossDomainPeers?: import("./federation/crossDomainPeers.js").CrossDomainPeers | null;
+	// This Gateway's own operator/network display name (learned from evie's register reply),
+	// stamped on every local TeamInfo so a linked friend Domain sees the owner's self-set
+	// label over the discovery roster (D1). Absent/null when unset or pre-feature.
+	operatorName?: (() => string | null | undefined) | null;
 	// Whether a gateway id resolves to a HOME (single-owner allowlist) peer. Mirrors the
 	// sealer's home-first resolution on the SEND side, so a send to your own home Gateway
 	// whose id collides with a friend's gateway id is sealed v1 to home (the bare-string
@@ -187,6 +191,7 @@ export function createRoutes({
 	evieClient,
 	sealer,
 	crossDomainPeers,
+	operatorName,
 	resolvesHomeGateway,
 	touchShares,
 	isSharedToForReply,
@@ -407,6 +412,12 @@ export function createRoutes({
 		const teamsList: TeamInfo[] = [];
 		const seen = new Set<string>();
 		const isDevcontainer = (name: string) => offlineCatalog.has(name) || knownTeamPaths.has(name);
+		// This Gateway's own network label, stamped on every local session so a linked friend
+		// Domain sees the owner's self-set name over the discovery roster (D1). Spread in only
+		// when set, so a Gateway with no operator name emits the same minimal TeamInfo as before
+		// (the field is nullish on the wire; the friend's gateway is the authoritative source).
+		const ownOperatorName = operatorName?.();
+		const operatorNameField = ownOperatorName ? { operatorName: ownOperatorName } : {};
 
 		for (const [name, subs] of registry) {
 			if (name === "host") continue;
@@ -427,6 +438,7 @@ export function createRoutes({
 				team: name,
 				gatewayId: localGatewayId,
 				domainId: localDomainId,
+				...operatorNameField,
 				status: "online",
 				mode: getTeamMode(subs),
 				kind:
@@ -448,6 +460,7 @@ export function createRoutes({
 				team: name,
 				gatewayId: localGatewayId,
 				domainId: localDomainId,
+				...operatorNameField,
 				status: "available",
 				kind: "devcontainer",
 				queue_depth: 0,
@@ -496,7 +509,8 @@ export function createRoutes({
 				// Gateway knows which Domain it linked, while a friend on an older build might
 				// stamp none). The (domainId, gatewayId) pair is what the console groups by and
 				// the send path resolves the seal target from, since a gateway id collides
-				// across Domains.
+				// across Domains. The peer's own operatorName rides through the spread (the friend
+				// Gateway stamped its self-set network label), so Peers display the friend's name (D1).
 				return peerTeams.map((t) => ({ ...t, domainId: peer.friendDomainId }));
 			}),
 		);

@@ -1,4 +1,4 @@
-// SYNC-HASH: 480dacf23463d6d1155f6cf7ab04b356
+// SYNC-HASH: b7d3053cef0f252fe1e3d924edfbc704
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -93,11 +93,16 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 	// revocation bites a connected Gateway within seconds instead of at its next
 	// register. `domain` stays opaque here (this leaf imports nothing but zod); the
 	// Gateway validates it with DomainSnapshotSchema. `version` is the keyring hash the
-	// Gateway can echo to skip a redundant apply.
+	// Gateway can echo to skip a redundant apply. `operatorName` carries the Domain's
+	// current network display name so a rename pushed this way refreshes the owner's OWN
+	// Gateway immediately (the allowlist the snapshot feeds drops operatorName, so the
+	// rename would otherwise not reach teams()/discover until a reconnect). This frame only
+	// ever reaches the renamed Domain's own gateways, so the name is unambiguously theirs.
 	z.object({
 		type: z.literal("domain_update"),
 		domain: z.unknown(),
 		version: z.string().optional(),
+		operatorName: z.string().nullish(),
 	}),
 ]);
 

@@ -200,14 +200,19 @@ FINGERPRINT in the profile for first-root troubleshooting.
 
 ### Resolved decisions
 
-- **D1 (operator-name propagation) -> evie STORES + serves the name.** operatorName lives on evie's Domain
-  record; it is returned on the register snapshot + the discovery roster, so Peers see it. A rename is a
-  new OWNER-SIGNED console op (`SET_OPERATOR_NAME_V1`, versioned signing bytes) that evie CAS-merges onto
-  the Domain and then fans a `domain_update`, so a rename DISPATCHES live to linked Peers (no re-link).
-  DOCUMENTED content-blindness deviation: evie now holds a human display LABEL (it already knows the opaque
-  domainId + keys; under the cooperative/no-strangers threat model a label adds no meaningful exposure).
-  This is why D1-A beats riding the link artifact (which would pin the name at link time and need a
-  signing-bytes change + new Kotlin vectors).
+- **D1 (operator-name propagation) -> evie STORES + serves the name; OWNER-IMMEDIATE, PEER-LAZY.**
+  operatorName lives on evie's Domain record; it is returned on the register snapshot + the discovery
+  roster, so Peers see it. A rename is a new OWNER-SIGNED console op (`SET_OPERATOR_NAME_V1`, versioned
+  signing bytes) that evie CAS-merges onto the Domain and then pushes a `domain_update` to the renamed
+  Domain's OWN gateways. The owner's own gateway refreshes immediately (its `teams()`/discover output
+  reflects the new name with no reconnect, via the gateway's `onDomainUpdate` intake; the snapshot's
+  allowlist drops operatorName, so the name also rides the `domain_update` frame top-level). Linked PEERS
+  pick the rename up LAZILY, on their next discovery refresh (which already stamps each session with the
+  peer's current operatorName) - `broadcastDomainUpdate` is Domain-isolated and never crosses to a Peer's
+  gateway, and no new cross-Domain push frame is built. DOCUMENTED content-blindness deviation: evie now
+  holds a human display LABEL (it already knows the opaque domainId + keys; under the cooperative/no-
+  strangers threat model a label adds no meaningful exposure). This is why D1-A beats riding the link
+  artifact (which would pin the name at link time and need a signing-bytes change + new Kotlin vectors).
 - **D2 (pending-tenant lifecycle) -> AUTO-SWEEP + regenerate.** An unredeemed pending tenant auto-removes at
   the QR TTL (~1 day) so no orphan rootless Domains accumulate; while alive it shows "awaiting setup" in the
   host list (Removable early). QR REGENERATE is allowed: minting a fresh nonce on the entry invalidates the

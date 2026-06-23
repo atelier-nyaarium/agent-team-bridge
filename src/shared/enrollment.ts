@@ -1,4 +1,4 @@
-// SYNC-HASH: 81fdcac659382561dd6547714faab729
+// SYNC-HASH: 61a169549b3e5b9d24866737cb551981
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -153,7 +153,8 @@ export const SignedXDomainLinkRevocationSchema = z
 //    carrying the one-time QR nonce; evie roots the pending Domain at it, idempotent on
 //    the same key, refusing a re-root at a different key.
 //  - set_operator_name: OWNER-signed (the rooted owner of the Domain); evie CAS-merges
-//    the rename onto the Domain record and fans it to linked Peers.
+//    the rename onto the Domain record and pushes it to the Domain's own gateways (so the
+//    owner's gateway reflects it at once); linked Peers see it on their next discovery refresh.
 //
 //  Each signing-bytes preimage is the SAME versioned, newline-joined, fixed-order
 //  encoding as admissionSigningBytes: the slug-constrained `domainId` (the
@@ -258,8 +259,11 @@ export const SignedFirstRootSchema = z
 	})
 	.meta({ id: "SignedFirstRoot" });
 
-/** The owner's request to rename their Domain's operator name (owner-signed). evie
- * CAS-merges it and fans a domain_update to linked Peers, so a rename dispatches live. */
+/** The owner's request to rename their Domain's operator name (owner-signed). evie CAS-merges
+ * it and pushes a domain_update to the renamed Domain's OWN gateways, so the rename takes effect
+ * on the owner's own gateway immediately (its discover output reflects the new name without a
+ * reconnect). Linked Peers pick the rename up lazily, on their next discovery refresh (which
+ * stamps each session with the owner's current operatorName). */
 export const SetOperatorNameSchema = z
 	.object({
 		domainId: slugField(),
@@ -300,9 +304,10 @@ export const EnrollOpSchema = z
 		z.object({ kind: z.literal("revoke_xdomain_link"), revocation: SignedXDomainLinkRevocationSchema }),
 		// Friend cross-Domain onboarding: the operator pre-stages a pending tenant
 		// (provision_tenant) or drops it (remove_tenant), and the rooted owner renames the
-		// network (set_operator_name). The friend's first_root roots the Domain through the
-		// gateway's PENDING_ENROLL console path (the `first_root` ConsoleOp), not this evie
-		// enroll surface, because pre-root the friend has no admission to authenticate here.
+		// network (set_operator_name). The friend's first_root is NOT on this enroll surface
+		// either: a pending Domain has no gateway, so the friend's app POSTs the SignedFirstRoot
+		// DIRECTLY to evie's console-bridge firstRoot intake (it carries no admission to
+		// authenticate here pre-root, and the one-time invite nonce is its authorization).
 		z.object({ kind: z.literal("provision_tenant"), provision: SignedProvisionTenantSchema }),
 		z.object({ kind: z.literal("remove_tenant"), removal: SignedRemoveTenantSchema }),
 		z.object({ kind: z.literal("set_operator_name"), rename: SignedSetOperatorNameSchema }),

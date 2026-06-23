@@ -60,7 +60,10 @@ interface Harness {
 	handler: ReturnType<typeof createConsoleHandler>;
 }
 
-function makeHarness(overrides: Partial<ConsoleRoutes> = {}): Harness {
+function makeHarness(
+	overrides: Partial<ConsoleRoutes> = {},
+	deps: { domainStatus?: () => string | undefined } = {},
+): Harness {
 	const registry: TeamRegistry = new Map();
 	const conversationRegistry: ConversationRegistry = new Map();
 	const mailboxStore = new DeviceMailboxStore();
@@ -98,6 +101,7 @@ function makeHarness(overrides: Partial<ConsoleRoutes> = {}): Harness {
 		mailboxStore,
 		localGatewayId: "test-host",
 		routes,
+		domainStatus: deps.domainStatus,
 	});
 	return { registry, conversationRegistry, mailboxStore, sendCalls, respondCalls, handler };
 }
@@ -161,6 +165,47 @@ describe("createConsoleHandler", () => {
 		expect(peer.data.virtual).toBe(true);
 		expect(peer.data.mode).toBe("channel");
 		expect(h.conversationRegistry.get("conv-pixel")).toBe(peer);
+	});
+
+	it("register carries the Gateway's domainStatus so the app knows to first-root vs provision", async () => {
+		const h = makeHarness({}, { domainStatus: () => "pending" });
+		const reply = await h.handler.handleFrame(frame({ kind: "register" }));
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toMatchObject({ device: "pixel", domainStatus: "pending" });
+	});
+
+	it("register OMITS domainStatus when the Gateway has none (legacy already-rooted path)", async () => {
+		const h = makeHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "register" }));
+		expect(reply.ok).toBe(true);
+		expect(reply.result).not.toHaveProperty("domainStatus");
+	});
+
+	it("register DROPS a garbage domainStatus (boundary-validated against the closed union)", async () => {
+		const h = makeHarness({}, { domainStatus: () => "bogus" });
+		const reply = await h.handler.handleFrame(frame({ kind: "register" }));
+		expect(reply.ok).toBe(true);
+		expect(reply.result).not.toHaveProperty("domainStatus");
+	});
+
+	it("rejects a first_root op: it is decided at evie, never through a Gateway", async () => {
+		const h = makeHarness();
+		const firstRoot = {
+			kind: "first_root" as const,
+			firstRoot: {
+				firstRoot: {
+					domainId: "carol",
+					ownerSignPub: "spub",
+					ownerBoxPub: "bpub",
+					nonce: "bm9uY2U=",
+					issuedAt: 1,
+				},
+				signature: "sig",
+			},
+		};
+		const reply = await h.handler.handleFrame(frame(firstRoot));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("evie");
 	});
 
 	it("rejects reserved device names", async () => {
