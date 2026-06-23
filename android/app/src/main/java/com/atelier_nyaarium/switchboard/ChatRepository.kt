@@ -56,9 +56,11 @@ data class ScannedGateway(
  * sealed bundle to hand-carry when LAN delivery was not possible (paste fallback). */
 data class EnrollDelivery(val admitted: Boolean, val message: String, val pasteBundle: String?)
 
-/** A linked friend Domain row for the Federation hub: the Domain id (also its label until the
- * owner renames it), how many of its sessions are visible to me, and whether any is online. */
-data class LinkedDomain(val domainId: String, val sessionCount: Int, val online: Boolean)
+/** A linked friend Domain row for the Federation hub: the Domain id (plumbing), the friend's
+ * network display name (their self-set operator name, propagated over discovery - shown instead of
+ * the opaque domainId when known), how many of its sessions are visible to me, and whether any is
+ * online. `operatorName` is null until a discovery session for the peer carries it. */
+data class LinkedDomain(val domainId: String, val operatorName: String?, val sessionCount: Int, val online: Boolean)
 
 /** A requester-side pairing in flight: the one-time pin the requester minted (passed back to
  * confirm) and the Gateway's request result (the SAS + both sides' keys). */
@@ -153,6 +155,14 @@ data class ChatState(
 	 * offline and has shared nothing back - the gap that otherwise dead-locks the post-link sharing
 	 * flow. Refreshed alongside teams; an empty set just falls back to discovery-only. */
 	val linkedPeerDomains: Set<String> = emptySet(),
+	/** This owner's own network display name (the operator name), for the profile field and the
+	 * MY NETWORK card. Seeded from the local cache and refreshed from discovery's home-session
+	 * operatorName; empty until the owner sets one. */
+	val operatorName: String = "",
+	/** True once this device has first-rooted a pending friend Domain from its invite blob. Mirrors
+	 * store.firstRooted into the UI state so the empty board can tell a friend who is set up but has
+	 * no host yet (-> the Setting-up-a-host pointer) from an operator who has not admitted a Gateway. */
+	val firstRooted: Boolean = false,
 ) {
 	/** Sessions shows live teams plus any team we already have a thread with
 	 * (agent-initiated). A thread-only peer is gone from the bridge and cannot be
@@ -196,6 +206,12 @@ data class ChatState(
 	 * (one match site, the same derive-from-state pattern as health). */
 	val needsGateway: Boolean
 		get() = error?.startsWith("Add a Gateway") == true
+
+	/** Which no-gateway empty-board guidance applies: the friend's just-set-up "bring up a host"
+	 * state vs the operator's Add-a-Gateway onboarding, split off the first-root latch. The board
+	 * keys its no-gateway copy + CTA off this instead of needsGateway alone. */
+	val noGatewayState: NoGatewayState
+		get() = FriendOnboarding.noGatewayState(needsGateway, firstRooted)
 
 	/** Last local activity time for a thread, for the session card subtitle. */
 	fun lastActivity(team: String): Long? = threads[team]?.maxByOrNull { it.at }?.at
@@ -393,6 +409,8 @@ class ChatRepository(
 			deviceName = currentDeviceName(),
 			labels = loadPersistedLabels(),
 			localGatewayId = localGatewayId,
+			operatorName = store.operatorName,
+			firstRooted = store.firstRooted,
 		),
 	)
 	val state: StateFlow<ChatState> = _state
@@ -647,9 +665,15 @@ class ChatRepository(
 		// against a possibly re-rooted Domain, so clear the console-admitted gate to re-submit
 		// this Console's admission on the next connect.
 		store.consoleAdmitted = false
+		// A re-import may carry a fresh invite (a friend re-onboarding, or a regenerated QR), so
+		// clear the first-root latch: the next connect re-evaluates the blob's pendingTenant and
+		// re-roots if present. An ordinary already-rooted blob (no pendingTenant) skips the step.
+		store.firstRooted = false
 		client = null
 		sttsClient = null
-		_state.update { it.copy(provisioned = true, error = null, deviceName = prov.device) }
+		// firstRooted=false mirrors the latch reset above so a re-imported fresh invite does not show
+		// the "already set up" host pointer before the next connect re-evaluates the new pendingTenant.
+		_state.update { it.copy(provisioned = true, error = null, deviceName = prov.device, firstRooted = false) }
 	}
 
 	suspend fun connect() = withContext(Dispatchers.IO) {
@@ -675,6 +699,16 @@ class ChatRepository(
 				return@withContext
 			}
 			DebugLog.log("Connect", "apiReachable ok")
+			// First-root step (friend invite): a blob carrying a pendingTenant means this app must
+			// root that pending Domain at its silently-generated owner key BEFORE submitting its own
+			// admission (the admission is owner-signed, and evie only trusts it once the Domain is
+			// rooted at that owner key). A reject (expired / already-claimed invite) is terminal -
+			// the root was decided, not dropped - so stop with the friendly guidance.
+			if (!firstRootIfPending()) return@withContext
+			// Reflect the first-root latch into the UI state now, so if the steps below fail with the
+			// no-gateway cause (a freshly-rooted friend has no host yet) the empty board shows the
+			// "set up, now bring up a host" guidance rather than the operator Add-a-Gateway CTA.
+			if (store.firstRooted && !_state.value.firstRooted) _state.update { it.copy(firstRooted = true) }
 			// Submit this Console's own admission before the sealed register, so the Gateway
 			// has an owner-signed reason to trust its sealed ops. Bearer-gated, so it lands
 			// even though the Console is not admitted yet. A THROW here (e.g. the Keystore-backed
@@ -728,6 +762,7 @@ class ChatRepository(
 					enrollingSince = 0L,
 				)
 			}
+			refreshOperatorNameFromTeams()
 			DebugLog.log("Connect", "connected gateway=${localGatewayId.ifEmpty { "?" }}")
 		} catch (e: Exception) {
 			val (cause, kind) = classifyConnError(e)
@@ -756,6 +791,50 @@ class ChatRepository(
 			// DEBUG: stream whatever this attempt logged, even on the failure paths that return before
 			// the poll loop's own flush would run. No-op in release (flushToIngest is BuildConfig.DEBUG).
 			DebugLog.flushToIngest()
+		}
+	}
+
+	/** First-root a pending friend Domain if the imported blob carries one (and it is not yet
+	 * rooted). Builds a FirstRoot over this device's silent owner key + the invite nonce, self-signs
+	 * it (FederationManager), and POSTs it to evie's console-bridge firstRoot intake. Returns true to
+	 * let connect() proceed (nothing pending, already rooted, or a fresh root just succeeded), false
+	 * to abort connect after surfacing a terminal reject (an expired / already-claimed invite, which
+	 * does not self-heal). Idempotent: the firstRooted latch skips the round-trip on later connects. */
+	private fun firstRootIfPending(): Boolean {
+		val prov = runCatching { store.load()?.let { Provisioning.parse(it) } }.getOrNull() ?: return true
+		return when (val decision = FriendOnboarding.decide(prov, store.firstRooted)) {
+			is FirstRootDecision.NotPending -> true
+			is FirstRootDecision.Root -> {
+				DebugLog.log("FirstRoot", "pending domain=${decision.domainId}; rooting at silent owner key")
+				val signed = federation.signFirstRoot(decision.domainId, decision.nonce, System.currentTimeMillis())
+				val result = runCatching { client().firstRoot(signed) }.getOrElse {
+					// A transport failure here is NOT terminal: the root was not decided, only
+					// unreachable. Surface a transient cause and let the poll loop retry.
+					val (cause, _) = classifyConnError(it)
+					_state.update { s -> s.copy(status = "connecting", error = cause, connected = false, enrollingSince = 0L) }
+					return false
+				}
+				if (result.ok) {
+					store.firstRooted = true
+					DebugLog.log("FirstRoot", "rooted ok domain=${decision.domainId}")
+					true
+				} else {
+					// A transient evie reject (clock skew, CAS persist contention) leaves the latch
+					// false and the poll loop re-attempts, so it surfaces as "connecting" (auto-retry),
+					// not a terminal "error" that the user reads as a dead end.
+					val reject = FriendOnboarding.classifyFirstRootError(result.error)
+					DebugLog.log("FirstRoot", "rejected (transient=${reject.transient}): ${result.error?.take(120)}")
+					_state.update {
+						it.copy(
+							status = if (reject.transient) "connecting" else "error",
+							error = reject.message,
+							connected = false,
+							enrollingSince = 0L,
+						)
+					}
+					false
+				}
+			}
 		}
 	}
 
@@ -885,7 +964,159 @@ class ChatRepository(
 	fun localDomainId(): String {
 		val gw = localGatewayId
 		val fromLocal = _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
-		return fromLocal?.ifEmpty { null } ?: "home"
+		return fromLocal?.ifEmpty { null } ?: FriendOnboarding.DEFAULT_DOMAIN_ID
+	}
+
+	////////////////////////////////
+	//  Operator name (this owner's network display name)
+
+	/** This owner's current network display name, for the profile field + the MY NETWORK card. The
+	 * cache (refreshed from discovery) is authoritative for display; empty until the owner sets one. */
+	fun localOperatorName(): String = _state.value.operatorName
+
+	/** Refresh the cached operator name from discovery's HOME session (the gateway stamps each
+	 * session's operatorName; the local Gateway's is this owner's own). A no-op when no home session
+	 * carries one yet, so a board with only peer sessions never blanks the cached name. */
+	private fun refreshOperatorNameFromTeams() {
+		val gw = localGatewayId
+		val home = _state.value.teams.firstOrNull {
+			(it.gatewayId.ifEmpty { gw }) == gw && !it.operatorName.isNullOrEmpty()
+		}?.operatorName ?: return
+		if (home != store.operatorName) store.operatorName = home
+		if (home != _state.value.operatorName) _state.update { it.copy(operatorName = home) }
+	}
+
+	/** Rename this owner's own network: owner-sign a SET_OPERATOR_NAME op over the home Domain and
+	 * submit it evie-direct. On success cache the new name + reflect it immediately (evie pushes a
+	 * domain_update to this owner's gateways, so discovery will confirm it on the next refresh). */
+	suspend fun setOperatorName(name: String): Result<Unit> = withContext(Dispatchers.IO) {
+		val trimmed = name.trim()
+		if (trimmed.isEmpty()) return@withContext Result.failure(IllegalArgumentException("Name cannot be empty"))
+		runCatching {
+			val signed = federation.signSetOperatorName(localDomainId(), trimmed, System.currentTimeMillis())
+			val result = client().enroll(EnrollOp.SetOperatorName(signed))
+			if (!result.ok) error(result.error ?: "rename rejected")
+			store.operatorName = trimmed
+			_state.update { it.copy(operatorName = trimmed) }
+		}
+	}
+
+	////////////////////////////////
+	//  Networks you host (guest tenants the operator pre-stages)
+
+	/** The guest tenants this owner has staged, each with its discovery-derived state
+	 * (awaiting-setup -> offline -> online). The locally-persisted rows supply the label + the
+	 * invite nonce (so a row can re-render its QR before the friend's gateway ever appears);
+	 * discovery upgrades the state once the friend roots + brings a gateway online. */
+	fun hostedTenants(): List<HostedTenant> {
+		val stored = loadHostedTenants()
+		val teams = _state.value.teams
+		return stored.map { it.copy(state = FriendOnboarding.hostedState(it.domainId, teams)) }
+	}
+
+	/** Stage a new guest tenant: mint an opaque domainId, owner-sign a provision_tenant op, submit
+	 * it evie-direct, and persist the row with the one-time invite nonce evie returns (the QR is
+	 * built from it). Returns the new row, or a failure carrying evie's reason. */
+	suspend fun provisionTenant(operatorName: String): Result<HostedTenant> = withContext(Dispatchers.IO) {
+		val label = operatorName.trim()
+		if (label.isEmpty()) return@withContext Result.failure(IllegalArgumentException("Name cannot be empty"))
+		runCatching {
+			val domainId = federation.newDomainId()
+			val signed = federation.signProvisionTenant(domainId, label, System.currentTimeMillis())
+			val result = client().provisionTenant(signed)
+			val nonce = if (result.ok) result.nonce else null
+			if (nonce.isNullOrEmpty()) error(result.error ?: "no invite nonce returned")
+			val row = HostedTenant(domainId, label, nonce, HostedTenantState.AWAITING_SETUP)
+			upsertHostedTenant(row)
+			row
+		}
+	}
+
+	/** Regenerate a pending tenant's one-time invite (D2): re-submit provision_tenant for the SAME
+	 * domainId, which mints a fresh nonce at evie (invalidating the prior one) without a remove +
+	 * re-add. Returns the refreshed row. */
+	suspend fun regenerateInvite(domainId: String, operatorName: String): Result<HostedTenant> =
+		withContext(Dispatchers.IO) {
+			val label = operatorName.trim().ifEmpty { return@withContext Result.failure(IllegalArgumentException("Name cannot be empty")) }
+			runCatching {
+				val signed = federation.signProvisionTenant(domainId, label, System.currentTimeMillis())
+				val result = client().provisionTenant(signed)
+				val nonce = if (result.ok) result.nonce else null
+				if (nonce.isNullOrEmpty()) error(result.error ?: "no invite nonce returned")
+				val row = HostedTenant(domainId, label, nonce, HostedTenantState.AWAITING_SETUP)
+				upsertHostedTenant(row)
+				row
+			}
+		}
+
+	/** Build the invite blob a hosted tenant's QR encodes: the CONSOLE-bridge transport creds the
+	 * operator was itself provisioned with (this owner's own blob) plus the pending tenant's
+	 * {domainId, nonce}. The friend reaches the SAME shared evie console-bridge as the operator, so it
+	 * first-roots over the console-bridge /relay path; sourcing the operator's own console-bridge SA +
+	 * CONSOLE_BRIDGE_TOKEN is what makes the friend's first_root authorize there. Sourcing the home
+	 * Gateway's bootstrap-transport instead would hand the friend the gateway-bridge SA + BRIDGE_TOKEN,
+	 * which the console-bridge service-proxy RBAC-403s and evie token-401s. The blob omits service/port
+	 * so the friend defaults to evie-console-bridge:20004. The JSON is exactly what the paste /
+	 * file-import path also accepts. */
+	suspend fun buildInviteBlob(tenant: HostedTenant): Result<String> = withContext(Dispatchers.IO) {
+		runCatching {
+			val blob = store.load() ?: error("This device is not provisioned. Re-import your setup blob first.")
+			val prov = Provisioning.parse(blob)
+			val obj = JSONObject()
+				.put("apiUrl", prov.apiUrl)
+				.put("saToken", prov.saToken)
+				.put("caPem", prov.caPem)
+				.put("appToken", prov.appToken)
+				.put("pendingTenant", JSONObject().put("domainId", tenant.domainId).put("nonce", tenant.nonce))
+			obj.toString()
+		}
+	}
+
+	/** Drop a hosted tenant: owner-sign a remove_tenant op, submit it evie-direct, and forget the
+	 * local row. evie deletes the Domain slice (and evicts a live guest gateway). */
+	suspend fun removeHostedTenant(domainId: String): Result<Unit> = withContext(Dispatchers.IO) {
+		runCatching {
+			val signed = federation.signRemoveTenant(domainId, System.currentTimeMillis())
+			val result = client().enroll(EnrollOp.RemoveTenant(signed))
+			if (!result.ok) error(result.error ?: "remove rejected")
+			deleteHostedTenant(domainId)
+		}
+	}
+
+	private fun upsertHostedTenant(row: HostedTenant) {
+		val rows = loadHostedTenants().filterNot { it.domainId == row.domainId } + row
+		persistHostedTenants(rows)
+	}
+
+	private fun deleteHostedTenant(domainId: String) {
+		persistHostedTenants(loadHostedTenants().filterNot { it.domainId == domainId })
+	}
+
+	private fun loadHostedTenants(): List<HostedTenant> {
+		val json = store.loadHostedTenants() ?: return emptyList()
+		// Parse skip-and-keep per row: a single malformed entry (a write tear, a manual edit) must not
+		// collapse the whole list to empty, because the next upsert/delete would then persist that loss
+		// and permanently discard every other staged tenant. One bad row is dropped; the rest survive.
+		val arr = runCatching { JSONArray(json) }.getOrNull() ?: return emptyList()
+		return (0 until arr.length()).mapNotNull { i ->
+			runCatching {
+				val o = arr.getJSONObject(i)
+				HostedTenant(
+					domainId = o.getString("domainId"),
+					operatorName = o.getString("operatorName"),
+					nonce = o.getString("nonce"),
+					state = HostedTenantState.AWAITING_SETUP,
+				)
+			}.getOrNull()
+		}
+	}
+
+	private fun persistHostedTenants(rows: List<HostedTenant>) {
+		val arr = JSONArray()
+		for (r in rows) {
+			arr.put(JSONObject().put("domainId", r.domainId).put("operatorName", r.operatorName).put("nonce", r.nonce))
+		}
+		runCatching { store.saveHostedTenants(arr.toString()) }
 	}
 
 	/** The linked friend Domains. The trust roster comes from the home Gateway's cross-Domain peer
@@ -1181,7 +1412,10 @@ class ChatRepository(
 	}.getOrDefault(false)
 
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
-		runCatching { client().teams(localGatewayId) }.onSuccess { t -> _state.update { it.copy(teams = t) } }
+		runCatching { client().teams(localGatewayId) }.onSuccess { t ->
+			_state.update { it.copy(teams = t) }
+			refreshOperatorNameFromTeams()
+		}
 		// Also refresh the cross-Domain peer roster so the Federation PEERS list shows a freshly-linked
 		// peer that has no discovery sessions yet. Best-effort + only when federation is reachable;
 		// folded into the same refresh so a board update and the peer set stay consistent.
@@ -1397,6 +1631,7 @@ class ChatRepository(
 						lastTeamsAt = now
 						runCatching { client().teams(localGatewayId) }.onSuccess { t ->
 							_state.update { it.copy(teams = t) }
+							refreshOperatorNameFromTeams()
 						}
 					}
 					// Visible: long-poll (the hold IS the wait; re-poll immediately).

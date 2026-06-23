@@ -26,7 +26,12 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainShareResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnlinkResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnshareResult
 import com.atelier_nyaarium.switchboard.proto.GatewayTransport
+import com.atelier_nyaarium.switchboard.proto.PendingTenantRef
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
+import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
+import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
+import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
+import com.atelier_nyaarium.switchboard.proto.SignedSetOperatorName
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
 import java.io.ByteArrayInputStream
@@ -76,6 +81,10 @@ data class Provisioning(
 	val gatewayId: String = "",
 	val gatewaySignPub: String = "",
 	val gatewayBoxPub: String = "",
+	/** Present on a friend INVITE blob: the pending Domain id + the one-time invite nonce the
+	 * app first-roots with. Absent on an ordinary (already-rooted) operator blob, which just
+	 * provisions the console. The presence of this field IS what distinguishes the two paths. */
+	val pendingTenant: PendingTenantRef? = null,
 ) {
 	companion object {
 		fun parse(blob: String): Provisioning {
@@ -96,6 +105,7 @@ data class Provisioning(
 				gatewayId = p.gatewayId ?: "",
 				gatewaySignPub = p.gatewaySignPub ?: "",
 				gatewayBoxPub = p.gatewayBoxPub ?: "",
+				pendingTenant = p.pendingTenant,
 			)
 		}
 	}
@@ -122,6 +132,10 @@ data class Team(
 	// its Domain. Null for a pre-federation Gateway and for the locally-synthesized ended
 	// session (it has no live wire record).
 	val domainId: String? = null,
+	// The owning Domain's network display name (its operator name), stamped by the gateway's
+	// discover for both home and peer sessions. The Peers list shows this instead of the opaque
+	// domainId. Null for a pre-feature gateway or a Domain that has not set a name yet.
+	val operatorName: String? = null,
 ) {
 	/** Short local name shown in the UI: the tail after the gateway qualifier. */
 	val displayName: String get() = TeamAddress.parse(name, "").name
@@ -149,6 +163,19 @@ private data class EnrollEnvelope(
 /** A retryable bounce body (offline / malformed), distinct from an EnrollResult. */
 @Serializable
 private data class BounceBody(val error: String? = null, val retryable: Boolean = false)
+
+/** The first-root POST body: a top-level `firstRoot` field routes to evie's console-bridge
+ * firstRoot intake (decided AT evie, never relayed to a Gateway), the symmetric twin of
+ * `enrollOp` routing to the enrollment coordinator. */
+@Serializable
+private data class FirstRootEnvelope(val firstRoot: SignedFirstRoot)
+
+/** evie's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the
+ * minted one-time invite `nonce` (the operator's app builds the friend's QR from it). The wire
+ * EnrollResult schema omits `nonce`, so this is a local richer decode (ignoreUnknownKeys keeps
+ * it forward-compatible). */
+@Serializable
+data class ProvisionTenantResult(val ok: Boolean, val error: String? = null, val nonce: String? = null)
 
 /** Decode posture for everything off the wire: unknown fields are tolerated
  * (additive protocol). Encode posture: the default config omits null-defaulted
@@ -345,6 +372,66 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
+	/** First-root a PENDING friend Domain at this device's silently-generated owner key. evie
+	 * decides it directly (self-signed frame + one-time invite nonce), with no gateway and no
+	 * admission, so it works before any Gateway is admitted. evie answers with an EnrollResult
+	 * (2xx ok, 400 reject, e.g. an expired or already-claimed invite). A reject is NOT retryable
+	 * (the root was decided), so the caller surfaces the message rather than spinning. */
+	fun firstRoot(signed: SignedFirstRoot): EnrollResult {
+		val envelope = FirstRootEnvelope(signed)
+		val req = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(wireJson.encodeToString(FirstRootEnvelope.serializer(), envelope).toRequestBody(JSON))
+			.build()
+		DebugLog.log("FirstRoot", "POST $proxyBase/relay domain=${signed.firstRoot.domainId}")
+		val resp =
+			try {
+				client.newCall(req).execute()
+			} catch (e: Exception) {
+				DebugLog.log("FirstRoot", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+				throw e
+			}
+		resp.use {
+			val text = resp.body?.string().orEmpty()
+			DebugLog.log("FirstRoot", "resp HTTP ${resp.code} ${text.take(160)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<EnrollResult>(text) }
+					.getOrElse { EnrollResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<EnrollResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return EnrollResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
+	/** Submit an operator-signed provision_tenant enroll op and decode the minted one-time invite
+	 * nonce evie returns (the operator's app builds the friend's QR from it). Same evie-direct path
+	 * as enroll(); the only difference is the richer result decode (the wire EnrollResult omits the
+	 * nonce, so this reads it directly). */
+	fun provisionTenant(signed: SignedProvisionTenant): ProvisionTenantResult {
+		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), EnrollOp.ProvisionTenant(signed))
+		val req = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON))
+			.build()
+		DebugLog.log("Enroll", "POST $proxyBase/relay op=ProvisionTenant")
+		client.newCall(req).execute().use { resp ->
+			val text = resp.body?.string().orEmpty()
+			DebugLog.log("Enroll", "provision resp HTTP ${resp.code} ${text.take(120)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<ProvisionTenantResult>(text) }
+					.getOrElse { ProvisionTenantResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<ProvisionTenantResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return ProvisionTenantResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
 	/** The reply's result payload decoded as T, or an error for a failed op. */
 	private inline fun <reified T> resultOf(body: ConsoleReplyBody, op: String): T {
 		if (!body.ok) error("$op failed: ${body.error ?: "unknown error"}")
@@ -385,6 +472,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 				kind = it.kind ?: "loose",
 				version = it.version,
 				domainId = it.domainId,
+				operatorName = it.operatorName,
 			)
 		}
 	}

@@ -4,14 +4,23 @@ import com.atelier_nyaarium.switchboard.crypto.AdmissionCrypto
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.crypto.OwnerBackup
+import com.atelier_nyaarium.switchboard.crypto.ProvisionOpsCrypto
 import com.atelier_nyaarium.switchboard.crypto.XDomainLinkCrypto
 import com.atelier_nyaarium.switchboard.crypto.canonicalSnapshot
 import com.atelier_nyaarium.switchboard.proto.Admission
 import com.atelier_nyaarium.switchboard.proto.DomainSnapshot
+import com.atelier_nyaarium.switchboard.proto.FirstRoot
+import com.atelier_nyaarium.switchboard.proto.ProvisionTenant
+import com.atelier_nyaarium.switchboard.proto.RemoveTenant
 import com.atelier_nyaarium.switchboard.proto.Revocation
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
+import com.atelier_nyaarium.switchboard.proto.SetOperatorName
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
+import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
+import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
+import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRevocation
+import com.atelier_nyaarium.switchboard.proto.SignedSetOperatorName
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLinkEdge
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLinkRevocation
@@ -243,5 +252,52 @@ class FederationManager(private val store: ProvisioningStore) {
 		val current = keyring().snapshot
 		val next = canonicalSnapshot(current.ownerSignPub, current.admissions, current.revocations + signed)
 		store.saveDomain(json.encodeToString(DomainSnapshot.serializer(), next), store.loadDomainVersion())
+	}
+
+	////////////////////////////////
+	//  Friend cross-Domain onboarding (pending tenant + first-root + operator name)
+
+	/** A fresh opaque Domain id (a slug: lowercase hex, never shown to the human - pure
+	 * plumbing). 16 random bytes hex-encoded is well under the 64-char slug bound and collides
+	 * negligibly, so the operator never has to choose or check one. */
+	fun newDomainId(): String {
+		val bytes = ByteArray(16).also { rnd.nextBytes(it) }
+		return bytes.joinToString("") { "%02x".format(it) }
+	}
+
+	/** Self-sign this device's first-root of a PENDING Domain at its silently-generated owner key.
+	 * No admission exists yet, so the artifact is self-signed by the fresh owner key (the verifier
+	 * checks the signature against the embedded ownerSignPub); the one-time invite `nonce` from the
+	 * scanned blob is the authorization. evie roots the Domain idempotently on the same key and
+	 * refuses a re-root at a different one. */
+	fun signFirstRoot(domainId: String, nonce: String, nowMs: Long): SignedFirstRoot {
+		val owner = ownerIdentity()
+		val firstRoot = FirstRoot(domainId, owner.sign.pub, owner.box.pub, nonce, nowMs)
+		return ProvisionOpsCrypto.signFirstRoot(firstRoot, owner.sign.priv)
+	}
+
+	/** Owner-sign a request to pre-stage a friend's PENDING tenant: an opaque domainId + a network
+	 * display label, NO owner root. The signing nonce is the anti-replay token for this request;
+	 * evie mints the SEPARATE one-time invite nonce (carried in the QR) and returns it. */
+	fun signProvisionTenant(domainId: String, operatorName: String, nowMs: Long): SignedProvisionTenant {
+		val owner = ownerIdentity()
+		val provision = ProvisionTenant(domainId, operatorName, nowMs, nonce())
+		return ProvisionOpsCrypto.signProvision(provision, owner.sign.priv, owner.sign.pub)
+	}
+
+	/** Owner-sign a request to drop a tenant (pending or rooted) by its Domain id. */
+	fun signRemoveTenant(domainId: String, nowMs: Long): SignedRemoveTenant {
+		val owner = ownerIdentity()
+		val removal = RemoveTenant(domainId, nowMs, nonce())
+		return ProvisionOpsCrypto.signRemove(removal, owner.sign.priv, owner.sign.pub)
+	}
+
+	/** Owner-sign a rename of this owner's own Domain network display name. evie CAS-merges it onto
+	 * the Domain record and pushes it to the Domain's gateways. The `domainId` is this owner's own
+	 * (rooted home) Domain; evie verifies the signature against the Domain's pinned owner key. */
+	fun signSetOperatorName(domainId: String, operatorName: String, nowMs: Long): SignedSetOperatorName {
+		val owner = ownerIdentity()
+		val rename = SetOperatorName(domainId, operatorName, nowMs, nonce())
+		return ProvisionOpsCrypto.signSetOperatorName(rename, owner.sign.priv, owner.sign.pub)
 	}
 }

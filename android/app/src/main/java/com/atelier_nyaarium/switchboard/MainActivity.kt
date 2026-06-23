@@ -184,6 +184,13 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	var showFederation by remember { mutableStateOf(false) }
 	var federationPeer by remember { mutableStateOf<String?>(null) }
 	var showLinkWizard by remember { mutableStateOf(false) }
+	// Host-a-friend overlays: the "Networks you host" list, and the open hosted tenant's detail (its
+	// domainId, or null). Kept apart from the peer overlays so hosting never reads as linking.
+	var showHostNetworks by remember { mutableStateOf(false) }
+	var hostTenant by remember { mutableStateOf<String?>(null) }
+	// The tucked host-setup manual, reachable post-provision from the empty board when a friend has
+	// rooted but has no gateway yet (the "bring up a host" pointer).
+	var showHostHelp by remember { mutableStateOf(false) }
 	var unlocked by remember { mutableStateOf(false) }
 
 	// WebView pool lives at App scope (never leaves composition) so each thread's
@@ -272,6 +279,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			showFederation = false
 			federationPeer = null
 			showLinkWizard = false
+			showHostNetworks = false
+			hostTenant = null
+			showHostHelp = false
 			openTeam = team
 			openTeamRequest.value = null
 		}
@@ -290,10 +300,14 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// System back navigates within the app (thread/settings/manage -> back) instead of exiting.
 	BackHandler(
 		enabled = openTeam != null || showSettings || showManage || showAddGateway ||
-			showFederation || federationPeer != null || showLinkWizard,
+			showFederation || federationPeer != null || showLinkWizard || showHostNetworks ||
+			hostTenant != null || showHostHelp,
 	) {
 		when {
 			showLinkWizard -> showLinkWizard = false
+			showHostHelp -> showHostHelp = false
+			hostTenant != null -> hostTenant = null
+			showHostNetworks -> showHostNetworks = false
 			federationPeer != null -> federationPeer = null
 			showFederation -> showFederation = false
 			showAddGateway -> showAddGateway = false
@@ -305,8 +319,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	}
 
 	when {
-		!state.provisioned -> ProvisionScreen(repo = repo, onProvision = { scope.launch { repo.provision(it) } })
+		!state.provisioned ->
+			ProvisionScreen(repo = repo, state = state, onProvision = { scope.launch { repo.provision(it) } })
 		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
+		showHostHelp -> HostSetupHelpScreen(onBack = { showHostHelp = false })
 		showLinkWizard ->
 			LinkWizard(
 				repo = repo,
@@ -320,12 +336,27 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onBack = { federationPeer = null },
 				onUnlinked = { federationPeer = null },
 			)
+		hostTenant != null ->
+			HostedTenantDetailScreen(
+				repo = repo,
+				domainId = hostTenant!!,
+				onBack = { hostTenant = null },
+				onRemoved = { hostTenant = null },
+				onLink = { showLinkWizard = true },
+			)
+		showHostNetworks ->
+			HostNetworksScreen(
+				repo = repo,
+				onBack = { showHostNetworks = false },
+				onTenant = { hostTenant = it },
+			)
 		showFederation ->
 			FederationScreen(
 				repo = repo,
 				onBack = { showFederation = false },
 				onLink = { showLinkWizard = true },
 				onPeer = { federationPeer = it },
+				onHostNetworks = { showHostNetworks = true },
 			)
 		showAddGateway ->
 			AddGatewayScreen(repo = repo, onBack = { showAddGateway = false }, onDone = { showAddGateway = false })
@@ -413,6 +444,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					showSettings = true
 				},
 				onManage = { showManage = true },
+				onHostHelp = { showHostHelp = true },
 				onOpen = { team ->
 					repo.openThread(team)
 					openTeam = team
@@ -446,24 +478,36 @@ fun LockScreen(onUnlock: () -> Unit) {
 	}
 }
 
+/** The neutral fresh-open: one "Scan your setup code" screen (Scan QR / Paste / Open file). The
+ * SAME import handles BOTH an operator provisioning blob AND a friend invite; the app distinguishes
+ * them on connect (a pending tenant first-roots the silently-generated owner key, an already-rooted
+ * Domain just provisions the console), so the human never picks a path and no path labels appear.
+ * The host-setup instructions live behind a tucked "Setting up a host?" link a friend never needs. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProvisionScreen(repo: ChatRepository, onProvision: (String) -> Unit) {
+fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String) -> Unit) {
 	val context = LocalContext.current
 	var status by remember { mutableStateOf("") }
-	var step by remember { mutableStateOf(1) }
-	// Owner identity, minted-or-loaded on first read. Shown so the host can root the mesh at it.
-	val signPub = remember { repo.ownerSignPub() }
-	val boxPub = remember { repo.ownerBoxPub() }
-	val sas = remember { repo.ownerSas() }
+	var scanning by remember { mutableStateOf(false) }
+	var showHostHelp by remember { mutableStateOf(false) }
+	// A blob that passes looksProvisionable() but fails the strict kotlinx parse inside provision()
+	// leaves us on this screen with provisioned=false and the real cause on state.error. Track the
+	// attempt so we can swap the local "Connecting..." for that cause instead of stalling on it.
+	var provisionAttempted by remember { mutableStateOf(false) }
+	// The silent owner key is minted-or-loaded on first read, so it exists before any first-root;
+	// the human never sees or pastes it (the host-setup manual reads the public keys for the
+	// operator path). Touch it here so it is generated up front.
+	LaunchedEffect(Unit) { repo.ownerSignPub() }
 
 	fun tryProvision(text: String?, source: String) {
 		val s = text?.trim().orEmpty()
 		if (looksProvisionable(s)) {
 			status = "Connecting..."
+			provisionAttempted = true
 			onProvision(s)
 		} else {
-			status = "$source did not contain a valid setup."
+			provisionAttempted = false
+			status = "That $source did not contain a setup code. Ask your host for one, or check the file."
 		}
 	}
 
@@ -473,12 +517,9 @@ fun ProvisionScreen(repo: ChatRepository, onProvision: (String) -> Unit) {
 		val text = runCatching {
 			context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
 		}.getOrNull()
-		tryProvision(text, "File")
+		tryProvision(text, "file")
 	}
 
-	// QR scan: the host's QR carries the setup blob verbatim, so the scanned text is exactly
-	// what tryProvision expects. Full-screen CameraX + ML Kit scanner.
-	var scanning by remember { mutableStateOf(false) }
 	if (scanning) {
 		QrScanScreen(
 			onResult = {
@@ -490,22 +531,74 @@ fun ProvisionScreen(repo: ChatRepository, onProvision: (String) -> Unit) {
 		return
 	}
 
-	// On step 2, the system back returns to step 1 rather than leaving the screen.
-	BackHandler(enabled = step == 2) {
-		step = 1
-		status = ""
+	if (showHostHelp) {
+		HostSetupHelpScreen(onBack = { showHostHelp = false })
+		return
 	}
 
 	Scaffold(
+		topBar = { TopAppBar(title = { Text("Set up") }) },
+	) { pad ->
+		Column(
+			Modifier.padding(pad).padding(24.dp).fillMaxSize().verticalScroll(rememberScrollState()),
+			verticalArrangement = Arrangement.spacedBy(16.dp),
+		) {
+			Text("Scan your setup code", style = MaterialTheme.typography.titleLarge)
+			Text(
+				"Whoever set this up for you sends a one-time setup code (a QR, or text you can paste). " +
+					"Scan or paste it to get started.",
+				style = MaterialTheme.typography.bodyMedium,
+			)
+			Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
+			Text("No camera, or got it as text?", style = MaterialTheme.typography.bodySmall)
+			Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+				OutlinedButton(
+					onClick = { tryProvision(readClipboard(context), "clipboard") },
+					modifier = Modifier.weight(1f),
+				) { Text("Paste") }
+				OutlinedButton(
+					onClick = { fileLauncher.launch(arrayOf("*/*")) },
+					modifier = Modifier.weight(1f),
+				) { Text("Open file") }
+			}
+			// A strict-parse rejection from provision() lands on state.error while we are still on this
+			// screen (provisioned stays false); prefer it over the stale local "Connecting..." so a
+			// type-malformed blob reads like the missing-field case instead of an endless spinner.
+			val parseError = state.error?.takeIf { provisionAttempted && it.isNotBlank() }
+			val shown = parseError ?: status
+			if (shown.isNotEmpty()) {
+				val color =
+					if (parseError == null && status.startsWith("Connecting")) {
+						MaterialTheme.colorScheme.primary
+					} else {
+						MaterialTheme.colorScheme.error
+					}
+				Text(shown, color = color)
+			}
+			Spacer(Modifier.height(8.dp))
+			HorizontalDivider()
+			// Tucked, text-only host-setup manual behind a small link. The operator finds it here;
+			// a friend with an invite never opens it.
+			TextButton(onClick = { showHostHelp = true }) { Text("Setting up a host?") }
+		}
+	}
+}
+
+/** The tucked, text-only "Setting up a host" manual: the operator path (run provision-console.sh on
+ * a computer, paste back the setup blob it emits). No QR, no key prompt - the owner key is generated
+ * silently and the script reads the PUBLIC keys. Reached from the fresh-open screen AND from the
+ * empty board after a friend first-roots but has no host/gateway yet (the bring-up-a-host pointer). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HostSetupHelpScreen(onBack: () -> Unit) {
+	BackHandler { onBack() }
+	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text("Link this phone") },
+				title = { Text("Setting up a host") },
 				navigationIcon = {
-					if (step == 2) {
-						TextButton(onClick = {
-							step = 1
-							status = ""
-						}) { Text("Back") }
+					IconButton(onClick = onBack) {
+						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
 					}
 				},
 			)
@@ -513,55 +606,25 @@ fun ProvisionScreen(repo: ChatRepository, onProvision: (String) -> Unit) {
 	) { pad ->
 		Column(
 			Modifier.padding(pad).padding(24.dp).fillMaxSize().verticalScroll(rememberScrollState()),
-			verticalArrangement = Arrangement.spacedBy(16.dp),
+			verticalArrangement = Arrangement.spacedBy(12.dp),
 		) {
+			Text("Running your own host", style = MaterialTheme.typography.titleMedium)
 			Text(
-				"Step $step of 2",
-				style = MaterialTheme.typography.labelLarge,
-				color = MaterialTheme.colorScheme.primary,
+				"This is only for setting up your OWN computer as a host. If a friend invited you, you do " +
+					"not need any of this - just scan or paste the code they sent.",
+				style = MaterialTheme.typography.bodyMedium,
 			)
-			if (step == 1) {
-				Text("Give your computer the key", style = MaterialTheme.typography.titleLarge)
-				Text(
-					"On your computer, run ./provision-console.sh. When it asks for the owner key, " +
-						"tap Copy key and paste it in.",
-					style = MaterialTheme.typography.bodyMedium,
-				)
-				Button(
-					onClick = { copyToClipboard(context, """{"signPub":"$signPub","boxPub":"$boxPub"}""") },
-					modifier = Modifier.fillMaxWidth(),
-				) { Text("Copy key") }
-				HorizontalDivider()
-				Text(
-					"Optional: the computer prints this code so you can confirm it matches.",
-					style = MaterialTheme.typography.bodySmall,
-				)
-				Text(sas, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
-				Button(onClick = { step = 2 }, modifier = Modifier.fillMaxWidth()) { Text("Next") }
-			} else {
-				Text("Scan what it gives back", style = MaterialTheme.typography.titleLarge)
-				Text(
-					"When setup finishes, your computer shows a QR. Scan it to finish.",
-					style = MaterialTheme.typography.bodyMedium,
-				)
-				Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
-				Text("No camera on this phone?", style = MaterialTheme.typography.bodySmall)
-				Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-					OutlinedButton(
-						onClick = { tryProvision(readClipboard(context), "Clipboard") },
-						modifier = Modifier.weight(1f),
-					) { Text("Paste text") }
-					OutlinedButton(
-						onClick = { fileLauncher.launch(arrayOf("*/*")) },
-						modifier = Modifier.weight(1f),
-					) { Text("Open file") }
-				}
-				if (status.isNotEmpty()) {
-					val color =
-						if (status.startsWith("Connecting")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-					Text(status, color = color)
-				}
-			}
+			HorizontalDivider()
+			Text(
+				"1. On the computer that will run your agents, clone switchboard and run " +
+					"./provision-console.sh --setup.\n\n" +
+					"2. It asks for a network name (what your friends will see) and sets up the host. You do " +
+					"not paste any keys - this app already holds your owner key privately.\n\n" +
+					"3. When it finishes, it prints a setup code (a QR and a block of text). Come back to the " +
+					"previous screen and scan the QR, or copy the text and paste it.\n\n" +
+					"4. Once connected, add a Gateway from Settings to bring your agents online.",
+				style = MaterialTheme.typography.bodyMedium,
+			)
 		}
 	}
 }
@@ -569,11 +632,6 @@ fun ProvisionScreen(repo: ChatRepository, onProvision: (String) -> Unit) {
 private fun readClipboard(context: Context): String? {
 	val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
 	return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
-}
-
-private fun copyToClipboard(context: Context, value: String) {
-	val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-	cm.setPrimaryClip(android.content.ClipData.newPlainText("owner key", value))
 }
 
 /** True once the text is a JSON object with the fields a Provisioning needs. */
@@ -600,6 +658,7 @@ fun SessionsScreen(
 	onRefresh: () -> Unit,
 	onSettings: () -> Unit,
 	onManage: () -> Unit,
+	onHostHelp: () -> Unit,
 	onOpen: (String) -> Unit,
 	onRename: (String, String) -> Unit,
 	onForget: (String) -> Unit,
@@ -681,7 +740,7 @@ fun SessionsScreen(
 				}
 			}
 			if (sessions.isEmpty()) {
-				EmptyBoard(state, onManage, onRefresh)
+				EmptyBoard(state, onManage, onRefresh, onHostHelp)
 			} else {
 				val order = sessionOrder(state)
 				// My own Domain id, learned from a local session (one owned by the connected
@@ -744,20 +803,32 @@ fun SessionsScreen(
  * checked before the enrolling/connecting spinners, so a hard error can never sit under a "Setting
  * up..." spinner, and it names the actual cause with a way forward instead of pointing elsewhere. */
 @Composable
-private fun EmptyBoard(state: ChatState, onManage: () -> Unit, onRefresh: () -> Unit) {
+private fun EmptyBoard(state: ChatState, onManage: () -> Unit, onRefresh: () -> Unit, onHostHelp: () -> Unit) {
 	Column(
 		Modifier.fillMaxSize().padding(32.dp),
 		horizontalAlignment = Alignment.CenterHorizontally,
 		verticalArrangement = Arrangement.Center,
 	) {
 		when {
-			// No Gateway admitted yet: the primary onboarding step, with a real action.
-			state.needsGateway -> {
+			// A friend who just first-rooted has no host of their own yet (the invite omits gateway
+			// ids by design), so point at bringing one up - NOT the operator Add-a-Gateway error.
+			state.noGatewayState == NoGatewayState.AWAITING_HOST -> {
+				Text("You're all set up", style = MaterialTheme.typography.titleLarge)
+				Spacer(Modifier.height(8.dp))
+				BoardBody("Your network is ready. Now bring up a host computer to run your agents, and they show up here.")
+				Spacer(Modifier.height(20.dp))
+				Button(onClick = onHostHelp) { Text("How do I set up a host?") }
+			}
+			// No Gateway admitted yet: the primary onboarding step, with a real action. The secondary
+			// link points at the tucked manual for an operator who has not stood up a host yet.
+			state.noGatewayState == NoGatewayState.NEEDS_GATEWAY -> {
 				Text("No Gateways yet", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
-				BoardBody("Add a Gateway to start talking to your agent sessions.")
+				BoardBody("Add a Gateway to start talking to your agent sessions. If you do not have a host yet, set one up first.")
 				Spacer(Modifier.height(20.dp))
 				Button(onClick = onManage) { Text("Add a Gateway") }
+				Spacer(Modifier.height(4.dp))
+				TextButton(onClick = onHostHelp) { Text("How do I set up a host?") }
 			}
 			// A terminal failure that will not self-heal (secure storage, 401, admission rejected, or
 			// an enrollment that gave up past the grace window). Name the actual cause from `error`
@@ -780,17 +851,28 @@ private fun EmptyBoard(state: ChatState, onManage: () -> Unit, onRefresh: () -> 
 				Spacer(Modifier.height(4.dp))
 				BoardBody("Finishing enrollment with your Gateway.")
 			}
-			// Establishing the connection for the first time.
+			// Establishing the connection for the first time. A transient cause (no network, server
+			// unreachable) is set on state.error by classifyConnError; surface it under the spinner so
+			// a fresh friend with no network sees "Offline - no network", not a bare endless spinner.
 			!state.connected -> {
 				CircularProgressIndicator()
 				Spacer(Modifier.height(12.dp))
 				Text("Connecting...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+				state.error?.takeIf { it.isNotBlank() }?.let {
+					Spacer(Modifier.height(8.dp))
+					BoardBody(it)
+				}
 			}
-			// Connected but the recent polls failed: online-ish, quietly reconnecting.
+			// Connected but the recent polls failed: online-ish, quietly reconnecting. Show the
+			// classified cause when one is set, so a transient stall is named rather than silent.
 			state.pollFailStreak > 0 -> {
 				CircularProgressIndicator()
 				Spacer(Modifier.height(12.dp))
 				Text("Reconnecting...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+				state.error?.takeIf { it.isNotBlank() }?.let {
+					Spacer(Modifier.height(8.dp))
+					BoardBody(it)
+				}
 			}
 			// Connected and healthy, just nothing here yet.
 			else -> Text("No active sessions yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1343,7 +1425,7 @@ fun SettingsScreen(
 					SettingsRow(Icons.Default.Lock, "Security") { onRoute(SettingsRoute.SECURITY) }
 					SettingsRow(Icons.Default.Tune, "System") { onRoute(SettingsRoute.SYSTEM) }
 				}
-				SettingsRoute.PROFILE -> ProfileSettings(state, onSetDeviceName)
+				SettingsRoute.PROFILE -> ProfileSettings(state, repo, onSetDeviceName)
 				SettingsRoute.VOICE -> SttsVoiceSection(repo)
 				SettingsRoute.NETWORKS -> NetworksSettings(repo, onManage, onFederation)
 				SettingsRoute.SECURITY -> SecuritySettings(state, onToggleBiometric)
@@ -1373,11 +1455,65 @@ private fun SettingsRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ProfileSettings(state: ChatState, onSetDeviceName: (String) -> Unit) {
+private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceName: (String) -> Unit) {
+	val scope = rememberCoroutineScope()
+	// Operator name (the owner's NETWORK display name, one per owner): what linked friends see your
+	// network as. Owner-signed + pushed to evie; it lives above the per-install device name. Seeded
+	// from state.operatorName (cache, refreshed from discovery) and re-seeded when that changes.
+	var operatorName by remember(state.operatorName) { mutableStateOf(state.operatorName) }
+	var opStatus by remember { mutableStateOf("") }
+	var opBusy by remember { mutableStateOf(false) }
+	// A friend (one who first-rooted their own non-home Domain) renaming before discovery populates
+	// would sign over the "home" fallback localDomainId() returns, which evie rejects ("Domain not
+	// rooted"/"not owner-signed") as a raw "Could not save". Gate Save until the real Domain id is
+	// known for that friend. A genuine home operator legitimately resolves to "home", so they are not
+	// gated (firstRooted is false for them).
+	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, repo.localDomainId())
+	Text("Network name", style = MaterialTheme.typography.titleMedium)
+	Text(
+		"What your linked friends see your network called. One name for your whole network.",
+		style = MaterialTheme.typography.bodySmall,
+		color = MaterialTheme.colorScheme.onSurfaceVariant,
+	)
+	Row(verticalAlignment = Alignment.CenterVertically) {
+		OutlinedTextField(
+			value = operatorName,
+			onValueChange = { operatorName = it },
+			singleLine = true,
+			modifier = Modifier.weight(1f),
+		)
+		Button(
+			enabled = operatorName.isNotBlank() && operatorName.trim() != state.operatorName && !opBusy && !domainResolving,
+			onClick = {
+				opBusy = true
+				opStatus = ""
+				scope.launch {
+					repo.setOperatorName(operatorName)
+						.onSuccess { opStatus = "Saved." }
+						.onFailure { opStatus = "Could not save: ${it.message?.take(120)}" }
+					opBusy = false
+				}
+			},
+			modifier = Modifier.padding(start = 8.dp),
+		) { Text(if (opBusy) "..." else "Save") }
+	}
+	if (domainResolving) {
+		Text("Loading your network...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+	} else if (opStatus.isNotEmpty()) {
+		Text(opStatus, style = MaterialTheme.typography.bodySmall)
+	}
+
+	HorizontalDivider()
+
 	var name by remember { mutableStateOf(state.deviceName) }
 	Text("Device name", style = MaterialTheme.typography.titleMedium)
+	Text(
+		"A label for THIS phone, so you can tell your devices apart.",
+		style = MaterialTheme.typography.bodySmall,
+		color = MaterialTheme.colorScheme.onSurfaceVariant,
+	)
 	Row(verticalAlignment = Alignment.CenterVertically) {
-		OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.weight(1f))
+		OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, modifier = Modifier.weight(1f))
 		Button(
 			enabled = name.isNotBlank() && name != state.deviceName,
 			onClick = { onSetDeviceName(name.trim()) },

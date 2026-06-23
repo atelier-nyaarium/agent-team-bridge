@@ -228,6 +228,34 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putBoolean(KEY_CONSOLE_ADMITTED, value).apply()
 		}
 
+	/** Whether this device has already first-rooted the pending Domain from its invite blob.
+	 * Gates the one-time first_root so connect does not re-POST it every cycle once the Domain
+	 * is rooted (the op is idempotent at evie, but the latch avoids a needless round-trip and
+	 * lets the connect path distinguish "still pending" from "rooted, proceed"). Cleared by a
+	 * re-import so a fresh invite re-roots. */
+	var firstRooted: Boolean
+		get() = prefs.getBoolean(KEY_FIRST_ROOTED, false)
+		set(value) {
+			prefs.edit().putBoolean(KEY_FIRST_ROOTED, value).apply()
+		}
+
+	/** This owner's own network display name (the operator name), cached locally so the profile
+	 * shows it without a round-trip. The authoritative copy lives on the Domain at evie; this is
+	 * refreshed from discovery (the home session's operatorName) and updated on a local rename. */
+	var operatorName: String
+		get() = prefs.getString(KEY_OPERATOR_NAME, "") ?: ""
+		set(value) {
+			prefs.edit().putString(KEY_OPERATOR_NAME, value).apply()
+		}
+
+	/** The guest tenants this owner has staged (the "Networks you host" list), as a JSON array of
+	 * {domainId, operatorName, nonce}. Persisted locally so the list + each row's invite QR survive
+	 * restarts (evie holds the canonical pending/rooted state, but only the host remembers the label
+	 * + the current invite nonce for re-rendering the QR). */
+	fun saveHostedTenants(json: String) = prefs.edit().putString(KEY_HOSTED_TENANTS, json).apply()
+
+	fun loadHostedTenants(): String? = prefs.getString(KEY_HOSTED_TENANTS, null)
+
 	/** A Gateway's signing + box public keys, resolved from the owner-verified keyring at
 	 * seal time (the phone-anchored model does not persist per-Gateway keys). */
 	data class GatewayKeys(val signPub: String, val boxPub: String)
@@ -244,6 +272,9 @@ class ProvisioningStore(context: Context) {
 		const val KEY_DOMAIN = "federation_domain"
 		const val KEY_DOMAIN_VERSION = "federation_domain_version"
 		const val KEY_CONSOLE_ADMITTED = "federation_console_admitted"
+		const val KEY_FIRST_ROOTED = "federation_first_rooted"
+		const val KEY_OPERATOR_NAME = "federation_operator_name"
+		const val KEY_HOSTED_TENANTS = "federation_hosted_tenants"
 		const val KEY_STTS_URL = "stts_url"
 		const val KEY_STTS_KEY = "stts_key"
 		const val KEY_STTS_MIGRATED = "stts_migrated"
@@ -266,8 +297,9 @@ class ProvisioningStore(context: Context) {
 		 * Clear (a privacy/correctness regression). The partition is pinned by a unit test. */
 		val PROVISIONING_KEYS = listOf(
 			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
-			KEY_CONSOLE_ADMITTED, KEY_THREADS, KEY_LABELS, KEY_DRAFTS, KEY_GATEWAY_ID,
-			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED,
+			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_OPERATOR_NAME, KEY_HOSTED_TENANTS,
+			KEY_THREADS, KEY_LABELS, KEY_DRAFTS, KEY_GATEWAY_ID, KEY_SYNC_EPOCH, KEY_SYNC_ACKED,
+			KEY_SYNC_DROPPED,
 		)
 	}
 }
