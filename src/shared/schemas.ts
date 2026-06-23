@@ -19,10 +19,12 @@ export const TeamKindSchema = z.enum(["devcontainer", "loose", "console", "gatew
 export const ResponseStatusSchema = z
 	.enum(["completed", "clarification", "deferred", "needs_human", "error", "timeout", "running"])
 	.meta({ id: "ResponseStatus" });
-// Whether the console's Domain is rooted yet. A `pending` Domain (an operator-staged tenant
-// the friend has not yet first-rooted) tells the app to submit its owner pubkey via first_root;
-// a `rooted` Domain just provisions the console. Decode-side this stays an open String in Kotlin.
-export const DomainStatusSchema = z.enum(["pending", "rooted"]).meta({ id: "DomainStatus" });
+// Whether the console's Domain is rooted yet. `unrooted` is a fresh, never-provisioned home
+// (no owner, no pending tenant); `pending` is an operator-staged tenant the friend has not yet
+// first-rooted (tells the app to submit its owner pubkey via first_root); `rooted` just
+// provisions the console. Mirrors evie's getDomainStatus 3-value union exactly, so the register
+// reply parses strictly. Decode-side this stays an open String in Kotlin.
+export const DomainStatusSchema = z.enum(["unrooted", "pending", "rooted"]).meta({ id: "DomainStatus" });
 
 ////////////////////////////////
 //  Channel Reply Schema
