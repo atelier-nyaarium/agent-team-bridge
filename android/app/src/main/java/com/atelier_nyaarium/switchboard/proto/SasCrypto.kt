@@ -37,6 +37,17 @@ data class CrossDomainParty(
 	val gatewayId: String,
 )
 
+/**
+ * One owner side of an enroll handshake: the owner root signing key, the owner box key (the
+ * seal anchor for owner-to-owner trust), and the Domain id. No gateway fields - the enrollee
+ * is gateway-less at enroll time. Twin of EnrollParty in cross-domain-sas.ts.
+ */
+data class EnrollParty(
+	val ownerSignPub: String,
+	val ownerBoxPub: String,
+	val domainId: String,
+)
+
 ////////////////////////////////
 //  Class
 
@@ -125,6 +136,55 @@ object SasCrypto {
 	 */
 	fun crossDomainSas(a: CrossDomainParty, b: CrossDomainParty, pin: String): String {
 		val digest = sha256(crossDomainSasPreimage(a, b, pin))
+		var n = BigInteger.ZERO
+		for (i in 0 until 8) {
+			n = n.shiftLeft(8).or(BigInteger.valueOf(digest[i].toLong() and 0xFFL))
+		}
+		return n.mod(SAS_MODULUS).toString(10).padStart(SAS_DIGITS, '0')
+	}
+
+	////////////////////////////////
+	//  Enroll SAS (owner-anchored, role-tagged)
+	//
+	//  Twin of the enroll* helpers in cross-domain-sas.ts: the FLOW-1 in-person admin<->enrollee
+	//  compare, brokered by an UNTRUSTED evie. Owner-anchored (no gateway keys) + FIXED-SLOT
+	//  role-tagged (ADMIN / ENROLLEE blocks), so the preimage is injective and evie - which never
+	//  computes this code - cannot transpose the blocks. The 6-digit reduction + salted commitment
+	//  match crossDomainSas; only the preimage shape + version literals differ. Pinned by
+	//  tests/fixtures/enroll-sas/vectors.json. Role is "ADMIN" (showed the QR) or "ENROLLEE" (scanned).
+
+	fun enrollCommitmentPreimage(party: EnrollParty, role: String, salt: String): ByteArray =
+		listOf(
+			"ENROLL_COMMIT_V1",
+			role,
+			party.ownerSignPub,
+			party.ownerBoxPub,
+			party.domainId,
+			salt,
+		).joinToString("\n").toByteArray(Charsets.UTF_8)
+
+	fun enrollCommitment(party: EnrollParty, role: String, salt: String): String =
+		Base64.getEncoder().encodeToString(sha256(enrollCommitmentPreimage(party, role, salt)))
+
+	fun verifyEnrollCommitment(commitment: String, party: EnrollParty, role: String, salt: String): Boolean =
+		enrollCommitment(party, role, salt) == commitment
+
+	fun enrollSasPreimage(admin: EnrollParty, enrollee: EnrollParty, pin: String): ByteArray =
+		listOf(
+			"ENROLL_SAS_V1",
+			"ADMIN",
+			admin.ownerSignPub,
+			admin.ownerBoxPub,
+			admin.domainId,
+			"ENROLLEE",
+			enrollee.ownerSignPub,
+			enrollee.ownerBoxPub,
+			enrollee.domainId,
+			pin,
+		).joinToString("\n").toByteArray(Charsets.UTF_8)
+
+	fun enrollSas(admin: EnrollParty, enrollee: EnrollParty, pin: String): String {
+		val digest = sha256(enrollSasPreimage(admin, enrollee, pin))
 		var n = BigInteger.ZERO
 		for (i in 0 until 8) {
 			n = n.shiftLeft(8).or(BigInteger.valueOf(digest[i].toLong() and 0xFFL))
