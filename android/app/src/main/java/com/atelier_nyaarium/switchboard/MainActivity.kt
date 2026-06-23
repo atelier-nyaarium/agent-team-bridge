@@ -507,7 +507,7 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 			onProvision(s)
 		} else {
 			provisionAttempted = false
-			status = "That $source did not contain a setup code. Ask your host for one, or check the file."
+			status = "No setup code in that $source. Check it, or ask whoever sent it."
 		}
 	}
 
@@ -545,12 +545,10 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 		) {
 			Text("Scan your setup code", style = MaterialTheme.typography.titleLarge)
 			Text(
-				"Whoever set this up for you sends a one-time setup code (a QR, or text you can paste). " +
-					"Scan or paste it to get started.",
+				"Scan or paste the one-time code you were sent.",
 				style = MaterialTheme.typography.bodyMedium,
 			)
 			Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
-			Text("No camera, or got it as text?", style = MaterialTheme.typography.bodySmall)
 			Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
 				OutlinedButton(
 					onClick = { tryProvision(readClipboard(context), "clipboard") },
@@ -579,7 +577,7 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 			HorizontalDivider()
 			// Tucked, text-only host-setup manual behind a small link. The operator finds it here;
 			// a friend with an invite never opens it.
-			TextButton(onClick = { showHostHelp = true }) { Text("Setting up a host?") }
+			TextButton(onClick = { showHostHelp = true }) { Text("Setting up your own network?") }
 		}
 	}
 }
@@ -595,7 +593,7 @@ fun HostSetupHelpScreen(onBack: () -> Unit) {
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text("Setting up a host") },
+				title = { Text("Set up your own network") },
 				navigationIcon = {
 					IconButton(onClick = onBack) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -608,21 +606,19 @@ fun HostSetupHelpScreen(onBack: () -> Unit) {
 			Modifier.padding(pad).padding(24.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(12.dp),
 		) {
-			Text("Running your own host", style = MaterialTheme.typography.titleMedium)
+			Text("On your own computer", style = MaterialTheme.typography.titleMedium)
 			Text(
-				"This is only for setting up your OWN computer as a host. If a friend invited you, you do " +
-					"not need any of this - just scan or paste the code they sent.",
+				"Only for your own computer. Invited by a friend? Skip this - just scan the code they sent.",
 				style = MaterialTheme.typography.bodyMedium,
 			)
 			HorizontalDivider()
 			Text(
 				"1. On the computer that will run your agents, clone switchboard and run " +
 					"./provision-console.sh --setup.\n\n" +
-					"2. It asks for a network name (what your friends will see) and sets up the host. You do " +
-					"not paste any keys - this app already holds your owner key privately.\n\n" +
-					"3. When it finishes, it prints a setup code (a QR and a block of text). Come back to the " +
-					"previous screen and scan the QR, or copy the text and paste it.\n\n" +
-					"4. Once connected, add a Gateway from Settings to bring your agents online.",
+					"2. It asks for a network name and sets everything up. No keys to paste - this app " +
+					"holds your owner key.\n\n" +
+					"3. It prints a setup code. Go back and scan or paste it.\n\n" +
+					"4. Once connected, add a Gateway in Settings to bring your agents online.",
 				style = MaterialTheme.typography.bodyMedium,
 			)
 		}
@@ -732,7 +728,7 @@ fun SessionsScreen(
 					shape = MaterialTheme.shapes.medium,
 				) {
 					Text(
-						"Some messages were dropped (mailbox overflow). Pull history from the host to recover.",
+						"Some messages were dropped. Pull history from your Gateway to recover.",
 						Modifier.padding(12.dp),
 						color = MaterialTheme.colorScheme.onErrorContainer,
 						style = MaterialTheme.typography.bodySmall,
@@ -815,20 +811,20 @@ private fun EmptyBoard(state: ChatState, onManage: () -> Unit, onRefresh: () -> 
 			state.noGatewayState == NoGatewayState.AWAITING_HOST -> {
 				Text("You're all set up", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
-				BoardBody("Your network is ready. Now bring up a host computer to run your agents, and they show up here.")
+				BoardBody("Your network is ready. Set up a computer to run your agents and they'll show up here.")
 				Spacer(Modifier.height(20.dp))
-				Button(onClick = onHostHelp) { Text("How do I set up a host?") }
+				Button(onClick = onHostHelp) { Text("How do I set up a computer?") }
 			}
 			// No Gateway admitted yet: the primary onboarding step, with a real action. The secondary
 			// link points at the tucked manual for an operator who has not stood up a host yet.
 			state.noGatewayState == NoGatewayState.NEEDS_GATEWAY -> {
 				Text("No Gateways yet", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
-				BoardBody("Add a Gateway to start talking to your agent sessions. If you do not have a host yet, set one up first.")
+				BoardBody("Add a Gateway to reach your agents. No computer yet? Set one up first.")
 				Spacer(Modifier.height(20.dp))
 				Button(onClick = onManage) { Text("Add a Gateway") }
 				Spacer(Modifier.height(4.dp))
-				TextButton(onClick = onHostHelp) { Text("How do I set up a host?") }
+				TextButton(onClick = onHostHelp) { Text("How do I set up a computer?") }
 			}
 			// A terminal failure that will not self-heal (secure storage, 401, admission rejected, or
 			// an enrollment that gave up past the grace window). Name the actual cause from `error`
@@ -836,7 +832,7 @@ private fun EmptyBoard(state: ChatState, onManage: () -> Unit, onRefresh: () -> 
 			state.status == "error" -> {
 				Text("Can't connect", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
-				BoardBody(state.error ?: "Something went wrong reaching your Gateway.")
+				BoardBody(state.error ?: "Couldn't reach your Gateway.")
 				Spacer(Modifier.height(20.dp))
 				Button(onClick = onRefresh) { Text("Try again") }
 				Spacer(Modifier.height(4.dp))
@@ -900,7 +896,7 @@ fun HealthHeader(state: ChatState) {
 		state.health == ChatState.Health.ONLINE -> Color(0xFF2EA043) to "Bridge online"
 		// Calm blue while a fresh enrollment's allowlist is still syncing to its Gateway -
 		// a normal, self-healing window, not an error.
-		state.health == ChatState.Health.SYNCING -> Color(0xFF0969DA) to (state.error ?: "Finishing up enrollment...")
+		state.health == ChatState.Health.SYNCING -> Color(0xFF0969DA) to (state.error ?: "Finishing enrollment...")
 		// Show the SPECIFIC classified cause (set by classifyConnError) rather than a
 		// blanket label, so the header tells the human exactly what to fix.
 		state.health == ChatState.Health.DEGRADED -> Color(0xFFD29922) to (state.error ?: "Reconnecting...")
@@ -1094,7 +1090,7 @@ fun SessionActionsDialog(
 					TextButton(onClick = onRename, modifier = Modifier.fillMaxWidth()) { Text("Rename") }
 				} else {
 					Text(
-						"Project names come from the host and cannot be renamed.",
+						"Project names come from the Gateway and cannot be renamed.",
 						style = MaterialTheme.typography.bodySmall,
 						color = MaterialTheme.colorScheme.onSurfaceVariant,
 					)
@@ -1471,7 +1467,7 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, repo.localDomainId())
 	Text("Network name", style = MaterialTheme.typography.titleMedium)
 	Text(
-		"What your linked friends see your network called. One name for your whole network.",
+		"What linked friends see your network called.",
 		style = MaterialTheme.typography.bodySmall,
 		color = MaterialTheme.colorScheme.onSurfaceVariant,
 	)
@@ -1490,7 +1486,7 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 				scope.launch {
 					repo.setOperatorName(operatorName)
 						.onSuccess { opStatus = "Saved." }
-						.onFailure { opStatus = "Could not save: ${it.message?.take(120)}" }
+						.onFailure { opStatus = "Couldn't save: ${it.message?.take(120)}" }
 					opBusy = false
 				}
 			},
@@ -1507,11 +1503,6 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 
 	var name by remember { mutableStateOf(state.deviceName) }
 	Text("Device name", style = MaterialTheme.typography.titleMedium)
-	Text(
-		"A label for THIS phone, so you can tell your devices apart.",
-		style = MaterialTheme.typography.bodySmall,
-		color = MaterialTheme.colorScheme.onSurfaceVariant,
-	)
 	Row(verticalAlignment = Alignment.CenterVertically) {
 		OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, modifier = Modifier.weight(1f))
 		Button(
@@ -1527,14 +1518,9 @@ private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onFeder
 	// Two distinct concerns kept apart: managing gateways within YOUR network, and linking with a
 	// friend's separate network (cross-Domain trust).
 	Text("Your network", style = MaterialTheme.typography.titleSmall)
-	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Manage gateways") }
+	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Manage Gateways") }
 	HorizontalDivider()
-	Text("Friends' networks", style = MaterialTheme.typography.titleSmall)
-	Text(
-		"Link with a friend's network so your agents can collaborate, isolated by default.",
-		style = MaterialTheme.typography.bodySmall,
-		color = MaterialTheme.colorScheme.onSurfaceVariant,
-	)
+	Text("Peers", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = onFederation, modifier = Modifier.fillMaxWidth()) { Text("Federation") }
 	HorizontalDivider()
 	OwnerKeysCard(repo)

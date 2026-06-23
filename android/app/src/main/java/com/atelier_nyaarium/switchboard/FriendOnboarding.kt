@@ -110,13 +110,13 @@ object FriendOnboarding {
 				m.contains("invite expired", ignoreCase = true) ||
 				m.contains("already rooted", ignoreCase = true) ||
 				m.contains("already claimed", ignoreCase = true) ->
-				FirstRootReject("This setup code is expired or already used. Ask your host for a new one.", transient = false)
+				FirstRootReject("This setup code is expired or already used. Ask for a new one.", transient = false)
 			m.contains("not available", ignoreCase = true) || m.startsWith("HTTP 501") ->
-				FirstRootReject("This server is not set up to host guests. Ask your host to finish their setup.", transient = false)
+				FirstRootReject("This network isn't ready yet. Ask whoever invited you to finish their setup.", transient = false)
 			m.contains("operator op is stale", ignoreCase = true) ->
-				FirstRootReject("Your device clock is off - sync the time, then setup will retry automatically.", transient = true)
+				FirstRootReject("Your device clock is off - sync the time and setup will retry.", transient = true)
 			m.contains("persist failed", ignoreCase = true) ->
-				FirstRootReject("The host is busy right now - this will retry in a moment.", transient = true)
+				FirstRootReject("The server is busy - retrying.", transient = true)
 			else -> FirstRootReject("Setup could not be completed: ${m.take(140)}", transient = true)
 		}
 	}

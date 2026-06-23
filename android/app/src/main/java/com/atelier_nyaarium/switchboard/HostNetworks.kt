@@ -86,7 +86,7 @@ fun HostNetworksScreen(repo: ChatRepository, onBack: () -> Unit, onTenant: (Stri
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text("Networks you host") },
+				title = { Text("Guest networks") },
 				navigationIcon = {
 					IconButton(onClick = onBack) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -100,15 +100,14 @@ fun HostNetworksScreen(repo: ChatRepository, onBack: () -> Unit, onTenant: (Stri
 			verticalArrangement = Arrangement.spacedBy(16.dp),
 		) {
 			Text(
-				"Networks you run for friends who do not host their own. Each friend scans a one-time " +
-					"invite, then runs their own agents on your host. Hosting alone does not link you - " +
-					"link separately if you want to collaborate.",
+				"Networks you set up for friends who have none. They scan a one-time invite and run their " +
+					"own agents on their own computer. Hosting doesn't link you.",
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
 			if (tenants.isEmpty()) {
 				Text(
-					"You are not hosting any networks yet. Add one to invite a friend.",
+					"None yet. Add one to invite a friend.",
 					style = MaterialTheme.typography.bodyMedium,
 				)
 			}
@@ -181,8 +180,7 @@ private fun AddNetworkScreen(repo: ChatRepository, onBack: () -> Unit, onDone: (
 		) {
 			Text("Name your friend's network", style = MaterialTheme.typography.titleMedium)
 			Text(
-				"A label for the network you will host for them (they can rename it once they are in). " +
-					"This is how it shows in your hosted list.",
+				"Just a label; they can rename it once in.",
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
@@ -197,13 +195,13 @@ private fun AddNetworkScreen(repo: ChatRepository, onBack: () -> Unit, onDone: (
 				enabled = label.isNotBlank() && !busy,
 				onClick = {
 					busy = true
-					status = "Setting up..."
+					status = "Creating..."
 					scope.launch {
 						repo.provisionTenant(label)
 							.onSuccess { onDone() }
 							.onFailure {
 								busy = false
-								status = "Could not create the network: ${it.message?.take(140)}"
+								status = "Could not create: ${it.message?.take(140)}"
 							}
 					}
 				},
@@ -254,8 +252,7 @@ fun HostedTenantDetailScreen(
 	if (confirmRemove) {
 		ConfirmDialog(
 			title = "Remove ${tenant.operatorName}?",
-			body = "Drops this hosted network. If your friend already set it up, they lose access " +
-				"immediately and would need a fresh invite to return.",
+			body = "Drops this network. If your friend set it up, they lose access and need a fresh invite to return.",
 			confirmText = "Remove",
 			onConfirm = {
 				confirmRemove = false
@@ -294,8 +291,7 @@ fun HostedTenantDetailScreen(
 			val blob = inviteBlob
 			if (blob == null) {
 				Text(
-					"Send your friend this one-time invite. They scan it (or paste the text) in the app to " +
-						"get started. Keep it private - whoever uses it first becomes the network's owner.",
+					"Send your friend this one-time invite to scan or paste. Keep it private - whoever uses it first owns the network.",
 					style = MaterialTheme.typography.bodyMedium,
 				)
 				Button(
@@ -314,10 +310,10 @@ fun HostedTenantDetailScreen(
 						}
 					},
 					modifier = Modifier.fillMaxWidth(),
-				) { Text(if (busy) "..." else "Generate invite QR") }
+				) { Text(if (busy) "..." else "Generate invite") }
 			} else {
 				Text(
-					"Show this QR to your friend to scan, or send them the code by text or file.",
+					"Show the QR, or send the code by text or file.",
 					style = MaterialTheme.typography.bodyMedium,
 				)
 				QrCode(text = blob) {
@@ -325,7 +321,7 @@ fun HostedTenantDetailScreen(
 					// below still work, so just explain the missing image.
 					Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
 						Text(
-							"This invite is too large for a QR. Use Copy or Save to send it instead.",
+							"Too large for a QR. Use Copy or Save instead.",
 							Modifier.padding(16.dp),
 							style = MaterialTheme.typography.bodySmall,
 						)
@@ -341,7 +337,7 @@ fun HostedTenantDetailScreen(
 					enabled = !busy,
 					onClick = {
 						busy = true
-						status = "Refreshing invite..."
+						status = "Regenerating..."
 						scope.launch {
 							repo.regenerateInvite(domainId, tenant.operatorName)
 								.onSuccess {
@@ -353,7 +349,7 @@ fun HostedTenantDetailScreen(
 							busy = false
 						}
 					},
-				) { Text("Regenerate invite (invalidates the old one)") }
+				) { Text("Regenerate invite") }
 			}
 
 			if (status.isNotEmpty()) Text(status, style = MaterialTheme.typography.bodySmall)
@@ -363,8 +359,7 @@ fun HostedTenantDetailScreen(
 			// Link is the separate cross-Domain pairing (hosting does not link). Available once the
 			// friend is online; offered always, with the wizard guiding the both-present ceremony.
 			Text(
-				"Want your agents to collaborate with theirs? Linking is separate from hosting and is " +
-					"mutual - do it together once they are set up.",
+				"Want your agents to work with theirs? Link separately, once they're set up.",
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
@@ -386,9 +381,8 @@ fun HostedTenantDetailScreen(
 private fun HostedStateBanner(state: HostedTenantState) {
 	val text = when (state) {
 		HostedTenantState.AWAITING_SETUP ->
-			"Waiting for your friend to scan the invite. Once they do, this turns to online and they can " +
-				"run their own agents here."
-		HostedTenantState.OFFLINE -> "Your friend has joined but is offline right now."
+			"Waiting for your friend to scan the invite."
+		HostedTenantState.OFFLINE -> "Your friend has joined but is offline."
 		HostedTenantState.ONLINE -> "Your friend is online."
 	}
 	Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
@@ -404,7 +398,7 @@ private fun HostedStateBanner(state: HostedTenantState) {
 
 private fun copyInvite(context: Context, value: String) {
 	val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager ?: return
-	cm.setPrimaryClip(ClipData.newPlainText("setup code", value))
+	cm.setPrimaryClip(ClipData.newPlainText("invite", value))
 }
 
 /** A SAF create-document launcher that writes the invite blob to a chosen .json file. Returns a

@@ -66,7 +66,7 @@ fun OwnerKeysCard(repo: ChatRepository) {
 		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 			Text("Owner key", style = MaterialTheme.typography.titleMedium)
 			Text(
-				"The key your mesh trusts. Copy it if you re-run the host setup.",
+				"The key your network trusts. Copy it if you re-run setup.",
 				style = MaterialTheme.typography.bodySmall,
 			)
 			Text("Fingerprint: $sas", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
@@ -94,8 +94,8 @@ fun OwnerBackupCard(repo: ChatRepository) {
 		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 			Text("Owner key backup", style = MaterialTheme.typography.titleMedium)
 			Text(
-				"Export a passphrase-encrypted backup and keep it offline. Anyone with the file AND " +
-					"the passphrase controls the network, so choose a strong passphrase.",
+				"Export a passphrase-encrypted backup and keep it offline. Anyone with the file and " +
+					"the passphrase controls your network, so pick a strong one.",
 				style = MaterialTheme.typography.bodySmall,
 			)
 			OutlinedTextField(
@@ -118,7 +118,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 					scope.launch {
 						val blob = repo.exportOwnerBackup(pass1)
 						shareText(context, "Switchboard owner key backup", blob)
-						status = "Save the backup to a file or password manager, then keep it offline."
+						status = "Saved. Keep it offline."
 					}
 				},
 				modifier = Modifier.fillMaxWidth(),
@@ -129,7 +129,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 			OutlinedTextField(
 				value = restoreBlob,
 				onValueChange = { restoreBlob = it },
-				label = { Text("Backup blob") },
+				label = { Text("Backup text") },
 				modifier = Modifier.fillMaxWidth(),
 			)
 			OutlinedTextField(
@@ -146,7 +146,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 						status = when (repo.importOwnerBackup(restoreBlob.trim(), restorePass)) {
 							OwnerRestoreResult.OK -> "Owner key restored."
 							OwnerRestoreResult.DIFFERENT_OWNER ->
-								"That backup is a different owner key. Restore it only on a fresh device."
+								"That backup is a different owner key. Only restore it on a fresh device."
 							OwnerRestoreResult.WRONG_PASSPHRASE -> "Restore failed (wrong passphrase or bad file)."
 						}
 					}
@@ -158,7 +158,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 	}
 }
 
-/** Manage networks: the admitted members of the keyring, with revoke, plus Add Gateway. */
+/** Manage Gateways: the admitted members of the keyring, with revoke, plus Add Gateway. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ManageScreen(repo: ChatRepository, onBack: () -> Unit, onAddGateway: () -> Unit) {
@@ -166,13 +166,13 @@ fun ManageScreen(repo: ChatRepository, onBack: () -> Unit, onAddGateway: () -> U
 	// Re-read after an admit/revoke so the board reflects the change.
 	var refresh by remember { mutableStateOf(0) }
 	val members = remember(refresh) { repo.admittedMembers() }
-	Scaffold(topBar = { TopAppBar(title = { Text("Manage networks") }) }) { pad ->
+	Scaffold(topBar = { TopAppBar(title = { Text("Manage Gateways") }) }) { pad ->
 		Column(
 			Modifier.padding(pad).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(12.dp),
 		) {
 			if (members.isEmpty()) {
-				Text("No members admitted yet. Add a Gateway to enroll one.", style = MaterialTheme.typography.bodyMedium)
+				Text("No gateways yet. Add one to get started.", style = MaterialTheme.typography.bodyMedium)
 			}
 			for (m in members) {
 				Card(Modifier.fillMaxWidth()) {
@@ -253,7 +253,7 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 					Button(
 						onClick = { copyToClipboard(context, "gateway bundle", paste) },
 						modifier = Modifier.fillMaxWidth(),
-					) { Text("Copy sealed bundle") }
+					) { Text("Copy bundle") }
 					OutlinedButton(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Done") }
 				} else {
 					Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -271,7 +271,7 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 									if (result.admitted && result.pasteBundle == null) onDone()
 								}
 							},
-						) { Text("Approve & admit") }
+						) { Text("Approve") }
 					}
 				}
 			}
