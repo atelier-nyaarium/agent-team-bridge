@@ -1,23 +1,32 @@
 // Console setup - the SINGLE bootstrap for the Android Console. Driven by provision-console.sh,
 // a thin launcher that execs this.
 //
-//   --setup              interactive menu: Provision (cutover + root the Domain at the CONSOLE
-//                        owner key + emit the transport blob) or Purge (clean-break wipe).
-//                        Non-TTY runs Provision direct.
+//   --setup              interactive menu: Provision (cutover + pre-stage the home Domain +
+//                        emit the transport blob) or Purge (clean-break wipe). Non-TTY runs
+//                        Provision direct.
 //   --gateway-transport  move the local Gateway off port-forward onto the service-proxy WS (run
 //                        AFTER validating WS-over-proxy on this cluster).
 //   --qr                 re-open the enrollment-QR menu for the current blob.
 //   --verify             health-probe the bridge + report what is / is not set up.
 //   --help
 //
-// Phone-anchored trust: the Domain ROOT private key is generated on the Console and never reaches
-// the host. This script (on the trusted host with cluster access) roots evie's Domain at the owner
-// PUBLIC keys the operator reads from the app, then emits a transport-ONLY blob (cluster creds; no
-// identity, no Gateway keys). The Console generates its own identity, admits itself, and admits
-// each Gateway afterward. Mirrors the Gateway's start-gateway.sh --setup ergonomics.
+// Phone-anchored trust: the Domain ROOT private key is generated SILENTLY on the Console and never
+// reaches the host, so this script never holds, prompts for, or roots with the owner key. Provision
+// is a fresh-vs-reprovision state machine keyed on whether the home Domain is already rooted in
+// evie's federation Secret:
+//   - FRESH (home absent / unrooted): the trusted host bootstrap (direct Secret access) pre-stages
+//     the home Domain as a PENDING tenant - an operator name the operator types + a one-time invite
+//     nonce, no owner root - and emits a transport-ONLY blob carrying `pendingTenant`. The operator's
+//     phone reads it and first-roots the home Domain at its silent owner key, exactly like a friend.
+//   - RE-PROVISION (home already rooted): skip staging; emit the blob only (no `pendingTenant`),
+//     preserving the existing operator name.
+// The blob is transport-only (cluster creds; no identity, no Gateway keys). The Console generates its
+// own identity, admits itself, and admits each Gateway afterward. Mirrors start-gateway.sh --setup.
 
+import { randomBytes } from "node:crypto";
 import { $ } from "bun";
-import { bootstrapDomain } from "./bootstrap-domain.js";
+import { DEFAULT_DOMAIN_ID } from "../src/shared/domain-id.js";
+import { pendingHomeDomain, readHomeDomain } from "./bootstrap-domain.js";
 import {
 	applySecret,
 	ask,
@@ -54,6 +63,11 @@ const SECRETS_DIR = `${process.env.HOME}/android-dev/secrets`;
 const BLOB_FILE = `${SECRETS_DIR}/console-provisioning.json`; // the artifact the app imports
 const QR_GIF = `${SECRETS_DIR}/console-enrollment-qr.gif`; // optional saved QR image (menu opt 2)
 const OWNER_ID_FILE = `${SECRETS_DIR}/console-owner-identity.json`; // legacy host-minted owner (the phone holds it now)
+
+// The one-time invite lifetime for a freshly-staged pending home Domain. Matches evie's
+// DEFAULT_INVITE_TTL_MS (~1 day) so the operator has time to scan + connect; evie sweeps an
+// unredeemed pending tenant at issuedAt + ttlMs.
+const INVITE_TTL_MS = 86_400_000;
 
 const USAGE = [
 	"Console setup - the SINGLE bootstrap for the Android Console.",
@@ -111,14 +125,9 @@ async function cutover(): Promise<void> {
 	}
 }
 
-/** Root the Domain at the CONSOLE owner's public keys (phone-anchored trust), writing evie's
- * federation Secret directly. The owner private key never reaches the host: the operator reads the
- * pubkeys from the app. The crypto is bootstrapDomain() so the rooted owner verifies byte-for-byte
- * on the gateway + app. */
-async function bootstrap(): Promise<void> {
-	note("Rooting the Domain at your owner key...");
-	// On a clean slate the Secret was purged; evie re-creates it on boot, which can lag the rollout
-	// readiness. Wait for federation.json to appear before reading it.
+/** Read evie's live federation.json, waiting for the pod to publish it. On a clean slate the
+ * Secret was purged and evie re-creates it on boot, which can lag the rollout readiness. */
+async function readEvieFed(): Promise<string> {
 	let evieFed = "";
 	for (let i = 0; i < 30; i++) {
 		const b64 = (await k("get", "secret", FED_SECRET, "-o", "jsonpath={.data.federation\\.json}").quiet().nothrow())
@@ -132,63 +141,56 @@ async function bootstrap(): Promise<void> {
 		await Bun.sleep(2000);
 	}
 	if (!evieFed) throw new Error("could not read evie federation Secret (is evie federation up?)");
+	return evieFed;
+}
 
-	// The Console owner pubkeys: from the environment for a scripted run, else prompted. The
-	// operator reads both from the app's Owner setup screen and confirms the fingerprint.
-	let ownerSign = process.env.SB_OWNER_SIGN_PUB ?? "";
-	let ownerBox = process.env.SB_OWNER_BOX_PUB ?? "";
-	if (!ownerSign || !ownerBox) {
+/** Pre-stage the home Domain as a PENDING tenant (fresh setup): an operator name + a one-time
+ * invite nonce, NO owner root. The operator's phone first-roots it on scan at its silently-generated
+ * owner key (the same root-on-connect path a friend takes). Writes evie's federation Secret directly
+ * (the trusted host bootstrap has Secret access, so it pre-stages the home Domain without an operator
+ * signature - unlike the phone's operator-signed provision_tenant for FRIEND tenants). Returns the
+ * minted invite nonce so the caller emits it in the blob's `pendingTenant`. */
+async function stageHomePending(evieFed: string): Promise<{ nonce: string }> {
+	// The operator name (the friendly network label): from the environment for a scripted run, else
+	// prompted (D3). It is the same label the operator would type when hosting a friend.
+	let operatorName = (process.env.SB_OPERATOR_NAME ?? "").trim();
+	if (!operatorName) {
 		if (!process.stdin.isTTY) {
-			throw new Error("owner pubkeys required (set SB_OWNER_SIGN_PUB + SB_OWNER_BOX_PUB, or run interactively)");
+			throw new Error("operator name required (set SB_OPERATOR_NAME, or run interactively)");
 		}
-		console.log("In the app: Owner setup -> Copy owner keys, then paste here.");
-		const ownerJson = ask("Owner keys:");
-		if (ownerJson.includes('"signPub"')) {
-			const parsed = jparse<{ signPub?: string; boxPub?: string }>(ownerJson);
-			ownerSign = parsed?.signPub ?? "";
-			ownerBox = parsed?.boxPub ?? "";
-		} else {
-			// Fallback: a bare signing key was pasted (older app or manual entry).
-			ownerSign = ownerJson;
-			ownerBox = ask("Owner box key:");
-		}
+		console.log("Name your network (the label friends see, e.g. Nyaarium).");
+		operatorName = ask("Operator name:");
 	}
-	if (!ownerSign || !ownerBox) throw new Error("owner keys are required (use the app's 'Copy owner keys' button)");
+	if (!operatorName) throw new Error("an operator name is required");
 
-	const { ownerSignPub: ownerPub, federationJson } = bootstrapDomain(evieFed, ownerSign, ownerBox);
-
-	// If the gateway PINS an owner key (untrusted-evie mode) it refuses any allowlist not rooted at
-	// that key, so a mismatched pin silently drops this Domain. Abort with the exact remediation.
-	const pin = (await dx("printenv", "FEDERATION_OWNER_SIGN_PUB").quiet().nothrow()).text().trim();
-	if (pin && pin !== ownerPub) {
-		throw new Error(
-			`the gateway pins a DIFFERENT Domain owner key than this root:\n` +
-				`  gateway FEDERATION_OWNER_SIGN_PUB = ${pin}\n` +
-				`  this Domain root                  = ${ownerPub}\n` +
-				`  Set FEDERATION_OWNER_SIGN_PUB=${ownerPub} on the gateway (or unset it), restart it, then re-run --setup.`,
-		);
-	}
+	// The one-time invite nonce the friend echoes verbatim in its first_root frame. STANDARD base64
+	// (not base64url): the wire `nonce` field is a b64Field ([A-Za-z0-9+/]={0,2}), and a base64url
+	// nonce carrying -/_ would fail that schema parse. 18 random bytes match evie's mint.
+	const nonce = randomBytes(18).toString("base64");
+	const { federationJson } = pendingHomeDomain(evieFed, operatorName, nonce, Date.now(), INVITE_TTL_MS);
 
 	// Server-side apply: evie's pod created this Secret via the API (no kubectl last-applied
 	// annotation), so a client-side apply warns on the first write after each purge. SSA ignores
-	// that annotation, and --force-conflicts takes the field back from evie to root cleanly.
+	// that annotation, and --force-conflicts takes the field back from evie to write cleanly.
 	if (!(await applySecret(FED_SECRET, { "federation.json": JSON.stringify(federationJson) }, true))) {
 		throw new Error("writing federation Secret failed");
 	}
-	note("Domain rooted at your owner key.");
+	note(`Home network "${operatorName}" pre-staged (pending your phone's first scan).`);
 
-	// Restart evie so it reads the rooted state. The Console then submits its own admission and
-	// admits this Gateway afterward (no host-side admit).
+	// Restart evie so it reads the pending state and serves it to the first-rooting console.
 	await k("rollout", "restart", EVIE_DEPLOY).quiet().nothrow();
 	if ((await k("rollout", "status", EVIE_DEPLOY, "--timeout=120s").quiet().nothrow()).exitCode !== 0) {
-		throw new Error("evie rollout stalled after bootstrap");
+		throw new Error("evie rollout stalled after pre-staging");
 	}
+	return { nonce };
 }
 
 /** Pull the console-bridge cluster creds into a TRANSPORT-ONLY provisioning blob (no identity, no
  * Gateway keys - the Console owns those). Also packs the gateway-bridge creds so the Console can
- * seal a bootstrap bundle for a creds-less Gateway it admits. */
-async function emitBlob(): Promise<void> {
+ * seal a bootstrap bundle for a creds-less Gateway it admits. `pendingTenant` is set only for a
+ * fresh pending home Domain (the home domainId + the minted invite nonce), so the app first-roots
+ * on scan; omitted for a re-provision of an already-rooted Domain (just provisions the console). */
+async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Promise<void> {
 	const { saToken, caPem } = await readSaCreds("console-bridge-proxy-token");
 	if (!saToken || !caPem)
 		throw new Error("console-bridge SA token not populated yet - re-run --setup in a few seconds");
@@ -219,7 +221,7 @@ async function emitBlob(): Promise<void> {
 	// NOTE: sttsUrl/sttsKey are NOT emitted. Voice creds are device-owned now (entered in the app's
 	// Voice settings, persisted on the phone), so a re-provision never wipes voice; do not re-add them.
 	await writeProvisioningBlob(
-		{ apiUrl, caPem, saToken, appToken, namespace: NS, service: SERVICE, port: PORT },
+		{ apiUrl, caPem, saToken, appToken, namespace: NS, service: SERVICE, port: PORT, pendingTenant },
 		BLOB_FILE,
 	);
 	await $`chmod 600 ${BLOB_FILE}`.quiet().nothrow();
@@ -391,12 +393,43 @@ async function qrMenu(): Promise<void> {
 ////////////////////////////////
 //  Top-level operations
 
-/** Cutover the cluster objects, root the Domain at the app's owner key, emit the transport blob,
- * verify the bridge path. */
+/** The fresh-vs-reprovision state machine. After the cluster cutover it reads evie's home Domain
+ * slice: a FRESH (absent / unrooted) home is pre-staged as a PENDING tenant (operator name + a
+ * one-time invite nonce) and the blob carries `pendingTenant` so the operator's phone first-roots on
+ * scan at its silent owner key; an already-ROOTED home skips staging and emits the blob ONLY,
+ * preserving the existing operator name. Then it verifies the bridge path either way. */
 async function provision(): Promise<void> {
 	await cutover();
-	await bootstrap();
-	await emitBlob();
+	const evieFed = await readEvieFed();
+	const home = readHomeDomain(evieFed);
+
+	let pendingTenant: { domainId: string; nonce: string } | undefined;
+	if (home.rooted) {
+		// Re-provision: the home Domain is already rooted at the phone's owner key. Nothing to stage;
+		// just refresh the transport creds. Sanity-check a gateway owner pin against the rooted key so
+		// a mismatched pin (which would make the gateway silently drop this Domain's allowlist) aborts
+		// with the exact remediation instead of failing invisibly downstream.
+		const pin = (await dx("printenv", "FEDERATION_OWNER_SIGN_PUB").quiet().nothrow()).text().trim();
+		if (pin && home.ownerSignPub && pin !== home.ownerSignPub) {
+			throw new Error(
+				`the gateway pins a DIFFERENT Domain owner key than the rooted home Domain:\n` +
+					`  gateway FEDERATION_OWNER_SIGN_PUB = ${pin}\n` +
+					`  rooted home Domain owner          = ${home.ownerSignPub}\n` +
+					`  Set FEDERATION_OWNER_SIGN_PUB=${home.ownerSignPub} on the gateway (or unset it), restart it, then re-run --setup.`,
+			);
+		}
+		note(
+			home.operatorName
+				? `Home network "${home.operatorName}" already rooted - re-provisioning.`
+				: "Home Domain already rooted - re-provisioning.",
+		);
+	} else {
+		// Fresh setup: pre-stage the pending home Domain and carry its invite nonce into the blob.
+		const { nonce } = await stageHomePending(evieFed);
+		pendingTenant = { domainId: DEFAULT_DOMAIN_ID, nonce };
+	}
+
+	await emitBlob(pendingTenant);
 	await verify();
 	console.log();
 	note(`Setup complete. Blob: ${BLOB_FILE}`);
@@ -424,7 +457,7 @@ async function purge(): Promise<void> {
 	note("Host: blob + identity removed.");
 
 	console.log();
-	note("Done. Run Provision with the app's owner keys to set up fresh.");
+	note("Done. Run Provision to set up fresh (it pre-stages the home Domain; your phone roots it on scan).");
 }
 
 /** Top dial menu (interactive --setup), mirroring start-gateway.sh's --setup. */
@@ -432,7 +465,7 @@ async function topMenu(): Promise<void> {
 	await menu("Switchboard - Console setup", [
 		{
 			key: "1",
-			label: "Provision - Root the Domain + emit the blob",
+			label: "Provision - Pre-stage the home Domain + emit the blob",
 			run: async () => {
 				await provision();
 				await qrMenu();

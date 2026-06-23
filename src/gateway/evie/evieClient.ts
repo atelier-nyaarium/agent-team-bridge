@@ -65,6 +65,10 @@ export interface EvieClientConfig {
 	// so this is the only path that updates it between registers. Absent against a pre-feature evie.
 	onDomainUpdate?: (meta: { operatorName?: string | null }) => void;
 	onDisconnect?: () => void;
+	// Override the pending-Domain re-register cadence. Production leaves it unset (the
+	// PENDING_REREGISTER_DELAY_MS default); tests pass a small value to exercise the retry
+	// without waiting out the real interval.
+	pendingReregisterDelayMs?: number;
 }
 
 export interface EvieClient {
@@ -79,6 +83,15 @@ export interface EvieClient {
 
 const RECONNECT_DELAY_MS = 5_000;
 const TOOL_CALL_TIMEOUT_MS = 120_000;
+// When evie refuses gateway_register because the Domain is still PENDING (staged but not
+// yet rooted), re-register on this cadence. A fresh provision-console.sh --setup stages a
+// pending home Domain and restarts evie BEFORE the operator's phone first-roots it, so the
+// register the open-handler fires gets a pending refusal; without this retry the Gateway
+// would sit unregistered into its own home Domain forever (the heartbeat keeps the WS warm,
+// so it never reconnects to re-register). The cap bounds the spin so a genuinely stuck setup
+// stops re-trying instead of polling evie indefinitely.
+const PENDING_REREGISTER_DELAY_MS = 15_000;
+const PENDING_REREGISTER_MAX_ATTEMPTS = 40;
 // Application-level keepalive over the link. The k8s API service-proxy (and any LB in
 // front of the apiserver) drops idle upgraded connections, so a ping well under that
 // idle window keeps the tunnel warm AND detects a silently-dropped path: two missed
@@ -92,6 +105,8 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 	let stopped = false;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+	let pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
+	let pendingRetryAttempts = 0;
 	let missedPongs = 0;
 	let cachedTools: EvieToolSchema[] = [];
 	let droppedFrames = 0;
@@ -113,38 +128,11 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		ws.on("open", () => {
 			console.log(`[evie-client] connected`);
 			missedPongs = 0;
+			// A fresh connection re-registers from scratch; drop any pending-retry timer left
+			// from a prior socket so its cadence does not double up with the new open-handler.
+			clearPendingRetry();
 			startHeartbeat();
-			// Register this Gateway with the Router so cross-Gateway frames can find it.
-			// Re-runs on every reconnect (the Router re-keys gateway id -> socket).
-			void callTool("gateway_register", {
-				gatewayId: config.gatewayId,
-				domainId: config.domainId,
-				protocolVersion: FEDERATION_PROTOCOL_VERSION,
-				...(config.buildRegisterAuth?.() ?? {}),
-			}).then((res) => {
-				const r = res.result as
-					| {
-							ok?: boolean;
-							error?: string;
-							gateways?: string[];
-							domain?: unknown;
-							domainStatus?: string;
-							operatorName?: string | null;
-					  }
-					| undefined;
-				if (res.error) console.error(`[evie-client] gateway_register failed: ${res.error}`);
-				else if (r?.ok === false) console.error(`[evie-client] Router rejected registration: ${r.error}`);
-				else {
-					const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
-					console.log(`[evie-client] registered as Gateway "${config.gatewayId}"${peers}`);
-					if (r?.domain) config.onDomainSync?.(r.domain);
-					// Surface the Gateway's own Domain status + operator name to the console
-					// register reply / discovery roster. Sent only by a federation-aware evie.
-					if (r?.domainStatus !== undefined || r?.operatorName !== undefined) {
-						config.onDomainMeta?.({ domainStatus: r.domainStatus, operatorName: r.operatorName });
-					}
-				}
-			});
+			registerGateway();
 		});
 
 		ws.on("message", (raw: WebSocket.Data) => {
@@ -233,6 +221,9 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		ws.on("close", () => {
 			ws = null;
 			stopHeartbeat();
+			// The pending-retry rides this socket; a reconnect re-registers from the open
+			// handler, so cancel the timer rather than fire a register at a dead socket.
+			clearPendingRetry();
 			// Fail in-flight calls now rather than letting each wait out its 120s
 			// timer across a reconnect; callers see a fast retryable error.
 			for (const [callId, pending] of pendingCalls) {
@@ -256,6 +247,84 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		if (stopped) return;
 		if (reconnectTimer) clearTimeout(reconnectTimer);
 		reconnectTimer = setTimeout(connect, RECONNECT_DELAY_MS);
+	}
+
+	// Register this Gateway with the Router so cross-Gateway frames can find it. Fired
+	// once from the open handler (the Router re-keys gateway id -> socket on every reconnect)
+	// and re-fired by the pending-retry timer when the Domain was still PENDING.
+	function registerGateway(): void {
+		if (!ws || ws.readyState !== WebSocket.OPEN) return;
+		void callTool("gateway_register", {
+			gatewayId: config.gatewayId,
+			domainId: config.domainId,
+			protocolVersion: FEDERATION_PROTOCOL_VERSION,
+			...(config.buildRegisterAuth?.() ?? {}),
+		}).then((res) => {
+			const r = res.result as
+				| {
+						ok?: boolean;
+						pending?: boolean;
+						error?: string;
+						gateways?: string[];
+						domain?: unknown;
+						domainStatus?: string;
+						operatorName?: string | null;
+				  }
+				| undefined;
+			if (res.error) {
+				console.error(`[evie-client] gateway_register failed: ${res.error}`);
+				return;
+			}
+			if (r?.ok === false) {
+				// A PENDING-tagged refusal is transient: the Domain is staged but not yet rooted
+				// (a fresh setup roots it once the operator's phone scans the QR). Retry on a
+				// bounded cadence so registration lands as soon as the root arrives. Any other
+				// ok:false is terminal (revoked / wrong-domain / version) - log only, no retry,
+				// so a real denial is not masked behind an endless re-register loop.
+				if (r.pending) schedulePendingRetry(r.error);
+				else console.error(`[evie-client] Router rejected registration: ${r.error}`);
+				return;
+			}
+			// A successful register clears any pending-retry left from earlier attempts.
+			clearPendingRetry();
+			const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
+			console.log(`[evie-client] registered as Gateway "${config.gatewayId}"${peers}`);
+			if (r?.domain) config.onDomainSync?.(r.domain);
+			// Surface the Gateway's own Domain status + operator name to the console
+			// register reply / discovery roster. Sent only by a federation-aware evie.
+			if (r?.domainStatus !== undefined || r?.operatorName !== undefined) {
+				config.onDomainMeta?.({ domainStatus: r.domainStatus, operatorName: r.operatorName });
+			}
+		});
+	}
+
+	function schedulePendingRetry(reason?: string): void {
+		if (stopped) return;
+		if (pendingRetryTimer) return; // one timer in flight; do not stack
+		if (pendingRetryAttempts >= PENDING_REREGISTER_MAX_ATTEMPTS) {
+			console.error(
+				`[evie-client] Domain still pending after ${pendingRetryAttempts} re-register attempts, giving up: ${reason ?? "pending"}`,
+			);
+			return;
+		}
+		const delayMs = config.pendingReregisterDelayMs ?? PENDING_REREGISTER_DELAY_MS;
+		pendingRetryAttempts++;
+		console.warn(
+			`[evie-client] Domain not yet rooted (${reason ?? "pending"}); re-registering in ${delayMs / 1000}s (attempt ${pendingRetryAttempts}/${PENDING_REREGISTER_MAX_ATTEMPTS})`,
+		);
+		pendingRetryTimer = setTimeout(() => {
+			pendingRetryTimer = null;
+			registerGateway();
+		}, delayMs);
+		pendingRetryTimer.unref?.();
+	}
+
+	function clearPendingRetry(): void {
+		if (pendingRetryTimer) {
+			clearTimeout(pendingRetryTimer);
+			pendingRetryTimer = null;
+		}
+		pendingRetryAttempts = 0;
 	}
 
 	function startHeartbeat(): void {
@@ -315,6 +384,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 	function stop(): void {
 		stopped = true;
 		stopHeartbeat();
+		clearPendingRetry();
 		if (reconnectTimer) clearTimeout(reconnectTimer);
 		for (const [, pending] of pendingCalls) {
 			clearTimeout(pending.timer);
