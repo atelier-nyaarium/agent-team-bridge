@@ -50,6 +50,7 @@ data class TeamInfo(
 	val team: String,
 	val gatewayId: String? = null,
 	val domainId: String? = null,
+	val operatorName: String? = null,
 	val status: String,
 	val mode: String? = null,
 	val kind: String? = null,
@@ -87,6 +88,12 @@ sealed class ConsoleOp {
 	data class Register(
 		val clientVersion: String? = null,
 		val clientVariant: String? = null,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("first_root")
+	data class FirstRoot(
+		val firstRoot: SignedFirstRoot,
 	) : ConsoleOp()
 
 	@Serializable
@@ -246,6 +253,7 @@ data class ConsoleRegisterResult(
 	val gatewayId: String? = null,
 	val cursor: Long,
 	val epoch: Long,
+	val domainStatus: String? = null,
 )
 
 @Serializable
@@ -376,12 +384,40 @@ sealed class EnrollOp {
 	data class RevokeXdomainLink(
 		val revocation: SignedXDomainLinkRevocation,
 	) : EnrollOp()
+
+	@Serializable
+	@SerialName("provision_tenant")
+	data class ProvisionTenant(
+		val provision: SignedProvisionTenant,
+	) : EnrollOp()
+
+	@Serializable
+	@SerialName("remove_tenant")
+	data class RemoveTenant(
+		val removal: SignedRemoveTenant,
+	) : EnrollOp()
+
+	@Serializable
+	@SerialName("set_operator_name")
+	data class SetOperatorName(
+		val rename: SignedSetOperatorName,
+	) : EnrollOp()
 }
 
 @Serializable
 data class EnrollResult(
 	val ok: Boolean,
 	val error: String? = null,
+)
+
+@Serializable
+data class PendingTenant(
+	val domainId: String,
+	val operatorName: String,
+	val nonce: String,
+	val issuedAt: Long,
+	val ttlMs: Long,
+	val rooted: Boolean,
 )
 
 @Serializable
@@ -405,6 +441,21 @@ data class GatewayBootstrapFrame(
 	val v: Long,
 	val signerSignPub: String,
 	val sealed: SealedEnvelope,
+)
+
+@Serializable
+data class SignedFirstRoot(
+	val firstRoot: FirstRoot,
+	val signature: String,
+)
+
+@Serializable
+data class FirstRoot(
+	val domainId: String,
+	val ownerSignPub: String,
+	val ownerBoxPub: String,
+	val nonce: String,
+	val issuedAt: Long,
 )
 
 @Serializable
@@ -439,6 +490,7 @@ data class DomainSnapshot(
 	val ownerSignPub: String,
 	val admissions: List<SignedAdmission>,
 	val revocations: List<SignedRevocation>,
+	val operatorName: String? = null,
 )
 
 @Serializable
@@ -583,5 +635,49 @@ data class XDomainLinkRevocation(
 	val srcDomainId: String,
 	val dstDomainId: String,
 	val revokedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
+data class SignedProvisionTenant(
+	val provision: ProvisionTenant,
+	val operatorSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class ProvisionTenant(
+	val domainId: String,
+	val operatorName: String,
+	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
+data class SignedRemoveTenant(
+	val removal: RemoveTenant,
+	val operatorSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class RemoveTenant(
+	val domainId: String,
+	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
+data class SignedSetOperatorName(
+	val rename: SetOperatorName,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class SetOperatorName(
+	val domainId: String,
+	val operatorName: String,
+	val issuedAt: Long,
 	val nonce: String,
 )

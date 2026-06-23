@@ -34,7 +34,7 @@ import {
 	GATEWAY_QUALIFIER_SEP,
 	NOTICE_SESSION_PREFIX,
 } from "../src/shared/console-protocol.js";
-import { EnrollOpSchema, EnrollResultSchema } from "../src/shared/enrollment.js";
+import { EnrollOpSchema, EnrollResultSchema, PendingTenantSchema } from "../src/shared/enrollment.js";
 import {
 	ChannelFileSchema,
 	ConsoleListTeamsResultSchema,
@@ -91,6 +91,7 @@ const ROOTS: z.ZodType[] = [
 	SignedRevocationSchema,
 	EnrollOpSchema,
 	EnrollResultSchema,
+	PendingTenantSchema,
 	GatewayTransportSchema,
 	GatewayBootstrapBundleSchema,
 	GatewayBootstrapFrameSchema,

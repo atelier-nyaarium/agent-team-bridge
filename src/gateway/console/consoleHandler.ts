@@ -417,6 +417,14 @@ export function createConsoleHandler({
 				return { device, gatewayId: localGatewayId, cursor: box.highWater, epoch: box.epoch };
 			}
 
+			case "first_root": {
+				// PENDING_ENROLL: the friend's first-root of a rootless Domain. The wire shape
+				// lands here in the protocol phase; the gateway's PENDING_ENROLL accept path
+				// (the self-signed-frame branch in the consoleSealer) and the relay to evie are a
+				// later phase, so reject it explicitly for now rather than fall through.
+				throw new Error("first_root is not yet handled on this Gateway");
+			}
+
 			case "list_teams": {
 				// Fan out across the mesh so the console sees every Gateway's sessions, each
 				// carrying its own `gatewayId` (the console keys threads by gateway/name).

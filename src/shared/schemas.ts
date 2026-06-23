@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DomainSnapshotSchema, SignedAdmissionSchema } from "./admission.js";
+import { SignedFirstRootSchema } from "./enrollment.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 
 ////////////////////////////////
@@ -18,6 +19,10 @@ export const TeamKindSchema = z.enum(["devcontainer", "loose", "console", "gatew
 export const ResponseStatusSchema = z
 	.enum(["completed", "clarification", "deferred", "needs_human", "error", "timeout", "running"])
 	.meta({ id: "ResponseStatus" });
+// Whether the console's Domain is rooted yet. A `pending` Domain (an operator-staged tenant
+// the friend has not yet first-rooted) tells the app to submit its owner pubkey via first_root;
+// a `rooted` Domain just provisions the console. Decode-side this stays an open String in Kotlin.
+export const DomainStatusSchema = z.enum(["pending", "rooted"]).meta({ id: "DomainStatus" });
 
 ////////////////////////////////
 //  Channel Reply Schema
@@ -114,6 +119,11 @@ export const TeamInfoSchema = z
 		// Optional for decode tolerance: a pre-federation Gateway omits it and consumers
 		// fall back to the home Domain.
 		domainId: z.string().optional(),
+		// The friendly NETWORK display name of the Domain that owns this session, propagated
+		// over the discovery roster so a linked friend Domain shows the owner's self-set label
+		// (e.g. "Carol") instead of a local alias. Optional/nullable for decode tolerance: a
+		// pre-feature Gateway omits it and consumers fall back to the domainId / a local label.
+		operatorName: z.string().nullish(),
 		status: z.enum(["online", "available"]),
 		mode: ConnectionModeSchema.optional(),
 		// Optional for decode tolerance: old gateways omit kind and consumers
@@ -147,6 +157,13 @@ export const ConsoleOpSchema = z
 			clientVersion: z.string().max(64).optional(),
 			clientVariant: z.string().max(16).optional(),
 		}),
+		// First-root a PENDING (rootless) Domain at this console's silently-generated owner
+		// key. The friend's app sends it when register reports `domainStatus: "pending"`; the
+		// gateway's PENDING_ENROLL path accepts it (the ONE op allowed before the Domain is
+		// rooted) by verifying the SELF-signature inside `firstRoot` against its own
+		// ownerSignPub plus the one-time QR nonce, then relays the root to evie. Every other
+		// op stays rejected until the Domain is rooted.
+		z.object({ kind: z.literal("first_root"), firstRoot: SignedFirstRootSchema }),
 		z.object({ kind: z.literal("list_teams") }),
 		z.object({
 			kind: z.literal("send"),
@@ -442,6 +459,11 @@ export const ConsoleRegisterResultSchema = z
 		// Mailbox instance id. If it differs from the console's stored epoch, the
 		// mailbox was recreated and the console must reset its cursor to 0.
 		epoch: z.number().int().nonnegative(),
+		// Whether this console's Domain is rooted yet. `pending` (an operator-staged tenant the
+		// friend has not first-rooted) tells the app to submit its owner pubkey via first_root;
+		// `rooted` just provisions the console. Optional for decode tolerance: a pre-feature
+		// Gateway omits it and the app treats the Domain as already rooted (the legacy path).
+		domainStatus: DomainStatusSchema.optional(),
 	})
 	.meta({ id: "ConsoleRegisterResult" });
 
