@@ -98,10 +98,14 @@ object CrossDomainLink {
 				val sessions = byDomain[domainId].orEmpty()
 				LinkedDomain(
 					domainId = domainId,
+					// The friend's self-set network name, propagated over discovery (the gateway stamps
+					// each shared session's operatorName). First non-empty wins; null until any session
+					// carries one, in which case the UI falls back to the opaque domainId.
+					operatorName = sessions.firstNotNullOfOrNull { it.operatorName?.ifEmpty { null } },
 					sessionCount = sessions.size,
 					online = sessions.any { it.status == "online" },
 				)
 			}
-			.sortedBy { it.domainId }
+			.sortedBy { it.operatorName ?: it.domainId }
 	}
 }

@@ -129,6 +129,9 @@ dependencies {
 	implementation(libs.androidx.camera.view)
 	implementation(libs.androidx.lifecycle.runtime.compose)
 	implementation(libs.mlkit.barcode.scanning)
+	// QR ENCODER for the host-a-friend invite QR (the operator's phone renders a pending-tenant
+	// provisioning blob the friend scans). Pure Java, GMS-free, no Android transitives.
+	implementation(libs.zxing.core)
 
 	testImplementation(libs.junit)
 }

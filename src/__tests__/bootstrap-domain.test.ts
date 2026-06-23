@@ -1,7 +1,9 @@
+import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { bootstrapDomain } from "../../scripts/bootstrap-domain.js";
+import { bootstrapDomain, pendingHomeDomain, readHomeDomain } from "../../scripts/bootstrap-domain.js";
+import { buildProvisioningBlob } from "../../scripts/write-provisioning-blob.js";
 import { type Admission, type SignedAdmission, signAdmission } from "../shared/admission.js";
-import { generateIdentity } from "../shared/crypto.js";
+import { b64Field, generateIdentity } from "../shared/crypto.js";
 import { DEFAULT_DOMAIN_ID } from "../shared/domain-id.js";
 
 ////////////////////////////////
@@ -142,5 +144,169 @@ describe("bootstrapDomain v2-awareness (red-team P5: data loss)", () => {
 
 	it("rejects a malformed owner key with an actionable error", () => {
 		expect(() => bootstrapDomain(v2Secret(), "not-a-key", owner.box.pub)).toThrow(/32-byte key/);
+	});
+});
+
+////////////////////////////////
+//  operatorName preservation on the owner-key bootstrapDomain rooting helper.
+//
+//  These cover bootstrapDomain (the owner-key-in-hand same-owner re-root case), NOT the live
+//  provision() re-provision path - that path never rewrites the Secret for an already-rooted home,
+//  so it preserves operatorName by not touching the slice. The pendingHomeDomain / readHomeDomain
+//  blocks below cover the live fresh-vs-reprovision flow.
+
+interface SliceWithName {
+	ownerSignPub: string | null;
+	admissions: SignedAdmission[];
+	operatorName?: string | null;
+	pendingTenant?: { operatorName: string; nonce: string; issuedAt: number; ttlMs: number; rooted: boolean };
+}
+
+/** A v2 Secret whose home Domain is rooted at `owner` AND carries an operatorName, so the
+ * same-owner re-root path can be checked to PRESERVE that label. */
+function v2RootedWithName(name: string) {
+	return JSON.stringify({
+		schema: 2,
+		identity: evie,
+		enrollment: {
+			[DEFAULT_DOMAIN_ID]: {
+				ownerSignPub: owner.sign.pub,
+				ownerBoxPub: owner.box.pub,
+				admissions: [homeAdmission()],
+				revocations: [],
+				operatorName: name,
+			},
+		},
+	});
+}
+
+describe("bootstrapDomain operatorName preservation (owner-key re-root helper, not the live path)", () => {
+	it("keeps operatorName on a SAME-owner re-root", () => {
+		const { federationJson } = bootstrapDomain(v2RootedWithName("Nyaarium"), owner.sign.pub, owner.box.pub);
+		const home = (federationJson as { enrollment: Record<string, SliceWithName> }).enrollment[DEFAULT_DOMAIN_ID];
+		expect(home.operatorName).toBe("Nyaarium");
+		// The same-owner allowlist is preserved alongside the name.
+		expect(home.admissions).toHaveLength(1);
+	});
+
+	it("drops operatorName on a DIFFERENT-owner re-root (fresh Domain, the label was the prior owner's)", () => {
+		const { federationJson } = bootstrapDomain(
+			v2RootedWithName("Nyaarium"),
+			otherOwner.sign.pub,
+			otherOwner.box.pub,
+		);
+		const home = (federationJson as { enrollment: Record<string, SliceWithName> }).enrollment[DEFAULT_DOMAIN_ID];
+		expect(home.operatorName).toBeUndefined();
+		expect(home.admissions).toHaveLength(0);
+	});
+});
+
+////////////////////////////////
+//  pendingHomeDomain (fresh setup: pre-stage the rootless home Domain)
+
+describe("pendingHomeDomain (the fresh-setup pending home slice)", () => {
+	const NONCE = randomBytes(18).toString("base64");
+
+	it("writes a rootless home slice mirroring evie's PendingTenantRecord", () => {
+		const fresh = JSON.stringify({ schema: 2, identity: evie, enrollment: {} });
+		const { federationJson } = pendingHomeDomain(fresh, "Nyaarium", NONCE, 1000, 86_400_000);
+		expect((federationJson as { schema?: number }).schema).toBe(2);
+		const home = (federationJson as { enrollment: Record<string, SliceWithName> }).enrollment[DEFAULT_DOMAIN_ID];
+		// No owner yet (the phone first-roots on scan); the operatorName + pendingTenant are set.
+		expect(home.ownerSignPub).toBeNull();
+		expect(home.operatorName).toBe("Nyaarium");
+		expect(home.pendingTenant).toEqual({
+			operatorName: "Nyaarium",
+			nonce: NONCE,
+			issuedAt: 1000,
+			ttlMs: 86_400_000,
+			rooted: false,
+		});
+	});
+
+	it("mints the invite nonce as STANDARD base64 (not base64url - the wire field is a b64Field)", () => {
+		// randomBytes(18).toString("base64") is the byte-identical mint evie uses, and it must pass
+		// the b64Field charset that the first_root wire `nonce` enforces. A base64url nonce carrying
+		// -/_ would fail this, reintroducing the Phase 3 bug.
+		expect(b64Field().safeParse(NONCE).success).toBe(true);
+		expect(NONCE).not.toMatch(/[-_]/);
+	});
+
+	it("preserves evie's identity and every friend Domain when pre-staging home", () => {
+		// A v2 Secret already hosting a friend Domain "work": pre-staging home must not touch it.
+		const { federationJson } = pendingHomeDomain(v2Secret(), "Nyaarium", NONCE, 1000, 86_400_000);
+		expect(federationJson.identity.sign.pub).toBe(evie.sign.pub);
+		const enrollment = (federationJson as { enrollment: Record<string, SliceWithName> }).enrollment;
+		expect(enrollment.work.ownerSignPub).toBe(otherOwner.sign.pub);
+		expect(enrollment[DEFAULT_DOMAIN_ID].ownerSignPub).toBeNull();
+		expect(enrollment[DEFAULT_DOMAIN_ID].pendingTenant?.rooted).toBe(false);
+	});
+
+	it("keeps the v1 single-Domain write path on a legacy Secret", () => {
+		const v1 = JSON.stringify({
+			identity: evie,
+			enrollment: { ownerSignPub: null, ownerBoxPub: null, admissions: [], revocations: [] },
+		});
+		const { federationJson } = pendingHomeDomain(v1, "Nyaarium", NONCE, 1000, 86_400_000);
+		expect((federationJson as { schema?: number }).schema).toBeUndefined();
+		const home = federationJson.enrollment as SliceWithName;
+		expect(home.ownerSignPub).toBeNull();
+		expect(home.pendingTenant?.operatorName).toBe("Nyaarium");
+	});
+});
+
+////////////////////////////////
+//  readHomeDomain (the fresh-vs-reprovision state-machine discriminator)
+
+describe("readHomeDomain (fresh vs re-provision detection)", () => {
+	it("reads ROOTED for a rooted home Domain and surfaces its owner + operatorName", () => {
+		const r = readHomeDomain(v2RootedWithName("Nyaarium"));
+		expect(r.rooted).toBe(true);
+		expect(r.ownerSignPub).toBe(owner.sign.pub);
+		expect(r.operatorName).toBe("Nyaarium");
+	});
+
+	it("reads NOT-rooted for a freshly pre-staged pending home, surfacing the pending operatorName", () => {
+		const fresh = JSON.stringify({ schema: 2, identity: evie, enrollment: {} });
+		const { federationJson } = pendingHomeDomain(fresh, "Nyaarium", randomBytes(18).toString("base64"), 1000, 1);
+		const r = readHomeDomain(JSON.stringify(federationJson));
+		expect(r.rooted).toBe(false);
+		expect(r.ownerSignPub).toBeNull();
+		// The label is read off the pending record before rooting (so a re-run shows the same name).
+		expect(r.operatorName).toBe("Nyaarium");
+	});
+
+	it("reads NOT-rooted for an absent home (a never-staged Secret)", () => {
+		const r = readHomeDomain(JSON.stringify({ schema: 2, identity: evie, enrollment: {} }));
+		expect(r).toEqual({ rooted: false, ownerSignPub: null, operatorName: null });
+	});
+
+	it("reads NOT-rooted for a malformed Secret (fresh setup pre-stages it rather than throwing)", () => {
+		const r = readHomeDomain("not json {");
+		expect(r).toEqual({ rooted: false, ownerSignPub: null, operatorName: null });
+	});
+});
+
+////////////////////////////////
+//  Blob pendingTenant wiring (the discriminator the app reads)
+
+describe("provisioning blob pendingTenant (the pending vs rooted discriminator)", () => {
+	const base = { apiUrl: "https://k8s.example:6443", caPem: "ca", saToken: "sa", appToken: "app" };
+
+	it("carries pendingTenant when fresh (home domainId + the standard-base64 invite nonce)", () => {
+		const nonce = randomBytes(18).toString("base64");
+		const blob = buildProvisioningBlob({ ...base, pendingTenant: { domainId: DEFAULT_DOMAIN_ID, nonce } });
+		expect(blob.pendingTenant).toEqual({ domainId: DEFAULT_DOMAIN_ID, nonce });
+	});
+
+	it("omits pendingTenant on a re-provision (rooted Domain)", () => {
+		const blob = buildProvisioningBlob(base);
+		expect(blob.pendingTenant).toBeUndefined();
+	});
+
+	it("rejects a base64url nonce in pendingTenant (guards the Phase 3 bug at the schema)", () => {
+		expect(() =>
+			buildProvisioningBlob({ ...base, pendingTenant: { domainId: DEFAULT_DOMAIN_ID, nonce: "ab-cd_ef" } }),
+		).toThrow();
 	});
 });

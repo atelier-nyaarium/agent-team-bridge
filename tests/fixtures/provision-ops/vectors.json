@@ -1,0 +1,58 @@
+{
+	"_comment": "Cross-runtime vectors for the friend cross-Domain onboarding signing bytes (src/shared/enrollment.ts): provision_tenant (PROVISION_TENANT_V1), remove_tenant (REMOVE_TENANT_V1), first_root (FIRST_ROOT_V1, SELF-signed by the fresh owner key), set_operator_name (SET_OPERATOR_NAME_V1). Read by src/__tests__/provision-ops.test.ts (TS) AND ProvisionOpsTest.kt (Kotlin), so the hand-authored Kotlin twin (ProvisionOpsCrypto.kt) cannot drift from this TS reference. signingBytes is the canonical newline-joined preimage (utf8 + hex + base64); signature is a node Ed25519 (RFC 8032 deterministic) signature over those bytes. operatorFingerprint/ownerFingerprint inside the bytes are fingerprint(signerSignPub). Generated from the TS reference; never hand-authored.",
+	"operatorSignPub": "F51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=",
+	"operatorSignPriv": "zwAUh+WAfzZ5yWSxEtR7mRk9fIIzLTtwo4SsbeEAzLA=",
+	"operatorFingerprint": "469E-3643-F81A-9EB8",
+	"friendOwnerSignPub": "jGn787BASDt0fha5d8cjuYxZBQ2DZPVZzbEel3Cfcv4=",
+	"friendOwnerSignPriv": "hv4it8vBajVd4NohKuqkjiVeqvGiZaYkgN940TvrYrM=",
+	"friendOwnerBoxPub": "NNZvUCMX+V3Y209+2UFZ6A7NJE3npuKnCQf7nNmnYlc=",
+	"friendOwnerFingerprint": "E3AF-DDB0-1F50-4DE2",
+	"provision": {
+		"value": {
+			"domainId": "carol",
+			"operatorName": "Carol Network",
+			"issuedAt": 1717171717171,
+			"nonce": "cHJvdmlzaW9uLW5vbmNl"
+		},
+		"signingBytes": "PROVISION_TENANT_V1\n469E-3643-F81A-9EB8\ncarol\nCarol Network\n1717171717171\ncHJvdmlzaW9uLW5vbmNl",
+		"signingBytesHex": "50524f564953494f4e5f54454e414e545f56310a343639452d333634332d463831412d394542380a6361726f6c0a4361726f6c204e6574776f726b0a313731373137313731373137310a63484a76646d6c7a615739754c573576626d4e6c",
+		"signingBytesBase64": "UFJPVklTSU9OX1RFTkFOVF9WMQo0NjlFLTM2NDMtRjgxQS05RUI4CmNhcm9sCkNhcm9sIE5ldHdvcmsKMTcxNzE3MTcxNzE3MQpjSEp2ZG1semFXOXVMVzV2Ym1ObA==",
+		"signature": "Qlz/bFGBXpNfjA0nR8z3Wee768F8CNokEKFcD7EoH1++0xcubbtSrG/AAm3F45f35Ks2OG/KLvKCfz1iH/2MAg=="
+	},
+	"removal": {
+		"value": {
+			"domainId": "carol",
+			"issuedAt": 1717171800000,
+			"nonce": "cmVtb3ZlLW5vbmNl"
+		},
+		"signingBytes": "REMOVE_TENANT_V1\n469E-3643-F81A-9EB8\ncarol\n1717171800000\ncmVtb3ZlLW5vbmNl",
+		"signingBytesHex": "52454d4f56455f54454e414e545f56310a343639452d333634332d463831412d394542380a6361726f6c0a313731373137313830303030300a636d567462335a6c4c573576626d4e6c",
+		"signingBytesBase64": "UkVNT1ZFX1RFTkFOVF9WMQo0NjlFLTM2NDMtRjgxQS05RUI4CmNhcm9sCjE3MTcxNzE4MDAwMDAKY21WdGIzWmxMVzV2Ym1ObA==",
+		"signature": "oyCsegS0UooL95I6hKm8c7Y9rCGUc4FZFQSGvHbj7doctyFkd79LVm+h4pSptEPzBCo9MS1iv4tKQFx7uNohBg=="
+	},
+	"firstRoot": {
+		"value": {
+			"domainId": "carol",
+			"ownerSignPub": "jGn787BASDt0fha5d8cjuYxZBQ2DZPVZzbEel3Cfcv4=",
+			"ownerBoxPub": "NNZvUCMX+V3Y209+2UFZ6A7NJE3npuKnCQf7nNmnYlc=",
+			"nonce": "Zmlyc3Qtcm9vdC1ub25jZQ==",
+			"issuedAt": 1717171717171
+		},
+		"signingBytes": "FIRST_ROOT_V1\ncarol\njGn787BASDt0fha5d8cjuYxZBQ2DZPVZzbEel3Cfcv4=\nNNZvUCMX+V3Y209+2UFZ6A7NJE3npuKnCQf7nNmnYlc=\nZmlyc3Qtcm9vdC1ub25jZQ==\n1717171717171",
+		"signingBytesHex": "46495253545f524f4f545f56310a6361726f6c0a6a476e373837424153447430666861356438636a7559785a425132445a50565a7a6245656c3343666376343d0a4e4e5a7655434d582b5633593230392b3255465a3641374e4a45336e70754b6e435166376e4e6d6e596c633d0a5a6d6c7963335174636d3976644331756232356a5a513d3d0a31373137313731373137313731",
+		"signingBytesBase64": "RklSU1RfUk9PVF9WMQpjYXJvbApqR243ODdCQVNEdDBmaGE1ZDhjanVZeFpCUTJEWlBWWnpiRWVsM0NmY3Y0PQpOTlp2VUNNWCtWM1kyMDkrMlVGWjZBN05KRTNucHVLbkNRZjduTm1uWWxjPQpabWx5YzNRdGNtOXZkQzF1YjI1alpRPT0KMTcxNzE3MTcxNzE3MQ==",
+		"signature": "A58m1gzMeBl7LF4E3qXJVUIYi81wfwqhsNiHke/OsRpYdol0NgP7chMY8F7eR3Uk+jzxQSl2UHDf1sfLnCxNCQ=="
+	},
+	"rename": {
+		"value": {
+			"domainId": "carol",
+			"operatorName": "Carol's Lab",
+			"issuedAt": 1717171900000,
+			"nonce": "c2V0LW5hbWUtbm9uY2U="
+		},
+		"signingBytes": "SET_OPERATOR_NAME_V1\nE3AF-DDB0-1F50-4DE2\ncarol\nCarol's Lab\n1717171900000\nc2V0LW5hbWUtbm9uY2U=",
+		"signingBytesHex": "5345545f4f50455241544f525f4e414d455f56310a453341462d444442302d314635302d344445320a6361726f6c0a4361726f6c2773204c61620a313731373137313930303030300a633256304c57356862575574626d39755932553d",
+		"signingBytesBase64": "U0VUX09QRVJBVE9SX05BTUVfVjEKRTNBRi1EREIwLTFGNTAtNERFMgpjYXJvbApDYXJvbCdzIExhYgoxNzE3MTcxOTAwMDAwCmMyVjBMVzVoYldVdGJtOXVZMlU9",
+		"signature": "0OZMpT2L8nvsqwImH0vC7cmCdG5CeXrmDIkNKK2SFrQ2r05LQFYF8wOndjh5drC61Wzw3NU7fO589D23Pc7bBA=="
+	}
+}

@@ -1,4 +1,4 @@
-// SYNC-HASH: e53a6578171e9599b0ef7ddfcf942d55
+// SYNC-HASH: ed0e65b7e41cc93c168095bfc110de07
 // SYNCED MODULE - source of truth: switchboard/src/shared/admission.ts
 // Copied verbatim into: evie-bot/app/features/bridge/admission.ts
 // MUST re-copy on change: cp src/shared/admission.ts ../evie-bot/app/features/bridge/admission.ts
@@ -77,6 +77,10 @@ export const DomainSnapshotSchema = z
 		ownerSignPub: z.string().min(1),
 		admissions: z.array(SignedAdmissionSchema),
 		revocations: z.array(SignedRevocationSchema),
+		// The friendly NETWORK display name (one per owner/Domain), propagated so Peers see
+		// the owner's self-set label instead of a local alias. Optional/nullable for decode
+		// tolerance: a pre-feature snapshot omits it and consumers fall back to a local label.
+		operatorName: z.string().nullish(),
 	})
 	.meta({ id: "DomainSnapshot" });
 

@@ -24,7 +24,7 @@ import {
 	type TmuxTarget,
 } from "../../shared/host-op.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
-import type { GatewayTransport } from "../../shared/schemas.js";
+import { DomainStatusSchema, type GatewayTransport } from "../../shared/schemas.js";
 import { SessionId, TeamAddress } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
@@ -71,6 +71,13 @@ export interface ConsoleHandlerDeps {
 	/** The current keyring + its version hash, for the Console's poll-based sync. The
 	 * poll reply carries the snapshot only when the Console's known version differs. */
 	domain?: () => { version: string; snapshot: DomainSnapshot } | null;
+	/** This Gateway's own Domain lifecycle status, learned from evie's register reply. A Gateway
+	 * exists only for a Domain past rooting, so this is "rooted" (or "unrooted" for a fresh home),
+	 * never "pending" - the pending case reaches the app via the provisioning blob's pendingTenant,
+	 * not here. Returned on the console register so a fresh-home app just-provisions. Undefined
+	 * pre-register / against a pre-feature evie (the app then treats the Domain as already
+	 * rooted - the legacy path). */
+	domainStatus?: () => string | undefined;
 	/** The bootstrap transport creds a creds-less Gateway needs to reach evie, served to the
 	 * Console on the get_gateway_transport op (it seals them into a bundle for a Gateway it is
 	 * enrolling). Read from the federation dir's bootstrap-transport.json; null when unprovisioned. */
@@ -195,6 +202,7 @@ export function createConsoleHandler({
 	sendBoundMs = SEND_BOUND_MS,
 	isProjectName,
 	domain,
+	domainStatus,
 	bootstrapTransport,
 	relayToHost,
 	crossDomain,
@@ -414,7 +422,32 @@ export function createConsoleHandler({
 				console.log(
 					`[console register] conv=${conversationId.slice(0, 12)} owner=${ownerId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
 				);
-				return { device, gatewayId: localGatewayId, cursor: box.highWater, epoch: box.epoch };
+				// Carry the Gateway's own Domain status. A Gateway only exists for a Domain past
+				// rooting, so this is `rooted` (or `unrooted` for a fresh home) - never `pending`,
+				// which the app learns earlier from the provisioning blob's `pendingTenant` and
+				// first-roots directly at evie. Validate the evie-sourced value against the closed
+				// union (a garbage status is dropped, not forwarded). Omitted when unknown
+				// (pre-register / pre-feature evie), so the app falls back to the already-rooted
+				// legacy path.
+				const status = DomainStatusSchema.safeParse(domainStatus?.());
+				return {
+					device,
+					gatewayId: localGatewayId,
+					cursor: box.highWater,
+					epoch: box.epoch,
+					...(status.success ? { domainStatus: status.data } : {}),
+				};
+			}
+
+			case "first_root": {
+				// first_root is decided AT evie, never on a Gateway: a pending friend Domain has
+				// no Gateway yet (it gets one only AFTER first-root) and the pre-root console has
+				// no admission, so the self-signed, invite-nonce-gated frame cannot ride this
+				// sealed gateway-relay path - it could not even open here (the consoleSealer
+				// requires an admitted kind:console). The app POSTs the SignedFirstRoot directly to
+				// evie's console bridge instead. Reject explicitly so a misrouted frame fails clear
+				// rather than falling through.
+				throw new Error("first_root is handled directly at evie, not through a Gateway");
 			}
 
 			case "list_teams": {
