@@ -407,12 +407,12 @@ describe("parseCommitReply / parseRevealReply", () => {
 				gatewayId: "sakura-gw",
 			},
 			receiverSalt: "c2FsdA",
-			sas: "123456789012",
+			sas: "847291",
 		};
 		expect(parseRevealReply(reply)).toEqual(reply);
 	});
 
 	it("parseRevealReply rejects a malformed reply (missing party)", () => {
-		expect(() => parseRevealReply({ sas: "123456789012", receiverSalt: "s" })).toThrow();
+		expect(() => parseRevealReply({ sas: "847291", receiverSalt: "s" })).toThrow();
 	});
 });

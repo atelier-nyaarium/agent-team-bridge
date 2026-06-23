@@ -192,15 +192,20 @@ describe("the offline grind across both legs is impossible", () => {
 
 		// The grind, simulated: the MITM is committed to A's real keys on B's leg and searches
 		// over its OWN substituted key sets for one whose SAS(A, candidate) equals the target it
-		// wants B to see. Across many candidates, none reproduces the honest target - the 12-digit
-		// width makes a collision a ~1-in-10^12 event, and crucially the MITM is COMMITTED, so it
-		// gets only the single online guess the attempt cap allows, not an offline search.
+		// wants B to see. The real defense is the COMMITMENT, not the width: because the MITM is
+		// committed before it learns the peer's keys, it gets only the single online guess the
+		// attempt cap allows, not an offline search. The 6-digit width sets only the residual of
+		// that one guess (~1-in-10^6), so a small batch of blind substitutions essentially never
+		// reproduces the honest target.
 		let collisions = 0;
 		for (let i = 0; i < 256; i++) {
 			const candidate = partyOf(makeDomain("x", "y"));
 			if (crossDomainSas(partyOf(a), candidate, PIN) === target) collisions++;
 		}
-		expect(collisions).toBe(0);
+		// 256 blind tries against a 10^6 space: the expected count is ~2.6e-4, so >1 collision is a
+		// ~3e-8 event. Tolerate the astronomically rare single hit to stay non-flaky; the security
+		// claim is the committed single-guess, not zero collisions across a batch.
+		expect(collisions).toBeLessThanOrEqual(1);
 	});
 
 	it("an honest end-to-end pairing yields the SAME SAS on both sides (no false abort)", async () => {

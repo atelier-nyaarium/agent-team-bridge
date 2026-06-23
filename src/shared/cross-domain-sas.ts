@@ -11,7 +11,7 @@ import crypto from "node:crypto";
 //  out-of-band compare. The fix is commit-then-reveal: each side publishes a HIDING
 //  commitment to its own keys+ids BEFORE either side reveals them, so the Router can
 //  no longer grind (it must pick its substituted keys before it learns the peer's,
-//  collapsing the attack to a single online 1-in-10^12 guess bounded by the attempt
+//  collapsing the attack to a single online 1-in-10^6 guess bounded by the attempt
 //  cap). The SAS then binds the COMMITTED keys + both sides' ids + the pin.
 //
 //  Two primitives live here:
@@ -83,12 +83,16 @@ export function verifyCrossDomainCommitment(commitment: string, party: CrossDoma
 ////////////////////////////////
 //  SAS
 
-// The displayed safety code is this many decimal digits. Widened from 8 so the residual
-// online-guess space (after the commitment closes the offline grind) is 1-in-10^12.
-const SAS_DIGITS = 12;
+// The displayed safety code is this many decimal digits, shown as two groups of three.
+// The code is a yes/no COMPARE, so its ceiling is human rubber-stamping (which rises with
+// length), not the crypto residual: six digits is the shortest width that keeps the
+// post-commitment online-guess space negligible (1-in-10^6) while staying easy to compare
+// faithfully. The commitment closes the offline grind; the width bounds only the residual.
+const SAS_DIGITS = 6;
 
-// 10^12, the modulus the digest reduces to. A BigInt because it exceeds 2^32.
-const SAS_MODULUS = 1_000_000_000_000n;
+// 10^6, the modulus the digest reduces to. A BigInt because the digest value `n` it reduces
+// is a BigInt (the 8 digest bytes reach ~1.8e19), so the modulo runs in BigInt space.
+const SAS_MODULUS = 1_000_000n;
 
 /** The canonical SAS preimage: the literal `SAS_V1`, then BOTH sides' five identity
  * fields SORTED lexicographically by their string value, then the pin - all
@@ -117,18 +121,18 @@ export function crossDomainSasPreimage(a: CrossDomainParty, b: CrossDomainParty,
 }
 
 /** The displayed safety code: SHA-256 the canonical preimage, read the FIRST 8 digest
- * bytes as a big-endian unsigned BigInt, reduce mod 10^12, and zero-pad to 12 decimal
- * digits.
+ * bytes as a big-endian unsigned BigInt, reduce mod 10^6, and zero-pad to 6 decimal
+ * digits (displayed as two groups of three).
  *
  * Derivation (the Kotlin twin must mirror exactly):
  *   1. preimage = crossDomainSasPreimage(a, b, pin)   (UTF-8 bytes)
  *   2. digest   = SHA-256(preimage)                   (32 bytes)
  *   3. n        = digest[0..7] as a big-endian unsigned BigInt
- *   4. code     = (n mod 10^12) zero-padded to 12 digits
+ *   4. code     = (n mod 10^6) zero-padded to 6 digits
  *
- * Eight bytes (a 64-bit value, max ~1.8e19) comfortably exceed 10^12, so the modulus is
- * load-bearing: it bounds the value to exactly 12 digits with a near-uniform
- * distribution. Width is fixed at 12 so the two phones compare equal-length strings. */
+ * Eight bytes (a 64-bit value, max ~1.8e19) comfortably exceed 10^6, so the modulus is
+ * load-bearing: it bounds the value to exactly 6 digits with a near-uniform
+ * distribution. Width is fixed at 6 so the two phones compare equal-length strings. */
 export function crossDomainSas(a: CrossDomainParty, b: CrossDomainParty, pin: string): string {
 	const buf = crypto
 		.createHash("sha256")

@@ -59,12 +59,12 @@ sealed interface ConfirmOutcome {
 //  Functions & Helpers
 
 object CrossDomainLink {
-	/** A 12-digit SAS, the width SasCrypto emits. The UI rejects a typed code of any other
+	/** A 6-digit SAS, the width SasCrypto emits. The UI rejects a typed code of any other
 	 * length before comparing, so a partial entry never spuriously matches. */
-	const val SAS_DIGITS = 12
+	const val SAS_DIGITS = 6
 
 	/** Keep only the decimal digits of a human-typed code, so spaces / grouping the human added
-	 * while reading the code aloud ("42 17 93 ...") do not defeat the exact compare. */
+	 * while reading the code aloud ("847 291") do not defeat the exact compare. */
 	fun normalizeTypedSas(typed: String): String = typed.filter { it.isDigit() }
 
 	/** True iff the typed code, once stripped of grouping, is exactly the expected SAS. This is

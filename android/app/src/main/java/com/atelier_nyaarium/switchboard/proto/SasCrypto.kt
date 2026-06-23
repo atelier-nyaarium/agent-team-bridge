@@ -41,11 +41,14 @@ data class CrossDomainParty(
 //  Class
 
 object SasCrypto {
-	// The displayed safety code is this many decimal digits. Widened so the residual
-	// online-guess space (after the commitment closes the offline grind) is 1-in-10^12.
-	private const val SAS_DIGITS = 12
+	// The displayed safety code is this many decimal digits, shown as two groups of three.
+	// The code is a yes/no COMPARE, so its ceiling is human rubber-stamping (which rises with
+	// length), not the crypto residual: six digits keeps the post-commitment online-guess space
+	// negligible (1-in-10^6) while staying easy to compare faithfully.
+	private const val SAS_DIGITS = 6
 
-	// 10^12, the modulus the digest reduces to. A BigInteger because it exceeds 2^32.
+	// 10^6 (computed from SAS_DIGITS), the modulus the digest reduces to. A BigInteger because
+	// the digest value `n` it reduces is a BigInteger (the 8 digest bytes reach ~1.8e19).
 	private val SAS_MODULUS: BigInteger = BigInteger.TEN.pow(SAS_DIGITS)
 
 	////////////////////////////////
@@ -112,13 +115,13 @@ object SasCrypto {
 
 	/**
 	 * The displayed safety code: SHA-256 the canonical preimage, read the FIRST 8 digest
-	 * bytes as a big-endian unsigned integer, reduce mod 10^12, and zero-pad to 12
-	 * decimal digits.
+	 * bytes as a big-endian unsigned integer, reduce mod 10^6, and zero-pad to 6
+	 * decimal digits (displayed as two groups of three).
 	 *
 	 *   1. preimage = crossDomainSasPreimage(a, b, pin)   (UTF-8 bytes)
 	 *   2. digest   = SHA-256(preimage)                   (32 bytes)
 	 *   3. n        = digest[0..7] as a big-endian unsigned integer
-	 *   4. code     = (n mod 10^12) zero-padded to 12 digits
+	 *   4. code     = (n mod 10^6) zero-padded to 6 digits
 	 */
 	fun crossDomainSas(a: CrossDomainParty, b: CrossDomainParty, pin: String): String {
 		val digest = sha256(crossDomainSasPreimage(a, b, pin))

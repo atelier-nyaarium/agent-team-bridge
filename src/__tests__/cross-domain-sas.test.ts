@@ -45,8 +45,8 @@ const vectors = JSON.parse(
 describe("cross-domain SAS vectors", () => {
 	it.each(vectors.cases.map((c, i) => [i, c] as const))("crossDomainSas reproduces case %i", (_, c) => {
 		expect(crossDomainSas(c.a, c.b, c.pin)).toBe(c.sas);
-		// Width is fixed at 12 digits so the two phones compare equal-length strings.
-		expect(c.sas).toMatch(/^\d{12}$/);
+		// Width is fixed at 6 digits so the two phones compare equal-length strings.
+		expect(c.sas).toMatch(/^\d{6}$/);
 	});
 
 	it("is order-independent (swapping the two parties yields the first case's SAS)", () => {
@@ -79,11 +79,11 @@ describe("cross-domain SAS vectors", () => {
 		const { a, b, pin, sasPreimage, sas } = vectors.handComputed;
 		expect(crossDomainSasPreimage(a, b, pin).toString("utf8")).toBe(sasPreimage);
 		// The documented derivation recomputes the digits independently of the helper:
-		// first 8 digest bytes as a big-endian BigInt mod 10^12, zero-padded to 12.
+		// first 8 digest bytes as a big-endian BigInt mod 10^6, zero-padded to 6.
 		const digest = crypto.createHash("sha256").update(Buffer.from(sasPreimage, "utf8")).digest();
 		let n = 0n;
 		for (let i = 0; i < 8; i++) n = (n << 8n) | BigInt(digest[i]);
-		const expected = (n % 1_000_000_000_000n).toString(10).padStart(12, "0");
+		const expected = (n % 1_000_000n).toString(10).padStart(6, "0");
 		expect(crossDomainSas(a, b, pin)).toBe(expected);
 		expect(crossDomainSas(a, b, pin)).toBe(sas);
 	});

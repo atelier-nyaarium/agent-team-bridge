@@ -585,7 +585,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		resultOf(relay(ConsoleOp.CrossDomainListen), "cross_domain_listen")
 
 	/** REQUESTER: pair against the friend's listening token. The Gateway runs the full
-	 * commit-reveal exchange and returns the 12-digit SAS plus both sides' keys. */
+	 * commit-reveal exchange and returns the 6-digit SAS plus both sides' keys. */
 	fun crossDomainRequest(
 		listeningToken: String,
 		pin: String,

@@ -37,7 +37,7 @@ import type { CrossDomainPeer, CrossDomainPeers } from "./crossDomainPeers.js";
 //  reveals them; a reveal that does not reproduce the earlier commitment aborts. Because
 //  each side is committed BEFORE the other reveals, the Router cannot substitute keys and
 //  search for a colliding short code: it must pick its substitution before it learns the
-//  peer's, collapsing the attack to a single online 1-in-10^12 guess bounded by the
+//  peer's, collapsing the attack to a single online 1-in-10^6 guess bounded by the
 //  attempt cap. The SAS is computed over the COMMITTED keys + both sides' ids + the pin.
 //
 //  Two round trips, both content-blind through the Router:
@@ -224,9 +224,13 @@ export interface CrossDomainHandshakeDeps {
 // scratch does not time out mid-pairing. Leaving the pairing screen still cancels it.
 const DEFAULT_TTL_MS = 3_600_000;
 
-// Tight single-digit cap on pairing attempts against one listening token (plan: "tight
-// single-digit, global per requester-owner within the window"). On cap-exceeded the token
-// + any pairing are invalidated, forcing a full restart (a fresh listen).
+// Tight single-digit cap on pairing attempts against ONE listening token. On cap-exceeded the
+// token + any pairing are invalidated, forcing a full restart (a fresh listen). This bound is
+// PER-TOKEN: a fresh listen() resets the counter, so it caps SAS guesses per window, not per
+// requester-owner relationship. At the 6-digit SAS width the residual therefore leans partly on
+// human retry tolerance (a mismatch surfaces as a "possible tampering" signal that discourages
+// blind retries); a global per-requester-owner / re-listen-rate cap would make the bound purely
+// cryptographic.
 const DEFAULT_MAX_ATTEMPTS = 5;
 
 // The random tail of a listening token: 18 bytes base64url, matching the enrollment nonce.

@@ -450,8 +450,8 @@ private fun InfoSurface(text: String) {
 // (the requester's exchange completes in one round trip) without hammering the relay.
 private const val LISTEN_POLL_MS = 2000L
 
-/** Group a 12-digit code into pairs for easy comparison ("42 17 93 ..."). */
-private fun grouped(code: String): String = code.chunked(2).joinToString(" ")
+/** Group a 6-digit code into two groups of three for easy comparison ("847 291"). */
+private fun grouped(code: String): String = code.chunked(3).joinToString(" ")
 
 /** Map a raw handshake error to a calmer, actionable line for the failed panel. */
 private fun humanizeHandshakeError(message: String?): String {

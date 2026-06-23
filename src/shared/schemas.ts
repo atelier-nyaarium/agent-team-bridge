@@ -595,7 +595,7 @@ export const CrossDomainCancelResultSchema = z
 // The receiver's view of its listening window (the cross_domain_listen_state poll). Before a
 // pairing arrives it carries only pairingArrived=false (+ the window's expiry, or expired=true
 // once the window is gone). Once the requester's commit-reveal lands the pairing, it carries the
-// SAS the receiver computed (the same 12-digit value the requester sees) plus the friend's keys
+// SAS the receiver computed (the same 6-digit value the requester sees) plus the friend's keys
 // the receiver phone must owner-sign its link over: the four friend* keys + the friend Domain /
 // Gateway ids. The phone transitions to the type-the-code compare on pairingArrived.
 export const CrossDomainListenStateResultSchema = z
@@ -606,7 +606,7 @@ export const CrossDomainListenStateResultSchema = z
 		// back to cross_domain_confirm so the gateway resolves this window's pairing (the receiver
 		// never minted it; it learns it here, E2E sealed). Single-use, consumed at confirm.
 		pin: z.string().optional(),
-		// The 12-digit safety code, present only when pairingArrived. Identical to the requester's
+		// The 6-digit safety code, present only when pairingArrived. Identical to the requester's
 		// so the two humans compare the same value.
 		sas: z.string().optional(),
 		// The friend's keys the receiver must owner-sign a link over (present only when arrived):
