@@ -22,3 +22,18 @@
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
+
+# CameraX (camera-camera2) discovers its camera2 backend + default CameraXConfig provider via
+# manifest metadata / reflection (LifecycleCameraController uses the default config), which R8
+# CANNOT trace as reachable, so it strips Camera2Config + androidx.camera.camera2.internal.* and
+# the QR scanner crashes on bindToLifecycle (ClassNotFoundException, in BOTH minified variants -
+# debug minifies too, so testDebugUnitTest never catches it). Confirmed via the release usage.txt
+# dropping Camera2CameraImpl/Camera2CameraFactory/Camera2Config. Keep the camera2 backend.
+-keep class androidx.camera.camera2.** { *; }
+-dontwarn androidx.camera.**
+
+# ML Kit bundled (GMS-free) barcode loads its model reflectively; keep it so R8 cannot strip the
+# scanner the same way (getClient runs on the same QrScanScreen as the camera bind above).
+-keep class com.google.mlkit.** { *; }
+-keep class com.google.android.gms.internal.mlkit_vision_barcode.** { *; }
+-dontwarn com.google.mlkit.**
