@@ -16,14 +16,16 @@ import okhttp3.Request
  * No browser, no auth, no storage permissions.
  */
 object AppUpdater {
-	// Self-update to the SAME variant we are running: a debug build pulls
-	// switchboard-debug.apk (so it keeps the ingest log stream), a release build pulls
-	// switchboard-release.apk. Both are signed with the same key, so an update never
-	// bounces the user across variants. Not `const` because BuildConfig.DEBUG is
-	// resolved per build, not at the const-eval site.
-	private val ASSET_NAME = if (BuildConfig.DEBUG) "switchboard-debug.apk" else "switchboard-release.apk"
-	val RELEASE_URL =
-		"https://github.com/atelier-nyaarium/switchboard/releases/download/android-app/$ASSET_NAME"
+	/** The variant this build is: a debug build is "debug" (it keeps the ingest log
+	 * stream), a release build is "release". Both are built in the same CI run, signed
+	 * with the same key, so a cross-variant install is a reinstall, not a downgrade. Not
+	 * `const` because BuildConfig.DEBUG is resolved per build, not at the const-eval site. */
+	fun currentVariant(): String = if (BuildConfig.DEBUG) "debug" else "release"
+
+	private fun assetFor(variant: String) = "switchboard-$variant.apk"
+
+	private fun urlFor(variant: String) =
+		"https://github.com/atelier-nyaarium/switchboard/releases/download/android-app/${assetFor(variant)}"
 
 	sealed interface Result {
 		data class Newer(val versionName: String?, val versionCode: Long) : Result
@@ -33,13 +35,19 @@ object AppUpdater {
 
 	private val client = OkHttpClient.Builder().followRedirects(true).followSslRedirects(true).build()
 
-	/** Download the release APK, keep it only if it beats the installed build,
-	 * and launch the system installer for it. Runs on the caller's (IO) thread. */
-	fun downloadAndStage(context: Context): Result {
+	/** Download the chosen variant's APK, keep it only if it beats the installed build
+	 * (same-variant update) or is a deliberate cross-variant flash, and launch the system
+	 * installer for it. Runs on the caller's (IO) thread.
+	 *
+	 * The versionCode "up to date if not newer" gate applies ONLY to a same-variant update.
+	 * Both variants ship from one CI run and share a versionCode, so a cross-variant fetch
+	 * (debug <-> release) skips the gate and always stages: the shared signing key makes the
+	 * equal-versionCode install a reinstall onto the other variant, not a downgrade. */
+	fun downloadAndStage(context: Context, variant: String): Result {
 		val dir = File(context.cacheDir, "updates").apply { mkdirs() }
 		val staged = File(dir, "update.apk")
 		val ok = runCatching {
-			client.newCall(Request.Builder().url(RELEASE_URL).build()).execute().use { resp ->
+			client.newCall(Request.Builder().url(urlFor(variant)).build()).execute().use { resp ->
 				if (!resp.isSuccessful) return Result.Failed("Download failed (HTTP ${resp.code})")
 				val sink = resp.body ?: return Result.Failed("Empty download")
 				staged.outputStream().use { out -> sink.byteStream().use { it.copyTo(out) } }
@@ -53,7 +61,8 @@ object AppUpdater {
 		if (info.packageName != context.packageName) return Result.Failed("APK is for a different app")
 
 		val code = versionCodeOf(info)
-		if (code <= installedVersionCode(context)) return Result.UpToDate
+		// Only block a same-variant update that is not newer; a cross-flash is always allowed.
+		if (variant == currentVariant() && code <= installedVersionCode(context)) return Result.UpToDate
 		return Result.Newer(info.versionName, code)
 	}
 
