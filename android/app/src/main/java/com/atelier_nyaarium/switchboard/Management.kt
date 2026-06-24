@@ -224,6 +224,9 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 		QrScanScreen(
 			onResult = {
 				scanning = false
+				// Clear any message from a prior failed scan first, so a good scan's confirm screen
+				// never shows the last attempt's "not a Gateway code" error next to the valid SAS.
+				status = ""
 				val parsed = repo.parseAdmitGateway(it)
 				if (parsed == null) status = "That QR is not a Gateway enrollment code." else scanned = parsed
 			},

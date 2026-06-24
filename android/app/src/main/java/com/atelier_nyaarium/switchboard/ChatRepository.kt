@@ -1748,7 +1748,10 @@ class ChatRepository(
 	 * through evie's domain sync. */
 	suspend fun enrollGateway(scanned: ScannedGateway): EnrollDelivery = withContext(Dispatchers.IO) {
 		val signed = admitGateway(scanned.gatewayId, scanned.signPub, scanned.boxPub)
-			?: return@withContext EnrollDelivery(false, "Couldn't add the Gateway. Try again.", null)
+			// admitGateway sets _state.error to the real cause (e.g. "Admit failed: admission not
+			// owner-signed" - this phone's owner key does not match the Domain root). Surface that
+			// instead of a generic retry prompt so an owner-key mismatch is visible, not a black box.
+			?: return@withContext EnrollDelivery(false, _state.value.error ?: "Couldn't add the Gateway. Try again.", null)
 		val nonce = scanned.nonce
 			?: return@withContext EnrollDelivery(true, "Added. This Gateway will come online shortly.", null)
 		// Fetch the bootstrap transport from the home Gateway. The Console no longer carries it in
