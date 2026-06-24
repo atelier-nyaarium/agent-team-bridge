@@ -248,13 +248,20 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
       people picker (Specific = a checklist of linked people). The Users screen now has a YOU section (name +
       4-group fingerprint), a PEOPLE section (excludes self), the per-row kebab (Manage shares -> Sharing,
       Untrust), and "Trust back" on a pending row. Gates green (compile + unit tests + R8).
-    - [NEXT, the remaining UX-lap slices]:
-      (a0) the admin-vs-user mockup's **"Enroll a user" button** in the YOU section (admin only) + the
-      shared-session count on a trusted row + an untrusted "trust first" entry in the Specific picker (polish). (b) the untrust RELAY-edge revoke + the
-      link console op (the tombstone's Router half). (c) the **renames + UI restructure** (the Users surface
-      absorbs the Federation hub's MY NETWORK / PEERS / GUEST NETWORKS; retire "Federation"/"Peer"-as-noun). (d)
-      **Refactor A slice 2** (the gateway storage re-key: crossDomainShareState/Peers owner-keyed - the
-      multi-Domain robustness fix). The FINAL slice = the dead-code cleanup pass (Final scouting bucket F - note
+    - [DONE, sb c651c53 + 678a9e8 + 1d14b4e] **Mockup polish + refactor A slice 2 foundation.** The "Enroll a
+      user" button in the YOU section (admin-only, routes to the guest-networks flow). `CrossDomainPeerEntry` now
+      carries `ownerSignPub` (refactor A slice 2 - the owner-keyed join), consumed by `sharedSessionCounts` to
+      show "online · N shared sessions" on a trusted row. Gates green throughout.
+    - [NEXT - the tail-end]:
+      (a) the **"trust first"** disabled rows in the Sharing Specific picker (untrusted roster people; needs the
+      Sharing screen to fetch the roster + the owner->domain map from `crossDomainListPeers`). (b) the untrust
+      RELAY-edge revoke + the link console op (the tombstone's Router half; entangled - needs the peer's domains
+      the roster strips). (c) the **renames + nav restructure** (make Users the primary surface; retire
+      "Federation"/"Peer"-as-noun - UNDER-SPECIFIED by the mockups: they show the Users surface but not where the
+      Link wizard / Guest networks / Add gateway actions live, so this needs a nav-placement decision). (d) the
+      rest of **Refactor A slice 2** (thread `ownerSignPub` through the Android `LinkedDomain` merge; key
+      crossDomainPeers/Share owner-aware for the multi-Domain edge case). The FINAL slice = the dead-code cleanup
+      pass (Final scouting bucket F - note
       CLAUDE.md says the evie_* proxy is intentionally KEPT, so confirm before removing). Landmarks: `XDomainLink`,
       `enrollSas`, `cross_domain_unlink`/`cross_domain_untrust`, `crossDomainShareState`,
       `CrossDomainPeers.removeByOwner`.
