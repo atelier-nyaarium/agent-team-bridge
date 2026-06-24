@@ -4,10 +4,13 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
+import com.atelier_nyaarium.switchboard.proto.EnrollParty
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.NoticeId
+import com.atelier_nyaarium.switchboard.proto.SasCrypto
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SessionId
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
@@ -24,6 +27,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -246,6 +250,15 @@ data class ChatState(
  * the sync never lands within this grace window. */
 private const val ENROLL_GRACE_MS = 90_000L
 
+/** How often each phone re-polls the evie broker for the peer's commit/reveal frame during the
+ * in-person enroll ceremony. A short cadence (the peer is on screen beside you) without hammering
+ * the relay. */
+private const val ENROLL_POLL_MS = 2_000L
+
+/** Max poll attempts per handshake round before giving up (2s * 150 = 5 min, comfortably under the
+ * broker's 10-min window TTL). A vanished peer fails with a timeout rather than hanging forever. */
+private const val ENROLL_POLL_MAX = 150
+
 /** Three-way classification of a connect/poll/relay failure. */
 internal enum class ConnKind {
 	/** Needs human action (re-provision, bad creds, app update); surface immediately. */
@@ -430,6 +443,11 @@ class ChatRepository(
 	// receiver's listening token. The receiver needs it to confirm its pairing (the gateway resolves
 	// the window by the pin), but the wizard only holds the token, so the poll stashes it here.
 	private val receiverPin = mutableMapOf<String, String>()
+	// ADMIN-side enroll-invite secrets (handshakeId + pin) minted per staged tenant when the invite
+	// blob is built, reused to drive the admin's leg of the in-person compare. Transient like the link
+	// ceremony's linkNonce: the in-person flow keeps the detail screen open, and regenerating the
+	// invite mints fresh secrets (abandoning the old QR's window).
+	private val enrollInvites = java.util.concurrent.ConcurrentHashMap<String, EnrollInvite>()
 	private var pollFails = 0
 	private var pollJob: Job? = null
 	// The poll loop's scope, reused to launch auto-TTS preloads that gate the
@@ -1054,6 +1072,9 @@ class ChatRepository(
 				val result = client().provisionTenant(signed)
 				val nonce = if (result.ok) result.nonce else null
 				if (nonce.isNullOrEmpty()) error(result.error ?: "no invite nonce returned")
+				// A regenerated invite is a fresh ceremony: drop the prior handshake secrets so the next
+				// buildInviteBlob mints new ones (the old QR's broker window is abandoned with its nonce).
+				enrollInvites.remove(domainId)
 				val row = HostedTenant(domainId, label, nonce, HostedTenantState.AWAITING_SETUP)
 				upsertHostedTenant(row)
 				row
@@ -1073,12 +1094,25 @@ class ChatRepository(
 		runCatching {
 			val blob = store.load() ?: error("This device is not provisioned. Re-import your setup blob first.")
 			val prov = Provisioning.parse(blob)
+			// Mint (once per tenant) the enroll-handshake secrets that seed the in-person compare and
+			// embed them in the QR alongside this admin's owner keys + Domain. The pin rides the QR OUT
+			// OF BAND (never sent to evie); the handshakeId keys the broker window the admin's leg polls.
+			val invite = enrollInvites.computeIfAbsent(tenant.domainId) {
+				EnrollInvite(handshakeId = federation.freshHandshakeId(), pin = federation.freshEnrollPin())
+			}
+			val enrollHandshake = JSONObject()
+				.put("adminOwnerSignPub", federation.ownerSignPub())
+				.put("adminOwnerBoxPub", federation.ownerBoxPub())
+				.put("adminDomainId", localDomainId())
+				.put("handshakeId", invite.handshakeId)
+				.put("pin", invite.pin)
 			val obj = JSONObject()
 				.put("apiUrl", prov.apiUrl)
 				.put("saToken", prov.saToken)
 				.put("caPem", prov.caPem)
 				.put("appToken", prov.appToken)
 				.put("pendingTenant", JSONObject().put("domainId", tenant.domainId).put("nonce", tenant.nonce))
+				.put("enrollHandshake", enrollHandshake)
 			obj.toString()
 		}
 	}
@@ -1313,6 +1347,111 @@ class ChatRepository(
 	/** Cancel the pairing windows when the owner leaves the link screen (no passive surface). */
 	suspend fun crossDomainCancel(listeningToken: String?, pin: String?) = withContext(Dispatchers.IO) {
 		runCatching { client().crossDomainCancel(listeningToken, pin) }
+	}
+
+	////////////////////////////////
+	//  FLOW-1 enroll ceremony (the in-person admin <-> new-user trust compare, brokered by evie)
+
+	/** The ADMIN leg context for a staged tenant's in-person compare: the handshakeId + pin the
+	 * invite embedded (minted on buildInviteBlob) plus this owner's party. Null until the admin has
+	 * generated the invite (so the QR and the ceremony share one handshake window). */
+	fun adminEnrollContext(domainId: String): EnrollCeremonyContext? {
+		val invite = enrollInvites[domainId] ?: return null
+		val myParty = EnrollParty(federation.ownerSignPub(), federation.ownerBoxPub(), localDomainId())
+		return EnrollCeremonyContext(EnrollCeremony.ADMIN, invite.handshakeId, invite.pin, myParty, expectedPeer = null)
+	}
+
+	/** The ENROLLEE leg context after first-rooting an invited Domain: the handshakeId + pin + admin
+	 * party read from the scanned blob, plus this owner's freshly-rooted party. The admin party is
+	 * carried as `expectedPeer` so a substituted admin reveal is caught against the in-person QR, not
+	 * only at the compare. Null when the blob carries no enroll handshake (an ordinary invite). The
+	 * Domain id is taken from the blob's pendingTenant (the EXACT Domain this device just rooted), NOT
+	 * localDomainId() - which still reads the "home" fallback until discovery lands. */
+	fun enrolleeEnrollContext(): EnrollCeremonyContext? {
+		val prov = runCatching { store.load()?.let { Provisioning.parse(it) } }.getOrNull() ?: return null
+		val hs = prov.enrollHandshake ?: return null
+		val myDomainId = prov.pendingTenant?.domainId ?: return null
+		val myParty = EnrollParty(federation.ownerSignPub(), federation.ownerBoxPub(), myDomainId)
+		val adminParty = EnrollParty(hs.adminOwnerSignPub, hs.adminOwnerBoxPub, hs.adminDomainId)
+		return EnrollCeremonyContext(EnrollCeremony.ENROLLEE, hs.handshakeId, hs.pin, myParty, expectedPeer = adminParty)
+	}
+
+	/** Run the commit-reveal exchange up to the human compare: commit this side, poll the broker for
+	 * the peer's commitment, reveal, poll for the peer's reveal, verify the peer's reveal opens to its
+	 * commitment (and, on the enrollee side, matches the QR-pinned admin keys), then compute the SAS
+	 * locally. evie is a dumb broker throughout - every check here is on the phone. A terminal failure
+	 * (broker reject, tamper, timeout) surfaces as Result.failure; cancellation (leaving the screen)
+	 * cancels the suspend. */
+	suspend fun enrollExchange(ctx: EnrollCeremonyContext): Result<EnrollExchange> = withContext(Dispatchers.IO) {
+		runCatching {
+			val salt = federation.freshEnrollSalt()
+			val myReveal = com.atelier_nyaarium.switchboard.proto.EnrollReveal(
+				ctx.myParty.ownerSignPub,
+				ctx.myParty.ownerBoxPub,
+				ctx.myParty.domainId,
+				salt,
+			)
+			val commitment = SasCrypto.enrollCommitment(ctx.myParty, ctx.role, salt)
+			val peerRole = EnrollCeremony.peerRole(ctx.role)
+
+			// Round 1: commit, then poll (re-POSTing the same commit is idempotent) for the peer's.
+			val peerCommitment = pollEnroll("commit") {
+				val r = client().enrollHandshake(EnrollHandshakeOp.Commit(ctx.handshakeId, ctx.role, commitment))
+				if (!r.ok) error(r.error ?: "enroll commit rejected")
+				r.peerCommitment
+			}
+			// Round 2: reveal, then poll for the peer's reveal.
+			val peerReveal = pollEnroll("reveal") {
+				val r = client().enrollHandshake(EnrollHandshakeOp.Reveal(ctx.handshakeId, ctx.role, myReveal))
+				if (!r.ok) error(r.error ?: "enroll reveal rejected")
+				r.peerReveal
+			}
+			val peerParty = EnrollCeremony.partyOf(peerReveal)
+			// Commit-reveal binding: the peer's reveal must open to its round-1 commitment.
+			if (!EnrollCeremony.verifyPeer(peerCommitment, peerParty, peerRole, peerReveal.salt)) {
+				error("The other phone's keys did not match its commitment (the relay tampered with the exchange). Rescan to restart.")
+			}
+			// Enrollee side: the admin's revealed keys MUST equal the in-person QR (the OOB
+			// admin -> user authentication). A mismatch is an evie substitution of the admin reveal.
+			ctx.expectedPeer?.let { expected ->
+				if (peerParty != expected) {
+					error("The admin keys did not match the scanned code (possible tampering). Rescan to restart.")
+				}
+			}
+			EnrollExchange(
+				sas = EnrollCeremony.sas(ctx.role, ctx.myParty, peerParty, ctx.pin),
+				peerDomainId = peerReveal.domainId,
+				peerParty = peerParty,
+			)
+		}
+	}
+
+	/** On a mutual [Yes]: owner-sign + submit this side's cross-Domain link edge (my Domain -> the
+	 * peer's CONFIRMED Domain - the EXACT value the SAS bound, never a re-fetch). Mirrors the link
+	 * wizard's edge result: Linked, or RelayEdgeRejected (the trust is recorded but the Router refused
+	 * the relay edge, retryable). */
+	suspend fun enrollConfirm(myDomainId: String, peerDomainId: String): Result<ConfirmOutcome> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				if (submitXdomainLink(myDomainId, peerDomainId)) ConfirmOutcome.Linked else ConfirmOutcome.RelayEdgeRejected(peerDomainId)
+			}
+		}
+
+	/** Cancel this leg of the handshake (a [No], a timeout, or leaving the screen) so the broker tears
+	 * the window down rather than leaving a half-formed edge. Best-effort. */
+	suspend fun enrollCancel(handshakeId: String, role: String) = withContext(Dispatchers.IO) {
+		runCatching { client().enrollHandshake(EnrollHandshakeOp.Cancel(handshakeId, role)) }
+	}
+
+	/** Poll one handshake step: call [step] (re-POSTing the same frame is idempotent at the broker)
+	 * until it returns the peer's frame, with a bounded number of attempts so a vanished peer fails
+	 * rather than hangs. [step] throws on a terminal broker reject, which propagates out. */
+	private suspend fun <T> pollEnroll(label: String, step: () -> T?): T {
+		repeat(ENROLL_POLL_MAX) {
+			step()?.let { return it }
+			delay(ENROLL_POLL_MS)
+		}
+		error("Timed out waiting for the other phone ($label). Make sure you are both on this screen, then rescan.")
 	}
 
 	/** This owner's current per-session shares as (sessionTarget, domainId) pairs, so the UI can

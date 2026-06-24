@@ -4,6 +4,7 @@ import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
+import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeRef
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeResult
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
@@ -87,6 +88,10 @@ data class Provisioning(
 	 * app first-roots with. Absent on an ordinary (already-rooted) operator blob, which just
 	 * provisions the console. The presence of this field IS what distinguishes the two paths. */
 	val pendingTenant: PendingTenantRef? = null,
+	/** Present on a friend ENROLL invite blob (alongside pendingTenant): the admin's owner keys +
+	 * Domain and the handshakeId + pin that seed the in-person FLOW-1 trust compare. The enrollee's
+	 * app reads it after first-rooting to run the ceremony as ENROLLEE. Absent on a plain invite. */
+	val enrollHandshake: EnrollHandshakeRef? = null,
 ) {
 	companion object {
 		fun parse(blob: String): Provisioning {
@@ -108,6 +113,7 @@ data class Provisioning(
 				gatewaySignPub = p.gatewaySignPub ?: "",
 				gatewayBoxPub = p.gatewayBoxPub ?: "",
 				pendingTenant = p.pendingTenant,
+				enrollHandshake = p.enrollHandshake,
 			)
 		}
 	}

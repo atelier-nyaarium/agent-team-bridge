@@ -173,6 +173,19 @@ class FederationManager(private val store: ProvisioningStore) {
 	 * pin it for the lifetime of one pairing. */
 	fun freshLinkNonce(): String = nonce()
 
+	/** A fresh UNGUESSABLE handshake id, minted by the admin into the enroll QR. Unguessability is
+	 * what stops a third party who learned a Domain from targeting a real ceremony window. */
+	fun freshHandshakeId(): String = nonce()
+
+	/** A fresh high-entropy enroll pin, minted by the admin into the QR. It rides the QR OUT OF BAND
+	 * and is NEVER sent to evie, so the untrusted broker cannot compute a candidate compare code to
+	 * grind - the residual is the 6-digit blind online guess, not an offline search. */
+	fun freshEnrollPin(): String = nonce()
+
+	/** A fresh per-ceremony commitment salt, so the round-1 commitment is hiding (evie learns the
+	 * peer's keys only at reveal, after it has had to commit to its own substitution). */
+	fun freshEnrollSalt(): String = nonce()
+
 	/** The current keyring: the stored snapshot, or an owner-only one before any sync. */
 	fun keyring(): Keyring = Keyring.parse(store.loadDomain()) ?: Keyring.empty(ownerSignPub())
 
