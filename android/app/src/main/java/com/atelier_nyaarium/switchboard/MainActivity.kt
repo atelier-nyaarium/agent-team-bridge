@@ -188,9 +188,6 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// domainId, or null). Kept apart from the peer overlays so hosting never reads as linking.
 	var showHostNetworks by remember { mutableStateOf(false) }
 	var hostTenant by remember { mutableStateOf<String?>(null) }
-	// The tucked host-setup manual, reachable post-provision from the empty board when a friend has
-	// rooted but has no gateway yet (the "bring up a host" pointer).
-	var showHostHelp by remember { mutableStateOf(false) }
 	// The FLOW-1 in-person enroll compare overlays (transient, like the link wizard). The ADMIN leg
 	// is launched from a tenant's detail ("Verify in person", carrying the QR blob + the tenant's
 	// label); the ENROLLEE leg is the freshly-rooted device's own context. Either non-null shows the
@@ -302,7 +299,6 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			showLinkWizard = false
 			showHostNetworks = false
 			hostTenant = null
-			showHostHelp = false
 			adminCeremonyCtx = null
 			enrolleeCeremonyCtx = null
 			openTeam = team
@@ -324,13 +320,12 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	BackHandler(
 		enabled = openTeam != null || showSettings || showManage || showAddGateway ||
 			showUsers || showLinkWizard || showHostNetworks ||
-			hostTenant != null || showHostHelp || adminCeremonyCtx != null || enrolleeCeremonyCtx != null,
+			hostTenant != null || adminCeremonyCtx != null || enrolleeCeremonyCtx != null,
 	) {
 		when {
 			adminCeremonyCtx != null -> adminCeremonyCtx = null
 			enrolleeCeremonyCtx != null -> enrolleeCeremonyCtx = null
 			showLinkWizard -> showLinkWizard = false
-			showHostHelp -> showHostHelp = false
 			hostTenant != null -> hostTenant = null
 			showHostNetworks -> showHostNetworks = false
 			showUsers -> showUsers = false
@@ -346,7 +341,6 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		// Lock wins over everything (a provisioned + locked session must show the lock, never a
 		// leftover overlay underneath it). An unprovisioned session is never locked.
 		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
-		showHostHelp -> HostSetupHelpScreen(onBack = { showHostHelp = false })
 		// The in-person enroll compare overlays both the tenant detail (admin) and the board (enrollee),
 		// so they sit above those branches. Admin carries the QR blob; enrollee latches done on success.
 		adminCeremonyCtx != null ->
@@ -509,7 +503,6 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					showSettings = true
 				},
 				onManage = { showManage = true },
-				onHostHelp = { showHostHelp = true },
 				onOpen = { team ->
 					repo.openThread(team)
 					openTeam = team
@@ -730,7 +723,6 @@ fun SessionsScreen(
 	onRefresh: () -> Unit,
 	onSettings: () -> Unit,
 	onManage: () -> Unit,
-	onHostHelp: () -> Unit,
 	onOpen: (String) -> Unit,
 	onRename: (String, String) -> Unit,
 	onForget: (String) -> Unit,
@@ -815,7 +807,7 @@ fun SessionsScreen(
 			if (sessions.isEmpty()) {
 				// Offer the still-owed in-person compare only on the awaiting-host board (a freshly-rooted
 				// enrollee who has not finished the trust step); EmptyBoard gates the button on that state.
-				EmptyBoard(state, onManage, onRefresh, onHostHelp, onVerifyEnroll = onVerifyEnroll)
+				EmptyBoard(state, onManage, onRefresh, onVerifyEnroll = onVerifyEnroll)
 			} else {
 				val order = sessionOrder(state)
 				// My own Domain id, learned from a local session (one owned by the connected
@@ -882,7 +874,6 @@ private fun EmptyBoard(
 	state: ChatState,
 	onManage: () -> Unit,
 	onRefresh: () -> Unit,
-	onHostHelp: () -> Unit,
 	onVerifyEnroll: (() -> Unit)? = null,
 ) {
 	Column(
@@ -892,33 +883,33 @@ private fun EmptyBoard(
 	) {
 		when {
 			// A friend who just first-rooted has no host of their own yet (the invite omits gateway
-			// ids by design), so point at bringing one up - NOT the operator Add-a-Gateway error.
+			// ids by design), and the operator's own fresh provision first-roots too - so both land
+			// here. The action goes straight to the Gateways screen (admit a Gateway by scanning its
+			// code); the friend with no computer yet still has the body's "set up a computer" guidance.
 			state.noGatewayState == NoGatewayState.AWAITING_HOST -> {
 				Text("You're all set up", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
-				BoardBody("Your network is ready. Set up a computer to run your agents and they'll show up here.")
+				BoardBody("Your network is ready. Set up a computer to run your agents, then add its Gateway here.")
 				// An outstanding in-person trust compare (the admin who invited you is waiting) takes the
-				// primary slot; bringing up a host becomes the secondary step.
+				// primary slot; adding a Gateway becomes the secondary step.
 				if (onVerifyEnroll != null) {
 					Spacer(Modifier.height(20.dp))
 					Button(onClick = onVerifyEnroll) { Text("Verify with the admin") }
 					Spacer(Modifier.height(4.dp))
-					TextButton(onClick = onHostHelp) { Text("How do I set up a computer?") }
+					TextButton(onClick = onManage) { Text("Add a Gateway") }
 				} else {
 					Spacer(Modifier.height(20.dp))
-					Button(onClick = onHostHelp) { Text("How do I set up a computer?") }
+					Button(onClick = onManage) { Text("Add a Gateway") }
 				}
 			}
-			// No Gateway admitted yet: the primary onboarding step, with a real action. The secondary
-			// link points at the tucked manual for an operator who has not stood up a host yet.
+			// No Gateway admitted yet: the primary onboarding step, a real action straight to the
+			// Gateways screen.
 			state.noGatewayState == NoGatewayState.NEEDS_GATEWAY -> {
 				Text("No Gateways yet", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
 				BoardBody("Add a Gateway to reach your agents. No computer yet? Set one up first.")
 				Spacer(Modifier.height(20.dp))
 				Button(onClick = onManage) { Text("Add a Gateway") }
-				Spacer(Modifier.height(4.dp))
-				TextButton(onClick = onHostHelp) { Text("How do I set up a computer?") }
 			}
 			// A terminal failure that will not self-heal (secure storage, 401, admission rejected, or
 			// an enrollment that gave up past the grace window). Name the actual cause from `error`
