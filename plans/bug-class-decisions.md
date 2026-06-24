@@ -100,33 +100,90 @@ literal. The smell is eradicated, not patched.
   `evie-protocol.ts`, `admission.ts`), `schemas.ts`, codegen `Protocol.kt`, the gateway, Android,
   evie, scripts, tests. Rename to `profileName` is breaking + re-syncs the leaves + regenerates codegen.
 
-## Plan (breaking refactor - retire `home`, rename to profile, fail-closed identity)
+## Gap audit (refinement lap 1) - 39 confirmed gaps (3 blocker / 18 high / 15 medium / 3 low)
 
-**Open implementation sub-decision (flag during build):** after `== "home"` is gone, the app still
-needs an "am I the operator (can host guests) vs a guest" signal that today rides on `confirmed ==
-"home"` (isHomeOperator). Likely fix: a role flag on the provisioning blob (operator-setup vs
-guest-invite) and/or evie marking the one operator/primary Domain - resolve in Phase 1.
+A 10-dimension code-verified fan-out found the plan-as-written would ship a BROKEN console. The
+dominant theme: `"home"` is not merely an "absent-domainId default" - it is the LOAD-BEARING binding
+by which the console (which sends NO domainId on the wire; it addresses gateways) reaches its
+operator's mesh. Retiring it for a random id, with no replacement, breaks every console op. The
+restructured plan below closes all 39; the full ranked list is in the gap-audit output.
 
-- **Phase 1 - Domain ID: retire `home`, mint random ids.** Delete `DEFAULT_DOMAIN_ID`;
-  `resolveLocalDomainId` requires `FEDERATION_DOMAIN_ID` (no fallback); provisioning
-  (`provision.ts`/`bootstrap-domain.ts`) mints a random home Domain id like `newDomainId` and sets the
-  gateway env to it. evie: every `DEFAULT_DOMAIN_ID` default resolves to the real rooted id from the
-  Secret, not a constant. Android: `localDomainId()` returns null/empty when unconfirmed (drop the
-  `?: "home"`); `renameAwaitsDiscovery = firstRooted && notConfirmed`; replace `isHomeOperator`'s
-  `== "home"` with the operator-vs-guest signal above.
-- **Phase 2 - `operatorName` -> `profileName` (the person).** Rename the wire field across the synced
-  leaves (re-sync to evie) + `schemas.ts` + codegen + gateway + Android + evie + scripts + tests. The
-  SIGNED bytes are value-positional (SET_OPERATOR_NAME_V1), so the field-name rename does not change
-  the preimage - verify vectors hold. Roster/UI ALWAYS render `profileName`, never the Domain id.
-- **Phase 3 - CLASS 5 fail-closed identity.** `ProvisioningStore` distinguishes present-but-corrupt
-  from absent (no more decode-swallow to null indistinguishable from missing). `FederationManager`
-  mints only when truly absent, fails closed on corrupt (surface recovery, never overwrite), + fp log
-  on load/mint (gateway parity). Gateway `identity.ts` gains the orphan detector (admission present,
-  no key match -> "identity regenerated, re-admit", distinct from un-enrolled).
-- **Phase 4 - verify + ship.** All gates (switchboard lint+test, Android testDebugUnitTest +
-  assembleRelease, evie lint+bridge, codegen no-drift, synced-leaf hashes) + the smell-check grep
-  (`"home"` returns nothing as a domain id) + an on-device fresh-provision round-trip (breaking, so a
-  re-provision is required).
+## KEY DESIGN DECISION (the blocker - confirm before Phase 1): the operator-home ANCHOR
+
+evie's console routing (`BridgeServer.homeFallbackConnection`/`pushToGateway`/`pushGatewayFrame`/
+`gatewayIds`/`isConnected`, all `gatewayConnections.get(DEFAULT_DOMAIN_ID)`) + the enroll-op path
+(`coordinatorFor(DEFAULT_DOMAIN_ID)`, `flushDomain`/`broadcastDomainUpdate(DEFAULT_DOMAIN_ID)`) +
+the register security gate (`BridgeServer.ts:477 domainId !== DEFAULT_DOMAIN_ID`) all use the literal
+`"home"` to mean "the operator's own Domain." The evie Secret has NO operator/primary marker today.
+Two ways to replace it:
+- **(A, recommended)** Add a persisted `operatorDomainId` / `isPrimary` marker to the evie Secret
+  (bump schema v2 -> v3), written at first-root; re-key every console-routing + enroll-op + register
+  read off it. Console wire stays domainId-free (Q3 locks one-operator/one-home, so a single primary
+  is adequate). Smaller wire surface.
+- **(B)** Bind the console's `conversationId` -> its home domainId at provisioning and have the console
+  send the home domainId on every relay; evie routes by it. More explicit, changes the console wire.
+
+Recommend **A**. This is the one fork to confirm; everything else is mechanical.
+
+## Plan (restructured: breaking refactor, ONE atomic cutover)
+
+- **Phase 0 - the operator-home anchor + operator-vs-guest signal (the blocker; design first).**
+  Implement decision A: the evie Secret gains an operator/primary-Domain marker (v3), written at
+  first-root; re-key the 5 console-routing methods + the enroll-op `coordinatorFor`/`flushDomain`/
+  `broadcastDomainUpdate` + the register gate off `DEFAULT_DOMAIN_ID`. Add an explicit
+  `role: operator|guest` (or `isOperatorSetup`) to `ProvisioningSchema` (provision.ts --setup =
+  operator; the app invite = guest) so the persona signal is on the blob, not inferred from `"home"`.
+  Closes: blockers 1-3, highs 4/5/9/10, mediums 22/26.
+- **Phase 1 - Domain ID: retire `home` -> random hex, with plumbing + persistence.** Delete
+  `DEFAULT_DOMAIN_ID`; `resolveLocalDomainId` requires `FEDERATION_DOMAIN_ID` (no fallback); decide
+  `sanitizeDomainId` empty-input behavior (reject vs a non-`home` sentinel) and keep the switchboard +
+  evie twins byte-identical. `provision.ts`/`gateway-setup.ts` mint a random home id (`newDomainId`
+  style), root it in the evie Secret, write `FEDERATION_DOMAIN_ID` into the gateway `.env`, ADD a
+  `FEDERATION_DOMAIN_ID` passthrough to `docker-compose.yml` (else it does not survive restart), and
+  restart the gateway. Android: `localDomainId()` -> `confirmedDomainId(): String?` (null until a
+  local session confirms); migrate ALL signing + routing call sites onto it (not just the rename gate:
+  `signSetOperatorName`, `submitXdomainLink` link/revoke, `EnrollParty`/`trustParty`), disabling those
+  UI surfaces until confirmed; `renameAwaitsDiscovery = firstRooted && confirmedDomainId == null`;
+  `isHomeOperator` -> the Phase-0 role/marker. Define the wire `domainId` posture (make required vs a
+  defined absent behavior in `GatewayRegisterParams`/`GatewayRelayRoute`/relay frames). Retire evie's
+  v1->v2 `home` migration + the `operatorName` backfill (clean-break). Closes: highs 6/7/11/19/20,
+  mediums 24/28/31, low 39.
+- **Phase 2 - `operatorName` -> `profileName` (the person) + empty fallback.** Rename the wire field
+  across `schemas.ts` + the 3 synced leaves (re-sync via `sync-leaf.ts`) + codegen `Protocol.kt` +
+  gateway + Android + evie + scripts + tests. Note BOTH `setOperatorNameSigningBytes` AND
+  `provisionTenantSigningBytes` are value-positional over the field, so the preimage bytes are
+  unchanged BUT the fixture JSON keys + the Kotlin readers re-cut (provision-ops vectors). Define a
+  single empty-`profileName` placeholder ("(unnamed)") routed through EVERY person-name render
+  (ChatRepository.kt:886 + the 3 id-leak sites); NEVER the Domain id. Closes: high 14, mediums 25/29,
+  lows 37/38.
+- **Phase 3 - re-cut the `home`-bearing SIGNING vector corpora (Phase 1's hidden cost).** THREE
+  cross-runtime signed/hashed corpora embed `domainId:"home"` in the preimage (xdomain-link, enroll-sas,
+  cross-domain-sas) + the protocol golden fixtures: the VALUE changes, so the bytes change and the
+  vectors regenerate on BOTH runtimes (TS fixtures + Android `testDebugUnitTest` decoders). Rewrite
+  `domain-id.test.ts` ("defaults to home" -> "throws/empties when FEDERATION_DOMAIN_ID unset"). Closes:
+  high 13, medium 23.
+- **Phase 4 - CLASS 5 fail-closed identity, with caller handling.** `ProvisioningStore.loadIdentity`/
+  `loadOwnerIdentity` return a tri-state (Loaded/Corrupt/Absent), not decode-swallow-to-null.
+  `FederationManager` mints only on Absent, fails closed on Corrupt (never overwrite) + fp log
+  load/mint. EXEMPT `importOwnerBackup` from the no-overwrite rule (restore is the sanctioned
+  recovery). Make the Compose composition-time key readers (OwnerKeysCard/Users/Sharing/ManageScreen)
+  non-throwing (nullable accessor / runCatching) - a throw in composition crashes. Add a corrupt-key
+  branch to `ConsoleClient.requireConsoleIdentity` (the live sign/seal path reads the store directly)
+  + `classifyConnError` -> `ConnKind.TERMINAL` "key unreadable - restore backup / re-provision".
+  Gateway `identity.ts` orphan detector (admission present, no key match -> "regenerated, re-admit").
+  Closes: high 18, mediums 32/33/34/36.
+- **Phase 5 - ONE atomic deploy + verify.** Phases 0-4 are ONE atomic breaking release across 4
+  artifacts (evie image, gateway container, APK, provision script) - they CANNOT land independently
+  (medium 35). Sequenced clean-break wipe FIRST (delete the whole `evie-federation` Secret, each
+  gateway `federation-allowlist.json`, the phone identity). Rollout order: push evie (await Push(main)
+  rollout) -> push switchboard (main-push.yml builds the APK) -> rebuild gateway -> re-provision ->
+  MANUALLY flash `switchboard-release.apk` onto every console (the in-app updater is opt-in + only
+  sees the new versionCode after re-provision). Optionally bump `FEDERATION_PROTOCOL_VERSION` +
+  `CONSOLE_PROTOCOL_VERSION` so an old runtime fails fast, not silently. Gates: all 3 runtimes +
+  codegen no-drift + synced-leaf hashes + the smell-check grep (`"home"` not a domain id) + a SEMANTIC
+  acceptance test (a roster row with empty profileName shows "(unnamed)", not the hex id - the literal
+  grep gives a FALSE green on the leak) + on-device fresh-provision round-trip. Closes: highs 15/16/17/21,
+  mediums 27/30.
 
 **Minor (separate, low):** evie `CursorMergePullRequestAction.checkGHCLI` (CLASS 2) returns a
 hardcoded "GitHub CLI not found" discarding `gh` stderr - unrelated cursor feature; fix the narrow
