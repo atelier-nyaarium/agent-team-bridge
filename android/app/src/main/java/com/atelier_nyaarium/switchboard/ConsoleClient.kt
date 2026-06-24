@@ -3,6 +3,8 @@ package com.atelier_nyaarium.switchboard
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
+import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
+import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeResult
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleGatewayTransportResult
@@ -169,6 +171,12 @@ private data class BounceBody(val error: String? = null, val retryable: Boolean 
  * `enrollOp` routing to the enrollment coordinator. */
 @Serializable
 private data class FirstRootEnvelope(val firstRoot: SignedFirstRoot)
+
+/** The enroll-handshake POST body: a top-level `enrollHandshake` field routes to evie's
+ * console-bridge enroll-handshake broker (a dumb relay, never to a Gateway), the twin of
+ * `firstRoot` routing. */
+@Serializable
+private data class EnrollHandshakeEnvelope(val enrollHandshake: EnrollHandshakeOp)
 
 /** evie's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the
  * minted one-time invite `nonce` (the operator's app builds the friend's QR from it). The wire
@@ -403,6 +411,39 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			runCatching { wireJson.decodeFromString<EnrollResult>(text) }.getOrNull()?.let { return it }
 			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
 			return EnrollResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
+	/** Drive one enroll-handshake frame through evie's broker (POST { enrollHandshake }). evie relays
+	 * the peer's frame back (or pending); the phone computes the SAS locally. Pre-admission like
+	 * firstRoot - the fresh enrollee has no admission. A terminal failure is ok=false + error; ok=true
+	 * with the peer frame absent means keep polling (re-send the same step). */
+	fun enrollHandshake(op: EnrollHandshakeOp): EnrollHandshakeResult {
+		val envelope = EnrollHandshakeEnvelope(op)
+		val req = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(wireJson.encodeToString(EnrollHandshakeEnvelope.serializer(), envelope).toRequestBody(JSON))
+			.build()
+		DebugLog.log("EnrollHs", "POST $proxyBase/relay step=${op::class.simpleName}")
+		val resp =
+			try {
+				client.newCall(req).execute()
+			} catch (e: Exception) {
+				DebugLog.log("EnrollHs", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+				throw e
+			}
+		resp.use {
+			val text = resp.body?.string().orEmpty()
+			DebugLog.log("EnrollHs", "resp HTTP ${resp.code} ${text.take(160)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<EnrollHandshakeResult>(text) }
+					.getOrElse { EnrollHandshakeResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<EnrollHandshakeResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return EnrollHandshakeResult(ok = false, error = err ?: "HTTP ${resp.code}")
 		}
 	}
 
