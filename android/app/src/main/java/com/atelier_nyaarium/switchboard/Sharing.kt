@@ -66,6 +66,10 @@ fun SharingScreen(repo: ChatRepository, onBack: () -> Unit) {
 	val scope = rememberCoroutineScope()
 	val sessions = remember { repo.shareableSessions() }
 	val people = remember { repo.linkedDomains() }
+	val myOwner = remember { repo.ownerSignPub() }
+	// Roster people you have NOT linked - shown disabled ("trust first") in the Specific picker, since
+	// you can only share with someone you have a cross-Domain link to.
+	var trustFirst by remember { mutableStateOf<List<String>>(emptyList()) }
 	// (session -> {everyone, domains}) rebuilt on each refresh from the gateway's share list.
 	var shares by remember { mutableStateOf<Map<String, SessionShares>>(emptyMap()) }
 	var loaded by remember { mutableStateOf(false) }
@@ -84,13 +88,22 @@ fun SharingScreen(repo: ChatRepository, onBack: () -> Unit) {
 		shares = byName
 		loaded = true
 	}
-	LaunchedEffect(Unit) { refresh() }
+	LaunchedEffect(Unit) {
+		refresh()
+		// People on the roster I have not linked (by owner key) become "trust first" rows.
+		val linkedOwners = people.mapNotNull { it.ownerSignPub }.toSet()
+		trustFirst = repo.fetchRoster().getOrDefault(emptyList())
+			.filter { it.ownerSignPub != myOwner && it.ownerSignPub !in linkedOwners }
+			.map { it.operatorName.ifEmpty { "(unnamed)" } }
+			.distinct()
+	}
 
 	val focus = active
 	if (focus != null) {
 		SessionShareScreen(
 			sessionName = sessions.find { it.name == focus }?.displayName ?: focus,
 			people = people,
+			trustFirst = trustFirst,
 			current = shares[focus] ?: SessionShares(false, emptySet()),
 			onBack = { active = null },
 			onSetMode = { mode ->
@@ -163,6 +176,7 @@ fun SharingScreen(repo: ChatRepository, onBack: () -> Unit) {
 private fun SessionShareScreen(
 	sessionName: String,
 	people: List<LinkedDomain>,
+	trustFirst: List<String>,
 	current: SessionShares,
 	onBack: () -> Unit,
 	onSetMode: (ShareMode) -> Unit,
@@ -216,6 +230,21 @@ private fun SessionShareScreen(
 							onCheckedChange = { onToggleDomain(p.domainId, it) },
 						)
 						Text(p.operatorName ?: p.domainId, Modifier.padding(start = 4.dp))
+					}
+				}
+				// People you have not linked: shown disabled, since sharing needs a trust link first.
+				for (name in trustFirst) {
+					Row(
+						Modifier.fillMaxWidth().padding(vertical = 4.dp),
+						verticalAlignment = Alignment.CenterVertically,
+					) {
+						Checkbox(checked = false, enabled = false, onCheckedChange = null)
+						Text(name, Modifier.padding(start = 4.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+						Text(
+							"  trust first",
+							style = MaterialTheme.typography.labelSmall,
+							color = MaterialTheme.colorScheme.onSurfaceVariant,
+						)
 					}
 				}
 			}
