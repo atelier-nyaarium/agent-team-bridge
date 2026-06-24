@@ -873,6 +873,10 @@ class ChatRepository(
 
 	fun ownerBoxPub(): String = federation.ownerBoxPub()
 
+	/** This owner's network display name (the operator name), falling back to the local Domain id
+	 * before discovery has stamped a name. Shown as "YOU" on the Users surface. */
+	fun operatorDisplayName(): String = state.value.operatorName.ifEmpty { localDomainId() }
+
 	/** A passphrase-encrypted backup of the owner root key for offline safekeeping. */
 	// Runs the scrypt KDF, so it stays off the main thread (the UI dispatches it from a
 	// coroutine) - the same posture as importOwnerBackup.

@@ -73,6 +73,10 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
 	var pending by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
 	// A live FLOW-2 compare (initiated by me, or me responding to a highlighted arm); overlays the roster.
 	var activeTrust by remember { mutableStateOf<TrustLaunch?>(null) }
+	// The Sharing surface, opened from a row's "Manage shares"; overlays the roster.
+	var showSharing by remember { mutableStateOf(false) }
+	val myName = remember { repo.operatorDisplayName() }
+	val myFingerprint = remember { repo.ownerSas().replace("-", " · ") }
 
 	suspend fun refresh() {
 		outcome = repo.fetchRoster()
@@ -94,6 +98,10 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
 				scope.launch { refresh() }
 			},
 		)
+		return
+	}
+	if (showSharing) {
+		SharingScreen(repo = repo, onBack = { showSharing = false })
 		return
 	}
 
@@ -118,6 +126,18 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
+
+			// YOU: this owner's identity (name + the 4-group fingerprint), per the admin-vs-user mockup.
+			SectionLabel("YOU")
+			Card(Modifier.fillMaxWidth()) {
+				Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+					Text(myName, style = MaterialTheme.typography.titleMedium)
+					Text("fingerprint", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+					Text(myFingerprint, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+				}
+			}
+
+			SectionLabel("PEOPLE")
 			val result = outcome
 			when {
 				result == null -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -139,21 +159,20 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
 				}
 
 				else -> {
-					val members = result.getOrDefault(emptyList())
+					// PEOPLE excludes my own row (the YOU section above shows me), sorted by name.
+					val members = result.getOrDefault(emptyList()).filter { it.ownerSignPub != myOwner }.sortedBy { it.operatorName }
 					if (members.isEmpty()) {
-						Text("No one here yet.", style = MaterialTheme.typography.bodyMedium)
+						Text("No one else here yet.", style = MaterialTheme.typography.bodyMedium)
 					}
-					// "You" first, then the rest by name, so the roster reads consistently.
-					for (m in members.sortedWith(compareByDescending<RosterMember> { it.ownerSignPub == myOwner }.thenBy { it.operatorName })) {
-						val isYou = m.ownerSignPub == myOwner
+					for (m in members) {
 						val trusted = remember(m.ownerSignPub, trustVersion) { repo.isOwnerTrusted(m.ownerSignPub) }
 						val armedRendezvous = pending[m.ownerSignPub]
 						UserRow(
 							member = m,
-							isYou = isYou,
+							isYou = false,
 							isTrusted = trusted,
-							isPending = !isYou && !trusted && armedRendezvous != null,
-							onTrust = if (!isYou && !trusted) {
+							isPending = !trusted && armedRendezvous != null,
+							onTrust = if (!trusted) {
 								{
 									// Respond to an arm aimed at me (join its rendezvous), or start a fresh one.
 									activeTrust = if (armedRendezvous != null) {
@@ -165,7 +184,12 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
 							} else {
 								null
 							},
-							onUntrust = if (!isYou && trusted) {
+							onManageShares = if (trusted) {
+								{ showSharing = true }
+							} else {
+								null
+							},
+							onUntrust = if (trusted) {
 								{ scope.launch { repo.untrustOwner(m.ownerSignPub); trustVersion++ } }
 							} else {
 								null
@@ -193,9 +217,10 @@ private fun UserRow(
 	isTrusted: Boolean,
 	isPending: Boolean,
 	onTrust: (() -> Unit)?,
+	onManageShares: (() -> Unit)? = null,
 	onUntrust: (() -> Unit)?,
 ) {
-	val fingerprint = remember(member.ownerSignPub) { Crypto.fingerprint(member.ownerSignPub) }
+	val fingerprint = remember(member.ownerSignPub) { Crypto.fingerprint(member.ownerSignPub).replace("-", " · ") }
 	val cardColors =
 		if (isPending) CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
 		else CardDefaults.cardColors()
@@ -232,11 +257,11 @@ private fun UserRow(
 			PresenceDot(online = member.online)
 			if (onTrust != null) {
 				Spacer(Modifier.width(8.dp))
-				Button(onClick = onTrust) { Text(if (isPending) "Respond" else "Trust") }
+				Button(onClick = onTrust) { Text(if (isPending) "Trust back" else "Trust") }
 			}
 			if (onUntrust != null) {
 				Spacer(Modifier.width(8.dp))
-				RowKebab(onUntrust = onUntrust)
+				RowKebab(onManageShares = onManageShares, onUntrust = onUntrust)
 			}
 		}
 	}
@@ -255,10 +280,10 @@ private fun TrustedBadge() {
 	}
 }
 
-/** The per-row overflow menu. For a trusted person it offers Untrust; Manage shares + the Trust
- * arm flow for an untrusted person are folded in as those flows land. */
+/** The per-row overflow menu (the kebab mockup): Manage shares + Untrust for a trusted person. The
+ * SAME menu for everyone - no Rename here. */
 @Composable
-private fun RowKebab(onUntrust: () -> Unit) {
+private fun RowKebab(onManageShares: (() -> Unit)?, onUntrust: () -> Unit) {
 	var open by remember { mutableStateOf(false) }
 	var confirm by remember { mutableStateOf(false) }
 	Box {
@@ -266,6 +291,15 @@ private fun RowKebab(onUntrust: () -> Unit) {
 			Icon(Icons.Default.MoreVert, contentDescription = "Actions")
 		}
 		DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+			if (onManageShares != null) {
+				DropdownMenuItem(
+					text = { Text("Manage shares") },
+					onClick = {
+						open = false
+						onManageShares()
+					},
+				)
+			}
 			DropdownMenuItem(
 				text = { Text("Untrust") },
 				onClick = {
