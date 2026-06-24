@@ -57,27 +57,8 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
       either can compute the code. Flow: commit -> poll peerCommit -> reveal -> poll peerReveal -> verify the
       peer's reveal opens its commitment (enrollee also pins the admin keys to the QR) -> compute SAS -> glance
       compare -> [Yes] signs the link edge. Revealing public owner keys + spent salts to the dumb broker leaks
-      nothing; the human [Yes] still gates the only trust commitment (the edge). Original map (kept for history;
-      full map in the workflow output tasks/wttde4mg5.output):
-    - **Client:** add `ConsoleClient.enrollHandshake(op): EnrollHandshakeResult` mirroring `ConsoleClient.enroll`
-      / `firstRoot` (POST to evie's /relay with the app-token bearer; body `{ enrollHandshake: <EnrollHandshakeOp> }`;
-      decode `EnrollHandshakeResult`). NO sealing (pre-admission, like firstRoot).
-    - **Admin QR gen (hook in `ChatRepository.buildInviteBlob`):** mint handshakeId + pin
-      (Base64(SecureRandom)), add `enrollHandshake = EnrollHandshakeRef{adminOwnerSignPub, adminOwnerBoxPub,
-      adminDomainId, handshakeId, pin}` to the blob; shown via the existing `QrImage`/`QrCode` on
-      `HostNetworks.HostedTenantDetailScreen`. Admin keys from `FederationManager.ownerIdentity()`.
-    - **Enrollee hook (in `ChatRepository.firstRootIfPending`):** AFTER first-root succeeds, if
-      `prov.enrollHandshake` is set, enter the ceremony UI with the parsed `EnrollHandshakeRef`.
-    - **Ceremony (both sides, mirror `LinkWizard` commit-reveal + `VerifyStep`):** mint salt;
-      `SasCrypto.enrollCommitment(party, role, salt)` -> POST Commit -> poll (re-POST) for peerCommitment;
-      `SasCrypto.enrollSas(adminParty, enrolleeParty, pin)` LOCALLY -> show the 6-digit code + the [Yes]/[No]
-      compare (reuse the LinkWizard 6-digit display, but a GLANCE compare not typed - per the design); on [Yes]
-      POST Reveal (EnrollReveal{ownerSignPub, ownerBoxPub, domainId, salt}) -> poll for peerReveal -> verify
-      `SasCrypto.enrollCommitment(peerReveal..) == peerCommitment` LOCALLY; then BOTH owner-sign a
-      `SignedXDomainLinkEdge` to the peer's Domain over the EXACT confirmed (domainId, keys) (R-edge, no re-fetch)
-      via `FederationManager.signXdomainLinkEdge` + submit `submit_xdomain_link`; on [No]/timeout POST Cancel.
-    - **Roles:** ADMIN = showed the QR (the HostedTenantDetail side), ENROLLEE = scanned. Build verifies with
-      `assembleDebug` + `testDebugUnitTest`; the on-device wire round-trip is the owner's wall.
+      nothing; the human [Yes] still gates the only trust commitment (the edge). (The pre-build implementation
+      map was reduced once shipped; the as-built detail is the [DONE] bullets above + git history.)
   - [DONE] **Lap-2 align audit (12-dimension Workflow fan-out, run wf_64308a7f):** 12/12 ALIGNED, 0 gaps. Vetted
     against the plan + the red-team build requirements: R-pre (fixed-slot role-tagged ENROLL_SAS_V1, TS+Kotlin
     byte-identical, vector-pinned), R-edge (edge signed over the EXACT verified peer domain + the enrollee's
@@ -226,88 +207,98 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
   defensive SAS-width zod bound; injective/fixed-slot SAS preimage hardening + a committed leading-zero
   vector. Full detail lives with the implementing agent's notes.
 
-## Enroll-ceremony architecture (lap-2 analysis - RESOLVED: evie-resident)
+## Final scouting (pre-UX-lap crust sweep - runs wf_c27a8a3b + wf_e8432cba)
 
-**Scope decision (owner): C - full 3-runtime build.** Build the whole enroll ceremony across evie + switchboard
-+ Android, updating the evie repo as needed; only critical-stop for a real blocker. The evie image rollout +
-gateway rebuild + the on-device wire round-trip (R8/minify gate) are the final OWNER-COORDINATED steps (a
-device + a cluster deploy are the only walls); everything else is built and locally unit-verified first.
+An 11-dimension dynamic sweep across switchboard + evie + Android (Gateway-era bug classes, gateway-presence
+assumptions, closed-enum folds, stale labeling/renames, dead code, and framework-first abstractions). ~80
+findings; the actionable core below. THE dominant finding is ONE structural refactor (A) that is the
+prerequisite for the richer Users surface and absorbs most of the high-severity crust.
 
+### A. THE structural refactor: decouple OWNER IDENTITY from the HOME/DOMAIN id (the UX-lap prerequisite)
+The system CONFLATES "the owner" with "the home Domain" (the `DEFAULT_DOMAIN_ID = "home"` hardwiring) and keys
+trust/share/peer/routing by `domainId` (+ `gatewayId`). User-First needs owner identity as a first-class key:
+the Users surface's per-row "is this person trusted?" and "reach a gateway-less member" CANNOT be answered by
+domain-keyed state (one owner may run several Domains). The holistic verdict: the single highest-value refactor
+for the lap is to extract console routing + identity from the home-Domain monolith into a first-class
+OWNER-KEYED identity object - decouple "whose home" (owner id) from "which Domain does this console reach"
+(domain id). Do this FIRST in the lap; the Trusted badge / kebab / share all depend on it. High-severity sites
+(all coupled to the UX lap unless noted):
+- `crossDomainShareState` keyed by `(sessionTarget, toDomainId)` -> an unshare to ONE of a user's Domains drops
+  shares to ALL of them; the relay gate + discovery filter read it by domainId.
+- `crossDomainPeers` keyed by `(friendDomainId, friendGatewayId)` + `crossDomainHandshake.confirm()` writes the
+  peer Domain-keyed -> the same friend re-links as a second peer when you operate a different Domain.
+- the cross-Domain LINK edge + its revocation are per-`(srcDomain, dstDomain)`, NOT per-owner; and
+  `XDomainLinkSchema` REQUIRES a non-empty `peerGatewayId` -> a gateway-LESS friend cannot be linked AT ALL (a
+  hard User-First blocker; the whole pairing handshake is unreachable for a console-only member).
+- evie `BridgeService` flushes + broadcasts `DEFAULT_DOMAIN_ID` for `submit_admission` / `submit_revocation`
+  REGARDLESS of the target Domain (a sibling of the fixed edge-routing bug) -> a non-home Domain's
+  admission/revocation mutates IN MEMORY but never persists to the Secret + never reaches its gateways (silent
+  data loss; a guest gateway's revocation is lost). [fix-now, also true outside the UX surface]
+- evie `BridgeServer.gatewayIds()` / `pushToGateway()` / `pushGatewayFrame()` hardwire `DEFAULT_DOMAIN_ID`, so
+  console routing only reaches HOME-Domain gateways (a guest-Domain reply mis-routes / drops).
+- Android console SEALING (`ConsoleClient.resolveGatewayId()`) + `ConsoleClient.send()` REQUIRE an admitted
+  gateway -> a gateway-less user can perform NO sealed op (roster / link / confirm / share / send / respond /
+  poll all throw "No Gateway admitted"). Hard User-First blocker.
+- Android `linkedDomains` / `linkedPeerDomains` / `hostedTenants` keyed by `domainId`; `set_operator_name`
+  per-Domain; discovery `operatorName` stamped per-GATEWAY (one name shared across all a gateway's Domains).
 
-A 5-angle cross-repo analysis (switchboard + evie) resolved WHERE the FLOW-1 enroll commit-reveal compare
-plumbs. Consensus (4/5 agents; the lone "gateway-reuse" dissent ignored that the fresh enrollee has NO gateway):
+### B. Closed-enum folds (FOLD INTO UX - they activate the moment the surface adds presence/role values)
+- (high) Android `MainActivity` `else -> "ended"` in THREE places (`presenceIndicator` / `SessionCard` /
+  `presenceColor`) silently maps any new `TeamInfo.status` to "ended".
+- (high) `mcp/bridge/bridgeSend.ts` `formatResult` has NO final `else` over the ResponseStatus chain.
+- `FriendOnboarding.hostedState` + `bridgeDiscover` default an unknown status without an explicit branch.
 
-- **The enroll handshake MUST live at EVIE, not the gateway.** A fresh enrollee has just first-rooted and is
-  reachable ONLY via evie's poll-based console-bridge (no gateway, no WS). The gateway's
-  `CrossDomainHandshakeCoordinator` needs a gateway-minted listening token + synchronous gateway_relay
-  routing - incompatible with a gatewayless poll client. This MATCHES the owner's existing **D1** ("build
-  console-to-console Trust NOW... server-resident evie rendezvous... PORT the coordinator defenses").
-- **Build a new `EnrollHandshakeCoordinator` in evie** (parallel to TenantAdmin, ~400-600 LoC): window state
-  persisted in the K8s federation Secret (survives an evie restart mid-ceremony), keyed by
-  (adminOwnerId, enrolleeConversationId)/handshake-nonce; ports the gateway coordinator's defenses
-  (single-flight, attempt cap 5, TTL, replay, and the per-relationship rate-limit the gateway lacks - the
-  laundry-listed global cap naturally lands HERE); new console-bridge ops `enroll_commit`/`enroll_reveal`
-  surfaced to the enrollee via the poll mailbox.
-- **NO SAS in evie; NO SAS synced leaf** (corrected after the design red-team). Because evie is a DUMB BROKER
-  and the PHONES compute the SAS, evie never computes any SAS - so `cross-domain-sas.ts` stays switchboard-only.
-  The ENROLL SAS is a NEW owner-anchored derivation living in switchboard (the TS reference for
-  vectors/tests) + the Android `SasCrypto.kt` twin (the real phone-side compute), pinned by a NEW cross-runtime
-  vector corpus - exactly like the existing gateway SAS, no synced copy. evie only needs the enroll handshake
-  FRAME schemas (to relay opaque commit/reveal blobs keyed by handshakeId) - those live in `enrollment.ts`
-  (already a synced leaf).
-- **Scope = 3 runtimes + an evie deploy.** evie (the coordinator + ops + Secret persistence + the synced
-  leaf), switchboard (the shared `enroll_*` op schemas + a consoleHandler relay arm + the enroll-QR payload:
-  admin ownerSignPub + handshake nonce, ~+155 bytes / +4 QR modules, measured-fine), Android (the 5-frame
-  enroll UI + the commit-reveal client + owner-signing the admission on mutual [Yes]). Building+testing needs
-  NO deploy (both repos have test gates); RUNNING it needs an evie image rollout + the gateway rebuild + an
-  on-device wire round-trip (the R8/minify gate).
-- **PROTOCOL CORRECTION (from reading the real code - the analysis was optimistic):** evie is UNTRUSTED at
-  enroll (the entire reason the 6-digit compare exists is to catch an evie substitution - closing D4). So:
-  - **evie is a DUMB BROKER, it does NOT compute the SAS.** If evie computed + returned the SAS it could just
-    hand both phones matching codes and MITM silently. evie only relays the commit then reveal frames (keyed by
-    a `handshakeId`), enforcing single-flight + attempt-cap + TTL + a per-(adminDomain, enrolleeConv) rate cap.
-  - **The PHONES compute the SAS locally** (SasCrypto / the synced crossDomainSas core) over the keys each
-    actually holds, and verify the peer's reveal against the peer's commit locally. The humans compare. A
-    substituted enrollee key yields a mismatch; commit-reveal stops evie grinding it (evie must commit its
-    substitution before it learns the real key); the 6-digit residual holds.
-  - **The pin rides in the QR (OOB), and is NEVER sent to evie** - both phones fold it into the SAS, so evie
-    cannot even compute a candidate code to grind. (Sharper than the gateway path, where evie relays a sealed
-    pin.)
-  - **Owner-anchored SAS preimage (NET-NEW vs the gateway's gateway-keyed preimage):** the enroll SAS binds
-    BOTH owners' keys (ownerSignPub + ownerBoxPub + domainId) + the pin, NOT gateway keys (the enrollee has no
-    gateway). This is a NEW derivation with its OWN cross-runtime vector corpus (TS + SasCrypto.kt twin),
-    sibling to crossDomainSas. The 6-digit reduction + commitment algebra are reused; only the preimage fields
-    change.
-  - **Trust output = the EXISTING cross-Domain link edges, not a new admission.** The enrollee first-roots
-    their OWN Domain (existing first_root), so admin + enrollee are two Domain owners; on mutual [Yes] each
-    owner-signs a `SignedXDomainLinkEdge` to the other's Domain (existing `submit_xdomain_link`). The handshake
-    is PURELY the key-confirmation ceremony; first_root + link edges are existing machinery.
-- **DESIGN RED-TEAM VERDICT (6 angles): core SOUND, build requirements baked in.** Relay-two-session DEFEATED
-  (the OOB QR admin-key + the evie-unknown pin make A's and E's codes diverge under any evie substitution),
-  pin-secrecy SOUND, commit-reveal-with-active-broker SOUND (synchronous commit-before-reveal per leg). Three
-  build requirements (no protocol break):
-  - **(R-pre) Fixed-slot, role-tagged ENROLL_SAS_V1 preimage** (not flat-sort): `ENROLL_SAS_V1 \n ADMIN \n
-    ownerSignPub_A \n ownerBoxPub_A \n domainId_A \n ENROLLEE \n ownerSignPub_E \n ownerBoxPub_E \n domainId_E
-    \n pin`, with a sibling `ENROLL_COMMIT_V1` fixed-slot commitment. Net-new, so built injective from the
-    start (closes the field-role-reassignment the gateway flat-sort is only saved from by its commitment).
-  - **(R-edge, was HIGH) Close the confirm->sign gap:** the XDomainLinkEdge binds domainIds, NOT owner keys.
-    So domainId MUST be a committed field in the ENROLL_SAS preimage (it is), AND each phone signs its
-    SignedXDomainLinkEdge over the EXACT locally-confirmed (domainId, keys) it computed the SAS over - NEVER a
-    value re-fetched from evie post-confirm. Chain: SAS confirms the (key,domain) pair -> phone signs edge to
-    the confirmed domain -> first_root guarantees that domain is owned by that key. (Defense-in-depth option,
-    laundry: also carry the peer ownerSignPub in the edge.)
-  - **(R-dos, was HIGH) evie coordinator guards:** per-(handshakeId) attempt cap (5) + per-(adminDomain,
-    enrolleeConv) rate cap + handshakeId idempotency (dedup retries) + an UNGUESSABLE handshakeId + each
-    role-slot bound to its FIRST committer (anti-hijack). The global per-relationship cap (lap-1 laundry) lands
-    HERE.
-  - The pin appears in NO frame (excluded from the commit/reveal schemas by construction); phones verify the
-    peer commit + compute the SAS locally; evie computes nothing.
-- **Open implementation forks (recommended defaults, not blockers):** (D5) the handshake nonce rides IN the QR
-  as a one-time invite (like the pendingTenant nonce), so the 6-digit SAS stays the ONLY out-of-band signal;
-  the enroll handshake frames are phone-minted, NOT owner-signed (only the resulting admission is signed - no
-  5th signing scheme); rate-limit + attempt-cap live INSIDE the evie coordinator keyed on
-  (adminDomainId, enrolleeConversationId); the enrollee authenticates the pre-admission handshake with its
-  console-bridge bearer token (it has no admission yet, by definition).
+### C. Renames (FOLD INTO UX - the design pass already mandates these)
+- Retire the "Federation" screen title, the "PEERS" / "MY NETWORK" / "GUEST NETWORKS" headers, the Settings
+  "Peers" label, and the whose-network labels. "Peer" as a NOUN is a category error (Peer = a LINKED network;
+  the roster includes unlinked) - reword. `operatorName` has 3 rename surfaces with inconsistent terminology;
+  member/operator -> ADMIN/USER. "home" (`DEFAULT_DOMAIN_ID`) reads like "a house" but means "the operator's
+  Domain" - rename candidate, do it WITH refactor A (same conflation). Scrub stale Federation/PEERS comments.
+
+### D. Framework-first abstractions (the boilerplate hit 3x this session)
+- (fold into UX) A `SignedScheme<T>` abstraction: a signed scheme is NINE hand-authored pieces today (schema +
+  signing-bytes + sign/verify + Kotlin twin + vector + codegen ROOT + 2 tests + manifest). Add a preimage
+  field-ORDER validation (the order is load-bearing but unchecked) and Kotlin-twin generation; let codegen
+  DISCOVER + auto-register signed schemes + auto-nest into ConsoleOp.
+- (fold into UX) Standardize the wire Result to `{ok, error?, data?}` (today some results put the payload
+  optional-on-reject - RosterResult.members, EnrollHandshakeResult.peer* - some always-present, some skip error).
+- (cleanup) PoP unification (`registerSigningBytes` + `rosterRequestSigningBytes` are the same shape).
+  Replay-guard unification (THREE seen-nonce+TTL impls: gateway `ReplayGuard`, evie's registration cache,
+  `BridgeService.rosterNonces`).
+
+### E. The synced-leaf footgun (FIX-NOW, INDEPENDENT - a real trap hit twice this session)
+`biome lint:fix` reformats the SOURCE after the `check-sync-hash --write` restamp, so a `cp` done before the
+format leaves the evie/nyaaskills copy stale (fails their CI). FIX: a `scripts/sync-leaf.ts` doing
+format -> restamp -> cp ATOMICALLY (the copy target is already in each file header: "MUST re-copy on change:
+cp ..."), plus a CLAUDE.md warning. Also: adding a NESTED-ONLY schema to the codegen ROOTS is non-obvious (had
+to add `SignedXDomainUntrustSchema` as a bare root) - document it or add an explicit emit-this-nested affordance.
+
+### F. Dead/retired code (the FINAL cleanup-pass material - owner is wiping evie, NO migration code)
+- Retired enroll-owner / authorize-console QR payload types (schema-persisted but unredeemable; the owner root
+  is host-rooted now) + the retired `enroll_redeem` EnrollOp (evie rejects it, no app path) + the commented-out
+  `FederationEnrollOwnerAction`. The DETACHED `evie_*` tool proxy (`mcp/evie/evieTools.ts`, zero imports) + the
+  `POST /evie/tool-call` route (never called). Stale "arbiter" references in the OTHER plan files (code renamed).
+
+### G. Leave / laundry (low value, do NOT block on)
+- The opaque-reject convention is consistent enough without a shared helper. The 6-corpus vector fragmentation
+  is acceptable. The PoP freshness windows differ slightly (`REGISTER_MAX_SKEW` vs `ROSTER_MAX_SKEW`) - harmless.
+
+>> UX-LAP PLAN IMPACT: lap-3's UX work now leads with **refactor A** (owner-keyed identity, decoupled from the
+home/Domain id) as Phase-4 slice 0 - the trust badges, kebab, arm-trust, and share control all sit on it. B + C
+fold into the screens as built. D folds in where it touches the new signed schemes / result shapes; the rest
+(E, F, the cleanup half of D) is the final cleanup pass. The Phase 1-4 roadmap below predates this scouting; A
+supersedes the "Phase 3 ForeignOwnerKeyring" framing by making owner-keying the spine, not an add-on.
+
+## Enroll-ceremony architecture (lap 2 - SHIPPED, reduced)
+
+Lap 2 is complete + fully audited (see Build progress). The FLOW-1 in-person enroll ceremony is evie-RESIDENT:
+a fresh enrollee has no gateway, so the commit-reveal mutual 6-digit compare is brokered AT evie by a DUMB
+BROKER (`EnrollHandshakeCoordinator`) that relays commit then reveal frames keyed by an unguessable
+handshakeId and computes NO SAS (the phones do; the pin rides the QR out of band). Each phone verifies the
+peer's reveal opens its commitment, computes the owner-anchored `ENROLL_SAS_V1` LOCALLY, glance-compares, and
+on a mutual [Yes] each owner signs a cross-Domain link EDGE - the trust output is the EXISTING edges, NOT a new
+admission and NOT a gateway peer (the enrollee is gateway-less). The verbose design + red-team analysis lived
+here; reduced once shipped (full text in git history).
 
 ## Vision
 
@@ -352,138 +343,28 @@ Entry + wording:
 - **Standing note (user):** vet every string for on-screen-context clarity as it is rewritten; apply the
   federation-wording discipline (cut what the title/section already says).
 
-## Analysis (lap 3 - deep multi-repo: switchboard + evie-bot + nyaaskills)
+## Analysis (lap 3 - SUPERSEDED by the Design pass + Final scouting, reduced)
 
-Method: an 8-agent dynamic workflow (trust, wire/codegen, evie routing, link FSM, share model, Android
-UX/wording, console presence, nyaaskills coupling) + a direct read of the security-critical code. Findings
-converge; corrections to the lap-1 audit noted.
+The deep multi-repo analysis that fed the lap-3 design. Load-bearing invariants that survive: isolated-by-default
+is STRUCTURAL at evie (`handleListGateways` returns only the caller's OWN-Domain gateways); a guest/tenant is
+its OWN Domain rooted at its OWN owner key; the roster is a genuine cross-Domain NAME disclosure needing a
+net-new evie aggregation (BUILT this session - see Build progress). The hard blockers it raised (console-only
+members visible-only first; "Peer" is a wording category error; the unsigned-name compromise) were resolved by
+Q3=B + Q4=A (below) and the Final scouting's refactor A (owner-keyed identity). Full text in git history.
 
-### Code-confirmed invariants (the floor the design sits on)
-- Isolated-by-default is STRUCTURAL at evie: `handleListGateways` returns only gateways in the caller's OWN
-  Domain as `{gatewayId, online}`, no operatorName, and an unregistered caller sees nothing (evie
-  BridgeServer.ts:823-837). `gatewayConnections` is partitioned per Domain (106-109).
-- A guest/tenant is its OWN Domain rooted at its OWN owner key on the friend's phone (first_root). So
-  "members of your network see each other" is a genuine CROSS-Domain name disclosure between
-  mutually-isolated owners, not an intra-Domain tweak.
-- The link is strictly GATEWAY-to-GATEWAY commit-reveal SAS-AKE: the receiver opens a listening window +
-  mints a token `<gatewayId>.<random>`, the requester routes by the token's gateway-id prefix, a 12-digit
-  type-to-match SAS over the committed keys+pin, attempt-capped at 5, each owner owner-signs an XDOMAIN_LINK
-  edge (crossDomainHandshake.ts). evie routes by GATEWAY id, never Domain id.
-- Cross-Domain share is per-`(sessionTarget, toDomainId)` plain state on the OWNING gateway's volume, gated
-  LIVE at access time by `isSharedTo` (crossDomainShareState.ts; hostRelay gate). Only devcontainer/loose
-  kinds are shareable. The relay denies a non-shared op with ONE byte-identical error (no existence/kind oracle).
+## Questionaire (lap 3 - decisions captured below + in Build progress, reduced)
 
-### Corrections to the lap-1 audit
-- The per-peer share-toggle UI IS built (Federation.kt ShareRow/ShareCheck/setCrossDomainShare). "Manage
-  shares" is largely a re-skin + the new mode, not net-new.
-- The dynamic "everyone I trust" share is nearly FREE on the gateway. [SUPERSEDED by Red-team lap 1 - FALSE:
-  the share store + all 5 read sites are domain-keyed exact matches with zero peer awareness, and Q4 re-keys
-  trust to OWNER identity. It is net-new gateway work (discriminated target + a central gate helper +
-  owner->Domain-set resolution + an across-domains expiry). See Red-team rank 14/15.]
-- The roster membership LIST may be DERIVABLE from the DomainSnapshot the console already polls. [SUPERSEDED
-  by Red-team lap 1 - FALSE: a DomainSnapshot is ONE owner's slice; co-hosted guests are separate isolated
-  Domains, so your poll contains zero bytes about them. The roster needs a net-new cross-tenant evie
-  aggregation op. See Red-team rank 1/2.]
-
-### Hard blockers (load-bearing, must decide)
-- A console-only member is UNLINKABLE + un-shareable-TO today: no gateway means no peer record
-  (CrossDomainPeerSchema needs friendGatewayId/Sign/Box), no seal box key, and no route to send a
-  cross-Domain op. The design note's "console-only linkable + consuming" IS the separately-deferred unbuilt
-  gateway-bootstrap piece. First build: console-only = VISIBLE only.
-- "Peer" as the unifying noun is a wording category error: federation-wording.md reserves Peer = a network
-  you have LINKED; the roster includes un-linked members.
-- Name source: admissions carry NO name field. A signed name = ADMISSION_V1->V2 churn (synced leaf + vectors
-  + evie + Kotlin). An unsigned name (gateway TeamInfo.team + console device label) is cheap and spoofable
-  but carries no trust weight.
-- Presence for a console-only dot has NO signal + NO wire field today (status enum closed to
-  {online,available}); it needs new evie console-presence state.
-- Launch-from-roster must NOT auto-arm the receiver (no passive surface): the receiver still explicitly arms
-  its own window; the SAS type-to-match stays whole (compact = render-size only).
-
-### Coherence flags
-- federation-management-ux.md + several plans are still in stale "Switch"/"arbiter" vocabulary; map to the
-  CODE (post-rename), not the prose.
-- federation-wording.md says "nothing changed yet" but GUEST NETWORKS etc already shipped; diff against the
-  shipped strings.
-- owner-broadcast-consoles.md needs an evie owner index (ownerKeyId); the roster needs the same - build once.
-
-## Questionaire (lap 3 - post deep-analysis, re-anchored on the "trust this person" steering)
-
-**Q1. Who appears in the list?** -> A, FULL TEAM ROSTER (user: "A. Full roster so you can actually tap on the
-person."). Everyone in your network is visible + tappable, including co-hosted guests who do not know each
-other. Confirms the owner-approved cross-Domain name disclosure; boundary assumed = the members on your evie
-(you + your hosted guests), non-transitive; the red-team is required before build.
-
-**Q2. How does the other person come into a Trust?** -> Mainly B with A's no-prompt (user: "Mainly B, sorta
-A's no prompt. We are arming a trust back feature. It will remain on the Trust screen though (no unsolicited
-pings), just highlighted that user's row somehow."). Tapping Trust on someone's row ARMS your side and posts
-a pending trust-back; the target sees the requester's row HIGHLIGHTED on their own Trust screen (NO push /
-unsolicited ping - the signal lives only on the Trust screen), explicitly taps it back to arm, then the
-12-digit SAS compare runs on both. Preserves no-auto-arm + the both-present SAS.
-  - Design/red-team notes (consequences): (1) a "pending trust" state must be stored server-side (evie) and
-    surfaced as a per-row flag; (2) routing the handshake to the target's gateway must resolve SERVER-SIDE
-    (do NOT expose a gatewayId/key in the roster row - that would be a seal/probe handle); (3) the pending
-    request needs a TTL (mirror the listening-window expiry) + a rate-limit so pending markers cannot be
-    spammed across rosters; (4) the red-team must bless the on-screen pending marker as non-passive (it adds
-    only "X armed trust toward you" over a name already visible in the roster).
-
-**Q3. Console-only members: visible-only vs build Trust now?** -> B, BUILD THE TRUST FOUNDATION NOW (user:
-"B. Right, Trust IMPLIES a friend system like thing. Foundation has to be built now not later. In the
-immediate implementation, it essentially provides them nothing but a friends list. It has more meaning when
-Gateways are added later."). Trust is a persistent friend edge between PEOPLE, recorded now even when a
-member is console-only (it yields only a friends list until they add a gateway).
-  - IMPLICATION (forces the crypto re-anchor, Q4): the shipped link binds GATEWAY keys (CrossDomainPeerSchema,
-    the SAS reveal, the XDomainLink edge), so it cannot record a trust edge for a gateway-less member. A
-    friend-system foundation requires re-anchoring the trust edge on OWNER identity.
-
-**Q4. Re-anchor Trust on owner identity + accept the metadata compromise?** -> A, YES (user: "A it is!").
-The crypto design (now decided):
-  - **Trust edge = owner-to-owner.** The SAS (which already carries both owners' keys) pins the two OWNER
-    keys; each owner signs "I trust owner B". No gateway in the edge, so it is recordable now, even
-    console-to-console. The AES-256-GCM / X25519 seal CIPHER is UNCHANGED - only the identity binding +
-    key-distribution change (small risk surface).
-  - **Late gateways are free.** When B adds a gateway, B's owner signs a `kind:gateway` admission; A (having
-    pinned B's owner key at the SAS) learns B's current gateways from B's owner-signed snapshot, relayed by
-    evie but verified under B's owner key (evie cannot forge it). No re-trust ceremony.
-  - **"Share with all trusted" needs NO group crypto.** Traffic is interactive/pairwise (a peer reaches INTO
-    your session), so each engaging peer seals PAIRWISE to your gateway as today. "All trusted" is purely the
-    share GATE answering yes for any currently-trusted owner, resolved LIVE at access time. No group key, no
-    broadcast cipher, no re-keying on membership change.
-  - **"Share the session, not the gateway" is preserved.** The seal secures the transport; ACCESS is gated
-    per-session AFTER unseal (only shared sessions, only devcontainer/loose kinds). Trust grants ZERO
-    sessions by itself. The target session name is inside the sealed payload, so evie cannot see which
-    session a peer reached.
-  - **Accepted compromise = METADATA, never content.** evie sees the social graph (names, presence,
-    who-hosts/trusts-whom, traffic timing) and can withhold / stale-replay or (for unsigned fields) mislabel,
-    bounded by the SAS at trust-time + owner-signed messages/revocations. It can NEVER read content, forge a
-    message, or escalate a lie into a fake trust.
-  - Implementation note: console-to-console Trust (no gateways) needs the SAS to route over the
-    console-bridge transport (new) rather than gateway-relay; the commit-reveal logic is reused.
-
-**Q5. Member names: owner-signed/verified or evie-served?** -> B, EVIE-SERVED + RENAMABLE (user: "B is fine.
-Let the person rename their profile if they want. Fingerprint and topology explains a lot about a person.").
-Names are unsigned, evie-served (cheap), and the person renames their own profile freely. The REAL identity
-signals are the owner FINGERPRINT (the SAS digits, surfaced on the row) + the network TOPOLOGY (their
-gateways); the cryptographic trust STATUS disambiguates a forged/duplicate name (a fake "Nyaarium" shows as
-untrusted = red flag; an imposter cannot fake sealed shared content).
-  - Consequence (good): unlocks the CHEAP roster path - the membership LIST derives from the DomainSnapshot
-    the console already polls; no ADMISSION_V1->V2 churn, no name pinning at trust.
-  - Design note: surface the owner fingerprint on a peer row (the verifier the user relies on), and show a
-    trusted peer's gateways/topology as the recognition aid.
-
-**Q6. Boundary + the unifying noun/screen name?** -> Boundary CONFIRMED (roster = the members on your evie,
-non-transitive). Noun = A, USER-CENTRIC -> "Users" (user: "Roster is members yes. A. User-centric. You can
-call them 'Users' instead of 'Your people'. Just sounds cleaner."). The merged screen/section is "Users";
-each row is a user; trusted users get a "Trusted" badge + their fingerprint. Verb stays "Trust". Drops the
-"Federation"/"Peers"/"Networks" jargon. Exact strings get vetted in the wording pass.
-
-**Q7. Where does sharing live + the default path?** -> A, SESSION-CENTRIC + a central overview (user: "A. But
-you need to also include in the trusts section of settings a way to see all sessions and share settings.").
-One share state, surfaced three ways: (1) PRIMARY - on a project/session, a control Private / Everyone I
-trust / Specific users (the per-project person-picking dance is gone; Everyone-I-trust is one tap, Specific
-opens a picker for the low-key one-to-one); (2) a CENTRAL "all sessions + share settings" overview in the
-Users section (audit + manage every session's share state in one place); (3) a read-only per-user "what X can
-see from me" view from the row's kebab. All three edit/read the same per-session share state.
+The owner decisions that shaped the UX (live in the Design pass + Decision update; full prose in git history):
+- **Q1=A FULL ROSTER:** every member is visible by name to every other member, non-transitive, scoped to the
+  members on your evie (you + your hosted guests). [BUILT - the roster.]
+- **Q2=B + no-prompt:** tapping Trust ARMS your side + posts a pending trust-back; the target sees their row
+  HIGHLIGHTED on the Trust screen (NO push / unsolicited ping), taps it back to arm, then the mutual 6-digit
+  SAS compare runs on both. A pending-trust state stored server-side (evie), TTL'd + rate-limited; a roster tap
+  exposes NO gatewayId / mints NO token.
+- **Q3=B BUILD THE TRUST FOUNDATION NOW:** trust is a persistent friend edge between PEOPLE, recorded even when
+  a member is console-only (it yields a friends list until they add a gateway).
+- **Q4=A RE-ANCHOR trust on OWNER identity:** the SAS pins the two OWNER keys; the trust edge is owner-to-owner
+  (the enroll ceremony already does this - the Final scouting's refactor A finishes it across the subsystem).
 
 ## Plan (consolidated v2 - lap-3 questionaire + Red-team lap-1 + D1/D2 resolved)
 
@@ -585,182 +466,16 @@ corpus + a Kotlin twin + a `_signing-vectors-manifest.json` line:**
 merging Phase 3 gateway consumers to switchboard main (the gateway restart is a non-selective git pull of
 main). Gate new gateway code on an evie-capability check so an un-upgraded evie degrades to no-op.
 
-## Red-team (lap 1) - findings, adopted refinements, and open owner decisions
+## Red-team (lap 1) - 67 findings, folded in (reduced)
 
-An 18-angle adversarial plan red-team, each finding verified against the ACTUAL CODE by an independent
-skeptic: 84 raised, 67 confirmed, 9 blockers. The DESIGN is sound but the COST MODEL was wrong in three
-load-bearing places, and several security-critical mechanisms the plan named in one line are net-new
-subsystems. Full corpus: workflow run wf_d190f27b-078.
+The first design red-team: 67 confirmed findings across 7 root-cause themes. Every adopted refinement was
+folded into the Plan phases + the Design pass; the resolved owner forks live in Decided-so-far + the Design
+pass. Verdict: the design is sound; the build proceeded on it. Full corpus in git history.
 
-### Root-cause themes (the 7 the findings collapse into)
-1. The roster's "derive from the polled DomainSnapshot, no new evie op" premise is FALSE. A snapshot is ONE
-   owner's slice; co-hosted guests are separate isolated Domains. The roster REQUIRES a net-new cross-tenant
-   evie aggregation op (membership + names + presence) that inverts the per-Domain partition. The single
-   biggest mis-size. (ranks 1, 2)
-2. The SAS re-anchor is a net-new crypto subsystem, not a binding tweak. Moving gateway box keys OUT of the
-   human-compared SAS re-roots box-key trust in an evie-relayed owner-signed snapshot, which needs: a
-   per-foreign-owner keyring (none exists; allowlist is single-owner + refuses foreign roots), a new
-   cross-owner snapshot-relay frame (domain_update is owner-self-scoped + applyDomainSync rejects a foreign
-   root), an owner-signed MONOTONIC anti-rollback version (applySnapshot is an unconditional replace; a
-   stale-replay resurrects a revoked key = CONTENT break, not metadata), a seal/unseal-time
-   verify-against-the-SAS-pinned-owner gate, an owner-edge UNTRUST artifact (so untrust fails closed),
-   migration of existing gateway-keyed peers, and a v1/v2/v3 SealedBody class rethink. (ranks 1, 3, 4, 8, 9,
-   10, 18)
-3. Console-to-console Trust is NOT "reuse over a new transport." The SAS preimage hard-binds 3
-   gateway-mandatory fields a gateway-less party lacks (needs a new SAS_V2 + vectors + Kotlin twin), AND the
-   console-bridge is poll-based, push-less, gateway-terminating, stateless - no rendezvous/listening window
-   and NONE of the commit-reveal defenses (single-flight, attempt-cap, rate-limit, replay), which all live in
-   the gateway coordinator. (ranks 5, 6)
-4. The pending-trust arm/highlight flow (Q2) is unbuilt and not yet blessable: no store, no TTL, no working
-   rate-limit KEY (the existing throttle keys on a dstGateway the roster-tap withholds, and fans out to the
-   whole roster), no server-side owner->gateway index, no marker idempotency/clear-on-cancel. (ranks 11, 12,
-   13, 21, 22, 33)
-5. The roster reverses per-Domain isolation into a cross-Domain PERSONAL-DATA disclosure with no consent /
-   audit / revoke / moment-of-change surface: a co-hosted guest is named (under a HOST-typed name they never
-   approved) + presence-tracked to strangers; untrust does NOT remove a hosting-derived row; evie becomes a
-   cross-owner social-graph data controller. (ranks 7, 19, 25, 26, 36)
-6. Wire/codegen/R8/build obligations under-enumerated and in the exact lane CI does not gate (three separate
-   signing-byte schemes + vectors + Kotlin twins; the closed status enum + the Android else->ended bug; the
-   assembleRelease + on-device round-trip the build steps never name; non-phase-granular gateway deploy).
-   (ranks 17, 24, 31, 32)
-7. Wording: "member" is a RESERVED code term (an admitted keyring entry / Manage Gateways); do not reuse it
-   for a roster row - extend Q6's "User". "Everyone I trust" must be scoped to reachable-gateway owners.
-   (ranks 28, 29, 30, 34)
+## Red-team (lap 2) - the v2 refinements verified (reduced)
 
-### Adopted refinements (folded into the design; no owner input needed)
-- HYBRID SAS (the key risk-reducer, rank 4): KEEP the gateway box key IN the SAS for any gateway present at
-  trust time (today's human-verified seal-key binding, unchanged), and use the owner-signed-snapshot path
-  ONLY for LATER-added gateways. Shrinks the new crypto subsystem's blast radius and migrates existing links
-  for free.
-- Trust DECISION is the LOCAL owner-edge (fail-closed on local delete); the evie-relayed snapshot is only a
-  key-FRESHNESS hint for an already-locally-trusted owner, never the trust grant. Untrust = delete the local
-  edge + an owner-signed UNTRUST tombstone (mirror revoke_xdomain_link, issuedAt floor).
-- Anti-rollback: owner-signed MONOTONIC snapshot version + refuse-if-older + revocations MERGE (never drop),
-  with cross-runtime vectors. Phase 1.
-- Roster = net-new cross-tenant evie op (strike "derive/cheap"): scope by the admitted-console signature;
-  separate operator-enumerates-tenants from guest-sees-co-tenants; opaque-reject on absence; poll-rate
-  ceiling; converge with the owner-broadcast ownerKeyId index (build once); evie (not the phone) is the
-  source of truth for the hosted-tenant list.
-- "Everyone I trust" = net-new gateway work (strike "nearly free"): a discriminated share target, ONE central
-  isSharedTo(target, srcDomain, isTrusted) helper routing ALL read sites, owner->Domain-set resolution at the
-  gate, and expireBySessionAcrossDomains for the untrust / off-everyone teardown.
-- Pending-trust spec (concrete): evie store keyed by TARGET owner key; rate-limit key
-  (requesterOwner,targetOwner) + an aggregate per-requester cap; TTL; opaque-reject; idempotent re-arm;
-  clear-on-cancel/expire. HARD server rule: a roster tap mints NO token, exposes NO gatewayId, makes NO frame
-  routable - handleIncomingCommit's "no open window" stays the SOLE admission gate (no unsolicited surface).
-  The marker carries ZERO trust weight (fingerprint + SAS is the gate; a forged marker still hits the
-  out-of-band compare).
-- Consent rails: notice-and-accept at hosting ("X and the people they host may see your name + online
-  status"); a guest can self-set/blank their roster name; an appear-in-roster opt-out; a "who can see me"
-  audit/revoke; surface that evie sees the graph. (Names stay public-by-default per Q1b, plus these rails.)
-- Field allowlist for a guest's roster row: name + presence + fingerprint + their-own-gateways only; strip
-  host/guest topology (non-transitive covers TOPOLOGY, not just names); never source from
-  crossDomainPeers.all() or discover().
-- Build gates: name the assembleRelease + on-device register/poll/seal round-trip for every changed sealed
-  @Serializable op; SEQUENCE THE MERGES (evie Phase 2 live before Phase 3 gateway consumers land), since a
-  gateway restart is a non-selective git-pull of main.
-- Wording: roster entry = "User" (never "member"/Member*); retire the live "Federation" title + "Peers"
-  subheader; reconcile operatorName's three rename surfaces; scope "everyone I trust" copy to
-  reachable-gateway owners; a console-only Trusted row reads as an inert friends-list entry.
-
-### RESOLVED OWNER DECISIONS (lap-1 forks)
-- **D1 = A: build console-to-console Trust NOW** (user: "A. now. if we must, I will reprovision."). Q3=B
-  confirmed at its true cost - IN SCOPE for v1: a SAS_V2 (owner-anchored, gateway-OPTIONAL, with a
-  console/owner box key as the seal anchor for a gateway-less party) + a server-resident evie rendezvous (a
-  console-bridge listening-window store + the ported commit-reveal defenses: single-flight, attempt-cap,
-  rate-limit, replay). Console-only members are FULL trust endpoints, not visible-only.
-- **D2 = A: names public-by-default (Q1b) + consent rails** (user: "A."). IN SCOPE: notice-and-accept at
-  hosting ("X and the people they host may see your name + online status"), a guest self-set/blank roster
-  name, an appear-in-roster opt-out, a "who can see me" audit/revoke, and surfacing that evie sees the graph.
-- **Reprovision accepted** (user: "if we must, I will reprovision."): RESOLVES the migration blocker (rank 9).
-  A CLEAN BREAK is acceptable, so the re-anchor does NOT need a lazy on-disk migration of existing
-  gateway-anchored peers - require a re-trust (re-provision) after the re-anchor lands; recovery is already a
-  documented clean-break.
-
-## Red-team (lap 2) - the v2 refinements verified; the 6 remaining specs to land before build
-
-A second 12-angle adversarial red-team of the REVISED plan, each finding code-verified: 71 raised, 55
-confirmed. **Verdict: the core architecture is SOUND** (owner-to-owner re-anchor, hybrid SAS,
-local-edge-as-sole-trust-gate, anti-rollback intent, consent rails as committed scope) - the lap-1
-refinements landed, and most surviving findings are SPEC-PRECISION + COMPLETENESS on net-new, not-yet-built
-subsystems, not design contradictions. The adversarial verify even CORRECTLY downgraded an over-claimed
-"rotation re-opens substitution" blocker to minor (forbidding override would contradict the owner-signed
-design - a rotation IS authoritative via the owner signature). Six blockers remain, all resolvable here at
-the planning altitude. Full corpus: workflow run wf_b0ea408f-f67.
-
-### The 6 blockers + their adopted resolutions (fold into the phases)
-- **B1 (rank 1) - the roster op's caller->Domain authz has no surface at evie.** evie receives only
-  `{opId, signerSignPub, sealed, ...}` and NEVER verifies signerSignPub (the GATEWAY does, via consoleSealer +
-  its box key). RESOLUTION: the roster request is a NEW evie-direct op carrying the console's owner-signed
-  `kind:console` admission + a fresh proof-of-possession (mirroring `verifyRegistration`/`firstRoot`'s
-  self-signature). evie verifies the OWNER SIGNATURE on the admission (a public-key check - NO box key needed)
-  to bind caller -> Domain, then scopes the roster to that Domain. This is the ONLY path that also works for a
-  console-only (gateway-less) member. Note the metadata posture: evie verifies a signed-but-cleartext body.
-- **B2 (rank 2) - the console-to-console rendezvous must NOT put the commit-reveal ordering oracle inside
-  evie** (the content-blind adversary the SAS exists to defeat; the SAS preimage is non-injective, so timing
-  IS the defense). RESOLUTION: keep single-flight OFF evie - ONE console mints the window and is the
-  authoritative state-holder (accepts exactly one inbound commit, rejects the second); evie stays a dumb
-  relay/mailbox. Invariant: commitments + the SAS are computed PHONE-side; only salted commitments + ciphertext
-  transit evie. Add a console-to-console twin of `cross-domain-mitm.test.ts` driving the attack through a
-  hostile evie store.
-- **B3 (rank 3) - "anti-rollback version" has no signed home** (today's `version()` is an UNSIGNED content
-  hash; DomainSnapshotSchema has no version field). RESOLUTION: a NET-NEW owner-signed envelope - a MONOTONIC
-  integer counter inside a versioned preimage (`DOMAIN_VERSION_V1\nownerSignPub\ndomainId\nversion\nnonce`),
-  owner-incremented + signed on every Domain mutation, verified under the SAS-pinned/home owner key BEFORE
-  refuse-if-older. This is a FOURTH signed scheme (its own signing-bytes fn + vectors + Kotlin twin + manifest
-  line); it must cover the FOREIGN-owner snapshot (the real stale-replay surface). Keep the content-hash
-  `version()` only as the cache-skip token (rename it).
-- **B4 (rank 4) - notice-at-hosting has no fire-point** (first-root is automatic, evie-direct, headless on the
-  next `connect()`). RESOLUTION: the notice-and-accept dialog fires on the guest's blob-IMPORT screen (BEFORE
-  `provision()` persists); Decline aborts. The accept is recorded as NEW connect-FSM state that
-  `firstRootIfPending` reads and refuses to first-root without. Not a cosmetic dialog - a precondition gating
-  the automatic first-root.
-- **B5 (rank 5) - console-only members have no presence authority** ("gateway = presence authority" is
-  self-contradictory for a gateway-less member). RESOLUTION: presence is GATEWAY-attested for gateway-backed
-  members, and EVIE-attested for console-only ones - evie timestamps liveness on each relayed `console_relay`
-  frame keyed by the cleartext signerSignPub (the only id it reads), bound to a Domain via the admissions evie
-  already holds, TTL-to-absent. Explicitly evie-attested (unsigned, stale-replayable within the SAS bound),
-  consistent with the Q4 "evie sees presence" compromise, and NEVER a trust input. If deferred, ship
-  console-only rows dot-less and SAY SO (not buried in an "if schedule slips" aside).
-- **B6 (ranks 6/8/9 - major, consolidated) - the seal-key precedence across the two key sources is unstated +
-  self-contradictory.** RESOLUTION (one Phase-3 precedence spec): the SAS-pinned box key is AUTHORITATIVE for
-  its `(domainId, gatewayId)` for its LIFETIME; a relayed snapshot may only ADD box keys for gatewayIds NOT
-  present at trust time, NEVER override a trust-time-pinned key. A rotation (same gatewayId, new boxPub) is
-  authoritative via the OWNER signature (owner-signed admission, anti-rollback-versioned), NOT snapshot
-  freshness - so reword the Phase-3 "until the first snapshot arrives" line accordingly. FAIL CLOSED if neither
-  source yields a key (never guess/fall through). The gateway-less seal ANCHOR = `ownerBoxPub` (stable across
-  console reinstalls; matches the owner-edge; the phone holds its priv, so console-to-console seal is
-  phone-to-phone, no gateway involved) - and it MUST be a committed field in the SAS_V2 preimage so the human
-  compare covers the actual seal key.
-
-### Two consolidated specs the audit asks for before vectors freeze
-- **SAS_V2 preimage (ranks 7/8):** before cutting ANY vector - bump the domain-sep literal to SAS_V2 /
-  SAS_COMMIT_V2; make the preimage SELF-DESCRIBING + fixed-shape (role-tagged per-party blocks or fixed slots
-  with an explicit absent-marker) carrying a gateway-present/absent DISCRIMINANT + the chosen anchor key in a
-  canonical slot, so absent-field aliasing, multiset reassignment, and anchor-type DOWNGRADE are all
-  impossible (today's flat 10-field sort cannot do this safely). Vectors for all combos (gw/gw, gw/none,
-  none/none) + a present-vs-absent-differs + a within-party-reassignment negative + a V1-vs-V2 no-collision.
-- **Codegen/cross-runtime checklist (theme 5):** every wire/schema change owes - signing-vectors corpus +
-  manifest line (for a signed op), a `tests/fixtures/protocol` golden fixture + `_manifest.json` entry (for a
-  ConsoleOp/result), a synced-leaf re-stamp+cp (the owner-edge + untrust tombstone land in the SYNC-HASH leaf
-  `enrollment.ts` as new EnrollOp members), Protocol.kt regen, and the assembleRelease + on-device round-trip.
-  Anti-rollback (B3) is the FOURTH signed scheme. Fix the Android `else -> "ended"` fold to map unknown
-  presence values to a neutral state BEFORE introducing any new presence value.
-
-### Consent rails re-phasing (theme 4) - move the server halves to Phase 2
-The enforceable half of three of four rails is server-side, so they cannot ship Phase-4-Android-only: the
-roster-visibility OPT-OUT field + filter, the who-can-see-me audience query, and the notice-accept gate all
-move to Phase 2 evie with a DEFAULT-SAFE (not-in-roster) posture + an evie-capability gate (so an un-upgraded
-evie degrades the rail to safe-default, not a leak). The opt-out also interacts with roster-armed trust:
-define whether an opted-out guest stays arm-trustable to the host who provisioned them (recommended) or the
-opt-out also removes the trust-arm surface. HostNetworks must drop its local-store name read (evie is the
-source of truth) so the host does not see two names for one guest.
-
-### Conclusion
-Close these 6 (+ the two consolidated specs + the consent re-phasing) and the plan is BUILD-READY. The
-remaining minor/nit tail is checklist tightening that folds into Phase 1 WITHOUT further red-team rounds
-(the lap-2 verdict's own finding). Plan-refinement has CONVERGED: lap 1 (67 findings, design-level) -> lap 2
-(55, spec-level) -> the surviving items are all named with adopted resolutions above.
+Verified the v2 plan refinements; 6 blockers resolved + folded into the phases (notably the consent rails moved
+to evie Phase 2, and the 6-digit SAS treated as a wire change end to end). Full detail in git history.
 
 ## Design pass (DesignSync mockups - claude.ai/design project "switchboard-peer-ux")
 
@@ -870,74 +585,15 @@ Confirmed live with the owner while iterating HTML mockups (these translate to A
 - **QR screen behavior:** show NO expiry countdown text; AUTO-DISMISS the QR ~1 minute BEFORE the token
   timeout, so a put-down phone never leaves a live enroll QR exposed.
 
-## Red-team (lap 3) - the design-pass changes vetted; reconcile before build + 2 owner forks
+## Red-team (lap 3) - the design pass vetted, forks resolved (reduced)
 
-A 9-angle lap-3 red-team focused on the post-lap-2 DESIGN PASS (4-digit code, two-flow trust, admin-only
-rename, no alias), each finding code-verified: 56 raised, 43 confirmed. **Verdict: the design pass is SOUND
-IN INTENT and owner-accepted - lap 3 overturns NO owner decision.** But it is NOT build-ready: it is an
-OVERLAY the phases below it never reconciled (theme 1), so a builder following the phase checklist would trip
-on stale text + orphaned items. Two genuine blockers + reconciliation/precision fixes. Full corpus: workflow
-run wf_c656b918-22a.
-
-### Adopted reconciliation + precision fixes (fold into the build; no owner input)
-- **6-digit code is a WIRE change, not a display tweak (rank 2, blocker):** the SAS output IS the compared
-  value end to end. A Phase-1 bullet folded into the SAS_V2 cut: SAS_MODULUS 10^12->10^6 + SAS_DIGITS 12->6 in
-  BOTH cross-domain-sas.ts AND SasCrypto.kt; re-cut tests/fixtures/cross-domain-sas/vectors.json; fix the
-  CrossDomainLink.kt length gate (`length != SAS_DIGITS` would SILENTLY REJECT a 6-digit code) + the
-  LinkWizard.kt "12 digits" string + the two TS asserts; run the LOCAL Android build (the CI-blind lane).
-  (Digit count locked at 6 this session; the enroll ceremony reuses the SAME derivation - see Decision update.)
-- **Fingerprint stays 16 chars / 4 groups (rank 6) - NOT 12** (fixed above): `fingerprint()` is signed into
-  provision-op preimages; only the rendered display may show fewer groups.
-- **Residual is ~1-in-10,000 per ceremony, not 1-in-2,000 (rank 9):** single-flight binds the human to ONE
-  committed SAS guess per window; the 5-try cap bounds PIN brute-force, not five SAS guesses (~1-in-2,000
-  needs ~5 separate full re-pairings). The owner's 4-digit acceptance STANDS; the number is BETTER than
-  stated - just correct the mechanism so a builder does not "fix" it by loosening single-flight.
-- **Paste-blocks-own-code is a NO-OP on the symmetric SAS (rank 8):** crossDomainSas sorts both parties'
-  fields order-independently, so both sides compute the IDENTICAL code (your code == their code). DROP the
-  paste-block-own affordance; reframe FLOW-2 as a symmetric COMPARE (enter the same 4 digits both see), not an
-  asymmetric give/type. Decide symmetric-vs-asymmetric for SAS_V2 before vectors freeze (symmetric is the
-  natural read).
-- **QR auto-dismiss decouple (rank 7):** the enroll nonce TTL is ~24h, so "~1 min before the token timeout"
-  never protects a put-down phone. Drive auto-dismiss off a SHORT foreground timer (60-120s of the QR shown),
-  independent of the redemption nonce; Phase-4 home; plumb a timing field into the Android display model.
-- **Scrub the stale 12-digit / 10^12 / fingerprint-at-SAS strings (rank 4):** Phase 4 "12-digit type-to-match
-  kept WHOLE", Decided-so-far, Q2, and any fingerprint-on-the-ceremony-screen. Widen the Plan-v2 NOTE banner
-  to also cover Decided-so-far + the Q-block.
-- **Presence "offline" (rank 11):** the untrusted-row online/offline requirement reuses the lap-2 B5 absent
-  value + the Android else->ended fix - back-reference it, not net-new.
-- **Orphaned affordances -> Phase-4 homes (rank 12/15):** mark the lap-1/2 "single SAS" statements
-  FLOW-2-specific; tap-to-copy (verification code / identity card / fingerprint - reuse copyToClipboard); the
-  FLOW-2 paste action (reuse readClipboard, after the rank-8 resolution).
-- **"Whose-network" string scrub (rank 14):** extend the Phase-4 retirement list to "MY NETWORK" / "GUEST
-  NETWORKS", not just the two lap-1 strings.
-- **SAS_V2 injective preimage is now LOAD-BEARING at 4 digits (rank 10):** the 4-digit width is conditional on
-  the self-describing/fixed-slot preimage landing in the SAME cut; the within-party-reassignment negative
-  vector is no longer belt-and-suspenders.
-
-### OWNER FORKS (both RESOLVED this session)
-- **D3. Admin-rename of a rooted user is cryptographically IMPOSSIBLE as written (rank 1, BLOCKER). RESOLVED =
-  A** (owner: "admin cant rename user? then remove the context option") - the kebab **Rename is REMOVED** (no
-  admin-rename op built); the admin sets only the enroll BOOTSTRAP label (provision_tenant), and post-root the
-  USER self-renames (the sole writer, `set_operator_name`).
-  operatorName is renamable ONLY by the target Domain's OWN rooted owner key (the user's). The admin runs a
-  different Domain at a different key, so an admin-signed rename is rejected; the admin can only set the
-  PRE-root staging label at enroll (provision_tenant), overwritten by the user's first self-rename. So the
-  kebab "Rename" has NO buildable backing for an enrolled user. **(A)** admin sets the name ONLY at enroll;
-  post-root rename is USER-ONLY; HIDE the kebab Rename for rooted users (clean, matches the crypto, no new op).
-  **(B)** build a net-new operator-signed "rooted-tenant-label" override op (a 5th signed scheme + vectors +
-  Kotlin twin + a precedence rule) so the admin CAN relabel a rooted user - a deliberate trust inversion (an
-  admin overriding a sovereign user's self-set name) that re-opens the "two names for one user" problem. You
-  wanted admin-rename via the kebab (B), but it is a real net-new capability with an authority question; A is
-  the cheap, crypto-clean default.
-- **D4. RESOLVED (2026-06-23) - close it, do not accept the residual.** The persistent-MITM shape was real: a
-  durable owner-edge means a key a compromised evie substitutes AT ENROLL becomes the PERSISTENT seal/trust
-  root (all future content to the attacker until re-trust), undetectable by the in-app fingerprint glance.
-  RESOLUTION: FLOW-1 now ENDS in a mutual in-person 6-digit [Yes]/[No] compare riding the commit-reveal
-  handshake (see Decision update + the rewritten FLOW 1). The in-person QR authenticates admin->user; the
-  compare authenticates user->admin; commit-reveal makes the 6-digit code grind-resistant (~1-in-1,000,000 per
-  ceremony). This removes the single accepted exception to the Q4 "evie can never forge a trust" invariant.
-  BUILD NOTE: FLOW-1 still needs its phase home + the QR-seeded handshake wiring (no edge-minting path exists
-  today); plan:18's "fresh red-team before build" still applies to the new FLOW-1 ceremony specifically.
+A 9-angle red-team of the post-lap-2 design pass (the 6-digit code, two-flow trust, admin-only rename, no
+alias): SOUND in intent, owner-accepted, overturns no owner decision. The reconciliation fixes are folded into
+the build: the 6-digit code is a WIRE change end to end (SAS_MODULUS 10^6 / SAS_DIGITS 6 in both runtimes -
+DONE lap 1); the fingerprint stays 16 chars / 4 groups (signed into provision-op preimages, do NOT truncate);
+the residual is ~1-in-10^6 per ceremony (single-flight); the SAS is symmetric so paste-block-own is a no-op;
+QR auto-dismiss rides a short foreground timer, not the nonce TTL. Both owner forks RESOLVED this session. Full
+corpus in git history.
 
 ## Amendment notes (what earlier laps superseded - kept so the trail is not lost)
 
