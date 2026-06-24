@@ -158,7 +158,10 @@ Secret operator/primary marker.
   DISABLED until it is non-empty; the entered name is carried into first-root and owner-signed as the
   profile name, so a person is never nameless. Applies to operator AND guest (each names themselves on
   their own device). This MOVES name entry to the phone, so the host-side `provision.ts --setup`
-  operator-name prompt is dropped (provision stages no name). The "(unnamed)" placeholder stays ONLY
+  operator-name prompt is dropped (provision stages no name). The host-side launcher
+  `provision-console.sh` is RENAMED to `setup-evie-admin.sh` (owner: admin/operator setup ONLY -
+  guests come via the app invite), updating every reference (CLAUDE.md, script self-refs,
+  `scripts/provision.ts` usage strings, `start-*.sh`). The "(unnamed)" placeholder stays ONLY
   as a defensive backstop (legacy/edge), routed through every person-name render (ChatRepository.kt:886
   + the 3 id-leak sites), NEVER the Domain id. Closes: high 14, mediums 25/29, lows 37/38.
 - **Phase 3 - re-cut the `home`-bearing SIGNING vector corpora (Phase 1's hidden cost).** THREE
