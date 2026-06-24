@@ -137,6 +137,40 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
     large Compose; separate from the enroll ceremony.
   - [TODO] **Then:** the Users roster unification UI + share-control surface (the original peer-ux core; large
     Compose). Deploy (evie rollout + gateway rebuild) + on-device round-trip = the final owner-coordinated steps.
+- **Lap 3 - Users surface (IN PROGRESS, owner: "build it all out, debug issues as they come").** A 4-phase
+  multi-runtime feature (wire -> evie -> gateway -> Android). Owner decisions this lap: (a) build all phases now,
+  do NOT wait on the lap-2 deploy/validate (debug later); (b) **NO SAS fork** - keep the two existing 6-digit
+  flows (enroll owner-anchored glance-compare + user-to-user typed), do NOT build a unified hybrid derivation.
+  Phase-1 gap (run wf_866e52b2, vs the lap-2 baseline): the owner-keyed trust edge (`XDomainLink`, both owner
+  keys, in federation-protocol.ts) + the owner-anchored SAS (`enrollSas`) ALREADY exist. Net-new Phase-1 wire
+  shapes: an owner-keyed UNTRUST tombstone (mirrors XDomainLink, gateway-persisted, evie never sees it), a
+  cross-tenant ROSTER op (name + presence + fingerprint + own-gateways; NO gatewayId/key in a row), a
+  PENDING-TRUST op (arm/cancel/poll, keyed by target owner key, TTL + rate-limit, no token/gatewayId exposed), a
+  DISCRIMINATED share target ({kind:domain}|{kind:everyone-trusted}), an anti-rollback monotonic snapshot
+  VERSION on DomainSnapshot (snapshot-derived, not separately signed), and a console-PRESENCE "absent" value +
+  the Android else->ended fold fix. Then Phase 2 evie (roster aggregation, console rendezvous, pending-trust
+  store, cross-owner snapshot relay, owner-key index, presence), Phase 3 gateway (ForeignOwnerKeyring +
+  owner-anchored seal/unseal, central everyone-I-trust gate, all-sessions overview), Phase 4 Android (the Users
+  screen, arm+highlight trust, share control, consent rails, wording). The FINAL slice = the cleanup pass.
+  - **Lap-3 PROGRESS (resume point for a fresh instance):**
+    - [DONE, commit 8db8021] **Untrust tombstone.** `XDomainUntrust`/`SignedXDomainUntrust` + signing-bytes
+      (`XDOMAIN_UNTRUST_V1`, owner-keyed: myOwnerSignPub + peerOwnerSignPub + revokedAt + nonce) + sign/verify in
+      `src/shared/federation-protocol.ts`; Kotlin twin in `crypto/XDomainLinkCrypto.kt` (untrustSigningBytes/
+      signUntrust/verifyUntrust); cross-runtime vector in the `xdomain-link` corpus (`untrust` key); TS tests
+      (xdomain-link.test.ts + xdomain-link-edge.test.ts); Kotlin tests (XDomainLinkTest.kt); emitted to Kotlin as
+      a codegen ROOT (`SignedXDomainUntrustSchema`). The console op carrying it + the gateway tombstone handler
+      land in the gateway phase. THIS IS THE PATTERN for any new signed scheme: schema+signing in the right
+      shared file -> gen vector from the TS ref with the corpus's fixed key -> Kotlin twin -> codegen ROOT (or
+      nest in an op) -> TS + Kotlin tests -> manifest if a NEW corpus.
+    - [NEXT] the remaining Phase-1 shapes - each is interconnected with its evie/gateway/Android producer, so
+      prefer CONNECTED slices over wire-only stubs: console-presence "absent" value on `TeamInfoSchema.status`
+      (closed enum) + the Android status fold; the monotonic snapshot VERSION field on `DomainSnapshotSchema` +
+      the applySnapshot refusal gate (gateway `Allowlist` + Android `FederationManager.applyDomainSync`); the
+      DISCRIMINATED share target ({kind:domain}|{kind:everyone-trusted}) on `CrossDomainShareEntry` + the share
+      ops; the cross-tenant ROSTER op (new EnrollOp/ConsoleOp variant + a stub handler until Phase 2); the
+      PENDING-TRUST op (arm/cancel/poll, keyed by target owner). Existing landmarks to reuse: `XDomainLink`
+      (owner-keyed link already exists), `enrollSas` (owner-anchored SAS already exists), `cross_domain_unlink`
+      (domain-keyed; the untrust is the owner-keyed sibling), `crossDomainShareState` (the share store).
 - **OWNER DIRECTIVES (standing, channel):** (1) **NO migration / back-compat / coexistence code anywhere** -
   the owner is WIPING evie from scratch, so build for the END STATE only (e.g. do not add token<->admission
   coexistence shims, old-format readers, or version-straddling branches in any NEW code). (2) The **FINAL
