@@ -180,6 +180,20 @@ class FederationManager(private val store: ProvisioningStore) {
 	 * pin it for the lifetime of one pairing. */
 	fun freshLinkNonce(): String = nonce()
 
+	/** Build a signed cross-tenant roster request: the console proves possession of its admitted
+	 * signing key by signing a fresh ROSTER proof, so evie can scope the roster to this owner's
+	 * network (and reject a key it cannot place in a Domain). */
+	fun signRosterRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.RosterRequest {
+		val console = consoleIdentity()
+		val n = nonce()
+		return com.atelier_nyaarium.switchboard.proto.RosterRequest(
+			signerSignPub = console.sign.pub,
+			proofAt = nowMs,
+			nonce = n,
+			proof = ProvisionOpsCrypto.signRosterRequest(console.sign.pub, nowMs, n, console.sign.priv),
+		)
+	}
+
 	/** A fresh UNGUESSABLE handshake id, minted by the admin into the enroll QR. Unguessability is
 	 * what stops a third party who learned a Domain from targeting a real ceremony window. */
 	fun freshHandshakeId(): String = nonce()

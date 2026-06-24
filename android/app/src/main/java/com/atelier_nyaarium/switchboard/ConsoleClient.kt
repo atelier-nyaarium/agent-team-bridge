@@ -4,6 +4,8 @@ import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
+import com.atelier_nyaarium.switchboard.proto.RosterRequest
+import com.atelier_nyaarium.switchboard.proto.RosterResult
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeRef
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeResult
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
@@ -183,6 +185,12 @@ private data class FirstRootEnvelope(val firstRoot: SignedFirstRoot)
  * `firstRoot` routing. */
 @Serializable
 private data class EnrollHandshakeEnvelope(val enrollHandshake: EnrollHandshakeOp)
+
+/** The roster POST body: a top-level `roster` field routes to evie's cross-tenant roster handler
+ * (answered AT evie, which aggregates across Domains a gateway cannot see), the twin of `firstRoot`
+ * routing. */
+@Serializable
+private data class RosterEnvelope(val roster: RosterRequest)
 
 /** evie's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the
  * minted one-time invite `nonce` (the operator's app builds the friend's QR from it). The wire
@@ -450,6 +458,36 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			runCatching { wireJson.decodeFromString<EnrollHandshakeResult>(text) }.getOrNull()?.let { return it }
 			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
 			return EnrollHandshakeResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
+	/** Fetch the cross-tenant roster (the Users surface) from evie. POST { roster } evie-direct, like
+	 * firstRoot - evie aggregates across Domains a gateway cannot see and answers itself. The request
+	 * carries the console's signed ROSTER proof; a non-member comes back ok=false (opaque). */
+	fun roster(req: RosterRequest): RosterResult {
+		val request = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(wireJson.encodeToString(RosterEnvelope.serializer(), RosterEnvelope(req)).toRequestBody(JSON))
+			.build()
+		val resp =
+			try {
+				client.newCall(request).execute()
+			} catch (e: Exception) {
+				DebugLog.log("Roster", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+				throw e
+			}
+		resp.use {
+			val text = resp.body?.string().orEmpty()
+			DebugLog.log("Roster", "resp HTTP ${resp.code} ${text.take(160)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<RosterResult>(text) }
+					.getOrElse { RosterResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<RosterResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return RosterResult(ok = false, error = err ?: "HTTP ${resp.code}")
 		}
 	}
 

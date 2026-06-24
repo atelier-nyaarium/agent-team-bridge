@@ -975,6 +975,18 @@ class ChatRepository(
 	/** The admitted members of the keyring, for the management board. */
 	fun admittedMembers(): List<MemberInfo> = federation.members()
 
+	/** Fetch the cross-tenant roster (the Users surface): every member on this evie, by name +
+	 * presence. evie-direct + signed-proof scoped; a non-member or auth failure surfaces as a
+	 * failure with evie's opaque reason. The rendering surface consumes the rows. */
+	suspend fun fetchRoster(): Result<List<com.atelier_nyaarium.switchboard.proto.RosterMember>> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				val result = client().roster(federation.signRosterRequest(System.currentTimeMillis()))
+				if (!result.ok) error(result.error ?: "roster unavailable")
+				result.members ?: emptyList()
+			}
+		}
+
 	////////////////////////////////
 	//  Cross-Domain trust (the link/share/unlink surface the Federation UI drives)
 
