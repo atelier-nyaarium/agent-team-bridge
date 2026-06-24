@@ -68,6 +68,7 @@ fun FederationScreen(
 	onLink: () -> Unit,
 	onPeer: (String) -> Unit,
 	onHostNetworks: () -> Unit,
+	onUsers: () -> Unit,
 ) {
 	// Observe the chat state so a discovery change or an unlink re-derives the peer list. The PEERS
 	// roster unions the gateway's cross-Domain peer set (state.linkedPeerDomains) with discovery, so
@@ -113,6 +114,10 @@ fun FederationScreen(
 					Text(ownerFp, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
 				}
 			}
+
+			// Everyone on this network, by name (the cross-tenant roster). The unified Users surface
+			// that will absorb these sections; surfaced as an entry for now.
+			OutlinedButton(onClick = onUsers, modifier = Modifier.fillMaxWidth()) { Text("Users") }
 
 			// Hosting != linking: a separate section for guest networks YOU run for friends. Lives
 			// apart from PEERS so cross-network access is never granted by simply hosting someone.

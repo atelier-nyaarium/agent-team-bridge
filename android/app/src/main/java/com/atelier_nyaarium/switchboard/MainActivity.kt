@@ -183,6 +183,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// Cross-Domain trust overlays: the Federation hub, the open peer's detail (its domainId, or
 	// null), and the transient link wizard (leaving it cancels the pairing windows).
 	var showFederation by remember { mutableStateOf(false) }
+	var showUsers by remember { mutableStateOf(false) }
 	var federationPeer by remember { mutableStateOf<String?>(null) }
 	var showLinkWizard by remember { mutableStateOf(false) }
 	// Host-a-friend overlays: the "Networks you host" list, and the open hosted tenant's detail (its
@@ -300,6 +301,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			showManage = false
 			showAddGateway = false
 			showFederation = false
+			showUsers = false
 			federationPeer = null
 			showLinkWizard = false
 			showHostNetworks = false
@@ -325,7 +327,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// System back navigates within the app (thread/settings/manage -> back) instead of exiting.
 	BackHandler(
 		enabled = openTeam != null || showSettings || showManage || showAddGateway ||
-			showFederation || federationPeer != null || showLinkWizard || showHostNetworks ||
+			showFederation || showUsers || federationPeer != null || showLinkWizard || showHostNetworks ||
 			hostTenant != null || showHostHelp || adminCeremonyCtx != null || enrolleeCeremonyCtx != null,
 	) {
 		when {
@@ -336,6 +338,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			hostTenant != null -> hostTenant = null
 			showHostNetworks -> showHostNetworks = false
 			federationPeer != null -> federationPeer = null
+			showUsers -> showUsers = false
 			showFederation -> showFederation = false
 			showAddGateway -> showAddGateway = false
 			showManage -> showManage = false
@@ -407,6 +410,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onBack = { showHostNetworks = false },
 				onTenant = { hostTenant = it },
 			)
+		showUsers ->
+			UsersScreen(repo = repo, onBack = { showUsers = false })
 		showFederation ->
 			FederationScreen(
 				repo = repo,
@@ -414,6 +419,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onLink = { showLinkWizard = true },
 				onPeer = { federationPeer = it },
 				onHostNetworks = { showHostNetworks = true },
+				onUsers = { showUsers = true },
 			)
 		showAddGateway ->
 			AddGatewayScreen(repo = repo, onBack = { showAddGateway = false }, onDone = { showAddGateway = false })
