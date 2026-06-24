@@ -115,6 +115,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 			Button(
 				enabled = pass1.length >= 8 && pass1 == pass2,
 				onClick = {
+					status = ""
 					scope.launch {
 						val blob = repo.exportOwnerBackup(pass1)
 						shareText(context, "Switchboard owner key backup", blob)
@@ -142,6 +143,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 			Button(
 				enabled = restoreBlob.isNotBlank() && restorePass.isNotBlank(),
 				onClick = {
+					status = ""
 					scope.launch {
 						status = when (repo.importOwnerBackup(restoreBlob.trim(), restorePass)) {
 							OwnerRestoreResult.OK -> "Owner key restored."

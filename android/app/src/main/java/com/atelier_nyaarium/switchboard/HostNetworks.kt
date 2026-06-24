@@ -257,6 +257,7 @@ fun HostedTenantDetailScreen(
 			confirmText = "Remove",
 			onConfirm = {
 				confirmRemove = false
+				status = ""
 				busy = true
 				scope.launch {
 					repo.removeHostedTenant(domainId)

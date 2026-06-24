@@ -1756,12 +1756,18 @@ class ChatRepository(
 			?: return@withContext EnrollDelivery(true, "Added. This Gateway will come online shortly.", null)
 		// Fetch the bootstrap transport from the home Gateway. The Console no longer carries it in
 		// its blob; the Gateway holds it as bootstrap-transport.json and serves it sealed on demand.
-		val transport = runCatching { client().getGatewayTransport() }.getOrNull()
-			?: return@withContext EnrollDelivery(
+		val transport = try {
+			client().getGatewayTransport()
+		} catch (e: Exception) {
+			// Surface the REAL transport-fetch cause (reached-but-rejected, "not admitted", an op
+			// failure) instead of asserting "couldn't reach" + a re-provision that will not fix an
+			// admission/seal mismatch. Same class as the admitGateway fix two steps above (bf328e9).
+			return@withContext EnrollDelivery(
 				true,
-				"Added, but couldn't reach the Gateway to set it up. Re-run provision-console.sh.",
+				"Added, but couldn't finish Gateway setup: ${e.message?.take(120) ?: "unknown error"}",
 				null,
 			)
+		}
 		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub)
 		val frameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), frame)
 		if (scanned.lanHost != null && scanned.lanPort != null && isPrivateLanHost(scanned.lanHost)) {

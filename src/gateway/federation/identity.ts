@@ -19,7 +19,12 @@ export function loadOrCreateIdentity(dataDir: string): Identity {
 	const file = path.join(dataDir, IDENTITY_FILE);
 	try {
 		const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-		if (isIdentity(parsed)) return parsed;
+		if (isIdentity(parsed)) {
+			// Log the LOADED signing fingerprint (parity with the mint path below), so an operator
+			// can confirm the Gateway kept its admitted key and spot a silent identity change.
+			console.log(`[identity] loaded federation identity (signing fp ${fingerprint(parsed.sign.pub)})`);
+			return parsed;
+		}
 		console.warn(`[identity] ${file} is malformed; minting a fresh identity`);
 	} catch {
 		// Absent or unreadable: mint below.
