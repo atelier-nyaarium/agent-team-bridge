@@ -62,6 +62,14 @@ fun EnrollCeremonyScreen(
 	var step by remember { mutableStateOf<EnrollStep>(EnrollStep.Waiting) }
 	var busy by remember { mutableStateOf(false) }
 	var note by remember { mutableStateOf("") }
+	// Set the moment this phone decides to MATCH. Once set, leaving must NOT cancel the broker window:
+	// the peer may still need to poll THIS phone's reveal to finish its own side, and cancelling would
+	// strand it with a one-way edge. A decline / undecided walk-away leaves it false, so the window is
+	// still torn down on those paths.
+	val confirmed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+	// One owner-link nonce pinned for the whole ceremony so a retry (or a lost-ack re-submit) re-signs
+	// the SAME edge bytes, which evie dedupes - rather than accumulating a fresh edge per attempt.
+	val edgeNonce = remember { repo.freshLinkNonce() }
 
 	// Drive the commit-reveal exchange the moment the screen opens: commit this side, poll the broker
 	// for the peer, verify the binding, compute the code. A failure (mismatch, timeout, transport)
@@ -72,13 +80,16 @@ fun EnrollCeremonyScreen(
 			.onFailure { step = EnrollStep.Failed(humanizeEnrollError(it.message)) }
 	}
 
-	// Leaving the ceremony (back or [They differ]) tears the broker window down so a half-formed edge
-	// cannot complete after the owner walked away. Best-effort on a detached scope (the broker also
-	// TTLs the window), mirroring the link wizard's dispose-cancel.
+	// Leaving the ceremony BEFORE confirming (back, or an undecided walk-away) tears the broker window
+	// down so a half-formed edge cannot complete after the owner left. Once this phone has matched
+	// (confirmed=true) the window is left to TTL out instead, so the peer can still poll this phone's
+	// reveal and finish its own edge. Best-effort on a detached scope, mirroring the link wizard.
 	androidx.compose.runtime.DisposableEffect(ctx.handshakeId, ctx.role) {
 		onDispose {
-			@Suppress("OPT_IN_USAGE")
-			kotlinx.coroutines.GlobalScope.launch { runCatching { repo.enrollCancel(ctx.handshakeId, ctx.role) } }
+			if (!confirmed.get()) {
+				@Suppress("OPT_IN_USAGE")
+				kotlinx.coroutines.GlobalScope.launch { runCatching { repo.enrollCancel(ctx.handshakeId, ctx.role) } }
+			}
 		}
 	}
 
@@ -106,9 +117,12 @@ fun EnrollCeremonyScreen(
 					peerLabel = peerLabel,
 					busy = busy,
 					onMatch = {
+						// Mark matched up front: from here the window must survive this phone leaving, so
+						// the peer can finish its side even if this confirm is slow or this phone navigates away.
+						confirmed.set(true)
 						busy = true
 						scope.launch {
-							repo.enrollConfirm(ctx.myParty.domainId, s.exchange.peerDomainId)
+							repo.enrollConfirm(ctx.myParty.domainId, s.exchange.peerDomainId, edgeNonce)
 								.onSuccess { outcome ->
 									step = when (outcome) {
 										is ConfirmOutcome.Linked -> EnrollStep.Done
@@ -140,7 +154,7 @@ fun EnrollCeremonyScreen(
 					onRetry = {
 						busy = true
 						scope.launch {
-							repo.enrollConfirm(ctx.myParty.domainId, s.peerDomainId)
+							repo.enrollConfirm(ctx.myParty.domainId, s.peerDomainId, edgeNonce)
 								.onSuccess { outcome ->
 									step = when (outcome) {
 										is ConfirmOutcome.Linked -> EnrollStep.Done
@@ -151,7 +165,10 @@ fun EnrollCeremonyScreen(
 							busy = false
 						}
 					},
-					onDone = onDone,
+					// "Later" dismisses WITHOUT marking the ceremony done: the relay edge is still
+					// unauthorized, so the enrollee must keep being re-offered the retry (only a real Done
+					// latches enrollCeremonyDone). onCancel just closes the overlay.
+					onLater = onCancel,
 				)
 
 				is EnrollStep.Done -> DonePanel(peerLabel = peerLabel, onDone = onDone)
@@ -238,7 +255,7 @@ private fun DonePanel(peerLabel: String, onDone: () -> Unit) {
 /** The trust edge is recorded but the Router did not authorize the relay, so cross-Domain sends
  * would be denied. Offer a one-tap retry of just the edge (idempotent), mirroring the link wizard. */
 @Composable
-private fun LinkedNoRelayPanel(busy: Boolean, note: String, onRetry: () -> Unit, onDone: () -> Unit) {
+private fun LinkedNoRelayPanel(busy: Boolean, note: String, onRetry: () -> Unit, onLater: () -> Unit) {
 	Text("Trusted - finishing the connection", style = MaterialTheme.typography.titleLarge)
 	Surface(
 		color = MaterialTheme.colorScheme.errorContainer,
@@ -255,7 +272,7 @@ private fun LinkedNoRelayPanel(busy: Boolean, note: String, onRetry: () -> Unit,
 	}
 	if (note.isNotEmpty()) InfoSurface(note)
 	Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-		OutlinedButton(onClick = onDone, enabled = !busy, modifier = Modifier.weight(1f)) { Text("Later") }
+		OutlinedButton(onClick = onLater, enabled = !busy, modifier = Modifier.weight(1f)) { Text("Later") }
 		Button(onClick = onRetry, enabled = !busy, modifier = Modifier.weight(1f)) {
 			Text(if (busy) "Retrying..." else "Retry")
 		}

@@ -958,10 +958,11 @@ class ChatRepository(
 	 * link-handshake confirm. Returns true iff evie accepted it. There is no local keyring
 	 * merge: the edge lives only in evie's edge set (the cross-Domain peer + its keys are
 	 * written by the handshake confirm, not by this edge). */
-	suspend fun submitXdomainLink(srcDomainId: String, dstDomainId: String): Boolean = withContext(Dispatchers.IO) {
-		val signed = federation.signXdomainLinkEdge(srcDomainId, dstDomainId, System.currentTimeMillis())
-		submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitXdomainLink(it)) }, {}, "Link failed")
-	}
+	suspend fun submitXdomainLink(srcDomainId: String, dstDomainId: String, edgeNonce: String? = null): Boolean =
+		withContext(Dispatchers.IO) {
+			val signed = federation.signXdomainLinkEdge(srcDomainId, dstDomainId, System.currentTimeMillis(), edgeNonce)
+			submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitXdomainLink(it)) }, {}, "Link failed")
+		}
 
 	/** Owner-sign a cross-Domain link-edge revocation and submit it to evie so its
 	 * relay-affinity gate refuses the cross-Domain crosstalk again. Called on unlink. Returns
@@ -1443,10 +1444,16 @@ class ChatRepository(
 	 * peer's CONFIRMED Domain - the EXACT value the SAS bound, never a re-fetch). Mirrors the link
 	 * wizard's edge result: Linked, or RelayEdgeRejected (the trust is recorded but the Router refused
 	 * the relay edge, retryable). */
-	suspend fun enrollConfirm(myDomainId: String, peerDomainId: String): Result<ConfirmOutcome> =
+	suspend fun enrollConfirm(myDomainId: String, peerDomainId: String, edgeNonce: String): Result<ConfirmOutcome> =
 		withContext(Dispatchers.IO) {
 			runCatching {
-				if (submitXdomainLink(myDomainId, peerDomainId)) ConfirmOutcome.Linked else ConfirmOutcome.RelayEdgeRejected(peerDomainId)
+				// Pin the edge nonce so a retry / lost-ack re-submit re-signs the SAME edge (evie dedupes
+				// by (src, nonce)) instead of accumulating a duplicate per attempt.
+				if (submitXdomainLink(myDomainId, peerDomainId, edgeNonce)) {
+					ConfirmOutcome.Linked
+				} else {
+					ConfirmOutcome.RelayEdgeRejected(peerDomainId)
+				}
 			}
 		}
 

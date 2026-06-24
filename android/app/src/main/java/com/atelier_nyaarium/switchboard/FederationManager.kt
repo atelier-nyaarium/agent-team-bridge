@@ -122,9 +122,16 @@ class FederationManager(private val store: ProvisioningStore) {
 	 * Domain (`srcDomainId`) may relay to a friend Domain (`dstDomainId`) it has linked with.
 	 * evie's relay-affinity gate honors a cross-Domain gateway_relay only when this edge
 	 * exists. Content-blind: it names only the two Domain ids. */
-	fun signXdomainLinkEdge(srcDomainId: String, dstDomainId: String, nowMs: Long): SignedXDomainLinkEdge {
+	fun signXdomainLinkEdge(
+		srcDomainId: String,
+		dstDomainId: String,
+		nowMs: Long,
+		edgeNonce: String? = null,
+	): SignedXDomainLinkEdge {
 		val owner = ownerIdentity()
-		val edge = XDomainLinkEdge(srcDomainId, dstDomainId, nowMs, nonce())
+		// A caller may PIN the nonce (the enroll ceremony) so a retry re-signs the same edge identity,
+		// which evie dedupes by (srcDomainId, nonce); an unpinned caller mints a fresh one as before.
+		val edge = XDomainLinkEdge(srcDomainId, dstDomainId, nowMs, edgeNonce ?: nonce())
 		return XDomainLinkCrypto.signEdge(edge, owner.sign.priv, owner.sign.pub)
 	}
 
