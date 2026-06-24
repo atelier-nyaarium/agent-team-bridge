@@ -482,6 +482,13 @@ data class GatewayBootstrapFrame(
 )
 
 @Serializable
+data class SignedXDomainUntrust(
+	val untrust: XDomainUntrust,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
 data class SignedFirstRoot(
 	val firstRoot: FirstRoot,
 	val signature: String,
@@ -741,4 +748,12 @@ data class EnrollReveal(
 	val ownerBoxPub: String,
 	val domainId: String,
 	val salt: String,
+)
+
+@Serializable
+data class XDomainUntrust(
+	val myOwnerSignPub: String,
+	val peerOwnerSignPub: String,
+	val revokedAt: Long,
+	val nonce: String,
 )

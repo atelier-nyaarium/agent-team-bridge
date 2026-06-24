@@ -41,6 +41,7 @@ import {
 	EnrollResultSchema,
 	PendingTenantSchema,
 } from "../src/shared/enrollment.js";
+import { SignedXDomainUntrustSchema } from "../src/shared/federation-protocol.js";
 import {
 	ChannelFileSchema,
 	ConsoleListTeamsResultSchema,
@@ -103,6 +104,9 @@ const ROOTS: z.ZodType[] = [
 	GatewayTransportSchema,
 	GatewayBootstrapBundleSchema,
 	GatewayBootstrapFrameSchema,
+	// Emitted as a root so the Android owner can sign it; the console op that carries it (and the
+	// gateway handler that tombstones the foreign-owner trust) lands with the gateway phase.
+	SignedXDomainUntrustSchema,
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything

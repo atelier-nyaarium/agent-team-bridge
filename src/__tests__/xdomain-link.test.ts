@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import { generateIdentity } from "../shared/crypto.js";
 import {
 	signXDomainLink,
+	signXDomainUntrust,
 	verifyXDomainLink,
+	verifyXDomainUntrust,
 	type XDomainLink,
 	XDomainLinkSchema,
+	type XDomainUntrust,
 } from "../shared/federation-protocol.js";
 
 // Two owners (two Domains) and a friend gateway whose keys the link binds.
@@ -99,5 +102,41 @@ describe("cross-Domain link artifact", () => {
 		expect(verifyXDomainLink(friendSide, friendOwner.sign.pub)).toBe(true);
 		// And it does NOT verify under my own owner key.
 		expect(verifyXDomainLink(friendSide, myOwner.sign.pub)).toBe(false);
+	});
+});
+
+describe("cross-Domain untrust tombstone", () => {
+	function untrust(over: Partial<XDomainUntrust> = {}): XDomainUntrust {
+		return {
+			myOwnerSignPub: myOwner.sign.pub,
+			peerOwnerSignPub: friendOwner.sign.pub,
+			revokedAt: 2000,
+			nonce: "dW50cnVzdA==",
+			...over,
+		};
+	}
+
+	it("owner-signs and verifies an untrust under the signing owner key", () => {
+		const s = signXDomainUntrust(untrust(), myOwner.sign.priv, myOwner.sign.pub);
+		expect(verifyXDomainUntrust(s, myOwner.sign.pub)).toBe(true);
+	});
+
+	it("only the local owner can withdraw its own trust (rejects another key)", () => {
+		const s = signXDomainUntrust(untrust(), myOwner.sign.priv, myOwner.sign.pub);
+		// The friend owner cannot be the verifier - this is MY withdrawal, signed by MY key.
+		expect(verifyXDomainUntrust(s, friendOwner.sign.pub)).toBe(false);
+	});
+
+	it("rejects a forged signature (signed by a non-owner claiming to be me)", () => {
+		const attacker = generateIdentity();
+		const s = signXDomainUntrust(untrust(), attacker.sign.priv, myOwner.sign.pub);
+		expect(verifyXDomainUntrust(s, myOwner.sign.pub)).toBe(false);
+	});
+
+	it("rejects a tampered peerOwnerSignPub (would silently untrust a different person)", () => {
+		const stranger = generateIdentity();
+		const s = signXDomainUntrust(untrust(), myOwner.sign.priv, myOwner.sign.pub);
+		const tampered = { ...s, untrust: { ...s.untrust, peerOwnerSignPub: stranger.sign.pub } };
+		expect(verifyXDomainUntrust(tampered, myOwner.sign.pub)).toBe(false);
 	});
 });

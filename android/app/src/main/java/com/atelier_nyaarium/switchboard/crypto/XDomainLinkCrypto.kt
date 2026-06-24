@@ -3,9 +3,11 @@ package com.atelier_nyaarium.switchboard.crypto
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLinkEdge
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLinkRevocation
+import com.atelier_nyaarium.switchboard.proto.SignedXDomainUntrust
 import com.atelier_nyaarium.switchboard.proto.XDomainLink
 import com.atelier_nyaarium.switchboard.proto.XDomainLinkEdge
 import com.atelier_nyaarium.switchboard.proto.XDomainLinkRevocation
+import com.atelier_nyaarium.switchboard.proto.XDomainUntrust
 
 /**
  * Owner-signed cross-Domain link edge / revocation, the byte-exact Kotlin counterpart
@@ -90,4 +92,31 @@ object XDomainLinkCrypto {
 	fun verifyLink(s: SignedXDomainLink, expectedOwnerSignPub: String): Boolean =
 		s.ownerSignPub == expectedOwnerSignPub &&
 			Crypto.verify(linkSigningBytes(s.link), s.signature, expectedOwnerSignPub)
+
+	/**
+	 * The owner-keyed untrust tombstone: withdraws trust in a friend OWNER (every gateway under
+	 * that root), signed by MY owner key. Mirrors federation-protocol.ts xDomainUntrustSigningBytes
+	 * byte-for-byte. A distinct version prefix from the link so neither signature replays as the
+	 * other. `revokedAt` floors out any trust link issued at or before it (a replayed stale link
+	 * stays dead); a genuine re-trust issued AFTER it is honored.
+	 */
+	fun untrustSigningBytes(u: XDomainUntrust): ByteArray =
+		listOf(
+			"XDOMAIN_UNTRUST_V1",
+			u.myOwnerSignPub,
+			u.peerOwnerSignPub,
+			u.revokedAt.toString(),
+			u.nonce,
+		).joinToString("\n").toByteArray(Charsets.UTF_8)
+
+	fun signUntrust(u: XDomainUntrust, ownerSignPriv: String, ownerSignPub: String): SignedXDomainUntrust =
+		SignedXDomainUntrust(
+			untrust = u,
+			ownerSignPub = ownerSignPub,
+			signature = Crypto.sign(untrustSigningBytes(u), ownerSignPriv),
+		)
+
+	fun verifyUntrust(s: SignedXDomainUntrust, expectedOwnerSignPub: String): Boolean =
+		s.ownerSignPub == expectedOwnerSignPub &&
+			Crypto.verify(untrustSigningBytes(s.untrust), s.signature, expectedOwnerSignPub)
 }

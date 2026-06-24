@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard.crypto
 import com.atelier_nyaarium.switchboard.proto.XDomainLink
 import com.atelier_nyaarium.switchboard.proto.XDomainLinkEdge
 import com.atelier_nyaarium.switchboard.proto.XDomainLinkRevocation
+import com.atelier_nyaarium.switchboard.proto.XDomainUntrust
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -135,6 +136,50 @@ class XDomainLinkTest {
 		assertTrue(Crypto.verify(bytes, linkVec["signature"]!!.jsonPrimitive.content, ownerSignPub))
 		// A different owner key must not verify the node-signed link.
 		assertFalse(Crypto.verify(bytes, linkVec["signature"]!!.jsonPrimitive.content, Crypto.generateIdentity().sign.pub))
+	}
+
+	private fun untrust(o: JsonObject) =
+		XDomainUntrust(
+			myOwnerSignPub = o["myOwnerSignPub"]!!.jsonPrimitive.content,
+			peerOwnerSignPub = o["peerOwnerSignPub"]!!.jsonPrimitive.content,
+			revokedAt = o["revokedAt"]!!.jsonPrimitive.content.toLong(),
+			nonce = o["nonce"]!!.jsonPrimitive.content,
+		)
+
+	@Test
+	fun untrustCanonicalBytesMatchNode() {
+		val v = vectors()
+		val uVec = v["untrust"]!!.jsonObject
+		val bytes = XDomainLinkCrypto.untrustSigningBytes(untrust(uVec["value"]!!.jsonObject))
+		assertEquals(uVec["signingBytes"]!!.jsonPrimitive.content, bytes.toString(Charsets.UTF_8))
+		assertEquals(uVec["signingBytesHex"]!!.jsonPrimitive.content, bytes.joinToString("") { "%02x".format(it) })
+	}
+
+	@Test
+	fun verifiesANodeSignedUntrust() {
+		val v = vectors()
+		val ownerSignPub = v["ownerSignPub"]!!.jsonPrimitive.content
+		val uVec = v["untrust"]!!.jsonObject
+		val bytes = XDomainLinkCrypto.untrustSigningBytes(untrust(uVec["value"]!!.jsonObject))
+		assertTrue(Crypto.verify(bytes, uVec["signature"]!!.jsonPrimitive.content, ownerSignPub))
+		assertFalse(Crypto.verify(bytes, uVec["signature"]!!.jsonPrimitive.content, Crypto.generateIdentity().sign.pub))
+	}
+
+	@Test
+	fun signsAndVerifiesUntrustLocally() {
+		val owner = Crypto.generateIdentity()
+		val attacker = Crypto.generateIdentity()
+		val u = XDomainUntrust(
+			myOwnerSignPub = owner.sign.pub,
+			peerOwnerSignPub = attacker.sign.pub,
+			revokedAt = 8000L,
+			nonce = "dQ==",
+		)
+		val signed = XDomainLinkCrypto.signUntrust(u, owner.sign.priv, owner.sign.pub)
+		assertTrue(XDomainLinkCrypto.verifyUntrust(signed, owner.sign.pub))
+		assertFalse(XDomainLinkCrypto.verifyUntrust(signed, attacker.sign.pub))
+		// A tampered peerOwnerSignPub (would untrust a different person) must not verify.
+		assertFalse(XDomainLinkCrypto.verifyUntrust(signed.copy(untrust = u.copy(peerOwnerSignPub = "AAAA")), owner.sign.pub))
 	}
 
 	@Test
