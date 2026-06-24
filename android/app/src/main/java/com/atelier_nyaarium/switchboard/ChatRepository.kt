@@ -1516,13 +1516,18 @@ class ChatRepository(
 		runCatching {
 			// Drop the local friend edge first so the Users surface reflects the untrust immediately.
 			federation.removeTrustedOwner(peerOwnerSignPub)
+			// Capture the person's Domains BEFORE the local cleanup forgets the peers (a person may run
+			// several), so we can revoke each Router-side relay edge. Owner-keyed via the peer set.
+			val peerDomains = runCatching {
+				client().crossDomainListPeers().peers.filter { it.ownerSignPub == peerOwnerSignPub }.map { it.domainId }.toSet()
+			}.getOrDefault(emptySet())
 			// Tell the gateway to forget every peer + share for this owner across all their Domains
 			// (owner-keyed local cleanup). Best-effort: the friend-graph removal already stands even if
 			// the gateway is unreachable (a gateway-less owner has no peer state to drop anyway).
 			runCatching { client().crossDomainUntrust(peerOwnerSignPub) }
-			// Mint the signed tombstone (the Router-side relay-edge revoke rides this owner-signed
-			// artifact); the local removal above already reflects the untrust on the board.
-			federation.signUntrust(peerOwnerSignPub, System.currentTimeMillis())
+			// Router-side: revoke the owner-signed link edge for each of the person's Domains, so evie
+			// drops its relay-affinity edge too (the tombstone's relay half, completing the untrust).
+			for (d in peerDomains) runCatching { revokeXdomainLink(localDomainId(), d) }
 			Unit
 		}
 	}
