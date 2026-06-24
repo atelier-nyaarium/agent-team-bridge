@@ -108,6 +108,7 @@ fun SharingScreen(repo: ChatRepository, onBack: () -> Unit) {
 			onBack = { active = null },
 			onSetMode = { mode ->
 				scope.launch {
+					note = null
 					applyMode(repo, focus, shares[focus] ?: SessionShares(false, emptySet()), mode)
 						.onFailure { note = it.message?.take(120) }
 					refresh()
@@ -115,6 +116,7 @@ fun SharingScreen(repo: ChatRepository, onBack: () -> Unit) {
 			},
 			onToggleDomain = { domainId, checked ->
 				scope.launch {
+					note = null
 					// Specific implies not-everyone: clear the everyone share first so the two never overlap.
 					if (shares[focus]?.everyone == true) repo.setShareEveryoneTrusted(focus, false)
 					repo.setCrossDomainShare(focus, domainId, checked).onFailure { note = it.message?.take(120) }
