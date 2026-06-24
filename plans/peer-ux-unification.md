@@ -222,15 +222,29 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
         HIGHLIGHTS armed rows; tapping a highlighted row arms back -> the compare panel (REUSE
         `EnrollCeremonyScreen`'s compare/reveal UI). Build slices: F2.1 evie broker + ops + wire, F2.2 Android
         client + the arm/highlight/compare UI.
-    - [NEXT, after FLOW-2] (a) **DISCRIMINATED share target** ({kind:domain}|{kind:everyone-trusted}) on
-      `CrossDomainShareEntry` + the share ops + the gateway gate (`crossDomainShareState`) + the "everyone I trust"
-      central isSharedTo helper (the kebab's "Manage shares"). (b) the untrust + link CONSOLE OPS + the gateway
-      ForeignOwnerKeyring handlers (the untrust tombstone wire shape is built; its op + handler are not). (c) the
-      **renames + UI restructure** (the Users surface absorbs the Federation hub's MY NETWORK / PEERS / GUEST
-      NETWORKS sections; retire "Federation"/"Peer"-as-noun) + the closed-enum-fold + synced-leaf-script fix-nows.
-      (d) **Refactor A slice 2** (the gateway storage re-key: crossDomainShareState/Peers owner-keyed - the
-      multi-Domain robustness fix). The FINAL slice = the dead-code cleanup pass (Final scouting bucket F).
-      Landmarks: `XDomainLink`, `enrollSas`, `cross_domain_unlink`, `crossDomainShareState`.
+    - [DONE this stretch - the bounded fix-nows + the untrust gateway half]:
+      - [DONE, sb 8da71ae] **The synced-leaf footgun fix** - `scripts/sync-leaf.ts` (format -> restamp -> cp
+        atomically, reading each target from the leaf header) + a CLAUDE.md warning.
+      - [DONE, sb a0cd0b5] **The bridgeSend closed-enum fall-through** (a defensive final else). The Android
+        `else -> "ended"` presence folds are LEFT (an unknown presence = not-active is a defensible default).
+      - [DONE, sb 7021e72] **The owner-keyed UNTRUST gateway handler** - the local-state half. A
+        `cross_domain_untrust` console op (owner-keyed sibling of `cross_domain_unlink`) drives
+        `CrossDomainPeers.removeByOwner` (forget every peer Gateway of every Domain the person owns) + drops the
+        shares + settles the jobs for those Domains; `ChatRepository.untrustOwner` submits it after the local
+        friend-graph removal. Idempotent, console-sealed. The RELAY-edge revoke (the owner-signed tombstone's
+        Router half) is still TODO - it is entangled (needs the peer's domains, which the roster strips).
+    - [NEXT, the remaining UX-lap slices - all gateway-side / large, best as focused passes]:
+      (a) **DISCRIMINATED share target** ({kind:domain}|{kind:everyone-trusted}) on `CrossDomainShareEntry` + the
+      share ops + the gateway gate (`crossDomainShareState.isSharedTo`) + the "everyone I trust" helper (the
+      gateway derives "trusted owners" from `crossDomainPeers`' `friendOwnerSignPub`, so an everyone-trusted share
+      matches any requesting Domain whose owner is in the peer set). The kebab's "Manage shares". TOUCHES THE
+      RELAY GATE (security-sensitive) - do as a focused pass. (b) the untrust RELAY-edge revoke + the link console
+      op (the tombstone's Router half). (c) the **renames + UI restructure** (the Users surface absorbs the
+      Federation hub's MY NETWORK / PEERS / GUEST NETWORKS; retire "Federation"/"Peer"-as-noun). (d) **Refactor A
+      slice 2** (the gateway storage re-key: crossDomainShareState/Peers owner-keyed - the multi-Domain
+      robustness fix). The FINAL slice = the dead-code cleanup pass (Final scouting bucket F - note CLAUDE.md says
+      the evie_* proxy is intentionally KEPT, so confirm before removing). Landmarks: `XDomainLink`, `enrollSas`,
+      `cross_domain_unlink`/`cross_domain_untrust`, `crossDomainShareState`, `CrossDomainPeers.removeByOwner`.
     - **Roster evie landmarks (grounding for the aggregation, found this stretch):** presence = evie's
       `BridgeServer.gatewayConnections: Map<domainId, Map<gatewayId, ConnectionId>>` (a Domain with a live
       gateway conn is online). Per-Domain name + owner live in the `EnrollmentState` in the federation Secret
