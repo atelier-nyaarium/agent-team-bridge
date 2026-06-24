@@ -192,6 +192,17 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// The tucked host-setup manual, reachable post-provision from the empty board when a friend has
 	// rooted but has no gateway yet (the "bring up a host" pointer).
 	var showHostHelp by remember { mutableStateOf(false) }
+	// The FLOW-1 in-person enroll compare overlays (transient, like the link wizard). The ADMIN leg
+	// is launched from a tenant's detail ("Verify in person", carrying the QR blob + the tenant's
+	// label); the ENROLLEE leg is the freshly-rooted device's own context. Either non-null shows the
+	// ceremony; leaving cancels the broker window.
+	var adminCeremonyCtx by remember { mutableStateOf<EnrollCeremonyContext?>(null) }
+	var adminCeremonyBlob by remember { mutableStateOf("") }
+	var adminCeremonyLabel by remember { mutableStateOf("") }
+	var enrolleeCeremonyCtx by remember { mutableStateOf<EnrollCeremonyContext?>(null) }
+	// One-shot so the enrollee compare auto-pops once after first-root, never re-popping after a
+	// manual dismiss (the board keeps a "Verify with the admin" entry for that).
+	var enrolleeCeremonyOffered by remember { mutableStateOf(false) }
 	var unlocked by remember { mutableStateOf(false) }
 
 	// WebView pool lives at App scope (never leaves composition) so each thread's
@@ -234,6 +245,17 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 
 	LaunchedEffect(injectedBlob) {
 		if (injectedBlob != null && !state.provisioned) repo.provision(injectedBlob)
+	}
+	// Auto-pop the in-person enroll compare once the device first-roots an enroll invite (the admin is
+	// right there, mid-scan). One-shot: a dismiss does not re-pop it; the empty board keeps a manual
+	// "Verify with the admin" entry, and a completed compare latches it off.
+	LaunchedEffect(state.provisioned, state.firstRooted) {
+		if (state.provisioned && !enrolleeCeremonyOffered) {
+			repo.pendingEnrolleeCeremony()?.let {
+				enrolleeCeremonyCtx = it
+				enrolleeCeremonyOffered = true
+			}
+		}
 	}
 	// The service owns the connection and poll loop; the Activity just makes sure
 	// it is running and asks for notification permission once provisioned.
@@ -283,6 +305,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			showHostNetworks = false
 			hostTenant = null
 			showHostHelp = false
+			adminCeremonyCtx = null
+			enrolleeCeremonyCtx = null
 			openTeam = team
 			openTeamRequest.value = null
 		}
@@ -302,9 +326,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	BackHandler(
 		enabled = openTeam != null || showSettings || showManage || showAddGateway ||
 			showFederation || federationPeer != null || showLinkWizard || showHostNetworks ||
-			hostTenant != null || showHostHelp,
+			hostTenant != null || showHostHelp || adminCeremonyCtx != null || enrolleeCeremonyCtx != null,
 	) {
 		when {
+			adminCeremonyCtx != null -> adminCeremonyCtx = null
+			enrolleeCeremonyCtx != null -> enrolleeCeremonyCtx = null
 			showLinkWizard -> showLinkWizard = false
 			showHostHelp -> showHostHelp = false
 			hostTenant != null -> hostTenant = null
@@ -324,6 +350,29 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		// leftover overlay underneath it). An unprovisioned session is never locked.
 		locked -> LockScreen(onUnlock = { activity?.let { a -> promptUnlock(a) { ok -> if (ok) unlocked = true } } })
 		showHostHelp -> HostSetupHelpScreen(onBack = { showHostHelp = false })
+		// The in-person enroll compare overlays both the tenant detail (admin) and the board (enrollee),
+		// so they sit above those branches. Admin carries the QR blob; enrollee latches done on success.
+		adminCeremonyCtx != null ->
+			EnrollCeremonyScreen(
+				repo = repo,
+				ctx = adminCeremonyCtx!!,
+				inviteBlob = adminCeremonyBlob,
+				peerLabel = adminCeremonyLabel.ifEmpty { "the new user" },
+				onDone = { adminCeremonyCtx = null },
+				onCancel = { adminCeremonyCtx = null },
+			)
+		enrolleeCeremonyCtx != null ->
+			EnrollCeremonyScreen(
+				repo = repo,
+				ctx = enrolleeCeremonyCtx!!,
+				inviteBlob = null,
+				peerLabel = "the admin",
+				onDone = {
+					repo.markEnrolleeCeremonyDone()
+					enrolleeCeremonyCtx = null
+				},
+				onCancel = { enrolleeCeremonyCtx = null },
+			)
 		showLinkWizard ->
 			LinkWizard(
 				repo = repo,
@@ -344,6 +393,13 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onBack = { hostTenant = null },
 				onRemoved = { hostTenant = null },
 				onLink = { showLinkWizard = true },
+				onVerify = { blob, label ->
+					repo.adminEnrollContext(hostTenant!!)?.let {
+						adminCeremonyCtx = it
+						adminCeremonyBlob = blob
+						adminCeremonyLabel = label
+					}
+				},
 			)
 		showHostNetworks ->
 			HostNetworksScreen(
@@ -465,6 +521,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				},
 				onRename = { team, name -> repo.setLabel(team, name) },
 				onForget = { team -> repo.forget(team) },
+				// Launch the enrollee compare from the empty board when one is still owed (the device
+				// rooted an enroll invite but has not completed the in-person trust step).
+				onVerifyEnroll = (if (state.provisioned) repo.pendingEnrolleeCeremony() else null)
+					?.let { c -> { enrolleeCeremonyCtx = c } },
 			)
 	}
 
@@ -678,6 +738,7 @@ fun SessionsScreen(
 	onOpen: (String) -> Unit,
 	onRename: (String, String) -> Unit,
 	onForget: (String) -> Unit,
+	onVerifyEnroll: (() -> Unit)? = null,
 ) {
 	// Long-press flow: action menu -> rename dialog or forget confirm.
 	var actionTeam by remember { mutableStateOf<Team?>(null) }
@@ -756,7 +817,9 @@ fun SessionsScreen(
 				}
 			}
 			if (sessions.isEmpty()) {
-				EmptyBoard(state, onManage, onRefresh, onHostHelp)
+				// Offer the still-owed in-person compare only on the awaiting-host board (a freshly-rooted
+				// enrollee who has not finished the trust step); EmptyBoard gates the button on that state.
+				EmptyBoard(state, onManage, onRefresh, onHostHelp, onVerifyEnroll = onVerifyEnroll)
 			} else {
 				val order = sessionOrder(state)
 				// My own Domain id, learned from a local session (one owned by the connected
@@ -819,7 +882,13 @@ fun SessionsScreen(
  * checked before the enrolling/connecting spinners, so a hard error can never sit under a "Setting
  * up..." spinner, and it names the actual cause with a way forward instead of pointing elsewhere. */
 @Composable
-private fun EmptyBoard(state: ChatState, onManage: () -> Unit, onRefresh: () -> Unit, onHostHelp: () -> Unit) {
+private fun EmptyBoard(
+	state: ChatState,
+	onManage: () -> Unit,
+	onRefresh: () -> Unit,
+	onHostHelp: () -> Unit,
+	onVerifyEnroll: (() -> Unit)? = null,
+) {
 	Column(
 		Modifier.fillMaxSize().padding(32.dp),
 		horizontalAlignment = Alignment.CenterHorizontally,
@@ -832,8 +901,17 @@ private fun EmptyBoard(state: ChatState, onManage: () -> Unit, onRefresh: () -> 
 				Text("You're all set up", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
 				BoardBody("Your network is ready. Set up a computer to run your agents and they'll show up here.")
-				Spacer(Modifier.height(20.dp))
-				Button(onClick = onHostHelp) { Text("How do I set up a computer?") }
+				// An outstanding in-person trust compare (the admin who invited you is waiting) takes the
+				// primary slot; bringing up a host becomes the secondary step.
+				if (onVerifyEnroll != null) {
+					Spacer(Modifier.height(20.dp))
+					Button(onClick = onVerifyEnroll) { Text("Verify with the admin") }
+					Spacer(Modifier.height(4.dp))
+					TextButton(onClick = onHostHelp) { Text("How do I set up a computer?") }
+				} else {
+					Spacer(Modifier.height(20.dp))
+					Button(onClick = onHostHelp) { Text("How do I set up a computer?") }
+				}
 			}
 			// No Gateway admitted yet: the primary onboarding step, with a real action. The secondary
 			// link points at the tucked manual for an operator who has not stood up a host yet.

@@ -239,6 +239,15 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putBoolean(KEY_FIRST_ROOTED, value).apply()
 		}
 
+	/** Whether this device has completed the FLOW-1 in-person enroll compare for its invite. Gates
+	 * the enrollee's "Verify with the admin" prompt so it stops offering once the trust edge is
+	 * recorded. Cleared by a re-import (a fresh invite is a fresh ceremony). */
+	var enrollCeremonyDone: Boolean
+		get() = prefs.getBoolean(KEY_ENROLL_CEREMONY_DONE, false)
+		set(value) {
+			prefs.edit().putBoolean(KEY_ENROLL_CEREMONY_DONE, value).apply()
+		}
+
 	/** This owner's own network display name (the operator name), cached locally so the profile
 	 * shows it without a round-trip. The authoritative copy lives on the Domain at evie; this is
 	 * refreshed from discovery (the home session's operatorName) and updated on a local rename. */
@@ -273,6 +282,7 @@ class ProvisioningStore(context: Context) {
 		const val KEY_DOMAIN_VERSION = "federation_domain_version"
 		const val KEY_CONSOLE_ADMITTED = "federation_console_admitted"
 		const val KEY_FIRST_ROOTED = "federation_first_rooted"
+		const val KEY_ENROLL_CEREMONY_DONE = "federation_enroll_ceremony_done"
 		const val KEY_OPERATOR_NAME = "federation_operator_name"
 		const val KEY_HOSTED_TENANTS = "federation_hosted_tenants"
 		const val KEY_STTS_URL = "stts_url"
@@ -297,7 +307,7 @@ class ProvisioningStore(context: Context) {
 		 * Clear (a privacy/correctness regression). The partition is pinned by a unit test. */
 		val PROVISIONING_KEYS = listOf(
 			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
-			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_OPERATOR_NAME, KEY_HOSTED_TENANTS,
+			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_OPERATOR_NAME, KEY_HOSTED_TENANTS,
 			KEY_THREADS, KEY_LABELS, KEY_DRAFTS, KEY_GATEWAY_ID, KEY_SYNC_EPOCH, KEY_SYNC_ACKED,
 			KEY_SYNC_DROPPED,
 		)

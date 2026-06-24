@@ -228,6 +228,7 @@ fun HostedTenantDetailScreen(
 	onBack: () -> Unit,
 	onRemoved: () -> Unit,
 	onLink: () -> Unit,
+	onVerify: (blob: String, peerLabel: String) -> Unit,
 ) {
 	val context = LocalContext.current
 	val scope = rememberCoroutineScope()
@@ -332,6 +333,10 @@ fun HostedTenantDetailScreen(
 						Text("Copy")
 					}
 					OutlinedButton(onClick = { saveLauncher(blob) }, modifier = Modifier.weight(1f)) { Text("Save as file") }
+				}
+				// After they scan in person, run the mutual 6-digit compare that commits the trust edge.
+				Button(onClick = { onVerify(blob, tenant.operatorName) }, modifier = Modifier.fillMaxWidth()) {
+					Text("Verify in person")
 				}
 				TextButton(
 					enabled = !busy,

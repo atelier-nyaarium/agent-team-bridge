@@ -687,6 +687,8 @@ class ChatRepository(
 		// clear the first-root latch: the next connect re-evaluates the blob's pendingTenant and
 		// re-roots if present. An ordinary already-rooted blob (no pendingTenant) skips the step.
 		store.firstRooted = false
+		// A fresh invite is a fresh trust ceremony: re-offer the in-person compare on the next connect.
+		store.enrollCeremonyDone = false
 		client = null
 		sttsClient = null
 		// firstRooted=false mirrors the latch reset above so a re-imported fresh invite does not show
@@ -1374,6 +1376,17 @@ class ChatRepository(
 		val myParty = EnrollParty(federation.ownerSignPub(), federation.ownerBoxPub(), myDomainId)
 		val adminParty = EnrollParty(hs.adminOwnerSignPub, hs.adminOwnerBoxPub, hs.adminDomainId)
 		return EnrollCeremonyContext(EnrollCeremony.ENROLLEE, hs.handshakeId, hs.pin, myParty, expectedPeer = adminParty)
+	}
+
+	/** The enrollee leg to run (or re-offer), or null when the blob carries no enroll handshake or the
+	 * in-person compare is already done. Drives the post-first-root auto-launch and the board's
+	 * "Verify with the admin" prompt - both go quiet once [markEnrolleeCeremonyDone] latches. */
+	fun pendingEnrolleeCeremony(): EnrollCeremonyContext? =
+		if (store.enrollCeremonyDone) null else enrolleeEnrollContext()
+
+	/** Latch the enrollee compare as complete so it stops being offered (the trust edge is recorded). */
+	fun markEnrolleeCeremonyDone() {
+		store.enrollCeremonyDone = true
 	}
 
 	/** Run the commit-reveal exchange up to the human compare: commit this side, poll the broker for
