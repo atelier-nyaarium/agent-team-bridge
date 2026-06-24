@@ -212,6 +212,13 @@ class FederationManager(private val store: ProvisioningStore) {
 	 * a third party cannot target a live rendezvous. */
 	fun freshRendezvousId(): String = nonce()
 
+	/** This owner's party for a FLOW-2 compare: the owner keys + the given local Domain. Reuses the
+	 * EnrollParty shape so the SAS/commitment machinery (enrollSas/enrollCommitment) is shared. */
+	fun trustParty(domainId: String): com.atelier_nyaarium.switchboard.proto.EnrollParty {
+		val owner = ownerIdentity()
+		return com.atelier_nyaarium.switchboard.proto.EnrollParty(owner.sign.pub, owner.box.pub, domainId)
+	}
+
 	/** A fresh UNGUESSABLE handshake id, minted by the admin into the enroll QR. Unguessability is
 	 * what stops a third party who learned a Domain from targeting a real ceremony window. */
 	fun freshHandshakeId(): String = nonce()

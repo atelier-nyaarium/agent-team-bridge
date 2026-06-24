@@ -11,6 +11,7 @@ import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.NoticeId
 import com.atelier_nyaarium.switchboard.proto.SasCrypto
+import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SessionId
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
@@ -258,6 +259,12 @@ private const val ENROLL_POLL_MS = 2_000L
 /** Max poll attempts per handshake round before giving up (2s * 150 = 5 min, comfortably under the
  * broker's 10-min window TTL). A vanished peer fails with a timeout rather than hanging forever. */
 private const val ENROLL_POLL_MAX = 150
+
+/** FLOW-2 rendezvous sides: who ARMED (initiator) vs who JOINED a highlighted arm (target). Distinct
+ * from the SAS role (ADMIN/ENROLLEE by sorted owner key) - the side picks the broker frame, the role
+ * orders the SAS. Must match the TrustHandshakeOp.Reveal `side` literals on the wire. */
+private const val TRUST_SIDE_INITIATOR = "INITIATOR"
+private const val TRUST_SIDE_TARGET = "TARGET"
 
 /** Three-way classification of a connect/poll/relay failure. */
 internal enum class ConnKind {
@@ -1506,6 +1513,93 @@ class ChatRepository(
 	 * the window down rather than leaving a half-formed edge. Best-effort. */
 	suspend fun enrollCancel(handshakeId: String, role: String) = withContext(Dispatchers.IO) {
 		runCatching { client().enrollHandshake(EnrollHandshakeOp.Cancel(handshakeId, role)) }
+	}
+
+	////////////////////////////////
+	//  FLOW-2 trust rendezvous (roster-initiated user-to-user trust)
+
+	/** The sorted-owner-key role both sides agree on for the SYMMETRIC FLOW-2 SAS: the lower owner key
+	 * takes the ADMIN slot, so both phones hash the two parties in the SAME order. Reuses enrollSas /
+	 * enrollCommitment - no new SAS scheme (the rendezvousId is the pin). */
+	private fun trustRole(myOwner: String, peerOwner: String): String =
+		if (myOwner < peerOwner) EnrollCeremony.ADMIN else EnrollCeremony.ENROLLEE
+
+	/** Mint a fresh rendezvous id (the initiator's; also the SAS pin both sides bind). */
+	fun mintRendezvousId(): String = federation.freshRendezvousId()
+
+	/** Poll "who armed trust toward me?" (the highlight). Returns the armed initiator rows (owner key
+	 * + rendezvousId) so the Users surface highlights them. Best-effort. */
+	suspend fun fetchPendingTrust(): Result<List<com.atelier_nyaarium.switchboard.proto.TrustPendingEntry>> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				val r = client().trustPending(federation.signTrustPendingRequest(System.currentTimeMillis()))
+				if (!r.ok) error(r.error ?: "trust pending unavailable")
+				r.pending ?: emptyList()
+			}
+		}
+
+	/** Run one side of the FLOW-2 commit-reveal compare over the rendezvous. `mySide` is INITIATOR (I
+	 * armed) or TARGET (I joined a highlighted arm). Mirrors `enrollExchange`: commit (arm/join) ->
+	 * poll peerCommit -> reveal -> poll peerReveal -> verify the commit-reveal binding + that the peer
+	 * revealed the OWNER the rendezvous named -> compute the SAS. The result's `peerParty`/`peerDomainId`
+	 * feed `enrollConfirm` (shared trust-confirm) on a [Yes]. */
+	suspend fun trustExchange(
+		rendezvousId: String,
+		mySide: String,
+		peerOwnerSignPub: String,
+	): Result<EnrollExchange> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				val myParty = federation.trustParty(localDomainId())
+				val myRole = trustRole(myParty.ownerSignPub, peerOwnerSignPub)
+				val peerRole = EnrollCeremony.peerRole(myRole)
+				val salt = federation.freshEnrollSalt()
+				val myReveal = com.atelier_nyaarium.switchboard.proto.EnrollReveal(
+					myParty.ownerSignPub,
+					myParty.ownerBoxPub,
+					myParty.domainId,
+					salt,
+				)
+				val commitment = SasCrypto.enrollCommitment(myParty, myRole, salt)
+
+				// Round 1: commit (the initiator ARMs, the target JOINs), then poll for the peer's.
+				val peerCommitment = pollEnroll("commit") {
+					val op = if (mySide == TRUST_SIDE_INITIATOR) {
+						TrustHandshakeOp.Arm(rendezvousId, myParty.ownerSignPub, peerOwnerSignPub, commitment)
+					} else {
+						TrustHandshakeOp.Join(rendezvousId, myParty.ownerSignPub, commitment)
+					}
+					val r = client().trustHandshake(op)
+					if (!r.ok) error(r.error ?: "trust commit rejected")
+					r.peerCommitment
+				}
+				// Round 2: reveal, then poll for the peer's reveal.
+				val peerReveal = pollEnroll("reveal") {
+					val r = client().trustHandshake(TrustHandshakeOp.Reveal(rendezvousId, mySide, myReveal))
+					if (!r.ok) error(r.error ?: "trust reveal rejected")
+					r.peerReveal
+				}
+				val peerParty = EnrollCeremony.partyOf(peerReveal)
+				// Commit-reveal binding: the peer's reveal must open to its round-1 commitment.
+				if (!EnrollCeremony.verifyPeer(peerCommitment, peerParty, peerRole, peerReveal.salt)) {
+					error("The other phone's keys did not match its commitment (the relay tampered with the exchange). Try again.")
+				}
+				// Anti-substitution: the peer must reveal the OWNER the rendezvous named (the arm /
+				// highlight bound peerOwnerSignPub), so evie cannot splice in a different person.
+				if (peerParty.ownerSignPub != peerOwnerSignPub) {
+					error("The other person's identity did not match the trust request. Try again.")
+				}
+				EnrollExchange(
+					sas = EnrollCeremony.sas(myRole, myParty, peerParty, rendezvousId),
+					peerDomainId = peerReveal.domainId,
+					peerParty = peerParty,
+				)
+			}
+		}
+
+	/** Cancel this leg of the trust rendezvous (a [No], timeout, or leaving). Best-effort. */
+	suspend fun trustCancel(rendezvousId: String) = withContext(Dispatchers.IO) {
+		runCatching { client().trustHandshake(TrustHandshakeOp.Cancel(rendezvousId)) }
 	}
 
 	/** Poll one handshake step: call [step] (re-POSTing the same frame is idempotent at the broker)
