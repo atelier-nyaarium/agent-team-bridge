@@ -53,6 +53,9 @@ interface DomainEnrollment {
 	revocations: SignedRevocation[];
 	operatorName?: string | null;
 	pendingTenant?: PendingTenantRecord;
+	// Marks the operator's own home Domain so evie scopes the console relay to it. Only the home
+	// slice this script writes carries it; a hosted guest Domain never does.
+	isPrimary?: boolean;
 }
 
 /** The legacy (v1) single-Domain Secret: `enrollment` IS one EnrollmentState. */
@@ -215,6 +218,7 @@ function rootHomeSlice(
 		admissions: sameOwner ? (prior?.admissions ?? []) : [],
 		revocations: sameOwner ? (prior?.revocations ?? []) : [],
 		...(sameOwner && prior?.operatorName != null ? { operatorName: prior.operatorName } : {}),
+		isPrimary: true,
 	};
 }
 
@@ -250,6 +254,7 @@ function pendingHomeSlice(operatorName: string, nonce: string, issuedAt: number,
 		revocations: [],
 		operatorName,
 		pendingTenant: { operatorName, nonce, issuedAt, ttlMs, rooted: false },
+		isPrimary: true,
 	};
 }
 
