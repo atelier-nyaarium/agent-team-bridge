@@ -161,16 +161,43 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
       work: the Trusted badge + per-row kebab + the arm-trust flow + share control - all of which need the trust
       state RECONCILED onto owner identity (today the local trust/share state is domain-keyed - linkedDomains /
       crossDomainShareState - while the roster + enroll edges are owner-keyed; reconcile before the badge/kebab).
-    - [NEXT] (a) the **richer Users surface**: Trusted badge + per-row kebab (Manage shares / Untrust; Trust on
-      untrusted) + the dual admin-vs-user view, building on `UsersScreen`. Needs the owner-keyed trust-state
-      reconciliation noted above. (b) The
-      **PENDING-TRUST op** (arm/cancel/poll, keyed by TARGET owner; server-side routing, no token/gatewayId in a
-      row) - the arm+highlight trust flow. (c) The **DISCRIMINATED share target**
-      ({kind:domain}|{kind:everyone-trusted}) on `CrossDomainShareEntry` + the share ops + the gateway gate
-      (`crossDomainShareState`) + the "everyone I trust" central isSharedTo helper. (d) The untrust + link CONSOLE
-      OPS + the gateway ForeignOwnerKeyring handlers (the untrust tombstone wire shape is built; its op + handler
-      are not). Landmarks to reuse: `XDomainLink` (owner-keyed link exists), `enrollSas`, `cross_domain_unlink`
-      (domain-keyed; untrust is the owner-keyed sibling), `crossDomainShareState`.
+    - [DONE, commit 2e90d47] **Refactor A slice 1 - the owner-keyed friend graph + the Users trust surface.**
+      A local, owner-keyed trusted-owners store (`ProvisioningStore` KEY_TRUSTED_OWNERS, `FederationManager`
+      trustedOwners/isTrusted/add/remove + `signUntrust`) - the FRIEND graph the Users surface reads, recorded
+      even for a gateway-less person (Q3=B), distinct from the gateway relay-affinity edges. Written on every
+      completed trust ceremony: `enrollConfirm` (now takes `peerOwnerSignPub`) and `confirmWithMyLink`. The Users
+      roster (`Users.kt`) now renders a per-owner **Trusted badge** + a per-row **kebab with Untrust** (drops the
+      friend edge + mints the owner-keyed untrust tombstone; an untrusted row shows presence only). `ChatRepository`
+      isOwnerTrusted/trustedOwners/untrustOwner. Gates green (testDebugUnitTest + R8). This is the owner-keyed
+      trust QUERY the surface needed - the reconciliation the prior [NEXT] flagged is now DONE for the read path.
+    - [NEXT - the big one: FLOW-2, roster-initiated user-to-user trust] **The Trust button + arm/highlight/compare.**
+      Decided design (honors Q2=B no-prompt + Q4=A owner-keyed + "no SAS fork" - REUSES the enroll commit-reveal
+      machinery, adds only a rendezvous):
+      - **Rendezvous = a NEW evie target-indexed pending-trust broker** (mirror `EnrollHandshakeCoordinator`, but
+        keyed by owner pair + INDEXED by target owner so "who armed trust toward me?" is a cheap query, NOT a QR
+        handshakeId). Ops: `trust_arm` (initiator posts {initiatorOwnerSignPub, targetOwnerSignPub, rendezvousId
+        (fresh, the SAS "pin"), commitment, sig}, stored under targetOwnerSignPub), `trust_pending` (target
+        queries by its owner key -> the armed rows, to HIGHLIGHT them - no push), `trust_reveal`/`trust_poll`
+        (the commit-reveal relay), `trust_cancel`. TTL'd + attempt-capped like the enroll broker. evie stays
+        content-blind on the keys (it only indexes the two owner keys + relays opaque commit/reveal).
+      - **SAS = REUSE `enrollSas`** (owner-anchored, already built) with roles assigned by SORTED owner-key order
+        (symmetric in effect, no new scheme) and the `rendezvousId` as the pin (scopes the compare to this
+        rendezvous; the commit-reveal still closes the offline grind). TYPED compare (user-to-user), not glance.
+      - **Trust output = the owner-to-owner trust edge** (`addTrustedOwner` both sides + the existing
+        `submit_xdomain_link` relay edge when gateways exist; gateway-less still records the friend edge).
+      - **Android:** the untrusted-row kebab/Trust button -> `trust_arm`; the Users screen's `trust_pending` poll
+        HIGHLIGHTS armed rows; tapping a highlighted row arms back -> the compare panel (REUSE
+        `EnrollCeremonyScreen`'s compare/reveal UI). Build slices: F2.1 evie broker + ops + wire, F2.2 Android
+        client + the arm/highlight/compare UI.
+    - [NEXT, after FLOW-2] (a) **DISCRIMINATED share target** ({kind:domain}|{kind:everyone-trusted}) on
+      `CrossDomainShareEntry` + the share ops + the gateway gate (`crossDomainShareState`) + the "everyone I trust"
+      central isSharedTo helper (the kebab's "Manage shares"). (b) the untrust + link CONSOLE OPS + the gateway
+      ForeignOwnerKeyring handlers (the untrust tombstone wire shape is built; its op + handler are not). (c) the
+      **renames + UI restructure** (the Users surface absorbs the Federation hub's MY NETWORK / PEERS / GUEST
+      NETWORKS sections; retire "Federation"/"Peer"-as-noun) + the closed-enum-fold + synced-leaf-script fix-nows.
+      (d) **Refactor A slice 2** (the gateway storage re-key: crossDomainShareState/Peers owner-keyed - the
+      multi-Domain robustness fix). The FINAL slice = the dead-code cleanup pass (Final scouting bucket F).
+      Landmarks: `XDomainLink`, `enrollSas`, `cross_domain_unlink`, `crossDomainShareState`.
     - **Roster evie landmarks (grounding for the aggregation, found this stretch):** presence = evie's
       `BridgeServer.gatewayConnections: Map<domainId, Map<gatewayId, ConnectionId>>` (a Domain with a live
       gateway conn is online). Per-Domain name + owner live in the `EnrollmentState` in the federation Secret
