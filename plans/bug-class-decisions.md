@@ -123,7 +123,8 @@ Two ways to replace it:
 - **(B)** Bind the console's `conversationId` -> its home domainId at provisioning and have the console
   send the home domainId on every relay; evie routes by it. More explicit, changes the console wire.
 
-Recommend **A**. This is the one fork to confirm; everything else is mechanical.
+**CONFIRMED: A (owner).** The operator-home reference is stored on the Domain's store - the evie
+Secret operator/primary marker.
 
 ## Plan (restructured: breaking refactor, ONE atomic cutover)
 
@@ -152,10 +153,14 @@ Recommend **A**. This is the one fork to confirm; everything else is mechanical.
   across `schemas.ts` + the 3 synced leaves (re-sync via `sync-leaf.ts`) + codegen `Protocol.kt` +
   gateway + Android + evie + scripts + tests. Note BOTH `setOperatorNameSigningBytes` AND
   `provisionTenantSigningBytes` are value-positional over the field, so the preimage bytes are
-  unchanged BUT the fixture JSON keys + the Kotlin readers re-cut (provision-ops vectors). Define a
-  single empty-`profileName` placeholder ("(unnamed)") routed through EVERY person-name render
-  (ChatRepository.kt:886 + the 3 id-leak sites); NEVER the Domain id. Closes: high 14, mediums 25/29,
-  lows 37/38.
+  unchanged BUT the fixture JSON keys + the Kotlin readers re-cut (provision-ops vectors). **Profile name is REQUIRED at provisioning (owner decision):**
+  the app's import screen gains a "Your Name" field, and the QR-scan + paste-clipboard actions are
+  DISABLED until it is non-empty; the entered name is carried into first-root and owner-signed as the
+  profile name, so a person is never nameless. Applies to operator AND guest (each names themselves on
+  their own device). This MOVES name entry to the phone, so the host-side `provision.ts --setup`
+  operator-name prompt is dropped (provision stages no name). The "(unnamed)" placeholder stays ONLY
+  as a defensive backstop (legacy/edge), routed through every person-name render (ChatRepository.kt:886
+  + the 3 id-leak sites), NEVER the Domain id. Closes: high 14, mediums 25/29, lows 37/38.
 - **Phase 3 - re-cut the `home`-bearing SIGNING vector corpora (Phase 1's hidden cost).** THREE
   cross-runtime signed/hashed corpora embed `domainId:"home"` in the preimage (xdomain-link, enroll-sas,
   cross-domain-sas) + the protocol golden fixtures: the VALUE changes, so the bytes change and the
