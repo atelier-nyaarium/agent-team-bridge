@@ -107,6 +107,28 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
       regression sweep (link wizard unchanged; no missed callers; no migration code). Gates green: switchboard
       compile + testDebugUnitTest + assembleDebug (R8); evie 44 bun tests + biome + tsc. Commits: evie 97f8c1e,
       switchboard c83ecd4.
+  - [DONE] **Lap-2 framework-first audit (8-dimension Workflow, run wf_4864cc05):** 1 LEAVE (edge-confirm-
+    outcome thin/justified), 5 DEFERRED to the lap-3 Users-surface rework + cleanup (they will rework this UI
+    anyway), 2 acted NOW (see framework-fix):
+    - **(NOW) Shared ceremony UI primitives.** `Busy` / `InfoSurface` / `grouped(code)` were duplicated between
+      LinkWizard and EnrollCeremonyScreen (I introduced the second copy). Extract to one shared place and point
+      both screens at it. The higher-level panels (LinkedNoRelay/Failed) keep their per-ceremony copy (divergent
+      copy + the onLater latch difference; lap-3 reworks them).
+    - **(NOW) Shared SAS reduction kernel.** The digest -> first-8-bytes-BigInt -> mod 10^6 -> pad-6 reduction is
+      byte-identical across crossDomainSas + enrollSas in BOTH runtimes; extract a private reducer per runtime so
+      the 6-digit width lives in one place (vector-pinned, so a regression breaks the cross-runtime tests). The
+      PREIMAGE builders stay specialized (the audit surface).
+    - **Both NOW chunks DONE + verified (commit 694bf4e):** shared Busy/InfoSurface/grouped in Federation.kt (both
+      ceremonies point at the one copy); reduceToSas private kernel in SasCrypto.kt + cross-domain-sas.ts. Gates
+      green: TS lint + 668 tests (cross-domain-sas + enroll-sas vectors byte-for-byte preserved); Android
+      testDebugUnitTest (the Kotlin twin still reproduces the vectors) + assembleDebug (R8, UI extraction holds).
+    - **Deferred to lap-3 (laundry):** (a) **nonce-pinning convention + a LATENT BUG** - signProvisionTenant /
+      signRemoveTenant are idempotent at evie (dedup by operatorSignPub+nonce) but ChatRepository calls them with
+      NO pinned nonce, so a network-hiccup retry mints a fresh nonce and creates a DUPLICATE provision/remove at
+      evie instead of replaying. Pin those nonces (the enroll edge path already does). (b) rendezvous-broker seam
+      (EnrollHandshakeCoordinator vs the gateway CrossDomainHandshakeCoordinator). (c) ceremony-context factory
+      unification. (d) evie onEnrollOp table-driven dispatch. (e) the holistic dual-ceremony-wizard scaffold (the
+      crypto cores stay justifiably separate; the UI scaffold is the real extraction, folded into lap-3).
   - [TODO] **Users roster unification UI + share-control** (the original peer-ux core; the design-pass mockups):
     large Compose; separate from the enroll ceremony.
   - [TODO] **Then:** the Users roster unification UI + share-control surface (the original peer-ux core; large
