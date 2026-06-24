@@ -194,6 +194,24 @@ class FederationManager(private val store: ProvisioningStore) {
 		)
 	}
 
+	/** Build a signed FLOW-2 "who armed trust toward me?" query: the OWNER proves possession of its
+	 * owner key (the arms are indexed by owner key, so the owner key - not the console key - signs the
+	 * TRUST_PENDING proof). evie verifies + scopes to this owner before listing the arms. */
+	fun signTrustPendingRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.TrustPendingRequest {
+		val owner = ownerIdentity()
+		val n = nonce()
+		return com.atelier_nyaarium.switchboard.proto.TrustPendingRequest(
+			signerSignPub = owner.sign.pub,
+			proofAt = nowMs,
+			nonce = n,
+			proof = ProvisionOpsCrypto.signTrustPendingRequest(owner.sign.pub, nowMs, n, owner.sign.priv),
+		)
+	}
+
+	/** A fresh rendezvous id for a FLOW-2 trust arm (also the SAS pin both sides bind). Unguessable so
+	 * a third party cannot target a live rendezvous. */
+	fun freshRendezvousId(): String = nonce()
+
 	/** A fresh UNGUESSABLE handshake id, minted by the admin into the enroll QR. Unguessability is
 	 * what stops a third party who learned a Domain from targeting a real ceremony window. */
 	fun freshHandshakeId(): String = nonce()

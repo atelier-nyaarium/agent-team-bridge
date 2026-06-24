@@ -6,6 +6,10 @@ import com.atelier_nyaarium.switchboard.proto.ChannelFile
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.RosterRequest
 import com.atelier_nyaarium.switchboard.proto.RosterResult
+import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
+import com.atelier_nyaarium.switchboard.proto.TrustHandshakeResult
+import com.atelier_nyaarium.switchboard.proto.TrustPendingRequest
+import com.atelier_nyaarium.switchboard.proto.TrustPendingResult
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeRef
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeResult
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
@@ -191,6 +195,14 @@ private data class EnrollHandshakeEnvelope(val enrollHandshake: EnrollHandshakeO
  * routing. */
 @Serializable
 private data class RosterEnvelope(val roster: RosterRequest)
+
+/** The FLOW-2 trust-rendezvous POST bodies: top-level fields routing to evie's trust broker / pending
+ * query (the twins of `roster` routing). */
+@Serializable
+private data class TrustHandshakeEnvelope(val trustHandshake: TrustHandshakeOp)
+
+@Serializable
+private data class TrustPendingEnvelope(val trustPending: TrustPendingRequest)
 
 /** evie's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the
  * minted one-time invite `nonce` (the operator's app builds the friend's QR from it). The wire
@@ -488,6 +500,68 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			runCatching { wireJson.decodeFromString<RosterResult>(text) }.getOrNull()?.let { return it }
 			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
 			return RosterResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
+	/** Broker a FLOW-2 trust-rendezvous frame (arm/join/reveal/cancel) at evie. POST { trustHandshake }
+	 * evie-direct (the dumb broker; no sealing, like the enroll handshake). */
+	fun trustHandshake(op: TrustHandshakeOp): TrustHandshakeResult {
+		val request = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(
+				wireJson.encodeToString(TrustHandshakeEnvelope.serializer(), TrustHandshakeEnvelope(op)).toRequestBody(JSON),
+			)
+			.build()
+		val resp =
+			try {
+				client.newCall(request).execute()
+			} catch (e: Exception) {
+				DebugLog.log("Trust", "handshake transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+				throw e
+			}
+		resp.use {
+			val text = resp.body?.string().orEmpty()
+			DebugLog.log("Trust", "handshake HTTP ${resp.code} ${text.take(160)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<TrustHandshakeResult>(text) }
+					.getOrElse { TrustHandshakeResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<TrustHandshakeResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return TrustHandshakeResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
+	/** Query "who armed trust toward me?" at evie (the highlight). POST { trustPending } with the
+	 * owner-signed proof; evie returns the armed rendezvous indexed under this owner key. */
+	fun trustPending(req: TrustPendingRequest): TrustPendingResult {
+		val request = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(
+				wireJson.encodeToString(TrustPendingEnvelope.serializer(), TrustPendingEnvelope(req)).toRequestBody(JSON),
+			)
+			.build()
+		val resp =
+			try {
+				client.newCall(request).execute()
+			} catch (e: Exception) {
+				DebugLog.log("Trust", "pending transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+				throw e
+			}
+		resp.use {
+			val text = resp.body?.string().orEmpty()
+			DebugLog.log("Trust", "pending HTTP ${resp.code} ${text.take(160)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<TrustPendingResult>(text) }
+					.getOrElse { TrustPendingResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<TrustPendingResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return TrustPendingResult(ok = false, error = err ?: "HTTP ${resp.code}")
 		}
 	}
 
