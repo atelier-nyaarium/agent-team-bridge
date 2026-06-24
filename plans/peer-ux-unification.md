@@ -74,6 +74,39 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
       via `FederationManager.signXdomainLinkEdge` + submit `submit_xdomain_link`; on [No]/timeout POST Cancel.
     - **Roles:** ADMIN = showed the QR (the HostedTenantDetail side), ENROLLEE = scanned. Build verifies with
       `assembleDebug` + `testDebugUnitTest`; the on-device wire round-trip is the owner's wall.
+  - [DONE] **Lap-2 align audit (12-dimension Workflow fan-out, run wf_64308a7f):** 12/12 ALIGNED, 0 gaps. Vetted
+    against the plan + the red-team build requirements: R-pre (fixed-slot role-tagged ENROLL_SAS_V1, TS+Kotlin
+    byte-identical, vector-pinned), R-edge (edge signed over the EXACT verified peer domain + the enrollee's
+    pendingTenant domain, no localDomainId re-fetch), R-dos (all 5 evie guards present + tested), dumb-broker
+    (no SAS/pin/commitment-verify at evie; cross-domain-sas.ts NOT synced), pin-OOB (absent from every frame),
+    commit-reveal binding, QR-pin admin auth (enrollee-only expectedPeer), edges-only trust (no admission, no
+    gateway-peer write), glance compare, NO migration/legacy code, codegen no-drift + sync-hash match, roles +
+    stable per-invite handshake secrets. Nothing to fix.
+  - [DONE] **Lap-2 red-team (12-angle adversarial Workflow + verify, run wf_eb1abd19):** 9 angles CLEAN
+    (relay-MITM residual sound, coordinator-races none, commitment-hiding sound, edge-domain-confusion none,
+    android-poll-failure graceful, pin-multiguess one-shot, error-oracle opaque, role-slot first-committer
+    DoS-only/in-model, first-root-before-ceremony ordered). 4 issues fixed (see red-team-fix):
+    - **(CRITICAL, owner-confirmed: User-First) evie edge-op routing.** `dispatchEnrollOp` ran every
+      `submit_xdomain_link`/`revoke_xdomain_link` against the HOME coordinator, whose `addLinkEdge` rejects any
+      edge with `srcDomainId != home`. So a gateway-less ENROLLEE's edge (src = its first-rooted tenant Domain)
+      was refused -> one-way trust, and a user with NO gateway could never record their half. Fix: route an edge
+      op to `coordinatorFor(edge.srcDomainId)` (evie already vivifies a rooted coordinator for any first-rooted
+      Domain, gateway or not). Surfaced by the red-team's first-root dimension + confirmed live by the owner.
+    - **(HIGH) cancel-dispose-race.** The ceremony's DisposableEffect unconditionally `enrollCancel`s on leave,
+      deleting the whole broker window; if A confirms + leaves before B polls A's reveal, B is stranded (A->B
+      edge only). Fix: skip the dispose-cancel once this phone has CONFIRMED (a decline/walk-away still cancels).
+    - **(HIGH) premature-latch.** The LinkedNoRelay "Later" button latched `enrollCeremonyDone`, so a relay-edge
+      reject permanently killed the enrollee re-offer. Fix: "Later" routes to onCancel (dismiss, no latch); only
+      a real Done (Linked) latches.
+    - **(MEDIUM) double-confirm edge accumulation.** Each `enrollConfirm`/retry minted a fresh edge nonce, so a
+      lost-ack retry accumulates duplicate edges at evie. Fix: pin one edge nonce per ceremony (the link path's
+      same non-pinned-retry issue is laundry-listed).
+    - **All 4 fixes VERIFIED** (6-agent fix-verify, run wf_4e362680): every finding resolved, zero regressions,
+      including a security re-check of the new evie edge routing (shouldVivifyCoordinator blocks vivify-DoS;
+      addLinkEdge still owner-verifies against the srcDomain's rooted key, so no cross-Domain write) and the
+      regression sweep (link wizard unchanged; no missed callers; no migration code). Gates green: switchboard
+      compile + testDebugUnitTest + assembleDebug (R8); evie 44 bun tests + biome + tsc. Commits: evie 97f8c1e,
+      switchboard c83ecd4.
   - [TODO] **Users roster unification UI + share-control** (the original peer-ux core; the design-pass mockups):
     large Compose; separate from the enroll ceremony.
   - [TODO] **Then:** the Users roster unification UI + share-control surface (the original peer-ux core; large
