@@ -6,13 +6,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,7 +27,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -299,28 +296,7 @@ private fun FailedPanel(reason: String, onClose: () -> Unit) {
 }
 
 ////////////////////////////////
-//  Bits
-
-@Composable
-private fun Busy(text: String) {
-	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-		CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-		Text(text, style = MaterialTheme.typography.bodyMedium)
-	}
-}
-
-@Composable
-private fun InfoSurface(text: String) {
-	Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
-		Text(text, Modifier.padding(16.dp).fillMaxWidth(), style = MaterialTheme.typography.bodySmall)
-	}
-}
-
-////////////////////////////////
 //  Helpers
-
-/** Group the 6-digit code into two groups of three for an easy glance compare ("847 291"). */
-private fun grouped(code: String): String = code.chunked(3).joinToString(" ")
 
 /** Map a raw ceremony error to a calmer, actionable line. */
 private fun humanizeEnrollError(message: String?): String {

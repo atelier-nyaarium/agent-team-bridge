@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -388,3 +389,23 @@ internal fun CodeBlock(code: String) {
 		)
 	}
 }
+
+/** A small inline spinner with a label, the "working..." state shared by the pairing ceremonies. */
+@Composable
+internal fun Busy(text: String) {
+	Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+		CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+		Text(text, style = MaterialTheme.typography.bodyMedium)
+	}
+}
+
+/** A muted info box, shared by the pairing ceremonies for guidance / status lines. */
+@Composable
+internal fun InfoSurface(text: String) {
+	Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
+		Text(text, Modifier.padding(16.dp).fillMaxWidth(), style = MaterialTheme.typography.bodySmall)
+	}
+}
+
+/** Group a 6-digit safety code into two groups of three for an easy compare ("847 291"). */
+internal fun grouped(code: String): String = code.chunked(3).joinToString(" ")

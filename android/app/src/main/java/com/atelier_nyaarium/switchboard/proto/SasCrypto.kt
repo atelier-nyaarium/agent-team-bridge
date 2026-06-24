@@ -134,14 +134,8 @@ object SasCrypto {
 	 *   3. n        = digest[0..7] as a big-endian unsigned integer
 	 *   4. code     = (n mod 10^6) zero-padded to 6 digits
 	 */
-	fun crossDomainSas(a: CrossDomainParty, b: CrossDomainParty, pin: String): String {
-		val digest = sha256(crossDomainSasPreimage(a, b, pin))
-		var n = BigInteger.ZERO
-		for (i in 0 until 8) {
-			n = n.shiftLeft(8).or(BigInteger.valueOf(digest[i].toLong() and 0xFFL))
-		}
-		return n.mod(SAS_MODULUS).toString(10).padStart(SAS_DIGITS, '0')
-	}
+	fun crossDomainSas(a: CrossDomainParty, b: CrossDomainParty, pin: String): String =
+		reduceToSas(crossDomainSasPreimage(a, b, pin))
 
 	////////////////////////////////
 	//  Enroll SAS (owner-anchored, role-tagged)
@@ -183,17 +177,26 @@ object SasCrypto {
 			pin,
 		).joinToString("\n").toByteArray(Charsets.UTF_8)
 
-	fun enrollSas(admin: EnrollParty, enrollee: EnrollParty, pin: String): String {
-		val digest = sha256(enrollSasPreimage(admin, enrollee, pin))
+	fun enrollSas(admin: EnrollParty, enrollee: EnrollParty, pin: String): String =
+		reduceToSas(enrollSasPreimage(admin, enrollee, pin))
+
+	////////////////////////////////
+	//  Functions & Helpers
+
+	/**
+	 * Reduce a SAS preimage to the displayed code: SHA-256, read the FIRST 8 digest bytes as a
+	 * big-endian unsigned integer, reduce mod 10^6, zero-pad to 6 digits. The single reduction +
+	 * width choice shared by every SAS derivation (cross-Domain and enroll); the per-derivation
+	 * preimage builders stay specialized - they are the audit surface, this is the common kernel.
+	 */
+	private fun reduceToSas(preimage: ByteArray): String {
+		val digest = sha256(preimage)
 		var n = BigInteger.ZERO
 		for (i in 0 until 8) {
 			n = n.shiftLeft(8).or(BigInteger.valueOf(digest[i].toLong() and 0xFFL))
 		}
 		return n.mod(SAS_MODULUS).toString(10).padStart(SAS_DIGITS, '0')
 	}
-
-	////////////////////////////////
-	//  Functions & Helpers
 
 	// A fresh MessageDigest per call: the instance is stateful, so it must not be reused
 	// across calls without reset.

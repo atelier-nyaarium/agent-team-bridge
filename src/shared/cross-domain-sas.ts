@@ -133,14 +133,22 @@ export function crossDomainSasPreimage(a: CrossDomainParty, b: CrossDomainParty,
  * Eight bytes (a 64-bit value, max ~1.8e19) comfortably exceed 10^6, so the modulus is
  * load-bearing: it bounds the value to exactly 6 digits with a near-uniform
  * distribution. Width is fixed at 6 so the two phones compare equal-length strings. */
-export function crossDomainSas(a: CrossDomainParty, b: CrossDomainParty, pin: string): string {
-	const buf = crypto
-		.createHash("sha256")
-		.update(crossDomainSasPreimage(a, b, pin))
-		.digest();
+/**
+ * Reduce a SAS preimage to the displayed code: SHA-256, read the FIRST 8 digest bytes as a
+ * big-endian unsigned integer, reduce mod 10^6, zero-pad to 6 digits. The single reduction +
+ * width choice shared by every SAS derivation (cross-Domain and enroll); the per-derivation
+ * preimage builders stay specialized - they are the audit surface, this is the common kernel.
+ * The Kotlin twin's reduceToSas mirrors this exactly (pinned by the cross-runtime vectors).
+ */
+function reduceToSas(preimage: Buffer): string {
+	const buf = crypto.createHash("sha256").update(preimage).digest();
 	let n = 0n;
 	for (let i = 0; i < 8; i++) n = (n << 8n) | BigInt(buf[i]);
 	return (n % SAS_MODULUS).toString(10).padStart(SAS_DIGITS, "0");
+}
+
+export function crossDomainSas(a: CrossDomainParty, b: CrossDomainParty, pin: string): string {
+	return reduceToSas(crossDomainSasPreimage(a, b, pin));
 }
 
 ////////////////////////////////
@@ -245,11 +253,5 @@ export function enrollSasPreimage(admin: EnrollParty, enrollee: EnrollParty, pin
  * the owner-anchored role-tagged preimage. Computed PHONE-SIDE only (evie never computes it);
  * the two humans compare the two phones' codes in person. */
 export function enrollSas(admin: EnrollParty, enrollee: EnrollParty, pin: string): string {
-	const buf = crypto
-		.createHash("sha256")
-		.update(enrollSasPreimage(admin, enrollee, pin))
-		.digest();
-	let n = 0n;
-	for (let i = 0; i < 8; i++) n = (n << 8n) | BigInt(buf[i]);
-	return (n % SAS_MODULUS).toString(10).padStart(SAS_DIGITS, "0");
+	return reduceToSas(enrollSasPreimage(admin, enrollee, pin));
 }
