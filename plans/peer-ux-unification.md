@@ -233,18 +233,24 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
         shares + settles the jobs for those Domains; `ChatRepository.untrustOwner` submits it after the local
         friend-graph removal. Idempotent, console-sealed. The RELAY-edge revoke (the owner-signed tombstone's
         Router half) is still TODO - it is entangled (needs the peer's domains, which the roster strips).
+    - [DONE, sb f8d73d2] **DISCRIMINATED share target backend + transport.** `CrossDomainShareTarget`
+      ({kind:domain}|{kind:everyone_trusted}) codegen'd sealed; the share/unshare ops + the list-shares entry
+      carry it. The store keys by (session, target); the gate's `isSharedTo`/`sharesFor` take an `isLinked`
+      predicate (built once in index.ts from `crossDomainPeers`) so an everyone-trusted share resolves LIVE to
+      "any requesting Domain whose owner is a linked peer" - can NEVER reach an unlinked Domain (the safety
+      invariant, tested). `dropDomain` drops only specific-Domain records. Android transport:
+      `setShareEveryoneTrusted` + `sessionsSharedToEveryone`. Gates green (TS 695 + Android + R8). REMAINING: the
+      share-MODE picker UI (Private / Everyone-I-trust / Specific) - the transport is ready; wire it where the
+      existing per-peer share checkmarks live (`Federation.kt`) or the Users-surface kebab.
     - [NEXT, the remaining UX-lap slices - all gateway-side / large, best as focused passes]:
-      (a) **DISCRIMINATED share target** ({kind:domain}|{kind:everyone-trusted}) on `CrossDomainShareEntry` + the
-      share ops + the gateway gate (`crossDomainShareState.isSharedTo`) + the "everyone I trust" helper (the
-      gateway derives "trusted owners" from `crossDomainPeers`' `friendOwnerSignPub`, so an everyone-trusted share
-      matches any requesting Domain whose owner is in the peer set). The kebab's "Manage shares". TOUCHES THE
-      RELAY GATE (security-sensitive) - do as a focused pass. (b) the untrust RELAY-edge revoke + the link console
-      op (the tombstone's Router half). (c) the **renames + UI restructure** (the Users surface absorbs the
-      Federation hub's MY NETWORK / PEERS / GUEST NETWORKS; retire "Federation"/"Peer"-as-noun). (d) **Refactor A
-      slice 2** (the gateway storage re-key: crossDomainShareState/Peers owner-keyed - the multi-Domain
-      robustness fix). The FINAL slice = the dead-code cleanup pass (Final scouting bucket F - note CLAUDE.md says
-      the evie_* proxy is intentionally KEPT, so confirm before removing). Landmarks: `XDomainLink`, `enrollSas`,
-      `cross_domain_unlink`/`cross_domain_untrust`, `crossDomainShareState`, `CrossDomainPeers.removeByOwner`.
+      (a) the **share-mode picker UI** (consumes the transport above). (b) the untrust RELAY-edge revoke + the
+      link console op (the tombstone's Router half). (c) the **renames + UI restructure** (the Users surface
+      absorbs the Federation hub's MY NETWORK / PEERS / GUEST NETWORKS; retire "Federation"/"Peer"-as-noun). (d)
+      **Refactor A slice 2** (the gateway storage re-key: crossDomainShareState/Peers owner-keyed - the
+      multi-Domain robustness fix). The FINAL slice = the dead-code cleanup pass (Final scouting bucket F - note
+      CLAUDE.md says the evie_* proxy is intentionally KEPT, so confirm before removing). Landmarks: `XDomainLink`,
+      `enrollSas`, `cross_domain_unlink`/`cross_domain_untrust`, `crossDomainShareState`,
+      `CrossDomainPeers.removeByOwner`.
     - **Roster evie landmarks (grounding for the aggregation, found this stretch):** presence = evie's
       `BridgeServer.gatewayConnections: Map<domainId, Map<gatewayId, ConnectionId>>` (a Domain with a live
       gateway conn is online). Per-Domain name + owner live in the `EnrollmentState` in the federation Secret
