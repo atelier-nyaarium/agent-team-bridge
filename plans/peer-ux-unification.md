@@ -173,9 +173,16 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
       proof+freshness+replay, the ConsoleBridgeServer `roster` intake + 4 intake tests). Visibility = Q1 "full
       roster": a console admitted in ANY Domain on the evie sees EVERY rooted Domain (membership-gated, no
       per-row predicate); a row is {ownerSignPub, operatorName, online} only (no gatewayId/box/domainId). To
-      render: `ChatRepository.fetchRoster()` returns the `RosterMember` rows; build the Users screen on it.
-    - [NEXT] (a) the **Users Compose SCREEN** consuming `fetchRoster()` (replaces Federation's split sections;
-      name + presence dot + Trusted badge + fingerprint derived from ownerSignPub; the per-row kebab). (b) The
+      render: `ChatRepository.fetchRoster()` returns the `RosterMember` rows.
+    - [DONE, commit e938011] **Basic Users SCREEN** (`Users.kt`, `UsersScreen`): fetches `fetchRoster()` and
+      renders each member (name + a "you" tag + the owner fingerprint + a presence dot), loading + opaque-reject
+      handled; reachable from the Federation hub via a "Users" entry. The RICHER surface is the remaining Phase-4
+      work: the Trusted badge + per-row kebab + the arm-trust flow + share control - all of which need the trust
+      state RECONCILED onto owner identity (today the local trust/share state is domain-keyed - linkedDomains /
+      crossDomainShareState - while the roster + enroll edges are owner-keyed; reconcile before the badge/kebab).
+    - [NEXT] (a) the **richer Users surface**: Trusted badge + per-row kebab (Manage shares / Untrust; Trust on
+      untrusted) + the dual admin-vs-user view, building on `UsersScreen`. Needs the owner-keyed trust-state
+      reconciliation noted above. (b) The
       **PENDING-TRUST op** (arm/cancel/poll, keyed by TARGET owner; server-side routing, no token/gatewayId in a
       row) - the arm+highlight trust flow. (c) The **DISCRIMINATED share target**
       ({kind:domain}|{kind:everyone-trusted}) on `CrossDomainShareEntry` + the share ops + the gateway gate
