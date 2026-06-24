@@ -88,11 +88,11 @@ object CrossDomainLink {
 	 * start sharing) - the gap that otherwise dead-locked the post-link flow. Discovery supplies the
 	 * session count + presence; a peer present ONLY in the peer set shows zero sessions / offline.
 	 * The home Domain is excluded from both inputs. Sorted by domainId for a stable list. */
-	fun mergeLinkedDomains(teams: List<Team>, peerDomains: Set<String>, home: String): List<LinkedDomain> {
+	fun mergeLinkedDomains(teams: List<Team>, peerOwners: Map<String, String>, home: String): List<LinkedDomain> {
 		val byDomain = teams
 			.filter { !it.domainId.isNullOrEmpty() && it.domainId != home }
 			.groupBy { it.domainId!! }
-		val domains = byDomain.keys + peerDomains.filter { it != home }
+		val domains = byDomain.keys + peerOwners.keys.filter { it != home }
 		return domains
 			.map { domainId ->
 				val sessions = byDomain[domainId].orEmpty()
@@ -104,6 +104,8 @@ object CrossDomainLink {
 					operatorName = sessions.firstNotNullOfOrNull { it.operatorName?.ifEmpty { null } },
 					sessionCount = sessions.size,
 					online = sessions.any { it.status == "online" },
+					// The owner from the cross-Domain peer set; null for a discovery-only Domain.
+					ownerSignPub = peerOwners[domainId],
 				)
 			}
 			.sortedBy { it.operatorName ?: it.domainId }

@@ -205,7 +205,7 @@ class FriendOnboardingTest {
 				team("home-gw/app", "home"),
 				team("carol-gw/lib", "carol", status = "online", operatorName = "Carol"),
 			),
-			peerDomains = setOf("carol"),
+			peerOwners = mapOf("carol" to "carol-owner"),
 			home = "home",
 		)
 		assertEquals(1, peers.size)
@@ -219,7 +219,7 @@ class FriendOnboardingTest {
 		// falls back to the opaque domainId.
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = emptyList(),
-			peerDomains = setOf("dave"),
+			peerOwners = mapOf("dave" to "dave-owner"),
 			home = "home",
 		)
 		assertEquals(1, peers.size)

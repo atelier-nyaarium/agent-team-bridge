@@ -57,7 +57,7 @@ class CrossDomainLinkTest {
 		// is offline / shared nothing back). It MUST still appear so PeerDetail is reachable.
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = listOf(team("home-gw/app", "home")),
-			peerDomains = setOf("bob"),
+			peerOwners = mapOf("bob" to "bob-owner"),
 			home = "home",
 		)
 		assertEquals(1, peers.size)
@@ -75,7 +75,7 @@ class CrossDomainLinkTest {
 				team("home-gw/app", "home"),
 				team("carol-gw/lib", "carol", status = "online"),
 			),
-			peerDomains = setOf("carol", "dave"),
+			peerOwners = mapOf("carol" to "carol-owner", "dave" to "dave-owner"),
 			home = "home",
 		)
 		assertEquals(listOf("carol", "dave"), peers.map { it.domainId }) // sorted, no dupes
@@ -92,7 +92,7 @@ class CrossDomainLinkTest {
 		// A home-tagged session and the home Domain id in the peer set must never list as a peer.
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = listOf(team("home-gw/app", "home"), team("home-gw/api", null)),
-			peerDomains = setOf("home"),
+			peerOwners = mapOf("home" to "home-owner"),
 			home = "home",
 		)
 		assertTrue("home is never a peer", peers.isEmpty())
@@ -103,7 +103,7 @@ class CrossDomainLinkTest {
 		// An empty peer set (relay roster unavailable) must not blank a peer discovery already found.
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = listOf(team("erin-gw/svc", "erin", status = "online")),
-			peerDomains = emptySet(),
+			peerOwners = emptyMap(),
 			home = "home",
 		)
 		assertEquals(listOf("erin"), peers.map { it.domainId })

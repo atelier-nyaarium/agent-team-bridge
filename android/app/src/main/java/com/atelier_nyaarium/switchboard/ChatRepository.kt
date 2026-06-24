@@ -65,7 +65,15 @@ data class EnrollDelivery(val admitted: Boolean, val message: String, val pasteB
  * network display name (their self-set operator name, propagated over discovery - shown instead of
  * the opaque domainId when known), how many of its sessions are visible to me, and whether any is
  * online. `operatorName` is null until a discovery session for the peer carries it. */
-data class LinkedDomain(val domainId: String, val operatorName: String?, val sessionCount: Int, val online: Boolean)
+data class LinkedDomain(
+	val domainId: String,
+	val operatorName: String?,
+	val sessionCount: Int,
+	val online: Boolean,
+	// The friend OWNER's signing key (from the cross-Domain peer set), so a linked Domain joins to the
+	// owner-keyed roster. Null for a Domain seen only via discovery (no peer entry yet).
+	val ownerSignPub: String?,
+)
 
 /** A requester-side pairing in flight: the one-time pin the requester minted (passed back to
  * confirm) and the Gateway's request result (the SAS + both sides' keys). */
@@ -159,7 +167,7 @@ data class ChatState(
 	 * so a freshly-linked peer is visible (and its detail reachable) even while its gateway is
 	 * offline and has shared nothing back - the gap that otherwise dead-locks the post-link sharing
 	 * flow. Refreshed alongside teams; an empty set just falls back to discovery-only. */
-	val linkedPeerDomains: Set<String> = emptySet(),
+	val linkedPeerOwners: Map<String, String> = emptyMap(),
 	/** This owner's own network display name (the operator name), for the profile field and the
 	 * MY NETWORK card. Seeded from the local cache and refreshed from discovery's home-session
 	 * operatorName; empty until the owner sets one. */
@@ -1198,7 +1206,7 @@ class ChatRepository(
 	 * the gap that otherwise dead-locked the post-link sharing flow. Discovery still supplies the
 	 * session count + presence; a peer present only in the peer set shows zero sessions / offline. */
 	fun linkedDomains(): List<LinkedDomain> =
-		CrossDomainLink.mergeLinkedDomains(_state.value.teams, _state.value.linkedPeerDomains, localDomainId())
+		CrossDomainLink.mergeLinkedDomains(_state.value.teams, _state.value.linkedPeerOwners, localDomainId())
 
 	/** Refresh the linked-peer roster from the home Gateway's cross-Domain peer set into state, so
 	 * linkedDomains() can union it with discovery. Best-effort: a relay failure keeps the prior set
@@ -1207,8 +1215,9 @@ class ChatRepository(
 	suspend fun refreshLinkedPeers() = withContext(Dispatchers.IO) {
 		runCatching { client().crossDomainListPeers() }
 			.onSuccess { result ->
-				val domains = result.peers.map { it.domainId }.filter { it.isNotEmpty() }.toSet()
-				_state.update { it.copy(linkedPeerDomains = domains) }
+				// domainId -> friend owner key (a Domain may run several gateways under one owner; last wins).
+				val owners = result.peers.filter { it.domainId.isNotEmpty() }.associate { it.domainId to it.ownerSignPub }
+				_state.update { it.copy(linkedPeerOwners = owners) }
 			}
 	}
 
