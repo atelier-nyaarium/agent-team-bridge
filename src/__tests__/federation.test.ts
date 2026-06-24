@@ -286,7 +286,7 @@ function memShareState(shared: Array<[string, string]> = []): RelayShareState & 
  * RelayShareState mock above does not have) in a fresh tmp dir, seeded with shares. */
 function memShareStateStore(shared: Array<[string, string]> = []): CrossDomainShareState {
 	const s = new CrossDomainShareState(path.join(os.tmpdir(), `fed-xd-share-${Math.random().toString(36).slice(2)}`));
-	for (const [sessionTarget, domainId] of shared) s.share(sessionTarget, domainId);
+	for (const [sessionTarget, domainId] of shared) s.share(sessionTarget, { kind: "domain", domainId });
 	return s;
 }
 
@@ -1525,8 +1525,8 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 		const share = new CrossDomainShareState(
 			path.join(os.tmpdir(), `fed-sweep-${Math.random().toString(36).slice(2)}`),
 		);
-		share.share("bob-gw/lib", "alice"); // will be kept by a RECENTLY-ACTIVE thread
-		share.share("bob-gw/old", "alice"); // stale, thread-less -> dropped
+		share.share("bob-gw/lib", { kind: "domain", domainId: "alice" }); // will be kept by a RECENTLY-ACTIVE thread
+		share.share("bob-gw/old", { kind: "domain", domainId: "alice" }); // stale, thread-less -> dropped
 
 		// Sweep far in the future so BOTH shares are past their absence TTL. The live thread's
 		// anchor is pinned recent relative to that sweep instant (ongoing traffic refreshes
@@ -1539,8 +1539,8 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 
 		const dropped = share.sweep(sweepNow, THIRTY_DAYS_MS, isLive);
 		expect(dropped).toBe(1); // bob-gw/old only
-		expect(share.isSharedTo("bob-gw/lib", "alice")).toBe(true); // recent thread kept it
-		expect(share.isSharedTo("bob-gw/old", "alice")).toBe(false); // stale, forgotten
+		expect(share.isSharedTo("bob-gw/lib", "alice", () => true)).toBe(true); // recent thread kept it
+		expect(share.isSharedTo("bob-gw/old", "alice", () => true)).toBe(false); // stale, forgotten
 	});
 
 	// Fix 3 regression: isLive must mean RECENTLY ACTIVE, not "ever touched". The OLD predicate
@@ -1557,7 +1557,7 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 		const share = new CrossDomainShareState(
 			path.join(os.tmpdir(), `fed-stale-${Math.random().toString(36).slice(2)}`),
 		);
-		share.share("bob-gw/lib", "alice"); // lastSeenAt ~= base, so it is past TTL at sweepNow
+		share.share("bob-gw/lib", { kind: "domain", domainId: "alice" }); // lastSeenAt ~= base, so it is past TTL at sweepNow
 
 		// A persistent cross-Domain anchor that last saw traffic at `base` (its createdAt), so by
 		// sweepNow it is older than the recency window: it must NOT suppress the forget.
@@ -1566,7 +1566,7 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 		expect(isLiveFor(store, peers, "bob-gw", sweepNow)("bob-gw/lib")).toBe(false);
 		const dropped = share.sweep(sweepNow, THIRTY_DAYS_MS, isLiveFor(store, peers, "bob-gw", sweepNow));
 		expect(dropped).toBe(1);
-		expect(share.isSharedTo("bob-gw/lib", "alice")).toBe(false);
+		expect(share.isSharedTo("bob-gw/lib", "alice", () => true)).toBe(false);
 
 		// Contrast: an anchor touched recently (createdAt at sweepNow) still suppresses the forget.
 		const live = new PendingJobStore<ResponsePayload>();

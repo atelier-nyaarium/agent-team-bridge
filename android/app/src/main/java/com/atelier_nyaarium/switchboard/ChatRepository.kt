@@ -1618,17 +1618,46 @@ class ChatRepository(
 		error("Timed out waiting for the other phone ($label). Make sure you are both on this screen, then rescan.")
 	}
 
-	/** This owner's current per-session shares as (sessionTarget, domainId) pairs, so the UI can
-	 * render the share checkmarks. */
+	/** This owner's current per-session SPECIFIC-Domain shares as (sessionTarget, domainId) pairs, so
+	 * the per-peer checkmark UI can render them (everyone-trusted shares are a separate mode). */
 	suspend fun crossDomainShares(): Result<Set<Pair<String, String>>> = withContext(Dispatchers.IO) {
-		runCatching { client().crossDomainListShares().shares.map { it.sessionTarget to it.domainId }.toSet() }
+		runCatching {
+			client().crossDomainListShares().shares
+				.mapNotNull { e ->
+					(e.target as? com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.Domain)?.let {
+						e.sessionTarget to it.domainId
+					}
+				}
+				.toSet()
+		}
 	}
 
-	/** Toggle a local session's share to a friend Domain (the checkmark IS the consent). */
+	/** The sessions shared to EVERYONE the owner trusts (the Users-surface share mode). */
+	suspend fun sessionsSharedToEveryone(): Result<Set<String>> = withContext(Dispatchers.IO) {
+		runCatching {
+			client().crossDomainListShares().shares
+				.filter { it.target is com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.EveryoneTrusted }
+				.map { it.sessionTarget }
+				.toSet()
+		}
+	}
+
+	/** Toggle a local session's share to a specific friend Domain (the checkmark IS the consent). */
 	suspend fun setCrossDomainShare(sessionTarget: String, domainId: String, shared: Boolean): Result<Unit> =
 		withContext(Dispatchers.IO) {
 			runCatching {
-				if (shared) client().crossDomainShare(sessionTarget, domainId) else client().crossDomainUnshare(sessionTarget, domainId)
+				val target = com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.Domain(domainId)
+				if (shared) client().crossDomainShare(sessionTarget, target) else client().crossDomainUnshare(sessionTarget, target)
+				Unit
+			}
+		}
+
+	/** Toggle a local session's share to EVERYONE the owner trusts (the live-trust-set audience). */
+	suspend fun setShareEveryoneTrusted(sessionTarget: String, shared: Boolean): Result<Unit> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				val target = com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.EveryoneTrusted
+				if (shared) client().crossDomainShare(sessionTarget, target) else client().crossDomainUnshare(sessionTarget, target)
 				Unit
 			}
 		}

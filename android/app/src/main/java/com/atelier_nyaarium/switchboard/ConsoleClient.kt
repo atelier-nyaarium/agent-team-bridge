@@ -32,6 +32,7 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainListenResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainListenStateResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainRequestResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainShareResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnlinkResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnshareResult
 import com.atelier_nyaarium.switchboard.proto.GatewayTransport
@@ -791,13 +792,24 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	fun crossDomainCancel(listeningToken: String? = null, pin: String? = null): CrossDomainCancelResult =
 		resultOf(relay(ConsoleOp.CrossDomainCancel(listeningToken = listeningToken, pin = pin)), "cross_domain_cancel")
 
-	/** Mark a local session shared to a linked friend Domain (the checkmark IS the consent). */
-	fun crossDomainShare(sessionTarget: String, domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainShareResult =
-		resultOf(relay(ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, domainId = domainId), opId), "cross_domain_share")
+	/** Mark a local session shared to an audience (a linked friend Domain, or everyone trusted). */
+	fun crossDomainShare(
+		sessionTarget: String,
+		target: CrossDomainShareTarget,
+		opId: String = UUID.randomUUID().toString(),
+	): CrossDomainShareResult =
+		resultOf(relay(ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, target = target), opId), "cross_domain_share")
 
-	/** Withdraw a local session's share to a friend Domain. */
-	fun crossDomainUnshare(sessionTarget: String, domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnshareResult =
-		resultOf(relay(ConsoleOp.CrossDomainUnshare(sessionTarget = sessionTarget, domainId = domainId), opId), "cross_domain_unshare")
+	/** Withdraw a local session's share from an audience. */
+	fun crossDomainUnshare(
+		sessionTarget: String,
+		target: CrossDomainShareTarget,
+		opId: String = UUID.randomUUID().toString(),
+	): CrossDomainUnshareResult =
+		resultOf(
+			relay(ConsoleOp.CrossDomainUnshare(sessionTarget = sessionTarget, target = target), opId),
+			"cross_domain_unshare",
+		)
 
 	/** This owner's current shares, so the UI can render the per-session checkmarks. */
 	fun crossDomainListShares(): CrossDomainListSharesResult =

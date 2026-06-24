@@ -9,6 +9,7 @@ import {
 	type CrossDomainListPeersResult,
 	type CrossDomainListSharesResult,
 	type CrossDomainRequestResult,
+	type CrossDomainShareTarget,
 	type CrossDomainUnlinkResult,
 	type MailboxInput,
 	type OpenedConsoleFrame,
@@ -135,18 +136,18 @@ export interface CrossDomainConsoleHandlers {
  * so the handler stays mockable and never imports the store class. `sessionTarget` is the
  * canonical `gateway/name` of a LOCAL session; `domainId` is a linked friend Domain. */
 export interface CrossDomainShareHandlers {
-	share: (sessionTarget: string, domainId: string) => void;
-	/** Withdraw a session's share to a friend Domain, returning whether a record was removed
+	share: (sessionTarget: string, target: CrossDomainShareTarget) => void;
+	/** Withdraw a session's share from an audience, returning whether a record was removed
 	 * (so the handler only expires in-flight jobs when the share actually changed). */
-	unshare: (sessionTarget: string, domainId: string) => boolean;
+	unshare: (sessionTarget: string, target: CrossDomainShareTarget) => boolean;
 	listShares: () => CrossDomainListSharesResult["shares"];
-	/** Actively settle any in-flight cross-Domain job for this (canonical session, friend
-	 * Domain) pair, so an already-accepted send's reply stops at the destination instead of
-	 * forwarding home after the share is withdrawn (the per-session counterpart of the
-	 * whole-Domain unlink expiry). Called after a successful unshare. */
-	expireSessionJobs: (sessionTarget: string, domainId: string) => void;
-	/** Whether the owner has a linked cross-Domain peer in this Domain (a share can only
-	 * target a Domain that has been linked through the handshake). */
+	/** Actively settle any in-flight cross-Domain job after a withdrawn share, so an already-accepted
+	 * send's reply stops at the destination instead of forwarding home. For a specific-Domain share
+	 * that one Domain; for an everyone-trusted share every currently-linked Domain (it reached them
+	 * all). Called after a successful unshare. */
+	expireSessionJobsForTarget: (sessionTarget: string, target: CrossDomainShareTarget) => void;
+	/** Whether the owner has a linked cross-Domain peer in this Domain (a specific-Domain share can
+	 * only target a Domain that has been linked through the handshake). */
 	isLinkedDomain: (domainId: string) => boolean;
 }
 
@@ -717,8 +718,8 @@ export function createConsoleHandler({
 				// Store under the CANONICAL gateway/name key, the same form the relay gate, the
 				// sweep, and discovery compare against; a bare-name share would otherwise never
 				// match and silently never take effect.
-				const canonicalTarget = await assertShareable(op.sessionTarget, op.domainId);
-				crossDomainShare.share(canonicalTarget, op.domainId);
+				const canonicalTarget = await assertShareable(op.sessionTarget, op.target);
+				crossDomainShare.share(canonicalTarget, op.target);
 				return { ok: true };
 			}
 
@@ -728,12 +729,11 @@ export function createConsoleHandler({
 				// session whose kind changed or a now-unlinked Domain can still be cleaned up.
 				// Canonicalize so an unshare keys identically to the share it withdraws.
 				const canonicalTarget = canonicalShareTarget(op.sessionTarget);
-				const removed = crossDomainShare.unshare(canonicalTarget, op.domainId);
-				// Un-share must bite in-flight too, not just on the next fresh send: settle any
-				// already-accepted cross-Domain job for this (session, friend) pair so its reply is
-				// dropped at the destination rather than forwarded home. Only when the share
-				// actually changed (an idempotent re-unshare has nothing in flight to close).
-				if (removed) crossDomainShare.expireSessionJobs(canonicalTarget, op.domainId);
+				const removed = crossDomainShare.unshare(canonicalTarget, op.target);
+				// Un-share must bite in-flight too, not just on the next fresh send: settle the
+				// already-accepted cross-Domain job(s) for this audience so the reply is dropped at the
+				// destination rather than forwarded home. Only when the share actually changed.
+				if (removed) crossDomainShare.expireSessionJobsForTarget(canonicalTarget, op.target);
 				return { ok: true };
 			}
 
@@ -781,17 +781,19 @@ export function createConsoleHandler({
 	 * "gateway", the cli "host", or a console-kind team) and the friend Domain must be one the
 	 * owner has actually linked. Resolves the kind from the local team registry the way teams()
 	 * classifies them. */
-	async function assertShareable(sessionTarget: string, domainId: string): Promise<string> {
-		if (!crossDomainShare?.isLinkedDomain(domainId)) {
-			throw new Error(`cannot share to "${domainId}": not a linked Domain`);
+	async function assertShareable(sessionTarget: string, target: CrossDomainShareTarget): Promise<string> {
+		// A SPECIFIC-Domain share must target a linked Domain; an EVERYONE-TRUSTED share is always valid
+		// (it reaches only linked Domains, resolved live at the gate), so it has no per-Domain check.
+		if (target.kind === "domain" && !crossDomainShare?.isLinkedDomain(target.domainId)) {
+			throw new Error(`cannot share to "${target.domainId}": not a linked Domain`);
 		}
 		const { gatewayId, name } = parseQualifiedTeam(sessionTarget);
 		if (gatewayId && gatewayId !== localGatewayId) {
 			throw new Error(`cannot share "${sessionTarget}": only local sessions can be shared`);
 		}
 		const teams = (await routes.teams().json()) as TeamInfo[];
-		const target = teams.find((t) => t.team === name);
-		if (!target || (target.kind !== "devcontainer" && target.kind !== "loose")) {
+		const team = teams.find((t) => t.team === name);
+		if (!team || (team.kind !== "devcontainer" && team.kind !== "loose")) {
 			throw new Error(`cannot share "${name}": only devcontainer and loose sessions can be shared`);
 		}
 		return TeamAddress.local(localGatewayId, name).canonical;

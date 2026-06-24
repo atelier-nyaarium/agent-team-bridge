@@ -62,6 +62,7 @@ import {
 	ConsoleRespondResultSchema,
 	ConsoleSendResultSchema,
 	ConsoleTmuxSendResultSchema,
+	CrossDomainShareTargetSchema,
 	GatewayBootstrapBundleSchema,
 	GatewayBootstrapFrameSchema,
 	GatewayTransportSchema,
@@ -84,6 +85,7 @@ const ROOTS: z.ZodType[] = [
 	ChannelFileSchema,
 	TeamInfoSchema,
 	MailboxEntrySchema,
+	CrossDomainShareTargetSchema,
 	ConsoleOpSchema,
 	ConsoleOpEnvelopeSchema,
 	ConsoleRelayFrameSchema,
@@ -127,7 +129,13 @@ const ROOTS: z.ZodType[] = [
 // the discriminator key is read from zod internals. EnrollOp is composed by the
 // console (owner enroll requests), so closure is safe; the scanned EnrollmentPayload
 // is DECODED and stays hand-parsed (forward-compatible) in the Android client.
-const SEALED_ROOTS = new Set(["ConsoleOp", "EnrollOp", "EnrollHandshakeOp", "TrustHandshakeOp"]);
+const SEALED_ROOTS = new Set([
+	"ConsoleOp",
+	"EnrollOp",
+	"EnrollHandshakeOp",
+	"TrustHandshakeOp",
+	"CrossDomainShareTarget",
+]);
 
 ////////////////////////////////
 //  zod -> cleaned JSON Schema (evie's conversion hygiene)

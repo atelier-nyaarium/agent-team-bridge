@@ -82,6 +82,21 @@ data class MailboxEntry(
 @Serializable
 @OptIn(ExperimentalSerializationApi::class)
 @JsonClassDiscriminator("kind")
+sealed class CrossDomainShareTarget {
+	@Serializable
+	@SerialName("domain")
+	data class Domain(
+		val domainId: String,
+	) : CrossDomainShareTarget()
+
+	@Serializable
+	@SerialName("everyone_trusted")
+	data object EveryoneTrusted : CrossDomainShareTarget()
+}
+
+@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("kind")
 sealed class ConsoleOp {
 	@Serializable
 	@SerialName("register")
@@ -187,14 +202,14 @@ sealed class ConsoleOp {
 	@SerialName("cross_domain_share")
 	data class CrossDomainShare(
 		val sessionTarget: String,
-		val domainId: String,
+		val target: CrossDomainShareTarget,
 	) : ConsoleOp()
 
 	@Serializable
 	@SerialName("cross_domain_unshare")
 	data class CrossDomainUnshare(
 		val sessionTarget: String,
-		val domainId: String,
+		val target: CrossDomainShareTarget,
 	) : ConsoleOp()
 
 	@Serializable
@@ -687,7 +702,7 @@ data class CrossDomainListSharesResult(
 @Serializable
 data class CrossDomainShareEntry(
 	val sessionTarget: String,
-	val domainId: String,
+	val target: CrossDomainShareTarget,
 )
 
 @Serializable

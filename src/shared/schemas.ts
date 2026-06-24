@@ -150,6 +150,18 @@ export const TeamInfoSchema = z
 //  blind-cast it. The console-protocol.ts types derive from these schemas via
 //  z.infer - this file is the single truth for the console wire.
 
+/** The audience a session is shared to: a SPECIFIC linked Domain, or EVERYONE the owner trusts. The
+ * `everyone_trusted` target carries NO id - the gateway resolves it at the gate to "any requesting
+ * Domain whose owner is in the cross-Domain peer set", so it tracks the live trust set (a newly linked
+ * friend is included, an untrusted one drops out) without re-sharing. A share never reaches a Domain
+ * the owner has not linked, whichever target. */
+export const CrossDomainShareTargetSchema = z
+	.discriminatedUnion("kind", [
+		z.object({ kind: z.literal("domain"), domainId: z.string().min(1).max(64) }),
+		z.object({ kind: z.literal("everyone_trusted") }),
+	])
+	.meta({ id: "CrossDomainShareTarget" });
+
 export const ConsoleOpSchema = z
 	.discriminatedUnion("kind", [
 		z.object({
@@ -301,20 +313,20 @@ export const ConsoleOpSchema = z
 		// Authenticated by the existing console seal (the frame is opened + the signer verified
 		// before dispatch), so there is no second signature scheme.
 
-		// Mark a local session shared to a friend Domain. Idempotent on `(sessionTarget,
-		// domainId)`: a re-share refreshes the share rather than duplicating it.
+		// Mark a local session shared to an audience (a specific linked Domain, or everyone the owner
+		// trusts). Idempotent on `(sessionTarget, target)`: a re-share refreshes rather than duplicating.
 		z.object({
 			kind: z.literal("cross_domain_share"),
 			// The canonical `gateway/name` target of the local session to share.
 			sessionTarget: z.string().min(1).max(128),
-			// The friend Domain (slug) this session is shared TO. Must be a linked Domain.
-			domainId: z.string().min(1).max(64),
+			// Who the session is shared TO (a linked Domain, or everyone trusted).
+			target: CrossDomainShareTargetSchema,
 		}),
-		// Withdraw a local session's share to a friend Domain.
+		// Withdraw a local session's share from an audience.
 		z.object({
 			kind: z.literal("cross_domain_unshare"),
 			sessionTarget: z.string().min(1).max(128),
-			domainId: z.string().min(1).max(64),
+			target: CrossDomainShareTargetSchema,
 		}),
 		// Read this owner's current shares (so the console can render the share checkmarks).
 		z.object({ kind: z.literal("cross_domain_list_shares") }),
@@ -653,13 +665,13 @@ export const CrossDomainUnshareResultSchema = z
 	})
 	.meta({ id: "CrossDomainUnshareResult" });
 
-// One share row in a list_shares result: a local session offered to one friend Domain.
-// Named (.meta id) so the codegen emits it as a Kotlin nested class instead of erroring
-// on an inline array-of-object.
+// One share row in a list_shares result: a local session offered to an audience (a specific linked
+// Domain, or everyone trusted). Named (.meta id) so the codegen emits it as a Kotlin nested class
+// instead of erroring on an inline array-of-object.
 export const CrossDomainShareEntrySchema = z
 	.object({
 		sessionTarget: z.string(),
-		domainId: z.string(),
+		target: CrossDomainShareTargetSchema,
 	})
 	.meta({ id: "CrossDomainShareEntry" });
 

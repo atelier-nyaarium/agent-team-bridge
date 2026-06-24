@@ -21,6 +21,7 @@ import type {
 	CrossDomainListSharesResultSchema,
 	CrossDomainRequestResultSchema,
 	CrossDomainShareResultSchema,
+	CrossDomainShareTargetSchema,
 	CrossDomainUnlinkResultSchema,
 	CrossDomainUnshareResultSchema,
 	MailboxEntrySchema,
@@ -53,6 +54,7 @@ export const CONSOLE_PROTOCOL_VERSION = 1;
 
 export type ConsoleOp = z.infer<typeof ConsoleOpSchema>;
 export type ConsoleOpKind = ConsoleOp["kind"];
+export type CrossDomainShareTarget = z.infer<typeof CrossDomainShareTargetSchema>;
 export type ConsoleRegisterOp = Extract<ConsoleOp, { kind: "register" }>;
 export type ConsoleListTeamsOp = Extract<ConsoleOp, { kind: "list_teams" }>;
 export type ConsoleSendOp = Extract<ConsoleOp, { kind: "send" }>;
