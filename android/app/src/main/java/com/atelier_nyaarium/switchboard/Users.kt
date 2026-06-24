@@ -61,8 +61,10 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
+fun UsersScreen(repo: ChatRepository, onBack: () -> Unit, onEnrollUser: () -> Unit) {
 	val scope = rememberCoroutineScope()
+	// Only the home operator (the admin) enrolls users; a guest/user sees no enroll button.
+	val isAdmin = remember { repo.isHomeOperator() }
 	// One-shot fetch on entry. Null = loading; a Result carries the rows or evie's opaque reason.
 	var outcome by remember { mutableStateOf<Result<List<RosterMember>>?>(null) }
 	val myOwner = remember { repo.ownerSignPub() }
@@ -135,6 +137,9 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
 					Text("fingerprint", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 					Text(myFingerprint, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
 				}
+			}
+			if (isAdmin) {
+				Button(onClick = onEnrollUser, modifier = Modifier.fillMaxWidth()) { Text("Enroll a user") }
 			}
 
 			SectionLabel("PEOPLE")

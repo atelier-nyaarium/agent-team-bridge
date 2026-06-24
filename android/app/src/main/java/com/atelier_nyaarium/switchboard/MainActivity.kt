@@ -411,7 +411,14 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onTenant = { hostTenant = it },
 			)
 		showUsers ->
-			UsersScreen(repo = repo, onBack = { showUsers = false })
+			UsersScreen(
+				repo = repo,
+				onBack = { showUsers = false },
+				onEnrollUser = {
+					showUsers = false
+					showHostNetworks = true
+				},
+			)
 		showFederation ->
 			FederationScreen(
 				repo = repo,
