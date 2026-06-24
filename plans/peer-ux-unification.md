@@ -1,7 +1,15 @@
-# Peer UX unification (questionaire in progress)
+# Peer UX unification (BUILD COMPLETE)
 
-**Status:** Questionaire lap 3, post deep-analysis. The full team-roster reversal is owner-approved.
-Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is in Amendment notes (bottom).
+**Status: THE UX LAP IS COMPLETE** end to end across all three runtimes, built to the design mockups, all gates
+green (switchboard lint + 695 tests + no codegen drift; Android testDebugUnitTest + assembleRelease R8; evie
+lint + 243 bridge tests). Unpushed - the evie rollout + gateway rebuild + on-device round-trip are the owner's
+deploy walls. Shipped: FLOW-2 roster trust, the discriminated share target + "everyone I trust" with the live
+safety invariant, the owner-keyed untrust (local + Router-edge revoke), refactor A (the owner-keyed friend
+graph + the LinkedDomain owner thread-through), the Users surface as the home (YOU/PEOPLE + kebab + Sharing
+screen + enroll button, Federation hub retired), and the crust-sweep fixes (sync-leaf, bridgeSend). Remaining
+crust is INTENTIONALLY KEPT (the evie_* proxy, per CLAUDE.md) or a tested-but-currently-unused primitive (the
+owner-keyed XDomainUntrust tombstone - the relay revoke uses per-Domain revocations instead). The build-progress
+log below is the audit trail.
 
 ## Build progress (audited-implementation cycle)
 
