@@ -96,6 +96,22 @@ class ProvisionOpsTest {
 	}
 
 	@Test
+	fun rosterRequestCanonicalBytesMatchNode() {
+		val v = vectors()
+		val vec = v["roster"]!!.jsonObject
+		val value = vec["value"]!!.jsonObject
+		val signer = value["signerSignPub"]!!.jsonPrimitive.content
+		val bytes = ProvisionOpsCrypto.rosterRequestSigningBytes(
+			signer,
+			value["proofAt"]!!.jsonPrimitive.content.toLong(),
+			value["nonce"]!!.jsonPrimitive.content,
+		)
+		CanonicalBytes.assertCanonicalBytes(bytes, vec)
+		// The node-signed proof verifies under the signer key (the twin reproduces it).
+		assertTrue(Crypto.verify(bytes, vec["signature"]!!.jsonPrimitive.content, signer))
+	}
+
+	@Test
 	fun verifiesNodeSignedOperatorOps() {
 		val v = vectors()
 		val operatorSignPub = v["operatorSignPub"]!!.jsonPrimitive.content
