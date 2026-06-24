@@ -37,15 +37,29 @@ data class CrossDomainParty(
 	val gatewayId: String,
 )
 
+/**
+ * One owner side of an enroll handshake: the owner root signing key, the owner box key (the
+ * seal anchor for owner-to-owner trust), and the Domain id. No gateway fields - the enrollee
+ * is gateway-less at enroll time. Twin of EnrollParty in cross-domain-sas.ts.
+ */
+data class EnrollParty(
+	val ownerSignPub: String,
+	val ownerBoxPub: String,
+	val domainId: String,
+)
+
 ////////////////////////////////
 //  Class
 
 object SasCrypto {
-	// The displayed safety code is this many decimal digits. Widened so the residual
-	// online-guess space (after the commitment closes the offline grind) is 1-in-10^12.
-	private const val SAS_DIGITS = 12
+	// The displayed safety code is this many decimal digits, shown as two groups of three.
+	// The code is a yes/no COMPARE, so its ceiling is human rubber-stamping (which rises with
+	// length), not the crypto residual: six digits keeps the post-commitment online-guess space
+	// negligible (1-in-10^6) while staying easy to compare faithfully.
+	private const val SAS_DIGITS = 6
 
-	// 10^12, the modulus the digest reduces to. A BigInteger because it exceeds 2^32.
+	// 10^6 (computed from SAS_DIGITS), the modulus the digest reduces to. A BigInteger because
+	// the digest value `n` it reduces is a BigInteger (the 8 digest bytes reach ~1.8e19).
 	private val SAS_MODULUS: BigInteger = BigInteger.TEN.pow(SAS_DIGITS)
 
 	////////////////////////////////
@@ -112,25 +126,77 @@ object SasCrypto {
 
 	/**
 	 * The displayed safety code: SHA-256 the canonical preimage, read the FIRST 8 digest
-	 * bytes as a big-endian unsigned integer, reduce mod 10^12, and zero-pad to 12
-	 * decimal digits.
+	 * bytes as a big-endian unsigned integer, reduce mod 10^6, and zero-pad to 6
+	 * decimal digits (displayed as two groups of three).
 	 *
 	 *   1. preimage = crossDomainSasPreimage(a, b, pin)   (UTF-8 bytes)
 	 *   2. digest   = SHA-256(preimage)                   (32 bytes)
 	 *   3. n        = digest[0..7] as a big-endian unsigned integer
-	 *   4. code     = (n mod 10^12) zero-padded to 12 digits
+	 *   4. code     = (n mod 10^6) zero-padded to 6 digits
 	 */
-	fun crossDomainSas(a: CrossDomainParty, b: CrossDomainParty, pin: String): String {
-		val digest = sha256(crossDomainSasPreimage(a, b, pin))
+	fun crossDomainSas(a: CrossDomainParty, b: CrossDomainParty, pin: String): String =
+		reduceToSas(crossDomainSasPreimage(a, b, pin))
+
+	////////////////////////////////
+	//  Enroll SAS (owner-anchored, role-tagged)
+	//
+	//  Twin of the enroll* helpers in cross-domain-sas.ts: the FLOW-1 in-person admin<->enrollee
+	//  compare, brokered by an UNTRUSTED evie. Owner-anchored (no gateway keys) + FIXED-SLOT
+	//  role-tagged (ADMIN / ENROLLEE blocks), so the preimage is injective and evie - which never
+	//  computes this code - cannot transpose the blocks. The 6-digit reduction + salted commitment
+	//  match crossDomainSas; only the preimage shape + version literals differ. Pinned by
+	//  tests/fixtures/enroll-sas/vectors.json. Role is "ADMIN" (showed the QR) or "ENROLLEE" (scanned).
+
+	fun enrollCommitmentPreimage(party: EnrollParty, role: String, salt: String): ByteArray =
+		listOf(
+			"ENROLL_COMMIT_V1",
+			role,
+			party.ownerSignPub,
+			party.ownerBoxPub,
+			party.domainId,
+			salt,
+		).joinToString("\n").toByteArray(Charsets.UTF_8)
+
+	fun enrollCommitment(party: EnrollParty, role: String, salt: String): String =
+		Base64.getEncoder().encodeToString(sha256(enrollCommitmentPreimage(party, role, salt)))
+
+	fun verifyEnrollCommitment(commitment: String, party: EnrollParty, role: String, salt: String): Boolean =
+		enrollCommitment(party, role, salt) == commitment
+
+	fun enrollSasPreimage(admin: EnrollParty, enrollee: EnrollParty, pin: String): ByteArray =
+		listOf(
+			"ENROLL_SAS_V1",
+			"ADMIN",
+			admin.ownerSignPub,
+			admin.ownerBoxPub,
+			admin.domainId,
+			"ENROLLEE",
+			enrollee.ownerSignPub,
+			enrollee.ownerBoxPub,
+			enrollee.domainId,
+			pin,
+		).joinToString("\n").toByteArray(Charsets.UTF_8)
+
+	fun enrollSas(admin: EnrollParty, enrollee: EnrollParty, pin: String): String =
+		reduceToSas(enrollSasPreimage(admin, enrollee, pin))
+
+	////////////////////////////////
+	//  Functions & Helpers
+
+	/**
+	 * Reduce a SAS preimage to the displayed code: SHA-256, read the FIRST 8 digest bytes as a
+	 * big-endian unsigned integer, reduce mod 10^6, zero-pad to 6 digits. The single reduction +
+	 * width choice shared by every SAS derivation (cross-Domain and enroll); the per-derivation
+	 * preimage builders stay specialized - they are the audit surface, this is the common kernel.
+	 */
+	private fun reduceToSas(preimage: ByteArray): String {
+		val digest = sha256(preimage)
 		var n = BigInteger.ZERO
 		for (i in 0 until 8) {
 			n = n.shiftLeft(8).or(BigInteger.valueOf(digest[i].toLong() and 0xFFL))
 		}
 		return n.mod(SAS_MODULUS).toString(10).padStart(SAS_DIGITS, '0')
 	}
-
-	////////////////////////////////
-	//  Functions & Helpers
 
 	// A fresh MessageDigest per call: the instance is stateful, so it must not be reused
 	// across calls without reset.

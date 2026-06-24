@@ -3,6 +3,15 @@ package com.atelier_nyaarium.switchboard
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
+import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
+import com.atelier_nyaarium.switchboard.proto.RosterRequest
+import com.atelier_nyaarium.switchboard.proto.RosterResult
+import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
+import com.atelier_nyaarium.switchboard.proto.TrustHandshakeResult
+import com.atelier_nyaarium.switchboard.proto.TrustPendingRequest
+import com.atelier_nyaarium.switchboard.proto.TrustPendingResult
+import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeRef
+import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeResult
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleGatewayTransportResult
@@ -23,6 +32,7 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainListenResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainListenStateResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainRequestResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainShareResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnlinkResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnshareResult
 import com.atelier_nyaarium.switchboard.proto.GatewayTransport
@@ -85,6 +95,10 @@ data class Provisioning(
 	 * app first-roots with. Absent on an ordinary (already-rooted) operator blob, which just
 	 * provisions the console. The presence of this field IS what distinguishes the two paths. */
 	val pendingTenant: PendingTenantRef? = null,
+	/** Present on a friend ENROLL invite blob (alongside pendingTenant): the admin's owner keys +
+	 * Domain and the handshakeId + pin that seed the in-person FLOW-1 trust compare. The enrollee's
+	 * app reads it after first-rooting to run the ceremony as ENROLLEE. Absent on a plain invite. */
+	val enrollHandshake: EnrollHandshakeRef? = null,
 ) {
 	companion object {
 		fun parse(blob: String): Provisioning {
@@ -106,6 +120,7 @@ data class Provisioning(
 				gatewaySignPub = p.gatewaySignPub ?: "",
 				gatewayBoxPub = p.gatewayBoxPub ?: "",
 				pendingTenant = p.pendingTenant,
+				enrollHandshake = p.enrollHandshake,
 			)
 		}
 	}
@@ -169,6 +184,26 @@ private data class BounceBody(val error: String? = null, val retryable: Boolean 
  * `enrollOp` routing to the enrollment coordinator. */
 @Serializable
 private data class FirstRootEnvelope(val firstRoot: SignedFirstRoot)
+
+/** The enroll-handshake POST body: a top-level `enrollHandshake` field routes to evie's
+ * console-bridge enroll-handshake broker (a dumb relay, never to a Gateway), the twin of
+ * `firstRoot` routing. */
+@Serializable
+private data class EnrollHandshakeEnvelope(val enrollHandshake: EnrollHandshakeOp)
+
+/** The roster POST body: a top-level `roster` field routes to evie's cross-tenant roster handler
+ * (answered AT evie, which aggregates across Domains a gateway cannot see), the twin of `firstRoot`
+ * routing. */
+@Serializable
+private data class RosterEnvelope(val roster: RosterRequest)
+
+/** The FLOW-2 trust-rendezvous POST bodies: top-level fields routing to evie's trust broker / pending
+ * query (the twins of `roster` routing). */
+@Serializable
+private data class TrustHandshakeEnvelope(val trustHandshake: TrustHandshakeOp)
+
+@Serializable
+private data class TrustPendingEnvelope(val trustPending: TrustPendingRequest)
 
 /** evie's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the
  * minted one-time invite `nonce` (the operator's app builds the friend's QR from it). The wire
@@ -406,6 +441,131 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
+	/** Drive one enroll-handshake frame through evie's broker (POST { enrollHandshake }). evie relays
+	 * the peer's frame back (or pending); the phone computes the SAS locally. Pre-admission like
+	 * firstRoot - the fresh enrollee has no admission. A terminal failure is ok=false + error; ok=true
+	 * with the peer frame absent means keep polling (re-send the same step). */
+	fun enrollHandshake(op: EnrollHandshakeOp): EnrollHandshakeResult {
+		val envelope = EnrollHandshakeEnvelope(op)
+		val req = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(wireJson.encodeToString(EnrollHandshakeEnvelope.serializer(), envelope).toRequestBody(JSON))
+			.build()
+		DebugLog.log("EnrollHs", "POST $proxyBase/relay step=${op::class.simpleName}")
+		val resp =
+			try {
+				client.newCall(req).execute()
+			} catch (e: Exception) {
+				DebugLog.log("EnrollHs", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+				throw e
+			}
+		resp.use {
+			val text = resp.body?.string().orEmpty()
+			DebugLog.log("EnrollHs", "resp HTTP ${resp.code} ${text.take(160)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<EnrollHandshakeResult>(text) }
+					.getOrElse { EnrollHandshakeResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<EnrollHandshakeResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return EnrollHandshakeResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
+	/** Fetch the cross-tenant roster (the Users surface) from evie. POST { roster } evie-direct, like
+	 * firstRoot - evie aggregates across Domains a gateway cannot see and answers itself. The request
+	 * carries the console's signed ROSTER proof; a non-member comes back ok=false (opaque). */
+	fun roster(req: RosterRequest): RosterResult {
+		val request = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(wireJson.encodeToString(RosterEnvelope.serializer(), RosterEnvelope(req)).toRequestBody(JSON))
+			.build()
+		val resp =
+			try {
+				client.newCall(request).execute()
+			} catch (e: Exception) {
+				DebugLog.log("Roster", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+				throw e
+			}
+		resp.use {
+			val text = resp.body?.string().orEmpty()
+			DebugLog.log("Roster", "resp HTTP ${resp.code} ${text.take(160)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<RosterResult>(text) }
+					.getOrElse { RosterResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<RosterResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return RosterResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
+	/** Broker a FLOW-2 trust-rendezvous frame (arm/join/reveal/cancel) at evie. POST { trustHandshake }
+	 * evie-direct (the dumb broker; no sealing, like the enroll handshake). */
+	fun trustHandshake(op: TrustHandshakeOp): TrustHandshakeResult {
+		val request = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(
+				wireJson.encodeToString(TrustHandshakeEnvelope.serializer(), TrustHandshakeEnvelope(op)).toRequestBody(JSON),
+			)
+			.build()
+		val resp =
+			try {
+				client.newCall(request).execute()
+			} catch (e: Exception) {
+				DebugLog.log("Trust", "handshake transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+				throw e
+			}
+		resp.use {
+			val text = resp.body?.string().orEmpty()
+			DebugLog.log("Trust", "handshake HTTP ${resp.code} ${text.take(160)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<TrustHandshakeResult>(text) }
+					.getOrElse { TrustHandshakeResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<TrustHandshakeResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return TrustHandshakeResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
+	/** Query "who armed trust toward me?" at evie (the highlight). POST { trustPending } with the
+	 * owner-signed proof; evie returns the armed rendezvous indexed under this owner key. */
+	fun trustPending(req: TrustPendingRequest): TrustPendingResult {
+		val request = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(
+				wireJson.encodeToString(TrustPendingEnvelope.serializer(), TrustPendingEnvelope(req)).toRequestBody(JSON),
+			)
+			.build()
+		val resp =
+			try {
+				client.newCall(request).execute()
+			} catch (e: Exception) {
+				DebugLog.log("Trust", "pending transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+				throw e
+			}
+		resp.use {
+			val text = resp.body?.string().orEmpty()
+			DebugLog.log("Trust", "pending HTTP ${resp.code} ${text.take(160)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<TrustPendingResult>(text) }
+					.getOrElse { TrustPendingResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<TrustPendingResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return TrustPendingResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
 	/** Submit an operator-signed provision_tenant enroll op and decode the minted one-time invite
 	 * nonce evie returns (the operator's app builds the friend's QR from it). Same evie-direct path
 	 * as enroll(); the only difference is the richer result decode (the wire EnrollResult omits the
@@ -585,7 +745,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		resultOf(relay(ConsoleOp.CrossDomainListen), "cross_domain_listen")
 
 	/** REQUESTER: pair against the friend's listening token. The Gateway runs the full
-	 * commit-reveal exchange and returns the 12-digit SAS plus both sides' keys. */
+	 * commit-reveal exchange and returns the 6-digit SAS plus both sides' keys. */
 	fun crossDomainRequest(
 		listeningToken: String,
 		pin: String,
@@ -632,13 +792,24 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	fun crossDomainCancel(listeningToken: String? = null, pin: String? = null): CrossDomainCancelResult =
 		resultOf(relay(ConsoleOp.CrossDomainCancel(listeningToken = listeningToken, pin = pin)), "cross_domain_cancel")
 
-	/** Mark a local session shared to a linked friend Domain (the checkmark IS the consent). */
-	fun crossDomainShare(sessionTarget: String, domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainShareResult =
-		resultOf(relay(ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, domainId = domainId), opId), "cross_domain_share")
+	/** Mark a local session shared to an audience (a linked friend Domain, or everyone trusted). */
+	fun crossDomainShare(
+		sessionTarget: String,
+		target: CrossDomainShareTarget,
+		opId: String = UUID.randomUUID().toString(),
+	): CrossDomainShareResult =
+		resultOf(relay(ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, target = target), opId), "cross_domain_share")
 
-	/** Withdraw a local session's share to a friend Domain. */
-	fun crossDomainUnshare(sessionTarget: String, domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnshareResult =
-		resultOf(relay(ConsoleOp.CrossDomainUnshare(sessionTarget = sessionTarget, domainId = domainId), opId), "cross_domain_unshare")
+	/** Withdraw a local session's share from an audience. */
+	fun crossDomainUnshare(
+		sessionTarget: String,
+		target: CrossDomainShareTarget,
+		opId: String = UUID.randomUUID().toString(),
+	): CrossDomainUnshareResult =
+		resultOf(
+			relay(ConsoleOp.CrossDomainUnshare(sessionTarget = sessionTarget, target = target), opId),
+			"cross_domain_unshare",
+		)
 
 	/** This owner's current shares, so the UI can render the per-session checkmarks. */
 	fun crossDomainListShares(): CrossDomainListSharesResult =
@@ -653,6 +824,10 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	/** Unlink a friend Domain: drop the local trust + share state for it. */
 	fun crossDomainUnlink(domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
 		resultOf(relay(ConsoleOp.CrossDomainUnlink(domainId = domainId), opId), "cross_domain_unlink")
+
+	/** Untrust a PERSON by owner key: drop the local peer + share state for every Domain they own. */
+	fun crossDomainUntrust(ownerSignPub: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
+		resultOf(relay(ConsoleOp.CrossDomainUntrust(ownerSignPub = ownerSignPub), opId), "cross_domain_untrust")
 
 	companion object {
 		private val JSON = "application/json".toMediaType()

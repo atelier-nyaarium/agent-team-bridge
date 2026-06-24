@@ -150,6 +150,18 @@ export const TeamInfoSchema = z
 //  blind-cast it. The console-protocol.ts types derive from these schemas via
 //  z.infer - this file is the single truth for the console wire.
 
+/** The audience a session is shared to: a SPECIFIC linked Domain, or EVERYONE the owner trusts. The
+ * `everyone_trusted` target carries NO id - the gateway resolves it at the gate to "any requesting
+ * Domain whose owner is in the cross-Domain peer set", so it tracks the live trust set (a newly linked
+ * friend is included, an untrusted one drops out) without re-sharing. A share never reaches a Domain
+ * the owner has not linked, whichever target. */
+export const CrossDomainShareTargetSchema = z
+	.discriminatedUnion("kind", [
+		z.object({ kind: z.literal("domain"), domainId: z.string().min(1).max(64) }),
+		z.object({ kind: z.literal("everyone_trusted") }),
+	])
+	.meta({ id: "CrossDomainShareTarget" });
+
 export const ConsoleOpSchema = z
 	.discriminatedUnion("kind", [
 		z.object({
@@ -301,20 +313,20 @@ export const ConsoleOpSchema = z
 		// Authenticated by the existing console seal (the frame is opened + the signer verified
 		// before dispatch), so there is no second signature scheme.
 
-		// Mark a local session shared to a friend Domain. Idempotent on `(sessionTarget,
-		// domainId)`: a re-share refreshes the share rather than duplicating it.
+		// Mark a local session shared to an audience (a specific linked Domain, or everyone the owner
+		// trusts). Idempotent on `(sessionTarget, target)`: a re-share refreshes rather than duplicating.
 		z.object({
 			kind: z.literal("cross_domain_share"),
 			// The canonical `gateway/name` target of the local session to share.
 			sessionTarget: z.string().min(1).max(128),
-			// The friend Domain (slug) this session is shared TO. Must be a linked Domain.
-			domainId: z.string().min(1).max(64),
+			// Who the session is shared TO (a linked Domain, or everyone trusted).
+			target: CrossDomainShareTargetSchema,
 		}),
-		// Withdraw a local session's share to a friend Domain.
+		// Withdraw a local session's share from an audience.
 		z.object({
 			kind: z.literal("cross_domain_unshare"),
 			sessionTarget: z.string().min(1).max(128),
-			domainId: z.string().min(1).max(64),
+			target: CrossDomainShareTargetSchema,
 		}),
 		// Read this owner's current shares (so the console can render the share checkmarks).
 		z.object({ kind: z.literal("cross_domain_list_shares") }),
@@ -333,6 +345,16 @@ export const ConsoleOpSchema = z
 			kind: z.literal("cross_domain_unlink"),
 			// The friend Domain (slug) to unlink.
 			domainId: z.string().min(1).max(64),
+		}),
+		// Untrust a PERSON by owner key: drop the LOCAL trust + share state for EVERY peer Gateway owned
+		// by that owner (across all their Domains) + every share to those Domains - the owner-keyed sibling
+		// of cross_domain_unlink (which forgets one Domain at a time). Console-sealed auth (an admitted
+		// console of this owner's Domain). The phone separately owner-signs the untrust tombstone for the
+		// Router-side relay-edge revoke; this op is the local-state half.
+		z.object({
+			kind: z.literal("cross_domain_untrust"),
+			// The friend OWNER's raw Ed25519 signing key (base64) to forget.
+			ownerSignPub: z.string().min(1).max(128),
 		}),
 	])
 	.meta({ id: "ConsoleOp" });
@@ -595,7 +617,7 @@ export const CrossDomainCancelResultSchema = z
 // The receiver's view of its listening window (the cross_domain_listen_state poll). Before a
 // pairing arrives it carries only pairingArrived=false (+ the window's expiry, or expired=true
 // once the window is gone). Once the requester's commit-reveal lands the pairing, it carries the
-// SAS the receiver computed (the same 12-digit value the requester sees) plus the friend's keys
+// SAS the receiver computed (the same 6-digit value the requester sees) plus the friend's keys
 // the receiver phone must owner-sign its link over: the four friend* keys + the friend Domain /
 // Gateway ids. The phone transitions to the type-the-code compare on pairingArrived.
 export const CrossDomainListenStateResultSchema = z
@@ -606,7 +628,7 @@ export const CrossDomainListenStateResultSchema = z
 		// back to cross_domain_confirm so the gateway resolves this window's pairing (the receiver
 		// never minted it; it learns it here, E2E sealed). Single-use, consumed at confirm.
 		pin: z.string().optional(),
-		// The 12-digit safety code, present only when pairingArrived. Identical to the requester's
+		// The 6-digit safety code, present only when pairingArrived. Identical to the requester's
 		// so the two humans compare the same value.
 		sas: z.string().optional(),
 		// The friend's keys the receiver must owner-sign a link over (present only when arrived):
@@ -643,13 +665,13 @@ export const CrossDomainUnshareResultSchema = z
 	})
 	.meta({ id: "CrossDomainUnshareResult" });
 
-// One share row in a list_shares result: a local session offered to one friend Domain.
-// Named (.meta id) so the codegen emits it as a Kotlin nested class instead of erroring
-// on an inline array-of-object.
+// One share row in a list_shares result: a local session offered to an audience (a specific linked
+// Domain, or everyone trusted). Named (.meta id) so the codegen emits it as a Kotlin nested class
+// instead of erroring on an inline array-of-object.
 export const CrossDomainShareEntrySchema = z
 	.object({
 		sessionTarget: z.string(),
-		domainId: z.string(),
+		target: CrossDomainShareTargetSchema,
 	})
 	.meta({ id: "CrossDomainShareEntry" });
 
@@ -667,6 +689,9 @@ export const CrossDomainPeerEntrySchema = z
 	.object({
 		domainId: z.string(),
 		gatewayId: z.string(),
+		// The friend OWNER's signing key (base64) - the owner-keyed identity the Users surface joins on
+		// (a roster row is keyed by owner, so this maps a linked Domain back to the person who owns it).
+		ownerSignPub: z.string(),
 	})
 	.meta({ id: "CrossDomainPeerEntry" });
 
@@ -765,6 +790,22 @@ export const PendingTenantRefSchema = z
 	})
 	.meta({ id: "PendingTenantRef" });
 
+// The admin-enroll handshake seed the QR carries (present only on an ADMIN-ENROLL invite
+// blob). Named (.meta id) so the codegen emits it as a nested Kotlin class.
+export const EnrollHandshakeRefSchema = z
+	.object({
+		// The admin's OWNER keys + Domain, OOB-authenticated by the in-person scan; the friend
+		// folds them into its local enroll SAS (ENROLL_SAS_V1).
+		adminOwnerSignPub: b64Field(),
+		adminOwnerBoxPub: b64Field(),
+		adminDomainId: slugField(),
+		// The unguessable id naming the evie broker window both phones drive.
+		handshakeId: b64Field(),
+		// The one-time shared secret both phones fold into the SAS but NEVER send to evie.
+		pin: b64Field(),
+	})
+	.meta({ id: "EnrollHandshakeRef" });
+
 export const ProvisioningSchema = z
 	.object({
 		apiUrl: z.string().min(1),
@@ -800,6 +841,10 @@ export const ProvisioningSchema = z
 		// nonce) iff it is present, else it just provisions the console. Absent for a re-provision
 		// of an already-rooted Domain.
 		pendingTenant: PendingTenantRefSchema.optional(),
+		// Present only on an ADMIN-ENROLL invite blob: the seed for the in-person mutual 6-digit
+		// compare the friend runs AFTER first-root (see EnrollHandshakeRef). Absent for a plain
+		// provision / re-provision.
+		enrollHandshake: EnrollHandshakeRefSchema.optional(),
 	})
 	.meta({ id: "Provisioning" });
 

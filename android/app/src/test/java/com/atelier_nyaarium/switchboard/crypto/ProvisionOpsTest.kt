@@ -96,6 +96,45 @@ class ProvisionOpsTest {
 	}
 
 	@Test
+	fun rosterRequestCanonicalBytesMatchNode() {
+		val v = vectors()
+		val vec = v["roster"]!!.jsonObject
+		val value = vec["value"]!!.jsonObject
+		val signer = value["signerSignPub"]!!.jsonPrimitive.content
+		val bytes = ProvisionOpsCrypto.rosterRequestSigningBytes(
+			signer,
+			value["proofAt"]!!.jsonPrimitive.content.toLong(),
+			value["nonce"]!!.jsonPrimitive.content,
+		)
+		CanonicalBytes.assertCanonicalBytes(bytes, vec)
+		// The node-signed proof verifies under the signer key (the twin reproduces it).
+		assertTrue(Crypto.verify(bytes, vec["signature"]!!.jsonPrimitive.content, signer))
+	}
+
+	@Test
+	fun trustPendingCanonicalBytesMatchNode() {
+		val v = vectors()
+		val vec = v["trustPending"]!!.jsonObject
+		val value = vec["value"]!!.jsonObject
+		val signer = value["signerSignPub"]!!.jsonPrimitive.content
+		val bytes = ProvisionOpsCrypto.trustPendingSigningBytes(
+			signer,
+			value["proofAt"]!!.jsonPrimitive.content.toLong(),
+			value["nonce"]!!.jsonPrimitive.content,
+		)
+		CanonicalBytes.assertCanonicalBytes(bytes, vec)
+		assertTrue(Crypto.verify(bytes, vec["signature"]!!.jsonPrimitive.content, signer))
+		// The distinct version tag means the ROSTER_V1 proof never verifies as a trust-pending query.
+		val rosterSig = ProvisionOpsCrypto.signRosterRequest(
+			signer,
+			value["proofAt"]!!.jsonPrimitive.content.toLong(),
+			value["nonce"]!!.jsonPrimitive.content,
+			v["friendOwnerSignPriv"]!!.jsonPrimitive.content,
+		)
+		assertFalse(Crypto.verify(bytes, rosterSig, signer))
+	}
+
+	@Test
 	fun verifiesNodeSignedOperatorOps() {
 		val v = vectors()
 		val operatorSignPub = v["operatorSignPub"]!!.jsonPrimitive.content

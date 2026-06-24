@@ -488,7 +488,7 @@ describe("CrossDomainHandshakeCoordinator - requester role", () => {
 		const sendReveal = vi.fn(async () => ({
 			receiverParty: partyOf(receiver),
 			receiverSalt: salt,
-			sas: "000000000000", // a forged / wrong code
+			sas: "000000", // a forged / wrong code
 		}));
 		const coord = new CrossDomainHandshakeCoordinator({
 			self: selfFor(requester),

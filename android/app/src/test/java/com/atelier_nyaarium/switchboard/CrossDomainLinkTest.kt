@@ -11,38 +11,38 @@ import org.junit.Test
  * code (with or without the grouping a human reads aloud) must.
  */
 class CrossDomainLinkTest {
-	private val sas = "421793081234" // a 12-digit code, the width SasCrypto emits
+	private val sas = "847291" // a 6-digit code, the width SasCrypto emits
 
 	@Test
 	fun exactMatchUnlocks() {
-		assertTrue(CrossDomainLink.sasMatches(sas, "421793081234"))
+		assertTrue(CrossDomainLink.sasMatches(sas, "847291"))
 	}
 
 	@Test
 	fun groupingWhitespaceIsIgnored() {
-		// The human reads "42 17 93 08 12 34"; the typed grouping must not defeat the compare.
-		assertTrue(CrossDomainLink.sasMatches(sas, "42 17 93 08 12 34"))
-		assertTrue(CrossDomainLink.sasMatches(sas, " 4217-9308-1234 "))
+		// The human reads "847 291"; the typed grouping must not defeat the compare.
+		assertTrue(CrossDomainLink.sasMatches(sas, "847 291"))
+		assertTrue(CrossDomainLink.sasMatches(sas, " 847-291 "))
 	}
 
 	@Test
 	fun wrongDigitsDoNotMatch() {
-		assertFalse(CrossDomainLink.sasMatches(sas, "421793081235"))
-		assertFalse(CrossDomainLink.sasMatches(sas, "999999999999"))
+		assertFalse(CrossDomainLink.sasMatches(sas, "847292"))
+		assertFalse(CrossDomainLink.sasMatches(sas, "999999"))
 	}
 
 	@Test
 	fun partialOrEmptyNeverMatches() {
 		assertFalse(CrossDomainLink.sasMatches(sas, ""))
-		assertFalse(CrossDomainLink.sasMatches(sas, "4217"))
-		assertFalse(CrossDomainLink.sasMatches(sas, "42179308123")) // 11 digits
+		assertFalse(CrossDomainLink.sasMatches(sas, "847"))
+		assertFalse(CrossDomainLink.sasMatches(sas, "84729")) // 5 digits
 		// A correct prefix plus extra digits is the wrong length, so it must not match.
-		assertFalse(CrossDomainLink.sasMatches(sas, "4217930812345"))
+		assertFalse(CrossDomainLink.sasMatches(sas, "8472910"))
 	}
 
 	@Test
 	fun normalizeKeepsOnlyDigits() {
-		assertEquals("421793081234", CrossDomainLink.normalizeTypedSas(" 4217-9308 1234 "))
+		assertEquals("847291", CrossDomainLink.normalizeTypedSas(" 847-291 "))
 		assertEquals("", CrossDomainLink.normalizeTypedSas("abc -- "))
 	}
 
@@ -57,7 +57,7 @@ class CrossDomainLinkTest {
 		// is offline / shared nothing back). It MUST still appear so PeerDetail is reachable.
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = listOf(team("home-gw/app", "home")),
-			peerDomains = setOf("bob"),
+			peerOwners = mapOf("bob" to "bob-owner"),
 			home = "home",
 		)
 		assertEquals(1, peers.size)
@@ -75,7 +75,7 @@ class CrossDomainLinkTest {
 				team("home-gw/app", "home"),
 				team("carol-gw/lib", "carol", status = "online"),
 			),
-			peerDomains = setOf("carol", "dave"),
+			peerOwners = mapOf("carol" to "carol-owner", "dave" to "dave-owner"),
 			home = "home",
 		)
 		assertEquals(listOf("carol", "dave"), peers.map { it.domainId }) // sorted, no dupes
@@ -92,7 +92,7 @@ class CrossDomainLinkTest {
 		// A home-tagged session and the home Domain id in the peer set must never list as a peer.
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = listOf(team("home-gw/app", "home"), team("home-gw/api", null)),
-			peerDomains = setOf("home"),
+			peerOwners = mapOf("home" to "home-owner"),
 			home = "home",
 		)
 		assertTrue("home is never a peer", peers.isEmpty())
@@ -103,7 +103,7 @@ class CrossDomainLinkTest {
 		// An empty peer set (relay roster unavailable) must not blank a peer discovery already found.
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = listOf(team("erin-gw/svc", "erin", status = "online")),
-			peerDomains = emptySet(),
+			peerOwners = emptyMap(),
 			home = "home",
 		)
 		assertEquals(listOf("erin"), peers.map { it.domainId })

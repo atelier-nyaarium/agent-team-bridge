@@ -239,6 +239,15 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putBoolean(KEY_FIRST_ROOTED, value).apply()
 		}
 
+	/** Whether this device has completed the FLOW-1 in-person enroll compare for its invite. Gates
+	 * the enrollee's "Verify with the admin" prompt so it stops offering once the trust edge is
+	 * recorded. Cleared by a re-import (a fresh invite is a fresh ceremony). */
+	var enrollCeremonyDone: Boolean
+		get() = prefs.getBoolean(KEY_ENROLL_CEREMONY_DONE, false)
+		set(value) {
+			prefs.edit().putBoolean(KEY_ENROLL_CEREMONY_DONE, value).apply()
+		}
+
 	/** This owner's own network display name (the operator name), cached locally so the profile
 	 * shows it without a round-trip. The authoritative copy lives on the Domain at evie; this is
 	 * refreshed from discovery (the home session's operatorName) and updated on a local rename. */
@@ -255,6 +264,15 @@ class ProvisioningStore(context: Context) {
 	fun saveHostedTenants(json: String) = prefs.edit().putString(KEY_HOSTED_TENANTS, json).apply()
 
 	fun loadHostedTenants(): String? = prefs.getString(KEY_HOSTED_TENANTS, null)
+
+	/** The set of OWNER signing keys this owner trusts (the friend graph, keyed by ownerSignPub - the
+	 * owner-keyed trust the Users surface reads). Written on every completed trust ceremony (enroll or
+	 * link) and on untrust; persisted as a JSON array of base64 owner keys. This is the friend edge
+	 * (recorded even for a gateway-less person, per the design), distinct from the gateway-side
+	 * relay-affinity edges that enable actual cross-Domain traffic. */
+	fun saveTrustedOwners(json: String) = prefs.edit().putString(KEY_TRUSTED_OWNERS, json).apply()
+
+	fun loadTrustedOwners(): String? = prefs.getString(KEY_TRUSTED_OWNERS, null)
 
 	/** A Gateway's signing + box public keys, resolved from the owner-verified keyring at
 	 * seal time (the phone-anchored model does not persist per-Gateway keys). */
@@ -273,8 +291,10 @@ class ProvisioningStore(context: Context) {
 		const val KEY_DOMAIN_VERSION = "federation_domain_version"
 		const val KEY_CONSOLE_ADMITTED = "federation_console_admitted"
 		const val KEY_FIRST_ROOTED = "federation_first_rooted"
+		const val KEY_ENROLL_CEREMONY_DONE = "federation_enroll_ceremony_done"
 		const val KEY_OPERATOR_NAME = "federation_operator_name"
 		const val KEY_HOSTED_TENANTS = "federation_hosted_tenants"
+		const val KEY_TRUSTED_OWNERS = "federation_trusted_owners"
 		const val KEY_STTS_URL = "stts_url"
 		const val KEY_STTS_KEY = "stts_key"
 		const val KEY_STTS_MIGRATED = "stts_migrated"
@@ -297,7 +317,8 @@ class ProvisioningStore(context: Context) {
 		 * Clear (a privacy/correctness regression). The partition is pinned by a unit test. */
 		val PROVISIONING_KEYS = listOf(
 			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
-			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_OPERATOR_NAME, KEY_HOSTED_TENANTS,
+			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_OPERATOR_NAME, KEY_HOSTED_TENANTS,
+			KEY_TRUSTED_OWNERS,
 			KEY_THREADS, KEY_LABELS, KEY_DRAFTS, KEY_GATEWAY_ID, KEY_SYNC_EPOCH, KEY_SYNC_ACKED,
 			KEY_SYNC_DROPPED,
 		)

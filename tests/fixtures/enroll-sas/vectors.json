@@ -1,0 +1,136 @@
+{
+	"_comment": "Cross-runtime vectors for the owner-anchored ROLE-TAGGED enroll SAS (enroll* in cross-domain-sas.ts). Read by src/__tests__/enroll-sas.test.ts (TS) AND, in the Android pass, SasCryptoTest.kt (Kotlin). `sas` = 6 decimal digits (SHA-256 of the ENROLL_SAS_V1 preimage -> first 8 bytes big-endian BigInt -> mod 10^6 -> zero-pad 6). The preimage is FIXED-SLOT/role-tagged (ADMIN block, ENROLLEE block, pin), so it is NOT order-independent: swapping roles OR reassigning fields changes the code. A `commitment` is base64 SHA-256 of the ENROLL_COMMIT_V1 preimage over one party + role + salt.",
+	"cases": [
+		{
+			"admin": {
+				"ownerSignPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
+				"ownerBoxPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
+				"domainId": "home"
+			},
+			"enrollee": {
+				"ownerSignPub": "vZKKvkssEXBWu+b/uEOqj1mFP19NYc/MeZYmpyvXub4=",
+				"ownerBoxPub": "77DbDotF0RKGmi/WZNlZgDNs+ymsxEqfk3V450thWhk=",
+				"domainId": "kashia"
+			},
+			"pin": "pko5oj8QbOO/49b6qdHBKgXb",
+			"sas": "386368"
+		},
+		{
+			"admin": {
+				"ownerSignPub": "+O6mVvaXo35ecH1IlhJwWNoWoB9mJn7CfjeE3I7p8cU=",
+				"ownerBoxPub": "2iJezYvVA+FhBowOT3JAvCfFt3ds3yabFwYbvMUml6s=",
+				"domainId": "carol"
+			},
+			"enrollee": {
+				"ownerSignPub": "Yu7ms+ohgofnQu+F/KM4aAGGOn1Yo+7BUFoSqsx/x08=",
+				"ownerBoxPub": "vXj3i89l/WdfqnI2C8tCLJkCXBBluM/tVQF6SbWjpIE=",
+				"domainId": "dave"
+			},
+			"pin": "+4C01CnmqY2G/byi5MXvAGA5",
+			"sas": "518911"
+		}
+	],
+	"roleSwap": {
+		"_comment": "Swapping ADMIN and ENROLLEE roles yields a DIFFERENT code (role-fixed, NOT order-independent). differsFrom = cases[0].sas.",
+		"admin": {
+			"ownerSignPub": "vZKKvkssEXBWu+b/uEOqj1mFP19NYc/MeZYmpyvXub4=",
+			"ownerBoxPub": "77DbDotF0RKGmi/WZNlZgDNs+ymsxEqfk3V450thWhk=",
+			"domainId": "kashia"
+		},
+		"enrollee": {
+			"ownerSignPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
+			"ownerBoxPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
+			"domainId": "home"
+		},
+		"pin": "pko5oj8QbOO/49b6qdHBKgXb",
+		"sas": "087137",
+		"differsFrom": "386368"
+	},
+	"fieldReassign": {
+		"_comment": "Swapping ownerSignPub<->ownerBoxPub WITHIN the admin block changes the code (injective preimage; the red-team reassignment guard). differsFrom = cases[0].sas.",
+		"admin": {
+			"ownerSignPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
+			"ownerBoxPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
+			"domainId": "home"
+		},
+		"enrollee": {
+			"ownerSignPub": "vZKKvkssEXBWu+b/uEOqj1mFP19NYc/MeZYmpyvXub4=",
+			"ownerBoxPub": "77DbDotF0RKGmi/WZNlZgDNs+ymsxEqfk3V450thWhk=",
+			"domainId": "kashia"
+		},
+		"pin": "pko5oj8QbOO/49b6qdHBKgXb",
+		"sas": "477816",
+		"differsFrom": "386368"
+	},
+	"substitution": {
+		"_comment": "An evie-substituted enrollee box key changes the code (the residual MITM detector after commit-reveal). differsFrom = cases[0].sas.",
+		"admin": {
+			"ownerSignPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
+			"ownerBoxPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
+			"domainId": "home"
+		},
+		"enrollee": {
+			"ownerSignPub": "vZKKvkssEXBWu+b/uEOqj1mFP19NYc/MeZYmpyvXub4=",
+			"ownerBoxPub": "xMpiDK8vVweyuuHGa9iKrxvq3Dq6UWD+7cqWYkeAHhE=",
+			"domainId": "kashia"
+		},
+		"pin": "pko5oj8QbOO/49b6qdHBKgXb",
+		"sas": "503810",
+		"differsFrom": "386368"
+	},
+	"commitment": {
+		"_comment": "ENROLL_COMMIT_V1 over the admin party + role ADMIN + salt.",
+		"party": {
+			"ownerSignPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
+			"ownerBoxPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
+			"domainId": "home"
+		},
+		"role": "ADMIN",
+		"salt": "UThwxgYLE+16J6tbmeWnV+pE",
+		"commitment": "xiMrbvMIr75xgjQyF+Bli6TSlVs1sj6CNAu6Q+ZoTCE="
+	},
+	"commitmentRoleBinding": {
+		"_comment": "The SAME party + salt under role ENROLLEE yields a DIFFERENT commitment (role is bound). differsFrom = commitment.commitment.",
+		"party": {
+			"ownerSignPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
+			"ownerBoxPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
+			"domainId": "home"
+		},
+		"role": "ENROLLEE",
+		"salt": "UThwxgYLE+16J6tbmeWnV+pE",
+		"commitment": "SMNDFhDR+Iw2O9/+x/9sVUFkNQ5jy4/3O5XkBqa+4ls=",
+		"differsFrom": "xiMrbvMIr75xgjQyF+Bli6TSlVs1sj6CNAu6Q+ZoTCE="
+	},
+	"commitmentSaltBinding": {
+		"_comment": "The SAME party + role under a DIFFERENT salt yields a DIFFERENT commitment (salt hides the keys). differsFrom = commitment.commitment.",
+		"party": {
+			"ownerSignPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
+			"ownerBoxPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
+			"domainId": "home"
+		},
+		"role": "ADMIN",
+		"salt": "krVeJSLapBx2lgjp+Uq/fGtM",
+		"commitment": "hlE6BJhqc6RuAXHfDtg5HTsCt/7gFZeIm3WA4GWO//o=",
+		"differsFrom": "xiMrbvMIr75xgjQyF+Bli6TSlVs1sj6CNAu6Q+ZoTCE="
+	},
+	"handComputed": {
+		"_comment": "Tiny non-key strings so the test can assert the EXACT canonical preimages. The SAS preimage is the fixed-slot ADMIN/ENROLLEE block layout; the commitment preimage is role-tagged fixed-order.",
+		"admin": {
+			"ownerSignPub": "Aos",
+			"ownerBoxPub": "Aob",
+			"domainId": "ad"
+		},
+		"enrollee": {
+			"ownerSignPub": "Eos",
+			"ownerBoxPub": "Eob",
+			"domainId": "ed"
+		},
+		"pin": "pin-x",
+		"role": "ADMIN",
+		"salt": "salt-x",
+		"sasPreimage": "ENROLL_SAS_V1\nADMIN\nAos\nAob\nad\nENROLLEE\nEos\nEob\ned\npin-x",
+		"sas": "404506",
+		"commitmentPreimage": "ENROLL_COMMIT_V1\nADMIN\nAos\nAob\nad\nsalt-x",
+		"commitment": "zbY/gDjpai+Qw1pKyPgJdHi8K47K9xx9lx2csqiPFr4="
+	}
+}

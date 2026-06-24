@@ -14,9 +14,13 @@ import {
 } from "../shared/enrollment.js";
 import {
 	signXDomainLink,
+	signXDomainUntrust,
 	verifyXDomainLink,
+	verifyXDomainUntrust,
 	type XDomainLink,
+	type XDomainUntrust,
 	xDomainLinkSigningBytes,
+	xDomainUntrustSigningBytes,
 } from "../shared/federation-protocol.js";
 
 ////////////////////////////////
@@ -46,6 +50,7 @@ const vectors = JSON.parse(
 	edge: SignedVec<XDomainLinkEdge>;
 	revocation: SignedVec<XDomainLinkRevocation>;
 	link: SignedVec<XDomainLink>;
+	untrust: SignedVec<XDomainUntrust>;
 };
 
 describe("cross-Domain link-edge vectors", () => {
@@ -129,5 +134,30 @@ describe("cross-Domain link (gateway-key XDomainLink artifact) vectors", () => {
 	it("rejects the link under a different owner key", () => {
 		const forged = { ...signXDomainLink(vectors.link.value, ownerSignPriv, ownerSignPub), ownerSignPub: "AAAA" };
 		expect(verifyXDomainLink(forged, ownerSignPub)).toBe(false);
+	});
+});
+
+describe("cross-Domain untrust (owner-keyed tombstone) vectors", () => {
+	const { ownerSignPub, ownerSignPriv } = vectors;
+
+	it("reproduces the canonical XDOMAIN_UNTRUST_V1 signing bytes", () => {
+		const bytes = xDomainUntrustSigningBytes(vectors.untrust.value);
+		expect(bytes.toString("utf8")).toBe(vectors.untrust.signingBytes);
+		expect(bytes.toString("hex")).toBe(vectors.untrust.signingBytesHex);
+		expect(bytes.toString("base64")).toBe(vectors.untrust.signingBytesBase64);
+	});
+
+	it("reproduces the recorded untrust signature and verifies it under the owner key", () => {
+		const signed = signXDomainUntrust(vectors.untrust.value, ownerSignPriv, ownerSignPub);
+		expect(signed.signature).toBe(vectors.untrust.signature);
+		expect(verifyXDomainUntrust(signed, ownerSignPub)).toBe(true);
+	});
+
+	it("rejects the untrust under a different owner key", () => {
+		const forged = {
+			...signXDomainUntrust(vectors.untrust.value, ownerSignPriv, ownerSignPub),
+			ownerSignPub: "AAAA",
+		};
+		expect(verifyXDomainUntrust(forged, ownerSignPub)).toBe(false);
 	});
 });

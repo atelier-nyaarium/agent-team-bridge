@@ -59,12 +59,12 @@ sealed interface ConfirmOutcome {
 //  Functions & Helpers
 
 object CrossDomainLink {
-	/** A 12-digit SAS, the width SasCrypto emits. The UI rejects a typed code of any other
+	/** A 6-digit SAS, the width SasCrypto emits. The UI rejects a typed code of any other
 	 * length before comparing, so a partial entry never spuriously matches. */
-	const val SAS_DIGITS = 12
+	const val SAS_DIGITS = 6
 
 	/** Keep only the decimal digits of a human-typed code, so spaces / grouping the human added
-	 * while reading the code aloud ("42 17 93 ...") do not defeat the exact compare. */
+	 * while reading the code aloud ("847 291") do not defeat the exact compare. */
 	fun normalizeTypedSas(typed: String): String = typed.filter { it.isDigit() }
 
 	/** True iff the typed code, once stripped of grouping, is exactly the expected SAS. This is
@@ -88,11 +88,11 @@ object CrossDomainLink {
 	 * start sharing) - the gap that otherwise dead-locked the post-link flow. Discovery supplies the
 	 * session count + presence; a peer present ONLY in the peer set shows zero sessions / offline.
 	 * The home Domain is excluded from both inputs. Sorted by domainId for a stable list. */
-	fun mergeLinkedDomains(teams: List<Team>, peerDomains: Set<String>, home: String): List<LinkedDomain> {
+	fun mergeLinkedDomains(teams: List<Team>, peerOwners: Map<String, String>, home: String): List<LinkedDomain> {
 		val byDomain = teams
 			.filter { !it.domainId.isNullOrEmpty() && it.domainId != home }
 			.groupBy { it.domainId!! }
-		val domains = byDomain.keys + peerDomains.filter { it != home }
+		val domains = byDomain.keys + peerOwners.keys.filter { it != home }
 		return domains
 			.map { domainId ->
 				val sessions = byDomain[domainId].orEmpty()
@@ -104,6 +104,8 @@ object CrossDomainLink {
 					operatorName = sessions.firstNotNullOfOrNull { it.operatorName?.ifEmpty { null } },
 					sessionCount = sessions.size,
 					online = sessions.any { it.status == "online" },
+					// The owner from the cross-Domain peer set; null for a discovery-only Domain.
+					ownerSignPub = peerOwners[domainId],
 				)
 			}
 			.sortedBy { it.operatorName ?: it.domainId }

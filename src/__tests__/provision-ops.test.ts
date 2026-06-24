@@ -10,12 +10,16 @@ import {
 	provisionTenantSigningBytes,
 	type RemoveTenant,
 	removeTenantSigningBytes,
+	rosterRequestSigningBytes,
 	type SetOperatorName,
 	setOperatorNameSigningBytes,
 	signFirstRoot,
 	signProvisionTenant,
 	signRemoveTenant,
+	signRosterRequest,
 	signSetOperatorName,
+	signTrustPendingRequest,
+	trustPendingSigningBytes,
 	verifyFirstRoot,
 	verifyProvisionTenant,
 	verifyRemoveTenant,
@@ -57,6 +61,8 @@ const vectors = JSON.parse(
 	removal: SignedVec<RemoveTenant>;
 	firstRoot: SignedVec<FirstRoot>;
 	rename: SignedVec<SetOperatorName>;
+	roster: SignedVec<{ signerSignPub: string; proofAt: number; nonce: string }>;
+	trustPending: SignedVec<{ signerSignPub: string; proofAt: number; nonce: string }>;
 };
 
 describe("provision_tenant vectors (operator-signed)", () => {
@@ -238,5 +244,37 @@ describe("ProvisioningSchema pendingTenant (the pending-Domain discriminator)", 
 			ProvisioningSchema.safeParse({ ...base, pendingTenant: { domainId: "ok-domain", nonce: "not base64!" } })
 				.success,
 		).toBe(false);
+	});
+});
+
+describe("roster request proof vectors (console-signed)", () => {
+	it("reproduces the canonical ROSTER_V1 bytes + signature (cross-runtime pin)", () => {
+		const { signerSignPub, proofAt, nonce } = vectors.roster.value;
+		const bytes = rosterRequestSigningBytes(signerSignPub, proofAt, nonce);
+		assertCanonicalBytes(bytes, vectors.roster);
+		// Deterministic Ed25519: re-signing with the fixed key reproduces the pinned signature.
+		expect(signRosterRequest(signerSignPub, proofAt, nonce, vectors.friendOwnerSignPriv)).toBe(
+			vectors.roster.signature,
+		);
+		expect(verify(bytes, vectors.roster.signature, signerSignPub)).toBe(true);
+	});
+});
+
+describe("trust-pending proof vectors (owner-signed, FLOW-2)", () => {
+	it("reproduces the canonical TRUST_PENDING_V1 bytes + signature (cross-runtime pin)", () => {
+		const { signerSignPub, proofAt, nonce } = vectors.trustPending.value;
+		const bytes = trustPendingSigningBytes(signerSignPub, proofAt, nonce);
+		assertCanonicalBytes(bytes, vectors.trustPending);
+		expect(signTrustPendingRequest(signerSignPub, proofAt, nonce, vectors.friendOwnerSignPriv)).toBe(
+			vectors.trustPending.signature,
+		);
+		expect(verify(bytes, vectors.trustPending.signature, signerSignPub)).toBe(true);
+	});
+
+	it("the distinct version tag stops a roster proof from verifying as a trust-pending query", () => {
+		// Same key + proofAt + nonce, but ROSTER_V1 vs TRUST_PENDING_V1, so neither proof crosses over.
+		const { signerSignPub, proofAt, nonce } = vectors.trustPending.value;
+		const rosterSig = signRosterRequest(signerSignPub, proofAt, nonce, vectors.friendOwnerSignPriv);
+		expect(verify(trustPendingSigningBytes(signerSignPub, proofAt, nonce), rosterSig, signerSignPub)).toBe(false);
 	});
 });

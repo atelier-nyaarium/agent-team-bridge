@@ -34,7 +34,20 @@ import {
 	GATEWAY_QUALIFIER_SEP,
 	NOTICE_SESSION_PREFIX,
 } from "../src/shared/console-protocol.js";
-import { EnrollOpSchema, EnrollResultSchema, PendingTenantSchema } from "../src/shared/enrollment.js";
+import {
+	EnrollHandshakeOpSchema,
+	EnrollHandshakeResultSchema,
+	EnrollOpSchema,
+	EnrollResultSchema,
+	PendingTenantSchema,
+	RosterRequestSchema,
+	RosterResultSchema,
+	TrustHandshakeOpSchema,
+	TrustHandshakeResultSchema,
+	TrustPendingRequestSchema,
+	TrustPendingResultSchema,
+} from "../src/shared/enrollment.js";
+import { SignedXDomainUntrustSchema } from "../src/shared/federation-protocol.js";
 import {
 	ChannelFileSchema,
 	ConsoleListTeamsResultSchema,
@@ -49,6 +62,7 @@ import {
 	ConsoleRespondResultSchema,
 	ConsoleSendResultSchema,
 	ConsoleTmuxSendResultSchema,
+	CrossDomainShareTargetSchema,
 	GatewayBootstrapBundleSchema,
 	GatewayBootstrapFrameSchema,
 	GatewayTransportSchema,
@@ -71,6 +85,7 @@ const ROOTS: z.ZodType[] = [
 	ChannelFileSchema,
 	TeamInfoSchema,
 	MailboxEntrySchema,
+	CrossDomainShareTargetSchema,
 	ConsoleOpSchema,
 	ConsoleOpEnvelopeSchema,
 	ConsoleRelayFrameSchema,
@@ -91,10 +106,22 @@ const ROOTS: z.ZodType[] = [
 	SignedRevocationSchema,
 	EnrollOpSchema,
 	EnrollResultSchema,
+	EnrollHandshakeOpSchema,
+	EnrollHandshakeResultSchema,
 	PendingTenantSchema,
 	GatewayTransportSchema,
 	GatewayBootstrapBundleSchema,
 	GatewayBootstrapFrameSchema,
+	// Emitted as a root so the Android owner can sign it; the console op that carries it (and the
+	// gateway handler that tombstones the foreign-owner trust) lands with the gateway phase.
+	SignedXDomainUntrustSchema,
+	RosterRequestSchema,
+	RosterResultSchema,
+	// FLOW-2 trust rendezvous: the phone signs/encodes the handshake + the pending query.
+	TrustHandshakeOpSchema,
+	TrustHandshakeResultSchema,
+	TrustPendingRequestSchema,
+	TrustPendingResultSchema,
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything
@@ -102,7 +129,13 @@ const ROOTS: z.ZodType[] = [
 // the discriminator key is read from zod internals. EnrollOp is composed by the
 // console (owner enroll requests), so closure is safe; the scanned EnrollmentPayload
 // is DECODED and stays hand-parsed (forward-compatible) in the Android client.
-const SEALED_ROOTS = new Set(["ConsoleOp", "EnrollOp"]);
+const SEALED_ROOTS = new Set([
+	"ConsoleOp",
+	"EnrollOp",
+	"EnrollHandshakeOp",
+	"TrustHandshakeOp",
+	"CrossDomainShareTarget",
+]);
 
 ////////////////////////////////
 //  zod -> cleaned JSON Schema (evie's conversion hygiene)

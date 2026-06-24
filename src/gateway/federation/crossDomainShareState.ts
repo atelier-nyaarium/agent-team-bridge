@@ -1,25 +1,33 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { CrossDomainShareTargetSchema } from "../../shared/schemas.js";
+
+type CrossDomainShareTarget = z.infer<typeof CrossDomainShareTargetSchema>;
 
 ////////////////////////////////
 //  Schemas
 
-/** A single per-session share: a local session this Gateway has offered to ONE
- * friend Domain. Keyed by `(sessionTarget, toDomainId)`. This is plain state, NOT
- * an owner-signed artifact: the device's submit op is authenticated by the existing
- * console seal (it is already an admitted console), so no second signature scheme. */
+/** A single per-session share: a local session this Gateway has offered to an AUDIENCE - a SPECIFIC
+ * linked Domain, or EVERYONE the owner trusts. Keyed by `(sessionTarget, targetKey)`. This is plain
+ * state, NOT an owner-signed artifact: the device's submit op is authenticated by the existing console
+ * seal (it is already an admitted console), so no second signature scheme. */
 const ShareRecordSchema = z.object({
 	// The canonical SessionId target (`gateway/name`) of the shared session. Only
 	// devcontainer/loose sessions are ever shared; the host-agent, gateway, and
 	// console are never shared (the caller enforces the kind, the store is kind-agnostic).
 	sessionTarget: z.string().min(1),
-	// The friend Domain id (slug) this session is shared TO.
-	toDomainId: z.string().min(1),
+	// Who the session is shared TO: a specific linked Domain, or everyone trusted.
+	target: CrossDomainShareTargetSchema,
 	// Last time the session was seen online. Used by the absence auto-forget.
 	lastSeenAt: z.number().int(),
 });
 export type ShareRecord = z.infer<typeof ShareRecordSchema>;
+
+/** The idempotency key for a share target: one record per (session, audience). */
+function targetKey(target: CrossDomainShareTarget): string {
+	return target.kind === "domain" ? `domain:${target.domainId}` : "everyone_trusted";
+}
 
 const CrossDomainShareFileSchema = z.object({
 	shares: z.array(ShareRecordSchema),
@@ -59,41 +67,56 @@ export class CrossDomainShareState {
 		fs.writeFileSync(this.file, JSON.stringify(this.state), { mode: 0o600 });
 	}
 
-	/** Offer a session to a friend Domain. Idempotent on `(sessionTarget, toDomainId)`:
-	 * re-sharing refreshes `lastSeenAt` rather than duplicating. */
-	share(sessionTarget: string, toDomainId: string): void {
+	/** Offer a session to an audience. Idempotent on `(sessionTarget, target)`: re-sharing refreshes
+	 * `lastSeenAt` rather than duplicating. */
+	share(sessionTarget: string, target: CrossDomainShareTarget): void {
+		const key = targetKey(target);
 		const existing = this.state.shares.find(
-			(s) => s.sessionTarget === sessionTarget && s.toDomainId === toDomainId,
+			(s) => s.sessionTarget === sessionTarget && targetKey(s.target) === key,
 		);
 		if (existing) {
 			existing.lastSeenAt = Date.now();
 		} else {
-			this.state.shares.push({ sessionTarget, toDomainId, lastSeenAt: Date.now() });
+			this.state.shares.push({ sessionTarget, target, lastSeenAt: Date.now() });
 		}
 		this.persist();
 	}
 
-	/** Withdraw a session's share to a friend Domain. Returns whether a record was actually
-	 * removed, so the caller can skip the follow-on in-flight-job expiry when the share was
-	 * already absent (an idempotent re-unshare does no work). */
-	unshare(sessionTarget: string, toDomainId: string): boolean {
+	/** Withdraw a session's share from an audience. Returns whether a record was actually removed, so
+	 * the caller can skip the follow-on in-flight-job expiry when the share was already absent. */
+	unshare(sessionTarget: string, target: CrossDomainShareTarget): boolean {
+		const key = targetKey(target);
 		const before = this.state.shares.length;
 		this.state.shares = this.state.shares.filter(
-			(s) => !(s.sessionTarget === sessionTarget && s.toDomainId === toDomainId),
+			(s) => !(s.sessionTarget === sessionTarget && targetKey(s.target) === key),
 		);
 		const removed = this.state.shares.length !== before;
 		if (removed) this.persist();
 		return removed;
 	}
 
-	/** Whether a session is currently shared to a given friend Domain. */
-	isSharedTo(sessionTarget: string, toDomainId: string): boolean {
-		return this.state.shares.some((s) => s.sessionTarget === sessionTarget && s.toDomainId === toDomainId);
+	/** Whether a session is currently shared to a given friend Domain. A SPECIFIC-Domain share matches
+	 * that Domain; an EVERYONE-TRUSTED share matches any Domain `isLinked` reports as a linked peer (so
+	 * it tracks the live trust set, and can NEVER reach a Domain the owner has not linked). */
+	isSharedTo(sessionTarget: string, toDomainId: string, isLinked: (domainId: string) => boolean): boolean {
+		return this.state.shares.some(
+			(s) =>
+				s.sessionTarget === sessionTarget &&
+				(s.target.kind === "domain" ? s.target.domainId === toDomainId : isLinked(toDomainId)),
+		);
 	}
 
-	/** The session targets shared to a given friend Domain (the slimmed discovery filter). */
-	sharesFor(toDomainId: string): string[] {
-		return this.state.shares.filter((s) => s.toDomainId === toDomainId).map((s) => s.sessionTarget);
+	/** The session targets shared to a given friend Domain (the slimmed discovery filter): the
+	 * specific-Domain shares for it, plus every everyone-trusted share when the Domain is a linked peer. */
+	sharesFor(toDomainId: string, isLinked: (domainId: string) => boolean): string[] {
+		const linked = isLinked(toDomainId);
+		return [
+			...new Set(
+				this.state.shares
+					.filter((s) => (s.target.kind === "domain" ? s.target.domainId === toDomainId : linked))
+					.map((s) => s.sessionTarget),
+			),
+		];
 	}
 
 	/** Refresh `lastSeenAt` for every share of a session, so the absence sweep does not
@@ -119,7 +142,11 @@ export class CrossDomainShareState {
 	 * automatic per-session auto-forget; this is the manual, immediate, whole-Domain drop. */
 	dropDomain(toDomainId: string): number {
 		const before = this.state.shares.length;
-		this.state.shares = this.state.shares.filter((s) => s.toDomainId !== toDomainId);
+		// Only the SPECIFIC-Domain shares for this Domain are dropped; an everyone-trusted share is not
+		// Domain-specific and auto-stops reaching it once the link is gone (isLinked turns false).
+		this.state.shares = this.state.shares.filter(
+			(s) => !(s.target.kind === "domain" && s.target.domainId === toDomainId),
+		);
 		const removed = before - this.state.shares.length;
 		if (removed > 0) this.persist();
 		return removed;

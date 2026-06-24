@@ -128,6 +128,21 @@ export class CrossDomainPeers {
 		return removed;
 	}
 
+	/** Drop EVERY peer owned by a friend OWNER, across ALL their Domains + gateways (one owner may
+	 * run several Domains), returning the count removed + the distinct friend Domain ids affected. This
+	 * is the UNTRUST granularity (owner-keyed): untrusting a PERSON forgets every Gateway of every
+	 * Domain they own, so the sealer refuses all of them. The returned Domain ids let the caller drop
+	 * the per-session shares + settle the in-flight jobs for exactly those Domains. */
+	removeByOwner(friendOwnerSignPub: string): { removed: number; domains: string[] } {
+		const owned = this.state.peers.filter((e) => e.friendOwnerSignPub === friendOwnerSignPub);
+		const domains = [...new Set(owned.map((e) => e.friendDomainId))];
+		if (owned.length > 0) {
+			this.state.peers = this.state.peers.filter((e) => e.friendOwnerSignPub !== friendOwnerSignPub);
+			this.persist();
+		}
+		return { removed: owned.length, domains };
+	}
+
 	/** A copy of all cross-Domain peers. */
 	all(): CrossDomainPeer[] {
 		return [...this.state.peers];

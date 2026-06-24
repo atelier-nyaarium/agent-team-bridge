@@ -208,6 +208,11 @@ export async function startGateway(): Promise<void> {
 	// peer set so a share can only target a Domain the owner has actually linked.
 	let crossDomainShareState: CrossDomainShareState | null = null;
 	let crossDomainPeersForConsole: CrossDomainPeers | null = null;
+	// A Domain is "trusted/linked" iff this Gateway holds a cross-Domain peer for it (the owner linked
+	// it). The single predicate the share gate uses to resolve an everyone-trusted share + to bound a
+	// per-Domain share to a real link, so an everyone-trusted share can never reach a non-peer.
+	const isLinkedDomain = (domainId: string): boolean =>
+		crossDomainPeersForConsole?.all().some((p) => p.friendDomainId === domainId) ?? false;
 
 	// The Gateway persists its federation identity + mirrored allowlist here; an enrolled
 	// Gateway also drops its service-proxy transport.json here. The bridge activates on
@@ -478,7 +483,7 @@ export async function startGateway(): Promise<void> {
 		// accepted while shared, then un-shared, has its in-flight reply dropped here instead
 		// of relayed home (the un-share bites every direction, not just fresh sends).
 		isSharedToForReply: crossDomainShareState
-			? (sessionTarget, domainId) => crossDomainShareState!.isSharedTo(sessionTarget, domainId)
+			? (sessionTarget, domainId) => crossDomainShareState!.isSharedTo(sessionTarget, domainId, isLinkedDomain)
 			: null,
 		resolveHandshake: wsHandlers.resolveHandshake,
 	});
@@ -514,6 +519,7 @@ export async function startGateway(): Promise<void> {
 							peers: crossDomainPeersForConsole!.all().map((p) => ({
 								domainId: p.friendDomainId,
 								gatewayId: p.friendGatewayId,
+								ownerSignPub: p.friendOwnerSignPub,
 							})),
 						}),
 					}
@@ -521,23 +527,24 @@ export async function startGateway(): Promise<void> {
 			crossDomainShare:
 				crossDomainShareState && crossDomainPeersForConsole
 					? {
-							share: (sessionTarget, domainId) => crossDomainShareState!.share(sessionTarget, domainId),
-							unshare: (sessionTarget, domainId) =>
-								crossDomainShareState!.unshare(sessionTarget, domainId),
-							// After a successful unshare, settle any in-flight cross-Domain job for that
-							// (session, friend) pair so an already-accepted send's reply stops at the
-							// destination instead of forwarding home. Keyed by the same canonical
-							// gateway/name the share uses, scoped to the friend Domain.
-							expireSessionJobs: (sessionTarget, domainId) =>
-								store.expireBySession(sessionTarget, domainId, localGatewayId),
+							share: (sessionTarget, target) => crossDomainShareState!.share(sessionTarget, target),
+							unshare: (sessionTarget, target) => crossDomainShareState!.unshare(sessionTarget, target),
+							// After a successful unshare, settle any in-flight cross-Domain job so an
+							// already-accepted send's reply stops at the destination instead of forwarding
+							// home. A specific-Domain unshare scopes to that Domain; an everyone-trusted
+							// unshare must settle every Domain it reached, i.e. every currently-linked one.
+							expireSessionJobsForTarget: (sessionTarget, target) => {
+								const domains =
+									target.kind === "domain"
+										? [target.domainId]
+										: [...new Set(crossDomainPeersForConsole!.all().map((p) => p.friendDomainId))];
+								for (const d of domains) store.expireBySession(sessionTarget, d, localGatewayId);
+							},
 							listShares: () =>
 								crossDomainShareState!
 									.all()
-									.map((s) => ({ sessionTarget: s.sessionTarget, domainId: s.toDomainId })),
-							// A share may only target a Domain the owner has actually linked: the peer
-							// set has at least one entry for that friendDomainId.
-							isLinkedDomain: (domainId) =>
-								crossDomainPeersForConsole!.all().some((p) => p.friendDomainId === domainId),
+									.map((s) => ({ sessionTarget: s.sessionTarget, target: s.target })),
+							isLinkedDomain,
 						}
 					: undefined,
 			// Unlink a linked friend Domain: drop the LOCAL trust + share + in-flight state for
@@ -553,6 +560,23 @@ export async function startGateway(): Promise<void> {
 							sharesDropped: crossDomainShareState!.dropDomain(domainId),
 							jobsExpired: store.expireByDomain(domainId),
 						})
+					: undefined,
+			// Untrust a PERSON (owner-keyed): forget every peer Gateway owned by that owner across ALL
+			// their Domains, then drop the shares + settle the in-flight jobs for exactly those Domains.
+			// The owner-keyed sibling of unlinkDomain; the same local-cleanup primitives, summed over the
+			// owner's Domains. Idempotent - an already-untrusted owner returns zero counts.
+			untrustOwner:
+				crossDomainShareState && crossDomainPeersForConsole
+					? (ownerSignPub) => {
+							const { removed, domains } = crossDomainPeersForConsole!.removeByOwner(ownerSignPub);
+							let sharesDropped = 0;
+							let jobsExpired = 0;
+							for (const domainId of domains) {
+								sharesDropped += crossDomainShareState!.dropDomain(domainId);
+								jobsExpired += store.expireByDomain(domainId);
+							}
+							return { peersRemoved: removed, sharesDropped, jobsExpired };
+						}
 					: undefined,
 		});
 		handleConsoleRelay = createConsoleRelayPump({
@@ -574,8 +598,8 @@ export async function startGateway(): Promise<void> {
 			shareState: crossDomainShareState
 				? {
 						isSharedTo: (sessionTarget, domainId) =>
-							crossDomainShareState!.isSharedTo(sessionTarget, domainId),
-						sharesFor: (domainId) => crossDomainShareState!.sharesFor(domainId),
+							crossDomainShareState!.isSharedTo(sessionTarget, domainId, isLinkedDomain),
+						sharesFor: (domainId) => crossDomainShareState!.sharesFor(domainId, isLinkedDomain),
 						touch: (sessionTarget) => crossDomainShareState!.touch(sessionTarget),
 					}
 				: undefined,

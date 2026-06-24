@@ -4,10 +4,14 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
+import com.atelier_nyaarium.switchboard.proto.EnrollParty
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.NoticeId
+import com.atelier_nyaarium.switchboard.proto.SasCrypto
+import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SessionId
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
@@ -24,6 +28,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -60,7 +65,15 @@ data class EnrollDelivery(val admitted: Boolean, val message: String, val pasteB
  * network display name (their self-set operator name, propagated over discovery - shown instead of
  * the opaque domainId when known), how many of its sessions are visible to me, and whether any is
  * online. `operatorName` is null until a discovery session for the peer carries it. */
-data class LinkedDomain(val domainId: String, val operatorName: String?, val sessionCount: Int, val online: Boolean)
+data class LinkedDomain(
+	val domainId: String,
+	val operatorName: String?,
+	val sessionCount: Int,
+	val online: Boolean,
+	// The friend OWNER's signing key (from the cross-Domain peer set), so a linked Domain joins to the
+	// owner-keyed roster. Null for a Domain seen only via discovery (no peer entry yet).
+	val ownerSignPub: String?,
+)
 
 /** A requester-side pairing in flight: the one-time pin the requester minted (passed back to
  * confirm) and the Gateway's request result (the SAS + both sides' keys). */
@@ -154,7 +167,7 @@ data class ChatState(
 	 * so a freshly-linked peer is visible (and its detail reachable) even while its gateway is
 	 * offline and has shared nothing back - the gap that otherwise dead-locks the post-link sharing
 	 * flow. Refreshed alongside teams; an empty set just falls back to discovery-only. */
-	val linkedPeerDomains: Set<String> = emptySet(),
+	val linkedPeerOwners: Map<String, String> = emptyMap(),
 	/** This owner's own network display name (the operator name), for the profile field and the
 	 * MY NETWORK card. Seeded from the local cache and refreshed from discovery's home-session
 	 * operatorName; empty until the owner sets one. */
@@ -245,6 +258,21 @@ data class ChatState(
  * show a calm "Finishing up enrollment..." and retry, escalating to a real error only if
  * the sync never lands within this grace window. */
 private const val ENROLL_GRACE_MS = 90_000L
+
+/** How often each phone re-polls the evie broker for the peer's commit/reveal frame during the
+ * in-person enroll ceremony. A short cadence (the peer is on screen beside you) without hammering
+ * the relay. */
+private const val ENROLL_POLL_MS = 2_000L
+
+/** Max poll attempts per handshake round before giving up (2s * 150 = 5 min, comfortably under the
+ * broker's 10-min window TTL). A vanished peer fails with a timeout rather than hanging forever. */
+private const val ENROLL_POLL_MAX = 150
+
+/** FLOW-2 rendezvous sides: who ARMED (initiator) vs who JOINED a highlighted arm (target). Distinct
+ * from the SAS role (ADMIN/ENROLLEE by sorted owner key) - the side picks the broker frame, the role
+ * orders the SAS. Must match the TrustHandshakeOp.Reveal `side` literals on the wire. */
+internal const val TRUST_SIDE_INITIATOR = "INITIATOR"
+internal const val TRUST_SIDE_TARGET = "TARGET"
 
 /** Three-way classification of a connect/poll/relay failure. */
 internal enum class ConnKind {
@@ -430,6 +458,11 @@ class ChatRepository(
 	// receiver's listening token. The receiver needs it to confirm its pairing (the gateway resolves
 	// the window by the pin), but the wizard only holds the token, so the poll stashes it here.
 	private val receiverPin = mutableMapOf<String, String>()
+	// ADMIN-side enroll-invite secrets (handshakeId + pin) minted per staged tenant when the invite
+	// blob is built, reused to drive the admin's leg of the in-person compare. Transient like the link
+	// ceremony's linkNonce: the in-person flow keeps the detail screen open, and regenerating the
+	// invite mints fresh secrets (abandoning the old QR's window).
+	private val enrollInvites = java.util.concurrent.ConcurrentHashMap<String, EnrollInvite>()
 	private var pollFails = 0
 	private var pollJob: Job? = null
 	// The poll loop's scope, reused to launch auto-TTS preloads that gate the
@@ -669,6 +702,8 @@ class ChatRepository(
 		// clear the first-root latch: the next connect re-evaluates the blob's pendingTenant and
 		// re-roots if present. An ordinary already-rooted blob (no pendingTenant) skips the step.
 		store.firstRooted = false
+		// A fresh invite is a fresh trust ceremony: re-offer the in-person compare on the next connect.
+		store.enrollCeremonyDone = false
 		client = null
 		sttsClient = null
 		// firstRooted=false mirrors the latch reset above so a re-imported fresh invite does not show
@@ -846,6 +881,10 @@ class ChatRepository(
 
 	fun ownerBoxPub(): String = federation.ownerBoxPub()
 
+	/** This owner's network display name (the operator name), falling back to the local Domain id
+	 * before discovery has stamped a name. Shown as "YOU" on the Users surface. */
+	fun operatorDisplayName(): String = state.value.operatorName.ifEmpty { localDomainId() }
+
 	/** A passphrase-encrypted backup of the owner root key for offline safekeeping. */
 	// Runs the scrypt KDF, so it stays off the main thread (the UI dispatches it from a
 	// coroutine) - the same posture as importOwnerBackup.
@@ -938,10 +977,11 @@ class ChatRepository(
 	 * link-handshake confirm. Returns true iff evie accepted it. There is no local keyring
 	 * merge: the edge lives only in evie's edge set (the cross-Domain peer + its keys are
 	 * written by the handshake confirm, not by this edge). */
-	suspend fun submitXdomainLink(srcDomainId: String, dstDomainId: String): Boolean = withContext(Dispatchers.IO) {
-		val signed = federation.signXdomainLinkEdge(srcDomainId, dstDomainId, System.currentTimeMillis())
-		submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitXdomainLink(it)) }, {}, "Link failed")
-	}
+	suspend fun submitXdomainLink(srcDomainId: String, dstDomainId: String, edgeNonce: String? = null): Boolean =
+		withContext(Dispatchers.IO) {
+			val signed = federation.signXdomainLinkEdge(srcDomainId, dstDomainId, System.currentTimeMillis(), edgeNonce)
+			submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitXdomainLink(it)) }, {}, "Link failed")
+		}
 
 	/** Owner-sign a cross-Domain link-edge revocation and submit it to evie so its
 	 * relay-affinity gate refuses the cross-Domain crosstalk again. Called on unlink. Returns
@@ -953,6 +993,18 @@ class ChatRepository(
 
 	/** The admitted members of the keyring, for the management board. */
 	fun admittedMembers(): List<MemberInfo> = federation.members()
+
+	/** Fetch the cross-tenant roster (the Users surface): every member on this evie, by name +
+	 * presence. evie-direct + signed-proof scoped; a non-member or auth failure surfaces as a
+	 * failure with evie's opaque reason. The rendering surface consumes the rows. */
+	suspend fun fetchRoster(): Result<List<com.atelier_nyaarium.switchboard.proto.RosterMember>> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				val result = client().roster(federation.signRosterRequest(System.currentTimeMillis()))
+				if (!result.ok) error(result.error ?: "roster unavailable")
+				result.members ?: emptyList()
+			}
+		}
 
 	////////////////////////////////
 	//  Cross-Domain trust (the link/share/unlink surface the Federation UI drives)
@@ -1054,6 +1106,9 @@ class ChatRepository(
 				val result = client().provisionTenant(signed)
 				val nonce = if (result.ok) result.nonce else null
 				if (nonce.isNullOrEmpty()) error(result.error ?: "no invite nonce returned")
+				// A regenerated invite is a fresh ceremony: drop the prior handshake secrets so the next
+				// buildInviteBlob mints new ones (the old QR's broker window is abandoned with its nonce).
+				enrollInvites.remove(domainId)
 				val row = HostedTenant(domainId, label, nonce, HostedTenantState.AWAITING_SETUP)
 				upsertHostedTenant(row)
 				row
@@ -1073,12 +1128,25 @@ class ChatRepository(
 		runCatching {
 			val blob = store.load() ?: error("This device is not provisioned. Re-import your setup blob first.")
 			val prov = Provisioning.parse(blob)
+			// Mint (once per tenant) the enroll-handshake secrets that seed the in-person compare and
+			// embed them in the QR alongside this admin's owner keys + Domain. The pin rides the QR OUT
+			// OF BAND (never sent to evie); the handshakeId keys the broker window the admin's leg polls.
+			val invite = enrollInvites.computeIfAbsent(tenant.domainId) {
+				EnrollInvite(handshakeId = federation.freshHandshakeId(), pin = federation.freshEnrollPin())
+			}
+			val enrollHandshake = JSONObject()
+				.put("adminOwnerSignPub", federation.ownerSignPub())
+				.put("adminOwnerBoxPub", federation.ownerBoxPub())
+				.put("adminDomainId", localDomainId())
+				.put("handshakeId", invite.handshakeId)
+				.put("pin", invite.pin)
 			val obj = JSONObject()
 				.put("apiUrl", prov.apiUrl)
 				.put("saToken", prov.saToken)
 				.put("caPem", prov.caPem)
 				.put("appToken", prov.appToken)
 				.put("pendingTenant", JSONObject().put("domainId", tenant.domainId).put("nonce", tenant.nonce))
+				.put("enrollHandshake", enrollHandshake)
 			obj.toString()
 		}
 	}
@@ -1138,7 +1206,7 @@ class ChatRepository(
 	 * the gap that otherwise dead-locked the post-link sharing flow. Discovery still supplies the
 	 * session count + presence; a peer present only in the peer set shows zero sessions / offline. */
 	fun linkedDomains(): List<LinkedDomain> =
-		CrossDomainLink.mergeLinkedDomains(_state.value.teams, _state.value.linkedPeerDomains, localDomainId())
+		CrossDomainLink.mergeLinkedDomains(_state.value.teams, _state.value.linkedPeerOwners, localDomainId())
 
 	/** Refresh the linked-peer roster from the home Gateway's cross-Domain peer set into state, so
 	 * linkedDomains() can union it with discovery. Best-effort: a relay failure keeps the prior set
@@ -1147,8 +1215,9 @@ class ChatRepository(
 	suspend fun refreshLinkedPeers() = withContext(Dispatchers.IO) {
 		runCatching { client().crossDomainListPeers() }
 			.onSuccess { result ->
-				val domains = result.peers.map { it.domainId }.filter { it.isNotEmpty() }.toSet()
-				_state.update { it.copy(linkedPeerDomains = domains) }
+				// domainId -> friend owner key (a Domain may run several gateways under one owner; last wins).
+				val owners = result.peers.filter { it.domainId.isNotEmpty() }.associate { it.domainId to it.ownerSignPub }
+				_state.update { it.copy(linkedPeerOwners = owners) }
 			}
 	}
 
@@ -1281,6 +1350,8 @@ class ChatRepository(
 			nowMs = System.currentTimeMillis(),
 			nonce = linkNonce,
 		)
+		// Record the OWNER-keyed friend edge (the Users-surface trust) - the SAS confirmed this owner key.
+		federation.addTrustedOwner(peerOwnerSignPub)
 		client().crossDomainConfirm(pin, mySignedLink)
 		// The local peer is now written. The relay-affinity edge is a separate Router submit that
 		// returns false on rejection; surface that as RelayEdgeRejected (recoverable by retrying the
@@ -1315,17 +1386,322 @@ class ChatRepository(
 		runCatching { client().crossDomainCancel(listeningToken, pin) }
 	}
 
-	/** This owner's current per-session shares as (sessionTarget, domainId) pairs, so the UI can
-	 * render the share checkmarks. */
-	suspend fun crossDomainShares(): Result<Set<Pair<String, String>>> = withContext(Dispatchers.IO) {
-		runCatching { client().crossDomainListShares().shares.map { it.sessionTarget to it.domainId }.toSet() }
+	////////////////////////////////
+	//  FLOW-1 enroll ceremony (the in-person admin <-> new-user trust compare, brokered by evie)
+
+	/** The ADMIN leg context for a staged tenant's in-person compare: the handshakeId + pin the
+	 * invite embedded (minted on buildInviteBlob) plus this owner's party. Null until the admin has
+	 * generated the invite (so the QR and the ceremony share one handshake window). */
+	fun adminEnrollContext(domainId: String): EnrollCeremonyContext? {
+		val invite = enrollInvites[domainId] ?: return null
+		val myParty = EnrollParty(federation.ownerSignPub(), federation.ownerBoxPub(), localDomainId())
+		return EnrollCeremonyContext(EnrollCeremony.ADMIN, invite.handshakeId, invite.pin, myParty, expectedPeer = null)
 	}
 
-	/** Toggle a local session's share to a friend Domain (the checkmark IS the consent). */
+	/** The ENROLLEE leg context after first-rooting an invited Domain: the handshakeId + pin + admin
+	 * party read from the scanned blob, plus this owner's freshly-rooted party. The admin party is
+	 * carried as `expectedPeer` so a substituted admin reveal is caught against the in-person QR, not
+	 * only at the compare. Null when the blob carries no enroll handshake (an ordinary invite). The
+	 * Domain id is taken from the blob's pendingTenant (the EXACT Domain this device just rooted), NOT
+	 * localDomainId() - which still reads the "home" fallback until discovery lands. */
+	fun enrolleeEnrollContext(): EnrollCeremonyContext? {
+		val prov = runCatching { store.load()?.let { Provisioning.parse(it) } }.getOrNull() ?: return null
+		val hs = prov.enrollHandshake ?: return null
+		val myDomainId = prov.pendingTenant?.domainId ?: return null
+		val myParty = EnrollParty(federation.ownerSignPub(), federation.ownerBoxPub(), myDomainId)
+		val adminParty = EnrollParty(hs.adminOwnerSignPub, hs.adminOwnerBoxPub, hs.adminDomainId)
+		return EnrollCeremonyContext(EnrollCeremony.ENROLLEE, hs.handshakeId, hs.pin, myParty, expectedPeer = adminParty)
+	}
+
+	/** The enrollee leg to run (or re-offer), or null when the blob carries no enroll handshake or the
+	 * in-person compare is already done. Drives the post-first-root auto-launch and the board's
+	 * "Verify with the admin" prompt - both go quiet once [markEnrolleeCeremonyDone] latches. */
+	fun pendingEnrolleeCeremony(): EnrollCeremonyContext? =
+		if (store.enrollCeremonyDone) null else enrolleeEnrollContext()
+
+	/** Latch the enrollee compare as complete so it stops being offered (the trust edge is recorded). */
+	fun markEnrolleeCeremonyDone() {
+		store.enrollCeremonyDone = true
+	}
+
+	/** Run the commit-reveal exchange up to the human compare: commit this side, poll the broker for
+	 * the peer's commitment, reveal, poll for the peer's reveal, verify the peer's reveal opens to its
+	 * commitment (and, on the enrollee side, matches the QR-pinned admin keys), then compute the SAS
+	 * locally. evie is a dumb broker throughout - every check here is on the phone. A terminal failure
+	 * (broker reject, tamper, timeout) surfaces as Result.failure; cancellation (leaving the screen)
+	 * cancels the suspend. */
+	suspend fun enrollExchange(ctx: EnrollCeremonyContext): Result<EnrollExchange> = withContext(Dispatchers.IO) {
+		runCatching {
+			val salt = federation.freshEnrollSalt()
+			val myReveal = com.atelier_nyaarium.switchboard.proto.EnrollReveal(
+				ctx.myParty.ownerSignPub,
+				ctx.myParty.ownerBoxPub,
+				ctx.myParty.domainId,
+				salt,
+			)
+			val commitment = SasCrypto.enrollCommitment(ctx.myParty, ctx.role, salt)
+			val peerRole = EnrollCeremony.peerRole(ctx.role)
+
+			// Round 1: commit, then poll (re-POSTing the same commit is idempotent) for the peer's.
+			val peerCommitment = pollEnroll("commit") {
+				val r = client().enrollHandshake(EnrollHandshakeOp.Commit(ctx.handshakeId, ctx.role, commitment))
+				if (!r.ok) error(r.error ?: "enroll commit rejected")
+				r.peerCommitment
+			}
+			// Round 2: reveal, then poll for the peer's reveal.
+			val peerReveal = pollEnroll("reveal") {
+				val r = client().enrollHandshake(EnrollHandshakeOp.Reveal(ctx.handshakeId, ctx.role, myReveal))
+				if (!r.ok) error(r.error ?: "enroll reveal rejected")
+				r.peerReveal
+			}
+			val peerParty = EnrollCeremony.partyOf(peerReveal)
+			// Commit-reveal binding: the peer's reveal must open to its round-1 commitment.
+			if (!EnrollCeremony.verifyPeer(peerCommitment, peerParty, peerRole, peerReveal.salt)) {
+				error("The other phone's keys did not match its commitment (the relay tampered with the exchange). Rescan to restart.")
+			}
+			// Enrollee side: the admin's revealed keys MUST equal the in-person QR (the OOB
+			// admin -> user authentication). A mismatch is an evie substitution of the admin reveal.
+			ctx.expectedPeer?.let { expected ->
+				if (peerParty != expected) {
+					error("The admin keys did not match the scanned code (possible tampering). Rescan to restart.")
+				}
+			}
+			EnrollExchange(
+				sas = EnrollCeremony.sas(ctx.role, ctx.myParty, peerParty, ctx.pin),
+				peerDomainId = peerReveal.domainId,
+				peerParty = peerParty,
+			)
+		}
+	}
+
+	/** On a mutual [Yes]: owner-sign + submit this side's cross-Domain link edge (my Domain -> the
+	 * peer's CONFIRMED Domain - the EXACT value the SAS bound, never a re-fetch). Mirrors the link
+	 * wizard's edge result: Linked, or RelayEdgeRejected (the trust is recorded but the Router refused
+	 * the relay edge, retryable). */
+	suspend fun enrollConfirm(
+		myDomainId: String,
+		peerDomainId: String,
+		edgeNonce: String,
+		peerOwnerSignPub: String,
+	): Result<ConfirmOutcome> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				// Record the OWNER-keyed friend edge first (the Users-surface trust): the compare confirmed
+				// the peer's owner key, so trust the PERSON even if the relay edge below is rejected (a
+				// gateway-less friend still becomes a friend; relay enables later).
+				federation.addTrustedOwner(peerOwnerSignPub)
+				// Pin the edge nonce so a retry / lost-ack re-submit re-signs the SAME edge (evie dedupes
+				// by (src, nonce)) instead of accumulating a duplicate per attempt.
+				if (submitXdomainLink(myDomainId, peerDomainId, edgeNonce)) {
+					ConfirmOutcome.Linked
+				} else {
+					ConfirmOutcome.RelayEdgeRejected(peerDomainId)
+				}
+			}
+		}
+
+	////////////////////////////////
+	//  Owner-keyed trust (the friend graph the Users surface reads)
+
+	/** True iff this owner has trusted the given owner key (the Users-surface Trusted badge). */
+	fun isOwnerTrusted(ownerSignPub: String): Boolean = federation.isTrusted(ownerSignPub)
+
+	/** The set of trusted owner keys (the friend graph). */
+	fun trustedOwners(): Set<String> = federation.trustedOwners()
+
+	/** Untrust a person by owner key: drop the local friend edge + sign an owner-keyed untrust
+	 * tombstone. The relay-affinity edge teardown (per the peer's Domains) is the gateway-side
+	 * follow-up; the friend-graph removal is immediate so the Users surface reflects it now. */
+	suspend fun untrustOwner(peerOwnerSignPub: String): Result<Unit> = withContext(Dispatchers.IO) {
+		runCatching {
+			// Drop the local friend edge first so the Users surface reflects the untrust immediately.
+			federation.removeTrustedOwner(peerOwnerSignPub)
+			// Capture the person's Domains BEFORE the local cleanup forgets the peers (a person may run
+			// several), so we can revoke each Router-side relay edge. Owner-keyed via the peer set.
+			val peerDomains = runCatching {
+				client().crossDomainListPeers().peers.filter { it.ownerSignPub == peerOwnerSignPub }.map { it.domainId }.toSet()
+			}.getOrDefault(emptySet())
+			// Tell the gateway to forget every peer + share for this owner across all their Domains
+			// (owner-keyed local cleanup). Best-effort: the friend-graph removal already stands even if
+			// the gateway is unreachable (a gateway-less owner has no peer state to drop anyway).
+			runCatching { client().crossDomainUntrust(peerOwnerSignPub) }
+			// Router-side: revoke the owner-signed link edge for each of the person's Domains, so evie
+			// drops its relay-affinity edge too (the tombstone's relay half, completing the untrust).
+			for (d in peerDomains) runCatching { revokeXdomainLink(localDomainId(), d) }
+			Unit
+		}
+	}
+
+	/** Cancel this leg of the handshake (a [No], a timeout, or leaving the screen) so the broker tears
+	 * the window down rather than leaving a half-formed edge. Best-effort. */
+	suspend fun enrollCancel(handshakeId: String, role: String) = withContext(Dispatchers.IO) {
+		runCatching { client().enrollHandshake(EnrollHandshakeOp.Cancel(handshakeId, role)) }
+	}
+
+	////////////////////////////////
+	//  FLOW-2 trust rendezvous (roster-initiated user-to-user trust)
+
+	/** The sorted-owner-key role both sides agree on for the SYMMETRIC FLOW-2 SAS: the lower owner key
+	 * takes the ADMIN slot, so both phones hash the two parties in the SAME order. Reuses enrollSas /
+	 * enrollCommitment - no new SAS scheme (the rendezvousId is the pin). */
+	private fun trustRole(myOwner: String, peerOwner: String): String =
+		if (myOwner < peerOwner) EnrollCeremony.ADMIN else EnrollCeremony.ENROLLEE
+
+	/** Mint a fresh rendezvous id (the initiator's; also the SAS pin both sides bind). */
+	fun mintRendezvousId(): String = federation.freshRendezvousId()
+
+	/** Poll "who armed trust toward me?" (the highlight). Returns the armed initiator rows (owner key
+	 * + rendezvousId) so the Users surface highlights them. Best-effort. */
+	suspend fun fetchPendingTrust(): Result<List<com.atelier_nyaarium.switchboard.proto.TrustPendingEntry>> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				val r = client().trustPending(federation.signTrustPendingRequest(System.currentTimeMillis()))
+				if (!r.ok) error(r.error ?: "trust pending unavailable")
+				r.pending ?: emptyList()
+			}
+		}
+
+	/** Run one side of the FLOW-2 commit-reveal compare over the rendezvous. `mySide` is INITIATOR (I
+	 * armed) or TARGET (I joined a highlighted arm). Mirrors `enrollExchange`: commit (arm/join) ->
+	 * poll peerCommit -> reveal -> poll peerReveal -> verify the commit-reveal binding + that the peer
+	 * revealed the OWNER the rendezvous named -> compute the SAS. The result's `peerParty`/`peerDomainId`
+	 * feed `enrollConfirm` (shared trust-confirm) on a [Yes]. */
+	suspend fun trustExchange(
+		rendezvousId: String,
+		mySide: String,
+		peerOwnerSignPub: String,
+	): Result<EnrollExchange> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				val myParty = federation.trustParty(localDomainId())
+				val myRole = trustRole(myParty.ownerSignPub, peerOwnerSignPub)
+				val peerRole = EnrollCeremony.peerRole(myRole)
+				val salt = federation.freshEnrollSalt()
+				val myReveal = com.atelier_nyaarium.switchboard.proto.EnrollReveal(
+					myParty.ownerSignPub,
+					myParty.ownerBoxPub,
+					myParty.domainId,
+					salt,
+				)
+				val commitment = SasCrypto.enrollCommitment(myParty, myRole, salt)
+
+				// Round 1: commit (the initiator ARMs, the target JOINs), then poll for the peer's.
+				val peerCommitment = pollEnroll("commit") {
+					val op = if (mySide == TRUST_SIDE_INITIATOR) {
+						TrustHandshakeOp.Arm(rendezvousId, myParty.ownerSignPub, peerOwnerSignPub, commitment)
+					} else {
+						TrustHandshakeOp.Join(rendezvousId, myParty.ownerSignPub, commitment)
+					}
+					val r = client().trustHandshake(op)
+					if (!r.ok) error(r.error ?: "trust commit rejected")
+					r.peerCommitment
+				}
+				// Round 2: reveal, then poll for the peer's reveal.
+				val peerReveal = pollEnroll("reveal") {
+					val r = client().trustHandshake(TrustHandshakeOp.Reveal(rendezvousId, mySide, myReveal))
+					if (!r.ok) error(r.error ?: "trust reveal rejected")
+					r.peerReveal
+				}
+				val peerParty = EnrollCeremony.partyOf(peerReveal)
+				// Commit-reveal binding: the peer's reveal must open to its round-1 commitment.
+				if (!EnrollCeremony.verifyPeer(peerCommitment, peerParty, peerRole, peerReveal.salt)) {
+					error("The other phone's keys did not match its commitment (the relay tampered with the exchange). Try again.")
+				}
+				// Anti-substitution: the peer must reveal the OWNER the rendezvous named (the arm /
+				// highlight bound peerOwnerSignPub), so evie cannot splice in a different person.
+				if (peerParty.ownerSignPub != peerOwnerSignPub) {
+					error("The other person's identity did not match the trust request. Try again.")
+				}
+				EnrollExchange(
+					sas = EnrollCeremony.sas(myRole, myParty, peerParty, rendezvousId),
+					peerDomainId = peerReveal.domainId,
+					peerParty = peerParty,
+				)
+			}
+		}
+
+	/** Cancel this leg of the trust rendezvous (a [No], timeout, or leaving). Best-effort. */
+	suspend fun trustCancel(rendezvousId: String) = withContext(Dispatchers.IO) {
+		runCatching { client().trustHandshake(TrustHandshakeOp.Cancel(rendezvousId)) }
+	}
+
+	/** Poll one handshake step: call [step] (re-POSTing the same frame is idempotent at the broker)
+	 * until it returns the peer's frame, with a bounded number of attempts so a vanished peer fails
+	 * rather than hangs. [step] throws on a terminal broker reject, which propagates out. */
+	private suspend fun <T> pollEnroll(label: String, step: () -> T?): T {
+		repeat(ENROLL_POLL_MAX) {
+			step()?.let { return it }
+			delay(ENROLL_POLL_MS)
+		}
+		error("Timed out waiting for the other phone ($label). Make sure you are both on this screen, then rescan.")
+	}
+
+	/** This owner's current per-session SPECIFIC-Domain shares as (sessionTarget, domainId) pairs, so
+	 * the per-peer checkmark UI can render them (everyone-trusted shares are a separate mode). */
+	suspend fun crossDomainShares(): Result<Set<Pair<String, String>>> = withContext(Dispatchers.IO) {
+		runCatching {
+			client().crossDomainListShares().shares
+				.mapNotNull { e ->
+					(e.target as? com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.Domain)?.let {
+						e.sessionTarget to it.domainId
+					}
+				}
+				.toSet()
+		}
+	}
+
+	/** How many of MY sessions each TRUSTED person can reach, keyed by their owner key (the Users
+	 * row's "N shared sessions"). A person reaches a session shared to one of their Domains OR shared
+	 * to everyone-trusted. Joins the peer set (owner -> their Domains) with the share list. */
+	suspend fun sharedSessionCounts(): Result<Map<String, Int>> = withContext(Dispatchers.IO) {
+		runCatching {
+			val ownerDomains = client().crossDomainListPeers().peers
+				.filter { it.ownerSignPub.isNotEmpty() }
+				.groupBy({ it.ownerSignPub }, { it.domainId })
+			val shares = client().crossDomainListShares().shares
+			val everyoneSessions = shares
+				.filter { it.target is com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.EveryoneTrusted }
+				.map { it.sessionTarget }
+				.toSet()
+			val byDomain = shares
+				.mapNotNull { e ->
+					(e.target as? com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.Domain)?.let {
+						it.domainId to e.sessionTarget
+					}
+				}
+				.groupBy({ it.first }, { it.second })
+			ownerDomains.mapValues { (_, domains) ->
+				(domains.flatMap { byDomain[it].orEmpty() }.toSet() + everyoneSessions).size
+			}
+		}
+	}
+
+	/** The sessions shared to EVERYONE the owner trusts (the Users-surface share mode). */
+	suspend fun sessionsSharedToEveryone(): Result<Set<String>> = withContext(Dispatchers.IO) {
+		runCatching {
+			client().crossDomainListShares().shares
+				.filter { it.target is com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.EveryoneTrusted }
+				.map { it.sessionTarget }
+				.toSet()
+		}
+	}
+
+	/** Toggle a local session's share to a specific friend Domain (the checkmark IS the consent). */
 	suspend fun setCrossDomainShare(sessionTarget: String, domainId: String, shared: Boolean): Result<Unit> =
 		withContext(Dispatchers.IO) {
 			runCatching {
-				if (shared) client().crossDomainShare(sessionTarget, domainId) else client().crossDomainUnshare(sessionTarget, domainId)
+				val target = com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.Domain(domainId)
+				if (shared) client().crossDomainShare(sessionTarget, target) else client().crossDomainUnshare(sessionTarget, target)
+				Unit
+			}
+		}
+
+	/** Toggle a local session's share to EVERYONE the owner trusts (the live-trust-set audience). */
+	suspend fun setShareEveryoneTrusted(sessionTarget: String, shared: Boolean): Result<Unit> =
+		withContext(Dispatchers.IO) {
+			runCatching {
+				val target = com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.EveryoneTrusted
+				if (shared) client().crossDomainShare(sessionTarget, target) else client().crossDomainUnshare(sessionTarget, target)
 				Unit
 			}
 		}

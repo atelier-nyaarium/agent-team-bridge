@@ -75,6 +75,11 @@ function formatResult(result: SendResult, to?: string): { content: Array<{ type:
 		parts.push(`Error: ${result.reason ?? result.message ?? "Unknown error"}`);
 	} else if (result.status === "timeout") {
 		parts.push(result.message || `No response in time.`);
+	} else {
+		// Defensive catch-all: a ResponseStatus added later (or an absent status) would otherwise fall
+		// through silently, dropping the body. Surface whatever text the payload carries.
+		const body = result.response ?? result.message ?? result.reason;
+		if (body) parts.push(`\n${body}`);
 	}
 
 	if (result.session_id) parts.push(`\n[session_id: ${result.session_id}]`);

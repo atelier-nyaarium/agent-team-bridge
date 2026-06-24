@@ -82,6 +82,21 @@ data class MailboxEntry(
 @Serializable
 @OptIn(ExperimentalSerializationApi::class)
 @JsonClassDiscriminator("kind")
+sealed class CrossDomainShareTarget {
+	@Serializable
+	@SerialName("domain")
+	data class Domain(
+		val domainId: String,
+	) : CrossDomainShareTarget()
+
+	@Serializable
+	@SerialName("everyone_trusted")
+	data object EveryoneTrusted : CrossDomainShareTarget()
+}
+
+@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("kind")
 sealed class ConsoleOp {
 	@Serializable
 	@SerialName("register")
@@ -187,14 +202,14 @@ sealed class ConsoleOp {
 	@SerialName("cross_domain_share")
 	data class CrossDomainShare(
 		val sessionTarget: String,
-		val domainId: String,
+		val target: CrossDomainShareTarget,
 	) : ConsoleOp()
 
 	@Serializable
 	@SerialName("cross_domain_unshare")
 	data class CrossDomainUnshare(
 		val sessionTarget: String,
-		val domainId: String,
+		val target: CrossDomainShareTarget,
 	) : ConsoleOp()
 
 	@Serializable
@@ -209,6 +224,12 @@ sealed class ConsoleOp {
 	@SerialName("cross_domain_unlink")
 	data class CrossDomainUnlink(
 		val domainId: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_untrust")
+	data class CrossDomainUntrust(
+		val ownerSignPub: String,
 	) : ConsoleOp()
 }
 
@@ -312,6 +333,7 @@ data class Provisioning(
 	val gatewaySignPub: String? = null,
 	val gatewayBoxPub: String? = null,
 	val pendingTenant: PendingTenantRef? = null,
+	val enrollHandshake: EnrollHandshakeRef? = null,
 )
 
 @Serializable
@@ -412,6 +434,42 @@ data class EnrollResult(
 )
 
 @Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("step")
+sealed class EnrollHandshakeOp {
+	@Serializable
+	@SerialName("commit")
+	data class Commit(
+		val handshakeId: String,
+		val role: String,
+		val commitment: String,
+	) : EnrollHandshakeOp()
+
+	@Serializable
+	@SerialName("reveal")
+	data class Reveal(
+		val handshakeId: String,
+		val role: String,
+		val reveal: EnrollReveal,
+	) : EnrollHandshakeOp()
+
+	@Serializable
+	@SerialName("cancel")
+	data class Cancel(
+		val handshakeId: String,
+		val role: String,
+	) : EnrollHandshakeOp()
+}
+
+@Serializable
+data class EnrollHandshakeResult(
+	val ok: Boolean,
+	val error: String? = null,
+	val peerCommitment: String? = null,
+	val peerReveal: EnrollReveal? = null,
+)
+
+@Serializable
 data class PendingTenant(
 	val domainId: String,
 	val operatorName: String,
@@ -442,6 +500,87 @@ data class GatewayBootstrapFrame(
 	val v: Long,
 	val signerSignPub: String,
 	val sealed: SealedEnvelope,
+)
+
+@Serializable
+data class SignedXDomainUntrust(
+	val untrust: XDomainUntrust,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class RosterRequest(
+	val signerSignPub: String,
+	val proofAt: Long,
+	val nonce: String,
+	val proof: String,
+)
+
+@Serializable
+data class RosterResult(
+	val ok: Boolean,
+	val error: String? = null,
+	val members: List<RosterMember>? = null,
+)
+
+@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("step")
+sealed class TrustHandshakeOp {
+	@Serializable
+	@SerialName("arm")
+	data class Arm(
+		val rendezvousId: String,
+		val initiatorOwnerSignPub: String,
+		val targetOwnerSignPub: String,
+		val commitment: String,
+	) : TrustHandshakeOp()
+
+	@Serializable
+	@SerialName("join")
+	data class Join(
+		val rendezvousId: String,
+		val joinerOwnerSignPub: String,
+		val commitment: String,
+	) : TrustHandshakeOp()
+
+	@Serializable
+	@SerialName("reveal")
+	data class Reveal(
+		val rendezvousId: String,
+		val side: String,
+		val reveal: EnrollReveal,
+	) : TrustHandshakeOp()
+
+	@Serializable
+	@SerialName("cancel")
+	data class Cancel(
+		val rendezvousId: String,
+	) : TrustHandshakeOp()
+}
+
+@Serializable
+data class TrustHandshakeResult(
+	val ok: Boolean,
+	val error: String? = null,
+	val peerCommitment: String? = null,
+	val peerReveal: EnrollReveal? = null,
+)
+
+@Serializable
+data class TrustPendingRequest(
+	val signerSignPub: String,
+	val proofAt: Long,
+	val nonce: String,
+	val proof: String,
+)
+
+@Serializable
+data class TrustPendingResult(
+	val ok: Boolean,
+	val error: String? = null,
+	val pending: List<TrustPendingEntry>? = null,
 )
 
 @Serializable
@@ -563,7 +702,7 @@ data class CrossDomainListSharesResult(
 @Serializable
 data class CrossDomainShareEntry(
 	val sessionTarget: String,
-	val domainId: String,
+	val target: CrossDomainShareTarget,
 )
 
 @Serializable
@@ -575,6 +714,7 @@ data class CrossDomainListPeersResult(
 data class CrossDomainPeerEntry(
 	val domainId: String,
 	val gatewayId: String,
+	val ownerSignPub: String,
 )
 
 @Serializable
@@ -588,6 +728,15 @@ data class CrossDomainUnlinkResult(
 data class PendingTenantRef(
 	val domainId: String,
 	val nonce: String,
+)
+
+@Serializable
+data class EnrollHandshakeRef(
+	val adminOwnerSignPub: String,
+	val adminOwnerBoxPub: String,
+	val adminDomainId: String,
+	val handshakeId: String,
+	val pin: String,
 )
 
 @Serializable
@@ -687,4 +836,33 @@ data class SetOperatorName(
 	val operatorName: String,
 	val issuedAt: Long,
 	val nonce: String,
+)
+
+@Serializable
+data class EnrollReveal(
+	val ownerSignPub: String,
+	val ownerBoxPub: String,
+	val domainId: String,
+	val salt: String,
+)
+
+@Serializable
+data class XDomainUntrust(
+	val myOwnerSignPub: String,
+	val peerOwnerSignPub: String,
+	val revokedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
+data class RosterMember(
+	val ownerSignPub: String,
+	val operatorName: String,
+	val online: Boolean,
+)
+
+@Serializable
+data class TrustPendingEntry(
+	val initiatorOwnerSignPub: String,
+	val rendezvousId: String,
 )

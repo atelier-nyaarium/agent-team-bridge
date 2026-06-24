@@ -104,4 +104,29 @@ object ProvisionOpsCrypto {
 	fun verifySetOperatorName(s: SignedSetOperatorName, expectedOwnerSignPub: String): Boolean =
 		s.ownerSignPub == expectedOwnerSignPub &&
 			Crypto.verify(setOperatorNameSigningBytes(s.rename, expectedOwnerSignPub), s.signature, expectedOwnerSignPub)
+
+	/**
+	 * The cross-tenant roster request proof: the console proves it holds an admitted signing key by
+	 * signing ROSTER_V1 over its OWN key + a fresh timestamp + nonce (proof of possession, mirroring
+	 * the registration proof). evie verifies the signature, freshness, and non-replay, then resolves
+	 * the key to an admitted console. The preimage binds the RAW signer key (not a fingerprint), so
+	 * it reproduces byte-for-byte against rosterRequestSigningBytes in enrollment.ts.
+	 */
+	fun rosterRequestSigningBytes(signerSignPub: String, proofAt: Long, nonce: String): ByteArray =
+		listOf("ROSTER_V1", signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
+
+	fun signRosterRequest(signerSignPub: String, proofAt: Long, nonce: String, signPriv: String): String =
+		Crypto.sign(rosterRequestSigningBytes(signerSignPub, proofAt, nonce), signPriv)
+
+	/**
+	 * The FLOW-2 trust-pending query proof: the target owner proves possession of its owner key by
+	 * signing TRUST_PENDING_V1 over its OWN key + a fresh timestamp + nonce, so only the owner can
+	 * enumerate the arms aimed at it. A distinct version tag from ROSTER_V1, so neither proof crosses
+	 * over. Reproduces byte-for-byte against trustPendingSigningBytes in enrollment.ts.
+	 */
+	fun trustPendingSigningBytes(signerSignPub: String, proofAt: Long, nonce: String): ByteArray =
+		listOf("TRUST_PENDING_V1", signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
+
+	fun signTrustPendingRequest(signerSignPub: String, proofAt: Long, nonce: String, signPriv: String): String =
+		Crypto.sign(trustPendingSigningBytes(signerSignPub, proofAt, nonce), signPriv)
 }

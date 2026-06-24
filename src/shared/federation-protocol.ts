@@ -209,3 +209,68 @@ export function verifyXDomainLink(s: SignedXDomainLink, expectedOwnerSignPubB64:
 	if (s.ownerSignPub !== expectedOwnerSignPubB64) return false;
 	return verify(xDomainLinkSigningBytes(s.link), s.signature, expectedOwnerSignPubB64);
 }
+
+////////////////////////////////
+//  Untrust tombstone (withdraw trust in a friend OWNER)
+//
+//  The Users-surface "Untrust" revokes trust in a PERSON (an owner), not one gateway, so the
+//  tombstone is keyed by the two OWNER roots only - dropping ANY trust link to that owner whatever
+//  gateway it bound. Signed by MY owner key (only I can withdraw my own trust) and verified under
+//  it. `revokedAt` is the floor: a trust link issued at or before it is dead (so a replayed stale
+//  link cannot re-establish trust), while a genuine re-trust (a fresh link issued AFTER the
+//  revoke) is honored. Gateway-persisted like the link itself; evie never sees it.
+
+export const XDomainUntrustSchema = z
+	.object({
+		// The owner withdrawing trust (the signer).
+		myOwnerSignPub: z.string().min(1),
+		// The friend owner being untrusted (the trust is dropped for every gateway under this root).
+		peerOwnerSignPub: z.string().min(1),
+		// Revoke time (epoch ms); the floor that nullifies any trust link issued at or before it.
+		revokedAt: z.number().int().nonnegative(),
+		// Single-use random (base64), so a re-issued untrust is a distinct bytestring.
+		nonce: z.string().min(1),
+	})
+	.meta({ id: "XDomainUntrust" });
+
+export const SignedXDomainUntrustSchema = z
+	.object({
+		untrust: XDomainUntrustSchema,
+		// The owner key that signed this untrust (checked against the local owner root, never trusted alone).
+		ownerSignPub: z.string().min(1),
+		// The owner's Ed25519 signature over xDomainUntrustSigningBytes (base64).
+		signature: z.string().min(1),
+	})
+	.meta({ id: "SignedXDomainUntrust" });
+
+export type XDomainUntrust = z.infer<typeof XDomainUntrustSchema>;
+export type SignedXDomainUntrust = z.infer<typeof SignedXDomainUntrustSchema>;
+
+/** Versioned, newline-joined signing bytes for an untrust tombstone. Same shape discipline as
+ * `xDomainLinkSigningBytes` (every field base64/decimal, no newline can sneak in). */
+export function xDomainUntrustSigningBytes(u: XDomainUntrust): Buffer {
+	return Buffer.from(
+		["XDOMAIN_UNTRUST_V1", u.myOwnerSignPub, u.peerOwnerSignPub, String(u.revokedAt), u.nonce].join("\n"),
+		"utf8",
+	);
+}
+
+/** Owner-sign an untrust tombstone (the owner device holds the signing key). */
+export function signXDomainUntrust(
+	untrust: XDomainUntrust,
+	ownerSignPrivB64: string,
+	ownerSignPubB64: string,
+): SignedXDomainUntrust {
+	return {
+		untrust,
+		ownerSignPub: ownerSignPubB64,
+		signature: sign(xDomainUntrustSigningBytes(untrust), ownerSignPrivB64),
+	};
+}
+
+/** True if the untrust verifies under the EXPECTED owner key (the local owner root - only that key
+ * may withdraw its own trust). The claimed ownerSignPub must equal it AND the signature must check. */
+export function verifyXDomainUntrust(s: SignedXDomainUntrust, expectedOwnerSignPubB64: string): boolean {
+	if (s.ownerSignPub !== expectedOwnerSignPubB64) return false;
+	return verify(xDomainUntrustSigningBytes(s.untrust), s.signature, expectedOwnerSignPubB64);
+}

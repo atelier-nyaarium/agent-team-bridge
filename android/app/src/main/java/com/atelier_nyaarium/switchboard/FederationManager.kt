@@ -122,9 +122,16 @@ class FederationManager(private val store: ProvisioningStore) {
 	 * Domain (`srcDomainId`) may relay to a friend Domain (`dstDomainId`) it has linked with.
 	 * evie's relay-affinity gate honors a cross-Domain gateway_relay only when this edge
 	 * exists. Content-blind: it names only the two Domain ids. */
-	fun signXdomainLinkEdge(srcDomainId: String, dstDomainId: String, nowMs: Long): SignedXDomainLinkEdge {
+	fun signXdomainLinkEdge(
+		srcDomainId: String,
+		dstDomainId: String,
+		nowMs: Long,
+		edgeNonce: String? = null,
+	): SignedXDomainLinkEdge {
 		val owner = ownerIdentity()
-		val edge = XDomainLinkEdge(srcDomainId, dstDomainId, nowMs, nonce())
+		// A caller may PIN the nonce (the enroll ceremony) so a retry re-signs the same edge identity,
+		// which evie dedupes by (srcDomainId, nonce); an unpinned caller mints a fresh one as before.
+		val edge = XDomainLinkEdge(srcDomainId, dstDomainId, nowMs, edgeNonce ?: nonce())
 		return XDomainLinkCrypto.signEdge(edge, owner.sign.priv, owner.sign.pub)
 	}
 
@@ -172,6 +179,58 @@ class FederationManager(private val store: ProvisioningStore) {
 	 * reuses it (the signed link stays byte-stable across the retry). Exposed so the wizard can
 	 * pin it for the lifetime of one pairing. */
 	fun freshLinkNonce(): String = nonce()
+
+	/** Build a signed cross-tenant roster request: the console proves possession of its admitted
+	 * signing key by signing a fresh ROSTER proof, so evie can scope the roster to this owner's
+	 * network (and reject a key it cannot place in a Domain). */
+	fun signRosterRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.RosterRequest {
+		val console = consoleIdentity()
+		val n = nonce()
+		return com.atelier_nyaarium.switchboard.proto.RosterRequest(
+			signerSignPub = console.sign.pub,
+			proofAt = nowMs,
+			nonce = n,
+			proof = ProvisionOpsCrypto.signRosterRequest(console.sign.pub, nowMs, n, console.sign.priv),
+		)
+	}
+
+	/** Build a signed FLOW-2 "who armed trust toward me?" query: the OWNER proves possession of its
+	 * owner key (the arms are indexed by owner key, so the owner key - not the console key - signs the
+	 * TRUST_PENDING proof). evie verifies + scopes to this owner before listing the arms. */
+	fun signTrustPendingRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.TrustPendingRequest {
+		val owner = ownerIdentity()
+		val n = nonce()
+		return com.atelier_nyaarium.switchboard.proto.TrustPendingRequest(
+			signerSignPub = owner.sign.pub,
+			proofAt = nowMs,
+			nonce = n,
+			proof = ProvisionOpsCrypto.signTrustPendingRequest(owner.sign.pub, nowMs, n, owner.sign.priv),
+		)
+	}
+
+	/** A fresh rendezvous id for a FLOW-2 trust arm (also the SAS pin both sides bind). Unguessable so
+	 * a third party cannot target a live rendezvous. */
+	fun freshRendezvousId(): String = nonce()
+
+	/** This owner's party for a FLOW-2 compare: the owner keys + the given local Domain. Reuses the
+	 * EnrollParty shape so the SAS/commitment machinery (enrollSas/enrollCommitment) is shared. */
+	fun trustParty(domainId: String): com.atelier_nyaarium.switchboard.proto.EnrollParty {
+		val owner = ownerIdentity()
+		return com.atelier_nyaarium.switchboard.proto.EnrollParty(owner.sign.pub, owner.box.pub, domainId)
+	}
+
+	/** A fresh UNGUESSABLE handshake id, minted by the admin into the enroll QR. Unguessability is
+	 * what stops a third party who learned a Domain from targeting a real ceremony window. */
+	fun freshHandshakeId(): String = nonce()
+
+	/** A fresh high-entropy enroll pin, minted by the admin into the QR. It rides the QR OUT OF BAND
+	 * and is NEVER sent to evie, so the untrusted broker cannot compute a candidate compare code to
+	 * grind - the residual is the 6-digit blind online guess, not an offline search. */
+	fun freshEnrollPin(): String = nonce()
+
+	/** A fresh per-ceremony commitment salt, so the round-1 commitment is hiding (evie learns the
+	 * peer's keys only at reveal, after it has had to commit to its own substitution). */
+	fun freshEnrollSalt(): String = nonce()
 
 	/** The current keyring: the stored snapshot, or an owner-only one before any sync. */
 	fun keyring(): Keyring = Keyring.parse(store.loadDomain()) ?: Keyring.empty(ownerSignPub())
@@ -256,6 +315,55 @@ class FederationManager(private val store: ProvisioningStore) {
 
 	////////////////////////////////
 	//  Friend cross-Domain onboarding (pending tenant + first-root + operator name)
+
+	////////////////////////////////
+	//  Trusted owners (the owner-keyed friend graph the Users surface reads)
+
+	/** The owners this owner has completed a trust ceremony with (enroll or link), by ownerSignPub.
+	 * This is the persistent FRIEND edge - recorded even for a gateway-less person (the design's Q3=B)
+	 * - distinct from the gateway-side relay-affinity edges that enable actual cross-Domain traffic. */
+	@Synchronized
+	fun trustedOwners(): Set<String> {
+		val raw = store.loadTrustedOwners() ?: return emptySet()
+		return runCatching {
+			val arr = org.json.JSONArray(raw)
+			(0 until arr.length()).map { arr.getString(it) }.toSet()
+		}.getOrDefault(emptySet())
+	}
+
+	/** True iff this owner has trusted the given owner key. */
+	fun isTrusted(ownerSignPub: String): Boolean = ownerSignPub.isNotEmpty() && trustedOwners().contains(ownerSignPub)
+
+	/** Record a trust edge to an owner (idempotent). Called on a completed trust ceremony. */
+	@Synchronized
+	fun addTrustedOwner(ownerSignPub: String) {
+		if (ownerSignPub.isEmpty()) return
+		persistTrustedOwners(trustedOwners() + ownerSignPub)
+	}
+
+	/** Drop a trust edge to an owner (the untrust friend-graph half; the relay-edge revoke is separate). */
+	@Synchronized
+	fun removeTrustedOwner(ownerSignPub: String) {
+		persistTrustedOwners(trustedOwners() - ownerSignPub)
+	}
+
+	/** Owner-sign an untrust tombstone withdrawing trust in a peer owner (myOwner -> peerOwner). */
+	fun signUntrust(peerOwnerSignPub: String, nowMs: Long): com.atelier_nyaarium.switchboard.proto.SignedXDomainUntrust {
+		val owner = ownerIdentity()
+		val untrust = com.atelier_nyaarium.switchboard.proto.XDomainUntrust(
+			myOwnerSignPub = owner.sign.pub,
+			peerOwnerSignPub = peerOwnerSignPub,
+			revokedAt = nowMs,
+			nonce = nonce(),
+		)
+		return XDomainLinkCrypto.signUntrust(untrust, owner.sign.priv, owner.sign.pub)
+	}
+
+	private fun persistTrustedOwners(owners: Set<String>) {
+		val arr = org.json.JSONArray()
+		owners.forEach { arr.put(it) }
+		store.saveTrustedOwners(arr.toString())
+	}
 
 	/** A fresh opaque Domain id (a slug: lowercase hex, never shown to the human - pure
 	 * plumbing). 16 random bytes hex-encoded is well under the 64-char slug bound and collides

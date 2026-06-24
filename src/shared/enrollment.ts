@@ -1,4 +1,4 @@
-// SYNC-HASH: 61a169549b3e5b9d24866737cb551981
+// SYNC-HASH: 64c143dc9a07c06414046eaf2d2d9bc5
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -319,12 +319,210 @@ export const EnrollResultSchema = z
 	.object({ ok: z.boolean(), error: z.string().optional() })
 	.meta({ id: "EnrollResult" });
 
+////////////////////////////////
+//  Enroll handshake (the FLOW-1 in-person mutual 6-digit compare)
+//
+//  A fresh enrollee has no gateway, so the commit-reveal that confirms the admin's + the
+//  enrollee's OWNER keys is brokered by evie as an UNTRUSTED DUMB BROKER: evie relays the two
+//  phones' commit then reveal frames by handshakeId and NEVER computes the SAS (the phones
+//  compute it locally - SasCrypto.enrollSas - and the humans compare). These frames carry NO
+//  pin (it rides the QR out of band) and NO signature (only the resulting cross-Domain link
+//  edge is owner-signed). Each role slot is bound to its first committer; a second, different
+//  commitment for the same (handshakeId, role) is rejected (anti-hijack). The phone POSTs the
+//  frame DIRECTLY to evie's console-bridge enrollHandshake intake (pre-admission, app-token
+//  gated), re-POSTing the same step to poll for the peer's frame.
+
+/** One revealed enroll party on the wire: the owner keys + Domain + the round-1 salt. The peer
+ * re-hashes these (ENROLL_COMMIT_V1) against the round-1 commitment, then folds them into its
+ * local enroll SAS. */
+export const EnrollRevealSchema = z
+	.object({
+		ownerSignPub: b64Field(),
+		ownerBoxPub: b64Field(),
+		domainId: slugField(),
+		salt: b64Field(),
+	})
+	.meta({ id: "EnrollReveal" });
+
+/** A phone's frame to evie's enroll-handshake broker, by step: `commit` (round-1 hiding
+ * commitment to this side's owner keys), `reveal` (round-2 owner keys + salt, sent once the
+ * peer's commitment is in), `cancel` (abort + evict on [No] / timeout). `handshakeId`
+ * (unguessable, from the QR) names the window; `role` is ADMIN (showed the QR) or ENROLLEE
+ * (scanned). NO pin (out of band), NO signature (the trust artifact is the later link edge). */
+export const EnrollHandshakeOpSchema = z
+	.discriminatedUnion("step", [
+		z.object({
+			step: z.literal("commit"),
+			handshakeId: b64Field(),
+			role: z.enum(["ADMIN", "ENROLLEE"]),
+			commitment: b64Field(),
+		}),
+		z.object({
+			step: z.literal("reveal"),
+			handshakeId: b64Field(),
+			role: z.enum(["ADMIN", "ENROLLEE"]),
+			reveal: EnrollRevealSchema,
+		}),
+		z.object({ step: z.literal("cancel"), handshakeId: b64Field(), role: z.enum(["ADMIN", "ENROLLEE"]) }),
+	])
+	.meta({ id: "EnrollHandshakeOp" });
+
+/** evie's reply to an enroll-handshake frame. `ok:false` + `error` is terminal (the window
+ * expired, hit the attempt cap, or a role-slot conflict). Otherwise the PEER's frame is
+ * included once it lands so the phone can verify + compute the SAS locally; absent means keep
+ * polling (re-POST the same step). */
+export const EnrollHandshakeResultSchema = z
+	.object({
+		ok: z.boolean(),
+		error: z.string().optional(),
+		// Present on a commit reply once the PEER has committed (round 1 done on both sides).
+		peerCommitment: b64Field().optional(),
+		// Present on a reveal reply once the PEER has revealed (round 2 done on both sides).
+		peerReveal: EnrollRevealSchema.optional(),
+	})
+	.meta({ id: "EnrollHandshakeResult" });
+
+////////////////////////////////
+//  Cross-tenant roster (the "Users" surface: everyone on this evie, name + presence)
+//
+//  The Users surface unifies a network's members into one list. evie is the source of truth (the
+//  per-Domain names + owners are in its Secret; presence is its live gateway-connection table). The
+//  visibility model is Q1=A "full roster": every member on this evie is visible to every other
+//  member, non-transitive (the roster never reaches a member's linked peers). So the request only
+//  AUTHENTICATES the caller as some member of this evie (a console admitted in one of its Domains) -
+//  there is no per-row visibility predicate. A row carries the owner identity + display name +
+//  presence ONLY: NO gatewayId and NO box key, so a row is never a seal/probe handle (the trust
+//  ceremony resolves a target's gateway server-side); the phone derives the fingerprint from
+//  ownerSignPub. evie OPAQUE-REJECTS a caller it cannot place in a Domain.
+
+/** A console's signed request for the roster. The console signs ROSTER_V1 over its own signing key
+ * + a fresh timestamp + nonce (proof of possession); evie verifies the signature, freshness, and
+ * non-replay, then resolves the signer to an admitted console in one of its Domains. */
+export const RosterRequestSchema = z
+	.object({
+		// The console's raw Ed25519 signing key (the subject of an owner-signed kind:console admission).
+		signerSignPub: b64Field(),
+		// Proof timestamp (epoch ms), freshness-checked against evie's clock.
+		proofAt: z.number().int().nonnegative(),
+		// Single-use random (base64); evie rejects a replayed nonce within the freshness window.
+		nonce: b64Field(),
+		// The console's Ed25519 signature over rosterRequestSigningBytes (base64).
+		proof: b64Field(),
+	})
+	.meta({ id: "RosterRequest" });
+
+/** One member row in the roster: the owner identity (the trust anchor; the phone derives the
+ * fingerprint from it), the network display name, and a presence boolean. Deliberately NO gatewayId
+ * / box key / domainId - a row is an identity, never a routing or seal handle, and topology is
+ * stripped. */
+export const RosterMemberSchema = z
+	.object({
+		ownerSignPub: b64Field(),
+		operatorName: displayField(128),
+		// True iff this member's Domain has a live gateway connection at evie right now.
+		online: z.boolean(),
+	})
+	.meta({ id: "RosterMember" });
+
+/** evie's roster reply. `ok:false` + `error` is an OPAQUE reject (the caller could not be placed in a
+ * Domain on this evie, or the proof failed) - it never enumerates Domain state. */
+export const RosterResultSchema = z
+	.object({
+		ok: z.boolean(),
+		error: z.string().optional(),
+		// Present only on success; absent on an opaque reject.
+		members: z.array(RosterMemberSchema).optional(),
+	})
+	.meta({ id: "RosterResult" });
+
+////////////////////////////////
+//  Trust rendezvous (FLOW-2: roster-initiated user-to-user trust)
+//
+//  Two members already on this evie establish owner-to-owner trust WITHOUT a QR. The initiator ARMS
+//  (commits; the rendezvous is indexed at evie under the TARGET owner key). The target discovers the
+//  armed intent with a "who armed trust toward me?" query (the highlight - no push), arms back, then
+//  both run the SAME commit-reveal owner-key compare as the enroll ceremony, REUSING enrollSas with
+//  sorted-owner-key roles + the rendezvousId as the pin (so no new SAS scheme). evie stays the dumb
+//  broker: it indexes the two owner keys + relays opaque commit/reveal, never computing the SAS.
+
+export const TrustHandshakeOpSchema = z
+	.discriminatedUnion("step", [
+		// The INITIATOR arms: creates the rendezvous (indexed under targetOwnerSignPub) + commits.
+		z.object({
+			step: z.literal("arm"),
+			rendezvousId: b64Field(),
+			initiatorOwnerSignPub: b64Field(),
+			targetOwnerSignPub: b64Field(),
+			commitment: b64Field(),
+		}),
+		// The TARGET arms back (or either side re-polls by re-sending its own commit): joins the
+		// rendezvous. The joiner's OWN owner key must match the armed target.
+		z.object({
+			step: z.literal("join"),
+			rendezvousId: b64Field(),
+			joinerOwnerSignPub: b64Field(),
+			commitment: b64Field(),
+		}),
+		z.object({
+			step: z.literal("reveal"),
+			rendezvousId: b64Field(),
+			side: z.enum(["INITIATOR", "TARGET"]),
+			reveal: EnrollRevealSchema,
+		}),
+		z.object({ step: z.literal("cancel"), rendezvousId: b64Field() }),
+	])
+	.meta({ id: "TrustHandshakeOp" });
+
+/** evie's reply to a trust-handshake frame. Same shape + semantics as the enroll-handshake reply:
+ * `ok:false` is terminal; otherwise the peer's commit/reveal is included once it lands. */
+export const TrustHandshakeResultSchema = z
+	.object({
+		ok: z.boolean(),
+		error: z.string().optional(),
+		peerCommitment: b64Field().optional(),
+		peerReveal: EnrollRevealSchema.optional(),
+	})
+	.meta({ id: "TrustHandshakeResult" });
+
+/** A target's signed "who armed trust toward me?" query (the highlight). The target signs
+ * TRUST_PENDING_V1 over its OWN owner signing key + a fresh timestamp + nonce (proof of possession);
+ * evie verifies the signature, freshness, and non-replay, then returns the arms indexed under that
+ * owner key. Only the owner-key holder can enumerate the arms aimed at it. */
+export const TrustPendingRequestSchema = z
+	.object({
+		signerSignPub: b64Field(),
+		proofAt: z.number().int().nonnegative(),
+		nonce: b64Field(),
+		proof: b64Field(),
+	})
+	.meta({ id: "TrustPendingRequest" });
+
+/** One armed trust intent toward the querying owner: who armed it + the rendezvous to join. */
+export const TrustPendingEntrySchema = z
+	.object({
+		initiatorOwnerSignPub: b64Field(),
+		rendezvousId: b64Field(),
+	})
+	.meta({ id: "TrustPendingEntry" });
+
+export const TrustPendingResultSchema = z
+	.object({
+		ok: z.boolean(),
+		error: z.string().optional(),
+		// Present only on success; absent on an opaque reject.
+		pending: z.array(TrustPendingEntrySchema).optional(),
+	})
+	.meta({ id: "TrustPendingResult" });
+
 export type EnrollmentPayload = z.infer<typeof EnrollmentPayloadSchema>;
 export type EnrollOwnerPayload = Extract<EnrollmentPayload, { type: "enroll-owner" }>;
 export type AdmitGatewayPayload = Extract<EnrollmentPayload, { type: "admit-gateway" }>;
 export type AuthorizeConsolePayload = Extract<EnrollmentPayload, { type: "authorize-console" }>;
 export type EnrollOp = z.infer<typeof EnrollOpSchema>;
 export type EnrollResult = z.infer<typeof EnrollResultSchema>;
+export type EnrollReveal = z.infer<typeof EnrollRevealSchema>;
+export type EnrollHandshakeOp = z.infer<typeof EnrollHandshakeOpSchema>;
+export type EnrollHandshakeResult = z.infer<typeof EnrollHandshakeResultSchema>;
 export type PendingTenant = z.infer<typeof PendingTenantSchema>;
 export type ProvisionTenant = z.infer<typeof ProvisionTenantSchema>;
 export type SignedProvisionTenant = z.infer<typeof SignedProvisionTenantSchema>;
@@ -338,6 +536,14 @@ export type XDomainLinkEdge = z.infer<typeof XDomainLinkEdgeSchema>;
 export type SignedXDomainLinkEdge = z.infer<typeof SignedXDomainLinkEdgeSchema>;
 export type XDomainLinkRevocation = z.infer<typeof XDomainLinkRevocationSchema>;
 export type SignedXDomainLinkRevocation = z.infer<typeof SignedXDomainLinkRevocationSchema>;
+export type RosterRequest = z.infer<typeof RosterRequestSchema>;
+export type RosterMember = z.infer<typeof RosterMemberSchema>;
+export type RosterResult = z.infer<typeof RosterResultSchema>;
+export type TrustHandshakeOp = z.infer<typeof TrustHandshakeOpSchema>;
+export type TrustHandshakeResult = z.infer<typeof TrustHandshakeResultSchema>;
+export type TrustPendingRequest = z.infer<typeof TrustPendingRequestSchema>;
+export type TrustPendingEntry = z.infer<typeof TrustPendingEntrySchema>;
+export type TrustPendingResult = z.infer<typeof TrustPendingResultSchema>;
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -592,4 +798,62 @@ export function signSetOperatorName(
 export function verifySetOperatorName(s: SignedSetOperatorName, expectedOwnerSignPubB64: string): boolean {
 	if (s.ownerSignPub !== expectedOwnerSignPubB64) return false;
 	return verify(setOperatorNameSigningBytes(s.rename, expectedOwnerSignPubB64), s.signature, expectedOwnerSignPubB64);
+}
+
+////////////////////////////////
+//  Roster request proof-of-possession (a console proving it holds an admitted signing key)
+//
+//  Mirrors the registration proof: the console signs a versioned, newline-joined challenge over its
+//  own signing key + a fresh timestamp + nonce. evie verifies the signature against the key, that
+//  the timestamp is fresh, and (statefully) that the nonce is unseen in the window, then resolves
+//  the key to an owner-signed kind:console admission in one of its Domains. So a captured request
+//  cannot be replayed to pull the roster.
+
+/** Default roster-proof freshness window (epoch ms), same posture as the registration proof. */
+export const ROSTER_MAX_SKEW_MS = 120_000;
+
+export function rosterRequestSigningBytes(signerSignPubB64: string, proofAt: number, nonce: string): Buffer {
+	return Buffer.from(["ROSTER_V1", signerSignPubB64, String(proofAt), nonce].join("\n"), "utf8");
+}
+
+/** Sign a fresh roster request with the console's raw Ed25519 private key. */
+export function signRosterRequest(
+	signerSignPubB64: string,
+	proofAt: number,
+	nonce: string,
+	signPrivB64: string,
+): string {
+	return sign(rosterRequestSigningBytes(signerSignPubB64, proofAt, nonce), signPrivB64);
+}
+
+/** True if the roster request's proof verifies under its claimed signer key. The caller (evie)
+ * additionally checks freshness, non-replay, and that the signer is an admitted console. */
+export function verifyRosterRequest(req: RosterRequest): boolean {
+	return verify(rosterRequestSigningBytes(req.signerSignPub, req.proofAt, req.nonce), req.proof, req.signerSignPub);
+}
+
+/** Default trust-pending-proof freshness window (epoch ms), same posture as the roster proof. */
+export const TRUST_PENDING_MAX_SKEW_MS = 120_000;
+
+/** Canonical TRUST_PENDING_V1 proof-of-possession bytes: the querying OWNER's signing key + a fresh
+ * timestamp + nonce. A distinct version tag from ROSTER_V1 so a roster proof can never be replayed as
+ * a trust-pending query and vice versa. */
+export function trustPendingSigningBytes(signerSignPubB64: string, proofAt: number, nonce: string): Buffer {
+	return Buffer.from(["TRUST_PENDING_V1", signerSignPubB64, String(proofAt), nonce].join("\n"), "utf8");
+}
+
+/** Sign a fresh trust-pending query with the querying owner's raw Ed25519 private key. */
+export function signTrustPendingRequest(
+	signerSignPubB64: string,
+	proofAt: number,
+	nonce: string,
+	signPrivB64: string,
+): string {
+	return sign(trustPendingSigningBytes(signerSignPubB64, proofAt, nonce), signPrivB64);
+}
+
+/** True if the trust-pending query's proof verifies under its claimed owner key. The caller (evie)
+ * additionally checks freshness + non-replay before returning the arms indexed under that owner. */
+export function verifyTrustPendingRequest(req: TrustPendingRequest): boolean {
+	return verify(trustPendingSigningBytes(req.signerSignPub, req.proofAt, req.nonce), req.proof, req.signerSignPub);
 }
