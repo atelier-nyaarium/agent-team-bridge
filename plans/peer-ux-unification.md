@@ -162,13 +162,27 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
       land in the gateway phase. THIS IS THE PATTERN for any new signed scheme: schema+signing in the right
       shared file -> gen vector from the TS ref with the corpus's fixed key -> Kotlin twin -> codegen ROOT (or
       nest in an op) -> TS + Kotlin tests -> manifest if a NEW corpus.
-    - [NEXT] the remaining Phase-1 shapes - each is interconnected with its evie/gateway/Android producer, so
-      build them as CONNECTED vertical slices, not wire-only stubs. The two big ones are the cross-tenant ROSTER
-      op (new op + the evie aggregation - the largest net-new piece) and the PENDING-TRUST op (arm/cancel/poll,
-      keyed by target owner). The DISCRIMINATED share target ({kind:domain}|{kind:everyone-trusted}) modifies
-      `CrossDomainShareEntry` + the share ops + the gateway gate (`crossDomainShareState`). Landmarks to reuse:
-      `XDomainLink` (owner-keyed link exists), `enrollSas` (owner-anchored SAS exists), `cross_domain_unlink`
-      (domain-keyed; untrust is the owner-keyed sibling), `crossDomainShareState` (the share store).
+    - [DONE] **ROSTER data path COMPLETE end to end** (the Users surface's plumbing; the Compose SCREEN is the
+      only remaining roster piece, Phase 4). Commits: switchboard b67ea89 (wire: RosterRequest/Member/Result +
+      the ROSTER_V1 proof in the synced enrollment.ts, codegen'd) + aa46c8d (members optional, absent on opaque
+      reject) + 1306545 (the proof Kotlin twin in ProvisionOpsCrypto + a provision-ops vector) + 1bbeee5 (Android
+      transport: ConsoleClient.roster + FederationManager.signRosterRequest + ChatRepository.fetchRoster); evie
+      05155bd (synced enrollment) + fdec6df (the pure `buildRoster` core + roster.bun.test: full-roster, guest
+      sees co-tenant, opaque non-member, revoked console, pending excluded, gateway-key-not-member) + a29314e
+      (the I/O: KubeSecretStore.listDomains, BridgeServer.onlineDomainIds, BridgeService.handleRoster with
+      proof+freshness+replay, the ConsoleBridgeServer `roster` intake + 4 intake tests). Visibility = Q1 "full
+      roster": a console admitted in ANY Domain on the evie sees EVERY rooted Domain (membership-gated, no
+      per-row predicate); a row is {ownerSignPub, operatorName, online} only (no gatewayId/box/domainId). To
+      render: `ChatRepository.fetchRoster()` returns the `RosterMember` rows; build the Users screen on it.
+    - [NEXT] (a) the **Users Compose SCREEN** consuming `fetchRoster()` (replaces Federation's split sections;
+      name + presence dot + Trusted badge + fingerprint derived from ownerSignPub; the per-row kebab). (b) The
+      **PENDING-TRUST op** (arm/cancel/poll, keyed by TARGET owner; server-side routing, no token/gatewayId in a
+      row) - the arm+highlight trust flow. (c) The **DISCRIMINATED share target**
+      ({kind:domain}|{kind:everyone-trusted}) on `CrossDomainShareEntry` + the share ops + the gateway gate
+      (`crossDomainShareState`) + the "everyone I trust" central isSharedTo helper. (d) The untrust + link CONSOLE
+      OPS + the gateway ForeignOwnerKeyring handlers (the untrust tombstone wire shape is built; its op + handler
+      are not). Landmarks to reuse: `XDomainLink` (owner-keyed link exists), `enrollSas`, `cross_domain_unlink`
+      (domain-keyed; untrust is the owner-keyed sibling), `crossDomainShareState`.
     - **Roster evie landmarks (grounding for the aggregation, found this stretch):** presence = evie's
       `BridgeServer.gatewayConnections: Map<domainId, Map<gatewayId, ConnectionId>>` (a Domain with a live
       gateway conn is online). Per-Domain name + owner live in the `EnrollmentState` in the federation Secret
