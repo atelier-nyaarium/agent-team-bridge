@@ -1636,6 +1636,32 @@ class ChatRepository(
 		}
 	}
 
+	/** How many of MY sessions each TRUSTED person can reach, keyed by their owner key (the Users
+	 * row's "N shared sessions"). A person reaches a session shared to one of their Domains OR shared
+	 * to everyone-trusted. Joins the peer set (owner -> their Domains) with the share list. */
+	suspend fun sharedSessionCounts(): Result<Map<String, Int>> = withContext(Dispatchers.IO) {
+		runCatching {
+			val ownerDomains = client().crossDomainListPeers().peers
+				.filter { it.ownerSignPub.isNotEmpty() }
+				.groupBy({ it.ownerSignPub }, { it.domainId })
+			val shares = client().crossDomainListShares().shares
+			val everyoneSessions = shares
+				.filter { it.target is com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.EveryoneTrusted }
+				.map { it.sessionTarget }
+				.toSet()
+			val byDomain = shares
+				.mapNotNull { e ->
+					(e.target as? com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.Domain)?.let {
+						it.domainId to e.sessionTarget
+					}
+				}
+				.groupBy({ it.first }, { it.second })
+			ownerDomains.mapValues { (_, domains) ->
+				(domains.flatMap { byDomain[it].orEmpty() }.toSet() + everyoneSessions).size
+			}
+		}
+	}
+
 	/** The sessions shared to EVERYONE the owner trusts (the Users-surface share mode). */
 	suspend fun sessionsSharedToEveryone(): Result<Set<String>> = withContext(Dispatchers.IO) {
 		runCatching {

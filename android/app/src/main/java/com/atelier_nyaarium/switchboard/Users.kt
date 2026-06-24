@@ -80,9 +80,13 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit, onEnrollUser: () -> Un
 	val myName = remember { repo.operatorDisplayName() }
 	val myFingerprint = remember { repo.ownerSas().replace("-", " · ") }
 
+	// owner key -> how many of my sessions that trusted person can reach (the "N shared sessions" line).
+	var sharedCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+
 	suspend fun refresh() {
 		outcome = repo.fetchRoster()
 		pending = repo.fetchPendingTrust().getOrDefault(emptyList()).associate { it.initiatorOwnerSignPub to it.rendezvousId }
+		sharedCounts = repo.sharedSessionCounts().getOrDefault(emptyMap())
 	}
 	LaunchedEffect(Unit) { refresh() }
 
@@ -176,6 +180,7 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit, onEnrollUser: () -> Un
 							member = m,
 							isYou = false,
 							isTrusted = trusted,
+							sharedCount = if (trusted) sharedCounts[m.ownerSignPub] ?: 0 else 0,
 							isPending = !trusted && armedRendezvous != null,
 							onTrust = if (!trusted) {
 								{
@@ -220,12 +225,18 @@ private fun UserRow(
 	member: RosterMember,
 	isYou: Boolean,
 	isTrusted: Boolean,
+	sharedCount: Int = 0,
 	isPending: Boolean,
 	onTrust: (() -> Unit)?,
 	onManageShares: (() -> Unit)? = null,
 	onUntrust: (() -> Unit)?,
 ) {
 	val fingerprint = remember(member.ownerSignPub) { Crypto.fingerprint(member.ownerSignPub).replace("-", " · ") }
+	// "online" / "offline", plus "· N shared sessions" for a trusted person, per the mockup.
+	val presenceLine = buildString {
+		append(if (member.online) "online" else "offline")
+		if (isTrusted && sharedCount > 0) append(" · $sharedCount shared session${if (sharedCount == 1) "" else "s"}")
+	}
 	val cardColors =
 		if (isPending) CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
 		else CardDefaults.cardColors()
@@ -252,6 +263,11 @@ private fun UserRow(
 						color = MaterialTheme.colorScheme.onSecondaryContainer,
 					)
 				}
+				Text(
+					presenceLine,
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+				)
 				Text(
 					fingerprint,
 					fontFamily = FontFamily.Monospace,
