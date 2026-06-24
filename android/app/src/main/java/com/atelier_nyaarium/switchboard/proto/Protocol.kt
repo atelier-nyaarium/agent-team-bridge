@@ -714,6 +714,7 @@ data class CrossDomainListPeersResult(
 data class CrossDomainPeerEntry(
 	val domainId: String,
 	val gatewayId: String,
+	val ownerSignPub: String,
 )
 
 @Serializable

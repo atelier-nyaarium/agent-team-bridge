@@ -1037,8 +1037,8 @@ describe("console cross-Domain handshake ops", () => {
 	// not online and it has shared nothing back, so it never enters discovery. list_peers must still
 	// report it (the roster read the post-link sharing flow depends on).
 	const PEER_SET = [
-		{ domainId: "bob", gatewayId: "bob-desktop" },
-		{ domainId: "carol", gatewayId: "carol-laptop" },
+		{ domainId: "bob", gatewayId: "bob-desktop", ownerSignPub: "bob-owner-key" },
+		{ domainId: "carol", gatewayId: "carol-laptop", ownerSignPub: "carol-owner-key" },
 	];
 	function makeCrossDomainHarness() {
 		const calls: Record<string, unknown[]> = {
@@ -1210,8 +1210,8 @@ describe("console cross-Domain handshake ops", () => {
 		// online / shared-back state, so the offline peer is present and PeerDetail is reachable.
 		expect(reply.result).toEqual({
 			peers: [
-				{ domainId: "bob", gatewayId: "bob-desktop" },
-				{ domainId: "carol", gatewayId: "carol-laptop" },
+				{ domainId: "bob", gatewayId: "bob-desktop", ownerSignPub: "bob-owner-key" },
+				{ domainId: "carol", gatewayId: "carol-laptop", ownerSignPub: "carol-owner-key" },
 			],
 		});
 		expect(h.calls.listPeers).toHaveLength(1);

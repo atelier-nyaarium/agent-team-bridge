@@ -519,6 +519,7 @@ export async function startGateway(): Promise<void> {
 							peers: crossDomainPeersForConsole!.all().map((p) => ({
 								domainId: p.friendDomainId,
 								gatewayId: p.friendGatewayId,
+								ownerSignPub: p.friendOwnerSignPub,
 							})),
 						}),
 					}

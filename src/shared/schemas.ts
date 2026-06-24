@@ -689,6 +689,9 @@ export const CrossDomainPeerEntrySchema = z
 	.object({
 		domainId: z.string(),
 		gatewayId: z.string(),
+		// The friend OWNER's signing key (base64) - the owner-keyed identity the Users surface joins on
+		// (a roster row is keyed by owner, so this maps a linked Domain back to the person who owns it).
+		ownerSignPub: z.string(),
 	})
 	.meta({ id: "CrossDomainPeerEntry" });
 
