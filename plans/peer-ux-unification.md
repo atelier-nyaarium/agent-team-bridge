@@ -170,9 +170,15 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
       friend edge + mints the owner-keyed untrust tombstone; an untrusted row shows presence only). `ChatRepository`
       isOwnerTrusted/trustedOwners/untrustOwner. Gates green (testDebugUnitTest + R8). This is the owner-keyed
       trust QUERY the surface needed - the reconciliation the prior [NEXT] flagged is now DONE for the read path.
-    - [FLOW-2 IN PROGRESS - sub-slices 1+2 DONE] **The Trust button + arm/highlight/compare** (roster-initiated
-      user-to-user trust). Honors Q2=B no-prompt + Q4=A owner-keyed + "no SAS fork" (REUSES the enroll
-      commit-reveal). Progress:
+    - [FLOW-2 COMPLETE end to end across all 3 runtimes] **The Trust button + arm/highlight/compare**
+      (roster-initiated user-to-user trust). Honors Q2=B no-prompt + Q4=A owner-keyed + "no SAS fork" (REUSES the
+      enroll commit-reveal). Commits: sb 465e7ce/e38e4a2/fb1df0a/ec4220d + evie 41dacb9/d802d7b. The full path
+      works: a Trust button on an untrusted roster row arms a rendezvous (sb 3c/3d); the target sees the row
+      HIGHLIGHTED with a Respond button (the `fetchPendingTrust` poll, no push); both run the owner-anchored
+      6-digit SAS compare (reusing `enrollSas` with sorted-owner-key roles + the rendezvousId pin) via
+      `TrustCompareScreen`; a mutual [Yes] records the owner-to-owner friend edge (`enrollConfirm`) and the
+      Trusted badge appears. evie is the dumb `TrustRendezvousCoordinator` (indexed by target owner). All gates
+      green both repos. Sub-slice detail:
       - [DONE, sb 465e7ce + evie 41dacb9] **Sub-slice 1 - wire ops + PoP.** `TrustHandshakeOp` (arm/join/reveal/
         cancel) + `TrustHandshakeResult` + the target's `TRUST_PENDING_V1` PoP query
         (`TrustPendingRequest`/`Entry`/`Result`) in the synced enrollment.ts; codegen'd (sealed `TrustHandshakeOp`,
