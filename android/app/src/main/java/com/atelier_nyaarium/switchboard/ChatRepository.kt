@@ -1501,9 +1501,14 @@ class ChatRepository(
 	 * follow-up; the friend-graph removal is immediate so the Users surface reflects it now. */
 	suspend fun untrustOwner(peerOwnerSignPub: String): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatching {
+			// Drop the local friend edge first so the Users surface reflects the untrust immediately.
 			federation.removeTrustedOwner(peerOwnerSignPub)
-			// Mint the signed tombstone now (used by the gateway untrust op when that lands); the local
-			// removal already reflects the untrust on the board.
+			// Tell the gateway to forget every peer + share for this owner across all their Domains
+			// (owner-keyed local cleanup). Best-effort: the friend-graph removal already stands even if
+			// the gateway is unreachable (a gateway-less owner has no peer state to drop anyway).
+			runCatching { client().crossDomainUntrust(peerOwnerSignPub) }
+			// Mint the signed tombstone (the Router-side relay-edge revoke rides this owner-signed
+			// artifact); the local removal above already reflects the untrust on the board.
 			federation.signUntrust(peerOwnerSignPub, System.currentTimeMillis())
 			Unit
 		}

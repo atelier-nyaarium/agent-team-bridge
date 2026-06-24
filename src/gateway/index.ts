@@ -554,6 +554,23 @@ export async function startGateway(): Promise<void> {
 							jobsExpired: store.expireByDomain(domainId),
 						})
 					: undefined,
+			// Untrust a PERSON (owner-keyed): forget every peer Gateway owned by that owner across ALL
+			// their Domains, then drop the shares + settle the in-flight jobs for exactly those Domains.
+			// The owner-keyed sibling of unlinkDomain; the same local-cleanup primitives, summed over the
+			// owner's Domains. Idempotent - an already-untrusted owner returns zero counts.
+			untrustOwner:
+				crossDomainShareState && crossDomainPeersForConsole
+					? (ownerSignPub) => {
+							const { removed, domains } = crossDomainPeersForConsole!.removeByOwner(ownerSignPub);
+							let sharesDropped = 0;
+							let jobsExpired = 0;
+							for (const domainId of domains) {
+								sharesDropped += crossDomainShareState!.dropDomain(domainId);
+								jobsExpired += store.expireByDomain(domainId);
+							}
+							return { peersRemoved: removed, sharesDropped, jobsExpired };
+						}
+					: undefined,
 		});
 		handleConsoleRelay = createConsoleRelayPump({
 			sealer: consoleSealer!,

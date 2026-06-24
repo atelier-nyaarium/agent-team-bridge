@@ -102,6 +102,11 @@ export interface ConsoleHandlerDeps {
 	 * an already-unlinked Domain returns zero counts with no error. The Router-side relay-edge
 	 * revocation is the phone's separate owner-signed submit, not this gateway-local cleanup. */
 	unlinkDomain?: (domainId: string) => CrossDomainUnlinkResult;
+	/** Untrust a PERSON by owner key (the cross_domain_untrust op): the owner-keyed sibling of
+	 * unlinkDomain. Forgets every peer Gateway owned by that owner across ALL their Domains, then drops
+	 * the shares + settles the in-flight jobs for those Domains, returning the summed counts. Idempotent.
+	 * Absent when federation is not wired (the op then errors "not available"). */
+	untrustOwner?: (ownerSignPub: string) => CrossDomainUnlinkResult;
 }
 
 /** The subset of the cross-Domain handshake coordinator the console handler drives. A
@@ -189,7 +194,8 @@ function isMutatingOp(op: ConsoleOp): boolean {
 		op.kind === "cross_domain_cancel" ||
 		op.kind === "cross_domain_share" ||
 		op.kind === "cross_domain_unshare" ||
-		op.kind === "cross_domain_unlink"
+		op.kind === "cross_domain_unlink" ||
+		op.kind === "cross_domain_untrust"
 	);
 }
 
@@ -208,6 +214,7 @@ export function createConsoleHandler({
 	crossDomain,
 	crossDomainShare,
 	unlinkDomain,
+	untrustOwner,
 }: ConsoleHandlerDeps) {
 	/** Resolve a console terminal target (the gateway-qualified session name) to the host
 	 * tmux it maps to: the host-agent's own session for "gateway", a devcontainer for a known
@@ -750,6 +757,14 @@ export function createConsoleHandler({
 				// Domain returns zero counts, no error. The phone separately owner-signs + submits
 				// the link-edge revocation so the Router drops its relay-affinity edge.
 				return unlinkDomain(op.domainId);
+			}
+
+			case "cross_domain_untrust": {
+				if (!untrustOwner) throw new Error("cross-Domain linking is not available on this Gateway");
+				// Owner-keyed local cleanup: forget every peer Gateway owned by this person across ALL
+				// their Domains, then drop the shares + settle the jobs for those Domains. Idempotent.
+				// The phone separately owner-signs the untrust tombstone for the Router-side edge revoke.
+				return untrustOwner(op.ownerSignPub);
 			}
 		}
 	}

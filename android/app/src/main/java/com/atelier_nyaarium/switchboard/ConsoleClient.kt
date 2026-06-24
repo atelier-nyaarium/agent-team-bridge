@@ -813,6 +813,10 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	fun crossDomainUnlink(domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
 		resultOf(relay(ConsoleOp.CrossDomainUnlink(domainId = domainId), opId), "cross_domain_unlink")
 
+	/** Untrust a PERSON by owner key: drop the local peer + share state for every Domain they own. */
+	fun crossDomainUntrust(ownerSignPub: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
+		resultOf(relay(ConsoleOp.CrossDomainUntrust(ownerSignPub = ownerSignPub), opId), "cross_domain_untrust")
+
 	companion object {
 		private val JSON = "application/json".toMediaType()
 

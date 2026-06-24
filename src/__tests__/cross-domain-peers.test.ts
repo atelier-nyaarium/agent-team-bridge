@@ -143,6 +143,28 @@ describe("CrossDomainPeers store", () => {
 		expect(reloaded.resolveByGateway("dave", "dave-laptop")).not.toBeNull();
 	});
 
+	it("removeByOwner drops EVERY Domain of one owner (the untrust granularity) and returns the affected domains", () => {
+		const dir = tmp();
+		const store = new CrossDomainPeers(dir);
+		const ownerB = generateIdentity().sign.pub;
+		// The same person (friendOwner) runs two Domains; a DIFFERENT owner runs a third.
+		store.add(peer({ friendDomainId: "carol-home", friendGatewayId: "g1" }));
+		store.add(peer({ friendDomainId: "carol-guest", friendGatewayId: "g2" }));
+		store.add(peer({ friendOwnerSignPub: ownerB, friendDomainId: "dave", friendGatewayId: "g3" }));
+
+		// Untrusting the PERSON forgets both their Domains at once and names them for the share/job drop.
+		const res = store.removeByOwner(friendOwner.sign.pub);
+		expect(res.removed).toBe(2);
+		expect(new Set(res.domains)).toEqual(new Set(["carol-home", "carol-guest"]));
+		// The other owner's peer survives (untrust is per-person, not global).
+		expect(store.all().map((p) => p.friendDomainId)).toEqual(["dave"]);
+		// Idempotent: a second untrust of the same owner removes nothing.
+		expect(store.removeByOwner(friendOwner.sign.pub).removed).toBe(0);
+
+		// Persisted across instances.
+		expect(new CrossDomainPeers(dir).all()).toHaveLength(1);
+	});
+
 	it("rejects a malformed peer (missing required field)", () => {
 		const store = new CrossDomainPeers(tmp());
 		const bad = { ...peer(), friendSignPub: "" };

@@ -334,6 +334,16 @@ export const ConsoleOpSchema = z
 			// The friend Domain (slug) to unlink.
 			domainId: z.string().min(1).max(64),
 		}),
+		// Untrust a PERSON by owner key: drop the LOCAL trust + share state for EVERY peer Gateway owned
+		// by that owner (across all their Domains) + every share to those Domains - the owner-keyed sibling
+		// of cross_domain_unlink (which forgets one Domain at a time). Console-sealed auth (an admitted
+		// console of this owner's Domain). The phone separately owner-signs the untrust tombstone for the
+		// Router-side relay-edge revoke; this op is the local-state half.
+		z.object({
+			kind: z.literal("cross_domain_untrust"),
+			// The friend OWNER's raw Ed25519 signing key (base64) to forget.
+			ownerSignPub: z.string().min(1).max(128),
+		}),
 	])
 	.meta({ id: "ConsoleOp" });
 

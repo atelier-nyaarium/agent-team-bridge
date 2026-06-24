@@ -210,6 +210,12 @@ sealed class ConsoleOp {
 	data class CrossDomainUnlink(
 		val domainId: String,
 	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("cross_domain_untrust")
+	data class CrossDomainUntrust(
+		val ownerSignPub: String,
+	) : ConsoleOp()
 }
 
 @Serializable
