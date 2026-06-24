@@ -163,14 +163,24 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
       shared file -> gen vector from the TS ref with the corpus's fixed key -> Kotlin twin -> codegen ROOT (or
       nest in an op) -> TS + Kotlin tests -> manifest if a NEW corpus.
     - [NEXT] the remaining Phase-1 shapes - each is interconnected with its evie/gateway/Android producer, so
-      prefer CONNECTED slices over wire-only stubs: console-presence "absent" value on `TeamInfoSchema.status`
-      (closed enum) + the Android status fold; the monotonic snapshot VERSION field on `DomainSnapshotSchema` +
-      the applySnapshot refusal gate (gateway `Allowlist` + Android `FederationManager.applyDomainSync`); the
-      DISCRIMINATED share target ({kind:domain}|{kind:everyone-trusted}) on `CrossDomainShareEntry` + the share
-      ops; the cross-tenant ROSTER op (new EnrollOp/ConsoleOp variant + a stub handler until Phase 2); the
-      PENDING-TRUST op (arm/cancel/poll, keyed by target owner). Existing landmarks to reuse: `XDomainLink`
-      (owner-keyed link already exists), `enrollSas` (owner-anchored SAS already exists), `cross_domain_unlink`
-      (domain-keyed; the untrust is the owner-keyed sibling), `crossDomainShareState` (the share store).
+      build them as CONNECTED vertical slices, not wire-only stubs. The two big ones are the cross-tenant ROSTER
+      op (new op + the evie aggregation - the largest net-new piece) and the PENDING-TRUST op (arm/cancel/poll,
+      keyed by target owner). The DISCRIMINATED share target ({kind:domain}|{kind:everyone-trusted}) modifies
+      `CrossDomainShareEntry` + the share ops + the gateway gate (`crossDomainShareState`). Landmarks to reuse:
+      `XDomainLink` (owner-keyed link exists), `enrollSas` (owner-anchored SAS exists), `cross_domain_unlink`
+      (domain-keyed; untrust is the owner-keyed sibling), `crossDomainShareState` (the share store).
+    - **Design clarifications (vetted this stretch - do NOT re-derive):**
+      - **Console presence lives on the ROSTER-MEMBER shape, NOT `TeamInfoSchema.status`.** A console-only person
+        has no session/team, so they never appear as a `TeamInfo`; their online/absent dot is a field on the
+        roster op's member rows. So do NOT add "absent" to the TeamInfo status enum. The Android `else -> ended`
+        folds (MainActivity, the session subtitle + StatusChip) are NOT buggy today (the only non-online/available
+        TeamInfo status is the Android-synthesized "ended"); they are a latent-robustness nit, not load-bearing.
+      - **The monotonic snapshot-VERSION gate is belt-and-suspenders, LOW priority.** `applyDomainSync`
+        (Android `FederationManager`) and the gateway `Allowlist.applySnapshot` already UNION the server snapshot
+        over the local one for BOTH admissions and revocations (canonicalSnapshot), so a stale snapshot served by
+        an untrusted evie CANNOT drop a locally-held revocation or admission - the union is the real rollback
+        defense. The version refusal-gate only adds defense-in-depth; skip it unless a concrete rollback gap is
+        found that the union does not already cover.
 - **OWNER DIRECTIVES (standing, channel):** (1) **NO migration / back-compat / coexistence code anywhere** -
   the owner is WIPING evie from scratch, so build for the END STATE only (e.g. do not add token<->admission
   coexistence shims, old-format readers, or version-straddling branches in any NEW code). (2) The **FINAL
