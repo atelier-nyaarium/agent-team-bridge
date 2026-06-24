@@ -489,6 +489,21 @@ data class SignedXDomainUntrust(
 )
 
 @Serializable
+data class RosterRequest(
+	val signerSignPub: String,
+	val proofAt: Long,
+	val nonce: String,
+	val proof: String,
+)
+
+@Serializable
+data class RosterResult(
+	val ok: Boolean,
+	val error: String? = null,
+	val members: List<RosterMember>,
+)
+
+@Serializable
 data class SignedFirstRoot(
 	val firstRoot: FirstRoot,
 	val signature: String,
@@ -756,4 +771,11 @@ data class XDomainUntrust(
 	val peerOwnerSignPub: String,
 	val revokedAt: Long,
 	val nonce: String,
+)
+
+@Serializable
+data class RosterMember(
+	val ownerSignPub: String,
+	val operatorName: String,
+	val online: Boolean,
 )

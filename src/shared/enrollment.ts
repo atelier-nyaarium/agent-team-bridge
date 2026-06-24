@@ -1,4 +1,4 @@
-// SYNC-HASH: 60696f328a8e0380a1ee15859f50e5f6
+// SYNC-HASH: e458c464a24dcf0376f617608de929dd
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -382,6 +382,58 @@ export const EnrollHandshakeResultSchema = z
 	})
 	.meta({ id: "EnrollHandshakeResult" });
 
+////////////////////////////////
+//  Cross-tenant roster (the "Users" surface: everyone on this evie, name + presence)
+//
+//  The Users surface unifies a network's members into one list. evie is the source of truth (the
+//  per-Domain names + owners are in its Secret; presence is its live gateway-connection table). The
+//  visibility model is Q1=A "full roster": every member on this evie is visible to every other
+//  member, non-transitive (the roster never reaches a member's linked peers). So the request only
+//  AUTHENTICATES the caller as some member of this evie (a console admitted in one of its Domains) -
+//  there is no per-row visibility predicate. A row carries the owner identity + display name +
+//  presence ONLY: NO gatewayId and NO box key, so a row is never a seal/probe handle (the trust
+//  ceremony resolves a target's gateway server-side); the phone derives the fingerprint from
+//  ownerSignPub. evie OPAQUE-REJECTS a caller it cannot place in a Domain.
+
+/** A console's signed request for the roster. The console signs ROSTER_V1 over its own signing key
+ * + a fresh timestamp + nonce (proof of possession); evie verifies the signature, freshness, and
+ * non-replay, then resolves the signer to an admitted console in one of its Domains. */
+export const RosterRequestSchema = z
+	.object({
+		// The console's raw Ed25519 signing key (the subject of an owner-signed kind:console admission).
+		signerSignPub: b64Field(),
+		// Proof timestamp (epoch ms), freshness-checked against evie's clock.
+		proofAt: z.number().int().nonnegative(),
+		// Single-use random (base64); evie rejects a replayed nonce within the freshness window.
+		nonce: b64Field(),
+		// The console's Ed25519 signature over rosterRequestSigningBytes (base64).
+		proof: b64Field(),
+	})
+	.meta({ id: "RosterRequest" });
+
+/** One member row in the roster: the owner identity (the trust anchor; the phone derives the
+ * fingerprint from it), the network display name, and a presence boolean. Deliberately NO gatewayId
+ * / box key / domainId - a row is an identity, never a routing or seal handle, and topology is
+ * stripped. */
+export const RosterMemberSchema = z
+	.object({
+		ownerSignPub: b64Field(),
+		operatorName: displayField(128),
+		// True iff this member's Domain has a live gateway connection at evie right now.
+		online: z.boolean(),
+	})
+	.meta({ id: "RosterMember" });
+
+/** evie's roster reply. `ok:false` + `error` is an OPAQUE reject (the caller could not be placed in a
+ * Domain on this evie, or the proof failed) - it never enumerates Domain state. */
+export const RosterResultSchema = z
+	.object({
+		ok: z.boolean(),
+		error: z.string().optional(),
+		members: z.array(RosterMemberSchema),
+	})
+	.meta({ id: "RosterResult" });
+
 export type EnrollmentPayload = z.infer<typeof EnrollmentPayloadSchema>;
 export type EnrollOwnerPayload = Extract<EnrollmentPayload, { type: "enroll-owner" }>;
 export type AdmitGatewayPayload = Extract<EnrollmentPayload, { type: "admit-gateway" }>;
@@ -404,6 +456,9 @@ export type XDomainLinkEdge = z.infer<typeof XDomainLinkEdgeSchema>;
 export type SignedXDomainLinkEdge = z.infer<typeof SignedXDomainLinkEdgeSchema>;
 export type XDomainLinkRevocation = z.infer<typeof XDomainLinkRevocationSchema>;
 export type SignedXDomainLinkRevocation = z.infer<typeof SignedXDomainLinkRevocationSchema>;
+export type RosterRequest = z.infer<typeof RosterRequestSchema>;
+export type RosterMember = z.infer<typeof RosterMemberSchema>;
+export type RosterResult = z.infer<typeof RosterResultSchema>;
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -658,4 +713,36 @@ export function signSetOperatorName(
 export function verifySetOperatorName(s: SignedSetOperatorName, expectedOwnerSignPubB64: string): boolean {
 	if (s.ownerSignPub !== expectedOwnerSignPubB64) return false;
 	return verify(setOperatorNameSigningBytes(s.rename, expectedOwnerSignPubB64), s.signature, expectedOwnerSignPubB64);
+}
+
+////////////////////////////////
+//  Roster request proof-of-possession (a console proving it holds an admitted signing key)
+//
+//  Mirrors the registration proof: the console signs a versioned, newline-joined challenge over its
+//  own signing key + a fresh timestamp + nonce. evie verifies the signature against the key, that
+//  the timestamp is fresh, and (statefully) that the nonce is unseen in the window, then resolves
+//  the key to an owner-signed kind:console admission in one of its Domains. So a captured request
+//  cannot be replayed to pull the roster.
+
+/** Default roster-proof freshness window (epoch ms), same posture as the registration proof. */
+export const ROSTER_MAX_SKEW_MS = 120_000;
+
+export function rosterRequestSigningBytes(signerSignPubB64: string, proofAt: number, nonce: string): Buffer {
+	return Buffer.from(["ROSTER_V1", signerSignPubB64, String(proofAt), nonce].join("\n"), "utf8");
+}
+
+/** Sign a fresh roster request with the console's raw Ed25519 private key. */
+export function signRosterRequest(
+	signerSignPubB64: string,
+	proofAt: number,
+	nonce: string,
+	signPrivB64: string,
+): string {
+	return sign(rosterRequestSigningBytes(signerSignPubB64, proofAt, nonce), signPrivB64);
+}
+
+/** True if the roster request's proof verifies under its claimed signer key. The caller (evie)
+ * additionally checks freshness, non-replay, and that the signer is an admitted console. */
+export function verifyRosterRequest(req: RosterRequest): boolean {
+	return verify(rosterRequestSigningBytes(req.signerSignPub, req.proofAt, req.nonce), req.proof, req.signerSignPub);
 }
