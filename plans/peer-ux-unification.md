@@ -242,8 +242,15 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
       `setShareEveryoneTrusted` + `sessionsSharedToEveryone`. Gates green (TS 695 + Android + R8). REMAINING: the
       share-MODE picker UI (Private / Everyone-I-trust / Specific) - the transport is ready; wire it where the
       existing per-peer share checkmarks live (`Federation.kt`) or the Users-surface kebab.
-    - [NEXT, the remaining UX-lap slices - all gateway-side / large, best as focused passes]:
-      (a) the **share-mode picker UI** (consumes the transport above). (b) the untrust RELAY-edge revoke + the
+    - [DONE, sb b48b418] **The share-mode UI + the Users surface, built to the design mockups** (found in the
+      session scratchpad `design-mockups/components/`: share-control, kebab-menu, admin-vs-user). A `Sharing`
+      screen (`Sharing.kt`) lists shareable sessions, each tappable to a Private / Everyone-I-trust / Specific-
+      people picker (Specific = a checklist of linked people). The Users screen now has a YOU section (name +
+      4-group fingerprint), a PEOPLE section (excludes self), the per-row kebab (Manage shares -> Sharing,
+      Untrust), and "Trust back" on a pending row. Gates green (compile + unit tests + R8).
+    - [NEXT, the remaining UX-lap slices]:
+      (a0) the admin-vs-user mockup's **"Enroll a user" button** in the YOU section (admin only) + the
+      shared-session count on a trusted row + an untrusted "trust first" entry in the Specific picker (polish). (b) the untrust RELAY-edge revoke + the
       link console op (the tombstone's Router half). (c) the **renames + UI restructure** (the Users surface
       absorbs the Federation hub's MY NETWORK / PEERS / GUEST NETWORKS; retire "Federation"/"Peer"-as-noun). (d)
       **Refactor A slice 2** (the gateway storage re-key: crossDomainShareState/Peers owner-keyed - the
