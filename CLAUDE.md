@@ -235,7 +235,14 @@ Manifests use EXACT version pins, no ranges. The plugin launches via `bun --inst
 
 ### Synced schema modules
 
-Several leaf modules in `src/shared/` are the source of truth for a wire shape shared with a sibling repo, and are copied VERBATIM (manual `cp`). Each file's header carries the source path, the copy command, and a `// SYNC-HASH:` of its body. After editing a source, RESTAMP then re-copy:
+Several leaf modules in `src/shared/` are the source of truth for a wire shape shared with a sibling repo, and are copied VERBATIM (manual `cp`). Each file's header carries the source path, the copy command, and a `// SYNC-HASH:` of its body. After editing a source, use `sync-leaf.ts` - it formats, restamps, and copies in ONE atomic step (reading the target from the leaf's own header):
+
+```
+bun scripts/sync-leaf.ts src/shared/notice.ts   # format -> restamp -> cp, all at once
+bun scripts/sync-leaf.ts --all                   # re-sync every leaf
+```
+
+FOOTGUN (why the script exists): the manual order is format -> restamp -> cp. If you `cp` and THEN run `bun run lint:fix`, biome reformats the SOURCE, so the stamp + the copy go stale and the sibling repo's CI fails on a hash mismatch. `sync-leaf.ts` runs the biome pass FIRST so a later `lint:fix` is a no-op. The manual equivalent (run lint:fix BEFORE these two, never after):
 
 ```
 bun scripts/check-sync-hash.ts --write src/shared/notice.ts
