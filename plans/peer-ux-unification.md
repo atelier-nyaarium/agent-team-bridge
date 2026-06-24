@@ -12,8 +12,12 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
   compileDebugKotlin + testDebugUnitTest. Audited (align: 6/6 aligned; red-team: cryptographically sound, P1
   commit-reveal closes the offline grind, cross-runtime parity verified; framework: twin pattern complete).
   Commit f90a1ce (local on main, not pushed).
-- **Lap 2 - enroll ceremony (IN PROGRESS, owner picked full 3-runtime build).** Architecture + design DONE +
-  red-team-validated (see the two sections below). Implementation order + status:
+- **Lap 2 - enroll ceremony (COMPLETE, full 3-runtime build + full audit chain).** Built across evie +
+  switchboard + Android, then run through align (12/12 clean) -> red-team (4 confirmed bugs fixed + verified,
+  incl. the CRITICAL User-First edge-routing the owner confirmed) -> framework-first (2 extractions) -> docs.
+  All gates green both repos; commits local on main, unpushed (the evie rollout + gateway rebuild + on-device
+  wire round-trip are the owner's deploy walls). Remaining plan work is lap 3 (the Users roster + share-control
+  surface, the deferred laundry, and the final cleanup pass). Implementation order + status:
   - [DONE + verified] **Crypto core (TS):** `ENROLL_SAS_V1` (fixed-slot/role-tagged, owner-anchored) +
     `ENROLL_COMMIT_V1` in src/shared/cross-domain-sas.ts; cross-runtime vectors at
     tests/fixtures/enroll-sas/vectors.json; src/__tests__/enroll-sas.test.ts (13 tests). Injective props pinned
