@@ -128,13 +128,16 @@ Secret operator/primary marker.
 
 ## Plan (restructured: breaking refactor, ONE atomic cutover)
 
-- **Phase 0 - the operator-home anchor + operator-vs-guest signal (the blocker; design first).**
-  Implement decision A: the evie Secret gains an operator/primary-Domain marker (v3), written at
-  first-root; re-key the 5 console-routing methods + the enroll-op `coordinatorFor`/`flushDomain`/
-  `broadcastDomainUpdate` + the register gate off `DEFAULT_DOMAIN_ID`. Add an explicit
-  `role: operator|guest` (or `isOperatorSetup`) to `ProvisioningSchema` (provision.ts --setup =
-  operator; the app invite = guest) so the persona signal is on the blob, not inferred from `"home"`.
-  Closes: blockers 1-3, highs 4/5/9/10, mediums 22/26.
+- **Phase 0 - the operator-home anchor (the blocker). DONE (evie `018b6c8`, switchboard `4350c7a`).**
+  The operator home slice is flagged `isPrimary` on `EnrollmentState` (set host-side in
+  `bootstrap-domain.ts`, preserved through `firstRoot`); `KubeSecretStore.operatorDomainId()` resolves
+  it; the 5 console-routing methods + the enroll-op `coordinatorFor`/`flushDomain`/`broadcastDomainUpdate`
+  + the register gate re-key onto it through a single `operatorDomain()` resolver (one `?? DEFAULT`
+  fallback site). Audit hardening: `operatorDomainId()` fails closed on >1 primary, `persistDomain`
+  preserves the marker across a coordinator overwrite, `provision_tenant`/`remove_tenant` refuse the
+  primary domain by the marker. No `v3` schema bump (the field is optional, so a v2 blob deserializes
+  unchanged). DEFERRED to Phase 1: the `role: operator|guest` flag on `ProvisioningSchema` (rides with
+  the Android `isHomeOperator` re-key). Closed: blockers 1-3, highs 4/5/9/10, mediums 22/26.
 - **Phase 1 - Domain ID: retire `home` -> random hex, with plumbing + persistence.** Delete
   `DEFAULT_DOMAIN_ID`; `resolveLocalDomainId` requires `FEDERATION_DOMAIN_ID` (no fallback); decide
   `sanitizeDomainId` empty-input behavior (reject vs a non-`home` sentinel) and keep the switchboard +
@@ -147,8 +150,12 @@ Secret operator/primary marker.
   UI surfaces until confirmed; `renameAwaitsDiscovery = firstRooted && confirmedDomainId == null`;
   `isHomeOperator` -> the Phase-0 role/marker. Define the wire `domainId` posture (make required vs a
   defined absent behavior in `GatewayRegisterParams`/`GatewayRelayRoute`/relay frames). Retire evie's
-  v1->v2 `home` migration + the `operatorName` backfill (clean-break). Closes: highs 6/7/11/19/20,
-  mediums 24/28/31, low 39.
+  v1->v2 `home` migration + the `operatorName` backfill (clean-break). When the home id becomes random,
+  key `composeFederationJson`'s home replacement + the `carryOtherDomain` skip on the operator-home id
+  (not the `home` literal) so exactly ONE slice stays `isPrimary` (a second primary is otherwise
+  reachable), and make the operator-domain resolution fail-closed END TO END once the `?? DEFAULT`
+  fallback is gone (an ambiguous/absent marker routes the console NOWHERE rather than to a stale
+  default). Closes: highs 6/7/11/19/20, mediums 24/28/31, low 39.
 - **Phase 2 - `operatorName` -> `profileName` (the person) + empty fallback.** Rename the wire field
   across `schemas.ts` + the 3 synced leaves (re-sync via `sync-leaf.ts`) + codegen `Protocol.kt` +
   gateway + Android + evie + scripts + tests. Note BOTH `setOperatorNameSigningBytes` AND
@@ -163,7 +170,11 @@ Secret operator/primary marker.
   guests come via the app invite), updating every reference (CLAUDE.md, script self-refs,
   `scripts/provision.ts` usage strings, `start-*.sh`). The "(unnamed)" placeholder stays ONLY
   as a defensive backstop (legacy/edge), routed through every person-name render (ChatRepository.kt:886
-  + the 3 id-leak sites), NEVER the Domain id. Closes: high 14, mediums 25/29, lows 37/38.
+  + the 3 id-leak sites), NEVER the Domain id. ALSO (owner ask): the conversation thread labels the
+  user's OWN rows "you" (ThreadRenderer.kt:213, `from = if (m.fromMe) "you" else ...`); thread the
+  local `profileName` into the renderer (a `selfName` field on ThreadRenderer, set from repo state via
+  `ThreadWebView`) so own rows show the person's name, falling back to "you" only when empty. The other
+  party's `m.from` (the host/session name) stays. Closes: high 14, mediums 25/29, lows 37/38.
 - **Phase 3 - re-cut the `home`-bearing SIGNING vector corpora (Phase 1's hidden cost).** THREE
   cross-runtime signed/hashed corpora embed `domainId:"home"` in the preimage (xdomain-link, enroll-sas,
   cross-domain-sas) + the protocol golden fixtures: the VALUE changes, so the bytes change and the
