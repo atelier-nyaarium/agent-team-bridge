@@ -182,16 +182,23 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
         indexed by TARGET owner; arm creates+indexes, join binds the target slot, reveal relays; attempt +
         per-target + concurrent caps + TTL). `ConsoleBridgeServer` routes `trustHandshake`/`trustPending`;
         `BridgeService.handleTrustPending` verifies the proof + freshness + non-replay. 10 broker tests + 43 bridge.
-      - [NEXT - sub-slice 3: the Android client + UI]. (a) `ConsoleClient.trustHandshake(op)` +
-        `trustPending(req)` POST methods (mirror `enrollHandshake`/`roster`). (b) `FederationManager`:
-        `signTrustPendingRequest` (the PoP, console... NO - the OWNER key; the arms index by owner) + reuse
-        `enrollSas` with SORTED owner-key roles + `rendezvousId` pin. (c) `ChatRepository`: `armTrust(targetOwner)`
-        (mint rendezvousId + commit + arm), `fetchPendingTrust()` (poll `trustPending`, owner-signed), the
-        join+reveal+compare orchestration (mirror `enrollExchange`), and trust-confirm = `addTrustedOwner` + the
-        `submit_xdomain_link` relay edge when gateways exist. (d) Users screen: a Trust button on untrusted rows
-        -> `armTrust`; poll `fetchPendingTrust` -> HIGHLIGHT armed rows; tapping a highlighted row joins ->
-        the compare panel (REUSE `EnrollCeremonyScreen`'s compare/reveal UI). Note: roles by sorted owner key make
-        the symmetric SAS; the rendezvousId rides in the arm so both sides use the same pin.
+      - [DONE, sb e38e4a2] **Sub-slice 3a+3b - Android transport + PoP.** `ConsoleClient.trustHandshake` (arm/
+        join/reveal/cancel, POST evie-direct like the enroll handshake) + `trustPending` (the highlight query);
+        `FederationManager.signTrustPendingRequest` (signs the TRUST_PENDING proof with the OWNER key, since the
+        arms index by owner) + `freshRendezvousId`. Compiles + R8.
+      - [NEXT - sub-slice 3c+3d: the orchestration + UI] (THE remaining FLOW-2 piece; the whole backend +
+        transport are DONE + tested). (c) `ChatRepository` orchestration, MIRROR `enrollExchange` (the existing
+        enroll commit-reveal): `armTrust(targetOwner)` = `freshRendezvousId` + this side's commit + POST arm;
+        `fetchPendingTrust()` = poll `trustPending` (owner-signed) -> the armed rows; `trustExchange(rendezvousId,
+        peerOwner)` = (join if target / re-arm if initiator) -> poll peerCommit -> reveal -> poll peerReveal ->
+        verify -> SAS; trust-confirm = `addTrustedOwner(peerOwner)` + `submit_xdomain_link` when gateways exist.
+        THE SAS: REUSE `EnrollCeremony.sas`/`SasCrypto.enrollSas` + `enrollCommitment` with the role derived from
+        SORTED owner keys (`if (myOwner < peerOwner) ADMIN else ENROLLEE`) so both sides compute the SAME ordered
+        code, and `rendezvousId` as the pin. The `EnrollParty` = `(ownerSignPub, ownerBoxPub, domainId)`. (d) Users
+        screen: a **Trust** button on untrusted rows -> `armTrust`; a poll of `fetchPendingTrust` -> HIGHLIGHT the
+        armed initiator rows (a badge/accent, NO push - Q2=B); tapping a highlighted row joins -> a compare panel
+        (REUSE `EnrollCeremonyScreen`'s Compare/reveal UI, or factor its compare panel into a shared composable).
+        On a [Yes] match the trusted badge appears (the friend graph already drives it via slice A1).
       Original decided design (for reference):
       - **Rendezvous = a NEW evie target-indexed pending-trust broker** (mirror `EnrollHandshakeCoordinator`, but
         keyed by owner pair + INDEXED by target owner so "who armed trust toward me?" is a cheap query, NOT a QR
