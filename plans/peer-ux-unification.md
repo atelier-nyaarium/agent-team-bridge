@@ -710,3 +710,75 @@ corpus in git history.
 - lap-1 rough Plan + lap-1 Audit (the 70-gap STOP) + the A/B/C DECISION-NEEDED fork -> RESOLVED (roster
   reversal approved) and FOLDED into the Analysis section + Decided-so-far above. The audit's load-bearing
   constraints now live in Analysis > "Code-confirmed invariants" and "Hard blockers".
+
+## Post-merge field bugs (fresh-provision round-trip, 2026-06-24) - bug CLASSES to watch
+
+The first real end-to-end fresh provision after the merge surfaced a cluster of bugs that text/grep + the
+unit suites could never catch (they only appear in a live first-root -> admit -> connect chain). Recording
+the CLASSES, not just the instances, because each is a pattern likely to recur elsewhere.
+
+### CLASS 1 (HEADLINE) - Frozen wire-time capture vs per-op resolution of a REFRESHABLE dependency
+
+- **Instance:** evie `BridgeService.onEnrollOp` resolved `submit_admission`/`submit_revocation` against
+  `coordinator`, a reference captured ONCE at console-bridge wire-up (`const coordinator = coordinatorFor(
+  DEFAULT_DOMAIN_ID)`). But `firstRootDomain` calls `refreshCoordinator(home)` = DROP + re-vivify, replacing
+  the home coordinator object after a first-root. So the captured ref was a stale, pre-root coordinator with
+  an EMPTY `ownerSignPub`; every correctly owner-signed admission then failed `verifyAdmission(signed, "")`
+  as "admission not owner-signed". Symptom chain: "Couldn't add the Gateway" on Approve, then the console's
+  OWN admission silently never landing -> stuck "Finishing up enrollment" / "Can't connect". `admissions[]`
+  stayed empty even though the phone signed with the real (rooted) owner key.
+- **Why it hid:** the SAME file ALREADY resolved fresh-per-op for the cases that had been bug-reported before
+  - the xdomain_link edge ops (`coordinatorFor(edge.srcDomainId)`, the User-First fix) and the tenant-op
+    operator pin (an explicit "resolved PER OP, a getter not a frozen value" comment). Admissions/revocations
+    were the one survivor still reading the frozen capture. A refresh-after-boot is invisible until a Domain
+    is rooted AFTER evie starts (exactly the fresh-operator phone flow), which no test exercised.
+- **Fix:** `const target = this.coordinatorFor(edgeDomain ?? DEFAULT_DOMAIN_ID)` - resolve every enroll op
+  through the live cache. evie commit 958dcfa / PR #1406. Instant unblock was a pod restart (re-captures the
+  now-rooted home into a fresh boot-time coordinator).
+- **The CLASS / audit rule:** any handler that captures a per-tenant / per-Domain / otherwise-REPLACEABLE
+  dependency at construction/wire-up, when something (first-root, rename, re-stage, hot-reload) can DROP +
+  re-create that object mid-process, will serve stale state forever after the refresh. Resolve refreshable
+  dependencies FRESH per invocation (a getter / lookup), never freeze them in a closure. Grep target: a
+  `const x = lookupFor(...)` captured in an outer scope and then read inside a long-lived handler, where some
+  other code path calls `drop`/`refresh`/`delete` on that same registry. A unit test that exercises
+  "refresh the dependency, THEN invoke the handler, assert it sees the new state" would have caught it
+  (deferred: evie has no BridgeService-level wiring test; the bug lives in the closure, not the coordinator).
+
+### CLASS 2 - A generic catch-all user message that HIDES a captured, more-specific cause
+
+- **Instance:** `enrollGateway` returned a flat "Couldn't add the Gateway. Try again." while `submitOwnerFact`
+  had already written the real evie reason ("Admit failed: admission not owner-signed") into `_state.error`.
+  Field-debugging was blind until we surfaced the captured cause. Fix: return `_state.error` (switchboard
+  bf328e9).
+- **The CLASS:** when an inner layer captures a precise failure reason, the outer user-facing message must
+  surface it, not overwrite it with a friendly generic. A generic-over-specific swallow turns a 1-minute
+  on-device diagnosis into a multi-hour log archaeology.
+
+### CLASS 3 - One shared UI status var for BOTH error + progress, cleared only on entry
+
+- **Instance:** `AddGatewayScreen` kept a single `status` used for the scan-parse error AND the enroll
+  progress; a prior failed scan's "That QR is not a Gateway enrollment code." leaked onto a later VALID
+  scan's confirm screen because `status` was reset only at screen entry, not at each scan result. Fix: clear
+  on every scan result (bf328e9).
+- **The CLASS:** a status/error field reused across transitions must be reset at the START of each transition,
+  not once at mount.
+
+### CLASS 4 - A state classifier whose meaning SHIFTED when an upstream flow changed
+
+- **Instance:** `FriendOnboarding.noGatewayState` routes `firstRooted=true` -> AWAITING_HOST ("You're all set
+  up", help-only, NO admit action). It was written when only FRIENDS first-rooted. The provisioning-model
+  change made the OPERATOR's own home first-root too, so the operator landed on the friend board with no path
+  to admit their Gateway. Fix: give the board a real "Add a Gateway" action regardless (switchboard dd82a02).
+- **The CLASS:** when an upstream flow starts producing a state that a downstream classifier assumed only one
+  persona could reach, the classifier's branches silently mis-serve the new persona. Re-audit every consumer
+  of a predicate (`firstRooted`, `noGateway`, ...) whenever the set of producers widens.
+
+### Operational footgun (not a code bug, but cost real time) - silent owner-key regeneration
+
+- The owner root key is generated SILENTLY on first app start and never surfaced. A fresh INSTALL / cleared
+  data mints a NEW key, orphaning an already-rooted Domain (admissions then fail "not owner-signed" against
+  the old root) - with no on-screen hint that the key changed. Recovery is wipe-the-Domain + re-provision, OR
+  the existing owner-key backup/restore (Manage Gateways). Worth a future "your owner key changed; this Domain
+  was rooted by a different key - restore your backup or re-provision" detector instead of a cryptic admit
+  failure. (This session it was a RED HERRING: the YOU fingerprint matched the root, so the real cause was
+  CLASS 1, not a key mismatch - which is exactly why surfacing the real reason, CLASS 2, matters.)
