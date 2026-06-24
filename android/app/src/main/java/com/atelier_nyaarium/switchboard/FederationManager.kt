@@ -291,6 +291,55 @@ class FederationManager(private val store: ProvisioningStore) {
 	////////////////////////////////
 	//  Friend cross-Domain onboarding (pending tenant + first-root + operator name)
 
+	////////////////////////////////
+	//  Trusted owners (the owner-keyed friend graph the Users surface reads)
+
+	/** The owners this owner has completed a trust ceremony with (enroll or link), by ownerSignPub.
+	 * This is the persistent FRIEND edge - recorded even for a gateway-less person (the design's Q3=B)
+	 * - distinct from the gateway-side relay-affinity edges that enable actual cross-Domain traffic. */
+	@Synchronized
+	fun trustedOwners(): Set<String> {
+		val raw = store.loadTrustedOwners() ?: return emptySet()
+		return runCatching {
+			val arr = org.json.JSONArray(raw)
+			(0 until arr.length()).map { arr.getString(it) }.toSet()
+		}.getOrDefault(emptySet())
+	}
+
+	/** True iff this owner has trusted the given owner key. */
+	fun isTrusted(ownerSignPub: String): Boolean = ownerSignPub.isNotEmpty() && trustedOwners().contains(ownerSignPub)
+
+	/** Record a trust edge to an owner (idempotent). Called on a completed trust ceremony. */
+	@Synchronized
+	fun addTrustedOwner(ownerSignPub: String) {
+		if (ownerSignPub.isEmpty()) return
+		persistTrustedOwners(trustedOwners() + ownerSignPub)
+	}
+
+	/** Drop a trust edge to an owner (the untrust friend-graph half; the relay-edge revoke is separate). */
+	@Synchronized
+	fun removeTrustedOwner(ownerSignPub: String) {
+		persistTrustedOwners(trustedOwners() - ownerSignPub)
+	}
+
+	/** Owner-sign an untrust tombstone withdrawing trust in a peer owner (myOwner -> peerOwner). */
+	fun signUntrust(peerOwnerSignPub: String, nowMs: Long): com.atelier_nyaarium.switchboard.proto.SignedXDomainUntrust {
+		val owner = ownerIdentity()
+		val untrust = com.atelier_nyaarium.switchboard.proto.XDomainUntrust(
+			myOwnerSignPub = owner.sign.pub,
+			peerOwnerSignPub = peerOwnerSignPub,
+			revokedAt = nowMs,
+			nonce = nonce(),
+		)
+		return XDomainLinkCrypto.signUntrust(untrust, owner.sign.priv, owner.sign.pub)
+	}
+
+	private fun persistTrustedOwners(owners: Set<String>) {
+		val arr = org.json.JSONArray()
+		owners.forEach { arr.put(it) }
+		store.saveTrustedOwners(arr.toString())
+	}
+
 	/** A fresh opaque Domain id (a slug: lowercase hex, never shown to the human - pure
 	 * plumbing). 16 random bytes hex-encoded is well under the 64-char slug bound and collides
 	 * negligibly, so the operator never has to choose or check one. */

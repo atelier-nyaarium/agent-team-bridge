@@ -119,11 +119,12 @@ fun EnrollCeremonyScreen(
 						confirmed.set(true)
 						busy = true
 						scope.launch {
-							repo.enrollConfirm(ctx.myParty.domainId, s.exchange.peerDomainId, edgeNonce)
+							repo.enrollConfirm(ctx.myParty.domainId, s.exchange.peerDomainId, edgeNonce, s.exchange.peerParty.ownerSignPub)
 								.onSuccess { outcome ->
 									step = when (outcome) {
 										is ConfirmOutcome.Linked -> EnrollStep.Done
-										is ConfirmOutcome.RelayEdgeRejected -> EnrollStep.LinkedNoRelay(outcome.peerDomainId)
+										is ConfirmOutcome.RelayEdgeRejected ->
+											EnrollStep.LinkedNoRelay(outcome.peerDomainId, s.exchange.peerParty.ownerSignPub)
 									}
 								}
 								.onFailure { step = EnrollStep.Failed(humanizeEnrollError(it.message)) }
@@ -151,11 +152,12 @@ fun EnrollCeremonyScreen(
 					onRetry = {
 						busy = true
 						scope.launch {
-							repo.enrollConfirm(ctx.myParty.domainId, s.peerDomainId, edgeNonce)
+							repo.enrollConfirm(ctx.myParty.domainId, s.peerDomainId, edgeNonce, s.peerOwnerSignPub)
 								.onSuccess { outcome ->
 									step = when (outcome) {
 										is ConfirmOutcome.Linked -> EnrollStep.Done
-										is ConfirmOutcome.RelayEdgeRejected -> EnrollStep.LinkedNoRelay(outcome.peerDomainId)
+										is ConfirmOutcome.RelayEdgeRejected ->
+											EnrollStep.LinkedNoRelay(outcome.peerDomainId, s.peerOwnerSignPub)
 									}
 								}
 								.onFailure { note = humanizeEnrollError(it.message) }

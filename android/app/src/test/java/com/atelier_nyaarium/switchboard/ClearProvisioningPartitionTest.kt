@@ -28,6 +28,7 @@ class ClearProvisioningPartitionTest {
 			"federation_enroll_ceremony_done",
 			"federation_operator_name",
 			"federation_hosted_tenants",
+			"federation_trusted_owners",
 			"threads",
 			"labels",
 			"drafts",

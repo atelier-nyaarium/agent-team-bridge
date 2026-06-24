@@ -52,8 +52,8 @@ sealed interface EnrollStep {
 	data object Done : EnrollStep
 
 	/** The local trust is recorded but the Router rejected the relay-affinity edge, so cross-Domain
-	 * sends would be denied; carries the peer Domain for the one-tap edge-only retry. */
-	data class LinkedNoRelay(val peerDomainId: String) : EnrollStep
+	 * sends would be denied; carries the peer Domain + owner for the one-tap edge-only retry. */
+	data class LinkedNoRelay(val peerDomainId: String, val peerOwnerSignPub: String) : EnrollStep
 
 	/** A terminal failure (mismatch, cap, timeout, transport, or a [No] decline). */
 	data class Failed(val reason: String) : EnrollStep

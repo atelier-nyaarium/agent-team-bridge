@@ -16,8 +16,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,8 +32,10 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +45,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.RosterMember
+import kotlinx.coroutines.launch
 
 ////////////////////////////////
 //  Users (the cross-tenant roster: everyone on this network)
@@ -54,10 +60,13 @@ import com.atelier_nyaarium.switchboard.proto.RosterMember
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
+	val scope = rememberCoroutineScope()
 	// One-shot fetch on entry. Null = loading; a Result carries the rows or evie's opaque reason.
 	var outcome by remember { mutableStateOf<Result<List<RosterMember>>?>(null) }
 	LaunchedEffect(Unit) { outcome = repo.fetchRoster() }
 	val myOwner = remember { repo.ownerSignPub() }
+	// Bumped on an untrust so the per-row Trusted badge re-reads the friend graph.
+	var trustVersion by remember { mutableIntStateOf(0) }
 
 	Scaffold(
 		topBar = {
@@ -107,7 +116,18 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
 					}
 					// "You" first, then the rest by name, so the roster reads consistently.
 					for (m in members.sortedWith(compareByDescending<RosterMember> { it.ownerSignPub == myOwner }.thenBy { it.operatorName })) {
-						UserRow(member = m, isYou = m.ownerSignPub == myOwner)
+						val isYou = m.ownerSignPub == myOwner
+						val trusted = remember(m.ownerSignPub, trustVersion) { repo.isOwnerTrusted(m.ownerSignPub) }
+						UserRow(
+							member = m,
+							isYou = isYou,
+							isTrusted = trusted,
+							onUntrust = if (!isYou && trusted) {
+								{ scope.launch { repo.untrustOwner(m.ownerSignPub); trustVersion++ } }
+							} else {
+								null
+							},
+						)
 					}
 				}
 			}
@@ -115,10 +135,11 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
 	}
 }
 
-/** One roster row: the display name (+ a "you" tag for your own), a presence dot, and the owner
- * fingerprint (derived from the row's owner key - the long-lived identity for recognition). */
+/** One roster row: the display name (+ a "you" tag for your own), a Trusted badge, a presence dot,
+ * the owner fingerprint (the long-lived identity for recognition), and a per-row kebab. An untrusted
+ * row shows presence only - the missing badge conveys it (no "not trusted" text, per the design). */
 @Composable
-private fun UserRow(member: RosterMember, isYou: Boolean) {
+private fun UserRow(member: RosterMember, isYou: Boolean, isTrusted: Boolean, onUntrust: (() -> Unit)?) {
 	val fingerprint = remember(member.ownerSignPub) { Crypto.fingerprint(member.ownerSignPub) }
 	Card(Modifier.fillMaxWidth()) {
 		Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -131,6 +152,9 @@ private fun UserRow(member: RosterMember, isYou: Boolean) {
 					if (isYou) {
 						Spacer(Modifier.width(8.dp))
 						Text("you", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+					} else if (isTrusted) {
+						Spacer(Modifier.width(8.dp))
+						TrustedBadge()
 					}
 				}
 				Text(
@@ -141,7 +165,58 @@ private fun UserRow(member: RosterMember, isYou: Boolean) {
 				)
 			}
 			PresenceDot(online = member.online)
+			if (onUntrust != null) {
+				Spacer(Modifier.width(8.dp))
+				RowKebab(onUntrust = onUntrust)
+			}
 		}
+	}
+}
+
+/** The trusted-person badge: the per-row signal that you have a friend edge to this owner. */
+@Composable
+private fun TrustedBadge() {
+	Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small) {
+		Text(
+			"Trusted",
+			Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+			style = MaterialTheme.typography.labelSmall,
+			color = MaterialTheme.colorScheme.onSecondaryContainer,
+		)
+	}
+}
+
+/** The per-row overflow menu. For a trusted person it offers Untrust; Manage shares + the Trust
+ * arm flow for an untrusted person are folded in as those flows land. */
+@Composable
+private fun RowKebab(onUntrust: () -> Unit) {
+	var open by remember { mutableStateOf(false) }
+	var confirm by remember { mutableStateOf(false) }
+	Box {
+		IconButton(onClick = { open = true }) {
+			Icon(Icons.Default.MoreVert, contentDescription = "Actions")
+		}
+		DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+			DropdownMenuItem(
+				text = { Text("Untrust") },
+				onClick = {
+					open = false
+					confirm = true
+				},
+			)
+		}
+	}
+	if (confirm) {
+		ConfirmDialog(
+			title = "Untrust this person?",
+			body = "Removes your trust. You can trust them again later, but anything you shared with them stops being reachable.",
+			confirmText = "Untrust",
+			onConfirm = {
+				confirm = false
+				onUntrust()
+			},
+			onDismiss = { confirm = false },
+		)
 	}
 }
 

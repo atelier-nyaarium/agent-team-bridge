@@ -1330,6 +1330,8 @@ class ChatRepository(
 			nowMs = System.currentTimeMillis(),
 			nonce = linkNonce,
 		)
+		// Record the OWNER-keyed friend edge (the Users-surface trust) - the SAS confirmed this owner key.
+		federation.addTrustedOwner(peerOwnerSignPub)
 		client().crossDomainConfirm(pin, mySignedLink)
 		// The local peer is now written. The relay-affinity edge is a separate Router submit that
 		// returns false on rejection; surface that as RelayEdgeRejected (recoverable by retrying the
@@ -1456,9 +1458,18 @@ class ChatRepository(
 	 * peer's CONFIRMED Domain - the EXACT value the SAS bound, never a re-fetch). Mirrors the link
 	 * wizard's edge result: Linked, or RelayEdgeRejected (the trust is recorded but the Router refused
 	 * the relay edge, retryable). */
-	suspend fun enrollConfirm(myDomainId: String, peerDomainId: String, edgeNonce: String): Result<ConfirmOutcome> =
+	suspend fun enrollConfirm(
+		myDomainId: String,
+		peerDomainId: String,
+		edgeNonce: String,
+		peerOwnerSignPub: String,
+	): Result<ConfirmOutcome> =
 		withContext(Dispatchers.IO) {
 			runCatching {
+				// Record the OWNER-keyed friend edge first (the Users-surface trust): the compare confirmed
+				// the peer's owner key, so trust the PERSON even if the relay edge below is rejected (a
+				// gateway-less friend still becomes a friend; relay enables later).
+				federation.addTrustedOwner(peerOwnerSignPub)
 				// Pin the edge nonce so a retry / lost-ack re-submit re-signs the SAME edge (evie dedupes
 				// by (src, nonce)) instead of accumulating a duplicate per attempt.
 				if (submitXdomainLink(myDomainId, peerDomainId, edgeNonce)) {
@@ -1468,6 +1479,28 @@ class ChatRepository(
 				}
 			}
 		}
+
+	////////////////////////////////
+	//  Owner-keyed trust (the friend graph the Users surface reads)
+
+	/** True iff this owner has trusted the given owner key (the Users-surface Trusted badge). */
+	fun isOwnerTrusted(ownerSignPub: String): Boolean = federation.isTrusted(ownerSignPub)
+
+	/** The set of trusted owner keys (the friend graph). */
+	fun trustedOwners(): Set<String> = federation.trustedOwners()
+
+	/** Untrust a person by owner key: drop the local friend edge + sign an owner-keyed untrust
+	 * tombstone. The relay-affinity edge teardown (per the peer's Domains) is the gateway-side
+	 * follow-up; the friend-graph removal is immediate so the Users surface reflects it now. */
+	suspend fun untrustOwner(peerOwnerSignPub: String): Result<Unit> = withContext(Dispatchers.IO) {
+		runCatching {
+			federation.removeTrustedOwner(peerOwnerSignPub)
+			// Mint the signed tombstone now (used by the gateway untrust op when that lands); the local
+			// removal already reflects the untrust on the board.
+			federation.signUntrust(peerOwnerSignPub, System.currentTimeMillis())
+			Unit
+		}
+	}
 
 	/** Cancel this leg of the handshake (a [No], a timeout, or leaving the screen) so the broker tears
 	 * the window down rather than leaving a half-formed edge. Best-effort. */
