@@ -1,4 +1,4 @@
-// SYNC-HASH: 97a7a1465036d4fe036c093afdc7d8dd
+// SYNC-HASH: 64c143dc9a07c06414046eaf2d2d9bc5
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -435,6 +435,85 @@ export const RosterResultSchema = z
 	})
 	.meta({ id: "RosterResult" });
 
+////////////////////////////////
+//  Trust rendezvous (FLOW-2: roster-initiated user-to-user trust)
+//
+//  Two members already on this evie establish owner-to-owner trust WITHOUT a QR. The initiator ARMS
+//  (commits; the rendezvous is indexed at evie under the TARGET owner key). The target discovers the
+//  armed intent with a "who armed trust toward me?" query (the highlight - no push), arms back, then
+//  both run the SAME commit-reveal owner-key compare as the enroll ceremony, REUSING enrollSas with
+//  sorted-owner-key roles + the rendezvousId as the pin (so no new SAS scheme). evie stays the dumb
+//  broker: it indexes the two owner keys + relays opaque commit/reveal, never computing the SAS.
+
+export const TrustHandshakeOpSchema = z
+	.discriminatedUnion("step", [
+		// The INITIATOR arms: creates the rendezvous (indexed under targetOwnerSignPub) + commits.
+		z.object({
+			step: z.literal("arm"),
+			rendezvousId: b64Field(),
+			initiatorOwnerSignPub: b64Field(),
+			targetOwnerSignPub: b64Field(),
+			commitment: b64Field(),
+		}),
+		// The TARGET arms back (or either side re-polls by re-sending its own commit): joins the
+		// rendezvous. The joiner's OWN owner key must match the armed target.
+		z.object({
+			step: z.literal("join"),
+			rendezvousId: b64Field(),
+			joinerOwnerSignPub: b64Field(),
+			commitment: b64Field(),
+		}),
+		z.object({
+			step: z.literal("reveal"),
+			rendezvousId: b64Field(),
+			side: z.enum(["INITIATOR", "TARGET"]),
+			reveal: EnrollRevealSchema,
+		}),
+		z.object({ step: z.literal("cancel"), rendezvousId: b64Field() }),
+	])
+	.meta({ id: "TrustHandshakeOp" });
+
+/** evie's reply to a trust-handshake frame. Same shape + semantics as the enroll-handshake reply:
+ * `ok:false` is terminal; otherwise the peer's commit/reveal is included once it lands. */
+export const TrustHandshakeResultSchema = z
+	.object({
+		ok: z.boolean(),
+		error: z.string().optional(),
+		peerCommitment: b64Field().optional(),
+		peerReveal: EnrollRevealSchema.optional(),
+	})
+	.meta({ id: "TrustHandshakeResult" });
+
+/** A target's signed "who armed trust toward me?" query (the highlight). The target signs
+ * TRUST_PENDING_V1 over its OWN owner signing key + a fresh timestamp + nonce (proof of possession);
+ * evie verifies the signature, freshness, and non-replay, then returns the arms indexed under that
+ * owner key. Only the owner-key holder can enumerate the arms aimed at it. */
+export const TrustPendingRequestSchema = z
+	.object({
+		signerSignPub: b64Field(),
+		proofAt: z.number().int().nonnegative(),
+		nonce: b64Field(),
+		proof: b64Field(),
+	})
+	.meta({ id: "TrustPendingRequest" });
+
+/** One armed trust intent toward the querying owner: who armed it + the rendezvous to join. */
+export const TrustPendingEntrySchema = z
+	.object({
+		initiatorOwnerSignPub: b64Field(),
+		rendezvousId: b64Field(),
+	})
+	.meta({ id: "TrustPendingEntry" });
+
+export const TrustPendingResultSchema = z
+	.object({
+		ok: z.boolean(),
+		error: z.string().optional(),
+		// Present only on success; absent on an opaque reject.
+		pending: z.array(TrustPendingEntrySchema).optional(),
+	})
+	.meta({ id: "TrustPendingResult" });
+
 export type EnrollmentPayload = z.infer<typeof EnrollmentPayloadSchema>;
 export type EnrollOwnerPayload = Extract<EnrollmentPayload, { type: "enroll-owner" }>;
 export type AdmitGatewayPayload = Extract<EnrollmentPayload, { type: "admit-gateway" }>;
@@ -460,6 +539,11 @@ export type SignedXDomainLinkRevocation = z.infer<typeof SignedXDomainLinkRevoca
 export type RosterRequest = z.infer<typeof RosterRequestSchema>;
 export type RosterMember = z.infer<typeof RosterMemberSchema>;
 export type RosterResult = z.infer<typeof RosterResultSchema>;
+export type TrustHandshakeOp = z.infer<typeof TrustHandshakeOpSchema>;
+export type TrustHandshakeResult = z.infer<typeof TrustHandshakeResultSchema>;
+export type TrustPendingRequest = z.infer<typeof TrustPendingRequestSchema>;
+export type TrustPendingEntry = z.infer<typeof TrustPendingEntrySchema>;
+export type TrustPendingResult = z.infer<typeof TrustPendingResultSchema>;
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -746,4 +830,30 @@ export function signRosterRequest(
  * additionally checks freshness, non-replay, and that the signer is an admitted console. */
 export function verifyRosterRequest(req: RosterRequest): boolean {
 	return verify(rosterRequestSigningBytes(req.signerSignPub, req.proofAt, req.nonce), req.proof, req.signerSignPub);
+}
+
+/** Default trust-pending-proof freshness window (epoch ms), same posture as the roster proof. */
+export const TRUST_PENDING_MAX_SKEW_MS = 120_000;
+
+/** Canonical TRUST_PENDING_V1 proof-of-possession bytes: the querying OWNER's signing key + a fresh
+ * timestamp + nonce. A distinct version tag from ROSTER_V1 so a roster proof can never be replayed as
+ * a trust-pending query and vice versa. */
+export function trustPendingSigningBytes(signerSignPubB64: string, proofAt: number, nonce: string): Buffer {
+	return Buffer.from(["TRUST_PENDING_V1", signerSignPubB64, String(proofAt), nonce].join("\n"), "utf8");
+}
+
+/** Sign a fresh trust-pending query with the querying owner's raw Ed25519 private key. */
+export function signTrustPendingRequest(
+	signerSignPubB64: string,
+	proofAt: number,
+	nonce: string,
+	signPrivB64: string,
+): string {
+	return sign(trustPendingSigningBytes(signerSignPubB64, proofAt, nonce), signPrivB64);
+}
+
+/** True if the trust-pending query's proof verifies under its claimed owner key. The caller (evie)
+ * additionally checks freshness + non-replay before returning the arms indexed under that owner. */
+export function verifyTrustPendingRequest(req: TrustPendingRequest): boolean {
+	return verify(trustPendingSigningBytes(req.signerSignPub, req.proofAt, req.nonce), req.proof, req.signerSignPub);
 }

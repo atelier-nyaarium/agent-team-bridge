@@ -42,6 +42,10 @@ import {
 	PendingTenantSchema,
 	RosterRequestSchema,
 	RosterResultSchema,
+	TrustHandshakeOpSchema,
+	TrustHandshakeResultSchema,
+	TrustPendingRequestSchema,
+	TrustPendingResultSchema,
 } from "../src/shared/enrollment.js";
 import { SignedXDomainUntrustSchema } from "../src/shared/federation-protocol.js";
 import {
@@ -111,6 +115,11 @@ const ROOTS: z.ZodType[] = [
 	SignedXDomainUntrustSchema,
 	RosterRequestSchema,
 	RosterResultSchema,
+	// FLOW-2 trust rendezvous: the phone signs/encodes the handshake + the pending query.
+	TrustHandshakeOpSchema,
+	TrustHandshakeResultSchema,
+	TrustPendingRequestSchema,
+	TrustPendingResultSchema,
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything
@@ -118,7 +127,7 @@ const ROOTS: z.ZodType[] = [
 // the discriminator key is read from zod internals. EnrollOp is composed by the
 // console (owner enroll requests), so closure is safe; the scanned EnrollmentPayload
 // is DECODED and stays hand-parsed (forward-compatible) in the Android client.
-const SEALED_ROOTS = new Set(["ConsoleOp", "EnrollOp", "EnrollHandshakeOp"]);
+const SEALED_ROOTS = new Set(["ConsoleOp", "EnrollOp", "EnrollHandshakeOp", "TrustHandshakeOp"]);
 
 ////////////////////////////////
 //  zod -> cleaned JSON Schema (evie's conversion hygiene)

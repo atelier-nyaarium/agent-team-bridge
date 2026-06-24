@@ -504,6 +504,65 @@ data class RosterResult(
 )
 
 @Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("step")
+sealed class TrustHandshakeOp {
+	@Serializable
+	@SerialName("arm")
+	data class Arm(
+		val rendezvousId: String,
+		val initiatorOwnerSignPub: String,
+		val targetOwnerSignPub: String,
+		val commitment: String,
+	) : TrustHandshakeOp()
+
+	@Serializable
+	@SerialName("join")
+	data class Join(
+		val rendezvousId: String,
+		val joinerOwnerSignPub: String,
+		val commitment: String,
+	) : TrustHandshakeOp()
+
+	@Serializable
+	@SerialName("reveal")
+	data class Reveal(
+		val rendezvousId: String,
+		val side: String,
+		val reveal: EnrollReveal,
+	) : TrustHandshakeOp()
+
+	@Serializable
+	@SerialName("cancel")
+	data class Cancel(
+		val rendezvousId: String,
+	) : TrustHandshakeOp()
+}
+
+@Serializable
+data class TrustHandshakeResult(
+	val ok: Boolean,
+	val error: String? = null,
+	val peerCommitment: String? = null,
+	val peerReveal: EnrollReveal? = null,
+)
+
+@Serializable
+data class TrustPendingRequest(
+	val signerSignPub: String,
+	val proofAt: Long,
+	val nonce: String,
+	val proof: String,
+)
+
+@Serializable
+data class TrustPendingResult(
+	val ok: Boolean,
+	val error: String? = null,
+	val pending: List<TrustPendingEntry>? = null,
+)
+
+@Serializable
 data class SignedFirstRoot(
 	val firstRoot: FirstRoot,
 	val signature: String,
@@ -778,4 +837,10 @@ data class RosterMember(
 	val ownerSignPub: String,
 	val operatorName: String,
 	val online: Boolean,
+)
+
+@Serializable
+data class TrustPendingEntry(
+	val initiatorOwnerSignPub: String,
+	val rendezvousId: String,
 )
