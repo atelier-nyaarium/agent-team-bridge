@@ -61,10 +61,18 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun UsersScreen(repo: ChatRepository, onBack: () -> Unit, onEnrollUser: () -> Unit) {
+fun UsersScreen(
+	repo: ChatRepository,
+	onBack: () -> Unit,
+	onEnrollUser: () -> Unit,
+	onLink: () -> Unit,
+	onHostNetworks: () -> Unit,
+	onAddGateway: () -> Unit,
+) {
 	val scope = rememberCoroutineScope()
-	// Only the home operator (the admin) enrolls users; a guest/user sees no enroll button.
+	// Only the home operator (the admin) enrolls users + hosts guest networks; a guest sees neither.
 	val isAdmin = remember { repo.isHomeOperator() }
+	var menuOpen by remember { mutableStateOf(false) }
 	// One-shot fetch on entry. Null = loading; a Result carries the rows or evie's opaque reason.
 	var outcome by remember { mutableStateOf<Result<List<RosterMember>>?>(null) }
 	val myOwner = remember { repo.ownerSignPub() }
@@ -118,6 +126,29 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit, onEnrollUser: () -> Un
 				navigationIcon = {
 					IconButton(onClick = onBack) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+					}
+				},
+				actions = {
+					// The federation actions live here now that Users is the home surface (no separate
+					// Federation hub). Guest networks is admin-only.
+					IconButton(onClick = { menuOpen = true }) {
+						Icon(Icons.Default.MoreVert, contentDescription = "Network actions")
+					}
+					DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+						DropdownMenuItem(text = { Text("Link with a peer") }, onClick = {
+							menuOpen = false
+							onLink()
+						})
+						if (isAdmin) {
+							DropdownMenuItem(text = { Text("Guest networks") }, onClick = {
+								menuOpen = false
+								onHostNetworks()
+							})
+						}
+						DropdownMenuItem(text = { Text("Add gateway") }, onClick = {
+							menuOpen = false
+							onAddGateway()
+						})
 					}
 				},
 			)

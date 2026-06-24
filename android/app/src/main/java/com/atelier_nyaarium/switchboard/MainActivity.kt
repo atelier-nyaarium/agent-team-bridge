@@ -418,6 +418,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					showUsers = false
 					showHostNetworks = true
 				},
+				onLink = { showLinkWizard = true },
+				onHostNetworks = { showHostNetworks = true },
+				onAddGateway = { showAddGateway = true },
 			)
 		showFederation ->
 			FederationScreen(
@@ -447,9 +450,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onToggleBiometric = { repo.setBiometricLock(it) },
 				onManage = { showManage = true },
 				onFederation = {
+					// Users is the home surface now (the old Federation hub is retired); the federation
+					// actions live in the Users top-bar menu.
 					showSettings = false
 					settingsRoute = SettingsRoute.HUB
-					showFederation = true
+					showUsers = true
 				},
 				onClear = {
 					scope.launch { repo.clearAll() }
@@ -1645,8 +1650,8 @@ private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onFeder
 	Text("Your network", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Manage Gateways") }
 	HorizontalDivider()
-	Text("Peers", style = MaterialTheme.typography.titleSmall)
-	Button(onClick = onFederation, modifier = Modifier.fillMaxWidth()) { Text("Federation") }
+	Text("People", style = MaterialTheme.typography.titleSmall)
+	Button(onClick = onFederation, modifier = Modifier.fillMaxWidth()) { Text("Users") }
 	HorizontalDivider()
 	OwnerKeysCard(repo)
 	OwnerBackupCard(repo)
