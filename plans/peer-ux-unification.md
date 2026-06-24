@@ -169,6 +169,19 @@ Superseded earlier-lap Q/A has been pruned into "Decided so far"; the trail is i
       `CrossDomainShareEntry` + the share ops + the gateway gate (`crossDomainShareState`). Landmarks to reuse:
       `XDomainLink` (owner-keyed link exists), `enrollSas` (owner-anchored SAS exists), `cross_domain_unlink`
       (domain-keyed; untrust is the owner-keyed sibling), `crossDomainShareState` (the share store).
+    - **Roster evie landmarks (grounding for the aggregation, found this stretch):** presence = evie's
+      `BridgeServer.gatewayConnections: Map<domainId, Map<gatewayId, ConnectionId>>` (a Domain with a live
+      gateway conn is online). Per-Domain name + owner live in the `EnrollmentState` in the federation Secret
+      (`operatorName`, `ownerSignPub`), written by `TenantAdmin` (provision/rename). The existing Domain-scoped
+      query to EXTEND is `BridgeServer.handleListGateways(connId)` ("online peer roster for the caller, presence
+      only") - it already returns only the caller's OWN Domain gateways as `{gatewayId, online}` with NO
+      operatorName, and an unregistered caller sees nothing. The roster op is the CROSS-TENANT generalization:
+      scope by the admitted-console signature -> the caller's owner -> the Domains they may see (operator sees
+      its hosted tenants; a guest sees the operator + co-tenants), returning per member `{operatorName, presence,
+      fingerprint(ownerSignPub), their-own-gateways}` and STRIPPING host/guest topology; opaque-reject on
+      absence; a poll-rate ceiling. Transport = the console-bridge (evie-direct, like firstRoot / enrollHandshake),
+      NOT the gateway relay. Careful: this is a cross-Domain NAME DISCLOSURE - over-disclosure (leaking topology
+      or a non-visible Domain) is a privacy bug; build the visibility predicate FIRST and red-team it.
     - **Design clarifications (vetted this stretch - do NOT re-derive):**
       - **Console presence lives on the ROSTER-MEMBER shape, NOT `TeamInfoSchema.status`.** A console-only person
         has no session/team, so they never appear as a `TeamInfo`; their online/absent dot is a field on the
