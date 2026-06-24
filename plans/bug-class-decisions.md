@@ -203,6 +203,15 @@ Secret operator/primary marker.
   acceptance test (a roster row with empty profileName shows "(unnamed)", not the hex id - the literal
   grep gives a FALSE green on the leak) + on-device fresh-provision round-trip. Closes: highs 15/16/17/21,
   mediums 27/30.
+- **Phase 6 - rename the host-agent identity `gateway` -> `host-agent` (FINAL, UNVETTED).** The host
+  orchestrator is hardcoded as the team name `"gateway"` (`mcp/index.ts` `projectName`, reserved in
+  `websocket.ts` `RESERVED_TEAM_NAMES`, mapped to `kind: "gateway"` by `consoleHandler`), which
+  collides with the Docker Gateway server. Rename the host-AGENT identity name + the wire `kind`
+  enum value to `host-agent` across: the gateway (`mcp/index.ts`, `websocket.ts` `from`/reserved,
+  `consoleHandler`, `routes`, `hostRelay`), the wire (`schemas.ts` `TeamInfo` kind enum + codegen
+  `Protocol.kt`), and the app (every `kind == "gateway"` check + the `GatewayHeader`/host grouping).
+  The Docker Gateway server KEEPS its name - only the host-agent renames. NOT YET VETTED: this phase
+  needs its own gap-audit + red-team pass before implementing. The grind STOPS here.
 
 **Minor (separate, low):** evie `CursorMergePullRequestAction.checkGHCLI` (CLASS 2) returns a
 hardcoded "GitHub CLI not found" discarding `gh` stderr - unrelated cursor feature; fix the narrow
