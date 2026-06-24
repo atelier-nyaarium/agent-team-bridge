@@ -263,8 +263,8 @@ private const val ENROLL_POLL_MAX = 150
 /** FLOW-2 rendezvous sides: who ARMED (initiator) vs who JOINED a highlighted arm (target). Distinct
  * from the SAS role (ADMIN/ENROLLEE by sorted owner key) - the side picks the broker frame, the role
  * orders the SAS. Must match the TrustHandshakeOp.Reveal `side` literals on the wire. */
-private const val TRUST_SIDE_INITIATOR = "INITIATOR"
-private const val TRUST_SIDE_TARGET = "TARGET"
+internal const val TRUST_SIDE_INITIATOR = "INITIATOR"
+internal const val TRUST_SIDE_TARGET = "TARGET"
 
 /** Three-way classification of a connect/poll/relay failure. */
 internal enum class ConnKind {

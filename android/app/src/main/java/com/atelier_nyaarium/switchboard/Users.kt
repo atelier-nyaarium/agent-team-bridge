@@ -17,7 +17,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -63,10 +65,37 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
 	val scope = rememberCoroutineScope()
 	// One-shot fetch on entry. Null = loading; a Result carries the rows or evie's opaque reason.
 	var outcome by remember { mutableStateOf<Result<List<RosterMember>>?>(null) }
-	LaunchedEffect(Unit) { outcome = repo.fetchRoster() }
 	val myOwner = remember { repo.ownerSignPub() }
-	// Bumped on an untrust so the per-row Trusted badge re-reads the friend graph.
+	// Bumped on an untrust/trust so the per-row Trusted badge re-reads the friend graph.
 	var trustVersion by remember { mutableIntStateOf(0) }
+	// The arms aimed at me (initiatorOwnerSignPub -> rendezvousId), polled so their rows HIGHLIGHT
+	// (Q2=B: no push - the target discovers the request on the roster). Refreshed on entry + on close.
+	var pending by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+	// A live FLOW-2 compare (initiated by me, or me responding to a highlighted arm); overlays the roster.
+	var activeTrust by remember { mutableStateOf<TrustLaunch?>(null) }
+
+	suspend fun refresh() {
+		outcome = repo.fetchRoster()
+		pending = repo.fetchPendingTrust().getOrDefault(emptyList()).associate { it.initiatorOwnerSignPub to it.rendezvousId }
+	}
+	LaunchedEffect(Unit) { refresh() }
+
+	val launch = activeTrust
+	if (launch != null) {
+		TrustCompareScreen(
+			repo = repo,
+			rendezvousId = launch.rendezvousId,
+			mySide = launch.side,
+			peerOwnerSignPub = launch.peerOwner,
+			peerName = launch.peerName,
+			onClose = {
+				activeTrust = null
+				trustVersion++
+				scope.launch { refresh() }
+			},
+		)
+		return
+	}
 
 	Scaffold(
 		topBar = {
@@ -118,10 +147,24 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
 					for (m in members.sortedWith(compareByDescending<RosterMember> { it.ownerSignPub == myOwner }.thenBy { it.operatorName })) {
 						val isYou = m.ownerSignPub == myOwner
 						val trusted = remember(m.ownerSignPub, trustVersion) { repo.isOwnerTrusted(m.ownerSignPub) }
+						val armedRendezvous = pending[m.ownerSignPub]
 						UserRow(
 							member = m,
 							isYou = isYou,
 							isTrusted = trusted,
+							isPending = !isYou && !trusted && armedRendezvous != null,
+							onTrust = if (!isYou && !trusted) {
+								{
+									// Respond to an arm aimed at me (join its rendezvous), or start a fresh one.
+									activeTrust = if (armedRendezvous != null) {
+										TrustLaunch(armedRendezvous, TRUST_SIDE_TARGET, m.ownerSignPub, m.operatorName)
+									} else {
+										TrustLaunch(repo.mintRendezvousId(), TRUST_SIDE_INITIATOR, m.ownerSignPub, m.operatorName)
+									}
+								}
+							} else {
+								null
+							},
 							onUntrust = if (!isYou && trusted) {
 								{ scope.launch { repo.untrustOwner(m.ownerSignPub); trustVersion++ } }
 							} else {
@@ -135,13 +178,28 @@ fun UsersScreen(repo: ChatRepository, onBack: () -> Unit) {
 	}
 }
 
+/** Where a tapped Trust/Respond action takes the compare flow: the rendezvous + which side I am
+ * (INITIATOR when I start it, TARGET when I respond to an arm aimed at me) + the peer to confirm. */
+data class TrustLaunch(val rendezvousId: String, val side: String, val peerOwner: String, val peerName: String)
+
 /** One roster row: the display name (+ a "you" tag for your own), a Trusted badge, a presence dot,
- * the owner fingerprint (the long-lived identity for recognition), and a per-row kebab. An untrusted
- * row shows presence only - the missing badge conveys it (no "not trusted" text, per the design). */
+ * the owner fingerprint (the long-lived identity for recognition), and the per-row trust controls. An
+ * untrusted row shows a Trust button (Respond + a highlight when someone armed trust toward me); a
+ * trusted row shows the badge + an Untrust kebab. No "not trusted" text - the missing badge conveys it. */
 @Composable
-private fun UserRow(member: RosterMember, isYou: Boolean, isTrusted: Boolean, onUntrust: (() -> Unit)?) {
+private fun UserRow(
+	member: RosterMember,
+	isYou: Boolean,
+	isTrusted: Boolean,
+	isPending: Boolean,
+	onTrust: (() -> Unit)?,
+	onUntrust: (() -> Unit)?,
+) {
 	val fingerprint = remember(member.ownerSignPub) { Crypto.fingerprint(member.ownerSignPub) }
-	Card(Modifier.fillMaxWidth()) {
+	val cardColors =
+		if (isPending) CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+		else CardDefaults.cardColors()
+	Card(Modifier.fillMaxWidth(), colors = cardColors) {
 		Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 			Column(Modifier.weight(1f)) {
 				Row(verticalAlignment = Alignment.CenterVertically) {
@@ -157,6 +215,13 @@ private fun UserRow(member: RosterMember, isYou: Boolean, isTrusted: Boolean, on
 						TrustedBadge()
 					}
 				}
+				if (isPending) {
+					Text(
+						"Wants to trust you",
+						style = MaterialTheme.typography.labelMedium,
+						color = MaterialTheme.colorScheme.onSecondaryContainer,
+					)
+				}
 				Text(
 					fingerprint,
 					fontFamily = FontFamily.Monospace,
@@ -165,6 +230,10 @@ private fun UserRow(member: RosterMember, isYou: Boolean, isTrusted: Boolean, on
 				)
 			}
 			PresenceDot(online = member.online)
+			if (onTrust != null) {
+				Spacer(Modifier.width(8.dp))
+				Button(onClick = onTrust) { Text(if (isPending) "Respond" else "Trust") }
+			}
 			if (onUntrust != null) {
 				Spacer(Modifier.width(8.dp))
 				RowKebab(onUntrust = onUntrust)
