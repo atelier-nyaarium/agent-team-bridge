@@ -500,7 +500,7 @@ data class RosterRequest(
 data class RosterResult(
 	val ok: Boolean,
 	val error: String? = null,
-	val members: List<RosterMember>,
+	val members: List<RosterMember>? = null,
 )
 
 @Serializable

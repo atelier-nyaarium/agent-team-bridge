@@ -1,4 +1,4 @@
-// SYNC-HASH: e458c464a24dcf0376f617608de929dd
+// SYNC-HASH: 97a7a1465036d4fe036c093afdc7d8dd
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -430,7 +430,8 @@ export const RosterResultSchema = z
 	.object({
 		ok: z.boolean(),
 		error: z.string().optional(),
-		members: z.array(RosterMemberSchema),
+		// Present only on success; absent on an opaque reject.
+		members: z.array(RosterMemberSchema).optional(),
 	})
 	.meta({ id: "RosterResult" });
 
