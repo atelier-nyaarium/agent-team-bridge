@@ -197,7 +197,7 @@ export async function startGateway(): Promise<void> {
 	// so the app knows to first-root vs just-provision; teams()/discover stamp profileName
 	// so a linked friend Domain shows the owner's self-set network label. Null until the
 	// first register (or against a pre-feature evie that sends neither field).
-	let domainMeta: { domainStatus?: string; profileName?: string | null } | null = null;
+	let domainMeta: { domainStatus?: string; profileName?: string | null; isAdminDomain?: boolean } | null = null;
 	// The cross-Domain listening-mode handshake coordinator (built in the federation block),
 	// exposed to the console handler so the cross_domain_* ops drive the mutual pairing. The
 	// ONLY writer of the disjoint CrossDomainPeers store.
@@ -466,10 +466,14 @@ export async function startGateway(): Promise<void> {
 		evieClient,
 		sealer,
 		crossDomainPeers: crossDomainPeersForConsole,
-		// This Gateway's own operator/network display name (learned from evie's register
-		// reply), stamped on every local TeamInfo so a linked friend Domain sees the owner's
-		// self-set label over the discovery roster (D1). Null until the first register.
+		// This Gateway's own network display name (learned from evie's register reply), stamped
+		// on every local TeamInfo so a linked friend Domain sees the owner's self-set label over
+		// the discovery roster (D1). Null until the first register.
 		profileName: () => domainMeta?.profileName ?? null,
+		// True when this Gateway's own Domain is the admin's (the evie-runner who provisions
+		// others), learned from the register reply. Stamped on the local TeamInfo so the console
+		// shows the admin surfaces only on the admin's own session.
+		isAdminDomain: () => domainMeta?.isAdminDomain ?? false,
 		// Home-first seal-target resolution on the send side: a target gateway the home
 		// allowlist admits seals v1 to home, mirroring the sealer's open-side ordering, so a
 		// home/friend gateway-id collision never routes a home send to the friend.

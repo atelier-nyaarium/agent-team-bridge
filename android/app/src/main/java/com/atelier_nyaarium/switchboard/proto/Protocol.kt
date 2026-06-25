@@ -51,6 +51,7 @@ data class TeamInfo(
 	val gatewayId: String? = null,
 	val domainId: String? = null,
 	val profileName: String? = null,
+	val isAdminDomain: Boolean? = null,
 	val status: String,
 	val mode: String? = null,
 	val kind: String? = null,

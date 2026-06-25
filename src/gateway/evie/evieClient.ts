@@ -58,7 +58,7 @@ export interface EvieClientConfig {
 	// surfaces these to its console (the register reply's domainStatus + the discovery
 	// roster's profileName). Re-applied on every reconnect, so a rename made elsewhere
 	// reaches the Gateway at its next register. Fields absent against a pre-feature evie.
-	onDomainMeta?: (meta: { domainStatus?: string; profileName?: string | null }) => void;
+	onDomainMeta?: (meta: { domainStatus?: string; profileName?: string | null; isAdminDomain?: boolean }) => void;
 	// A live operator-name refresh from a domain_update push (the owner renamed THIS Domain's
 	// network). Refreshes the held profileName without a reconnect, so teams()/discover reflect
 	// the rename immediately. The allowlist the domain_update's snapshot feeds drops profileName,
@@ -269,6 +269,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 						domain?: unknown;
 						domainStatus?: string;
 						profileName?: string | null;
+						isAdminDomain?: boolean;
 				  }
 				| undefined;
 			if (res.error) {
@@ -290,10 +291,14 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
 			console.log(`[evie-client] registered as Gateway "${config.gatewayId}"${peers}`);
 			if (r?.domain) config.onDomainSync?.(r.domain);
-			// Surface the Gateway's own Domain status + operator name to the console
-			// register reply / discovery roster. Sent only by a federation-aware evie.
-			if (r?.domainStatus !== undefined || r?.profileName !== undefined) {
-				config.onDomainMeta?.({ domainStatus: r.domainStatus, profileName: r.profileName });
+			// Surface the Gateway's own Domain status + profile name + admin-Domain flag to the
+			// console register reply / discovery roster. Sent only by a federation-aware evie.
+			if (r?.domainStatus !== undefined || r?.profileName !== undefined || r?.isAdminDomain !== undefined) {
+				config.onDomainMeta?.({
+					domainStatus: r.domainStatus,
+					profileName: r.profileName,
+					isAdminDomain: r.isAdminDomain,
+				});
 			}
 		});
 	}

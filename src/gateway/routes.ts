@@ -48,10 +48,14 @@ export interface RoutesDeps {
 	// here (the SealTarget is keyed by the full (domainId, gatewayId) pair, never the bare
 	// id), and discovery fans a list_teams to each linked peer. Absent when federation is off.
 	crossDomainPeers?: import("./federation/crossDomainPeers.js").CrossDomainPeers | null;
-	// This Gateway's own operator/network display name (learned from evie's register reply),
-	// stamped on every local TeamInfo so a linked friend Domain sees the owner's self-set
-	// label over the discovery roster (D1). Absent/null when unset or pre-feature.
+	// This Gateway's own network display name (learned from evie's register reply), stamped on
+	// every local TeamInfo so a linked friend Domain sees the owner's self-set label over the
+	// discovery roster (D1). Absent/null when unset or pre-feature.
 	profileName?: (() => string | null | undefined) | null;
+	// Whether this Gateway's own Domain is the admin's (the evie-runner who provisions others),
+	// learned from the register reply. Stamped on the local TeamInfo so the console shows the
+	// admin surfaces only on the admin's own session.
+	isAdminDomain?: (() => boolean) | null;
 	// Whether a gateway id resolves to a HOME (single-owner allowlist) peer. Mirrors the
 	// sealer's home-first resolution on the SEND side, so a send to your own home Gateway
 	// whose id collides with a friend's gateway id is sealed v1 to home (the bare-string
@@ -192,6 +196,7 @@ export function createRoutes({
 	sealer,
 	crossDomainPeers,
 	profileName,
+	isAdminDomain,
 	resolvesHomeGateway,
 	touchShares,
 	isSharedToForReply,
@@ -418,6 +423,7 @@ export function createRoutes({
 		// (the field is nullish on the wire; the friend's gateway is the authoritative source).
 		const ownProfileName = profileName?.();
 		const profileNameField = ownProfileName ? { profileName: ownProfileName } : {};
+		const isAdminDomainField = isAdminDomain?.() ? { isAdminDomain: true } : {};
 
 		for (const [name, subs] of registry) {
 			if (name === "host") continue;
@@ -439,6 +445,7 @@ export function createRoutes({
 				gatewayId: localGatewayId,
 				domainId: localDomainId,
 				...profileNameField,
+				...isAdminDomainField,
 				status: "online",
 				mode: getTeamMode(subs),
 				kind:
@@ -461,6 +468,7 @@ export function createRoutes({
 				gatewayId: localGatewayId,
 				domainId: localDomainId,
 				...profileNameField,
+				...isAdminDomainField,
 				status: "available",
 				kind: "devcontainer",
 				queue_depth: 0,
