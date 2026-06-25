@@ -56,9 +56,9 @@ class CrossDomainLinkTest {
 		// The core fix: "bob" is in the gateway's peer set but has no discovery session (its gateway
 		// is offline / shared nothing back). It MUST still appear so PeerDetail is reachable.
 		val peers = CrossDomainLink.mergeLinkedDomains(
-			teams = listOf(team("home-gw/app", "home")),
+			teams = listOf(team("home-gw/app", "alice")),
 			peerOwners = mapOf("bob" to "bob-owner"),
-			home = "home",
+			home = "alice",
 		)
 		assertEquals(1, peers.size)
 		assertEquals("bob", peers[0].domainId)
@@ -72,11 +72,11 @@ class CrossDomainLinkTest {
 		// to one row carrying discovery's count + presence. "dave" is peer-set-only (offline).
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = listOf(
-				team("home-gw/app", "home"),
+				team("home-gw/app", "alice"),
 				team("carol-gw/lib", "carol", status = "online"),
 			),
 			peerOwners = mapOf("carol" to "carol-owner", "dave" to "dave-owner"),
-			home = "home",
+			home = "alice",
 		)
 		assertEquals(listOf("carol", "dave"), peers.map { it.domainId }) // sorted, no dupes
 		val carol = peers.first { it.domainId == "carol" }
@@ -91,9 +91,9 @@ class CrossDomainLinkTest {
 	fun mergeExcludesHomeFromBothInputs() {
 		// A home-tagged session and the home Domain id in the peer set must never list as a peer.
 		val peers = CrossDomainLink.mergeLinkedDomains(
-			teams = listOf(team("home-gw/app", "home"), team("home-gw/api", null)),
-			peerOwners = mapOf("home" to "home-owner"),
-			home = "home",
+			teams = listOf(team("home-gw/app", "alice"), team("home-gw/api", null)),
+			peerOwners = mapOf("alice" to "home-owner"),
+			home = "alice",
 		)
 		assertTrue("home is never a peer", peers.isEmpty())
 	}
@@ -104,7 +104,7 @@ class CrossDomainLinkTest {
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = listOf(team("erin-gw/svc", "erin", status = "online")),
 			peerOwners = emptyMap(),
-			home = "home",
+			home = "alice",
 		)
 		assertEquals(listOf("erin"), peers.map { it.domainId })
 		assertTrue(peers[0].online)

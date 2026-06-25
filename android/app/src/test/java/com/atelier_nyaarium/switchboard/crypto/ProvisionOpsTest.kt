@@ -180,14 +180,14 @@ class ProvisionOpsTest {
 		val adminOwner = Crypto.generateIdentity()
 		val attacker = Crypto.generateIdentity()
 
-		val p = ProvisionTenant("home", "Home Lab", 5000L, "cA==")
+		val p = ProvisionTenant("alice", "Home Lab", 5000L, "cA==")
 		val signedP = ProvisionOpsCrypto.signProvision(p, adminOwner.sign.priv, adminOwner.sign.pub)
 		assertTrue(ProvisionOpsCrypto.verifyProvision(signedP, adminOwner.sign.pub))
 		assertFalse(ProvisionOpsCrypto.verifyProvision(signedP, attacker.sign.pub))
 		// A tampered displayName must not verify.
 		assertFalse(ProvisionOpsCrypto.verifyProvision(signedP.copy(provision = p.copy(displayName = "Evil")), adminOwner.sign.pub))
 
-		val r = RemoveTenant("home", 6000L, "cg==")
+		val r = RemoveTenant("alice", 6000L, "cg==")
 		val signedR = ProvisionOpsCrypto.signRemove(r, adminOwner.sign.priv, adminOwner.sign.pub)
 		assertTrue(ProvisionOpsCrypto.verifyRemove(signedR, adminOwner.sign.pub))
 		assertFalse(ProvisionOpsCrypto.verifyRemove(signedR, attacker.sign.pub))
@@ -202,7 +202,7 @@ class ProvisionOpsTest {
 	fun firstRootSignsAndVerifiesLocally() {
 		val owner = Crypto.generateIdentity()
 		val attacker = Crypto.generateIdentity()
-		val f = FirstRoot("home", owner.sign.pub, owner.box.pub, "bm9uY2U=", 7000L)
+		val f = FirstRoot("alice", owner.sign.pub, owner.box.pub, "bm9uY2U=", 7000L)
 		val signed = ProvisionOpsCrypto.signFirstRoot(f, owner.sign.priv)
 		assertTrue(ProvisionOpsCrypto.verifyFirstRoot(signed))
 		// Re-pointing the rooted ownerSignPub breaks the self-signature.
@@ -215,7 +215,7 @@ class ProvisionOpsTest {
 	fun renameSignsAndVerifiesLocally() {
 		val owner = Crypto.generateIdentity()
 		val attacker = Crypto.generateIdentity()
-		val r = SetDisplayName("home", "My Network", 8000L, "bg==")
+		val r = SetDisplayName("alice", "My Network", 8000L, "bg==")
 		val signed = ProvisionOpsCrypto.signSetDisplayName(r, owner.sign.priv, owner.sign.pub)
 		assertTrue(ProvisionOpsCrypto.verifySetDisplayName(signed, owner.sign.pub))
 		assertFalse(ProvisionOpsCrypto.verifySetDisplayName(signed, attacker.sign.pub))

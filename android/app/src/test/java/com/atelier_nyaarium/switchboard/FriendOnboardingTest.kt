@@ -176,7 +176,7 @@ class FriendOnboardingTest {
 	@Test
 	fun noSessionsIsAwaitingSetup() {
 		// The friend has not first-rooted + brought a gateway online yet: nothing in discovery.
-		val teams = listOf(team("home-gw/app", "home"))
+		val teams = listOf(team("home-gw/app", "alice"))
 		assertEquals(HostedTenantState.AWAITING_SETUP, FriendOnboarding.hostedState("guest1", teams))
 	}
 
@@ -201,11 +201,11 @@ class FriendOnboardingTest {
 	fun peersShowTheFriendsDisplayName() {
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = listOf(
-				team("home-gw/app", "home"),
+				team("home-gw/app", "alice"),
 				team("carol-gw/lib", "carol", status = "online", displayName = "Carol"),
 			),
 			peerOwners = mapOf("carol" to "carol-owner"),
-			home = "home",
+			home = "alice",
 		)
 		assertEquals(1, peers.size)
 		assertEquals("carol", peers[0].domainId)
@@ -219,7 +219,7 @@ class FriendOnboardingTest {
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = emptyList(),
 			peerOwners = mapOf("dave" to "dave-owner"),
-			home = "home",
+			home = "alice",
 		)
 		assertEquals(1, peers.size)
 		assertNull(peers[0].displayName)
