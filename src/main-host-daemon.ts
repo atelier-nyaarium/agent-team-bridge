@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { startHostWakeListener } from "./mcp/devcontainer/hostWakeListener.js";
+import { startHostDaemon } from "./mcp/devcontainer/hostDaemon.js";
 
 // The headless host daemon: it claims the gateway's reserved "host" WS slot and owns the host
 // plumbing - the devcontainer catalog scan, on-demand container wake, and the console terminal-view
@@ -9,5 +9,5 @@ import { startHostWakeListener } from "./mcp/devcontainer/hostWakeListener.js";
 // it; HOST_WS_TOKEN authenticates the reserved slot and BRIDGE_ROUTER_URL points at the gateway.
 
 const projectDirs = [path.join(os.homedir(), "projects")];
-startHostWakeListener(projectDirs);
+startHostDaemon(projectDirs);
 console.error("[host-daemon] started");

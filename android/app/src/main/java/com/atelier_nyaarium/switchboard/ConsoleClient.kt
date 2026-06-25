@@ -207,7 +207,7 @@ private fun SealedEnvelope.toCrypto(): Crypto.SealedEnvelope =
 	Crypto.SealedEnvelope(ephemeralPub, nonce, ciphertext, signature)
 
 /** Talks to the console bridge through the CA-pinned k8s API service-proxy. */
-class ConsoleClient(private val prov: Provisioning, private val store: ProvisioningStore) {
+class ConsoleClient(private val prov: Provisioning, private val store: AppStateStore) {
 	private val client = buildPinnedClient(prov.caPem)
 	private val proxyBase =
 		"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
@@ -246,8 +246,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	private fun requireConsoleIdentity(): Crypto.Identity =
 		when (val load = store.loadIdentity()) {
 			is IdentityLoad.Loaded -> load.identity
-			IdentityLoad.Absent -> error("This device is not enrolled. Re-run provision-admin-domain.sh and re-import the setup blob.")
-			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-admin-domain.sh")
+			IdentityLoad.Absent -> error("This device is not enrolled. Re-run setup.sh and re-import the setup blob.")
+			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run setup.sh")
 		}
 
 	/** Resolve a Gateway's keys from the owner-rooted keyring, verifying its admission before sealing to
@@ -255,10 +255,10 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	 * that Gateway's keys, never because a provisioning blob named them. A Gateway absent from the keyring
 	 * is worded "not in the keyring" so it cannot collide with the server-side "is not admitted to the
 	 * Domain" sync-lag token. */
-	private fun requireGatewayKeys(gatewayId: String): ProvisioningStore.GatewayKeys {
+	private fun requireGatewayKeys(gatewayId: String): AppStateStore.GatewayKeys {
 		val keyring = Keyring.parse(store.loadDomain()) ?: error("Gateway \"$gatewayId\" is not in the keyring.")
 		val admission = keyring.resolveGateway(gatewayId) ?: error("Gateway \"$gatewayId\" is not in the keyring.")
-		return ProvisioningStore.GatewayKeys(admission.signPub, admission.boxPub)
+		return AppStateStore.GatewayKeys(admission.signPub, admission.boxPub)
 	}
 
 	/** The Gateway id to seal to, preferring the live routeGateway set after register, then the persisted
@@ -268,7 +268,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	private fun resolveGatewayId(): String =
 		routeGateway?.takeIf { it.isNotEmpty() }
 			?: store.loadGatewayId().takeIf { it.isNotEmpty() }
-			?: error("No Gateway admitted yet - add one from Manage Gateways.")
+			?: error("No Gateway admitted yet - add one from Manage Members.")
 
 	/** Build a sealed ConsoleRelayFrame for one op. Called fresh for every send including retries, so
 	 * each attempt uses a new ephemeral/nonce and the server's replay guard never sees a duplicate. */

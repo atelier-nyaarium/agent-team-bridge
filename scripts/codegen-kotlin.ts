@@ -48,7 +48,7 @@ import {
 	TrustHandshakeResultSchema,
 	TrustPendingRequestSchema,
 	TrustPendingResultSchema,
-} from "../src/shared/enrollment.js";
+} from "../src/shared/federation-lifecycle.js";
 import { SignedXDomainUntrustSchema } from "../src/shared/federation-protocol.js";
 import {
 	ChannelFileSchema,

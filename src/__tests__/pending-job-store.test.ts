@@ -109,7 +109,7 @@ describe("PendingJobStore.expireByDomain", () => {
 //  keyed by), since a destination job stores `entry.to` as the BARE local name.
 
 describe("PendingJobStore.expireBySession", () => {
-	// A destination job mirrors what hostRelay.handleOp + routes.send create for a
+	// A destination job mirrors what gatewayRelay.handleOp + routes.send create for a
 	// cross-Domain inbound send: the id is the origin-set canonical session key
 	// (conv:<conv>:<thisGateway>/<name>), `to` is the BARE local name, and dstDomainId is the
 	// verified sending friend Domain.

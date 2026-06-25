@@ -125,7 +125,7 @@ object Repo {
 		instance ?: synchronized(this) {
 			val app = context.applicationContext
 			instance ?: ChatRepository(
-				ProvisioningStore(app),
+				AppStateStore(app),
 				app.filesDir,
 				app.contentResolver,
 				loadSttsCatalog(app),
@@ -403,7 +403,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		showAddGateway ->
 			AddGatewayScreen(repo = repo, onBack = { showAddGateway = false }, onDone = { showAddGateway = false })
 		showManage ->
-			ManageScreen(repo = repo, onBack = { showManage = false }, onAddGateway = { showAddGateway = true })
+			ManageMembersScreen(repo = repo, onBack = { showManage = false }, onAddGateway = { showAddGateway = true })
 		// Settings is reachable from ANY state, so this branch is evaluated BEFORE the unprovisioned
 		// ProvisionScreen below (the setup screen's gear opens it). It sits below the overlay branches
 		// above, which are entered from Settings without clearing showSettings, so they must still win.
@@ -648,7 +648,7 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 	}
 }
 
-/** The tucked, text-only "Setting up a host" manual: the admin path (run provision-admin-domain.sh on
+/** The tucked, text-only "Setting up a host" manual: the admin path (run setup.sh on
  * a computer, paste back the setup blob it emits). No QR, no key prompt - the owner key is generated
  * silently and the script reads the PUBLIC keys. Reached from the fresh-open screen AND from the
  * empty board after a friend first-roots but has no host/gateway yet (the bring-up-a-host pointer). */
@@ -680,7 +680,7 @@ fun HostSetupHelpScreen(onBack: () -> Unit) {
 			HorizontalDivider()
 			Text(
 				"1. On the computer that will run your agents, clone switchboard and run " +
-					"./provision-admin-domain.sh.\n\n" +
+					"./setup.sh.\n\n" +
 					"2. It asks for your name and sets everything up. No keys to paste - this app " +
 					"holds your owner key.\n\n" +
 					"3. It prints a setup code. Go back and scan or paste it.\n\n" +
@@ -914,7 +914,7 @@ private fun EmptyBoard(
 				Spacer(Modifier.height(20.dp))
 				Button(onClick = onRefresh) { Text("Try again") }
 				Spacer(Modifier.height(4.dp))
-				TextButton(onClick = onManage) { Text("Manage Gateways") }
+				TextButton(onClick = onManage) { Text("Manage Members") }
 			}
 			// Mid-enrollment, still self-healing: the poll loop keeps retrying and clears it on the
 			// first success; past the grace window it escalates into the terminal branch above.
@@ -1598,7 +1598,7 @@ private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onFeder
 	// Two distinct concerns kept apart: managing gateways within YOUR network, and linking with a
 	// friend's separate network (cross-Domain trust).
 	Text("Your network", style = MaterialTheme.typography.titleSmall)
-	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Manage Gateways") }
+	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Manage Members") }
 	HorizontalDivider()
 	Text("People", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = onFederation, modifier = Modifier.fillMaxWidth()) { Text("Users") }

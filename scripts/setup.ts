@@ -1,6 +1,6 @@
 // Admin setup - the single bootstrap for this machine's gateway and the owner's Console. It
 // configures + enrolls the gateway and emits the bridge blob the owner's Console imports. Driven by
-// provision-admin-domain.sh, a thin launcher that execs this.
+// setup.sh, a thin launcher that execs this.
 //
 //   (no args)            interactive menu: set up this gateway, provision the admin Domain, or purge.
 //                        Non-TTY runs Provision direct.
@@ -22,7 +22,7 @@ import fs from "node:fs";
 import { $ } from "bun";
 import { ADMIT_PAYLOAD_FILE } from "../src/gateway/federation/enrollQr.js";
 import { sanitizeDomainId } from "../src/shared/domain-id.js";
-import { sanitizeGatewayId } from "../src/shared/host-id.js";
+import { sanitizeGatewayId } from "../src/shared/gateway-id.js";
 import { pendingAdminDomain, readAdminDomain, removeDomain, removeGatewayAdmission } from "./bootstrap-domain.js";
 import {
 	applySecret,
@@ -78,11 +78,11 @@ const INVITE_TTL_MS = 86_400_000;
 const USAGE = [
 	"Admin setup - the SINGLE bootstrap for this gateway and the Android Console.",
 	"",
-	"  ./provision-admin-domain.sh              menu: set up the gateway, provision, purge (non-TTY runs Provision direct)",
-	"  ./provision-admin-domain.sh --gateway-transport  move the local Gateway onto the service-proxy WS",
-	"  ./provision-admin-domain.sh --qr                 re-open the enrollment-QR menu for the current blob",
-	"  ./provision-admin-domain.sh --verify             health-probe the bridge",
-	"  ./provision-admin-domain.sh --help",
+	"  ./setup.sh              menu: set up the gateway, provision, purge (non-TTY runs Provision direct)",
+	"  ./setup.sh --gateway-transport  move the local Gateway onto the service-proxy WS",
+	"  ./setup.sh --qr                 re-open the enrollment-QR menu for the current blob",
+	"  ./setup.sh --verify             health-probe the bridge",
+	"  ./setup.sh --help",
 ].join("\n");
 
 ////////////////////////////////
@@ -385,7 +385,7 @@ async function purgeGateway(): Promise<void> {
 
 /** Apply the console-bridge + gateway-bridge k8s objects and ensure CONSOLE_BRIDGE_TOKEN is set so
  * evie's ConsoleBridgeServer starts on 20004. Idempotent. */
-async function cutover(): Promise<void> {
+async function applyBridgeManifests(): Promise<void> {
 	note("Applying cluster objects");
 	for (const yaml of [BRIDGE_YAML, GATEWAY_BRIDGE_YAML]) {
 		const r = await kStdin(await Bun.file(yaml).text(), "apply", "-f", "-")
@@ -537,8 +537,7 @@ async function writeGatewayTransport(): Promise<void> {
  * evie so it isolates bridge+creds from gateway connectivity. Bearer tokens ride a 0600 curl -K
  * config, never argv. */
 async function verify(): Promise<void> {
-	if (!(await Bun.file(BLOB_FILE).exists()))
-		throw new Error(`no blob at ${BLOB_FILE} - run provision-admin-domain.sh first`);
+	if (!(await Bun.file(BLOB_FILE).exists())) throw new Error(`no blob at ${BLOB_FILE} - run setup.sh first`);
 	const blob = jparse<{ apiUrl?: string; saToken?: string; appToken?: string; caPem?: string }>(
 		await Bun.file(BLOB_FILE).text(),
 	);
@@ -556,7 +555,7 @@ async function verify(): Promise<void> {
 	);
 	await $`chmod 600 ${cfg}`.quiet().nothrow();
 	const url = `${apiUrl}/api/v1/namespaces/${NS}/services/${SERVICE}:${PORT}/proxy/ingest`;
-	const body = '{"conversationId":"provision-verify","lines":["provision-admin-domain.sh --verify auth probe"]}';
+	const body = '{"conversationId":"provision-verify","lines":["setup.sh --verify auth probe"]}';
 	try {
 		// ConsoleBridge binds 20004 a few seconds AFTER the evie pod reports ready, so the proxy
 		// returns 503 briefly after a (re)start. 401/404 are terminal - fail fast.
@@ -686,7 +685,7 @@ async function evieDelete(mutate: (fedJson: string) => string): Promise<void> {
  * `pendingTenant` so the phone first-roots on scan; an already-rooted Domain skips staging and emits
  * the blob only. Verifies the bridge path either way. */
 async function provision(): Promise<void> {
-	await cutover();
+	await applyBridgeManifests();
 	const evieFed = await readEvieFed();
 	// The admin Domain id: a random hex id, minted on the first provision and pinned in the
 	// gateway env. A re-provision reuses it; a fresh setup mints one and writes it back so the gateway
@@ -787,8 +786,7 @@ async function main(): Promise<void> {
 			break;
 		}
 		case "--qr": {
-			if (!(await Bun.file(BLOB_FILE).exists()))
-				die(`no blob at ${BLOB_FILE} - run provision-admin-domain.sh first`);
+			if (!(await Bun.file(BLOB_FILE).exists())) die(`no blob at ${BLOB_FILE} - run setup.sh first`);
 			await qrMenu();
 			break;
 		}

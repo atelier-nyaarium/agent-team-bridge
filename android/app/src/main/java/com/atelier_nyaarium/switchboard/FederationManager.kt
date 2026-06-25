@@ -51,7 +51,7 @@ enum class OwnerRestoreResult { OK, WRONG_PASSPHRASE, DIFFERENT_OWNER }
 /** Owner public material for the settings cards (no private key). */
 data class OwnerKeysView(val signPub: String, val boxPub: String, val sas: String)
 
-class FederationManager(private val store: ProvisioningStore) {
+class FederationManager(private val store: AppStateStore) {
 	private val rnd = SecureRandom()
 	private val json = Json { ignoreUnknownKeys = true }
 
@@ -74,7 +74,7 @@ class FederationManager(private val store: ProvisioningStore) {
 		when (val load = store.loadIdentity()) {
 			is IdentityLoad.Loaded -> load.identity
 			IdentityLoad.Absent -> Crypto.generateIdentity().also { store.saveIdentity(it) }
-			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-admin-domain.sh")
+			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run setup.sh")
 		}
 
 	/** Owner public material for display, or null when the stored owner key is corrupt. Never

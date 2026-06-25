@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import { describe, expect, it } from "vitest";
-import { type ConsoleRoutes, createConsoleHandler } from "../gateway/console/consoleHandler.js";
+import { type ConsoleRoutes, createConsoleDispatcher } from "../gateway/console/consoleHandler.js";
 import { ConsolePeer } from "../gateway/console/consolePeer.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../gateway/websocket.js";
 import type { ConsoleOp, OpenedConsoleFrame } from "../shared/console-protocol.js";
@@ -57,7 +57,7 @@ interface Harness {
 	mailboxStore: DeviceMailboxStore;
 	sendCalls: Record<string, unknown>[];
 	respondCalls: Record<string, unknown>[];
-	handler: ReturnType<typeof createConsoleHandler>;
+	handler: ReturnType<typeof createConsoleDispatcher>;
 }
 
 function makeHarness(
@@ -95,7 +95,7 @@ function makeHarness(
 		...overrides,
 	};
 
-	const handler = createConsoleHandler({
+	const handler = createConsoleDispatcher({
 		registry,
 		conversationRegistry,
 		mailboxStore,
@@ -150,7 +150,7 @@ describe("ConsolePeer", () => {
 	});
 });
 
-describe("createConsoleHandler", () => {
+describe("createConsoleDispatcher", () => {
 	it("register inserts a virtual peer keyed by conversationId and returns the cursor", async () => {
 		const h = makeHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "register" }));
@@ -223,7 +223,7 @@ describe("createConsoleHandler", () => {
 		const registry: TeamRegistry = new Map();
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -570,7 +570,7 @@ describe("createConsoleHandler", () => {
 		const registry: TeamRegistry = new Map();
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -664,7 +664,7 @@ describe("createConsoleHandler", () => {
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
 		let resolveSend: ((res: Response) => void) | undefined;
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -706,7 +706,7 @@ describe("createConsoleHandler", () => {
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
 		let resolveSend: ((res: Response) => void) | undefined;
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -795,7 +795,7 @@ describe("createConsoleHandler", () => {
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
 		let resolveSend: ((res: Response) => void) | undefined;
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -893,7 +893,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			teams: () => jsonRes([]),
 			discover: async () => jsonRes([]),
 		};
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
@@ -1141,7 +1141,7 @@ describe("console cross-Domain handshake ops", () => {
 				return { peers: PEER_SET };
 			},
 		};
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
@@ -1295,7 +1295,7 @@ describe("console cross-Domain handshake ops", () => {
 	});
 
 	it("the cross_domain_* ops error cleanly when federation is not wired", async () => {
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
@@ -1358,7 +1358,7 @@ describe("console cross-Domain share ops", () => {
 			teams: teamsList,
 			discover: async () => teamsList(),
 		};
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
@@ -1606,7 +1606,7 @@ describe("console cross-Domain share ops", () => {
 	});
 
 	it("the share ops error cleanly when federation is not wired", async () => {
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
@@ -1698,7 +1698,7 @@ describe("console cross-Domain unlink op", () => {
 			teams: () => jsonRes([]),
 			discover: async () => jsonRes([]),
 		};
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
@@ -1742,7 +1742,7 @@ describe("console cross-Domain unlink op", () => {
 	});
 
 	it("cross_domain_unlink errors cleanly when federation is not wired", async () => {
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),

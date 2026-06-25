@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Pins the clearProvisioning() wipe/keep partition (ProvisioningStore.PROVISIONING_KEYS):
+ * Pins the clearProvisioning() wipe/keep partition (AppStateStore.PROVISIONING_KEYS):
  * the provisioning / identity / transcript keys are wiped, while the settings-owned keys
  * (voice creds + taste, the biometric lock, the one-shot migration latch) are preserved by
  * omission. A key added to the wrong side - e.g. a new identity key forgotten here, or a
@@ -13,7 +13,7 @@ import org.junit.Test
  * declared key list, not runtime prefs, so no Android Context is needed).
  */
 class ClearProvisioningPartitionTest {
-	private val wiped = ProvisioningStore.PROVISIONING_KEYS
+	private val wiped = AppStateStore.PROVISIONING_KEYS
 
 	@Test
 	fun wipesProvisioningIdentityAndTranscript() {

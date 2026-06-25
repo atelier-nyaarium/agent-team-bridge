@@ -6,12 +6,12 @@ import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { DurableStore } from "../shared/durable-store.js";
-import { resolveLocalGatewayId } from "../shared/host-id.js";
+import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import type { HostOp, HostOpResult } from "../shared/host-op.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
-import { createConsoleHandler } from "./console/consoleHandler.js";
+import { createConsoleDispatcher } from "./console/consoleHandler.js";
 import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { startEvieClient } from "./evie/evieClient.js";
@@ -27,7 +27,7 @@ import {
 import { CrossDomainPeers } from "./federation/crossDomainPeers.js";
 import { CrossDomainShareState } from "./federation/crossDomainShareState.js";
 import { ADMIT_PAYLOAD_FILE, admitGatewayPayload, logAdmitGatewayQr } from "./federation/enrollQr.js";
-import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/hostRelay.js";
+import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/gatewayRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
 import { ReplayGuard } from "./federation/replayGuard.js";
 import { createSealer, type Sealer } from "./federation/sealer.js";
@@ -352,7 +352,7 @@ export async function startGateway(): Promise<void> {
 		});
 	}
 
-	// Creds-less enrollment: when armed with a one-time nonce (provision-admin-domain.sh (Enroll gateway))
+	// Creds-less enrollment: when armed with a one-time nonce (setup.sh (Enroll gateway))
 	// and not yet admitted, mint the identity, print the admit-gateway QR with the LAN
 	// target, and accept exactly one sealed bootstrap bundle over POST /enroll.
 	let enrollInstall: ((frame: unknown) => string) | null = null;
@@ -401,9 +401,7 @@ export async function startGateway(): Promise<void> {
 			enrollTimer = setTimeout(() => {
 				if (enrollInstall) {
 					enrollInstall = null;
-					console.log(
-						"[enroll] enrollment window expired (~10 min); re-run provision-admin-domain.sh (Enroll gateway)",
-					);
+					console.log("[enroll] enrollment window expired (~10 min); re-run setup.sh (Enroll gateway)");
 				}
 			}, 600_000);
 			enrollTimer.unref?.();
@@ -461,7 +459,7 @@ export async function startGateway(): Promise<void> {
 	});
 
 	if (evieClient) {
-		const consoleHandler = createConsoleHandler({
+		const consoleHandler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore,

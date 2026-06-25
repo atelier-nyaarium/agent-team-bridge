@@ -186,7 +186,7 @@ function isMutatingOp(op: ConsoleOp): boolean {
 	);
 }
 
-export function createConsoleHandler({
+export function createConsoleDispatcher({
 	registry,
 	conversationRegistry,
 	mailboxStore,

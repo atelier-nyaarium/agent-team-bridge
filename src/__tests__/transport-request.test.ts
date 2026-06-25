@@ -8,7 +8,7 @@ import {
 	TransportRequestSchema,
 	transportRequestSigningBytes,
 	verifyTransportRequest,
-} from "../shared/enrollment.js";
+} from "../shared/federation-lifecycle.js";
 import { assertCanonicalBytes } from "./_canonical-bytes.js";
 
 ////////////////////////////////

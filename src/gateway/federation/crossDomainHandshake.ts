@@ -583,7 +583,7 @@ export class CrossDomainHandshakeCoordinator {
 //  Bridges the coordinator to the evie client. The requester leg drives each round trip
 //  as a tool call; the receiver leg validates an inbound relayed frame, runs it through
 //  the coordinator, and replies as the matching reply tool call. Mirrors the gateway-relay
-//  wiring in hostRelay.ts (one parse, one error surface).
+//  wiring in gatewayRelay.ts (one parse, one error surface).
 
 /** The inbound round-1 commit frame the Router routed to this Gateway. The outer envelope is
  * validated here; the inner `payload` is parsed with XDomainCommitWireSchema before dispatch. */

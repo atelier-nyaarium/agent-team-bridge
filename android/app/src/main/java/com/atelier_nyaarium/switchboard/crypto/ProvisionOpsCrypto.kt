@@ -11,7 +11,7 @@ import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 
 /**
  * Friend cross-Domain onboarding signing, the byte-exact Kotlin counterpart of
- * switchboard's `src/shared/enrollment.ts`. The admin pre-stages a friend's pending
+ * switchboard's `src/shared/federation-lifecycle.ts`. The admin pre-stages a friend's pending
  * tenant (provision_tenant) or drops it (remove_tenant), the friend's app roots the Domain
  * on first connect (first_root, SELF-signed by its silently-generated owner key), and the
  * rooted owner renames the network (set_display_name). evie verifies each against the
@@ -110,7 +110,7 @@ object ProvisionOpsCrypto {
 	 * signing ROSTER_V1 over its OWN key + a fresh timestamp + nonce (proof of possession, mirroring
 	 * the registration proof). evie verifies the signature, freshness, and non-replay, then resolves
 	 * the key to an admitted console. The preimage binds the RAW signer key (not a fingerprint), so
-	 * it reproduces byte-for-byte against rosterRequestSigningBytes in enrollment.ts.
+	 * it reproduces byte-for-byte against rosterRequestSigningBytes in federation-lifecycle.ts.
 	 */
 	fun rosterRequestSigningBytes(signerSignPub: String, proofAt: Long, nonce: String): ByteArray =
 		listOf("ROSTER_V1", signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
@@ -122,7 +122,7 @@ object ProvisionOpsCrypto {
 	 * The FLOW-2 trust-pending query proof: the target owner proves possession of its owner key by
 	 * signing TRUST_PENDING_V1 over its OWN key + a fresh timestamp + nonce, so only the owner can
 	 * enumerate the arms aimed at it. A distinct version tag from ROSTER_V1, so neither proof crosses
-	 * over. Reproduces byte-for-byte against trustPendingSigningBytes in enrollment.ts.
+	 * over. Reproduces byte-for-byte against trustPendingSigningBytes in federation-lifecycle.ts.
 	 */
 	fun trustPendingSigningBytes(signerSignPub: String, proofAt: Long, nonce: String): ByteArray =
 		listOf("TRUST_PENDING_V1", signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
@@ -135,7 +135,7 @@ object ProvisionOpsCrypto {
 	 * TRANSPORT_REQUEST_V1 over its OWN key + a fresh timestamp + nonce, so evie can resolve the
 	 * signer to a rooted owner and return the gateway-bridge transport. A distinct version tag from
 	 * ROSTER_V1 / TRUST_PENDING_V1, so no proof crosses over. Reproduces byte-for-byte against
-	 * transportRequestSigningBytes in enrollment.ts.
+	 * transportRequestSigningBytes in federation-lifecycle.ts.
 	 */
 	fun transportRequestSigningBytes(signerSignPub: String, proofAt: Long, nonce: String): ByteArray =
 		listOf("TRANSPORT_REQUEST_V1", signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)

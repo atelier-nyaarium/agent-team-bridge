@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { Allowlist } from "../gateway/federation/allowlist.js";
 import { type CrossDomainPeer, CrossDomainPeers } from "../gateway/federation/crossDomainPeers.js";
 import { CrossDomainShareState } from "../gateway/federation/crossDomainShareState.js";
-import { createGatewayRelayHandler, type RelayShareState } from "../gateway/federation/hostRelay.js";
+import { createGatewayRelayHandler, type RelayShareState } from "../gateway/federation/gatewayRelay.js";
 import { createSealer, type Sealer } from "../gateway/federation/sealer.js";
 import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
 import { signAdmission } from "../shared/admission.js";

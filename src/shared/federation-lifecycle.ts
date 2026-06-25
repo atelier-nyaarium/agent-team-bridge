@@ -1,7 +1,7 @@
-// SYNC-HASH: fa32be206216ed1c7d2ebb86e05658ee
-// SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
-// Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
-// MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
+// SYNC-HASH: 1630a1d83ca2eae26a704c4ec7caa86f
+// SYNCED MODULE - source of truth: switchboard/src/shared/federation-lifecycle.ts
+// Copied verbatim into: evie-bot/app/features/bridge/federation-lifecycle.ts
+// MUST re-copy on change: cp src/shared/federation-lifecycle.ts ../evie-bot/app/features/bridge/federation-lifecycle.ts
 import { z } from "zod";
 import {
 	type Admission,

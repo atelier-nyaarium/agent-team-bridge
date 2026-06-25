@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Pull and start this machine's gateway. One gateway per machine, configured by .env.
-# Setup lives in ./provision-admin-domain.sh.
+# Setup lives in ./setup.sh.
 
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1

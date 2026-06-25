@@ -91,7 +91,7 @@ export const GatewayRelayFrameSchema = z.object({
 ////////////////////////////////
 //  Types
 //
-//  Op RESULTS are sealed back to the origin Gateway too (hostRelay.ts seals the reply
+//  Op RESULTS are sealed back to the origin Gateway too (gatewayRelay.ts seals the reply
 //  leg), then parsed loosely by the origin: a peer Gateway is semi-trusted, and the
 //  existing route validation handles shape, so no result schema is enforced here.
 

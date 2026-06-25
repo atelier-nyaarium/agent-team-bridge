@@ -38,7 +38,7 @@ sealed interface IdentityLoad {
  * tokens), the biometric-lock flag, and the serialized chat transcript. Falls back
  * to plain prefs only if the device keystore is unavailable.
  */
-class ProvisioningStore(context: Context) {
+class AppStateStore(context: Context) {
 	// True when the Keystore-backed store initialized. Federation private keys are persisted ONLY
 	// when encrypted, keeping the Domain root signing key off disk in cleartext (fail closed).
 	private var encrypted = false

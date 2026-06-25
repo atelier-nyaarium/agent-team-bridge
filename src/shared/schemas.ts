@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { DomainSnapshotSchema, SignedAdmissionSchema } from "./admission.js";
 import { b64Field, slugField } from "./crypto.js";
-import { SignedFirstRootSchema } from "./enrollment.js";
+import { SignedFirstRootSchema } from "./federation-lifecycle.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 
 ////////////////////////////////
