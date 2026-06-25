@@ -5,6 +5,7 @@
 - `src/` - Main source code
   - `main-mcp.ts` - MCP plugin entry point (loaded by Claude Code / IDE plugins)
   - `main-gateway.ts` - Gateway server entry point (runs in Docker)
+  - `main-host-daemon.ts` - Headless host daemon entry point: runs the host plumbing (wake + the console terminal-view `host_op`) on the host, no Claude session. Launched by `start-host-daemon.sh`
   - `gateway/` - **Gateway server** - A Gateway: the central HTTP + WebSocket router for one machine's teams, running in Docker
     - `index.ts` - Server setup: Bun.serve, routes, WebSocket handlers, evie client init, port-forward
     - `routes.ts` - HTTP route handlers (send, respond, poll, teams, health, evie tool-call, ingest, human notify broadcast)
@@ -40,11 +41,6 @@
       - `channelReply.ts` - `channel_reply` tool: reply to an incoming channel message
       - `humanTools.ts` - the `notify_human` tool: broadcasts a `{title, summary, full, attachments?}` notice (all three tiers required; `tiny` is a deprecated alias for `title`) to every registered console via the gateway's `POST /human/notify`. `attachments` are absolute file paths the agent attaches from its filesystem
       - `evieFiles.ts` - Sanitize, materialize, and render Discord-bridge file attachments under `/tmp/evie-files/<msgId>/`; lazy mtime sweep with 1h TTL
-    - `cli/` - **CLI mode** - For non-Claude agents (cursor, copilot, codex)
-      - `agentHandlers.ts` - CLI agent process spawners (cursor-agent, copilot, codex)
-      - `handleInject.ts` - Handle inject messages from gateway, spawn CLI agent
-      - `promptBuilders.ts` - Build initial and follow-up prompts for injected requests
-      - `cliReply.ts` - `crosstalk_reply` tool: reply to an incoming bridge request
     - `connector/` - **Game client connector** - WebSocket bridge for external game clients
       - `connectorTools.ts` - MCP tools for connector management (status, serve, certs, tokens)
       - `projectTools.ts` - Dynamic tool registration from project's mcp-schema.js
@@ -52,25 +48,21 @@
       - `sessions.ts` - Connected game client session management
       - `tls.ts` - Self-signed CA and server certificate generation
       - `utils.ts` - Shared utilities (textResult, registerStubTool)
-    - `devcontainer/` - **Host-only dispatch tools** - Manage agent sessions in devcontainers
-      - `devcontainerCli.ts` - `dispatch_cli` tool: run a CLI agent inside a devcontainer
-      - `devcontainerExec.ts` - `dispatch_exec` tool: execute shell commands in a devcontainer
-      - `sessionPeek.ts` - `session_peek` tool: capture tmux pane 0 screen of a team's session
-      - `sessionSend.ts` - `session_send` tool: send a line of input to a team's tmux session
-      - `hostSessionPeek.ts` - `host_session_peek` tool: capture the host's own tmux pane 0 screen
-      - `hostSessionSend.ts` - `host_session_send` tool: send input to the host's own tmux session
-      - `reloadPlugins.ts` - `reload_plugins` tool: automated plugin update and MCP reconnect sequence
-      - `helpers.ts` - Project resolution, container lifecycle, devcontainer CLI discovery
-      - `hostWakeListener.ts` - Host-side `host` WebSocket: catalog scan, on-demand container waking, and the `host_op` handler that runs console terminal ops via `hostOpRunner.ts` + `tmuxCore.ts` (see Console terminal view)
+    - `devcontainer/` - **Host daemon plumbing + per-session tools** - the headless host daemon's wake + terminal-view layer, plus a few tools every peer registers
+      - `hostWakeListener.ts` - The host daemon's `host` WebSocket: catalog scan, on-demand container waking, and the `host_op` handler (peek / tmux_send / create_session / reload_plugins) run via `hostOpRunner.ts` + `tmuxCore.ts` (see Console terminal view). Started by `src/main-host-daemon.ts`
+      - `hostOpRunner.ts` - Executes a `HostOp` against tmux with the audit controls: peek single-flight + cadence-floor, and dedup-by-`dedupKey` for the mutating ops (send / createSession / reloadPlugins)
+      - `tmuxCore.ts` - The low-level tmux argv layer (no shell): peek / sendText / sendKey / createSession against a `<sessionName>.0` pane, on the host (bare `tmux`) or a devcontainer (`docker exec`)
+      - `reloadPlugins.ts` - The plugin update + MCP reconnect sequence: `spawnReloadPlugins(target)` backs the daemon's `reload_plugins` host op, and the same module still registers the in-session `reload_plugins` MCP tool every peer carries
+      - `setEffortLevel.ts` - `set_effort_level` tool: send `/effort <level>` to the session's own tmux pane
+      - `compactSession.ts` - `compact_session` tool: send `/compact` to the session's own pane
+      - `helpers.ts` - Project resolution + container lifecycle (`ensureContainerUpAsync`, `execInContainer`, `resolveProject`), used by the wake path
     - `evie/` - **Evie tool proxy** - Dynamic MCP tool registration from evie-bot's action registry
       - `evieTools.ts` - Converts evie's JSON Schema tool definitions to Zod via `z.fromJSONSchema()`
-    - `resolve-model.ts` - Model resolution by agent type and effort level
   - `shared/` - Shared utilities used by both gateway and MCP
     - `types.ts` - Shared TypeScript types; wire shapes derive from schemas.ts via `z.infer` (`ChannelFile`, `TeamInfo`, the enums), local payload/config types stay hand-written
     - `schemas.ts` - THE single zod truth for every wire shape: reply schemas, `ChannelFileSchema`, `TeamInfoSchema` (with each session's owning `gatewayId`), the full console protocol (`ConsoleOpSchema`, `ConsoleRelayFrameSchema`, `ConsoleRelayReplySchema`, op results, `MailboxEntrySchema`), and `ProvisioningSchema`. Every shared schema carries `.meta({ id })` - the id is the generated Kotlin class name (see codegen below)
     - `tmp-files.ts` - `cleanupTmpDir({dir, maxAgeMs, mode: "files" | "dirs"})` - generic lazy mtime sweep used by the connector and the Discord-bridge file materializer
     - `env.ts` - Container detection (isInsideContainer)
-    - `mutex.ts` - Mutex class for serializing CLI-mode requests per team
     - `pending-job-store.ts` - PendingJobStore for tracking in-flight requests with timeout/polling
     - `device-mailbox.ts` - `DeviceMailbox` (per-console inbound queue: monotonic seq, cursor ack, entry cap, epoch) and `DeviceMailboxStore` (per-conversation, idle TTL sweep + LRU device cap, `setOnEvict`)
     - `console-protocol.ts` - `CONSOLE_PROTOCOL_VERSION` + the legacy session-id grammar HELPERS being migrated onto `SessionId` (`composeConvSessionId`/`parseConvSessionTeam`/`noticeSessionId`, `qualifyTeam`/`parseQualifiedTeam`); the grammar CONSTANTS now live in `session-id.ts` and are re-exported here so codegen + un-migrated callers resolve unchanged; the wire TYPES re-export from schemas.ts via `z.infer`
@@ -87,9 +79,6 @@
   - `__tests__/` - Test files (vitest)
 - `skills/` - Claude Code skills
   - `crosstalk/SKILL.md` - Cross-team communication skill (tool reference, response format)
-  - `orchestrate/SKILL.md` - Multi-project orchestrator skill (team spawning, relay agents)
-- `agents/` - Claude Code agent definitions
-  - `team-relay.md` - Smart relay agent for bridging team-lead to devcontainer agents
 - `.claude-plugin/plugin.json` - Plugin metadata (name, version, description)
 - `.mcp.json` - MCP server config (entry point: main-mcp.ts)
 - `docker-compose.yml` - Docker Compose for the gateway (port 20000, bridge network)
@@ -98,7 +87,8 @@
 - `uninstall.sh` - Remove switchboard Docker network from a devcontainer project
 - `start-gateway.sh` - Thin launcher: the no-arg start (git pull, rebuild, health wait) stays bash; `--setup` / `--enroll` exec `scripts/gateway-setup.ts`
 - `provision-console.sh` - Thin launcher: execs `scripts/provision.ts` (the Console bootstrap)
-- `start-host-daemon.sh` - Start Claude Code host daemon in a tmux session
+- `start-host-daemon.sh` - Start the headless host daemon (`src/main-host-daemon.ts`) in a tmux session: it owns the gateway's reserved `host` WS slot (devcontainer wake + the console terminal view), carrying no Claude session
+- `start-session.sh <name>` - Start a Claude conversational session in a tmux session named `<name>`, joining the gateway as an ordinary loose peer (replaces the old privileged host-agent launch)
 - `scripts/provision.ts` - Console bootstrap flow (the `provision-console.sh` logic, in bun): Provision/Purge menu, cluster cutover, Domain rooting at the owner key, transport-blob emit + enrollment QR, and an authenticated bridge verify
 - `scripts/gateway-setup.ts` - Gateway `--setup` (Configure / Purge menu) and `--enroll` (creds-less LAN enrollment) flow, in bun (the `start-gateway.sh` setup logic)
 - `scripts/lib/host.ts` - Shared host-orchestration primitives for the bun setup scripts: Bun.$ wrappers over docker + kubectl (`k`/`kStdin`/`dc`/`dx`, container lifecycle, base64 Secret reads + Opaque-Secret apply), the interactive menu/prompt loop, and `.env` read/write
@@ -117,17 +107,16 @@ Two separate entry points, two different runtime contexts:
 
 **Gateway** (`main-gateway.ts`) - Runs in a Docker container. A Gateway (one of many in the Mesh): the central HTTP + WebSocket router that all local teams connect to. Handles message routing, request/response lifecycle, and the evie-bot bridge (evie is the content-blind Router that forwards between Gateways).
 
-### Connection Modes
+### Connection Mode
 
-- **Channel mode** (Claude) - Messages arrive as `<channel>` push notifications via `notifications/claude/channel`. Bidirectional, no polling needed. Conversations use persistent channel conversations (see below).
-- **CLI mode** (cursor, copilot, codex) - Messages are injected as prompts into spawned agent processes. Uses mutex to serialize requests per team. Each send is a one-shot request/response.
+Every bridge connection is **channel mode** now (the CLI dispatch path - cursor/copilot/codex agents injected as prompts - was retired with the host split). Messages arrive as `<channel>` push notifications via `notifications/claude/channel`. Bidirectional, no polling needed. Conversations use persistent channel conversations (see below). `ConnectionMode` is a single-value enum (`"channel"`) kept for the `TeamInfo.mode` wire field.
 
 ### Channel Conversation Model
 
 Channel-mode agents (Claude windows and devcontainer Claudes) have persistent conversations. Each MCP process generates a stable `conversation_id` on startup and reuses it across WebSocket reconnects for the life of that process.
 
 - The gateway derives a deterministic channel job key `"conv:" + senderConversationId + ":" + targetTeam`. Every `crosstalk_send` between the same (sender window, target team) pair lands in the same store entry; the caller does not manage session_ids.
-- Pending-job entries for channel conversations are marked `persistent: true` and are never swept by the store's TTL cleanup. Transient CLI-mode entries still time out after `RESPONSE_TIMEOUT_MS`.
+- Pending-job entries for channel conversations are marked `persistent: true` and are never swept by the store's TTL cleanup. Transient (non-persistent) entries still time out after `RESPONSE_TIMEOUT_MS`.
 - `channel_reply` may be called multiple times on the same session_id. Use `status: "running"` for interim updates (phase reports, ACKs, partial results) and `status: "completed"` for the final answer. The conversation only closes when a process exits.
 - Responses push back to the specific sender sub-session via `conversationRegistry`, so parallel host windows targeting the same devcontainer do not receive each other's replies.
 - Reconnects rebind the conversation: the same `conversation_id` shows up with a new WebSocket, the gateway swaps the registry pointer, and the conversation resumes without losing state.
@@ -176,17 +165,17 @@ Gateway side of a native Android chat client that reaches the bridge through evi
 
 - **Identity:** keyed by the console's per-install `conversationId` (the human Device Name is a display label). `consoleHandler.ts:assertValidIdentity` rejects reserved names, a name already held by a real team, and a conversation already owned by a live socket.
 - **Virtual peer:** `ConsolePeer` is inserted into the team + conversation registries like a real bridge peer, so existing crosstalk routing (wake, persistent conversations, `channel_push`/`response_push` delivery) is reused unchanged. Its `send()` appends to the device's `DeviceMailbox` instead of a wire; the console drains it with the `poll` op. Virtual peers are excluded from the heartbeat and from DM-holder selection (`getAllActiveRealWs`), and a real registration evicts a squatting virtual peer.
-- **Ops:** `register`, `list_teams`, `send` (to a devcontainer or the host-agent), `respond` (only to a thread delivered to this device), `poll`, `get_gateway_transport` (the home Gateway's bootstrap transport creds, served sealed from its `bootstrap-transport.json` so the Console can seal them into a bundle when enrolling a creds-less Gateway), `peek` + `tmux_send` (the terminal view: see Console terminal view below). `send`/`respond`/`tmux_send` are idempotent per `(conversationId, opId)`; reads (`poll`/`peek`) run fresh.
-- **Host-agent:** the host orchestrator's `gateway` channel identity is surfaced to the console as `kind: "gateway"` (shown first), reachable by `send` from the console only (`channelOnly`). A send injects a `channel_push` into the orchestrator, which can dispatch to its devcontainers. The cli `host` wake-daemon stays hidden; container crosstalk to the host-agent is deferred to the federation phases.
+- **Ops:** `register`, `list_teams`, `send` (to a devcontainer or a loose session), `respond` (only to a thread delivered to this device), `poll`, `get_gateway_transport` (the home Gateway's bootstrap transport creds, served sealed from its `bootstrap-transport.json` so the Console can seal them into a bundle when enrolling a creds-less Gateway), `peek` + `tmux_send` + `create_session` + `reload_plugins` (the terminal view + session lifecycle: see Console terminal view below). `send`/`respond`/`tmux_send`/`create_session`/`reload_plugins` are idempotent per `(conversationId, opId)`; reads (`poll`/`peek`) run fresh.
+- **Host machine:** the conversational host-agent was retired in the host split. A host Claude runs as an ordinary `loose` peer (started by `start-session.sh`); the privileged host plumbing lives in the headless host daemon, which registers the reserved, console-hidden `host` slot. The console reaches the host machine's terminal + session lifecycle through the dedicated `host` target (see Console terminal view), not a chat session.
 - **Mailbox:** `DeviceMailbox` is bounded (entry cap with cumulative `dropped` gap signal, 1h idle TTL, store-wide LRU device cap). Each instance carries an `epoch`; `poll` is epoch-gated so a cursor from an evicted instance cannot ack away a new instance's entries.
 - **Trust:** frames are zod-validated at the boundary (`ConsoleRelayFrameSchema`) AND E2E sealed: the gateway opens each frame through the `consoleSealer` (verifies the console's signature against an owner-signed `kind:console` admission, decrypts with its box key, replay- and freshness-checks) before dispatch, so it trusts a frame because it is signed by an admitted console, not because it arrived on the evie WS. Each conversationId is bound to its first signing key (a console cannot operate another install's mailbox by borrowing its conversationId). The bearer token is the coexistence-window relay gate at evie, retired by W5. Adds no new HTTP surface.
 
 ### Console terminal view (peek + tmux_send)
 
-A power-user view in the Console that drives an agent's RAW tmux pane (distinct from the chat): the `peek` op captures the visible ANSI screen and `tmux_send` injects literal text or a whitelisted control key (Enter/Escape/C-c/arrows/Tab). Both are sealed `ConsoleOp` variants on the same trust path as the chat ops, and reach the host machine through a gateway<->host-daemon RPC layered on the existing host WebSocket:
+A power-user view in the Console that drives an agent's RAW tmux pane (distinct from the chat): the `peek` op captures the visible ANSI screen, `tmux_send` injects literal text or a whitelisted control key (Enter/Escape/C-c/arrows/Tab), `create_session` starts a new named tmux session running a fresh agent (the daemon builds the launch command, the console supplies only the target + name), and `reload_plugins` drives a session through the plugin update + MCP reconnect sequence. All are sealed `ConsoleOp` variants on the same trust path as the chat ops, and reach the host machine through a gateway<->host-daemon RPC layered on the existing host WebSocket:
 
-- **Host RPC:** the gateway sends a `host_op` frame (a `reqId` + a `HostOp`) and correlates the reply by `reqId` through `HostOpCoordinator` (`gateway/hostOpCoordinator.ts`, mirroring `evieClient`'s pending-calls; `failAll` on a host disconnect), via `relayToHost` in `gateway/index.ts`. The host daemon (`hostWakeListener.ts`) runs it through `createHostOpRunner` (`mcp/devcontainer/hostOpRunner.ts`: peek single-flight + a cadence floor + a concurrency cap; send dedup by `(conversationId, opId)` so a relay timeout or gateway restart replays the ack instead of re-typing). The tmux primitives live in `mcp/devcontainer/tmuxCore.ts` (spawn argv - no shell; `--`-guarded literal text submitted atomically with a trailing CR; a slug-validated target name; an ANSI visible-pane capture with a byte cap + content hash). The wire vocabulary is the type-only `shared/host-op.ts` (deliberately no zod/codegen - it rides the trusted, token-authenticated host link, not the untrusted evie relay).
-- **Targets:** `kind: "gateway"` (the host-agent's own tmux) and locally-backed `kind: "devcontainer"` (`docker exec` into `<name>_devcontainer-dev-1`). `loose` and cross-Gateway sessions are gated off (`resolveTmuxTarget` in `consoleHandler.ts`).
+- **Host RPC:** the gateway sends a `host_op` frame (a `reqId` + a `HostOp`) and correlates the reply by `reqId` through `HostOpCoordinator` (`gateway/hostOpCoordinator.ts`, mirroring `evieClient`'s pending-calls; `failAll` on a host disconnect), via `relayToHost` in `gateway/index.ts`. The host daemon (`hostWakeListener.ts`) runs it through `createHostOpRunner` (`mcp/devcontainer/hostOpRunner.ts`: peek single-flight + a cadence floor + a concurrency cap; the mutating ops - send / create_session / reload_plugins - dedup by `(conversationId, opId)` so a relay timeout or gateway restart replays the ack instead of re-running). The tmux primitives live in `mcp/devcontainer/tmuxCore.ts` (spawn argv - no shell; `--`-guarded literal text submitted atomically with a trailing CR; a slug-validated target name; an ANSI visible-pane capture with a byte cap + content hash). The wire vocabulary is the type-only `shared/host-op.ts` (deliberately no zod/codegen - it rides the trusted, token-authenticated host link, not the untrusted evie relay).
+- **Targets:** the `host` machine (the `"host"` target, run via bare `tmux`) and a locally-backed `kind: "devcontainer"` (`docker exec` into `<name>_devcontainer-dev-1`). A `TmuxTarget` carries a `sessionName` and the pane is always `.0`: `create_session` picks the new session name, while `peek`/`tmux_send`/`reload_plugins` address the conventional `claude` session. Loose and cross-Gateway sessions are gated off (`resolveTmuxTarget` in `consoleHandler.ts`).
 - **Auth:** the reserved `host` WS slot is authenticated with `HOST_WS_TOKEN` (auto-provisioned into `.env` by `start-gateway.sh`, read by `start-host-daemon.sh`) so a LAN peer cannot squat it to read/forge panes or capture keystrokes.
 
 ### Port Map
