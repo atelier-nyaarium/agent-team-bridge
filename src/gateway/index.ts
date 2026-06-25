@@ -472,8 +472,10 @@ export async function startGateway(): Promise<void> {
 		displayName: () => domainMeta?.displayName ?? null,
 		// True when this Gateway's own Domain is the admin's (the evie-runner who provisions
 		// others), learned from the register reply. Stamped on the local TeamInfo so the console
-		// shows the admin surfaces only on the admin's own session.
-		isAdminDomain: () => domainMeta?.isAdminDomain ?? false,
+		// shows the admin surfaces only on the admin's own session. Null (not false) until the
+		// first register, mirroring displayName: "unknown" stays unknown rather than asserting
+		// "not admin" (the TeamInfo stamp omits the field for any falsy value either way).
+		isAdminDomain: () => domainMeta?.isAdminDomain ?? null,
 		// Home-first seal-target resolution on the send side: a target gateway the home
 		// allowlist admits seals v1 to home, mirroring the sealer's open-side ordering, so a
 		// home/friend gateway-id collision never routes a home send to the friend.

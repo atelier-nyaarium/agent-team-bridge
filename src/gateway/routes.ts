@@ -54,8 +54,9 @@ export interface RoutesDeps {
 	displayName?: (() => string | null | undefined) | null;
 	// Whether this Gateway's own Domain is the admin's (the evie-runner who provisions others),
 	// learned from the register reply. Stamped on the local TeamInfo so the console shows the
-	// admin surfaces only on the admin's own session.
-	isAdminDomain?: (() => boolean) | null;
+	// admin surfaces only on the admin's own session. Null when unknown (pre-register), mirroring
+	// displayName.
+	isAdminDomain?: (() => boolean | null) | null;
 	// Whether a gateway id resolves to a HOME (single-owner allowlist) peer. Mirrors the
 	// sealer's home-first resolution on the SEND side, so a send to your own home Gateway
 	// whose id collides with a friend's gateway id is sealed v1 to home (the bare-string
