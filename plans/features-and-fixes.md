@@ -330,6 +330,26 @@ Instead, since the wire can carry structured objects, attach an `"instructions":
 
 ---
 
+## Item 14 - app-side plugins support (bake-in a few, toggle on/off)
+
+**Idea.** Add a plugins layer to the Android app: extra app-side capabilities the user can turn on/off from settings. For now, BAKE IN a few good ones (ship them in the APK) behind per-plugin toggles, rather than a full third-party install story. The toggle-able set is the MVP; a dynamic install/marketplace path is later.
+
+**HARD REQUIREMENT for the follow-up.** When this item is actually picked up, it must FIRST `git clone` the user's `nyaarium/nyaadot` project into `/tmp/` and base the plugin model **100% on the schema modularity defined there**. Do not design a bespoke plugin schema for switchboard - adopt nyaadot's schema verbatim as the source of truth for how a plugin is described, declared, and toggled. The clone-and-read step is a precondition to any scoping or design work on this item.
+
+```bash
+git clone https://github.com/nyaarium/nyaadot /tmp/nyaadot
+# then read its schema/modularity model and base the plugin design entirely on it
+```
+
+**Quick grounding (NOT a design - revisit after the nyaadot clone).**
+- The app already has a settings surface (`MainActivity.kt:App`, the TTS settings composable with `autoPlayOptions`, voice picker, etc.) and a persistence layer (`ProvisioningStore.kt` over EncryptedSharedPreferences with the lowercase-underscore `KEY_*` convention) - a per-plugin enabled flag fits the existing `var x: Boolean` property pattern there.
+- The thread renderer is already an extensible WebView (`assets/thread/thread.js` + `thread.html`, vendoring markdown-it) with a `@JavascriptInterface` bridge - a likely host for any render-side plugin behavior.
+- Decide once nyaadot's schema is in hand whether a "plugin" here is a render/transform hook, a settings-driven behavior toggle, or a sandboxed module - nyaadot's modularity schema dictates this, not a fresh switchboard invention.
+
+**Open questions to revisit (after reading nyaadot).** What exactly nyaadot's schema models a plugin as (manifest shape, capability surface, enable/disable semantics); which baked-in plugins to ship first; where toggle state persists (likely `ProvisioningStore`) and whether it needs to sync server-side or stay device-local; sandboxing/trust if any plugin can touch message content or the bridge; whether the eventual dynamic-install path reuses the same schema.
+
+---
+
 ## Moved out: Items 11-13 -> the host-split plan
 
 The CLI-era teardown, the create-session button, and Copilot support are now subsumed into
