@@ -394,7 +394,7 @@ async function purgeGateway(): Promise<void> {
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await wipeState();
 	await $`rm -f .env`.quiet().nothrow();
-	console.log("Purged. Run Configure to set it up fresh.");
+	console.log("Purged. Run Setup Gateway to set it up fresh.");
 }
 
 ////////////////////////////////
