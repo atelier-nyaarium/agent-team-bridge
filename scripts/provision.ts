@@ -2,7 +2,7 @@
 // configures + enrolls the gateway, roots the owner's own Domain, and emits the bridge blob the
 // owner's Console imports. Driven by provision-admin-domain.sh, a thin launcher that execs this.
 //
-//   --setup              interactive menu: configure/enroll the gateway, provision the home Domain
+//   (no args)            interactive menu: configure/enroll the gateway, provision the home Domain
 //                        (cutover + pre-stage + emit the transport blob), re-show the QR, or purge.
 //                        Non-TTY runs Provision direct.
 //   --gateway-transport  move the local Gateway off port-forward onto the service-proxy WS (run
@@ -76,7 +76,7 @@ const INVITE_TTL_MS = 86_400_000;
 const USAGE = [
 	"Admin setup - the SINGLE bootstrap for this gateway and the Android Console.",
 	"",
-	"  ./provision-admin-domain.sh --setup              menu: configure/enroll the gateway, provision, QR, purge (non-TTY runs Provision direct)",
+	"  ./provision-admin-domain.sh              menu: configure/enroll the gateway, provision, QR, purge (non-TTY runs Provision direct)",
 	"  ./provision-admin-domain.sh --gateway-transport  move the local Gateway onto the service-proxy WS",
 	"  ./provision-admin-domain.sh --qr                 re-open the enrollment-QR menu for the current blob",
 	"  ./provision-admin-domain.sh --verify             health-probe the bridge",
@@ -367,7 +367,9 @@ async function stageHomePending(evieFed: string, homeDomainId: string): Promise<
 async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Promise<void> {
 	const { saToken, caPem } = await readSaCreds("console-bridge-proxy-token");
 	if (!saToken || !caPem)
-		throw new Error("console-bridge SA token not populated yet - re-run --setup in a few seconds");
+		throw new Error(
+			"console-bridge SA token not populated yet - re-run provision-admin-domain.sh in a few seconds",
+		);
 	const appToken = await kGetB64(
 		"get",
 		"secret",
@@ -406,7 +408,9 @@ async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Pr
 async function writeGatewayTransport(): Promise<void> {
 	const { saToken, caPem } = await readSaCreds("gateway-bridge-proxy-token");
 	if (!saToken || !caPem)
-		throw new Error("gateway-bridge SA token not populated yet - re-run --setup in a few seconds");
+		throw new Error(
+			"gateway-bridge SA token not populated yet - re-run provision-admin-domain.sh in a few seconds",
+		);
 	const apiUrl = await clusterApiUrl();
 	const transport = JSON.stringify({
 		apiUrl,
@@ -427,7 +431,8 @@ async function writeGatewayTransport(): Promise<void> {
  * evie so it isolates bridge+creds from gateway connectivity. Bearer tokens ride a 0600 curl -K
  * config, never argv. */
 async function verify(): Promise<void> {
-	if (!(await Bun.file(BLOB_FILE).exists())) throw new Error(`no blob at ${BLOB_FILE} - run --setup first`);
+	if (!(await Bun.file(BLOB_FILE).exists()))
+		throw new Error(`no blob at ${BLOB_FILE} - run provision-admin-domain.sh first`);
 	const blob = jparse<{ apiUrl?: string; saToken?: string; appToken?: string; caPem?: string }>(
 		await Bun.file(BLOB_FILE).text(),
 	);
@@ -461,12 +466,12 @@ async function verify(): Promise<void> {
 			if (code === "200") break;
 			if (code === "401") {
 				throw new Error(
-					"VERIFY: app token REJECTED (HTTP 401) - the CONSOLE_BRIDGE_TOKEN in the blob does not match evie's. Re-run --setup",
+					"VERIFY: app token REJECTED (HTTP 401) - the CONSOLE_BRIDGE_TOKEN in the blob does not match evie's. Re-run provision-admin-domain.sh",
 				);
 			}
 			if (code === "404") {
 				throw new Error(
-					"VERIFY: bridge not found (HTTP 404) - console-bridge Service/objects not applied. Re-run --setup",
+					"VERIFY: bridge not found (HTTP 404) - console-bridge Service/objects not applied. Re-run provision-admin-domain.sh",
 				);
 			}
 			await Bun.sleep(3000);
@@ -474,7 +479,7 @@ async function verify(): Promise<void> {
 		if (code !== "200") {
 			const detail = curlErr ? ` (${curlErr})` : "";
 			throw new Error(
-				`VERIFY: bridge probe returned HTTP ${code} after retries${detail} (bridge still starting / creds) - re-run --verify shortly, or --setup`,
+				`VERIFY: bridge probe returned HTTP ${code} after retries${detail} (bridge still starting / creds) - re-run --verify shortly, or provision-admin-domain.sh`,
 			);
 		}
 		note(
@@ -591,7 +596,7 @@ async function provision(): Promise<void> {
 				`the gateway pins a DIFFERENT Domain owner key than the rooted home Domain:\n` +
 					`  gateway FEDERATION_OWNER_SIGN_PUB = ${pin}\n` +
 					`  rooted home Domain owner          = ${home.ownerSignPub}\n` +
-					`  Set FEDERATION_OWNER_SIGN_PUB=${home.ownerSignPub} on the gateway (or unset it), restart it, then re-run --setup.`,
+					`  Set FEDERATION_OWNER_SIGN_PUB=${home.ownerSignPub} on the gateway (or unset it), restart it, then re-run provision-admin-domain.sh.`,
 			);
 		}
 		note(
@@ -637,7 +642,7 @@ async function purgeFederation(): Promise<void> {
 	note("Done. Run Provision to set up fresh (it pre-stages the home Domain; your phone roots it on scan).");
 }
 
-/** Top dial menu (interactive --setup): the single bootstrap for the gateway and the Console. */
+/** Top dial menu (the default, interactive run): the single bootstrap for the gateway and the Console. */
 async function topMenu(): Promise<void> {
 	await menu(`Switchboard - Admin setup on ${await gatewayHostname()}`, [
 		{
@@ -685,7 +690,7 @@ async function topMenu(): Promise<void> {
 async function main(): Promise<void> {
 	const arg = process.argv[2] ?? "";
 	switch (arg) {
-		case "--setup": {
+		case "": {
 			await ensureDomainId();
 			await ensureContainer();
 			// write_gateway_transport is intentionally NOT in the Provision chain: it commits the
@@ -700,7 +705,8 @@ async function main(): Promise<void> {
 			break;
 		}
 		case "--qr": {
-			if (!(await Bun.file(BLOB_FILE).exists())) die(`no blob at ${BLOB_FILE} - run --setup first`);
+			if (!(await Bun.file(BLOB_FILE).exists()))
+				die(`no blob at ${BLOB_FILE} - run provision-admin-domain.sh first`);
 			await qrMenu();
 			break;
 		}
@@ -715,7 +721,6 @@ async function main(): Promise<void> {
 			break;
 		}
 		case "--help":
-		case "":
 			console.log(USAGE);
 			break;
 		default:

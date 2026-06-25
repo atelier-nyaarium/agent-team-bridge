@@ -369,7 +369,7 @@ export async function startGateway(): Promise<void> {
 		});
 	}
 
-	// Creds-less enrollment: when armed with a one-time nonce (provision-admin-domain.sh --setup (Enroll gateway))
+	// Creds-less enrollment: when armed with a one-time nonce (provision-admin-domain.sh (Enroll gateway))
 	// and not yet admitted, mint the identity, print the admit-gateway QR with the LAN
 	// target, and accept exactly one sealed bootstrap bundle over POST /enroll.
 	let enrollInstall: ((frame: unknown) => string) | null = null;
@@ -409,7 +409,7 @@ export async function startGateway(): Promise<void> {
 				if (enrollInstall) {
 					enrollInstall = null;
 					console.log(
-						"[enroll] enrollment window expired (~10 min); re-run provision-admin-domain.sh --setup (Enroll gateway)",
+						"[enroll] enrollment window expired (~10 min); re-run provision-admin-domain.sh (Enroll gateway)",
 					);
 				}
 			}, 600_000);

@@ -685,7 +685,7 @@ fun HostSetupHelpScreen(onBack: () -> Unit) {
 			HorizontalDivider()
 			Text(
 				"1. On the computer that will run your agents, clone switchboard and run " +
-					"./provision-admin-domain.sh --setup.\n\n" +
+					"./provision-admin-domain.sh.\n\n" +
 					"2. It asks for a network name and sets everything up. No keys to paste - this app " +
 					"holds your owner key.\n\n" +
 					"3. It prints a setup code. Go back and scan or paste it.\n\n" +

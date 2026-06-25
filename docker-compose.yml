@@ -19,7 +19,7 @@ services:
       # The operator's home Domain id, minted at provision and written to .env. Passed through so
       # the gateway resolves the same Domain across a container restart.
       - FEDERATION_DOMAIN_ID=${FEDERATION_DOMAIN_ID:-}
-      # Armed only by provision-admin-domain.sh --setup (Enroll gateway) on a creds-less Gateway: a one-time nonce +
+      # Armed only by provision-admin-domain.sh (Enroll gateway) on a creds-less Gateway: a one-time nonce +
       # the host LAN address it advertises in the admit-gateway QR for bundle delivery.
       - ENROLL_NONCE=${ENROLL_NONCE:-}
       - ENROLL_LAN_HOST=${ENROLL_LAN_HOST:-}
