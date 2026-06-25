@@ -32,8 +32,8 @@ export interface EvieClientConfig {
 	// can be routed to this Gateway.
 	gatewayId: string;
 	// This Gateway's Domain id (multi-tenant evie), sent on register so the Router keys
-	// the connection by (domainId, gatewayId). Always set - resolveLocalDomainId requires
-	// FEDERATION_DOMAIN_ID, so there is no single-tenant default.
+	// the connection by (domainId, gatewayId). Always set: the evie client is constructed
+	// only when both the transport and the Domain id are non-null.
 	domainId: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	// The relay pump owns full ConsoleRelayFrameSchema validation; the envelope

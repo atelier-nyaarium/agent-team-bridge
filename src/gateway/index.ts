@@ -54,8 +54,11 @@ export async function startGateway(): Promise<void> {
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);
 	const localGatewayId = resolveLocalGatewayId();
 	console.log(`[gateway] Gateway id: ${localGatewayId}`);
-	const localDomainId = resolveLocalDomainId();
-	console.log(`[gateway] Domain id: ${localDomainId}`);
+	// The Gateway persists its federation identity, mirrored allowlist, and the enrollment-delivered
+	// transport.json + domain-id under this dir.
+	const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
+	const localDomainId = resolveLocalDomainId(federationDir);
+	console.log(`[gateway] Domain id: ${localDomainId ?? "(none - not yet enrolled)"}`);
 	const HEARTBEAT_INTERVAL_MS = 30000;
 	const MISSED_PINGS_LIMIT = 2;
 
@@ -206,14 +209,11 @@ export async function startGateway(): Promise<void> {
 	const isLinkedDomain = (domainId: string): boolean =>
 		crossDomainPeersForConsole?.all().some((p) => p.friendDomainId === domainId) ?? false;
 
-	// The Gateway persists its federation identity + mirrored allowlist here; an enrolled
-	// Gateway also drops its service-proxy transport.json here. The bridge activates when a
-	// transport is delivered (the SA-token-over-service-proxy creds); a gateway with no
-	// transport stays standalone (no mesh).
-	const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
 	const evieTransport = loadEvieTransport(federationDir);
 
-	if (evieTransport) {
+	// The evie bridge activates only with both a delivered transport AND a resolved Domain id;
+	// missing either, the gateway stays standalone (no mesh) and serves /health + /enroll.
+	if (evieTransport && localDomainId) {
 		// Load this Gateway's federation identity + mirrored allowlist from its volume,
 		// and build the E2E sealer (cross-Gateway frames are sealed peer-to-peer).
 		// Pin the owner root out-of-band so a malicious/token-holding evie cannot root

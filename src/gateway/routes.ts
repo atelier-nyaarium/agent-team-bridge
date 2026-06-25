@@ -426,6 +426,8 @@ export function createRoutes({
 		const ownDisplayName = displayName?.();
 		const displayNameField = ownDisplayName ? { displayName: ownDisplayName } : {};
 		const isAdminDomainField = isAdminDomain?.() ? { isAdminDomain: true } : {};
+		// Omit when null so the field is absent rather than null on the wire.
+		const domainIdField = localDomainId ? { domainId: localDomainId } : {};
 
 		for (const [name, subs] of registry) {
 			if (name === "host") continue;
@@ -443,7 +445,7 @@ export function createRoutes({
 			teamsList.push({
 				team: name,
 				gatewayId: localGatewayId,
-				domainId: localDomainId,
+				...domainIdField,
 				...displayNameField,
 				...isAdminDomainField,
 				status: "online",
@@ -459,7 +461,7 @@ export function createRoutes({
 			teamsList.push({
 				team: name,
 				gatewayId: localGatewayId,
-				domainId: localDomainId,
+				...domainIdField,
 				...displayNameField,
 				...isAdminDomainField,
 				status: "available",

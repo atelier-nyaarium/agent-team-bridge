@@ -1,4 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
 import { GATEWAY_QUALIFIER_SEP } from "./console-protocol.js";
+
+////////////////////////////////
+//  Constants
+
+/** Enrollment writes the delivered Domain id here, alongside transport.json. */
+export const DOMAIN_ID_FILE = "domain-id";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -18,11 +26,19 @@ export function sanitizeDomainId(raw: string): string {
 	return slug;
 }
 
-/** The local Gateway's Domain id, from the required `FEDERATION_DOMAIN_ID` env (the random hex id
- * minted at provision and written into the gateway `.env`). Throws when unset: a gateway has no
- * default Domain - it must be provisioned with its own id. */
-export function resolveLocalDomainId(): string {
-	const id = process.env.FEDERATION_DOMAIN_ID;
-	if (!id) throw new Error("FEDERATION_DOMAIN_ID is required (the gateway has no default Domain)");
-	return sanitizeDomainId(id);
+/** The local Gateway's Domain id, or null when it has not been enrolled yet. Resolution order: the
+ * enrollment-delivered `domain-id` file, then the `FEDERATION_DOMAIN_ID` env (the admin box's own
+ * record). Null means the gateway boots standalone and opens its enrollment listener; a Domain is
+ * required only to connect to evie. */
+export function resolveLocalDomainId(federationDir: string): string | null {
+	const id = readDomainIdFile(federationDir) ?? process.env.FEDERATION_DOMAIN_ID;
+	return id ? sanitizeDomainId(id) : null;
+}
+
+function readDomainIdFile(federationDir: string): string | null {
+	try {
+		return fs.readFileSync(path.join(federationDir, DOMAIN_ID_FILE), "utf8").trim() || null;
+	} catch {
+		return null;
+	}
 }
