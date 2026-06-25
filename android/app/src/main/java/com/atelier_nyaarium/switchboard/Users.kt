@@ -71,7 +71,7 @@ fun UsersScreen(
 ) {
 	val scope = rememberCoroutineScope()
 	// Only the home operator (the admin) enrolls users + hosts guest networks; a guest sees neither.
-	val isAdmin = remember { repo.isHomeOperator() }
+	val isAdmin = remember { repo.isAdmin() }
 	var menuOpen by remember { mutableStateOf(false) }
 	// One-shot fetch on entry. Null = loading; a Result carries the rows or evie's opaque reason.
 	var outcome by remember { mutableStateOf<Result<List<RosterMember>>?>(null) }

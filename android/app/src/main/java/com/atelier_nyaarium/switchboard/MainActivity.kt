@@ -1563,7 +1563,7 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 	// rooted"/"not owner-signed") as a raw "Could not save". Gate Save until the real Domain id is
 	// known for that friend. A genuine home operator legitimately resolves to "home", so they are not
 	// gated (firstRooted is false for them).
-	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, repo.localDomainId())
+	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, repo.confirmedDomainId())
 	Text("Network name", style = MaterialTheme.typography.titleMedium)
 	Text(
 		"What linked friends see your network called.",

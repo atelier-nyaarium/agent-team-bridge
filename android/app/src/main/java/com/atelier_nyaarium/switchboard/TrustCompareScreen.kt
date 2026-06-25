@@ -117,7 +117,7 @@ fun TrustCompareScreen(
 								busy = true
 								scope.launch {
 									repo.enrollConfirm(
-										repo.localDomainId(),
+										repo.confirmedDomainId() ?: return@launch,
 										s.exchange.peerDomainId,
 										edgeNonce,
 										peerOwnerSignPub,

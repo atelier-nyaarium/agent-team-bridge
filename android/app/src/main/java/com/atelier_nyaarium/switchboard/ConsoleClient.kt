@@ -147,10 +147,13 @@ data class Team(
 	// its Domain. Null for a pre-federation Gateway and for the locally-synthesized ended
 	// session (it has no live wire record).
 	val domainId: String? = null,
-	// The owning Domain's network display name (its operator name), stamped by the gateway's
-	// discover for both home and peer sessions. The Peers list shows this instead of the opaque
-	// domainId. Null for a pre-feature gateway or a Domain that has not set a name yet.
+	// The owning Domain's network display name, stamped by the gateway's discover for both home
+	// and peer sessions. The Peers list shows this instead of the opaque domainId. Null for a
+	// pre-feature gateway or a Domain that has not set a name yet.
 	val displayName: String? = null,
+	// True when the owning Domain is the admin's own (the evie-runner who provisions others), from
+	// the register reply via the gateway. The local session's value gates the admin surfaces.
+	val isAdminDomain: Boolean = false,
 ) {
 	/** Short local name shown in the UI: the tail after the gateway qualifier. */
 	val shortName: String get() = TeamAddress.parse(name, "").name
@@ -633,6 +636,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 				version = it.version,
 				domainId = it.domainId,
 				displayName = it.displayName,
+				isAdminDomain = it.isAdminDomain ?: false,
 			)
 		}
 	}

@@ -70,19 +70,12 @@ enum class NoGatewayState {
 //  Functions & Helpers
 
 object FriendOnboarding {
-	/** The Domain id a board falls back to before any local session reports a real one. Matches the
-	 * gateway's absent-domainId default (DEFAULT_DOMAIN_ID in src/shared/domain-id.ts) so the local
-	 * resolver and the rename gate agree on the one "not yet discovered" sentinel. */
-	const val DEFAULT_DOMAIN_ID = "home"
-
-	/** Whether an operator-name rename must wait for discovery. A friend (one who first-rooted their
-	 * own non-home Domain) whose local Domain id is still the [DEFAULT_DOMAIN_ID] fallback has not had
-	 * discovery populate their real Domain yet, so a rename would sign over "home" and evie would
-	 * reject it; gate Save until the real id is known. A genuine home operator legitimately resolves
-	 * to "home" (firstRooted is false for them), so they are never gated. Pure so the gate is pinned
-	 * without a live board. */
-	fun renameAwaitsDiscovery(firstRooted: Boolean, localDomainId: String): Boolean =
-		firstRooted && localDomainId == DEFAULT_DOMAIN_ID
+	/** Whether a display-name rename must wait for discovery. A device that has first-rooted its own
+	 * Domain but whose local session has not yet reported a confirmed Domain id (null) cannot sign a
+	 * rename over a real Domain, so gate Save until discovery lands one. A device that is not
+	 * firstRooted is never gated. Pure so the gate is pinned without a live board. */
+	fun renameAwaitsDiscovery(firstRooted: Boolean, confirmedDomainId: String?): Boolean =
+		firstRooted && confirmedDomainId == null
 
 	/** Decide whether a provisioning blob asks the app to first-root a pending Domain. The blob's
 	 * `pendingTenant` is the ONLY discriminator (a register reply never reports pending), so a blob

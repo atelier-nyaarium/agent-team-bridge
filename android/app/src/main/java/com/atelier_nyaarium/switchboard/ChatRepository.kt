@@ -883,7 +883,7 @@ class ChatRepository(
 
 	/** This owner's network display name (the operator name), falling back to the local Domain id
 	 * before discovery has stamped a name. Shown as "YOU" on the Users surface. */
-	fun displayName(): String = state.value.displayName.ifEmpty { localDomainId() }
+	fun displayName(): String = state.value.displayName.ifEmpty { confirmedDomainId().orEmpty() }
 
 	/** A passphrase-encrypted backup of the owner root key for offline safekeeping. */
 	// Runs the scrypt KDF, so it stays off the main thread (the UI dispatches it from a
@@ -1010,24 +1010,28 @@ class ChatRepository(
 	//  Cross-Domain trust (the link/share/unlink surface the Federation UI drives)
 
 	/** This owner's own Domain id, learned from a LOCAL session in the current board (the local
-	 * listing stamps domainId = the connected Gateway's Domain). Defaults to the constant "home"
-	 * before any local session is known, matching the gateway's absent-domainId default, so the
-	 * requester leg + the link edge always name a Domain. */
-	fun localDomainId(): String {
+	 * listing stamps domainId = the connected Gateway's Domain). Null until a local session confirms
+	 * it: the signing + cross-Domain routing sites refuse to act on a guessed id, so a frame never
+	 * names a Domain this device has not actually joined. */
+	fun confirmedDomainId(): String? {
 		val gw = localGatewayId
-		val fromLocal = _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
-		return fromLocal?.ifEmpty { null } ?: FriendOnboarding.DEFAULT_DOMAIN_ID
+		return _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
 	}
 
-	/** True only when a LOCAL session confirms this device owns the home (operator) Domain, so it can
-	 * host guest networks. A friend (a non-home Domain) returns false, and so does a device whose home
-	 * Domain is not yet confirmed (still the [FriendOnboarding.DEFAULT_DOMAIN_ID] fallback) - so the
-	 * Guest-networks admin section is hidden rather than shown as a dead button that evie would reject
-	 * (provision_tenant is gated on the home operator key, so "not operator-signed" for anyone else). */
-	fun isHomeOperator(): Boolean {
+	/** The confirmed local Domain id, or throw - for the signing/routing ops that run inside a
+	 * runCatching so a not-yet-confirmed Domain surfaces as a clean failure instead of a guessed id. */
+	private fun confirmedDomainIdOrThrow(): String =
+		confirmedDomainId() ?: error("Domain not yet confirmed by a local session")
+
+	/** True only when a LOCAL session confirms this device owns the ADMIN Domain (the one that runs
+	 * evie and provisions others), so it can host guest networks. evie stamps isAdminDomain on the
+	 * register reply and the gateway carries it onto the local TeamInfo. A guest (its own non-admin
+	 * Domain) returns false, and so does a device whose Domain is not yet confirmed - so the
+	 * Guest-networks admin section is hidden rather than shown as a dead button evie would reject
+	 * (provision_tenant is gated on the admin key, so "not admin-signed" for anyone else). */
+	fun isAdmin(): Boolean {
 		val gw = localGatewayId
-		val confirmed = _state.value.teams.firstOrNull { (it.gatewayId.ifEmpty { gw }) == gw && !it.domainId.isNullOrEmpty() }?.domainId
-		return confirmed == FriendOnboarding.DEFAULT_DOMAIN_ID
+		return _state.value.teams.any { (it.gatewayId.ifEmpty { gw }) == gw && it.isAdminDomain }
 	}
 
 	////////////////////////////////
@@ -1055,8 +1059,10 @@ class ChatRepository(
 	suspend fun setDisplayName(name: String): Result<Unit> = withContext(Dispatchers.IO) {
 		val trimmed = name.trim()
 		if (trimmed.isEmpty()) return@withContext Result.failure(IllegalArgumentException("Name cannot be empty"))
+		val home = confirmedDomainId()
+			?: return@withContext Result.failure(IllegalStateException("Domain not yet confirmed by a local session"))
 		runCatching {
-			val signed = federation.signSetDisplayName(localDomainId(), trimmed, System.currentTimeMillis())
+			val signed = federation.signSetDisplayName(home, trimmed, System.currentTimeMillis())
 			val result = client().enroll(EnrollOp.SetDisplayName(signed))
 			if (!result.ok) error(result.error ?: "rename rejected")
 			store.displayName = trimmed
@@ -1134,10 +1140,11 @@ class ChatRepository(
 			val invite = enrollInvites.computeIfAbsent(tenant.domainId) {
 				EnrollInvite(handshakeId = federation.freshHandshakeId(), pin = federation.freshEnrollPin())
 			}
+			val home = confirmedDomainId() ?: error("Domain not yet confirmed by a local session")
 			val enrollHandshake = JSONObject()
 				.put("adminOwnerSignPub", federation.ownerSignPub())
 				.put("adminOwnerBoxPub", federation.ownerBoxPub())
-				.put("adminDomainId", localDomainId())
+				.put("adminDomainId", home)
 				.put("handshakeId", invite.handshakeId)
 				.put("pin", invite.pin)
 			val obj = JSONObject()
@@ -1205,8 +1212,10 @@ class ChatRepository(
 	 * (and its detail reachable to start sharing) before any of its sessions surface in discovery -
 	 * the gap that otherwise dead-locked the post-link sharing flow. Discovery still supplies the
 	 * session count + presence; a peer present only in the peer set shows zero sessions / offline. */
-	fun linkedDomains(): List<LinkedDomain> =
-		CrossDomainLink.mergeLinkedDomains(_state.value.teams, _state.value.linkedPeerOwners, localDomainId())
+	fun linkedDomains(): List<LinkedDomain> {
+		val home = confirmedDomainId() ?: return emptyList()
+		return CrossDomainLink.mergeLinkedDomains(_state.value.teams, _state.value.linkedPeerOwners, home)
+	}
 
 	/** Refresh the linked-peer roster from the home Gateway's cross-Domain peer set into state, so
 	 * linkedDomains() can union it with discovery. Best-effort: a relay failure keeps the prior set
@@ -1229,7 +1238,7 @@ class ChatRepository(
 	/** My LOCAL devcontainer/loose sessions, the only kinds shareable to a friend Domain (never
 	 * the host-agent, the cli host, or a console). Drives the per-session share checkmarks. */
 	fun shareableSessions(): List<Team> {
-		val home = localDomainId()
+		val home = confirmedDomainId() ?: return emptyList()
 		val gw = localGatewayId
 		return _state.value.teams
 			.filter { (it.domainId.isNullOrEmpty() || it.domainId == home) && (it.gatewayId.isEmpty() || it.gatewayId == gw) }
@@ -1249,11 +1258,12 @@ class ChatRepository(
 		withContext(Dispatchers.IO) {
 			runCatching {
 				val pin = newRendezvousPin()
+				val home = confirmedDomainId() ?: error("Domain not yet confirmed by a local session")
 				val result = client().crossDomainRequest(
 					listeningToken = listeningToken.trim(),
 					pin = pin,
 					requesterOwnerSignPub = federation.ownerSignPub(),
-					requesterDomainId = localDomainId(),
+					requesterDomainId = home,
 					requesterGatewayId = localGatewayId,
 				)
 				CrossDomainPairing(pin = pin, result = result)
@@ -1356,7 +1366,7 @@ class ChatRepository(
 		// The local peer is now written. The relay-affinity edge is a separate Router submit that
 		// returns false on rejection; surface that as RelayEdgeRejected (recoverable by retrying the
 		// edge alone) rather than letting the wizard show a false "Linked".
-		if (submitXdomainLink(localDomainId(), peerDomainId)) {
+		if (submitXdomainLink(confirmedDomainIdOrThrow(), peerDomainId)) {
 			ConfirmOutcome.Linked
 		} else {
 			ConfirmOutcome.RelayEdgeRejected(peerDomainId)
@@ -1369,7 +1379,7 @@ class ChatRepository(
 	 * failure or advance to Done. */
 	suspend fun retryXdomainLinkEdge(peerDomainId: String): Result<ConfirmOutcome> = withContext(Dispatchers.IO) {
 		runCatching {
-			if (submitXdomainLink(localDomainId(), peerDomainId)) {
+			if (submitXdomainLink(confirmedDomainIdOrThrow(), peerDomainId)) {
 				ConfirmOutcome.Linked
 			} else {
 				ConfirmOutcome.RelayEdgeRejected(peerDomainId)
@@ -1394,7 +1404,8 @@ class ChatRepository(
 	 * generated the invite (so the QR and the ceremony share one handshake window). */
 	fun adminEnrollContext(domainId: String): EnrollCeremonyContext? {
 		val invite = enrollInvites[domainId] ?: return null
-		val myParty = EnrollParty(federation.ownerSignPub(), federation.ownerBoxPub(), localDomainId())
+		val home = confirmedDomainId() ?: return null
+		val myParty = EnrollParty(federation.ownerSignPub(), federation.ownerBoxPub(), home)
 		return EnrollCeremonyContext(EnrollCeremony.ADMIN, invite.handshakeId, invite.pin, myParty, expectedPeer = null)
 	}
 
@@ -1403,7 +1414,7 @@ class ChatRepository(
 	 * carried as `expectedPeer` so a substituted admin reveal is caught against the in-person QR, not
 	 * only at the compare. Null when the blob carries no enroll handshake (an ordinary invite). The
 	 * Domain id is taken from the blob's pendingTenant (the EXACT Domain this device just rooted), NOT
-	 * localDomainId() - which still reads the "home" fallback until discovery lands. */
+	 * confirmedDomainId() - which is null until a local discovery session lands. */
 	fun enrolleeEnrollContext(): EnrollCeremonyContext? {
 		val prov = runCatching { store.load()?.let { Provisioning.parse(it) } }.getOrNull() ?: return null
 		val hs = prov.enrollHandshake ?: return null
@@ -1527,7 +1538,7 @@ class ChatRepository(
 			runCatching { client().crossDomainUntrust(peerOwnerSignPub) }
 			// Router-side: revoke the owner-signed link edge for each of the person's Domains, so evie
 			// drops its relay-affinity edge too (the tombstone's relay half, completing the untrust).
-			for (d in peerDomains) runCatching { revokeXdomainLink(localDomainId(), d) }
+			for (d in peerDomains) runCatching { revokeXdomainLink(confirmedDomainIdOrThrow(), d) }
 			Unit
 		}
 	}
@@ -1573,7 +1584,7 @@ class ChatRepository(
 	): Result<EnrollExchange> =
 		withContext(Dispatchers.IO) {
 			runCatching {
-				val myParty = federation.trustParty(localDomainId())
+				val myParty = federation.trustParty(confirmedDomainIdOrThrow())
 				val myRole = trustRole(myParty.ownerSignPub, peerOwnerSignPub)
 				val peerRole = EnrollCeremony.peerRole(myRole)
 				val salt = federation.freshEnrollSalt()
@@ -1711,7 +1722,7 @@ class ChatRepository(
 	suspend fun unlinkDomain(domainId: String): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatching {
 			client().crossDomainUnlink(domainId)
-			revokeXdomainLink(localDomainId(), domainId)
+			revokeXdomainLink(confirmedDomainIdOrThrow(), domainId)
 			refreshTeams()
 			Unit
 		}
@@ -1954,11 +1965,11 @@ class ChatRepository(
 			// A cross-Domain target carries the friend Domain id from its discovery entry, so the
 			// gateway resolves the seal target by the full (domainId, gatewayId) pair; a home /
 			// same-Domain session resolves to null and keeps the existing routing.
-			val home = localDomainId()
+			val home = confirmedDomainId()
 			val targetDomain = _state.value.teams
 				.firstOrNull { TeamAddress.parse(it.name, localGatewayId).canonical == TeamAddress.parse(team, localGatewayId).canonical }
 				?.domainId
-				?.takeIf { it.isNotEmpty() && it != home }
+				?.takeIf { it.isNotEmpty() && home != null && it != home }
 			val r = client().send(team, text, picked, opId, targetDomain)
 			when {
 				!r.ok -> fail(r.error)

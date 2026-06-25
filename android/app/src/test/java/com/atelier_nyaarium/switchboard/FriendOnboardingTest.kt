@@ -151,25 +151,24 @@ class FriendOnboardingTest {
 		assertEquals(NoGatewayState.NEEDS_GATEWAY, FriendOnboarding.noGatewayState(noGateway = true, firstRooted = false))
 	}
 
-	// -- The rename-before-discovery gate (friend "home" fallback) --
+	// -- The rename-before-discovery gate (Domain not yet confirmed) --
 
 	@Test
-	fun friendRenameWaitsWhileDomainIsTheHomeFallback() {
-		// A friend whose real Domain has not been discovered yet still reads the "home" fallback; a
-		// rename then would sign over "home" and evie rejects it, so Save is gated.
-		assertTrue(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, localDomainId = "home"))
+	fun renameWaitsWhileDomainUnconfirmed() {
+		// A device that first-rooted its own Domain but has no confirmed local session yet (null) cannot
+		// sign a rename over a real Domain, so Save is gated.
+		assertTrue(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, confirmedDomainId = null))
 	}
 
 	@Test
-	fun friendRenameProceedsOnceTheRealDomainIsKnown() {
-		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, localDomainId = "guest-9f3a"))
+	fun renameProceedsOnceTheDomainIsConfirmed() {
+		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, confirmedDomainId = "guest-9f3a"))
 	}
 
 	@Test
-	fun homeOperatorRenameIsNeverGated() {
-		// A genuine home operator legitimately resolves to "home" and never first-rooted, so the
-		// gate must not trap them.
-		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = false, localDomainId = "home"))
+	fun notFirstRootedRenameIsNeverGated() {
+		// A device that never first-rooted is not gated even before a Domain is confirmed.
+		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = false, confirmedDomainId = null))
 	}
 
 	// -- The hosted-tenant state machine (awaiting -> offline -> online) --
