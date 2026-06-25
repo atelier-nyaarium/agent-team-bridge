@@ -24,7 +24,6 @@
 
 import type { SignedAdmission, SignedRevocation } from "../src/shared/admission.js";
 import type { Identity } from "../src/shared/crypto.js";
-import { DEFAULT_DOMAIN_ID } from "../src/shared/domain-id.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -155,10 +154,11 @@ function readEvieFederation(evieFedJson: string): {
 
 /** The incumbent home Domain slice from either Secret shape: the `home` entry of a v2 map, or the
  * single `enrollment` state of a legacy v1 Secret. Undefined when home is unset. */
-function homeSliceOf(evieFed: LegacyEvieFederation | MultiDomainEvieFederation): Partial<DomainEnrollment> | undefined {
-	return isMultiDomain(evieFed)
-		? evieFed.enrollment?.[DEFAULT_DOMAIN_ID]
-		: (evieFed as LegacyEvieFederation).enrollment;
+function homeSliceOf(
+	evieFed: LegacyEvieFederation | MultiDomainEvieFederation,
+	homeDomainId: string,
+): Partial<DomainEnrollment> | undefined {
+	return isMultiDomain(evieFed) ? evieFed.enrollment?.[homeDomainId] : (evieFed as LegacyEvieFederation).enrollment;
 }
 
 /** Normalize a non-home Domain slice to the full shape so the written map is well-formed, while
@@ -183,15 +183,16 @@ function composeFederationJson(
 	evieFed: LegacyEvieFederation | MultiDomainEvieFederation,
 	evieIdentity: Identity,
 	homeSlice: DomainEnrollment,
+	homeDomainId: string,
 ): LegacyFederationJson | MultiDomainFederationJson {
 	if (isMultiDomain(evieFed)) {
 		const incumbent = evieFed.enrollment ?? {};
 		const enrollment: Record<string, DomainEnrollment> = {};
 		for (const [domainId, slice] of Object.entries(incumbent)) {
-			if (domainId === DEFAULT_DOMAIN_ID) continue;
+			if (domainId === homeDomainId) continue;
 			enrollment[domainId] = carryOtherDomain(slice);
 		}
-		enrollment[DEFAULT_DOMAIN_ID] = homeSlice;
+		enrollment[homeDomainId] = homeSlice;
 		return { schema: FEDERATION_SECRET_SCHEMA, identity: evieIdentity, enrollment };
 	}
 	return { identity: evieIdentity, enrollment: homeSlice };
@@ -233,12 +234,17 @@ function rootHomeSlice(
  * v2-aware: an already multi-tenant Secret is read and only its HOME slice is replaced, so other
  * Domains and home's own admissions survive; the WHOLE map is written back with the v2 marker. A
  * legacy v1 Secret keeps the original single-Domain write. */
-export function bootstrapDomain(evieFedJson: string, ownerSignPub: string, ownerBoxPub: string): BootstrapResult {
+export function bootstrapDomain(
+	evieFedJson: string,
+	homeDomainId: string,
+	ownerSignPub: string,
+	ownerBoxPub: string,
+): BootstrapResult {
 	assertKey("owner signing key", ownerSignPub);
 	assertKey("owner box key", ownerBoxPub);
 	const { evieFed, evieIdentity } = readEvieFederation(evieFedJson);
-	const home = rootHomeSlice(homeSliceOf(evieFed), ownerSignPub, ownerBoxPub);
-	return { ownerSignPub, federationJson: composeFederationJson(evieFed, evieIdentity, home) };
+	const home = rootHomeSlice(homeSliceOf(evieFed, homeDomainId), ownerSignPub, ownerBoxPub);
+	return { ownerSignPub, federationJson: composeFederationJson(evieFed, evieIdentity, home, homeDomainId) };
 }
 
 /** Build the PENDING home slice: an operatorName label + a one-time invite nonce, NO owner root.
@@ -266,6 +272,7 @@ function pendingHomeSlice(operatorName: string, nonce: string, issuedAt: number,
  * first_root lands. v2-aware, same as `bootstrapDomain`. */
 export function pendingHomeDomain(
 	evieFedJson: string,
+	homeDomainId: string,
 	operatorName: string,
 	nonce: string,
 	issuedAt: number,
@@ -273,7 +280,7 @@ export function pendingHomeDomain(
 ): PendingResult {
 	const { evieFed, evieIdentity } = readEvieFederation(evieFedJson);
 	const home = pendingHomeSlice(operatorName, nonce, issuedAt, ttlMs);
-	return { federationJson: composeFederationJson(evieFed, evieIdentity, home) };
+	return { federationJson: composeFederationJson(evieFed, evieIdentity, home, homeDomainId) };
 }
 
 /** Inspect the incumbent home Domain slice to drive the fresh-vs-reprovision state machine.
@@ -281,7 +288,10 @@ export function pendingHomeDomain(
  * that rooted owner key (so a re-provision can sanity-check a gateway's pinned owner against it).
  * `operatorName` is the home network's label if any (preserved across a re-provision). A malformed
  * Secret reads as a fresh, unrooted home (so setup pre-stages it) rather than throwing here. */
-export function readHomeDomain(evieFedJson: string): {
+export function readHomeDomain(
+	evieFedJson: string,
+	homeDomainId: string,
+): {
 	rooted: boolean;
 	ownerSignPub: string | null;
 	operatorName: string | null;
@@ -292,7 +302,7 @@ export function readHomeDomain(evieFedJson: string): {
 	} catch {
 		return { rooted: false, ownerSignPub: null, operatorName: null };
 	}
-	const home = homeSliceOf(evieFed);
+	const home = homeSliceOf(evieFed, homeDomainId);
 	const ownerSignPub = home?.ownerSignPub ?? null;
 	const operatorName = home?.operatorName ?? home?.pendingTenant?.operatorName ?? null;
 	return { rooted: ownerSignPub != null, ownerSignPub, operatorName };

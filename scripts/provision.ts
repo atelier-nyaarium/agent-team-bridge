@@ -25,7 +25,7 @@
 
 import { randomBytes } from "node:crypto";
 import { $ } from "bun";
-import { DEFAULT_DOMAIN_ID } from "../src/shared/domain-id.js";
+import { sanitizeDomainId } from "../src/shared/domain-id.js";
 import { pendingHomeDomain, readHomeDomain } from "./bootstrap-domain.js";
 import {
 	applySecret,
@@ -35,6 +35,7 @@ import {
 	dx,
 	ensureContainer,
 	envGet,
+	envSet,
 	err,
 	jparse,
 	k,
@@ -150,7 +151,7 @@ async function readEvieFed(): Promise<string> {
  * (the trusted host bootstrap has Secret access, so it pre-stages the home Domain without an operator
  * signature - unlike the phone's operator-signed provision_tenant for FRIEND tenants). Returns the
  * minted invite nonce so the caller emits it in the blob's `pendingTenant`. */
-async function stageHomePending(evieFed: string): Promise<{ nonce: string }> {
+async function stageHomePending(evieFed: string, homeDomainId: string): Promise<{ nonce: string }> {
 	// The operator name (the friendly network label): from the environment for a scripted run, else
 	// prompted (D3). It is the same label the operator would type when hosting a friend.
 	let operatorName = (process.env.SB_OPERATOR_NAME ?? "").trim();
@@ -167,7 +168,7 @@ async function stageHomePending(evieFed: string): Promise<{ nonce: string }> {
 	// (not base64url): the wire `nonce` field is a b64Field ([A-Za-z0-9+/]={0,2}), and a base64url
 	// nonce carrying -/_ would fail that schema parse. 18 random bytes match evie's mint.
 	const nonce = randomBytes(18).toString("base64");
-	const { federationJson } = pendingHomeDomain(evieFed, operatorName, nonce, Date.now(), INVITE_TTL_MS);
+	const { federationJson } = pendingHomeDomain(evieFed, homeDomainId, operatorName, nonce, Date.now(), INVITE_TTL_MS);
 
 	// Server-side apply: evie's pod created this Secret via the API (no kubectl last-applied
 	// annotation), so a client-side apply warns on the first write after each purge. SSA ignores
@@ -401,7 +402,12 @@ async function qrMenu(): Promise<void> {
 async function provision(): Promise<void> {
 	await cutover();
 	const evieFed = await readEvieFed();
-	const home = readHomeDomain(evieFed);
+	// The operator's home Domain id: a random hex id, minted on the first provision and pinned in the
+	// gateway env. A re-provision reuses it; a fresh setup mints one and writes it back so the gateway
+	// resolves the same Domain on restart.
+	const existing = await envGet("FEDERATION_DOMAIN_ID");
+	const homeDomainId = existing || sanitizeDomainId(randomBytes(8).toString("hex"));
+	const home = readHomeDomain(evieFed, homeDomainId);
 
 	let pendingTenant: { domainId: string; nonce: string } | undefined;
 	if (home.rooted) {
@@ -425,8 +431,9 @@ async function provision(): Promise<void> {
 		);
 	} else {
 		// Fresh setup: pre-stage the pending home Domain and carry its invite nonce into the blob.
-		const { nonce } = await stageHomePending(evieFed);
-		pendingTenant = { domainId: DEFAULT_DOMAIN_ID, nonce };
+		const { nonce } = await stageHomePending(evieFed, homeDomainId);
+		pendingTenant = { domainId: homeDomainId, nonce };
+		await envSet("FEDERATION_DOMAIN_ID", homeDomainId);
 	}
 
 	await emitBlob(pendingTenant);

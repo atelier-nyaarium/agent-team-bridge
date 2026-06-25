@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_DOMAIN_ID, resolveLocalDomainId, sanitizeDomainId } from "../shared/domain-id.js";
+import { resolveLocalDomainId, sanitizeDomainId } from "../shared/domain-id.js";
 
 describe("sanitizeDomainId", () => {
 	it("slugs to lower-case alphanumerics with single dashes", () => {
@@ -15,9 +15,9 @@ describe("sanitizeDomainId", () => {
 		expect(sanitizeDomainId("a/b")).toBe("a-b");
 	});
 
-	it("falls back to the default Domain on empty or all-separator input", () => {
-		expect(sanitizeDomainId("")).toBe(DEFAULT_DOMAIN_ID);
-		expect(sanitizeDomainId("///")).toBe(DEFAULT_DOMAIN_ID);
+	it("throws on empty or all-separator input (no silent default)", () => {
+		expect(() => sanitizeDomainId("")).toThrow();
+		expect(() => sanitizeDomainId("///")).toThrow();
 	});
 });
 
@@ -33,9 +33,9 @@ describe("resolveLocalDomainId", () => {
 		else process.env.FEDERATION_DOMAIN_ID = prev;
 	});
 
-	it("defaults to the home Domain when the env is unset", () => {
+	it("throws when FEDERATION_DOMAIN_ID is unset (no default Domain)", () => {
 		delete process.env.FEDERATION_DOMAIN_ID;
-		expect(resolveLocalDomainId()).toBe(DEFAULT_DOMAIN_ID);
+		expect(() => resolveLocalDomainId()).toThrow();
 	});
 
 	it("honors and sanitizes FEDERATION_DOMAIN_ID", () => {
