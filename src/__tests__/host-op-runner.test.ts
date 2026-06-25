@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createHostOpRunner, type TmuxOps } from "../mcp/devcontainer/hostOpRunner.js";
 import type { TmuxTarget } from "../shared/host-op.js";
 
-const T: TmuxTarget = { kind: "devcontainer", name: "recipe-app" };
+const T: TmuxTarget = { kind: "devcontainer", name: "recipe-app", sessionName: "claude" };
 
 function makeOps(): { ops: TmuxOps } {
 	let n = 0;

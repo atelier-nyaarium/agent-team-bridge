@@ -929,13 +929,19 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app" }, "p1"));
 		expect(reply.ok).toBe(true);
 		expect(reply.result).toEqual({ ansi: "SCREEN", hash: "h1" });
-		expect(h.hostOps[0]).toEqual({ kind: "peek", target: { kind: "devcontainer", name: "recipe-app" } });
+		expect(h.hostOps[0]).toEqual({
+			kind: "peek",
+			target: { kind: "devcontainer", name: "recipe-app", sessionName: "claude" },
+		});
 	});
 
 	it("peek resolves the host-agent 'gateway' to its local tmux", async () => {
 		const h = makeTerminalHarness();
 		await h.handler.handleFrame(frame({ kind: "peek", target: "gateway" }, "p2"));
-		expect(h.hostOps[0]).toMatchObject({ kind: "peek", target: { kind: "gateway", name: "gateway" } });
+		expect(h.hostOps[0]).toMatchObject({
+			kind: "peek",
+			target: { kind: "host", name: "gateway", sessionName: "claude" },
+		});
 	});
 
 	it("peek with a matching sinceHash returns unchanged and drops the body", async () => {
@@ -969,7 +975,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		// dedupKey = `${conversationId}:${opId}` so the host can replay a re-relayed send.
 		expect(h.hostOps[0]).toEqual({
 			kind: "sendText",
-			target: { kind: "devcontainer", name: "recipe-app" },
+			target: { kind: "devcontainer", name: "recipe-app", sessionName: "claude" },
 			text: "/model opus",
 			dedupKey: "conv-pixel:s1",
 		});
@@ -980,7 +986,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		await h.handler.handleFrame(frame({ kind: "tmux_send", target: "gateway", key: "C-c" }, "s2"));
 		expect(h.hostOps[0]).toEqual({
 			kind: "sendKey",
-			target: { kind: "gateway", name: "gateway" },
+			target: { kind: "host", name: "gateway", sessionName: "claude" },
 			key: "C-c",
 			dedupKey: "conv-pixel:s2",
 		});

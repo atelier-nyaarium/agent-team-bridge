@@ -217,16 +217,17 @@ export function createConsoleHandler({
 	unlinkDomain,
 	untrustOwner,
 }: ConsoleHandlerDeps) {
-	/** Resolve a console terminal target (the gateway-qualified session name) to the host
-	 * tmux it maps to: the host-agent's own session for "gateway", a devcontainer for a known
-	 * project. A cross-Gateway target (v1 is local-only) or an unknown/loose name is rejected. */
+	/** Resolve a console terminal target (the gateway-qualified session name) to the host tmux
+	 * it maps to: the host machine for "gateway", a devcontainer for a known project. The console
+	 * peek/tmux_send ops address each target's single `claude` session today; a cross-Gateway
+	 * target (v1 is local-only) or an unknown/loose name is rejected. */
 	function resolveTmuxTarget(qualifiedTarget: string): TmuxTarget {
 		const { gatewayId, name } = parseQualifiedTeam(qualifiedTarget);
 		if (gatewayId && gatewayId !== localGatewayId) {
 			throw new Error(`terminal view is not available for a session on another Gateway`);
 		}
-		if (name === "gateway") return { kind: "gateway", name };
-		if (isProjectName?.(name)) return { kind: "devcontainer", name };
+		if (name === "gateway") return { kind: "host", name, sessionName: "claude" };
+		if (isProjectName?.(name)) return { kind: "devcontainer", name, sessionName: "claude" };
 		throw new Error(`terminal view is not available for "${name}" (only the host agent and devcontainers)`);
 	}
 	// The per-install conversationId is the DEVICE identity: it keys the registry sub,

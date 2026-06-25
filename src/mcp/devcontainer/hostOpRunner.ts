@@ -24,7 +24,7 @@ const MAX_CONCURRENT_PEEKS = 6;
 // gateway restart) returns the cached ack instead of re-injecting keys.
 const SEND_DEDUP_TTL_MS = 60_000;
 
-const targetKey = (t: TmuxTarget): string => `${t.kind}:${t.name}`;
+const targetKey = (t: TmuxTarget): string => `${t.kind}:${t.name}:${t.sessionName}`;
 
 /**
  * Executes a host op against tmux with the load + idempotency controls the audit requires:

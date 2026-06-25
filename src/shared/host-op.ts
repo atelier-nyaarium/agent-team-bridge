@@ -12,10 +12,14 @@
 //  follows the same hand-typed + field-guard convention as the wake/catalog frames on
 //  that channel rather than the zod-at-the-boundary ethos reserved for the evie link.
 
-/** Which tmux a host op targets: the orchestrator's own session, or a devcontainer's. */
+/** Which tmux a host op targets: a named session on the host machine (bare `tmux`), or in a
+ * devcontainer (`docker exec`). A target carries its session NAME; the pane is always `.0`
+ * (reserved for the agent), so a target can address one of several named sessions on the same
+ * host or container. `name` is the device label (the host, or the devcontainer team). */
 export interface TmuxTarget {
-	kind: "gateway" | "devcontainer";
+	kind: "host" | "devcontainer";
 	name: string;
+	sessionName: string;
 }
 
 /** The only control keys a console may send by name. Enforced at BOTH the gateway dispatch
