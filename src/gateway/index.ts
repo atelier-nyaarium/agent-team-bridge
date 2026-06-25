@@ -4,7 +4,7 @@ import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
-import { resolveLocalDomainId } from "../shared/domain-id.js";
+import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/host-id.js";
 import type { HostOp, HostOpResult } from "../shared/host-op.js";
@@ -387,6 +387,10 @@ export async function startGateway(): Promise<void> {
 				fs.writeFileSync(path.join(federationDir, "transport.json"), JSON.stringify(bundle.transport), {
 					mode: 0o600,
 				});
+				// Record the joined Domain so the post-enroll restart resolves the same Domain.
+				if (bundle.domainId) {
+					fs.writeFileSync(path.join(federationDir, DOMAIN_ID_FILE), bundle.domainId, { mode: 0o600 });
+				}
 				enrollInstall = null;
 				if (enrollTimer) clearTimeout(enrollTimer);
 				console.log(

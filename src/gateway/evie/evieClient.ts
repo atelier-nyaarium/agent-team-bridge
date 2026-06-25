@@ -292,6 +292,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
 			console.log(`[evie-client] registered as Gateway "${config.gatewayId}"${peers}`);
 			if (r?.domain) config.onDomainSync?.(r.domain);
+			else
+				console.warn(
+					`[federation] registered but evie returned no Domain snapshot - the Domain may not be rooted, or evie is outdated`,
+				);
 			// Surface the Gateway's own Domain status + profile name + admin-Domain flag to the
 			// console register reply / discovery roster. Sent only by a federation-aware evie.
 			if (r?.domainStatus !== undefined || r?.displayName !== undefined || r?.isAdminDomain !== undefined) {

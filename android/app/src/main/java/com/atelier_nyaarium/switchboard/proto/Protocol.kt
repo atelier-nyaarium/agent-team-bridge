@@ -507,6 +507,7 @@ data class GatewayBootstrapBundle(
 	val transport: GatewayTransport,
 	val admission: SignedAdmission,
 	val domain: DomainSnapshot,
+	val domainId: String? = null,
 )
 
 @Serializable

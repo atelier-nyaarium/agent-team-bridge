@@ -905,6 +905,8 @@ export const GatewayBootstrapBundleSchema = z
 		transport: GatewayTransportSchema,
 		admission: SignedAdmissionSchema,
 		domain: DomainSnapshotSchema,
+		// the network this gateway joins; the gateway records it so it resolves the same Domain on its next boot
+		domainId: z.string().min(1).max(64).optional(),
 	})
 	.meta({ id: "GatewayBootstrapBundle" });
 
