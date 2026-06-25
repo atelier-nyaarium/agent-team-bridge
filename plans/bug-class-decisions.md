@@ -56,12 +56,27 @@ audited (align / red-team / framework) + tested.
 - Wire `domainId` posture (was UNDECIDED): kept the schema optional + reject-empty-at-the-boundary path
   (the lighter one; the synced `evie-protocol.ts` leaf untouched).
 
-**Android (REMAINING Phase-1 piece - needs the local Gradle build gate before push):** `localDomainId()`
--> `confirmedDomainId(): String?` (null until a local session confirms); migrate ALL signing + routing
-sites onto it (`signSetOperatorName`, `submitXdomainLink` link/revoke, `EnrollParty`/`trustParty` - not
-just the rename gate), disabling those surfaces until confirmed; `renameAwaitsDiscovery = firstRooted &&
-confirmedDomainId == null`; `isHomeOperator` -> the operator marker/role. Gate (mandatory, per CLAUDE.md -
-Android broke main twice when skipped): `JAVA_HOME=... ANDROID_HOME=... ./gradlew :app:testDebugUnitTest`.
+**Android (REMAINING Phase-1 piece - needs the local Gradle build gate before push):** scope is 5 files,
+~29 refs, concentrated in `ChatRepository.kt` (19). Mechanical part: `localDomainId(): String` ->
+`confirmedDomainId(): String?` (drop the `?: DEFAULT_DOMAIN_ID` fallback at :1019, return the local
+session's domain or null); thread the ~14 callers (`signSetOperatorName` :1059, `submitXdomainLink`
+link/revoke :1359/:1372/:1530/:1714, `EnrollParty` :1397, `trustParty` :1576, `adminDomainId` :1140,
+`mergeLinkedDomains` :1209, the `home` reads :1232/:1957, plus the `operatorDisplayName` :886 display),
+GATING every signing site on non-null (no signing with a fallback id) and routing the display to
+profileName, not the id; `renameAwaitsDiscovery = firstRooted && confirmedDomainId() == null`; retire
+`FriendOnboarding.DEFAULT_DOMAIN_ID`.
+
+DESIGN QUESTION (decide before coding, do NOT guess): `isHomeOperator()` (:1027) currently returns
+`confirmedDomainId == DEFAULT_DOMAIN_ID` - it identifies THE operator (Nyaarium) by the literal `"home"`,
+because in the old model only the original operator held `"home"` while provisioned guests got random ids.
+After the retire the operator's OWN home is a random id too, so the literal check is meaningless. Need the
+real signal for "this device owns the operator (host) Domain, show the Guest-networks admin": either (a) a
+wire operator/isPrimary flag on the LOCAL session's `TeamInfo` (evie already marks `isPrimary` per Phase 0,
+but it is not currently surfaced to the console), or (b) `confirmedDomainId() != null` IF every console
+operates its own rooted home (depends on the guest topology - a guest provisioned as a tenant on the
+operator's evie vs a guest with its own Gateway). Resolve the topology, then implement. Gate (mandatory,
+per CLAUDE.md - Android broke main twice when skipped): `JAVA_HOME=... ANDROID_HOME=... ./gradlew
+:app:testDebugUnitTest`.
 
 **Acceptance:** `"home"` greps nowhere as a domain id in SOURCE (test fixtures still carry it as a local
 const / literal - cleaned in the Phase 5 smell pass); all 3 runtimes compile + tests green.
