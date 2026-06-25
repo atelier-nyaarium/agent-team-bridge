@@ -8,6 +8,8 @@ export interface TmuxOps {
 	peekPane: (target: TmuxTarget) => Promise<HostPeekResult>;
 	sendText: (target: TmuxTarget, text: string) => Promise<void>;
 	sendKey: (target: TmuxTarget, key: string) => Promise<void>;
+	createSession: (target: TmuxTarget) => Promise<void>;
+	reloadPlugins: (target: TmuxTarget) => Promise<void>;
 }
 
 ////////////////////////////////
@@ -69,34 +71,47 @@ export function createHostOpRunner(ops: TmuxOps, opts: { minPeekIntervalMs?: num
 		return result;
 	}
 
-	async function runSend(op: Extract<HostOp, { kind: "sendText" | "sendKey" }>): Promise<unknown> {
-		const exec = () => (op.kind === "sendText" ? ops.sendText(op.target, op.text) : ops.sendKey(op.target, op.key));
-		if (!op.dedupKey) {
+	// Idempotency for a mutating op: a re-relayed op with the same dedupKey replays the cached ack
+	// instead of re-running the side effect (a re-injected keystroke, a second session, a second
+	// reload). Without a dedupKey the op runs every time. `result` is the ack to cache and return.
+	async function runDeduped(
+		dedupKey: string | undefined,
+		exec: () => Promise<void>,
+		result: unknown,
+	): Promise<unknown> {
+		if (!dedupKey) {
 			await exec();
-			return { sent: true };
+			return result;
 		}
-		const dk = op.dedupKey;
 		const at = now();
-		const prior = sentCache.get(dk);
+		const prior = sentCache.get(dedupKey);
 		if (prior && at - prior.at < SEND_DEDUP_TTL_MS) return prior.result;
-		let inflight = inflightSends.get(dk);
+		let inflight = inflightSends.get(dedupKey);
 		if (!inflight) {
 			inflight = exec().then(() => {
-				const result = { sent: true };
-				sentCache.set(dk, { at: now(), result });
+				sentCache.set(dedupKey, { at: now(), result });
 				// Drop expired dedup entries so the map cannot grow without bound.
 				for (const [k, v] of sentCache) if (now() - v.at >= SEND_DEDUP_TTL_MS) sentCache.delete(k);
 				return result;
 			});
-			inflightSends.set(dk, inflight);
-			void inflight.catch(() => {}).finally(() => inflightSends.delete(dk));
+			inflightSends.set(dedupKey, inflight);
+			void inflight.catch(() => {}).finally(() => inflightSends.delete(dedupKey));
 		}
 		return inflight;
+	}
+
+	function runSend(op: Extract<HostOp, { kind: "sendText" | "sendKey" }>): Promise<unknown> {
+		const exec = () => (op.kind === "sendText" ? ops.sendText(op.target, op.text) : ops.sendKey(op.target, op.key));
+		return runDeduped(op.dedupKey, exec, { sent: true });
 	}
 
 	async function run(op: HostOp): Promise<unknown> {
 		if (op.kind === "peek") return runPeek(op.target);
 		if (op.kind === "sendText" || op.kind === "sendKey") return runSend(op);
+		if (op.kind === "createSession")
+			return runDeduped(op.dedupKey, () => ops.createSession(op.target), { created: true });
+		if (op.kind === "reloadPlugins")
+			return runDeduped(op.dedupKey, () => ops.reloadPlugins(op.target), { initiated: true });
 		throw new Error("unknown host op");
 	}
 

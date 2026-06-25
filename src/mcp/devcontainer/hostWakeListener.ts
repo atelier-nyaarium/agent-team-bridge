@@ -3,11 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
 import { debugLog } from "../../shared/debug-log.js";
-import type { HostOp } from "../../shared/host-op.js";
+import type { HostOp, TmuxTarget } from "../../shared/host-op.js";
 import { createReconnector } from "../../shared/reconnect.js";
 import { ensureContainerUpAsync, execInContainer, resolveProject } from "./helpers.js";
 import { createHostOpRunner } from "./hostOpRunner.js";
-import { peekPane, sendKey, sendText } from "./tmuxCore.js";
+import { spawnReloadPlugins } from "./reloadPlugins.js";
+import { createSession, peekPane, sendKey, sendText } from "./tmuxCore.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -290,9 +291,31 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 ////////////////////////////////
 //  Host op handler (console terminal view)
 
+const CLAUDE_FLAGS =
+	"--dangerously-skip-permissions --dangerously-load-development-channels plugin:switchboard@atelier-nyaarium";
+
+// The launch command a create_session op runs in a fresh tmux session. The daemon owns it (the
+// console supplies only the target + session name), so an arbitrary host command can never be
+// injected. A host session is a loose conversational peer; `exec bash` keeps the pane alive after
+// Claude exits. A devcontainer session opens in its workspace project.
+function buildLaunchCommand(target: TmuxTarget): string {
+	if (target.kind === "host") {
+		return `bash -c 'source ~/.bashrc && claude --model default --effort low ${CLAUDE_FLAGS}; exec bash'`;
+	}
+	return `source ~/.bashrc && cd /workspace/${target.name} && claude --model default --effort high ${CLAUDE_FLAGS}`;
+}
+
 // The executor owns single-flight + the peek cadence floor; this module only relays the
 // reply onto the host WS, correlated by reqId.
-const hostOpRunner = createHostOpRunner({ peekPane, sendText, sendKey });
+const hostOpRunner = createHostOpRunner({
+	peekPane,
+	sendText,
+	sendKey,
+	createSession: (target) => createSession(target, buildLaunchCommand(target)),
+	reloadPlugins: async (target) => {
+		spawnReloadPlugins(target);
+	},
+});
 
 async function handleHostOp(reqId: string, op: HostOp): Promise<void> {
 	try {

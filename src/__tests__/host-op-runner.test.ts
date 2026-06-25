@@ -13,6 +13,8 @@ function makeOps(): { ops: TmuxOps } {
 		}),
 		sendText: vi.fn(async () => {}),
 		sendKey: vi.fn(async () => {}),
+		createSession: vi.fn(async () => {}),
+		reloadPlugins: vi.fn(async () => {}),
 	};
 	return { ops };
 }
@@ -80,6 +82,33 @@ describe("createHostOpRunner", () => {
 		await runner.run({ kind: "sendText", target: T, text: "a", dedupKey: "conv:op1" });
 		await runner.run({ kind: "sendText", target: T, text: "b", dedupKey: "conv:op2" });
 		expect(h.ops.sendText).toHaveBeenCalledTimes(2);
+	});
+
+	it("relays createSession and reloadPlugins and returns their acks", async () => {
+		const h = makeOps();
+		const runner = createHostOpRunner(h.ops);
+		expect(await runner.run({ kind: "createSession", target: T })).toEqual({ created: true });
+		expect(h.ops.createSession).toHaveBeenCalledWith(T);
+		expect(await runner.run({ kind: "reloadPlugins", target: T })).toEqual({ initiated: true });
+		expect(h.ops.reloadPlugins).toHaveBeenCalledWith(T);
+	});
+
+	it("dedups a re-relayed createSession by dedupKey: the session is created once", async () => {
+		const h = makeOps();
+		const runner = createHostOpRunner(h.ops);
+		const op = { kind: "createSession", target: T, dedupKey: "conv:new1" } as const;
+		expect(await runner.run(op)).toEqual({ created: true });
+		expect(await runner.run(op)).toEqual({ created: true }); // a retry replays the ack
+		expect(h.ops.createSession).toHaveBeenCalledTimes(1);
+	});
+
+	it("dedups a re-relayed reloadPlugins by dedupKey: the reload fires once", async () => {
+		const h = makeOps();
+		const runner = createHostOpRunner(h.ops);
+		const op = { kind: "reloadPlugins", target: T, dedupKey: "conv:reload1" } as const;
+		await runner.run(op);
+		await runner.run(op);
+		expect(h.ops.reloadPlugins).toHaveBeenCalledTimes(1);
 	});
 
 	it("rejects an unknown op kind", async () => {

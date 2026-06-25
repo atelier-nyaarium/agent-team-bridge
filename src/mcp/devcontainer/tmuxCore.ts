@@ -119,3 +119,12 @@ export function sendKey(target: TmuxTarget, key: string): Promise<void> {
 		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), key]));
 	});
 }
+
+/** Start a new detached tmux session named `target.sessionName` running `command`. `new-session`
+ * addresses the session by NAME (not the `.0` pane), so this validates `sessionName` directly. The
+ * command is the shell-command tmux runs in the session; the daemon builds it (model/effort/plugin)
+ * and it is never console-supplied, so an arbitrary host command cannot be injected here. */
+export async function createSession(target: TmuxTarget, command: string): Promise<void> {
+	assertName(target.sessionName);
+	await run(tmuxArgv(target, ["new-session", "-d", "-s", target.sessionName, command]), 15_000);
+}

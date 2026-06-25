@@ -26,7 +26,7 @@ vi.mock("node:child_process", () => ({
 	},
 }));
 
-import { peekPane, sendKey, sendText } from "../mcp/devcontainer/tmuxCore.js";
+import { createSession, peekPane, sendKey, sendText } from "../mcp/devcontainer/tmuxCore.js";
 
 afterEach(() => {
 	calls.length = 0;
@@ -93,6 +93,37 @@ describe("tmuxCore peekPane", () => {
 
 	it("rejects a crafted session name before reaching tmux", async () => {
 		await expect(peekPane({ kind: "host", name: "host", sessionName: "a;b" })).rejects.toThrow(/invalid tmux name/);
+		expect(calls).toHaveLength(0);
+	});
+});
+
+describe("tmuxCore createSession", () => {
+	it("creates a detached session by name on the host running the command", async () => {
+		await createSession({ kind: "host", name: "host", sessionName: "scratch" }, "claude --foo");
+		expect(calls).toEqual([["tmux", "new-session", "-d", "-s", "scratch", "claude --foo"]]);
+	});
+
+	it("creates a session inside a devcontainer via docker exec", async () => {
+		await createSession({ kind: "devcontainer", name: "recipe-app", sessionName: "scratch" }, "claude");
+		expect(calls[0]).toEqual([
+			"docker",
+			"exec",
+			"-u",
+			"vscode",
+			"recipe-app_devcontainer-dev-1",
+			"tmux",
+			"new-session",
+			"-d",
+			"-s",
+			"scratch",
+			"claude",
+		]);
+	});
+
+	it("rejects a crafted session name before spawning anything", async () => {
+		await expect(createSession({ kind: "host", name: "host", sessionName: "a;b" }, "claude")).rejects.toThrow(
+			/invalid tmux name/,
+		);
 		expect(calls).toHaveLength(0);
 	});
 });

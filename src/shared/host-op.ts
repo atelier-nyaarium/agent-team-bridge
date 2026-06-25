@@ -41,11 +41,17 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
 
 export type HostOp =
 	| { kind: "peek"; target: TmuxTarget }
-	// dedupKey = `${conversationId}:${opId}`: the host replays a completed send's ack for a
-	// re-relayed identical op instead of re-injecting the keystrokes (idempotency across a
-	// relay timeout or a gateway restart).
+	// dedupKey = `${conversationId}:${opId}`: the host replays a completed mutating op's ack for a
+	// re-relayed identical op instead of re-running it (idempotency across a relay timeout or a
+	// gateway restart). It guards the keystroke injections and the two session-lifecycle ops below.
 	| { kind: "sendText"; target: TmuxTarget; text: string; dedupKey?: string }
-	| { kind: "sendKey"; target: TmuxTarget; key: string; dedupKey?: string };
+	| { kind: "sendKey"; target: TmuxTarget; key: string; dedupKey?: string }
+	// Start a new tmux session on the target running a fresh agent. The daemon owns the launch
+	// command (model/effort/plugin); the op carries only the target + the chosen session name, so a
+	// console can never inject an arbitrary host command.
+	| { kind: "createSession"; target: TmuxTarget; dedupKey?: string }
+	// Drive the target session's pane through the plugin update + MCP reconnect sequence.
+	| { kind: "reloadPlugins"; target: TmuxTarget; dedupKey?: string };
 
 /** A captured pane plus a short content hash, so the console can skip an unchanged frame. */
 export interface HostPeekResult {
