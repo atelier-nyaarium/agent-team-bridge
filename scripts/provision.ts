@@ -182,20 +182,13 @@ async function ensureDomainId(): Promise<string> {
 async function configureGateway(): Promise<void> {
 	const host = await gatewayHostname();
 	const curId = await envGet("GATEWAY_ID");
-	const curOwner = await envGet("FEDERATION_OWNER_SIGN_PUB");
 
 	// The Gateway is named by the device hostname; a pre-set GATEWAY_ID is the escape hatch for
 	// duplicate hostnames, so there is no nickname prompt.
 	const id = curId || host;
 
-	// FEDERATION_OWNER_SIGN_PUB pins which owner this Gateway trusts (the base64 key from the app's
-	// owner screen) so a compromised evie cannot re-root it. Optional: blank = trust on first enroll.
-	const ownerKey =
-		ask(`Owner key (optional, blank = trust on first enroll)${curOwner ? " [keep]" : ""}:`) || curOwner;
-
 	await ensureDomainId();
 	await envSet("GATEWAY_ID", id);
-	await envSet("FEDERATION_OWNER_SIGN_PUB", ownerKey);
 	await $`chmod 600 .env`.quiet().nothrow();
 
 	// A delivered transport is what puts this gateway on the mesh; without one it runs standalone.
@@ -594,18 +587,7 @@ async function provision(): Promise<void> {
 	let pendingTenant: { domainId: string; nonce: string } | undefined;
 	if (adminDomain.rooted) {
 		// Re-provision: the admin Domain is already rooted at the phone's owner key. Nothing to stage;
-		// just refresh the transport creds. Sanity-check a gateway owner pin against the rooted key so
-		// a mismatched pin (which would make the gateway silently drop this Domain's allowlist) aborts
-		// with the exact remediation instead of failing invisibly downstream.
-		const pin = (await dx("printenv", "FEDERATION_OWNER_SIGN_PUB").quiet().nothrow()).text().trim();
-		if (pin && adminDomain.ownerSignPub && pin !== adminDomain.ownerSignPub) {
-			throw new Error(
-				`the gateway pins a DIFFERENT Domain owner key than the rooted admin Domain:\n` +
-					`  gateway FEDERATION_OWNER_SIGN_PUB = ${pin}\n` +
-					`  rooted admin Domain owner          = ${adminDomain.ownerSignPub}\n` +
-					`  Set FEDERATION_OWNER_SIGN_PUB=${adminDomain.ownerSignPub} on the gateway (or unset it), restart it, then re-run provision-admin-domain.sh.`,
-			);
-		}
+		// just refresh the transport creds.
 		note(
 			adminDomain.displayName
 				? `Network "${adminDomain.displayName}" already rooted - re-provisioning.`
@@ -679,7 +661,7 @@ async function topMenu(): Promise<void> {
 			},
 		},
 		{
-			key: "5",
+			key: "9",
 			label: "Purge gateway     - wipe this gateway's .env + local data",
 			run: purgeGateway,
 		},

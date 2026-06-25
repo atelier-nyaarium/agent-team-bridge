@@ -216,14 +216,7 @@ export async function startGateway(): Promise<void> {
 	if (evieTransport && localDomainId) {
 		// Load this Gateway's federation identity + mirrored allowlist from its volume,
 		// and build the E2E sealer (cross-Gateway frames are sealed peer-to-peer).
-		// Pin the owner root out-of-band so a malicious/token-holding evie cannot root
-		// this Gateway at an attacker key via the mirror (the snapshot is relayed through
-		// untrusted evie). Unset = trust-on-first-use.
-		const allowlist = new Allowlist(
-			federationDir,
-			process.env.FEDERATION_OWNER_SIGN_PUB,
-			process.env.FEDERATION_REQUIRE_OWNER_PIN === "true",
-		);
+		const allowlist = new Allowlist(federationDir);
 		allowlistForConsole = allowlist;
 		// Cross-Domain peers (other owners' Gateways this Gateway has linked with): a
 		// DISJOINT store from the single-owner allowlist, written only by the handshake,
@@ -375,11 +368,7 @@ export async function startGateway(): Promise<void> {
 	let enrollInstall: ((frame: unknown) => string) | null = null;
 	const enrollNonce = process.env.ENROLL_NONCE;
 	if (enrollNonce && !evieTransport) {
-		const enrollAllowlist = new Allowlist(
-			federationDir,
-			process.env.FEDERATION_OWNER_SIGN_PUB,
-			process.env.FEDERATION_REQUIRE_OWNER_PIN === "true",
-		);
+		const enrollAllowlist = new Allowlist(federationDir);
 		const enrollIdentity = loadOrCreateIdentity(federationDir);
 		if (!enrollAllowlist.selfAdmission(enrollIdentity.sign.pub)) {
 			logAdmitGatewayQr(enrollIdentity, localGatewayId, {

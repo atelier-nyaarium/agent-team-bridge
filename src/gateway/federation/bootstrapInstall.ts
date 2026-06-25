@@ -16,9 +16,8 @@ import {
 //      to it, so opening proves proximity + write-once via the nonce.
 //   2. The nonce equals the one this Gateway's listener showed (anti-replay across windows).
 //   3. The enclosed admission is owner-signed under the bundle's own Domain root AND binds
-//      THIS Gateway's exact keys + id + a gateway kind. The owner key is pinned trust-on-
-//      first-use here, gated by the SAS the human confirmed and LAN proximity - the same
-//      posture as FEDERATION_OWNER_SIGN_PUB unset.
+//      THIS Gateway's exact keys + id + a gateway kind. The owner key is trusted on first
+//      use here, gated by the SAS the human confirmed and LAN proximity.
 
 /** Open + fully validate a received bootstrap frame. Returns the trusted bundle, or
  * throws with a short reason (the caller keeps the listener open on a soft failure). */
