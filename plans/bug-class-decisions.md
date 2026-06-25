@@ -40,57 +40,31 @@ enroll-op + register gate re-keyed onto one `operatorDomain()` resolver, fail-cl
 `persistDomain` preserves the marker, `provision`/`remove` refuse the primary by the marker. Fully
 audited (align / red-team / framework) + tested.
 
-## Phase 1 - retire `home` -> random hex (THE sweep; ONE coherent green pass)
+## Phase 1 - retire `home` -> random hex (THE sweep)
 
-CONCRETE scope, mapped by starting it. It is ONE knot: deleting `DEFAULT_DOMAIN_ID` forces every consumer
-at once + a fail-closed routing change that reworks the federation test suite. Sequence: re-key all
-consumers (keeps compiling while the const is still defined), delete the const LAST, then the tests.
-Reaches green only as a complete pass; half-done is a red build.
+**evie + switchboard DONE + green + committed.** evie `019ed18`, switchboard `316e83d`.
+- evie: `DEFAULT_DOMAIN_ID` deleted (0 refs in source), `sanitizeDomainId` throws on empty,
+  `EnrollmentCoordinator` ctor requires `domainId`, `shouldVivifyCoordinator` drops the default-vivify,
+  `BridgeService`/`BridgeServer` `operatorDomain()` fail-closed (`string | null`: no route / refuse on
+  null; an unregistered-sender relay is rejected), the v1->v2 migration + `MIGRATION_OPERATOR_NAME`
+  backfill + dead `getActiveEnrollment` removed, `TenantAdmin` guards on the `isPrimary` marker alone.
+  ~35 federation/store tests reworked. Lint clean, 242 bridge tests pass.
+- switchboard: `resolveLocalDomainId` requires `FEDERATION_DOMAIN_ID` (throws unset), `sanitizeDomainId`
+  throws empty, `bootstrap-domain.ts` threads the home Domain id (no hardcoded key), `provision.ts`
+  resolves it from the gateway env or mints a random hex on a fresh setup and writes it back via
+  `envSet("FEDERATION_DOMAIN_ID", ...)`. Lint clean, 695 tests pass.
+- Wire `domainId` posture (was UNDECIDED): kept the schema optional + reject-empty-at-the-boundary path
+  (the lighter one; the synced `evie-protocol.ts` leaf untouched).
 
-**evie** (`DEFAULT_DOMAIN_ID` def in `EnrollmentCoordinator.ts`):
-- `sanitizeDomainId`: empty / all-separator -> THROW (every wire op names a real Domain; the
-  register/relay boundary callers must catch + reject - check `BridgeService` :240/:439).
-- `shouldVivifyCoordinator`: drop the `=== DEFAULT_DOMAIN_ID` line (vivify on rooted/pending only; the
-  now-unused param -> `_domainId`).
-- `EnrollmentCoordinator` ctor: `domainId` REQUIRED (drop the default) -> cascades to ~15
-  `new EnrollmentCoordinator(...)` sites (prod `BridgeService` passes it; the test sites omit it).
-- Delete the dead `getActiveEnrollment` + the dead `FederationEnrollOwnerAction` (its import is already
-  commented out in `ActionRegistry`).
-- `BridgeService`: drop the boot pre-create `coordinatorFor(DEFAULT_DOMAIN_ID)`; `operatorDomain()`
-  FAIL-CLOSED (`string | null`, no `?? DEFAULT`).
-- `BridgeServer`: `operatorDomain()` (the `?? DEFAULT` accessor) fail-closed -> the 5 routing methods +
-  the register carve-out handle null (no route / refuse); the 3 relay `senderDomainId ?? DEFAULT_DOMAIN_ID`
-  (an unregistered sender) -> reject the relay.
-- `KubeSecretStore`: RETIRE the v1->v2 migration + the `MIGRATION_OPERATOR_NAME` backfill (clean-break,
-  no legacy Secret).
-- `TenantAdmin`: the provision/remove guards drop the `=== DEFAULT_DOMAIN_ID ||` half (the marker
-  `operatorDomainId()` is the sole guard).
-- Delete `DEFAULT_DOMAIN_ID` + every import.
-- TESTS (the bulk): `EnrollmentCoordinator` / `KubeSecretStore` / `TenantAdmin` / `BridgeServer.federation`
-  / `ConsoleBridgeServer` bun tests construct coordinators with an explicit domainId, set the `isPrimary`
-  marker so routing resolves (instead of leaning on the `"home"` default), expect the sanitize-empty
-  THROW, and drop the migration + `getActiveEnrollment` tests.
+**Android (REMAINING Phase-1 piece - needs the local Gradle build gate before push):** `localDomainId()`
+-> `confirmedDomainId(): String?` (null until a local session confirms); migrate ALL signing + routing
+sites onto it (`signSetOperatorName`, `submitXdomainLink` link/revoke, `EnrollParty`/`trustParty` - not
+just the rename gate), disabling those surfaces until confirmed; `renameAwaitsDiscovery = firstRooted &&
+confirmedDomainId == null`; `isHomeOperator` -> the operator marker/role. Gate (mandatory, per CLAUDE.md -
+Android broke main twice when skipped): `JAVA_HOME=... ANDROID_HOME=... ./gradlew :app:testDebugUnitTest`.
 
-**switchboard:**
-- `domain-id.ts`: `resolveLocalDomainId` REQUIRES `FEDERATION_DOMAIN_ID` (throw if unset, no `home`
-  fallback); `sanitizeDomainId` rejects empty; keep the evie twin byte-consistent.
-- `bootstrap-domain.ts`: key the home slice at the random id (passed in), not `DEFAULT_DOMAIN_ID`;
-  `composeFederationJson` / `carryOtherDomain` / `homeSliceOf` key on the operator-home id + keep
-  exactly ONE `isPrimary` (a second primary is otherwise reachable - framework finding).
-- `provision.ts` / `gateway-setup.ts`: mint a random home id, root it, write `FEDERATION_DOMAIN_ID`
-  into the gateway `.env` (compose passthrough already DONE).
-- Wire `domainId` posture: keep the schema optional + reject empty at the boundary (the lighter path -
-  avoids touching the synced `evie-protocol.ts` leaf) vs make it required in
-  `GatewayRegisterParams`/`GatewayRelayRoute`. DECIDE before the sweep.
-- Fixtures off the `"home"` literal.
-
-**Android:** `localDomainId()` -> `confirmedDomainId(): String?` (null until a local session confirms);
-migrate ALL signing + routing sites onto it (`signSetOperatorName`, `submitXdomainLink` link/revoke,
-`EnrollParty`/`trustParty` - not just the rename gate), disabling those surfaces until confirmed;
-`renameAwaitsDiscovery = firstRooted && confirmedDomainId == null`; `isHomeOperator` -> the operator
-marker/role.
-
-**Acceptance:** `"home"` greps nowhere as a domain id; all 3 runtimes compile + tests green.
+**Acceptance:** `"home"` greps nowhere as a domain id in SOURCE (test fixtures still carry it as a local
+const / literal - cleaned in the Phase 5 smell pass); all 3 runtimes compile + tests green.
 
 ## Phase 2 - `operatorName` -> `profileName` (the person) + the "Your Name" gate
 
