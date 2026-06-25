@@ -80,17 +80,6 @@ data class Provisioning(
 	val port: Int,
 	val device: String,
 	val conversationId: String,
-	/** STTS (TTS playback) service base URL; empty until known. */
-	val sttsUrl: String = "",
-	/** STTS API key, sent as the vrcstt-api-key header; empty disables Play. */
-	val sttsKey: String = "",
-	/** Carried by a legacy host-minted-identity blob and IGNORED in the phone-anchored
-	 * model: the Console generates its own identity and resolves Gateway keys from the synced
-	 * keyring, so these never drive enrollment. Kept only so an old blob still decodes. */
-	val identity: String = "",
-	val gatewayId: String = "",
-	val gatewaySignPub: String = "",
-	val gatewayBoxPub: String = "",
 	/** Present on a friend INVITE blob: the pending Domain id + the one-time invite nonce the
 	 * app first-roots with. Absent on an ordinary (already-rooted) admin blob, which just
 	 * provisions the console. The presence of this field IS what distinguishes the two paths. */
@@ -113,12 +102,6 @@ data class Provisioning(
 				port = p.port?.toInt() ?: 20004,
 				device = p.device ?: (android.os.Build.MODEL ?: "android"),
 				conversationId = p.conversationId ?: UUID.randomUUID().toString(),
-				sttsUrl = (p.sttsUrl ?: "").trimEnd('/'),
-				sttsKey = p.sttsKey ?: "",
-				identity = p.identity ?: "",
-				gatewayId = p.gatewayId ?: "",
-				gatewaySignPub = p.gatewaySignPub ?: "",
-				gatewayBoxPub = p.gatewayBoxPub ?: "",
 				pendingTenant = p.pendingTenant,
 				enrollHandshake = p.enrollHandshake,
 			)
@@ -658,9 +641,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	)
 
 	/** List the bridge's sessions, each keyed by its gateway-qualified name. A
-	 * session's Gateway comes from the wire (`TeamInfo.gatewayId`); when a pre-federation
-	 * Gateway omits it, `localGatewayId` (this connection's Gateway, learned at register)
-	 * is the fallback. Both empty leaves the name bare (single implicit Gateway). */
+	 * session's Gateway comes from the wire (`TeamInfo.gatewayId`, always stamped); an
+	 * empty value falls back to `localGatewayId` (this connection's Gateway, learned at
+	 * register) and leaves the name bare (single implicit Gateway). */
 	fun teams(localGatewayId: String = ""): List<Team> {
 		val body = relay(ConsoleOp.ListTeams)
 		// Surface a relay failure instead of blanking the board with an empty list; the
@@ -669,13 +652,13 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		val result =
 			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult>(body.result)
 		return result.teams.map {
-			val gatewayId = it.gatewayId?.ifEmpty { null } ?: localGatewayId
+			val gatewayId = it.gatewayId.ifEmpty { localGatewayId }
 			Team(
 				name = TeamAddress.parse(it.team, gatewayId).canonical,
 				status = it.status,
 				mode = it.mode ?: "",
 				queueDepth = it.queue_depth.toInt(),
-				kind = it.kind ?: "loose",
+				kind = it.kind,
 				version = it.version,
 				domainId = it.domainId,
 				displayName = it.displayName,

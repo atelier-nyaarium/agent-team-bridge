@@ -1,16 +1,9 @@
 import crypto from "node:crypto";
 import WebSocket from "ws";
-import {
-	type BridgeTool,
-	EvieInboundFrameSchema,
-	FEDERATION_PROTOCOL_VERSION,
-	type ToolCallFrame,
-} from "../../shared/evie-protocol.js";
+import { EvieInboundFrameSchema, FEDERATION_PROTOCOL_VERSION, type ToolCallFrame } from "../../shared/evie-protocol.js";
 
 ////////////////////////////////
 //  Interfaces & Types
-
-export type EvieToolSchema = BridgeTool;
 
 export interface EvieToolCallResult {
 	callId: string;
@@ -20,13 +13,11 @@ export interface EvieToolCallResult {
 
 export interface EvieClientConfig {
 	url: string;
-	// WebSocket handshake headers. Legacy (kubectl port-forward) carries the bridge
-	// token as Authorization; the service-proxy transport carries the SA token as
+	// WebSocket handshake headers. The service-proxy transport carries the SA token as
 	// Authorization (consumed by the API server) plus the bridge token in a forwarded
 	// header, so the auth shape lives with the caller, not here.
 	headers: Record<string, string>;
-	// Cluster CA (PEM) to pin TLS against when dialing the service-proxy (wss://). Unset
-	// for the legacy plaintext localhost tunnel.
+	// Cluster CA (PEM) to pin TLS against when dialing the service-proxy (wss://).
 	tls?: { ca: string };
 	// This Gateway's id, registered with the Router on connect so cross-Gateway frames
 	// can be routed to this Gateway.
@@ -35,7 +26,6 @@ export interface EvieClientConfig {
 	// the connection by (domainId, gatewayId). Always set: the evie client is constructed
 	// only when both the transport and the Domain id are non-null.
 	domainId: string;
-	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	// The relay pump owns full ConsoleRelayFrameSchema validation; the envelope
 	// union only routes by type, so the frame travels as unknown.
 	onConsoleRelay?: (frame: unknown) => void;
@@ -75,7 +65,6 @@ export interface EvieClientConfig {
 export interface EvieClient {
 	callTool: (action: string, params: Record<string, unknown>) => Promise<EvieToolCallResult>;
 	isConnected: () => boolean;
-	getToolSchemas: () => EvieToolSchema[];
 	stop: () => void;
 }
 
@@ -109,7 +98,6 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 	let pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
 	let pendingRetryAttempts = 0;
 	let missedPongs = 0;
-	let cachedTools: EvieToolSchema[] = [];
 	let droppedFrames = 0;
 	const pendingCalls = new Map<
 		string,
@@ -160,12 +148,6 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			const frame = parsed.data;
 
 			switch (frame.type) {
-				case "tool_registry": {
-					cachedTools = frame.tools;
-					console.log(`[evie-client] received ${cachedTools.length} tool schemas`);
-					config.onToolRegistry?.(cachedTools);
-					break;
-				}
 				case "console_relay": {
 					config.onConsoleRelay?.(frame);
 					break;
@@ -387,10 +369,6 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		return ws !== null && ws.readyState === WebSocket.OPEN;
 	}
 
-	function getToolSchemas(): EvieToolSchema[] {
-		return cachedTools;
-	}
-
 	function stop(): void {
 		stopped = true;
 		stopHeartbeat();
@@ -410,5 +388,5 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 
 	connect();
 
-	return { callTool, isConnected, getToolSchemas, stop };
+	return { callTool, isConnected, stop };
 }

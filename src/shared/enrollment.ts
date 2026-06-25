@@ -1,4 +1,4 @@
-// SYNC-HASH: f5a33adf11cd496808ee715dcad3fc0d
+// SYNC-HASH: f93c4bade02613d9f6cac797cdde79cd
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -34,8 +34,6 @@ const ServiceBundleSchema = z.object({
 	// Reach-evie basics + service keys the wizard delivers (never hand-pasted).
 	evieAddr: z.string().optional(),
 	transportToken: z.string().optional(),
-	sttsUrl: z.string().optional(),
-	sttsKey: z.string().optional(),
 });
 
 export const EnrollmentPayloadSchema = z

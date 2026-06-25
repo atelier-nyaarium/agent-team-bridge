@@ -600,16 +600,6 @@ export function createConsoleHandler({
 				return base;
 			}
 
-			case "get_gateway_transport": {
-				// Retired: the Console pulls the gateway-bridge transport from evie directly now (a
-				// signed TRANSPORT_REQUEST_V1 proof), not from the route Gateway. The op stays in the
-				// wire union for compatibility; the Gateway no longer serves it. An old build that
-				// still sends it gets a clear error rather than a silent empty reply.
-				throw new Error(
-					"get_gateway_transport is retired - update the app, which now pulls transport from evie",
-				);
-			}
-
 			case "peek": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
 				const target = resolveTmuxTarget(op.target);

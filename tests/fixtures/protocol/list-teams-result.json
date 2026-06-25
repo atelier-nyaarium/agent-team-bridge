@@ -10,8 +10,10 @@
 			"queue_depth": 0
 		},
 		{
-			"team": "old-gateway-team",
+			"team": "scratch",
+			"gatewayId": "laptop",
 			"status": "available",
+			"kind": "loose",
 			"queue_depth": 2
 		}
 	]

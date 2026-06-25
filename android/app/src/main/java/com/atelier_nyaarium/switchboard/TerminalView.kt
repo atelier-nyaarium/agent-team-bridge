@@ -359,7 +359,7 @@ fun TerminalView(
 					onHoldRepeat = { fire(null, "M-BSpace") },
 				)
 				FilledIconButton(
-					// Empty input sends a bare Enter (the Enter chip is retired in favor of this).
+					// Empty input sends a bare Enter; non-empty submits the typed text.
 					onClick = {
 						if (input.isEmpty()) {
 							fire(null, "Enter")

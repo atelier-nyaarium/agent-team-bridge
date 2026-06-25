@@ -1,4 +1,4 @@
-// SYNC-HASH: 15ce28d6a87c1e1b215d9a1da658c19b
+// SYNC-HASH: 3fa132ccdc8b955ce85e434deb361e9f
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -40,22 +40,9 @@ export const ChannelFileSchema = z
 
 export const ChannelFilesSchema = z.array(ChannelFileSchema);
 
-/** One tool in the registry push. Matches evie-bot's `BridgeToolSchema`
- * (exportToolSchemas); `title` is tolerated for older senders. */
-export const BridgeToolSchema = z.object({
-	name: z.string().min(1),
-	title: z.string().optional(),
-	description: z.string(),
-	parameters: z.record(z.string(), z.unknown()),
-});
-
 /** Frames the gateway RECEIVES from evie-bot. Unknown `type` values fail the
  * union; the consumer logs and drops them (observability, not crash). */
 export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
-	z.object({
-		type: z.literal("tool_registry"),
-		tools: z.array(BridgeToolSchema),
-	}),
 	z.object({
 		type: z.literal("tool_result"),
 		callId: z.string(),
@@ -134,8 +121,8 @@ export const FEDERATION_PROTOCOL_VERSION = 1;
  * admission + a fresh possession proof). The auth fields stay opaque strings here
  * so this leaf keeps importing nothing but zod; evie parses `admission` with the
  * synced SignedAdmissionSchema and checks it with verifyRegistration. They are
- * optional for a pre-enrollment / token-only Gateway; evie gates only once it holds
- * a Domain trust anchor. */
+ * optional at this parse layer (parse-then-verify); evie's verifyRegistration is the
+ * gate that rejects an unadmitted Gateway - there is no bearer fallback. */
 export const GatewayRegisterParamsSchema = z.object({
 	gatewayId: z.string().min(1).max(64),
 	// This Gateway's Domain id (multi-tenant evie). Optional + min(1) on the wire so a
@@ -258,7 +245,6 @@ export const CrossDomainHandshakeRevealReplyParamsSchema = z.object({
 //  Types
 
 export type ChannelFile = z.infer<typeof ChannelFileSchema>;
-export type BridgeTool = z.infer<typeof BridgeToolSchema>;
 export type EvieInboundFrame = z.infer<typeof EvieInboundFrameSchema>;
 export type ToolCallFrame = z.infer<typeof ToolCallFrameSchema>;
 export type GatewayRegisterParams = z.infer<typeof GatewayRegisterParamsSchema>;

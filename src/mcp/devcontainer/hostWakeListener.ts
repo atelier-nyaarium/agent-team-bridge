@@ -54,8 +54,9 @@ function connect(): void {
 	ws.on("open", () => {
 		console.error("[host-wake] connected to gateway");
 		reconnector.reset();
-		// Present the host-daemon token when configured (the gateway enforces it only
-		// when it too has HOST_WS_TOKEN set).
+		// Present the host-daemon token. The gateway's host slot is fail-closed: it refuses
+		// the register unless it has HOST_WS_TOKEN set AND this token matches it, so
+		// start-gateway.sh and start-host-daemon.sh wire the same value from .env.
 		const hostToken = process.env.HOST_WS_TOKEN;
 		ws!.send(JSON.stringify({ type: "register", team: "host", ...(hostToken ? { token: hostToken } : {}) }));
 

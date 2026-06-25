@@ -90,12 +90,13 @@ export const WsRegisterSchema = z.object({
 	mode: z.string().optional(),
 	subId: z.string().optional(),
 	conversationId: z.string().optional(),
-	// The plugin version (package.json) the MCP process is running. Optional so an
-	// older plugin that predates this field still registers cleanly.
+	// The plugin version (package.json) the MCP process is running. Absent for
+	// non-plugin registrants (e.g. the host daemon); the plugin always reports it.
 	version: z.string().optional(),
 	// Shared secret the host daemon presents so a LAN peer cannot squat the reserved
-	// "host" slot and drive agent terminals. Optional + only enforced when the gateway
-	// has HOST_WS_TOKEN set (coexistence: an un-configured deploy is unchanged).
+	// "host" slot and drive agent terminals. Optional on the wire (only the host slot
+	// sends it), but the host slot is fail-closed: a host register is refused unless the
+	// gateway has HOST_WS_TOKEN set AND this token matches it.
 	token: z.string().optional(),
 });
 
@@ -111,35 +112,32 @@ export const TeamInfoSchema = z
 		team: z.string(),
 		// The id of the Gateway that owns this session. `team` stays the bare local
 		// name; the console composes the qualified key `gateway/team` to keep two
-		// Gateways' identically-named sessions apart. Optional for decode tolerance:
-		// a pre-federation Gateway omits it and the console falls back to its connected
-		// Gateway id (bare resolves local).
-		gatewayId: z.string().optional(),
+		// Gateways' identically-named sessions apart. Always stamped by the gateway.
+		gatewayId: z.string(),
 		// The Domain id of the Gateway that owns this session. A gateway id is unique only
 		// within a Domain, so the full (domainId, gatewayId) pair is what addresses a
 		// session unambiguously: two linked friend Domains may run a gateway whose id
 		// collides with the local or each other's. The local listing stamps the local
 		// Domain id; a cross-Domain discovery entry is tagged with the peer's Domain id.
-		// Optional for decode tolerance: a pre-federation Gateway omits it, and a consumer
+		// Absent when this gateway has not resolved a Domain yet (arming mode); a consumer
 		// then treats the session as belonging to the local Gateway's own Domain.
 		domainId: z.string().optional(),
 		// The friendly NETWORK display name of the Domain that owns this session, propagated
 		// over the discovery roster so a linked friend Domain shows the owner's self-set label
-		// (e.g. "Carol") instead of a local alias. Optional/nullable for decode tolerance: a
-		// pre-feature Gateway omits it and consumers fall back to the domainId / a local label.
+		// (e.g. "Carol") instead of a local alias. Null when the Domain has no owner-set label;
+		// consumers fall back to the domainId / a local label.
 		displayName: z.string().nullish(),
 		// True when the Domain that owns this session is the ADMIN's own Domain (the evie-runner
 		// who provisions others). The console reads it on its LOCAL session to decide whether to
-		// show the admin surfaces (hosting guests). Optional: a pre-feature Gateway omits it and
-		// consumers treat it as false.
+		// show the admin surfaces (hosting guests). Stamped only for the admin Domain (omitted
+		// when false), so consumers treat absence as false.
 		isAdminDomain: z.boolean().optional(),
 		status: z.enum(["online", "available"]),
 		mode: ConnectionModeSchema.optional(),
-		// Optional for decode tolerance: old gateways omit kind and consumers
-		// default it to "loose" (the hand Kotlin client always did).
-		kind: TeamKindSchema.optional(),
-		// The plugin version the agent's MCP process reported at register. Optional:
-		// consoles, offline-catalog entries, and pre-feature gateways omit it. The
+		// loose | devcontainer | console. Always stamped by the gateway.
+		kind: TeamKindSchema,
+		// The plugin version the agent's MCP process reported at register. Absent for
+		// consoles and offline-catalog entries (no plugin process behind them). The
 		// console shows it as a chip only when it differs from the app's own expected
 		// version - a benign, self-correcting lag (the host auto-updates daily).
 		version: z.string().optional(),
@@ -219,9 +217,6 @@ export const ConsoleOpSchema = z
 			// cycle at near-zero steady cost.
 			knownDomainVersion: z.string().optional(),
 		}),
-		// Retired: the Console fetches the gateway-bridge transport from evie directly now. The op
-		// value stays in the union for Kotlin codegen continuity; the Gateway throws if it is called.
-		z.object({ kind: z.literal("get_gateway_transport") }),
 		// Capture an agent's VISIBLE tmux pane for the console terminal view. `target` is the
 		// gateway-qualified session name; the gateway resolves it to the host-agent's own
 		// tmux or a devcontainer and relays to the host daemon. `sinceHash` lets the console
@@ -450,8 +445,8 @@ export const MailboxEntrySchema = z
 		// Notification-bar line for notices; the body carries the full report.
 		title: z.string().optional(),
 		// The Short tier of a notice (4-6 sentences), addressable on its own so
-		// console features never parse it back out of the body. Always sent by
-		// current gateways; optional for decode tolerance of older wires.
+		// console features never parse it back out of the body. Present on notices;
+		// absent on a plain reply or a `sent` echo.
 		summary: z.string().optional(),
 		body: z.string().optional(),
 		// Reply/notice state on the wire (e.g. "running"/"error"). A `sent` echo never
@@ -471,8 +466,7 @@ export const MailboxEntrySchema = z
 //  Gateway transport creds (the gateway-bridge SA token + endpoint)
 //
 //  A dep-free leaf the GatewayBootstrapBundle seals (the creds a creds-less Gateway needs to reach
-//  evie). The retired get_gateway_transport op result (ConsoleGatewayTransportResult) is kept in the
-//  union for Kotlin codegen continuity but is no longer produced.
+//  evie). The Console pulls this from evie directly (a signed TRANSPORT_REQUEST_V1 proof).
 
 export const GatewayTransportSchema = z
 	.object({
@@ -497,9 +491,8 @@ export const ConsoleRegisterResultSchema = z
 		device: z.string(),
 		// The id of the Gateway this console is connected to. The console anchors its
 		// composite (gatewayId, name) key to this: it qualifies bare names to this
-		// Gateway and migrates pre-federation bare-keyed threads onto it. Optional
-		// for decode tolerance of a pre-federation Gateway.
-		gatewayId: z.string().optional(),
+		// Gateway and migrates bare-keyed threads onto it. Always sent by the gateway.
+		gatewayId: z.string(),
 		// Current mailbox high-water seq so a reconnecting console can resync its cursor.
 		cursor: z.number().int().nonnegative(),
 		// Mailbox instance id. If it differs from the console's stored epoch, the
@@ -510,8 +503,9 @@ export const ConsoleRegisterResultSchema = z
 		// only ever reports `rooted` (or `unrooted` for a fresh, never-provisioned admin Domain); it can
 		// NEVER report `pending`, because a pending Domain has no gateway to register against. The
 		// pending case is learned earlier, from the provisioning blob's `pendingTenant`, and the
-		// app first-roots DIRECTLY against evie. Optional for decode tolerance: a pre-feature
-		// Gateway omits it and the app treats the Domain as already rooted (the legacy path).
+		// app first-roots DIRECTLY against evie. Absent until this gateway completes its own
+		// evie register (the value comes from evie's snapshot); the app then treats the Domain
+		// as already rooted.
 		domainStatus: DomainStatusSchema.optional(),
 	})
 	.meta({ id: "ConsoleRegisterResult" });
@@ -553,12 +547,6 @@ export const ConsolePollResultSchema = z
 		domain: DomainSnapshotSchema.optional(),
 	})
 	.meta({ id: "ConsolePollResult" });
-
-export const ConsoleGatewayTransportResultSchema = z
-	.object({
-		transport: GatewayTransportSchema,
-	})
-	.meta({ id: "ConsoleGatewayTransportResult" });
 
 export const ConsolePeekResultSchema = z
 	.object({
@@ -756,7 +744,6 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleSendResultSchema,
 	ConsoleRespondResultSchema,
 	ConsolePollResultSchema,
-	ConsoleGatewayTransportResultSchema,
 	ConsolePeekResultSchema,
 	ConsoleTmuxSendResultSchema,
 	ConsoleCreateSessionResultSchema,
@@ -852,24 +839,6 @@ export const ProvisioningSchema = z
 		port: z.number().int().positive().optional(),
 		device: z.string().optional(),
 		conversationId: z.string().optional(),
-		// STTS (TTS playback) creds. DEVICE-OWNED now: entered in the app's Voice settings and
-		// persisted on the phone, NOT emitted by provisioning. Kept optional only so the app's
-		// one-release blob->settings migration can read a legacy hand-pasted blob; do not re-add
-		// these to the provisioning blob writer.
-		sttsUrl: z.string().optional(),
-		sttsKey: z.string().optional(),
-		// Console identity: a JSON-encoded Crypto.Identity ({sign,box} keypairs) minted
-		// AND admitted by provision-admin-domain.sh. When present, the app imports it
-		// on provision and is enrolled from the blob alone - no separate enroll/QR step.
-		// Absent for a legacy blob (the app then needs an interactive enroll).
-		identity: z.string().optional(),
-		// The route Gateway's id + public keys, also set by provision-admin-domain.sh.
-		// The app seals its FIRST op (register is itself sealed) TO the Gateway's box key,
-		// so it must hold these before connecting - the admit-gateway scan used to deliver
-		// them. With these in the blob, no admit-gateway step is needed either.
-		gatewayId: z.string().optional(),
-		gatewaySignPub: z.string().optional(),
-		gatewayBoxPub: z.string().optional(),
 		// Set only for a PENDING (unrooted) Domain blob (a friend invite or the admin's own
 		// fresh admin Domain setup): the pending Domain id + the one-time invite nonce. Its presence is
 		// the discriminator - the app first-roots (POSTs the SignedFirstRoot to evie with this

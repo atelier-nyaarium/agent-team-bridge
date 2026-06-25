@@ -23,12 +23,6 @@ export interface ProvisioningBlobInput {
 	// Its presence is the app's discriminator - it first-roots the Domain at the silently-generated
 	// owner key, then provisions the console. Omitted for a re-provision of an already-rooted Domain.
 	pendingTenant?: { domainId: string; nonce: string };
-	// Legacy host-minted-identity fields; the phone-anchored flow omits them (the Console owns its
-	// identity + keyring).
-	identity?: string;
-	gatewayId?: string;
-	gatewaySignPub?: string;
-	gatewayBoxPub?: string;
 }
 
 ////////////////////////////////

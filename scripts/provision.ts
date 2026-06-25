@@ -36,7 +36,6 @@ import {
 	confirm,
 	dc,
 	die,
-	dx,
 	ensureContainer,
 	envGet,
 	envSet,
@@ -69,10 +68,9 @@ const GATEWAY_BRIDGE_YAML = "../evie-bot/deploy/gateway-bridge.yaml";
 const SERVICE = "evie-console-bridge";
 const PORT = 20004;
 const FED_DIR_IN = "/app/log/federation"; // the gateway's federation dir (allowlist + keypair)
-const SECRETS_DIR = `${process.env.HOME}/android-dev/secrets`;
+const SECRETS_DIR = `${process.env.HOME}/.config/switchboard`; // host-local admin secrets (0700)
 const BLOB_FILE = `${SECRETS_DIR}/console-provisioning.json`; // the artifact the app imports
 const QR_GIF = `${SECRETS_DIR}/console-enrollment-qr.gif`; // optional saved QR image (menu opt 2)
-const OWNER_ID_FILE = `${SECRETS_DIR}/console-owner-identity.json`; // legacy host-minted owner (the phone holds it now)
 // Temp artifacts Setup Gateway can save so a far-away phone can scan/paste off-screen. Always
 // deleted on enrollment success, back-out, or ^C (see trackTemp / cleanupTemps).
 const GW_QR_GIF = `${SECRETS_DIR}/gateway-admit-qr.gif`;
@@ -137,7 +135,7 @@ async function gatewayHostname(): Promise<string> {
 
 /** Poll the gateway's /health until ready (30 x 2s = 60s). */
 async function waitHealth(): Promise<boolean> {
-	console.log("Waiting for the gateway to be ready...");
+	console.log("Waiting for gateway");
 	for (let i = 0; i < 30; i++) {
 		if ((await $`curl -sf ${HEALTH_URL}`.quiet().nothrow()).exitCode === 0) return true;
 		await Bun.sleep(2000);
@@ -174,7 +172,7 @@ async function armGateway(): Promise<void> {
 	const nonce = (await $`openssl rand -hex 16`.text()).trim();
 	const hostLine = (await $`hostname -I`.quiet().nothrow()).text().trim();
 	const host = hostLine.split(/\s+/)[0] || "0.0.0.0";
-	console.log(`Starting the gateway and opening enrollment on ${host}:20000.`);
+	console.log(`Starting gateway, enrollment on ${host}:20000`);
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await clearTransport();
 	const up = await dc("up", "--build", "-d")
@@ -182,7 +180,7 @@ async function armGateway(): Promise<void> {
 		.nothrow();
 	if (up.exitCode !== 0) throw new Error("could not start the gateway (is docker running?)");
 	if (!(await waitHealth())) {
-		throw new Error("The gateway didn't start within 60 seconds. Show its logs with: docker logs switchboard");
+		throw new Error("gateway not ready in 60s - run: docker logs switchboard");
 	}
 }
 
@@ -195,19 +193,17 @@ async function readAdmitPayload(): Promise<string> {
 		if (text.trim()) return text.trim();
 		await Bun.sleep(1000);
 	}
-	throw new Error(
-		`the gateway did not write its enrollment details (${ADMIT_PAYLOAD_HOST}) - check: docker logs switchboard`,
-	);
+	throw new Error(`no enrollment payload at ${ADMIT_PAYLOAD_HOST} - run: docker logs switchboard`);
 }
 
 /** Bring the gateway up normally (no enrollment nonce) so it connects with the delivered network id
  * and transport. */
 async function connectGateway(): Promise<void> {
-	console.log("Connecting the gateway to your network...");
+	console.log("Connecting");
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	if ((await dc("up", "--build", "-d").nothrow()).exitCode !== 0) throw new Error("could not start the gateway");
 	if (!(await waitHealth())) {
-		throw new Error("The gateway didn't start within 60 seconds. Show its logs with: docker logs switchboard");
+		throw new Error("gateway not ready in 60s - run: docker logs switchboard");
 	}
 }
 
@@ -222,10 +218,10 @@ async function postPastedBundle(bundle: string): Promise<boolean> {
 		});
 		if (res.ok) return true;
 		const detail = await res.text().catch(() => "");
-		err(`the gateway rejected the bundle (HTTP ${res.status}) ${detail}`.trim());
+		err(`bundle rejected (HTTP ${res.status}) ${detail}`.trim());
 		return false;
 	} catch (e) {
-		err(`could not reach the gateway: ${e instanceof Error ? e.message : String(e)}`);
+		err(`gateway unreachable: ${e instanceof Error ? e.message : String(e)}`);
 		return false;
 	}
 }
@@ -234,7 +230,7 @@ async function postPastedBundle(bundle: string): Promise<boolean> {
  * user pastes here. The gateway writes transport.json the moment it installs a bundle, so that file
  * appearing is the success signal. Returns "installed" once it lands, or "back" if the user quits. */
 async function waitForInstall(): Promise<"installed" | "back"> {
-	console.log("\nWaiting for your phone to deliver the connection bundle...");
+	console.log("\nWaiting for phone to deliver the bundle");
 	for (;;) {
 		// Give the phone's LAN delivery a few seconds to land before prompting, so the common case
 		// needs no keypress.
@@ -242,14 +238,13 @@ async function waitForInstall(): Promise<"installed" | "back"> {
 			if (await Bun.file(TRANSPORT_FILE_HOST).exists()) return "installed";
 			await Bun.sleep(1000);
 		}
-		console.log("\n  Still waiting. The gateway connects on its own once your phone delivers.");
-		console.log("    Enter) Check again");
+		console.log("\n    Enter) Check again");
 		console.log("    p) Paste the bundle here instead");
 		console.log("    b) Back");
 		const choice = ask("  >").toLowerCase();
 		if (choice === "b") return "back";
 		if (choice === "p") {
-			const bundle = ask("Paste the bundle, then press Enter:");
+			const bundle = ask("Paste the bundle:");
 			if (bundle && (await postPastedBundle(bundle))) return "installed";
 		}
 	}
@@ -276,7 +271,7 @@ async function presentArtifact(
 		if (choice === "2") {
 			try {
 				const saved = await save();
-				note(`Saved: ${saved}  (open it on this machine, then scan or copy it to your phone)`);
+				note(`Saved: ${saved}`);
 			} catch (e) {
 				err(e instanceof Error ? e.message : String(e));
 			}
@@ -293,7 +288,7 @@ async function presentArtifact(
 async function setupGateway(): Promise<void> {
 	// The phone enrolls a gateway against a network it already owns, so the network must exist first.
 	if (!(await envGet("FEDERATION_DOMAIN_ID"))) {
-		console.log("Set up your network first - run option 2 (Evie Admin Provision).");
+		console.log("Set up your network first - run option 2.");
 		return;
 	}
 
@@ -306,12 +301,7 @@ async function setupGateway(): Promise<void> {
 	// An already-enrolled gateway has a delivered transport; re-enrolling disconnects it until a new
 	// bundle arrives, so confirm before re-arming.
 	if (await Bun.file(TRANSPORT_FILE_HOST).exists()) {
-		if (
-			!confirm(
-				`Gateway "${id}" is already enrolled. Re-enroll it? It disconnects until you deliver a new bundle.`,
-			)
-		)
-			return;
+		if (!confirm(`Gateway "${id}" already enrolled. Re-enroll?`)) return;
 	}
 
 	await armGateway();
@@ -319,7 +309,7 @@ async function setupGateway(): Promise<void> {
 
 	try {
 		for (;;) {
-			console.log(`\nGateway "${id}" is ready to enroll. Choose how to send it to your phone:`);
+			console.log(`\nGateway "${id}" - send to your phone:`);
 			console.log("  1) Enroll with QR Code");
 			console.log("  2) Enroll with JSON Copy-pasta");
 			console.log("  b) Back");
@@ -383,8 +373,7 @@ async function setupGateway(): Promise<void> {
 
 /** Wipe this machine's gateway setup (.env + volumes/gateway) back to nothing. */
 async function purgeGateway(): Promise<void> {
-	console.log("Wipes .env + volumes/gateway (keypair, admissions, mailboxes).");
-	console.log("Re-configuring mints a new keypair, so the owner Console must re-admit this Gateway.");
+	console.log("Wipes .env + volumes/gateway.");
 	if (!confirm("Purge everything?")) return;
 	// Drop this Gateway's admission from evie's Domain first (the admission stores the SANITIZED
 	// slug, so use it not the raw env), then erase the local state.
@@ -394,7 +383,7 @@ async function purgeGateway(): Promise<void> {
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await wipeState();
 	await $`rm -f .env`.quiet().nothrow();
-	console.log("Purged. Run Setup Gateway to set it up fresh.");
+	console.log("Purged.");
 }
 
 ////////////////////////////////
@@ -403,7 +392,7 @@ async function purgeGateway(): Promise<void> {
 /** Apply the console-bridge + gateway-bridge k8s objects and ensure CONSOLE_BRIDGE_TOKEN is set so
  * evie's ConsoleBridgeServer starts on 20004. Idempotent. */
 async function cutover(): Promise<void> {
-	note("Applying cluster objects (console + gateway bridges)...");
+	note("Applying cluster objects");
 	for (const yaml of [BRIDGE_YAML, GATEWAY_BRIDGE_YAML]) {
 		const r = await kStdin(await Bun.file(yaml).text(), "apply", "-f", "-")
 			.quiet()
@@ -423,12 +412,12 @@ async function cutover(): Promise<void> {
 		if (!tok) tok = (await $`openssl rand -hex 32`.text()).trim();
 		// Applied as YAML on stdin so the token never hits argv; a non-zero exit (an AlreadyExists race) is harmless.
 		await applySecret("console-bridge-app-token", { CONSOLE_BRIDGE_TOKEN: tok });
-		note("Minted the console bridge token.");
+		note("Minted console bridge token");
 	}
 	// A non-zero exit is tolerated (e.g. an AlreadyExists race); a genuinely unwired token surfaces
 	// downstream at verify().
 	await k("set", "env", EVIE_DEPLOY, "--from=secret/console-bridge-app-token").quiet().nothrow();
-	note("Waiting for evie to restart...");
+	note("Waiting for evie");
 	if ((await k("rollout", "status", EVIE_DEPLOY, "--timeout=120s").quiet().nothrow()).exitCode !== 0) {
 		throw new Error("evie rollout stalled");
 	}
@@ -446,7 +435,7 @@ async function readEvieFed(): Promise<string> {
 			evieFed = Buffer.from(b64, "base64").toString();
 			break;
 		}
-		if (i === 0) note("Waiting for evie to publish its federation Secret...");
+		if (i === 0) note("Waiting for evie federation Secret");
 		await Bun.sleep(2000);
 	}
 	if (!evieFed) throw new Error("could not read evie federation Secret (is evie federation up?)");
@@ -467,10 +456,9 @@ async function stageAdminPending(evieFed: string, adminDomainId: string): Promis
 		if (!process.stdin.isTTY) {
 			throw new Error("display name required (set SB_DISPLAY_NAME, or run interactively)");
 		}
-		console.log("Name your network (the label friends see, e.g. Nyaarium).");
-		displayName = ask("Display name:");
+		displayName = ask("Your user display name:");
 	}
-	if (!displayName) throw new Error("an display name is required");
+	if (!displayName) throw new Error("a display name is required");
 
 	// The one-time invite nonce the friend echoes verbatim in its first_root frame. STANDARD base64
 	// (not base64url): the wire `nonce` field is a b64Field ([A-Za-z0-9+/]={0,2}), and a base64url
@@ -491,7 +479,7 @@ async function stageAdminPending(evieFed: string, adminDomainId: string): Promis
 	if (!(await applySecret(FED_SECRET, { "federation.json": JSON.stringify(federationJson) }, true))) {
 		throw new Error("writing federation Secret failed");
 	}
-	note(`Network "${displayName}" pre-staged (pending your phone's first scan).`);
+	note("Pre-staged.");
 
 	// Restart evie so it reads the pending state and serves it to the first-rooting console.
 	await k("rollout", "restart", EVIE_DEPLOY).quiet().nothrow();
@@ -508,10 +496,7 @@ async function stageAdminPending(evieFed: string, adminDomainId: string): Promis
  * on scan; omitted for a re-provision of an already-rooted Domain (just provisions the console). */
 async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Promise<void> {
 	const { saToken, caPem } = await readSaCreds("console-bridge-proxy-token");
-	if (!saToken || !caPem)
-		throw new Error(
-			"console-bridge SA token not populated yet - re-run provision-admin-domain.sh in a few seconds",
-		);
+	if (!saToken || !caPem) throw new Error("console-bridge SA token not ready yet - re-run in a few seconds");
 	const appToken = await kGetB64(
 		"get",
 		"secret",
@@ -534,17 +519,14 @@ async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Pr
 		BLOB_FILE,
 	);
 	await $`chmod 600 ${BLOB_FILE}`.quiet().nothrow();
-	note(`Blob written: ${BLOB_FILE}`);
+	note(`Blob: ${BLOB_FILE}`);
 }
 
 /** Write the local Gateway's service-proxy transport.json into its federation dir, so the gateway
  * reaches evie through the apiserver (off kubectl port-forward) on its next restart. */
 async function writeGatewayTransport(): Promise<void> {
 	const { saToken, caPem } = await readSaCreds("gateway-bridge-proxy-token");
-	if (!saToken || !caPem)
-		throw new Error(
-			"gateway-bridge SA token not populated yet - re-run provision-admin-domain.sh in a few seconds",
-		);
+	if (!saToken || !caPem) throw new Error("gateway-bridge SA token not ready yet - re-run in a few seconds");
 	const apiUrl = await clusterApiUrl();
 	const transport = JSON.stringify({
 		apiUrl,
@@ -557,7 +539,7 @@ async function writeGatewayTransport(): Promise<void> {
 	if (!(await writeGatewayFile(`${FED_DIR_IN}/transport.json`, transport))) {
 		throw new Error("writing gateway transport.json failed");
 	}
-	note("Gateway transport written (applies on its next restart).");
+	note("Gateway transport written");
 }
 
 /** Health-probe the full service-proxy -> bridge path with the emitted creds. Uses an AUTHENTICATED
@@ -599,26 +581,18 @@ async function verify(): Promise<void> {
 			curlErr = r.stderr.toString().trim();
 			if (code === "200") break;
 			if (code === "401") {
-				throw new Error(
-					"VERIFY: app token REJECTED (HTTP 401) - the CONSOLE_BRIDGE_TOKEN in the blob does not match evie's. Re-run provision-admin-domain.sh",
-				);
+				throw new Error("VERIFY: app token rejected (401) - blob token != evie's. Re-run provision.");
 			}
 			if (code === "404") {
-				throw new Error(
-					"VERIFY: bridge not found (HTTP 404) - console-bridge Service/objects not applied. Re-run provision-admin-domain.sh",
-				);
+				throw new Error("VERIFY: bridge not found (404) - console-bridge not applied. Re-run provision.");
 			}
 			await Bun.sleep(3000);
 		}
 		if (code !== "200") {
 			const detail = curlErr ? ` (${curlErr})` : "";
-			throw new Error(
-				`VERIFY: bridge probe returned HTTP ${code} after retries${detail} (bridge still starting / creds) - re-run --verify shortly, or provision-admin-domain.sh`,
-			);
+			throw new Error(`VERIFY: bridge probe HTTP ${code}${detail} - re-run --verify shortly`);
 		}
-		note(
-			"VERIFY: console bridge reachable + app token accepted (authenticated POST 200) - ready to import the blob",
-		);
+		note("VERIFY: bridge reachable, token accepted");
 	} finally {
 		await $`rm -f ${ca} ${cfg}`.quiet().nothrow();
 	}
@@ -633,7 +607,7 @@ async function verify(): Promise<void> {
  * clear error instead of qrcode-generator's raw overflow. */
 function qrPayload(blobText: string): string {
 	if (!fitsInQr(blobText)) {
-		throw new Error(`the blob is ${blobText.length} bytes - too large for a QR; use paste or file import`);
+		throw new Error(`blob is ${blobText.length} bytes - too large for a QR; use paste or file import`);
 	}
 	return blobText;
 }
@@ -666,7 +640,7 @@ async function saveQrImage(): Promise<string> {
 async function qrMenu(): Promise<void> {
 	let saved = "";
 	for (;;) {
-		console.log(`\n  Enrollment QR  (encodes ${BLOB_FILE})`);
+		console.log("\n  Enrollment QR:");
 		console.log("    1) Display the QR in this terminal (wide)");
 		console.log(`    2) Save the QR as an image -> ${QR_GIF}`);
 		console.log(saved ? "    q) Delete the saved QR and quit" : "    q) Quit");
@@ -682,7 +656,8 @@ async function qrMenu(): Promise<void> {
 		} else if (choice === "2") {
 			try {
 				saved = await saveQrImage();
-				note(`saved: ${saved}  (open it and scan, or send it to the phone)`);
+				trackTemp(saved);
+				note(`Saved: ${saved}`);
 			} catch (e) {
 				err(e instanceof Error ? e.message : String(e));
 				saved = "";
@@ -690,9 +665,9 @@ async function qrMenu(): Promise<void> {
 		} else if (choice === "" || choice.toLowerCase() === "q") {
 			if (saved) {
 				await $`rm -f ${saved}`.quiet().nothrow();
-				note(`deleted saved QR: ${saved}`);
+				note(`Deleted saved QR: ${saved}`);
 			}
-			note(`Done. The blob remains at ${BLOB_FILE} (0600) for re-display via --qr.`);
+			note("Done.");
 			return;
 		} else {
 			err(`unknown option: '${choice}' (use 1, 2, or q)`);
@@ -736,11 +711,7 @@ async function provision(): Promise<void> {
 	if (adminDomain.rooted) {
 		// Re-provision: the admin Domain is already rooted at the phone's owner key. Nothing to stage;
 		// just refresh the transport creds.
-		note(
-			adminDomain.displayName
-				? `Network "${adminDomain.displayName}" already rooted - re-provisioning.`
-				: "Admin Domain already rooted - re-provisioning.",
-		);
+		note("Already set up, re-provisioning.");
 	} else {
 		// Fresh setup: pre-stage the pending admin Domain and carry its invite nonce into the blob.
 		const { nonce } = await stageAdminPending(evieFed, adminDomainId);
@@ -754,31 +725,18 @@ async function provision(): Promise<void> {
 	note(`Setup complete. Blob: ${BLOB_FILE}`);
 }
 
-/** Clean break: wipe the Console federation across all three places it lives. The gateway keypair
- * (identity.json) stays so the Gateway id is stable; only the mirrored allowlist goes. */
+/** Clean break: delete this owner's whole Domain from evie, then erase the local state with the
+ * same full wipe as Purge gateway so a re-provision starts fresh. A hosted friend tenant survives. */
 async function purgeFederation(): Promise<void> {
-	console.log("Clean break - wipes the Console federation: evie's owner key + admissions, this");
-	console.log(`Gateway's mirrored allowlist (keypair kept), and the host blob under ${SECRETS_DIR}.`);
-	console.log("Everyone re-enrolls afterward.");
-	if (!confirm("Purge everything?")) {
-		note("Cancelled.");
-		return;
-	}
+	console.log("Wipes the network from evie, plus .env + volumes/gateway + the host blob.");
+	if (!confirm("Purge everything?")) return;
 
-	// Drop only THIS Domain from evie's Secret so a hosted friend tenant survives (the old
-	// whole-Secret delete took them down too).
 	const domain = await envGet("FEDERATION_DOMAIN_ID");
 	await evieDelete((fed) => removeDomain(fed, domain));
-	note("evie: owner + admissions wiped, restarting.");
-
-	await dx("rm", "-f", `${FED_DIR_IN}/federation-allowlist.json`).quiet().nothrow();
-	note("Gateway: allowlist wiped (keypair kept; restart it to re-sync).");
-
-	await $`rm -f ${OWNER_ID_FILE} ${BLOB_FILE} ${QR_GIF}`.quiet().nothrow();
-	note("Host: blob + identity removed.");
-
-	console.log();
-	note("Done. Run Provision to set up fresh (it pre-stages the admin Domain; your phone roots it on scan).");
+	await dc("down", "--remove-orphans").quiet().nothrow();
+	await wipeState();
+	await $`rm -f .env ${BLOB_FILE} ${QR_GIF}`.quiet().nothrow();
+	console.log("Purged.");
 }
 
 /** Top dial menu (the default, interactive run): the single bootstrap for the gateway and the
@@ -803,8 +761,8 @@ async function topMenu(): Promise<void> {
 		console.log("  2) Evie Admin Provision - First-time setup of your Evie network\n");
 		console.log("Purge:");
 		console.log("  9) Purge Gateway        - Remove this gateway and erase its data");
-		console.log("  0) Purge Federation     - Delete your whole network and erase everything");
-		console.log("  q) Quit");
+		console.log("  0) Purge Federation     - Delete your whole network and erase everything\n");
+		console.log("  q) Quit\n");
 		const choice = ask(">").toLowerCase();
 		if (choice === "" || choice === "q") return;
 		const op = ops[choice];
@@ -836,7 +794,7 @@ async function main(): Promise<void> {
 				await topMenu();
 			} else {
 				await provision();
-				note(`Import ${BLOB_FILE} into the app (paste or --qr).`);
+				note(`Import ${BLOB_FILE} into the app.`);
 			}
 			break;
 		}
@@ -869,4 +827,5 @@ async function main(): Promise<void> {
 // Every file this script writes carries key material or cluster creds; umask 077 makes them
 // 0600/0700 from birth (the explicit chmod 600 stay as belt-and-suspenders).
 process.umask(0o077);
+fs.mkdirSync(SECRETS_DIR, { recursive: true, mode: 0o700 });
 main().catch((e) => die(e instanceof Error ? e.message : String(e)));

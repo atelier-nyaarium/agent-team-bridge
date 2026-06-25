@@ -422,8 +422,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onToggleBiometric = { repo.setBiometricLock(it) },
 				onManage = { showManage = true },
 				onFederation = {
-					// Users is the main surface now (the old Federation hub is retired); the federation
-					// actions live in the Users top-bar menu.
+					// Users is the federation surface; the federation actions live in its top-bar menu.
 					showSettings = false
 					settingsRoute = SettingsRoute.HUB
 					showUsers = true
@@ -1421,8 +1420,8 @@ fun ThreadScreen(
 					label = { Text("Message") },
 					modifier = Modifier.weight(1f),
 				)
-				// Attach stacks above Send in a narrow right column, handing the text
-				// field the width the inline Attach button used to occupy.
+				// Attach stacks above Send in a narrow right column, so the text field
+				// takes the remaining width.
 				Column(Modifier.padding(start = 8.dp), horizontalAlignment = Alignment.End) {
 					IconButton(onClick = { picker.launch(arrayOf("*/*")) }) {
 							Icon(Icons.Default.AttachFile, contentDescription = "Attach file")

@@ -688,7 +688,6 @@ export async function startGateway(): Promise<void> {
 		if (method === "POST" && url.pathname === "/respond") return routes.respond(req, body);
 		if (method === "POST" && url.pathname === "/poll") return routes.poll(req, body);
 		if (method === "GET" && url.pathname === "/health") return routes.health();
-		if (method === "POST" && url.pathname === "/evie/tool-call") return routes.evieToolCall(req, body);
 		if (method === "POST" && url.pathname === "/human/notify") return routes.humanNotify(body);
 
 		return new Response("Not Found", { status: 404 });

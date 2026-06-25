@@ -73,19 +73,19 @@ export async function containerUp(): Promise<boolean> {
 }
 
 /** Ensure the gateway container is up so kubectl can reach the cluster; start it for this run
- * if it is down (e.g. right after a purge). The image already exists, so this is a fast `up`,
- * not a rebuild, and the container is left running. */
+ * if it is down (e.g. right after a purge). Builds so a pulled code change is picked up instead
+ * of an old image crash-looping; the layer cache keeps an unchanged build fast. Left running. */
 export async function ensureContainer(): Promise<void> {
 	if (await containerUp()) return;
-	note(`gateway container is down - starting it so kubectl can reach the cluster`);
-	const up = await dc("up", "-d").quiet().nothrow();
+	note(`Starting gateway docker`);
+	const up = await dc("up", "--build", "-d").quiet().nothrow();
 	if (up.exitCode !== 0) die(`docker compose up failed (is docker running?)`);
 	for (let i = 0; i < 30; i++) {
 		const probe = await $`docker exec ${CONTAINER} kubectl --kubeconfig=${KUBECONFIG_IN} version`.quiet().nothrow();
 		if (probe.exitCode === 0) return;
 		await Bun.sleep(2000);
 	}
-	die(`the '${CONTAINER}' container started but kubectl is not reachable through it`);
+	die(`kubectl not reachable through '${CONTAINER}'`);
 }
 
 /** A base64-decoded kubectl jsonpath read; empty string when the secret/field is absent. */

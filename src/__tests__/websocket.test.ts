@@ -7,6 +7,8 @@ import {
 	type WsData,
 } from "../gateway/websocket.js";
 
+const HOST_TOKEN = "host-secret";
+
 function createMockWs() {
 	return {
 		data: { teamName: null, subId: "", conversationId: null, missedPings: 0, isStale: false } as WsData,
@@ -43,7 +45,11 @@ describe("createWebSocketHandlers", () => {
 		const handlers = createWebSocketHandlers({
 			registry,
 			conversationRegistry,
-			config: { HEARTBEAT_INTERVAL_MS: 100000, MISSED_PINGS_LIMIT: 2, hostWsToken: overrides.hostWsToken },
+			config: {
+				HEARTBEAT_INTERVAL_MS: 100000,
+				MISSED_PINGS_LIMIT: 2,
+				hostWsToken: "hostWsToken" in overrides ? overrides.hostWsToken : HOST_TOKEN,
+			},
 			knownTeamPaths,
 			offlineCatalog,
 			wakeCoordinator,
@@ -71,8 +77,8 @@ describe("createWebSocketHandlers", () => {
 		const ws2 = createMockWs();
 		handlers.open(ws1);
 		handlers.open(ws2);
-		handlers.message(ws1, JSON.stringify({ type: "register", team: "host", subId: "a1" }));
-		handlers.message(ws2, JSON.stringify({ type: "register", team: "host", subId: "a2" }));
+		handlers.message(ws1, JSON.stringify({ type: "register", team: "host", subId: "a1", token: HOST_TOKEN }));
+		handlers.message(ws2, JSON.stringify({ type: "register", team: "host", subId: "a2", token: HOST_TOKEN }));
 		const subs = registry.get("host");
 		expect(subs!.size).toBe(1);
 		expect(subs!.get("a1")).toBe(ws1);
@@ -83,7 +89,7 @@ describe("createWebSocketHandlers", () => {
 		const { handlers, registry } = setup({ hostWsToken: "secret" });
 		const ws = createMockWs();
 		handlers.open(ws);
-		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1" }));
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
 		expect(registry.get("host")).toBeUndefined();
 		expect(ws.close).toHaveBeenCalled();
 		expect((ws.send as ReturnType<typeof vi.fn>).mock.calls.flat().join()).toContain("unauthorized");
@@ -97,12 +103,13 @@ describe("createWebSocketHandlers", () => {
 		expect(registry.get("host")?.get("h1")).toBe(ws);
 	});
 
-	it("with NO host token set, a token-less host register still succeeds (coexistence)", () => {
-		const { handlers, registry } = setup();
+	it("with NO host token configured, a host register is rejected (fail-closed)", () => {
+		const { handlers, registry } = setup({ hostWsToken: undefined });
 		const ws = createMockWs();
 		handlers.open(ws);
-		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1" }));
-		expect(registry.get("host")?.get("h1")).toBe(ws);
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: "anything" }));
+		expect(registry.get("host")).toBeUndefined();
+		expect(ws.close).toHaveBeenCalled();
 	});
 
 	it("a host_op_reply from the host socket settles the coordinator by reqId", () => {
@@ -110,7 +117,7 @@ describe("createWebSocketHandlers", () => {
 		const { handlers } = setup({ hostOpCoordinator });
 		const ws = createMockWs();
 		handlers.open(ws);
-		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1" }));
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
 		handlers.message(ws, JSON.stringify({ type: "host_op_reply", reqId: "r1", ok: true, result: { hash: "h" } }));
 		expect(hostOpCoordinator.settle).toHaveBeenCalledWith("r1", {
 			ok: true,
@@ -134,7 +141,7 @@ describe("createWebSocketHandlers", () => {
 		const { handlers } = setup({ hostOpCoordinator });
 		const ws = createMockWs();
 		handlers.open(ws);
-		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1" }));
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
 		handlers.close(ws);
 		expect(hostOpCoordinator.failAll).toHaveBeenCalledWith("host daemon disconnected");
 	});
@@ -230,7 +237,7 @@ describe("createWebSocketHandlers", () => {
 		const { handlers, offlineCatalog } = setup();
 		const ws = createMockWs();
 		handlers.open(ws);
-		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1" }));
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
 		handlers.message(
 			ws,
 			JSON.stringify({
@@ -264,7 +271,7 @@ describe("createWebSocketHandlers", () => {
 		const { handlers, offlineCatalog } = setup();
 		const ws = createMockWs();
 		handlers.open(ws);
-		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1" }));
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
 		handlers.message(
 			ws,
 			JSON.stringify({
@@ -283,7 +290,7 @@ describe("createWebSocketHandlers", () => {
 		const { handlers } = setup({ knownTeamPaths });
 		const ws = createMockWs();
 		handlers.open(ws);
-		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1" }));
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
 		handlers.message(
 			ws,
 			JSON.stringify({

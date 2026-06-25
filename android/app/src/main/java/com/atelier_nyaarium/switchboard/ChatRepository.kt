@@ -377,18 +377,6 @@ private fun enrollFold(prevSince: Long): Pair<String?, Long> {
 	}
 }
 
-/** What the one-time blob->store stts migration should seed: the non-empty creds from
- * a parsed blob, or nulls for a creds-less (or absent) blob. Pure + Android-free so a
- * JVM test pins the "copy iff non-empty, creds-less no-op" decision (the migration's
- * store writes are trivial; this is the part worth testing). */
-internal data class SttsSeed(val url: String?, val key: String?)
-
-internal fun sttsMigrationSeed(prov: Provisioning?): SttsSeed =
-	SttsSeed(
-		url = prov?.sttsUrl?.takeIf { it.isNotEmpty() },
-		key = prov?.sttsKey?.takeIf { it.isNotEmpty() },
-	)
-
 /**
  * Repair a persisted/legacy thread or label key to canonical form under a known Gateway id.
  * A bare name ("name") and - critically - an EMPTY-gateway qualified key ("/name", minted in
@@ -478,22 +466,6 @@ class ChatRepository(
 	/** TTS playback engine; cache lives under filesDir/stts/<team>/. */
 	val stts = SttsPlayer(filesDir)
 	@Volatile private var sttsClient: SttsClient? = null
-
-	init {
-		// One-time carry-over of stts creds from a PRE-regression hand-pasted blob into the
-		// settings store. Reads via Provisioning.parse (so the URL is trimmed) and copies only
-		// non-empty values; the regressed cohort's creds-less blob is a no-op (they paste the
-		// key in settings). Guarded so a later creds-less re-provision cannot re-clobber an
-		// in-app edit. After this the blob's stts fields are ignored forever.
-		if (!store.sttsMigrated) {
-			runCatching {
-				val seed = sttsMigrationSeed(store.load()?.let { Provisioning.parse(it) })
-				seed.url?.let { normalizeSttsUrl(it) }?.let { store.sttsUrl = it }
-				seed.key?.let { store.sttsKey = it }
-			}
-			store.sttsMigrated = true
-		}
-	}
 
 	/** True while the Activity is started; drives the poll cadence (5s visible,
 	 * 60s AFK burst). The mailbox accumulates server-side either way. */
@@ -594,18 +566,8 @@ class ChatRepository(
 		return id.isNotEmpty() && sttsCatalog.none { it.id == id }
 	}
 
-	/** Per-provider voice; blank uses the descriptor default. Reads seed once
-	 * from the legacy global voice so an existing install keeps its choice. */
-	fun sttsVoiceFor(providerId: String): String {
-		val perProvider = store.sttsVoiceFor(providerId)
-		if (perProvider.isNotEmpty()) return perProvider
-		val legacy = store.sttsVoice
-		if (legacy.isNotEmpty() && providerId == sttsProviderId) {
-			store.setSttsVoiceFor(providerId, legacy)
-			return legacy
-		}
-		return ""
-	}
+	/** Per-provider voice; blank uses the descriptor default. */
+	fun sttsVoiceFor(providerId: String): String = store.sttsVoiceFor(providerId)
 
 	fun setSttsVoiceFor(providerId: String, voice: String) = store.setSttsVoiceFor(providerId, voice.trim())
 
@@ -771,12 +733,11 @@ class ChatRepository(
 			// cursor. We still register (to learn gatewayId, claim the mailbox, get the epoch
 			// the box is on); the poll loop's advance() reconciles any epoch change.
 			val reg = client().register()
-			DebugLog.log("Connect", "register ok gateway=${reg.gatewayId ?: "?"}")
-			reg.gatewayId?.let { id ->
-				if (id.isNotEmpty() && id != localGatewayId) {
-					localGatewayId = id
-					store.saveGatewayId(id)
-				}
+			DebugLog.log("Connect", "register ok gateway=${reg.gatewayId}")
+			val id = reg.gatewayId
+			if (id.isNotEmpty() && id != localGatewayId) {
+				localGatewayId = id
+				store.saveGatewayId(id)
 			}
 			// Repair any thread/label/unread/tab key minted under an empty/unknown gateway
 			// now that the real gateway id is known, so an inbound reply (keyed gateway/name)

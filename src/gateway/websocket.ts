@@ -38,7 +38,7 @@ export interface WsData {
 	mode: ConnectionMode;
 	// Plugin version (package.json) this connection reported at register, surfaced in
 	// teams() so the console can flag a version-lagging agent. Undefined for virtual
-	// console peers and pre-feature plugins.
+	// console peers and non-plugin registrants (e.g. the host daemon).
 	version?: string;
 	missedPings: number;
 	isStale: boolean;
@@ -141,10 +141,12 @@ export function createWebSocketHandlers({
 			const mode: ConnectionMode = "channel";
 			const conversationId = reg.data.conversationId ?? null;
 
-			// Host-daemon auth: when a token is configured, the reserved "host" slot (which
-			// drives agent terminals and receives wakes) requires it, so a LAN peer cannot
-			// claim it. Unset = unchanged. Other teams are unaffected.
-			if (team === "host" && config.hostWsToken && reg.data.token !== config.hostWsToken) {
+			// Host-daemon auth: the reserved "host" slot (which drives agent terminals and
+			// receives wakes) is admission-gated by a shared secret so a LAN peer cannot
+			// claim it. Fail-closed: a host register is refused unless the gateway has a
+			// HOST_WS_TOKEN configured AND the daemon presents the matching token. Other
+			// teams are unaffected.
+			if (team === "host" && (!config.hostWsToken || reg.data.token !== config.hostWsToken)) {
 				console.log(`[ws] rejected host register - bad or missing token`);
 				ws.send(JSON.stringify({ type: "register_reject", team, reason: "unauthorized" }));
 				ws.data.isStale = true;

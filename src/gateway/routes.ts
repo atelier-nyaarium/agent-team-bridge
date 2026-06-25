@@ -139,21 +139,18 @@ const PollRequestSchema = z.object({
 	session_id: z.string(),
 });
 
-const EvieToolCallSchema = z.object({
-	action: z.string(),
-	params: z.record(z.string(), z.unknown()),
-});
-
 // title, summary, and full are REQUIRED: a notice must always carry a headline,
-// an addressable short tier, and a real body (no ghost pings). The object stays
-// NON-strict so a stray `tiny` from a not-yet-updated caller is silently stripped.
-const HumanNotifySchema = z.object({
-	from: z.string().min(1).max(128),
-	title: z.string().min(1).max(200),
-	summary: z.string().min(1),
-	full: z.string().min(1),
-	files: ChannelFilesSchema.optional(),
-});
+// an addressable short tier, and a real body (no ghost pings). Strict: an unknown
+// field (e.g. the retired `tiny`) is rejected, not silently stripped.
+const HumanNotifySchema = z
+	.object({
+		from: z.string().min(1).max(128),
+		title: z.string().min(1).max(200),
+		summary: z.string().min(1),
+		full: z.string().min(1),
+		files: ChannelFilesSchema.optional(),
+	})
+	.strict();
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -921,21 +918,6 @@ export function createRoutes({
 		});
 	}
 
-	async function evieToolCall(req: Request, body: Record<string, unknown>): Promise<Response> {
-		if (!evieClient?.isConnected()) {
-			return jsonResponse({ error: `Evie-bot is not connected.` }, 503);
-		}
-
-		const parsed = EvieToolCallSchema.safeParse(body);
-		if (!parsed.success) {
-			return jsonResponse({ error: `Invalid request: action (string) and params (object) are required` }, 400);
-		}
-
-		const { action, params } = parsed.data;
-		const result = await evieClient.callTool(action, params as Record<string, unknown>);
-		return jsonResponse(result, result.error ? 500 : 200);
-	}
-
 	/** Broadcast a notice to every registered console mailbox. Notices thread under
 	 * the sender on the console and are never respondable: they are appended
 	 * directly here (not via a peer push), so no inbound session is recorded. */
@@ -983,7 +965,6 @@ export function createRoutes({
 		respond,
 		poll,
 		health,
-		evieToolCall,
 		humanNotify,
 	};
 }

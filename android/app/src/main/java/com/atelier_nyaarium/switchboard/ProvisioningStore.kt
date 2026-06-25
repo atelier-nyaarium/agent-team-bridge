@@ -89,14 +89,6 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putString(KEY_STTS_PROVIDER, value).apply()
 		}
 
-	/** Legacy single global voice (pre per-provider). Seeded into the current
-	 * provider's per-provider key once, then unused. */
-	var sttsVoice: String
-		get() = prefs.getString(KEY_STTS_VOICE, "") ?: ""
-		set(value) {
-			prefs.edit().putString(KEY_STTS_VOICE, value).apply()
-		}
-
 	fun sttsVoiceFor(providerId: String): String = prefs.getString(KEY_STTS_VOICE_PREFIX + providerId, "") ?: ""
 
 	fun setSttsVoiceFor(providerId: String, voice: String) {
@@ -113,19 +105,9 @@ class ProvisioningStore(context: Context) {
 
 	/** Which tier of a new message is spoken aloud the moment it arrives, hands-free.
 	 * One of "off", "title", "summary", "full". Independent of autoTts (pre-generate):
-	 * a tier not pre-synthesized is synthesized on demand at play time.
-	 *
-	 * Migrates the retired boolean autoPlaySummary once: if the new key is absent
-	 * but the old key exists, true maps to "summary" and false to "off". */
+	 * a tier not pre-synthesized is synthesized on demand at play time. */
 	var autoPlay: String
-		get() {
-			if (!prefs.contains(KEY_AUTO_PLAY) && prefs.contains(KEY_AUTO_PLAY_SUMMARY)) {
-				val migrated = if (prefs.getBoolean(KEY_AUTO_PLAY_SUMMARY, false)) "summary" else "off"
-				prefs.edit().putString(KEY_AUTO_PLAY, migrated).apply()
-				return migrated
-			}
-			return prefs.getString(KEY_AUTO_PLAY, "off") ?: "off"
-		}
+		get() = prefs.getString(KEY_AUTO_PLAY, "off") ?: "off"
 		set(value) {
 			prefs.edit().putString(KEY_AUTO_PLAY, value).apply()
 		}
@@ -154,16 +136,6 @@ class ProvisioningStore(context: Context) {
 		get() = prefs.getString(KEY_STTS_KEY, "") ?: ""
 		set(value) {
 			prefs.edit().putString(KEY_STTS_KEY, value).apply()
-		}
-
-	/** One-shot guard for the blob->store credential migration: a pre-regression
-	 * hand-pasted blob may still carry stts creds, copied into the store once, then
-	 * this flips true so a later creds-less re-provision cannot re-clobber an in-app
-	 * edit. */
-	var sttsMigrated: Boolean
-		get() = prefs.getBoolean(KEY_STTS_MIGRATED, false)
-		set(value) {
-			prefs.edit().putBoolean(KEY_STTS_MIGRATED, value).apply()
 		}
 
 	fun saveThreads(json: String) = prefs.edit().putString(KEY_THREADS, json).apply()
@@ -324,13 +296,10 @@ class ProvisioningStore(context: Context) {
 		const val KEY_TRUSTED_OWNERS = "federation_trusted_owners"
 		const val KEY_STTS_URL = "stts_url"
 		const val KEY_STTS_KEY = "stts_key"
-		const val KEY_STTS_MIGRATED = "stts_migrated"
 		const val DEFAULT_STTS_URL = "https://vrcsttapi.azurewebsites.net"
 		const val KEY_STTS_PROVIDER = "stts_provider"
-		const val KEY_STTS_VOICE = "stts_voice"
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."
 		const val KEY_AUTO_TTS = "auto_tts"
-		const val KEY_AUTO_PLAY_SUMMARY = "auto_play_summary"
 		const val KEY_AUTO_PLAY = "auto_play_tier"
 		const val KEY_TERMINAL_REFRESH_MS = "terminal_refresh_ms"
 		const val TERMINAL_REFRESH_FLOOR_MS = 300L
@@ -339,7 +308,7 @@ class ProvisioningStore(context: Context) {
 		const val KEY_SYNC_DROPPED = "sync_dropped"
 
 		/** The keys a re-provision (Clear & re-provision) wipes. EVERYTHING ELSE is preserved
-		 * by omission - voice creds + taste, the biometric lock, the migration latch - so any
+		 * by omission - voice creds + taste, the biometric lock - so any
 		 * NEW provisioning/identity/transcript key MUST be added here or it silently survives a
 		 * Clear (a privacy/correctness regression). The partition is pinned by a unit test. */
 		val PROVISIONING_KEYS = listOf(

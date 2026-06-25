@@ -55,7 +55,6 @@ function fakeEvie(opts: {
 	const calls: { action: string; params: Record<string, unknown> }[] = [];
 	const client = {
 		isConnected: () => true,
-		getToolSchemas: () => [],
 		stop: () => {},
 		callTool: async (action: string, params: Record<string, unknown>) => {
 			calls.push({ action, params });
