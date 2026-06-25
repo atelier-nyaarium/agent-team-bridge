@@ -27,15 +27,13 @@ const CHANNEL_INSTRUCTIONS = [
 export async function startMcp(): Promise<void> {
 	const inContainer = isInsideContainer();
 	// Every session is a bridge peer: a devcontainer (PROJECT_NAME set) or a host/ad-hoc Claude that
-	// joins under a STABLE per-window name derived from the harness session id, so a reload /
-	// restart+resume re-registers the same name and the phone thread resumes. Subagents and a missing
-	// session id fall back to a fresh random name. Peers reach the gateway on the docker network
-	// inside a container or the forwarded localhost port elsewhere. The host plumbing (wake + terminal
-	// view) lives in the headless host daemon, not here.
+	// joins under a STABLE per-session name derived from the harness session id, so a reload /
+	// restart+resume re-registers the same name and the phone thread resumes. A missing session id
+	// falls back to a fresh random name. Peers reach the gateway on the docker network inside a
+	// container or the forwarded localhost port elsewhere. The host plumbing (wake + terminal view)
+	// lives in the headless host daemon, not here.
 	if (!process.env.PROJECT_NAME) {
-		process.env.PROJECT_NAME =
-			stableTeamName(process.env.CLAUDE_CODE_SESSION_ID, !!process.env.CLAUDE_CODE_CHILD_SESSION) ??
-			randomTeamId();
+		process.env.PROJECT_NAME = stableTeamName(process.env.CLAUDE_CODE_SESSION_ID) ?? randomTeamId();
 	}
 	if (!process.env.BRIDGE_ROUTER_URL) {
 		process.env.BRIDGE_ROUTER_URL = inContainer ? "http://switchboard:20000" : "http://localhost:20000";
