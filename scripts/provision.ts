@@ -2,8 +2,7 @@
 // configures + enrolls the gateway, roots the owner's own Domain, and emits the bridge blob the
 // owner's Console imports. Driven by provision-admin-domain.sh, a thin launcher that execs this.
 //
-//   (no args)            interactive menu: configure/enroll the gateway, provision the admin Domain
-//                        (cutover + pre-stage + emit the transport blob), re-show the QR, or purge.
+//   (no args)            interactive menu: set up this gateway, provision the admin Domain, or purge.
 //                        Non-TTY runs Provision direct.
 //   --gateway-transport  move the local Gateway off port-forward onto the service-proxy WS (run
 //                        AFTER validating WS-over-proxy on this cluster).
@@ -25,7 +24,9 @@
 // own identity, admits itself, and admits each Gateway afterward.
 
 import { randomBytes } from "node:crypto";
+import fs from "node:fs";
 import { $ } from "bun";
+import { ADMIT_PAYLOAD_FILE } from "../src/gateway/federation/enrollQr.js";
 import { sanitizeDomainId } from "../src/shared/domain-id.js";
 import { sanitizeGatewayId } from "../src/shared/host-id.js";
 import { pendingAdminDomain, readAdminDomain, removeDomain, removeGatewayAdmission } from "./bootstrap-domain.js";
@@ -44,7 +45,6 @@ import {
 	k,
 	kGetB64,
 	kStdin,
-	menu,
 	NS,
 	note,
 	readSaCreds,
@@ -57,6 +57,11 @@ import { writeProvisioningBlob } from "./write-provisioning-blob.js";
 //  Constants
 
 const HEALTH_URL = "http://localhost:20000/health";
+const ENROLL_URL = "http://localhost:20000/enroll";
+// The gateway's federation dir on the host (bind-mounted from FED_DIR_IN inside the container).
+const FED_DIR_HOST = "volumes/gateway/federation";
+const TRANSPORT_FILE_HOST = `${FED_DIR_HOST}/transport.json`; // enrollment writes this once a bundle installs
+const ADMIT_PAYLOAD_HOST = `${FED_DIR_HOST}/${ADMIT_PAYLOAD_FILE}`; // the raw admit payload the gateway writes while arming
 const EVIE_DEPLOY = "deploy/evie-bot-deployment";
 const FED_SECRET = "evie-federation";
 const BRIDGE_YAML = "../evie-bot/deploy/console-bridge.yaml";
@@ -68,6 +73,10 @@ const SECRETS_DIR = `${process.env.HOME}/android-dev/secrets`;
 const BLOB_FILE = `${SECRETS_DIR}/console-provisioning.json`; // the artifact the app imports
 const QR_GIF = `${SECRETS_DIR}/console-enrollment-qr.gif`; // optional saved QR image (menu opt 2)
 const OWNER_ID_FILE = `${SECRETS_DIR}/console-owner-identity.json`; // legacy host-minted owner (the phone holds it now)
+// Temp artifacts Setup Gateway can save so a far-away phone can scan/paste off-screen. Always
+// deleted on enrollment success, back-out, or ^C (see trackTemp / cleanupTemps).
+const GW_QR_GIF = `${SECRETS_DIR}/gateway-admit-qr.gif`;
+const GW_JSON_FILE = `${SECRETS_DIR}/gateway-admit.json`;
 
 // The one-time invite lifetime for a freshly-staged pending admin Domain. Matches evie's
 // DEFAULT_INVITE_TTL_MS (~1 day) so the admin has time to scan + connect; evie sweeps an
@@ -77,12 +86,38 @@ const INVITE_TTL_MS = 86_400_000;
 const USAGE = [
 	"Admin setup - the SINGLE bootstrap for this gateway and the Android Console.",
 	"",
-	"  ./provision-admin-domain.sh              menu: configure/enroll the gateway, provision, QR, purge (non-TTY runs Provision direct)",
+	"  ./provision-admin-domain.sh              menu: set up the gateway, provision, purge (non-TTY runs Provision direct)",
 	"  ./provision-admin-domain.sh --gateway-transport  move the local Gateway onto the service-proxy WS",
 	"  ./provision-admin-domain.sh --qr                 re-open the enrollment-QR menu for the current blob",
 	"  ./provision-admin-domain.sh --verify             health-probe the bridge",
 	"  ./provision-admin-domain.sh --help",
 ].join("\n");
+
+////////////////////////////////
+//  Temp file cleanup (saved enrollment artifacts)
+
+// Files Setup Gateway saved this run. They carry the gateway's enrollment payload, so they must
+// never be left behind: cleaned on success, on back-out, and on ^C.
+const tempFiles = new Set<string>();
+
+function trackTemp(path: string): void {
+	tempFiles.add(path);
+}
+
+function cleanupTemps(): void {
+	for (const f of tempFiles) {
+		try {
+			fs.rmSync(f, { force: true });
+		} catch {}
+	}
+	tempFiles.clear();
+}
+
+// Wipe any saved artifact if the user interrupts mid-enrollment, then exit.
+process.on("SIGINT", () => {
+	cleanupTemps();
+	process.exit(130);
+});
 
 ////////////////////////////////
 //  kubectl read helpers (the typed Secret reads + apply live in lib/host.ts)
@@ -100,27 +135,6 @@ async function gatewayHostname(): Promise<string> {
 	return (await $`hostname`.text()).trim();
 }
 
-/** docker logs for the gateway container, stdout + stderr merged (the logs split across both). */
-async function gatewayLogs(): Promise<string> {
-	const r = await $`docker logs switchboard`.quiet().nothrow();
-	return [r.stdout.toString(), r.stderr.toString()].join("\n");
-}
-
-/** The inclusive line range from the first line containing `start` to the next containing `end`,
- * like sed's /start/,/end/p. Empty when `start` is never seen. */
-function logRange(text: string, start: string, end: string): string {
-	const out: string[] = [];
-	let inRange = false;
-	for (const line of text.split("\n")) {
-		if (!inRange && line.includes(start)) inRange = true;
-		if (inRange) {
-			out.push(line);
-			if (line.includes(end)) break;
-		}
-	}
-	return out.join("\n").trim();
-}
-
 /** Poll the gateway's /health until ready (30 x 2s = 60s). */
 async function waitHealth(): Promise<boolean> {
 	console.log("Waiting for the gateway to be ready...");
@@ -129,27 +143,6 @@ async function waitHealth(): Promise<boolean> {
 		await Bun.sleep(2000);
 	}
 	return false;
-}
-
-/** Print the admit-gateway QR from the container logs, or say why there is not one. The gateway
- * logs the block as "... is not yet admitted ..." / "... open Add Gateway and scan:" / the QR /
- * "Confirm this fingerprint ..." (federation/enrollQr.ts), so slice between the first and last. */
-async function printQr(): Promise<void> {
-	const qr = logRange(await gatewayLogs(), "is not yet admitted", "Confirm this fingerprint");
-	console.log();
-	if (qr) {
-		console.log("Admit-gateway QR (scan with the owner console, confirm the fingerprint):");
-		console.log(qr);
-	} else {
-		console.log("No admit-gateway QR found. Expected when the Gateway is already admitted or has");
-		console.log("no delivered transport (standalone); otherwise inspect: docker logs switchboard");
-	}
-}
-
-/** A gateway is part of the mesh once a service-proxy transport has been delivered into its
- * federation dir (by provision-admin-domain.sh / enrollment). Absent = standalone, no mesh. */
-async function hasTransport(): Promise<boolean> {
-	return (await $`test -f volumes/gateway/federation/transport.json`.quiet().nothrow()).exitCode === 0;
 }
 
 /** Erase volumes/gateway. The gateway writes it as the in-container user, so a host-side rm is
@@ -163,86 +156,229 @@ async function wipeState(): Promise<void> {
 	}
 }
 
-/** The local Gateway's Domain id, ensured present in .env before any container bring-up. The gateway
- * fails closed at boot when FEDERATION_DOMAIN_ID is unset, so a fresh setup mints one (a random hex
- * id) and writes it back. Returns the existing id when already set. */
-async function ensureDomainId(): Promise<string> {
-	const id = await envGet("FEDERATION_DOMAIN_ID");
-	if (id) return id;
-	const minted = sanitizeDomainId(randomBytes(8).toString("hex"));
-	await envSet("FEDERATION_DOMAIN_ID", minted);
-	return minted;
-}
-
 ////////////////////////////////
 //  Gateway operations (throw on failure; the menu catches per-op, the top level exits)
 
-/** Prompt for GATEWAY_ID / owner key, write .env, then rebuild + start the gateway. A gateway joins
- * the mesh once a service-proxy transport has been delivered (enrollment); when one is present, show
- * its admit-gateway QR. */
-async function configureGateway(): Promise<void> {
-	const host = await gatewayHostname();
-	const curId = await envGet("GATEWAY_ID");
-
-	// The Gateway is named by the device hostname; a pre-set GATEWAY_ID is the escape hatch for
-	// duplicate hostnames, so there is no nickname prompt.
-	const id = curId || host;
-
-	await ensureDomainId();
-	await envSet("GATEWAY_ID", id);
-	await $`chmod 600 .env`.quiet().nothrow();
-
-	// A delivered transport is what puts this gateway on the mesh; without one it runs standalone.
-	const mesh = await hasTransport();
-	console.log(mesh ? "Building and starting..." : "Building and starting (standalone, no mesh)...");
-	if ((await dc("up", "--build", "-d").nothrow()).exitCode !== 0) throw new Error("docker compose up failed");
-	if (!(await waitHealth())) {
-		// The gateway fails closed at boot when FEDERATION_DOMAIN_ID is unset, which surfaces only as
-		// a health timeout. Name that cause so a setup/enroll run is diagnosable without reading logs.
-		const domHint = (await envGet("FEDERATION_DOMAIN_ID"))
-			? ""
-			: " (FEDERATION_DOMAIN_ID is unset; the gateway fails closed at boot without it - set it in .env first)";
-		throw new Error(`did not come up in 60s - run: docker logs switchboard${domHint}`);
-	}
-	console.log(`Gateway "${id}" running on :20000.`);
-	if (mesh) {
-		await Bun.sleep(6000);
-		await printQr();
-	}
+/** Delete the gateway's container-owned transport.json so the next boot arms for enrollment and the
+ * install-wait starts clean. */
+async function clearTransport(): Promise<void> {
+	if (!(await Bun.file(TRANSPORT_FILE_HOST).exists())) return;
+	const mount = `${process.cwd()}/volumes/gateway:/w`;
+	await $`docker run --rm -u 0 -v ${mount} busybox rm -f /w/federation/transport.json`.quiet().nothrow();
 }
 
-/** Creds-less LAN enrollment: arm a one-time nonce + advertise this host's LAN address, start the
- * gateway so it prints the admit-gateway QR, and wait for the admin Console to deliver a sealed
- * bundle. After delivery, a plain start connects via the installed service-proxy transport. */
-async function enrollGateway(): Promise<void> {
+/** Bring the gateway up with a fresh one-time enrollment nonce and its LAN address, so it opens the
+ * /enroll listener and writes its admit payload. Each call arms a new nonce, so a slow scan never
+ * hits the gateway's ~10 min one-shot window. */
+async function armGateway(): Promise<void> {
 	const nonce = (await $`openssl rand -hex 16`.text()).trim();
 	const hostLine = (await $`hostname -I`.quiet().nothrow()).text().trim();
 	const host = hostLine.split(/\s+/)[0] || "0.0.0.0";
-	console.log(`Arming one-time LAN enrollment on ${host}:20000 (nonce ${nonce.slice(0, 8)}...).`);
+	console.log(`Starting the gateway and opening enrollment on ${host}:20000.`);
 	await dc("down", "--remove-orphans").quiet().nothrow();
+	await clearTransport();
 	const up = await dc("up", "--build", "-d")
 		.env({ ...process.env, ENROLL_NONCE: nonce, ENROLL_LAN_HOST: host })
 		.nothrow();
-	if (up.exitCode !== 0) throw new Error("docker compose up failed");
+	if (up.exitCode !== 0) throw new Error("could not start the gateway (is docker running?)");
 	if (!(await waitHealth())) {
-		// The gateway fails closed at boot when FEDERATION_DOMAIN_ID is unset, which surfaces only as
-		// a health timeout. Name that cause so a setup/enroll run is diagnosable without reading logs.
-		const domHint = (await envGet("FEDERATION_DOMAIN_ID"))
-			? ""
-			: " (FEDERATION_DOMAIN_ID is unset; the gateway fails closed at boot without it - set it in .env first)";
-		throw new Error(`did not come up in 60s - run: docker logs switchboard${domHint}`);
+		throw new Error("The gateway didn't start within 60 seconds. Show its logs with: docker logs switchboard");
 	}
-	await Bun.sleep(4000);
-	console.log();
-	const qr = logRange(await gatewayLogs(), "is not yet admitted", "Waiting for the admin Console");
-	if (qr) {
-		console.log("Scan this with the admin Console (Add Gateway). It carries the LAN target + nonce:");
-		console.log(qr);
-	} else {
-		console.log("Could not find the admit-gateway QR in the logs - inspect: docker logs switchboard");
+}
+
+/** Read the raw admit payload the gateway wrote while arming, polling briefly until it lands. */
+async function readAdmitPayload(): Promise<string> {
+	for (let i = 0; i < 15; i++) {
+		const text = await Bun.file(ADMIT_PAYLOAD_HOST)
+			.text()
+			.catch(() => "");
+		if (text.trim()) return text.trim();
+		await Bun.sleep(1000);
 	}
-	console.log();
-	console.log("When the Console reports the Gateway delivered, run ./start-gateway.sh to connect.");
+	throw new Error(
+		`the gateway did not write its enrollment details (${ADMIT_PAYLOAD_HOST}) - check: docker logs switchboard`,
+	);
+}
+
+/** Bring the gateway up normally (no enrollment nonce) so it connects with the delivered network id
+ * and transport. */
+async function connectGateway(): Promise<void> {
+	console.log("Connecting the gateway to your network...");
+	await dc("down", "--remove-orphans").quiet().nothrow();
+	if ((await dc("up", "--build", "-d").nothrow()).exitCode !== 0) throw new Error("could not start the gateway");
+	if (!(await waitHealth())) {
+		throw new Error("The gateway didn't start within 60 seconds. Show its logs with: docker logs switchboard");
+	}
+}
+
+/** POST a pasted sealed bundle to the gateway's /enroll listener (the same intake the phone's LAN
+ * POST hits). Returns whether the gateway accepted and installed it. */
+async function postPastedBundle(bundle: string): Promise<boolean> {
+	try {
+		const res = await fetch(ENROLL_URL, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: bundle,
+		});
+		if (res.ok) return true;
+		const detail = await res.text().catch(() => "");
+		err(`the gateway rejected the bundle (HTTP ${res.status}) ${detail}`.trim());
+		return false;
+	} catch (e) {
+		err(`could not reach the gateway: ${e instanceof Error ? e.message : String(e)}`);
+		return false;
+	}
+}
+
+/** Wait for the phone to deliver the sealed bundle, by either the phone's LAN POST or a bundle the
+ * user pastes here. The gateway writes transport.json the moment it installs a bundle, so that file
+ * appearing is the success signal. Returns "installed" once it lands, or "back" if the user quits. */
+async function waitForInstall(): Promise<"installed" | "back"> {
+	console.log("\nWaiting for your phone to deliver the connection bundle...");
+	for (;;) {
+		// Give the phone's LAN delivery a few seconds to land before prompting, so the common case
+		// needs no keypress.
+		for (let i = 0; i < 5; i++) {
+			if (await Bun.file(TRANSPORT_FILE_HOST).exists()) return "installed";
+			await Bun.sleep(1000);
+		}
+		console.log("\n  Still waiting. The gateway connects on its own once your phone delivers.");
+		console.log("    Enter) Check again");
+		console.log("    p) Paste the bundle here instead");
+		console.log("    b) Back");
+		const choice = ask("  >").toLowerCase();
+		if (choice === "b") return "back";
+		if (choice === "p") {
+			const bundle = ask("Paste the bundle, then press Enter:");
+			if (bundle && (await postPastedBundle(bundle))) return "installed";
+		}
+	}
+}
+
+/** Render + display the gateway's admit payload, then offer to continue, save it to a file, or back
+ * out. `render` prints the artifact on screen; `save` writes it to a temp file (tracked for cleanup)
+ * and returns the path. Returns "continue" or "back". */
+async function presentArtifact(
+	heading: string,
+	saveLabel: string,
+	render: () => void,
+	save: () => Promise<string>,
+): Promise<"continue" | "back"> {
+	render();
+	for (;;) {
+		console.log(`\n  ${heading}`);
+		console.log("    1) Continue - wait for the phone, then connect");
+		console.log(`    2) ${saveLabel}`);
+		console.log("    b) Back");
+		const choice = ask("  >").toLowerCase();
+		if (choice === "1") return "continue";
+		if (choice === "b") return "back";
+		if (choice === "2") {
+			try {
+				const saved = await save();
+				note(`Saved: ${saved}  (open it on this machine, then scan or copy it to your phone)`);
+			} catch (e) {
+				err(e instanceof Error ? e.message : String(e));
+			}
+		} else {
+			err("Enter 1, 2, or b.");
+		}
+	}
+}
+
+/** Enroll THIS machine as a gateway, the same flow whether it is the first or the Nth. Names the
+ * gateway, arms it for enrollment, shows its admit payload (as a QR or as JSON to copy), then waits
+ * for the phone to deliver the connection bundle and restarts the gateway to connect. Any saved
+ * artifact is wiped on success, on back-out, and on ^C. */
+async function setupGateway(): Promise<void> {
+	// The phone enrolls a gateway against a network it already owns, so the network must exist first.
+	if (!(await envGet("FEDERATION_DOMAIN_ID"))) {
+		console.log("Set up your network first - run option 2 (Evie Admin Provision).");
+		return;
+	}
+
+	// The gateway is named by this machine's hostname; a pre-set GATEWAY_ID overrides it for
+	// duplicate hostnames, so there is no name prompt.
+	const id = (await envGet("GATEWAY_ID")) || (await gatewayHostname());
+	await envSet("GATEWAY_ID", id);
+	await $`chmod 600 .env`.quiet().nothrow();
+
+	// An already-enrolled gateway has a delivered transport; re-enrolling disconnects it until a new
+	// bundle arrives, so confirm before re-arming.
+	if (await Bun.file(TRANSPORT_FILE_HOST).exists()) {
+		if (
+			!confirm(
+				`Gateway "${id}" is already enrolled. Re-enroll it? It disconnects until you deliver a new bundle.`,
+			)
+		)
+			return;
+	}
+
+	await armGateway();
+	const payload = await readAdmitPayload();
+
+	try {
+		for (;;) {
+			console.log(`\nGateway "${id}" is ready to enroll. Choose how to send it to your phone:`);
+			console.log("  1) Enroll with QR Code");
+			console.log("  2) Enroll with JSON Copy-pasta");
+			console.log("  b) Back");
+			const choice = ask(">").toLowerCase();
+
+			let action: "continue" | "back";
+			if (choice === "1") {
+				action = await presentArtifact(
+					"Scan this QR in your phone's Add Gateway screen.",
+					"Save the QR as an image instead",
+					() => {
+						const { ansi, modules } = renderQrTerminal(payload);
+						process.stdout.write(ansi);
+						console.error(`${modules}x${modules} modules, needs ~${modules + 4} terminal columns`);
+					},
+					async () => {
+						const { gif } = renderQrImageGif(payload);
+						await Bun.write(GW_QR_GIF, gif);
+						await $`chmod 600 ${GW_QR_GIF}`.quiet().nothrow();
+						trackTemp(GW_QR_GIF);
+						return GW_QR_GIF;
+					},
+				);
+			} else if (choice === "2") {
+				const pretty = JSON.stringify(JSON.parse(payload), null, 2);
+				action = await presentArtifact(
+					"Copy this JSON into your phone's Add Gateway screen.",
+					"Save the JSON to a file instead",
+					() => {
+						console.log();
+						console.log(pretty);
+					},
+					async () => {
+						await Bun.write(GW_JSON_FILE, pretty);
+						await $`chmod 600 ${GW_JSON_FILE}`.quiet().nothrow();
+						trackTemp(GW_JSON_FILE);
+						return GW_JSON_FILE;
+					},
+				);
+			} else if (choice === "b") {
+				return;
+			} else {
+				err("Enter 1, 2, or b.");
+				continue;
+			}
+
+			if (action === "back") continue;
+
+			// Continue: wait for the bundle (LAN delivery or a paste), then connect.
+			if ((await waitForInstall()) === "installed") {
+				await connectGateway();
+				console.log();
+				note(`Gateway "${id}" is connected.`);
+				return;
+			}
+		}
+	} finally {
+		cleanupTemps();
+	}
 }
 
 /** Wipe this machine's gateway setup (.env + volumes/gateway) back to nothing. */
@@ -653,46 +789,44 @@ async function purgeFederation(): Promise<void> {
 	note("Done. Run Provision to set up fresh (it pre-stages the admin Domain; your phone roots it on scan).");
 }
 
-/** Top dial menu (the default, interactive run): the single bootstrap for the gateway and the Console. */
+/** Top dial menu (the default, interactive run): the single bootstrap for the gateway and the
+ * Console, grouped by what each option does. A first-time admin runs option 2 to set up the network,
+ * then option 1 to enroll this machine as a gateway. */
 async function topMenu(): Promise<void> {
-	await menu(`Switchboard - Admin setup on ${await gatewayHostname()}`, [
-		{
-			key: "1",
-			label: "Configure gateway - GATEWAY_ID + owner key, mint the Domain id, rebuild + start",
-			run: configureGateway,
+	const ops: Record<string, () => Promise<void>> = {
+		"1": setupGateway,
+		"2": async () => {
+			await provision();
+			await qrMenu();
 		},
-		{
-			key: "2",
-			label: "Provision         - root your Domain + emit the Console blob, then the QR",
-			run: async () => {
-				await provision();
-				await qrMenu();
-			},
-		},
-		{
-			key: "3",
-			label: "Enroll gateway    - creds-less LAN enroll (join an existing Domain)",
-			run: enrollGateway,
-		},
-		{
-			key: "4",
-			label: "Enrollment QR     - re-show the Console enrollment QR",
-			run: async () => {
-				if (await Bun.file(BLOB_FILE).exists()) await qrMenu();
-				else err("No blob yet - run Provision first.");
-			},
-		},
-		{
-			key: "9",
-			label: "Purge gateway     - wipe this gateway's .env + local data",
-			run: purgeGateway,
-		},
-		{
-			key: "0",
-			label: "Purge federation  - clean break: evie owner + admissions, allowlist, host blob",
-			run: purgeFederation,
-		},
-	]);
+		"9": purgeGateway,
+		"0": purgeFederation,
+	};
+	const host = await gatewayHostname();
+	for (;;) {
+		console.log(`\n\u{1F365} Switchboard - Setup on ${host}\n`);
+		console.log("Gateway:");
+		console.log("  1) Setup Gateway        - Enroll this machine as a gateway and (re)show its QR\n");
+		console.log("Admin:");
+		console.log("  2) Evie Admin Provision - First-time setup of your Evie network\n");
+		console.log("Purge:");
+		console.log("  9) Purge Gateway        - Remove this gateway and erase its data");
+		console.log("  0) Purge Federation     - Delete your whole network and erase everything");
+		console.log("  q) Quit");
+		const choice = ask(">").toLowerCase();
+		if (choice === "" || choice === "q") return;
+		const op = ops[choice];
+		if (!op) {
+			err("Enter 1, 2, 9, 0, or q.");
+			continue;
+		}
+		// A failed operation drops back to the menu so the admin can retry instead of crashing the tool.
+		try {
+			await op();
+		} catch (e) {
+			err(e instanceof Error ? e.message : String(e));
+		}
+	}
 }
 
 ////////////////////////////////
@@ -702,7 +836,6 @@ async function main(): Promise<void> {
 	const arg = process.argv[2] ?? "";
 	switch (arg) {
 		case "": {
-			await ensureDomainId();
 			await ensureContainer();
 			// write_gateway_transport is intentionally NOT in the Provision chain: it commits the
 			// local Gateway to the service-proxy WS, and if WS-over-proxy does not work on this

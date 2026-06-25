@@ -26,7 +26,7 @@ import {
 } from "./federation/crossDomainHandshake.js";
 import { CrossDomainPeers } from "./federation/crossDomainPeers.js";
 import { CrossDomainShareState } from "./federation/crossDomainShareState.js";
-import { logAdmitGatewayQr } from "./federation/enrollQr.js";
+import { ADMIT_PAYLOAD_FILE, admitGatewayPayload, logAdmitGatewayQr } from "./federation/enrollQr.js";
 import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/hostRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
 import { ReplayGuard } from "./federation/replayGuard.js";
@@ -371,11 +371,19 @@ export async function startGateway(): Promise<void> {
 		const enrollAllowlist = new Allowlist(federationDir);
 		const enrollIdentity = loadOrCreateIdentity(federationDir);
 		if (!enrollAllowlist.selfAdmission(enrollIdentity.sign.pub)) {
-			logAdmitGatewayQr(enrollIdentity, localGatewayId, {
+			const delivery = {
 				host: process.env.ENROLL_LAN_HOST || "0.0.0.0",
 				port: PORT,
 				nonce: enrollNonce,
-			});
+			};
+			logAdmitGatewayQr(enrollIdentity, localGatewayId, delivery);
+			// Also persist the raw payload so the setup script can re-render it (QR or pretty JSON)
+			// without scraping the rendered QR out of docker logs.
+			fs.writeFileSync(
+				path.join(federationDir, ADMIT_PAYLOAD_FILE),
+				JSON.stringify(admitGatewayPayload(enrollIdentity, localGatewayId, delivery)),
+				{ mode: 0o600 },
+			);
 			// The enrollment window closes after a bounded time; the nonce dies with it so a
 			// captured QR cannot be redeemed later. Re-run --enroll for a fresh nonce.
 			let enrollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -391,6 +399,8 @@ export async function startGateway(): Promise<void> {
 				if (bundle.domainId) {
 					fs.writeFileSync(path.join(federationDir, DOMAIN_ID_FILE), bundle.domainId, { mode: 0o600 });
 				}
+				// The admit payload's job ends once the bundle installs; drop it.
+				fs.rmSync(path.join(federationDir, ADMIT_PAYLOAD_FILE), { force: true });
 				enrollInstall = null;
 				if (enrollTimer) clearTimeout(enrollTimer);
 				console.log(

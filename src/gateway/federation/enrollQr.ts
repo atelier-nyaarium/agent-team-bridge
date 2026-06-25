@@ -2,6 +2,13 @@ import qrcode from "qrcode-generator";
 import { fingerprint, type Identity } from "../../shared/crypto.js";
 
 ////////////////////////////////
+//  Constants
+
+/** The gateway writes its raw admit-gateway payload here while arming, so the setup script can
+ * re-render it as a QR or pretty JSON instead of scraping the rendered QR out of docker logs. */
+export const ADMIT_PAYLOAD_FILE = "admit-payload.json";
+
+////////////////////////////////
 //  Interfaces & Types
 
 /** The admit-gateway enrollment payload this Gateway presents for the owner to scan
