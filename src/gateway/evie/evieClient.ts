@@ -32,8 +32,8 @@ export interface EvieClientConfig {
 	// can be routed to this Gateway.
 	gatewayId: string;
 	// This Gateway's Domain id (multi-tenant evie), sent on register so the Router keys
-	// the connection by (domainId, gatewayId). Always set - resolveLocalDomainId requires
-	// FEDERATION_DOMAIN_ID, so there is no single-tenant default.
+	// the connection by (domainId, gatewayId). Always set: the evie client is constructed
+	// only when both the transport and the Domain id are non-null.
 	domainId: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	// The relay pump owns full ConsoleRelayFrameSchema validation; the envelope
@@ -85,10 +85,10 @@ export interface EvieClient {
 const RECONNECT_DELAY_MS = 5_000;
 const TOOL_CALL_TIMEOUT_MS = 120_000;
 // When evie refuses gateway_register because the Domain is still PENDING (staged but not
-// yet rooted), re-register on this cadence. A fresh provision-console.sh --setup stages a
-// pending home Domain and restarts evie BEFORE the admin's phone first-roots it, so the
+// yet rooted), re-register on this cadence. A fresh provision-admin-domain.sh stages a
+// pending admin Domain and restarts evie BEFORE the admin's phone first-roots it, so the
 // register the open-handler fires gets a pending refusal; without this retry the Gateway
-// would sit unregistered into its own home Domain forever (the heartbeat keeps the WS warm,
+// would sit unregistered into its own admin Domain forever (the heartbeat keeps the WS warm,
 // so it never reconnects to re-register). The cap bounds the spin so a genuinely stuck setup
 // stops re-trying instead of polling evie indefinitely.
 const PENDING_REREGISTER_DELAY_MS = 15_000;
@@ -292,6 +292,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
 			console.log(`[evie-client] registered as Gateway "${config.gatewayId}"${peers}`);
 			if (r?.domain) config.onDomainSync?.(r.domain);
+			else
+				console.warn(
+					`[federation] registered but evie returned no Domain snapshot - the Domain may not be rooted, or evie is outdated`,
+				);
 			// Surface the Gateway's own Domain status + profile name + admin-Domain flag to the
 			// console register reply / discovery roster. Sent only by a federation-aware evie.
 			if (r?.domainStatus !== undefined || r?.displayName !== undefined || r?.isAdminDomain !== undefined) {

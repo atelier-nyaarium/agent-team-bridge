@@ -507,6 +507,7 @@ data class GatewayBootstrapBundle(
 	val transport: GatewayTransport,
 	val admission: SignedAdmission,
 	val domain: DomainSnapshot,
+	val domainId: String? = null,
 )
 
 @Serializable
@@ -595,6 +596,22 @@ data class TrustPendingResult(
 	val ok: Boolean,
 	val error: String? = null,
 	val pending: List<TrustPendingEntry>? = null,
+)
+
+@Serializable
+data class TransportRequest(
+	val signerSignPub: String,
+	val proofAt: Long,
+	val nonce: String,
+	val proof: String,
+)
+
+@Serializable
+data class TransportResult(
+	val ok: Boolean,
+	val saToken: String? = null,
+	val caPem: String? = null,
+	val error: String? = null,
 )
 
 @Serializable

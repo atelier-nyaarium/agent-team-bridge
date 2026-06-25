@@ -180,7 +180,7 @@ class ProvisionOpsTest {
 		val adminOwner = Crypto.generateIdentity()
 		val attacker = Crypto.generateIdentity()
 
-		val p = ProvisionTenant("alice", "Home Lab", 5000L, "cA==")
+		val p = ProvisionTenant("alice", "Acme Lab", 5000L, "cA==")
 		val signedP = ProvisionOpsCrypto.signProvision(p, adminOwner.sign.priv, adminOwner.sign.pub)
 		assertTrue(ProvisionOpsCrypto.verifyProvision(signedP, adminOwner.sign.pub))
 		assertFalse(ProvisionOpsCrypto.verifyProvision(signedP, attacker.sign.pub))

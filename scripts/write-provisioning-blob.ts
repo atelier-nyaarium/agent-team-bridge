@@ -4,7 +4,7 @@
 //
 // Transport-only in the phone-anchored model: the Console generates its own identity and resolves
 // Gateway keys from the synced keyring, so the identity/gateway fields stay unpopulated. The
-// gateway-bridge transport creds are fetched on demand (the get_gateway_transport op), never bundled here.
+// gateway-bridge transport creds are pulled from evie on demand by the Console, never bundled here.
 
 import { ProvisioningSchema } from "../src/shared/schemas.js";
 
@@ -19,7 +19,7 @@ export interface ProvisioningBlobInput {
 	namespace?: string;
 	service?: string;
 	port?: number;
-	// Set only for a PENDING (unrooted) home Domain: the home domainId + the one-time invite nonce.
+	// Set only for a PENDING (unrooted) admin Domain: the admin domainId + the one-time invite nonce.
 	// Its presence is the app's discriminator - it first-roots the Domain at the silently-generated
 	// owner key, then provisions the console. Omitted for a re-provision of an already-rooted Domain.
 	pendingTenant?: { domainId: string; nonce: string };

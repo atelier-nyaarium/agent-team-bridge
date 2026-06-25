@@ -69,7 +69,7 @@ export interface DeliverMeta {
 	persistent: boolean;
 	// The verified friend Domain a cross-Domain job is bound to (null for a local /
 	// same-Domain job). On a destination job (returnRoute set) the reply forward re-checks
-	// the session is still shared to THIS Domain before relaying home, so a withdrawn share
+	// the session is still shared to THIS Domain before relaying back to the origin, so a withdrawn share
 	// drops an already-accepted send's in-flight reply.
 	dstDomainId: string | null;
 }

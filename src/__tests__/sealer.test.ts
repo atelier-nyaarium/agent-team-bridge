@@ -37,13 +37,13 @@ function allowlistWithBoth(): Allowlist {
 	return a;
 }
 
-/** An empty cross-Domain peer set (the home tests carry no cross-Domain peers, so the
- * home seal path is exercised exactly as before). */
+/** An empty cross-Domain peer set (the local tests carry no cross-Domain peers, so the
+ * local seal path is exercised exactly as before). */
 function noPeers(): CrossDomainPeers {
 	return new CrossDomainPeers(tmp());
 }
 
-describe("sealer (home v1)", () => {
+describe("sealer (local v1)", () => {
 	it("round-trips a sealed object between two admitted Gateways", () => {
 		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice");
 		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "alice");
@@ -51,14 +51,14 @@ describe("sealer (home v1)", () => {
 		expect(bSealer.open("A", env)).toEqual({ hello: "world", n: 7 });
 	});
 
-	it("emits a v1 sealed body for a home peer (byte shape unchanged: v/src/dst/at/body, no domains)", () => {
+	it("emits a v1 sealed body for a local peer (byte shape unchanged: v/src/dst/at/body, no domains)", () => {
 		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice");
 		const env = aSealer.seal("B", { hello: "world" });
 		// Decrypt directly to inspect the inner wrapper B would parse.
 		const inner = JSON.parse(unseal(env, B.box.priv, A.sign.pub).toString("utf8"));
 		expect(inner).toEqual({ v: 1, src: "A", dst: "B", at: inner.at, body: { hello: "world" } });
 		expect(typeof inner.at).toBe("number");
-		// No Domain fields leak into the home v1 body.
+		// No Domain fields leak into the local v1 body.
 		expect(inner).not.toHaveProperty("srcDomain");
 		expect(inner).not.toHaveProperty("dstDomain");
 	});
@@ -120,12 +120,12 @@ describe("sealer (home v1)", () => {
 //  and does NOT admit the friend gateway, so the seal MUST resolve via crossDomainPeers
 //  and emit v2.
 
-const ownerX = generateIdentity(); // Domain "homex"
+const ownerX = generateIdentity(); // Domain "localx"
 const ownerY = generateIdentity(); // Domain "carol"
-const X = generateIdentity(); // gateway in homex, id "gw-x"
+const X = generateIdentity(); // gateway in localx, id "gw-x"
 const Y = generateIdentity(); // gateway in carol, id "gw-y"
 
-/** A home allowlist rooted at `o` admitting only its own gateway `(gwId, id)`. */
+/** A local allowlist rooted at `o` admitting only its own gateway `(gwId, id)`. */
 function soloAllowlist(o: Identity, gwId: string, id: Identity): Allowlist {
 	const a = new Allowlist(tmp());
 	a.setOwner(o.sign.pub);
@@ -168,23 +168,23 @@ function xPeers(): CrossDomainPeers {
 	s.add(crossPeer(ownerY, "carol", "gw-y", Y, ownerX));
 	return s;
 }
-/** Y's peers: it knows X (Domain "homex", id "gw-x"). */
+/** Y's peers: it knows X (Domain "localx", id "gw-x"). */
 function yPeers(): CrossDomainPeers {
 	const s = new CrossDomainPeers(tmp());
-	s.add(crossPeer(ownerX, "homex", "gw-x", X, ownerY));
+	s.add(crossPeer(ownerX, "localx", "gw-x", X, ownerY));
 	return s;
 }
 
 describe("sealer (cross-Domain v2)", () => {
 	it("round-trips a sealed object between two Gateways in different Domains", () => {
-		const xSealer = createSealer(X, soloAllowlist(ownerX, "gw-x", X), "gw-x", xPeers(), "homex");
+		const xSealer = createSealer(X, soloAllowlist(ownerX, "gw-x", X), "gw-x", xPeers(), "localx");
 		const ySealer = createSealer(Y, soloAllowlist(ownerY, "gw-y", Y), "gw-y", yPeers(), "carol");
 		const env = xSealer.seal({ domainId: "carol", gatewayId: "gw-y" }, { ping: 42 });
 		expect(ySealer.open("gw-x", env)).toEqual({ ping: 42 });
 	});
 
 	it("emits a v2 sealed body carrying srcDomain/dstDomain", () => {
-		const xSealer = createSealer(X, soloAllowlist(ownerX, "gw-x", X), "gw-x", xPeers(), "homex");
+		const xSealer = createSealer(X, soloAllowlist(ownerX, "gw-x", X), "gw-x", xPeers(), "localx");
 		const env = xSealer.seal({ domainId: "carol", gatewayId: "gw-y" }, { ping: 42 });
 		// Decrypt with Y's box key (the recipient) to inspect the inner wrapper.
 		const inner = JSON.parse(unseal(env, Y.box.priv, X.sign.pub).toString("utf8"));
@@ -192,27 +192,27 @@ describe("sealer (cross-Domain v2)", () => {
 			v: 2,
 			src: "gw-x",
 			dst: "gw-y",
-			srcDomain: "homex",
+			srcDomain: "localx",
 			dstDomain: "carol",
 			body: { ping: 42 },
 		});
 	});
 
 	it("rejects an unadmitted cross-Domain destination (no matching peer)", () => {
-		const xSealer = createSealer(X, soloAllowlist(ownerX, "gw-x", X), "gw-x", xPeers(), "homex");
+		const xSealer = createSealer(X, soloAllowlist(ownerX, "gw-x", X), "gw-x", xPeers(), "localx");
 		expect(() => xSealer.seal({ domainId: "dave", gatewayId: "gw-y" }, { x: 1 })).toThrow(/not admitted/);
 	});
 
 	it("rejects a v2 frame whose dstDomain is not this Gateway's Domain", () => {
 		// X seals to Y, but Y believes it lives in a DIFFERENT Domain than the link says.
-		const xSealer = createSealer(X, soloAllowlist(ownerX, "gw-x", X), "gw-x", xPeers(), "homex");
+		const xSealer = createSealer(X, soloAllowlist(ownerX, "gw-x", X), "gw-x", xPeers(), "localx");
 		const yWrongDomain = createSealer(Y, soloAllowlist(ownerY, "gw-y", Y), "gw-y", yPeers(), "elsewhere");
 		const env = xSealer.seal({ domainId: "carol", gatewayId: "gw-y" }, { x: 1 });
 		expect(() => yWrongDomain.open("gw-x", env)).toThrow(/not addressed to this Domain/);
 	});
 
 	it("rejects a v2 frame whose signed-in srcDomain disagrees with the resolved peer", () => {
-		// Y's peer record for X claims X lives in "homex". A sealer that signs in a
+		// Y's peer record for X claims X lives in "localx". A sealer that signs in a
 		// different srcDomain trips the srcDomain cross-check.
 		const xLies = createSealer(X, soloAllowlist(ownerX, "gw-x", X), "gw-x", xPeers(), "spoofed");
 		const ySealer = createSealer(Y, soloAllowlist(ownerY, "gw-y", Y), "gw-y", yPeers(), "carol");
@@ -228,7 +228,7 @@ describe("sealer (cross-Domain v2)", () => {
 			v: 99,
 			src: "gw-x",
 			dst: "gw-y",
-			srcDomain: "homex",
+			srcDomain: "localx",
 			dstDomain: "carol",
 			at: Date.now(),
 			body: {},
@@ -238,18 +238,18 @@ describe("sealer (cross-Domain v2)", () => {
 		expect(() => ySealer.open("gw-x", env)).toThrow(/unknown sealed body version/);
 	});
 
-	it("rejects a v1 frame from a cross-Domain Gateway (v1 must be a home peer)", () => {
+	it("rejects a v1 frame from a cross-Domain Gateway (v1 must be a local peer)", () => {
 		// A cross-Domain peer crafts a v1 body (no srcDomain/dstDomain) to skip the v2
-		// (srcDomain, dstDomain) binding. open() must reject it: v1 resolves only to a home peer.
-		// X is a cross peer in Y's yPeers() (homex/gw-x), so open resolves crossPeer, not home.
+		// (srcDomain, dstDomain) binding. open() must reject it: v1 resolves only to a local peer.
+		// X is a cross peer in Y's yPeers() (localx/gw-x), so open resolves crossPeer, not local.
 		const ySealer = createSealer(Y, soloAllowlist(ownerY, "gw-y", Y), "gw-y", yPeers(), "carol");
 		const inner = { v: 1, src: "gw-x", dst: "gw-y", at: Date.now(), body: { evil: true } };
 		const env = seal(Buffer.from(JSON.stringify(inner)), Y.box.pub, X.sign.priv);
 		expect(() => ySealer.open("gw-x", env)).toThrow(/v1 frame from a cross-Domain Gateway/);
 	});
 
-	it("a home gateway is unaffected by an empty cross-Domain set (no v2 ever)", () => {
-		// Sanity: with no peers, a home seal stays v1 even though the cross path exists.
+	it("a local gateway is unaffected by an empty cross-Domain set (no v2 ever)", () => {
+		// Sanity: with no peers, a local seal stays v1 even though the cross path exists.
 		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice");
 		const env = aSealer.seal("B", { ok: true });
 		const inner = JSON.parse(unseal(env, B.box.priv, A.sign.pub).toString("utf8"));

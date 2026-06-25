@@ -14,7 +14,6 @@ import {
 	verifyAdmission,
 	verifyRevocation,
 } from "../../shared/admission.js";
-import { fingerprint } from "../../shared/crypto.js";
 
 ////////////////////////////////
 //  Schemas
@@ -39,28 +38,10 @@ const ALLOWLIST_FILE = "federation-allowlist.json";
 export class Allowlist {
 	private file: string;
 	private state: AllowlistFile;
-	// The owner root pinned out-of-band (FEDERATION_OWNER_SIGN_PUB). When set, a
-	// snapshot rooted at any other key is refused - so a malicious / token-holding
-	// evie cannot root a fresh Gateway at an attacker key (the snapshot is relayed
-	// through untrusted evie). Null = trust-on-first-use (convenient, but trusts
-	// evie at the bootstrap; pinning is recommended for the untrusted-evie model).
-	private readonly pinnedOwner: string | null;
-	// Strict mode (FEDERATION_REQUIRE_OWNER_PIN): when set without an out-of-band pin,
-	// the Gateway refuses to root at all rather than trust-on-first-use. For the
-	// untrusted-evie model where TOFU is unacceptable.
-	private readonly requireOwnerPin: boolean;
 
-	constructor(dataDir: string, pinnedOwner?: string | null, requireOwnerPin = false) {
+	constructor(dataDir: string) {
 		this.file = path.join(dataDir, ALLOWLIST_FILE);
-		this.pinnedOwner = pinnedOwner ?? null;
-		this.requireOwnerPin = requireOwnerPin;
 		this.state = this.read();
-		// A pin that disagrees with a persisted root means the Gateway was previously
-		// rooted at a different key; refuse to serve the stale root.
-		if (this.pinnedOwner && this.state.ownerSignPub && this.state.ownerSignPub !== this.pinnedOwner) {
-			console.warn(`[allowlist] persisted owner root != pinned owner; clearing the stale root`);
-			this.state = { ownerSignPub: null, admissions: [], revocations: [] };
-		}
 	}
 
 	private read(): AllowlistFile {
@@ -83,7 +64,7 @@ export class Allowlist {
 	}
 
 	/** The current owner-rooted snapshot, or null before rooting. Mirrors evie's
-	 * canonical keyring (the Console syncs it through its home Gateway's poll reply). */
+	 * canonical keyring (the Console syncs it through its route Gateway's poll reply). */
 	getSnapshot(): DomainSnapshot | null {
 		if (!this.state.ownerSignPub) return null;
 		return {
@@ -105,19 +86,8 @@ export class Allowlist {
 	/** Set the Domain root once, at enrollment. Refuses to silently re-root an
 	 * already-enrolled Gateway (recovery is a deliberate, separate path). */
 	setOwner(ownerSignPubB64: string): void {
-		if (this.requireOwnerPin && !this.pinnedOwner) {
-			throw new Error("FEDERATION_REQUIRE_OWNER_PIN is set but no owner pin is configured; refusing to root");
-		}
-		if (this.pinnedOwner && ownerSignPubB64 !== this.pinnedOwner) {
-			throw new Error("owner key does not match the pinned owner");
-		}
 		if (this.state.ownerSignPub && this.state.ownerSignPub !== ownerSignPubB64) {
 			throw new Error("allowlist already rooted at a different owner key");
-		}
-		if (!this.pinnedOwner && !this.state.ownerSignPub) {
-			console.warn(
-				`[allowlist] trust-on-first-use: rooting at an owner key with no pin (set FEDERATION_OWNER_SIGN_PUB to verify it out-of-band)`,
-			);
 		}
 		this.state.ownerSignPub = ownerSignPubB64;
 		this.persist();
@@ -125,35 +95,13 @@ export class Allowlist {
 
 	/** Mirror the Domain state evie pushed (audit R3). Idempotent: replaces the
 	 * allowlist with the snapshot's owner-verified entries, so a re-sync converges
-	 * rather than accumulating duplicates. Refuses to ROOT at a key other than the
-	 * out-of-band pin (untrusted-evie defense), and refuses to silently re-root an
-	 * already-rooted Gateway (recovery is a deliberate, separate path). */
+	 * rather than accumulating duplicates. The first snapshot roots the Gateway
+	 * (trust-on-first-enroll); a later snapshot rooted at a different owner key is
+	 * ignored (recovery is a deliberate, separate path). */
 	applySnapshot(snapshot: DomainSnapshot): void {
-		// The snapshot arrives through untrusted evie. If an owner is pinned, the
-		// root MUST match it; otherwise evie could root a fresh Gateway at any key.
-		if (this.pinnedOwner && snapshot.ownerSignPub !== this.pinnedOwner) {
-			console.warn(`[allowlist] ignoring domain sync: root does not match the pinned owner key`);
-			return;
-		}
-		// Strict mode: without a pin there is no way to know the snapshot's root is the
-		// real owner (it arrived through untrusted evie), so refuse to root at all.
-		if (this.requireOwnerPin && !this.pinnedOwner) {
-			console.warn(
-				`[allowlist] FEDERATION_REQUIRE_OWNER_PIN set but FEDERATION_OWNER_SIGN_PUB is not; refusing to root at an unverified owner key`,
-			);
-			return;
-		}
 		if (this.state.ownerSignPub && this.state.ownerSignPub !== snapshot.ownerSignPub) {
 			console.warn(`[allowlist] ignoring domain sync rooted at a different owner key`);
 			return;
-		}
-		if (!this.pinnedOwner && !this.state.ownerSignPub) {
-			// Auto-capture-then-lock: the captured key becomes the effective pin (a
-			// later re-root is refused above). Surface its fingerprint so the admin
-			// can optionally promote it to an explicit FEDERATION_OWNER_SIGN_PUB pin.
-			console.warn(
-				`[allowlist] trust-on-first-use: rooting the Domain at owner key ${fingerprint(snapshot.ownerSignPub)} relayed by evie (now locked; set FEDERATION_OWNER_SIGN_PUB=${snapshot.ownerSignPub} to pin it out-of-band)`,
-			);
 		}
 		this.state.ownerSignPub = snapshot.ownerSignPub;
 		this.state.admissions = snapshot.admissions.filter((s) => verifyAdmission(s, snapshot.ownerSignPub));

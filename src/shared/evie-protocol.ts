@@ -1,4 +1,4 @@
-// SYNC-HASH: 6c543a4f46b5674da2e2995290a539b3
+// SYNC-HASH: 15ce28d6a87c1e1b215d9a1da658c19b
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -246,7 +246,7 @@ export const CrossDomainHandshakeRevealRouteSchema = z.object({
 });
 
 /** `cross_domain_handshake_reveal_reply` tool-call params: the receiver Gateway's round-2
- * answer (its revealed keys + salt + the SAS), routed home by `handshakeId`. */
+ * answer (its revealed keys + salt + the SAS), routed back to the origin by `handshakeId`. */
 export const CrossDomainHandshakeRevealReplyParamsSchema = z.object({
 	handshakeId: z.string().min(1).max(128),
 	ok: z.boolean(),

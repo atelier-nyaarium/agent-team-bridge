@@ -83,16 +83,16 @@ object CrossDomainLink {
 
 	/** Build the Federation PEERS roster by UNIONing the gateway's cross-Domain peer set
 	 * (`peerDomains`, from cross_domain_list_peers) with the Domains discovery already surfaced
-	 * (`teams` tagged with a non-home domainId). A peer is listed the moment it is linked, so a
+	 * (`teams` tagged with a non-local domainId). A peer is listed the moment it is linked, so a
 	 * freshly-linked peer with no discovery sessions still appears (and its detail is reachable to
 	 * start sharing) - the gap that otherwise dead-locked the post-link flow. Discovery supplies the
 	 * session count + presence; a peer present ONLY in the peer set shows zero sessions / offline.
-	 * The home Domain is excluded from both inputs. Sorted by domainId for a stable list. */
-	fun mergeLinkedDomains(teams: List<Team>, peerOwners: Map<String, String>, home: String): List<LinkedDomain> {
+	 * The admin Domain is excluded from both inputs. Sorted by domainId for a stable list. */
+	fun mergeLinkedDomains(teams: List<Team>, peerOwners: Map<String, String>, adminDomain: String): List<LinkedDomain> {
 		val byDomain = teams
-			.filter { !it.domainId.isNullOrEmpty() && it.domainId != home }
+			.filter { !it.domainId.isNullOrEmpty() && it.domainId != adminDomain }
 			.groupBy { it.domainId!! }
-		val domains = byDomain.keys + peerOwners.keys.filter { it != home }
+		val domains = byDomain.keys + peerOwners.keys.filter { it != adminDomain }
 		return domains
 			.map { domainId ->
 				val sessions = byDomain[domainId].orEmpty()

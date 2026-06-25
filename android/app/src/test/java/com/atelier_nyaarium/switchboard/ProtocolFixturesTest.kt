@@ -118,7 +118,7 @@ class ProtocolFixturesTest {
 		assertEquals("alice", result.teams[0].domainId)
 		assertNull(result.teams[1].kind)
 		// A pre-federation team omits the Domain id; it decodes as null (consumers fall back
-		// to the home Domain).
+		// to the local Domain).
 		assertNull(result.teams[1].domainId)
 	}
 

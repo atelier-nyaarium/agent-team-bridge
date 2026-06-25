@@ -217,7 +217,7 @@ private fun AddNetworkScreen(repo: ChatRepository, onBack: () -> Unit, onDone: (
 
 /** A hosted tenant's detail: generate the one-time invite (QR + Copy + Save-as-file) for the
  * friend to scan, regenerate it if it leaks/expires, Remove the tenant, or Link with it (the same
- * cross-Domain Link wizard, once they are online). The invite blob carries the home Gateway's
+ * cross-Domain Link wizard, once they are online). The invite blob carries the route Gateway's
  * transport creds + the pending {domainId, nonce}; the friend's app first-roots their Domain on
  * scan. */
 @OptIn(ExperimentalMaterial3Api::class)

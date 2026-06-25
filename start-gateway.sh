@@ -1,21 +1,10 @@
 #!/usr/bin/env bash
 #
-# No args:           pull and start this machine's gateway.
-# --setup / --enroll: configure or LAN-enroll it (run in bun via scripts/gateway-setup.ts).
-# One gateway per machine, configured by .env.
+# Pull and start this machine's gateway. One gateway per machine, configured by .env.
+# Setup lives in ./provision-admin-domain.sh.
 
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
-
-case "${1:-}" in
-	--setup | --enroll)
-		exec bun run scripts/gateway-setup.ts "$@"
-		;;
-	--*)
-		echo "ERROR: unknown option: $1 (expected --setup or --enroll, or no args to start)" >&2
-		exit 1
-		;;
-esac
 
 # Default: pull and start the gateway.
 git fetch --prune || true

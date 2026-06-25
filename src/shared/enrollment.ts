@@ -1,4 +1,4 @@
-// SYNC-HASH: d4885b4fb319977f9286a7048393c512
+// SYNC-HASH: f5a33adf11cd496808ee715dcad3fc0d
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -514,6 +514,39 @@ export const TrustPendingResultSchema = z
 	})
 	.meta({ id: "TrustPendingResult" });
 
+////////////////////////////////
+//  Transport request (an owner pulling its network's gateway-bridge transport)
+//
+//  An owner phone asks evie for the gateway-bridge transport blob (the cluster SA token + CA)
+//  by proving it owns a rooted network. It signs TRANSPORT_REQUEST_V1 over its OWN owner signing
+//  key + a fresh timestamp + nonce (proof of possession), mirroring the roster / trust-pending
+//  proofs. evie verifies the signature, freshness, and non-replay, then resolves the signer to a
+//  rooted owner and returns the transport.
+
+/** An owner's signed request for its network's gateway-bridge transport. The owner signs
+ * TRANSPORT_REQUEST_V1 over its own owner signing key + a fresh timestamp + nonce; evie verifies
+ * the proof, freshness, and non-replay, then resolves the signer to a rooted owner and returns the
+ * transport. */
+export const TransportRequestSchema = z
+	.object({
+		signerSignPub: b64Field(),
+		proofAt: z.number().int().nonnegative(),
+		nonce: b64Field(),
+		proof: b64Field(),
+	})
+	.meta({ id: "TransportRequest" });
+
+/** evie's transport reply. `ok:false` + `error` is an OPAQUE reject (the proof failed or the signer
+ * is not a rooted owner). On success it carries the gateway-bridge transport creds. */
+export const TransportResultSchema = z
+	.object({
+		ok: z.boolean(),
+		saToken: z.string().optional(),
+		caPem: z.string().optional(),
+		error: z.string().optional(),
+	})
+	.meta({ id: "TransportResult" });
+
 export type EnrollmentPayload = z.infer<typeof EnrollmentPayloadSchema>;
 export type EnrollOwnerPayload = Extract<EnrollmentPayload, { type: "enroll-owner" }>;
 export type AdmitGatewayPayload = Extract<EnrollmentPayload, { type: "admit-gateway" }>;
@@ -544,6 +577,8 @@ export type TrustHandshakeResult = z.infer<typeof TrustHandshakeResultSchema>;
 export type TrustPendingRequest = z.infer<typeof TrustPendingRequestSchema>;
 export type TrustPendingEntry = z.infer<typeof TrustPendingEntrySchema>;
 export type TrustPendingResult = z.infer<typeof TrustPendingResultSchema>;
+export type TransportRequest = z.infer<typeof TransportRequestSchema>;
+export type TransportResult = z.infer<typeof TransportResultSchema>;
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -852,4 +887,41 @@ export function signTrustPendingRequest(
  * additionally checks freshness + non-replay before returning the arms indexed under that owner. */
 export function verifyTrustPendingRequest(req: TrustPendingRequest): boolean {
 	return verify(trustPendingSigningBytes(req.signerSignPub, req.proofAt, req.nonce), req.proof, req.signerSignPub);
+}
+
+/** Default transport-proof freshness window (epoch ms), same posture as the roster proof. */
+export const TRANSPORT_REQUEST_MAX_SKEW_MS = 120_000;
+
+/** Canonical TRANSPORT_REQUEST_V1 proof-of-possession bytes: the requesting OWNER's signing key + a
+ * fresh timestamp + nonce. A distinct version tag from ROSTER_V1 / TRUST_PENDING_V1 so neither proof
+ * can be replayed as a transport request and vice versa. */
+export function transportRequestSigningBytes(signerSignPubB64: string, proofAt: number, nonce: string): Buffer {
+	return Buffer.from(["TRANSPORT_REQUEST_V1", signerSignPubB64, String(proofAt), nonce].join("\n"), "utf8");
+}
+
+/** Sign a fresh transport request with the requesting owner's raw Ed25519 private key (private key
+ * last, matching signRosterRequest / signTrustPendingRequest and the Kotlin twin). */
+export function signTransportRequest(
+	signerSignPubB64: string,
+	proofAt: number,
+	nonce: string,
+	signerSignPrivB64: string,
+): TransportRequest {
+	return {
+		signerSignPub: signerSignPubB64,
+		proofAt,
+		nonce,
+		proof: sign(transportRequestSigningBytes(signerSignPubB64, proofAt, nonce), signerSignPrivB64),
+	};
+}
+
+/** True if the transport request's proof verifies under its claimed owner key. The caller (evie)
+ * additionally checks freshness, non-replay, and that the signer is a rooted owner before returning
+ * the transport. */
+export function verifyTransportRequest(req: TransportRequest): boolean {
+	return verify(
+		transportRequestSigningBytes(req.signerSignPub, req.proofAt, req.nonce),
+		req.proof,
+		req.signerSignPub,
+	);
 }

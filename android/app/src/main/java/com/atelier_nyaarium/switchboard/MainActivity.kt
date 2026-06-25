@@ -180,7 +180,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.HUB) }
 	var showManage by remember { mutableStateOf(false) }
 	var showAddGateway by remember { mutableStateOf(false) }
-	// Cross-Domain trust overlays: the Users surface (the home for people + networks) and the
+	// Cross-Domain trust overlays: the Users surface (the hub for people + networks) and the
 	// transient link wizard (leaving it cancels the pairing windows).
 	var showUsers by remember { mutableStateOf(false) }
 	var showLinkWizard by remember { mutableStateOf(false) }
@@ -422,7 +422,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onToggleBiometric = { repo.setBiometricLock(it) },
 				onManage = { showManage = true },
 				onFederation = {
-					// Users is the home surface now (the old Federation hub is retired); the federation
+					// Users is the main surface now (the old Federation hub is retired); the federation
 					// actions live in the Users top-bar menu.
 					showSettings = false
 					settingsRoute = SettingsRoute.HUB
@@ -653,7 +653,7 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 	}
 }
 
-/** The tucked, text-only "Setting up a host" manual: the admin path (run provision-console.sh on
+/** The tucked, text-only "Setting up a host" manual: the admin path (run provision-admin-domain.sh on
  * a computer, paste back the setup blob it emits). No QR, no key prompt - the owner key is generated
  * silently and the script reads the PUBLIC keys. Reached from the fresh-open screen AND from the
  * empty board after a friend first-roots but has no host/gateway yet (the bring-up-a-host pointer). */
@@ -685,7 +685,7 @@ fun HostSetupHelpScreen(onBack: () -> Unit) {
 			HorizontalDivider()
 			Text(
 				"1. On the computer that will run your agents, clone switchboard and run " +
-					"./provision-console.sh --setup.\n\n" +
+					"./provision-admin-domain.sh.\n\n" +
 					"2. It asks for a network name and sets everything up. No keys to paste - this app " +
 					"holds your owner key.\n\n" +
 					"3. It prints a setup code. Go back and scan or paste it.\n\n" +
@@ -815,16 +815,16 @@ fun SessionsScreen(
 				// My own Domain id, learned from a local session (one owned by the connected
 				// Gateway): the local listing stamps it, so I can tell a peer Domain apart
 				// without threading a separate localDomainId through state. Empty until known.
-				val homeDomainId = sessions.firstOrNull { it.gatewayId == state.localGatewayId }?.domainId.orEmpty()
+				val adminDomainId = sessions.firstOrNull { it.gatewayId == state.localGatewayId }?.domainId.orEmpty()
 				// Accordion grouped by the owning (Domain, Gateway) pair - a gateway id is unique
 				// only within a Domain, so two linked friend Domains sharing an id must not merge
 				// into one group. Within each: host agent, then devcontainer projects, then loose
 				// sessions. The local Gateway sorts first; peer Domains follow, ordered by Domain.
 				val byGateway = sessions
-					.groupBy { GatewayGroupKey(it.domainId.orEmpty().ifEmpty { homeDomainId }, it.gatewayId.ifEmpty { state.localGatewayId }) }
+					.groupBy { GatewayGroupKey(it.domainId.orEmpty().ifEmpty { adminDomainId }, it.gatewayId.ifEmpty { state.localGatewayId }) }
 					.toList()
 					.sortedBy { (key, _) ->
-						if (key.domainId == homeDomainId && key.gatewayId == state.localGatewayId) "" else "${key.domainId}/${key.gatewayId}"
+						if (key.domainId == adminDomainId && key.gatewayId == state.localGatewayId) "" else "${key.domainId}/${key.gatewayId}"
 					}
 				LazyColumn(
 					Modifier.fillMaxSize(),
@@ -836,7 +836,7 @@ fun SessionsScreen(
 						val collapsed = collapsedGateways[composite] == true
 						// A peer Domain (a linked friend's) is labeled domain/gateway so a colliding
 						// gateway id reads distinctly; my own Domain shows the bare gateway id.
-						val isPeer = key.domainId.isNotEmpty() && homeDomainId.isNotEmpty() && key.domainId != homeDomainId
+						val isPeer = key.domainId.isNotEmpty() && adminDomainId.isNotEmpty() && key.domainId != adminDomainId
 						val headerName = if (isPeer) composite else key.gatewayId
 						item(key = "sw:$composite") {
 							GatewayHeader(

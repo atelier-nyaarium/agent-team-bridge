@@ -67,7 +67,7 @@ const FAKE_REQ = new Request("http://gateway/federation");
 const XDOMAIN_TARGET_DENIED = "cross-Domain op denied";
 
 /** Runs a federated op a peer Gateway asked this Gateway to perform, against the local
- * routes. The reply value becomes the gateway_relay_reply `result`, routed home by
+ * routes. The reply value becomes the gateway_relay_reply `result`, routed back to the origin by
  * the Router. */
 export function createGatewayRelayHandler({
 	routes,
@@ -135,7 +135,7 @@ export function createGatewayRelayHandler({
 					assertCrossDomainReturnRoute(op.returnRoute, srcGateway, srcDomainId);
 				}
 				// Land the cross-Gateway send on the local team, keyed by the origin's
-				// session id, with the return-route pinned so respond forwards home. For a
+				// session id, with the return-route pinned so respond forwards it back to the origin. For a
 				// cross-Domain send, stamp the VERIFIED origin Domain on the destination job so
 				// the reply + any colliding re-send are bound to the friend that originated it.
 				const res = await routes.send(FAKE_REQ, {
@@ -178,7 +178,7 @@ export function createGatewayRelayHandler({
 				return { ok };
 			}
 			case "response_push": {
-				// A reply pinned home: deliver it to the local origin job, which pushes
+				// A reply pinned to the origin: deliver it to the local origin job, which pushes
 				// to the originating conversation (its returnRoute is null, so respond
 				// does not re-forward). A cross-Domain response_push arrives at the ORIGIN
 				// Gateway, so its session_id points at the REMOTE destination
@@ -262,7 +262,7 @@ export function createGatewayRelayPump({ handleOp, sealer, sendReply }: GatewayR
 				const result = await handleOp(op, frame.srcGateway, srcDomainId);
 				// Seal the result back to the origin Gateway (E2E both directions). A
 				// cross-Domain origin is sealed v2 by the full (domainId, gatewayId) pair (a
-				// bare string would only resolve a home peer); a same-Domain origin stays the
+				// bare string would only resolve a local peer); a same-Domain origin stays the
 				// bare-string v1 path.
 				const replyTarget =
 					srcDomainId !== null ? { domainId: srcDomainId, gatewayId: frame.srcGateway } : frame.srcGateway;

@@ -148,14 +148,14 @@ describe("CrossDomainPeers store", () => {
 		const store = new CrossDomainPeers(dir);
 		const ownerB = generateIdentity().sign.pub;
 		// The same person (friendOwner) runs two Domains; a DIFFERENT owner runs a third.
-		store.add(peer({ friendDomainId: "carol-home", friendGatewayId: "g1" }));
+		store.add(peer({ friendDomainId: "carol-main", friendGatewayId: "g1" }));
 		store.add(peer({ friendDomainId: "carol-guest", friendGatewayId: "g2" }));
 		store.add(peer({ friendOwnerSignPub: ownerB, friendDomainId: "dave", friendGatewayId: "g3" }));
 
 		// Untrusting the PERSON forgets both their Domains at once and names them for the share/job drop.
 		const res = store.removeByOwner(friendOwner.sign.pub);
 		expect(res.removed).toBe(2);
-		expect(new Set(res.domains)).toEqual(new Set(["carol-home", "carol-guest"]));
+		expect(new Set(res.domains)).toEqual(new Set(["carol-main", "carol-guest"]));
 		// The other owner's peer survives (untrust is per-person, not global).
 		expect(store.all().map((p) => p.friendDomainId)).toEqual(["dave"]);
 		// Idempotent: a second untrust of the same owner removes nothing.

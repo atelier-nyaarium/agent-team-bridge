@@ -1,10 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { slugField } from "../shared/crypto.js";
-import { resolveLocalDomainId, sanitizeDomainId } from "../shared/domain-id.js";
+import { DOMAIN_ID_FILE, resolveLocalDomainId, sanitizeDomainId } from "../shared/domain-id.js";
 
 describe("sanitizeDomainId", () => {
 	it("slugs to lower-case alphanumerics with single dashes", () => {
-		expect(sanitizeDomainId("My Home")).toBe("my-home");
+		expect(sanitizeDomainId("My Lab")).toBe("my-lab");
 		expect(sanitizeDomainId("ACME_Corp.1")).toBe("acme-corp-1");
 	});
 
@@ -33,7 +36,7 @@ describe("slugField / sanitizeDomainId alignment", () => {
 	});
 
 	it("rejects pure-separator / edge-dash ids that sanitizeDomainId would throw on or alter", () => {
-		// The class the home-retire exposed: these once passed slugField but throw at sanitize
+		// The edge-case class these expose: these once passed slugField but throw at sanitize
 		// (the silent default that once swallowed them is gone), so reject them at validation.
 		for (const bad of ["---", "-x", "x-", "a--b", ""]) {
 			expect(slug.safeParse(bad).success).toBe(false);
@@ -43,23 +46,32 @@ describe("slugField / sanitizeDomainId alignment", () => {
 
 describe("resolveLocalDomainId", () => {
 	let prev: string | undefined;
+	let dir: string;
 
 	beforeEach(() => {
 		prev = process.env.FEDERATION_DOMAIN_ID;
+		dir = fs.mkdtempSync(path.join(os.tmpdir(), "domid-"));
 	});
 
 	afterEach(() => {
 		if (prev === undefined) delete process.env.FEDERATION_DOMAIN_ID;
 		else process.env.FEDERATION_DOMAIN_ID = prev;
+		fs.rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("throws when FEDERATION_DOMAIN_ID is unset (no default Domain)", () => {
+	it("returns null when neither the file nor the env is set", () => {
 		delete process.env.FEDERATION_DOMAIN_ID;
-		expect(() => resolveLocalDomainId()).toThrow();
+		expect(resolveLocalDomainId(dir)).toBeNull();
 	});
 
-	it("honors and sanitizes FEDERATION_DOMAIN_ID", () => {
+	it("falls back to FEDERATION_DOMAIN_ID, sanitized, when there is no file", () => {
 		process.env.FEDERATION_DOMAIN_ID = "Acme Corp";
-		expect(resolveLocalDomainId()).toBe("acme-corp");
+		expect(resolveLocalDomainId(dir)).toBe("acme-corp");
+	});
+
+	it("prefers the delivered domain-id file over the env", () => {
+		process.env.FEDERATION_DOMAIN_ID = "from-env";
+		fs.writeFileSync(path.join(dir, DOMAIN_ID_FILE), "From File\n");
+		expect(resolveLocalDomainId(dir)).toBe("from-file");
 	});
 });

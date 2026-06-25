@@ -1,0 +1,16 @@
+{
+	"_comment": "Cross-runtime vector for the transport-request signing bytes (src/shared/enrollment.ts): an owner's TRANSPORT_REQUEST_V1 proof of possession that pulls its network's gateway-bridge transport. Read by src/__tests__/transport-request.test.ts (TS) AND TransportRequestTest.kt (Kotlin), so the hand-authored Kotlin twin (ProvisionOpsCrypto.transportRequestSigningBytes) cannot drift from this TS reference. signingBytes is the canonical newline-joined preimage (utf8 + hex + base64) binding the RAW owner signing key + proofAt + nonce; signature is a node Ed25519 (RFC 8032 deterministic) signature over those bytes by ownerSignPriv. Distinct version tag from ROSTER_V1 / TRUST_PENDING_V1. Generated from the TS reference; never hand-authored.",
+	"ownerSignPub": "jGn787BASDt0fha5d8cjuYxZBQ2DZPVZzbEel3Cfcv4=",
+	"ownerSignPriv": "hv4it8vBajVd4NohKuqkjiVeqvGiZaYkgN940TvrYrM=",
+	"transport": {
+		"value": {
+			"signerSignPub": "jGn787BASDt0fha5d8cjuYxZBQ2DZPVZzbEel3Cfcv4=",
+			"proofAt": 1717171717171,
+			"nonce": "dHJhbnNwb3J0LXByb29mLW5vbmNl"
+		},
+		"signingBytes": "TRANSPORT_REQUEST_V1\njGn787BASDt0fha5d8cjuYxZBQ2DZPVZzbEel3Cfcv4=\n1717171717171\ndHJhbnNwb3J0LXByb29mLW5vbmNl",
+		"signingBytesHex": "5452414e53504f52545f524551554553545f56310a6a476e373837424153447430666861356438636a7559785a425132445a50565a7a6245656c3343666376343d0a313731373137313731373137310a64484a68626e4e7762334a304c5842796232396d4c573576626d4e6c",
+		"signingBytesBase64": "VFJBTlNQT1JUX1JFUVVFU1RfVjEKakduNzg3QkFTRHQwZmhhNWQ4Y2p1WXhaQlEyRFpQVlp6YkVlbDNDZmN2ND0KMTcxNzE3MTcxNzE3MQpkSEpoYm5Od2IzSjBMWEJ5YjI5bUxXNXZibU5s",
+		"signature": "b4DLLKKu5+tXqCf6owljFhHD53B1j24LTzCz42Z0rT+SG3DKbsWzj9qKKCSfFq+foJhucZKawhl+t83EMPRgAA=="
+	}
+}

@@ -15,6 +15,7 @@ import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SessionId
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
+import com.atelier_nyaarium.switchboard.proto.GatewayTransport
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
@@ -159,17 +160,17 @@ data class ChatState(
 	 * federation-aware connect; bare names resolve to the local Gateway in that case. */
 	val localGatewayId: String = "",
 	/** Non-zero (epoch ms) while a post-enrollment allowlist sync is in progress: the device
-	 * is admitted but the home Gateway has not re-synced yet, so sealed ops transiently reject.
+	 * is admitted but the route Gateway has not re-synced yet, so sealed ops transiently reject.
 	 * Drives the calm SYNCING header; cleared the moment an op succeeds or the grace lapses. */
 	val enrollingSince: Long = 0L,
-	/** The linked friend Domains the home Gateway reports from its cross-Domain peer set (the
+	/** The linked friend Domains the route Gateway reports from its cross-Domain peer set (the
 	 * cross_domain_list_peers roster). UNIONed with the discovery-derived Domains in linkedDomains()
 	 * so a freshly-linked peer is visible (and its detail reachable) even while its gateway is
 	 * offline and has shared nothing back - the gap that otherwise dead-locks the post-link sharing
 	 * flow. Refreshed alongside teams; an empty set just falls back to discovery-only. */
 	val linkedPeerOwners: Map<String, String> = emptyMap(),
 	/** This owner's own network display name (the display name), for the profile field and the
-	 * MY NETWORK card. Seeded from the local cache and refreshed from discovery's home-session
+	 * MY NETWORK card. Seeded from the local cache and refreshed from discovery's local-session
 	 * displayName; empty until the owner sets one. */
 	val displayName: String = "",
 	/** True once this device has first-rooted a pending friend Domain from its invite blob. Mirrors
@@ -243,7 +244,7 @@ data class ChatState(
 
 	/** Drill-down / title-bar label: a user's custom name if set, else the qualified
 	 * `gateway/name` for a REMOTE session (the originating Gateway is not otherwise on screen
-	 * here) and the bare name for a local one (its Gateway is the implicit home). The grouped
+	 * here) and the bare name for a local one (its Gateway is the implicit local Gateway). The grouped
 	 * session board uses [label]; this is the flat-context form per the rendering rules. */
 	fun titleLabel(team: String, localGatewayId: String = ""): String {
 		labels[team]?.let { return it }
@@ -253,7 +254,7 @@ data class ChatState(
 	}
 }
 
-/** A just-enrolled device's first ops can transiently reject while the home Gateway
+/** A just-enrolled device's first ops can transiently reject while the route Gateway
  * re-syncs the new admission from evie (it only re-syncs on its next re-register). We
  * show a calm "Finishing up enrollment..." and retry, escalating to a real error only if
  * the sync never lands within this grace window. */
@@ -306,7 +307,7 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 		// A rejected admission submission (e.g. the app's owner key does not match the Domain evie is
 		// rooted at) will NOT self-heal by waiting - surface it instead of the calm sync-lag above.
 		m.contains("admission rejected", ignoreCase = true) ->
-			"${m.take(100)} - re-run provision-console.sh, then re-import the setup blob" to ConnKind.TERMINAL
+			"${m.take(100)} - re-run provision-admin-domain.sh, then re-import the setup blob" to ConnKind.TERMINAL
 		// The Keystore-backed store failed to initialize, so the app fails closed (refuses to
 		// persist the federation key in cleartext). Re-running provision does not help; the device's
 		// secure storage must work. Distinct from "not enrolled" (which sounds fixable by re-running).
@@ -316,26 +317,26 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 		// over it (fail closed), so the only fixes are a backup restore or a deliberate recovery -
 		// distinct from "not enrolled" (which a re-import does fix).
 		m.contains("corrupt", ignoreCase = true) && m.contains("did not decode", ignoreCase = true) ->
-			"Stored key unreadable - restore from backup or re-run provision-console.sh" to ConnKind.TERMINAL
+			"Stored key unreadable - restore from backup or re-run provision-admin-domain.sh" to ConnKind.TERMINAL
 		m.contains("not enrolled", ignoreCase = true) ->
-			"Not enrolled - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
+			"Not enrolled - re-run provision-admin-domain.sh and re-import the setup blob" to ConnKind.TERMINAL
 		// A local provisioning gap (the blob did not carry the Gateway keys/id). Worded in
 		// ConsoleClient WITHOUT the "not admitted" token so it cannot collide with ENROLLING.
 		m.contains("keys are missing", ignoreCase = true) || m.contains("not provisioned", ignoreCase = true) ->
-			"Gateway not provisioned - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
+			"Gateway not provisioned - re-run provision-admin-domain.sh and re-import the setup blob" to ConnKind.TERMINAL
 		// The Console has no Gateway admitted yet (fresh setup), or none for this target in its
 		// keyring. The fix is to admit a Gateway from the management UI, not to re-provision.
 		// ChatState.needsGateway keys the board's Add-a-Gateway CTA off this message's prefix.
 		m.contains("not in the keyring", ignoreCase = true) || m.contains("no gateway admitted", ignoreCase = true) ->
 			"Add a Gateway from Manage Gateways to begin" to ConnKind.TERMINAL
 		m.startsWith("HTTP 400") ->
-			"App is out of date - update the app, or re-run provision-console.sh" to ConnKind.TERMINAL
+			"App is out of date - update the app, or re-run provision-admin-domain.sh" to ConnKind.TERMINAL
 		m.startsWith("HTTP 401") ->
-			"Sign-in rejected - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
+			"Sign-in rejected - re-run provision-admin-domain.sh and re-import the setup blob" to ConnKind.TERMINAL
 		m.startsWith("HTTP 403") ->
-			"Access expired - re-run provision-console.sh" to ConnKind.TERMINAL
+			"Access expired - re-run provision-admin-domain.sh" to ConnKind.TERMINAL
 		m.startsWith("HTTP 404") ->
-			"Server not set up - run provision-console.sh on the server" to ConnKind.TERMINAL
+			"Server not set up - run provision-admin-domain.sh on the server" to ConnKind.TERMINAL
 		m.startsWith("HTTP 409") ->
 			"A previous send is still finishing - retrying" to ConnKind.TRANSIENT
 		m.startsWith("HTTP 500") ->
@@ -346,7 +347,7 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 			"Server timed out - retrying" to ConnKind.TRANSIENT
 		e is javax.net.ssl.SSLHandshakeException || e is java.security.cert.CertificateException ||
 			m.contains("trust anchor", ignoreCase = true) || m.contains("CertPath", ignoreCase = true) ->
-			"Server certificate changed - re-run provision-console.sh" to ConnKind.TERMINAL
+			"Server certificate changed - re-run provision-admin-domain.sh" to ConnKind.TERMINAL
 		// Freshness/replay rejects clear on the next attempt (a retry carries a fresh
 		// timestamp + new nonce), so they are transient. Checked AFTER the TLS branch so a
 		// handshake-signature error is not mislabeled.
@@ -354,7 +355,7 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 			"Re-syncing the secure channel - retrying" to ConnKind.TRANSIENT
 		// A genuine key mismatch (bad signature / cannot decrypt) is terminal.
 		m.contains("signature", ignoreCase = true) || m.contains("decrypt", ignoreCase = true) ->
-			"Secure channel rejected - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
+			"Secure channel rejected - re-run provision-admin-domain.sh and re-import the setup blob" to ConnKind.TERMINAL
 		e is java.net.UnknownHostException ->
 			"Offline - no network" to ConnKind.TRANSIENT
 		e is java.net.ConnectException || e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException ->
@@ -370,7 +371,7 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 private fun enrollFold(prevSince: Long): Pair<String?, Long> {
 	val since = if (prevSince == 0L) System.currentTimeMillis() else prevSince
 	return if (System.currentTimeMillis() - since > ENROLL_GRACE_MS) {
-		"Enrollment did not finish - re-run provision-console.sh and re-import the setup blob." to 0L
+		"Enrollment did not finish - re-run provision-admin-domain.sh and re-import the setup blob." to 0L
 	} else {
 		null to since
 	}
@@ -781,9 +782,9 @@ class ChatRepository(
 			// now that the real gateway id is known, so an inbound reply (keyed gateway/name)
 			// can no longer file into a ghost "/name" thread the open tab cannot read.
 			recanonicalizeAllKeys(localGatewayId)
-			// Pin every subsequent relay to this home Gateway so the Gateway routes there
+			// Pin every subsequent relay to this route Gateway so the Gateway routes there
 			// even once other Gateways join the mesh.
-			client().homeGateway = localGatewayId.ifEmpty { null }
+			client().routeGateway = localGatewayId.ifEmpty { null }
 			// A teams refresh failure is not a connect failure: register succeeded, so we
 			// are connected. Log and proceed with the prior team list rather than masking
 			// the error as an empty board (which would blank live sessions).
@@ -910,7 +911,7 @@ class ChatRepository(
 	 * accepted it, surfacing the error otherwise. The merge-iff-accepted invariant lives in
 	 * this one place so an owner action cannot submit without the matching local merge (the
 	 * class of bug that once left a revoked member on the board). Secondary effects (the
-	 * home-gateway pin, the console-admitted gate) stay at the call site after a true return. */
+	 * route-gateway pin, the console-admitted gate) stay at the call site after a true return. */
 	private fun <T> submitOwnerFact(
 		signed: T,
 		submit: (T) -> EnrollResult,
@@ -965,7 +966,7 @@ class ChatRepository(
 			if (!submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitAdmission(it)) }, federation::mergeAdmission, "Admit failed")) {
 				return@withContext null
 			}
-			// The first admitted Gateway becomes the home Gateway the Console seals to.
+			// The first admitted Gateway becomes the route Gateway the Console seals to.
 			if (store.loadGatewayId().isEmpty()) {
 				store.saveGatewayId(gatewayId)
 				localGatewayId = gatewayId
@@ -1051,28 +1052,28 @@ class ChatRepository(
 	 * cache (refreshed from discovery) is authoritative for display; empty until the owner sets one. */
 	fun localDisplayName(): String = _state.value.displayName
 
-	/** Refresh the cached display name from discovery's HOME session (the gateway stamps each
-	 * session's displayName; the local Gateway's is this owner's own). A no-op when no home session
+	/** Refresh the cached display name from discovery's LOCAL session (the gateway stamps each
+	 * session's displayName; the local Gateway's is this owner's own). A no-op when no local session
 	 * carries one yet, so a board with only peer sessions never blanks the cached name. */
 	private fun refreshDisplayNameFromTeams() {
 		val gw = localGatewayId
-		val home = _state.value.teams.firstOrNull {
+		val local = _state.value.teams.firstOrNull {
 			(it.gatewayId.ifEmpty { gw }) == gw && !it.displayName.isNullOrEmpty()
 		}?.displayName ?: return
-		if (home != store.displayName) store.displayName = home
-		if (home != _state.value.displayName) _state.update { it.copy(displayName = home) }
+		if (local != store.displayName) store.displayName = local
+		if (local != _state.value.displayName) _state.update { it.copy(displayName = local) }
 	}
 
-	/** Rename this owner's own network: owner-sign a SET_ADMIN_NAME op over the home Domain and
+	/** Rename this owner's own network: owner-sign a SET_ADMIN_NAME op over the admin Domain and
 	 * submit it evie-direct. On success cache the new name + reflect it immediately (evie pushes a
 	 * domain_update to this owner's gateways, so discovery will confirm it on the next refresh). */
 	suspend fun setDisplayName(name: String): Result<Unit> = withContext(Dispatchers.IO) {
 		val trimmed = name.trim()
 		if (trimmed.isEmpty()) return@withContext Result.failure(IllegalArgumentException("Name cannot be empty"))
-		val home = confirmedDomainId()
+		val adminDomain = confirmedDomainId()
 			?: return@withContext Result.failure(IllegalStateException("Domain not yet confirmed by a local session"))
 		runCatching {
-			val signed = federation.signSetDisplayName(home, trimmed, System.currentTimeMillis())
+			val signed = federation.signSetDisplayName(adminDomain, trimmed, System.currentTimeMillis())
 			val result = client().enroll(EnrollOp.SetDisplayName(signed))
 			if (!result.ok) error(result.error ?: "rename rejected")
 			store.displayName = trimmed
@@ -1135,7 +1136,7 @@ class ChatRepository(
 	 * admin was itself provisioned with (this owner's own blob) plus the pending tenant's
 	 * {domainId, nonce}. The friend reaches the SAME shared evie console-bridge as the admin, so it
 	 * first-roots over the console-bridge /relay path; sourcing the admin's own console-bridge SA +
-	 * CONSOLE_BRIDGE_TOKEN is what makes the friend's first_root authorize there. Sourcing the home
+	 * CONSOLE_BRIDGE_TOKEN is what makes the friend's first_root authorize there. Sourcing the route
 	 * Gateway's bootstrap-transport instead would hand the friend the gateway-bridge SA + BRIDGE_TOKEN,
 	 * which the console-bridge service-proxy RBAC-403s and evie token-401s. The blob omits service/port
 	 * so the friend defaults to evie-console-bridge:20004. The JSON is exactly what the paste /
@@ -1150,11 +1151,11 @@ class ChatRepository(
 			val invite = enrollInvites.computeIfAbsent(tenant.domainId) {
 				EnrollInvite(handshakeId = federation.freshHandshakeId(), pin = federation.freshEnrollPin())
 			}
-			val home = confirmedDomainId() ?: error("Domain not yet confirmed by a local session")
+			val adminDomain = confirmedDomainId() ?: error("Domain not yet confirmed by a local session")
 			val enrollHandshake = JSONObject()
 				.put("adminOwnerSignPub", federation.ownerSignPub())
 				.put("adminOwnerBoxPub", federation.ownerBoxPub())
-				.put("adminDomainId", home)
+				.put("adminDomainId", adminDomain)
 				.put("handshakeId", invite.handshakeId)
 				.put("pin", invite.pin)
 			val obj = JSONObject()
@@ -1215,7 +1216,7 @@ class ChatRepository(
 		runCatching { store.saveHostedTenants(arr.toString()) }
 	}
 
-	/** The linked friend Domains. The trust roster comes from the home Gateway's cross-Domain peer
+	/** The linked friend Domains. The trust roster comes from the route Gateway's cross-Domain peer
 	 * set (state.linkedPeerDomains, fetched by refreshLinkedPeers): a peer is listed the moment it
 	 * is linked, regardless of whether its gateway is online or has shared anything back. That set
 	 * is UNIONed with the discovery-derived Domains so a just-linked peer is immediately visible
@@ -1223,11 +1224,11 @@ class ChatRepository(
 	 * the gap that otherwise dead-locked the post-link sharing flow. Discovery still supplies the
 	 * session count + presence; a peer present only in the peer set shows zero sessions / offline. */
 	fun linkedDomains(): List<LinkedDomain> {
-		val home = confirmedDomainId() ?: return emptyList()
-		return CrossDomainLink.mergeLinkedDomains(_state.value.teams, _state.value.linkedPeerOwners, home)
+		val adminDomain = confirmedDomainId() ?: return emptyList()
+		return CrossDomainLink.mergeLinkedDomains(_state.value.teams, _state.value.linkedPeerOwners, adminDomain)
 	}
 
-	/** Refresh the linked-peer roster from the home Gateway's cross-Domain peer set into state, so
+	/** Refresh the linked-peer roster from the route Gateway's cross-Domain peer set into state, so
 	 * linkedDomains() can union it with discovery. Best-effort: a relay failure keeps the prior set
 	 * (the Federation screen never blanks its PEERS list on a blip). Folds the per-gateway peer rows
 	 * to their distinct Domain ids (a Domain may run more than one gateway). */
@@ -1248,10 +1249,10 @@ class ChatRepository(
 	/** My LOCAL devcontainer/loose sessions, the only kinds shareable to a friend Domain (never
 	 * the host-agent, the cli host, or a console). Drives the per-session share checkmarks. */
 	fun shareableSessions(): List<Team> {
-		val home = confirmedDomainId() ?: return emptyList()
+		val adminDomain = confirmedDomainId() ?: return emptyList()
 		val gw = localGatewayId
 		return _state.value.teams
-			.filter { (it.domainId.isNullOrEmpty() || it.domainId == home) && (it.gatewayId.isEmpty() || it.gatewayId == gw) }
+			.filter { (it.domainId.isNullOrEmpty() || it.domainId == adminDomain) && (it.gatewayId.isEmpty() || it.gatewayId == gw) }
 			.filter { it.kind == "devcontainer" || it.kind == "loose" }
 			.sortedBy { it.shortName }
 	}
@@ -1268,12 +1269,12 @@ class ChatRepository(
 		withContext(Dispatchers.IO) {
 			runCatching {
 				val pin = newRendezvousPin()
-				val home = confirmedDomainId() ?: error("Domain not yet confirmed by a local session")
+				val adminDomain = confirmedDomainId() ?: error("Domain not yet confirmed by a local session")
 				val result = client().crossDomainRequest(
 					listeningToken = listeningToken.trim(),
 					pin = pin,
 					requesterOwnerSignPub = federation.ownerSignPub(),
-					requesterDomainId = home,
+					requesterDomainId = adminDomain,
 					requesterGatewayId = localGatewayId,
 				)
 				CrossDomainPairing(pin = pin, result = result)
@@ -1414,8 +1415,8 @@ class ChatRepository(
 	 * generated the invite (so the QR and the ceremony share one handshake window). */
 	fun adminEnrollContext(domainId: String): EnrollCeremonyContext? {
 		val invite = enrollInvites[domainId] ?: return null
-		val home = confirmedDomainId() ?: return null
-		val myParty = EnrollParty(federation.ownerSignPub(), federation.ownerBoxPub(), home)
+		val adminDomain = confirmedDomainId() ?: return null
+		val myParty = EnrollParty(federation.ownerSignPub(), federation.ownerBoxPub(), adminDomain)
 		return EnrollCeremonyContext(EnrollCeremony.ADMIN, invite.handshakeId, invite.pin, myParty, expectedPeer = null)
 	}
 
@@ -1763,7 +1764,7 @@ class ChatRepository(
 	}.getOrNull()
 
 	/** Enroll a scanned Gateway end to end: owner-admit it, then (if it offered LAN delivery)
-	 * fetch the bootstrap transport from the home Gateway, seal a bootstrap bundle, and deliver
+	 * fetch the bootstrap transport from the route Gateway, seal a bootstrap bundle, and deliver
 	 * it over the LAN, falling back to handing the admin the sealed text to paste. A
 	 * host-configured Gateway (no LAN, no nonce) just needs the admission, which reaches it
 	 * through evie's domain sync. */
@@ -1775,21 +1776,33 @@ class ChatRepository(
 			?: return@withContext EnrollDelivery(false, _state.value.error ?: "Couldn't add the Gateway. Try again.", null)
 		val nonce = scanned.nonce
 			?: return@withContext EnrollDelivery(true, "Added. This Gateway will come online shortly.", null)
-		// Fetch the bootstrap transport from the home Gateway. The Console no longer carries it in
-		// its blob; the Gateway holds it as bootstrap-transport.json and serves it sealed on demand.
-		val transport = try {
-			client().getGatewayTransport()
+		// Pull the gateway-bridge transport (proxy SA token + CA) from evie by proving this owner roots
+		// a network. apiUrl + the network id come from the provisioning blob: apiUrl is the SAME external
+		// apiserver the console bridge uses, and domainId is the rooted Domain the Gateway adopts.
+		val prov = runCatching { store.load()?.let { Provisioning.parse(it) } }.getOrNull()
+			?: return@withContext EnrollDelivery(true, "Added, but this device is not provisioned - re-import your setup blob.", null)
+		val result = try {
+			client().requestGatewayTransport(federation.signTransportRequest(System.currentTimeMillis()))
 		} catch (e: Exception) {
-			// Surface the REAL transport-fetch cause (reached-but-rejected, "not admitted", an op
-			// failure) instead of asserting "couldn't reach" + a re-provision that will not fix an
-			// admission/seal mismatch. Same class as the admitGateway fix two steps above (bf328e9).
+			// Surface the REAL transport-fetch cause (reached-but-rejected, an op failure) instead of
+			// asserting "couldn't reach" + a re-provision that will not fix an admission/seal mismatch.
 			return@withContext EnrollDelivery(
 				true,
 				"Added, but couldn't finish Gateway setup: ${e.message?.take(120) ?: "unknown error"}",
 				null,
 			)
 		}
-		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub)
+		if (!result.ok || result.saToken == null || result.caPem == null) {
+			return@withContext EnrollDelivery(
+				true,
+				"Added, but couldn't finish Gateway setup: ${result.error?.take(120) ?: "transport unavailable"}",
+				null,
+			)
+		}
+		// The 4-field GatewayTransport; the Gateway fills namespace/service/port defaults when it
+		// installs the bundle, and appToken is omitted (gateway-bridge auth is the SA token + admission).
+		val transport = GatewayTransport(apiUrl = prov.apiUrl, saToken = result.saToken, caPem = result.caPem)
+		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub, prov.pendingTenant?.domainId)
 		val frameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), frame)
 		if (scanned.lanHost != null && scanned.lanPort != null && isPrivateLanHost(scanned.lanHost)) {
 			val ok = runCatching { postBundle(scanned.lanHost, scanned.lanPort, frameJson) }.getOrDefault(false)
@@ -1973,13 +1986,13 @@ class ChatRepository(
 		}
 		try {
 			// A cross-Domain target carries the friend Domain id from its discovery entry, so the
-			// gateway resolves the seal target by the full (domainId, gatewayId) pair; a home /
+			// gateway resolves the seal target by the full (domainId, gatewayId) pair; a local /
 			// same-Domain session resolves to null and keeps the existing routing.
-			val home = confirmedDomainId()
+			val adminDomain = confirmedDomainId()
 			val targetDomain = _state.value.teams
 				.firstOrNull { TeamAddress.parse(it.name, localGatewayId).canonical == TeamAddress.parse(team, localGatewayId).canonical }
 				?.domainId
-				?.takeIf { it.isNotEmpty() && home != null && it != home }
+				?.takeIf { it.isNotEmpty() && adminDomain != null && it != adminDomain }
 			val r = client().send(team, text, picked, opId, targetDomain)
 			when {
 				!r.ok -> fail(r.error)
@@ -2058,7 +2071,7 @@ class ChatRepository(
 					val params = mailboxSync.pollParams()
 					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms")
 					val mb = client().poll(params.cursor, params.epoch, hold)
-					// Keyring sync: the home Gateway returns the snapshot only when it changed.
+					// Keyring sync: the route Gateway returns the snapshot only when it changed.
 					// Apply it owner-pinned so a revocation made elsewhere reaches this Console.
 					mb.domain?.let { federation.applyDomainSync(it, mb.domainVersion ?: "") }
 					// An old gateway ignores holdMs and returns empty instantly; floor

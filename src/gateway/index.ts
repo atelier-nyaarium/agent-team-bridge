@@ -4,7 +4,7 @@ import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
-import { resolveLocalDomainId } from "../shared/domain-id.js";
+import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/host-id.js";
 import type { HostOp, HostOpResult } from "../shared/host-op.js";
@@ -15,7 +15,7 @@ import { createConsoleHandler } from "./console/consoleHandler.js";
 import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { startEvieClient } from "./evie/evieClient.js";
-import { evieWsConnection, loadBootstrapTransport, loadEvieTransport } from "./evie/transport.js";
+import { evieWsConnection, loadEvieTransport } from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
 import {
@@ -26,7 +26,7 @@ import {
 } from "./federation/crossDomainHandshake.js";
 import { CrossDomainPeers } from "./federation/crossDomainPeers.js";
 import { CrossDomainShareState } from "./federation/crossDomainShareState.js";
-import { logAdmitGatewayQr } from "./federation/enrollQr.js";
+import { ADMIT_PAYLOAD_FILE, admitGatewayPayload, logAdmitGatewayQr } from "./federation/enrollQr.js";
 import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/hostRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
 import { ReplayGuard } from "./federation/replayGuard.js";
@@ -54,8 +54,11 @@ export async function startGateway(): Promise<void> {
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);
 	const localGatewayId = resolveLocalGatewayId();
 	console.log(`[gateway] Gateway id: ${localGatewayId}`);
-	const localDomainId = resolveLocalDomainId();
-	console.log(`[gateway] Domain id: ${localDomainId}`);
+	// The Gateway persists its federation identity, mirrored allowlist, and the enrollment-delivered
+	// transport.json + domain-id under this dir.
+	const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
+	const localDomainId = resolveLocalDomainId(federationDir);
+	console.log(`[gateway] Domain id: ${localDomainId ?? "(none - not yet enrolled)"}`);
 	const HEARTBEAT_INTERVAL_MS = 30000;
 	const MISSED_PINGS_LIMIT = 2;
 
@@ -206,29 +209,19 @@ export async function startGateway(): Promise<void> {
 	const isLinkedDomain = (domainId: string): boolean =>
 		crossDomainPeersForConsole?.all().some((p) => p.friendDomainId === domainId) ?? false;
 
-	// The Gateway persists its federation identity + mirrored allowlist here; an enrolled
-	// Gateway also drops its service-proxy transport.json here. The bridge activates when a
-	// transport is delivered (the SA-token-over-service-proxy creds); a gateway with no
-	// transport stays standalone (no mesh).
-	const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
 	const evieTransport = loadEvieTransport(federationDir);
 
-	if (evieTransport) {
+	// The evie bridge activates only with both a delivered transport AND a resolved Domain id;
+	// missing either, the gateway stays standalone (no mesh) and serves /health + /enroll.
+	if (evieTransport && localDomainId) {
 		// Load this Gateway's federation identity + mirrored allowlist from its volume,
 		// and build the E2E sealer (cross-Gateway frames are sealed peer-to-peer).
-		// Pin the owner root out-of-band so a malicious/token-holding evie cannot root
-		// this Gateway at an attacker key via the mirror (the snapshot is relayed through
-		// untrusted evie). Unset = trust-on-first-use.
-		const allowlist = new Allowlist(
-			federationDir,
-			process.env.FEDERATION_OWNER_SIGN_PUB,
-			process.env.FEDERATION_REQUIRE_OWNER_PIN === "true",
-		);
+		const allowlist = new Allowlist(federationDir);
 		allowlistForConsole = allowlist;
 		// Cross-Domain peers (other owners' Gateways this Gateway has linked with): a
 		// DISJOINT store from the single-owner allowlist, written only by the handshake,
-		// so a home-Domain sync can never wipe it and it never contaminates intra-Domain
-		// resolution. The sealer resolves home peers first, then this set.
+		// so a local-Domain sync can never wipe it and it never contaminates intra-Domain
+		// resolution. The sealer resolves local peers first, then this set.
 		const crossDomainPeers = new CrossDomainPeers(federationDir);
 		crossDomainPeersForConsole = crossDomainPeers;
 		// Per-session share state: which local sessions are offered to which linked friend
@@ -300,7 +293,7 @@ export async function startGateway(): Promise<void> {
 		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitGatewayQr(identity, localGatewayId);
 
 		// The service-proxy WS: creds are delivered by enrollment, no kubeconfig mount, and it
-		// reaches a home-NAT evie through the apiserver. The SA token authenticates to the API
+		// reaches a behind-NAT evie through the apiserver. The SA token authenticates to the API
 		// server (consumed there); the cluster CA is pinned for TLS.
 		const connection = evieWsConnection(evieTransport);
 		console.log(
@@ -369,24 +362,28 @@ export async function startGateway(): Promise<void> {
 		});
 	}
 
-	// Creds-less enrollment: when armed with a one-time nonce (start-gateway.sh --enroll)
+	// Creds-less enrollment: when armed with a one-time nonce (provision-admin-domain.sh (Enroll gateway))
 	// and not yet admitted, mint the identity, print the admit-gateway QR with the LAN
 	// target, and accept exactly one sealed bootstrap bundle over POST /enroll.
 	let enrollInstall: ((frame: unknown) => string) | null = null;
 	const enrollNonce = process.env.ENROLL_NONCE;
 	if (enrollNonce && !evieTransport) {
-		const enrollAllowlist = new Allowlist(
-			federationDir,
-			process.env.FEDERATION_OWNER_SIGN_PUB,
-			process.env.FEDERATION_REQUIRE_OWNER_PIN === "true",
-		);
+		const enrollAllowlist = new Allowlist(federationDir);
 		const enrollIdentity = loadOrCreateIdentity(federationDir);
 		if (!enrollAllowlist.selfAdmission(enrollIdentity.sign.pub)) {
-			logAdmitGatewayQr(enrollIdentity, localGatewayId, {
+			const delivery = {
 				host: process.env.ENROLL_LAN_HOST || "0.0.0.0",
 				port: PORT,
 				nonce: enrollNonce,
-			});
+			};
+			logAdmitGatewayQr(enrollIdentity, localGatewayId, delivery);
+			// Also persist the raw payload so the setup script can re-render it (QR or pretty JSON)
+			// without scraping the rendered QR out of docker logs.
+			fs.writeFileSync(
+				path.join(federationDir, ADMIT_PAYLOAD_FILE),
+				JSON.stringify(admitGatewayPayload(enrollIdentity, localGatewayId, delivery)),
+				{ mode: 0o600 },
+			);
 			// The enrollment window closes after a bounded time; the nonce dies with it so a
 			// captured QR cannot be redeemed later. Re-run --enroll for a fresh nonce.
 			let enrollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -398,6 +395,12 @@ export async function startGateway(): Promise<void> {
 				fs.writeFileSync(path.join(federationDir, "transport.json"), JSON.stringify(bundle.transport), {
 					mode: 0o600,
 				});
+				// Record the joined Domain so the post-enroll restart resolves the same Domain.
+				if (bundle.domainId) {
+					fs.writeFileSync(path.join(federationDir, DOMAIN_ID_FILE), bundle.domainId, { mode: 0o600 });
+				}
+				// The admit payload's job ends once the bundle installs; drop it.
+				fs.rmSync(path.join(federationDir, ADMIT_PAYLOAD_FILE), { force: true });
 				enrollInstall = null;
 				if (enrollTimer) clearTimeout(enrollTimer);
 				console.log(
@@ -408,7 +411,9 @@ export async function startGateway(): Promise<void> {
 			enrollTimer = setTimeout(() => {
 				if (enrollInstall) {
 					enrollInstall = null;
-					console.log("[enroll] enrollment window expired (~10 min); re-run start-gateway.sh --enroll");
+					console.log(
+						"[enroll] enrollment window expired (~10 min); re-run provision-admin-domain.sh (Enroll gateway)",
+					);
 				}
 			}, 600_000);
 			enrollTimer.unref?.();
@@ -450,10 +455,10 @@ export async function startGateway(): Promise<void> {
 		// first register, mirroring displayName: "unknown" stays unknown rather than asserting
 		// "not admin" (the TeamInfo stamp omits the field for any falsy value either way).
 		isAdminDomain: () => domainMeta?.isAdminDomain ?? null,
-		// Home-first seal-target resolution on the send side: a target gateway the home
-		// allowlist admits seals v1 to home, mirroring the sealer's open-side ordering, so a
-		// home/friend gateway-id collision never routes a home send to the friend.
-		resolvesHomeGateway: allowlistForConsole
+		// Local-first seal-target resolution on the send side: a target gateway the local
+		// allowlist admits seals v1 to the local Domain, mirroring the sealer's open-side ordering, so a
+		// local/friend gateway-id collision never routes a local send to the friend.
+		resolvesLocalGateway: allowlistForConsole
 			? (gatewayId) => allowlistForConsole!.resolveGateway(gatewayId) !== null
 			: null,
 		// teams() refreshes each online session's cross-Domain shares so presence keeps a
@@ -461,7 +466,7 @@ export async function startGateway(): Promise<void> {
 		touchShares: crossDomainShareState ? (sessionTarget) => crossDomainShareState!.touch(sessionTarget) : null,
 		// respond re-reads the per-session share on a cross-Domain reply forward: a send
 		// accepted while shared, then un-shared, has its in-flight reply dropped here instead
-		// of relayed home (the un-share bites every direction, not just fresh sends).
+		// of relayed back to the origin (the un-share bites every direction, not just fresh sends).
 		isSharedToForReply: crossDomainShareState
 			? (sessionTarget, domainId) => crossDomainShareState!.isSharedTo(sessionTarget, domainId, isLinkedDomain)
 			: null,
@@ -483,7 +488,6 @@ export async function startGateway(): Promise<void> {
 			// The console register reply carries this Gateway's Domain status (learned from
 			// evie's register reply) so the app knows to first-root vs just-provision.
 			domainStatus: () => domainMeta?.domainStatus,
-			bootstrapTransport: () => loadBootstrapTransport(federationDir),
 			relayToHost,
 			crossDomain: crossDomainCoordinator
 				? {
@@ -511,7 +515,7 @@ export async function startGateway(): Promise<void> {
 							unshare: (sessionTarget, target) => crossDomainShareState!.unshare(sessionTarget, target),
 							// After a successful unshare, settle any in-flight cross-Domain job so an
 							// already-accepted send's reply stops at the destination instead of forwarding
-							// home. A specific-Domain unshare scopes to that Domain; an everyone-trusted
+							// back to the origin. A specific-Domain unshare scopes to that Domain; an everyone-trusted
 							// unshare must settle every Domain it reached, i.e. every currently-linked one.
 							expireSessionJobsForTarget: (sessionTarget, target) => {
 								const domains =
@@ -568,7 +572,7 @@ export async function startGateway(): Promise<void> {
 		evictConsolePeer = (conversationId) => consoleHandler.removePeer(conversationId);
 
 		// Federation: a peer Gateway's frames land here, run against the local routes,
-		// and the reply routes home through the Router. The share state gates a
+		// and the reply routes back to the origin through the Router. The share state gates a
 		// cross-Domain op to a shared devcontainer/loose session and filters a
 		// cross-Domain caller's list_teams to shared sessions only.
 		const gatewayRelayHandler = createGatewayRelayHandler({

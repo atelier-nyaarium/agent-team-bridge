@@ -79,7 +79,7 @@ class FederationManager(private val store: ProvisioningStore) {
 		when (val load = store.loadIdentity()) {
 			is IdentityLoad.Loaded -> load.identity
 			IdentityLoad.Absent -> Crypto.generateIdentity().also { store.saveIdentity(it) }
-			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-console.sh")
+			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-admin-domain.sh")
 		}
 
 	/** Owner public material for DISPLAY only, or null when the stored owner key is unreadable
@@ -221,6 +221,21 @@ class FederationManager(private val store: ProvisioningStore) {
 		)
 	}
 
+	/** Build a signed gateway-bridge transport request: the OWNER proves possession of its owner key
+	 * (evie resolves the signer to a rooted owner and returns that network's transport, so the owner
+	 * key - not the console key - signs the TRANSPORT_REQUEST proof). evie verifies + scopes to this
+	 * owner before returning the creds. */
+	fun signTransportRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.TransportRequest {
+		val owner = ownerIdentity()
+		val n = nonce()
+		return com.atelier_nyaarium.switchboard.proto.TransportRequest(
+			signerSignPub = owner.sign.pub,
+			proofAt = nowMs,
+			nonce = n,
+			proof = ProvisionOpsCrypto.signTransportRequest(owner.sign.pub, nowMs, n, owner.sign.priv),
+		)
+	}
+
 	/** Build a signed FLOW-2 "who armed trust toward me?" query: the OWNER proves possession of its
 	 * owner key (the arms are indexed by owner key, so the owner key - not the console key - signs the
 	 * TRUST_PENDING proof). evie verifies + scopes to this owner before listing the arms. */
@@ -262,12 +277,25 @@ class FederationManager(private val store: ProvisioningStore) {
 	/** The current keyring: the stored snapshot, or an owner-only one before any sync. */
 	fun keyring(): Keyring = Keyring.parse(store.loadDomain()) ?: Keyring.empty(ownerSignPub())
 
-	/** Seal a bootstrap bundle (transport + the Gateway's admission + the current keyring)
-	 * to the Gateway's box key, signed by this Console, wrapped in a delivery frame. The
-	 * Gateway verifies the seal, opens it, checks the nonce + the owner-signed admission. */
-	fun sealBundle(nonce: String, transport: GatewayTransport, admission: SignedAdmission, recipientBoxPub: String): GatewayBootstrapFrame {
+	/** Seal a bootstrap bundle (transport + the Gateway's admission + the current keyring + the
+	 * network id) to the Gateway's box key, signed by this Console, wrapped in a delivery frame. The
+	 * Gateway verifies the seal, opens it, checks the nonce + the owner-signed admission, and adopts
+	 * `domainId` as its Domain id (it boots arming and learns the id from here). */
+	fun sealBundle(
+		nonce: String,
+		transport: GatewayTransport,
+		admission: SignedAdmission,
+		recipientBoxPub: String,
+		domainId: String?,
+	): GatewayBootstrapFrame {
 		val console = consoleIdentity()
-		val bundle = GatewayBootstrapBundle(nonce = nonce, transport = transport, admission = admission, domain = keyring().snapshot)
+		val bundle = GatewayBootstrapBundle(
+			nonce = nonce,
+			transport = transport,
+			admission = admission,
+			domain = keyring().snapshot,
+			domainId = domainId,
+		)
 		val plain = json.encodeToString(GatewayBootstrapBundle.serializer(), bundle).toByteArray(Charsets.UTF_8)
 		val sealed = Crypto.seal(plain, recipientBoxPub, console.sign.priv)
 		return GatewayBootstrapFrame(
@@ -431,7 +459,7 @@ class FederationManager(private val store: ProvisioningStore) {
 
 	/** Owner-sign a rename of this owner's own Domain network display name. evie CAS-merges it onto
 	 * the Domain record and pushes it to the Domain's gateways. The `domainId` is this owner's own
-	 * (rooted home) Domain; evie verifies the signature against the Domain's pinned owner key. */
+	 * (rooted admin) Domain; evie verifies the signature against the Domain's pinned owner key. */
 	fun signSetDisplayName(domainId: String, displayName: String, nowMs: Long): SignedSetDisplayName {
 		val owner = ownerIdentity()
 		val rename = SetDisplayName(domainId, displayName, nowMs, nonce())

@@ -57,18 +57,18 @@ export interface RoutesDeps {
 	// admin surfaces only on the admin's own session. Null when unknown (pre-register), mirroring
 	// displayName.
 	isAdminDomain?: (() => boolean | null) | null;
-	// Whether a gateway id resolves to a HOME (single-owner allowlist) peer. Mirrors the
-	// sealer's home-first resolution on the SEND side, so a send to your own home Gateway
-	// whose id collides with a friend's gateway id is sealed v1 to home (the bare-string
+	// Whether a gateway id resolves to a LOCAL (single-owner allowlist) peer. Mirrors the
+	// sealer's local-first resolution on the SEND side, so a send to your own local Gateway
+	// whose id collides with a friend's gateway id is sealed v1 to the local Domain (the bare-string
 	// shorthand) rather than hijacked to the friend. Absent when federation crypto is off.
-	resolvesHomeGateway?: ((gatewayId: string) => boolean) | null;
+	resolvesLocalGateway?: ((gatewayId: string) => boolean) | null;
 	// Refresh the share lastSeenAt for a live local session (its canonical gateway/name),
 	// called from teams() per online team so a session's presence keeps its shares from
 	// auto-forgetting. Absent when federation sharing is not wired.
 	touchShares?: ((sessionTarget: string) => void) | null;
 	// Whether a local session (canonical gateway/name) is still shared to a friend Domain,
 	// re-read on the destination cross-Domain reply forward: an already-accepted send whose
-	// session was un-shared has its in-flight reply DROPPED here rather than relayed home. The
+	// session was un-shared has its in-flight reply DROPPED here rather than relayed back to the origin. The
 	// share state is the single source both the inbound gate and this reply gate read, so an
 	// un-share bites without evie. Absent when federation sharing is not wired (no recheck).
 	isSharedToForReply?: ((sessionTarget: string, domainId: string) => boolean) | null;
@@ -81,7 +81,7 @@ const SendRequestSchema = z.object({
 	to: z.string(),
 	// The Domain id of a cross-Domain target (a session from a linked friend Domain). A
 	// gateway id is unique only within a Domain, so when this is set the seal target is
-	// resolved by the full (domainId, gatewayId) pair; absent keeps the home/cross-Gateway
+	// resolved by the full (domainId, gatewayId) pair; absent keeps the local/cross-Gateway
 	// (bare gateway id) resolution. Console-supplied from the selected session's Domain.
 	targetDomainId: z.string().optional(),
 	type: z.string().optional(),
@@ -199,27 +199,27 @@ export function createRoutes({
 	crossDomainPeers,
 	displayName,
 	isAdminDomain,
-	resolvesHomeGateway,
+	resolvesLocalGateway,
 	touchShares,
 	isSharedToForReply,
 	resolveHandshake,
 }: RoutesDeps) {
 	const { LOG_PATH, localGatewayId, localDomainId } = config;
 
-	/** Resolve a target Gateway id to a SealTarget, HOME-FIRST (mirroring the sealer's own
-	 * resolution order). A gateway id the home single-owner allowlist resolves is the
+	/** Resolve a target Gateway id to a SealTarget, LOCAL-FIRST (mirroring the sealer's own
+	 * resolution order). A gateway id the local single-owner allowlist resolves is the
 	 * bare-string shorthand and seals v1 - checked BEFORE the cross-Domain scan, so a send to
-	 * your OWN home Gateway whose id collides with a friend's gateway id is never hijacked to
-	 * the friend. Only a gateway id NOT in the home Domain is matched against the disjoint
+	 * your OWN local Gateway whose id collides with a friend's gateway id is never hijacked to
+	 * the friend. Only a gateway id NOT in the local Domain is matched against the disjoint
 	 * cross-Domain peer set: a single peer resolves to an explicit `(domainId, gatewayId)`
 	 * SealTarget (v2, the Addressing decision's separate domainId field, never folded into the
 	 * id string); a gateway id ambiguous across two friend Domains throws rather than guess. */
 	function sealTargetFor(targetGateway: string, targetDomain?: string): import("./federation/sealer.js").SealTarget {
-		// Home first: a gateway the home allowlist admits is the bare-string v1 shorthand, so a
-		// home/friend gateway-id collision can never route a home send to the friend. A caller
+		// Local first: a gateway the local allowlist admits is the bare-string v1 shorthand, so a
+		// local/friend gateway-id collision can never route a local send to the friend. A caller
 		// that named an explicit cross-Domain target still falls to the cross-Domain resolution
-		// below (a friend gateway is never in the home allowlist), so the home check is safe.
-		if (resolvesHomeGateway?.(targetGateway)) return targetGateway;
+		// below (a friend gateway is never in the local allowlist), so the local check is safe.
+		if (resolvesLocalGateway?.(targetGateway)) return targetGateway;
 		// An explicit (domainId, gatewayId) from the caller resolves the peer unambiguously,
 		// closing the same-id-two-Domains case the bare scan refuses: two linked friends running
 		// an identically-named gateway are told apart by the Domain the console selected.
@@ -234,13 +234,13 @@ export function createRoutes({
 		if (peers.length > 1) {
 			throw new Error(`Gateway "${targetGateway}" is ambiguous across linked Domains; cannot route`);
 		}
-		// Neither a known home gateway nor a cross-Domain peer: fall back to the bare string,
-		// which the sealer resolves against the home allowlist (and emits v1) or rejects as
-		// "not admitted". This preserves the prior behavior when no home predicate is wired.
+		// Neither a known local gateway nor a cross-Domain peer: fall back to the bare string,
+		// which the sealer resolves against the local allowlist (and emits v1) or rejects as
+		// "not admitted". This preserves the prior behavior when no local predicate is wired.
 		return targetGateway;
 	}
 
-	/** The resolved target Domain id for a cross-Gateway send, or null for a home /
+	/** The resolved target Domain id for a cross-Gateway send, or null for a local /
 	 * same-Domain (bare-string) target. Recorded on the origin anchor so the reply gate can
 	 * require a response_push's verified Domain to match the Domain the send was routed to. A
 	 * resolution error (an ambiguous gateway id) surfaces on the relay path first, so this
@@ -276,7 +276,7 @@ export function createRoutes({
 		if (!evieClient?.isConnected())
 			return { ok: false, error: `Router unavailable; cannot reach Gateway "${dstGateway}"` };
 		if (!sealer) return { ok: false, error: `federation crypto is not configured` };
-		// Resolve the target to a SealTarget once: a home peer is the bare string (v1); a
+		// Resolve the target to a SealTarget once: a local peer is the bare string (v1); a
 		// cross-Domain peer becomes an explicit (domainId, gatewayId) target (v2). An explicit
 		// dstDomain disambiguates a gateway id shared across two linked Domains. The destination's
 		// Domain (if any) also lets us open its v2 reply by the full pair.
@@ -426,6 +426,8 @@ export function createRoutes({
 		const ownDisplayName = displayName?.();
 		const displayNameField = ownDisplayName ? { displayName: ownDisplayName } : {};
 		const isAdminDomainField = isAdminDomain?.() ? { isAdminDomain: true } : {};
+		// Omit when null so the field is absent rather than null on the wire.
+		const domainIdField = localDomainId ? { domainId: localDomainId } : {};
 
 		for (const [name, subs] of registry) {
 			if (name === "host") continue;
@@ -443,7 +445,7 @@ export function createRoutes({
 			teamsList.push({
 				team: name,
 				gatewayId: localGatewayId,
-				domainId: localDomainId,
+				...domainIdField,
 				...displayNameField,
 				...isAdminDomainField,
 				status: "online",
@@ -459,7 +461,7 @@ export function createRoutes({
 			teamsList.push({
 				team: name,
 				gatewayId: localGatewayId,
-				domainId: localDomainId,
+				...domainIdField,
 				...displayNameField,
 				...isAdminDomainField,
 				status: "available",
@@ -768,7 +770,7 @@ export function createRoutes({
 			const rr = deliverResult.returnRoute;
 			// Re-check the per-session share on a CROSS-DOMAIN reply (a destination job carries the
 			// verified friend Domain): an already-accepted send whose session was un-shared after it
-			// landed must have its in-flight reply DROPPED, not relayed home. The share state is the
+			// landed must have its in-flight reply DROPPED, not relayed back to the origin. The share state is the
 			// same source the inbound op gate reads, so an un-share bites every direction without
 			// evie. The session target is the canonical gateway/name parsed from the job's own
 			// (origin-set) session key, the form the share is keyed by. A same-Domain federated reply

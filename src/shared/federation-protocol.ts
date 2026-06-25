@@ -10,7 +10,7 @@ import { ChannelFilesSchema } from "./evie-protocol.js";
 //  gateways share and evie does not: the federated op a Gateway runs on a peer's
 //  behalf, the return-route that pins a reply back to the origin session, and the
 //  crypto-aware payload wrapper. It is NOT codegen'd to Kotlin - cross-Gateway
-//  traffic is gateway-to-gateway; the console reaches the mesh through its home
+//  traffic is gateway-to-gateway; the console reaches the mesh through its route
 //  Gateway. Re-export `FEDERATION_PROTOCOL_VERSION` from the synced leaf so both the
 //  wire version and the inner ops travel from one import surface.
 
@@ -49,7 +49,7 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("list_teams") }),
 	// Wake-across-Gateways: bring up a sleeping devcontainer on the destination.
 	z.object({ kind: z.literal("wake"), team: z.string().min(1).max(128) }),
-	// The destination's reply, pinned home: delivered to `session_id` on the origin.
+	// The destination's reply, pinned to the origin: delivered to `session_id` on the origin.
 	z.object({
 		kind: z.literal("response_push"),
 		session_id: z.string().min(1).max(256),
