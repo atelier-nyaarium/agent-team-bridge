@@ -1,6 +1,6 @@
 # Features and fixes (PLAN - not implemented)
 
-Scoped items across the terminal view, TTS playback, message rendering, and attachments, plus a backlog of larger features and a CLI-era teardown. Verified against the current tree on branch `home-retire-refactor` (versions at 5.0.23). Symbol refs are `path:scope:name`, never line numbers.
+Scoped items across the terminal view, TTS playback, message rendering, and attachments, plus a backlog of larger features. Verified against the current tree on branch `home-retire-refactor` (versions at 5.0.23). Symbol refs are `path:scope:name`, never line numbers. (The CLI teardown + create-session + Copilot items moved into the host-split plan, `bug-class-decisions.md` Phase 6.)
 
 `android/.../` below abbreviates `android/app/src/main/java/com/atelier_nyaarium/switchboard/` (package `com.atelier_nyaarium.switchboard`). Asset paths under `android/app/src/main/assets/` are written in full.
 
@@ -330,58 +330,8 @@ Instead, since the wire can carry structured objects, attach an `"instructions":
 
 ---
 
-## Sequencing note for items 11-13
+## Moved out: Items 11-13 -> the host-split plan
 
-Item 11 (CLI-era teardown) should land BEFORE items 12-13 (create-session button, Copilot support). The teardown removes the old prompt-injection session-driving code; items 12-13 then rebuild session-launch + Copilot the right way under the new host_op/tmux architecture. The user accepts that the teardown deletes code that 12-13 partly reinvent - that's the point (do it right under the new model).
-
-## Item 11 - CLEANUP: tear down the CLI-era (cursor / copilot / codex) infrastructure
-
-**Reality check - the teardown is ~70% already done.** `src/mcp/cli/` does NOT exist (the prompt-injection spawners, `handleInject`, `promptBuilders`, `cliReply` are already gone), and `src/shared/mutex.ts` is gone. CLAUDE.md is STALE and still documents all of it. What remains is the host-side `dispatch_cli` tool, dead model-resolution, dead types, the gateway's vestigial `ConnectionMode "cli"` reject branches, and stale docs. This item is mostly dead-code + doc cleanup, not a big infra removal.
-
-**(A) Delete outright.**
-- `src/mcp/devcontainer/devcontainerCli.ts` - the whole `dispatch_cli` tool (`devcontainerCli.ts:registerDevcontainerCli`, `:pollJob`, `DevcontainerCliSchema` with `agent: z.enum(CLI_AGENT_TYPES)`, the cursor-agent/copilot/codex runner spawner). Sole non-test consumer is `src/mcp/index.ts`.
-- `src/mcp/resolve-model.ts` - now fully dead except its own test (`resolve-model.ts:DEFAULT_MODELS`, `resolve-model.ts:resolveModel` has zero non-test callers). Dies once `helpers.ts` stops importing `DEFAULT_MODELS`.
-- `src/__tests__/resolve-model.test.ts`.
-
-**(B) Remove symbols/branches from shared files.**
-- `src/mcp/index.ts` - the `import { registerDevcontainerCli }` and its call in the host branch (`index.ts:startMcp`).
-- `src/mcp/devcontainer/helpers.ts` - CLI-only helpers: `helpers.ts:CLI_AGENT_TYPES`, `helpers.ts:EFFORT_LEVELS` (the `["simple","standard","complex"]` one - NOT the unrelated `setEffortLevel.ts:EFFORT_LEVELS`), `helpers.ts:resolveDevcontainerModel`, `helpers.ts:buildAgentCommand`, `helpers.ts:BuildAgentCommandParams`, the `DEFAULT_MODELS` import. KEEP the container-lifecycle internals (`assertNotContainer`, `resolveProject`, `ensureContainerUp`, `execInContainer`, ...) - load-bearing for `devcontainerExec.ts` + the wake path.
-- `src/shared/types.ts` - dead `types.ts:InjectPayload` (referenced nowhere), `types.ts:EffortEnv` (only the dead `resolveModel` used it; `MODEL_SIMPLE/STANDARD/COMPLEX` env reads are fully dead), and the stale CLI comment block.
-- **`ConnectionMode "cli"` entanglement (decision needed).** `mode` is the ONLY field distinguishing CLI from channel agents at the gateway, and every remaining "cli" branch exists to REJECT a CLI agent. Either (i) collapse to channel-only and drop the enum, or (ii) keep `mode` as a defensive reject. If collapsing, touch: `src/shared/schemas.ts:ConnectionModeSchema` (drop `"cli"`), `src/shared/types.ts:ConnectionMode`, `src/gateway/websocket.ts` (the `mode` derive + `WsData.mode`), `src/gateway/routes.ts:getTeamMode` + the `channelOnly` reject + the "CLI-mode agents are no longer supported" 400, `src/gateway/console/consoleHandler.ts` (the `ws.data.mode === "cli"` reject), `src/gateway/index.ts` (the two `mode: "cli" as const` upgrade defaults). NOTE: `ConnectionModeSchema` is codegen'd to Kotlin, so dropping `"cli"` is a wire-schema change -> `bun scripts/codegen-kotlin.ts` + Android build. Keeping `mode` as a guard is lower-risk; lean that way unless a clean cut is wanted.
-- **Container-side twin:** `src/mcp/bridge/registerBridgeTools.ts:detectAgentType` + the `AGENT_CLI_NAMES` map probe agent type; post-teardown a container is always Claude/channel. Simplify `detectAgentType` to return `"claude"` (and drop cursor/copilot/codex) OR leave `AGENT_TYPE` as a future hook. Keep in sync with the gateway `mode` decision (`helpers.ts` sets `mode = isChannel ? "channel" : "cli"`).
-
-**(C) Do NOT delete (CLI-named but channel/federation load-bearing).** `src/shared/pending-job-store.ts` (core channel-conversation + cross-Domain job store; only the stale `poll()` comment needs fixing), `src/mcp/bridge/replyTool.ts` (now channel-only: `channelReply` + `humanTools`), `src/mcp/devcontainer/devcontainerExec.ts` (`dispatch_exec`).
-
-**(D) Stale docs/config to clean.** `CLAUDE.md` (the entire `cli/` subtree doc, the `mutex.ts` line, the "CLI mode (cursor/copilot/codex)" Connection Modes section, the `dispatch_cli` line, `AGENT_TYPE`/`MODEL_*` env docs, the `mutex.test.ts` testing example - all reference gone code); `README.md` (the "Cursor/Copilot/Codex" tagline, the inject-mode bullet, the `dispatch_cli` row, the `AGENT_TYPE=cursor` section); `skills/orchestrate/SKILL.md` + `skills/crosstalk/SKILL.md` (the `dispatch_cli` / `crosstalk_reply` / "CLI agents" lines); `agents/team-relay.md` (the `dispatch_cli` doc + `agent: cursor|copilot|codex` examples). Env files (`.mcp.json`, `docker-compose.yml`, `install.sh`, `Dockerfile`, `start-*.sh`) are ALREADY clean - nothing to change.
-
-**(E) Tests.** Remove `resolve-model.test.ts`. If the `ConnectionMode "cli"` enum is dropped, update the `mode:"cli"` fixtures in `console-handler.test.ts` (the CLI-reject test + error-message asserts), `routes.test.ts`, `websocket.test.ts`.
-
-## Item 12 - FEATURE: "create session" button (tmux create + launch)
-
-A Console button that launches a NEW agent session (tmux new-session + `claude ...`) on a target, instead of only attaching to the one hardcoded `claude` session. Full path mapped; the hard part is session naming.
-
-**The path, hop by hop** (mirrors the existing `peek`/`tmux_send` flow):
-- Android button - `android/.../MainActivity.kt:SessionsScreen` (the "Agent Sessions" list screen; add an `onCreateSession` lambda + a `TopAppBar` action or FAB, or in `MainActivity.kt:EmptyBoard`).
-- Android repo/client - `android/.../ChatRepository.kt` new `createSession` (twin of `ChatRepository:peekTerminal`/`:tmuxSend`) -> `android/.../ConsoleClient.kt` new `createSession` -> `ConsoleClient:relay(ConsoleOp.CreateSession, ...)` (twin of `ConsoleClient:peek`/`:tmuxSend`).
-- Wire schema - `src/shared/schemas.ts:ConsoleOpSchema` new `create_session` member (sibling of `peek`/`tmux_send`). **Codegen change:** `ConsoleOp` is `.meta({id})`'d -> run `bun scripts/codegen-kotlin.ts` to regenerate `android/.../proto/Protocol.kt` (CI drift-checks it).
-- Gateway dispatch - `src/gateway/console/consoleHandler.ts:dispatch` new `create_session` case (next to the `peek`/`tmux_send` cases): `resolveTmuxTarget(op.target)` then `relayToHost({kind:"createSession",...})`. Add it to `consoleHandler.ts:isMutatingOp` so a retried opId replays instead of double-launching.
-- Gateway relay - `src/gateway/index.ts:relayToHost` (reused; may need to raise `HOST_OP_TIMEOUT_MS = 20_000` OR make the op fire-and-return rather than block on Claude booting).
-- Host RPC - `src/shared/host-op.ts:HostOp` new `{ kind: "createSession"; target; ... }` variant (type-only, NOT codegen'd). `src/mcp/devcontainer/hostWakeListener.ts:handleHostOp` reused; add a `createSession` primitive to the `createHostOpRunner({...})` deps. `src/mcp/devcontainer/hostOpRunner.ts:createHostOpRunner` new `run` branch + `TmuxOps`.
-- tmux primitive - `src/mcp/devcontainer/tmuxCore.ts` new `createSession` (twin of `tmuxCore:sendText`), building `tmuxArgv(target, ["new-session","-d","-s",<name>, <claude cmd>])`. Launch command template: `start-host-daemon.sh` (host) and `hostWakeListener.ts:handleWake` (devcontainer, the truest template - it already does `tmux new-session -d -s claude "... claude --model ... plugin:switchboard@..."`).
-
-**Hard parts (flagged).**
-1. **Session naming/collision (central).** `tmuxCore.ts:TMUX_PANE` is hardcoded `"claude.0"` and BOTH launch templates name the session `claude` - the whole peek/send layer assumes ONE session per target. A button that adds sessions breaks the 1:1 assumption. Easiest v1: scope "create session" to launching a KNOWN, not-yet-running catalog project (effectively a manual wake) - reuses all existing single-`claude` machinery, no multi-session plumbing. True multi-session-per-target requires threading a session name through `TmuxTarget` -> `TMUX_PANE` -> every primitive -> the team registry.
-2. **Registration latency.** The button launches a process; the session appears as a team only after the in-session Claude's MCP plugin self-registers (`websocket.ts` register path). `list_teams` won't show it immediately - UI must poll/refresh (the wake path already models "launch then poll the pane for readiness").
-3. **Host-op timeout.** Booting Claude may exceed `HOST_OP_TIMEOUT_MS`; return fast and let registration surface async rather than blocking the sealed relay.
-4. **Auth/privilege.** Inherits the console seal (owner-signed `kind:console` admission) + the token-gated `host` WS slot - no new auth surface, but launching a session is heavier than keystroke injection, so keep `consoleHandler.ts:resolveTmuxTarget`'s allowlist (known projects + `gateway`) as the gate.
-
-## Item 13 - FEATURE: Copilot support (limited - no channels API)
-
-Drive a Copilot session through the SAME create-session -> host_op -> tmux path as item 12; the only divergence is the launch command in the `tmuxCore:createSession` primitive (a `copilot`/CLI-agent invocation instead of `claude ...`). Depends on items 11 + 12.
-
-**The key design constraint.** Copilot has no channels API, so a Copilot session canNOT self-register as a channel team the way Claude does - the old CLI mode handled this with one-shot prompt injection (now torn down in item 11) and the console `send` path explicitly rejects non-channel agents today. So Copilot can't appear as a chat team. The natural fit under the new architecture: drive Copilot PURELY through the terminal view (peek + tmux_send on its tmux pane) - no channel registration, no chat thread, just the raw pane. The create-session button launches it; the terminal view operates it.
-
-**Open questions to revisit.**
-- Does Copilot get a tmux session that the terminal view targets (terminal-only, no team entry), or does it need a lightweight registry presence so it shows in the session list? If the latter, what registers it (the host daemon on launch, since Copilot won't)?
-- Session naming again (item 12 hard-part 1): a Copilot session on the host/a container is a second session alongside `claude` -> needs the multi-session-name plumbing, OR its own target convention.
-- This deliberately reinvents (correctly) the agent-launch capability item 11 removed - confirm the terminal-only model is the intended scope vs. any chat affordance.
+The CLI-era teardown, the create-session button, and Copilot support are now subsumed into
+`bug-class-decisions.md` Phase 6 (split the host: demote the host-agent, headless multi-session
+daemon). They were removed here to avoid a split source of truth.
