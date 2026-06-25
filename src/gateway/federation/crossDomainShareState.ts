@@ -8,14 +8,12 @@ type CrossDomainShareTarget = z.infer<typeof CrossDomainShareTargetSchema>;
 ////////////////////////////////
 //  Schemas
 
-/** A single per-session share: a local session this Gateway has offered to an AUDIENCE - a SPECIFIC
- * linked Domain, or EVERYONE the owner trusts. Keyed by `(sessionTarget, targetKey)`. This is plain
- * state, NOT an owner-signed artifact: the device's submit op is authenticated by the existing console
- * seal (it is already an admitted console), so no second signature scheme. */
+/** A per-session share: a local session this Gateway offers to an audience (a specific linked
+ * Domain, or everyone the owner trusts), keyed by `(sessionTarget, targetKey)`. Plain state, not an
+ * owner-signed artifact: the submit op is already authenticated by the console seal, so no second signature. */
 const ShareRecordSchema = z.object({
-	// The canonical SessionId target (`gateway/name`) of the shared session. Only
-	// devcontainer/loose sessions are ever shared; the host-agent, gateway, and
-	// console are never shared (the caller enforces the kind, the store is kind-agnostic).
+	// The canonical SessionId target (`gateway/name`). Only devcontainer/loose sessions are
+	// shared; the caller enforces that, and the store is kind-agnostic.
 	sessionTarget: z.string().min(1),
 	// Who the session is shared TO: a specific linked Domain, or everyone trusted.
 	target: CrossDomainShareTargetSchema,
@@ -39,10 +37,9 @@ type CrossDomainShareFile = z.infer<typeof CrossDomainShareFileSchema>;
 
 export const XDOMAIN_SHARE_FILE = "cross-domain-share-state.json";
 
-/** The per-session share set on a Gateway: which local sessions are offered to which
- * friend Domains, persisted to the Gateway's volume (tight perms). Both discovery and
- * the relay read this one source, so an un-share bites without evie. A record keyed by
- * `(sessionTarget, toDomainId)`; one session shared to N Domains is N records. */
+/** The per-session share set on a Gateway: which local sessions are offered to which friend
+ * Domains, persisted to the Gateway's volume (0600). Discovery and the relay both read this one
+ * source, so an un-share takes effect without evie. One session shared to N Domains is N records. */
 export class CrossDomainShareState {
 	private file: string;
 	private state: CrossDomainShareFile;
@@ -119,11 +116,9 @@ export class CrossDomainShareState {
 		];
 	}
 
-	/** Refresh `lastSeenAt` for every share of a session, so the absence sweep does not
-	 * auto-forget it. Called from `teams()` for every online local session (presence keeps a
-	 * share fresh) and on a permitted cross-Domain delivery in the relay handler (a live
-	 * thread keeps it fresh). The sweep separately suppresses the forget while a cross-Domain
-	 * thread is open, so a long-running collaboration is never forgotten mid-stream. */
+	/** Refresh `lastSeenAt` for every share of a session so the absence sweep does not auto-forget
+	 * it. Called from `teams()` for each online session and on a permitted cross-Domain delivery. The
+	 * sweep also suppresses the forget while a cross-Domain thread is open, so a collaboration survives. */
 	touch(sessionTarget: string): void {
 		let changed = false;
 		const now = Date.now();
@@ -136,10 +131,9 @@ export class CrossDomainShareState {
 		if (changed) this.persist();
 	}
 
-	/** Drop EVERY share offered to a friend Domain, returning the number dropped. The
-	 * immediate unlink path: forgetting what was shared to a Domain when its link is pulled,
-	 * so a re-link starts from share-nothing. Distinct from the absence sweep, which is the
-	 * automatic per-session auto-forget; this is the manual, immediate, whole-Domain drop. */
+	/** Drop every share offered to a friend Domain, returning the number dropped. The immediate
+	 * unlink path: forget what was shared to a Domain when its link is pulled, so a re-link starts
+	 * from share-nothing. Distinct from the absence sweep, which auto-forgets per session over time. */
 	dropDomain(toDomainId: string): number {
 		const before = this.state.shares.length;
 		// Only the SPECIFIC-Domain shares for this Domain are dropped; an everyone-trusted share is not

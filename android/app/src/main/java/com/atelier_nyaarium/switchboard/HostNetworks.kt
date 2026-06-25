@@ -55,18 +55,15 @@ import kotlinx.coroutines.launch
 //  Networks you host (guest tenants the admin pre-stages for friends)
 
 /**
- * The host-a-friend admin surface, kept separate from PEERS (hosting != linking). The list shows
- * each staged guest tenant by its network name with a state chip (awaiting-setup -> offline ->
- * online); [+ Add a network] stages a new pending tenant; tapping a row drills into the invite
- * detail (Generate QR / Copy / Save-as-file, plus Remove and Link). The friend scans the one-time
- * invite, their app first-roots their Domain at its silent owner key, and they run their own agents.
+ * The host-a-friend admin surface, separate from PEERS (hosting is not linking). Lists each staged
+ * guest tenant with a state chip; adding one stages a pending tenant, and tapping a row drills into
+ * the invite detail. The friend scans the one-time invite and their app first-roots their Domain.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HostNetworksScreen(repo: ChatRepository, onBack: () -> Unit, onTenant: (String) -> Unit) {
 	val state by repo.state.collectAsState()
-	// Re-derive the rows on a discovery change (a friend coming online flips a state chip) and after
-	// an add/remove (the `refresh` tick).
+	// Re-derive rows on a discovery change (a state chip flips) or after an add/remove.
 	var refresh by remember { mutableStateOf(0) }
 	val tenants = remember(state.teams, refresh) { repo.hostedTenants() }
 	var showAdd by remember { mutableStateOf(false) }
@@ -152,9 +149,8 @@ private fun HostedStateLabel(state: HostedTenantState) {
 ////////////////////////////////
 //  Add a network (stage a pending tenant)
 
-/** Prompt the friend's network name, then stage a pending tenant (provision_tenant). On success
- * evie mints the one-time invite and the row appears as "awaiting setup"; the detail screen renders
- * the invite QR. */
+/** Prompt the friend's network name, then stage a pending tenant (provision_tenant). On success the
+ * row appears as "awaiting setup" and the detail screen renders the invite QR. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AddNetworkScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Unit) {
@@ -215,11 +211,9 @@ private fun AddNetworkScreen(repo: ChatRepository, onBack: () -> Unit, onDone: (
 ////////////////////////////////
 //  Hosted-tenant detail (invite QR + Copy / Save + Remove + Link)
 
-/** A hosted tenant's detail: generate the one-time invite (QR + Copy + Save-as-file) for the
- * friend to scan, regenerate it if it leaks/expires, Remove the tenant, or Link with it (the same
- * cross-Domain Link wizard, once they are online). The invite blob carries the route Gateway's
- * transport creds + the pending {domainId, nonce}; the friend's app first-roots their Domain on
- * scan. */
+/** A hosted tenant's detail: generate the one-time invite for the friend to scan, regenerate it,
+ * Remove the tenant, or Link with it. The invite blob carries the route Gateway's transport creds
+ * plus the pending {domainId, nonce}; the friend's app first-roots their Domain on scan. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HostedTenantDetailScreen(
@@ -234,8 +228,7 @@ fun HostedTenantDetailScreen(
 	val scope = rememberCoroutineScope()
 	val state by repo.state.collectAsState()
 	val tenant = remember(state.teams, domainId) { repo.hostedTenants().firstOrNull { it.domainId == domainId } }
-	// The invite blob is built lazily (it fetches the gateway transport on demand). Generating it
-	// shows the QR; until then the user sees the Generate button.
+	// The invite blob is built lazily because it fetches the gateway transport on demand.
 	var inviteBlob by remember(domainId) { mutableStateOf<String?>(null) }
 	var status by remember { mutableStateOf("") }
 	var busy by remember { mutableStateOf(false) }
@@ -319,8 +312,7 @@ fun HostedTenantDetailScreen(
 					style = MaterialTheme.typography.bodyMedium,
 				)
 				QrCode(text = blob) {
-					// The blob overflowed a single QR (very large creds): the code-and-file fallbacks
-					// below still work, so just explain the missing image.
+					// The blob overflowed a single QR; the Copy and Save fallbacks below still work.
 					Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
 						Text(
 							"Too large for a QR. Use Copy or Save instead.",
@@ -362,8 +354,8 @@ fun HostedTenantDetailScreen(
 
 			HorizontalDivider()
 
-			// Link is the separate cross-Domain pairing (hosting does not link). Available once the
-			// friend is online; offered always, with the wizard guiding the both-present ceremony.
+			// Link is the separate cross-Domain pairing (hosting does not link); the wizard guides the
+			// both-present ceremony.
 			Text(
 				"Want your agents to work with theirs? Link separately, once they're set up.",
 				style = MaterialTheme.typography.bodySmall,
@@ -381,8 +373,8 @@ fun HostedTenantDetailScreen(
 	}
 }
 
-/** The state banner at the top of the detail: awaiting-setup explains the friend has not joined yet
- * (pointing at the manual to bring up their own host), offline/online are status only. */
+/** The state banner at the top of the detail; awaiting-setup explains the friend has not joined
+ * yet, offline/online are status only. */
 @Composable
 private fun HostedStateBanner(state: HostedTenantState) {
 	val text = when (state) {

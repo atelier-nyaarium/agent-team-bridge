@@ -13,18 +13,15 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * On-device debug log the user can pull off the console. Writes to the shared
- * Downloads folder as `switchboard-debug.log` (Downloads/switchboard-debug.log)
- * via MediaStore, with no storage permission. The file is truncated at each app
- * start, then appended to, so a sent log is one session.
+ * On-device debug log the user can pull off the console. Writes to
+ * Downloads/switchboard-debug.log via MediaStore with no storage permission,
+ * truncating at each app start so a sent log is one session. Lines also go to
+ * logcat under the `sb/<tag>` tag.
  *
- * Logging must never crash the app, so every sink call is wrapped and a failure is
- * swallowed. Lines also go to logcat under the `sb/<tag>` tag.
- *
- * DEBUG builds also buffer the last RING_CAP lines in memory and flush them to
- * evie's POST /ingest once per poll cycle (see attachIngest / flushToIngest).
- * Release builds contain no reachable ingest path: every ingest call is inside
- * `if (BuildConfig.DEBUG)` blocks that the compiler eliminates for release.
+ * Logging must never crash the app, so every sink call is wrapped and failures
+ * are swallowed. DEBUG builds also buffer the last RING_CAP lines and flush them
+ * to evie's POST /ingest once per poll cycle. Release builds eliminate the ingest
+ * path entirely (every call sits inside `if (BuildConfig.DEBUG)`).
  */
 object DebugLog {
 	private const val FILE_NAME = "switchboard-debug.log"
@@ -51,10 +48,9 @@ object DebugLog {
 	@Volatile private var ingestAppToken: String? = null
 	@Volatile private var ingestDevice: String? = null
 	@Volatile private var ingestConversationId: String? = null
-	// The ingest POST hits the K8s API server (cluster-signed cert), so a default
-	// HttpsURLConnection fails the handshake against the platform trust store and the
-	// error is swallowed - the reason the debug stream was silent. Pin the cluster CA
-	// the same way the relay's OkHttp client does.
+	// The ingest POST hits the K8s API server's cluster-signed cert, so a default
+	// HttpsURLConnection fails the handshake against the platform trust store. Pin
+	// the cluster CA the same way the relay's OkHttp client does.
 	@Volatile private var ingestSslFactory: javax.net.ssl.SSLSocketFactory? = null
 
 	fun init(context: Context) {
@@ -74,9 +70,9 @@ object DebugLog {
 	}
 
 	/**
-	 * Wire up the ingest sender. Call once the provisioning blob is parsed.
-	 * DEBUG builds: enables periodic log streaming to POST $proxyBase/ingest.
-	 * Release builds: this method is a no-op (the body is inside BuildConfig.DEBUG).
+	 * Wire up the ingest sender; call once the provisioning blob is parsed. DEBUG
+	 * builds enable periodic log streaming; release builds no-op (body inside
+	 * BuildConfig.DEBUG).
 	 */
 	fun attachIngest(prov: Provisioning) {
 		if (BuildConfig.DEBUG) {
@@ -92,9 +88,8 @@ object DebugLog {
 	}
 
 	/**
-	 * Drain the ring buffer and POST it to /ingest. Call once per poll cycle
-	 * (or on any convenient IO thread). Silently swallows all errors - debug only.
-	 * Release builds: this method is a no-op (the body is inside BuildConfig.DEBUG).
+	 * Drain the ring buffer and POST it to /ingest, once per poll cycle. Swallows
+	 * all errors. Release builds no-op (body inside BuildConfig.DEBUG).
 	 */
 	fun flushToIngest() {
 		if (BuildConfig.DEBUG) {
@@ -186,8 +181,7 @@ object DebugLog {
 	}
 
 	/** A TLS socket factory trusting ONLY the cluster CA, matching the relay's pinned
-	 * OkHttp client. Without it the ingest POST to the cluster-signed API server fails
-	 * the handshake against the default trust store, which silenced the debug stream. */
+	 * OkHttp client. The default trust store rejects the cluster-signed API server. */
 	private fun pinnedSocketFactory(caPem: String): javax.net.ssl.SSLSocketFactory {
 		val ca = java.security.cert.CertificateFactory.getInstance("X.509")
 			.generateCertificate(caPem.byteInputStream())

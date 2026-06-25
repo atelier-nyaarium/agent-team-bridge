@@ -23,13 +23,12 @@ import { generateIdentity, type Identity } from "../shared/crypto.js";
 ////////////////////////////////
 //  MITM-closure proof for the commit-reveal SAS-AKE
 //
-//  The fixed vulnerability: the old SAS was over only the public keys + the pin, all
-//  relayed by the content-blind Router with no commitment. A malicious Router could
-//  substitute its own keys on BOTH legs and grind offline until both phones showed the
-//  SAME short code, a full double-MITM. These tests reproduce the attack against the
-//  commit-reveal exchange and assert it now FAILS: a reveal that does not hash to the
-//  earlier commitment is rejected, and the commitment forces the Router to fix its
-//  substituted keys BEFORE it learns the peer's, so it cannot search for a colliding SAS.
+//  The old SAS covered only the public keys plus the pin with no commitment, so a
+//  content-blind Router could substitute its own keys on both legs and grind offline
+//  until both phones showed the same code (a double-MITM). These tests reproduce the
+//  attack and assert it fails: a reveal that does not hash to its commitment is rejected,
+//  and the commitment forces the Router to fix its keys before it learns the peer's, so
+//  it cannot search for a colliding SAS.
 
 ////////////////////////////////
 //  Fixtures
@@ -156,29 +155,20 @@ describe("the offline grind across both legs is impossible", () => {
 		// The Router's substituted identity, presented to each honest side in place of the peer.
 		const mitm = makeDomain("mitm", "mitm-gw");
 
-		// The exchange the HONEST sides actually run is: each side commits to its OWN keys, the
-		// MITM forwards those commitments, and at reveal the MITM swaps in ITS keys. The
-		// commitment is fixed BEFORE the MITM reveals, so on each leg the SAS the honest side
-		// computes is over (its real keys, the MITM's keys). The MITM controls its own keys but
-		// must use the SAME committed keys it sent each side, so:
-		//
-		//   A's leg SAS = SAS(A, mitm-as-seen-by-A)   // A's honest keys + the MITM keys to A
-		//   B's leg SAS = SAS(mitm-as-seen-by-B, B)   // the MITM keys to B + B's honest keys
-		//
-		// For the double-MITM to go undetected, A's SAS must equal B's SAS. The ACTUAL defense is
-		// the commit-reveal ordering (the test above): the MITM is committed to ONE key set per leg
-		// before it sees the honest reveal, so it cannot align the legs - A's SAS binds A's real
-		// keys, B's SAS binds B's real keys. (The flat-sort SAS preimage alone is NOT injective - a
-		// within-party field swap collides it - so the safety here is the commitment timing doing
-		// the work, not the SAS structure.)
+		// Each honest side commits to its OWN keys; the MITM forwards those commitments and at
+		// reveal swaps in ITS keys. The commitment is fixed before the MITM reveals, so each leg's
+		// SAS binds the honest side's real keys against the MITM keys committed to that side
+		// (A's leg = SAS(A, mitm-to-A), B's leg = SAS(mitm-to-B, B)). The MITM cannot align the
+		// legs, being committed to one key set per leg before it sees the honest reveal. The
+		// flat-sort SAS preimage alone is not injective (a within-party field swap collides it),
+		// so the commitment timing does the safety work, not the SAS structure.
 		const mitmParty = partyOf(mitm);
 		const sasOnAsLeg = crossDomainSas(partyOf(a), mitmParty, PIN);
 		const sasOnBsLeg = crossDomainSas(mitmParty, partyOf(b), PIN);
 		expect(sasOnAsLeg).not.toBe(sasOnBsLeg);
 
-		// The MITM cannot grind its OWN keys to force the two legs to agree, because changing
-		// its key set changes BOTH legs at once (it is committed to one value per leg before it
-		// sees the honest reveal). Sample many candidate MITM key sets: none collide the legs.
+		// The MITM cannot grind its OWN keys to force the legs to agree: changing its key set
+		// changes BOTH legs at once. Sample many candidate MITM key sets; none collide the legs.
 		for (let i = 0; i < 64; i++) {
 			const candidate = partyOf(makeDomain("mitm", "mitm-gw"));
 			expect(crossDomainSas(partyOf(a), candidate, PIN)).not.toBe(crossDomainSas(candidate, partyOf(b), PIN));
@@ -190,21 +180,19 @@ describe("the offline grind across both legs is impossible", () => {
 		const b = makeDomain("bob", "bob-desktop");
 		const target = crossDomainSas(partyOf(a), partyOf(b), PIN);
 
-		// The grind, simulated: the MITM is committed to A's real keys on B's leg and searches
-		// over its OWN substituted key sets for one whose SAS(A, candidate) equals the target it
-		// wants B to see. The real defense is the COMMITMENT, not the width: because the MITM is
-		// committed before it learns the peer's keys, it gets only the single online guess the
-		// attempt cap allows, not an offline search. The 6-digit width sets only the residual of
-		// that one guess (~1-in-10^6), so a small batch of blind substitutions essentially never
-		// reproduces the honest target.
+		// The grind, simulated: the MITM is committed to A's real keys on B's leg and searches its
+		// OWN substituted key sets for one whose SAS(A, candidate) equals the target. The defense
+		// is the commitment: committed before it learns the peer's keys, the MITM gets only the
+		// single online guess the attempt cap allows, not an offline search. The 6-digit width
+		// sets the residual of that one guess (~1-in-10^6), so a small batch essentially never hits.
 		let collisions = 0;
 		for (let i = 0; i < 256; i++) {
 			const candidate = partyOf(makeDomain("x", "y"));
 			if (crossDomainSas(partyOf(a), candidate, PIN) === target) collisions++;
 		}
-		// 256 blind tries against a 10^6 space: the expected count is ~2.6e-4, so >1 collision is a
-		// ~3e-8 event. Tolerate the astronomically rare single hit to stay non-flaky; the security
-		// claim is the committed single-guess, not zero collisions across a batch.
+		// 256 blind tries against a 10^6 space: expected ~2.6e-4 hits, so >1 collision is a ~3e-8
+		// event. Tolerate the rare single hit to stay non-flaky; the security claim is the committed
+		// single-guess, not zero collisions across a batch.
 		expect(collisions).toBeLessThanOrEqual(1);
 	});
 

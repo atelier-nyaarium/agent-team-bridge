@@ -48,13 +48,13 @@ data class ChannelFile(
 @Serializable
 data class TeamInfo(
 	val team: String,
-	val gatewayId: String? = null,
+	val gatewayId: String,
 	val domainId: String? = null,
 	val displayName: String? = null,
 	val isAdminDomain: Boolean? = null,
 	val status: String,
 	val mode: String? = null,
-	val kind: String? = null,
+	val kind: String,
 	val version: String? = null,
 	val queue_depth: Long,
 )
@@ -145,10 +145,6 @@ sealed class ConsoleOp {
 		val holdMs: Long? = null,
 		val knownDomainVersion: String? = null,
 	) : ConsoleOp()
-
-	@Serializable
-	@SerialName("get_gateway_transport")
-	data object GetGatewayTransport : ConsoleOp()
 
 	@Serializable
 	@SerialName("peek")
@@ -285,7 +281,7 @@ data class ConsoleReplyBody(
 @Serializable
 data class ConsoleRegisterResult(
 	val device: String,
-	val gatewayId: String? = null,
+	val gatewayId: String,
 	val cursor: Long,
 	val epoch: Long,
 	val domainStatus: String? = null,
@@ -340,12 +336,6 @@ data class Provisioning(
 	val port: Long? = null,
 	val device: String? = null,
 	val conversationId: String? = null,
-	val sttsUrl: String? = null,
-	val sttsKey: String? = null,
-	val identity: String? = null,
-	val gatewayId: String? = null,
-	val gatewaySignPub: String? = null,
-	val gatewayBoxPub: String? = null,
 	val pendingTenant: PendingTenantRef? = null,
 	val enrollHandshake: EnrollHandshakeRef? = null,
 )
@@ -662,11 +652,6 @@ data class DomainSnapshot(
 	val admissions: List<SignedAdmission>,
 	val revocations: List<SignedRevocation>,
 	val displayName: String? = null,
-)
-
-@Serializable
-data class ConsoleGatewayTransportResult(
-	val transport: GatewayTransport,
 )
 
 @Serializable

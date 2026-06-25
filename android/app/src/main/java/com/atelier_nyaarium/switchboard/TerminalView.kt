@@ -89,7 +89,7 @@ internal data class AnsiRun(val text: String, val fg: Long?, val bg: Long?, val 
 /**
  * Parse a `tmux capture-pane -e` snapshot (text with SGR color escapes, no cursor motion) into
  * styled runs. Non-SGR escape sequences are skipped; unsupported SGR codes (italic, underline) are
- * ignored. v1 scope: 16-color, 256-color, truecolor, bold, reverse. Pure (no Compose), JVM-testable.
+ * ignored. Handles 16-color, 256-color, truecolor, bold, and reverse. Pure (no Compose), JVM-testable.
  */
 internal fun parseAnsiRuns(input: String): List<AnsiRun> {
 	val runs = ArrayList<AnsiRun>()
@@ -229,10 +229,9 @@ private const val BACKSPACE_HOLD_MS = 350L
 private const val BACKSPACE_REPEAT_MS = 120L
 
 /**
- * A filled key that fires `onTap` once on a tap, and on a press-and-hold starts repeat-firing
- * `onHoldRepeat` after a short threshold (at a steady cadence) until release. Backspace uses it: a tap
- * erases one char, a hold spams Alt+Backspace (delete-word). Tonal, so it reads distinct from the
- * primary Send button it sits above.
+ * A filled key that fires `onTap` on a tap, and on press-and-hold starts repeat-firing `onHoldRepeat`
+ * after a short threshold until release. Backspace uses it: a tap erases one char, a hold repeats
+ * Alt+Backspace (delete-word).
  */
 @Composable
 private fun BackspaceKey(onTap: () -> Unit, onHoldRepeat: () -> Unit, modifier: Modifier = Modifier) {
@@ -268,10 +267,10 @@ private fun BackspaceKey(onTap: () -> Unit, onHoldRepeat: () -> Unit, modifier: 
 }
 
 /**
- * The terminal view: a live ANSI pane (auto-refreshed while the screen is RESUMED, so it pauses on
- * background and when toggled off) over a fixed palette (control keys + curated text) + a text input
- * that injects via tmux_send. onPeek carries the last hash so an idle pane round-trips only the hash,
- * and returns a Result so a never-loaded pane can show the backend's reason instead of staying blank.
+ * A live ANSI pane (auto-refreshed while RESUMED, so it pauses in the background and when toggled off)
+ * over a fixed palette (control keys + slash commands) and a text input that injects via tmux_send.
+ * onPeek carries the last hash so an idle pane round-trips only the hash, and returns a Result so a
+ * never-loaded pane can show the backend's reason instead of staying blank.
  */
 @Composable
 fun TerminalView(
@@ -359,7 +358,7 @@ fun TerminalView(
 					onHoldRepeat = { fire(null, "M-BSpace") },
 				)
 				FilledIconButton(
-					// Empty input sends a bare Enter (the Enter chip is retired in favor of this).
+					// Empty input sends a bare Enter; non-empty submits the typed text.
 					onClick = {
 						if (input.isEmpty()) {
 							fire(null, "Enter")

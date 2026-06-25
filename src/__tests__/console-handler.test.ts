@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import { describe, expect, it } from "vitest";
-import { type ConsoleRoutes, createConsoleHandler } from "../gateway/console/consoleHandler.js";
+import { type ConsoleRoutes, createConsoleDispatcher } from "../gateway/console/consoleHandler.js";
 import { ConsolePeer } from "../gateway/console/consolePeer.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../gateway/websocket.js";
 import type { ConsoleOp, OpenedConsoleFrame } from "../shared/console-protocol.js";
@@ -57,7 +57,7 @@ interface Harness {
 	mailboxStore: DeviceMailboxStore;
 	sendCalls: Record<string, unknown>[];
 	respondCalls: Record<string, unknown>[];
-	handler: ReturnType<typeof createConsoleHandler>;
+	handler: ReturnType<typeof createConsoleDispatcher>;
 }
 
 function makeHarness(
@@ -95,7 +95,7 @@ function makeHarness(
 		...overrides,
 	};
 
-	const handler = createConsoleHandler({
+	const handler = createConsoleDispatcher({
 		registry,
 		conversationRegistry,
 		mailboxStore,
@@ -150,7 +150,7 @@ describe("ConsolePeer", () => {
 	});
 });
 
-describe("createConsoleHandler", () => {
+describe("createConsoleDispatcher", () => {
 	it("register inserts a virtual peer keyed by conversationId and returns the cursor", async () => {
 		const h = makeHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "register" }));
@@ -223,7 +223,7 @@ describe("createConsoleHandler", () => {
 		const registry: TeamRegistry = new Map();
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -323,7 +323,7 @@ describe("createConsoleHandler", () => {
 		const reply = await h.handler.handleFrame(frame({ kind: "list_teams" }));
 		expect(reply.ok).toBe(true);
 		const teams = (reply.result as { teams: { team: string }[] }).teams.map((t) => t.team);
-		// "gateway" (the host-agent) is now surfaced; the cli "host" daemon and the
+		// "gateway" (the host-agent) is surfaced; the cli "host" daemon and the
 		// device itself stay excluded.
 		expect(teams.sort()).toEqual(["gateway", "team-a"]);
 	});
@@ -570,7 +570,7 @@ describe("createConsoleHandler", () => {
 		const registry: TeamRegistry = new Map();
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -664,7 +664,7 @@ describe("createConsoleHandler", () => {
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
 		let resolveSend: ((res: Response) => void) | undefined;
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -706,7 +706,7 @@ describe("createConsoleHandler", () => {
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
 		let resolveSend: ((res: Response) => void) | undefined;
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -795,7 +795,7 @@ describe("createConsoleHandler", () => {
 		const conversationRegistry: ConversationRegistry = new Map();
 		const mailboxStore = new DeviceMailboxStore();
 		let resolveSend: ((res: Response) => void) | undefined;
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -875,8 +875,7 @@ describe("DeviceMailboxStore caps", () => {
 
 	it("a fresh instance gets a new epoch", () => {
 		// Epochs are random (the console compares them only for equality), so the
-		// contract is "different", not "greater" - greater was the old counter
-		// semantics that collided across gateway restarts.
+		// contract is "different", not "greater".
 		const store = new DeviceMailboxStore();
 		const e1 = store.ensure("x").epoch;
 		store.delete("x");
@@ -894,7 +893,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			teams: () => jsonRes([]),
 			discover: async () => jsonRes([]),
 		};
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
@@ -1142,7 +1141,7 @@ describe("console cross-Domain handshake ops", () => {
 				return { peers: PEER_SET };
 			},
 		};
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
@@ -1267,7 +1266,7 @@ describe("console cross-Domain handshake ops", () => {
 		expect(reply.ok).toBe(true);
 		expect(reply.result).toEqual({ cancelled: true });
 		expect(h.calls.cancel).toHaveLength(1);
-		// Backward behavior: a bare cancel carries neither field, so the coordinator only sweeps.
+		// A bare cancel carries neither field, so the coordinator only sweeps.
 		expect(h.calls.cancel[0]).toEqual({ listeningToken: undefined, pin: undefined });
 	});
 
@@ -1296,7 +1295,7 @@ describe("console cross-Domain handshake ops", () => {
 	});
 
 	it("the cross_domain_* ops error cleanly when federation is not wired", async () => {
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
@@ -1359,7 +1358,7 @@ describe("console cross-Domain share ops", () => {
 			teams: teamsList,
 			discover: async () => teamsList(),
 		};
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
@@ -1607,7 +1606,7 @@ describe("console cross-Domain share ops", () => {
 	});
 
 	it("the share ops error cleanly when federation is not wired", async () => {
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
@@ -1636,10 +1635,10 @@ describe("console cross-Domain share ops", () => {
 		expect(lr.error).toContain("not available");
 	});
 
-	// Fix 5 regression: a BARE-name share must be stored under the CANONICAL gateway/name key,
-	// the same form the relay gate / sweep / discovery compare against. The OLD code stored the
-	// raw op.sessionTarget, so a bare-name share ("app") was filed as "app" and the relay's
-	// "test-host/app" lookup never matched - the share silently never took effect (fail-closed).
+	// A BARE-name share must be stored under the CANONICAL gateway/name key, the same form the
+	// relay gate / sweep / discovery compare against. A bare-name share ("app") stored raw is
+	// filed as "app", so the relay's "test-host/app" lookup never matches and the share silently
+	// never takes effect (fail-closed).
 	it("a bare-name share is stored under the canonical gateway/name key the relay looks up", async () => {
 		const h = makeShareHarness();
 		const reply = await h.handler.handleFrame(
@@ -1699,7 +1698,7 @@ describe("console cross-Domain unlink op", () => {
 			teams: () => jsonRes([]),
 			discover: async () => jsonRes([]),
 		};
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
@@ -1743,7 +1742,7 @@ describe("console cross-Domain unlink op", () => {
 	});
 
 	it("cross_domain_unlink errors cleanly when federation is not wired", async () => {
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry: new Map(),
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),

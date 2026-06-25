@@ -11,7 +11,7 @@ import com.atelier_nyaarium.switchboard.proto.XDomainUntrust
 
 /**
  * Owner-signed cross-Domain link edge / revocation, the byte-exact Kotlin counterpart
- * of switchboard's `src/shared/enrollment.ts`. The owner device (this console) signs the
+ * of switchboard's `src/shared/federation-lifecycle.ts`. The owner device (this console) signs the
  * edge that opens a cross-Domain relay affinity and the revocation that withdraws it, and
  * evie verifies both against the rooted owner key, so the canonical signing bytes - a
  * versioned, newline-joined, fixed-order encoding - must reproduce exactly. The

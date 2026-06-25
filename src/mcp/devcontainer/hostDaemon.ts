@@ -26,7 +26,7 @@ let projectDirs: string[] = [path.join(HOME, "projects")];
 let channelPushHandler: ChannelPushHandler | null = null;
 const reconnector = createReconnector(() => connect());
 
-export function startHostWakeListener(dirs?: string[], onChannelPush?: ChannelPushHandler): void {
+export function startHostDaemon(dirs?: string[], onChannelPush?: ChannelPushHandler): void {
 	if (dirs && dirs.length > 0) {
 		projectDirs = dirs;
 	}
@@ -54,8 +54,9 @@ function connect(): void {
 	ws.on("open", () => {
 		console.error("[host-wake] connected to gateway");
 		reconnector.reset();
-		// Present the host-daemon token when configured (the gateway enforces it only
-		// when it too has HOST_WS_TOKEN set).
+		// Present the host-daemon token. The gateway's host slot is fail-closed: it refuses
+		// the register unless it has HOST_WS_TOKEN set AND this token matches it, so
+		// start-gateway.sh and start-host-daemon.sh wire the same value from .env.
 		const hostToken = process.env.HOST_WS_TOKEN;
 		ws!.send(JSON.stringify({ type: "register", team: "host", ...(hostToken ? { token: hostToken } : {}) }));
 
@@ -82,7 +83,7 @@ function connect(): void {
 
 		if (msg.type === "channel_push") {
 			// #region Hypothesis N: host daemon received channel_push fallback
-			debugLog("N", "hostWakeListener.ts:onMessage", "channel_push received via host", {
+			debugLog("N", "hostDaemon.ts:onMessage", "channel_push received via host", {
 				from: msg.from,
 				sessionId: String(msg.session_id ?? "").slice(0, 8),
 				hasHandler: !!channelPushHandler,
@@ -155,8 +156,8 @@ function findProjectPath(team: string): string {
 async function handleWake(msg: WakeMessage): Promise<void> {
 	const projectPath = msg.projectPath || findProjectPath(msg.team);
 
-	// #region Hypothesis J: confirm wake message arrives at hostWakeListener
-	debugLog("J", "hostWakeListener.ts:handleWake", "wake received", {
+	// #region Hypothesis J: confirm wake message arrives at hostDaemon
+	debugLog("J", "hostDaemon.ts:handleWake", "wake received", {
 		team: msg.team,
 		projectPath,
 		wsReadyState: ws?.readyState ?? null,
@@ -169,7 +170,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		console.error(`[host-wake] starting ${msg.team} at ${resolved}`);
 
 		// #region Hypothesis K: log before ensureContainerUpAsync
-		debugLog("K", "hostWakeListener.ts:handleWake", "starting container", {
+		debugLog("K", "hostDaemon.ts:handleWake", "starting container", {
 			team: msg.team,
 			resolved,
 		});
@@ -178,7 +179,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		const { pluginsProvisioned } = await ensureContainerUpAsync(resolved);
 
 		// #region Hypothesis K: log after ensureContainerUpAsync
-		debugLog("K", "hostWakeListener.ts:handleWake", "container up", {
+		debugLog("K", "hostDaemon.ts:handleWake", "container up", {
 			team: msg.team,
 			pluginsProvisioned,
 		});
@@ -249,7 +250,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		}
 
 		// #region Hypothesis L: log wake_result send state
-		debugLog("L", "hostWakeListener.ts:handleWake", "sending wake_result success", {
+		debugLog("L", "hostDaemon.ts:handleWake", "sending wake_result success", {
 			team: msg.team,
 			wsReadyState: ws?.readyState ?? null,
 			wsOpen: ws?.readyState === WebSocket.OPEN,
@@ -274,7 +275,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		console.error(`[host-wake] failed to wake ${msg.team}: ${message}`);
 
 		// #region Hypothesis K: log wake failure with error details
-		debugLog("K", "hostWakeListener.ts:handleWake", "wake failed", {
+		debugLog("K", "hostDaemon.ts:handleWake", "wake failed", {
 			team: msg.team,
 			error: message,
 			wsReadyState: ws?.readyState ?? null,

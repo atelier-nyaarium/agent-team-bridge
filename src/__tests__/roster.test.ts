@@ -7,7 +7,7 @@ import {
 	rosterRequestSigningBytes,
 	signRosterRequest,
 	verifyRosterRequest,
-} from "../shared/enrollment.js";
+} from "../shared/federation-lifecycle.js";
 
 // A console proves it holds an admitted signing key by signing ROSTER_V1 over its own key + a
 // fresh timestamp + nonce. evie verifies the proof, then resolves the key to an admitted console.

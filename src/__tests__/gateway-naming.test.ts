@@ -5,7 +5,7 @@ import {
 	parseQualifiedTeam,
 	qualifyTeam,
 } from "../shared/console-protocol.js";
-import { sanitizeGatewayId } from "../shared/host-id.js";
+import { sanitizeGatewayId } from "../shared/gateway-id.js";
 
 describe("gateway qualification", () => {
 	it("qualifies a bare name under a Gateway id", () => {

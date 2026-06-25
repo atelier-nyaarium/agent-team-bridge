@@ -1,4 +1,4 @@
-// SYNC-HASH: 7e787d055a675f63ec46d11eaeae46e6
+// SYNC-HASH: 8958b332488190320d16c5609cc8b484
 // SYNCED MODULE - source of truth: switchboard/src/shared/crypto.ts
 // Copied verbatim into: evie-bot/app/features/bridge/crypto.ts
 // MUST re-copy on change: cp src/shared/crypto.ts ../evie-bot/app/features/bridge/crypto.ts
@@ -8,19 +8,16 @@ import { z } from "zod";
 ////////////////////////////////
 //  Federation crypto (node:crypto only - no third-party dependency)
 //
-//  Identity = an Ed25519 signing keypair (authentication, admissions) + an
-//  X25519 box keypair (encryption). The wire carries RAW 32-byte keys (base64),
-//  the same encoding Android's BouncyCastle uses, so the two platforms interop.
-//  Local storage uses PKCS8/SPKI DER (only the owner of a key reads it).
+//  Identity = an Ed25519 signing keypair + an X25519 box keypair. The wire carries
+//  RAW 32-byte keys (base64), the same encoding Android's BouncyCastle uses, so the
+//  two platforms interop. Local storage uses PKCS8/SPKI DER.
 //
-//  Seal = a stateless per-message ephemeral box with a detached signature (the
-//  proportionate forward-secrecy fit per Owner decision D1, not a stateful
-//  ratchet): an ephemeral X25519 keypair does ECDH to the recipient's STATIC box
-//  key -> HKDF-SHA256 -> AES-256-GCM, and the whole sealed blob is signed by
-//  the sender's STATIC Ed25519 identity. Forward secrecy comes from the ephemeral
-//  (its private half is discarded after sealing); authenticity from the signature;
-//  recipient-binding from the ECDH to the recipient's static key. evie never seals
-//  or unseals - it routes the sealed blob opaquely (content-blind).
+//  Seal = a stateless per-message ephemeral box with a detached signature. An
+//  ephemeral X25519 keypair does ECDH to the recipient's static box key, then
+//  HKDF-SHA256 -> AES-256-GCM, and the sealed blob is signed by the sender's static
+//  Ed25519 identity. Forward secrecy comes from the ephemeral (its private half is
+//  discarded after sealing), authenticity from the signature, recipient-binding from
+//  the ECDH to the recipient's static key. evie routes the sealed blob content-blind.
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -189,10 +186,10 @@ export function b64Field(): z.ZodString {
 }
 
 /** A slug field (an opaque id like a domainId): lowercase alphanumeric segments joined
- * by single dashes, bounded length, so it holds no newline that could blur a signing-bytes
- * boundary. The regex matches sanitizeDomainId's canonical output (no leading/trailing or
- * doubled dashes), so a value that passes here always survives sanitizeDomainId unchanged -
- * a pure-separator id like "---" can never slip past validation only to throw at sanitize. */
+ * by single dashes, bounded length, holding no boundary-blurring newline. The regex matches
+ * sanitizeDomainId's canonical output (no leading/trailing or doubled dashes), so a value
+ * that passes here always survives sanitizeDomainId unchanged - a pure-separator id like
+ * "---" cannot slip past validation only to throw at sanitize. */
 export function slugField(): z.ZodString {
 	return z
 		.string()
@@ -200,10 +197,9 @@ export function slugField(): z.ZodString {
 		.max(64);
 }
 
-/** A free-text display label bounded only in length and the no-newline rule, so it
- * holds no newline that could blur a signing-bytes boundary. Under the cooperative
- * threat model the label carries no trust weight; this only keeps the preimage
- * unambiguous. */
+/** A free-text display label bounded only in length and the no-newline rule. Under the
+ * cooperative threat model the label carries no trust weight; this only keeps the
+ * signing-bytes preimage unambiguous. */
 export function displayField(max: number): z.ZodString {
 	return z
 		.string()

@@ -76,7 +76,7 @@ fun OwnerKeysCard(repo: ChatRepository) {
 					style = MaterialTheme.typography.bodySmall,
 				)
 				Text("Fingerprint: ${keys.sas}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
-				// Both owner pubkeys as one JSON blob; provision-admin-domain.sh parses it. base64 needs no escaping.
+				// Both owner pubkeys as one JSON blob; setup.sh parses it. base64 needs no escaping.
 				OutlinedButton(
 					onClick = { copyToClipboard(context, "owner key", """{"signPub":"${keys.signPub}","boxPub":"${keys.boxPub}"}""") },
 					modifier = Modifier.fillMaxWidth(),
@@ -167,15 +167,15 @@ fun OwnerBackupCard(repo: ChatRepository) {
 	}
 }
 
-/** Manage Gateways: the admitted members of the keyring, with revoke, plus Add Gateway. */
+/** Manage Members: the admitted members of the keyring, with revoke, plus Add Gateway. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ManageScreen(repo: ChatRepository, onBack: () -> Unit, onAddGateway: () -> Unit) {
+fun ManageMembersScreen(repo: ChatRepository, onBack: () -> Unit, onAddGateway: () -> Unit) {
 	val scope = rememberCoroutineScope()
 	// Re-read after an admit/revoke so the board reflects the change.
 	var refresh by remember { mutableStateOf(0) }
 	val members = remember(refresh) { repo.admittedMembers() }
-	Scaffold(topBar = { TopAppBar(title = { Text("Manage Gateways") }) }) { pad ->
+	Scaffold(topBar = { TopAppBar(title = { Text("Manage Members") }) }) { pad ->
 		Column(
 			Modifier.padding(pad).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(12.dp),

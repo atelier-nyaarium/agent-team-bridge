@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { Allowlist } from "../gateway/federation/allowlist.js";
 import { type CrossDomainPeer, CrossDomainPeers } from "../gateway/federation/crossDomainPeers.js";
 import { CrossDomainShareState } from "../gateway/federation/crossDomainShareState.js";
-import { createGatewayRelayHandler, type RelayShareState } from "../gateway/federation/hostRelay.js";
+import { createGatewayRelayHandler, type RelayShareState } from "../gateway/federation/gatewayRelay.js";
 import { createSealer, type Sealer } from "../gateway/federation/sealer.js";
 import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
 import { signAdmission } from "../shared/admission.js";
@@ -55,7 +55,6 @@ function fakeEvie(opts: {
 	const calls: { action: string; params: Record<string, unknown> }[] = [];
 	const client = {
 		isConnected: () => true,
-		getToolSchemas: () => [],
 		stop: () => {},
 		callTool: async (action: string, params: Record<string, unknown>) => {
 			calls.push({ action, params });
@@ -251,17 +250,17 @@ describe("federation routing (E2E sealed)", () => {
 			displayName?: string;
 		}[];
 		expect(teams.find((t) => t.team === "recipe-app")?.gatewayId).toBe("hosta");
-		// The local Gateway stamps its own display name on its sessions (D1).
+		// The local Gateway stamps its own display name on its sessions.
 		expect(teams.find((t) => t.team === "recipe-app")?.displayName).toBe("My Lab");
 		// A peer's display name rides through the merge unchanged (the peer Gateway is the
-		// authoritative source of its own self-set network label).
+		// authoritative source of its own self-set display name).
 		expect(teams.find((t) => t.team === "api")?.gatewayId).toBe("hostb");
 		expect(teams.find((t) => t.team === "api")?.displayName).toBe("Carol's Lab");
 	});
 });
 
 ////////////////////////////////
-//  Phase D: destination-enforced scoped crosstalk
+//  Destination-enforced scoped crosstalk
 //
 //  The relay handler is the security boundary: a cross-Domain op may only reach a
 //  shared session of kind devcontainer|loose, and a cross-Domain list_teams sees only
@@ -450,10 +449,9 @@ describe("Phase D destination gate (cross-Domain relay handleOp)", () => {
 		expect(sendCalls).toHaveLength(0);
 	});
 
-	// Fix 4 regression: the denial must be an IDENTICAL, name-free / kind-free error for an
-	// unshared-but-existing session and for a nonexistent one. Distinct messages were an
-	// existence oracle: a friend could probe which session names (and kinds) exist, defeating
-	// the shared-only list_teams filter.
+	// The denial must be an identical, name-free and kind-free error for an unshared-but-existing
+	// session and for a nonexistent one. Distinct messages are an existence oracle: a friend could
+	// probe which session names and kinds exist, defeating the shared-only list_teams filter.
 	it("the denial for an unshared-existing session is byte-identical to a nonexistent one", async () => {
 		const { routes } = gateRoutes([lib()]); // lib exists (devcontainer), shared to nobody
 		const { handleOp } = createGatewayRelayHandler({
@@ -897,7 +895,7 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 });
 
 ////////////////////////////////
-//  Phase D cross-Domain send flow (real crypto, two Domains)
+//  Cross-Domain send flow (real crypto, two Domains)
 //
 //  alice-gw (Domain "alice") sends to bob-gw/lib (Domain "bob"). The seal MUST be v2
 //  (resolved by the (domainId, gatewayId) pair from the disjoint peer set), evie stays
@@ -1140,9 +1138,8 @@ describe("Phase D cross-Domain send flow (E2E sealed v2)", () => {
 		const libEntry = teams.find((t) => t.team === "lib");
 		expect(libEntry?.gatewayId).toBe("bob-gw");
 		// The cross-Domain entry is tagged with the PEER's Domain id (bob), authoritative from
-		// alice's own peer set - so the console groups it under bob, not alice's local Domain,
-		// even if bob ran an older build that stamped no domainId. alice's local app carries her
-		// own Domain id.
+		// alice's own peer set, so the console groups it under bob even if bob's build stamped no
+		// domainId. alice's local app carries her own Domain id.
 		expect(libEntry?.domainId).toBe("bob");
 		expect(teams.find((t) => t.team === "app")?.domainId).toBe("alice");
 	});
@@ -1543,10 +1540,8 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 		expect(share.isSharedTo("bob-gw/old", "alice", () => true)).toBe(false); // stale, forgotten
 	});
 
-	// Fix 3 regression: isLive must mean RECENTLY ACTIVE, not "ever touched". The OLD predicate
-	// returned true for ANY persistent cross-Domain anchor regardless of age, so a single
-	// long-dead anchor pinned a share forever (auto-forget never fired). A thread idle past the
-	// recency window must stop suppressing the forget.
+	// isLive must mean RECENTLY ACTIVE, not "ever touched": a single long-dead anchor must not
+	// pin a share forever. A thread idle past the recency window stops suppressing the forget.
 	it("a share whose ONLY cross-Domain anchor is older than the recency window IS swept", () => {
 		const base = Date.now();
 		// Two full windows past `base`, so both the share's absence TTL and the anchor's recency

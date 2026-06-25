@@ -12,7 +12,7 @@ import {
 	verifyXDomainLinkRevocation,
 	type XDomainLinkEdge,
 	type XDomainLinkRevocation,
-} from "../shared/enrollment.js";
+} from "../shared/federation-lifecycle.js";
 
 const owner = generateIdentity();
 const host = generateIdentity();

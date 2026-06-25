@@ -9,17 +9,21 @@ import { readReplyAttachment } from "../bridge/replyTool.js";
 //  Schemas
 
 // title, summary, and full are all required (no ghost ping that is only a bar
-// headline). The object stays NON-strict so a stray `tiny` from a not-yet-updated
-// caller is silently stripped rather than rejected during the deploy window.
-const NotifyHumanSchema = z.object({
-	title: NoticeTitle,
-	summary: NoticeSummary,
-	full: NoticeFull,
-	attachments: z
-		.array(z.string())
-		.optional()
-		.describe(`Optional absolute file paths to attach (screenshots, logs). Images render inline on the console.`),
-});
+// headline). Strict: an unknown field (e.g. the retired `tiny`) is rejected, not
+// silently stripped.
+const NotifyHumanSchema = z
+	.object({
+		title: NoticeTitle,
+		summary: NoticeSummary,
+		full: NoticeFull,
+		attachments: z
+			.array(z.string())
+			.optional()
+			.describe(
+				`Optional absolute file paths to attach (screenshots, logs). Images render inline on the console.`,
+			),
+	})
+	.strict();
 type NotifyHumanArgs = z.infer<typeof NotifyHumanSchema>;
 
 ////////////////////////////////

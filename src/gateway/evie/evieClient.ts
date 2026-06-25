@@ -1,16 +1,9 @@
 import crypto from "node:crypto";
 import WebSocket from "ws";
-import {
-	type BridgeTool,
-	EvieInboundFrameSchema,
-	FEDERATION_PROTOCOL_VERSION,
-	type ToolCallFrame,
-} from "../../shared/evie-protocol.js";
+import { EvieInboundFrameSchema, FEDERATION_PROTOCOL_VERSION, type ToolCallFrame } from "../../shared/evie-protocol.js";
 
 ////////////////////////////////
 //  Interfaces & Types
-
-export type EvieToolSchema = BridgeTool;
 
 export interface EvieToolCallResult {
 	callId: string;
@@ -20,22 +13,19 @@ export interface EvieToolCallResult {
 
 export interface EvieClientConfig {
 	url: string;
-	// WebSocket handshake headers. Legacy (kubectl port-forward) carries the bridge
-	// token as Authorization; the service-proxy transport carries the SA token as
+	// WebSocket handshake headers. The service-proxy transport carries the SA token as
 	// Authorization (consumed by the API server) plus the bridge token in a forwarded
 	// header, so the auth shape lives with the caller, not here.
 	headers: Record<string, string>;
-	// Cluster CA (PEM) to pin TLS against when dialing the service-proxy (wss://). Unset
-	// for the legacy plaintext localhost tunnel.
+	// Cluster CA (PEM) to pin TLS against when dialing the service-proxy (wss://).
 	tls?: { ca: string };
 	// This Gateway's id, registered with the Router on connect so cross-Gateway frames
 	// can be routed to this Gateway.
 	gatewayId: string;
-	// This Gateway's Domain id (multi-tenant evie), sent on register so the Router keys
-	// the connection by (domainId, gatewayId). Always set: the evie client is constructed
-	// only when both the transport and the Domain id are non-null.
+	// This Gateway's Domain id, sent on register so the Router keys the connection by
+	// (domainId, gatewayId). Always set: the client is constructed only when both the
+	// transport and the Domain id are non-null.
 	domainId: string;
-	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	// The relay pump owns full ConsoleRelayFrameSchema validation; the envelope
 	// union only routes by type, so the frame travels as unknown.
 	onConsoleRelay?: (frame: unknown) => void;
@@ -45,25 +35,21 @@ export interface EvieClientConfig {
 	// A pre-trust cross-Domain handshake frame the Router routed to this Gateway (the
 	// receiver leg); the handshake pump owns full validation, so it travels as unknown.
 	onCrossDomainHandshake?: (frame: unknown) => void;
-	// Extra `gateway_register` params (the admitted-identity proof: signPub/boxPub
-	// + owner-signed admission + a fresh possession proof), computed at each
-	// (re)register so the proof timestamp is current. Returns null pre-enrollment,
-	// leaving registration token-only.
+	// Extra `gateway_register` params (the admitted-identity proof: signPub/boxPub +
+	// owner-signed admission + a fresh possession proof), recomputed at each (re)register
+	// so the proof timestamp is current. Returns null pre-enrollment.
 	buildRegisterAuth?: () => Record<string, unknown> | null;
 	// The mirrored Domain (owner root + allowlist) evie returns in the register
 	// reply; the Gateway applies it so a revocation bites even while evie is offline.
 	// Travels as unknown; the consumer validates with DomainSnapshotSchema.
 	onDomainSync?: (domain: unknown) => void;
 	// This Gateway's own Domain lifecycle metadata from the register reply: its status
-	// ("pending"/"rooted"/"unrooted") and the network display name. The Gateway
-	// surfaces these to its console (the register reply's domainStatus + the discovery
-	// roster's displayName). Re-applied on every reconnect, so a rename made elsewhere
-	// reaches the Gateway at its next register. Fields absent against a pre-feature evie.
+	// ("pending"/"rooted"/"unrooted") and display name, surfaced to the console. Re-applied
+	// on every reconnect, so a rename made elsewhere reaches the Gateway at its next register.
 	onDomainMeta?: (meta: { domainStatus?: string; displayName?: string | null; isAdminDomain?: boolean }) => void;
-	// A live display-name refresh from a domain_update push (the owner renamed THIS Domain's
-	// network). Refreshes the held displayName without a reconnect, so teams()/discover reflect
-	// the rename immediately. The allowlist the domain_update's snapshot feeds drops displayName,
-	// so this is the only path that updates it between registers. Absent against a pre-feature evie.
+	// A live display-name refresh from a domain_update push. Refreshes the held displayName
+	// without a reconnect, so teams()/discover reflect the rename immediately. The snapshot
+	// the push feeds drops displayName, so this is the only path that updates it between registers.
 	onDomainUpdate?: (meta: { displayName?: string | null }) => void;
 	onDisconnect?: () => void;
 	// Override the pending-Domain re-register cadence. Production leaves it unset (the
@@ -75,7 +61,6 @@ export interface EvieClientConfig {
 export interface EvieClient {
 	callTool: (action: string, params: Record<string, unknown>) => Promise<EvieToolCallResult>;
 	isConnected: () => boolean;
-	getToolSchemas: () => EvieToolSchema[];
 	stop: () => void;
 }
 
@@ -84,20 +69,16 @@ export interface EvieClient {
 
 const RECONNECT_DELAY_MS = 5_000;
 const TOOL_CALL_TIMEOUT_MS = 120_000;
-// When evie refuses gateway_register because the Domain is still PENDING (staged but not
-// yet rooted), re-register on this cadence. A fresh provision-admin-domain.sh stages a
-// pending admin Domain and restarts evie BEFORE the admin's phone first-roots it, so the
-// register the open-handler fires gets a pending refusal; without this retry the Gateway
-// would sit unregistered into its own admin Domain forever (the heartbeat keeps the WS warm,
-// so it never reconnects to re-register). The cap bounds the spin so a genuinely stuck setup
-// stops re-trying instead of polling evie indefinitely.
+// When evie refuses gateway_register because the Domain is still pending (staged but not
+// yet rooted), re-register on this cadence. The open-handler's register fires before the
+// admin's phone first-roots the Domain, and the heartbeat keeps the WS warm so the socket
+// never reconnects to re-register on its own. The cap bounds the spin so a genuinely stuck
+// setup stops re-trying instead of polling evie indefinitely.
 const PENDING_REREGISTER_DELAY_MS = 15_000;
 const PENDING_REREGISTER_MAX_ATTEMPTS = 40;
-// Application-level keepalive over the link. The k8s API service-proxy (and any LB in
-// front of the apiserver) drops idle upgraded connections, so a ping well under that
-// idle window keeps the tunnel warm AND detects a silently-dropped path: two missed
-// pongs terminate the socket and trigger the normal reconnect. Mirrors the gateway's
-// own team-socket heartbeat.
+// Application-level keepalive. The k8s API service-proxy drops idle upgraded connections,
+// so a ping well under that idle window keeps the tunnel warm and detects a silently-dropped
+// path: two missed pongs terminate the socket and trigger a reconnect.
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const MISSED_PONGS_LIMIT = 2;
 
@@ -109,7 +90,6 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 	let pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
 	let pendingRetryAttempts = 0;
 	let missedPongs = 0;
-	let cachedTools: EvieToolSchema[] = [];
 	let droppedFrames = 0;
 	const pendingCalls = new Map<
 		string,
@@ -129,8 +109,8 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		ws.on("open", () => {
 			console.log(`[evie-client] connected`);
 			missedPongs = 0;
-			// A fresh connection re-registers from scratch; drop any pending-retry timer left
-			// from a prior socket so its cadence does not double up with the new open-handler.
+			// Drop any pending-retry timer left from a prior socket so its cadence does not
+			// double up with the new open-handler's register.
 			clearPendingRetry();
 			startHeartbeat();
 			registerGateway();
@@ -160,12 +140,6 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			const frame = parsed.data;
 
 			switch (frame.type) {
-				case "tool_registry": {
-					cachedTools = frame.tools;
-					console.log(`[evie-client] received ${cachedTools.length} tool schemas`);
-					config.onToolRegistry?.(cachedTools);
-					break;
-				}
 				case "console_relay": {
 					config.onConsoleRelay?.(frame);
 					break;
@@ -183,8 +157,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					// immediately so a revocation bites without waiting for the next register.
 					config.onDomainSync?.(frame.domain);
 					// A rename rides the same push: refresh the held displayName so the owner's
-					// OWN Gateway reflects it in teams()/discover at once (applySnapshot drops it).
-					// Only sent by a federation-aware evie, only to the renamed Domain's gateways.
+					// own Gateway reflects it in teams()/discover at once (applySnapshot drops it).
 					if (frame.displayName !== undefined) config.onDomainUpdate?.({ displayName: frame.displayName });
 					break;
 				}
@@ -222,11 +195,11 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		ws.on("close", () => {
 			ws = null;
 			stopHeartbeat();
-			// The pending-retry rides this socket; a reconnect re-registers from the open
-			// handler, so cancel the timer rather than fire a register at a dead socket.
+			// The reconnect re-registers from the open handler, so cancel the pending-retry
+			// timer rather than fire a register at a dead socket.
 			clearPendingRetry();
-			// Fail in-flight calls now rather than letting each wait out its 120s
-			// timer across a reconnect; callers see a fast retryable error.
+			// Fail in-flight calls now rather than letting each wait out its timeout across
+			// a reconnect; callers see a fast retryable error.
 			for (const [callId, pending] of pendingCalls) {
 				clearTimeout(pending.timer);
 				pending.resolve({ callId, error: `Disconnected from evie-bot` });
@@ -250,9 +223,9 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		reconnectTimer = setTimeout(connect, RECONNECT_DELAY_MS);
 	}
 
-	// Register this Gateway with the Router so cross-Gateway frames can find it. Fired
-	// once from the open handler (the Router re-keys gateway id -> socket on every reconnect)
-	// and re-fired by the pending-retry timer when the Domain was still PENDING.
+	// Register this Gateway with the Router so cross-Gateway frames can find it. Fired from
+	// the open handler (the Router re-keys gateway id -> socket on every reconnect) and
+	// re-fired by the pending-retry timer when the Domain was still pending.
 	function registerGateway(): void {
 		if (!ws || ws.readyState !== WebSocket.OPEN) return;
 		void callTool("gateway_register", {
@@ -278,11 +251,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				return;
 			}
 			if (r?.ok === false) {
-				// A PENDING-tagged refusal is transient: the Domain is staged but not yet rooted
-				// (a fresh setup roots it once the admin's phone scans the QR). Retry on a
-				// bounded cadence so registration lands as soon as the root arrives. Any other
-				// ok:false is terminal (revoked / wrong-domain / version) - log only, no retry,
-				// so a real denial is not masked behind an endless re-register loop.
+				// A pending-tagged refusal is transient: the Domain is staged but not yet rooted.
+				// Retry on a bounded cadence so registration lands as soon as the root arrives.
+				// Any other ok:false is terminal (revoked / wrong-domain / version), so log only
+				// rather than mask a real denial behind an endless re-register loop.
 				if (r.pending) schedulePendingRetry(r.error);
 				else console.error(`[evie-client] Router rejected registration: ${r.error}`);
 				return;
@@ -296,8 +268,8 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				console.warn(
 					`[federation] registered but evie returned no Domain snapshot - the Domain may not be rooted, or evie is outdated`,
 				);
-			// Surface the Gateway's own Domain status + profile name + admin-Domain flag to the
-			// console register reply / discovery roster. Sent only by a federation-aware evie.
+			// Surface the Gateway's own Domain status + display name + admin-Domain flag to the
+			// console register reply / discovery roster.
 			if (r?.domainStatus !== undefined || r?.displayName !== undefined || r?.isAdminDomain !== undefined) {
 				config.onDomainMeta?.({
 					domainStatus: r.domainStatus,
@@ -387,10 +359,6 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		return ws !== null && ws.readyState === WebSocket.OPEN;
 	}
 
-	function getToolSchemas(): EvieToolSchema[] {
-		return cachedTools;
-	}
-
 	function stop(): void {
 		stopped = true;
 		stopHeartbeat();
@@ -410,5 +378,5 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 
 	connect();
 
-	return { callTool, isConnected, getToolSchemas, stop };
+	return { callTool, isConnected, stop };
 }

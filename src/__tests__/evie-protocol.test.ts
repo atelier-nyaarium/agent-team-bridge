@@ -9,13 +9,8 @@ import { EvieInboundFrameSchema, ToolCallFrameSchema } from "../shared/evie-prot
 //  rest are exact decode shapes.
 
 describe("evie inbound frame union", () => {
-	it("parses a tool_registry frame", () => {
-		const frame = EvieInboundFrameSchema.parse({
-			type: "tool_registry",
-			tools: [{ name: "evie_search", description: "Search the web", parameters: { type: "object" } }],
-		});
-		expect(frame.type).toBe("tool_registry");
-		if (frame.type === "tool_registry") expect(frame.tools).toHaveLength(1);
+	it("rejects a retired tool_registry frame (the tool proxy is gone)", () => {
+		expect(EvieInboundFrameSchema.safeParse({ type: "tool_registry", tools: [] }).success).toBe(false);
 	});
 
 	it("parses tool_result and tool_error frames", () => {

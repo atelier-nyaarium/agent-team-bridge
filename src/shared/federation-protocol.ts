@@ -5,14 +5,10 @@ import { ChannelFilesSchema } from "./evie-protocol.js";
 ////////////////////////////////
 //  Federation inner protocol (gateway <-> gateway, via evie)
 //
-//  evie routes the OUTER envelope (evie-protocol.ts: relayId / srcGateway / dstGateway)
-//  and never reads the payload. THIS module is the inner vocabulary the two
-//  gateways share and evie does not: the federated op a Gateway runs on a peer's
-//  behalf, the return-route that pins a reply back to the origin session, and the
-//  crypto-aware payload wrapper. It is NOT codegen'd to Kotlin - cross-Gateway
-//  traffic is gateway-to-gateway; the console reaches the mesh through its route
-//  Gateway. Re-export `FEDERATION_PROTOCOL_VERSION` from the synced leaf so both the
-//  wire version and the inner ops travel from one import surface.
+//  evie routes the OUTER envelope (evie-protocol.ts) and never reads the payload. This
+//  module is the inner vocabulary the two gateways share and evie does not. It is NOT
+//  codegen'd to Kotlin: cross-Gateway traffic is gateway-to-gateway, and the console
+//  reaches the mesh through its route Gateway.
 
 export { FEDERATION_PROTOCOL_VERSION } from "./evie-protocol.js";
 
@@ -20,10 +16,9 @@ export { FEDERATION_PROTOCOL_VERSION } from "./evie-protocol.js";
 //  Schemas
 
 /** How a destination Gateway pins a reply back to the originating Gateway's exact
- * session. Carried on a cross-Gateway `send`, stored on the destination job, and
- * read by `respond` to forward the response_push back across evie. `srcSession`
- * is the origin's channel job key (`conv:<srcConversationId>:<dstGateway>/<name>`),
- * used as the job key on BOTH Gateways so neither side has to translate. */
+ * session. `srcSession` is the origin's channel job key
+ * (`conv:<srcConversationId>:<dstGateway>/<name>`), used as the job key on BOTH
+ * Gateways so neither side has to translate. */
 export const ReturnRouteSchema = z.object({
 	srcGateway: z.string().min(1).max(64),
 	srcConversationId: z.string().min(1).max(128),
@@ -72,9 +67,8 @@ export const SealedEnvelopeSchema = z.object({
 	signature: z.string(),
 });
 
-/** The gateway_relay payload. Clean cutover: cross-Gateway traffic is ALWAYS E2E-sealed
- * (the plaintext spike's cleartext `op` is retired), so evie sees only this opaque
- * sealed blob - it cannot read or forge the op. */
+/** The gateway_relay payload. Cross-Gateway traffic is ALWAYS E2E-sealed, so evie sees
+ * only this opaque sealed blob and cannot read or forge the op. */
 export const GatewayRelayPayloadSchema = z.object({
 	sealed: SealedEnvelopeSchema,
 });
@@ -97,10 +91,9 @@ export const GatewayRelayFrameSchema = z.object({
 ////////////////////////////////
 //  Types
 //
-//  Op RESULTS are sealed back to the origin Gateway too (hostRelay.ts seals the reply
+//  Op RESULTS are sealed back to the origin Gateway too (gatewayRelay.ts seals the reply
 //  leg), then parsed loosely by the origin: a peer Gateway is semi-trusted, and the
-//  console's tolerant decode plus the existing route validation handle shape, so no
-//  result schema is enforced here.
+//  existing route validation handles shape, so no result schema is enforced here.
 
 export type ReturnRoute = z.infer<typeof ReturnRouteSchema>;
 export type FederatedOp = z.infer<typeof FederatedOpSchema>;

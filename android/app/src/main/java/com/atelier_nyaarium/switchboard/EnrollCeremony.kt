@@ -5,42 +5,39 @@ import com.atelier_nyaarium.switchboard.proto.EnrollReveal
 import com.atelier_nyaarium.switchboard.proto.SasCrypto
 
 /**
- * Pure (Android-free) core of the FLOW-1 in-person enroll ceremony: the role pairing, the
- * role-ordered SAS derivation, and the commit-reveal verification a phone runs against the
- * UNTRUSTED evie broker. Kept here so a JVM unit test pins the security-critical decisions (the
- * peer-commitment binding, the admin-key QR pin, the role ordering the SAS hashes over) without a
- * device - the same split as CrossDomainLink.kt / FriendOnboarding.kt. The networked commit /
- * reveal / submit orchestration lives in ChatRepository.
+ * Pure (Android-free) core of the in-person enroll ceremony: role pairing, role-ordered SAS
+ * derivation, and the commit-reveal verification a phone runs against the untrusted evie broker.
+ * Kept here so a JVM unit test can pin the security-critical decisions without a device. The
+ * networked commit/reveal/submit orchestration lives in ChatRepository.
  *
  * evie only relays the two phones' commit then reveal frames; it never computes this SAS and never
  * verifies a commitment. Every check below is local to the phone, so a substituted key surfaces as
- * a commitment mismatch or a diverging compare code, not a trusted-because-evie-said-so frame.
+ * a commitment mismatch or a diverging compare code.
  */
 
 ////////////////////////////////
 //  Interfaces & Types
 
-/** One leg of the in-person enroll compare. The ADMIN (showed the QR) and the ENROLLEE (scanned it)
- * each build their own context: the shared handshakeId + pin (the pin rides the QR out of band and
- * is never sent to evie), this owner's party, and - for the enrollee only - the admin party pinned
- * from the QR, so a substituted admin reveal is caught immediately rather than only at the compare. */
+/** One leg of the in-person enroll compare. The admin (showed the QR) and the enrollee (scanned it)
+ * each build their own context: the shared handshakeId, the pin (rides the QR out of band, never
+ * sent to evie), this owner's party, and on the enrollee side the admin party pinned from the QR. */
 data class EnrollCeremonyContext(
 	val role: String,
 	val handshakeId: String,
 	val pin: String,
 	val myParty: EnrollParty,
-	/** The admin's party as pinned from the scanned QR (enrollee side); null on the admin side,
-	 * which has no out-of-band knowledge of the fresh enrollee's keys and relies on the compare. */
+	/** The admin's party pinned from the scanned QR (enrollee side); null on the admin side, which
+	 * has no out-of-band knowledge of the enrollee's keys and relies on the compare. */
 	val expectedPeer: EnrollParty? = null,
 )
 
-/** The product of the commit-reveal exchange the human then confirms: the compare code, the peer's
- * confirmed Domain id (signed into the link edge on [Yes] - the EXACT value the SAS was computed
- * over, never a re-fetch), and the peer's party. */
+/** The product of the commit-reveal exchange the human confirms: the compare code, the peer's
+ * confirmed Domain id (signed into the link edge on Yes, the exact value the SAS was computed over,
+ * never a re-fetch), and the peer's party. */
 data class EnrollExchange(val sas: String, val peerDomainId: String, val peerParty: EnrollParty)
 
-/** The ceremony's step, a linear progression with terminal done/error states (mirrors LinkStep).
- * The UI renders one panel per step. */
+/** The ceremony's linear step progression with terminal done/error states. The UI renders one panel
+ * per step. */
 sealed interface EnrollStep {
 	/** Committing this side and polling the broker for the peer's commit + reveal. */
 	data object Waiting : EnrollStep
@@ -51,7 +48,7 @@ sealed interface EnrollStep {
 	/** Both link edges submitted: the admin <-> user trust is committed. */
 	data object Done : EnrollStep
 
-	/** The local trust is recorded but the Router rejected the relay-affinity edge, so cross-Domain
+	/** Local trust is recorded but the Router rejected the relay-affinity edge, so cross-Domain
 	 * sends would be denied; carries the peer Domain + owner for the one-tap edge-only retry. */
 	data class LinkedNoRelay(val peerDomainId: String, val peerOwnerSignPub: String) : EnrollStep
 
@@ -59,9 +56,8 @@ sealed interface EnrollStep {
 	data class Failed(val reason: String) : EnrollStep
 }
 
-/** The admin-minted, per-invite enroll secrets embedded in the QR and reused to drive the admin's
- * leg of the compare. Transient (in-memory): the in-person flow keeps the detail screen open; a
- * process restart means regenerate the invite (the friend rescans). */
+/** The admin-minted, per-invite enroll secrets embedded in the QR. Transient (in-memory): a process
+ * restart means regenerating the invite so the friend rescans. */
 data class EnrollInvite(val handshakeId: String, val pin: String)
 
 ////////////////////////////////
@@ -77,15 +73,15 @@ object EnrollCeremony {
 	fun partyOf(reveal: EnrollReveal): EnrollParty =
 		EnrollParty(reveal.ownerSignPub, reveal.ownerBoxPub, reveal.domainId)
 
-	/** True iff the peer's reveal opens to its round-1 commitment - the commit-reveal binding. evie
-	 * does not check this (it is a dumb broker); the phone re-hashes the revealed keys+salt under the
-	 * peer's role and aborts on a mismatch, so a relay that swapped a key in the reveal is caught. */
+	/** True iff the peer's reveal opens to its round-1 commitment - the commit-reveal binding. The
+	 * phone re-hashes the revealed keys+salt under the peer's role and aborts on a mismatch, so a
+	 * relay that swapped a key in the reveal is caught. evie does not check this. */
 	fun verifyPeer(peerCommitment: String, peerParty: EnrollParty, peerRole: String, peerSalt: String): Boolean =
 		SasCrypto.verifyEnrollCommitment(peerCommitment, peerParty, peerRole, peerSalt)
 
-	/** The 6-digit compare code for this leg. Both phones must hash the two parties in the SAME slot
-	 * order (ADMIN block then ENROLLEE block), so order by role rather than by which side I am - the
-	 * preimage is role-tagged and NOT order-independent (unlike the gateway's flat-sorted SAS). */
+	/** The 6-digit compare code for this leg. Both phones must hash the two parties in the same slot
+	 * order (ADMIN block then ENROLLEE block), so order by role rather than by which side I am: the
+	 * preimage is role-tagged and not order-independent. */
 	fun sas(role: String, myParty: EnrollParty, peerParty: EnrollParty, pin: String): String {
 		val admin = if (role == ADMIN) myParty else peerParty
 		val enrollee = if (role == ADMIN) peerParty else myParty

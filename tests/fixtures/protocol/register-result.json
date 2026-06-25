@@ -1,5 +1,6 @@
 {
 	"device": "pixel-test",
+	"gatewayId": "laptop",
 	"cursor": 42,
 	"epoch": 1073741824
 }

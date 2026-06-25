@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createConsoleHandler } from "../gateway/console/consoleHandler.js";
+import { createConsoleDispatcher } from "../gateway/console/consoleHandler.js";
 import { createConsoleSealer } from "../gateway/console/consoleSealer.js";
 import { createConsoleRelayPump } from "../gateway/console/relayPump.js";
 import { Allowlist } from "../gateway/federation/allowlist.js";
@@ -74,7 +74,7 @@ function openReply(device: Identity, reply: ConsoleRelayReply): ConsoleReplyBody
 function makePump(device: Identity, replies: ConsoleRelayReply[]) {
 	const registry: TeamRegistry = new Map();
 	const conversationRegistry: ConversationRegistry = new Map();
-	const handler = createConsoleHandler({
+	const handler = createConsoleDispatcher({
 		registry,
 		conversationRegistry,
 		mailboxStore: new DeviceMailboxStore(),
@@ -190,7 +190,7 @@ describe("createConsoleRelayPump (sealed)", () => {
 		const device = generateIdentity();
 		const registry: TeamRegistry = new Map();
 		const conversationRegistry: ConversationRegistry = new Map();
-		const handler = createConsoleHandler({
+		const handler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore: new DeviceMailboxStore(),

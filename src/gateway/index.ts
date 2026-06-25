@@ -6,12 +6,12 @@ import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { DurableStore } from "../shared/durable-store.js";
-import { resolveLocalGatewayId } from "../shared/host-id.js";
+import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import type { HostOp, HostOpResult } from "../shared/host-op.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
-import { createConsoleHandler } from "./console/consoleHandler.js";
+import { createConsoleDispatcher } from "./console/consoleHandler.js";
 import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { startEvieClient } from "./evie/evieClient.js";
@@ -27,7 +27,7 @@ import {
 import { CrossDomainPeers } from "./federation/crossDomainPeers.js";
 import { CrossDomainShareState } from "./federation/crossDomainShareState.js";
 import { ADMIT_PAYLOAD_FILE, admitGatewayPayload, logAdmitGatewayQr } from "./federation/enrollQr.js";
-import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/hostRelay.js";
+import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/gatewayRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
 import { ReplayGuard } from "./federation/replayGuard.js";
 import { createSealer, type Sealer } from "./federation/sealer.js";
@@ -87,11 +87,9 @@ export async function startGateway(): Promise<void> {
 	store.startCleanup();
 	mailboxStore.startCleanup();
 
-	// Durability: the in-memory delivery state otherwise vanishes on a restart/deploy -
-	// 404ing a reply ("no pending request") and losing queued mail. Snapshot the
-	// persistent job anchors + the device mailboxes (each box keeps its epoch, so the
-	// console's durable cursor still matches) to /app/log (a bind-mount that survives the
-	// container rebuild); reload on boot; re-save on a timer and on shutdown.
+	// In-memory delivery state otherwise vanishes on restart, 404ing replies and losing queued
+	// mail. Snapshot the persistent job anchors and device mailboxes (each box keeps its epoch so
+	// the console's durable cursor still matches) to /app/log, reload on boot, re-save on a timer.
 	const jobsDurable = new DurableStore(path.dirname(LOG_PATH), "pending-jobs");
 	const mailboxDurable = new DurableStore(path.dirname(LOG_PATH), "mailboxes");
 	{
@@ -184,23 +182,18 @@ export async function startGateway(): Promise<void> {
 	let evieClient: ReturnType<typeof startEvieClient> | null = null;
 	let sealer: Sealer | null = null;
 	let consoleSealer: ConsoleSealer | null = null;
-	// Exposed to the console handler (built in a later block) so its poll reply can carry
-	// the mirrored keyring + version for the Console's keyring sync.
+	// Exposed to the console handler (built later) so its poll reply can carry the mirrored
+	// keyring + version for the Console's keyring sync.
 	let allowlistForConsole: Allowlist | null = null;
-	// This Gateway's own Domain lifecycle metadata, learned from evie's gateway_register
-	// reply (refreshed on every reconnect). The console register reply carries domainStatus
-	// so the app knows to first-root vs just-provision; teams()/discover stamp displayName
-	// so a linked friend Domain shows the owner's self-set network label. Null until the
-	// first register (or against a pre-feature evie that sends neither field).
+	// This Gateway's own Domain lifecycle metadata, learned from evie's gateway_register reply.
+	// domainStatus tells the app to first-root vs just-provision; displayName lets teams()/discover
+	// show a linked friend Domain the owner's self-set name. Null until the first register.
 	let domainMeta: { domainStatus?: string; displayName?: string | null; isAdminDomain?: boolean } | null = null;
-	// The cross-Domain listening-mode handshake coordinator (built in the federation block),
-	// exposed to the console handler so the cross_domain_* ops drive the mutual pairing. The
-	// ONLY writer of the disjoint CrossDomainPeers store.
+	// Cross-Domain handshake coordinator, exposed to the console handler so the cross_domain_*
+	// ops drive the mutual pairing. The ONLY writer of the disjoint CrossDomainPeers store.
 	let crossDomainCoordinator: CrossDomainHandshakeCoordinator | null = null;
-	// The per-session share state (built in the federation block alongside crossDomainPeers),
-	// exposed to the console handler so the cross_domain_share/unshare/list_shares ops manage
-	// which local sessions are offered to a linked friend Domain. `isLinkedDomain` reads the
-	// peer set so a share can only target a Domain the owner has actually linked.
+	// Per-session share state: which local sessions are offered to which linked friend Domain.
+	// Exposed to the console handler for the cross_domain_share/unshare/list_shares ops.
 	let crossDomainShareState: CrossDomainShareState | null = null;
 	let crossDomainPeersForConsole: CrossDomainPeers | null = null;
 	// A Domain is "trusted/linked" iff this Gateway holds a cross-Domain peer for it (the owner linked
@@ -240,12 +233,9 @@ export async function startGateway(): Promise<void> {
 		}
 		replayPersist = () => replayDurable.save(replayGuard.snapshot());
 		sealer = createSealer(identity, allowlist, localGatewayId, crossDomainPeers, localDomainId, replayGuard);
-		// The cross-Domain listening-mode handshake: the ONLY writer of crossDomainPeers. It
-		// carries this Gateway's keys + ids into the SAS/link and reads the phone-held owner
-		// root from the allowlist. The requester leg routes both commit-reveal rounds through
-		// the Router seam below; evie (content-blind) forwards each frame to the receiver
-		// Gateway and holds the reply. evieClient is assigned further down in this block, so
-		// the seam reads it lazily at request time.
+		// The requester leg routes both commit-reveal rounds through the Router seam below; evie
+		// (content-blind) forwards each frame to the receiver Gateway and holds the reply.
+		// evieClient is assigned further down in this block, so the seam reads it lazily.
 		const routeHandshake = async (
 			action: string,
 			receiverGatewayId: string,
@@ -330,7 +320,7 @@ export async function startGateway(): Promise<void> {
 				domainMeta = meta;
 			},
 			onDomainUpdate: (meta) => {
-				// A live rename of THIS Domain's network: refresh only displayName, preserving
+				// A live rename of the owner's display name: refresh only displayName, preserving
 				// the domainStatus from the last register, so teams()/discover reflect the new
 				// name immediately without a reconnect.
 				domainMeta = { ...(domainMeta ?? {}), displayName: meta.displayName };
@@ -362,7 +352,7 @@ export async function startGateway(): Promise<void> {
 		});
 	}
 
-	// Creds-less enrollment: when armed with a one-time nonce (provision-admin-domain.sh (Enroll gateway))
+	// Creds-less enrollment: when armed with a one-time nonce (setup.sh (Enroll gateway))
 	// and not yet admitted, mint the identity, print the admit-gateway QR with the LAN
 	// target, and accept exactly one sealed bootstrap bundle over POST /enroll.
 	let enrollInstall: ((frame: unknown) => string) | null = null;
@@ -411,9 +401,7 @@ export async function startGateway(): Promise<void> {
 			enrollTimer = setTimeout(() => {
 				if (enrollInstall) {
 					enrollInstall = null;
-					console.log(
-						"[enroll] enrollment window expired (~10 min); re-run provision-admin-domain.sh (Enroll gateway)",
-					);
+					console.log("[enroll] enrollment window expired (~10 min); re-run setup.sh (Enroll gateway)");
 				}
 			}, 600_000);
 			enrollTimer.unref?.();
@@ -445,15 +433,12 @@ export async function startGateway(): Promise<void> {
 		evieClient,
 		sealer,
 		crossDomainPeers: crossDomainPeersForConsole,
-		// This Gateway's own network display name (learned from evie's register reply), stamped
-		// on every local TeamInfo so a linked friend Domain sees the owner's self-set label over
-		// the discovery roster (D1). Null until the first register.
+		// The owner's display name (from evie's register reply), stamped on every local TeamInfo
+		// so a linked friend Domain sees the owner's self-set label. Null until the first register.
 		displayName: () => domainMeta?.displayName ?? null,
-		// True when this Gateway's own Domain is the admin's (the evie-runner who provisions
-		// others), learned from the register reply. Stamped on the local TeamInfo so the console
-		// shows the admin surfaces only on the admin's own session. Null (not false) until the
-		// first register, mirroring displayName: "unknown" stays unknown rather than asserting
-		// "not admin" (the TeamInfo stamp omits the field for any falsy value either way).
+		// True when this Gateway's own Domain is the admin's (the evie-runner who provisions others).
+		// Stamped on the local TeamInfo so the console shows admin surfaces only on the admin's own
+		// session. Null (not false) until the first register, so "unknown" stays unknown.
 		isAdminDomain: () => domainMeta?.isAdminDomain ?? null,
 		// Local-first seal-target resolution on the send side: a target gateway the local
 		// allowlist admits seals v1 to the local Domain, mirroring the sealer's open-side ordering, so a
@@ -474,7 +459,7 @@ export async function startGateway(): Promise<void> {
 	});
 
 	if (evieClient) {
-		const consoleHandler = createConsoleHandler({
+		const consoleHandler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -531,12 +516,11 @@ export async function startGateway(): Promise<void> {
 							isLinkedDomain,
 						}
 					: undefined,
-			// Unlink a linked friend Domain: drop the LOCAL trust + share + in-flight state for
-			// it. Forgetting the peer makes the sealer refuse both legs to that Domain on the
-			// next frame; dropping the shares makes a re-link start from share-nothing; expiring
-			// the in-flight jobs settles them fast instead of stalling to TTL. Idempotent - an
-			// already-unlinked Domain returns zero counts. The phone separately submits the
-			// owner-signed link-edge revocation so the Router drops its relay-affinity edge.
+			// Unlink a friend Domain: drop the LOCAL trust + share + in-flight state for it.
+			// Forgetting the peer makes the sealer refuse both legs on the next frame; dropping
+			// shares makes a re-link start from share-nothing; expiring jobs settles them instead
+			// of stalling to TTL. Idempotent. The phone separately submits the owner-signed
+			// link-edge revocation so the Router drops its relay-affinity edge.
 			unlinkDomain:
 				crossDomainShareState && crossDomainPeersForConsole
 					? (domainId) => ({
@@ -545,10 +529,9 @@ export async function startGateway(): Promise<void> {
 							jobsExpired: store.expireByDomain(domainId),
 						})
 					: undefined,
-			// Untrust a PERSON (owner-keyed): forget every peer Gateway owned by that owner across ALL
-			// their Domains, then drop the shares + settle the in-flight jobs for exactly those Domains.
-			// The owner-keyed sibling of unlinkDomain; the same local-cleanup primitives, summed over the
-			// owner's Domains. Idempotent - an already-untrusted owner returns zero counts.
+			// Untrust a PERSON (owner-keyed): forget every peer Gateway owned by that owner across
+			// ALL their Domains, then drop the shares + settle the in-flight jobs for those Domains.
+			// The owner-keyed sibling of unlinkDomain, summed over the owner's Domains. Idempotent.
 			untrustOwner:
 				crossDomainShareState && crossDomainPeersForConsole
 					? (ownerSignPub) => {
@@ -688,7 +671,6 @@ export async function startGateway(): Promise<void> {
 		if (method === "POST" && url.pathname === "/respond") return routes.respond(req, body);
 		if (method === "POST" && url.pathname === "/poll") return routes.poll(req, body);
 		if (method === "GET" && url.pathname === "/health") return routes.health();
-		if (method === "POST" && url.pathname === "/evie/tool-call") return routes.evieToolCall(req, body);
 		if (method === "POST" && url.pathname === "/human/notify") return routes.humanNotify(body);
 
 		return new Response("Not Found", { status: 404 });

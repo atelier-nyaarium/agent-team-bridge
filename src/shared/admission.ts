@@ -1,4 +1,4 @@
-// SYNC-HASH: 895a3f614f589cdb388c63521055369d
+// SYNC-HASH: 551d1213127b1d9694411e86f07bbed3
 // SYNCED MODULE - source of truth: switchboard/src/shared/admission.ts
 // Copied verbatim into: evie-bot/app/features/bridge/admission.ts
 // MUST re-copy on change: cp src/shared/admission.ts ../evie-bot/app/features/bridge/admission.ts
@@ -8,17 +8,16 @@ import { sign, verify } from "./crypto.js";
 ////////////////////////////////
 //  Domain admission + allowlist (the trust model)
 //
-//  Membership in the Domain is an allowlist of OWNER-SIGNED admissions: the owner
-//  device attests a subject's keys (a Gateway or a console) into the Domain. evie AND
-//  each Gateway hold the allowlist, so a revocation bites even while evie is
-//  unreachable (audit R3). The owner is the single root of trust; an admission /
-//  revocation is only honored if it verifies under the expected owner key.
+//  Membership is an allowlist of owner-signed admissions: the owner device attests a
+//  subject's keys (a Gateway or console) into the Domain. evie and each Gateway hold
+//  the allowlist, so a revocation bites even while evie is unreachable. The owner is
+//  the single root of trust; an admission or revocation is honored only if it verifies
+//  under the expected owner key.
 //
-//  The SIGNING BYTES are a versioned, newline-joined, fixed-order encoding. Every
-//  field is base64 (keys, nonce), a slug (gatewayId), or a decimal int (issuedAt) -
-//  none can contain a newline - so the encoding is unambiguous and reproduces
-//  byte-for-byte on switchboard, evie, and Android. Do NOT sign raw JSON (key
-//  order is not canonical).
+//  The signing bytes are a versioned, newline-joined, fixed-order encoding. Every field
+//  is base64, a slug, or a decimal int, so none can contain a newline and the encoding
+//  reproduces byte-for-byte on switchboard, evie, and Android. Do NOT sign raw JSON: key
+//  order is not canonical.
 
 ////////////////////////////////
 //  Schemas
@@ -44,8 +43,8 @@ export const AdmissionSchema = z
 export const SignedAdmissionSchema = z
 	.object({
 		admission: AdmissionSchema,
-		// The owner key that signed (informational; the verifier checks it against
-		// the Domain's expected owner key, never trusts this field alone).
+		// Informational; the verifier checks it against the Domain's expected owner
+		// key and never trusts this field alone.
 		ownerSignPub: z.string().min(1),
 		// Owner's Ed25519 signature over admissionSigningBytes (base64).
 		signature: z.string().min(1),
@@ -69,17 +68,17 @@ export const SignedRevocationSchema = z
 	})
 	.meta({ id: "SignedRevocation" });
 
-/** The mirrored Domain state evie pushes to each Gateway so a revocation bites even
- * while evie is unreachable (audit R3): the owner root plus the owner-signed
- * allowlist. Only present once the Domain is rooted. */
+/** The mirrored Domain state evie pushes to each Gateway (owner root plus the
+ * owner-signed allowlist) so a revocation bites even while evie is unreachable.
+ * Present only once the Domain is rooted. */
 export const DomainSnapshotSchema = z
 	.object({
 		ownerSignPub: z.string().min(1),
 		admissions: z.array(SignedAdmissionSchema),
 		revocations: z.array(SignedRevocationSchema),
-		// The friendly NETWORK display name (one per owner/Domain), propagated so Peers see
-		// the owner's self-set label instead of a local alias. Optional/nullable for decode
-		// tolerance: a pre-feature snapshot omits it and consumers fall back to a local label.
+		// The display name (one per owner/Domain), propagated so Peers see the owner's
+		// self-set label instead of a local alias. Nullable for decode tolerance: an
+		// older snapshot omits it and consumers fall back to a local label.
 		displayName: z.string().nullish(),
 	})
 	.meta({ id: "DomainSnapshot" });
@@ -146,11 +145,10 @@ export function verifyRevocation(s: SignedRevocation, expectedOwnerSignPubB64: s
 	return verify(revocationSigningBytes(s.revocation), s.signature, expectedOwnerSignPubB64);
 }
 
-/** The newest owner-verified admission matching `match`, BEFORE revocations are applied.
- * The one selection step behind both `resolveAdmitted` (match by signing key) and the
- * gateway's `resolveGateway` (match by gateway id), so the iterate / verify-owner /
- * newest-wins rule lives in exactly one place (the Kotlin `Keyring` factors it the same
- * way). Callers apply the revocation rule themselves. */
+/** The newest owner-verified admission matching `match`, before revocations are applied.
+ * Shared by `resolveAdmitted` (match by signing key) and the gateway's `resolveGateway`
+ * (match by gateway id), so the iterate, verify-owner, and newest-wins rule lives in one
+ * place (the Kotlin `Keyring` factors it the same way). Callers apply revocations. */
 export function findAdmission(
 	allowlist: SignedAdmission[],
 	expectedOwnerSignPubB64: string,
@@ -189,18 +187,18 @@ export function resolveAdmitted(
 ////////////////////////////////
 //  Registration proof-of-possession
 //
-//  An admission is owner-signed but not secret: it rides every registration, so
-//  an observer could replay one to impersonate the admitted Gateway. The registering
-//  Gateway therefore PROVES it holds the admitted signing key by signing a
-//  self-timestamped challenge carrying a fresh random NONCE; the verifier checks
-//  the signature against the admission's signPub, that the timestamp is fresh, AND
-//  (statefully, on evie) that the nonce has not been seen within the window - so a
-//  captured proof cannot be replayed even inside the skew window. The bytes are the
-//  same versioned newline encoding as admissions.
+//  An admission is owner-signed but not secret: it rides every registration, so an
+//  observer could replay one to impersonate the admitted Gateway. The registering
+//  Gateway proves it holds the admitted signing key by signing a self-timestamped
+//  challenge carrying a fresh random nonce. The verifier checks the signature against
+//  the admission's signPub, that the timestamp is fresh, and (statefully, on evie) that
+//  the nonce has not been seen within the window, so a captured proof cannot be replayed
+//  even inside the skew window. The bytes use the same versioned newline encoding as
+//  admissions.
 
-/** Default proof freshness window (epoch ms). A proof older / newer than this
- * from the verifier's clock is rejected as stale (and the seen-nonce cache only
- * needs to remember this long). */
+/** Default proof freshness window (epoch ms). A proof further than this from the
+ * verifier's clock is rejected as stale, and the seen-nonce cache only needs to
+ * remember this long. */
 export const REGISTER_MAX_SKEW_MS = 120_000;
 
 export function registerSigningBytes(gatewayId: string, proofAt: number, nonce: string): Buffer {
@@ -239,18 +237,18 @@ export interface RegistrationTrust {
 	maxSkewMs?: number;
 }
 
-/** Verify an admitted Gateway's registration end to end: the admission is
- * owner-signed and not revoked, binds this Gateway id + both keys + a `gateway` kind,
- * and the proof shows the connection holds the admitted signing key freshly. Returns
- * null on success, or a short rejection reason. The caller (evie) ALSO rejects a
- * replayed `nonce` within the window - this pure check cannot dedup statefully. */
+/** Verify an admitted Gateway's registration end to end: the admission is owner-signed
+ * and not revoked, binds this Gateway id, both keys, and a `gateway` kind, and the proof
+ * shows the connection holds the admitted signing key freshly. Returns null on success,
+ * or a short rejection reason. The caller (evie) also rejects a replayed `nonce` within
+ * the window; this pure check cannot dedup statefully. */
 export function verifyRegistration(claim: RegistrationClaim, trust: RegistrationTrust): string | null {
 	const admitted = resolveAdmitted([claim.admission], trust.revocations ?? [], trust.ownerSignPub, claim.signPub);
 	if (!admitted) return "admission not owner-signed or revoked";
 	if (admitted.kind !== "gateway") return "admission is not a gateway admission";
 	if (admitted.gatewayId !== claim.gatewayId) return "admission gatewayId does not match";
-	// Bind the box key too: the admission attests both keys, so a registration may
-	// not present a different boxPub than the owner signed.
+	// The admission attests both keys, so a registration may not present a different
+	// boxPub than the owner signed.
 	if (admitted.boxPub !== claim.boxPub) return "admission boxPub does not match";
 	const skew = Math.abs(trust.nowMs - claim.proofAt);
 	if (skew > (trust.maxSkewMs ?? REGISTER_MAX_SKEW_MS)) return "registration proof is stale";

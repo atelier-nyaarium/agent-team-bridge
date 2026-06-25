@@ -8,7 +8,7 @@
 // it. This script does all three in one shot, reading each target from the leaf's own header
 // ("// MUST re-copy on change: cp <src> <dst>"), so a sync can never go half-done.
 //
-//   bun scripts/sync-leaf.ts src/shared/enrollment.ts [more leaves...]
+//   bun scripts/sync-leaf.ts src/shared/federation-lifecycle.ts [more leaves...]
 //   bun scripts/sync-leaf.ts --all        # every leaf with a copy-target header
 
 import { execFileSync } from "node:child_process";

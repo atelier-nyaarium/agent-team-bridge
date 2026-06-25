@@ -35,14 +35,11 @@ import java.util.Base64
 import kotlinx.serialization.json.Json
 
 /**
- * Owns the device's role as the Domain trust anchor: the owner root keypair (sole
- * signer of admissions and revocations) and the console member identity, plus the
- * mirrored keyring the Console resolves peers against. The owner key is generated on
- * first access and never leaves the device except as a passphrase-encrypted backup.
- *
- * Admissions and revocations are signed here and submitted to evie through the
- * Console's enroll channel; the Console verifies every Gateway it seals to against this
- * keyring, so trust is symmetric (each peer is admitted by the one owner root).
+ * The Domain trust anchor: the owner root keypair (sole signer of admissions and
+ * revocations), the console member identity, and the mirrored keyring the Console
+ * resolves peers against. The owner key never leaves the device except as a
+ * passphrase-encrypted backup. Admissions and revocations are signed here and submitted
+ * to evie; the Console verifies every Gateway it seals to against this keyring.
  */
 /** One admitted member, for the management board. */
 data class MemberInfo(val kind: String, val gatewayId: String?, val signPub: String, val boxPub: String, val isSelf: Boolean)
@@ -54,16 +51,14 @@ enum class OwnerRestoreResult { OK, WRONG_PASSPHRASE, DIFFERENT_OWNER }
 /** Owner public material for the settings cards (no private key). */
 data class OwnerKeysView(val signPub: String, val boxPub: String, val sas: String)
 
-class FederationManager(private val store: ProvisioningStore) {
+class FederationManager(private val store: AppStateStore) {
 	private val rnd = SecureRandom()
 	private val json = Json { ignoreUnknownKeys = true }
 
-	/** The owner root identity, generated and persisted on first access. Synchronized: the
-	 * UI (owner-keys card) and background coroutines (connect, admit, poll) all reach this,
-	 * and a non-atomic generate-then-persist would let two callers mint different keys and
-	 * orphan one - so the admin could root evie at a key the device later discards. Mints ONLY
-	 * on an absent key; a corrupt stored key throws rather than minting over it, so a transient
-	 * decode fault never silently re-roots the device and orphans the real owner key. */
+	/** The owner root identity, generated and persisted on first access. Synchronized because a
+	 * non-atomic generate-then-persist would let two concurrent callers mint different keys and
+	 * orphan one. Mints ONLY on an absent key; a corrupt stored key throws rather than minting
+	 * over it, so a transient decode fault never silently re-roots the device. */
 	@Synchronized
 	fun ownerIdentity(): Crypto.Identity =
 		when (val load = store.loadOwnerIdentity()) {
@@ -79,13 +74,12 @@ class FederationManager(private val store: ProvisioningStore) {
 		when (val load = store.loadIdentity()) {
 			is IdentityLoad.Loaded -> load.identity
 			IdentityLoad.Absent -> Crypto.generateIdentity().also { store.saveIdentity(it) }
-			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-admin-domain.sh")
+			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run setup.sh")
 		}
 
-	/** Owner public material for DISPLAY only, or null when the stored owner key is unreadable
-	 * (corrupt). Never throws and never mints over a corrupt key, so a settings card shows a
-	 * restore prompt instead of crashing the screen. An ABSENT key still mints (the silent
-	 * first-gen), matching [ownerIdentity]. */
+	/** Owner public material for display, or null when the stored owner key is corrupt. Never
+	 * throws and never mints over a corrupt key, so a settings card shows a restore prompt
+	 * instead of crashing. An absent key still mints, matching [ownerIdentity]. */
 	fun ownerKeysForDisplay(): OwnerKeysView? =
 		runCatching { ownerIdentity() }.getOrNull()?.let {
 			OwnerKeysView(it.sign.pub, it.box.pub, Crypto.fingerprint(it.sign.pub))
@@ -102,19 +96,16 @@ class FederationManager(private val store: ProvisioningStore) {
 	fun exportOwnerBackup(passphrase: String): String =
 		OwnerBackup.export(json.encodeToString(Crypto.Identity.serializer(), ownerIdentity()), passphrase)
 
-	/** Restore the owner root key from a backup blob. Restore is meant for a fresh install
-	 * (no owner yet), so it REFUSES to overwrite a DIFFERENT existing owner: a backup carrying
-	 * another owner key (passphrase known) must not be able to silently re-root this device
-	 * and brick the mesh. Re-importing the same owner is idempotent. Synchronized with
-	 * ownerIdentity() so a concurrent generation cannot overwrite the restored key. The
-	 * result distinguishes a wrong passphrase from a different-owner rejection. */
+	/** Restore the owner root key from a backup blob. Refuses to overwrite a DIFFERENT existing
+	 * owner so a backup carrying another owner key cannot silently re-root this device and brick
+	 * the mesh; re-importing the same owner is idempotent. Synchronized with ownerIdentity() so a
+	 * concurrent generation cannot overwrite the restored key. */
 	@Synchronized
 	fun importOwnerBackup(blob: String, passphrase: String): OwnerRestoreResult {
 		val restored = runCatching { json.decodeFromString(Crypto.Identity.serializer(), OwnerBackup.restore(blob, passphrase)) }
 			.getOrElse { return OwnerRestoreResult.WRONG_PASSPHRASE }
-		// Only a DECODABLE existing owner with a different key blocks the restore. An absent or
-		// corrupt stored key is exactly what restore recovers, so it proceeds - the explicit
-		// passphrase + intent authorize the overwrite the silent mint path refuses.
+		// Only a decodable existing owner with a different key blocks the restore. An absent or
+		// corrupt stored key is what restore recovers, so it proceeds.
 		val existing = store.loadOwnerIdentity()
 		if (existing is IdentityLoad.Loaded && existing.identity.sign.pub != restored.sign.pub) {
 			return OwnerRestoreResult.DIFFERENT_OWNER
@@ -156,8 +147,8 @@ class FederationManager(private val store: ProvisioningStore) {
 		edgeNonce: String? = null,
 	): SignedXDomainLinkEdge {
 		val owner = ownerIdentity()
-		// A caller may PIN the nonce (the enroll ceremony) so a retry re-signs the same edge identity,
-		// which evie dedupes by (srcDomainId, nonce); an unpinned caller mints a fresh one as before.
+		// A caller may pin the nonce so a retry re-signs the same edge identity, which evie dedupes
+		// by (srcDomainId, nonce); an unpinned caller mints a fresh one.
 		val edge = XDomainLinkEdge(srcDomainId, dstDomainId, nowMs, edgeNonce ?: nonce())
 		return XDomainLinkCrypto.signEdge(edge, owner.sign.priv, owner.sign.pub)
 	}
@@ -172,12 +163,10 @@ class FederationManager(private val store: ProvisioningStore) {
 		return XDomainLinkCrypto.signRevocation(rev, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Owner-sign THIS owner's side of a cross-Domain link, binding the FRIEND Gateway's keys
-	 * the SAS confirmed out of band. The owner private key is phone-held, so only the phone can
-	 * produce this; the confirming Gateway verifies it under this owner key and the friend's
-	 * Gateway persists it as its cross-Domain peer. The friend phone likewise signs THEIR side
-	 * (binding this Gateway's keys) - the two sides are symmetric, each signed by its own owner.
-	 * `nonce` is supplied (not minted here) so a retried confirm reuses the same signed link
+	/** Owner-sign this owner's side of a cross-Domain link, binding the friend Gateway's keys the
+	 * SAS confirmed out of band. The two sides are symmetric, each signed by its own phone-held
+	 * owner key; the friend's Gateway verifies this side under this owner key and persists it as
+	 * its cross-Domain peer. `nonce` is supplied so a retried confirm reuses the same signed link
 	 * rather than a fresh one the Gateway has not seen. */
 	fun signMyLink(
 		peerOwnerSignPub: String,
@@ -202,14 +191,12 @@ class FederationManager(private val store: ProvisioningStore) {
 		return XDomainLinkCrypto.signLink(link, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** A fresh base64 nonce for an owner-signed link side, minted once per confirm so a retry
-	 * reuses it (the signed link stays byte-stable across the retry). Exposed so the wizard can
-	 * pin it for the lifetime of one pairing. */
+	/** A fresh base64 nonce for an owner-signed link side. Exposed so the wizard can pin it for
+	 * the lifetime of one pairing, keeping the signed link byte-stable across a retry. */
 	fun freshLinkNonce(): String = nonce()
 
 	/** Build a signed cross-tenant roster request: the console proves possession of its admitted
-	 * signing key by signing a fresh ROSTER proof, so evie can scope the roster to this owner's
-	 * network (and reject a key it cannot place in a Domain). */
+	 * signing key so evie can scope the roster to this owner's network. */
 	fun signRosterRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.RosterRequest {
 		val console = consoleIdentity()
 		val n = nonce()
@@ -221,10 +208,9 @@ class FederationManager(private val store: ProvisioningStore) {
 		)
 	}
 
-	/** Build a signed gateway-bridge transport request: the OWNER proves possession of its owner key
-	 * (evie resolves the signer to a rooted owner and returns that network's transport, so the owner
-	 * key - not the console key - signs the TRANSPORT_REQUEST proof). evie verifies + scopes to this
-	 * owner before returning the creds. */
+	/** Build a signed gateway-bridge transport request. The owner key (not the console key) signs
+	 * the TRANSPORT_REQUEST proof, because evie resolves the signer to a rooted owner and returns
+	 * that network's transport after verifying and scoping to this owner. */
 	fun signTransportRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.TransportRequest {
 		val owner = ownerIdentity()
 		val n = nonce()
@@ -236,9 +222,9 @@ class FederationManager(private val store: ProvisioningStore) {
 		)
 	}
 
-	/** Build a signed FLOW-2 "who armed trust toward me?" query: the OWNER proves possession of its
-	 * owner key (the arms are indexed by owner key, so the owner key - not the console key - signs the
-	 * TRUST_PENDING proof). evie verifies + scopes to this owner before listing the arms. */
+	/** Build a signed "who armed trust toward me?" query. The arms are indexed by owner key, so the
+	 * owner key (not the console key) signs the TRUST_PENDING proof; evie verifies and scopes to
+	 * this owner before listing the arms. */
 	fun signTrustPendingRequest(nowMs: Long): com.atelier_nyaarium.switchboard.proto.TrustPendingRequest {
 		val owner = ownerIdentity()
 		val n = nonce()
@@ -250,24 +236,24 @@ class FederationManager(private val store: ProvisioningStore) {
 		)
 	}
 
-	/** A fresh rendezvous id for a FLOW-2 trust arm (also the SAS pin both sides bind). Unguessable so
-	 * a third party cannot target a live rendezvous. */
+	/** A fresh rendezvous id for a trust arm (also the SAS pin both sides bind). Unguessable so a
+	 * third party cannot target a live rendezvous. */
 	fun freshRendezvousId(): String = nonce()
 
-	/** This owner's party for a FLOW-2 compare: the owner keys + the given local Domain. Reuses the
-	 * EnrollParty shape so the SAS/commitment machinery (enrollSas/enrollCommitment) is shared. */
+	/** This owner's party for a trust compare: the owner keys plus the given local Domain. Reuses
+	 * the EnrollParty shape so the SAS/commitment machinery is shared. */
 	fun trustParty(domainId: String): com.atelier_nyaarium.switchboard.proto.EnrollParty {
 		val owner = ownerIdentity()
 		return com.atelier_nyaarium.switchboard.proto.EnrollParty(owner.sign.pub, owner.box.pub, domainId)
 	}
 
-	/** A fresh UNGUESSABLE handshake id, minted by the admin into the enroll QR. Unguessability is
-	 * what stops a third party who learned a Domain from targeting a real ceremony window. */
+	/** A fresh handshake id, minted by the admin into the enroll QR. Unguessable so a third party
+	 * who learned a Domain cannot target a real ceremony window. */
 	fun freshHandshakeId(): String = nonce()
 
-	/** A fresh high-entropy enroll pin, minted by the admin into the QR. It rides the QR OUT OF BAND
-	 * and is NEVER sent to evie, so the untrusted broker cannot compute a candidate compare code to
-	 * grind - the residual is the 6-digit blind online guess, not an offline search. */
+	/** A fresh high-entropy enroll pin, minted by the admin into the QR. It rides the QR out of band
+	 * and is never sent to evie, so the untrusted broker cannot grind a candidate compare code; the
+	 * residual is the 6-digit blind online guess, not an offline search. */
 	fun freshEnrollPin(): String = nonce()
 
 	/** A fresh per-ceremony commitment salt, so the round-1 commitment is hiding (evie learns the
@@ -277,10 +263,10 @@ class FederationManager(private val store: ProvisioningStore) {
 	/** The current keyring: the stored snapshot, or an owner-only one before any sync. */
 	fun keyring(): Keyring = Keyring.parse(store.loadDomain()) ?: Keyring.empty(ownerSignPub())
 
-	/** Seal a bootstrap bundle (transport + the Gateway's admission + the current keyring + the
-	 * network id) to the Gateway's box key, signed by this Console, wrapped in a delivery frame. The
-	 * Gateway verifies the seal, opens it, checks the nonce + the owner-signed admission, and adopts
-	 * `domainId` as its Domain id (it boots arming and learns the id from here). */
+	/** Seal a bootstrap bundle (transport, the Gateway's admission, the current keyring, the network
+	 * id) to the Gateway's box key, signed by this Console, wrapped in a delivery frame. The Gateway
+	 * verifies the seal, checks the nonce and the owner-signed admission, and adopts `domainId` as
+	 * its Domain id (it boots arming and learns the id from here). */
 	fun sealBundle(
 		nonce: String,
 		transport: GatewayTransport,
@@ -305,22 +291,17 @@ class FederationManager(private val store: ProvisioningStore) {
 		)
 	}
 
-	/** Apply a snapshot synced from a Gateway, but ONLY when it is rooted at this device's
-	 * own owner key. A relay that tampered with the root (to seat an attacker owner) is
-	 * rejected, so the pinned owner can never be swapped out from under the Console. Read
-	 * the owner key WITHOUT generating one: a sync arriving before this device has an owner
-	 * cannot be verified and must not seat a throwaway root. The server snapshot is folded
-	 * OVER the current one for BOTH admissions and revocations, deduped by signing key +
-	 * nonce and ordered by issue time. Both are append-only owner-signed facts (a revocation
-	 * is never undone - a later admission supersedes it by timestamp), so the union is safe
-	 * and convergent: a member the owner just admitted OR revoked locally survives until evie
-	 * rebroadcasts it, then the dedupe makes the rebroadcast idempotent. Taking revocations
-	 * canonical-from-server alone would drop a locally-merged revocation on the next poll,
-	 * letting a just-revoked member reappear on the board (and be sealed to) until evie caught
-	 * up. */
+	/** Apply a snapshot synced from a Gateway, but ONLY when it is rooted at this device's own owner
+	 * key, so a relay that tampered with the root cannot swap the pinned owner out from under the
+	 * Console. The server snapshot is folded OVER the current one for both admissions and
+	 * revocations, deduped by signing key plus nonce and ordered by issue time. Both are append-only
+	 * owner-signed facts, so the union is safe and convergent: a member the owner just admitted or
+	 * revoked locally survives until evie rebroadcasts it, then the dedupe makes the rebroadcast
+	 * idempotent. Taking revocations canonical-from-server alone would drop a locally-merged
+	 * revocation on the next poll, letting a just-revoked member reappear until evie caught up. */
 	@Synchronized
 	fun applyDomainSync(snapshot: DomainSnapshot, version: String): Boolean {
-		// Read the owner key WITHOUT minting one. A sync arriving before this device has an owner,
+		// Read the owner key without minting one. A sync arriving before this device has an owner,
 		// or over a corrupt one, cannot be verified and must not seat a throwaway root.
 		val ownerPub = (store.loadOwnerIdentity() as? IdentityLoad.Loaded)?.identity?.sign?.pub ?: return false
 		if (snapshot.ownerSignPub != ownerPub) return false
@@ -349,9 +330,9 @@ class FederationManager(private val store: ProvisioningStore) {
 		return out
 	}
 
-	/** Fold a freshly owner-signed admission into the local keyring so the Console can
-	 * seal to a member it just admitted, before evie's snapshot syncs back. Synchronized
-	 * with applyDomainSync so a concurrent poll cannot overwrite the merge. */
+	/** Fold a freshly owner-signed admission into the local keyring so the Console can seal to a
+	 * member it just admitted, before evie's snapshot syncs back. Synchronized with applyDomainSync
+	 * so a concurrent poll cannot overwrite the merge. */
 	@Synchronized
 	fun mergeAdmission(signed: SignedAdmission) {
 		val current = keyring().snapshot
@@ -359,10 +340,9 @@ class FederationManager(private val store: ProvisioningStore) {
 		store.saveDomain(json.encodeToString(DomainSnapshot.serializer(), next), store.loadDomainVersion())
 	}
 
-	/** Fold a freshly owner-signed revocation into the local keyring so the revoked member
-	 * drops off the board immediately, before evie rebroadcasts it. members() honors
-	 * revocations, so the member disappears on the next read. Synchronized with
-	 * applyDomainSync so a concurrent poll cannot overwrite the merge. */
+	/** Fold a freshly owner-signed revocation into the local keyring so the revoked member drops off
+	 * the board immediately, before evie rebroadcasts it. Synchronized with applyDomainSync so a
+	 * concurrent poll cannot overwrite the merge. */
 	@Synchronized
 	fun mergeRevocation(signed: SignedRevocation) {
 		val current = keyring().snapshot
@@ -376,9 +356,9 @@ class FederationManager(private val store: ProvisioningStore) {
 	////////////////////////////////
 	//  Trusted owners (the owner-keyed friend graph the Users surface reads)
 
-	/** The owners this owner has completed a trust ceremony with (enroll or link), by ownerSignPub.
-	 * This is the persistent FRIEND edge - recorded even for a gateway-less person (the design's Q3=B)
-	 * - distinct from the gateway-side relay-affinity edges that enable actual cross-Domain traffic. */
+	/** The owners this owner has completed a trust ceremony with, by ownerSignPub. The persistent
+	 * friend edge, recorded even for a gateway-less person, distinct from the gateway-side
+	 * relay-affinity edges that enable actual cross-Domain traffic. */
 	@Synchronized
 	fun trustedOwners(): Set<String> {
 		val raw = store.loadTrustedOwners() ?: return emptySet()
@@ -422,28 +402,26 @@ class FederationManager(private val store: ProvisioningStore) {
 		store.saveTrustedOwners(arr.toString())
 	}
 
-	/** A fresh opaque Domain id (a slug: lowercase hex, never shown to the human - pure
-	 * plumbing). 16 random bytes hex-encoded is well under the 64-char slug bound and collides
-	 * negligibly, so the admin never has to choose or check one. */
+	/** A fresh opaque Domain id (lowercase hex, never shown to the human). 16 random bytes is well
+	 * under the 64-char slug bound and collides negligibly, so the admin never has to choose one. */
 	fun newDomainId(): String {
 		val bytes = ByteArray(16).also { rnd.nextBytes(it) }
 		return bytes.joinToString("") { "%02x".format(it) }
 	}
 
-	/** Self-sign this device's first-root of a PENDING Domain at its silently-generated owner key.
-	 * No admission exists yet, so the artifact is self-signed by the fresh owner key (the verifier
-	 * checks the signature against the embedded ownerSignPub); the one-time invite `nonce` from the
-	 * scanned blob is the authorization. evie roots the Domain idempotently on the same key and
-	 * refuses a re-root at a different one. */
+	/** Self-sign this device's first-root of a PENDING Domain at its owner key. No admission exists
+	 * yet, so the artifact is self-signed (the verifier checks the signature against the embedded
+	 * ownerSignPub) and the one-time invite `nonce` from the scanned blob is the authorization. evie
+	 * roots the Domain idempotently on the same key and refuses a re-root at a different one. */
 	fun signFirstRoot(domainId: String, nonce: String, nowMs: Long): SignedFirstRoot {
 		val owner = ownerIdentity()
 		val firstRoot = FirstRoot(domainId, owner.sign.pub, owner.box.pub, nonce, nowMs)
 		return ProvisionOpsCrypto.signFirstRoot(firstRoot, owner.sign.priv)
 	}
 
-	/** Owner-sign a request to pre-stage a friend's PENDING tenant: an opaque domainId + a network
-	 * display label, NO owner root. The signing nonce is the anti-replay token for this request;
-	 * evie mints the SEPARATE one-time invite nonce (carried in the QR) and returns it. */
+	/** Owner-sign a request to pre-stage a friend's PENDING tenant (an opaque domainId plus the
+	 * friend's display name, no owner root). The signing nonce is this request's anti-replay token;
+	 * evie mints the separate one-time invite nonce carried in the QR and returns it. */
 	fun signProvisionTenant(domainId: String, displayName: String, nowMs: Long): SignedProvisionTenant {
 		val owner = ownerIdentity()
 		val provision = ProvisionTenant(domainId, displayName, nowMs, nonce())
@@ -457,9 +435,9 @@ class FederationManager(private val store: ProvisioningStore) {
 		return ProvisionOpsCrypto.signRemove(removal, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Owner-sign a rename of this owner's own Domain network display name. evie CAS-merges it onto
-	 * the Domain record and pushes it to the Domain's gateways. The `domainId` is this owner's own
-	 * (rooted admin) Domain; evie verifies the signature against the Domain's pinned owner key. */
+	/** Owner-sign a rename of this owner's own display name. evie CAS-merges it onto the Domain
+	 * record and pushes it to the Domain's gateways. The `domainId` is this owner's own rooted
+	 * Domain; evie verifies the signature against the Domain's pinned owner key. */
 	fun signSetDisplayName(domainId: String, displayName: String, nowMs: Long): SignedSetDisplayName {
 		val owner = ownerIdentity()
 		val rename = SetDisplayName(domainId, displayName, nowMs, nonce())

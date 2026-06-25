@@ -28,19 +28,16 @@ export const EVIE_FILES_DIR = "/tmp/evie-files";
 export const EVIE_FILES_TTL_MS = 60 * 60 * 1000;
 
 const MAX_LEAF_BYTES = 200;
-// Discord caps a message at 10 attachments; the bound is generous theatre.
+// Discord caps a message at 10 attachments; this bound is generous.
 const MAX_COLLISION_SUFFIX = 50;
 
 ////////////////////////////////
 //  Functions & Helpers
 
 /**
- * Sanitize a Discord-supplied filename into a safe leaf.
- *
- * - Defangs path traversal by taking the basename only.
- * - Strips leading dots (no hidden files) and ASCII control chars.
- * - Preserves unicode and spaces.
- * - Caps the result at 200 bytes (UTF-8) so ext4 / tmpfs accept it.
+ * Sanitize a Discord-supplied filename into a safe leaf: basename only (defangs
+ * traversal), no leading dots or ASCII control chars, unicode and spaces kept.
+ * Capped at 200 bytes (UTF-8) so ext4 / tmpfs accept it.
  */
 export function safeFilename(name: string): string {
 	let safe = name.split(/[/\\]/).pop() ?? "";
@@ -57,20 +54,16 @@ export function safeFilename(name: string): string {
 
 /**
  * Materialize Discord-bridge files to /tmp/evie-files/<discordMessageId>/.
- *
- * Files with a `base64` payload are written to disk via tmp + atomic rename.
- * Files without `base64` (out-of-scope categories) pass through as metadata-only
- * so the renderer can list them without a `-> /path`.
- *
- * Lazy cleanup of expired buckets runs at the top of every call.
+ * Files with a `base64` payload are written via tmp + atomic rename; files
+ * without it pass through as metadata-only so the renderer lists them with no
+ * `-> /path`. Expired buckets are swept at entry.
  */
 export function materializeFiles({ discordMessageId, files }: MaterializeFilesParams): MaterializedFile[] {
 	mkdirSync(EVIE_FILES_DIR, { recursive: true });
 	cleanupTmpDir({ dir: EVIE_FILES_DIR, maxAgeMs: EVIE_FILES_TTL_MS, mode: "dirs" });
 
-	// safeFilename is a no-op for real Discord snowflakes (pure digits) but
-	// keeps `path.join` from escaping EVIE_FILES_DIR when the id is supplied
-	// from tests or any future non-Discord origin.
+	// safeFilename is a no-op for real Discord snowflakes (pure digits) but stops
+	// a non-Discord id (tests, future origins) from escaping EVIE_FILES_DIR via path.join.
 	const bucket = join(EVIE_FILES_DIR, safeFilename(discordMessageId));
 	const claimedLeaves = new Set<string>();
 	const out: MaterializedFile[] = [];
@@ -107,9 +100,8 @@ export function renderFilesBlock({ discordMessageId, files }: RenderFilesBlockPa
 	if (files.length === 0) return "";
 
 	const opener = discordMessageId ? `[FILES messageId="${discordMessageId}"]` : `[FILES]`;
-	// Console files always arrive with bytes and are materialized to disk. A
-	// metadata-only entry (no bytes) has no re-fetch path - the evie tool proxy
-	// that once re-served them is retired - so it is surfaced as not-transferred.
+	// Console files always arrive with bytes and are materialized. A metadata-only
+	// entry (no bytes) has no re-fetch path, so it is surfaced as not-transferred.
 	const hasMetadataOnly = files.some((f) => !f.path);
 	const instruction = hasMetadataOnly
 		? `*Files with \`-> /path\` are on disk; Read them. Entries without a path were not transferred.*`
@@ -140,9 +132,9 @@ function resolveCollisionFreePath(bucket: string, requestedLeaf: string, claimed
 }
 
 /**
- * Write to <target>.tmp.<pid> then rename to target. Rename is atomic on POSIX
- * so concurrent host MCP processes that received the same channel_push end up
- * with identical bytes at the target path; last rename wins.
+ * Write to <target>.tmp.<pid> then rename. Rename is atomic on POSIX, so
+ * concurrent host MCP processes handling the same channel_push converge on
+ * identical bytes at the target; last rename wins.
  */
 function writeAtomic(targetPath: string, buffer: Buffer): void {
 	const tmpPath = `${targetPath}.tmp.${process.pid}`;

@@ -247,7 +247,7 @@ describe("routes", () => {
 			expect(json.map((t) => t.team)).toEqual(["team-a"]);
 		});
 
-		it("stamps the Gateway's display name on every team so Peers see the network label (D1)", async () => {
+		it("stamps the Gateway's display name on every team so Peers see the display name (D1)", async () => {
 			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
 			const offlineCatalog = new Map<string, string>([["proj-b", "/home/user/proj-b"]]);
 			const ctx = makeCtx({ registry, offlineCatalog, displayName: () => "Carol's Lab" });

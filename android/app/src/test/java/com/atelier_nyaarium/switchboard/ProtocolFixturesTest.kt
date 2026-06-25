@@ -111,14 +111,15 @@ class ProtocolFixturesTest {
 	}
 
 	@Test
-	fun toleratesOldGatewayTeamWithoutKindAndCarriesDomainId() {
+	fun looseTeamCarriesRequiredGatewayIdAndKindOmitsDomainId() {
 		val result = json.decodeFromString<ConsoleListTeamsResult>(fixture("list-teams-result.json"))
 		assertEquals(2, result.teams.size)
 		assertEquals("devcontainer", result.teams[0].kind)
 		assertEquals("alice", result.teams[0].domainId)
-		assertNull(result.teams[1].kind)
-		// A pre-federation team omits the Domain id; it decodes as null (consumers fall back
-		// to the local Domain).
+		assertEquals("laptop", result.teams[1].gatewayId)
+		assertEquals("loose", result.teams[1].kind)
+		// domainId is absent for a session whose gateway has not resolved a Domain (arming);
+		// consumers fall back to the local Domain.
 		assertNull(result.teams[1].domainId)
 	}
 

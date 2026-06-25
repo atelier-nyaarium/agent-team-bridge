@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { TrustHandshakeOpSchema, TrustPendingRequestSchema, TrustPendingResultSchema } from "../shared/enrollment.js";
+import {
+	TrustHandshakeOpSchema,
+	TrustPendingRequestSchema,
+	TrustPendingResultSchema,
+} from "../shared/federation-lifecycle.js";
 
 ////////////////////////////////
 //  FLOW-2 trust rendezvous wire shapes

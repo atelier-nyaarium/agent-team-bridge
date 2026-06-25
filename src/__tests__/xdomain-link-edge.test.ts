@@ -11,7 +11,7 @@ import {
 	type XDomainLinkRevocation,
 	xDomainLinkEdgeSigningBytes,
 	xDomainLinkRevocationSigningBytes,
-} from "../shared/enrollment.js";
+} from "../shared/federation-lifecycle.js";
 import {
 	signXDomainLink,
 	signXDomainUntrust,

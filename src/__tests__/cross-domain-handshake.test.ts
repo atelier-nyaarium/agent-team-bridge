@@ -571,7 +571,7 @@ describe("CrossDomainHandshakeCoordinator - two-Gateway end to end", () => {
 		expect(coordB.confirm({ pin: PIN, mySignedLink: signLinkSide(b, a) }).ok).toBe(true);
 
 		// A now trusts B; B now trusts A. The disjoint peer sets are the handshake's only writes,
-		// and each stores its OWN owner's attestation (Model A).
+		// and each stores its OWN owner's attestation.
 		const aPeer = peersA.resolveByGateway("bob", "bob-desktop");
 		const bPeer = peersB.resolveByGateway("alice", "sakura-laptop");
 		expect(aPeer?.friendOwnerSignPub).toBe(b.owner.sign.pub);

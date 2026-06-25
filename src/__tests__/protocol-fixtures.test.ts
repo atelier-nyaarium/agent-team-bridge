@@ -89,14 +89,15 @@ describe("protocol fixtures", () => {
 		expect(entry.request_type).toBe("handoff");
 	});
 
-	it("tolerates an old-gateway team without kind and carries the owning Domain id", () => {
+	it("a loose team carries required gatewayId+kind but omits the optional domainId", () => {
 		const result = ConsoleListTeamsResultSchema.parse(fixture("list-teams-result.json"));
 		expect(result.teams).toHaveLength(2);
 		expect(result.teams[0].kind).toBe("devcontainer");
 		expect(result.teams[0].domainId).toBe("alice");
-		expect(result.teams[1].kind).toBeUndefined();
-		// A pre-federation team omits the Domain id; it decodes as absent (consumers fall
-		// back to the local Domain).
+		expect(result.teams[1].gatewayId).toBe("laptop");
+		expect(result.teams[1].kind).toBe("loose");
+		// domainId is absent for a session whose gateway has not resolved a Domain (arming);
+		// consumers fall back to the local Domain.
 		expect(result.teams[1].domainId).toBeUndefined();
 	});
 });

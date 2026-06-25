@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
-	bootstrapDomain,
 	pendingAdminDomain,
 	readAdminDomain,
 	removeDomain,
@@ -58,110 +57,8 @@ function v2Secret() {
 
 ////////////////////////////////
 //  Tests
-
-describe("bootstrapDomain v2-awareness (red-team P5: data loss)", () => {
-	it("re-roots ONLY the admin slice of a v2 Secret and preserves a friend Domain", () => {
-		const { federationJson } = bootstrapDomain(v2Secret(), TEST_DOMAIN_ID, owner.sign.pub, owner.box.pub);
-		// Written back in the v2 shape, not blind-overwritten as v1.
-		expect((federationJson as { schema?: number }).schema).toBe(2);
-		const enrollment = (federationJson as { enrollment: Record<string, { ownerSignPub: string }> }).enrollment;
-		// The friend Domain "work" survives, still rooted at the OTHER owner.
-		expect(enrollment.work).toBeDefined();
-		expect(enrollment.work.ownerSignPub).toBe(otherOwner.sign.pub);
-		// The admin Domain is (re-)rooted at our owner.
-		expect(enrollment[TEST_DOMAIN_ID].ownerSignPub).toBe(owner.sign.pub);
-	});
-
-	it("preserves the admin Domain's existing admissions when re-rooting at the SAME owner", () => {
-		const { federationJson } = bootstrapDomain(v2Secret(), TEST_DOMAIN_ID, owner.sign.pub, owner.box.pub);
-		const slice = (federationJson as { enrollment: Record<string, { admissions: SignedAdmission[] }> }).enrollment[
-			TEST_DOMAIN_ID
-		];
-		// The admin admission survived (same-owner re-root keeps the allowlist).
-		expect(slice.admissions).toHaveLength(1);
-		expect(slice.admissions[0].admission.signPub).toBe(member.sign.pub);
-	});
-
-	it("drops the admin Domain's admissions when re-rooting at a DIFFERENT owner, but still keeps the friend Domain", () => {
-		// A different owner is a fresh admin Domain (old admissions would not verify), yet the
-		// friend Domain must NOT be touched.
-		const { federationJson } = bootstrapDomain(v2Secret(), TEST_DOMAIN_ID, otherOwner.sign.pub, otherOwner.box.pub);
-		const enrollment = (
-			federationJson as {
-				enrollment: Record<string, { ownerSignPub: string; admissions: SignedAdmission[] }>;
-			}
-		).enrollment;
-		expect(enrollment[TEST_DOMAIN_ID].ownerSignPub).toBe(otherOwner.sign.pub);
-		expect(enrollment[TEST_DOMAIN_ID].admissions).toHaveLength(0);
-		// "work" (rooted at otherOwner already) is carried through untouched.
-		expect(enrollment.work.ownerSignPub).toBe(otherOwner.sign.pub);
-	});
-
-	it("does not double-count: a v2 Secret never wipes a non-admin Domain", () => {
-		// Two friend Domains plus the admin Domain: all three slices must be present after rooting.
-		const secret = JSON.stringify({
-			schema: 2,
-			identity: evie,
-			enrollment: {
-				[TEST_DOMAIN_ID]: { ownerSignPub: "old-owner", ownerBoxPub: "b", admissions: [], revocations: [] },
-				work: { ownerSignPub: "work-owner", ownerBoxPub: "wb", admissions: [], revocations: [] },
-				lab: { ownerSignPub: "lab-owner", ownerBoxPub: "lb", admissions: [], revocations: [] },
-			},
-		});
-		const { federationJson } = bootstrapDomain(secret, TEST_DOMAIN_ID, owner.sign.pub, owner.box.pub);
-		const keys = Object.keys((federationJson as { enrollment: Record<string, unknown> }).enrollment).sort();
-		expect(keys).toEqual(["alice", "lab", "work"]);
-	});
-
-	it("first-root on a fresh v2 empty-map Secret writes the admin slice in v2 shape", () => {
-		// evie's KubeSecretStore.init writes { schema:2, identity, enrollment:{} } on first
-		// boot; rooting must produce a v2 blob with just the admin slice.
-		const fresh = JSON.stringify({ schema: 2, identity: evie, enrollment: {} });
-		const { federationJson } = bootstrapDomain(fresh, TEST_DOMAIN_ID, owner.sign.pub, owner.box.pub);
-		expect((federationJson as { schema?: number }).schema).toBe(2);
-		const enrollment = (federationJson as { enrollment: Record<string, { ownerSignPub: string }> }).enrollment;
-		expect(Object.keys(enrollment)).toEqual(["alice"]);
-		expect(enrollment[TEST_DOMAIN_ID].ownerSignPub).toBe(owner.sign.pub);
-	});
-
-	it("keeps the legacy v1 single-Domain write path for a v1 Secret", () => {
-		// A genuinely old v1 Secret (no schema, enrollment IS an EnrollmentState).
-		const v1 = JSON.stringify({
-			identity: evie,
-			enrollment: {
-				ownerSignPub: owner.sign.pub,
-				ownerBoxPub: owner.box.pub,
-				admissions: [adminAdmission()],
-				revocations: [],
-			},
-		});
-		const { federationJson } = bootstrapDomain(v1, TEST_DOMAIN_ID, owner.sign.pub, owner.box.pub);
-		// v1 output: NO schema marker, enrollment is the single state (not a map).
-		expect((federationJson as { schema?: number }).schema).toBeUndefined();
-		const enrollment = federationJson.enrollment as { ownerSignPub: string; admissions: SignedAdmission[] };
-		expect(enrollment.ownerSignPub).toBe(owner.sign.pub);
-		// Same-owner: the admission is preserved on the v1 path too.
-		expect(enrollment.admissions).toHaveLength(1);
-	});
-
-	it("preserves evie's identity verbatim (rooting must not change evie's SAS)", () => {
-		const { federationJson } = bootstrapDomain(v2Secret(), TEST_DOMAIN_ID, owner.sign.pub, owner.box.pub);
-		expect(federationJson.identity.sign.pub).toBe(evie.sign.pub);
-		expect(federationJson.identity.sign.priv).toBe(evie.sign.priv);
-	});
-
-	it("rejects a malformed owner key with an actionable error", () => {
-		expect(() => bootstrapDomain(v2Secret(), TEST_DOMAIN_ID, "not-a-key", owner.box.pub)).toThrow(/32-byte key/);
-	});
-});
-
-////////////////////////////////
-//  displayName preservation on the owner-key bootstrapDomain rooting helper.
 //
-//  These cover bootstrapDomain (the owner-key-in-hand same-owner re-root case), NOT the live
-//  provision() re-provision path - that path never rewrites the Secret for an already-rooted admin Domain,
-//  so it preserves displayName by not touching the slice. The pendingAdminDomain / readAdminDomain
-//  blocks below cover the live fresh-vs-reprovision flow.
+//  displayName + slice fixtures shared by the pendingAdminDomain / readAdminDomain blocks.
 
 interface SliceWithName {
 	ownerSignPub: string | null;
@@ -170,8 +67,8 @@ interface SliceWithName {
 	pendingTenant?: { displayName: string; nonce: string; issuedAt: number; ttlMs: number; rooted: boolean };
 }
 
-/** A v2 Secret whose admin Domain is rooted at `owner` AND carries an displayName, so the
- * same-owner re-root path can be checked to PRESERVE that label. */
+/** A v2 Secret whose admin Domain is rooted at `owner` AND carries an displayName, so
+ * readAdminDomain can be checked to surface that label on an already-rooted admin Domain. */
 function v2RootedWithName(name: string) {
 	return JSON.stringify({
 		schema: 2,
@@ -187,33 +84,6 @@ function v2RootedWithName(name: string) {
 		},
 	});
 }
-
-describe("bootstrapDomain displayName preservation (owner-key re-root helper, not the live path)", () => {
-	it("keeps displayName on a SAME-owner re-root", () => {
-		const { federationJson } = bootstrapDomain(
-			v2RootedWithName("Nyaarium"),
-			TEST_DOMAIN_ID,
-			owner.sign.pub,
-			owner.box.pub,
-		);
-		const slice = (federationJson as { enrollment: Record<string, SliceWithName> }).enrollment[TEST_DOMAIN_ID];
-		expect(slice.displayName).toBe("Nyaarium");
-		// The same-owner allowlist is preserved alongside the name.
-		expect(slice.admissions).toHaveLength(1);
-	});
-
-	it("drops displayName on a DIFFERENT-owner re-root (fresh Domain, the label was the prior owner's)", () => {
-		const { federationJson } = bootstrapDomain(
-			v2RootedWithName("Nyaarium"),
-			TEST_DOMAIN_ID,
-			otherOwner.sign.pub,
-			otherOwner.box.pub,
-		);
-		const slice = (federationJson as { enrollment: Record<string, SliceWithName> }).enrollment[TEST_DOMAIN_ID];
-		expect(slice.displayName).toBeUndefined();
-		expect(slice.admissions).toHaveLength(0);
-	});
-});
 
 ////////////////////////////////
 //  pendingAdminDomain (fresh setup: pre-stage the rootless admin Domain)
@@ -239,9 +109,8 @@ describe("pendingAdminDomain (the fresh-setup pending admin slice)", () => {
 	});
 
 	it("mints the invite nonce as STANDARD base64 (not base64url - the wire field is a b64Field)", () => {
-		// randomBytes(18).toString("base64") is the byte-identical mint evie uses, and it must pass
-		// the b64Field charset that the first_root wire `nonce` enforces. A base64url nonce carrying
-		// -/_ would fail this, reintroducing the Phase 3 bug.
+		// The nonce must pass the b64Field charset the first_root wire `nonce` enforces; a base64url
+		// nonce carrying -/_ would fail it.
 		expect(b64Field().safeParse(NONCE).success).toBe(true);
 		expect(NONCE).not.toMatch(/[-_]/);
 	});
@@ -254,18 +123,6 @@ describe("pendingAdminDomain (the fresh-setup pending admin slice)", () => {
 		expect(enrollment.work.ownerSignPub).toBe(otherOwner.sign.pub);
 		expect(enrollment[TEST_DOMAIN_ID].ownerSignPub).toBeNull();
 		expect(enrollment[TEST_DOMAIN_ID].pendingTenant?.rooted).toBe(false);
-	});
-
-	it("keeps the v1 single-Domain write path on a legacy Secret", () => {
-		const v1 = JSON.stringify({
-			identity: evie,
-			enrollment: { ownerSignPub: null, ownerBoxPub: null, admissions: [], revocations: [] },
-		});
-		const { federationJson } = pendingAdminDomain(v1, TEST_DOMAIN_ID, "Nyaarium", NONCE, 1000, 86_400_000);
-		expect((federationJson as { schema?: number }).schema).toBeUndefined();
-		const slice = federationJson.enrollment as SliceWithName;
-		expect(slice.ownerSignPub).toBeNull();
-		expect(slice.pendingTenant?.displayName).toBe("Nyaarium");
 	});
 });
 

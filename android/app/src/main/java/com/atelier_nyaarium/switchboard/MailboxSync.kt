@@ -8,13 +8,13 @@ import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 
 /**
  * The console-side durable OWNER of the mailbox consumption cursor. Loads the cursor from
- * ProvisioningStore on construction, advances it through the pure SyncCursor rules, and
+ * AppStateStore on construction, advances it through the pure SyncCursor rules, and
  * persists it as the LAST write of a poll cycle. The caller MUST render + persist threads
  * BEFORE calling commit(), so a crash between the two re-delivers (the dedupe absorbs it)
  * rather than skips. This is where the cursor becomes console-owned and durable, closing the
  * backlog-deleted-on-reconnect bug: the console never re-adopts a server-dictated cursor.
  */
-class MailboxSync(private val store: ProvisioningStore) {
+class MailboxSync(private val store: AppStateStore) {
 	@Volatile
 	private var cursor: SyncCursor = store.loadSyncCursor() ?: SyncCursor.initial()
 

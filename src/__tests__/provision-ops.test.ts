@@ -24,7 +24,7 @@ import {
 	verifyProvisionTenant,
 	verifyRemoveTenant,
 	verifySetDisplayName,
-} from "../shared/enrollment.js";
+} from "../shared/federation-lifecycle.js";
 import { ConsoleOpSchema, ProvisioningSchema } from "../shared/schemas.js";
 import { assertCanonicalBytes } from "./_canonical-bytes.js";
 
