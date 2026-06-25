@@ -75,7 +75,10 @@ fun UsersScreen(
 	var menuOpen by remember { mutableStateOf(false) }
 	// One-shot fetch on entry. Null = loading; a Result carries the rows or evie's opaque reason.
 	var outcome by remember { mutableStateOf<Result<List<RosterMember>>?>(null) }
-	val myOwner = remember { repo.ownerSignPub() }
+	// Non-throwing read: a corrupt owner key degrades to empty (no row ever matches it) rather
+	// than crashing the roster. The connect path surfaces a corrupt key as a terminal cause.
+	val myOwnerKeys = remember { repo.ownerKeysForDisplay() }
+	val myOwner = myOwnerKeys?.signPub.orEmpty()
 	// Bumped on an untrust/trust so the per-row Trusted badge re-reads the friend graph.
 	var trustVersion by remember { mutableIntStateOf(0) }
 	// The arms aimed at me (initiatorOwnerSignPub -> rendezvousId), polled so their rows HIGHLIGHT
@@ -86,7 +89,7 @@ fun UsersScreen(
 	// The Sharing surface, opened from a row's "Manage shares"; overlays the roster.
 	var showSharing by remember { mutableStateOf(false) }
 	val myName = remember { repo.displayName() }
-	val myFingerprint = remember { repo.ownerSas().replace("-", " · ") }
+	val myFingerprint = myOwnerKeys?.sas?.replace("-", " · ").orEmpty()
 
 	// owner key -> how many of my sessions that trusted person can reach (the "N shared sessions" line).
 	var sharedCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }

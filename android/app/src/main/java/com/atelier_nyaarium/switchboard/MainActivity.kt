@@ -558,8 +558,9 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 	var provisionAttempted by remember { mutableStateOf(false) }
 	// The silent owner key is minted-or-loaded on first read, so it exists before any first-root;
 	// the human never sees or pastes it (the host-setup manual reads the public keys for the
-	// admin path). Touch it here so it is generated up front.
-	LaunchedEffect(Unit) { repo.ownerSignPub() }
+	// admin path). Touch it here so it is generated up front. Non-throwing: a corrupt stored key
+	// must not crash app start - the connect path surfaces it as a terminal cause.
+	LaunchedEffect(Unit) { repo.ownerKeysForDisplay() }
 
 	fun tryProvision(text: String?, source: String) {
 		val s = text?.trim().orEmpty()

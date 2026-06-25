@@ -66,7 +66,8 @@ fun SharingScreen(repo: ChatRepository, onBack: () -> Unit) {
 	val scope = rememberCoroutineScope()
 	val sessions = remember { repo.shareableSessions() }
 	val people = remember { repo.linkedDomains() }
-	val myOwner = remember { repo.ownerSignPub() }
+	// Non-throwing read: a corrupt owner key degrades to empty rather than crashing the sheet.
+	val myOwner = remember { repo.ownerKeysForDisplay()?.signPub.orEmpty() }
 	// Roster people you have NOT linked - shown disabled ("trust first") in the Specific picker, since
 	// you can only share with someone you have a cross-Domain link to.
 	var trustFirst by remember { mutableStateOf<List<String>>(emptyList()) }

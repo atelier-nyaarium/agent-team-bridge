@@ -263,11 +263,16 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
-	/** Resolve the console identity from the store. Throws a clear error when the
-	 * identity is absent (device not provisioned), so callers see a re-provision hint
-	 * rather than a NullPointerException. Wording avoids the retired in-app QR flow. */
+	/** Resolve the console identity from the store. An ABSENT identity means the device is not
+	 * provisioned (re-provision hint); a CORRUPT one means present-but-unreadable bytes, which a
+	 * re-provision will not fix without a restore - so the two surface DISTINCT terminal causes
+	 * instead of one ambiguous "not enrolled". Never mints here: enrollment owns minting. */
 	private fun requireConsoleIdentity(): Crypto.Identity =
-		store.loadIdentity() ?: error("This device is not enrolled. Re-run provision-console.sh and re-import the setup blob.")
+		when (val load = store.loadIdentity()) {
+			is IdentityLoad.Loaded -> load.identity
+			IdentityLoad.Absent -> error("This device is not enrolled. Re-run provision-console.sh and re-import the setup blob.")
+			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-console.sh")
+		}
 
 	/** Resolve a Gateway's keys from the owner-rooted keyring, verifying its admission
 	 * before sealing to it. This is the device side of symmetric trust: the Console

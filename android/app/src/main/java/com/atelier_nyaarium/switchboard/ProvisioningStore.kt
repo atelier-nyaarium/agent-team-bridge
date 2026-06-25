@@ -8,6 +8,34 @@ import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.SyncCursor
 
 /**
+ * The outcome of reading a persisted federation identity. Decode-to-null conflated a MISSING
+ * key (mint a fresh one is correct) with a CORRUPT key (present bytes that did not decode);
+ * minting on the latter silently re-roots the device and orphans the real key, so every
+ * admission/revocation it signed becomes unverifiable. The tri-state forces the caller to mint
+ * only on [Absent] and fail closed on [Corrupt].
+ */
+sealed interface IdentityLoad {
+	data class Loaded(val identity: Crypto.Identity) : IdentityLoad
+
+	/** Bytes are present but did not decode. Never overwrite; surface the error. */
+	data object Corrupt : IdentityLoad
+
+	data object Absent : IdentityLoad
+
+	companion object {
+		/** Classify a stored identity blob into the tri-state: null bytes are [Absent], present
+		 * bytes that decode are [Loaded], present bytes that do not decode are [Corrupt]. Pure (no
+		 * prefs), so the absent-vs-corrupt distinction the fail-closed mint gate rests on is pinned
+		 * by a plain JVM unit test. */
+		fun classify(raw: String?): IdentityLoad {
+			if (raw == null) return Absent
+			return runCatching { wireJson.decodeFromString(Crypto.Identity.serializer(), raw) }
+				.fold({ Loaded(it) }, { Corrupt })
+		}
+	}
+}
+
+/**
  * Encrypted-at-rest storage for the provisioning blob (which holds the SA + app
  * tokens), the biometric-lock flag, and the serialized chat transcript. Falls back
  * to plain prefs only if the device keystore is unavailable.
@@ -187,10 +215,7 @@ class ProvisioningStore(context: Context) {
 		prefs.edit().putString(KEY_IDENTITY, wireJson.encodeToString(Crypto.Identity.serializer(), identity)).apply()
 	}
 
-	fun loadIdentity(): Crypto.Identity? =
-		prefs.getString(KEY_IDENTITY, null)?.let { json ->
-			runCatching { wireJson.decodeFromString(Crypto.Identity.serializer(), json) }.getOrNull()
-		}
+	fun loadIdentity(): IdentityLoad = readIdentity(KEY_IDENTITY)
 
 	/** The Domain owner root keypair. This device is the trust anchor: the owner
 	 * signing key is the sole signer of admissions and revocations, so it is the one
@@ -203,10 +228,12 @@ class ProvisioningStore(context: Context) {
 			.apply()
 	}
 
-	fun loadOwnerIdentity(): Crypto.Identity? =
-		prefs.getString(KEY_OWNER_IDENTITY, null)?.let { json ->
-			runCatching { wireJson.decodeFromString(Crypto.Identity.serializer(), json) }.getOrNull()
-		}
+	fun loadOwnerIdentity(): IdentityLoad = readIdentity(KEY_OWNER_IDENTITY)
+
+	/** Read a persisted identity into the [IdentityLoad] tri-state: absent when no bytes are
+	 * stored, corrupt when the bytes are present but do not decode, loaded otherwise. The
+	 * corrupt case is kept distinct so the caller never mints over an unreadable key. */
+	private fun readIdentity(key: String): IdentityLoad = IdentityLoad.classify(prefs.getString(key, null))
 
 	/** The mirrored Domain snapshot (the keyring) the Console resolves peers against.
 	 * Public material only (admissions + revocations + the owner pubkey), so the

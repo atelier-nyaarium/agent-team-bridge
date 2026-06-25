@@ -59,22 +59,29 @@ private fun shareText(context: Context, subject: String, value: String) {
 @Composable
 fun OwnerKeysCard(repo: ChatRepository) {
 	val context = LocalContext.current
-	val signPub = remember { repo.ownerSignPub() }
-	val boxPub = remember { repo.ownerBoxPub() }
-	val sas = remember { repo.ownerSas() }
+	// Non-throwing: a corrupt owner key returns null so the card shows a restore prompt instead
+	// of crashing settings. An absent key still mints (the silent first-gen).
+	val keys = remember { repo.ownerKeysForDisplay() }
 	Card(Modifier.fillMaxWidth()) {
 		Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 			Text("Owner key", style = MaterialTheme.typography.titleMedium)
-			Text(
-				"The key your network trusts. Copy it if you re-run setup.",
-				style = MaterialTheme.typography.bodySmall,
-			)
-			Text("Fingerprint: $sas", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
-			// Both owner pubkeys as one JSON blob; provision-console.sh parses it. base64 needs no escaping.
-			OutlinedButton(
-				onClick = { copyToClipboard(context, "owner key", """{"signPub":"$signPub","boxPub":"$boxPub"}""") },
-				modifier = Modifier.fillMaxWidth(),
-			) { Text("Copy key") }
+			if (keys == null) {
+				Text(
+					"Your owner key could not be read. Restore it from a backup below, or recover the network.",
+					style = MaterialTheme.typography.bodySmall,
+				)
+			} else {
+				Text(
+					"The key your network trusts. Copy it if you re-run setup.",
+					style = MaterialTheme.typography.bodySmall,
+				)
+				Text("Fingerprint: ${keys.sas}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+				// Both owner pubkeys as one JSON blob; provision-console.sh parses it. base64 needs no escaping.
+				OutlinedButton(
+					onClick = { copyToClipboard(context, "owner key", """{"signPub":"${keys.signPub}","boxPub":"${keys.boxPub}"}""") },
+					modifier = Modifier.fillMaxWidth(),
+				) { Text("Copy key") }
+			}
 		}
 	}
 }

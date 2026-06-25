@@ -312,6 +312,11 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 		// secure storage must work. Distinct from "not enrolled" (which sounds fixable by re-running).
 		m.contains("secure storage unavailable", ignoreCase = true) ->
 			"Secure storage unavailable - turn on a screen lock, then retry" to ConnKind.TERMINAL
+		// A stored key whose bytes are present but did not decode. Re-provisioning does NOT mint
+		// over it (fail closed), so the only fixes are a backup restore or a deliberate recovery -
+		// distinct from "not enrolled" (which a re-import does fix).
+		m.contains("corrupt", ignoreCase = true) && m.contains("did not decode", ignoreCase = true) ->
+			"Stored key unreadable - restore from backup or re-run provision-console.sh" to ConnKind.TERMINAL
 		m.contains("not enrolled", ignoreCase = true) ->
 			"Not enrolled - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
 		// A local provisioning gap (the blob did not carry the Gateway keys/id). Worded in
@@ -880,6 +885,11 @@ class ChatRepository(
 	fun ownerSignPub(): String = federation.ownerSignPub()
 
 	fun ownerBoxPub(): String = federation.ownerBoxPub()
+
+	/** Owner public material for the settings cards, or null when the stored owner key is
+	 * corrupt. Non-throwing so a corrupt key renders a restore prompt rather than crashing the
+	 * card; an absent key still mints (the silent first-gen). */
+	fun ownerKeysForDisplay(): OwnerKeysView? = federation.ownerKeysForDisplay()
 
 	/** This owner's network display name (the display name), falling back to the local Domain id
 	 * before discovery has stamped a name. Shown as "YOU" on the Users surface. */
