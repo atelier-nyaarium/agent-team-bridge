@@ -72,6 +72,10 @@ named multi-sessions. Folds in features-and-fixes Item 11 (CLI teardown), subsum
 - New headless entry (e.g. `main-host-daemon.ts`) running ONLY: `startHostWakeListener` (catalog scan +
   on-demand container waking) + the `host_op` handler (`hostOpRunner.ts` + `tmuxCore.ts`) + two NEW ops:
   `reload_plugins` and `create_session`. No Claude, no MCP chat tools.
+- BOTH new ops are **console-triggered**: `reload_plugins` and `create_session` each become a `ConsoleOp`
+  member -> `consoleHandler` dispatch -> `relayToHost` -> a new `HostOp` variant -> the daemon. So reload
+  stays one-tap from the phone (Q1's intent) rather than an owner-only script. Both are mutating ->
+  add them to `consoleHandler.isMutatingOp` so a retried `opId` replays the ack, not a re-run.
 - `start-host-daemon.sh` -> generic **`start-session.sh <name>`**: starts a tmux session named `<name>`
   (bare `tmux` on the host, `docker exec ... tmux` in a devcontainer). Target-parameterized.
 - KEEP the gateway<->daemon RPC: `relayToHost` + `hostOpCoordinator` (`gateway/index.ts`) + the reserved
@@ -103,10 +107,17 @@ named multi-sessions. Folds in features-and-fixes Item 11 (CLI teardown), subsum
 
 ### Part C - generalize the tmux layer to named multi-sessions (NEW; subsumes Item 12)
 
-- Thread a **`sessionName`** through `TmuxTarget` (`shared/host-op.ts`) -> the peek / send / create
-  primitives (`tmuxCore.ts`) -> the `create_session` op -> the console session list. The pane is ALWAYS
-  `.0`: `TMUX_PANE = "claude.0"` splits into a variable `<sessionName>` + a fixed pane `0`; every op
-  targets `<sessionName>.0`. Never vary the pane.
+- Thread a **`sessionName`** through `TmuxTarget` (`shared/host-op.ts`: today `{kind,name}`, add the
+  field) -> the peek / send / create primitives (`tmuxCore.ts`) -> the `create_session` op -> the console
+  session list. The pane is ALWAYS `.0`: `TMUX_PANE = "claude.0"` splits into a variable `<sessionName>` +
+  a fixed pane `0`; every op targets `<sessionName>.0`. Never vary the pane.
+- **Host-target addressing** (resolves the demote vs target tension): the `TmuxTarget` kind `"gateway"`
+  (the host MACHINE, run via bare `tmux`) RENAMES to `"host"` - distinct from the retired host-AGENT
+  session identity. So a target is `{kind: "host"|"devcontainer", name, sessionName}`: `"host"` -> bare
+  `tmux`, `"devcontainer"` -> `docker exec <name>_devcontainer-dev-1 tmux`. `resolveTmuxTarget`
+  (`consoleHandler.ts`, today gates loose off + maps `name==="gateway"`) re-keys on this: the host is
+  reachable as a `"host"` target, NOT by un-gating arbitrary loose peers (keeps the peek/drive surface
+  bounded to the host + known devcontainers, no new attack surface).
 - `create_session` console op (wire: a new `ConsoleOp` member -> codegen) -> the daemon's `create_session`
   (`start-session.sh <name>` on the target). Multi-session per target: the host OR a devcontainer can run
   >1 named session (a second window in a devcontainer just works). Idempotent per `(conversationId, opId)`.
@@ -117,10 +128,12 @@ named multi-sessions. Folds in features-and-fixes Item 11 (CLI teardown), subsum
 
 ### Wire + codegen (one atomic pass)
 
-- `shared/schemas.ts`: `TeamKindSchema` drops `"gateway"` (the host session is `loose`);
-  `ConnectionModeSchema` drops `"cli"`; add a `create_session` `ConsoleOp` member. Regen `proto/Protocol.kt`
-  in ONE pass, then the **Android build gate** (CLAUDE.md: a wire change MUST run the Gradle build).
-  Clean-break covers the breaking enum changes; an unknown `kind`/`mode` decodes tolerantly on both sides.
+- `shared/schemas.ts`, ONE atomic codegen pass: `TeamKindSchema` drops `"gateway"` (the host session is
+  `loose`); `ConnectionModeSchema` drops `"cli"`; add the `create_session` AND `reload_plugins` `ConsoleOp`
+  members (both `.meta`'d). Regen `proto/Protocol.kt` once, then the **Android build gate** (CLAUDE.md: a
+  wire change MUST run the Gradle build). Clean-break covers the breaking enum changes; an unknown
+  `kind`/`mode` decodes tolerantly on both sides. The `HostOp` union (`shared/host-op.ts`, type-only, NOT
+  codegen'd) gains the matching `createSession` + `reloadPlugins` variants.
 - Android `MainActivity.kt`: drop every `kind == "gateway"` arm (`terminalEligible`, `canRename` ->
   `kind != "devcontainer"`, the host grouping filter, the label guard) + the `GatewayHeader` host section;
   add the create-session button + the multi-session list.
