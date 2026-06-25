@@ -45,13 +45,13 @@ export interface EvieClientConfig {
 	// Travels as unknown; the consumer validates with DomainSnapshotSchema.
 	onDomainSync?: (domain: unknown) => void;
 	// This Gateway's own Domain lifecycle metadata from the register reply: its status
-	// ("pending"/"rooted"/"unrooted") and the network display name. The Gateway
+	// ("pending"/"rooted"/"unrooted") and the display name. The Gateway
 	// surfaces these to its console (the register reply's domainStatus + the discovery
 	// roster's displayName). Re-applied on every reconnect, so a rename made elsewhere
 	// reaches the Gateway at its next register. Fields absent against a pre-feature evie.
 	onDomainMeta?: (meta: { domainStatus?: string; displayName?: string | null; isAdminDomain?: boolean }) => void;
-	// A live display-name refresh from a domain_update push (the owner renamed THIS Domain's
-	// network). Refreshes the held displayName without a reconnect, so teams()/discover reflect
+	// A live display-name refresh from a domain_update push (the owner renamed their
+	// display name). Refreshes the held displayName without a reconnect, so teams()/discover reflect
 	// the rename immediately. The allowlist the domain_update's snapshot feeds drops displayName,
 	// so this is the only path that updates it between registers. Absent against a pre-feature evie.
 	onDomainUpdate?: (meta: { displayName?: string | null }) => void;
@@ -278,7 +278,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 				console.warn(
 					`[federation] registered but evie returned no Domain snapshot - the Domain may not be rooted, or evie is outdated`,
 				);
-			// Surface the Gateway's own Domain status + profile name + admin-Domain flag to the
+			// Surface the Gateway's own Domain status + display name + admin-Domain flag to the
 			// console register reply / discovery roster. Sent only by a federation-aware evie.
 			if (r?.domainStatus !== undefined || r?.displayName !== undefined || r?.isAdminDomain !== undefined) {
 				config.onDomainMeta?.({

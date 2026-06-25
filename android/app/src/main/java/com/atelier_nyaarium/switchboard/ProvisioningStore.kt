@@ -247,7 +247,7 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putBoolean(KEY_ENROLL_CEREMONY_DONE, value).apply()
 		}
 
-	/** This owner's own network display name (the display name), cached locally so the profile
+	/** This owner's own display name, cached locally so the profile
 	 * shows it without a round-trip. The authoritative copy lives on the Domain at evie; this is
 	 * refreshed from discovery (the local session's displayName) and updated on a local rename. */
 	var displayName: String

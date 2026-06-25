@@ -36,8 +36,8 @@ export interface PendingTenantRecord {
 }
 
 /** One Domain's slice (a v2 per-domain entry). `ownerSignPub`/`ownerBoxPub` are null on a
- * pending slice (no owner has rooted it yet) and set once rooted. `displayName` is the friendly
- * network label; `pendingTenant` marks a Domain pre-staged but not yet rooted. Mirrors evie's
+ * pending slice (no owner has rooted it yet) and set once rooted. `displayName` is the owner's
+ * display name; `pendingTenant` marks a Domain pre-staged but not yet rooted. Mirrors evie's
  * `EnrollmentState` for the fields setup writes. */
 interface DomainEnrollment {
 	ownerSignPub: string | null;
@@ -180,7 +180,7 @@ export function pendingAdminDomain(
 /** Inspect the incumbent admin Domain slice to drive the fresh-vs-reprovision state machine.
  * `rooted` is true once an owner key is set (re-provision: emit the blob only). `ownerSignPub` is
  * that rooted owner key (so a re-provision can sanity-check a gateway's pinned owner against it).
- * `displayName` is the network's label if any (preserved across a re-provision). A malformed
+ * `displayName` is the owner's display name if any (preserved across a re-provision). A malformed
  * Secret reads as a fresh, unrooted admin Domain (so setup pre-stages it) rather than throwing here. */
 export function readAdminDomain(
 	evieFedJson: string,

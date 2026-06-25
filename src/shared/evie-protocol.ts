@@ -1,4 +1,4 @@
-// SYNC-HASH: 3fa132ccdc8b955ce85e434deb361e9f
+// SYNC-HASH: a2dc70f9b42af9a3833efc747461615e
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -81,7 +81,7 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 	// register. `domain` stays opaque here (this leaf imports nothing but zod); the
 	// Gateway validates it with DomainSnapshotSchema. `version` is the keyring hash the
 	// Gateway can echo to skip a redundant apply. `displayName` carries the Domain's
-	// current network display name so a rename pushed this way refreshes the owner's OWN
+	// current display name so a rename pushed this way refreshes the owner's OWN
 	// Gateway immediately (the allowlist the snapshot feeds drops displayName, so the
 	// rename would otherwise not reach teams()/discover until a reconnect). This frame only
 	// ever reaches the renamed Domain's own gateways, so the name is unambiguously theirs.

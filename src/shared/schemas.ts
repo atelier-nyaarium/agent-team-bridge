@@ -122,7 +122,7 @@ export const TeamInfoSchema = z
 		// Absent when this gateway has not resolved a Domain yet (arming mode); a consumer
 		// then treats the session as belonging to the local Gateway's own Domain.
 		domainId: z.string().optional(),
-		// The friendly NETWORK display name of the Domain that owns this session, propagated
+		// The friendly display name of the Domain that owns this session, propagated
 		// over the discovery roster so a linked friend Domain shows the owner's self-set label
 		// (e.g. "Carol") instead of a local alias. Null when the Domain has no owner-set label;
 		// consumers fall back to the domainId / a local label.

@@ -16,7 +16,7 @@ package com.atelier_nyaarium.switchboard
 data class HostedTenant(
 	/** The opaque Domain id (plumbing; never the row's title). */
 	val domainId: String,
-	/** The network display label the admin chose (the row title). */
+	/** The display name the admin chose (the row title). */
 	val displayName: String,
 	/** The one-time invite nonce, so the row can re-render its QR / blob. */
 	val nonce: String,

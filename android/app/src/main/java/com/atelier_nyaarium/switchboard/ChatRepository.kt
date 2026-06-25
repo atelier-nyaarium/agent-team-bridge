@@ -63,7 +63,7 @@ data class ScannedGateway(
 data class EnrollDelivery(val admitted: Boolean, val message: String, val pasteBundle: String?)
 
 /** A linked friend Domain row for the Federation hub: the Domain id (plumbing), the friend's
- * network display name (their self-set display name, propagated over discovery - shown instead of
+ * display name (self-set, propagated over discovery - shown instead of
  * the opaque domainId when known), how many of its sessions are visible to me, and whether any is
  * online. `displayName` is null until a discovery session for the peer carries it. */
 data class LinkedDomain(
@@ -169,7 +169,7 @@ data class ChatState(
 	 * offline and has shared nothing back - the gap that otherwise dead-locks the post-link sharing
 	 * flow. Refreshed alongside teams; an empty set just falls back to discovery-only. */
 	val linkedPeerOwners: Map<String, String> = emptyMap(),
-	/** This owner's own network display name (the display name), for the profile field and the
+	/** This owner's own display name, for the profile field and the
 	 * MY NETWORK card. Seeded from the local cache and refreshed from discovery's local-session
 	 * displayName; empty until the owner sets one. */
 	val displayName: String = "",
@@ -853,7 +853,7 @@ class ChatRepository(
 	 * card; an absent key still mints (the silent first-gen). */
 	fun ownerKeysForDisplay(): OwnerKeysView? = federation.ownerKeysForDisplay()
 
-	/** This owner's network display name (the display name), falling back to the local Domain id
+	/** This owner's display name, falling back to the local Domain id
 	 * before discovery has stamped a name. Shown as "YOU" on the Users surface. */
 	fun displayName(): String = state.value.displayName.ifEmpty { confirmedDomainId().orEmpty() }
 
@@ -1007,9 +1007,9 @@ class ChatRepository(
 	}
 
 	////////////////////////////////
-	//  Admin name (this owner's network display name)
+	//  Display name (this owner's display name)
 
-	/** This owner's current network display name, for the profile field + the MY NETWORK card. The
+	/** This owner's current display name, for the profile field + the MY NETWORK card. The
 	 * cache (refreshed from discovery) is authoritative for display; empty until the owner sets one. */
 	fun localDisplayName(): String = _state.value.displayName
 
@@ -1025,7 +1025,7 @@ class ChatRepository(
 		if (local != _state.value.displayName) _state.update { it.copy(displayName = local) }
 	}
 
-	/** Rename this owner's own network: owner-sign a SET_ADMIN_NAME op over the admin Domain and
+	/** Rename this owner's own display name: owner-sign a SET_ADMIN_NAME op over the admin Domain and
 	 * submit it evie-direct. On success cache the new name + reflect it immediately (evie pushes a
 	 * domain_update to this owner's gateways, so discovery will confirm it on the next refresh). */
 	suspend fun setDisplayName(name: String): Result<Unit> = withContext(Dispatchers.IO) {

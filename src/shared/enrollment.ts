@@ -1,4 +1,4 @@
-// SYNC-HASH: f93c4bade02613d9f6cac797cdde79cd
+// SYNC-HASH: 1952137769945c6969b74d91c9aa431b
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -177,7 +177,7 @@ export const PendingTenantSchema = z
 	.object({
 		// The opaque Domain id (slug; never shown to the human - pure plumbing).
 		domainId: slugField(),
-		// The friendly NETWORK display name (one per owner/Domain). Free text the admin
+		// The friendly display name (one per owner/Domain). Free text the admin
 		// pre-sets and the friend edits from their profile once in.
 		displayName: displayField(128),
 		// The one-time invite nonce (base64), spent on the first successful first-root.
@@ -301,8 +301,8 @@ export const EnrollOpSchema = z
 		z.object({ kind: z.literal("submit_xdomain_link"), edge: SignedXDomainLinkEdgeSchema }),
 		z.object({ kind: z.literal("revoke_xdomain_link"), revocation: SignedXDomainLinkRevocationSchema }),
 		// Friend cross-Domain onboarding: the admin pre-stages a pending tenant
-		// (provision_tenant) or drops it (remove_tenant), and the rooted owner renames the
-		// network (set_display_name). The friend's first_root is NOT on this enroll surface
+		// (provision_tenant) or drops it (remove_tenant), and the rooted owner renames their
+		// display name (set_display_name). The friend's first_root is NOT on this enroll surface
 		// either: a pending Domain has no gateway, so the friend's app POSTs the SignedFirstRoot
 		// DIRECTLY to evie's console-bridge firstRoot intake (it carries no admission to
 		// authenticate here pre-root, and the one-time invite nonce is its authorization).
@@ -384,7 +384,7 @@ export const EnrollHandshakeResultSchema = z
 //  Cross-tenant roster (the "Users" surface: everyone on this evie, name + presence)
 //
 //  The Users surface unifies a network's members into one list. evie is the source of truth (the
-//  per-Domain names + owners are in its Secret; presence is its live gateway-connection table). The
+//  per-Domain display names + owners are in its Secret; presence is its live gateway-connection table). The
 //  visibility model is Q1=A "full roster": every member on this evie is visible to every other
 //  member, non-transitive (the roster never reaches a member's linked peers). So the request only
 //  AUTHENTICATES the caller as some member of this evie (a console admitted in one of its Domains) -
@@ -410,7 +410,7 @@ export const RosterRequestSchema = z
 	.meta({ id: "RosterRequest" });
 
 /** One member row in the roster: the owner identity (the trust anchor; the phone derives the
- * fingerprint from it), the network display name, and a presence boolean. Deliberately NO gatewayId
+ * fingerprint from it), the display name, and a presence boolean. Deliberately NO gatewayId
  * / box key / domainId - a row is an identity, never a routing or seal handle, and topology is
  * stripped. */
 export const RosterMemberSchema = z

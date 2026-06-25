@@ -449,7 +449,7 @@ async function readEvieFed(): Promise<string> {
  * signature - unlike the phone's admin-signed provision_tenant for FRIEND tenants). Returns the
  * minted invite nonce so the caller emits it in the blob's `pendingTenant`. */
 async function stageAdminPending(evieFed: string, adminDomainId: string): Promise<{ nonce: string }> {
-	// The display name (the friendly network label): from the environment for a scripted run, else
+	// The owner's display name: from the environment for a scripted run, else
 	// prompted (D3). It is the same label the admin would type when hosting a friend.
 	let displayName = (process.env.SB_DISPLAY_NAME ?? "").trim();
 	if (!displayName) {

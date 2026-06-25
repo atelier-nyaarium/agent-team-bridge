@@ -48,7 +48,7 @@ export interface RoutesDeps {
 	// here (the SealTarget is keyed by the full (domainId, gatewayId) pair, never the bare
 	// id), and discovery fans a list_teams to each linked peer. Absent when federation is off.
 	crossDomainPeers?: import("./federation/crossDomainPeers.js").CrossDomainPeers | null;
-	// This Gateway's own network display name (learned from evie's register reply), stamped on
+	// The owner's display name (learned from evie's register reply), stamped on
 	// every local TeamInfo so a linked friend Domain sees the owner's self-set label over the
 	// discovery roster (D1). Absent/null when unset or pre-feature.
 	displayName?: (() => string | null | undefined) | null;
@@ -416,7 +416,7 @@ export function createRoutes({
 		const teamsList: TeamInfo[] = [];
 		const seen = new Set<string>();
 		const isDevcontainer = (name: string) => offlineCatalog.has(name) || knownTeamPaths.has(name);
-		// This Gateway's own network label, stamped on every local session so a linked friend
+		// The owner's display name, stamped on every local session so a linked friend
 		// Domain sees the owner's self-set name over the discovery roster (D1). Spread in only
 		// when set, so a Gateway with no display name emits the same minimal TeamInfo as before
 		// (the field is nullish on the wire; the friend's gateway is the authoritative source).
@@ -510,7 +510,7 @@ export function createRoutes({
 				// stamp none). The (domainId, gatewayId) pair is what the console groups by and
 				// the send path resolves the seal target from, since a gateway id collides
 				// across Domains. The peer's own displayName rides through the spread (the friend
-				// Gateway stamped its self-set network label), so Peers display the friend's name (D1).
+				// Gateway stamped its self-set display name), so Peers display the friend's name (D1).
 				return peerTeams.map((t) => ({ ...t, domainId: peer.friendDomainId }));
 			}),
 		);

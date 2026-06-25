@@ -130,7 +130,7 @@ data class Team(
 	// its Domain. Null for a pre-federation Gateway and for the locally-synthesized ended
 	// session (it has no live wire record).
 	val domainId: String? = null,
-	// The owning Domain's network display name, stamped by the gateway's discover for both local
+	// The owning Domain's display name, stamped by the gateway's discover for both local
 	// and peer sessions. The Peers list shows this instead of the opaque domainId. Null for a
 	// pre-feature gateway or a Domain that has not set a name yet.
 	val displayName: String? = null,

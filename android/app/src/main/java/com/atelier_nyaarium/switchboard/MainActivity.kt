@@ -685,7 +685,7 @@ fun HostSetupHelpScreen(onBack: () -> Unit) {
 			Text(
 				"1. On the computer that will run your agents, clone switchboard and run " +
 					"./provision-admin-domain.sh.\n\n" +
-					"2. It asks for a network name and sets everything up. No keys to paste - this app " +
+					"2. It asks for your name and sets everything up. No keys to paste - this app " +
 					"holds your owner key.\n\n" +
 					"3. It prints a setup code. Go back and scan or paste it.\n\n" +
 					"4. Once connected, add a Gateway in Settings to bring your agents online.",
@@ -1541,9 +1541,9 @@ private fun SettingsRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 @Composable
 private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceName: (String) -> Unit) {
 	val scope = rememberCoroutineScope()
-	// Admin name (the owner's NETWORK display name, one per owner): what linked friends see your
-	// network as. Owner-signed + pushed to evie; it lives above the per-install device name. Seeded
-	// from state.displayName (cache, refreshed from discovery) and re-seeded when that changes.
+	// The owner's display name (one per owner): what linked friends see them as. Owner-signed +
+	// pushed to evie; it lives above the per-install device name. Seeded from state.displayName
+	// (cache, refreshed from discovery) and re-seeded when that changes.
 	var displayName by remember(state.displayName) { mutableStateOf(state.displayName) }
 	var opStatus by remember { mutableStateOf("") }
 	var opBusy by remember { mutableStateOf(false) }
@@ -1553,9 +1553,9 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 	// the real Domain id. A device that never first-rooted (the admin) is not gated - its rename
 	// signs over its own confirmed Domain once discovery reports it.
 	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, repo.confirmedDomainId())
-	Text("Network name", style = MaterialTheme.typography.titleMedium)
+	Text("Your name", style = MaterialTheme.typography.titleMedium)
 	Text(
-		"What linked friends see your network called.",
+		"The name linked friends see you by.",
 		style = MaterialTheme.typography.bodySmall,
 		color = MaterialTheme.colorScheme.onSurfaceVariant,
 	)

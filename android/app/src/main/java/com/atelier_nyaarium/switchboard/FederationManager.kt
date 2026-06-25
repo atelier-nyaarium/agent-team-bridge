@@ -441,8 +441,8 @@ class FederationManager(private val store: ProvisioningStore) {
 		return ProvisionOpsCrypto.signFirstRoot(firstRoot, owner.sign.priv)
 	}
 
-	/** Owner-sign a request to pre-stage a friend's PENDING tenant: an opaque domainId + a network
-	 * display label, NO owner root. The signing nonce is the anti-replay token for this request;
+	/** Owner-sign a request to pre-stage a friend's PENDING tenant: an opaque domainId + the friend's
+	 * display name, NO owner root. The signing nonce is the anti-replay token for this request;
 	 * evie mints the SEPARATE one-time invite nonce (carried in the QR) and returns it. */
 	fun signProvisionTenant(domainId: String, displayName: String, nowMs: Long): SignedProvisionTenant {
 		val owner = ownerIdentity()
@@ -457,7 +457,7 @@ class FederationManager(private val store: ProvisioningStore) {
 		return ProvisionOpsCrypto.signRemove(removal, owner.sign.priv, owner.sign.pub)
 	}
 
-	/** Owner-sign a rename of this owner's own Domain network display name. evie CAS-merges it onto
+	/** Owner-sign a rename of this owner's own display name. evie CAS-merges it onto
 	 * the Domain record and pushes it to the Domain's gateways. The `domainId` is this owner's own
 	 * (rooted admin) Domain; evie verifies the signature against the Domain's pinned owner key. */
 	fun signSetDisplayName(domainId: String, displayName: String, nowMs: Long): SignedSetDisplayName {
