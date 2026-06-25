@@ -1063,7 +1063,7 @@ describe("console cross-Domain handshake ops", () => {
 					receiverOwnerSignPub: "recv-owner",
 					receiverGatewaySignPub: "recv-gw-sign",
 					receiverGatewayBoxPub: "recv-gw-box",
-					receiverDomainId: "home",
+					receiverDomainId: "alice",
 					receiverGatewayId: "test-host",
 					expiresAt: 123,
 				};
@@ -1151,7 +1151,7 @@ describe("console cross-Domain handshake ops", () => {
 					pin: "thepin",
 					// A console could LIE here; the gateway must ignore it and use the verified owner.
 					requesterOwnerSignPub: "ATTACKER-CLAIMED-OWNER",
-					requesterDomainId: "home",
+					requesterDomainId: "alice",
 					requesterGatewayId: "test-host",
 				},
 				"rq1",
@@ -1164,7 +1164,7 @@ describe("console cross-Domain handshake ops", () => {
 			listeningToken: "bob-desktop.tok",
 			pin: "thepin",
 			requesterOwnerSignPub: OWNER_PUB,
-			requesterDomainId: "home",
+			requesterDomainId: "alice",
 			requesterGatewayId: "test-host",
 		});
 	});

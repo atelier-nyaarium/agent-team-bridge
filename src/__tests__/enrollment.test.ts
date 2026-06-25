@@ -97,7 +97,7 @@ describe("enrollment", () => {
 });
 
 describe("cross-Domain link edge", () => {
-	const edge: XDomainLinkEdge = { srcDomainId: "home", dstDomainId: "carol", issuedAt: 1000, nonce: "bm9uY2U=" };
+	const edge: XDomainLinkEdge = { srcDomainId: "alice", dstDomainId: "carol", issuedAt: 1000, nonce: "bm9uY2U=" };
 
 	it("owner-signs and verifies a link edge under the owner key", () => {
 		const signed = signXDomainLinkEdge(edge, owner.sign.priv, owner.sign.pub);
@@ -140,7 +140,7 @@ describe("cross-Domain link edge", () => {
 
 describe("cross-Domain link-edge revocation", () => {
 	const revocation: XDomainLinkRevocation = {
-		srcDomainId: "home",
+		srcDomainId: "alice",
 		dstDomainId: "carol",
 		revokedAt: 2000,
 		nonce: "cmV2b2tl",
@@ -183,12 +183,12 @@ describe("cross-Domain link-edge revocation", () => {
 		// A captured edge signature must not be replayable as a revocation: the signing-bytes
 		// prefix differs, so an edge artifact reshaped into the revocation envelope fails.
 		const edgeSigned = signXDomainLinkEdge(
-			{ srcDomainId: "home", dstDomainId: "carol", issuedAt: 2000, nonce: "cmV2b2tl" },
+			{ srcDomainId: "alice", dstDomainId: "carol", issuedAt: 2000, nonce: "cmV2b2tl" },
 			owner.sign.priv,
 			owner.sign.pub,
 		);
 		const reshaped = {
-			revocation: { srcDomainId: "home", dstDomainId: "carol", revokedAt: 2000, nonce: "cmV2b2tl" },
+			revocation: { srcDomainId: "alice", dstDomainId: "carol", revokedAt: 2000, nonce: "cmV2b2tl" },
 			ownerSignPub: edgeSigned.ownerSignPub,
 			signature: edgeSigned.signature,
 		};

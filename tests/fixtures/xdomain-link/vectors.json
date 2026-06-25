@@ -5,28 +5,28 @@
 	"edge": {
 		"_comment": "xDomainLinkEdgeSigningBytes + signXDomainLinkEdge over the fixed owner key.",
 		"value": {
-			"srcDomainId": "home",
+			"srcDomainId": "alice",
 			"dstDomainId": "bob",
 			"issuedAt": 1717171717171,
 			"nonce": "bm9uY2U="
 		},
-		"signingBytes": "XDOMAIN_RELAY_GATE_V1\nF51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=\nhome\nbob\n1717171717171\nbm9uY2U=",
-		"signingBytesHex": "58444f4d41494e5f52454c41595f474154455f56310a46353166375a4b305a575672474a583836517352776e343045654e5a674942492b5a4c2f5677376a786f493d0a686f6d650a626f620a313731373137313731373137310a626d39755932553d",
-		"signingBytesBase64": "WERPTUFJTl9SRUxBWV9HQVRFX1YxCkY1MWY3WkswWldWckdKWDg2UXNSd240MEVlTlpnSUJJK1pML1Z3N2p4b0k9CmhvbWUKYm9iCjE3MTcxNzE3MTcxNzEKYm05dVkyVT0=",
-		"signature": "on2ALuSZQu8Hmouyl9ywC2jjil+XsPnaCUD1tpoOtW/dDHRkW0FcpY3t0MzAn//uzwb5R5FYYdTZNYGIfH6fBQ=="
+		"signingBytes": "XDOMAIN_RELAY_GATE_V1\nF51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=\nalice\nbob\n1717171717171\nbm9uY2U=",
+		"signingBytesHex": "58444f4d41494e5f52454c41595f474154455f56310a46353166375a4b305a575672474a583836517352776e343045654e5a674942492b5a4c2f5677376a786f493d0a616c6963650a626f620a313731373137313731373137310a626d39755932553d",
+		"signingBytesBase64": "WERPTUFJTl9SRUxBWV9HQVRFX1YxCkY1MWY3WkswWldWckdKWDg2UXNSd240MEVlTlpnSUJJK1pML1Z3N2p4b0k9CmFsaWNlCmJvYgoxNzE3MTcxNzE3MTcxCmJtOXVZMlU9",
+		"signature": "fkU63rk8mnII854OhOM79BNsWFpA8yrSoe1nDv+QTFZOIdcbwMTRUSDN88bfbvQk3+njizwa3fhUxGlxuJmQDA=="
 	},
 	"revocation": {
 		"_comment": "xDomainLinkRevocationSigningBytes + signXDomainLinkRevocation over the fixed owner key.",
 		"value": {
-			"srcDomainId": "home",
+			"srcDomainId": "alice",
 			"dstDomainId": "bob",
 			"revokedAt": 1717171800000,
 			"nonce": "cmV2LW5vbmNl"
 		},
-		"signingBytes": "XDOMAIN_REVOKE_V1\nF51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=\nhome\nbob\n1717171800000\ncmV2LW5vbmNl",
-		"signingBytesHex": "58444f4d41494e5f5245564f4b455f56310a46353166375a4b305a575672474a583836517352776e343045654e5a674942492b5a4c2f5677376a786f493d0a686f6d650a626f620a313731373137313830303030300a636d56324c573576626d4e6c",
-		"signingBytesBase64": "WERPTUFJTl9SRVZPS0VfVjEKRjUxZjdaSzBaV1ZyR0pYODZRc1J3bjQwRWVOWmdJQkkrWkwvVnc3anhvST0KaG9tZQpib2IKMTcxNzE3MTgwMDAwMApjbVYyTFc1dmJtTmw=",
-		"signature": "WdxmE+J/KfaZb19rcjZYLhvhzAZ290XmK0XqC+bemyQbUdSZ/p+GKCz8lu2Jl+9D/vUWwjqINEFpcJCUlvsXDg=="
+		"signingBytes": "XDOMAIN_REVOKE_V1\nF51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=\nalice\nbob\n1717171800000\ncmV2LW5vbmNl",
+		"signingBytesHex": "58444f4d41494e5f5245564f4b455f56310a46353166375a4b305a575672474a583836517352776e343045654e5a674942492b5a4c2f5677376a786f493d0a616c6963650a626f620a313731373137313830303030300a636d56324c573576626d4e6c",
+		"signingBytesBase64": "WERPTUFJTl9SRVZPS0VfVjEKRjUxZjdaSzBaV1ZyR0pYODZRc1J3bjQwRWVOWmdJQkkrWkwvVnc3anhvST0KYWxpY2UKYm9iCjE3MTcxNzE4MDAwMDAKY21WMkxXNXZibU5s",
+		"signature": "h2cdahnbhxKJ2r53/JVh0VO6RouwXMNSILx8u+Ctct2HRyYLN4F9+6BUe5oggzcqAHOa7e6UtmjNRuFfOswMDw=="
 	},
 	"link": {
 		"_comment": "xDomainLinkSigningBytes + signXDomainLink (federation-protocol.ts) over the fixed owner key: the full gateway-key XDomainLink artifact the handshake confirm binds, distinct from the relay-affinity edge above.",

@@ -91,7 +91,7 @@ describe("cross-Domain link artifact", () => {
 			link({
 				myOwnerSignPub: friendOwner.sign.pub,
 				peerOwnerSignPub: myOwner.sign.pub,
-				peerDomainId: "home",
+				peerDomainId: "alice",
 				peerGatewayId: "my-laptop",
 				peerSignPub: myGateway.sign.pub,
 				peerBoxPub: myGateway.box.pub,

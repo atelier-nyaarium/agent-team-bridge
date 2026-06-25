@@ -5,7 +5,7 @@
 			"admin": {
 				"ownerSignPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
 				"ownerBoxPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
-				"domainId": "home"
+				"domainId": "alice"
 			},
 			"enrollee": {
 				"ownerSignPub": "vZKKvkssEXBWu+b/uEOqj1mFP19NYc/MeZYmpyvXub4=",
@@ -13,7 +13,7 @@
 				"domainId": "kashia"
 			},
 			"pin": "pko5oj8QbOO/49b6qdHBKgXb",
-			"sas": "386368"
+			"sas": "610670"
 		},
 		{
 			"admin": {
@@ -40,18 +40,18 @@
 		"enrollee": {
 			"ownerSignPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
 			"ownerBoxPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
-			"domainId": "home"
+			"domainId": "alice"
 		},
 		"pin": "pko5oj8QbOO/49b6qdHBKgXb",
-		"sas": "087137",
-		"differsFrom": "386368"
+		"sas": "714781",
+		"differsFrom": "610670"
 	},
 	"fieldReassign": {
 		"_comment": "Swapping ownerSignPub<->ownerBoxPub WITHIN the admin block changes the code (injective preimage; the red-team reassignment guard). differsFrom = cases[0].sas.",
 		"admin": {
 			"ownerSignPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
 			"ownerBoxPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
-			"domainId": "home"
+			"domainId": "alice"
 		},
 		"enrollee": {
 			"ownerSignPub": "vZKKvkssEXBWu+b/uEOqj1mFP19NYc/MeZYmpyvXub4=",
@@ -59,15 +59,15 @@
 			"domainId": "kashia"
 		},
 		"pin": "pko5oj8QbOO/49b6qdHBKgXb",
-		"sas": "477816",
-		"differsFrom": "386368"
+		"sas": "292898",
+		"differsFrom": "610670"
 	},
 	"substitution": {
 		"_comment": "An evie-substituted enrollee box key changes the code (the residual MITM detector after commit-reveal). differsFrom = cases[0].sas.",
 		"admin": {
 			"ownerSignPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
 			"ownerBoxPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
-			"domainId": "home"
+			"domainId": "alice"
 		},
 		"enrollee": {
 			"ownerSignPub": "vZKKvkssEXBWu+b/uEOqj1mFP19NYc/MeZYmpyvXub4=",
@@ -75,43 +75,43 @@
 			"domainId": "kashia"
 		},
 		"pin": "pko5oj8QbOO/49b6qdHBKgXb",
-		"sas": "503810",
-		"differsFrom": "386368"
+		"sas": "039430",
+		"differsFrom": "610670"
 	},
 	"commitment": {
 		"_comment": "ENROLL_COMMIT_V1 over the admin party + role ADMIN + salt.",
 		"party": {
 			"ownerSignPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
 			"ownerBoxPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
-			"domainId": "home"
+			"domainId": "alice"
 		},
 		"role": "ADMIN",
 		"salt": "UThwxgYLE+16J6tbmeWnV+pE",
-		"commitment": "xiMrbvMIr75xgjQyF+Bli6TSlVs1sj6CNAu6Q+ZoTCE="
+		"commitment": "MdJdosv6djBCpbg1VvfwVhtoCBnr+/+ur0CnE2nuLEI="
 	},
 	"commitmentRoleBinding": {
 		"_comment": "The SAME party + salt under role ENROLLEE yields a DIFFERENT commitment (role is bound). differsFrom = commitment.commitment.",
 		"party": {
 			"ownerSignPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
 			"ownerBoxPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
-			"domainId": "home"
+			"domainId": "alice"
 		},
 		"role": "ENROLLEE",
 		"salt": "UThwxgYLE+16J6tbmeWnV+pE",
-		"commitment": "SMNDFhDR+Iw2O9/+x/9sVUFkNQ5jy4/3O5XkBqa+4ls=",
-		"differsFrom": "xiMrbvMIr75xgjQyF+Bli6TSlVs1sj6CNAu6Q+ZoTCE="
+		"commitment": "dw2/3frvVZzKXmzFG4Yr5Po2FCqMXemJOEFQYksjRzg=",
+		"differsFrom": "MdJdosv6djBCpbg1VvfwVhtoCBnr+/+ur0CnE2nuLEI="
 	},
 	"commitmentSaltBinding": {
 		"_comment": "The SAME party + role under a DIFFERENT salt yields a DIFFERENT commitment (salt hides the keys). differsFrom = commitment.commitment.",
 		"party": {
 			"ownerSignPub": "+1Q6jsVGWEDI4iPn194NhJlj4k6wTszJBvLEJBZkcMs=",
 			"ownerBoxPub": "iNVTBx6at5DAQOFMhuSo0gr/JL+lW4R4uLH1uBkBJwM=",
-			"domainId": "home"
+			"domainId": "alice"
 		},
 		"role": "ADMIN",
 		"salt": "krVeJSLapBx2lgjp+Uq/fGtM",
-		"commitment": "hlE6BJhqc6RuAXHfDtg5HTsCt/7gFZeIm3WA4GWO//o=",
-		"differsFrom": "xiMrbvMIr75xgjQyF+Bli6TSlVs1sj6CNAu6Q+ZoTCE="
+		"commitment": "ArfORDOnyZops5ZB1d+3SBCHwu3bLg4eel5OINbAZao=",
+		"differsFrom": "MdJdosv6djBCpbg1VvfwVhtoCBnr+/+ur0CnE2nuLEI="
 	},
 	"handComputed": {
 		"_comment": "Tiny non-key strings so the test can assert the EXACT canonical preimages. The SAS preimage is the fixed-slot ADMIN/ENROLLEE block layout; the commitment preimage is role-tagged fixed-order.",

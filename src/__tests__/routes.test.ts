@@ -29,7 +29,7 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 			LOG_PATH: "/tmp/test-debug.log",
 			RESPONSE_TIMEOUT_MS: 500,
 			localGatewayId: "test-host",
-			localDomainId: "home",
+			localDomainId: "alice",
 		},
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
 		offlineCatalog,
@@ -76,7 +76,7 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "available",
 					kind: "devcontainer",
 					queue_depth: 0,
@@ -97,7 +97,7 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "cli",
 					kind: "devcontainer",
@@ -106,7 +106,7 @@ describe("routes", () => {
 				{
 					team: "proj-b",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "available",
 					kind: "devcontainer",
 					queue_depth: 0,
@@ -145,7 +145,7 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
@@ -154,7 +154,7 @@ describe("routes", () => {
 				{
 					team: "2fb1f8",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "channel",
 					kind: "loose",
@@ -175,7 +175,7 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
@@ -184,7 +184,7 @@ describe("routes", () => {
 				{
 					team: "Aqua",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "channel",
 					kind: "console",
@@ -205,7 +205,7 @@ describe("routes", () => {
 				{
 					team: "gateway",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "channel",
 					kind: "gateway",
@@ -214,7 +214,7 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",

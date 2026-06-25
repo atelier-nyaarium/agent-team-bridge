@@ -9,7 +9,7 @@ describe("sanitizeDomainId", () => {
 	});
 
 	it("trims dash runs at the ends", () => {
-		expect(sanitizeDomainId("--home--")).toBe("home");
+		expect(sanitizeDomainId("--alice--")).toBe("alice");
 	});
 
 	it("collapses the qualifier separator instead of carrying it", () => {
@@ -26,7 +26,7 @@ describe("slugField / sanitizeDomainId alignment", () => {
 	const slug = slugField();
 
 	it("accepts canonical ids that sanitize unchanged", () => {
-		for (const id of ["home", "carol-gw", "guest-9f3a", "a3f91c2e4d5b6789", "sakura"]) {
+		for (const id of ["alice", "carol-gw", "guest-9f3a", "a3f91c2e4d5b6789", "sakura"]) {
 			expect(slug.safeParse(id).success).toBe(true);
 			expect(sanitizeDomainId(id)).toBe(id);
 		}
@@ -34,7 +34,7 @@ describe("slugField / sanitizeDomainId alignment", () => {
 
 	it("rejects pure-separator / edge-dash ids that sanitizeDomainId would throw on or alter", () => {
 		// The class the home-retire exposed: these once passed slugField but throw at sanitize
-		// (the silent "home" default that swallowed them is gone), so reject them at validation.
+		// (the silent default that once swallowed them is gone), so reject them at validation.
 		for (const bad of ["---", "-x", "x-", "a--b", ""]) {
 			expect(slug.safeParse(bad).success).toBe(false);
 		}

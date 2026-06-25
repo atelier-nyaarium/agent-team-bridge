@@ -69,7 +69,7 @@ function revealWire(token: string): XDomainRevealWire {
 
 describe("createCrossDomainHandshakePump (receiver leg)", () => {
 	it("a round-1 commit frame reaches handleIncomingCommit and the reply is shipped back", async () => {
-		const recv = selfFor("sakura-gw", "home");
+		const recv = selfFor("sakura-gw", "alice");
 		const coord = new CrossDomainHandshakeCoordinator({ self: recv, peers: new CrossDomainPeers(tmp()) });
 		const token = coord.listen().listeningToken;
 
@@ -103,7 +103,7 @@ describe("createCrossDomainHandshakePump (receiver leg)", () => {
 	});
 
 	it("a round-2 reveal frame reaches handleIncomingReveal and the reply carries the SAS", async () => {
-		const recv = selfFor("sakura-gw", "home");
+		const recv = selfFor("sakura-gw", "alice");
 		const coord = new CrossDomainHandshakeCoordinator({ self: recv, peers: new CrossDomainPeers(tmp()) });
 		const token = coord.listen().listeningToken;
 		// Prime round 1 so the reveal has a matching commitment.
@@ -137,14 +137,14 @@ describe("createCrossDomainHandshakePump (receiver leg)", () => {
 			ownerSignPub: "owner-pub",
 			gatewaySignPub: "sakura-gw-sign",
 			gatewayBoxPub: "sakura-gw-box",
-			domainId: "home",
+			domainId: "alice",
 			gatewayId: "sakura-gw",
 		};
 		expect(result.sas).toBe(crossDomainSas(receiverParty, REQUESTER, "cGlu"));
 	});
 
 	it("a coordinator rejection (unknown token) becomes an error reply, correlated by handshakeId", async () => {
-		const recv = selfFor("sakura-gw", "home");
+		const recv = selfFor("sakura-gw", "alice");
 		const coord = new CrossDomainHandshakeCoordinator({ self: recv, peers: new CrossDomainPeers(tmp()) });
 		const replies: CrossDomainHandshakeReplyParams[] = [];
 		const pump = createCrossDomainHandshakePump({
@@ -257,7 +257,7 @@ describe("createCrossDomainHandshakePump (receiver leg)", () => {
 	});
 
 	it("a sendReply failure is contained (no unhandled rejection)", async () => {
-		const recv = selfFor("sakura-gw", "home");
+		const recv = selfFor("sakura-gw", "alice");
 		const coord = new CrossDomainHandshakeCoordinator({ self: recv, peers: new CrossDomainPeers(tmp()) });
 		const token = coord.listen().listeningToken;
 		const pump = createCrossDomainHandshakePump({
@@ -312,7 +312,7 @@ describe("cross-Domain handshake requester seam (wired through a callTool-style 
 
 	it("the requester leg routes both rounds via the injected Router and cross-checks the SAS", async () => {
 		const receiver = new CrossDomainHandshakeCoordinator({
-			self: selfFor("sakura-gw", "home"),
+			self: selfFor("sakura-gw", "alice"),
 			peers: new CrossDomainPeers(tmp()),
 		});
 		const token = receiver.listen().listeningToken;
@@ -403,7 +403,7 @@ describe("parseCommitReply / parseRevealReply", () => {
 				ownerSignPub: "o",
 				gatewaySignPub: "s",
 				gatewayBoxPub: "b",
-				domainId: "home",
+				domainId: "alice",
 				gatewayId: "sakura-gw",
 			},
 			receiverSalt: "c2FsdA",

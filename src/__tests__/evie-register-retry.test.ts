@@ -80,7 +80,7 @@ describe("evieClient pending-Domain re-register", () => {
 			url: `ws://localhost:${evie.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",
-			domainId: "home",
+			domainId: "alice",
 			pendingReregisterDelayMs: 25,
 			onDomainMeta: (m) => {
 				lastStatus = m.domainStatus;
@@ -119,7 +119,7 @@ describe("evieClient pending-Domain re-register", () => {
 			url: `ws://localhost:${evie.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",
-			domainId: "home",
+			domainId: "alice",
 			pendingReregisterDelayMs: 25,
 		});
 
@@ -155,7 +155,7 @@ describe("evieClient pending-Domain re-register", () => {
 			url: `ws://localhost:${evie.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",
-			domainId: "home",
+			domainId: "alice",
 			pendingReregisterDelayMs: 5_000,
 		});
 

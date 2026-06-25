@@ -6,7 +6,7 @@
 				"ownerSignPub": "+mRd4cnxQyU4HHf7SE936HUaIW3oFjo9Z/qB5SGfEHI=",
 				"gatewaySignPub": "f1P87g04wWvICVjMvvJ7U3k71Cb8EhY8LeUYrPwSFIg=",
 				"gatewayBoxPub": "zdPKc9sA2rc9VdoNw/TpKVymj6vpblNQvDeaWG9tEAE=",
-				"domainId": "home",
+				"domainId": "alice",
 				"gatewayId": "sakura-laptop"
 			},
 			"b": {
@@ -17,7 +17,7 @@
 				"gatewayId": "bob-desktop"
 			},
 			"pin": "ZiZ95K8yhZn3RLpuzJIeyCcO",
-			"sas": "867634"
+			"sas": "906931"
 		},
 		{
 			"a": {
@@ -51,11 +51,11 @@
 			"ownerSignPub": "+mRd4cnxQyU4HHf7SE936HUaIW3oFjo9Z/qB5SGfEHI=",
 			"gatewaySignPub": "f1P87g04wWvICVjMvvJ7U3k71Cb8EhY8LeUYrPwSFIg=",
 			"gatewayBoxPub": "zdPKc9sA2rc9VdoNw/TpKVymj6vpblNQvDeaWG9tEAE=",
-			"domainId": "home",
+			"domainId": "alice",
 			"gatewayId": "sakura-laptop"
 		},
 		"pin": "ZiZ95K8yhZn3RLpuzJIeyCcO",
-		"sas": "867634",
+		"sas": "906931",
 		"equalsCase": 0
 	},
 	"substitution": {
@@ -64,7 +64,7 @@
 			"ownerSignPub": "+mRd4cnxQyU4HHf7SE936HUaIW3oFjo9Z/qB5SGfEHI=",
 			"gatewaySignPub": "f1P87g04wWvICVjMvvJ7U3k71Cb8EhY8LeUYrPwSFIg=",
 			"gatewayBoxPub": "y4SQn7uDaMSAzR8fl/RhvGvWmLS0L6obrOzKqvfwKos=",
-			"domainId": "home",
+			"domainId": "alice",
 			"gatewayId": "sakura-laptop"
 		},
 		"b": {
@@ -75,8 +75,8 @@
 			"gatewayId": "bob-desktop"
 		},
 		"pin": "ZiZ95K8yhZn3RLpuzJIeyCcO",
-		"sas": "187126",
-		"differsFrom": "867634"
+		"sas": "590675",
+		"differsFrom": "906931"
 	},
 	"commitment": {
 		"_comment": "SHA-256(base64) of the SAS_COMMIT_V1 preimage over party a + salt. The peer re-derives this from the revealed party+salt and aborts on a mismatch (the commit-reveal binding).",
@@ -84,11 +84,11 @@
 			"ownerSignPub": "+mRd4cnxQyU4HHf7SE936HUaIW3oFjo9Z/qB5SGfEHI=",
 			"gatewaySignPub": "f1P87g04wWvICVjMvvJ7U3k71Cb8EhY8LeUYrPwSFIg=",
 			"gatewayBoxPub": "zdPKc9sA2rc9VdoNw/TpKVymj6vpblNQvDeaWG9tEAE=",
-			"domainId": "home",
+			"domainId": "alice",
 			"gatewayId": "sakura-laptop"
 		},
 		"salt": "c2FsdC1hbHBoYQ",
-		"commitment": "rMTg7lUozjzHdTWuVktbgm93aT7+dZGXr3MuCFpoRH8="
+		"commitment": "o4yCLKcUsm0TAsSrqzqyyIVYpY1YdIg5bKu3O6z0R30="
 	},
 	"commitmentSaltBinding": {
 		"_comment": "The SAME party with a DIFFERENT salt yields a DIFFERENT commitment, so the salt is load-bearing (it hides the public keys).",
@@ -96,12 +96,12 @@
 			"ownerSignPub": "+mRd4cnxQyU4HHf7SE936HUaIW3oFjo9Z/qB5SGfEHI=",
 			"gatewaySignPub": "f1P87g04wWvICVjMvvJ7U3k71Cb8EhY8LeUYrPwSFIg=",
 			"gatewayBoxPub": "zdPKc9sA2rc9VdoNw/TpKVymj6vpblNQvDeaWG9tEAE=",
-			"domainId": "home",
+			"domainId": "alice",
 			"gatewayId": "sakura-laptop"
 		},
 		"salt": "c2FsdC1icmF2bw",
-		"commitment": "P4ofFylXrJXHbN5MNBeJYdE8/ilJRggGSTZr9WSdlmg=",
-		"differsFrom": "rMTg7lUozjzHdTWuVktbgm93aT7+dZGXr3MuCFpoRH8="
+		"commitment": "QtlxBG8AvWqnFHvDwKHpJwnt7JOVc0mQQa4wX8ob228=",
+		"differsFrom": "o4yCLKcUsm0TAsSrqzqyyIVYpY1YdIg5bKu3O6z0R30="
 	},
 	"handComputed": {
 		"_comment": "Tiny non-key strings so the test can assert the EXACT canonical preimages and recompute by hand. The SAS preimage sorts the ten fields lexicographically; the commitment preimage is fixed-order.",

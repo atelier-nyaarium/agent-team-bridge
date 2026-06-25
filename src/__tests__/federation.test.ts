@@ -34,7 +34,7 @@ function sealerFor(self: Identity, localGatewayId: string, peers: Record<string,
 	// These Gateways are same-Domain (the home v1 path); an empty cross-Domain set
 	// (never written - no `add` here) keeps resolution on the allowlist.
 	const noCrossPeers = new CrossDomainPeers(path.join(os.tmpdir(), "federation-test-no-peers"));
-	return createSealer(self, allowlist, localGatewayId, noCrossPeers, "home");
+	return createSealer(self, allowlist, localGatewayId, noCrossPeers, "alice");
 }
 const sealerA = sealerFor(A, "hosta", { hostb: B });
 const sealerB = sealerFor(B, "hostb", { hosta: A });
@@ -78,7 +78,7 @@ function makeCtx(localGatewayId: string, over: Partial<RoutesDeps> = {}): Routes
 		registry: new Map() as RoutesDeps["registry"],
 		conversationRegistry: new Map() as RoutesDeps["conversationRegistry"],
 		store: new PendingJobStore<ResponsePayload>(),
-		config: { LOG_PATH: "/tmp/fed-test.log", RESPONSE_TIMEOUT_MS: 500, localGatewayId, localDomainId: "home" },
+		config: { LOG_PATH: "/tmp/fed-test.log", RESPONSE_TIMEOUT_MS: 500, localGatewayId, localDomainId: "alice" },
 		tryWakeTeam: () => Promise.resolve(false),
 		offlineCatalog: new Map(),
 		knownTeamPaths: new Map(),
@@ -1249,7 +1249,7 @@ describe("cross-Domain unlink local cleanup (the dep over the real stores)", () 
 //  cross-Domain peer set, so a home target always seals v1 to home.
 
 const homeOwner = generateIdentity();
-const senderGw = generateIdentity(); // the sending Gateway, in Domain "home"
+const senderGw = generateIdentity(); // the sending Gateway, in Domain "alice"
 const homeGw1 = generateIdentity(); // a SECOND home Gateway, id "gw1"
 const friendOwner = generateIdentity();
 const friendGw1 = generateIdentity(); // a FRIEND Gateway, ALSO id "gw1", in Domain "friend"
@@ -1295,7 +1295,7 @@ describe("sealTargetFor home-first (gateway-id collision)", () => {
 		const homeAllowlist = homeAllowlistWithGw1();
 		// The sender ALSO has a linked friend Domain whose gateway id collides ("gw1").
 		const senderPeers = peersOf(xdPeer(friendOwner, "friend", "gw1", friendGw1, homeOwner));
-		const senderSealer = createSealer(senderGw, homeAllowlist, "sender-gw", senderPeers, "home");
+		const senderSealer = createSealer(senderGw, homeAllowlist, "sender-gw", senderPeers, "alice");
 
 		// Capture the sealed payload + the srcDomain evie was handed. The home gw1 opens it; the
 		// friend's gw1 must NOT be able to (proving it was sealed to home, not the friend).
@@ -1336,7 +1336,7 @@ describe("sealTargetFor home-first (gateway-id collision)", () => {
 					new CrossDomainPeers(
 						path.join(os.tmpdir(), `fed-gw1-nopeers-${Math.random().toString(36).slice(2)}`),
 					),
-					"home",
+					"alice",
 				);
 				const opened = homeGw1Sealer.openWithSource("sender-gw", sealedToOpen);
 				// v1 / home: the destination resolved the sender as a HOME peer, not cross-Domain.
@@ -1351,7 +1351,7 @@ describe("sealTargetFor home-first (gateway-id collision)", () => {
 			crossDomainPeers: senderPeers,
 			resolvesHomeGateway: (gatewayId) => homeAllowlist.resolveGateway(gatewayId) !== null,
 		});
-		ctx.config.localDomainId = "home";
+		ctx.config.localDomainId = "alice";
 		const { send } = createRoutes(ctx);
 
 		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
@@ -1364,7 +1364,7 @@ describe("sealTargetFor home-first (gateway-id collision)", () => {
 		expect(res.status).toBe(200);
 		// The v1 home path sends NO srcDomain-keyed cross routing (the relay still stamps
 		// localDomainId, but the SEAL is v1: the friend's gw1 cannot open it).
-		expect(srcDomainSent).toBe("home");
+		expect(srcDomainSent).toBe("alice");
 		expect(sealedToOpen).toBeDefined();
 
 		// Hard proof it went HOME, not to the friend: the friend's gw1 sealer (the colliding
@@ -1377,10 +1377,10 @@ describe("sealTargetFor home-first (gateway-id collision)", () => {
 				return a;
 			})(),
 			"gw1",
-			peersOf(xdPeer(homeOwner, "home", "sender-gw", senderGw, friendOwner)),
+			peersOf(xdPeer(homeOwner, "alice", "sender-gw", senderGw, friendOwner)),
 			"friend",
 		);
-		expect(() => friendGw1Sealer.openWithSource("sender-gw", sealedToOpen as SealedEnvelope, "home")).toThrow();
+		expect(() => friendGw1Sealer.openWithSource("sender-gw", sealedToOpen as SealedEnvelope, "alice")).toThrow();
 	});
 });
 
@@ -1410,10 +1410,10 @@ describe("sealTargetFor (domainId, gatewayId) disambiguation", () => {
 			soloAllowlist(senderOwner, "sender-gw", senderGw),
 			"sender-gw",
 			senderPeers,
-			"home",
+			"alice",
 		);
 		const ctx = makeCtx("sender-gw", { sealer: senderSealer, crossDomainPeers: senderPeers, ...over });
-		ctx.config.localDomainId = "home";
+		ctx.config.localDomainId = "alice";
 		return { ctx, senderPeers };
 	}
 
@@ -1440,19 +1440,19 @@ describe("sealTargetFor (domainId, gatewayId) disambiguation", () => {
 			friend2Gw,
 			soloAllowlist(friend2Owner, "shared-gw", friend2Gw),
 			"shared-gw",
-			peersOf(xdPeer(senderOwner, "home", "sender-gw", senderGw, friend2Owner)),
+			peersOf(xdPeer(senderOwner, "alice", "sender-gw", senderGw, friend2Owner)),
 			"friend2",
 		);
 		const evie = fakeEvie({
 			onCall: (action, params) => {
 				if (action !== "gateway_relay") return { ok: true };
-				expect(params.srcDomain).toBe("home");
+				expect(params.srcDomain).toBe("alice");
 				const sealed = (params.payload as { sealed: SealedEnvelope }).sealed;
-				openedByFriend2 = friend2Sealer.openWithSource("sender-gw", sealed, "home");
-				expect(openedByFriend2.srcDomainId).toBe("home");
+				openedByFriend2 = friend2Sealer.openWithSource("sender-gw", sealed, "alice");
+				expect(openedByFriend2.srcDomainId).toBe("alice");
 				return {
 					ok: true,
-					result: friend2Sealer.seal({ domainId: "home", gatewayId: "sender-gw" }, { ok: true }),
+					result: friend2Sealer.seal({ domainId: "alice", gatewayId: "sender-gw" }, { ok: true }),
 				};
 			},
 		});
