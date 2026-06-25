@@ -205,14 +205,13 @@ async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Pr
 	const apiUrl = await clusterApiUrl();
 
 	const { saToken: swSa, caPem: swCa } = await readSaCreds("gateway-bridge-proxy-token");
-	const swApp = await envGet("BRIDGE_TOKEN");
-	// The 4-field GatewayTransport shape (the gateway fills namespace/service/port defaults when it
-	// installs the bundle). Absent when the gateway-bridge SA is not yet populated. Handed to the
-	// home Gateway as bootstrap-transport.json, NOT carried in the blob: the Console fetches it via
-	// the get_gateway_transport op when enrolling a creds-less Gateway, so a QR-sized blob fits and
-	// the gateway-bridge token never persists on the device.
-	const bootstrapTransport =
-		swSa && swCa ? JSON.stringify({ apiUrl, saToken: swSa, caPem: swCa, appToken: swApp || "" }) : undefined;
+	// The GatewayTransport shape (the gateway fills namespace/service/port defaults when it installs
+	// the bundle). Absent when the gateway-bridge SA is not yet populated. Handed to the home Gateway
+	// as bootstrap-transport.json, NOT carried in the blob: the Console fetches it via the
+	// get_gateway_transport op when enrolling a creds-less Gateway, so a QR-sized blob fits. The
+	// gateway-bridge auth is the SA token over the API service-proxy plus the owner-signed admission;
+	// there is no bridge bearer to carry.
+	const bootstrapTransport = swSa && swCa ? JSON.stringify({ apiUrl, saToken: swSa, caPem: swCa }) : undefined;
 	if (bootstrapTransport && !(await writeGatewayFile(`${FED_DIR_IN}/bootstrap-transport.json`, bootstrapTransport))) {
 		note("warning: could not write bootstrap-transport.json into the Gateway");
 	}
@@ -235,14 +234,12 @@ async function writeGatewayTransport(): Promise<void> {
 	const { saToken, caPem } = await readSaCreds("gateway-bridge-proxy-token");
 	if (!saToken || !caPem)
 		throw new Error("gateway-bridge SA token not populated yet - re-run --setup in a few seconds");
-	const appToken = await envGet("BRIDGE_TOKEN");
 	const apiUrl = await clusterApiUrl();
 	const transport = JSON.stringify({
 		apiUrl,
 		namespace: NS,
 		saToken,
 		caPem,
-		appToken: appToken || "",
 		service: "evie-bridge",
 		port: 20001,
 	});

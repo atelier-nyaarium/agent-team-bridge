@@ -498,7 +498,7 @@ data class GatewayTransport(
 	val apiUrl: String,
 	val saToken: String,
 	val caPem: String,
-	val appToken: String,
+	val appToken: String? = null,
 )
 
 @Serializable

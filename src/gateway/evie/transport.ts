@@ -13,9 +13,6 @@ export interface EvieTransport {
 	namespace: string;
 	saToken: string;
 	caPem: string;
-	// The bridge app token, forwarded to evie in a header the k8s proxy passes through
-	// (the Authorization header is consumed by the API server for the SA token).
-	appToken: string;
 	service: string;
 	port: number;
 }
@@ -30,7 +27,6 @@ function normalize(raw: Partial<EvieTransport> & { apiUrl?: string }): EvieTrans
 		namespace: raw.namespace || "evie-bot",
 		saToken: raw.saToken,
 		caPem: raw.caPem,
-		appToken: raw.appToken || "",
 		service: raw.service || "evie-bridge",
 		port: raw.port || 20001,
 	};
@@ -38,7 +34,7 @@ function normalize(raw: Partial<EvieTransport> & { apiUrl?: string }): EvieTrans
 
 /** Resolve the service-proxy transport: the `EVIE_API_URL`/`EVIE_SA_TOKEN`/`EVIE_CA_PEM`
  * env trio first, else a `transport.json` written into the federation dir by enrollment.
- * Null when neither is present, which leaves the gateway on the legacy port-forward. */
+ * Null when neither is present, which leaves the gateway off the evie bridge (standalone). */
 export function loadEvieTransport(federationDir: string): EvieTransport | null {
 	if (process.env.EVIE_API_URL) {
 		return normalize({
@@ -46,7 +42,6 @@ export function loadEvieTransport(federationDir: string): EvieTransport | null {
 			namespace: process.env.EVIE_NAMESPACE,
 			saToken: process.env.EVIE_SA_TOKEN,
 			caPem: process.env.EVIE_CA_PEM,
-			appToken: process.env.EVIE_BRIDGE_APP_TOKEN,
 			service: process.env.EVIE_BRIDGE_SERVICE,
 			port: process.env.EVIE_BRIDGE_PROXY_PORT ? parseInt(process.env.EVIE_BRIDGE_PROXY_PORT, 10) : undefined,
 		});
@@ -83,8 +78,7 @@ export function loadBootstrapTransport(federationDir: string): GatewayTransport 
 
 /** Build the WebSocket connection params for the service-proxy transport: a `wss://`
  * URL through the API server's service-proxy, the SA token as Authorization (the API
- * server authenticates it), the bridge token in the forwarded header, and the cluster
- * CA pinned for TLS. */
+ * server authenticates it), and the cluster CA pinned for TLS. */
 export function evieWsConnection(t: EvieTransport): {
 	url: string;
 	headers: Record<string, string>;
@@ -93,6 +87,5 @@ export function evieWsConnection(t: EvieTransport): {
 	const wsBase = t.apiUrl.replace(/^http/, "ws");
 	const url = `${wsBase}/api/v1/namespaces/${t.namespace}/services/${t.service}:${t.port}/proxy/`;
 	const headers: Record<string, string> = { Authorization: `Bearer ${t.saToken}` };
-	if (t.appToken) headers["X-Bridge-Token"] = `Bearer ${t.appToken}`;
 	return { url, headers, tls: { ca: t.caPem } };
 }

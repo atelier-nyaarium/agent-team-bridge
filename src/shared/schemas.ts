@@ -481,7 +481,7 @@ export const GatewayTransportSchema = z
 		apiUrl: z.string().min(1),
 		saToken: z.string().min(1),
 		caPem: z.string().min(1),
-		appToken: z.string().min(1),
+		appToken: z.string().min(1).optional(),
 	})
 	.meta({ id: "GatewayTransport" });
 

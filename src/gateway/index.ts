@@ -15,7 +15,6 @@ import { createConsoleHandler } from "./console/consoleHandler.js";
 import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { startEvieClient } from "./evie/evieClient.js";
-import { startPortForward } from "./evie/portForward.js";
 import { evieWsConnection, loadBootstrapTransport, loadEvieTransport } from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
@@ -179,13 +178,6 @@ export async function startGateway(): Promise<void> {
 	}
 
 	// Start evie-bot bridge if config is present
-	const evieAuthToken = process.env.BRIDGE_TOKEN;
-	const evieKubeconfig = process.env.EVIE_KUBECONFIG || "/app/kubeconfig.yaml";
-	const evieNamespace = process.env.EVIE_NAMESPACE || "evie-bot";
-	const evieDeploymentLabel = process.env.EVIE_DEPLOYMENT_LABEL || "app=evie-bot-app";
-	const eviePort = parseInt(process.env.EVIE_BRIDGE_PORT || "20001", 10);
-	const evieLocalPort = parseInt(process.env.EVIE_LOCAL_PORT || "20001", 10);
-
 	let evieClient: ReturnType<typeof startEvieClient> | null = null;
 	let sealer: Sealer | null = null;
 	let consoleSealer: ConsoleSealer | null = null;
@@ -215,12 +207,13 @@ export async function startGateway(): Promise<void> {
 		crossDomainPeersForConsole?.all().some((p) => p.friendDomainId === domainId) ?? false;
 
 	// The Gateway persists its federation identity + mirrored allowlist here; an enrolled
-	// Gateway also drops its service-proxy transport.json here. The bridge activates on
-	// either a delivered transport or the legacy BRIDGE_TOKEN.
+	// Gateway also drops its service-proxy transport.json here. The bridge activates when a
+	// transport is delivered (the SA-token-over-service-proxy creds); a gateway with no
+	// transport stays standalone (no mesh).
 	const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
 	const evieTransport = loadEvieTransport(federationDir);
 
-	if (evieAuthToken || evieTransport) {
+	if (evieTransport) {
 		// Load this Gateway's federation identity + mirrored allowlist from its volume,
 		// and build the E2E sealer (cross-Gateway frames are sealed peer-to-peer).
 		// Pin the owner root out-of-band so a malicious/token-holding evie cannot root
@@ -306,31 +299,13 @@ export async function startGateway(): Promise<void> {
 		// into the Domain. Once admitted (mirrored from evie), this falls silent.
 		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitGatewayQr(identity, localGatewayId);
 
-		// Two transports: the service-proxy WS (preferred - creds are delivered by
-		// enrollment, no kubeconfig mount, reaches a home-NAT evie through the apiserver)
-		// or the legacy kubectl port-forward tunnel gated on BRIDGE_TOKEN.
-		let portForward: ReturnType<typeof startPortForward> | null = null;
-		let connection: { url: string; headers: Record<string, string>; tls?: { ca: string } };
-		if (evieTransport) {
-			connection = evieWsConnection(evieTransport);
-			console.log(
-				`[evie] service-proxy transport -> ${evieTransport.apiUrl} (${evieTransport.service}:${evieTransport.port})`,
-			);
-		} else {
-			portForward = startPortForward({
-				kubeconfig: evieKubeconfig,
-				namespace: evieNamespace,
-				deploymentLabel: evieDeploymentLabel,
-				remotePort: eviePort,
-				localPort: evieLocalPort,
-			});
-			// Port-forward needs a moment before the tunnel is ready
-			await new Promise((r) => setTimeout(r, 3_000));
-			connection = {
-				url: `ws://localhost:${evieLocalPort}`,
-				headers: { Authorization: `Bearer ${evieAuthToken}` },
-			};
-		}
+		// The service-proxy WS: creds are delivered by enrollment, no kubeconfig mount, and it
+		// reaches a home-NAT evie through the apiserver. The SA token authenticates to the API
+		// server (consumed there); the cluster CA is pinned for TLS.
+		const connection = evieWsConnection(evieTransport);
+		console.log(
+			`[evie] service-proxy transport -> ${evieTransport.apiUrl} (${evieTransport.service}:${evieTransport.port})`,
+		);
 
 		evieClient = startEvieClient({
 			url: connection.url,
@@ -391,7 +366,6 @@ export async function startGateway(): Promise<void> {
 
 		process.on("SIGTERM", () => {
 			evieClient?.stop();
-			portForward?.stop();
 		});
 	}
 
@@ -400,7 +374,7 @@ export async function startGateway(): Promise<void> {
 	// target, and accept exactly one sealed bootstrap bundle over POST /enroll.
 	let enrollInstall: ((frame: unknown) => string) | null = null;
 	const enrollNonce = process.env.ENROLL_NONCE;
-	if (enrollNonce && !evieAuthToken && !evieTransport) {
+	if (enrollNonce && !evieTransport) {
 		const enrollAllowlist = new Allowlist(
 			federationDir,
 			process.env.FEDERATION_OWNER_SIGN_PUB,
