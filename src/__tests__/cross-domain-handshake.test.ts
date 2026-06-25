@@ -96,7 +96,7 @@ const PIN = "cGluLXJlbmRlenZvdXM";
 
 describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	it("mints a listening token prefixed with this Gateway's id, returning its own keys", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 
 		const r = coord.listen();
@@ -104,14 +104,14 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 		expect(r.receiverOwnerSignPub).toBe(recv.owner.sign.pub);
 		expect(r.receiverGatewaySignPub).toBe(recv.gateway.sign.pub);
 		expect(r.receiverGatewayBoxPub).toBe(recv.gateway.box.pub);
-		expect(r.receiverDomainId).toBe("home");
+		expect(r.receiverDomainId).toBe("alice");
 		expect(r.receiverGatewayId).toBe("sakura-laptop");
 		expect(r.expiresAt).toBeGreaterThan(Date.now());
 		expect(coord.openCount).toBe(1);
 	});
 
 	it("refuses to listen without a Domain owner", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const coord = new CrossDomainHandshakeCoordinator({
 			self: { ...selfFor(recv), ownerSignPub: () => null },
 			peers: new CrossDomainPeers(tmp()),
@@ -120,7 +120,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("round 1 returns a commitment (no keys); round 2 verifies the reveal and returns the SAS", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		const token = coord.listen().listeningToken;
@@ -148,7 +148,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("rejects a commit for an unknown / closed token (no unsolicited surface)", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		expect(() =>
@@ -161,7 +161,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("rejects a reveal whose keys do not match the round-1 commitment (the binding)", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		const token = coord.listen().listeningToken;
@@ -185,7 +185,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("rejects a reveal under a wrong salt (the salt is part of the commitment)", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		const token = coord.listen().listeningToken;
@@ -205,7 +205,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("rejects a reveal with no prior commitment for the pin", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		const token = coord.listen().listeningToken;
@@ -220,7 +220,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("is single-flight: a second commit on a pairing window is rejected", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		const token = coord.listen().listeningToken;
@@ -234,7 +234,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("caps pairing attempts and invalidates the token on the cap (full restart)", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		const coord = new CrossDomainHandshakeCoordinator({
 			self: selfFor(recv),
@@ -261,7 +261,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("a fresh commit after expiry is rejected (TTL sweep closes the window)", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		let t = 1_000_000;
 		const coord = new CrossDomainHandshakeCoordinator({
@@ -283,7 +283,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("confirm writes the friend as a cross-Domain peer after the local link verifies (Model A)", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		const peers = new CrossDomainPeers(tmp());
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers });
@@ -307,9 +307,9 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("confirm rejects an own link not signed by this Domain's owner", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
-		const imposter = makeDomain("home", "sakura-laptop"); // same ids, different owner key
+		const imposter = makeDomain("alice", "sakura-laptop"); // same ids, different owner key
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		runReceiverRounds(coord, recv, req, PIN);
 		// The "own" side is signed by an IMPOSTER owner, not this Gateway's admitted owner key.
@@ -320,7 +320,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("confirm rejects an own link that does not bind the friend's keys", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		const otherFriend = makeDomain("bob", "bob-desktop"); // owner-signed, but binds the WRONG gateway keys
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
@@ -331,7 +331,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("confirm without a pairing for the pin is rejected (single-use)", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		const mySide = signLinkSide(recv, req);
@@ -339,7 +339,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 	});
 
 	it("a confirmed pin cannot be confirmed twice (the pairing is consumed)", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const req = makeDomain("bob", "bob-desktop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		runReceiverRounds(coord, recv, req, PIN);
@@ -355,7 +355,7 @@ describe("CrossDomainHandshakeCoordinator - receiver role", () => {
 describe("CrossDomainHandshakeCoordinator - requester role", () => {
 	it("drives both rounds, cross-checks the SAS, and stores a pending pairing", async () => {
 		const requester = makeDomain("bob", "bob-desktop");
-		const receiver = makeDomain("home", "sakura-laptop");
+		const receiver = makeDomain("alice", "sakura-laptop");
 		const peers = new CrossDomainPeers(tmp());
 		const recvCoord = new CrossDomainHandshakeCoordinator({
 			self: selfFor(receiver),
@@ -393,7 +393,7 @@ describe("CrossDomainHandshakeCoordinator - requester role", () => {
 		const mySide = signLinkSide(requester, receiver);
 		const confirmResult = coord.confirm({ pin: PIN, mySignedLink: mySide });
 		expect(confirmResult.ok).toBe(true);
-		expect(peers.resolveByGateway("home", "sakura-laptop")?.friendOwnerSignPub).toBe(receiver.owner.sign.pub);
+		expect(peers.resolveByGateway("alice", "sakura-laptop")?.friendOwnerSignPub).toBe(receiver.owner.sign.pub);
 	});
 
 	it("refuses the request leg when no Router seam is wired", async () => {
@@ -451,11 +451,11 @@ describe("CrossDomainHandshakeCoordinator - requester role", () => {
 
 	it("aborts when the receiver's reveal does not match its committed hash", async () => {
 		const requester = makeDomain("bob", "bob-desktop");
-		const receiver = makeDomain("home", "sakura-laptop");
+		const receiver = makeDomain("alice", "sakura-laptop");
 		// The Router returns an HONEST commitment in round 1 but a DIFFERENT party at reveal.
 		const honestSalt = "cmVjdi1zYWx0";
 		const sendCommit = vi.fn(async () => ({ receiverCommitment: commitmentOf(partyOf(receiver), honestSalt) }));
-		const evil = makeDomain("home", "sakura-laptop"); // different keys, same ids
+		const evil = makeDomain("alice", "sakura-laptop"); // different keys, same ids
 		const sendReveal = vi.fn(async () => ({
 			receiverParty: partyOf(evil),
 			receiverSalt: honestSalt,
@@ -480,7 +480,7 @@ describe("CrossDomainHandshakeCoordinator - requester role", () => {
 
 	it("aborts on a SAS mismatch (a key substituted while still matching its commitment)", async () => {
 		const requester = makeDomain("bob", "bob-desktop");
-		const receiver = makeDomain("home", "sakura-laptop");
+		const receiver = makeDomain("alice", "sakura-laptop");
 		const salt = "cmVjdi1zYWx0";
 		// The reveal matches its commitment (so the commitment check passes), but the receiver
 		// LIES about the SAS - the requester recomputes and rejects.
@@ -513,7 +513,7 @@ describe("CrossDomainHandshakeCoordinator - requester role", () => {
 
 describe("CrossDomainHandshakeCoordinator - two-Gateway end to end", () => {
 	it("the link COMPLETES on both sides: B drives the exchange, A learns the pairing via listenState, both confirm independently and both peer sets populate", async () => {
-		const a = makeDomain("home", "sakura-laptop"); // receiver / listener
+		const a = makeDomain("alice", "sakura-laptop"); // receiver / listener
 		const b = makeDomain("bob", "bob-desktop"); // requester
 		const peersA = new CrossDomainPeers(tmp());
 		const peersB = new CrossDomainPeers(tmp());
@@ -573,7 +573,7 @@ describe("CrossDomainHandshakeCoordinator - two-Gateway end to end", () => {
 		// A now trusts B; B now trusts A. The disjoint peer sets are the handshake's only writes,
 		// and each stores its OWN owner's attestation (Model A).
 		const aPeer = peersA.resolveByGateway("bob", "bob-desktop");
-		const bPeer = peersB.resolveByGateway("home", "sakura-laptop");
+		const bPeer = peersB.resolveByGateway("alice", "sakura-laptop");
 		expect(aPeer?.friendOwnerSignPub).toBe(b.owner.sign.pub);
 		expect(aPeer?.link.link.myOwnerSignPub).toBe(a.owner.sign.pub); // A stored A's own side
 		expect(bPeer?.friendOwnerSignPub).toBe(a.owner.sign.pub);
@@ -591,7 +591,7 @@ describe("CrossDomainHandshakeCoordinator - two-Gateway end to end", () => {
 
 describe("CrossDomainHandshakeCoordinator - cancel", () => {
 	it("cancels an open listening window by token", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		const token = coord.listen().listeningToken;
 		expect(coord.cancel({ listeningToken: token })).toBe(true);
@@ -608,7 +608,7 @@ describe("CrossDomainHandshakeCoordinator - cancel", () => {
 
 	it("cancels a requester pending pairing by pin", async () => {
 		const requester = makeDomain("bob", "bob-desktop");
-		const receiver = makeDomain("home", "sakura-laptop");
+		const receiver = makeDomain("alice", "sakura-laptop");
 		const recvCoord = new CrossDomainHandshakeCoordinator({
 			self: selfFor(receiver),
 			peers: new CrossDomainPeers(tmp()),
@@ -632,7 +632,7 @@ describe("CrossDomainHandshakeCoordinator - cancel", () => {
 	});
 
 	it("returns false when nothing matches", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		expect(coord.cancel({ listeningToken: "nope", pin: "nope" })).toBe(false);
 	});

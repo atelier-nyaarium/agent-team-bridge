@@ -54,7 +54,7 @@ export interface WsData {
 ////////////////////////////////
 //  Functions & Helpers
 
-export const RESERVED_TEAM_NAMES = new Set(["gateway", "host"]);
+export const RESERVED_TEAM_NAMES = new Set(["host"]);
 
 export function getAllActiveWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData>[] {
 	const result: ServerWebSocket<WsData>[] = [];
@@ -137,7 +137,8 @@ export function createWebSocketHandlers({
 			}
 			const team = reg.data.team;
 			const subId = reg.data.subId || crypto.randomUUID().slice(0, 8);
-			const mode: ConnectionMode = reg.data.mode === "channel" ? "channel" : "cli";
+			// Every bridge connection is channel mode now (CLI dispatch was retired with the host split).
+			const mode: ConnectionMode = "channel";
 			const conversationId = reg.data.conversationId ?? null;
 
 			// Host-daemon auth: when a token is configured, the reserved "host" slot (which
@@ -152,8 +153,8 @@ export function createWebSocketHandlers({
 			}
 
 			// Reserved-name protection: first live registration wins. A second process
-			// trying to claim "gateway" or "host" is rejected so a stray container project
-			// cannot squat on the host's slots.
+			// trying to claim "host" is rejected so a stray container project cannot squat
+			// on the host daemon's slot.
 			if (RESERVED_TEAM_NAMES.has(team)) {
 				const existingSubs = registry.get(team);
 				const existingActive = existingSubs ? getAllActiveWs(existingSubs) : [];

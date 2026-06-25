@@ -93,7 +93,7 @@ describe("protocol fixtures", () => {
 		const result = ConsoleListTeamsResultSchema.parse(fixture("list-teams-result.json"));
 		expect(result.teams).toHaveLength(2);
 		expect(result.teams[0].kind).toBe("devcontainer");
-		expect(result.teams[0].domainId).toBe("home");
+		expect(result.teams[0].domainId).toBe("alice");
 		expect(result.teams[1].kind).toBeUndefined();
 		// A pre-federation team omits the Domain id; it decodes as absent (consumers fall
 		// back to the home Domain).

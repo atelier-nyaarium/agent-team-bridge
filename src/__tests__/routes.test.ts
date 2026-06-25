@@ -29,13 +29,13 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 			LOG_PATH: "/tmp/test-debug.log",
 			RESPONSE_TIMEOUT_MS: 500,
 			localGatewayId: "test-host",
-			localDomainId: "home",
+			localDomainId: "alice",
 		},
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
 		offlineCatalog,
 		knownTeamPaths,
 		mailboxStore: overrides.mailboxStore,
-		operatorName: overrides.operatorName,
+		displayName: overrides.displayName,
 	};
 }
 
@@ -76,7 +76,7 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "available",
 					kind: "devcontainer",
 					queue_depth: 0,
@@ -85,7 +85,7 @@ describe("routes", () => {
 		});
 
 		it("active teams take precedence over catalog", async () => {
-			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "cli" } } });
+			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
 			const offlineCatalog = new Map<string, string>();
 			offlineCatalog.set("proj-a", "/home/user/proj-a");
 			offlineCatalog.set("proj-b", "/home/user/proj-b");
@@ -97,16 +97,16 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
-					mode: "cli",
+					mode: "channel",
 					kind: "devcontainer",
 					queue_depth: 0,
 				},
 				{
 					team: "proj-b",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "available",
 					kind: "devcontainer",
 					queue_depth: 0,
@@ -145,7 +145,7 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
@@ -154,7 +154,7 @@ describe("routes", () => {
 				{
 					team: "2fb1f8",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "channel",
 					kind: "loose",
@@ -175,7 +175,7 @@ describe("routes", () => {
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
@@ -184,7 +184,7 @@ describe("routes", () => {
 				{
 					team: "Aqua",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "channel",
 					kind: "console",
@@ -193,9 +193,9 @@ describe("routes", () => {
 			]);
 		});
 
-		it("marks the gateway channel identity as kind switch (the host-agent)", async () => {
+		it("classifies a loose host session as kind loose (no host-agent special case)", async () => {
 			const registry = makeRegistry({
-				gateway: { readyState: 1, data: { mode: "channel" } },
+				"host-agent": { readyState: 1, data: { mode: "channel" } },
 				"proj-a": { readyState: 1, data: { mode: "channel" } },
 			});
 			const knownTeamPaths = new Map<string, string>([["proj-a", "/home/user/proj-a"]]);
@@ -203,18 +203,18 @@ describe("routes", () => {
 			const json = await createRoutes(ctx).teams().json();
 			expect(json).toEqual([
 				{
-					team: "gateway",
+					team: "host-agent",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "channel",
-					kind: "gateway",
+					kind: "loose",
 					queue_depth: 0,
 				},
 				{
 					team: "proj-a",
 					gatewayId: "test-host",
-					domainId: "home",
+					domainId: "alice",
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
@@ -239,7 +239,7 @@ describe("routes", () => {
 
 		it("excludes the cli host wake-daemon from the listing", async () => {
 			const registry = makeRegistry({
-				host: { readyState: 1, data: { mode: "cli" } },
+				host: { readyState: 1, data: { mode: "channel" } },
 				"team-a": { readyState: 1, data: { mode: "channel" } },
 			});
 			const ctx = makeCtx({ registry });
@@ -247,22 +247,22 @@ describe("routes", () => {
 			expect(json.map((t) => t.team)).toEqual(["team-a"]);
 		});
 
-		it("stamps the Gateway's operator name on every team so Peers see the network label (D1)", async () => {
+		it("stamps the Gateway's display name on every team so Peers see the network label (D1)", async () => {
 			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
 			const offlineCatalog = new Map<string, string>([["proj-b", "/home/user/proj-b"]]);
-			const ctx = makeCtx({ registry, offlineCatalog, operatorName: () => "Carol's Lab" });
-			const json = (await createRoutes(ctx).teams().json()) as { team: string; operatorName?: string }[];
-			expect(json.map((t) => [t.team, t.operatorName])).toEqual([
+			const ctx = makeCtx({ registry, offlineCatalog, displayName: () => "Carol's Lab" });
+			const json = (await createRoutes(ctx).teams().json()) as { team: string; displayName?: string }[];
+			expect(json.map((t) => [t.team, t.displayName])).toEqual([
 				["proj-a", "Carol's Lab"],
 				["proj-b", "Carol's Lab"],
 			]);
 		});
 
-		it("OMITS operatorName when the Gateway has none (minimal wire, unchanged for a pre-feature Gateway)", async () => {
+		it("OMITS displayName when the Gateway has none (minimal wire, unchanged for a pre-feature Gateway)", async () => {
 			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
-			const ctx = makeCtx({ registry, operatorName: () => null });
+			const ctx = makeCtx({ registry, displayName: () => null });
 			const json = (await createRoutes(ctx).teams().json()) as Record<string, unknown>[];
-			expect(json[0]).not.toHaveProperty("operatorName");
+			expect(json[0]).not.toHaveProperty("displayName");
 		});
 	});
 
@@ -475,7 +475,7 @@ describe("routes", () => {
 
 	describe("/health", () => {
 		it("returns ok with counts", async () => {
-			const registry = makeRegistry({ a: { readyState: 1, data: { mode: "cli" } } });
+			const registry = makeRegistry({ a: { readyState: 1, data: { mode: "channel" } } });
 			const store = new PendingJobStore<ResponsePayload>();
 			store.create("s1", "a", "b");
 			const ctx = makeCtx({ registry, store });
@@ -498,33 +498,19 @@ describe("routes", () => {
 			expect((await res.json()).error).toContain("not connected");
 		});
 
-		it("blocks a non-console (crosstalk) send to the host-agent with 400", async () => {
+		it("blocks a crosstalk send to the reserved host daemon with 400", async () => {
 			const ctx = makeCtx();
 			const { send } = createRoutes(ctx);
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
 				from: "proj-a",
-				to: "gateway",
+				to: "host",
 				body: "hi",
 			});
 			expect(res.status).toBe(400);
 		});
 
-		it("lets a console (channelOnly) send past the reserved guard to the host-agent", async () => {
-			// channelOnly send to "gateway" clears the 400 guard; with no gateway
-			// registered here it then 404s, proving it got past the reserved block.
-			const ctx = makeCtx();
-			const { send } = createRoutes(ctx);
-			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
-				from: "pixel",
-				to: "gateway",
-				channelOnly: true,
-				body: "hi",
-			});
-			expect(res.status).toBe(404);
-		});
-
 		it("returns 404 when target ws.readyState !== 1", async () => {
-			const registry = makeRegistry({ b: { readyState: 3, data: { mode: "cli" } } });
+			const registry = makeRegistry({ b: { readyState: 3, data: { mode: "channel" } } });
 			const ctx = makeCtx({ registry });
 			const { send } = createRoutes(ctx);
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {

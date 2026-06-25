@@ -17,7 +17,7 @@ import org.junit.Test
  * local checks an untrusted broker cannot influence.
  */
 class EnrollCeremonyTest {
-	private val admin = EnrollParty(ownerSignPub = "adminSign", ownerBoxPub = "adminBox", domainId = "home")
+	private val admin = EnrollParty(ownerSignPub = "adminSign", ownerBoxPub = "adminBox", domainId = "alice")
 	private val enrollee = EnrollParty(ownerSignPub = "userSign", ownerBoxPub = "userBox", domainId = "guest42")
 	private val pin = "pin-abc"
 

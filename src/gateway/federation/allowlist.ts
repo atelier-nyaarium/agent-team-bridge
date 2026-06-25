@@ -149,7 +149,7 @@ export class Allowlist {
 		}
 		if (!this.pinnedOwner && !this.state.ownerSignPub) {
 			// Auto-capture-then-lock: the captured key becomes the effective pin (a
-			// later re-root is refused above). Surface its fingerprint so the operator
+			// later re-root is refused above). Surface its fingerprint so the admin
 			// can optionally promote it to an explicit FEDERATION_OWNER_SIGN_PUB pin.
 			console.warn(
 				`[allowlist] trust-on-first-use: rooting the Domain at owner key ${fingerprint(snapshot.ownerSignPub)} relayed by evie (now locked; set FEDERATION_OWNER_SIGN_PUB=${snapshot.ownerSignPub} to pin it out-of-band)`,

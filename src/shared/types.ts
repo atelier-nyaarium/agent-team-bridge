@@ -31,19 +31,8 @@ export type RequestType = z.infer<typeof RequestTypeSchema>;
 export type ResponseStatus = z.infer<typeof ResponseStatusSchema>;
 
 ////////////////////////////////
-//  Note: CLI replies (crosstalk_reply) carry a status. Channel replies
-//  (channel_reply) are stream messages with no status at all. The fields
-//  below are optional so the same payload type serves both paths.
-
-export interface InjectPayload {
-	type: "inject";
-	from: string;
-	request_type: RequestType;
-	body: string;
-	effort: EffortLevel | "auto";
-	session_id: string;
-	is_follow_up: boolean;
-}
+//  Reply payloads. Fields are optional because a channel reply (channel_reply) is a
+//  stream message that may carry only a partial update (status, a chunk, or the final).
 
 export interface ChannelPushPayload {
 	type: "channel_push";
@@ -86,12 +75,6 @@ export interface ResponsePushPayload {
 	files?: ChannelFile[];
 }
 
-export interface EffortEnv {
-	simple?: string;
-	standard?: string;
-	complex?: string;
-}
-
 ////////////////////////////////
 //  WebSocket Types
 
@@ -123,8 +106,8 @@ export interface GatewayConfig {
 	// This Gateway's id, qualifying every local session name on the wire (GATEWAY_ID
 	// env override, else the sanitized machine hostname).
 	localGatewayId: string;
-	// This Gateway's Domain id (FEDERATION_DOMAIN_ID env, else "home"). A single-tenant
-	// gateway stays on "home", byte-compatible with a pre-multi-tenant evie.
+	// This Gateway's Domain id, from the required FEDERATION_DOMAIN_ID env (an opaque slug;
+	// resolveLocalDomainId throws if it is unset, so there is no implicit default).
 	localDomainId: string;
 }
 

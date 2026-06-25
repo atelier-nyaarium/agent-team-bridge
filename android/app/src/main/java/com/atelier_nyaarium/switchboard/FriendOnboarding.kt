@@ -11,13 +11,13 @@ package com.atelier_nyaarium.switchboard
 //  Interfaces & Types
 
 /** A hosted guest tenant row for the "Networks you host" admin list. Built locally from the
- * operator's own provisioned tenants (the app remembers what it staged); evie holds the canonical
+ * admin's own provisioned tenants (the app remembers what it staged); evie holds the canonical
  * pending/rooted state, surfaced lazily through discovery once the friend's gateway comes online. */
 data class HostedTenant(
 	/** The opaque Domain id (plumbing; never the row's title). */
 	val domainId: String,
-	/** The network display label the operator chose (the row title). */
-	val operatorName: String,
+	/** The network display label the admin chose (the row title). */
+	val displayName: String,
 	/** The one-time invite nonce, so the row can re-render its QR / blob. */
 	val nonce: String,
 	/** awaiting-setup -> offline -> online, derived from discovery presence. */
@@ -41,19 +41,19 @@ sealed interface FirstRootDecision {
 	/** The blob carries a pending tenant and the app must first-root it (carrying the nonce). */
 	data class Root(val domainId: String, val nonce: String) : FirstRootDecision
 
-	/** No pending tenant (an ordinary already-rooted operator blob): skip first-root, just provision. */
+	/** No pending tenant (an ordinary already-rooted admin blob): skip first-root, just provision. */
 	data object NotPending : FirstRootDecision
 }
 
 /** A classified first-root reject: the human message plus whether evie's rejection is transient
  * (the latch stays false, the poll loop auto-retries) or terminal (the root was decided and waiting
- * will not help). Clock skew ("operator op is stale") and a CAS persist contention ("persist
+ * will not help). Clock skew ("admin op is stale") and a CAS persist contention ("persist
  * failed") are transient; an expired/used invite or an unconfigured host is terminal. */
 data class FirstRootReject(val message: String, val transient: Boolean)
 
 /** Which empty-board guidance to show when the Console has no Gateway to seal to yet. The friend's
  * invite blob omits gateway ids by design, so right after a successful first-root the friend is set
- * up but still has to bring a host online; an operator who never first-rooted just needs to admit a
+ * up but still has to bring a host online; an admin who never first-rooted just needs to admit a
  * Gateway. The two states share the "no gateway" cause but want different copy and a different CTA. */
 enum class NoGatewayState {
 	/** Not a no-gateway situation (a Gateway is admitted, or the cause is some other error). */
@@ -62,7 +62,7 @@ enum class NoGatewayState {
 	/** A friend who has first-rooted but has no host yet: point at the "Setting up a host" manual. */
 	AWAITING_HOST,
 
-	/** An operator with no Gateway admitted yet: the Add-a-Gateway onboarding CTA. */
+	/** An admin with no Gateway admitted yet: the Add-a-Gateway onboarding CTA. */
 	NEEDS_GATEWAY,
 }
 
@@ -70,19 +70,12 @@ enum class NoGatewayState {
 //  Functions & Helpers
 
 object FriendOnboarding {
-	/** The Domain id a board falls back to before any local session reports a real one. Matches the
-	 * gateway's absent-domainId default (DEFAULT_DOMAIN_ID in src/shared/domain-id.ts) so the local
-	 * resolver and the rename gate agree on the one "not yet discovered" sentinel. */
-	const val DEFAULT_DOMAIN_ID = "home"
-
-	/** Whether an operator-name rename must wait for discovery. A friend (one who first-rooted their
-	 * own non-home Domain) whose local Domain id is still the [DEFAULT_DOMAIN_ID] fallback has not had
-	 * discovery populate their real Domain yet, so a rename would sign over "home" and evie would
-	 * reject it; gate Save until the real id is known. A genuine home operator legitimately resolves
-	 * to "home" (firstRooted is false for them), so they are never gated. Pure so the gate is pinned
-	 * without a live board. */
-	fun renameAwaitsDiscovery(firstRooted: Boolean, localDomainId: String): Boolean =
-		firstRooted && localDomainId == DEFAULT_DOMAIN_ID
+	/** Whether a display-name rename must wait for discovery. A device that has first-rooted its own
+	 * Domain but whose local session has not yet reported a confirmed Domain id (null) cannot sign a
+	 * rename over a real Domain, so gate Save until discovery lands one. A device that is not
+	 * firstRooted is never gated. Pure so the gate is pinned without a live board. */
+	fun renameAwaitsDiscovery(firstRooted: Boolean, confirmedDomainId: String?): Boolean =
+		firstRooted && confirmedDomainId == null
 
 	/** Decide whether a provisioning blob asks the app to first-root a pending Domain. The blob's
 	 * `pendingTenant` is the ONLY discriminator (a register reply never reports pending), so a blob
@@ -98,7 +91,7 @@ object FriendOnboarding {
 	 *
 	 * evie returns an OPAQUE "invalid or expired invite" for an absent/wrong-nonce/already-claimed
 	 * slug and a distinct "invite expired" for a lapsed-but-valid nonce; both are terminal (the root
-	 * was decided) and collapse to "ask the host for a fresh code". "operator op is stale" (a >2min
+	 * was decided) and collapse to "ask the host for a fresh code". "admin op is stale" (a >2min
 	 * device clock skew) and "persist failed" (an evie Secret-CAS contention) are TRANSIENT: the latch
 	 * stays false and the poll loop re-attempts, so the friend is told to wait/sync rather than shown a
 	 * hard failure. A transport/unknown failure passes through trimmed as transient (a retry may clear
@@ -113,7 +106,7 @@ object FriendOnboarding {
 				FirstRootReject("This setup code is expired or already used. Ask for a new one.", transient = false)
 			m.contains("not available", ignoreCase = true) || m.startsWith("HTTP 501") ->
 				FirstRootReject("This network isn't ready yet. Ask whoever invited you to finish their setup.", transient = false)
-			m.contains("operator op is stale", ignoreCase = true) ->
+			m.contains("admin op is stale", ignoreCase = true) ->
 				FirstRootReject("Your device clock is off - sync the time and setup will retry.", transient = true)
 			m.contains("persist failed", ignoreCase = true) ->
 				FirstRootReject("The server is busy - retrying.", transient = true)
@@ -125,11 +118,11 @@ object FriendOnboarding {
 	 * one-arg form the message-only call sites use. */
 	fun humanizeFirstRootError(message: String?): String = classifyFirstRootError(message).message
 
-	/** Split the "no Gateway admitted" empty-board cause into the operator's Add-a-Gateway onboarding
+	/** Split the "no Gateway admitted" empty-board cause into the admin's Add-a-Gateway onboarding
 	 * vs the friend's just-set-up-now-bring-up-a-host state. `noGateway` is the connect-error
 	 * classification (true once resolveGatewayId throws and classifyConnError emits the no-gateway
 	 * cause); `firstRooted` is true only after this device rooted a pending friend Domain. A device
-	 * that first-rooted and then lands with no Gateway is a friend awaiting a host, not an operator
+	 * that first-rooted and then lands with no Gateway is a friend awaiting a host, not an admin
 	 * who forgot to admit one. Pure so the branch is pinned without a live board. */
 	fun noGatewayState(noGateway: Boolean, firstRooted: Boolean): NoGatewayState =
 		when {

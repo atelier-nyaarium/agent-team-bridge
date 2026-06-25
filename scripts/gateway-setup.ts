@@ -5,7 +5,7 @@
 //   --enroll  creds-less LAN enrollment: arm a one-time nonce, start the gateway, and print the
 //             admit-gateway QR for the admin Console to scan.
 //
-// One gateway per machine, configured by .env (GATEWAY_ID, BRIDGE_TOKEN, FEDERATION_OWNER_SIGN_PUB).
+// One gateway per machine, configured by .env (GATEWAY_ID, FEDERATION_OWNER_SIGN_PUB).
 
 import { $ } from "bun";
 import { ask, confirm, dc, die, envGet, envSet, menu } from "./lib/host.js";
@@ -61,8 +61,14 @@ async function printQr(): Promise<void> {
 		console.log(qr);
 	} else {
 		console.log("No admit-gateway QR found. Expected when the Gateway is already admitted or has");
-		console.log("no BRIDGE_TOKEN; otherwise inspect: docker logs switchboard");
+		console.log("no delivered transport (standalone); otherwise inspect: docker logs switchboard");
 	}
+}
+
+/** A gateway is part of the mesh once a service-proxy transport has been delivered into its
+ * federation dir (by provision-console.sh / enrollment). Absent = standalone, no mesh. */
+async function hasTransport(): Promise<boolean> {
+	return (await $`test -f volumes/gateway/federation/transport.json`.quiet().nothrow()).exitCode === 0;
 }
 
 /** Erase volumes/gateway. The gateway writes it as the in-container user, so a host-side rm is
@@ -79,18 +85,17 @@ async function wipeState(): Promise<void> {
 ////////////////////////////////
 //  Operations (throw on failure; the menu catches per-op, the top level exits)
 
-/** Prompt for GATEWAY_ID / BRIDGE_TOKEN / owner key, write .env, then rebuild + start the gateway
- * and (when a token is set) show its admit-gateway QR. */
+/** Prompt for GATEWAY_ID / owner key, write .env, then rebuild + start the gateway. A gateway joins
+ * the mesh once a service-proxy transport has been delivered (enrollment); when one is present, show
+ * its admit-gateway QR. */
 async function configure(): Promise<void> {
 	const host = await hostname();
 	const curId = await envGet("GATEWAY_ID");
-	const curToken = await envGet("BRIDGE_TOKEN");
 	const curOwner = await envGet("FEDERATION_OWNER_SIGN_PUB");
 
 	// The Gateway is named by the device hostname; a pre-set GATEWAY_ID is the escape hatch for
 	// duplicate hostnames, so there is no nickname prompt.
 	const id = curId || host;
-	const token = curToken ? ask("Evie token [keep]:") || curToken : ask("Evie token (blank = standalone):");
 
 	// FEDERATION_OWNER_SIGN_PUB pins which owner this Gateway trusts (the base64 key from the app's
 	// owner screen) so a compromised evie cannot re-root it. Optional: blank = trust on first enroll.
@@ -98,15 +103,23 @@ async function configure(): Promise<void> {
 		ask(`Owner key (optional, blank = trust on first enroll)${curOwner ? " [keep]" : ""}:`) || curOwner;
 
 	await envSet("GATEWAY_ID", id);
-	await envSet("BRIDGE_TOKEN", token);
 	await envSet("FEDERATION_OWNER_SIGN_PUB", ownerKey);
 	await $`chmod 600 .env`.quiet().nothrow();
 
-	console.log(token ? "Building and starting..." : "Building and starting (standalone, no mesh)...");
+	// A delivered transport is what puts this gateway on the mesh; without one it runs standalone.
+	const mesh = await hasTransport();
+	console.log(mesh ? "Building and starting..." : "Building and starting (standalone, no mesh)...");
 	if ((await dc("up", "--build", "-d").nothrow()).exitCode !== 0) throw new Error("docker compose up failed");
-	if (!(await waitHealth())) throw new Error("did not come up in 60s - run: docker logs switchboard");
+	if (!(await waitHealth())) {
+		// The gateway fails closed at boot when FEDERATION_DOMAIN_ID is unset, which surfaces only as
+		// a health timeout. Name that cause so a setup/enroll run is diagnosable without reading logs.
+		const domHint = (await envGet("FEDERATION_DOMAIN_ID"))
+			? ""
+			: " (FEDERATION_DOMAIN_ID is unset; the gateway fails closed at boot without it - set it in .env first)";
+		throw new Error(`did not come up in 60s - run: docker logs switchboard${domHint}`);
+	}
 	console.log(`Gateway "${id}" running on :20000.`);
-	if (token) {
+	if (mesh) {
 		await Bun.sleep(6000);
 		await printQr();
 	}
@@ -136,7 +149,14 @@ async function enroll(): Promise<void> {
 		.env({ ...process.env, ENROLL_NONCE: nonce, ENROLL_LAN_HOST: host })
 		.nothrow();
 	if (up.exitCode !== 0) throw new Error("docker compose up failed");
-	if (!(await waitHealth())) throw new Error("did not come up in 60s - run: docker logs switchboard");
+	if (!(await waitHealth())) {
+		// The gateway fails closed at boot when FEDERATION_DOMAIN_ID is unset, which surfaces only as
+		// a health timeout. Name that cause so a setup/enroll run is diagnosable without reading logs.
+		const domHint = (await envGet("FEDERATION_DOMAIN_ID"))
+			? ""
+			: " (FEDERATION_DOMAIN_ID is unset; the gateway fails closed at boot without it - set it in .env first)";
+		throw new Error(`did not come up in 60s - run: docker logs switchboard${domHint}`);
+	}
 	await Bun.sleep(4000);
 	console.log();
 	const qr = logRange(await gatewayLogs(), "is not yet admitted", "Waiting for the admin Console");
@@ -176,6 +196,6 @@ async function main(): Promise<void> {
 	}
 }
 
-// .env carries the BRIDGE_TOKEN + owner key; umask 077 writes it 0600 from birth.
+// .env carries the owner key; umask 077 writes it 0600 from birth.
 process.umask(0o077);
 main().catch((e) => die(e instanceof Error ? e.message : String(e)));

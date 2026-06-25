@@ -131,7 +131,7 @@ export interface MenuItem {
 	run: () => Promise<void> | void;
 }
 
-/** Numbered dial menu, looping until the operator quits (q or empty). TTY only - a non-TTY caller
+/** Numbered dial menu, looping until the admin quits (q or empty). TTY only - a non-TTY caller
  * drives the flow directly instead. */
 export async function menu(title: string, items: MenuItem[]): Promise<void> {
 	for (;;) {
@@ -145,7 +145,7 @@ export async function menu(title: string, items: MenuItem[]): Promise<void> {
 			console.log(`Enter ${items.map((i) => i.key).join(", ")}, or q.`);
 			continue;
 		}
-		// A failed operation drops back to the menu so the operator can retry, instead of
+		// A failed operation drops back to the menu so the admin can retry, instead of
 		// crashing the whole tool.
 		try {
 			await item.run();
@@ -155,7 +155,7 @@ export async function menu(title: string, items: MenuItem[]): Promise<void> {
 	}
 }
 
-/** Read one trimmed line from the operator. Bun's prompt() leaves the cursor on the answer's line,
+/** Read one trimmed line from the admin. Bun's prompt() leaves the cursor on the answer's line,
  * so the next output mashes onto it; emit the newline ourselves to keep every answer separated. */
 export function ask(label: string): string {
 	const v = prompt(label) ?? "";

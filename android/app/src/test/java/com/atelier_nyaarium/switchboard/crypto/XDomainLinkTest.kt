@@ -99,7 +99,7 @@ class XDomainLinkTest {
 		val owner = Crypto.generateIdentity()
 		val attacker = Crypto.generateIdentity()
 
-		val e = XDomainLinkEdge("home", "bob", 5000L, "ZQ==")
+		val e = XDomainLinkEdge("alice", "bob", 5000L, "ZQ==")
 		val signedEdge = XDomainLinkCrypto.signEdge(e, owner.sign.priv, owner.sign.pub)
 		assertTrue(XDomainLinkCrypto.verifyEdge(signedEdge, owner.sign.pub))
 		// The claimed owner key must match the expected root.
@@ -107,7 +107,7 @@ class XDomainLinkTest {
 		// A tampered edge (swapped dstDomainId) must not verify.
 		assertFalse(XDomainLinkCrypto.verifyEdge(signedEdge.copy(edge = e.copy(dstDomainId = "carol")), owner.sign.pub))
 
-		val r = XDomainLinkRevocation("home", "bob", 6000L, "cg==")
+		val r = XDomainLinkRevocation("alice", "bob", 6000L, "cg==")
 		val signedRev = XDomainLinkCrypto.signRevocation(r, owner.sign.priv, owner.sign.pub)
 		assertTrue(XDomainLinkCrypto.verifyRevocation(signedRev, owner.sign.pub))
 		assertFalse(XDomainLinkCrypto.verifyRevocation(signedRev, attacker.sign.pub))

@@ -1,10 +1,11 @@
 {
 	"name": "switchboard",
-	"version": "5.0.23",
+	"version": "6.0.0",
 	"type": "module",
 	"scripts": {
 		"start:gateway": "bun run src/main-gateway.ts",
 		"start:mcp": "bun run src/main-mcp.ts",
+		"start:host-daemon": "bun run src/main-host-daemon.ts",
 		"lint": "biome ci . && bunx tsc --noEmit",
 		"lint:fix": "biome check --write .",
 		"test": "vitest run"

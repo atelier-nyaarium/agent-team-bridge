@@ -14,13 +14,13 @@ import com.atelier_nyaarium.switchboard.proto.ProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.RemoveTenant
 import com.atelier_nyaarium.switchboard.proto.Revocation
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
-import com.atelier_nyaarium.switchboard.proto.SetOperatorName
+import com.atelier_nyaarium.switchboard.proto.SetDisplayName
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
 import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRevocation
-import com.atelier_nyaarium.switchboard.proto.SignedSetOperatorName
+import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLinkEdge
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLinkRevocation
@@ -51,6 +51,9 @@ data class MemberInfo(val kind: String, val gatewayId: String?, val signPub: Str
  * backup that belongs to a different owner (which restore refuses). */
 enum class OwnerRestoreResult { OK, WRONG_PASSPHRASE, DIFFERENT_OWNER }
 
+/** Owner public material for the settings cards (no private key). */
+data class OwnerKeysView(val signPub: String, val boxPub: String, val sas: String)
+
 class FederationManager(private val store: ProvisioningStore) {
 	private val rnd = SecureRandom()
 	private val json = Json { ignoreUnknownKeys = true }
@@ -58,22 +61,41 @@ class FederationManager(private val store: ProvisioningStore) {
 	/** The owner root identity, generated and persisted on first access. Synchronized: the
 	 * UI (owner-keys card) and background coroutines (connect, admit, poll) all reach this,
 	 * and a non-atomic generate-then-persist would let two callers mint different keys and
-	 * orphan one - so the operator could root evie at a key the device later discards. */
+	 * orphan one - so the admin could root evie at a key the device later discards. Mints ONLY
+	 * on an absent key; a corrupt stored key throws rather than minting over it, so a transient
+	 * decode fault never silently re-roots the device and orphans the real owner key. */
 	@Synchronized
 	fun ownerIdentity(): Crypto.Identity =
-		store.loadOwnerIdentity() ?: Crypto.generateIdentity().also { store.saveOwnerIdentity(it) }
+		when (val load = store.loadOwnerIdentity()) {
+			is IdentityLoad.Loaded -> load.identity
+			IdentityLoad.Absent -> Crypto.generateIdentity().also { store.saveOwnerIdentity(it) }
+			IdentityLoad.Corrupt -> error("owner key corrupt - the stored owner root key did not decode; restore from backup or recover the Domain")
+		}
 
-	/** The console member identity, generated and persisted on first access (atomic for the
-	 * same reason as the owner identity). */
+	/** The console member identity, generated and persisted on first access (atomic, and
+	 * mint-on-absent-only, for the same reasons as the owner identity). */
 	@Synchronized
 	fun consoleIdentity(): Crypto.Identity =
-		store.loadIdentity() ?: Crypto.generateIdentity().also { store.saveIdentity(it) }
+		when (val load = store.loadIdentity()) {
+			is IdentityLoad.Loaded -> load.identity
+			IdentityLoad.Absent -> Crypto.generateIdentity().also { store.saveIdentity(it) }
+			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-console.sh")
+		}
+
+	/** Owner public material for DISPLAY only, or null when the stored owner key is unreadable
+	 * (corrupt). Never throws and never mints over a corrupt key, so a settings card shows a
+	 * restore prompt instead of crashing the screen. An ABSENT key still mints (the silent
+	 * first-gen), matching [ownerIdentity]. */
+	fun ownerKeysForDisplay(): OwnerKeysView? =
+		runCatching { ownerIdentity() }.getOrNull()?.let {
+			OwnerKeysView(it.sign.pub, it.box.pub, Crypto.fingerprint(it.sign.pub))
+		}
 
 	fun ownerSignPub(): String = ownerIdentity().sign.pub
 
 	fun ownerBoxPub(): String = ownerIdentity().box.pub
 
-	/** The owner key fingerprint the operator confirms when rooting the Domain host-side. */
+	/** The owner key fingerprint the admin confirms when rooting the Domain host-side. */
 	fun ownerSas(): String = Crypto.fingerprint(ownerIdentity().sign.pub)
 
 	/** A passphrase-encrypted backup of the owner root key, for offline safekeeping. */
@@ -90,8 +112,13 @@ class FederationManager(private val store: ProvisioningStore) {
 	fun importOwnerBackup(blob: String, passphrase: String): OwnerRestoreResult {
 		val restored = runCatching { json.decodeFromString(Crypto.Identity.serializer(), OwnerBackup.restore(blob, passphrase)) }
 			.getOrElse { return OwnerRestoreResult.WRONG_PASSPHRASE }
+		// Only a DECODABLE existing owner with a different key blocks the restore. An absent or
+		// corrupt stored key is exactly what restore recovers, so it proceeds - the explicit
+		// passphrase + intent authorize the overwrite the silent mint path refuses.
 		val existing = store.loadOwnerIdentity()
-		if (existing != null && existing.sign.pub != restored.sign.pub) return OwnerRestoreResult.DIFFERENT_OWNER
+		if (existing is IdentityLoad.Loaded && existing.identity.sign.pub != restored.sign.pub) {
+			return OwnerRestoreResult.DIFFERENT_OWNER
+		}
 		store.saveOwnerIdentity(restored)
 		return OwnerRestoreResult.OK
 	}
@@ -265,7 +292,9 @@ class FederationManager(private val store: ProvisioningStore) {
 	 * up. */
 	@Synchronized
 	fun applyDomainSync(snapshot: DomainSnapshot, version: String): Boolean {
-		val ownerPub = store.loadOwnerIdentity()?.sign?.pub ?: return false
+		// Read the owner key WITHOUT minting one. A sync arriving before this device has an owner,
+		// or over a corrupt one, cannot be verified and must not seat a throwaway root.
+		val ownerPub = (store.loadOwnerIdentity() as? IdentityLoad.Loaded)?.identity?.sign?.pub ?: return false
 		if (snapshot.ownerSignPub != ownerPub) return false
 		val current = keyring().snapshot
 		val next = canonicalSnapshot(
@@ -314,7 +343,7 @@ class FederationManager(private val store: ProvisioningStore) {
 	}
 
 	////////////////////////////////
-	//  Friend cross-Domain onboarding (pending tenant + first-root + operator name)
+	//  Friend cross-Domain onboarding (pending tenant + first-root + display name)
 
 	////////////////////////////////
 	//  Trusted owners (the owner-keyed friend graph the Users surface reads)
@@ -367,7 +396,7 @@ class FederationManager(private val store: ProvisioningStore) {
 
 	/** A fresh opaque Domain id (a slug: lowercase hex, never shown to the human - pure
 	 * plumbing). 16 random bytes hex-encoded is well under the 64-char slug bound and collides
-	 * negligibly, so the operator never has to choose or check one. */
+	 * negligibly, so the admin never has to choose or check one. */
 	fun newDomainId(): String {
 		val bytes = ByteArray(16).also { rnd.nextBytes(it) }
 		return bytes.joinToString("") { "%02x".format(it) }
@@ -387,9 +416,9 @@ class FederationManager(private val store: ProvisioningStore) {
 	/** Owner-sign a request to pre-stage a friend's PENDING tenant: an opaque domainId + a network
 	 * display label, NO owner root. The signing nonce is the anti-replay token for this request;
 	 * evie mints the SEPARATE one-time invite nonce (carried in the QR) and returns it. */
-	fun signProvisionTenant(domainId: String, operatorName: String, nowMs: Long): SignedProvisionTenant {
+	fun signProvisionTenant(domainId: String, displayName: String, nowMs: Long): SignedProvisionTenant {
 		val owner = ownerIdentity()
-		val provision = ProvisionTenant(domainId, operatorName, nowMs, nonce())
+		val provision = ProvisionTenant(domainId, displayName, nowMs, nonce())
 		return ProvisionOpsCrypto.signProvision(provision, owner.sign.priv, owner.sign.pub)
 	}
 
@@ -403,9 +432,9 @@ class FederationManager(private val store: ProvisioningStore) {
 	/** Owner-sign a rename of this owner's own Domain network display name. evie CAS-merges it onto
 	 * the Domain record and pushes it to the Domain's gateways. The `domainId` is this owner's own
 	 * (rooted home) Domain; evie verifies the signature against the Domain's pinned owner key. */
-	fun signSetOperatorName(domainId: String, operatorName: String, nowMs: Long): SignedSetOperatorName {
+	fun signSetDisplayName(domainId: String, displayName: String, nowMs: Long): SignedSetDisplayName {
 		val owner = ownerIdentity()
-		val rename = SetOperatorName(domainId, operatorName, nowMs, nonce())
-		return ProvisionOpsCrypto.signSetOperatorName(rename, owner.sign.priv, owner.sign.pub)
+		val rename = SetDisplayName(domainId, displayName, nowMs, nonce())
+		return ProvisionOpsCrypto.signSetDisplayName(rename, owner.sign.priv, owner.sign.pub)
 	}
 }

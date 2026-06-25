@@ -32,8 +32,7 @@ Host Machine
 Docker: switchboard (port 20000)
   Gateway (main-gateway.ts)
     HTTP routes + WebSocket hub
-    kubectl port-forward to evie K8s pod (port 20001)
-    Evie WS client (tool calls, DM forwarding)
+    Evie WS client over the k8s API service-proxy (SA token + admission)
 
 DevContainers (one per project)
   Claude / Cursor / Copilot / Codex
@@ -121,7 +120,7 @@ This adds `switchboard-network` to your `.devcontainer/compose.yml`.
 
 ## Evie Bridge
 
-When `BRIDGE_TOKEN` is set in the gateway's environment, it establishes a kubectl port-forward tunnel to evie-bot's Kubernetes pod and connects via WebSocket with bearer auth. This enables:
+When a service-proxy transport (`transport.json`, delivered by enrollment) is present in the gateway's federation dir, the gateway connects to evie-bot over the Kubernetes API server's service-proxy. The transport's SA token authenticates to the API server (scoped by RBAC), the cluster CA is pinned for TLS, and registration is gated by the owner-signed admission. This enables:
 
 - **Tool proxying**: Evie's action registry (46 tools) is exported as JSON Schema and dynamically registered as MCP tools on the host, prefixed with `evie_`.
 - **DM forwarding**: Discord DMs from the bot owner are forwarded to the host orchestrator as channel push notifications.

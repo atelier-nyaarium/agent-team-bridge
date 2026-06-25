@@ -3,7 +3,7 @@
 		{
 			"team": "switchboard",
 			"gatewayId": "laptop",
-			"domainId": "home",
+			"domainId": "alice",
 			"status": "online",
 			"mode": "channel",
 			"kind": "devcontainer",

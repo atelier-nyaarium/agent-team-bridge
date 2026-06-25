@@ -26,7 +26,7 @@ class ClearProvisioningPartitionTest {
 			"federation_console_admitted",
 			"federation_first_rooted",
 			"federation_enroll_ceremony_done",
-			"federation_operator_name",
+			"federation_profile_name",
 			"federation_hosted_tenants",
 			"federation_trusted_owners",
 			"threads",

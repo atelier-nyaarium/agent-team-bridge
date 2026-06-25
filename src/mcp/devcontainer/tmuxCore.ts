@@ -5,9 +5,6 @@ import { ALLOWED_KEYS, type HostPeekResult, type TmuxTarget } from "../../shared
 ////////////////////////////////
 //  Constants
 
-// The pane every Claude Code tmux session runs in (session "claude", pane 0), for
-// both the host orchestrator and a devcontainer.
-const TMUX_PANE = "claude.0";
 // A devcontainer's container name follows the compose convention.
 const containerName = (team: string): string => `${team}_devcontainer-dev-1`;
 // A name reaching docker exec must be a slug. The name is also passed as an argv
@@ -23,14 +20,22 @@ const MAX_CAPTURE_BYTES = 256_000;
 //  Functions & Helpers
 
 function assertName(name: string): void {
-	if (!TEAM_NAME_RE.test(name)) throw new Error(`invalid session name "${name}"`);
+	if (!TEAM_NAME_RE.test(name)) throw new Error(`invalid tmux name "${name}"`);
 }
 
-/** Build the argv for a tmux subcommand against a target: the host's own tmux for the
- * orchestrator, or `docker exec` into the devcontainer. The name is an argv element,
- * never shell-interpolated, so it cannot be parsed as a shell token. */
+/** The pane a host op addresses: the agent runs in pane 0 of its session, so the pane index is
+ * fixed and only the session name varies (`<sessionName>.0`). The session name is an argv element
+ * (never shell-interpolated) and slug-validated as defense in depth. */
+function paneTarget(target: TmuxTarget): string {
+	assertName(target.sessionName);
+	return `${target.sessionName}.0`;
+}
+
+/** Build the argv for a tmux subcommand against a target: the host's own tmux for a host
+ * session, or `docker exec` into the devcontainer. The name is an argv element, never
+ * shell-interpolated, so it cannot be parsed as a shell token. */
 function tmuxArgv(target: TmuxTarget, sub: string[]): string[] {
-	if (target.kind === "gateway") return ["tmux", ...sub];
+	if (target.kind === "host") return ["tmux", ...sub];
 	assertName(target.name);
 	return ["docker", "exec", "-u", "vscode", containerName(target.name), "tmux", ...sub];
 }
@@ -76,7 +81,7 @@ function run(argv: string[], timeoutMs = EXEC_TIMEOUT_MS): Promise<string> {
 // Serialize tmux writes per target so a text+Enter pair is never interleaved with
 // another send to the same pane (which would submit a half-built line).
 const sendChains = new Map<string, Promise<unknown>>();
-const targetKey = (t: TmuxTarget): string => `${t.kind}:${t.name}`;
+const targetKey = (t: TmuxTarget): string => `${t.kind}:${t.name}:${t.sessionName}`;
 
 function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
 	const prev = sendChains.get(key) ?? Promise.resolve();
@@ -91,7 +96,7 @@ function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
 
 /** Capture the VISIBLE pane with ANSI colors (a live snapshot, not scrollback). */
 export async function peekPane(target: TmuxTarget): Promise<HostPeekResult> {
-	const ansi = await run(tmuxArgv(target, ["capture-pane", "-t", TMUX_PANE, "-e", "-p"]));
+	const ansi = await run(tmuxArgv(target, ["capture-pane", "-t", paneTarget(target), "-e", "-p"]));
 	const hash = crypto.createHash("sha256").update(ansi).digest("hex").slice(0, 16);
 	return { ansi, hash };
 }
@@ -102,7 +107,7 @@ export async function peekPane(target: TmuxTarget): Promise<HostPeekResult> {
  * it would swallow a `;` command separator, which is why the CR rides inside the literal). */
 export function sendText(target: TmuxTarget, text: string): Promise<void> {
 	return serialized(targetKey(target), async () => {
-		await run(tmuxArgv(target, ["send-keys", "-t", TMUX_PANE, "-l", "--", `${text}\r`]));
+		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), "-l", "--", `${text}\r`]));
 	});
 }
 
@@ -111,6 +116,15 @@ export function sendText(target: TmuxTarget, text: string): Promise<void> {
 export function sendKey(target: TmuxTarget, key: string): Promise<void> {
 	return serialized(targetKey(target), async () => {
 		if (!ALLOWED_KEYS.has(key)) throw new Error(`disallowed key "${key}"`);
-		await run(tmuxArgv(target, ["send-keys", "-t", TMUX_PANE, key]));
+		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), key]));
 	});
+}
+
+/** Start a new detached tmux session named `target.sessionName` running `command`. `new-session`
+ * addresses the session by NAME (not the `.0` pane), so this validates `sessionName` directly. The
+ * command is the shell-command tmux runs in the session; the daemon builds it (model/effort/plugin)
+ * and it is never console-supplied, so an arbitrary host command cannot be injected here. */
+export async function createSession(target: TmuxTarget, command: string): Promise<void> {
+	assertName(target.sessionName);
+	await run(tmuxArgv(target, ["new-session", "-d", "-s", target.sessionName, command]), 15_000);
 }

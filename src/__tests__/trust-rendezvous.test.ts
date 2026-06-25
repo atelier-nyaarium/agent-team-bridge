@@ -43,7 +43,7 @@ describe("TrustHandshakeOpSchema (the rendezvous steps)", () => {
 				step: "reveal",
 				rendezvousId: B64,
 				side: "TARGET",
-				reveal: { ownerSignPub: B64, ownerBoxPub: B64, domainId: "home", salt: B64 },
+				reveal: { ownerSignPub: B64, ownerBoxPub: B64, domainId: "alice", salt: B64 },
 			}).success,
 		).toBe(true);
 		// An unknown side is rejected.
@@ -52,7 +52,7 @@ describe("TrustHandshakeOpSchema (the rendezvous steps)", () => {
 				step: "reveal",
 				rendezvousId: B64,
 				side: "BYSTANDER",
-				reveal: { ownerSignPub: B64, ownerBoxPub: B64, domainId: "home", salt: B64 },
+				reveal: { ownerSignPub: B64, ownerBoxPub: B64, domainId: "alice", salt: B64 },
 			}).success,
 		).toBe(false);
 	});

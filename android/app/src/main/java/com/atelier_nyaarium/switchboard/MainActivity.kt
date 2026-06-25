@@ -485,9 +485,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					repo.forget(openTeam!!)
 					openTeam = null
 				},
-				// Only a LOCAL host-agent or devcontainer has a tmux pane this Gateway can drive;
+				// Only a LOCAL devcontainer has a tmux pane this Gateway can drive from a session card;
 				// a remote-Gateway session is gated off in v1 (the cross-Gateway terminal is deferred).
-				terminalEligible = (kind == "gateway" || kind == "devcontainer") &&
+				// The host machine's own terminal is reached through the dedicated "host" target.
+				terminalEligible = kind == "devcontainer" &&
 					(session?.gatewayId.isNullOrEmpty() || session?.gatewayId == state.localGatewayId),
 				terminalRefreshMs = repo.terminalRefreshMs,
 				onTerminalPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
@@ -541,7 +542,7 @@ fun LockScreen(onUnlock: () -> Unit) {
 }
 
 /** The neutral fresh-open: one "Scan your setup code" screen (Scan QR / Paste / Open file). The
- * SAME import handles BOTH an operator provisioning blob AND a friend invite; the app distinguishes
+ * SAME import handles BOTH an admin provisioning blob AND a friend invite; the app distinguishes
  * them on connect (a pending tenant first-roots the silently-generated owner key, an already-rooted
  * Domain just provisions the console), so the human never picks a path and no path labels appear.
  * The host-setup instructions live behind a tucked "Setting up a host?" link a friend never needs. */
@@ -558,8 +559,9 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 	var provisionAttempted by remember { mutableStateOf(false) }
 	// The silent owner key is minted-or-loaded on first read, so it exists before any first-root;
 	// the human never sees or pastes it (the host-setup manual reads the public keys for the
-	// operator path). Touch it here so it is generated up front.
-	LaunchedEffect(Unit) { repo.ownerSignPub() }
+	// admin path). Touch it here so it is generated up front. Non-throwing: a corrupt stored key
+	// must not crash app start - the connect path surfaces it as a terminal cause.
+	LaunchedEffect(Unit) { repo.ownerKeysForDisplay() }
 
 	fun tryProvision(text: String?, source: String) {
 		val s = text?.trim().orEmpty()
@@ -644,14 +646,14 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 			}
 			Spacer(Modifier.height(8.dp))
 			HorizontalDivider()
-			// Tucked, text-only host-setup manual behind a small link. The operator finds it here;
+			// Tucked, text-only host-setup manual behind a small link. The admin finds it here;
 			// a friend with an invite never opens it.
 			TextButton(onClick = { showHostHelp = true }) { Text("Setting up your own network?") }
 		}
 	}
 }
 
-/** The tucked, text-only "Setting up a host" manual: the operator path (run provision-console.sh on
+/** The tucked, text-only "Setting up a host" manual: the admin path (run provision-console.sh on
  * a computer, paste back the setup blob it emits). No QR, no key prompt - the owner key is generated
  * silently and the script reads the PUBLIC keys. Reached from the fresh-open screen AND from the
  * empty board after a friend first-roots but has no host/gateway yet (the bring-up-a-host pointer). */
@@ -738,7 +740,7 @@ fun SessionsScreen(
 	actionTeam?.let { team ->
 		SessionActionsDialog(
 			label = state.label(team.name, state.localGatewayId),
-			canRename = team.kind != "devcontainer" && team.kind != "gateway",
+			canRename = team.kind != "devcontainer",
 			onRename = {
 				actionTeam = null
 				renameTeam = team
@@ -752,7 +754,7 @@ fun SessionsScreen(
 	}
 	renameTeam?.let { team ->
 		RenameDialog(
-			team = team.displayName,
+			team = team.shortName,
 			current = state.label(team.name, state.localGatewayId),
 			onSave = {
 				onRename(team.name, it)
@@ -845,10 +847,9 @@ fun SessionsScreen(
 							)
 						}
 						if (!collapsed) {
-							val host = group.filter { it.kind == "gateway" }.sortedWith(order)
 							val projects = group.filter { it.kind == "devcontainer" }.sortedWith(order)
-							val loose = group.filter { it.kind != "gateway" && it.kind != "devcontainer" }.sortedWith(order)
-							items(host + projects + loose, key = { "team:${it.name}" }) { team ->
+							val loose = group.filter { it.kind != "devcontainer" }.sortedWith(order)
+							items(projects + loose, key = { "team:${it.name}" }) { team ->
 								SessionCard(
 									state = state,
 									team = team,
@@ -883,7 +884,7 @@ private fun EmptyBoard(
 	) {
 		when {
 			// A friend who just first-rooted has no host of their own yet (the invite omits gateway
-			// ids by design), and the operator's own fresh provision first-roots too - so both land
+			// ids by design), and the admin's own fresh provision first-roots too - so both land
 			// here. The action goes straight to the Gateways screen (admit a Gateway by scanning its
 			// code); the friend with no computer yet still has the body's "set up a computer" guidance.
 			state.noGatewayState == NoGatewayState.AWAITING_HOST -> {
@@ -1077,10 +1078,9 @@ fun SectionLabel(text: String) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: () -> Unit) {
-	val display = if (team.kind == "gateway") "Gateway" else state.label(team.name, state.localGatewayId)
+	val display = state.label(team.name, state.localGatewayId)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
-	val isCli = team.mode == "cli"
 	// Wire vocabulary -> board vocabulary: online teams are live, catalog teams are
 	// available (wakeable), anything else is an ended loose session.
 	val (statusWord, statusColor) = when {
@@ -1088,12 +1088,10 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 		team.status == "available" -> "available" to Color(0xFF0969DA)
 		else -> "ended" to MaterialTheme.colorScheme.outline
 	}
-	// Long-press stays enabled for CLI cards: the action sheet's Forget is the only
-	// way to clear their local thread state. Only opening (tap) is gated off. The
-	// clip keeps the ripple inside the card's rounded corners.
+	// The clip keeps the ripple inside the card's rounded corners.
 	Card(
 		modifier = Modifier.fillMaxWidth().clip(CardDefaults.shape).combinedClickable(
-			onClick = { if (!isCli) onClick() },
+			onClick = onClick,
 			onLongClick = onLongPress,
 		),
 	) {
@@ -1110,9 +1108,9 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 			// Under a custom label, surface the session's short local name so the user
 			// can still tell which session it maps to. label() falls back to the short
 			// name, so an unlabeled session adds nothing here.
-			if (display != team.displayName && team.kind != "gateway") {
+			if (display != team.shortName) {
 				Text(
-					team.displayName,
+					team.shortName,
 					style = MaterialTheme.typography.labelSmall,
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 					fontFamily = FontFamily.Monospace,
@@ -1128,7 +1126,6 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 					if (v != BuildConfig.VERSION_NAME) StatusChip("v$v", MaterialTheme.colorScheme.outline)
 				}
 				if (live && state.working(team.name)) StatusChip("working...", Color(0xFFD29922))
-				if (isCli) StatusChip("cli", MaterialTheme.colorScheme.outline)
 				Spacer(Modifier.weight(1f))
 				state.lastActivity(team.name)?.let {
 					Text(
@@ -1137,13 +1134,6 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 						color = MaterialTheme.colorScheme.onSurfaceVariant,
 					)
 				}
-			}
-			if (isCli) {
-				Text(
-					"CLI agent - console chat is not supported",
-					style = MaterialTheme.typography.bodySmall,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
-				)
 			}
 			state.snippet(team.name)?.let {
 				Text(
@@ -1552,18 +1542,18 @@ private fun SettingsRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 @Composable
 private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceName: (String) -> Unit) {
 	val scope = rememberCoroutineScope()
-	// Operator name (the owner's NETWORK display name, one per owner): what linked friends see your
+	// Admin name (the owner's NETWORK display name, one per owner): what linked friends see your
 	// network as. Owner-signed + pushed to evie; it lives above the per-install device name. Seeded
-	// from state.operatorName (cache, refreshed from discovery) and re-seeded when that changes.
-	var operatorName by remember(state.operatorName) { mutableStateOf(state.operatorName) }
+	// from state.displayName (cache, refreshed from discovery) and re-seeded when that changes.
+	var displayName by remember(state.displayName) { mutableStateOf(state.displayName) }
 	var opStatus by remember { mutableStateOf("") }
 	var opBusy by remember { mutableStateOf(false) }
-	// A friend (one who first-rooted their own non-home Domain) renaming before discovery populates
-	// would sign over the "home" fallback localDomainId() returns, which evie rejects ("Domain not
-	// rooted"/"not owner-signed") as a raw "Could not save". Gate Save until the real Domain id is
-	// known for that friend. A genuine home operator legitimately resolves to "home", so they are not
-	// gated (firstRooted is false for them).
-	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, repo.localDomainId())
+	// A friend (one who first-rooted their own Domain) renaming before discovery has reported a
+	// confirmed Domain id has nothing real to sign over, so evie would reject the rename ("Domain
+	// not rooted" / "not owner-signed") as a raw "Could not save". Gate Save until discovery lands
+	// the real Domain id. A device that never first-rooted (the admin) is not gated - its rename
+	// signs over its own confirmed Domain once discovery reports it.
+	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, repo.confirmedDomainId())
 	Text("Network name", style = MaterialTheme.typography.titleMedium)
 	Text(
 		"What linked friends see your network called.",
@@ -1572,18 +1562,18 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 	)
 	Row(verticalAlignment = Alignment.CenterVertically) {
 		OutlinedTextField(
-			value = operatorName,
-			onValueChange = { operatorName = it },
+			value = displayName,
+			onValueChange = { displayName = it },
 			singleLine = true,
 			modifier = Modifier.weight(1f),
 		)
 		Button(
-			enabled = operatorName.isNotBlank() && operatorName.trim() != state.operatorName && !opBusy && !domainResolving,
+			enabled = displayName.isNotBlank() && displayName.trim() != state.displayName && !opBusy && !domainResolving,
 			onClick = {
 				opBusy = true
 				opStatus = ""
 				scope.launch {
-					repo.setOperatorName(operatorName)
+					repo.setDisplayName(displayName)
 						.onSuccess { opStatus = "Saved." }
 						.onFailure { opStatus = "Couldn't save: ${it.message?.take(120)}" }
 					opBusy = false

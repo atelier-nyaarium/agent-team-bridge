@@ -63,7 +63,7 @@ describe("evieClient pending-Domain re-register", () => {
 
 	it("retries after a pending refusal and registers once the Domain roots", async () => {
 		// evie refuses the first register with the pending signal (Domain staged but not yet
-		// rooted), then accepts the retry (the operator's phone first-rooted home in between).
+		// rooted), then accepts the retry (the admin's phone first-rooted home in between).
 		const registers: Record<string, unknown>[] = [];
 		evie = await startFakeEvie((sock, msg) => {
 			if (msg.type !== "tool_call" || msg.action !== "gateway_register") return;
@@ -80,7 +80,7 @@ describe("evieClient pending-Domain re-register", () => {
 			url: `ws://localhost:${evie.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",
-			domainId: "home",
+			domainId: "alice",
 			pendingReregisterDelayMs: 25,
 			onDomainMeta: (m) => {
 				lastStatus = m.domainStatus;
@@ -119,7 +119,7 @@ describe("evieClient pending-Domain re-register", () => {
 			url: `ws://localhost:${evie.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",
-			domainId: "home",
+			domainId: "alice",
 			pendingReregisterDelayMs: 25,
 		});
 
@@ -155,7 +155,7 @@ describe("evieClient pending-Domain re-register", () => {
 			url: `ws://localhost:${evie.port}`,
 			headers: { Authorization: "Bearer test-token" },
 			gatewayId: "test-host",
-			domainId: "home",
+			domainId: "alice",
 			pendingReregisterDelayMs: 5_000,
 		});
 

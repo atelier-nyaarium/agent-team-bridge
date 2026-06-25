@@ -32,7 +32,8 @@ export interface EvieClientConfig {
 	// can be routed to this Gateway.
 	gatewayId: string;
 	// This Gateway's Domain id (multi-tenant evie), sent on register so the Router keys
-	// the connection by (domainId, gatewayId). "home" for a single-tenant Gateway.
+	// the connection by (domainId, gatewayId). Always set - resolveLocalDomainId requires
+	// FEDERATION_DOMAIN_ID, so there is no single-tenant default.
 	domainId: string;
 	onToolRegistry?: (tools: EvieToolSchema[]) => void;
 	// The relay pump owns full ConsoleRelayFrameSchema validation; the envelope
@@ -54,16 +55,16 @@ export interface EvieClientConfig {
 	// Travels as unknown; the consumer validates with DomainSnapshotSchema.
 	onDomainSync?: (domain: unknown) => void;
 	// This Gateway's own Domain lifecycle metadata from the register reply: its status
-	// ("pending"/"rooted"/"unrooted") and the operator/network display name. The Gateway
+	// ("pending"/"rooted"/"unrooted") and the network display name. The Gateway
 	// surfaces these to its console (the register reply's domainStatus + the discovery
-	// roster's operatorName). Re-applied on every reconnect, so a rename made elsewhere
+	// roster's displayName). Re-applied on every reconnect, so a rename made elsewhere
 	// reaches the Gateway at its next register. Fields absent against a pre-feature evie.
-	onDomainMeta?: (meta: { domainStatus?: string; operatorName?: string | null }) => void;
-	// A live operator-name refresh from a domain_update push (the owner renamed THIS Domain's
-	// network). Refreshes the held operatorName without a reconnect, so teams()/discover reflect
-	// the rename immediately. The allowlist the domain_update's snapshot feeds drops operatorName,
+	onDomainMeta?: (meta: { domainStatus?: string; displayName?: string | null; isAdminDomain?: boolean }) => void;
+	// A live display-name refresh from a domain_update push (the owner renamed THIS Domain's
+	// network). Refreshes the held displayName without a reconnect, so teams()/discover reflect
+	// the rename immediately. The allowlist the domain_update's snapshot feeds drops displayName,
 	// so this is the only path that updates it between registers. Absent against a pre-feature evie.
-	onDomainUpdate?: (meta: { operatorName?: string | null }) => void;
+	onDomainUpdate?: (meta: { displayName?: string | null }) => void;
 	onDisconnect?: () => void;
 	// Override the pending-Domain re-register cadence. Production leaves it unset (the
 	// PENDING_REREGISTER_DELAY_MS default); tests pass a small value to exercise the retry
@@ -85,7 +86,7 @@ const RECONNECT_DELAY_MS = 5_000;
 const TOOL_CALL_TIMEOUT_MS = 120_000;
 // When evie refuses gateway_register because the Domain is still PENDING (staged but not
 // yet rooted), re-register on this cadence. A fresh provision-console.sh --setup stages a
-// pending home Domain and restarts evie BEFORE the operator's phone first-roots it, so the
+// pending home Domain and restarts evie BEFORE the admin's phone first-roots it, so the
 // register the open-handler fires gets a pending refusal; without this retry the Gateway
 // would sit unregistered into its own home Domain forever (the heartbeat keeps the WS warm,
 // so it never reconnects to re-register). The cap bounds the spin so a genuinely stuck setup
@@ -181,10 +182,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					// evie pushed an updated keyring (an owner admit/revoke). Apply it
 					// immediately so a revocation bites without waiting for the next register.
 					config.onDomainSync?.(frame.domain);
-					// A rename rides the same push: refresh the held operatorName so the owner's
+					// A rename rides the same push: refresh the held displayName so the owner's
 					// OWN Gateway reflects it in teams()/discover at once (applySnapshot drops it).
 					// Only sent by a federation-aware evie, only to the renamed Domain's gateways.
-					if (frame.operatorName !== undefined) config.onDomainUpdate?.({ operatorName: frame.operatorName });
+					if (frame.displayName !== undefined) config.onDomainUpdate?.({ displayName: frame.displayName });
 					break;
 				}
 				case "tool_result": {
@@ -268,7 +269,8 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 						gateways?: string[];
 						domain?: unknown;
 						domainStatus?: string;
-						operatorName?: string | null;
+						displayName?: string | null;
+						isAdminDomain?: boolean;
 				  }
 				| undefined;
 			if (res.error) {
@@ -277,7 +279,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			}
 			if (r?.ok === false) {
 				// A PENDING-tagged refusal is transient: the Domain is staged but not yet rooted
-				// (a fresh setup roots it once the operator's phone scans the QR). Retry on a
+				// (a fresh setup roots it once the admin's phone scans the QR). Retry on a
 				// bounded cadence so registration lands as soon as the root arrives. Any other
 				// ok:false is terminal (revoked / wrong-domain / version) - log only, no retry,
 				// so a real denial is not masked behind an endless re-register loop.
@@ -290,10 +292,14 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
 			console.log(`[evie-client] registered as Gateway "${config.gatewayId}"${peers}`);
 			if (r?.domain) config.onDomainSync?.(r.domain);
-			// Surface the Gateway's own Domain status + operator name to the console
-			// register reply / discovery roster. Sent only by a federation-aware evie.
-			if (r?.domainStatus !== undefined || r?.operatorName !== undefined) {
-				config.onDomainMeta?.({ domainStatus: r.domainStatus, operatorName: r.operatorName });
+			// Surface the Gateway's own Domain status + profile name + admin-Domain flag to the
+			// console register reply / discovery roster. Sent only by a federation-aware evie.
+			if (r?.domainStatus !== undefined || r?.displayName !== undefined || r?.isAdminDomain !== undefined) {
+				config.onDomainMeta?.({
+					domainStatus: r.domainStatus,
+					displayName: r.displayName,
+					isAdminDomain: r.isAdminDomain,
+				});
 			}
 		});
 	}

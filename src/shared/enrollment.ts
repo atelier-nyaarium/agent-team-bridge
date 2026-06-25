@@ -1,4 +1,4 @@
-// SYNC-HASH: 64c143dc9a07c06414046eaf2d2d9bc5
+// SYNC-HASH: d4885b4fb319977f9286a7048393c512
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -56,7 +56,7 @@ export const EnrollmentPayloadSchema = z
 			signPub: z.string().min(1),
 			boxPub: z.string().min(1),
 			// Where the Console delivers the sealed bootstrap bundle. Present when the
-			// Gateway opened a LAN listener; absent when the operator chose manual paste.
+			// Gateway opened a LAN listener; absent when the admin chose manual paste.
 			lan: z.object({ host: z.string().min(1), port: z.number().int().positive() }).optional(),
 			// One-time nonce gating that listener; the Console echoes it inside the sealed
 			// bundle so a stale or cross-window delivery is rejected.
@@ -139,20 +139,20 @@ export const SignedXDomainLinkRevocationSchema = z
 	.meta({ id: "SignedXDomainLinkRevocation" });
 
 ////////////////////////////////
-//  Friend cross-Domain onboarding (pending tenant + first-root + operator name)
+//  Friend cross-Domain onboarding (pending tenant + first-root + display name)
 //
-//  The operator pre-stages a friend's Domain as a PENDING tenant (a domainId + an
-//  operatorName display label, NO owner root), mints a one-time invite QR carrying
+//  The admin pre-stages a friend's Domain as a PENDING tenant (a domainId + an
+//  displayName display label, NO owner root), mints a one-time invite QR carrying
 //  the pending-Domain transport creds, and the friend's app FIRST-ROOTS the Domain at
 //  its silently-generated owner key on first connect. The four signing artifacts below
 //  ride the existing app-token-gated bridge to evie:
 //
-//  - provision_tenant / remove_tenant: OPERATOR-signed (the operator's owner key). evie
+//  - provision_tenant / remove_tenant: ADMIN-signed (the admin's owner key). evie
 //    creates / drops the pending tenant.
 //  - first_root: SELF-signed by the friend's fresh owner key (no admission exists yet),
 //    carrying the one-time QR nonce; evie roots the pending Domain at it, idempotent on
 //    the same key, refusing a re-root at a different key.
-//  - set_operator_name: OWNER-signed (the rooted owner of the Domain); evie CAS-merges
+//  - set_display_name: OWNER-signed (the rooted owner of the Domain); evie CAS-merges
 //    the rename onto the Domain record and pushes it to the Domain's own gateways (so the
 //    owner's gateway reflects it at once); linked Peers see it on their next discovery refresh.
 //
@@ -163,25 +163,25 @@ export const SignedXDomainLinkRevocationSchema = z
 //  and reproduces byte-for-byte on switchboard, evie, and Android. These ops ENFORCE that
 //  claim at the schema boundary: every key field is base64-charset (`ownerSignPub`,
 //  `ownerBoxPub`, `nonce`, the `signature`), slug (`domainId`), or decimal (`issuedAt`),
-//  and `operatorName` is constrained newline-free, so no field can carry a newline that
-//  would make the encoding ambiguous against the next. `operatorName` is a free-text
+//  and `displayName` is constrained newline-free, so no field can carry a newline that
+//  would make the encoding ambiguous against the next. `displayName` is a free-text
 //  display label bounded only in length and the no-newline rule; under the cooperative /
 //  trusted-friends threat model (no attacker, names are shared team-style) it carries no
-//  trust weight, so its content cannot forge a different operator/owner identity, only
-//  re-spell the label the same operator chose. evie's first_root / provision handlers MUST
+//  trust weight, so its content cannot forge a different admin/owner identity, only
+//  re-spell the label the same admin chose. evie's first_root / provision handlers MUST
 //  read each value from the PARSED object, never by re-splitting the signed preimage. Do
 //  NOT sign raw JSON (key order is not canonical).
 
-/** A pending (rootless) tenant the operator pre-stages: a domainId + an operatorName
+/** A pending (rootless) tenant the admin pre-stages: a domainId + an displayName
  * display label, the one-time invite nonce (issuedAt + ttlMs server-checked at evie),
  * and `rooted` flipped true once a friend's first_root spends the nonce. */
 export const PendingTenantSchema = z
 	.object({
 		// The opaque Domain id (slug; never shown to the human - pure plumbing).
 		domainId: slugField(),
-		// The friendly NETWORK display name (one per owner/Domain). Free text the operator
+		// The friendly NETWORK display name (one per owner/Domain). Free text the admin
 		// pre-sets and the friend edits from their profile once in.
-		operatorName: displayField(128),
+		displayName: displayField(128),
 		// The one-time invite nonce (base64), spent on the first successful first-root.
 		nonce: b64Field(),
 		// When the invite was minted (epoch ms); the TTL is measured from this.
@@ -193,12 +193,12 @@ export const PendingTenantSchema = z
 	})
 	.meta({ id: "PendingTenant" });
 
-/** The operator's request to create a pending tenant (operator-signed). The signing bytes
- * bind the operator's own fingerprint, so evie can pin the request to the operator's key. */
+/** The admin's request to create a pending tenant (admin-signed). The signing bytes
+ * bind the admin's own fingerprint, so evie can pin the request to the admin's key. */
 export const ProvisionTenantSchema = z
 	.object({
 		domainId: slugField(),
-		operatorName: displayField(128),
+		displayName: displayField(128),
 		issuedAt: z.number().int().nonnegative(),
 		nonce: b64Field(),
 	})
@@ -207,16 +207,16 @@ export const ProvisionTenantSchema = z
 export const SignedProvisionTenantSchema = z
 	.object({
 		provision: ProvisionTenantSchema,
-		// The operator's root signing public key (base64). evie checks it against the
-		// operator's known key, never trusting this field alone; the signing bytes carry
+		// The admin's root signing public key (base64). evie checks it against the
+		// admin's known key, never trusting this field alone; the signing bytes carry
 		// its fingerprint.
-		operatorSignPub: b64Field(),
-		// The operator's Ed25519 signature over provisionTenantSigningBytes (base64).
+		adminSignPub: b64Field(),
+		// The admin's Ed25519 signature over provisionTenantSigningBytes (base64).
 		signature: b64Field(),
 	})
 	.meta({ id: "SignedProvisionTenant" });
 
-/** The operator's request to drop a pending tenant (operator-signed). */
+/** The admin's request to drop a pending tenant (admin-signed). */
 export const RemoveTenantSchema = z
 	.object({
 		domainId: slugField(),
@@ -228,7 +228,7 @@ export const RemoveTenantSchema = z
 export const SignedRemoveTenantSchema = z
 	.object({
 		removal: RemoveTenantSchema,
-		operatorSignPub: b64Field(),
+		adminSignPub: b64Field(),
 		signature: b64Field(),
 	})
 	.meta({ id: "SignedRemoveTenant" });
@@ -259,31 +259,31 @@ export const SignedFirstRootSchema = z
 	})
 	.meta({ id: "SignedFirstRoot" });
 
-/** The owner's request to rename their Domain's operator name (owner-signed). evie CAS-merges
+/** The owner's request to rename their Domain's display name (owner-signed). evie CAS-merges
  * it and pushes a domain_update to the renamed Domain's OWN gateways, so the rename takes effect
  * on the owner's own gateway immediately (its discover output reflects the new name without a
  * reconnect). Linked Peers pick the rename up lazily, on their next discovery refresh (which
- * stamps each session with the owner's current operatorName). */
-export const SetOperatorNameSchema = z
+ * stamps each session with the owner's current displayName). */
+export const SetDisplayNameSchema = z
 	.object({
 		domainId: slugField(),
-		operatorName: displayField(128),
+		displayName: displayField(128),
 		issuedAt: z.number().int().nonnegative(),
 		nonce: b64Field(),
 	})
-	.meta({ id: "SetOperatorName" });
+	.meta({ id: "SetDisplayName" });
 
-export const SignedSetOperatorNameSchema = z
+export const SignedSetDisplayNameSchema = z
 	.object({
-		rename: SetOperatorNameSchema,
+		rename: SetDisplayNameSchema,
 		// The rooted owner's root signing public key (base64). evie checks it against the
 		// Domain's rooted owner key, never trusting this field alone; the signing bytes carry
 		// its fingerprint.
 		ownerSignPub: b64Field(),
-		// The owner's Ed25519 signature over setOperatorNameSigningBytes (base64).
+		// The owner's Ed25519 signature over setDisplayNameSigningBytes (base64).
 		signature: b64Field(),
 	})
-	.meta({ id: "SignedSetOperatorName" });
+	.meta({ id: "SignedSetDisplayName" });
 
 /** The owner device's enrollment requests to evie (NOT relayed to a Gateway - evie
  * is the Domain root). All are self-authenticating: `enroll_redeem` is authorized by
@@ -302,15 +302,15 @@ export const EnrollOpSchema = z
 		z.object({ kind: z.literal("submit_revocation"), revocation: SignedRevocationSchema }),
 		z.object({ kind: z.literal("submit_xdomain_link"), edge: SignedXDomainLinkEdgeSchema }),
 		z.object({ kind: z.literal("revoke_xdomain_link"), revocation: SignedXDomainLinkRevocationSchema }),
-		// Friend cross-Domain onboarding: the operator pre-stages a pending tenant
+		// Friend cross-Domain onboarding: the admin pre-stages a pending tenant
 		// (provision_tenant) or drops it (remove_tenant), and the rooted owner renames the
-		// network (set_operator_name). The friend's first_root is NOT on this enroll surface
+		// network (set_display_name). The friend's first_root is NOT on this enroll surface
 		// either: a pending Domain has no gateway, so the friend's app POSTs the SignedFirstRoot
 		// DIRECTLY to evie's console-bridge firstRoot intake (it carries no admission to
 		// authenticate here pre-root, and the one-time invite nonce is its authorization).
 		z.object({ kind: z.literal("provision_tenant"), provision: SignedProvisionTenantSchema }),
 		z.object({ kind: z.literal("remove_tenant"), removal: SignedRemoveTenantSchema }),
-		z.object({ kind: z.literal("set_operator_name"), rename: SignedSetOperatorNameSchema }),
+		z.object({ kind: z.literal("set_display_name"), rename: SignedSetDisplayNameSchema }),
 	])
 	.meta({ id: "EnrollOp" });
 
@@ -418,7 +418,7 @@ export const RosterRequestSchema = z
 export const RosterMemberSchema = z
 	.object({
 		ownerSignPub: b64Field(),
-		operatorName: displayField(128),
+		displayName: displayField(128),
 		// True iff this member's Domain has a live gateway connection at evie right now.
 		online: z.boolean(),
 	})
@@ -530,8 +530,8 @@ export type RemoveTenant = z.infer<typeof RemoveTenantSchema>;
 export type SignedRemoveTenant = z.infer<typeof SignedRemoveTenantSchema>;
 export type FirstRoot = z.infer<typeof FirstRootSchema>;
 export type SignedFirstRoot = z.infer<typeof SignedFirstRootSchema>;
-export type SetOperatorName = z.infer<typeof SetOperatorNameSchema>;
-export type SignedSetOperatorName = z.infer<typeof SignedSetOperatorNameSchema>;
+export type SetDisplayName = z.infer<typeof SetDisplayNameSchema>;
+export type SignedSetDisplayName = z.infer<typeof SignedSetDisplayNameSchema>;
 export type XDomainLinkEdge = z.infer<typeof XDomainLinkEdgeSchema>;
 export type SignedXDomainLinkEdge = z.infer<typeof SignedXDomainLinkEdgeSchema>;
 export type XDomainLinkRevocation = z.infer<typeof XDomainLinkRevocationSchema>;
@@ -672,16 +672,16 @@ export function verifyXDomainLinkRevocation(s: SignedXDomainLinkRevocation, expe
 //  version prefixes keep the four artifacts non-interchangeable (a captured signature for
 //  one can never replay as another). Do NOT sign raw JSON.
 
-/** PROVISION_TENANT_V1 signing bytes (operator-signed; NO ownerSignPub - the tenant is
- * pending / rootless). `operatorFingerprint` is the fingerprint of the operator key in
+/** PROVISION_TENANT_V1 signing bytes (admin-signed; NO ownerSignPub - the tenant is
+ * pending / rootless). `adminFingerprint` is the fingerprint of the admin key in
  * the signed wrapper. */
-export function provisionTenantSigningBytes(p: ProvisionTenant, operatorSignPubB64: string): Buffer {
+export function provisionTenantSigningBytes(p: ProvisionTenant, adminSignPubB64: string): Buffer {
 	return Buffer.from(
 		[
 			"PROVISION_TENANT_V1",
-			fingerprint(operatorSignPubB64),
+			fingerprint(adminSignPubB64),
 			p.domainId,
-			p.operatorName,
+			p.displayName,
 			String(p.issuedAt),
 			p.nonce,
 		].join("\n"),
@@ -689,59 +689,55 @@ export function provisionTenantSigningBytes(p: ProvisionTenant, operatorSignPubB
 	);
 }
 
-/** Operator-sign a pending-tenant provision. */
+/** Admin-sign a pending-tenant provision. */
 export function signProvisionTenant(
 	provision: ProvisionTenant,
-	operatorSignPrivB64: string,
-	operatorSignPubB64: string,
+	adminSignPrivB64: string,
+	adminSignPubB64: string,
 ): SignedProvisionTenant {
 	return {
 		provision,
-		operatorSignPub: operatorSignPubB64,
-		signature: sign(provisionTenantSigningBytes(provision, operatorSignPubB64), operatorSignPrivB64),
+		adminSignPub: adminSignPubB64,
+		signature: sign(provisionTenantSigningBytes(provision, adminSignPubB64), adminSignPrivB64),
 	};
 }
 
-/** True if the provision verifies under the EXPECTED operator key. The claimed
- * operatorSignPub must equal the expected key AND the signature must check. */
-export function verifyProvisionTenant(s: SignedProvisionTenant, expectedOperatorSignPubB64: string): boolean {
-	if (s.operatorSignPub !== expectedOperatorSignPubB64) return false;
+/** True if the provision verifies under the EXPECTED admin key. The claimed
+ * adminSignPub must equal the expected key AND the signature must check. */
+export function verifyProvisionTenant(s: SignedProvisionTenant, expectedAdminSignPubB64: string): boolean {
+	if (s.adminSignPub !== expectedAdminSignPubB64) return false;
 	return verify(
-		provisionTenantSigningBytes(s.provision, expectedOperatorSignPubB64),
+		provisionTenantSigningBytes(s.provision, expectedAdminSignPubB64),
 		s.signature,
-		expectedOperatorSignPubB64,
+		expectedAdminSignPubB64,
 	);
 }
 
-/** REMOVE_TENANT_V1 signing bytes (operator-signed). */
-export function removeTenantSigningBytes(r: RemoveTenant, operatorSignPubB64: string): Buffer {
+/** REMOVE_TENANT_V1 signing bytes (admin-signed). */
+export function removeTenantSigningBytes(r: RemoveTenant, adminSignPubB64: string): Buffer {
 	return Buffer.from(
-		["REMOVE_TENANT_V1", fingerprint(operatorSignPubB64), r.domainId, String(r.issuedAt), r.nonce].join("\n"),
+		["REMOVE_TENANT_V1", fingerprint(adminSignPubB64), r.domainId, String(r.issuedAt), r.nonce].join("\n"),
 		"utf8",
 	);
 }
 
-/** Operator-sign a pending-tenant removal. */
+/** Admin-sign a pending-tenant removal. */
 export function signRemoveTenant(
 	removal: RemoveTenant,
-	operatorSignPrivB64: string,
-	operatorSignPubB64: string,
+	adminSignPrivB64: string,
+	adminSignPubB64: string,
 ): SignedRemoveTenant {
 	return {
 		removal,
-		operatorSignPub: operatorSignPubB64,
-		signature: sign(removeTenantSigningBytes(removal, operatorSignPubB64), operatorSignPrivB64),
+		adminSignPub: adminSignPubB64,
+		signature: sign(removeTenantSigningBytes(removal, adminSignPubB64), adminSignPrivB64),
 	};
 }
 
-/** True if the removal verifies under the EXPECTED operator key. */
-export function verifyRemoveTenant(s: SignedRemoveTenant, expectedOperatorSignPubB64: string): boolean {
-	if (s.operatorSignPub !== expectedOperatorSignPubB64) return false;
-	return verify(
-		removeTenantSigningBytes(s.removal, expectedOperatorSignPubB64),
-		s.signature,
-		expectedOperatorSignPubB64,
-	);
+/** True if the removal verifies under the EXPECTED admin key. */
+export function verifyRemoveTenant(s: SignedRemoveTenant, expectedAdminSignPubB64: string): boolean {
+	if (s.adminSignPub !== expectedAdminSignPubB64) return false;
+	return verify(removeTenantSigningBytes(s.removal, expectedAdminSignPubB64), s.signature, expectedAdminSignPubB64);
 }
 
 /** FIRST_ROOT_V1 signing bytes (SELF-signed by the fresh owner key; `ownerSignPub` is the
@@ -765,15 +761,15 @@ export function verifyFirstRoot(s: SignedFirstRoot): boolean {
 	return verify(firstRootSigningBytes(s.firstRoot), s.signature, s.firstRoot.ownerSignPub);
 }
 
-/** SET_OPERATOR_NAME_V1 signing bytes (owner-signed). `ownerFingerprint` is the
+/** SET_DISPLAY_NAME_V1 signing bytes (owner-signed). `ownerFingerprint` is the
  * fingerprint of the rooted owner key in the signed wrapper. */
-export function setOperatorNameSigningBytes(r: SetOperatorName, ownerSignPubB64: string): Buffer {
+export function setDisplayNameSigningBytes(r: SetDisplayName, ownerSignPubB64: string): Buffer {
 	return Buffer.from(
 		[
-			"SET_OPERATOR_NAME_V1",
+			"SET_DISPLAY_NAME_V1",
 			fingerprint(ownerSignPubB64),
 			r.domainId,
-			r.operatorName,
+			r.displayName,
 			String(r.issuedAt),
 			r.nonce,
 		].join("\n"),
@@ -781,23 +777,23 @@ export function setOperatorNameSigningBytes(r: SetOperatorName, ownerSignPubB64:
 	);
 }
 
-/** Owner-sign an operator-name rename (the owner device holds the signing key). */
-export function signSetOperatorName(
-	rename: SetOperatorName,
+/** Owner-sign an display-name rename (the owner device holds the signing key). */
+export function signSetDisplayName(
+	rename: SetDisplayName,
 	ownerSignPrivB64: string,
 	ownerSignPubB64: string,
-): SignedSetOperatorName {
+): SignedSetDisplayName {
 	return {
 		rename,
 		ownerSignPub: ownerSignPubB64,
-		signature: sign(setOperatorNameSigningBytes(rename, ownerSignPubB64), ownerSignPrivB64),
+		signature: sign(setDisplayNameSigningBytes(rename, ownerSignPubB64), ownerSignPrivB64),
 	};
 }
 
 /** True if the rename verifies under the EXPECTED owner key (the Domain's rooted owner). */
-export function verifySetOperatorName(s: SignedSetOperatorName, expectedOwnerSignPubB64: string): boolean {
+export function verifySetDisplayName(s: SignedSetDisplayName, expectedOwnerSignPubB64: string): boolean {
 	if (s.ownerSignPub !== expectedOwnerSignPubB64) return false;
-	return verify(setOperatorNameSigningBytes(s.rename, expectedOwnerSignPubB64), s.signature, expectedOwnerSignPubB64);
+	return verify(setDisplayNameSigningBytes(s.rename, expectedOwnerSignPubB64), s.signature, expectedOwnerSignPubB64);
 }
 
 ////////////////////////////////

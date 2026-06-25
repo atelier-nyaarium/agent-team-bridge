@@ -70,12 +70,15 @@ fun UsersScreen(
 	onAddGateway: () -> Unit,
 ) {
 	val scope = rememberCoroutineScope()
-	// Only the home operator (the admin) enrolls users + hosts guest networks; a guest sees neither.
-	val isAdmin = remember { repo.isHomeOperator() }
+	// Only the home admin (the admin) enrolls users + hosts guest networks; a guest sees neither.
+	val isAdmin = remember { repo.isAdmin() }
 	var menuOpen by remember { mutableStateOf(false) }
 	// One-shot fetch on entry. Null = loading; a Result carries the rows or evie's opaque reason.
 	var outcome by remember { mutableStateOf<Result<List<RosterMember>>?>(null) }
-	val myOwner = remember { repo.ownerSignPub() }
+	// Non-throwing read: a corrupt owner key degrades to empty (no row ever matches it) rather
+	// than crashing the roster. The connect path surfaces a corrupt key as a terminal cause.
+	val myOwnerKeys = remember { repo.ownerKeysForDisplay() }
+	val myOwner = myOwnerKeys?.signPub.orEmpty()
 	// Bumped on an untrust/trust so the per-row Trusted badge re-reads the friend graph.
 	var trustVersion by remember { mutableIntStateOf(0) }
 	// The arms aimed at me (initiatorOwnerSignPub -> rendezvousId), polled so their rows HIGHLIGHT
@@ -85,8 +88,8 @@ fun UsersScreen(
 	var activeTrust by remember { mutableStateOf<TrustLaunch?>(null) }
 	// The Sharing surface, opened from a row's "Manage shares"; overlays the roster.
 	var showSharing by remember { mutableStateOf(false) }
-	val myName = remember { repo.operatorDisplayName() }
-	val myFingerprint = remember { repo.ownerSas().replace("-", " · ") }
+	val myName = remember { repo.displayName() }
+	val myFingerprint = myOwnerKeys?.sas?.replace("-", " · ").orEmpty()
 
 	// owner key -> how many of my sessions that trusted person can reach (the "N shared sessions" line).
 	var sharedCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
@@ -200,7 +203,7 @@ fun UsersScreen(
 
 				else -> {
 					// PEOPLE excludes my own row (the YOU section above shows me), sorted by name.
-					val members = result.getOrDefault(emptyList()).filter { it.ownerSignPub != myOwner }.sortedBy { it.operatorName }
+					val members = result.getOrDefault(emptyList()).filter { it.ownerSignPub != myOwner }.sortedBy { it.displayName }
 					if (members.isEmpty()) {
 						Text("No one else here yet.", style = MaterialTheme.typography.bodyMedium)
 					}
@@ -217,9 +220,9 @@ fun UsersScreen(
 								{
 									// Respond to an arm aimed at me (join its rendezvous), or start a fresh one.
 									activeTrust = if (armedRendezvous != null) {
-										TrustLaunch(armedRendezvous, TRUST_SIDE_TARGET, m.ownerSignPub, m.operatorName)
+										TrustLaunch(armedRendezvous, TRUST_SIDE_TARGET, m.ownerSignPub, m.displayName)
 									} else {
-										TrustLaunch(repo.mintRendezvousId(), TRUST_SIDE_INITIATOR, m.ownerSignPub, m.operatorName)
+										TrustLaunch(repo.mintRendezvousId(), TRUST_SIDE_INITIATOR, m.ownerSignPub, m.displayName)
 									}
 								}
 							} else {
@@ -276,7 +279,7 @@ private fun UserRow(
 			Column(Modifier.weight(1f)) {
 				Row(verticalAlignment = Alignment.CenterVertically) {
 					Text(
-						member.operatorName.ifEmpty { "(unnamed)" },
+						member.displayName.ifEmpty { "(unnamed)" },
 						style = MaterialTheme.typography.titleMedium,
 					)
 					if (isYou) {

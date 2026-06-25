@@ -15,7 +15,6 @@ import { createConsoleHandler } from "./console/consoleHandler.js";
 import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { startEvieClient } from "./evie/evieClient.js";
-import { startPortForward } from "./evie/portForward.js";
 import { evieWsConnection, loadBootstrapTransport, loadEvieTransport } from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
@@ -179,13 +178,6 @@ export async function startGateway(): Promise<void> {
 	}
 
 	// Start evie-bot bridge if config is present
-	const evieAuthToken = process.env.BRIDGE_TOKEN;
-	const evieKubeconfig = process.env.EVIE_KUBECONFIG || "/app/kubeconfig.yaml";
-	const evieNamespace = process.env.EVIE_NAMESPACE || "evie-bot";
-	const evieDeploymentLabel = process.env.EVIE_DEPLOYMENT_LABEL || "app=evie-bot-app";
-	const eviePort = parseInt(process.env.EVIE_BRIDGE_PORT || "20001", 10);
-	const evieLocalPort = parseInt(process.env.EVIE_LOCAL_PORT || "20001", 10);
-
 	let evieClient: ReturnType<typeof startEvieClient> | null = null;
 	let sealer: Sealer | null = null;
 	let consoleSealer: ConsoleSealer | null = null;
@@ -194,10 +186,10 @@ export async function startGateway(): Promise<void> {
 	let allowlistForConsole: Allowlist | null = null;
 	// This Gateway's own Domain lifecycle metadata, learned from evie's gateway_register
 	// reply (refreshed on every reconnect). The console register reply carries domainStatus
-	// so the app knows to first-root vs just-provision; teams()/discover stamp operatorName
+	// so the app knows to first-root vs just-provision; teams()/discover stamp displayName
 	// so a linked friend Domain shows the owner's self-set network label. Null until the
 	// first register (or against a pre-feature evie that sends neither field).
-	let domainMeta: { domainStatus?: string; operatorName?: string | null } | null = null;
+	let domainMeta: { domainStatus?: string; displayName?: string | null; isAdminDomain?: boolean } | null = null;
 	// The cross-Domain listening-mode handshake coordinator (built in the federation block),
 	// exposed to the console handler so the cross_domain_* ops drive the mutual pairing. The
 	// ONLY writer of the disjoint CrossDomainPeers store.
@@ -215,12 +207,13 @@ export async function startGateway(): Promise<void> {
 		crossDomainPeersForConsole?.all().some((p) => p.friendDomainId === domainId) ?? false;
 
 	// The Gateway persists its federation identity + mirrored allowlist here; an enrolled
-	// Gateway also drops its service-proxy transport.json here. The bridge activates on
-	// either a delivered transport or the legacy BRIDGE_TOKEN.
+	// Gateway also drops its service-proxy transport.json here. The bridge activates when a
+	// transport is delivered (the SA-token-over-service-proxy creds); a gateway with no
+	// transport stays standalone (no mesh).
 	const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
 	const evieTransport = loadEvieTransport(federationDir);
 
-	if (evieAuthToken || evieTransport) {
+	if (evieTransport) {
 		// Load this Gateway's federation identity + mirrored allowlist from its volume,
 		// and build the E2E sealer (cross-Gateway frames are sealed peer-to-peer).
 		// Pin the owner root out-of-band so a malicious/token-holding evie cannot root
@@ -306,31 +299,13 @@ export async function startGateway(): Promise<void> {
 		// into the Domain. Once admitted (mirrored from evie), this falls silent.
 		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitGatewayQr(identity, localGatewayId);
 
-		// Two transports: the service-proxy WS (preferred - creds are delivered by
-		// enrollment, no kubeconfig mount, reaches a home-NAT evie through the apiserver)
-		// or the legacy kubectl port-forward tunnel gated on BRIDGE_TOKEN.
-		let portForward: ReturnType<typeof startPortForward> | null = null;
-		let connection: { url: string; headers: Record<string, string>; tls?: { ca: string } };
-		if (evieTransport) {
-			connection = evieWsConnection(evieTransport);
-			console.log(
-				`[evie] service-proxy transport -> ${evieTransport.apiUrl} (${evieTransport.service}:${evieTransport.port})`,
-			);
-		} else {
-			portForward = startPortForward({
-				kubeconfig: evieKubeconfig,
-				namespace: evieNamespace,
-				deploymentLabel: evieDeploymentLabel,
-				remotePort: eviePort,
-				localPort: evieLocalPort,
-			});
-			// Port-forward needs a moment before the tunnel is ready
-			await new Promise((r) => setTimeout(r, 3_000));
-			connection = {
-				url: `ws://localhost:${evieLocalPort}`,
-				headers: { Authorization: `Bearer ${evieAuthToken}` },
-			};
-		}
+		// The service-proxy WS: creds are delivered by enrollment, no kubeconfig mount, and it
+		// reaches a home-NAT evie through the apiserver. The SA token authenticates to the API
+		// server (consumed there); the cluster CA is pinned for TLS.
+		const connection = evieWsConnection(evieTransport);
+		console.log(
+			`[evie] service-proxy transport -> ${evieTransport.apiUrl} (${evieTransport.service}:${evieTransport.port})`,
+		);
 
 		evieClient = startEvieClient({
 			url: connection.url,
@@ -362,10 +337,10 @@ export async function startGateway(): Promise<void> {
 				domainMeta = meta;
 			},
 			onDomainUpdate: (meta) => {
-				// A live rename of THIS Domain's network: refresh only operatorName, preserving
+				// A live rename of THIS Domain's network: refresh only displayName, preserving
 				// the domainStatus from the last register, so teams()/discover reflect the new
 				// name immediately without a reconnect.
-				domainMeta = { ...(domainMeta ?? {}), operatorName: meta.operatorName };
+				domainMeta = { ...(domainMeta ?? {}), displayName: meta.displayName };
 			},
 			buildRegisterAuth: () => {
 				// Present this Gateway's owner-signed admission + a fresh possession proof,
@@ -391,7 +366,6 @@ export async function startGateway(): Promise<void> {
 
 		process.on("SIGTERM", () => {
 			evieClient?.stop();
-			portForward?.stop();
 		});
 	}
 
@@ -400,7 +374,7 @@ export async function startGateway(): Promise<void> {
 	// target, and accept exactly one sealed bootstrap bundle over POST /enroll.
 	let enrollInstall: ((frame: unknown) => string) | null = null;
 	const enrollNonce = process.env.ENROLL_NONCE;
-	if (enrollNonce && !evieAuthToken && !evieTransport) {
+	if (enrollNonce && !evieTransport) {
 		const enrollAllowlist = new Allowlist(
 			federationDir,
 			process.env.FEDERATION_OWNER_SIGN_PUB,
@@ -466,10 +440,16 @@ export async function startGateway(): Promise<void> {
 		evieClient,
 		sealer,
 		crossDomainPeers: crossDomainPeersForConsole,
-		// This Gateway's own operator/network display name (learned from evie's register
-		// reply), stamped on every local TeamInfo so a linked friend Domain sees the owner's
-		// self-set label over the discovery roster (D1). Null until the first register.
-		operatorName: () => domainMeta?.operatorName ?? null,
+		// This Gateway's own network display name (learned from evie's register reply), stamped
+		// on every local TeamInfo so a linked friend Domain sees the owner's self-set label over
+		// the discovery roster (D1). Null until the first register.
+		displayName: () => domainMeta?.displayName ?? null,
+		// True when this Gateway's own Domain is the admin's (the evie-runner who provisions
+		// others), learned from the register reply. Stamped on the local TeamInfo so the console
+		// shows the admin surfaces only on the admin's own session. Null (not false) until the
+		// first register, mirroring displayName: "unknown" stays unknown rather than asserting
+		// "not admin" (the TeamInfo stamp omits the field for any falsy value either way).
+		isAdminDomain: () => domainMeta?.isAdminDomain ?? null,
 		// Home-first seal-target resolution on the send side: a target gateway the home
 		// allowlist admits seals v1 to home, mirroring the sealer's open-side ordering, so a
 		// home/friend gateway-id collision never routes a home send to the friend.
@@ -726,7 +706,7 @@ export async function startGateway(): Promise<void> {
 							teamName: null,
 							subId: "",
 							conversationId: null,
-							mode: "cli" as const,
+							mode: "channel" as const,
 							missedPings: 0,
 							isStale: false,
 							handshakeConfirmed: false,
@@ -748,7 +728,7 @@ export async function startGateway(): Promise<void> {
 							teamName: null,
 							subId: "",
 							conversationId: null,
-							mode: "cli" as const,
+							mode: "channel" as const,
 							missedPings: 0,
 							isStale: false,
 							handshakeConfirmed: false,

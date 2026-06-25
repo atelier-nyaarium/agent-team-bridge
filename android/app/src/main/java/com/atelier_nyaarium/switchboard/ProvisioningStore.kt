@@ -8,6 +8,34 @@ import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.SyncCursor
 
 /**
+ * The outcome of reading a persisted federation identity. Decode-to-null conflated a MISSING
+ * key (mint a fresh one is correct) with a CORRUPT key (present bytes that did not decode);
+ * minting on the latter silently re-roots the device and orphans the real key, so every
+ * admission/revocation it signed becomes unverifiable. The tri-state forces the caller to mint
+ * only on [Absent] and fail closed on [Corrupt].
+ */
+sealed interface IdentityLoad {
+	data class Loaded(val identity: Crypto.Identity) : IdentityLoad
+
+	/** Bytes are present but did not decode. Never overwrite; surface the error. */
+	data object Corrupt : IdentityLoad
+
+	data object Absent : IdentityLoad
+
+	companion object {
+		/** Classify a stored identity blob into the tri-state: null bytes are [Absent], present
+		 * bytes that decode are [Loaded], present bytes that do not decode are [Corrupt]. Pure (no
+		 * prefs), so the absent-vs-corrupt distinction the fail-closed mint gate rests on is pinned
+		 * by a plain JVM unit test. */
+		fun classify(raw: String?): IdentityLoad {
+			if (raw == null) return Absent
+			return runCatching { wireJson.decodeFromString(Crypto.Identity.serializer(), raw) }
+				.fold({ Loaded(it) }, { Corrupt })
+		}
+	}
+}
+
+/**
  * Encrypted-at-rest storage for the provisioning blob (which holds the SA + app
  * tokens), the biometric-lock flag, and the serialized chat transcript. Falls back
  * to plain prefs only if the device keystore is unavailable.
@@ -187,10 +215,7 @@ class ProvisioningStore(context: Context) {
 		prefs.edit().putString(KEY_IDENTITY, wireJson.encodeToString(Crypto.Identity.serializer(), identity)).apply()
 	}
 
-	fun loadIdentity(): Crypto.Identity? =
-		prefs.getString(KEY_IDENTITY, null)?.let { json ->
-			runCatching { wireJson.decodeFromString(Crypto.Identity.serializer(), json) }.getOrNull()
-		}
+	fun loadIdentity(): IdentityLoad = readIdentity(KEY_IDENTITY)
 
 	/** The Domain owner root keypair. This device is the trust anchor: the owner
 	 * signing key is the sole signer of admissions and revocations, so it is the one
@@ -203,10 +228,12 @@ class ProvisioningStore(context: Context) {
 			.apply()
 	}
 
-	fun loadOwnerIdentity(): Crypto.Identity? =
-		prefs.getString(KEY_OWNER_IDENTITY, null)?.let { json ->
-			runCatching { wireJson.decodeFromString(Crypto.Identity.serializer(), json) }.getOrNull()
-		}
+	fun loadOwnerIdentity(): IdentityLoad = readIdentity(KEY_OWNER_IDENTITY)
+
+	/** Read a persisted identity into the [IdentityLoad] tri-state: absent when no bytes are
+	 * stored, corrupt when the bytes are present but do not decode, loaded otherwise. The
+	 * corrupt case is kept distinct so the caller never mints over an unreadable key. */
+	private fun readIdentity(key: String): IdentityLoad = IdentityLoad.classify(prefs.getString(key, null))
 
 	/** The mirrored Domain snapshot (the keyring) the Console resolves peers against.
 	 * Public material only (admissions + revocations + the owner pubkey), so the
@@ -248,17 +275,17 @@ class ProvisioningStore(context: Context) {
 			prefs.edit().putBoolean(KEY_ENROLL_CEREMONY_DONE, value).apply()
 		}
 
-	/** This owner's own network display name (the operator name), cached locally so the profile
+	/** This owner's own network display name (the display name), cached locally so the profile
 	 * shows it without a round-trip. The authoritative copy lives on the Domain at evie; this is
-	 * refreshed from discovery (the home session's operatorName) and updated on a local rename. */
-	var operatorName: String
-		get() = prefs.getString(KEY_OPERATOR_NAME, "") ?: ""
+	 * refreshed from discovery (the home session's displayName) and updated on a local rename. */
+	var displayName: String
+		get() = prefs.getString(KEY_PROFILE_NAME, "") ?: ""
 		set(value) {
-			prefs.edit().putString(KEY_OPERATOR_NAME, value).apply()
+			prefs.edit().putString(KEY_PROFILE_NAME, value).apply()
 		}
 
 	/** The guest tenants this owner has staged (the "Networks you host" list), as a JSON array of
-	 * {domainId, operatorName, nonce}. Persisted locally so the list + each row's invite QR survive
+	 * {domainId, displayName, nonce}. Persisted locally so the list + each row's invite QR survive
 	 * restarts (evie holds the canonical pending/rooted state, but only the host remembers the label
 	 * + the current invite nonce for re-rendering the QR). */
 	fun saveHostedTenants(json: String) = prefs.edit().putString(KEY_HOSTED_TENANTS, json).apply()
@@ -292,7 +319,7 @@ class ProvisioningStore(context: Context) {
 		const val KEY_CONSOLE_ADMITTED = "federation_console_admitted"
 		const val KEY_FIRST_ROOTED = "federation_first_rooted"
 		const val KEY_ENROLL_CEREMONY_DONE = "federation_enroll_ceremony_done"
-		const val KEY_OPERATOR_NAME = "federation_operator_name"
+		const val KEY_PROFILE_NAME = "federation_profile_name"
 		const val KEY_HOSTED_TENANTS = "federation_hosted_tenants"
 		const val KEY_TRUSTED_OWNERS = "federation_trusted_owners"
 		const val KEY_STTS_URL = "stts_url"
@@ -317,7 +344,7 @@ class ProvisioningStore(context: Context) {
 		 * Clear (a privacy/correctness regression). The partition is pinned by a unit test. */
 		val PROVISIONING_KEYS = listOf(
 			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
-			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_OPERATOR_NAME, KEY_HOSTED_TENANTS,
+			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_PROFILE_NAME, KEY_HOSTED_TENANTS,
 			KEY_TRUSTED_OWNERS,
 			KEY_THREADS, KEY_LABELS, KEY_DRAFTS, KEY_GATEWAY_ID, KEY_SYNC_EPOCH, KEY_SYNC_ACKED,
 			KEY_SYNC_DROPPED,

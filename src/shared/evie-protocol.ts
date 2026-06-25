@@ -1,4 +1,4 @@
-// SYNC-HASH: b7d3053cef0f252fe1e3d924edfbc704
+// SYNC-HASH: 6c543a4f46b5674da2e2995290a539b3
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -93,16 +93,16 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 	// revocation bites a connected Gateway within seconds instead of at its next
 	// register. `domain` stays opaque here (this leaf imports nothing but zod); the
 	// Gateway validates it with DomainSnapshotSchema. `version` is the keyring hash the
-	// Gateway can echo to skip a redundant apply. `operatorName` carries the Domain's
+	// Gateway can echo to skip a redundant apply. `displayName` carries the Domain's
 	// current network display name so a rename pushed this way refreshes the owner's OWN
-	// Gateway immediately (the allowlist the snapshot feeds drops operatorName, so the
+	// Gateway immediately (the allowlist the snapshot feeds drops displayName, so the
 	// rename would otherwise not reach teams()/discover until a reconnect). This frame only
 	// ever reaches the renamed Domain's own gateways, so the name is unambiguously theirs.
 	z.object({
 		type: z.literal("domain_update"),
 		domain: z.unknown(),
 		version: z.string().optional(),
-		operatorName: z.string().nullish(),
+		displayName: z.string().nullish(),
 	}),
 ]);
 
@@ -138,9 +138,9 @@ export const FEDERATION_PROTOCOL_VERSION = 1;
  * a Domain trust anchor. */
 export const GatewayRegisterParamsSchema = z.object({
 	gatewayId: z.string().min(1).max(64),
-	// This Gateway's Domain id (multi-tenant evie). Optional and min(1) when present; an
-	// ABSENT value resolves to the "home" Domain at the consumer, so a pre-multi-tenant
-	// Gateway that sends none lands in "home" unchanged.
+	// This Gateway's Domain id (multi-tenant evie). Optional + min(1) on the wire so a
+	// legacy/malformed frame still parses, but the Router's sanitizeDomainId rejects an
+	// absent or empty id at register time - there is no implicit default Domain.
 	domainId: z.string().min(1).max(64).optional(),
 	protocolVersion: z.number().int().positive(),
 	signPub: z.string().min(1).optional(),
@@ -163,8 +163,9 @@ export const GatewayRelayRouteSchema = z.object({
 	// The sender's Domain id. The Router stamps it from the SENDER connection's
 	// registered Domain (content-blind) so the destination resolves the source by the
 	// full (domainId, gatewayId) pair - a gateway id is not globally unique across
-	// Domains. Optional and min(1) when present; an ABSENT value resolves to the "home"
-	// Domain at the consumer, so a pre-multi-tenant relay still routes within "home".
+	// Domains. Optional + min(1) on the wire, but the Router stamps it from the sender's
+	// registered Domain id (which sanitizeDomainId already required at register), so a
+	// relayed frame always carries a real src Domain - there is no implicit default.
 	srcDomain: z.string().min(1).max(64).optional(),
 	// Opaque to evie. The destination gateway parses/unseals it.
 	payload: z.unknown(),

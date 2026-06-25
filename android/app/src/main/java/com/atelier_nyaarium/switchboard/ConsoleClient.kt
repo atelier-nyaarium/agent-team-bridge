@@ -41,7 +41,7 @@ import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
 import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
-import com.atelier_nyaarium.switchboard.proto.SignedSetOperatorName
+import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
 import java.io.ByteArrayInputStream
@@ -92,7 +92,7 @@ data class Provisioning(
 	val gatewaySignPub: String = "",
 	val gatewayBoxPub: String = "",
 	/** Present on a friend INVITE blob: the pending Domain id + the one-time invite nonce the
-	 * app first-roots with. Absent on an ordinary (already-rooted) operator blob, which just
+	 * app first-roots with. Absent on an ordinary (already-rooted) admin blob, which just
 	 * provisions the console. The presence of this field IS what distinguishes the two paths. */
 	val pendingTenant: PendingTenantRef? = null,
 	/** Present on a friend ENROLL invite blob (alongside pendingTenant): the admin's owner keys +
@@ -147,13 +147,16 @@ data class Team(
 	// its Domain. Null for a pre-federation Gateway and for the locally-synthesized ended
 	// session (it has no live wire record).
 	val domainId: String? = null,
-	// The owning Domain's network display name (its operator name), stamped by the gateway's
-	// discover for both home and peer sessions. The Peers list shows this instead of the opaque
-	// domainId. Null for a pre-feature gateway or a Domain that has not set a name yet.
-	val operatorName: String? = null,
+	// The owning Domain's network display name, stamped by the gateway's discover for both home
+	// and peer sessions. The Peers list shows this instead of the opaque domainId. Null for a
+	// pre-feature gateway or a Domain that has not set a name yet.
+	val displayName: String? = null,
+	// True when the owning Domain is the admin's own (the evie-runner who provisions others), from
+	// the register reply via the gateway. The local session's value gates the admin surfaces.
+	val isAdminDomain: Boolean = false,
 ) {
 	/** Short local name shown in the UI: the tail after the gateway qualifier. */
-	val displayName: String get() = TeamAddress.parse(name, "").name
+	val shortName: String get() = TeamAddress.parse(name, "").name
 
 	/** Owning Gateway id (the segment before the qualifier), or "" for a bare name. */
 	val gatewayId: String get() = TeamAddress.parse(name, "").gatewayId
@@ -206,7 +209,7 @@ private data class TrustHandshakeEnvelope(val trustHandshake: TrustHandshakeOp)
 private data class TrustPendingEnvelope(val trustPending: TrustPendingRequest)
 
 /** evie's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the
- * minted one-time invite `nonce` (the operator's app builds the friend's QR from it). The wire
+ * minted one-time invite `nonce` (the admin's app builds the friend's QR from it). The wire
  * EnrollResult schema omits `nonce`, so this is a local richer decode (ignoreUnknownKeys keeps
  * it forward-compatible). */
 @Serializable
@@ -260,11 +263,16 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
-	/** Resolve the console identity from the store. Throws a clear error when the
-	 * identity is absent (device not provisioned), so callers see a re-provision hint
-	 * rather than a NullPointerException. Wording avoids the retired in-app QR flow. */
+	/** Resolve the console identity from the store. An ABSENT identity means the device is not
+	 * provisioned (re-provision hint); a CORRUPT one means present-but-unreadable bytes, which a
+	 * re-provision will not fix without a restore - so the two surface DISTINCT terminal causes
+	 * instead of one ambiguous "not enrolled". Never mints here: enrollment owns minting. */
 	private fun requireConsoleIdentity(): Crypto.Identity =
-		store.loadIdentity() ?: error("This device is not enrolled. Re-run provision-console.sh and re-import the setup blob.")
+		when (val load = store.loadIdentity()) {
+			is IdentityLoad.Loaded -> load.identity
+			IdentityLoad.Absent -> error("This device is not enrolled. Re-run provision-console.sh and re-import the setup blob.")
+			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-console.sh")
+		}
 
 	/** Resolve a Gateway's keys from the owner-rooted keyring, verifying its admission
 	 * before sealing to it. This is the device side of symmetric trust: the Console
@@ -566,8 +574,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
-	/** Submit an operator-signed provision_tenant enroll op and decode the minted one-time invite
-	 * nonce evie returns (the operator's app builds the friend's QR from it). Same evie-direct path
+	/** Submit an admin-signed provision_tenant enroll op and decode the minted one-time invite
+	 * nonce evie returns (the admin's app builds the friend's QR from it). Same evie-direct path
 	 * as enroll(); the only difference is the richer result decode (the wire EnrollResult omits the
 	 * nonce, so this reads it directly). */
 	fun provisionTenant(signed: SignedProvisionTenant): ProvisionTenantResult {
@@ -632,7 +640,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 				kind = it.kind ?: "loose",
 				version = it.version,
 				domainId = it.domainId,
-				operatorName = it.operatorName,
+				displayName = it.displayName,
+				isAdminDomain = it.isAdminDomain ?: false,
 			)
 		}
 	}

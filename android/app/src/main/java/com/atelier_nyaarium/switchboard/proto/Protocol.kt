@@ -50,7 +50,8 @@ data class TeamInfo(
 	val team: String,
 	val gatewayId: String? = null,
 	val domainId: String? = null,
-	val operatorName: String? = null,
+	val displayName: String? = null,
+	val isAdminDomain: Boolean? = null,
 	val status: String,
 	val mode: String? = null,
 	val kind: String? = null,
@@ -162,6 +163,19 @@ sealed class ConsoleOp {
 		val target: String,
 		val text: String? = null,
 		val key: String? = null,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("create_session")
+	data class CreateSession(
+		val target: String,
+		val sessionName: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("reload_plugins")
+	data class ReloadPlugins(
+		val target: String,
 	) : ConsoleOp()
 
 	@Serializable
@@ -421,9 +435,9 @@ sealed class EnrollOp {
 	) : EnrollOp()
 
 	@Serializable
-	@SerialName("set_operator_name")
-	data class SetOperatorName(
-		val rename: SignedSetOperatorName,
+	@SerialName("set_display_name")
+	data class SetDisplayName(
+		val rename: SignedSetDisplayName,
 	) : EnrollOp()
 }
 
@@ -472,7 +486,7 @@ data class EnrollHandshakeResult(
 @Serializable
 data class PendingTenant(
 	val domainId: String,
-	val operatorName: String,
+	val displayName: String,
 	val nonce: String,
 	val issuedAt: Long,
 	val ttlMs: Long,
@@ -484,7 +498,7 @@ data class GatewayTransport(
 	val apiUrl: String,
 	val saToken: String,
 	val caPem: String,
-	val appToken: String,
+	val appToken: String? = null,
 )
 
 @Serializable
@@ -630,12 +644,22 @@ data class DomainSnapshot(
 	val ownerSignPub: String,
 	val admissions: List<SignedAdmission>,
 	val revocations: List<SignedRevocation>,
-	val operatorName: String? = null,
+	val displayName: String? = null,
 )
 
 @Serializable
 data class ConsoleGatewayTransportResult(
 	val transport: GatewayTransport,
+)
+
+@Serializable
+data class ConsoleCreateSessionResult(
+	val created: Boolean,
+)
+
+@Serializable
+data class ConsoleReloadPluginsResult(
+	val initiated: Boolean,
 )
 
 @Serializable
@@ -797,14 +821,14 @@ data class XDomainLinkRevocation(
 @Serializable
 data class SignedProvisionTenant(
 	val provision: ProvisionTenant,
-	val operatorSignPub: String,
+	val adminSignPub: String,
 	val signature: String,
 )
 
 @Serializable
 data class ProvisionTenant(
 	val domainId: String,
-	val operatorName: String,
+	val displayName: String,
 	val issuedAt: Long,
 	val nonce: String,
 )
@@ -812,7 +836,7 @@ data class ProvisionTenant(
 @Serializable
 data class SignedRemoveTenant(
 	val removal: RemoveTenant,
-	val operatorSignPub: String,
+	val adminSignPub: String,
 	val signature: String,
 )
 
@@ -824,16 +848,16 @@ data class RemoveTenant(
 )
 
 @Serializable
-data class SignedSetOperatorName(
-	val rename: SetOperatorName,
+data class SignedSetDisplayName(
+	val rename: SetDisplayName,
 	val ownerSignPub: String,
 	val signature: String,
 )
 
 @Serializable
-data class SetOperatorName(
+data class SetDisplayName(
 	val domainId: String,
-	val operatorName: String,
+	val displayName: String,
 	val issuedAt: Long,
 	val nonce: String,
 )
@@ -857,7 +881,7 @@ data class XDomainUntrust(
 @Serializable
 data class RosterMember(
 	val ownerSignPub: String,
-	val operatorName: String,
+	val displayName: String,
 	val online: Boolean,
 )
 

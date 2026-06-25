@@ -45,14 +45,14 @@ function noPeers(): CrossDomainPeers {
 
 describe("sealer (home v1)", () => {
 	it("round-trips a sealed object between two admitted Gateways", () => {
-		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "home");
-		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "home");
+		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice");
+		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "alice");
 		const env = aSealer.seal("B", { hello: "world", n: 7 });
 		expect(bSealer.open("A", env)).toEqual({ hello: "world", n: 7 });
 	});
 
 	it("emits a v1 sealed body for a home peer (byte shape unchanged: v/src/dst/at/body, no domains)", () => {
-		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "home");
+		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice");
 		const env = aSealer.seal("B", { hello: "world" });
 		// Decrypt directly to inspect the inner wrapper B would parse.
 		const inner = JSON.parse(unseal(env, B.box.priv, A.sign.pub).toString("utf8"));
@@ -64,48 +64,48 @@ describe("sealer (home v1)", () => {
 	});
 
 	it("rejects a replayed envelope (same nonce opened twice)", () => {
-		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "home");
-		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "home");
+		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice");
+		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "alice");
 		const env = aSealer.seal("B", { n: 1 });
 		expect(bSealer.open("A", env)).toEqual({ n: 1 });
 		expect(() => bSealer.open("A", env)).toThrow(/replay/);
 	});
 
 	it("rejects an envelope naming an unadmitted source Gateway", () => {
-		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "home");
-		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "home");
+		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice");
+		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "alice");
 		const env = aSealer.seal("B", { x: 1 });
 		expect(() => bSealer.open("C", env)).toThrow(/not admitted/);
 	});
 
 	it("fails to open a tampered envelope", () => {
-		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "home");
-		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "home");
+		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice");
+		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "alice");
 		const env = aSealer.seal("B", { ok: true });
 		const tampered = { ...env, ciphertext: Buffer.from("evil").toString("base64") };
 		expect(() => bSealer.open("A", tampered)).toThrow();
 	});
 
 	it("rejects a relabeled source (signed-in src must match the claimed srcGateway)", () => {
-		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "home");
-		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "home");
+		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice");
+		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "alice");
 		const env = aSealer.seal("B", { x: 1 });
 		// B is also admitted; opening A's frame under label "B" must not verify/attribute.
 		expect(() => bSealer.open("B", env)).toThrow();
 	});
 
 	it("rejects a frame addressed to a different Gateway", () => {
-		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "home");
+		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice");
 		// A seals to B, but a Gateway that believes itself "C" opens it.
-		const cSealer = createSealer(B, allowlistWithBoth(), "C", noPeers(), "home");
+		const cSealer = createSealer(B, allowlistWithBoth(), "C", noPeers(), "alice");
 		const env = aSealer.seal("B", { x: 1 });
 		expect(() => cSealer.open("A", env)).toThrow(/not addressed to this Gateway/);
 	});
 
 	it("rejects a stale envelope past the freshness window", () => {
 		let clock = 1_000_000;
-		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "home", new ReplayGuard(), () => clock);
-		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "home", new ReplayGuard(), () => clock);
+		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice", new ReplayGuard(), () => clock);
+		const bSealer = createSealer(B, allowlistWithBoth(), "B", noPeers(), "alice", new ReplayGuard(), () => clock);
 		const env = aSealer.seal("B", { x: 1 });
 		clock += 120_001; // past SEAL_MAX_AGE_MS
 		expect(() => bSealer.open("A", env)).toThrow(/stale/);
@@ -250,7 +250,7 @@ describe("sealer (cross-Domain v2)", () => {
 
 	it("a home gateway is unaffected by an empty cross-Domain set (no v2 ever)", () => {
 		// Sanity: with no peers, a home seal stays v1 even though the cross path exists.
-		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "home");
+		const aSealer = createSealer(A, allowlistWithBoth(), "A", noPeers(), "alice");
 		const env = aSealer.seal("B", { ok: true });
 		const inner = JSON.parse(unseal(env, B.box.priv, A.sign.pub).toString("utf8"));
 		expect(inner.v).toBe(1);

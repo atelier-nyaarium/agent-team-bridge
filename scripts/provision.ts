@@ -15,17 +15,17 @@
 // is a fresh-vs-reprovision state machine keyed on whether the home Domain is already rooted in
 // evie's federation Secret:
 //   - FRESH (home absent / unrooted): the trusted host bootstrap (direct Secret access) pre-stages
-//     the home Domain as a PENDING tenant - an operator name the operator types + a one-time invite
-//     nonce, no owner root - and emits a transport-ONLY blob carrying `pendingTenant`. The operator's
+//     the home Domain as a PENDING tenant - an display name the admin types + a one-time invite
+//     nonce, no owner root - and emits a transport-ONLY blob carrying `pendingTenant`. The admin's
 //     phone reads it and first-roots the home Domain at its silent owner key, exactly like a friend.
 //   - RE-PROVISION (home already rooted): skip staging; emit the blob only (no `pendingTenant`),
-//     preserving the existing operator name.
+//     preserving the existing display name.
 // The blob is transport-only (cluster creds; no identity, no Gateway keys). The Console generates its
 // own identity, admits itself, and admits each Gateway afterward. Mirrors start-gateway.sh --setup.
 
 import { randomBytes } from "node:crypto";
 import { $ } from "bun";
-import { DEFAULT_DOMAIN_ID } from "../src/shared/domain-id.js";
+import { sanitizeDomainId } from "../src/shared/domain-id.js";
 import { pendingHomeDomain, readHomeDomain } from "./bootstrap-domain.js";
 import {
 	applySecret,
@@ -35,6 +35,7 @@ import {
 	dx,
 	ensureContainer,
 	envGet,
+	envSet,
 	err,
 	jparse,
 	k,
@@ -65,7 +66,7 @@ const QR_GIF = `${SECRETS_DIR}/console-enrollment-qr.gif`; // optional saved QR 
 const OWNER_ID_FILE = `${SECRETS_DIR}/console-owner-identity.json`; // legacy host-minted owner (the phone holds it now)
 
 // The one-time invite lifetime for a freshly-staged pending home Domain. Matches evie's
-// DEFAULT_INVITE_TTL_MS (~1 day) so the operator has time to scan + connect; evie sweeps an
+// DEFAULT_INVITE_TTL_MS (~1 day) so the admin has time to scan + connect; evie sweeps an
 // unredeemed pending tenant at issuedAt + ttlMs.
 const INVITE_TTL_MS = 86_400_000;
 
@@ -144,30 +145,30 @@ async function readEvieFed(): Promise<string> {
 	return evieFed;
 }
 
-/** Pre-stage the home Domain as a PENDING tenant (fresh setup): an operator name + a one-time
- * invite nonce, NO owner root. The operator's phone first-roots it on scan at its silently-generated
+/** Pre-stage the home Domain as a PENDING tenant (fresh setup): an display name + a one-time
+ * invite nonce, NO owner root. The admin's phone first-roots it on scan at its silently-generated
  * owner key (the same root-on-connect path a friend takes). Writes evie's federation Secret directly
- * (the trusted host bootstrap has Secret access, so it pre-stages the home Domain without an operator
- * signature - unlike the phone's operator-signed provision_tenant for FRIEND tenants). Returns the
+ * (the trusted host bootstrap has Secret access, so it pre-stages the home Domain without an admin
+ * signature - unlike the phone's admin-signed provision_tenant for FRIEND tenants). Returns the
  * minted invite nonce so the caller emits it in the blob's `pendingTenant`. */
-async function stageHomePending(evieFed: string): Promise<{ nonce: string }> {
-	// The operator name (the friendly network label): from the environment for a scripted run, else
-	// prompted (D3). It is the same label the operator would type when hosting a friend.
-	let operatorName = (process.env.SB_OPERATOR_NAME ?? "").trim();
-	if (!operatorName) {
+async function stageHomePending(evieFed: string, homeDomainId: string): Promise<{ nonce: string }> {
+	// The display name (the friendly network label): from the environment for a scripted run, else
+	// prompted (D3). It is the same label the admin would type when hosting a friend.
+	let displayName = (process.env.SB_DISPLAY_NAME ?? "").trim();
+	if (!displayName) {
 		if (!process.stdin.isTTY) {
-			throw new Error("operator name required (set SB_OPERATOR_NAME, or run interactively)");
+			throw new Error("display name required (set SB_DISPLAY_NAME, or run interactively)");
 		}
 		console.log("Name your network (the label friends see, e.g. Nyaarium).");
-		operatorName = ask("Operator name:");
+		displayName = ask("Display name:");
 	}
-	if (!operatorName) throw new Error("an operator name is required");
+	if (!displayName) throw new Error("an display name is required");
 
 	// The one-time invite nonce the friend echoes verbatim in its first_root frame. STANDARD base64
 	// (not base64url): the wire `nonce` field is a b64Field ([A-Za-z0-9+/]={0,2}), and a base64url
 	// nonce carrying -/_ would fail that schema parse. 18 random bytes match evie's mint.
 	const nonce = randomBytes(18).toString("base64");
-	const { federationJson } = pendingHomeDomain(evieFed, operatorName, nonce, Date.now(), INVITE_TTL_MS);
+	const { federationJson } = pendingHomeDomain(evieFed, homeDomainId, displayName, nonce, Date.now(), INVITE_TTL_MS);
 
 	// Server-side apply: evie's pod created this Secret via the API (no kubectl last-applied
 	// annotation), so a client-side apply warns on the first write after each purge. SSA ignores
@@ -175,7 +176,7 @@ async function stageHomePending(evieFed: string): Promise<{ nonce: string }> {
 	if (!(await applySecret(FED_SECRET, { "federation.json": JSON.stringify(federationJson) }, true))) {
 		throw new Error("writing federation Secret failed");
 	}
-	note(`Home network "${operatorName}" pre-staged (pending your phone's first scan).`);
+	note(`Home network "${displayName}" pre-staged (pending your phone's first scan).`);
 
 	// Restart evie so it reads the pending state and serves it to the first-rooting console.
 	await k("rollout", "restart", EVIE_DEPLOY).quiet().nothrow();
@@ -204,14 +205,13 @@ async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Pr
 	const apiUrl = await clusterApiUrl();
 
 	const { saToken: swSa, caPem: swCa } = await readSaCreds("gateway-bridge-proxy-token");
-	const swApp = await envGet("BRIDGE_TOKEN");
-	// The 4-field GatewayTransport shape (the gateway fills namespace/service/port defaults when it
-	// installs the bundle). Absent when the gateway-bridge SA is not yet populated. Handed to the
-	// home Gateway as bootstrap-transport.json, NOT carried in the blob: the Console fetches it via
-	// the get_gateway_transport op when enrolling a creds-less Gateway, so a QR-sized blob fits and
-	// the gateway-bridge token never persists on the device.
-	const bootstrapTransport =
-		swSa && swCa ? JSON.stringify({ apiUrl, saToken: swSa, caPem: swCa, appToken: swApp || "" }) : undefined;
+	// The GatewayTransport shape (the gateway fills namespace/service/port defaults when it installs
+	// the bundle). Absent when the gateway-bridge SA is not yet populated. Handed to the home Gateway
+	// as bootstrap-transport.json, NOT carried in the blob: the Console fetches it via the
+	// get_gateway_transport op when enrolling a creds-less Gateway, so a QR-sized blob fits. The
+	// gateway-bridge auth is the SA token over the API service-proxy plus the owner-signed admission;
+	// there is no bridge bearer to carry.
+	const bootstrapTransport = swSa && swCa ? JSON.stringify({ apiUrl, saToken: swSa, caPem: swCa }) : undefined;
 	if (bootstrapTransport && !(await writeGatewayFile(`${FED_DIR_IN}/bootstrap-transport.json`, bootstrapTransport))) {
 		note("warning: could not write bootstrap-transport.json into the Gateway");
 	}
@@ -234,14 +234,12 @@ async function writeGatewayTransport(): Promise<void> {
 	const { saToken, caPem } = await readSaCreds("gateway-bridge-proxy-token");
 	if (!saToken || !caPem)
 		throw new Error("gateway-bridge SA token not populated yet - re-run --setup in a few seconds");
-	const appToken = await envGet("BRIDGE_TOKEN");
 	const apiUrl = await clusterApiUrl();
 	const transport = JSON.stringify({
 		apiUrl,
 		namespace: NS,
 		saToken,
 		caPem,
-		appToken: appToken || "",
 		service: "evie-bridge",
 		port: 20001,
 	});
@@ -394,14 +392,19 @@ async function qrMenu(): Promise<void> {
 //  Top-level operations
 
 /** The fresh-vs-reprovision state machine. After the cluster cutover it reads evie's home Domain
- * slice: a FRESH (absent / unrooted) home is pre-staged as a PENDING tenant (operator name + a
- * one-time invite nonce) and the blob carries `pendingTenant` so the operator's phone first-roots on
+ * slice: a FRESH (absent / unrooted) home is pre-staged as a PENDING tenant (display name + a
+ * one-time invite nonce) and the blob carries `pendingTenant` so the admin's phone first-roots on
  * scan at its silent owner key; an already-ROOTED home skips staging and emits the blob ONLY,
- * preserving the existing operator name. Then it verifies the bridge path either way. */
+ * preserving the existing display name. Then it verifies the bridge path either way. */
 async function provision(): Promise<void> {
 	await cutover();
 	const evieFed = await readEvieFed();
-	const home = readHomeDomain(evieFed);
+	// The admin's home Domain id: a random hex id, minted on the first provision and pinned in the
+	// gateway env. A re-provision reuses it; a fresh setup mints one and writes it back so the gateway
+	// resolves the same Domain on restart.
+	const existing = await envGet("FEDERATION_DOMAIN_ID");
+	const homeDomainId = existing || sanitizeDomainId(randomBytes(8).toString("hex"));
+	const home = readHomeDomain(evieFed, homeDomainId);
 
 	let pendingTenant: { domainId: string; nonce: string } | undefined;
 	if (home.rooted) {
@@ -419,14 +422,15 @@ async function provision(): Promise<void> {
 			);
 		}
 		note(
-			home.operatorName
-				? `Home network "${home.operatorName}" already rooted - re-provisioning.`
+			home.displayName
+				? `Home network "${home.displayName}" already rooted - re-provisioning.`
 				: "Home Domain already rooted - re-provisioning.",
 		);
 	} else {
 		// Fresh setup: pre-stage the pending home Domain and carry its invite nonce into the blob.
-		const { nonce } = await stageHomePending(evieFed);
-		pendingTenant = { domainId: DEFAULT_DOMAIN_ID, nonce };
+		const { nonce } = await stageHomePending(evieFed, homeDomainId);
+		pendingTenant = { domainId: homeDomainId, nonce };
+		await envSet("FEDERATION_DOMAIN_ID", homeDomainId);
 	}
 
 	await emitBlob(pendingTenant);

@@ -79,7 +79,7 @@ const PIN = "cGluLXJlbmRlenZvdXM";
 
 describe("commit-reveal binding: a reveal must reproduce the earlier commitment", () => {
 	it("the RECEIVER rejects a requester reveal whose keys do not hash to the round-1 commitment", () => {
-		const recv = makeDomain("home", "sakura-laptop");
+		const recv = makeDomain("alice", "sakura-laptop");
 		const honest = makeDomain("bob", "bob-desktop");
 		const coord = new CrossDomainHandshakeCoordinator({ self: selfFor(recv), peers: new CrossDomainPeers(tmp()) });
 		const token = coord.listen().listeningToken;
@@ -107,8 +107,8 @@ describe("commit-reveal binding: a reveal must reproduce the earlier commitment"
 
 	it("the REQUESTER rejects a receiver reveal that does not match the receiver's round-1 commitment", async () => {
 		const requester = makeDomain("bob", "bob-desktop");
-		const receiver = makeDomain("home", "sakura-laptop");
-		const mitm = makeDomain("home", "sakura-laptop"); // same ids, attacker keys
+		const receiver = makeDomain("alice", "sakura-laptop");
+		const mitm = makeDomain("alice", "sakura-laptop"); // same ids, attacker keys
 
 		// A Router that commits to the receiver's HONEST keys in round 1 but reveals its OWN
 		// substituted keys in round 2 (a late substitution after committing).
@@ -151,7 +151,7 @@ describe("commit-reveal binding: a reveal must reproduce the earlier commitment"
 describe("the offline grind across both legs is impossible", () => {
 	it("a double-MITM cannot make both legs' SAS agree once each side is committed", () => {
 		// The honest parties.
-		const a = makeDomain("home", "sakura-laptop"); // listener
+		const a = makeDomain("alice", "sakura-laptop"); // listener
 		const b = makeDomain("bob", "bob-desktop"); // requester
 		// The Router's substituted identity, presented to each honest side in place of the peer.
 		const mitm = makeDomain("mitm", "mitm-gw");
@@ -186,7 +186,7 @@ describe("the offline grind across both legs is impossible", () => {
 	});
 
 	it("two different committed key-sets yield different SAS (no second key-set reproduces a target code)", () => {
-		const a = makeDomain("home", "sakura-laptop");
+		const a = makeDomain("alice", "sakura-laptop");
 		const b = makeDomain("bob", "bob-desktop");
 		const target = crossDomainSas(partyOf(a), partyOf(b), PIN);
 
@@ -209,7 +209,7 @@ describe("the offline grind across both legs is impossible", () => {
 	});
 
 	it("an honest end-to-end pairing yields the SAME SAS on both sides (no false abort)", async () => {
-		const a = makeDomain("home", "sakura-laptop"); // receiver
+		const a = makeDomain("alice", "sakura-laptop"); // receiver
 		const b = makeDomain("bob", "bob-desktop"); // requester
 		const coordA = new CrossDomainHandshakeCoordinator({ self: selfFor(a), peers: new CrossDomainPeers(tmp()) });
 		const coordB = new CrossDomainHandshakeCoordinator({
@@ -239,7 +239,7 @@ describe("the offline grind across both legs is impossible", () => {
 
 describe("the commitment hides the committed keys", () => {
 	it("the same keys with different salts produce unrelated commitments", () => {
-		const d = makeDomain("home", "sakura-laptop");
+		const d = makeDomain("alice", "sakura-laptop");
 		const c1 = crossDomainCommitment(partyOf(d), "c2FsdC1vbmU");
 		const c2 = crossDomainCommitment(partyOf(d), "c2FsdC10d28");
 		expect(c1).not.toBe(c2);

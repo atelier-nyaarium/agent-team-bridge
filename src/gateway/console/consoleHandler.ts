@@ -177,7 +177,9 @@ const MAX_OPS_PER_CONVERSATION = 256;
 
 function isMutatingOp(op: ConsoleOp): boolean {
 	// tmux_send injects keystrokes (a real side effect), so a retried opId must replay
-	// the cached ack, not re-send the keys. peek is a fresh read (never cached). The
+	// the cached ack, not re-send the keys. create_session and reload_plugins likewise have
+	// side effects (a launched session, a running reload), so a retry replays rather than
+	// re-running. peek is a fresh read (never cached). The
 	// stateful cross_domain_* handshake ops (a minted window, a routed request, a written
 	// peer, a cancellation) cache so a retried opId replays the cached reply rather than
 	// minting a second window, re-routing, or re-writing the peer; listen_state is a fresh
@@ -189,6 +191,8 @@ function isMutatingOp(op: ConsoleOp): boolean {
 		op.kind === "send" ||
 		op.kind === "respond" ||
 		op.kind === "tmux_send" ||
+		op.kind === "create_session" ||
+		op.kind === "reload_plugins" ||
 		op.kind === "cross_domain_listen" ||
 		op.kind === "cross_domain_request" ||
 		op.kind === "cross_domain_confirm" ||
@@ -217,17 +221,18 @@ export function createConsoleHandler({
 	unlinkDomain,
 	untrustOwner,
 }: ConsoleHandlerDeps) {
-	/** Resolve a console terminal target (the gateway-qualified session name) to the host
-	 * tmux it maps to: the host-agent's own session for "gateway", a devcontainer for a known
-	 * project. A cross-Gateway target (v1 is local-only) or an unknown/loose name is rejected. */
-	function resolveTmuxTarget(qualifiedTarget: string): TmuxTarget {
+	/** Resolve a console terminal target (the gateway-qualified session name) to the host tmux it
+	 * maps to: the host machine for "host", a devcontainer for a known project. peek/tmux_send and
+	 * reload address an existing session (the conventional `claude`); create_session passes the NEW
+	 * session name. A cross-Gateway target (v1 is local-only) or an unknown/loose name is rejected. */
+	function resolveTmuxTarget(qualifiedTarget: string, sessionName = "claude"): TmuxTarget {
 		const { gatewayId, name } = parseQualifiedTeam(qualifiedTarget);
 		if (gatewayId && gatewayId !== localGatewayId) {
 			throw new Error(`terminal view is not available for a session on another Gateway`);
 		}
-		if (name === "gateway") return { kind: "gateway", name };
-		if (isProjectName?.(name)) return { kind: "devcontainer", name };
-		throw new Error(`terminal view is not available for "${name}" (only the host agent and devcontainers)`);
+		if (name === "host") return { kind: "host", name, sessionName };
+		if (isProjectName?.(name)) return { kind: "devcontainer", name, sessionName };
+		throw new Error(`terminal view is not available for "${name}" (only the host and devcontainers)`);
 	}
 	// The per-install conversationId is the DEVICE identity: it keys the registry sub,
 	// the signing-key binding, the idempotency cache, and the device-name binding. The
@@ -463,33 +468,18 @@ export function createConsoleHandler({
 				// carrying its own `gatewayId` (the console keys threads by gateway/name).
 				const teams = (await (await routes.discover()).json()) as TeamInfo[];
 				// A console does not list other consoles as send targets, and excludes
-				// itself. teams() already drops the cli "host" daemon; the "gateway"
-				// host-agent of each Gateway stays (kind "gateway"), reachable from the console.
+				// itself. teams() already drops the headless "host" daemon; the remaining
+				// sessions (loose agents + devcontainers) stay, reachable from the console.
 				return {
 					teams: teams.filter((t) => t.team !== device && t.kind !== "console"),
 				};
 			}
 
 			case "send": {
-				// Online CLI-mode targets answer synchronously through /send's blocking
-				// wait, far past any relay hold. Reject those up front. A SLEEPING
-				// CLI team is unknowable here (mode surfaces only on register), so
-				// it pays a wake and is then rejected by the route's channelOnly
-				// check instead of minting a random session id.
 				// The console may target a gateway-qualified name (`gateway/name`); strip the
-				// gateway for the local registry probe. Cross-gateway targets are rejected
-				// by routes.send (federation routing is a later phase).
+				// gateway for the local registry probe. Cross-gateway targets are rejected by
+				// routes.send (federation routing is a later phase).
 				const localTarget = parseQualifiedTeam(op.to).name;
-				const targetSubs = registry.get(localTarget);
-				if (targetSubs) {
-					for (const [, ws] of targetSubs) {
-						if (!ws.data.virtual && ws.readyState === 1 && ws.data.mode === "cli") {
-							throw new Error(
-								`"${localTarget}" is a CLI-mode agent; console chat supports channel-mode (Claude) teams only`,
-							);
-						}
-					}
-				}
 
 				// Canonical session id matching what routes.send composes, so the
 				// backgrounded-send path hands back the same id the in-time path would.
@@ -668,6 +658,24 @@ export function createConsoleHandler({
 				return { sent: true };
 			}
 
+			case "create_session": {
+				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
+				const target = resolveTmuxTarget(op.target, op.sessionName);
+				const dedupKey = `${conversationId}:${opId}`;
+				const r = await relayToHost({ kind: "createSession", target, dedupKey });
+				if (!r.ok) throw new Error(r.error ?? "create session failed");
+				return { created: true };
+			}
+
+			case "reload_plugins": {
+				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
+				const target = resolveTmuxTarget(op.target);
+				const dedupKey = `${conversationId}:${opId}`;
+				const r = await relayToHost({ kind: "reloadPlugins", target, dedupKey });
+				if (!r.ok) throw new Error(r.error ?? "reload failed");
+				return { initiated: true };
+			}
+
 			case "cross_domain_listen": {
 				if (!crossDomain) throw new Error("cross-Domain linking is not available on this Gateway");
 				return crossDomain.listen();
@@ -777,10 +785,10 @@ export function createConsoleHandler({
 	}
 
 	/** Gate a share request and return the CANONICAL key to store it under: the session must
-	 * be a LOCAL session of a shareable kind (devcontainer or loose ONLY - never the host-agent
-	 * "gateway", the cli "host", or a console-kind team) and the friend Domain must be one the
-	 * owner has actually linked. Resolves the kind from the local team registry the way teams()
-	 * classifies them. */
+	 * be a LOCAL session of a shareable kind (devcontainer or loose ONLY - never the headless
+	 * "host" daemon or a console-kind team) and the friend Domain must be one the owner has
+	 * actually linked. Resolves the kind from the local team registry the way teams() classifies
+	 * them. */
 	async function assertShareable(sessionTarget: string, target: CrossDomainShareTarget): Promise<string> {
 		// A SPECIFIC-Domain share must target a linked Domain; an EVERYONE-TRUSTED share is always valid
 		// (it reaches only linked Domains, resolved live at the gate), so it has no per-Domain check.

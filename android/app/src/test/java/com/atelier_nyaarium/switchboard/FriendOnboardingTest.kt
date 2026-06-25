@@ -27,8 +27,8 @@ class FriendOnboardingTest {
 			pendingTenant = pending,
 		)
 
-	private fun team(name: String, domainId: String?, status: String = "online", operatorName: String? = null) =
-		Team(name = name, status = status, mode = "channel", queueDepth = 0, domainId = domainId, operatorName = operatorName)
+	private fun team(name: String, domainId: String?, status: String = "online", displayName: String? = null) =
+		Team(name = name, status = status, mode = "channel", queueDepth = 0, domainId = domainId, displayName = displayName)
 
 	// -- The first-root decision (blob pendingTenant branch) --
 
@@ -43,7 +43,7 @@ class FriendOnboardingTest {
 
 	@Test
 	fun ordinaryBlobIsNotPending() {
-		// No pendingTenant: an already-rooted operator blob just provisions the console.
+		// No pendingTenant: an already-rooted admin blob just provisions the console.
 		assertTrue(FriendOnboarding.decide(prov(null), alreadyRooted = false) is FirstRootDecision.NotPending)
 	}
 
@@ -105,9 +105,9 @@ class FriendOnboardingTest {
 
 	@Test
 	fun clockSkewRejectIsTransientWithASyncHint() {
-		// evie's "operator op is stale" is a >2min device clock skew; the latch stays false and the
+		// evie's "admin op is stale" is a >2min device clock skew; the latch stays false and the
 		// poll loop re-attempts, so it must classify transient (auto-retry) with a clock-sync hint.
-		val r = FriendOnboarding.classifyFirstRootError("operator op is stale")
+		val r = FriendOnboarding.classifyFirstRootError("admin op is stale")
 		assertTrue(r.transient)
 		assertTrue(r.message.contains("clock", ignoreCase = true))
 	}
@@ -130,7 +130,7 @@ class FriendOnboardingTest {
 		assertTrue(r.message.contains("some odd transport failure"))
 	}
 
-	// -- The no-gateway empty-board split (friend awaiting host vs operator add-a-gateway) --
+	// -- The no-gateway empty-board split (friend awaiting host vs admin add-a-gateway) --
 
 	@Test
 	fun aGatewayPresentIsNotANoGatewayState() {
@@ -146,30 +146,29 @@ class FriendOnboardingTest {
 	}
 
 	@Test
-	fun noGatewayWithoutAFirstRootIsTheOperatorCta() {
-		// An operator who never first-rooted just needs to admit a Gateway.
+	fun noGatewayWithoutAFirstRootIsTheAdminCta() {
+		// An admin who never first-rooted just needs to admit a Gateway.
 		assertEquals(NoGatewayState.NEEDS_GATEWAY, FriendOnboarding.noGatewayState(noGateway = true, firstRooted = false))
 	}
 
-	// -- The rename-before-discovery gate (friend "home" fallback) --
+	// -- The rename-before-discovery gate (Domain not yet confirmed) --
 
 	@Test
-	fun friendRenameWaitsWhileDomainIsTheHomeFallback() {
-		// A friend whose real Domain has not been discovered yet still reads the "home" fallback; a
-		// rename then would sign over "home" and evie rejects it, so Save is gated.
-		assertTrue(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, localDomainId = "home"))
+	fun renameWaitsWhileDomainUnconfirmed() {
+		// A device that first-rooted its own Domain but has no confirmed local session yet (null) cannot
+		// sign a rename over a real Domain, so Save is gated.
+		assertTrue(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, confirmedDomainId = null))
 	}
 
 	@Test
-	fun friendRenameProceedsOnceTheRealDomainIsKnown() {
-		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, localDomainId = "guest-9f3a"))
+	fun renameProceedsOnceTheDomainIsConfirmed() {
+		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = true, confirmedDomainId = "guest-9f3a"))
 	}
 
 	@Test
-	fun homeOperatorRenameIsNeverGated() {
-		// A genuine home operator legitimately resolves to "home" and never first-rooted, so the
-		// gate must not trap them.
-		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = false, localDomainId = "home"))
+	fun notFirstRootedRenameIsNeverGated() {
+		// A device that never first-rooted is not gated even before a Domain is confirmed.
+		assertFalse(FriendOnboarding.renameAwaitsDiscovery(firstRooted = false, confirmedDomainId = null))
 	}
 
 	// -- The hosted-tenant state machine (awaiting -> offline -> online) --
@@ -177,7 +176,7 @@ class FriendOnboardingTest {
 	@Test
 	fun noSessionsIsAwaitingSetup() {
 		// The friend has not first-rooted + brought a gateway online yet: nothing in discovery.
-		val teams = listOf(team("home-gw/app", "home"))
+		val teams = listOf(team("home-gw/app", "alice"))
 		assertEquals(HostedTenantState.AWAITING_SETUP, FriendOnboarding.hostedState("guest1", teams))
 	}
 
@@ -196,33 +195,33 @@ class FriendOnboardingTest {
 		assertEquals(HostedTenantState.ONLINE, FriendOnboarding.hostedState("guest1", teams))
 	}
 
-	// -- The propagated operator name in the Peers list --
+	// -- The propagated display name in the Peers list --
 
 	@Test
-	fun peersShowTheFriendsOperatorName() {
+	fun peersShowTheFriendsDisplayName() {
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = listOf(
-				team("home-gw/app", "home"),
-				team("carol-gw/lib", "carol", status = "online", operatorName = "Carol"),
+				team("home-gw/app", "alice"),
+				team("carol-gw/lib", "carol", status = "online", displayName = "Carol"),
 			),
 			peerOwners = mapOf("carol" to "carol-owner"),
-			home = "home",
+			home = "alice",
 		)
 		assertEquals(1, peers.size)
 		assertEquals("carol", peers[0].domainId)
-		assertEquals("Carol", peers[0].operatorName)
+		assertEquals("Carol", peers[0].displayName)
 	}
 
 	@Test
 	fun peerWithNoNameYetFallsBackToNull() {
-		// A peer present only in the peer set (no discovery session) has no operatorName yet; the UI
+		// A peer present only in the peer set (no discovery session) has no displayName yet; the UI
 		// falls back to the opaque domainId.
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = emptyList(),
 			peerOwners = mapOf("dave" to "dave-owner"),
-			home = "home",
+			home = "alice",
 		)
 		assertEquals(1, peers.size)
-		assertNull(peers[0].operatorName)
+		assertNull(peers[0].displayName)
 	}
 }

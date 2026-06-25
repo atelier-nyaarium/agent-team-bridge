@@ -208,14 +208,12 @@ describe("createConsoleHandler", () => {
 		expect(reply.error).toContain("evie");
 	});
 
-	it("rejects reserved device names", async () => {
+	it("rejects the reserved host-daemon device name", async () => {
 		const h = makeHarness();
-		for (const name of ["gateway", "host"]) {
-			const reply = await h.handler.handleFrame(frame({ kind: "register" }, "op1", name, `conv-${name}`));
-			expect(reply.ok).toBe(false);
-			expect(reply.error).toContain("reserved");
-			expect(h.registry.get(name)).toBeUndefined();
-		}
+		const reply = await h.handler.handleFrame(frame({ kind: "register" }, "op1", "host", "conv-host"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("reserved");
+		expect(h.registry.get("host")).toBeUndefined();
 	});
 
 	it("rejects a device name that matches a devcontainer project, even a sleeping one", async () => {
@@ -568,18 +566,6 @@ describe("createConsoleHandler", () => {
 		expect(h.conversationRegistry.get("conv-pixel")).toBe(peer);
 	});
 
-	it("rejects send to a CLI-mode team instead of losing the answer", async () => {
-		const h = makeHarness();
-		const cliWs = realTeamWs("cli-team", "c1");
-		cliWs.data.mode = "cli";
-		h.registry.set("cli-team", new Map([["c1", cliWs]]));
-
-		const reply = await h.handler.handleFrame(frame({ kind: "send", to: "cli-team", body: "hi" }));
-		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("CLI-mode");
-		expect(h.sendCalls).toHaveLength(0);
-	});
-
 	it("a send blocked by a slow wake returns the deterministic session id", async () => {
 		const registry: TeamRegistry = new Map();
 		const conversationRegistry: ConversationRegistry = new Map();
@@ -929,13 +915,19 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app" }, "p1"));
 		expect(reply.ok).toBe(true);
 		expect(reply.result).toEqual({ ansi: "SCREEN", hash: "h1" });
-		expect(h.hostOps[0]).toEqual({ kind: "peek", target: { kind: "devcontainer", name: "recipe-app" } });
+		expect(h.hostOps[0]).toEqual({
+			kind: "peek",
+			target: { kind: "devcontainer", name: "recipe-app", sessionName: "claude" },
+		});
 	});
 
-	it("peek resolves the host-agent 'gateway' to its local tmux", async () => {
+	it("peek resolves the 'host' machine target to its local tmux", async () => {
 		const h = makeTerminalHarness();
-		await h.handler.handleFrame(frame({ kind: "peek", target: "gateway" }, "p2"));
-		expect(h.hostOps[0]).toMatchObject({ kind: "peek", target: { kind: "gateway", name: "gateway" } });
+		await h.handler.handleFrame(frame({ kind: "peek", target: "host" }, "p2"));
+		expect(h.hostOps[0]).toMatchObject({
+			kind: "peek",
+			target: { kind: "host", name: "host", sessionName: "claude" },
+		});
 	});
 
 	it("peek with a matching sinceHash returns unchanged and drops the body", async () => {
@@ -969,7 +961,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		// dedupKey = `${conversationId}:${opId}` so the host can replay a re-relayed send.
 		expect(h.hostOps[0]).toEqual({
 			kind: "sendText",
-			target: { kind: "devcontainer", name: "recipe-app" },
+			target: { kind: "devcontainer", name: "recipe-app", sessionName: "claude" },
 			text: "/model opus",
 			dedupKey: "conv-pixel:s1",
 		});
@@ -977,10 +969,10 @@ describe("console terminal ops (peek / tmux_send)", () => {
 
 	it("tmux_send with a named key relays sendKey", async () => {
 		const h = makeTerminalHarness();
-		await h.handler.handleFrame(frame({ kind: "tmux_send", target: "gateway", key: "C-c" }, "s2"));
+		await h.handler.handleFrame(frame({ kind: "tmux_send", target: "host", key: "C-c" }, "s2"));
 		expect(h.hostOps[0]).toEqual({
 			kind: "sendKey",
-			target: { kind: "gateway", name: "gateway" },
+			target: { kind: "host", name: "host", sessionName: "claude" },
 			key: "C-c",
 			dedupKey: "conv-pixel:s2",
 		});
@@ -1030,6 +1022,49 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(reply.error).toContain("disallowed key");
 		expect(h.hostOps).toHaveLength(0);
 	});
+
+	it("create_session relays a createSession host op carrying the new session name", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", sessionName: "scratch" }, "c1"),
+		);
+		expect(reply.result).toEqual({ created: true });
+		expect(h.hostOps[0]).toEqual({
+			kind: "createSession",
+			target: { kind: "devcontainer", name: "recipe-app", sessionName: "scratch" },
+			dedupKey: "conv-pixel:c1",
+		});
+	});
+
+	it("a retried create_session with the same opId launches once (idempotent)", async () => {
+		const h = makeTerminalHarness();
+		const f = frame({ kind: "create_session", target: "host", sessionName: "scratch" }, "cdup");
+		const [r1, r2] = await Promise.all([h.handler.handleFrame(f), h.handler.handleFrame(f)]);
+		expect(r1.ok && r2.ok).toBe(true);
+		expect(h.hostOps).toHaveLength(1);
+	});
+
+	it("reload_plugins relays a reloadPlugins host op for the resolved session", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "reload_plugins", target: "recipe-app" }, "r1"));
+		expect(reply.result).toEqual({ initiated: true });
+		expect(h.hostOps[0]).toEqual({
+			kind: "reloadPlugins",
+			target: { kind: "devcontainer", name: "recipe-app", sessionName: "claude" },
+			dedupKey: "conv-pixel:r1",
+		});
+	});
+
+	it("rejects create_session / reload_plugins for a loose session", async () => {
+		const h = makeTerminalHarness();
+		const a = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "some-loose", sessionName: "x" }, "c2"),
+		);
+		const b = await h.handler.handleFrame(frame({ kind: "reload_plugins", target: "some-loose" }, "r2"));
+		expect(a.ok).toBe(false);
+		expect(b.ok).toBe(false);
+		expect(h.hostOps).toHaveLength(0);
+	});
 });
 
 describe("console cross-Domain handshake ops", () => {
@@ -1063,7 +1098,7 @@ describe("console cross-Domain handshake ops", () => {
 					receiverOwnerSignPub: "recv-owner",
 					receiverGatewaySignPub: "recv-gw-sign",
 					receiverGatewayBoxPub: "recv-gw-box",
-					receiverDomainId: "home",
+					receiverDomainId: "alice",
 					receiverGatewayId: "test-host",
 					expiresAt: 123,
 				};
@@ -1151,7 +1186,7 @@ describe("console cross-Domain handshake ops", () => {
 					pin: "thepin",
 					// A console could LIE here; the gateway must ignore it and use the verified owner.
 					requesterOwnerSignPub: "ATTACKER-CLAIMED-OWNER",
-					requesterDomainId: "home",
+					requesterDomainId: "alice",
 					requesterGatewayId: "test-host",
 				},
 				"rq1",
@@ -1164,7 +1199,7 @@ describe("console cross-Domain handshake ops", () => {
 			listeningToken: "bob-desktop.tok",
 			pin: "thepin",
 			requesterOwnerSignPub: OWNER_PUB,
-			requesterDomainId: "home",
+			requesterDomainId: "alice",
 			requesterGatewayId: "test-host",
 		});
 	});

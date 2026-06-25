@@ -48,10 +48,15 @@ export interface RoutesDeps {
 	// here (the SealTarget is keyed by the full (domainId, gatewayId) pair, never the bare
 	// id), and discovery fans a list_teams to each linked peer. Absent when federation is off.
 	crossDomainPeers?: import("./federation/crossDomainPeers.js").CrossDomainPeers | null;
-	// This Gateway's own operator/network display name (learned from evie's register reply),
-	// stamped on every local TeamInfo so a linked friend Domain sees the owner's self-set
-	// label over the discovery roster (D1). Absent/null when unset or pre-feature.
-	operatorName?: (() => string | null | undefined) | null;
+	// This Gateway's own network display name (learned from evie's register reply), stamped on
+	// every local TeamInfo so a linked friend Domain sees the owner's self-set label over the
+	// discovery roster (D1). Absent/null when unset or pre-feature.
+	displayName?: (() => string | null | undefined) | null;
+	// Whether this Gateway's own Domain is the admin's (the evie-runner who provisions others),
+	// learned from the register reply. Stamped on the local TeamInfo so the console shows the
+	// admin surfaces only on the admin's own session. Null when unknown (pre-register), mirroring
+	// displayName.
+	isAdminDomain?: (() => boolean | null) | null;
 	// Whether a gateway id resolves to a HOME (single-owner allowlist) peer. Mirrors the
 	// sealer's home-first resolution on the SEND side, so a send to your own home Gateway
 	// whose id collides with a friend's gateway id is sealed v1 to home (the bare-string
@@ -168,15 +173,16 @@ function getFirstWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket
 	return undefined;
 }
 
-/** Get the mode of a team, preferring real sockets over virtual console peers
- * (which are always channel mode and could otherwise misroute a CLI team). */
+/** Get the mode of a team, preferring real sockets over virtual console peers. Every bridge
+ * connection is channel mode now, so this is effectively always "channel"; kept as the single
+ * source the teams listing and the send paths read. */
 function getTeamMode(subs: Map<string, ServerWebSocket<WsData>>): ConnectionMode {
 	let virtualMode: ConnectionMode | null = null;
 	for (const [, ws] of subs) {
 		if (!ws.data.virtual) return ws.data.mode;
 		virtualMode = virtualMode ?? ws.data.mode;
 	}
-	return virtualMode ?? "cli";
+	return virtualMode ?? "channel";
 }
 
 export function createRoutes({
@@ -191,7 +197,8 @@ export function createRoutes({
 	evieClient,
 	sealer,
 	crossDomainPeers,
-	operatorName,
+	displayName,
+	isAdminDomain,
 	resolvesHomeGateway,
 	touchShares,
 	isSharedToForReply,
@@ -414,10 +421,11 @@ export function createRoutes({
 		const isDevcontainer = (name: string) => offlineCatalog.has(name) || knownTeamPaths.has(name);
 		// This Gateway's own network label, stamped on every local session so a linked friend
 		// Domain sees the owner's self-set name over the discovery roster (D1). Spread in only
-		// when set, so a Gateway with no operator name emits the same minimal TeamInfo as before
+		// when set, so a Gateway with no display name emits the same minimal TeamInfo as before
 		// (the field is nullish on the wire; the friend's gateway is the authoritative source).
-		const ownOperatorName = operatorName?.();
-		const operatorNameField = ownOperatorName ? { operatorName: ownOperatorName } : {};
+		const ownDisplayName = displayName?.();
+		const displayNameField = ownDisplayName ? { displayName: ownDisplayName } : {};
+		const isAdminDomainField = isAdminDomain?.() ? { isAdminDomain: true } : {};
 
 		for (const [name, subs] of registry) {
 			if (name === "host") continue;
@@ -432,23 +440,15 @@ export function createRoutes({
 			// Plugin version reported by an active real socket (virtual console peers carry
 			// none); the same value across a team's sub-sessions in practice.
 			const version = getAllActiveRealWs(subs)[0]?.data.version;
-			// The host orchestrator registers its channel identity as "gateway"; surface
-			// it as the "host" agent, the machine's primary session (shown first).
 			teamsList.push({
 				team: name,
 				gatewayId: localGatewayId,
 				domainId: localDomainId,
-				...operatorNameField,
+				...displayNameField,
+				...isAdminDomainField,
 				status: "online",
 				mode: getTeamMode(subs),
-				kind:
-					name === "gateway"
-						? "gateway"
-						: isConsole
-							? "console"
-							: isDevcontainer(name)
-								? "devcontainer"
-								: "loose",
+				kind: isConsole ? "console" : isDevcontainer(name) ? "devcontainer" : "loose",
 				version,
 				queue_depth: 0,
 			});
@@ -460,7 +460,8 @@ export function createRoutes({
 				team: name,
 				gatewayId: localGatewayId,
 				domainId: localDomainId,
-				...operatorNameField,
+				...displayNameField,
+				...isAdminDomainField,
 				status: "available",
 				kind: "devcontainer",
 				queue_depth: 0,
@@ -509,7 +510,7 @@ export function createRoutes({
 				// Gateway knows which Domain it linked, while a friend on an older build might
 				// stamp none). The (domainId, gatewayId) pair is what the console groups by and
 				// the send path resolves the seal target from, since a gateway id collides
-				// across Domains. The peer's own operatorName rides through the spread (the friend
+				// across Domains. The peer's own displayName rides through the spread (the friend
 				// Gateway stamped its self-set network label), so Peers display the friend's name (D1).
 				return peerTeams.map((t) => ({ ...t, domainId: peer.friendDomainId }));
 			}),
@@ -578,12 +579,8 @@ export function createRoutes({
 		const localName = target.name;
 		const qualifiedTo = target.qualified;
 
-		// The "host" cli wake-daemon is never a direct target. The "gateway" channel
-		// identity (the host-agent) is reachable ONLY from the console (channelOnly): a
-		// send injects a channel message into the host orchestrator. Cross-session
-		// (container -> host-agent) sends are deferred to the federation phases that
-		// design that trust boundary.
-		if (localName === "host" || (localName === "gateway" && !channelOnly)) {
+		// The headless "host" daemon is never a direct crosstalk target (it carries no agent).
+		if (localName === "host") {
 			return jsonResponse(
 				{
 					error: `"${localName}" is a reserved name; crosstalk_send targets container teams only.`,
@@ -595,10 +592,8 @@ export function createRoutes({
 		let subs = registry.get(localName);
 		let targetWs = subs ? getFirstWs(subs) : undefined;
 
-		// If offline, attempt to wake the container. The "gateway" host-agent is
-		// never a wakeable devcontainer (it is the host process itself), so an
-		// offline host-agent goes straight to the 404 below.
-		if (!targetWs && localName !== "gateway") {
+		// If offline, attempt to wake the container.
+		if (!targetWs) {
 			const woken = await tryWakeTeam(localName);
 			if (woken) {
 				// Claude Code needs time after MCP connect to initialize its channel listener.

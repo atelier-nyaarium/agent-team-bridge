@@ -15,8 +15,10 @@ services:
       # Shared secret for the reserved "host" WS slot (which drives agent terminals via the
       # console). start-gateway.sh provisions it into .env so a LAN peer cannot squat the slot.
       - HOST_WS_TOKEN=${HOST_WS_TOKEN:-}
-      - BRIDGE_TOKEN=${BRIDGE_TOKEN:-}
       - FEDERATION_OWNER_SIGN_PUB=${FEDERATION_OWNER_SIGN_PUB:-}
+      # The operator's home Domain id, minted at provision and written to .env. Passed through so
+      # the gateway resolves the same Domain across a container restart.
+      - FEDERATION_DOMAIN_ID=${FEDERATION_DOMAIN_ID:-}
       # Armed only by start-gateway.sh --enroll on a creds-less Gateway: a one-time nonce +
       # the host LAN address it advertises in the admit-gateway QR for bundle delivery.
       - ENROLL_NONCE=${ENROLL_NONCE:-}

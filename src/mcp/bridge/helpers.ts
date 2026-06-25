@@ -133,7 +133,7 @@ export function connectToRouter(): void {
 	routerWs = new WebSocket(wsUrl);
 
 	const isChannel = AGENT_TYPE === "claude";
-	const mode: ConnectionMode = isChannel ? "channel" : "cli";
+	const mode: ConnectionMode = "channel";
 
 	routerWs.on("open", () => {
 		console.error(`[bridge] connected to router (mode: ${mode})`);

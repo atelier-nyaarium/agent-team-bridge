@@ -33,10 +33,18 @@ describe("federation identity", () => {
 		expect(b).toEqual(a);
 	});
 
-	it("re-mints when the stored file is malformed", () => {
+	it("fails closed (throws) on a present-but-malformed file instead of overwriting the admitted key", () => {
 		const dir = tmpDir();
-		fs.writeFileSync(path.join(dir, "federation-identity.json"), "{ not valid");
-		const id = loadOrCreateIdentity(dir);
-		expect(Buffer.from(id.box.pub, "base64")).toHaveLength(32);
+		const file = path.join(dir, "federation-identity.json");
+		fs.writeFileSync(file, "{ not valid");
+		expect(() => loadOrCreateIdentity(dir)).toThrow(/refusing to overwrite/);
+		// The orphan file is left untouched for a human to inspect/restore, never replaced.
+		expect(fs.readFileSync(file, "utf8")).toBe("{ not valid");
+	});
+
+	it("fails closed on a file that parses but is not an identity", () => {
+		const dir = tmpDir();
+		fs.writeFileSync(path.join(dir, "federation-identity.json"), JSON.stringify({ sign: { pub: "x" } }));
+		expect(() => loadOrCreateIdentity(dir)).toThrow(/refusing to overwrite/);
 	});
 });
