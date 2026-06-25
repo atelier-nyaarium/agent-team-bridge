@@ -1,4 +1,4 @@
-// SYNC-HASH: ae53009273813baa24aa068aaabedc0f
+// SYNC-HASH: 7e787d055a675f63ec46d11eaeae46e6
 // SYNCED MODULE - source of truth: switchboard/src/shared/crypto.ts
 // Copied verbatim into: evie-bot/app/features/bridge/crypto.ts
 // MUST re-copy on change: cp src/shared/crypto.ts ../evie-bot/app/features/bridge/crypto.ts
@@ -188,12 +188,15 @@ export function b64Field(): z.ZodString {
 	return z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/);
 }
 
-/** A slug field (an opaque id like a domainId): lowercase alphanumerics + dashes,
- * bounded length, so it holds no newline that could blur a signing-bytes boundary. */
+/** A slug field (an opaque id like a domainId): lowercase alphanumeric segments joined
+ * by single dashes, bounded length, so it holds no newline that could blur a signing-bytes
+ * boundary. The regex matches sanitizeDomainId's canonical output (no leading/trailing or
+ * doubled dashes), so a value that passes here always survives sanitizeDomainId unchanged -
+ * a pure-separator id like "---" can never slip past validation only to throw at sanitize. */
 export function slugField(): z.ZodString {
 	return z
 		.string()
-		.regex(/^[a-z0-9-]+$/)
+		.regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
 		.max(64);
 }
 
