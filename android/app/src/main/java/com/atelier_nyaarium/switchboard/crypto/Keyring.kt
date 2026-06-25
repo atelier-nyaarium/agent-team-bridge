@@ -12,7 +12,7 @@ import kotlinx.serialization.json.Json
  * Gateway because the owner admitted that Gateway's keys, never because a provisioning
  * blob named them. This is the device side of the symmetric-trust rule and the Kotlin
  * counterpart of resolveAdmitted in src/shared/admission.ts, additionally keyed by
- * Gateway id for the multi-home seal path (the Console knows a target by its Gateway id,
+ * Gateway id for the multi-gateway seal path (the Console knows a target by its Gateway id,
  * not its signing key).
  */
 class Keyring(val snapshot: DomainSnapshot) {

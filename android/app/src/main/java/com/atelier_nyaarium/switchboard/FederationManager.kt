@@ -431,7 +431,7 @@ class FederationManager(private val store: ProvisioningStore) {
 
 	/** Owner-sign a rename of this owner's own Domain network display name. evie CAS-merges it onto
 	 * the Domain record and pushes it to the Domain's gateways. The `domainId` is this owner's own
-	 * (rooted home) Domain; evie verifies the signature against the Domain's pinned owner key. */
+	 * (rooted admin) Domain; evie verifies the signature against the Domain's pinned owner key. */
 	fun signSetDisplayName(domainId: String, displayName: String, nowMs: Long): SignedSetDisplayName {
 		val owner = ownerIdentity()
 		val rename = SetDisplayName(domainId, displayName, nowMs, nonce())

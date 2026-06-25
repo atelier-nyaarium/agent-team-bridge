@@ -86,9 +86,9 @@ const RECONNECT_DELAY_MS = 5_000;
 const TOOL_CALL_TIMEOUT_MS = 120_000;
 // When evie refuses gateway_register because the Domain is still PENDING (staged but not
 // yet rooted), re-register on this cadence. A fresh provision-admin-domain.sh stages a
-// pending home Domain and restarts evie BEFORE the admin's phone first-roots it, so the
+// pending admin Domain and restarts evie BEFORE the admin's phone first-roots it, so the
 // register the open-handler fires gets a pending refusal; without this retry the Gateway
-// would sit unregistered into its own home Domain forever (the heartbeat keeps the WS warm,
+// would sit unregistered into its own admin Domain forever (the heartbeat keeps the WS warm,
 // so it never reconnects to re-register). The cap bounds the spin so a genuinely stuck setup
 // stops re-trying instead of polling evie indefinitely.
 const PENDING_REREGISTER_DELAY_MS = 15_000;

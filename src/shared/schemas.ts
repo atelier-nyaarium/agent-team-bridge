@@ -20,7 +20,7 @@ export const TeamKindSchema = z.enum(["devcontainer", "loose", "console"]).meta(
 export const ResponseStatusSchema = z
 	.enum(["completed", "clarification", "deferred", "needs_human", "error", "timeout", "running"])
 	.meta({ id: "ResponseStatus" });
-// Whether a console's Domain is rooted yet. `unrooted` is a fresh, never-provisioned home (no
+// Whether a console's Domain is rooted yet. `unrooted` is a fresh, never-provisioned admin Domain (no
 // owner, no pending tenant); `pending` is an admin-staged tenant the friend has not yet
 // first-rooted; `rooted` just provisions the console. Mirrors evie's getDomainStatus 3-value
 // union. The gateway register reply only ever carries `rooted`/`unrooted` (a pending Domain has
@@ -194,7 +194,7 @@ export const ConsoleOpSchema = z
 			// The Domain id of the target session, present only for a cross-Domain send (a session
 			// from a linked friend Domain). A gateway id is unique only within a Domain, so the
 			// gateway resolves the seal target by the full (domainId, gatewayId) pair when this is
-			// set; absent (or the local Domain) keeps the existing home/cross-Gateway resolution.
+			// set; absent (or the local Domain) keeps the existing local/cross-Gateway resolution.
 			domainId: z.string().min(1).max(64).optional(),
 			request_type: RequestTypeSchema.optional(),
 			effort: z.enum(["simple", "standard", "complex", "auto"]).optional(),
@@ -219,7 +219,7 @@ export const ConsoleOpSchema = z
 			// cycle at near-zero steady cost.
 			knownDomainVersion: z.string().optional(),
 		}),
-		// Fetch the home Gateway's bootstrap transport creds (the gateway-bridge SA + token) so
+		// Fetch the route Gateway's bootstrap transport creds (the gateway-bridge SA + token) so
 		// the Console can seal them into a bundle for a creds-less Gateway it is enrolling. No
 		// params: the Gateway returns its own bootstrap transport. Replaces carrying these creds
 		// in the provisioning blob.
@@ -405,9 +405,9 @@ export const ConsoleRelayFrameSchema = z
 		// public key, not a secret. conversationId + device + the op move INSIDE the
 		// seal, so evie sees only this opaque blob - it cannot read or forge the op.
 		signerSignPub: z.string().min(1),
-		// The Gateway this op targets, so evie routes per-target under direct multi-home
-		// (the Console seals to each Gateway directly). Plaintext routing metadata, like
-		// signerSignPub; absent falls back to evie's latest-Gateway routing (single-home).
+		// The Gateway this op targets, so evie routes per-target under direct multi-gateway
+		// routing (the Console seals to each Gateway directly). Plaintext routing metadata, like
+		// signerSignPub; absent falls back to evie's latest-Gateway routing (single-gateway).
 		targetGateway: z.string().optional(),
 		sealed: SealedEnvelopeSchema,
 	})
@@ -509,7 +509,7 @@ export const ConsoleRegisterResultSchema = z
 		epoch: z.number().int().nonnegative(),
 		// Whether this console's Domain is rooted yet, as the connected gateway sees it. A
 		// gateway only exists for a Domain that is already past rooting, so this register reply
-		// only ever reports `rooted` (or `unrooted` for a fresh, never-provisioned home); it can
+		// only ever reports `rooted` (or `unrooted` for a fresh, never-provisioned admin Domain); it can
 		// NEVER report `pending`, because a pending Domain has no gateway to register against. The
 		// pending case is learned earlier, from the provisioning blob's `pendingTenant`, and the
 		// app first-roots DIRECTLY against evie. Optional for decode tolerance: a pre-feature
@@ -813,7 +813,7 @@ export const ConsoleRelayReplySchema = z
 //  - the schema carries the shape, the Kotlin wrapper owns those behaviors.
 
 // The pending-Domain discriminator carried inside a provisioning blob. Present iff the blob is
-// for a PENDING (unrooted) Domain - both a friend invite AND the admin's own fresh-home
+// for a PENDING (unrooted) Domain - both a friend invite AND the admin's own fresh
 // (R1) setup. A pending Domain has no gateway, so the app cannot learn it is pending from a
 // register reply; it reads this off the blob and first-roots DIRECTLY against evie with the
 // nonce. Absent for a re-provision of an already-rooted Domain (which just provisions the
@@ -865,7 +865,7 @@ export const ProvisioningSchema = z
 		// on provision and is enrolled from the blob alone - no separate enroll/QR step.
 		// Absent for a legacy blob (the app then needs an interactive enroll).
 		identity: z.string().optional(),
-		// The home Gateway's id + public keys, also set by provision-admin-domain.sh.
+		// The route Gateway's id + public keys, also set by provision-admin-domain.sh.
 		// The app seals its FIRST op (register is itself sealed) TO the Gateway's box key,
 		// so it must hold these before connecting - the admit-gateway scan used to deliver
 		// them. With these in the blob, no admit-gateway step is needed either.
@@ -873,7 +873,7 @@ export const ProvisioningSchema = z
 		gatewaySignPub: z.string().optional(),
 		gatewayBoxPub: z.string().optional(),
 		// Set only for a PENDING (unrooted) Domain blob (a friend invite or the admin's own
-		// fresh-home setup): the pending Domain id + the one-time invite nonce. Its presence is
+		// fresh admin Domain setup): the pending Domain id + the one-time invite nonce. Its presence is
 		// the discriminator - the app first-roots (POSTs the SignedFirstRoot to evie with this
 		// nonce) iff it is present, else it just provisions the console. Absent for a re-provision
 		// of an already-rooted Domain.

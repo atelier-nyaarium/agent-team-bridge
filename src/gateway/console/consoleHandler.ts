@@ -40,7 +40,7 @@ export interface ConsoleRoutes {
 	respond: (req: Request, body: Record<string, unknown>) => Response;
 	teams: () => Response;
 	// Mesh-wide team list (local + every online peer Gateway); the console is a
-	// roaming console and sees all Gateways, not just its home Gateway.
+	// roaming console and sees all Gateways, not just its route Gateway.
 	discover: () => Promise<Response>;
 }
 
@@ -73,9 +73,9 @@ export interface ConsoleHandlerDeps {
 	 * poll reply carries the snapshot only when the Console's known version differs. */
 	domain?: () => { version: string; snapshot: DomainSnapshot } | null;
 	/** This Gateway's own Domain lifecycle status, learned from evie's register reply. A Gateway
-	 * exists only for a Domain past rooting, so this is "rooted" (or "unrooted" for a fresh home),
+	 * exists only for a Domain past rooting, so this is "rooted" (or "unrooted" for a fresh admin Domain),
 	 * never "pending" - the pending case reaches the app via the provisioning blob's pendingTenant,
-	 * not here. Returned on the console register so a fresh-home app just-provisions. Undefined
+	 * not here. Returned on the console register so a fresh admin Domain just-provisions. Undefined
 	 * pre-register / against a pre-feature evie (the app then treats the Domain as already
 	 * rooted - the legacy path). */
 	domainStatus?: () => string | undefined;
@@ -142,7 +142,7 @@ export interface CrossDomainShareHandlers {
 	unshare: (sessionTarget: string, target: CrossDomainShareTarget) => boolean;
 	listShares: () => CrossDomainListSharesResult["shares"];
 	/** Actively settle any in-flight cross-Domain job after a withdrawn share, so an already-accepted
-	 * send's reply stops at the destination instead of forwarding home. For a specific-Domain share
+	 * send's reply stops at the destination instead of forwarding back to the origin. For a specific-Domain share
 	 * that one Domain; for an everyone-trusted share every currently-linked Domain (it reached them
 	 * all). Called after a successful unshare. */
 	expireSessionJobsForTarget: (sessionTarget: string, target: CrossDomainShareTarget) => void;
@@ -436,7 +436,7 @@ export function createConsoleHandler({
 					`[console register] conv=${conversationId.slice(0, 12)} owner=${ownerId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
 				);
 				// Carry the Gateway's own Domain status. A Gateway only exists for a Domain past
-				// rooting, so this is `rooted` (or `unrooted` for a fresh home) - never `pending`,
+				// rooting, so this is `rooted` (or `unrooted` for a fresh admin Domain) - never `pending`,
 				// which the app learns earlier from the provisioning blob's `pendingTenant` and
 				// first-roots directly at evie. Validate the evie-sourced value against the closed
 				// union (a garbage status is dropped, not forwarded). Omitted when unknown
@@ -490,7 +490,7 @@ export function createConsoleHandler({
 					fromConversationId: ownerId,
 					to: op.to,
 					// Forward the selected session's Domain so a cross-Domain send resolves its seal
-					// target by the full (domainId, gatewayId) pair; absent for a home/cross-Gateway send.
+					// target by the full (domainId, gatewayId) pair; absent for a local/cross-Gateway send.
 					targetDomainId: op.domainId,
 					type: op.request_type,
 					effort: op.effort,
@@ -606,7 +606,7 @@ export function createConsoleHandler({
 			}
 
 			case "get_gateway_transport": {
-				// The home Gateway hands the Console the bootstrap creds (gateway-bridge SA + token)
+				// The route Gateway hands the Console the bootstrap creds (gateway-bridge SA + token)
 				// so it can seal them into a bundle for a creds-less Gateway it is enrolling. Serving
 				// creds here is safe because the frame reached dispatch only after the consoleSealer
 				// opened it against an owner-signed kind:console admission at the relay boundary; the
@@ -615,7 +615,7 @@ export function createConsoleHandler({
 				const transport = bootstrapTransport?.() ?? null;
 				if (!transport) {
 					throw new Error(
-						"gateway transport not provisioned - run provision-admin-domain.sh on the home Gateway",
+						"gateway transport not provisioned - run provision-admin-domain.sh on the route Gateway",
 					);
 				}
 				return { transport };
@@ -740,7 +740,7 @@ export function createConsoleHandler({
 				const removed = crossDomainShare.unshare(canonicalTarget, op.target);
 				// Un-share must bite in-flight too, not just on the next fresh send: settle the
 				// already-accepted cross-Domain job(s) for this audience so the reply is dropped at the
-				// destination rather than forwarded home. Only when the share actually changed.
+				// destination rather than forwarded back to the origin. Only when the share actually changed.
 				if (removed) crossDomainShare.expireSessionJobsForTarget(canonicalTarget, op.target);
 				return { ok: true };
 			}

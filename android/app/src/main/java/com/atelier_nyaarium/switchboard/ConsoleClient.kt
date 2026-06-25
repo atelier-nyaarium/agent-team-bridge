@@ -147,7 +147,7 @@ data class Team(
 	// its Domain. Null for a pre-federation Gateway and for the locally-synthesized ended
 	// session (it has no live wire record).
 	val domainId: String? = null,
-	// The owning Domain's network display name, stamped by the gateway's discover for both home
+	// The owning Domain's network display name, stamped by the gateway's discover for both local
 	// and peer sessions. The Peers list shows this instead of the opaque domainId. Null for a
 	// pre-feature gateway or a Domain that has not set a name yet.
 	val displayName: String? = null,
@@ -235,10 +235,10 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	private val proxyBase =
 		"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
 
-	/** This console's home Gateway id, learned at register and set by ChatRepository.
+	/** This console's route Gateway id, learned at register and set by ChatRepository.
 	 * Rides every relay so the Gateway routes to the right Gateway; null until learned. */
 	@Volatile
-	var homeGateway: String? = null
+	var routeGateway: String? = null
 
 	/**
 	 * CA-pinned preflight of the ACTUAL transport: the console-bridge liveness probe through the API
@@ -286,13 +286,13 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		return ProvisioningStore.GatewayKeys(admission.signPub, admission.boxPub)
 	}
 
-	/** The Gateway id to use for sealing, in priority order: (1) the live homeGateway set
+	/** The Gateway id to use for sealing, in priority order: (1) the live routeGateway set
 	 * after register, (2) the persisted Gateway id from a previous session. Throws when
 	 * neither is available - a fresh install before the owner has admitted any Gateway, where
 	 * the fix is to admit one (not re-provision); the "no gateway admitted" token routes the
 	 * banner to that guidance. */
 	private fun resolveGatewayId(): String =
-		homeGateway?.takeIf { it.isNotEmpty() }
+		routeGateway?.takeIf { it.isNotEmpty() }
 			?: store.loadGatewayId().takeIf { it.isNotEmpty() }
 			?: error("No Gateway admitted yet - add one from Manage Gateways.")
 
@@ -325,7 +325,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	}
 
 	/** Unseal a reply envelope using the console's box private key, verified against
-	 * the home Gateway's signing public key. */
+	 * the route Gateway's signing public key. */
 	private fun unsealReply(sealed: SealedEnvelope, identity: Crypto.Identity, hostSignPub: String): ConsoleReplyBody {
 		val plain = Crypto.unseal(sealed.toCrypto(), identity.box.priv, hostSignPub)
 		return wireJson.decodeFromString<ConsoleReplyBody>(plain.toString(Charsets.UTF_8))
@@ -345,9 +345,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		targetGateway: String? = null,
 	): ConsoleReplyBody {
 		val identity = requireConsoleIdentity()
-		// Direct multi-home: an op seals to the Gateway hosting its session (resolved from
+		// Direct multi-gateway: an op seals to the Gateway hosting its session (resolved from
 		// the keyring), naming it so evie routes there. Register/poll/list default to the
-		// home Gateway.
+		// route Gateway.
 		val gatewayId = targetGateway?.takeIf { it.isNotEmpty() } ?: resolveGatewayId()
 		val hostKeys = requireGatewayKeys(gatewayId)
 
@@ -672,15 +672,15 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			)
 		}
 		// Carry the selected session's Domain so the Gateway resolves a cross-Domain seal target
-		// by the full (domainId, gatewayId) pair; null/home keeps the existing home resolution.
+		// by the full (domainId, gatewayId) pair; null/local keeps the existing local resolution.
 		val crossDomain = domainId?.ifEmpty { null }
 		val op = ConsoleOp.Send(to = to, domainId = crossDomain, body = body, files = wireFiles.ifEmpty { null })
 		// A same-Domain send seals directly to the Gateway hosting the target team (a bare name
-		// resolves to home), so a cross-Gateway send goes E2E to that Gateway. A CROSS-Domain send
-		// must instead seal to HOME: the friend Gateway's keys are not in this owner's keyring (it
-		// is a separate Domain), so home opens the op and relays it on to the friend over the mesh.
-		val home = homeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()
-		val target = if (crossDomain != null) home else TeamAddress.parse(to, home).gatewayId
+		// resolves to the local Gateway), so a cross-Gateway send goes E2E to that Gateway. A CROSS-Domain send
+		// must instead seal to the LOCAL Domain: the friend Gateway's keys are not in this owner's keyring (it
+		// is a separate Domain), so the local Gateway opens the op and relays it on to the friend over the mesh.
+		val local = routeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()
+		val target = if (crossDomain != null) local else TeamAddress.parse(to, local).gatewayId
 		val replyBody = relay(op, opId, targetGateway = target)
 		val status = replyBody.result?.let {
 			runCatching { wireJson.decodeFromJsonElement<ConsoleSendResult>(it).status }.getOrNull()
@@ -693,7 +693,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	 * arrives or the hold expires, so delivery is near-instant at ~1 request per
 	 * hold window instead of constant fast polling. */
 	fun poll(cursor: Long, epoch: Long, holdMs: Long = 0): ConsolePollResult {
-		// Carry the synced keyring version so the home Gateway returns the snapshot only when
+		// Carry the synced keyring version so the route Gateway returns the snapshot only when
 		// it changed (a revocation made elsewhere reaches this Console within one cycle).
 		val knownVersion = store.loadDomainVersion().ifEmpty { null }
 		val op = ConsoleOp.Poll(
@@ -715,16 +715,16 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		return wireJson.decodeFromJsonElement<ConsolePollResult>(body.result)
 	}
 
-	/** Fetch the home Gateway's bootstrap transport creds (the gateway-bridge SA + token), so this
+	/** Fetch the route Gateway's bootstrap transport creds (the gateway-bridge SA + token), so this
 	 * Console can seal them into a bundle for a creds-less Gateway it is enrolling. Replaces carrying
 	 * these creds in the provisioning blob; the Console fetches them on demand. */
 	fun getGatewayTransport(): GatewayTransport =
 		resultOf<ConsoleGatewayTransportResult>(relay(ConsoleOp.GetGatewayTransport), "get_gateway_transport").transport
 
-	/** The Gateway that hosts a target session (a bare name resolves to home), so a peek/send
+	/** The Gateway that hosts a target session (a bare name resolves to the local Gateway), so a peek/send
 	 * seals E2E to that Gateway. Mirrors send(). */
 	private fun targetGatewayOf(target: String): String =
-		TeamAddress.parse(target, homeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()).gatewayId
+		TeamAddress.parse(target, routeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()).gatewayId
 
 	/** Capture the target's visible tmux pane for the terminal view. Pass the last hash so the
 	 * Gateway returns unchanged=true (no ansi) for an idle pane. */
@@ -742,8 +742,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	//  Cross-Domain trust ops
 	//
 	//  Thin convenience wrappers over the same seal/relay/poll path as the ops above. All
-	//  default to the HOME Gateway: the cross-Domain handshake coordinator, the per-session
-	//  share state, and the unlink cleanup all run on this owner's home Gateway (the friend
+	//  default to the ROUTE Gateway: the cross-Domain handshake coordinator, the per-session
+	//  share state, and the unlink cleanup all run on this owner's own Gateway (the friend
 	//  Gateway is reached through the mesh, not sealed to directly). The reads (list/listen)
 	//  run fresh; the mutating ops carry a stable opId so a lost-reply retry replays the cached
 	//  result server-side rather than re-running, exactly like send/tmux_send.
@@ -824,7 +824,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	fun crossDomainListShares(): CrossDomainListSharesResult =
 		resultOf(relay(ConsoleOp.CrossDomainListShares), "cross_domain_list_shares")
 
-	/** The linked friend Domains from the home Gateway's cross-Domain peer set, so a just-linked
+	/** The linked friend Domains from the route Gateway's cross-Domain peer set, so a just-linked
 	 * peer is visible (and its detail reachable) before any of its sessions surface in discovery. A
 	 * fresh read each call (never cached). */
 	fun crossDomainListPeers(): CrossDomainListPeersResult =

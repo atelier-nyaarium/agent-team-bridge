@@ -277,7 +277,7 @@ class ProvisioningStore(context: Context) {
 
 	/** This owner's own network display name (the display name), cached locally so the profile
 	 * shows it without a round-trip. The authoritative copy lives on the Domain at evie; this is
-	 * refreshed from discovery (the home session's displayName) and updated on a local rename. */
+	 * refreshed from discovery (the local session's displayName) and updated on a local rename. */
 	var displayName: String
 		get() = prefs.getString(KEY_PROFILE_NAME, "") ?: ""
 		set(value) {

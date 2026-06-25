@@ -4,7 +4,7 @@ import { resolveLocalDomainId, sanitizeDomainId } from "../shared/domain-id.js";
 
 describe("sanitizeDomainId", () => {
 	it("slugs to lower-case alphanumerics with single dashes", () => {
-		expect(sanitizeDomainId("My Home")).toBe("my-home");
+		expect(sanitizeDomainId("My Lab")).toBe("my-lab");
 		expect(sanitizeDomainId("ACME_Corp.1")).toBe("acme-corp-1");
 	});
 
@@ -33,7 +33,7 @@ describe("slugField / sanitizeDomainId alignment", () => {
 	});
 
 	it("rejects pure-separator / edge-dash ids that sanitizeDomainId would throw on or alter", () => {
-		// The class the home-retire exposed: these once passed slugField but throw at sanitize
+		// The edge-case class these expose: these once passed slugField but throw at sanitize
 		// (the silent default that once swallowed them is gone), so reject them at validation.
 		for (const bad of ["---", "-x", "x-", "a--b", ""]) {
 			expect(slug.safeParse(bad).success).toBe(false);

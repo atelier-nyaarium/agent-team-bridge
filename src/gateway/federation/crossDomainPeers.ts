@@ -43,10 +43,10 @@ export const XDOMAIN_PEERS_FILE = "cross-domain-peers.json";
 
 /** The cross-Domain peer set on a Gateway: the Gateways owned by OTHER owners this
  * Gateway has linked with, persisted to the Gateway's volume (tight perms). This is
- * a DISJOINT store from the home allowlist: it is written ONLY by the handshake,
- * never by `allowlist.applySnapshot` or any evie-relayed snapshot, so a home-Domain
+ * a DISJOINT store from the local allowlist: it is written ONLY by the handshake,
+ * never by `allowlist.applySnapshot` or any evie-relayed snapshot, so a local-Domain
  * sync can never wipe it and it can never contaminate intra-Domain resolution. The
- * sealer resolves home peers FIRST (the allowlist), then falls back here, so a home
+ * sealer resolves local peers FIRST (the allowlist), then falls back here, so a local
  * peer's seal path stays byte-for-byte unchanged. */
 export class CrossDomainPeers {
 	private file: string;

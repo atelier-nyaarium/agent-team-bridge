@@ -227,8 +227,8 @@ export async function startGateway(): Promise<void> {
 		allowlistForConsole = allowlist;
 		// Cross-Domain peers (other owners' Gateways this Gateway has linked with): a
 		// DISJOINT store from the single-owner allowlist, written only by the handshake,
-		// so a home-Domain sync can never wipe it and it never contaminates intra-Domain
-		// resolution. The sealer resolves home peers first, then this set.
+		// so a local-Domain sync can never wipe it and it never contaminates intra-Domain
+		// resolution. The sealer resolves local peers first, then this set.
 		const crossDomainPeers = new CrossDomainPeers(federationDir);
 		crossDomainPeersForConsole = crossDomainPeers;
 		// Per-session share state: which local sessions are offered to which linked friend
@@ -300,7 +300,7 @@ export async function startGateway(): Promise<void> {
 		if (!allowlist.selfAdmission(identity.sign.pub)) logAdmitGatewayQr(identity, localGatewayId);
 
 		// The service-proxy WS: creds are delivered by enrollment, no kubeconfig mount, and it
-		// reaches a home-NAT evie through the apiserver. The SA token authenticates to the API
+		// reaches a behind-NAT evie through the apiserver. The SA token authenticates to the API
 		// server (consumed there); the cluster CA is pinned for TLS.
 		const connection = evieWsConnection(evieTransport);
 		console.log(
@@ -452,10 +452,10 @@ export async function startGateway(): Promise<void> {
 		// first register, mirroring displayName: "unknown" stays unknown rather than asserting
 		// "not admin" (the TeamInfo stamp omits the field for any falsy value either way).
 		isAdminDomain: () => domainMeta?.isAdminDomain ?? null,
-		// Home-first seal-target resolution on the send side: a target gateway the home
-		// allowlist admits seals v1 to home, mirroring the sealer's open-side ordering, so a
-		// home/friend gateway-id collision never routes a home send to the friend.
-		resolvesHomeGateway: allowlistForConsole
+		// Local-first seal-target resolution on the send side: a target gateway the local
+		// allowlist admits seals v1 to the local Domain, mirroring the sealer's open-side ordering, so a
+		// local/friend gateway-id collision never routes a local send to the friend.
+		resolvesLocalGateway: allowlistForConsole
 			? (gatewayId) => allowlistForConsole!.resolveGateway(gatewayId) !== null
 			: null,
 		// teams() refreshes each online session's cross-Domain shares so presence keeps a
@@ -463,7 +463,7 @@ export async function startGateway(): Promise<void> {
 		touchShares: crossDomainShareState ? (sessionTarget) => crossDomainShareState!.touch(sessionTarget) : null,
 		// respond re-reads the per-session share on a cross-Domain reply forward: a send
 		// accepted while shared, then un-shared, has its in-flight reply dropped here instead
-		// of relayed home (the un-share bites every direction, not just fresh sends).
+		// of relayed back to the origin (the un-share bites every direction, not just fresh sends).
 		isSharedToForReply: crossDomainShareState
 			? (sessionTarget, domainId) => crossDomainShareState!.isSharedTo(sessionTarget, domainId, isLinkedDomain)
 			: null,
@@ -513,7 +513,7 @@ export async function startGateway(): Promise<void> {
 							unshare: (sessionTarget, target) => crossDomainShareState!.unshare(sessionTarget, target),
 							// After a successful unshare, settle any in-flight cross-Domain job so an
 							// already-accepted send's reply stops at the destination instead of forwarding
-							// home. A specific-Domain unshare scopes to that Domain; an everyone-trusted
+							// back to the origin. A specific-Domain unshare scopes to that Domain; an everyone-trusted
 							// unshare must settle every Domain it reached, i.e. every currently-linked one.
 							expireSessionJobsForTarget: (sessionTarget, target) => {
 								const domains =
@@ -570,7 +570,7 @@ export async function startGateway(): Promise<void> {
 		evictConsolePeer = (conversationId) => consoleHandler.removePeer(conversationId);
 
 		// Federation: a peer Gateway's frames land here, run against the local routes,
-		// and the reply routes home through the Router. The share state gates a
+		// and the reply routes back to the origin through the Router. The share state gates a
 		// cross-Domain op to a shared devcontainer/loose session and filters a
 		// cross-Domain caller's list_teams to shared sessions only.
 		const gatewayRelayHandler = createGatewayRelayHandler({

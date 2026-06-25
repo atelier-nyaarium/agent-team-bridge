@@ -83,7 +83,7 @@ export class Allowlist {
 	}
 
 	/** The current owner-rooted snapshot, or null before rooting. Mirrors evie's
-	 * canonical keyring (the Console syncs it through its home Gateway's poll reply). */
+	 * canonical keyring (the Console syncs it through its route Gateway's poll reply). */
 	getSnapshot(): DomainSnapshot | null {
 		if (!this.state.ownerSignPub) return null;
 		return {

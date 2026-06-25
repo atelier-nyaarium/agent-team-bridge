@@ -96,7 +96,7 @@ describe("protocol fixtures", () => {
 		expect(result.teams[0].domainId).toBe("alice");
 		expect(result.teams[1].kind).toBeUndefined();
 		// A pre-federation team omits the Domain id; it decodes as absent (consumers fall
-		// back to the home Domain).
+		// back to the local Domain).
 		expect(result.teams[1].domainId).toBeUndefined();
 	});
 });

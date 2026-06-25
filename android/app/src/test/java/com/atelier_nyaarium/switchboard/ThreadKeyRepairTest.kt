@@ -29,7 +29,7 @@ class ThreadKeyRepairTest {
 
 	@Test
 	fun preservesExplicitRemoteHost() {
-		// A cross-Host key is not "ours" to re-home; keep it byte-stable.
+		// A cross-Host key is not "ours" to re-assign; keep it byte-stable.
 		assertEquals("hostb/api", canonicalThreadKey("hostb/api", "switchboard"))
 	}
 

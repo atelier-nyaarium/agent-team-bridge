@@ -31,7 +31,7 @@ function sealerFor(self: Identity, localGatewayId: string, peers: Record<string,
 	const allowlist = {
 		resolveGateway: (h: string) => (peers[h] ? { signPub: peers[h].sign.pub, boxPub: peers[h].box.pub } : null),
 	} as unknown as Allowlist;
-	// These Gateways are same-Domain (the home v1 path); an empty cross-Domain set
+	// These Gateways are same-Domain (the local v1 path); an empty cross-Domain set
 	// (never written - no `add` here) keeps resolution on the allowlist.
 	const noCrossPeers = new CrossDomainPeers(path.join(os.tmpdir(), "federation-test-no-peers"));
 	return createSealer(self, allowlist, localGatewayId, noCrossPeers, "alice");
@@ -153,7 +153,7 @@ describe("federation routing (E2E sealed)", () => {
 		expect(res.status).toBe(503);
 	});
 
-	it("DESTINATION: an inbound federated send lands locally and seals its reply home", async () => {
+	it("DESTINATION: an inbound federated send lands locally and seals its reply back to the origin", async () => {
 		let pinned: FederatedOp | undefined;
 		const evie = fakeEvie({
 			destSealer: sealerA,
@@ -198,7 +198,7 @@ describe("federation routing (E2E sealed)", () => {
 		expect(pinned).toMatchObject({ kind: "response_push", session_id: srcSession, response: "all good" });
 	});
 
-	it("DESTINATION: a response_push pinned home delivers to the origin conversation", async () => {
+	it("DESTINATION: a response_push pinned to the origin delivers to the origin conversation", async () => {
 		const senderPushes: Record<string, unknown>[] = [];
 		const conversationRegistry = new Map() as RoutesDeps["conversationRegistry"];
 		conversationRegistry.set("conv-1", channelWs(senderPushes) as never);
@@ -901,7 +901,7 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 //
 //  alice-gw (Domain "alice") sends to bob-gw/lib (Domain "bob"). The seal MUST be v2
 //  (resolved by the (domainId, gatewayId) pair from the disjoint peer set), evie stays
-//  content-blind, and the op lands at bob's destination share gate. The home seal path
+//  content-blind, and the op lands at bob's destination share gate. The local seal path
 //  is untouched (covered by the same-Domain tests above).
 
 const aliceOwner = generateIdentity();
@@ -1140,7 +1140,7 @@ describe("Phase D cross-Domain send flow (E2E sealed v2)", () => {
 		const libEntry = teams.find((t) => t.team === "lib");
 		expect(libEntry?.gatewayId).toBe("bob-gw");
 		// The cross-Domain entry is tagged with the PEER's Domain id (bob), authoritative from
-		// alice's own peer set - so the console groups it under bob, not alice's home Domain,
+		// alice's own peer set - so the console groups it under bob, not alice's local Domain,
 		// even if bob ran an older build that stamped no domainId. alice's local app carries her
 		// own Domain id.
 		expect(libEntry?.domainId).toBe("bob");
@@ -1241,24 +1241,24 @@ describe("cross-Domain unlink local cleanup (the dep over the real stores)", () 
 });
 
 ////////////////////////////////
-//  sealTargetFor is home-first (a home/friend gateway-id collision)
+//  sealTargetFor is local-first (a local/friend gateway-id collision)
 //
-//  sealer.open resolves a peer home-first; the SEND side (sealTargetFor) must match, or a
-//  cross-gateway send to your OWN home Gateway whose id COLLIDES with a friend's gateway id
-//  is sealed v2 to the FRIEND. The fix consults `resolvesHomeGateway` before scanning the
-//  cross-Domain peer set, so a home target always seals v1 to home.
+//  sealer.open resolves a peer local-first; the SEND side (sealTargetFor) must match, or a
+//  cross-gateway send to your OWN local Gateway whose id COLLIDES with a friend's gateway id
+//  is sealed v2 to the FRIEND. sealTargetFor consults `resolvesLocalGateway` before scanning the
+//  cross-Domain peer set, so a local target always seals v1 to the local Domain.
 
-const homeOwner = generateIdentity();
+const localOwner = generateIdentity();
 const senderGw = generateIdentity(); // the sending Gateway, in Domain "alice"
-const homeGw1 = generateIdentity(); // a SECOND home Gateway, id "gw1"
+const localGw1 = generateIdentity(); // a SECOND local Gateway, id "gw1"
 const friendOwner = generateIdentity();
 const friendGw1 = generateIdentity(); // a FRIEND Gateway, ALSO id "gw1", in Domain "friend"
 
-/** A home allowlist that admits BOTH the sender and a second home gateway "gw1", so the
- * sender can seal home-to-home. */
-function homeAllowlistWithGw1(): Allowlist {
-	const a = new Allowlist(path.join(os.tmpdir(), `fed-home-${Math.random().toString(36).slice(2)}`));
-	a.setOwner(homeOwner.sign.pub);
+/** A local allowlist that admits BOTH the sender and a second local gateway "gw1", so the
+ * sender can seal local-to-local. */
+function localAllowlistWithGw1(): Allowlist {
+	const a = new Allowlist(path.join(os.tmpdir(), `fed-local-${Math.random().toString(36).slice(2)}`));
+	a.setOwner(localOwner.sign.pub);
 	a.addAdmission(
 		signAdmission(
 			{
@@ -1269,36 +1269,36 @@ function homeAllowlistWithGw1(): Allowlist {
 				issuedAt: 1,
 				nonce: "c2VuZA==",
 			},
-			homeOwner.sign.priv,
-			homeOwner.sign.pub,
+			localOwner.sign.priv,
+			localOwner.sign.pub,
 		),
 	);
 	a.addAdmission(
 		signAdmission(
 			{
 				kind: "gateway",
-				signPub: homeGw1.sign.pub,
-				boxPub: homeGw1.box.pub,
+				signPub: localGw1.sign.pub,
+				boxPub: localGw1.box.pub,
 				gatewayId: "gw1",
 				issuedAt: 1,
 				nonce: "Z3cx",
 			},
-			homeOwner.sign.priv,
-			homeOwner.sign.pub,
+			localOwner.sign.priv,
+			localOwner.sign.pub,
 		),
 	);
 	return a;
 }
 
-describe("sealTargetFor home-first (gateway-id collision)", () => {
-	it("a send to the HOME gw1 seals v1 to home, NOT v2 to the friend that also runs gw1", async () => {
-		const homeAllowlist = homeAllowlistWithGw1();
+describe("sealTargetFor local-first (gateway-id collision)", () => {
+	it("a send to the LOCAL gw1 seals v1 to the local Domain, NOT v2 to the friend that also runs gw1", async () => {
+		const localAllowlist = localAllowlistWithGw1();
 		// The sender ALSO has a linked friend Domain whose gateway id collides ("gw1").
-		const senderPeers = peersOf(xdPeer(friendOwner, "friend", "gw1", friendGw1, homeOwner));
-		const senderSealer = createSealer(senderGw, homeAllowlist, "sender-gw", senderPeers, "alice");
+		const senderPeers = peersOf(xdPeer(friendOwner, "friend", "gw1", friendGw1, localOwner));
+		const senderSealer = createSealer(senderGw, localAllowlist, "sender-gw", senderPeers, "alice");
 
-		// Capture the sealed payload + the srcDomain evie was handed. The home gw1 opens it; the
-		// friend's gw1 must NOT be able to (proving it was sealed to home, not the friend).
+		// Capture the sealed payload + the srcDomain evie was handed. The local gw1 opens it; the
+		// friend's gw1 must NOT be able to (proving it was sealed to the local Domain, not the friend).
 		let sealedToOpen: SealedEnvelope | undefined;
 		let srcDomainSent: unknown;
 		const evie = fakeEvie({
@@ -1306,16 +1306,16 @@ describe("sealTargetFor home-first (gateway-id collision)", () => {
 				if (action !== "gateway_relay") return { ok: true };
 				sealedToOpen = (params.payload as { sealed: SealedEnvelope }).sealed;
 				srcDomainSent = params.srcDomain;
-				// The home gw1 opens the v1 frame (home path -> srcDomainId null), runs nothing,
+				// The local gw1 opens the v1 frame (local path -> srcDomainId null), runs nothing,
 				// and seals an empty reply back so the origin's open succeeds.
-				const homeGw1Sealer = createSealer(
-					homeGw1,
-					// gw1's view: the same home Domain, admitting the sender so it can verify it.
+				const localGw1Sealer = createSealer(
+					localGw1,
+					// gw1's view: the same local Domain, admitting the sender so it can verify it.
 					(() => {
 						const a = new Allowlist(
 							path.join(os.tmpdir(), `fed-gw1-${Math.random().toString(36).slice(2)}`),
 						);
-						a.setOwner(homeOwner.sign.pub);
+						a.setOwner(localOwner.sign.pub);
 						a.addAdmission(
 							signAdmission(
 								{
@@ -1326,8 +1326,8 @@ describe("sealTargetFor home-first (gateway-id collision)", () => {
 									issuedAt: 1,
 									nonce: "c2VuZA==",
 								},
-								homeOwner.sign.priv,
-								homeOwner.sign.pub,
+								localOwner.sign.priv,
+								localOwner.sign.pub,
 							),
 						);
 						return a;
@@ -1338,10 +1338,10 @@ describe("sealTargetFor home-first (gateway-id collision)", () => {
 					),
 					"alice",
 				);
-				const opened = homeGw1Sealer.openWithSource("sender-gw", sealedToOpen);
-				// v1 / home: the destination resolved the sender as a HOME peer, not cross-Domain.
+				const opened = localGw1Sealer.openWithSource("sender-gw", sealedToOpen);
+				// v1 / local: the destination resolved the sender as a LOCAL peer, not cross-Domain.
 				expect(opened.srcDomainId).toBeNull();
-				return { ok: true, result: homeGw1Sealer.seal("sender-gw", { ok: true }) };
+				return { ok: true, result: localGw1Sealer.seal("sender-gw", { ok: true }) };
 			},
 		});
 
@@ -1349,7 +1349,7 @@ describe("sealTargetFor home-first (gateway-id collision)", () => {
 			evieClient: evie.client,
 			sealer: senderSealer,
 			crossDomainPeers: senderPeers,
-			resolvesHomeGateway: (gatewayId) => homeAllowlist.resolveGateway(gatewayId) !== null,
+			resolvesLocalGateway: (gatewayId) => localAllowlist.resolveGateway(gatewayId) !== null,
 		});
 		ctx.config.localDomainId = "alice";
 		const { send } = createRoutes(ctx);
@@ -1358,17 +1358,17 @@ describe("sealTargetFor home-first (gateway-id collision)", () => {
 			from: "app",
 			fromConversationId: "c1",
 			to: "gw1/team",
-			body: "home please",
+			body: "local please",
 			channelOnly: true,
 		});
 		expect(res.status).toBe(200);
-		// The v1 home path sends NO srcDomain-keyed cross routing (the relay still stamps
+		// The v1 local path sends NO srcDomain-keyed cross routing (the relay still stamps
 		// localDomainId, but the SEAL is v1: the friend's gw1 cannot open it).
 		expect(srcDomainSent).toBe("alice");
 		expect(sealedToOpen).toBeDefined();
 
-		// Hard proof it went HOME, not to the friend: the friend's gw1 sealer (the colliding
-		// peer) cannot open the envelope - the home target sealed to the HOME gw1's box key.
+		// Hard proof it went to the LOCAL Domain, not to the friend: the friend's gw1 sealer (the colliding
+		// peer) cannot open the envelope - the local target sealed to the LOCAL gw1's box key.
 		const friendGw1Sealer = createSealer(
 			friendGw1,
 			(() => {
@@ -1377,7 +1377,7 @@ describe("sealTargetFor home-first (gateway-id collision)", () => {
 				return a;
 			})(),
 			"gw1",
-			peersOf(xdPeer(homeOwner, "alice", "sender-gw", senderGw, friendOwner)),
+			peersOf(xdPeer(localOwner, "alice", "sender-gw", senderGw, friendOwner)),
 			"friend",
 		);
 		expect(() => friendGw1Sealer.openWithSource("sender-gw", sealedToOpen as SealedEnvelope, "alice")).toThrow();
@@ -1579,7 +1579,7 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 		// A federated job, but its origin Gateway is a SAME-Domain peer (not in the cross set).
 		store.create("conv:c1:bob-gw/lib", "x", "lib", {
 			persistent: true,
-			returnRoute: { srcGateway: "home-peer", srcConversationId: "c1", srcSession: "conv:c1:bob-gw/lib" },
+			returnRoute: { srcGateway: "local-peer", srcConversationId: "c1", srcSession: "conv:c1:bob-gw/lib" },
 		});
 		const peers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
 		const isLive = isLiveFor(store, peers, "bob-gw");
@@ -1599,8 +1599,8 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 //  Per-session un-share enforced on the destination reply forward (response_push)
 //
 //  The leak: B shares lib to Domain A; A sends to B/lib (accepted, B creates a destination
-//  job bound to A, returnRoute home, dstDomainId A); B un-shares lib from A; B's agent's
-//  in-flight reply must NOT still forward home, because the share is gone. routes.respond
+//  job bound to A, returnRoute to the origin, dstDomainId A); B un-shares lib from A; B's agent's
+//  in-flight reply must NOT still forward to the origin, because the share is gone. routes.respond
 //  re-reads the share on the cross-Domain reply forward and DROPS it when no longer shared.
 
 describe("destination reply forward re-checks the per-session share (cross-Domain)", () => {
@@ -1633,7 +1633,7 @@ describe("destination reply forward re-checks the per-session share (cross-Domai
 		return { routes, evie };
 	}
 
-	it("DROPS the response_push for a session that was un-shared (does not forward home)", async () => {
+	it("DROPS the response_push for a session that was un-shared (does not forward to the origin)", async () => {
 		const { routes, evie } = respondOnB(false);
 		const res = routes.respond(new Request("http://gateway/respond", { method: "POST" }), {
 			session_id: SRC_SESSION,
@@ -1655,7 +1655,7 @@ describe("destination reply forward re-checks the per-session share (cross-Domai
 			response: "all good",
 		});
 		expect((await res.json()).federated).toBe(true);
-		// The forward is fire-and-forget; let it run, then assert it relayed home.
+		// The forward is fire-and-forget; let it run, then assert it relayed to the origin.
 		await new Promise((r) => setTimeout(r, 0));
 		expect(evie.calls.find((c) => c.action === "gateway_relay")).toBeDefined();
 	});

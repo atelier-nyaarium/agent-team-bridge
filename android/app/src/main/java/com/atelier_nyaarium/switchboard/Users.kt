@@ -70,7 +70,7 @@ fun UsersScreen(
 	onAddGateway: () -> Unit,
 ) {
 	val scope = rememberCoroutineScope()
-	// Only the home admin (the admin) enrolls users + hosts guest networks; a guest sees neither.
+	// Only the admin enrolls users + hosts guest networks; a guest sees neither.
 	val isAdmin = remember { repo.isAdmin() }
 	var menuOpen by remember { mutableStateOf(false) }
 	// One-shot fetch on entry. Null = loading; a Result carries the rows or evie's opaque reason.
@@ -132,7 +132,7 @@ fun UsersScreen(
 					}
 				},
 				actions = {
-					// The federation actions live here now that Users is the home surface (no separate
+					// The federation actions live here now that Users is the main surface (no separate
 					// Federation hub). Guest networks is admin-only.
 					IconButton(onClick = { menuOpen = true }) {
 						Icon(Icons.Default.MoreVert, contentDescription = "Network actions")
