@@ -43,7 +43,7 @@ class FriendOnboardingTest {
 
 	@Test
 	fun ordinaryBlobIsNotPending() {
-		// No pendingTenant: an already-rooted operator blob just provisions the console.
+		// No pendingTenant: an already-rooted admin blob just provisions the console.
 		assertTrue(FriendOnboarding.decide(prov(null), alreadyRooted = false) is FirstRootDecision.NotPending)
 	}
 
@@ -105,9 +105,9 @@ class FriendOnboardingTest {
 
 	@Test
 	fun clockSkewRejectIsTransientWithASyncHint() {
-		// evie's "operator op is stale" is a >2min device clock skew; the latch stays false and the
+		// evie's "admin op is stale" is a >2min device clock skew; the latch stays false and the
 		// poll loop re-attempts, so it must classify transient (auto-retry) with a clock-sync hint.
-		val r = FriendOnboarding.classifyFirstRootError("operator op is stale")
+		val r = FriendOnboarding.classifyFirstRootError("admin op is stale")
 		assertTrue(r.transient)
 		assertTrue(r.message.contains("clock", ignoreCase = true))
 	}
@@ -130,7 +130,7 @@ class FriendOnboardingTest {
 		assertTrue(r.message.contains("some odd transport failure"))
 	}
 
-	// -- The no-gateway empty-board split (friend awaiting host vs operator add-a-gateway) --
+	// -- The no-gateway empty-board split (friend awaiting host vs admin add-a-gateway) --
 
 	@Test
 	fun aGatewayPresentIsNotANoGatewayState() {
@@ -146,8 +146,8 @@ class FriendOnboardingTest {
 	}
 
 	@Test
-	fun noGatewayWithoutAFirstRootIsTheOperatorCta() {
-		// An operator who never first-rooted just needs to admit a Gateway.
+	fun noGatewayWithoutAFirstRootIsTheAdminCta() {
+		// An admin who never first-rooted just needs to admit a Gateway.
 		assertEquals(NoGatewayState.NEEDS_GATEWAY, FriendOnboarding.noGatewayState(noGateway = true, firstRooted = false))
 	}
 
@@ -195,7 +195,7 @@ class FriendOnboardingTest {
 		assertEquals(HostedTenantState.ONLINE, FriendOnboarding.hostedState("guest1", teams))
 	}
 
-	// -- The propagated operator name in the Peers list --
+	// -- The propagated display name in the Peers list --
 
 	@Test
 	fun peersShowTheFriendsDisplayName() {

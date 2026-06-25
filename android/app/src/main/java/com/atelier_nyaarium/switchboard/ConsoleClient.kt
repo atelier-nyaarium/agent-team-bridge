@@ -92,7 +92,7 @@ data class Provisioning(
 	val gatewaySignPub: String = "",
 	val gatewayBoxPub: String = "",
 	/** Present on a friend INVITE blob: the pending Domain id + the one-time invite nonce the
-	 * app first-roots with. Absent on an ordinary (already-rooted) operator blob, which just
+	 * app first-roots with. Absent on an ordinary (already-rooted) admin blob, which just
 	 * provisions the console. The presence of this field IS what distinguishes the two paths. */
 	val pendingTenant: PendingTenantRef? = null,
 	/** Present on a friend ENROLL invite blob (alongside pendingTenant): the admin's owner keys +
@@ -209,7 +209,7 @@ private data class TrustHandshakeEnvelope(val trustHandshake: TrustHandshakeOp)
 private data class TrustPendingEnvelope(val trustPending: TrustPendingRequest)
 
 /** evie's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the
- * minted one-time invite `nonce` (the operator's app builds the friend's QR from it). The wire
+ * minted one-time invite `nonce` (the admin's app builds the friend's QR from it). The wire
  * EnrollResult schema omits `nonce`, so this is a local richer decode (ignoreUnknownKeys keeps
  * it forward-compatible). */
 @Serializable
@@ -569,8 +569,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
-	/** Submit an operator-signed provision_tenant enroll op and decode the minted one-time invite
-	 * nonce evie returns (the operator's app builds the friend's QR from it). Same evie-direct path
+	/** Submit an admin-signed provision_tenant enroll op and decode the minted one-time invite
+	 * nonce evie returns (the admin's app builds the friend's QR from it). Same evie-direct path
 	 * as enroll(); the only difference is the richer result decode (the wire EnrollResult omits the
 	 * nonce, so this reads it directly). */
 	fun provisionTenant(signed: SignedProvisionTenant): ProvisionTenantResult {

@@ -3,7 +3,7 @@
 // Phone-anchored trust: the owner root keypair is generated SILENTLY on the Console and never
 // reaches the host. So the host never holds, prompts for, or roots with the owner key. Instead the
 // trusted host bootstrap (it has direct Secret access) PRE-STAGES the home Domain as a PENDING
-// tenant - an displayName label plus a one-time invite nonce, no owner root - and the operator's
+// tenant - an displayName label plus a one-time invite nonce, no owner root - and the admin's
 // phone first-roots it on scan, exactly like a friend. `pendingHomeDomain` builds that pending
 // slice. The owner-key rooting path (`bootstrapDomain`) is kept for any caller that already holds
 // the public keys (a same-owner re-root from a backed-up key); it mints nothing and signs nothing.
@@ -52,7 +52,7 @@ interface DomainEnrollment {
 	revocations: SignedRevocation[];
 	displayName?: string | null;
 	pendingTenant?: PendingTenantRecord;
-	// Marks the operator's own home Domain so evie scopes the console relay to it. Only the home
+	// Marks the admin's own home Domain so evie scopes the console relay to it. Only the home
 	// slice this script writes carries it; a hosted guest Domain never does.
 	isAdminDomain?: boolean;
 }
@@ -93,7 +93,7 @@ export interface BootstrapResult {
 }
 
 /** A fresh pending home setup: no `ownerSignPub` yet, so the caller emits the blob with a
- * `pendingTenant` discriminator and the operator's phone first-roots on scan. */
+ * `pendingTenant` discriminator and the admin's phone first-roots on scan. */
 export interface PendingResult {
 	federationJson: LegacyFederationJson | MultiDomainFederationJson;
 }
@@ -227,7 +227,7 @@ function rootHomeSlice(
  * live evie federation.json text; the owner keys are base64 raw-32-byte public keys.
  *
  * OFF the default provision() path: the fresh setup pre-stages a PENDING home (`pendingHomeDomain`)
- * and the operator's phone first-roots on scan, so the host never holds the owner key. This
+ * and the admin's phone first-roots on scan, so the host never holds the owner key. This
  * owner-key-paste rooting is kept for the same-owner re-root-from-backup case (a caller that already
  * holds the public keys). It mints nothing and signs nothing.
  *
@@ -248,7 +248,7 @@ export function bootstrapDomain(
 }
 
 /** Build the PENDING home slice: an displayName label + a one-time invite nonce, NO owner root.
- * The fresh setup writes this so the operator's phone first-roots the home Domain on scan, exactly
+ * The fresh setup writes this so the admin's phone first-roots the home Domain on scan, exactly
  * like a friend. Mirrors evie's pending slice (`{ ownerSignPub: null, ownerBoxPub: null, admissions:
  * [], revocations: [], displayName, pendingTenant }`) so evie reads it back without complaint. The
  * nonce is minted by the caller (standard base64, never base64url - the wire `nonce` is a b64Field). */
@@ -267,7 +267,7 @@ function pendingHomeSlice(displayName: string, nonce: string, issuedAt: number, 
 /** Pre-stage the home Domain as a PENDING tenant in evie's Secret, preserving evie's identity +
  * every friend Domain. `evieFedJson` is the live evie federation.json text. The caller mints the
  * one-time invite `nonce` (standard base64) and emits it in the blob's `pendingTenant` so the
- * operator's phone first-roots on scan. This is the fresh-setup path: there is no owner key to
+ * admin's phone first-roots on scan. This is the fresh-setup path: there is no owner key to
  * root with (it is generated silently on the phone), so the home slice is rootless until the
  * first_root lands. v2-aware, same as `bootstrapDomain`. */
 export function pendingHomeDomain(

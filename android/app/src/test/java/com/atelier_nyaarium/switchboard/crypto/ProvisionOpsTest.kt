@@ -147,7 +147,7 @@ class ProvisionOpsTest {
 		val rBytes = ProvisionOpsCrypto.removeSigningBytes(removal(rVec["value"]!!.jsonObject), adminSignPub)
 		assertTrue(Crypto.verify(rBytes, rVec["signature"]!!.jsonPrimitive.content, adminSignPub))
 
-		// A different operator key must not verify either signature.
+		// A different admin key must not verify either signature.
 		val other = Crypto.generateIdentity()
 		assertFalse(Crypto.verify(pBytes, pVec["signature"]!!.jsonPrimitive.content, other.sign.pub))
 		assertFalse(Crypto.verify(rBytes, rVec["signature"]!!.jsonPrimitive.content, other.sign.pub))
@@ -177,25 +177,25 @@ class ProvisionOpsTest {
 
 	@Test
 	fun signsAndVerifiesLocally() {
-		val operator = Crypto.generateIdentity()
+		val adminOwner = Crypto.generateIdentity()
 		val attacker = Crypto.generateIdentity()
 
 		val p = ProvisionTenant("home", "Home Lab", 5000L, "cA==")
-		val signedP = ProvisionOpsCrypto.signProvision(p, operator.sign.priv, operator.sign.pub)
-		assertTrue(ProvisionOpsCrypto.verifyProvision(signedP, operator.sign.pub))
+		val signedP = ProvisionOpsCrypto.signProvision(p, adminOwner.sign.priv, adminOwner.sign.pub)
+		assertTrue(ProvisionOpsCrypto.verifyProvision(signedP, adminOwner.sign.pub))
 		assertFalse(ProvisionOpsCrypto.verifyProvision(signedP, attacker.sign.pub))
 		// A tampered displayName must not verify.
-		assertFalse(ProvisionOpsCrypto.verifyProvision(signedP.copy(provision = p.copy(displayName = "Evil")), operator.sign.pub))
+		assertFalse(ProvisionOpsCrypto.verifyProvision(signedP.copy(provision = p.copy(displayName = "Evil")), adminOwner.sign.pub))
 
 		val r = RemoveTenant("home", 6000L, "cg==")
-		val signedR = ProvisionOpsCrypto.signRemove(r, operator.sign.priv, operator.sign.pub)
-		assertTrue(ProvisionOpsCrypto.verifyRemove(signedR, operator.sign.pub))
+		val signedR = ProvisionOpsCrypto.signRemove(r, adminOwner.sign.priv, adminOwner.sign.pub)
+		assertTrue(ProvisionOpsCrypto.verifyRemove(signedR, adminOwner.sign.pub))
 		assertFalse(ProvisionOpsCrypto.verifyRemove(signedR, attacker.sign.pub))
 
 		// The distinct prefixes mean a provision signature does not verify as a removal over the
 		// same fields (and the reverse), so neither can be replayed as the other.
 		val crossRemoval = RemoveTenant(p.domainId, p.issuedAt, p.nonce)
-		assertFalse(Crypto.verify(ProvisionOpsCrypto.removeSigningBytes(crossRemoval, operator.sign.pub), signedP.signature, operator.sign.pub))
+		assertFalse(Crypto.verify(ProvisionOpsCrypto.removeSigningBytes(crossRemoval, adminOwner.sign.pub), signedP.signature, adminOwner.sign.pub))
 	}
 
 	@Test

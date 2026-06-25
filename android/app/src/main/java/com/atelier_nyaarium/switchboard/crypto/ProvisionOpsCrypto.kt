@@ -11,7 +11,7 @@ import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 
 /**
  * Friend cross-Domain onboarding signing, the byte-exact Kotlin counterpart of
- * switchboard's `src/shared/enrollment.ts`. The operator pre-stages a friend's pending
+ * switchboard's `src/shared/enrollment.ts`. The admin pre-stages a friend's pending
  * tenant (provision_tenant) or drops it (remove_tenant), the friend's app roots the Domain
  * on first connect (first_root, SELF-signed by its silently-generated owner key), and the
  * rooted owner renames the network (set_display_name). evie verifies each against the
@@ -38,9 +38,9 @@ object ProvisionOpsCrypto {
 			signature = Crypto.sign(provisionSigningBytes(p, adminSignPub), adminSignPriv),
 		)
 
-	fun verifyProvision(s: SignedProvisionTenant, expectedOperatorSignPub: String): Boolean =
-		s.adminSignPub == expectedOperatorSignPub &&
-			Crypto.verify(provisionSigningBytes(s.provision, expectedOperatorSignPub), s.signature, expectedOperatorSignPub)
+	fun verifyProvision(s: SignedProvisionTenant, expectedAdminSignPub: String): Boolean =
+		s.adminSignPub == expectedAdminSignPub &&
+			Crypto.verify(provisionSigningBytes(s.provision, expectedAdminSignPub), s.signature, expectedAdminSignPub)
 
 	fun removeSigningBytes(r: RemoveTenant, adminSignPub: String): ByteArray =
 		listOf(
@@ -58,9 +58,9 @@ object ProvisionOpsCrypto {
 			signature = Crypto.sign(removeSigningBytes(r, adminSignPub), adminSignPriv),
 		)
 
-	fun verifyRemove(s: SignedRemoveTenant, expectedOperatorSignPub: String): Boolean =
-		s.adminSignPub == expectedOperatorSignPub &&
-			Crypto.verify(removeSigningBytes(s.removal, expectedOperatorSignPub), s.signature, expectedOperatorSignPub)
+	fun verifyRemove(s: SignedRemoveTenant, expectedAdminSignPub: String): Boolean =
+		s.adminSignPub == expectedAdminSignPub &&
+			Crypto.verify(removeSigningBytes(s.removal, expectedAdminSignPub), s.signature, expectedAdminSignPub)
 
 	/**
 	 * first_root is SELF-signed by the fresh owner key (no admission exists yet): the owner key

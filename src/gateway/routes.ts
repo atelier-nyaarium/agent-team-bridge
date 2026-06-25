@@ -419,7 +419,7 @@ export function createRoutes({
 		const isDevcontainer = (name: string) => offlineCatalog.has(name) || knownTeamPaths.has(name);
 		// This Gateway's own network label, stamped on every local session so a linked friend
 		// Domain sees the owner's self-set name over the discovery roster (D1). Spread in only
-		// when set, so a Gateway with no operator name emits the same minimal TeamInfo as before
+		// when set, so a Gateway with no display name emits the same minimal TeamInfo as before
 		// (the field is nullish on the wire; the friend's gateway is the authoritative source).
 		const ownDisplayName = displayName?.();
 		const displayNameField = ownDisplayName ? { displayName: ownDisplayName } : {};

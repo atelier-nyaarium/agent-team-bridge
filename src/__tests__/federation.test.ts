@@ -251,9 +251,9 @@ describe("federation routing (E2E sealed)", () => {
 			displayName?: string;
 		}[];
 		expect(teams.find((t) => t.team === "recipe-app")?.gatewayId).toBe("hosta");
-		// The local Gateway stamps its own operator name on its sessions (D1).
+		// The local Gateway stamps its own display name on its sessions (D1).
 		expect(teams.find((t) => t.team === "recipe-app")?.displayName).toBe("My Lab");
-		// A peer's operator name rides through the merge unchanged (the peer Gateway is the
+		// A peer's display name rides through the merge unchanged (the peer Gateway is the
 		// authoritative source of its own self-set network label).
 		expect(teams.find((t) => t.team === "api")?.gatewayId).toBe("hostb");
 		expect(teams.find((t) => t.team === "api")?.displayName).toBe("Carol's Lab");

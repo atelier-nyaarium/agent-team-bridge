@@ -36,7 +36,7 @@ import { assertCanonicalBytes } from "./_canonical-bytes.js";
 //  the canonical bytes / signature either runtime derives differently fails one of the two
 //  suites. This suite also guards the fixture against a hand-edit (the recorded bytes +
 //  signature must reproduce from the live TS reference). The provision / remove ops are
-//  operator-signed, first_root is SELF-signed by the fresh owner key, set_display_name is
+//  admin-signed, first_root is SELF-signed by the fresh owner key, set_display_name is
 //  owner-signed.
 
 interface SignedVec<T> {
@@ -65,7 +65,7 @@ const vectors = JSON.parse(
 	trustPending: SignedVec<{ signerSignPub: string; proofAt: number; nonce: string }>;
 };
 
-describe("provision_tenant vectors (operator-signed)", () => {
+describe("provision_tenant vectors (admin-signed)", () => {
 	const { adminSignPub, adminSignPriv } = vectors;
 
 	it("reproduces the canonical PROVISION_TENANT_V1 signing bytes", () => {
@@ -73,7 +73,7 @@ describe("provision_tenant vectors (operator-signed)", () => {
 		assertCanonicalBytes(bytes, vectors.provision);
 	});
 
-	it("embeds the operator fingerprint in the signing bytes", () => {
+	it("embeds the admin fingerprint in the signing bytes", () => {
 		// The signing bytes bind fingerprint(adminSignPub), not the raw key, so the verifier
 		// can recompute it from the signed wrapper's adminSignPub.
 		expect(vectors.adminFingerprint).toBe(fingerprint(adminSignPub));
@@ -88,7 +88,7 @@ describe("provision_tenant vectors (operator-signed)", () => {
 		expect(verifyProvisionTenant(signed, adminSignPub)).toBe(true);
 	});
 
-	it("rejects the provision under a different operator key", () => {
+	it("rejects the provision under a different admin key", () => {
 		const forged = {
 			...signProvisionTenant(vectors.provision.value, adminSignPriv, adminSignPub),
 			adminSignPub: "AAAA",
@@ -108,7 +108,7 @@ describe("provision_tenant vectors (operator-signed)", () => {
 	});
 });
 
-describe("remove_tenant vectors (operator-signed)", () => {
+describe("remove_tenant vectors (admin-signed)", () => {
 	const { adminSignPub, adminSignPriv } = vectors;
 
 	it("reproduces the canonical REMOVE_TENANT_V1 signing bytes", () => {

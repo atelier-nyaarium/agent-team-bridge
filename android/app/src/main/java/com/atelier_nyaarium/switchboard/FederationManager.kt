@@ -58,7 +58,7 @@ class FederationManager(private val store: ProvisioningStore) {
 	/** The owner root identity, generated and persisted on first access. Synchronized: the
 	 * UI (owner-keys card) and background coroutines (connect, admit, poll) all reach this,
 	 * and a non-atomic generate-then-persist would let two callers mint different keys and
-	 * orphan one - so the operator could root evie at a key the device later discards. */
+	 * orphan one - so the admin could root evie at a key the device later discards. */
 	@Synchronized
 	fun ownerIdentity(): Crypto.Identity =
 		store.loadOwnerIdentity() ?: Crypto.generateIdentity().also { store.saveOwnerIdentity(it) }
@@ -73,7 +73,7 @@ class FederationManager(private val store: ProvisioningStore) {
 
 	fun ownerBoxPub(): String = ownerIdentity().box.pub
 
-	/** The owner key fingerprint the operator confirms when rooting the Domain host-side. */
+	/** The owner key fingerprint the admin confirms when rooting the Domain host-side. */
 	fun ownerSas(): String = Crypto.fingerprint(ownerIdentity().sign.pub)
 
 	/** A passphrase-encrypted backup of the owner root key, for offline safekeeping. */
@@ -314,7 +314,7 @@ class FederationManager(private val store: ProvisioningStore) {
 	}
 
 	////////////////////////////////
-	//  Friend cross-Domain onboarding (pending tenant + first-root + operator name)
+	//  Friend cross-Domain onboarding (pending tenant + first-root + display name)
 
 	////////////////////////////////
 	//  Trusted owners (the owner-keyed friend graph the Users surface reads)
@@ -367,7 +367,7 @@ class FederationManager(private val store: ProvisioningStore) {
 
 	/** A fresh opaque Domain id (a slug: lowercase hex, never shown to the human - pure
 	 * plumbing). 16 random bytes hex-encoded is well under the 64-char slug bound and collides
-	 * negligibly, so the operator never has to choose or check one. */
+	 * negligibly, so the admin never has to choose or check one. */
 	fun newDomainId(): String {
 		val bytes = ByteArray(16).also { rnd.nextBytes(it) }
 		return bytes.joinToString("") { "%02x".format(it) }

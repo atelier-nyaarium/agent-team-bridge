@@ -62,7 +62,7 @@ data class ScannedGateway(
 data class EnrollDelivery(val admitted: Boolean, val message: String, val pasteBundle: String?)
 
 /** A linked friend Domain row for the Federation hub: the Domain id (plumbing), the friend's
- * network display name (their self-set operator name, propagated over discovery - shown instead of
+ * network display name (their self-set display name, propagated over discovery - shown instead of
  * the opaque domainId when known), how many of its sessions are visible to me, and whether any is
  * online. `displayName` is null until a discovery session for the peer carries it. */
 data class LinkedDomain(
@@ -168,13 +168,13 @@ data class ChatState(
 	 * offline and has shared nothing back - the gap that otherwise dead-locks the post-link sharing
 	 * flow. Refreshed alongside teams; an empty set just falls back to discovery-only. */
 	val linkedPeerOwners: Map<String, String> = emptyMap(),
-	/** This owner's own network display name (the operator name), for the profile field and the
+	/** This owner's own network display name (the display name), for the profile field and the
 	 * MY NETWORK card. Seeded from the local cache and refreshed from discovery's home-session
 	 * displayName; empty until the owner sets one. */
 	val displayName: String = "",
 	/** True once this device has first-rooted a pending friend Domain from its invite blob. Mirrors
 	 * store.firstRooted into the UI state so the empty board can tell a friend who is set up but has
-	 * no host yet (-> the Setting-up-a-host pointer) from an operator who has not admitted a Gateway. */
+	 * no host yet (-> the Setting-up-a-host pointer) from an admin who has not admitted a Gateway. */
 	val firstRooted: Boolean = false,
 ) {
 	/** Sessions shows live teams plus any team we already have a thread with
@@ -221,7 +221,7 @@ data class ChatState(
 		get() = error?.startsWith("Add a Gateway") == true
 
 	/** Which no-gateway empty-board guidance applies: the friend's just-set-up "bring up a host"
-	 * state vs the operator's Add-a-Gateway onboarding, split off the first-root latch. The board
+	 * state vs the admin's Add-a-Gateway onboarding, split off the first-root latch. The board
 	 * keys its no-gateway copy + CTA off this instead of needsGateway alone. */
 	val noGatewayState: NoGatewayState
 		get() = FriendOnboarding.noGatewayState(needsGateway, firstRooted)
@@ -742,7 +742,7 @@ class ChatRepository(
 			if (!firstRootIfPending()) return@withContext
 			// Reflect the first-root latch into the UI state now, so if the steps below fail with the
 			// no-gateway cause (a freshly-rooted friend has no host yet) the empty board shows the
-			// "set up, now bring up a host" guidance rather than the operator Add-a-Gateway CTA.
+			// "set up, now bring up a host" guidance rather than the admin Add-a-Gateway CTA.
 			if (store.firstRooted && !_state.value.firstRooted) _state.update { it.copy(firstRooted = true) }
 			// Submit this Console's own admission before the sealed register, so the Gateway
 			// has an owner-signed reason to trust its sealed ops. Bearer-gated, so it lands
@@ -873,7 +873,7 @@ class ChatRepository(
 		}
 	}
 
-	/** The owner key fingerprint the operator confirms when rooting the Domain on the
+	/** The owner key fingerprint the admin confirms when rooting the Domain on the
 	 * host. Reading it mints the owner + console identities on first call. */
 	fun ownerSas(): String = federation.ownerSas()
 
@@ -881,7 +881,7 @@ class ChatRepository(
 
 	fun ownerBoxPub(): String = federation.ownerBoxPub()
 
-	/** This owner's network display name (the operator name), falling back to the local Domain id
+	/** This owner's network display name (the display name), falling back to the local Domain id
 	 * before discovery has stamped a name. Shown as "YOU" on the Users surface. */
 	fun displayName(): String = state.value.displayName.ifEmpty { confirmedDomainId().orEmpty() }
 
@@ -1035,13 +1035,13 @@ class ChatRepository(
 	}
 
 	////////////////////////////////
-	//  Operator name (this owner's network display name)
+	//  Admin name (this owner's network display name)
 
 	/** This owner's current network display name, for the profile field + the MY NETWORK card. The
 	 * cache (refreshed from discovery) is authoritative for display; empty until the owner sets one. */
 	fun localDisplayName(): String = _state.value.displayName
 
-	/** Refresh the cached operator name from discovery's HOME session (the gateway stamps each
+	/** Refresh the cached display name from discovery's HOME session (the gateway stamps each
 	 * session's displayName; the local Gateway's is this owner's own). A no-op when no home session
 	 * carries one yet, so a board with only peer sessions never blanks the cached name. */
 	private fun refreshDisplayNameFromTeams() {
@@ -1053,7 +1053,7 @@ class ChatRepository(
 		if (home != _state.value.displayName) _state.update { it.copy(displayName = home) }
 	}
 
-	/** Rename this owner's own network: owner-sign a SET_OPERATOR_NAME op over the home Domain and
+	/** Rename this owner's own network: owner-sign a SET_ADMIN_NAME op over the home Domain and
 	 * submit it evie-direct. On success cache the new name + reflect it immediately (evie pushes a
 	 * domain_update to this owner's gateways, so discovery will confirm it on the next refresh). */
 	suspend fun setDisplayName(name: String): Result<Unit> = withContext(Dispatchers.IO) {
@@ -1071,7 +1071,7 @@ class ChatRepository(
 	}
 
 	////////////////////////////////
-	//  Networks you host (guest tenants the operator pre-stages)
+	//  Networks you host (guest tenants the admin pre-stages)
 
 	/** The guest tenants this owner has staged, each with its discovery-derived state
 	 * (awaiting-setup -> offline -> online). The locally-persisted rows supply the label + the
@@ -1122,9 +1122,9 @@ class ChatRepository(
 		}
 
 	/** Build the invite blob a hosted tenant's QR encodes: the CONSOLE-bridge transport creds the
-	 * operator was itself provisioned with (this owner's own blob) plus the pending tenant's
-	 * {domainId, nonce}. The friend reaches the SAME shared evie console-bridge as the operator, so it
-	 * first-roots over the console-bridge /relay path; sourcing the operator's own console-bridge SA +
+	 * admin was itself provisioned with (this owner's own blob) plus the pending tenant's
+	 * {domainId, nonce}. The friend reaches the SAME shared evie console-bridge as the admin, so it
+	 * first-roots over the console-bridge /relay path; sourcing the admin's own console-bridge SA +
 	 * CONSOLE_BRIDGE_TOKEN is what makes the friend's first_root authorize there. Sourcing the home
 	 * Gateway's bootstrap-transport instead would hand the friend the gateway-bridge SA + BRIDGE_TOKEN,
 	 * which the console-bridge service-proxy RBAC-403s and evie token-401s. The blob omits service/port
@@ -1754,7 +1754,7 @@ class ChatRepository(
 
 	/** Enroll a scanned Gateway end to end: owner-admit it, then (if it offered LAN delivery)
 	 * fetch the bootstrap transport from the home Gateway, seal a bootstrap bundle, and deliver
-	 * it over the LAN, falling back to handing the operator the sealed text to paste. A
+	 * it over the LAN, falling back to handing the admin the sealed text to paste. A
 	 * host-configured Gateway (no LAN, no nonce) just needs the admission, which reaches it
 	 * through evie's domain sync. */
 	suspend fun enrollGateway(scanned: ScannedGateway): EnrollDelivery = withContext(Dispatchers.IO) {

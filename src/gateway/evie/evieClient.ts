@@ -54,12 +54,12 @@ export interface EvieClientConfig {
 	// Travels as unknown; the consumer validates with DomainSnapshotSchema.
 	onDomainSync?: (domain: unknown) => void;
 	// This Gateway's own Domain lifecycle metadata from the register reply: its status
-	// ("pending"/"rooted"/"unrooted") and the operator/network display name. The Gateway
+	// ("pending"/"rooted"/"unrooted") and the network display name. The Gateway
 	// surfaces these to its console (the register reply's domainStatus + the discovery
 	// roster's displayName). Re-applied on every reconnect, so a rename made elsewhere
 	// reaches the Gateway at its next register. Fields absent against a pre-feature evie.
 	onDomainMeta?: (meta: { domainStatus?: string; displayName?: string | null; isAdminDomain?: boolean }) => void;
-	// A live operator-name refresh from a domain_update push (the owner renamed THIS Domain's
+	// A live display-name refresh from a domain_update push (the owner renamed THIS Domain's
 	// network). Refreshes the held displayName without a reconnect, so teams()/discover reflect
 	// the rename immediately. The allowlist the domain_update's snapshot feeds drops displayName,
 	// so this is the only path that updates it between registers. Absent against a pre-feature evie.
@@ -85,7 +85,7 @@ const RECONNECT_DELAY_MS = 5_000;
 const TOOL_CALL_TIMEOUT_MS = 120_000;
 // When evie refuses gateway_register because the Domain is still PENDING (staged but not
 // yet rooted), re-register on this cadence. A fresh provision-console.sh --setup stages a
-// pending home Domain and restarts evie BEFORE the operator's phone first-roots it, so the
+// pending home Domain and restarts evie BEFORE the admin's phone first-roots it, so the
 // register the open-handler fires gets a pending refusal; without this retry the Gateway
 // would sit unregistered into its own home Domain forever (the heartbeat keeps the WS warm,
 // so it never reconnects to re-register). The cap bounds the spin so a genuinely stuck setup
@@ -278,7 +278,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			}
 			if (r?.ok === false) {
 				// A PENDING-tagged refusal is transient: the Domain is staged but not yet rooted
-				// (a fresh setup roots it once the operator's phone scans the QR). Retry on a
+				// (a fresh setup roots it once the admin's phone scans the QR). Retry on a
 				// bounded cadence so registration lands as soon as the root arrives. Any other
 				// ok:false is terminal (revoked / wrong-domain / version) - log only, no retry,
 				// so a real denial is not masked behind an endless re-register loop.

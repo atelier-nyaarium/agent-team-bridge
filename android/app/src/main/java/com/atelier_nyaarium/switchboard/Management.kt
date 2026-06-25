@@ -254,7 +254,7 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 				if (status.isNotEmpty()) Text(status)
 				val paste = pasteBundle
 				if (paste != null) {
-					// LAN delivery was not possible: hand the operator the sealed bundle to paste.
+					// LAN delivery was not possible: hand the admin the sealed bundle to paste.
 					Button(
 						onClick = { copyToClipboard(context, "gateway bundle", paste) },
 						modifier = Modifier.fillMaxWidth(),

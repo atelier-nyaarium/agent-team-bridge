@@ -71,7 +71,7 @@ export function loadBootstrapTransport(federationDir: string): GatewayTransport 
 		const parsed = GatewayTransportSchema.safeParse(JSON.parse(fs.readFileSync(file, "utf8")));
 		if (!parsed.success) {
 			// Surface schema drift instead of a silent "not provisioned": the op falls back to a
-			// cleartext error, so without this the operator cannot tell a missing file from a bad one.
+			// cleartext error, so without this the admin cannot tell a missing file from a bad one.
 			console.warn(`[bootstrap-transport] invalid bootstrap-transport.json: ${parsed.error.issues[0]?.message}`);
 			return null;
 		}

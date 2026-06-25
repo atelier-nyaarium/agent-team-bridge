@@ -541,7 +541,7 @@ fun LockScreen(onUnlock: () -> Unit) {
 }
 
 /** The neutral fresh-open: one "Scan your setup code" screen (Scan QR / Paste / Open file). The
- * SAME import handles BOTH an operator provisioning blob AND a friend invite; the app distinguishes
+ * SAME import handles BOTH an admin provisioning blob AND a friend invite; the app distinguishes
  * them on connect (a pending tenant first-roots the silently-generated owner key, an already-rooted
  * Domain just provisions the console), so the human never picks a path and no path labels appear.
  * The host-setup instructions live behind a tucked "Setting up a host?" link a friend never needs. */
@@ -558,7 +558,7 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 	var provisionAttempted by remember { mutableStateOf(false) }
 	// The silent owner key is minted-or-loaded on first read, so it exists before any first-root;
 	// the human never sees or pastes it (the host-setup manual reads the public keys for the
-	// operator path). Touch it here so it is generated up front.
+	// admin path). Touch it here so it is generated up front.
 	LaunchedEffect(Unit) { repo.ownerSignPub() }
 
 	fun tryProvision(text: String?, source: String) {
@@ -644,14 +644,14 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 			}
 			Spacer(Modifier.height(8.dp))
 			HorizontalDivider()
-			// Tucked, text-only host-setup manual behind a small link. The operator finds it here;
+			// Tucked, text-only host-setup manual behind a small link. The admin finds it here;
 			// a friend with an invite never opens it.
 			TextButton(onClick = { showHostHelp = true }) { Text("Setting up your own network?") }
 		}
 	}
 }
 
-/** The tucked, text-only "Setting up a host" manual: the operator path (run provision-console.sh on
+/** The tucked, text-only "Setting up a host" manual: the admin path (run provision-console.sh on
  * a computer, paste back the setup blob it emits). No QR, no key prompt - the owner key is generated
  * silently and the script reads the PUBLIC keys. Reached from the fresh-open screen AND from the
  * empty board after a friend first-roots but has no host/gateway yet (the bring-up-a-host pointer). */
@@ -883,7 +883,7 @@ private fun EmptyBoard(
 	) {
 		when {
 			// A friend who just first-rooted has no host of their own yet (the invite omits gateway
-			// ids by design), and the operator's own fresh provision first-roots too - so both land
+			// ids by design), and the admin's own fresh provision first-roots too - so both land
 			// here. The action goes straight to the Gateways screen (admit a Gateway by scanning its
 			// code); the friend with no computer yet still has the body's "set up a computer" guidance.
 			state.noGatewayState == NoGatewayState.AWAITING_HOST -> {
@@ -1552,7 +1552,7 @@ private fun SettingsRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 @Composable
 private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceName: (String) -> Unit) {
 	val scope = rememberCoroutineScope()
-	// Operator name (the owner's NETWORK display name, one per owner): what linked friends see your
+	// Admin name (the owner's NETWORK display name, one per owner): what linked friends see your
 	// network as. Owner-signed + pushed to evie; it lives above the per-install device name. Seeded
 	// from state.displayName (cache, refreshed from discovery) and re-seeded when that changes.
 	var displayName by remember(state.displayName) { mutableStateOf(state.displayName) }
@@ -1561,7 +1561,7 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 	// A friend (one who first-rooted their own non-home Domain) renaming before discovery populates
 	// would sign over the "home" fallback localDomainId() returns, which evie rejects ("Domain not
 	// rooted"/"not owner-signed") as a raw "Could not save". Gate Save until the real Domain id is
-	// known for that friend. A genuine home operator legitimately resolves to "home", so they are not
+	// known for that friend. A genuine home admin legitimately resolves to "home", so they are not
 	// gated (firstRooted is false for them).
 	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, repo.confirmedDomainId())
 	Text("Network name", style = MaterialTheme.typography.titleMedium)

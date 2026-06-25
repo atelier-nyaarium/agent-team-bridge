@@ -52,7 +52,7 @@ import androidx.compose.foundation.background
 import kotlinx.coroutines.launch
 
 ////////////////////////////////
-//  Networks you host (guest tenants the operator pre-stages for friends)
+//  Networks you host (guest tenants the admin pre-stages for friends)
 
 /**
  * The host-a-friend admin surface, kept separate from PEERS (hosting != linking). The list shows
@@ -241,7 +241,7 @@ fun HostedTenantDetailScreen(
 	var busy by remember { mutableStateOf(false) }
 	var confirmRemove by remember { mutableStateOf(false) }
 
-	// A SAF "create document" so the operator can save the invite blob to a file to send.
+	// A SAF "create document" so the admin can save the invite blob to a file to send.
 	val saveLauncher = rememberCreateInvite(context) { status = "Saved." }
 
 	if (tenant == null) {

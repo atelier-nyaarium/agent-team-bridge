@@ -21,7 +21,7 @@ export const ResponseStatusSchema = z
 	.enum(["completed", "clarification", "deferred", "needs_human", "error", "timeout", "running"])
 	.meta({ id: "ResponseStatus" });
 // Whether a console's Domain is rooted yet. `unrooted` is a fresh, never-provisioned home (no
-// owner, no pending tenant); `pending` is an operator-staged tenant the friend has not yet
+// owner, no pending tenant); `pending` is an admin-staged tenant the friend has not yet
 // first-rooted; `rooted` just provisions the console. Mirrors evie's getDomainStatus 3-value
 // union. The gateway register reply only ever carries `rooted`/`unrooted` (a pending Domain has
 // no gateway to register against); `pending` reaches the app via the provisioning blob's
@@ -172,7 +172,7 @@ export const ConsoleOpSchema = z
 		z.object({
 			kind: z.literal("register"),
 			// Build identity for server-side observability: the gateway logs these at
-			// register so the operator never has to guess which build (and debug-vs-
+			// register so the admin never has to guess which build (and debug-vs-
 			// release variant) a console is running. Optional + additive: an older console
 			// that omits them still registers.
 			clientVersion: z.string().max(64).optional(),
@@ -781,7 +781,7 @@ export const ConsoleRelayReplySchema = z
 //  - the schema carries the shape, the Kotlin wrapper owns those behaviors.
 
 // The pending-Domain discriminator carried inside a provisioning blob. Present iff the blob is
-// for a PENDING (unrooted) Domain - both a friend invite AND the operator's own fresh-home
+// for a PENDING (unrooted) Domain - both a friend invite AND the admin's own fresh-home
 // (R1) setup. A pending Domain has no gateway, so the app cannot learn it is pending from a
 // register reply; it reads this off the blob and first-roots DIRECTLY against evie with the
 // nonce. Absent for a re-provision of an already-rooted Domain (which just provisions the
@@ -840,7 +840,7 @@ export const ProvisioningSchema = z
 		gatewayId: z.string().optional(),
 		gatewaySignPub: z.string().optional(),
 		gatewayBoxPub: z.string().optional(),
-		// Set only for a PENDING (unrooted) Domain blob (a friend invite or the operator's own
+		// Set only for a PENDING (unrooted) Domain blob (a friend invite or the admin's own
 		// fresh-home setup): the pending Domain id + the one-time invite nonce. Its presence is
 		// the discriminator - the app first-roots (POSTs the SignedFirstRoot to evie with this
 		// nonce) iff it is present, else it just provisions the console. Absent for a re-provision
