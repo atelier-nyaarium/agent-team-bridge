@@ -19,7 +19,7 @@ export interface ProvisioningBlobInput {
 	namespace?: string;
 	service?: string;
 	port?: number;
-	// Set only for a PENDING (unrooted) home Domain: the home domainId + the one-time invite nonce.
+	// Set only for a PENDING (unrooted) admin Domain: the admin domainId + the one-time invite nonce.
 	// Its presence is the app's discriminator - it first-roots the Domain at the silently-generated
 	// owner key, then provisions the console. Omitted for a re-provision of an already-rooted Domain.
 	pendingTenant?: { domainId: string; nonce: string };
