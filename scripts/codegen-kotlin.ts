@@ -42,6 +42,8 @@ import {
 	PendingTenantSchema,
 	RosterRequestSchema,
 	RosterResultSchema,
+	TransportRequestSchema,
+	TransportResultSchema,
 	TrustHandshakeOpSchema,
 	TrustHandshakeResultSchema,
 	TrustPendingRequestSchema,
@@ -122,6 +124,9 @@ const ROOTS: z.ZodType[] = [
 	TrustHandshakeResultSchema,
 	TrustPendingRequestSchema,
 	TrustPendingResultSchema,
+	// An owner pulling its network's gateway-bridge transport (proof-of-possession + evie's reply).
+	TransportRequestSchema,
+	TransportResultSchema,
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything

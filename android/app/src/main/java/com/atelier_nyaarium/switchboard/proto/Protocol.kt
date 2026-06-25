@@ -599,6 +599,22 @@ data class TrustPendingResult(
 )
 
 @Serializable
+data class TransportRequest(
+	val signerSignPub: String,
+	val proofAt: Long,
+	val nonce: String,
+	val proof: String,
+)
+
+@Serializable
+data class TransportResult(
+	val ok: Boolean,
+	val saToken: String? = null,
+	val caPem: String? = null,
+	val error: String? = null,
+)
+
+@Serializable
 data class SignedFirstRoot(
 	val firstRoot: FirstRoot,
 	val signature: String,

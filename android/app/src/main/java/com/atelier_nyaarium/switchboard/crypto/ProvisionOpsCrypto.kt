@@ -129,4 +129,17 @@ object ProvisionOpsCrypto {
 
 	fun signTrustPendingRequest(signerSignPub: String, proofAt: Long, nonce: String, signPriv: String): String =
 		Crypto.sign(trustPendingSigningBytes(signerSignPub, proofAt, nonce), signPriv)
+
+	/**
+	 * The transport request proof: an owner proves it holds a rooted owner key by signing
+	 * TRANSPORT_REQUEST_V1 over its OWN key + a fresh timestamp + nonce, so evie can resolve the
+	 * signer to a rooted owner and return the gateway-bridge transport. A distinct version tag from
+	 * ROSTER_V1 / TRUST_PENDING_V1, so no proof crosses over. Reproduces byte-for-byte against
+	 * transportRequestSigningBytes in enrollment.ts.
+	 */
+	fun transportRequestSigningBytes(signerSignPub: String, proofAt: Long, nonce: String): ByteArray =
+		listOf("TRANSPORT_REQUEST_V1", signerSignPub, proofAt.toString(), nonce).joinToString("\n").toByteArray(Charsets.UTF_8)
+
+	fun signTransportRequest(signerSignPub: String, proofAt: Long, nonce: String, signPriv: String): String =
+		Crypto.sign(transportRequestSigningBytes(signerSignPub, proofAt, nonce), signPriv)
 }
