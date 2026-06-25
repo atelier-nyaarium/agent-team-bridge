@@ -26,6 +26,17 @@ gap-audit workflow output.)
   screen gates QR-scan/paste on a non-empty "Your Name", carried into first-root). "(unnamed)" is a
   defensive backstop only. Name entry moves to the phone, so the host `setup-evie-admin.sh` (renamed
   from `provision-console.sh`, admin-only) stages no name.
+- **`operator` -> user OR admin by sense; `isPrimary` -> `isAdminDomain`** (owner). "operator" is overloaded:
+  the NAME (`operatorName`, every Domain's display label) is a user's name -> `profileName` (Phase 2); the
+  ROLE (`operatorDomainId` / `operatorSignPub` / the operator-signed ops / `TenantAdmin`'s guard) is the
+  admin who runs evie + provisions others -> `admin*` (`adminDomainId`, `adminSignPub`, admin-ops,
+  `runGuardedAdminOp`). The Phase-0 marker `isPrimary` reads like "1 of N", not authority -> `isAdminDomain`
+  (this slice IS the admin's controlling Domain), and `operatorDomain()` / `operatorDomainId()` ->
+  `adminDomain()` / `adminDomainId()`. (`isAdminDomain` is the proposed word; owner may swap for
+  `isAuthority` / `isControlling` - NOT `isRoot`, which already means owner-key rooting.) The role rename
+  spans all 3 runtimes + the synced crypto/enrollment leaves (~70 refs) and the wire-stable `*_V1`
+  signing-constant strings (`SET_OPERATOR_NAME_V1` etc.), so it rides Phase 2 (field renames) + Phase 3
+  (vector re-cut). All a Phase-5 smell-check gate.
 - **Fail-closed identity.** A present-but-undecodable owner/console key NEVER silently regenerates or
   overwrites; mint only when truly EMPTY; surface recovery (restore backup / re-provision); fp logging
   parity (gateway ships it) + an orphan "key regenerated, re-admit" detector.
@@ -66,17 +77,19 @@ GATING every signing site on non-null (no signing with a fallback id) and routin
 profileName, not the id; `renameAwaitsDiscovery = firstRooted && confirmedDomainId() == null`; retire
 `FriendOnboarding.DEFAULT_DOMAIN_ID`.
 
-DESIGN QUESTION (decide before coding, do NOT guess): `isHomeOperator()` (:1027) currently returns
-`confirmedDomainId == DEFAULT_DOMAIN_ID` - it identifies THE operator (Nyaarium) by the literal `"home"`,
-because in the old model only the original operator held `"home"` while provisioned guests got random ids.
-After the retire the operator's OWN home is a random id too, so the literal check is meaningless. Need the
-real signal for "this device owns the operator (host) Domain, show the Guest-networks admin": either (a) a
-wire operator/isPrimary flag on the LOCAL session's `TeamInfo` (evie already marks `isPrimary` per Phase 0,
-but it is not currently surfaced to the console), or (b) `confirmedDomainId() != null` IF every console
-operates its own rooted home (depends on the guest topology - a guest provisioned as a tenant on the
-operator's evie vs a guest with its own Gateway). Resolve the topology, then implement. Gate (mandatory,
-per CLAUDE.md - Android broke main twice when skipped): `JAVA_HOME=... ANDROID_HOME=... ./gradlew
-:app:testDebugUnitTest`.
+MODEL (owner, pending final yes): person = one DOMAIN (trust identity / owner key) who stands up their own
+GATEWAYS (machines) under it. "home" conflated Domain and Gateway, which is the whole reason it dies. The
+OPERATOR is the evie-runner who provisions other people's Domains; their Domain is the `isPrimary` one on
+evie (TenantAdmin already gates provision/remove on exactly that). A guest owns a Domain + its Gateways but
+is NOT an operator.
+
+So `isHomeOperator()` (:1027, currently `confirmedDomainId == DEFAULT_DOMAIN_ID`) -> `isOperator()` = "my
+confirmed Domain is the primary one." This is OPTION A: evie surfaces its existing `isPrimary` marker onto
+the local session (one field on the register reply / `TeamInfo`), the console reads it. NOT "anyone with a
+rooted Domain" (a guest is not an operator; showing them the admin = a dead button evie rejects). So this
+piece is NOT Android-only: it adds one wire field (`TeamInfo`/register-reply `isPrimary`), codegen, the
+evie stamp, and the Android read, on top of the `confirmedDomainId` edits. Gate (mandatory, per CLAUDE.md -
+Android broke main twice when skipped): `JAVA_HOME=... ANDROID_HOME=... ./gradlew :app:testDebugUnitTest`.
 
 **Acceptance:** `"home"` greps nowhere as a domain id in SOURCE (test fixtures still carry it as a local
 const / literal - cleaned in the Phase 5 smell pass); all 3 runtimes compile + tests green.
@@ -96,12 +109,21 @@ sites), NEVER the Domain id. ALSO (owner ask): the conversation thread labels th
 renderer (a `selfName` field, set from repo state via `ThreadWebView`) so own rows show the person's
 name, falling back to "you" only when empty. The other party's `m.from` (host/session name) stays.
 
+ALSO rides here (same wire + field churn): the operator-ROLE -> `admin*` rename - `operatorDomainId` ->
+`adminDomainId`, `operatorSignPub` -> `adminSignPub`, the operator-signed ops + `runGuardedOperatorOp` +
+`TenantAdmin`'s "operator" -> admin, and the Phase-0 marker `isPrimary` -> `isAdminDomain`. See the
+operator/primary locked decision for the full scope + the `*_V1` constant note (Phase 3).
+
 ## Phase 3 - re-cut the `home`-bearing SIGNING vector corpora (Phase 1's hidden cost)
 
 THREE cross-runtime signed/hashed corpora embed `domainId:"home"` in the preimage (xdomain-link,
 enroll-sas, cross-domain-sas) + the protocol golden fixtures: the VALUE changes, so the bytes change and
 the vectors regenerate on BOTH runtimes (TS fixtures + Android `testDebugUnitTest` decoders). Rewrite
 `domain-id.test.ts` ("defaults to home" -> "throws when FEDERATION_DOMAIN_ID unset").
+
+The operator-role rename also shifts the wire-stable `*_V1` signing-constant strings (`SET_OPERATOR_NAME_V1`
+etc.) in the preimage, so those corpora re-cut HERE alongside the home-bearing ones rather than in a separate
+pass.
 
 ## Phase 4 - CLASS 5 fail-closed identity, with caller handling
 
@@ -123,7 +145,9 @@ push evie (await Push(main) rollout) -> push switchboard (main-push.yml builds t
 gateway -> re-provision -> MANUALLY flash `switchboard-release.apk` onto every console (the in-app
 updater is opt-in + only sees the new versionCode after re-provision). Optionally bump
 `FEDERATION_PROTOCOL_VERSION` + `CONSOLE_PROTOCOL_VERSION` so an old runtime fails fast. Gates: all 3
-runtimes + codegen no-drift + synced-leaf hashes + the smell-check grep (`"home"` not a domain id) + a
+runtimes + codegen no-drift + synced-leaf hashes + the smell-check grep (NONE of these survive: `"home"` as
+a domain id; the overloaded `operator` identifier - `operatorName`/`operatorDomainId`/`operatorSignPub`/
+operator-ops, all split to `profileName` or `admin*`; `isPrimary`/`primary` as the admin-Domain marker) + a
 SEMANTIC acceptance test (a roster row with empty profileName shows "(unnamed)", not the hex id - the
 literal grep gives a FALSE green on the leak) + on-device fresh-provision round-trip.
 
