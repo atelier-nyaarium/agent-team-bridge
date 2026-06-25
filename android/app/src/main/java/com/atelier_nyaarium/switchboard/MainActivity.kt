@@ -1559,11 +1559,11 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 	var displayName by remember(state.displayName) { mutableStateOf(state.displayName) }
 	var opStatus by remember { mutableStateOf("") }
 	var opBusy by remember { mutableStateOf(false) }
-	// A friend (one who first-rooted their own non-home Domain) renaming before discovery populates
-	// would sign over the "home" fallback localDomainId() returns, which evie rejects ("Domain not
-	// rooted"/"not owner-signed") as a raw "Could not save". Gate Save until the real Domain id is
-	// known for that friend. A genuine home admin legitimately resolves to "home", so they are not
-	// gated (firstRooted is false for them).
+	// A friend (one who first-rooted their own Domain) renaming before discovery has reported a
+	// confirmed Domain id has nothing real to sign over, so evie would reject the rename ("Domain
+	// not rooted" / "not owner-signed") as a raw "Could not save". Gate Save until discovery lands
+	// the real Domain id. A device that never first-rooted (the admin) is not gated - its rename
+	// signs over its own confirmed Domain once discovery reports it.
 	val domainResolving = FriendOnboarding.renameAwaitsDiscovery(state.firstRooted, repo.confirmedDomainId())
 	Text("Network name", style = MaterialTheme.typography.titleMedium)
 	Text(

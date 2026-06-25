@@ -1,4 +1,4 @@
-// SYNC-HASH: 4689310991487eee937a604a43942635
+// SYNC-HASH: 6c543a4f46b5674da2e2995290a539b3
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -138,9 +138,9 @@ export const FEDERATION_PROTOCOL_VERSION = 1;
  * a Domain trust anchor. */
 export const GatewayRegisterParamsSchema = z.object({
 	gatewayId: z.string().min(1).max(64),
-	// This Gateway's Domain id (multi-tenant evie). Optional and min(1) when present; an
-	// ABSENT value resolves to the "home" Domain at the consumer, so a pre-multi-tenant
-	// Gateway that sends none lands in "home" unchanged.
+	// This Gateway's Domain id (multi-tenant evie). Optional + min(1) on the wire so a
+	// legacy/malformed frame still parses, but the Router's sanitizeDomainId rejects an
+	// absent or empty id at register time - there is no implicit default Domain.
 	domainId: z.string().min(1).max(64).optional(),
 	protocolVersion: z.number().int().positive(),
 	signPub: z.string().min(1).optional(),
@@ -163,8 +163,9 @@ export const GatewayRelayRouteSchema = z.object({
 	// The sender's Domain id. The Router stamps it from the SENDER connection's
 	// registered Domain (content-blind) so the destination resolves the source by the
 	// full (domainId, gatewayId) pair - a gateway id is not globally unique across
-	// Domains. Optional and min(1) when present; an ABSENT value resolves to the "home"
-	// Domain at the consumer, so a pre-multi-tenant relay still routes within "home".
+	// Domains. Optional + min(1) on the wire, but the Router stamps it from the sender's
+	// registered Domain id (which sanitizeDomainId already required at register), so a
+	// relayed frame always carries a real src Domain - there is no implicit default.
 	srcDomain: z.string().min(1).max(64).optional(),
 	// Opaque to evie. The destination gateway parses/unseals it.
 	payload: z.unknown(),

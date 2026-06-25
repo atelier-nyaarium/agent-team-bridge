@@ -120,8 +120,8 @@ export const TeamInfoSchema = z
 		// session unambiguously: two linked friend Domains may run a gateway whose id
 		// collides with the local or each other's. The local listing stamps the local
 		// Domain id; a cross-Domain discovery entry is tagged with the peer's Domain id.
-		// Optional for decode tolerance: a pre-federation Gateway omits it and consumers
-		// fall back to the home Domain.
+		// Optional for decode tolerance: a pre-federation Gateway omits it, and a consumer
+		// then treats the session as belonging to the local Gateway's own Domain.
 		domainId: z.string().optional(),
 		// The friendly NETWORK display name of the Domain that owns this session, propagated
 		// over the discovery roster so a linked friend Domain shows the owner's self-set label

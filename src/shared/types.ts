@@ -123,8 +123,8 @@ export interface GatewayConfig {
 	// This Gateway's id, qualifying every local session name on the wire (GATEWAY_ID
 	// env override, else the sanitized machine hostname).
 	localGatewayId: string;
-	// This Gateway's Domain id (FEDERATION_DOMAIN_ID env, else "home"). A single-tenant
-	// gateway stays on "home", byte-compatible with a pre-multi-tenant evie.
+	// This Gateway's Domain id, from the required FEDERATION_DOMAIN_ID env (an opaque slug;
+	// resolveLocalDomainId throws if it is unset, so there is no implicit default).
 	localDomainId: string;
 }
 
