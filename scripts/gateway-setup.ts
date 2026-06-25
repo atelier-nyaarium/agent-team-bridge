@@ -104,7 +104,14 @@ async function configure(): Promise<void> {
 
 	console.log(token ? "Building and starting..." : "Building and starting (standalone, no mesh)...");
 	if ((await dc("up", "--build", "-d").nothrow()).exitCode !== 0) throw new Error("docker compose up failed");
-	if (!(await waitHealth())) throw new Error("did not come up in 60s - run: docker logs switchboard");
+	if (!(await waitHealth())) {
+		// The gateway fails closed at boot when FEDERATION_DOMAIN_ID is unset, which surfaces only as
+		// a health timeout. Name that cause so a setup/enroll run is diagnosable without reading logs.
+		const domHint = (await envGet("FEDERATION_DOMAIN_ID"))
+			? ""
+			: " (FEDERATION_DOMAIN_ID is unset; the gateway fails closed at boot without it - set it in .env first)";
+		throw new Error(`did not come up in 60s - run: docker logs switchboard${domHint}`);
+	}
 	console.log(`Gateway "${id}" running on :20000.`);
 	if (token) {
 		await Bun.sleep(6000);
@@ -136,7 +143,14 @@ async function enroll(): Promise<void> {
 		.env({ ...process.env, ENROLL_NONCE: nonce, ENROLL_LAN_HOST: host })
 		.nothrow();
 	if (up.exitCode !== 0) throw new Error("docker compose up failed");
-	if (!(await waitHealth())) throw new Error("did not come up in 60s - run: docker logs switchboard");
+	if (!(await waitHealth())) {
+		// The gateway fails closed at boot when FEDERATION_DOMAIN_ID is unset, which surfaces only as
+		// a health timeout. Name that cause so a setup/enroll run is diagnosable without reading logs.
+		const domHint = (await envGet("FEDERATION_DOMAIN_ID"))
+			? ""
+			: " (FEDERATION_DOMAIN_ID is unset; the gateway fails closed at boot without it - set it in .env first)";
+		throw new Error(`did not come up in 60s - run: docker logs switchboard${domHint}`);
+	}
 	await Bun.sleep(4000);
 	console.log();
 	const qr = logRange(await gatewayLogs(), "is not yet admitted", "Waiting for the admin Console");
