@@ -13,10 +13,10 @@ import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 //  console DECODES (e.g. MailboxEntry.request_type) stay open strings, per the
 //  additive decode-tolerance rule.
 
-export const ConnectionModeSchema = z.enum(["cli", "channel"]).meta({ id: "ConnectionMode" });
+export const ConnectionModeSchema = z.enum(["channel"]).meta({ id: "ConnectionMode" });
 export const EffortLevelSchema = z.enum(["simple", "standard", "complex"]).meta({ id: "EffortLevel" });
 export const RequestTypeSchema = z.enum(["feature", "bugfix", "question"]).meta({ id: "RequestType" });
-export const TeamKindSchema = z.enum(["devcontainer", "loose", "console", "gateway"]).meta({ id: "TeamKind" });
+export const TeamKindSchema = z.enum(["devcontainer", "loose", "console"]).meta({ id: "TeamKind" });
 export const ResponseStatusSchema = z
 	.enum(["completed", "clarification", "deferred", "needs_human", "error", "timeout", "running"])
 	.meta({ id: "ResponseStatus" });
@@ -81,8 +81,8 @@ export { ChannelFileSchema, ChannelFilesSchema } from "./evie-protocol.js";
 //
 //  Validates the register message at the bridge WebSocket boundary - the one
 //  message where a blind-cast team name could key the registry on undefined.
-//  mode stays an open string (the handler maps anything non-"channel" to
-//  "cli", tolerant of future modes).
+//  mode stays an open string but every bridge connection is channel mode now;
+//  the handler normalizes it (CLI dispatch was retired with the host split).
 
 export const WsRegisterSchema = z.object({
 	type: z.literal("register"),

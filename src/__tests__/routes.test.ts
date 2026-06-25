@@ -85,7 +85,7 @@ describe("routes", () => {
 		});
 
 		it("active teams take precedence over catalog", async () => {
-			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "cli" } } });
+			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
 			const offlineCatalog = new Map<string, string>();
 			offlineCatalog.set("proj-a", "/home/user/proj-a");
 			offlineCatalog.set("proj-b", "/home/user/proj-b");
@@ -99,7 +99,7 @@ describe("routes", () => {
 					gatewayId: "test-host",
 					domainId: "alice",
 					status: "online",
-					mode: "cli",
+					mode: "channel",
 					kind: "devcontainer",
 					queue_depth: 0,
 				},
@@ -239,7 +239,7 @@ describe("routes", () => {
 
 		it("excludes the cli host wake-daemon from the listing", async () => {
 			const registry = makeRegistry({
-				host: { readyState: 1, data: { mode: "cli" } },
+				host: { readyState: 1, data: { mode: "channel" } },
 				"team-a": { readyState: 1, data: { mode: "channel" } },
 			});
 			const ctx = makeCtx({ registry });
@@ -475,7 +475,7 @@ describe("routes", () => {
 
 	describe("/health", () => {
 		it("returns ok with counts", async () => {
-			const registry = makeRegistry({ a: { readyState: 1, data: { mode: "cli" } } });
+			const registry = makeRegistry({ a: { readyState: 1, data: { mode: "channel" } } });
 			const store = new PendingJobStore<ResponsePayload>();
 			store.create("s1", "a", "b");
 			const ctx = makeCtx({ registry, store });
@@ -510,7 +510,7 @@ describe("routes", () => {
 		});
 
 		it("returns 404 when target ws.readyState !== 1", async () => {
-			const registry = makeRegistry({ b: { readyState: 3, data: { mode: "cli" } } });
+			const registry = makeRegistry({ b: { readyState: 3, data: { mode: "channel" } } });
 			const ctx = makeCtx({ registry });
 			const { send } = createRoutes(ctx);
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {

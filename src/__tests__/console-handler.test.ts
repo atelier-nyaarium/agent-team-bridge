@@ -566,18 +566,6 @@ describe("createConsoleHandler", () => {
 		expect(h.conversationRegistry.get("conv-pixel")).toBe(peer);
 	});
 
-	it("rejects send to a CLI-mode team instead of losing the answer", async () => {
-		const h = makeHarness();
-		const cliWs = realTeamWs("cli-team", "c1");
-		cliWs.data.mode = "cli";
-		h.registry.set("cli-team", new Map([["c1", cliWs]]));
-
-		const reply = await h.handler.handleFrame(frame({ kind: "send", to: "cli-team", body: "hi" }));
-		expect(reply.ok).toBe(false);
-		expect(reply.error).toContain("CLI-mode");
-		expect(h.sendCalls).toHaveLength(0);
-	});
-
 	it("a send blocked by a slow wake returns the deterministic session id", async () => {
 		const registry: TeamRegistry = new Map();
 		const conversationRegistry: ConversationRegistry = new Map();

@@ -137,7 +137,8 @@ export function createWebSocketHandlers({
 			}
 			const team = reg.data.team;
 			const subId = reg.data.subId || crypto.randomUUID().slice(0, 8);
-			const mode: ConnectionMode = reg.data.mode === "channel" ? "channel" : "cli";
+			// Every bridge connection is channel mode now (CLI dispatch was retired with the host split).
+			const mode: ConnectionMode = "channel";
 			const conversationId = reg.data.conversationId ?? null;
 
 			// Host-daemon auth: when a token is configured, the reserved "host" slot (which

@@ -476,25 +476,10 @@ export function createConsoleHandler({
 			}
 
 			case "send": {
-				// Online CLI-mode targets answer synchronously through /send's blocking
-				// wait, far past any relay hold. Reject those up front. A SLEEPING
-				// CLI team is unknowable here (mode surfaces only on register), so
-				// it pays a wake and is then rejected by the route's channelOnly
-				// check instead of minting a random session id.
 				// The console may target a gateway-qualified name (`gateway/name`); strip the
-				// gateway for the local registry probe. Cross-gateway targets are rejected
-				// by routes.send (federation routing is a later phase).
+				// gateway for the local registry probe. Cross-gateway targets are rejected by
+				// routes.send (federation routing is a later phase).
 				const localTarget = parseQualifiedTeam(op.to).name;
-				const targetSubs = registry.get(localTarget);
-				if (targetSubs) {
-					for (const [, ws] of targetSubs) {
-						if (!ws.data.virtual && ws.readyState === 1 && ws.data.mode === "cli") {
-							throw new Error(
-								`"${localTarget}" is a CLI-mode agent; console chat supports channel-mode (Claude) teams only`,
-							);
-						}
-					}
-				}
 
 				// Canonical session id matching what routes.send composes, so the
 				// backgrounded-send path hands back the same id the in-time path would.

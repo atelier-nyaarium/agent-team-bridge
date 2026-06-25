@@ -173,15 +173,16 @@ function getFirstWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket
 	return undefined;
 }
 
-/** Get the mode of a team, preferring real sockets over virtual console peers
- * (which are always channel mode and could otherwise misroute a CLI team). */
+/** Get the mode of a team, preferring real sockets over virtual console peers. Every bridge
+ * connection is channel mode now, so this is effectively always "channel"; kept as the single
+ * source the teams listing and the send paths read. */
 function getTeamMode(subs: Map<string, ServerWebSocket<WsData>>): ConnectionMode {
 	let virtualMode: ConnectionMode | null = null;
 	for (const [, ws] of subs) {
 		if (!ws.data.virtual) return ws.data.mode;
 		virtualMode = virtualMode ?? ws.data.mode;
 	}
-	return virtualMode ?? "cli";
+	return virtualMode ?? "channel";
 }
 
 export function createRoutes({

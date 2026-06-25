@@ -363,7 +363,7 @@ describe("virtual peer awareness", () => {
 
 		const real = createMockWs();
 		handlers.open(real);
-		handlers.message(real, JSON.stringify({ type: "register", team: "teamx", subId: "r1", mode: "cli" }));
+		handlers.message(real, JSON.stringify({ type: "register", team: "teamx", subId: "r1", mode: "channel" }));
 
 		// Virtual sub lands beside the real one after registration.
 		const subs = registry.get("teamx");
