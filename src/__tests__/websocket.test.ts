@@ -71,9 +71,9 @@ describe("createWebSocketHandlers", () => {
 		const ws2 = createMockWs();
 		handlers.open(ws1);
 		handlers.open(ws2);
-		handlers.message(ws1, JSON.stringify({ type: "register", team: "gateway", subId: "a1" }));
-		handlers.message(ws2, JSON.stringify({ type: "register", team: "gateway", subId: "a2" }));
-		const subs = registry.get("gateway");
+		handlers.message(ws1, JSON.stringify({ type: "register", team: "host", subId: "a1" }));
+		handlers.message(ws2, JSON.stringify({ type: "register", team: "host", subId: "a2" }));
+		const subs = registry.get("host");
 		expect(subs!.size).toBe(1);
 		expect(subs!.get("a1")).toBe(ws1);
 		expect(ws2.close).toHaveBeenCalled();

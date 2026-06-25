@@ -221,19 +221,18 @@ export function createConsoleHandler({
 	unlinkDomain,
 	untrustOwner,
 }: ConsoleHandlerDeps) {
-	/** Resolve a console terminal target (the gateway-qualified session name) to the host tmux
-	 * it maps to: the host machine for "gateway", a devcontainer for a known project. peek/tmux_send
-	 * and reload address an existing session (the conventional `claude`); create_session passes the
-	 * NEW session name. A cross-Gateway target (v1 is local-only) or an unknown/loose name is
-	 * rejected. */
+	/** Resolve a console terminal target (the gateway-qualified session name) to the host tmux it
+	 * maps to: the host machine for "host", a devcontainer for a known project. peek/tmux_send and
+	 * reload address an existing session (the conventional `claude`); create_session passes the NEW
+	 * session name. A cross-Gateway target (v1 is local-only) or an unknown/loose name is rejected. */
 	function resolveTmuxTarget(qualifiedTarget: string, sessionName = "claude"): TmuxTarget {
 		const { gatewayId, name } = parseQualifiedTeam(qualifiedTarget);
 		if (gatewayId && gatewayId !== localGatewayId) {
 			throw new Error(`terminal view is not available for a session on another Gateway`);
 		}
-		if (name === "gateway") return { kind: "host", name, sessionName };
+		if (name === "host") return { kind: "host", name, sessionName };
 		if (isProjectName?.(name)) return { kind: "devcontainer", name, sessionName };
-		throw new Error(`terminal view is not available for "${name}" (only the host agent and devcontainers)`);
+		throw new Error(`terminal view is not available for "${name}" (only the host and devcontainers)`);
 	}
 	// The per-install conversationId is the DEVICE identity: it keys the registry sub,
 	// the signing-key binding, the idempotency cache, and the device-name binding. The
@@ -469,8 +468,8 @@ export function createConsoleHandler({
 				// carrying its own `gatewayId` (the console keys threads by gateway/name).
 				const teams = (await (await routes.discover()).json()) as TeamInfo[];
 				// A console does not list other consoles as send targets, and excludes
-				// itself. teams() already drops the cli "host" daemon; the "gateway"
-				// host-agent of each Gateway stays (kind "gateway"), reachable from the console.
+				// itself. teams() already drops the headless "host" daemon; the remaining
+				// sessions (loose agents + devcontainers) stay, reachable from the console.
 				return {
 					teams: teams.filter((t) => t.team !== device && t.kind !== "console"),
 				};
@@ -801,10 +800,10 @@ export function createConsoleHandler({
 	}
 
 	/** Gate a share request and return the CANONICAL key to store it under: the session must
-	 * be a LOCAL session of a shareable kind (devcontainer or loose ONLY - never the host-agent
-	 * "gateway", the cli "host", or a console-kind team) and the friend Domain must be one the
-	 * owner has actually linked. Resolves the kind from the local team registry the way teams()
-	 * classifies them. */
+	 * be a LOCAL session of a shareable kind (devcontainer or loose ONLY - never the headless
+	 * "host" daemon or a console-kind team) and the friend Domain must be one the owner has
+	 * actually linked. Resolves the kind from the local team registry the way teams() classifies
+	 * them. */
 	async function assertShareable(sessionTarget: string, target: CrossDomainShareTarget): Promise<string> {
 		// A SPECIFIC-Domain share must target a linked Domain; an EVERYONE-TRUSTED share is always valid
 		// (it reaches only linked Domains, resolved live at the gate), so it has no per-Domain check.

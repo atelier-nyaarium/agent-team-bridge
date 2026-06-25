@@ -208,14 +208,12 @@ describe("createConsoleHandler", () => {
 		expect(reply.error).toContain("evie");
 	});
 
-	it("rejects reserved device names", async () => {
+	it("rejects the reserved host-daemon device name", async () => {
 		const h = makeHarness();
-		for (const name of ["gateway", "host"]) {
-			const reply = await h.handler.handleFrame(frame({ kind: "register" }, "op1", name, `conv-${name}`));
-			expect(reply.ok).toBe(false);
-			expect(reply.error).toContain("reserved");
-			expect(h.registry.get(name)).toBeUndefined();
-		}
+		const reply = await h.handler.handleFrame(frame({ kind: "register" }, "op1", "host", "conv-host"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("reserved");
+		expect(h.registry.get("host")).toBeUndefined();
 	});
 
 	it("rejects a device name that matches a devcontainer project, even a sleeping one", async () => {
@@ -935,12 +933,12 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		});
 	});
 
-	it("peek resolves the host-agent 'gateway' to its local tmux", async () => {
+	it("peek resolves the 'host' machine target to its local tmux", async () => {
 		const h = makeTerminalHarness();
-		await h.handler.handleFrame(frame({ kind: "peek", target: "gateway" }, "p2"));
+		await h.handler.handleFrame(frame({ kind: "peek", target: "host" }, "p2"));
 		expect(h.hostOps[0]).toMatchObject({
 			kind: "peek",
-			target: { kind: "host", name: "gateway", sessionName: "claude" },
+			target: { kind: "host", name: "host", sessionName: "claude" },
 		});
 	});
 
@@ -983,10 +981,10 @@ describe("console terminal ops (peek / tmux_send)", () => {
 
 	it("tmux_send with a named key relays sendKey", async () => {
 		const h = makeTerminalHarness();
-		await h.handler.handleFrame(frame({ kind: "tmux_send", target: "gateway", key: "C-c" }, "s2"));
+		await h.handler.handleFrame(frame({ kind: "tmux_send", target: "host", key: "C-c" }, "s2"));
 		expect(h.hostOps[0]).toEqual({
 			kind: "sendKey",
-			target: { kind: "host", name: "gateway", sessionName: "claude" },
+			target: { kind: "host", name: "host", sessionName: "claude" },
 			key: "C-c",
 			dedupKey: "conv-pixel:s2",
 		});
@@ -1052,7 +1050,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 
 	it("a retried create_session with the same opId launches once (idempotent)", async () => {
 		const h = makeTerminalHarness();
-		const f = frame({ kind: "create_session", target: "gateway", sessionName: "scratch" }, "cdup");
+		const f = frame({ kind: "create_session", target: "host", sessionName: "scratch" }, "cdup");
 		const [r1, r2] = await Promise.all([h.handler.handleFrame(f), h.handler.handleFrame(f)]);
 		expect(r1.ok && r2.ok).toBe(true);
 		expect(h.hostOps).toHaveLength(1);

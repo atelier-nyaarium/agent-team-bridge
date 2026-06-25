@@ -439,8 +439,6 @@ export function createRoutes({
 			// Plugin version reported by an active real socket (virtual console peers carry
 			// none); the same value across a team's sub-sessions in practice.
 			const version = getAllActiveRealWs(subs)[0]?.data.version;
-			// The host orchestrator registers its channel identity as "gateway"; surface
-			// it as the "host" agent, the machine's primary session (shown first).
 			teamsList.push({
 				team: name,
 				gatewayId: localGatewayId,
@@ -449,14 +447,7 @@ export function createRoutes({
 				...isAdminDomainField,
 				status: "online",
 				mode: getTeamMode(subs),
-				kind:
-					name === "gateway"
-						? "gateway"
-						: isConsole
-							? "console"
-							: isDevcontainer(name)
-								? "devcontainer"
-								: "loose",
+				kind: isConsole ? "console" : isDevcontainer(name) ? "devcontainer" : "loose",
 				version,
 				queue_depth: 0,
 			});
@@ -587,12 +578,8 @@ export function createRoutes({
 		const localName = target.name;
 		const qualifiedTo = target.qualified;
 
-		// The "host" cli wake-daemon is never a direct target. The "gateway" channel
-		// identity (the host-agent) is reachable ONLY from the console (channelOnly): a
-		// send injects a channel message into the host orchestrator. Cross-session
-		// (container -> host-agent) sends are deferred to the federation phases that
-		// design that trust boundary.
-		if (localName === "host" || (localName === "gateway" && !channelOnly)) {
+		// The headless "host" daemon is never a direct crosstalk target (it carries no agent).
+		if (localName === "host") {
 			return jsonResponse(
 				{
 					error: `"${localName}" is a reserved name; crosstalk_send targets container teams only.`,
@@ -604,10 +591,8 @@ export function createRoutes({
 		let subs = registry.get(localName);
 		let targetWs = subs ? getFirstWs(subs) : undefined;
 
-		// If offline, attempt to wake the container. The "gateway" host-agent is
-		// never a wakeable devcontainer (it is the host process itself), so an
-		// offline host-agent goes straight to the 404 below.
-		if (!targetWs && localName !== "gateway") {
+		// If offline, attempt to wake the container.
+		if (!targetWs) {
 			const woken = await tryWakeTeam(localName);
 			if (woken) {
 				// Claude Code needs time after MCP connect to initialize its channel listener.

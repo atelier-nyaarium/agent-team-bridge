@@ -54,7 +54,7 @@ export interface WsData {
 ////////////////////////////////
 //  Functions & Helpers
 
-export const RESERVED_TEAM_NAMES = new Set(["gateway", "host"]);
+export const RESERVED_TEAM_NAMES = new Set(["host"]);
 
 export function getAllActiveWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData>[] {
 	const result: ServerWebSocket<WsData>[] = [];
@@ -152,8 +152,8 @@ export function createWebSocketHandlers({
 			}
 
 			// Reserved-name protection: first live registration wins. A second process
-			// trying to claim "gateway" or "host" is rejected so a stray container project
-			// cannot squat on the host's slots.
+			// trying to claim "host" is rejected so a stray container project cannot squat
+			// on the host daemon's slot.
 			if (RESERVED_TEAM_NAMES.has(team)) {
 				const existingSubs = registry.get(team);
 				const existingActive = existingSubs ? getAllActiveWs(existingSubs) : [];

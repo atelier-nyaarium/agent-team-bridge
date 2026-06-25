@@ -193,9 +193,9 @@ describe("routes", () => {
 			]);
 		});
 
-		it("marks the gateway channel identity as kind switch (the host-agent)", async () => {
+		it("classifies a loose host session as kind loose (no host-agent special case)", async () => {
 			const registry = makeRegistry({
-				gateway: { readyState: 1, data: { mode: "channel" } },
+				"host-agent": { readyState: 1, data: { mode: "channel" } },
 				"proj-a": { readyState: 1, data: { mode: "channel" } },
 			});
 			const knownTeamPaths = new Map<string, string>([["proj-a", "/home/user/proj-a"]]);
@@ -203,12 +203,12 @@ describe("routes", () => {
 			const json = await createRoutes(ctx).teams().json();
 			expect(json).toEqual([
 				{
-					team: "gateway",
+					team: "host-agent",
 					gatewayId: "test-host",
 					domainId: "alice",
 					status: "online",
 					mode: "channel",
-					kind: "gateway",
+					kind: "loose",
 					queue_depth: 0,
 				},
 				{
@@ -498,29 +498,15 @@ describe("routes", () => {
 			expect((await res.json()).error).toContain("not connected");
 		});
 
-		it("blocks a non-console (crosstalk) send to the host-agent with 400", async () => {
+		it("blocks a crosstalk send to the reserved host daemon with 400", async () => {
 			const ctx = makeCtx();
 			const { send } = createRoutes(ctx);
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
 				from: "proj-a",
-				to: "gateway",
+				to: "host",
 				body: "hi",
 			});
 			expect(res.status).toBe(400);
-		});
-
-		it("lets a console (channelOnly) send past the reserved guard to the host-agent", async () => {
-			// channelOnly send to "gateway" clears the 400 guard; with no gateway
-			// registered here it then 404s, proving it got past the reserved block.
-			const ctx = makeCtx();
-			const { send } = createRoutes(ctx);
-			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
-				from: "pixel",
-				to: "gateway",
-				channelOnly: true,
-				body: "hi",
-			});
-			expect(res.status).toBe(404);
 		});
 
 		it("returns 404 when target ws.readyState !== 1", async () => {
