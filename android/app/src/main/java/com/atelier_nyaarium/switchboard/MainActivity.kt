@@ -1554,8 +1554,8 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 	val scope = rememberCoroutineScope()
 	// Operator name (the owner's NETWORK display name, one per owner): what linked friends see your
 	// network as. Owner-signed + pushed to evie; it lives above the per-install device name. Seeded
-	// from state.operatorName (cache, refreshed from discovery) and re-seeded when that changes.
-	var operatorName by remember(state.operatorName) { mutableStateOf(state.operatorName) }
+	// from state.profileName (cache, refreshed from discovery) and re-seeded when that changes.
+	var profileName by remember(state.profileName) { mutableStateOf(state.profileName) }
 	var opStatus by remember { mutableStateOf("") }
 	var opBusy by remember { mutableStateOf(false) }
 	// A friend (one who first-rooted their own non-home Domain) renaming before discovery populates
@@ -1572,18 +1572,18 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 	)
 	Row(verticalAlignment = Alignment.CenterVertically) {
 		OutlinedTextField(
-			value = operatorName,
-			onValueChange = { operatorName = it },
+			value = profileName,
+			onValueChange = { profileName = it },
 			singleLine = true,
 			modifier = Modifier.weight(1f),
 		)
 		Button(
-			enabled = operatorName.isNotBlank() && operatorName.trim() != state.operatorName && !opBusy && !domainResolving,
+			enabled = profileName.isNotBlank() && profileName.trim() != state.profileName && !opBusy && !domainResolving,
 			onClick = {
 				opBusy = true
 				opStatus = ""
 				scope.launch {
-					repo.setOperatorName(operatorName)
+					repo.setProfileName(profileName)
 						.onSuccess { opStatus = "Saved." }
 						.onFailure { opStatus = "Couldn't save: ${it.message?.take(120)}" }
 					opBusy = false

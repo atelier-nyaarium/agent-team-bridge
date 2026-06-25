@@ -155,21 +155,21 @@ describe("bootstrapDomain v2-awareness (red-team P5: data loss)", () => {
 });
 
 ////////////////////////////////
-//  operatorName preservation on the owner-key bootstrapDomain rooting helper.
+//  profileName preservation on the owner-key bootstrapDomain rooting helper.
 //
 //  These cover bootstrapDomain (the owner-key-in-hand same-owner re-root case), NOT the live
 //  provision() re-provision path - that path never rewrites the Secret for an already-rooted home,
-//  so it preserves operatorName by not touching the slice. The pendingHomeDomain / readHomeDomain
+//  so it preserves profileName by not touching the slice. The pendingHomeDomain / readHomeDomain
 //  blocks below cover the live fresh-vs-reprovision flow.
 
 interface SliceWithName {
 	ownerSignPub: string | null;
 	admissions: SignedAdmission[];
-	operatorName?: string | null;
-	pendingTenant?: { operatorName: string; nonce: string; issuedAt: number; ttlMs: number; rooted: boolean };
+	profileName?: string | null;
+	pendingTenant?: { profileName: string; nonce: string; issuedAt: number; ttlMs: number; rooted: boolean };
 }
 
-/** A v2 Secret whose home Domain is rooted at `owner` AND carries an operatorName, so the
+/** A v2 Secret whose home Domain is rooted at `owner` AND carries an profileName, so the
  * same-owner re-root path can be checked to PRESERVE that label. */
 function v2RootedWithName(name: string) {
 	return JSON.stringify({
@@ -181,14 +181,14 @@ function v2RootedWithName(name: string) {
 				ownerBoxPub: owner.box.pub,
 				admissions: [homeAdmission()],
 				revocations: [],
-				operatorName: name,
+				profileName: name,
 			},
 		},
 	});
 }
 
-describe("bootstrapDomain operatorName preservation (owner-key re-root helper, not the live path)", () => {
-	it("keeps operatorName on a SAME-owner re-root", () => {
+describe("bootstrapDomain profileName preservation (owner-key re-root helper, not the live path)", () => {
+	it("keeps profileName on a SAME-owner re-root", () => {
 		const { federationJson } = bootstrapDomain(
 			v2RootedWithName("Nyaarium"),
 			DEFAULT_DOMAIN_ID,
@@ -196,12 +196,12 @@ describe("bootstrapDomain operatorName preservation (owner-key re-root helper, n
 			owner.box.pub,
 		);
 		const home = (federationJson as { enrollment: Record<string, SliceWithName> }).enrollment[DEFAULT_DOMAIN_ID];
-		expect(home.operatorName).toBe("Nyaarium");
+		expect(home.profileName).toBe("Nyaarium");
 		// The same-owner allowlist is preserved alongside the name.
 		expect(home.admissions).toHaveLength(1);
 	});
 
-	it("drops operatorName on a DIFFERENT-owner re-root (fresh Domain, the label was the prior owner's)", () => {
+	it("drops profileName on a DIFFERENT-owner re-root (fresh Domain, the label was the prior owner's)", () => {
 		const { federationJson } = bootstrapDomain(
 			v2RootedWithName("Nyaarium"),
 			DEFAULT_DOMAIN_ID,
@@ -209,7 +209,7 @@ describe("bootstrapDomain operatorName preservation (owner-key re-root helper, n
 			otherOwner.box.pub,
 		);
 		const home = (federationJson as { enrollment: Record<string, SliceWithName> }).enrollment[DEFAULT_DOMAIN_ID];
-		expect(home.operatorName).toBeUndefined();
+		expect(home.profileName).toBeUndefined();
 		expect(home.admissions).toHaveLength(0);
 	});
 });
@@ -225,11 +225,11 @@ describe("pendingHomeDomain (the fresh-setup pending home slice)", () => {
 		const { federationJson } = pendingHomeDomain(fresh, DEFAULT_DOMAIN_ID, "Nyaarium", NONCE, 1000, 86_400_000);
 		expect((federationJson as { schema?: number }).schema).toBe(2);
 		const home = (federationJson as { enrollment: Record<string, SliceWithName> }).enrollment[DEFAULT_DOMAIN_ID];
-		// No owner yet (the phone first-roots on scan); the operatorName + pendingTenant are set.
+		// No owner yet (the phone first-roots on scan); the profileName + pendingTenant are set.
 		expect(home.ownerSignPub).toBeNull();
-		expect(home.operatorName).toBe("Nyaarium");
+		expect(home.profileName).toBe("Nyaarium");
 		expect(home.pendingTenant).toEqual({
-			operatorName: "Nyaarium",
+			profileName: "Nyaarium",
 			nonce: NONCE,
 			issuedAt: 1000,
 			ttlMs: 86_400_000,
@@ -271,7 +271,7 @@ describe("pendingHomeDomain (the fresh-setup pending home slice)", () => {
 		expect((federationJson as { schema?: number }).schema).toBeUndefined();
 		const home = federationJson.enrollment as SliceWithName;
 		expect(home.ownerSignPub).toBeNull();
-		expect(home.pendingTenant?.operatorName).toBe("Nyaarium");
+		expect(home.pendingTenant?.profileName).toBe("Nyaarium");
 	});
 });
 
@@ -279,14 +279,14 @@ describe("pendingHomeDomain (the fresh-setup pending home slice)", () => {
 //  readHomeDomain (the fresh-vs-reprovision state-machine discriminator)
 
 describe("readHomeDomain (fresh vs re-provision detection)", () => {
-	it("reads ROOTED for a rooted home Domain and surfaces its owner + operatorName", () => {
+	it("reads ROOTED for a rooted home Domain and surfaces its owner + profileName", () => {
 		const r = readHomeDomain(v2RootedWithName("Nyaarium"), DEFAULT_DOMAIN_ID);
 		expect(r.rooted).toBe(true);
 		expect(r.ownerSignPub).toBe(owner.sign.pub);
-		expect(r.operatorName).toBe("Nyaarium");
+		expect(r.profileName).toBe("Nyaarium");
 	});
 
-	it("reads NOT-rooted for a freshly pre-staged pending home, surfacing the pending operatorName", () => {
+	it("reads NOT-rooted for a freshly pre-staged pending home, surfacing the pending profileName", () => {
 		const fresh = JSON.stringify({ schema: 2, identity: evie, enrollment: {} });
 		const { federationJson } = pendingHomeDomain(
 			fresh,
@@ -300,17 +300,17 @@ describe("readHomeDomain (fresh vs re-provision detection)", () => {
 		expect(r.rooted).toBe(false);
 		expect(r.ownerSignPub).toBeNull();
 		// The label is read off the pending record before rooting (so a re-run shows the same name).
-		expect(r.operatorName).toBe("Nyaarium");
+		expect(r.profileName).toBe("Nyaarium");
 	});
 
 	it("reads NOT-rooted for an absent home (a never-staged Secret)", () => {
 		const r = readHomeDomain(JSON.stringify({ schema: 2, identity: evie, enrollment: {} }), DEFAULT_DOMAIN_ID);
-		expect(r).toEqual({ rooted: false, ownerSignPub: null, operatorName: null });
+		expect(r).toEqual({ rooted: false, ownerSignPub: null, profileName: null });
 	});
 
 	it("reads NOT-rooted for a malformed Secret (fresh setup pre-stages it rather than throwing)", () => {
 		const r = readHomeDomain("not json {", DEFAULT_DOMAIN_ID);
-		expect(r).toEqual({ rooted: false, ownerSignPub: null, operatorName: null });
+		expect(r).toEqual({ rooted: false, ownerSignPub: null, profileName: null });
 	});
 });
 

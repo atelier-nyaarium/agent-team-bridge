@@ -85,7 +85,7 @@ fun UsersScreen(
 	var activeTrust by remember { mutableStateOf<TrustLaunch?>(null) }
 	// The Sharing surface, opened from a row's "Manage shares"; overlays the roster.
 	var showSharing by remember { mutableStateOf(false) }
-	val myName = remember { repo.operatorDisplayName() }
+	val myName = remember { repo.profileDisplayName() }
 	val myFingerprint = remember { repo.ownerSas().replace("-", " · ") }
 
 	// owner key -> how many of my sessions that trusted person can reach (the "N shared sessions" line).
@@ -200,7 +200,7 @@ fun UsersScreen(
 
 				else -> {
 					// PEOPLE excludes my own row (the YOU section above shows me), sorted by name.
-					val members = result.getOrDefault(emptyList()).filter { it.ownerSignPub != myOwner }.sortedBy { it.operatorName }
+					val members = result.getOrDefault(emptyList()).filter { it.ownerSignPub != myOwner }.sortedBy { it.profileName }
 					if (members.isEmpty()) {
 						Text("No one else here yet.", style = MaterialTheme.typography.bodyMedium)
 					}
@@ -217,9 +217,9 @@ fun UsersScreen(
 								{
 									// Respond to an arm aimed at me (join its rendezvous), or start a fresh one.
 									activeTrust = if (armedRendezvous != null) {
-										TrustLaunch(armedRendezvous, TRUST_SIDE_TARGET, m.ownerSignPub, m.operatorName)
+										TrustLaunch(armedRendezvous, TRUST_SIDE_TARGET, m.ownerSignPub, m.profileName)
 									} else {
-										TrustLaunch(repo.mintRendezvousId(), TRUST_SIDE_INITIATOR, m.ownerSignPub, m.operatorName)
+										TrustLaunch(repo.mintRendezvousId(), TRUST_SIDE_INITIATOR, m.ownerSignPub, m.profileName)
 									}
 								}
 							} else {
@@ -276,7 +276,7 @@ private fun UserRow(
 			Column(Modifier.weight(1f)) {
 				Row(verticalAlignment = Alignment.CenterVertically) {
 					Text(
-						member.operatorName.ifEmpty { "(unnamed)" },
+						member.profileName.ifEmpty { "(unnamed)" },
 						style = MaterialTheme.typography.titleMedium,
 					)
 					if (isYou) {

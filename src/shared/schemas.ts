@@ -127,7 +127,7 @@ export const TeamInfoSchema = z
 		// over the discovery roster so a linked friend Domain shows the owner's self-set label
 		// (e.g. "Carol") instead of a local alias. Optional/nullable for decode tolerance: a
 		// pre-feature Gateway omits it and consumers fall back to the domainId / a local label.
-		operatorName: z.string().nullish(),
+		profileName: z.string().nullish(),
 		status: z.enum(["online", "available"]),
 		mode: ConnectionModeSchema.optional(),
 		// Optional for decode tolerance: old gateways omit kind and consumers

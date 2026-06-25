@@ -154,21 +154,21 @@ async function readEvieFed(): Promise<string> {
 async function stageHomePending(evieFed: string, homeDomainId: string): Promise<{ nonce: string }> {
 	// The operator name (the friendly network label): from the environment for a scripted run, else
 	// prompted (D3). It is the same label the operator would type when hosting a friend.
-	let operatorName = (process.env.SB_OPERATOR_NAME ?? "").trim();
-	if (!operatorName) {
+	let profileName = (process.env.SB_OPERATOR_NAME ?? "").trim();
+	if (!profileName) {
 		if (!process.stdin.isTTY) {
 			throw new Error("operator name required (set SB_OPERATOR_NAME, or run interactively)");
 		}
 		console.log("Name your network (the label friends see, e.g. Nyaarium).");
-		operatorName = ask("Operator name:");
+		profileName = ask("Operator name:");
 	}
-	if (!operatorName) throw new Error("an operator name is required");
+	if (!profileName) throw new Error("an operator name is required");
 
 	// The one-time invite nonce the friend echoes verbatim in its first_root frame. STANDARD base64
 	// (not base64url): the wire `nonce` field is a b64Field ([A-Za-z0-9+/]={0,2}), and a base64url
 	// nonce carrying -/_ would fail that schema parse. 18 random bytes match evie's mint.
 	const nonce = randomBytes(18).toString("base64");
-	const { federationJson } = pendingHomeDomain(evieFed, homeDomainId, operatorName, nonce, Date.now(), INVITE_TTL_MS);
+	const { federationJson } = pendingHomeDomain(evieFed, homeDomainId, profileName, nonce, Date.now(), INVITE_TTL_MS);
 
 	// Server-side apply: evie's pod created this Secret via the API (no kubectl last-applied
 	// annotation), so a client-side apply warns on the first write after each purge. SSA ignores
@@ -176,7 +176,7 @@ async function stageHomePending(evieFed: string, homeDomainId: string): Promise<
 	if (!(await applySecret(FED_SECRET, { "federation.json": JSON.stringify(federationJson) }, true))) {
 		throw new Error("writing federation Secret failed");
 	}
-	note(`Home network "${operatorName}" pre-staged (pending your phone's first scan).`);
+	note(`Home network "${profileName}" pre-staged (pending your phone's first scan).`);
 
 	// Restart evie so it reads the pending state and serves it to the first-rooting console.
 	await k("rollout", "restart", EVIE_DEPLOY).quiet().nothrow();
@@ -425,8 +425,8 @@ async function provision(): Promise<void> {
 			);
 		}
 		note(
-			home.operatorName
-				? `Home network "${home.operatorName}" already rooted - re-provisioning.`
+			home.profileName
+				? `Home network "${home.profileName}" already rooted - re-provisioning.`
 				: "Home Domain already rooted - re-provisioning.",
 		);
 	} else {

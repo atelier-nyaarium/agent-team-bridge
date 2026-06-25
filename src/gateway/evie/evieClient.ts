@@ -56,14 +56,14 @@ export interface EvieClientConfig {
 	// This Gateway's own Domain lifecycle metadata from the register reply: its status
 	// ("pending"/"rooted"/"unrooted") and the operator/network display name. The Gateway
 	// surfaces these to its console (the register reply's domainStatus + the discovery
-	// roster's operatorName). Re-applied on every reconnect, so a rename made elsewhere
+	// roster's profileName). Re-applied on every reconnect, so a rename made elsewhere
 	// reaches the Gateway at its next register. Fields absent against a pre-feature evie.
-	onDomainMeta?: (meta: { domainStatus?: string; operatorName?: string | null }) => void;
+	onDomainMeta?: (meta: { domainStatus?: string; profileName?: string | null }) => void;
 	// A live operator-name refresh from a domain_update push (the owner renamed THIS Domain's
-	// network). Refreshes the held operatorName without a reconnect, so teams()/discover reflect
-	// the rename immediately. The allowlist the domain_update's snapshot feeds drops operatorName,
+	// network). Refreshes the held profileName without a reconnect, so teams()/discover reflect
+	// the rename immediately. The allowlist the domain_update's snapshot feeds drops profileName,
 	// so this is the only path that updates it between registers. Absent against a pre-feature evie.
-	onDomainUpdate?: (meta: { operatorName?: string | null }) => void;
+	onDomainUpdate?: (meta: { profileName?: string | null }) => void;
 	onDisconnect?: () => void;
 	// Override the pending-Domain re-register cadence. Production leaves it unset (the
 	// PENDING_REREGISTER_DELAY_MS default); tests pass a small value to exercise the retry
@@ -181,10 +181,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 					// evie pushed an updated keyring (an owner admit/revoke). Apply it
 					// immediately so a revocation bites without waiting for the next register.
 					config.onDomainSync?.(frame.domain);
-					// A rename rides the same push: refresh the held operatorName so the owner's
+					// A rename rides the same push: refresh the held profileName so the owner's
 					// OWN Gateway reflects it in teams()/discover at once (applySnapshot drops it).
 					// Only sent by a federation-aware evie, only to the renamed Domain's gateways.
-					if (frame.operatorName !== undefined) config.onDomainUpdate?.({ operatorName: frame.operatorName });
+					if (frame.profileName !== undefined) config.onDomainUpdate?.({ profileName: frame.profileName });
 					break;
 				}
 				case "tool_result": {
@@ -268,7 +268,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 						gateways?: string[];
 						domain?: unknown;
 						domainStatus?: string;
-						operatorName?: string | null;
+						profileName?: string | null;
 				  }
 				| undefined;
 			if (res.error) {
@@ -292,8 +292,8 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			if (r?.domain) config.onDomainSync?.(r.domain);
 			// Surface the Gateway's own Domain status + operator name to the console
 			// register reply / discovery roster. Sent only by a federation-aware evie.
-			if (r?.domainStatus !== undefined || r?.operatorName !== undefined) {
-				config.onDomainMeta?.({ domainStatus: r.domainStatus, operatorName: r.operatorName });
+			if (r?.domainStatus !== undefined || r?.profileName !== undefined) {
+				config.onDomainMeta?.({ domainStatus: r.domainStatus, profileName: r.profileName });
 			}
 		});
 	}

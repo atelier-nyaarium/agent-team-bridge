@@ -1,4 +1,4 @@
-// SYNC-HASH: ed0e65b7e41cc93c168095bfc110de07
+// SYNC-HASH: c90df1e8e16508eff74d8632bb62c831
 // SYNCED MODULE - source of truth: switchboard/src/shared/admission.ts
 // Copied verbatim into: evie-bot/app/features/bridge/admission.ts
 // MUST re-copy on change: cp src/shared/admission.ts ../evie-bot/app/features/bridge/admission.ts
@@ -80,7 +80,7 @@ export const DomainSnapshotSchema = z
 		// The friendly NETWORK display name (one per owner/Domain), propagated so Peers see
 		// the owner's self-set label instead of a local alias. Optional/nullable for decode
 		// tolerance: a pre-feature snapshot omits it and consumers fall back to a local label.
-		operatorName: z.string().nullish(),
+		profileName: z.string().nullish(),
 	})
 	.meta({ id: "DomainSnapshot" });
 

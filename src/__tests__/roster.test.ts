@@ -64,12 +64,12 @@ describe("roster schemas", () => {
 	it("accepts a well-formed request, member, and result", () => {
 		expect(RosterRequestSchema.safeParse(request()).success).toBe(true);
 		expect(
-			RosterMemberSchema.safeParse({ ownerSignPub: "a2V5", operatorName: "Kashia", online: true }).success,
+			RosterMemberSchema.safeParse({ ownerSignPub: "a2V5", profileName: "Kashia", online: true }).success,
 		).toBe(true);
 		expect(
 			RosterResultSchema.safeParse({
 				ok: true,
-				members: [{ ownerSignPub: "a2V5", operatorName: "Kashia", online: false }],
+				members: [{ ownerSignPub: "a2V5", profileName: "Kashia", online: false }],
 			}).success,
 		).toBe(true);
 	});
@@ -78,19 +78,19 @@ describe("roster schemas", () => {
 		// Extra routing/seal fields are stripped by the schema, so a row can never leak a handle.
 		const parsed = RosterMemberSchema.parse({
 			ownerSignPub: "a2V5",
-			operatorName: "Kashia",
+			profileName: "Kashia",
 			online: true,
 			gatewayId: "should-be-dropped",
 			boxPub: "c2hvdWxkLWRyb3A=",
 		} as never);
-		expect(parsed).toEqual({ ownerSignPub: "a2V5", operatorName: "Kashia", online: true });
+		expect(parsed).toEqual({ ownerSignPub: "a2V5", profileName: "Kashia", online: true });
 		expect("gatewayId" in parsed).toBe(false);
 		expect("boxPub" in parsed).toBe(false);
 	});
 
-	it("rejects a newline in operatorName (signing-byte safety for the name surface)", () => {
+	it("rejects a newline in profileName (signing-byte safety for the name surface)", () => {
 		expect(
-			RosterMemberSchema.safeParse({ ownerSignPub: "a2V5", operatorName: "Kashia\nevil", online: true }).success,
+			RosterMemberSchema.safeParse({ ownerSignPub: "a2V5", profileName: "Kashia\nevil", online: true }).success,
 		).toBe(false);
 	});
 });

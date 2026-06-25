@@ -11,19 +11,19 @@ import {
 	type RemoveTenant,
 	removeTenantSigningBytes,
 	rosterRequestSigningBytes,
-	type SetOperatorName,
-	setOperatorNameSigningBytes,
+	type SetProfileName,
+	setProfileNameSigningBytes,
 	signFirstRoot,
 	signProvisionTenant,
 	signRemoveTenant,
 	signRosterRequest,
-	signSetOperatorName,
+	signSetProfileName,
 	signTrustPendingRequest,
 	trustPendingSigningBytes,
 	verifyFirstRoot,
 	verifyProvisionTenant,
 	verifyRemoveTenant,
-	verifySetOperatorName,
+	verifySetProfileName,
 } from "../shared/enrollment.js";
 import { ConsoleOpSchema, ProvisioningSchema } from "../shared/schemas.js";
 import { assertCanonicalBytes } from "./_canonical-bytes.js";
@@ -36,7 +36,7 @@ import { assertCanonicalBytes } from "./_canonical-bytes.js";
 //  the canonical bytes / signature either runtime derives differently fails one of the two
 //  suites. This suite also guards the fixture against a hand-edit (the recorded bytes +
 //  signature must reproduce from the live TS reference). The provision / remove ops are
-//  operator-signed, first_root is SELF-signed by the fresh owner key, set_operator_name is
+//  operator-signed, first_root is SELF-signed by the fresh owner key, set_profile_name is
 //  owner-signed.
 
 interface SignedVec<T> {
@@ -60,7 +60,7 @@ const vectors = JSON.parse(
 	provision: SignedVec<ProvisionTenant>;
 	removal: SignedVec<RemoveTenant>;
 	firstRoot: SignedVec<FirstRoot>;
-	rename: SignedVec<SetOperatorName>;
+	rename: SignedVec<SetProfileName>;
 	roster: SignedVec<{ signerSignPub: string; proofAt: number; nonce: string }>;
 	trustPending: SignedVec<{ signerSignPub: string; proofAt: number; nonce: string }>;
 };
@@ -183,29 +183,29 @@ describe("first_root vectors (self-signed by the fresh owner key)", () => {
 	});
 });
 
-describe("set_operator_name vectors (owner-signed)", () => {
+describe("set_profile_name vectors (owner-signed)", () => {
 	const { friendOwnerSignPub, friendOwnerSignPriv } = vectors;
 
-	it("reproduces the canonical SET_OPERATOR_NAME_V1 signing bytes", () => {
-		const bytes = setOperatorNameSigningBytes(vectors.rename.value, friendOwnerSignPub);
+	it("reproduces the canonical SET_PROFILE_NAME_V1 signing bytes", () => {
+		const bytes = setProfileNameSigningBytes(vectors.rename.value, friendOwnerSignPub);
 		assertCanonicalBytes(bytes, vectors.rename);
 	});
 
 	it("reproduces the recorded signature and verifies it", () => {
-		const signed = signSetOperatorName(vectors.rename.value, friendOwnerSignPriv, friendOwnerSignPub);
+		const signed = signSetProfileName(vectors.rename.value, friendOwnerSignPriv, friendOwnerSignPub);
 		expect(signed.signature).toBe(vectors.rename.signature);
-		expect(verifySetOperatorName(signed, friendOwnerSignPub)).toBe(true);
+		expect(verifySetProfileName(signed, friendOwnerSignPub)).toBe(true);
 	});
 
 	it("rejects the rename under a different owner key", () => {
 		const attacker = generateIdentity();
-		const signed = signSetOperatorName(vectors.rename.value, friendOwnerSignPriv, friendOwnerSignPub);
-		expect(verifySetOperatorName(signed, attacker.sign.pub)).toBe(false);
+		const signed = signSetProfileName(vectors.rename.value, friendOwnerSignPriv, friendOwnerSignPub);
+		expect(verifySetProfileName(signed, attacker.sign.pub)).toBe(false);
 	});
 
-	it("parses a set_operator_name enroll op", () => {
-		const signed = signSetOperatorName(vectors.rename.value, friendOwnerSignPriv, friendOwnerSignPub);
-		expect(EnrollOpSchema.safeParse({ kind: "set_operator_name", rename: signed }).success).toBe(true);
+	it("parses a set_profile_name enroll op", () => {
+		const signed = signSetProfileName(vectors.rename.value, friendOwnerSignPriv, friendOwnerSignPub);
+		expect(EnrollOpSchema.safeParse({ kind: "set_profile_name", rename: signed }).success).toBe(true);
 	});
 });
 

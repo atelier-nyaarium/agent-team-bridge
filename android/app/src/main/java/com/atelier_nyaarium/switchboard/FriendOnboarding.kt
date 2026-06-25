@@ -17,7 +17,7 @@ data class HostedTenant(
 	/** The opaque Domain id (plumbing; never the row's title). */
 	val domainId: String,
 	/** The network display label the operator chose (the row title). */
-	val operatorName: String,
+	val profileName: String,
 	/** The one-time invite nonce, so the row can re-render its QR / blob. */
 	val nonce: String,
 	/** awaiting-setup -> offline -> online, derived from discovery presence. */

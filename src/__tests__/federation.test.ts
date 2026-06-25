@@ -226,7 +226,7 @@ describe("federation routing (E2E sealed)", () => {
 					{
 						team: "api",
 						gatewayId: "hostb",
-						operatorName: "Carol's Lab",
+						profileName: "Carol's Lab",
 						status: "online",
 						mode: "channel",
 						queue_depth: 0,
@@ -241,22 +241,22 @@ describe("federation routing (E2E sealed)", () => {
 			sealer: sealerA,
 			registry: registryWith({ "recipe-app": channelWs([]) }),
 			knownTeamPaths: new Map([["recipe-app", "/x"]]),
-			operatorName: () => "My Lab",
+			profileName: () => "My Lab",
 		});
 		const { discover } = createRoutes(ctx);
 
 		const teams = (await (await discover()).json()) as {
 			team: string;
 			gatewayId?: string;
-			operatorName?: string;
+			profileName?: string;
 		}[];
 		expect(teams.find((t) => t.team === "recipe-app")?.gatewayId).toBe("hosta");
 		// The local Gateway stamps its own operator name on its sessions (D1).
-		expect(teams.find((t) => t.team === "recipe-app")?.operatorName).toBe("My Lab");
+		expect(teams.find((t) => t.team === "recipe-app")?.profileName).toBe("My Lab");
 		// A peer's operator name rides through the merge unchanged (the peer Gateway is the
 		// authoritative source of its own self-set network label).
 		expect(teams.find((t) => t.team === "api")?.gatewayId).toBe("hostb");
-		expect(teams.find((t) => t.team === "api")?.operatorName).toBe("Carol's Lab");
+		expect(teams.find((t) => t.team === "api")?.profileName).toBe("Carol's Lab");
 	});
 });
 

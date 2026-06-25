@@ -3,18 +3,18 @@ package com.atelier_nyaarium.switchboard.crypto
 import com.atelier_nyaarium.switchboard.proto.FirstRoot
 import com.atelier_nyaarium.switchboard.proto.ProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.RemoveTenant
-import com.atelier_nyaarium.switchboard.proto.SetOperatorName
+import com.atelier_nyaarium.switchboard.proto.SetProfileName
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
 import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
-import com.atelier_nyaarium.switchboard.proto.SignedSetOperatorName
+import com.atelier_nyaarium.switchboard.proto.SignedSetProfileName
 
 /**
  * Friend cross-Domain onboarding signing, the byte-exact Kotlin counterpart of
  * switchboard's `src/shared/enrollment.ts`. The operator pre-stages a friend's pending
  * tenant (provision_tenant) or drops it (remove_tenant), the friend's app roots the Domain
  * on first connect (first_root, SELF-signed by its silently-generated owner key), and the
- * rooted owner renames the network (set_operator_name). evie verifies each against the
+ * rooted owner renames the network (set_profile_name). evie verifies each against the
  * matching key, so the canonical signing bytes - a versioned, newline-joined, fixed-order
  * encoding binding fingerprint(signerSignPub) - must reproduce exactly. The cross-platform
  * vector in ProvisionOpsTest pins it. Distinct version prefixes keep the four artifacts
@@ -26,7 +26,7 @@ object ProvisionOpsCrypto {
 			"PROVISION_TENANT_V1",
 			Crypto.fingerprint(operatorSignPub),
 			p.domainId,
-			p.operatorName,
+			p.profileName,
 			p.issuedAt.toString(),
 			p.nonce,
 		).joinToString("\n").toByteArray(Charsets.UTF_8)
@@ -84,26 +84,26 @@ object ProvisionOpsCrypto {
 	fun verifyFirstRoot(s: SignedFirstRoot): Boolean =
 		Crypto.verify(firstRootSigningBytes(s.firstRoot), s.signature, s.firstRoot.ownerSignPub)
 
-	fun setOperatorNameSigningBytes(r: SetOperatorName, ownerSignPub: String): ByteArray =
+	fun setProfileNameSigningBytes(r: SetProfileName, ownerSignPub: String): ByteArray =
 		listOf(
-			"SET_OPERATOR_NAME_V1",
+			"SET_PROFILE_NAME_V1",
 			Crypto.fingerprint(ownerSignPub),
 			r.domainId,
-			r.operatorName,
+			r.profileName,
 			r.issuedAt.toString(),
 			r.nonce,
 		).joinToString("\n").toByteArray(Charsets.UTF_8)
 
-	fun signSetOperatorName(r: SetOperatorName, ownerSignPriv: String, ownerSignPub: String): SignedSetOperatorName =
-		SignedSetOperatorName(
+	fun signSetProfileName(r: SetProfileName, ownerSignPriv: String, ownerSignPub: String): SignedSetProfileName =
+		SignedSetProfileName(
 			rename = r,
 			ownerSignPub = ownerSignPub,
-			signature = Crypto.sign(setOperatorNameSigningBytes(r, ownerSignPub), ownerSignPriv),
+			signature = Crypto.sign(setProfileNameSigningBytes(r, ownerSignPub), ownerSignPriv),
 		)
 
-	fun verifySetOperatorName(s: SignedSetOperatorName, expectedOwnerSignPub: String): Boolean =
+	fun verifySetProfileName(s: SignedSetProfileName, expectedOwnerSignPub: String): Boolean =
 		s.ownerSignPub == expectedOwnerSignPub &&
-			Crypto.verify(setOperatorNameSigningBytes(s.rename, expectedOwnerSignPub), s.signature, expectedOwnerSignPub)
+			Crypto.verify(setProfileNameSigningBytes(s.rename, expectedOwnerSignPub), s.signature, expectedOwnerSignPub)
 
 	/**
 	 * The cross-tenant roster request proof: the console proves it holds an admitted signing key by

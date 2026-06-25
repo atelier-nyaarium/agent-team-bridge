@@ -64,10 +64,10 @@ data class EnrollDelivery(val admitted: Boolean, val message: String, val pasteB
 /** A linked friend Domain row for the Federation hub: the Domain id (plumbing), the friend's
  * network display name (their self-set operator name, propagated over discovery - shown instead of
  * the opaque domainId when known), how many of its sessions are visible to me, and whether any is
- * online. `operatorName` is null until a discovery session for the peer carries it. */
+ * online. `profileName` is null until a discovery session for the peer carries it. */
 data class LinkedDomain(
 	val domainId: String,
-	val operatorName: String?,
+	val profileName: String?,
 	val sessionCount: Int,
 	val online: Boolean,
 	// The friend OWNER's signing key (from the cross-Domain peer set), so a linked Domain joins to the
@@ -170,8 +170,8 @@ data class ChatState(
 	val linkedPeerOwners: Map<String, String> = emptyMap(),
 	/** This owner's own network display name (the operator name), for the profile field and the
 	 * MY NETWORK card. Seeded from the local cache and refreshed from discovery's home-session
-	 * operatorName; empty until the owner sets one. */
-	val operatorName: String = "",
+	 * profileName; empty until the owner sets one. */
+	val profileName: String = "",
 	/** True once this device has first-rooted a pending friend Domain from its invite blob. Mirrors
 	 * store.firstRooted into the UI state so the empty board can tell a friend who is set up but has
 	 * no host yet (-> the Setting-up-a-host pointer) from an operator who has not admitted a Gateway. */
@@ -437,7 +437,7 @@ class ChatRepository(
 			deviceName = currentDeviceName(),
 			labels = loadPersistedLabels(),
 			localGatewayId = localGatewayId,
-			operatorName = store.operatorName,
+			profileName = store.profileName,
 			firstRooted = store.firstRooted,
 		),
 	)
@@ -797,7 +797,7 @@ class ChatRepository(
 					enrollingSince = 0L,
 				)
 			}
-			refreshOperatorNameFromTeams()
+			refreshProfileNameFromTeams()
 			DebugLog.log("Connect", "connected gateway=${localGatewayId.ifEmpty { "?" }}")
 		} catch (e: Exception) {
 			val (cause, kind) = classifyConnError(e)
@@ -883,7 +883,7 @@ class ChatRepository(
 
 	/** This owner's network display name (the operator name), falling back to the local Domain id
 	 * before discovery has stamped a name. Shown as "YOU" on the Users surface. */
-	fun operatorDisplayName(): String = state.value.operatorName.ifEmpty { localDomainId() }
+	fun profileDisplayName(): String = state.value.profileName.ifEmpty { localDomainId() }
 
 	/** A passphrase-encrypted backup of the owner root key for offline safekeeping. */
 	// Runs the scrypt KDF, so it stays off the main thread (the UI dispatches it from a
@@ -1035,32 +1035,32 @@ class ChatRepository(
 
 	/** This owner's current network display name, for the profile field + the MY NETWORK card. The
 	 * cache (refreshed from discovery) is authoritative for display; empty until the owner sets one. */
-	fun localOperatorName(): String = _state.value.operatorName
+	fun localProfileName(): String = _state.value.profileName
 
 	/** Refresh the cached operator name from discovery's HOME session (the gateway stamps each
-	 * session's operatorName; the local Gateway's is this owner's own). A no-op when no home session
+	 * session's profileName; the local Gateway's is this owner's own). A no-op when no home session
 	 * carries one yet, so a board with only peer sessions never blanks the cached name. */
-	private fun refreshOperatorNameFromTeams() {
+	private fun refreshProfileNameFromTeams() {
 		val gw = localGatewayId
 		val home = _state.value.teams.firstOrNull {
-			(it.gatewayId.ifEmpty { gw }) == gw && !it.operatorName.isNullOrEmpty()
-		}?.operatorName ?: return
-		if (home != store.operatorName) store.operatorName = home
-		if (home != _state.value.operatorName) _state.update { it.copy(operatorName = home) }
+			(it.gatewayId.ifEmpty { gw }) == gw && !it.profileName.isNullOrEmpty()
+		}?.profileName ?: return
+		if (home != store.profileName) store.profileName = home
+		if (home != _state.value.profileName) _state.update { it.copy(profileName = home) }
 	}
 
 	/** Rename this owner's own network: owner-sign a SET_OPERATOR_NAME op over the home Domain and
 	 * submit it evie-direct. On success cache the new name + reflect it immediately (evie pushes a
 	 * domain_update to this owner's gateways, so discovery will confirm it on the next refresh). */
-	suspend fun setOperatorName(name: String): Result<Unit> = withContext(Dispatchers.IO) {
+	suspend fun setProfileName(name: String): Result<Unit> = withContext(Dispatchers.IO) {
 		val trimmed = name.trim()
 		if (trimmed.isEmpty()) return@withContext Result.failure(IllegalArgumentException("Name cannot be empty"))
 		runCatching {
-			val signed = federation.signSetOperatorName(localDomainId(), trimmed, System.currentTimeMillis())
-			val result = client().enroll(EnrollOp.SetOperatorName(signed))
+			val signed = federation.signSetProfileName(localDomainId(), trimmed, System.currentTimeMillis())
+			val result = client().enroll(EnrollOp.SetProfileName(signed))
 			if (!result.ok) error(result.error ?: "rename rejected")
-			store.operatorName = trimmed
-			_state.update { it.copy(operatorName = trimmed) }
+			store.profileName = trimmed
+			_state.update { it.copy(profileName = trimmed) }
 		}
 	}
 
@@ -1080,8 +1080,8 @@ class ChatRepository(
 	/** Stage a new guest tenant: mint an opaque domainId, owner-sign a provision_tenant op, submit
 	 * it evie-direct, and persist the row with the one-time invite nonce evie returns (the QR is
 	 * built from it). Returns the new row, or a failure carrying evie's reason. */
-	suspend fun provisionTenant(operatorName: String): Result<HostedTenant> = withContext(Dispatchers.IO) {
-		val label = operatorName.trim()
+	suspend fun provisionTenant(profileName: String): Result<HostedTenant> = withContext(Dispatchers.IO) {
+		val label = profileName.trim()
 		if (label.isEmpty()) return@withContext Result.failure(IllegalArgumentException("Name cannot be empty"))
 		runCatching {
 			val domainId = federation.newDomainId()
@@ -1098,9 +1098,9 @@ class ChatRepository(
 	/** Regenerate a pending tenant's one-time invite (D2): re-submit provision_tenant for the SAME
 	 * domainId, which mints a fresh nonce at evie (invalidating the prior one) without a remove +
 	 * re-add. Returns the refreshed row. */
-	suspend fun regenerateInvite(domainId: String, operatorName: String): Result<HostedTenant> =
+	suspend fun regenerateInvite(domainId: String, profileName: String): Result<HostedTenant> =
 		withContext(Dispatchers.IO) {
-			val label = operatorName.trim().ifEmpty { return@withContext Result.failure(IllegalArgumentException("Name cannot be empty")) }
+			val label = profileName.trim().ifEmpty { return@withContext Result.failure(IllegalArgumentException("Name cannot be empty")) }
 			runCatching {
 				val signed = federation.signProvisionTenant(domainId, label, System.currentTimeMillis())
 				val result = client().provisionTenant(signed)
@@ -1182,7 +1182,7 @@ class ChatRepository(
 				val o = arr.getJSONObject(i)
 				HostedTenant(
 					domainId = o.getString("domainId"),
-					operatorName = o.getString("operatorName"),
+					profileName = o.getString("profileName"),
 					nonce = o.getString("nonce"),
 					state = HostedTenantState.AWAITING_SETUP,
 				)
@@ -1193,7 +1193,7 @@ class ChatRepository(
 	private fun persistHostedTenants(rows: List<HostedTenant>) {
 		val arr = JSONArray()
 		for (r in rows) {
-			arr.put(JSONObject().put("domainId", r.domainId).put("operatorName", r.operatorName).put("nonce", r.nonce))
+			arr.put(JSONObject().put("domainId", r.domainId).put("profileName", r.profileName).put("nonce", r.nonce))
 		}
 		runCatching { store.saveHostedTenants(arr.toString()) }
 	}
@@ -1810,7 +1810,7 @@ class ChatRepository(
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
 		runCatching { client().teams(localGatewayId) }.onSuccess { t ->
 			_state.update { it.copy(teams = t) }
-			refreshOperatorNameFromTeams()
+			refreshProfileNameFromTeams()
 		}
 		// Also refresh the cross-Domain peer roster so the Federation PEERS list shows a freshly-linked
 		// peer that has no discovery sessions yet. Best-effort + only when federation is reachable;
@@ -2027,7 +2027,7 @@ class ChatRepository(
 						lastTeamsAt = now
 						runCatching { client().teams(localGatewayId) }.onSuccess { t ->
 							_state.update { it.copy(teams = t) }
-							refreshOperatorNameFromTeams()
+							refreshProfileNameFromTeams()
 						}
 					}
 					// Visible: long-poll (the hold IS the wait; re-poll immediately).

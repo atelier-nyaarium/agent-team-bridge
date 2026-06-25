@@ -194,10 +194,10 @@ export async function startGateway(): Promise<void> {
 	let allowlistForConsole: Allowlist | null = null;
 	// This Gateway's own Domain lifecycle metadata, learned from evie's gateway_register
 	// reply (refreshed on every reconnect). The console register reply carries domainStatus
-	// so the app knows to first-root vs just-provision; teams()/discover stamp operatorName
+	// so the app knows to first-root vs just-provision; teams()/discover stamp profileName
 	// so a linked friend Domain shows the owner's self-set network label. Null until the
 	// first register (or against a pre-feature evie that sends neither field).
-	let domainMeta: { domainStatus?: string; operatorName?: string | null } | null = null;
+	let domainMeta: { domainStatus?: string; profileName?: string | null } | null = null;
 	// The cross-Domain listening-mode handshake coordinator (built in the federation block),
 	// exposed to the console handler so the cross_domain_* ops drive the mutual pairing. The
 	// ONLY writer of the disjoint CrossDomainPeers store.
@@ -362,10 +362,10 @@ export async function startGateway(): Promise<void> {
 				domainMeta = meta;
 			},
 			onDomainUpdate: (meta) => {
-				// A live rename of THIS Domain's network: refresh only operatorName, preserving
+				// A live rename of THIS Domain's network: refresh only profileName, preserving
 				// the domainStatus from the last register, so teams()/discover reflect the new
 				// name immediately without a reconnect.
-				domainMeta = { ...(domainMeta ?? {}), operatorName: meta.operatorName };
+				domainMeta = { ...(domainMeta ?? {}), profileName: meta.profileName };
 			},
 			buildRegisterAuth: () => {
 				// Present this Gateway's owner-signed admission + a fresh possession proof,
@@ -469,7 +469,7 @@ export async function startGateway(): Promise<void> {
 		// This Gateway's own operator/network display name (learned from evie's register
 		// reply), stamped on every local TeamInfo so a linked friend Domain sees the owner's
 		// self-set label over the discovery roster (D1). Null until the first register.
-		operatorName: () => domainMeta?.operatorName ?? null,
+		profileName: () => domainMeta?.profileName ?? null,
 		// Home-first seal-target resolution on the send side: a target gateway the home
 		// allowlist admits seals v1 to home, mirroring the sealer's open-side ordering, so a
 		// home/friend gateway-id collision never routes a home send to the friend.

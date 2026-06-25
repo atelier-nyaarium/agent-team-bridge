@@ -35,7 +35,7 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		offlineCatalog,
 		knownTeamPaths,
 		mailboxStore: overrides.mailboxStore,
-		operatorName: overrides.operatorName,
+		profileName: overrides.profileName,
 	};
 }
 
@@ -250,19 +250,19 @@ describe("routes", () => {
 		it("stamps the Gateway's operator name on every team so Peers see the network label (D1)", async () => {
 			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
 			const offlineCatalog = new Map<string, string>([["proj-b", "/home/user/proj-b"]]);
-			const ctx = makeCtx({ registry, offlineCatalog, operatorName: () => "Carol's Lab" });
-			const json = (await createRoutes(ctx).teams().json()) as { team: string; operatorName?: string }[];
-			expect(json.map((t) => [t.team, t.operatorName])).toEqual([
+			const ctx = makeCtx({ registry, offlineCatalog, profileName: () => "Carol's Lab" });
+			const json = (await createRoutes(ctx).teams().json()) as { team: string; profileName?: string }[];
+			expect(json.map((t) => [t.team, t.profileName])).toEqual([
 				["proj-a", "Carol's Lab"],
 				["proj-b", "Carol's Lab"],
 			]);
 		});
 
-		it("OMITS operatorName when the Gateway has none (minimal wire, unchanged for a pre-feature Gateway)", async () => {
+		it("OMITS profileName when the Gateway has none (minimal wire, unchanged for a pre-feature Gateway)", async () => {
 			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
-			const ctx = makeCtx({ registry, operatorName: () => null });
+			const ctx = makeCtx({ registry, profileName: () => null });
 			const json = (await createRoutes(ctx).teams().json()) as Record<string, unknown>[];
-			expect(json[0]).not.toHaveProperty("operatorName");
+			expect(json[0]).not.toHaveProperty("profileName");
 		});
 	});
 

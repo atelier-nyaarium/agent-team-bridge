@@ -94,7 +94,7 @@ fun SharingScreen(repo: ChatRepository, onBack: () -> Unit) {
 		val linkedOwners = people.mapNotNull { it.ownerSignPub }.toSet()
 		trustFirst = repo.fetchRoster().getOrDefault(emptyList())
 			.filter { it.ownerSignPub != myOwner && it.ownerSignPub !in linkedOwners }
-			.map { it.operatorName.ifEmpty { "(unnamed)" } }
+			.map { it.profileName.ifEmpty { "(unnamed)" } }
 			.distinct()
 	}
 
@@ -231,7 +231,7 @@ private fun SessionShareScreen(
 							checked = p.domainId in current.domains,
 							onCheckedChange = { onToggleDomain(p.domainId, it) },
 						)
-						Text(p.operatorName ?: p.domainId, Modifier.padding(start = 4.dp))
+						Text(p.profileName ?: p.domainId, Modifier.padding(start = 4.dp))
 					}
 				}
 				// People you have not linked: shown disabled, since sharing needs a trust link first.
@@ -274,7 +274,7 @@ private fun modeSummary(st: SessionShares, people: List<LinkedDomain>): String =
 		ShareMode.PRIVATE -> "Private"
 		ShareMode.EVERYONE -> "Everyone I trust"
 		ShareMode.SPECIFIC -> {
-			val names = st.domains.map { d -> people.find { it.domainId == d }?.operatorName ?: d }
+			val names = st.domains.map { d -> people.find { it.domainId == d }?.profileName ?: d }
 			when {
 				names.size == 1 -> "${names.first()} only"
 				else -> "${names.size} people"
