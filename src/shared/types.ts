@@ -31,19 +31,8 @@ export type RequestType = z.infer<typeof RequestTypeSchema>;
 export type ResponseStatus = z.infer<typeof ResponseStatusSchema>;
 
 ////////////////////////////////
-//  Note: CLI replies (crosstalk_reply) carry a status. Channel replies
-//  (channel_reply) are stream messages with no status at all. The fields
-//  below are optional so the same payload type serves both paths.
-
-export interface InjectPayload {
-	type: "inject";
-	from: string;
-	request_type: RequestType;
-	body: string;
-	effort: EffortLevel | "auto";
-	session_id: string;
-	is_follow_up: boolean;
-}
+//  Reply payloads. Fields are optional because a channel reply (channel_reply) is a
+//  stream message that may carry only a partial update (status, a chunk, or the final).
 
 export interface ChannelPushPayload {
 	type: "channel_push";
@@ -84,12 +73,6 @@ export interface ResponsePushPayload {
 	what_to_decide?: string;
 	message?: string;
 	files?: ChannelFile[];
-}
-
-export interface EffortEnv {
-	simple?: string;
-	standard?: string;
-	complex?: string;
 }
 
 ////////////////////////////////

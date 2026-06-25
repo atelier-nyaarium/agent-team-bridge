@@ -2,20 +2,9 @@ import { exec, execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_MODELS } from "../resolve-model.js";
 
 ////////////////////////////////
 //  Interfaces & Types
-
-export interface BuildAgentCommandParams {
-	agent: string;
-	model: string;
-	sessionId: string;
-	isFollowUp: boolean;
-	promptFile: string;
-	responseFile: string;
-	stderrFile: string;
-}
 
 export interface ExecInContainerParams {
 	projectPath: string;
@@ -33,18 +22,6 @@ export interface ContainerUpResult {
 //  Functions & Helpers
 
 const HOME = os.homedir();
-
-// CLI agent types for dispatch_cli (Claude uses channel-based communication instead)
-export const CLI_AGENT_TYPES = ["cursor", "copilot", "codex"] as [string, ...string[]];
-export const EFFORT_LEVELS = ["simple", "standard", "complex"] as [string, ...string[]];
-
-export function resolveDevcontainerModel(agent: string, effort: string): string {
-	const models = DEFAULT_MODELS[agent];
-	if (!models) throw new Error(`Unknown agent '${agent}'. Valid: ${CLI_AGENT_TYPES.join(", ")}`);
-	const model = models[effort];
-	if (!model) throw new Error(`Unknown effort '${effort}'. Valid: ${EFFORT_LEVELS.join(", ")}`);
-	return model;
-}
 
 // Devcontainer CLI discovery
 
@@ -316,35 +293,6 @@ export function ensureContainerUpAsync(projectPath: string): Promise<ContainerUp
 			},
 		);
 	});
-}
-
-// Agent command building
-
-export function buildAgentCommand({
-	agent,
-	model,
-	sessionId,
-	isFollowUp,
-	promptFile,
-	responseFile,
-	stderrFile,
-}: BuildAgentCommandParams): string {
-	switch (agent) {
-		case "cursor":
-			return `cursor-agent -f -p --model ${model} --resume=${sessionId} < ${promptFile} > ${responseFile} 2>${stderrFile}`;
-		case "copilot":
-			return `copilot -p "$(cat ${promptFile})" --yolo --no-ask-user --model ${model} --resume ${sessionId} -s > ${responseFile} 2>${stderrFile}`;
-		case "codex": {
-			if (isFollowUp) {
-				return `codex exec resume ${sessionId} -m ${model} --dangerously-bypass-approvals-and-sandbox < ${promptFile} > ${responseFile} 2>${stderrFile}`;
-			}
-			return `codex exec -m ${model} --dangerously-bypass-approvals-and-sandbox < ${promptFile} > ${responseFile} 2>${stderrFile}`;
-		}
-		default:
-			throw new Error(
-				`Unknown CLI agent '${agent}'. Claude uses channel-based communication, so use crosstalk_send instead.`,
-			);
-	}
 }
 
 // Container execution
