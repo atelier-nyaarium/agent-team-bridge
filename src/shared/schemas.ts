@@ -243,6 +243,21 @@ export const ConsoleOpSchema = z
 			text: z.string().max(4096).optional(),
 			key: z.string().max(32).optional(),
 		}),
+		// Start a new tmux session running a fresh agent on `target` (the host or a devcontainer),
+		// named `sessionName`. The daemon owns the launch command (model/effort/plugin); the console
+		// supplies only the target device + the new session name, so it can never inject a host
+		// command. The session name is slug-validated at the host tmux layer. Idempotent per opId.
+		z.object({
+			kind: z.literal("create_session"),
+			target: z.string().min(1).max(128),
+			sessionName: z.string().min(1).max(64),
+		}),
+		// Drive a session through the plugin update + MCP reconnect sequence. `target` is the
+		// gateway-qualified session to reload; the host runs the script detached. Idempotent per opId.
+		z.object({
+			kind: z.literal("reload_plugins"),
+			target: z.string().min(1).max(128),
+		}),
 		// Cross-Domain listening-mode handshake (cross-domain-federation.md). These four
 		// ops drive the mutual pairing that links two Gateways owned by DIFFERENT owners.
 		// The owner root key is phone-held, so each side SIGNS its link on the phone; the
@@ -564,6 +579,21 @@ export const ConsoleTmuxSendResultSchema = z
 	})
 	.meta({ id: "ConsoleTmuxSendResult" });
 
+export const ConsoleCreateSessionResultSchema = z
+	.object({
+		// The daemon detaches the new session immediately; the agent boots after this returns,
+		// so the console polls a peek to see it come up.
+		created: z.boolean(),
+	})
+	.meta({ id: "ConsoleCreateSessionResult" });
+
+export const ConsoleReloadPluginsResultSchema = z
+	.object({
+		// The reload script runs detached on the host for ~40s after this returns.
+		initiated: z.boolean(),
+	})
+	.meta({ id: "ConsoleReloadPluginsResult" });
+
 ////////////////////////////////
 //  Cross-Domain handshake op results (gateway -> console)
 //
@@ -731,6 +761,8 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleGatewayTransportResultSchema,
 	ConsolePeekResultSchema,
 	ConsoleTmuxSendResultSchema,
+	ConsoleCreateSessionResultSchema,
+	ConsoleReloadPluginsResultSchema,
 	CrossDomainListenResultSchema,
 	CrossDomainRequestResultSchema,
 	CrossDomainConfirmResultSchema,

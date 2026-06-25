@@ -1036,6 +1036,49 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(reply.error).toContain("disallowed key");
 		expect(h.hostOps).toHaveLength(0);
 	});
+
+	it("create_session relays a createSession host op carrying the new session name", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", sessionName: "scratch" }, "c1"),
+		);
+		expect(reply.result).toEqual({ created: true });
+		expect(h.hostOps[0]).toEqual({
+			kind: "createSession",
+			target: { kind: "devcontainer", name: "recipe-app", sessionName: "scratch" },
+			dedupKey: "conv-pixel:c1",
+		});
+	});
+
+	it("a retried create_session with the same opId launches once (idempotent)", async () => {
+		const h = makeTerminalHarness();
+		const f = frame({ kind: "create_session", target: "gateway", sessionName: "scratch" }, "cdup");
+		const [r1, r2] = await Promise.all([h.handler.handleFrame(f), h.handler.handleFrame(f)]);
+		expect(r1.ok && r2.ok).toBe(true);
+		expect(h.hostOps).toHaveLength(1);
+	});
+
+	it("reload_plugins relays a reloadPlugins host op for the resolved session", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "reload_plugins", target: "recipe-app" }, "r1"));
+		expect(reply.result).toEqual({ initiated: true });
+		expect(h.hostOps[0]).toEqual({
+			kind: "reloadPlugins",
+			target: { kind: "devcontainer", name: "recipe-app", sessionName: "claude" },
+			dedupKey: "conv-pixel:r1",
+		});
+	});
+
+	it("rejects create_session / reload_plugins for a loose session", async () => {
+		const h = makeTerminalHarness();
+		const a = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "some-loose", sessionName: "x" }, "c2"),
+		);
+		const b = await h.handler.handleFrame(frame({ kind: "reload_plugins", target: "some-loose" }, "r2"));
+		expect(a.ok).toBe(false);
+		expect(b.ok).toBe(false);
+		expect(h.hostOps).toHaveLength(0);
+	});
 });
 
 describe("console cross-Domain handshake ops", () => {

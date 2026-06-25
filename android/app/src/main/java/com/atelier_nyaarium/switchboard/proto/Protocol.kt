@@ -166,6 +166,19 @@ sealed class ConsoleOp {
 	) : ConsoleOp()
 
 	@Serializable
+	@SerialName("create_session")
+	data class CreateSession(
+		val target: String,
+		val sessionName: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("reload_plugins")
+	data class ReloadPlugins(
+		val target: String,
+	) : ConsoleOp()
+
+	@Serializable
 	@SerialName("cross_domain_listen")
 	data object CrossDomainListen : ConsoleOp()
 
@@ -637,6 +650,16 @@ data class DomainSnapshot(
 @Serializable
 data class ConsoleGatewayTransportResult(
 	val transport: GatewayTransport,
+)
+
+@Serializable
+data class ConsoleCreateSessionResult(
+	val created: Boolean,
+)
+
+@Serializable
+data class ConsoleReloadPluginsResult(
+	val initiated: Boolean,
 )
 
 @Serializable

@@ -177,7 +177,9 @@ const MAX_OPS_PER_CONVERSATION = 256;
 
 function isMutatingOp(op: ConsoleOp): boolean {
 	// tmux_send injects keystrokes (a real side effect), so a retried opId must replay
-	// the cached ack, not re-send the keys. peek is a fresh read (never cached). The
+	// the cached ack, not re-send the keys. create_session and reload_plugins likewise have
+	// side effects (a launched session, a running reload), so a retry replays rather than
+	// re-running. peek is a fresh read (never cached). The
 	// stateful cross_domain_* handshake ops (a minted window, a routed request, a written
 	// peer, a cancellation) cache so a retried opId replays the cached reply rather than
 	// minting a second window, re-routing, or re-writing the peer; listen_state is a fresh
@@ -189,6 +191,8 @@ function isMutatingOp(op: ConsoleOp): boolean {
 		op.kind === "send" ||
 		op.kind === "respond" ||
 		op.kind === "tmux_send" ||
+		op.kind === "create_session" ||
+		op.kind === "reload_plugins" ||
 		op.kind === "cross_domain_listen" ||
 		op.kind === "cross_domain_request" ||
 		op.kind === "cross_domain_confirm" ||
@@ -218,16 +222,17 @@ export function createConsoleHandler({
 	untrustOwner,
 }: ConsoleHandlerDeps) {
 	/** Resolve a console terminal target (the gateway-qualified session name) to the host tmux
-	 * it maps to: the host machine for "gateway", a devcontainer for a known project. The console
-	 * peek/tmux_send ops address each target's single `claude` session today; a cross-Gateway
-	 * target (v1 is local-only) or an unknown/loose name is rejected. */
-	function resolveTmuxTarget(qualifiedTarget: string): TmuxTarget {
+	 * it maps to: the host machine for "gateway", a devcontainer for a known project. peek/tmux_send
+	 * and reload address an existing session (the conventional `claude`); create_session passes the
+	 * NEW session name. A cross-Gateway target (v1 is local-only) or an unknown/loose name is
+	 * rejected. */
+	function resolveTmuxTarget(qualifiedTarget: string, sessionName = "claude"): TmuxTarget {
 		const { gatewayId, name } = parseQualifiedTeam(qualifiedTarget);
 		if (gatewayId && gatewayId !== localGatewayId) {
 			throw new Error(`terminal view is not available for a session on another Gateway`);
 		}
-		if (name === "gateway") return { kind: "host", name, sessionName: "claude" };
-		if (isProjectName?.(name)) return { kind: "devcontainer", name, sessionName: "claude" };
+		if (name === "gateway") return { kind: "host", name, sessionName };
+		if (isProjectName?.(name)) return { kind: "devcontainer", name, sessionName };
 		throw new Error(`terminal view is not available for "${name}" (only the host agent and devcontainers)`);
 	}
 	// The per-install conversationId is the DEVICE identity: it keys the registry sub,
@@ -667,6 +672,24 @@ export function createConsoleHandler({
 				const r = await relayToHost(hostOp);
 				if (!r.ok) throw new Error(r.error ?? "send failed");
 				return { sent: true };
+			}
+
+			case "create_session": {
+				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
+				const target = resolveTmuxTarget(op.target, op.sessionName);
+				const dedupKey = `${conversationId}:${opId}`;
+				const r = await relayToHost({ kind: "createSession", target, dedupKey });
+				if (!r.ok) throw new Error(r.error ?? "create session failed");
+				return { created: true };
+			}
+
+			case "reload_plugins": {
+				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
+				const target = resolveTmuxTarget(op.target);
+				const dedupKey = `${conversationId}:${opId}`;
+				const r = await relayToHost({ kind: "reloadPlugins", target, dedupKey });
+				if (!r.ok) throw new Error(r.error ?? "reload failed");
+				return { initiated: true };
 			}
 
 			case "cross_domain_listen": {
