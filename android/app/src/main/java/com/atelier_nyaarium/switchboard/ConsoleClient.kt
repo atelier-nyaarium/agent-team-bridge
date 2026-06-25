@@ -14,7 +14,6 @@ import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeRef
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeResult
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
-import com.atelier_nyaarium.switchboard.proto.ConsoleGatewayTransportResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
 import com.atelier_nyaarium.switchboard.proto.ConsolePeekResult
@@ -35,7 +34,6 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainShareResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnlinkResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnshareResult
-import com.atelier_nyaarium.switchboard.proto.GatewayTransport
 import com.atelier_nyaarium.switchboard.proto.PendingTenantRef
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
@@ -44,6 +42,8 @@ import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
 import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
+import com.atelier_nyaarium.switchboard.proto.TransportRequest
+import com.atelier_nyaarium.switchboard.proto.TransportResult
 import java.io.ByteArrayInputStream
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -199,6 +199,12 @@ private data class EnrollHandshakeEnvelope(val enrollHandshake: EnrollHandshakeO
  * routing. */
 @Serializable
 private data class RosterEnvelope(val roster: RosterRequest)
+
+/** The transport-request POST body: a top-level `transport` field routes to evie's console-bridge
+ * transport intake (answered AT evie, which holds the gateway-bridge Secret), the twin of `firstRoot`
+ * routing. */
+@Serializable
+private data class TransportEnvelope(val transport: TransportRequest)
 
 /** The FLOW-2 trust-rendezvous POST bodies: top-level fields routing to evie's trust broker / pending
  * query (the twins of `roster` routing). */
@@ -446,6 +452,38 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			runCatching { wireJson.decodeFromString<EnrollResult>(text) }.getOrNull()?.let { return it }
 			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
 			return EnrollResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
+	/** Pull this owner's network gateway-bridge transport (the proxy SA token + CA) from evie. POST
+	 * { transport } evie-direct, like firstRoot - evie holds the gateway-bridge Secret and answers
+	 * itself, scoping by the request's signed owner proof. ok=false is an opaque reject (bad proof or
+	 * not a rooted owner); a transport bounce maps to ok=false too. The Console seals the returned creds
+	 * into a bootstrap bundle for a creds-less Gateway it is enrolling. */
+	fun requestGatewayTransport(req: TransportRequest): TransportResult {
+		val request = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(wireJson.encodeToString(TransportEnvelope.serializer(), TransportEnvelope(req)).toRequestBody(JSON))
+			.build()
+		val resp =
+			try {
+				client.newCall(request).execute()
+			} catch (e: Exception) {
+				DebugLog.log("Transport", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+				throw e
+			}
+		resp.use {
+			val text = resp.body?.string().orEmpty()
+			DebugLog.log("Transport", "resp HTTP ${resp.code} ${text.take(160)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<TransportResult>(text) }
+					.getOrElse { TransportResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<TransportResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return TransportResult(ok = false, error = err ?: "HTTP ${resp.code}")
 		}
 	}
 
@@ -714,12 +752,6 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		if (!body.ok || body.result == null) error("poll relay failed: ${body.error ?: "no result"}")
 		return wireJson.decodeFromJsonElement<ConsolePollResult>(body.result)
 	}
-
-	/** Fetch the route Gateway's bootstrap transport creds (the gateway-bridge SA + token), so this
-	 * Console can seal them into a bundle for a creds-less Gateway it is enrolling. Replaces carrying
-	 * these creds in the provisioning blob; the Console fetches them on demand. */
-	fun getGatewayTransport(): GatewayTransport =
-		resultOf<ConsoleGatewayTransportResult>(relay(ConsoleOp.GetGatewayTransport), "get_gateway_transport").transport
 
 	/** The Gateway that hosts a target session (a bare name resolves to the local Gateway), so a peek/send
 	 * seals E2E to that Gateway. Mirrors send(). */

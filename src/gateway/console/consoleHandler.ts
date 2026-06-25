@@ -25,7 +25,7 @@ import {
 	type TmuxTarget,
 } from "../../shared/host-op.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
-import { DomainStatusSchema, type GatewayTransport } from "../../shared/schemas.js";
+import { DomainStatusSchema } from "../../shared/schemas.js";
 import { SessionId, TeamAddress } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
@@ -79,10 +79,6 @@ export interface ConsoleHandlerDeps {
 	 * pre-register / against a pre-feature evie (the app then treats the Domain as already
 	 * rooted - the legacy path). */
 	domainStatus?: () => string | undefined;
-	/** The bootstrap transport creds a creds-less Gateway needs to reach evie, served to the
-	 * Console on the get_gateway_transport op (it seals them into a bundle for a Gateway it is
-	 * enrolling). Read from the federation dir's bootstrap-transport.json; null when unprovisioned. */
-	bootstrapTransport?: () => GatewayTransport | null;
 	/** Relay a tmux op (peek/sendText/sendKey) to the local host daemon and await its reply.
 	 * Drives the console terminal view; absent when no host daemon is wired (the op then errors
 	 * "terminal unavailable"). */
@@ -214,7 +210,6 @@ export function createConsoleHandler({
 	isProjectName,
 	domain,
 	domainStatus,
-	bootstrapTransport,
 	relayToHost,
 	crossDomain,
 	crossDomainShare,
@@ -606,19 +601,13 @@ export function createConsoleHandler({
 			}
 
 			case "get_gateway_transport": {
-				// The route Gateway hands the Console the bootstrap creds (gateway-bridge SA + token)
-				// so it can seal them into a bundle for a creds-less Gateway it is enrolling. Serving
-				// creds here is safe because the frame reached dispatch only after the consoleSealer
-				// opened it against an owner-signed kind:console admission at the relay boundary; the
-				// reply is sealed back to the Console's box key on the same path, so evie never sees
-				// the token. Read fresh from the federation dir (not idempotency-cached).
-				const transport = bootstrapTransport?.() ?? null;
-				if (!transport) {
-					throw new Error(
-						"gateway transport not provisioned - run provision-admin-domain.sh on the route Gateway",
-					);
-				}
-				return { transport };
+				// Retired: the Console pulls the gateway-bridge transport from evie directly now (a
+				// signed TRANSPORT_REQUEST_V1 proof), not from the route Gateway. The op stays in the
+				// wire union for compatibility; the Gateway no longer serves it. An old build that
+				// still sends it gets a clear error rather than a silent empty reply.
+				throw new Error(
+					"get_gateway_transport is retired - update the app, which now pulls transport from evie",
+				);
 			}
 
 			case "peek": {

@@ -15,7 +15,7 @@ import { createConsoleHandler } from "./console/consoleHandler.js";
 import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { startEvieClient } from "./evie/evieClient.js";
-import { evieWsConnection, loadBootstrapTransport, loadEvieTransport } from "./evie/transport.js";
+import { evieWsConnection, loadEvieTransport } from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
 import {
@@ -488,7 +488,6 @@ export async function startGateway(): Promise<void> {
 			// The console register reply carries this Gateway's Domain status (learned from
 			// evie's register reply) so the app knows to first-root vs just-provision.
 			domainStatus: () => domainMeta?.domainStatus,
-			bootstrapTransport: () => loadBootstrapTransport(federationDir),
 			relayToHost,
 			crossDomain: crossDomainCoordinator
 				? {

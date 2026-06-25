@@ -219,10 +219,8 @@ export const ConsoleOpSchema = z
 			// cycle at near-zero steady cost.
 			knownDomainVersion: z.string().optional(),
 		}),
-		// Fetch the route Gateway's bootstrap transport creds (the gateway-bridge SA + token) so
-		// the Console can seal them into a bundle for a creds-less Gateway it is enrolling. No
-		// params: the Gateway returns its own bootstrap transport. Replaces carrying these creds
-		// in the provisioning blob.
+		// Retired: the Console fetches the gateway-bridge transport from evie directly now. The op
+		// value stays in the union for Kotlin codegen continuity; the Gateway throws if it is called.
 		z.object({ kind: z.literal("get_gateway_transport") }),
 		// Capture an agent's VISIBLE tmux pane for the console terminal view. `target` is the
 		// gateway-qualified session name; the gateway resolves it to the host-agent's own
@@ -472,9 +470,9 @@ export const MailboxEntrySchema = z
 ////////////////////////////////
 //  Gateway transport creds (the gateway-bridge SA token + endpoint)
 //
-//  A dep-free leaf shared by two consumers below: the get_gateway_transport op
-//  result (the Console fetches it to enroll a creds-less Gateway) and the
-//  GatewayBootstrapBundle it seals. Defined here so both can reference it.
+//  A dep-free leaf the GatewayBootstrapBundle seals (the creds a creds-less Gateway needs to reach
+//  evie). The retired get_gateway_transport op result (ConsoleGatewayTransportResult) is kept in the
+//  union for Kotlin codegen continuity but is no longer produced.
 
 export const GatewayTransportSchema = z
 	.object({

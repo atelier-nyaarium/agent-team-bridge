@@ -15,6 +15,7 @@ import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SessionId
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
+import com.atelier_nyaarium.switchboard.proto.GatewayTransport
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
@@ -1775,21 +1776,33 @@ class ChatRepository(
 			?: return@withContext EnrollDelivery(false, _state.value.error ?: "Couldn't add the Gateway. Try again.", null)
 		val nonce = scanned.nonce
 			?: return@withContext EnrollDelivery(true, "Added. This Gateway will come online shortly.", null)
-		// Fetch the bootstrap transport from the route Gateway. The Console no longer carries it in
-		// its blob; the Gateway holds it as bootstrap-transport.json and serves it sealed on demand.
-		val transport = try {
-			client().getGatewayTransport()
+		// Pull the gateway-bridge transport (proxy SA token + CA) from evie by proving this owner roots
+		// a network. apiUrl + the network id come from the provisioning blob: apiUrl is the SAME external
+		// apiserver the console bridge uses, and domainId is the rooted Domain the Gateway adopts.
+		val prov = runCatching { store.load()?.let { Provisioning.parse(it) } }.getOrNull()
+			?: return@withContext EnrollDelivery(true, "Added, but this device is not provisioned - re-import your setup blob.", null)
+		val result = try {
+			client().requestGatewayTransport(federation.signTransportRequest(System.currentTimeMillis()))
 		} catch (e: Exception) {
-			// Surface the REAL transport-fetch cause (reached-but-rejected, "not admitted", an op
-			// failure) instead of asserting "couldn't reach" + a re-provision that will not fix an
-			// admission/seal mismatch. Same class as the admitGateway fix two steps above (bf328e9).
+			// Surface the REAL transport-fetch cause (reached-but-rejected, an op failure) instead of
+			// asserting "couldn't reach" + a re-provision that will not fix an admission/seal mismatch.
 			return@withContext EnrollDelivery(
 				true,
 				"Added, but couldn't finish Gateway setup: ${e.message?.take(120) ?: "unknown error"}",
 				null,
 			)
 		}
-		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub)
+		if (!result.ok || result.saToken == null || result.caPem == null) {
+			return@withContext EnrollDelivery(
+				true,
+				"Added, but couldn't finish Gateway setup: ${result.error?.take(120) ?: "transport unavailable"}",
+				null,
+			)
+		}
+		// The 4-field GatewayTransport; the Gateway fills namespace/service/port defaults when it
+		// installs the bundle, and appToken is omitted (gateway-bridge auth is the SA token + admission).
+		val transport = GatewayTransport(apiUrl = prov.apiUrl, saToken = result.saToken, caPem = result.caPem)
+		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub, prov.pendingTenant?.domainId)
 		val frameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), frame)
 		if (scanned.lanHost != null && scanned.lanPort != null && isPrivateLanHost(scanned.lanHost)) {
 			val ok = runCatching { postBundle(scanned.lanHost, scanned.lanPort, frameJson) }.getOrDefault(false)

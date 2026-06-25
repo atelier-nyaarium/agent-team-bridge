@@ -214,32 +214,40 @@ fun ManageScreen(repo: ChatRepository, onBack: () -> Unit, onAddGateway: () -> U
 	}
 }
 
-/** Add Gateway: scan the Gateway's admit-gateway QR, confirm the SAS against the Gateway
- * terminal, then owner-sign + submit the admission. Bundle delivery to a remote Gateway
- * (LAN/paste) is a later step; a host-configured Gateway (e.g. the local one) gets its
- * admission through evie's domain sync alone. */
+/** Add Gateway: scan the Gateway's admit-gateway QR (or paste the same payload as JSON text),
+ * confirm the SAS against the Gateway terminal, then owner-sign + submit the admission. Bundle
+ * delivery to a remote Gateway (LAN/paste) follows; a host-configured Gateway (e.g. the local one)
+ * gets its admission through evie's domain sync alone. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Unit) {
 	val scope = rememberCoroutineScope()
 	val context = LocalContext.current
-	var scanning by remember { mutableStateOf(true) }
+	var scanning by remember { mutableStateOf(false) }
 	var scanned by remember { mutableStateOf<ScannedGateway?>(null) }
+	var pasteText by remember { mutableStateOf("") }
 	var status by remember { mutableStateOf("") }
 	var busy by remember { mutableStateOf(false) }
 	var pasteBundle by remember { mutableStateOf<String?>(null) }
+
+	// The QR and the JSON-paste method feed the SAME parser: the admit payload the Gateway prints
+	// as a QR is the same JSON it offers as copy-pasta, so a scan and a paste land on the identical
+	// confirm + admit + deliver path. Null means the text was not an admit-gateway payload.
+	fun adopt(payload: String, source: String) {
+		// Clear a prior failed attempt's error first, so a good payload's confirm screen never shows
+		// the last "not a Gateway code" message next to the valid SAS.
+		status = ""
+		val parsed = repo.parseAdmitGateway(payload)
+		if (parsed == null) status = "That $source is not a Gateway enrollment code." else scanned = parsed
+	}
 
 	if (scanning) {
 		QrScanScreen(
 			onResult = {
 				scanning = false
-				// Clear any message from a prior failed scan first, so a good scan's confirm screen
-				// never shows the last attempt's "not a Gateway code" error next to the valid SAS.
-				status = ""
-				val parsed = repo.parseAdmitGateway(it)
-				if (parsed == null) status = "That QR is not a Gateway enrollment code." else scanned = parsed
+				adopt(it, "QR")
 			},
-			onCancel = onBack,
+			onCancel = { scanning = false },
 		)
 		return
 	}
@@ -251,8 +259,21 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 		) {
 			val s = scanned
 			if (s == null) {
-				Text(status.ifEmpty { "No Gateway scanned." }, color = MaterialTheme.colorScheme.error)
-				Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan again") }
+				Text("Scan the Gateway's enrollment code, or paste it as JSON.", style = MaterialTheme.typography.bodyMedium)
+				if (status.isNotEmpty()) Text(status, color = MaterialTheme.colorScheme.error)
+				Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
+				OutlinedTextField(
+					value = pasteText,
+					onValueChange = { pasteText = it },
+					label = { Text("Paste enrollment JSON") },
+					modifier = Modifier.fillMaxWidth(),
+					minLines = 3,
+				)
+				Button(
+					onClick = { adopt(pasteText.trim(), "code") },
+					enabled = pasteText.isNotBlank(),
+					modifier = Modifier.fillMaxWidth(),
+				) { Text("Use pasted code") }
 				OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
 			} else {
 				Text("Scanned: ${s.gatewayId}", style = MaterialTheme.typography.titleMedium)

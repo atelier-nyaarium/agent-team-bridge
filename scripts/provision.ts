@@ -521,17 +521,9 @@ async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Pr
 	);
 	const apiUrl = await clusterApiUrl();
 
-	const { saToken: swSa, caPem: swCa } = await readSaCreds("gateway-bridge-proxy-token");
-	// The GatewayTransport shape (the gateway fills namespace/service/port defaults when it installs
-	// the bundle). Absent when the gateway-bridge SA is not yet populated. Handed to the local Gateway
-	// as bootstrap-transport.json, NOT carried in the blob: the Console fetches it via the
-	// get_gateway_transport op when enrolling a creds-less Gateway, so a QR-sized blob fits. The
-	// gateway-bridge auth is the SA token over the API service-proxy plus the owner-signed admission;
-	// there is no bridge bearer to carry.
-	const bootstrapTransport = swSa && swCa ? JSON.stringify({ apiUrl, saToken: swSa, caPem: swCa }) : undefined;
-	if (bootstrapTransport && !(await writeGatewayFile(`${FED_DIR_IN}/bootstrap-transport.json`, bootstrapTransport))) {
-		note("warning: could not write bootstrap-transport.json into the Gateway");
-	}
+	// The gateway-bridge transport (the proxy SA token + CA) is NOT staged on the Gateway or carried
+	// in the blob anymore. The Console pulls it from evie on demand (a signed TRANSPORT_REQUEST_V1
+	// proof) when enrolling a creds-less Gateway, so a QR-sized blob fits and evie holds the one copy.
 
 	// writeProvisioningBlob VALIDATES against the shared ProvisioningSchema before writing, so a
 	// field drift fails loudly here, not silently on the device.
@@ -636,9 +628,9 @@ async function verify(): Promise<void> {
 //  QR menu
 
 /** The blob, validated to fit a single QR. The gateway-bridge transport creds (the bulky half of
- * the old blob) are now fetched on demand via the get_gateway_transport op, not bundled, so the
- * blob sits well under a QR's ~2.9 KB ceiling. This guards against a future field pushing it over
- * with a clear error instead of qrcode-generator's raw overflow. */
+ * the old blob) are now pulled from evie on demand by the Console, not bundled, so the blob sits
+ * well under a QR's ~2.9 KB ceiling. This guards against a future field pushing it over with a
+ * clear error instead of qrcode-generator's raw overflow. */
 function qrPayload(blobText: string): string {
 	if (!fitsInQr(blobText)) {
 		throw new Error(`the blob is ${blobText.length} bytes - too large for a QR; use paste or file import`);
