@@ -41,7 +41,7 @@ import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
 import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
-import com.atelier_nyaarium.switchboard.proto.SignedSetProfileName
+import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
 import java.io.ByteArrayInputStream
@@ -150,10 +150,10 @@ data class Team(
 	// The owning Domain's network display name (its operator name), stamped by the gateway's
 	// discover for both home and peer sessions. The Peers list shows this instead of the opaque
 	// domainId. Null for a pre-feature gateway or a Domain that has not set a name yet.
-	val profileName: String? = null,
+	val displayName: String? = null,
 ) {
 	/** Short local name shown in the UI: the tail after the gateway qualifier. */
-	val displayName: String get() = TeamAddress.parse(name, "").name
+	val shortName: String get() = TeamAddress.parse(name, "").name
 
 	/** Owning Gateway id (the segment before the qualifier), or "" for a bare name. */
 	val gatewayId: String get() = TeamAddress.parse(name, "").gatewayId
@@ -632,7 +632,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 				kind = it.kind ?: "loose",
 				version = it.version,
 				domainId = it.domainId,
-				profileName = it.profileName,
+				displayName = it.displayName,
 			)
 		}
 	}

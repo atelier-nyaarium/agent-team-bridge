@@ -3,13 +3,13 @@
 // Phone-anchored trust: the owner root keypair is generated SILENTLY on the Console and never
 // reaches the host. So the host never holds, prompts for, or roots with the owner key. Instead the
 // trusted host bootstrap (it has direct Secret access) PRE-STAGES the home Domain as a PENDING
-// tenant - an profileName label plus a one-time invite nonce, no owner root - and the operator's
+// tenant - an displayName label plus a one-time invite nonce, no owner root - and the operator's
 // phone first-roots it on scan, exactly like a friend. `pendingHomeDomain` builds that pending
 // slice. The owner-key rooting path (`bootstrapDomain`) is kept for any caller that already holds
 // the public keys (a same-owner re-root from a backed-up key); it mints nothing and signs nothing.
 //
 // Both preserve evie's own identity verbatim (seating must not change evie's SAS). On the rooting
-// path, prior admissions / revocations + the profileName are kept ONLY when re-rooting at the SAME
+// path, prior admissions / revocations + the displayName are kept ONLY when re-rooting at the SAME
 // owner key; a DIFFERENT owner key starts a fresh Domain (old admissions were signed by a key that
 // no longer verifies).
 //
@@ -28,12 +28,12 @@ import type { Identity } from "../src/shared/crypto.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** A pending-tenant record on a not-yet-rooted Domain (an profileName display label + a
+/** A pending-tenant record on a not-yet-rooted Domain (an displayName display label + a
  * one-time invite nonce, no owner). Mirrors evie's `PendingTenantRecord` exactly (the wire
  * `PendingTenant` shape minus its `domainId`, which is the enrollment map key); the host writes
  * what evie reads. The friend's first_root spends the nonce and flips `rooted` true. */
 export interface PendingTenantRecord {
-	profileName: string;
+	displayName: string;
 	nonce: string;
 	issuedAt: number;
 	ttlMs: number;
@@ -42,7 +42,7 @@ export interface PendingTenantRecord {
 
 /** One Domain's slice (a v2 per-domain entry, and the v1 single-Domain `enrollment` payload -
  * the two shapes share this object). `ownerSignPub`/`ownerBoxPub` are null on a pending slice
- * (no owner has rooted it yet) and set once rooted. `profileName` is the friendly network
+ * (no owner has rooted it yet) and set once rooted. `displayName` is the friendly network
  * label; `pendingTenant` marks a Domain pre-staged but not yet rooted. Mirrors evie's
  * `EnrollmentState` for the fields setup writes. */
 interface DomainEnrollment {
@@ -50,7 +50,7 @@ interface DomainEnrollment {
 	ownerBoxPub: string | null;
 	admissions: SignedAdmission[];
 	revocations: SignedRevocation[];
-	profileName?: string | null;
+	displayName?: string | null;
 	pendingTenant?: PendingTenantRecord;
 	// Marks the operator's own home Domain so evie scopes the console relay to it. Only the home
 	// slice this script writes carries it; a hosted guest Domain never does.
@@ -162,7 +162,7 @@ function homeSliceOf(
 }
 
 /** Normalize a non-home Domain slice to the full shape so the written map is well-formed, while
- * carrying every field (including a friend Domain's profileName + pendingTenant) through
+ * carrying every field (including a friend Domain's displayName + pendingTenant) through
  * untouched. Setup only ever rewrites the home slice; a friend Domain must survive verbatim. */
 function carryOtherDomain(slice: Partial<DomainEnrollment> | undefined): DomainEnrollment {
 	return {
@@ -170,7 +170,7 @@ function carryOtherDomain(slice: Partial<DomainEnrollment> | undefined): DomainE
 		ownerBoxPub: slice?.ownerBoxPub ?? null,
 		admissions: slice?.admissions ?? [],
 		revocations: slice?.revocations ?? [],
-		...(slice?.profileName !== undefined ? { profileName: slice.profileName } : {}),
+		...(slice?.displayName !== undefined ? { displayName: slice.displayName } : {}),
 		...(slice?.pendingTenant !== undefined ? { pendingTenant: slice.pendingTenant } : {}),
 	};
 }
@@ -199,13 +199,13 @@ function composeFederationJson(
 }
 
 /** Build the rooted home slice from the incumbent home state. Keeps the existing allowlist +
- * profileName only when re-rooting at the SAME owner; a different owner key is a fresh Domain
- * (prior admissions would not verify under it, and its profileName was the prior owner's label,
+ * displayName only when re-rooting at the SAME owner; a different owner key is a fresh Domain
+ * (prior admissions would not verify under it, and its displayName was the prior owner's label,
  * so both are dropped).
  *
  * OFF the default provision() path: that path pre-stages a PENDING home (the phone first-roots on
  * scan) and, on a re-provision of an already-rooted home, never rewrites the Secret at all - so the
- * live re-provision preserves profileName by NOT TOUCHING the slice, not through this helper. This
+ * live re-provision preserves displayName by NOT TOUCHING the slice, not through this helper. This
  * helper serves the owner-key-in-hand rooting case only (`bootstrapDomain`). */
 function rootHomeSlice(
 	prior: Partial<DomainEnrollment> | undefined,
@@ -218,7 +218,7 @@ function rootHomeSlice(
 		ownerBoxPub,
 		admissions: sameOwner ? (prior?.admissions ?? []) : [],
 		revocations: sameOwner ? (prior?.revocations ?? []) : [],
-		...(sameOwner && prior?.profileName != null ? { profileName: prior.profileName } : {}),
+		...(sameOwner && prior?.displayName != null ? { displayName: prior.displayName } : {}),
 		isAdminDomain: true,
 	};
 }
@@ -247,19 +247,19 @@ export function bootstrapDomain(
 	return { ownerSignPub, federationJson: composeFederationJson(evieFed, evieIdentity, home, homeDomainId) };
 }
 
-/** Build the PENDING home slice: an profileName label + a one-time invite nonce, NO owner root.
+/** Build the PENDING home slice: an displayName label + a one-time invite nonce, NO owner root.
  * The fresh setup writes this so the operator's phone first-roots the home Domain on scan, exactly
  * like a friend. Mirrors evie's pending slice (`{ ownerSignPub: null, ownerBoxPub: null, admissions:
- * [], revocations: [], profileName, pendingTenant }`) so evie reads it back without complaint. The
+ * [], revocations: [], displayName, pendingTenant }`) so evie reads it back without complaint. The
  * nonce is minted by the caller (standard base64, never base64url - the wire `nonce` is a b64Field). */
-function pendingHomeSlice(profileName: string, nonce: string, issuedAt: number, ttlMs: number): DomainEnrollment {
+function pendingHomeSlice(displayName: string, nonce: string, issuedAt: number, ttlMs: number): DomainEnrollment {
 	return {
 		ownerSignPub: null,
 		ownerBoxPub: null,
 		admissions: [],
 		revocations: [],
-		profileName,
-		pendingTenant: { profileName, nonce, issuedAt, ttlMs, rooted: false },
+		displayName,
+		pendingTenant: { displayName, nonce, issuedAt, ttlMs, rooted: false },
 		isAdminDomain: true,
 	};
 }
@@ -273,20 +273,20 @@ function pendingHomeSlice(profileName: string, nonce: string, issuedAt: number, 
 export function pendingHomeDomain(
 	evieFedJson: string,
 	homeDomainId: string,
-	profileName: string,
+	displayName: string,
 	nonce: string,
 	issuedAt: number,
 	ttlMs: number,
 ): PendingResult {
 	const { evieFed, evieIdentity } = readEvieFederation(evieFedJson);
-	const home = pendingHomeSlice(profileName, nonce, issuedAt, ttlMs);
+	const home = pendingHomeSlice(displayName, nonce, issuedAt, ttlMs);
 	return { federationJson: composeFederationJson(evieFed, evieIdentity, home, homeDomainId) };
 }
 
 /** Inspect the incumbent home Domain slice to drive the fresh-vs-reprovision state machine.
  * `rooted` is true once an owner key is set (re-provision: emit the blob only). `ownerSignPub` is
  * that rooted owner key (so a re-provision can sanity-check a gateway's pinned owner against it).
- * `profileName` is the home network's label if any (preserved across a re-provision). A malformed
+ * `displayName` is the home network's label if any (preserved across a re-provision). A malformed
  * Secret reads as a fresh, unrooted home (so setup pre-stages it) rather than throwing here. */
 export function readHomeDomain(
 	evieFedJson: string,
@@ -294,16 +294,16 @@ export function readHomeDomain(
 ): {
 	rooted: boolean;
 	ownerSignPub: string | null;
-	profileName: string | null;
+	displayName: string | null;
 } {
 	let evieFed: LegacyEvieFederation | MultiDomainEvieFederation;
 	try {
 		evieFed = JSON.parse(evieFedJson) as LegacyEvieFederation | MultiDomainEvieFederation;
 	} catch {
-		return { rooted: false, ownerSignPub: null, profileName: null };
+		return { rooted: false, ownerSignPub: null, displayName: null };
 	}
 	const home = homeSliceOf(evieFed, homeDomainId);
 	const ownerSignPub = home?.ownerSignPub ?? null;
-	const profileName = home?.profileName ?? home?.pendingTenant?.profileName ?? null;
-	return { rooted: ownerSignPub != null, ownerSignPub, profileName };
+	const displayName = home?.displayName ?? home?.pendingTenant?.displayName ?? null;
+	return { rooted: ownerSignPub != null, ownerSignPub, displayName };
 }

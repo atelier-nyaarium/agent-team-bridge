@@ -14,13 +14,13 @@ import com.atelier_nyaarium.switchboard.proto.ProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.RemoveTenant
 import com.atelier_nyaarium.switchboard.proto.Revocation
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
-import com.atelier_nyaarium.switchboard.proto.SetProfileName
+import com.atelier_nyaarium.switchboard.proto.SetDisplayName
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
 import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRevocation
-import com.atelier_nyaarium.switchboard.proto.SignedSetProfileName
+import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLinkEdge
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLinkRevocation
@@ -387,9 +387,9 @@ class FederationManager(private val store: ProvisioningStore) {
 	/** Owner-sign a request to pre-stage a friend's PENDING tenant: an opaque domainId + a network
 	 * display label, NO owner root. The signing nonce is the anti-replay token for this request;
 	 * evie mints the SEPARATE one-time invite nonce (carried in the QR) and returns it. */
-	fun signProvisionTenant(domainId: String, profileName: String, nowMs: Long): SignedProvisionTenant {
+	fun signProvisionTenant(domainId: String, displayName: String, nowMs: Long): SignedProvisionTenant {
 		val owner = ownerIdentity()
-		val provision = ProvisionTenant(domainId, profileName, nowMs, nonce())
+		val provision = ProvisionTenant(domainId, displayName, nowMs, nonce())
 		return ProvisionOpsCrypto.signProvision(provision, owner.sign.priv, owner.sign.pub)
 	}
 
@@ -403,9 +403,9 @@ class FederationManager(private val store: ProvisioningStore) {
 	/** Owner-sign a rename of this owner's own Domain network display name. evie CAS-merges it onto
 	 * the Domain record and pushes it to the Domain's gateways. The `domainId` is this owner's own
 	 * (rooted home) Domain; evie verifies the signature against the Domain's pinned owner key. */
-	fun signSetProfileName(domainId: String, profileName: String, nowMs: Long): SignedSetProfileName {
+	fun signSetDisplayName(domainId: String, displayName: String, nowMs: Long): SignedSetDisplayName {
 		val owner = ownerIdentity()
-		val rename = SetProfileName(domainId, profileName, nowMs, nonce())
-		return ProvisionOpsCrypto.signSetProfileName(rename, owner.sign.priv, owner.sign.pub)
+		val rename = SetDisplayName(domainId, displayName, nowMs, nonce())
+		return ProvisionOpsCrypto.signSetDisplayName(rename, owner.sign.priv, owner.sign.pub)
 	}
 }

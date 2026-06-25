@@ -3,7 +3,7 @@ package com.atelier_nyaarium.switchboard.crypto
 import com.atelier_nyaarium.switchboard.proto.FirstRoot
 import com.atelier_nyaarium.switchboard.proto.ProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.RemoveTenant
-import com.atelier_nyaarium.switchboard.proto.SetProfileName
+import com.atelier_nyaarium.switchboard.proto.SetDisplayName
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -15,7 +15,7 @@ import org.junit.Test
 
 /**
  * Pins the Kotlin friend-onboarding signing (provision_tenant / remove_tenant / first_root /
- * set_profile_name) against switchboard's node:crypto, through the same vectors the vitest
+ * set_display_name) against switchboard's node:crypto, through the same vectors the vitest
  * suite reads (tests/fixtures/provision-ops/vectors.json). If the canonical encoding or the
  * signature scheme diverges, the node-signed artifacts below stop verifying here - which
  * would silently break friend cross-Domain onboarding. Mirrors XDomainLinkTest.
@@ -31,7 +31,7 @@ class ProvisionOpsTest {
 	private fun provision(o: JsonObject) =
 		ProvisionTenant(
 			domainId = o["domainId"]!!.jsonPrimitive.content,
-			profileName = o["profileName"]!!.jsonPrimitive.content,
+			displayName = o["displayName"]!!.jsonPrimitive.content,
 			issuedAt = o["issuedAt"]!!.jsonPrimitive.content.toLong(),
 			nonce = o["nonce"]!!.jsonPrimitive.content,
 		)
@@ -53,9 +53,9 @@ class ProvisionOpsTest {
 		)
 
 	private fun rename(o: JsonObject) =
-		SetProfileName(
+		SetDisplayName(
 			domainId = o["domainId"]!!.jsonPrimitive.content,
-			profileName = o["profileName"]!!.jsonPrimitive.content,
+			displayName = o["displayName"]!!.jsonPrimitive.content,
 			issuedAt = o["issuedAt"]!!.jsonPrimitive.content.toLong(),
 			nonce = o["nonce"]!!.jsonPrimitive.content,
 		)
@@ -91,7 +91,7 @@ class ProvisionOpsTest {
 		val v = vectors()
 		val ownerSignPub = v["friendOwnerSignPub"]!!.jsonPrimitive.content
 		val vec = v["rename"]!!.jsonObject
-		val bytes = ProvisionOpsCrypto.setProfileNameSigningBytes(rename(vec["value"]!!.jsonObject), ownerSignPub)
+		val bytes = ProvisionOpsCrypto.setDisplayNameSigningBytes(rename(vec["value"]!!.jsonObject), ownerSignPub)
 		CanonicalBytes.assertCanonicalBytes(bytes, vec)
 	}
 
@@ -170,7 +170,7 @@ class ProvisionOpsTest {
 		val v = vectors()
 		val ownerSignPub = v["friendOwnerSignPub"]!!.jsonPrimitive.content
 		val vec = v["rename"]!!.jsonObject
-		val bytes = ProvisionOpsCrypto.setProfileNameSigningBytes(rename(vec["value"]!!.jsonObject), ownerSignPub)
+		val bytes = ProvisionOpsCrypto.setDisplayNameSigningBytes(rename(vec["value"]!!.jsonObject), ownerSignPub)
 		assertTrue(Crypto.verify(bytes, vec["signature"]!!.jsonPrimitive.content, ownerSignPub))
 		assertFalse(Crypto.verify(bytes, vec["signature"]!!.jsonPrimitive.content, Crypto.generateIdentity().sign.pub))
 	}
@@ -184,8 +184,8 @@ class ProvisionOpsTest {
 		val signedP = ProvisionOpsCrypto.signProvision(p, operator.sign.priv, operator.sign.pub)
 		assertTrue(ProvisionOpsCrypto.verifyProvision(signedP, operator.sign.pub))
 		assertFalse(ProvisionOpsCrypto.verifyProvision(signedP, attacker.sign.pub))
-		// A tampered profileName must not verify.
-		assertFalse(ProvisionOpsCrypto.verifyProvision(signedP.copy(provision = p.copy(profileName = "Evil")), operator.sign.pub))
+		// A tampered displayName must not verify.
+		assertFalse(ProvisionOpsCrypto.verifyProvision(signedP.copy(provision = p.copy(displayName = "Evil")), operator.sign.pub))
 
 		val r = RemoveTenant("home", 6000L, "cg==")
 		val signedR = ProvisionOpsCrypto.signRemove(r, operator.sign.priv, operator.sign.pub)
@@ -215,10 +215,10 @@ class ProvisionOpsTest {
 	fun renameSignsAndVerifiesLocally() {
 		val owner = Crypto.generateIdentity()
 		val attacker = Crypto.generateIdentity()
-		val r = SetProfileName("home", "My Network", 8000L, "bg==")
-		val signed = ProvisionOpsCrypto.signSetProfileName(r, owner.sign.priv, owner.sign.pub)
-		assertTrue(ProvisionOpsCrypto.verifySetProfileName(signed, owner.sign.pub))
-		assertFalse(ProvisionOpsCrypto.verifySetProfileName(signed, attacker.sign.pub))
-		assertFalse(ProvisionOpsCrypto.verifySetProfileName(signed.copy(rename = r.copy(profileName = "Hijacked")), owner.sign.pub))
+		val r = SetDisplayName("home", "My Network", 8000L, "bg==")
+		val signed = ProvisionOpsCrypto.signSetDisplayName(r, owner.sign.priv, owner.sign.pub)
+		assertTrue(ProvisionOpsCrypto.verifySetDisplayName(signed, owner.sign.pub))
+		assertFalse(ProvisionOpsCrypto.verifySetDisplayName(signed, attacker.sign.pub))
+		assertFalse(ProvisionOpsCrypto.verifySetDisplayName(signed.copy(rename = r.copy(displayName = "Hijacked")), owner.sign.pub))
 	}
 }

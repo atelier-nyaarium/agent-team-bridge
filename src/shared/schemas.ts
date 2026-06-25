@@ -127,7 +127,7 @@ export const TeamInfoSchema = z
 		// over the discovery roster so a linked friend Domain shows the owner's self-set label
 		// (e.g. "Carol") instead of a local alias. Optional/nullable for decode tolerance: a
 		// pre-feature Gateway omits it and consumers fall back to the domainId / a local label.
-		profileName: z.string().nullish(),
+		displayName: z.string().nullish(),
 		// True when the Domain that owns this session is the ADMIN's own Domain (the evie-runner
 		// who provisions others). The console reads it on its LOCAL session to decide whether to
 		// show the admin surfaces (hosting guests). Optional: a pre-feature Gateway omits it and

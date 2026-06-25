@@ -99,15 +99,15 @@ object CrossDomainLink {
 				LinkedDomain(
 					domainId = domainId,
 					// The friend's self-set network name, propagated over discovery (the gateway stamps
-					// each shared session's profileName). First non-empty wins; null until any session
+					// each shared session's displayName). First non-empty wins; null until any session
 					// carries one, in which case the UI falls back to the opaque domainId.
-					profileName = sessions.firstNotNullOfOrNull { it.profileName?.ifEmpty { null } },
+					displayName = sessions.firstNotNullOfOrNull { it.displayName?.ifEmpty { null } },
 					sessionCount = sessions.size,
 					online = sessions.any { it.status == "online" },
 					// The owner from the cross-Domain peer set; null for a discovery-only Domain.
 					ownerSignPub = peerOwners[domainId],
 				)
 			}
-			.sortedBy { it.profileName ?: it.domainId }
+			.sortedBy { it.displayName ?: it.domainId }
 	}
 }

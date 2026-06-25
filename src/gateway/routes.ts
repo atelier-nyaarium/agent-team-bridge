@@ -51,7 +51,7 @@ export interface RoutesDeps {
 	// This Gateway's own network display name (learned from evie's register reply), stamped on
 	// every local TeamInfo so a linked friend Domain sees the owner's self-set label over the
 	// discovery roster (D1). Absent/null when unset or pre-feature.
-	profileName?: (() => string | null | undefined) | null;
+	displayName?: (() => string | null | undefined) | null;
 	// Whether this Gateway's own Domain is the admin's (the evie-runner who provisions others),
 	// learned from the register reply. Stamped on the local TeamInfo so the console shows the
 	// admin surfaces only on the admin's own session.
@@ -195,7 +195,7 @@ export function createRoutes({
 	evieClient,
 	sealer,
 	crossDomainPeers,
-	profileName,
+	displayName,
 	isAdminDomain,
 	resolvesHomeGateway,
 	touchShares,
@@ -421,8 +421,8 @@ export function createRoutes({
 		// Domain sees the owner's self-set name over the discovery roster (D1). Spread in only
 		// when set, so a Gateway with no operator name emits the same minimal TeamInfo as before
 		// (the field is nullish on the wire; the friend's gateway is the authoritative source).
-		const ownProfileName = profileName?.();
-		const profileNameField = ownProfileName ? { profileName: ownProfileName } : {};
+		const ownDisplayName = displayName?.();
+		const displayNameField = ownDisplayName ? { displayName: ownDisplayName } : {};
 		const isAdminDomainField = isAdminDomain?.() ? { isAdminDomain: true } : {};
 
 		for (const [name, subs] of registry) {
@@ -444,7 +444,7 @@ export function createRoutes({
 				team: name,
 				gatewayId: localGatewayId,
 				domainId: localDomainId,
-				...profileNameField,
+				...displayNameField,
 				...isAdminDomainField,
 				status: "online",
 				mode: getTeamMode(subs),
@@ -467,7 +467,7 @@ export function createRoutes({
 				team: name,
 				gatewayId: localGatewayId,
 				domainId: localDomainId,
-				...profileNameField,
+				...displayNameField,
 				...isAdminDomainField,
 				status: "available",
 				kind: "devcontainer",
@@ -517,7 +517,7 @@ export function createRoutes({
 				// Gateway knows which Domain it linked, while a friend on an older build might
 				// stamp none). The (domainId, gatewayId) pair is what the console groups by and
 				// the send path resolves the seal target from, since a gateway id collides
-				// across Domains. The peer's own profileName rides through the spread (the friend
+				// across Domains. The peer's own displayName rides through the spread (the friend
 				// Gateway stamped its self-set network label), so Peers display the friend's name (D1).
 				return peerTeams.map((t) => ({ ...t, domainId: peer.friendDomainId }));
 			}),

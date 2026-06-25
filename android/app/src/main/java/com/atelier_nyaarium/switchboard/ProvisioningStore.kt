@@ -250,15 +250,15 @@ class ProvisioningStore(context: Context) {
 
 	/** This owner's own network display name (the operator name), cached locally so the profile
 	 * shows it without a round-trip. The authoritative copy lives on the Domain at evie; this is
-	 * refreshed from discovery (the home session's profileName) and updated on a local rename. */
-	var profileName: String
+	 * refreshed from discovery (the home session's displayName) and updated on a local rename. */
+	var displayName: String
 		get() = prefs.getString(KEY_PROFILE_NAME, "") ?: ""
 		set(value) {
 			prefs.edit().putString(KEY_PROFILE_NAME, value).apply()
 		}
 
 	/** The guest tenants this owner has staged (the "Networks you host" list), as a JSON array of
-	 * {domainId, profileName, nonce}. Persisted locally so the list + each row's invite QR survive
+	 * {domainId, displayName, nonce}. Persisted locally so the list + each row's invite QR survive
 	 * restarts (evie holds the canonical pending/rooted state, but only the host remembers the label
 	 * + the current invite nonce for re-rendering the QR). */
 	fun saveHostedTenants(json: String) = prefs.edit().putString(KEY_HOSTED_TENANTS, json).apply()

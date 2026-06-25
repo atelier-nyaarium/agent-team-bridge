@@ -27,8 +27,8 @@ class FriendOnboardingTest {
 			pendingTenant = pending,
 		)
 
-	private fun team(name: String, domainId: String?, status: String = "online", profileName: String? = null) =
-		Team(name = name, status = status, mode = "channel", queueDepth = 0, domainId = domainId, profileName = profileName)
+	private fun team(name: String, domainId: String?, status: String = "online", displayName: String? = null) =
+		Team(name = name, status = status, mode = "channel", queueDepth = 0, domainId = domainId, displayName = displayName)
 
 	// -- The first-root decision (blob pendingTenant branch) --
 
@@ -199,23 +199,23 @@ class FriendOnboardingTest {
 	// -- The propagated operator name in the Peers list --
 
 	@Test
-	fun peersShowTheFriendsProfileName() {
+	fun peersShowTheFriendsDisplayName() {
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = listOf(
 				team("home-gw/app", "home"),
-				team("carol-gw/lib", "carol", status = "online", profileName = "Carol"),
+				team("carol-gw/lib", "carol", status = "online", displayName = "Carol"),
 			),
 			peerOwners = mapOf("carol" to "carol-owner"),
 			home = "home",
 		)
 		assertEquals(1, peers.size)
 		assertEquals("carol", peers[0].domainId)
-		assertEquals("Carol", peers[0].profileName)
+		assertEquals("Carol", peers[0].displayName)
 	}
 
 	@Test
 	fun peerWithNoNameYetFallsBackToNull() {
-		// A peer present only in the peer set (no discovery session) has no profileName yet; the UI
+		// A peer present only in the peer set (no discovery session) has no displayName yet; the UI
 		// falls back to the opaque domainId.
 		val peers = CrossDomainLink.mergeLinkedDomains(
 			teams = emptyList(),
@@ -223,6 +223,6 @@ class FriendOnboardingTest {
 			home = "home",
 		)
 		assertEquals(1, peers.size)
-		assertNull(peers[0].profileName)
+		assertNull(peers[0].displayName)
 	}
 }

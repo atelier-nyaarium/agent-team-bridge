@@ -752,7 +752,7 @@ fun SessionsScreen(
 	}
 	renameTeam?.let { team ->
 		RenameDialog(
-			team = team.displayName,
+			team = team.shortName,
 			current = state.label(team.name, state.localGatewayId),
 			onSave = {
 				onRename(team.name, it)
@@ -1110,9 +1110,9 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 			// Under a custom label, surface the session's short local name so the user
 			// can still tell which session it maps to. label() falls back to the short
 			// name, so an unlabeled session adds nothing here.
-			if (display != team.displayName && team.kind != "gateway") {
+			if (display != team.shortName && team.kind != "gateway") {
 				Text(
-					team.displayName,
+					team.shortName,
 					style = MaterialTheme.typography.labelSmall,
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 					fontFamily = FontFamily.Monospace,
@@ -1554,8 +1554,8 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 	val scope = rememberCoroutineScope()
 	// Operator name (the owner's NETWORK display name, one per owner): what linked friends see your
 	// network as. Owner-signed + pushed to evie; it lives above the per-install device name. Seeded
-	// from state.profileName (cache, refreshed from discovery) and re-seeded when that changes.
-	var profileName by remember(state.profileName) { mutableStateOf(state.profileName) }
+	// from state.displayName (cache, refreshed from discovery) and re-seeded when that changes.
+	var displayName by remember(state.displayName) { mutableStateOf(state.displayName) }
 	var opStatus by remember { mutableStateOf("") }
 	var opBusy by remember { mutableStateOf(false) }
 	// A friend (one who first-rooted their own non-home Domain) renaming before discovery populates
@@ -1572,18 +1572,18 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 	)
 	Row(verticalAlignment = Alignment.CenterVertically) {
 		OutlinedTextField(
-			value = profileName,
-			onValueChange = { profileName = it },
+			value = displayName,
+			onValueChange = { displayName = it },
 			singleLine = true,
 			modifier = Modifier.weight(1f),
 		)
 		Button(
-			enabled = profileName.isNotBlank() && profileName.trim() != state.profileName && !opBusy && !domainResolving,
+			enabled = displayName.isNotBlank() && displayName.trim() != state.displayName && !opBusy && !domainResolving,
 			onClick = {
 				opBusy = true
 				opStatus = ""
 				scope.launch {
-					repo.setProfileName(profileName)
+					repo.setDisplayName(displayName)
 						.onSuccess { opStatus = "Saved." }
 						.onFailure { opStatus = "Couldn't save: ${it.message?.take(120)}" }
 					opBusy = false

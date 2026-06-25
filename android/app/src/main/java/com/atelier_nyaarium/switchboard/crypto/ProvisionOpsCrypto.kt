@@ -3,18 +3,18 @@ package com.atelier_nyaarium.switchboard.crypto
 import com.atelier_nyaarium.switchboard.proto.FirstRoot
 import com.atelier_nyaarium.switchboard.proto.ProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.RemoveTenant
-import com.atelier_nyaarium.switchboard.proto.SetProfileName
+import com.atelier_nyaarium.switchboard.proto.SetDisplayName
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
 import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
-import com.atelier_nyaarium.switchboard.proto.SignedSetProfileName
+import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 
 /**
  * Friend cross-Domain onboarding signing, the byte-exact Kotlin counterpart of
  * switchboard's `src/shared/enrollment.ts`. The operator pre-stages a friend's pending
  * tenant (provision_tenant) or drops it (remove_tenant), the friend's app roots the Domain
  * on first connect (first_root, SELF-signed by its silently-generated owner key), and the
- * rooted owner renames the network (set_profile_name). evie verifies each against the
+ * rooted owner renames the network (set_display_name). evie verifies each against the
  * matching key, so the canonical signing bytes - a versioned, newline-joined, fixed-order
  * encoding binding fingerprint(signerSignPub) - must reproduce exactly. The cross-platform
  * vector in ProvisionOpsTest pins it. Distinct version prefixes keep the four artifacts
@@ -26,7 +26,7 @@ object ProvisionOpsCrypto {
 			"PROVISION_TENANT_V1",
 			Crypto.fingerprint(adminSignPub),
 			p.domainId,
-			p.profileName,
+			p.displayName,
 			p.issuedAt.toString(),
 			p.nonce,
 		).joinToString("\n").toByteArray(Charsets.UTF_8)
@@ -84,26 +84,26 @@ object ProvisionOpsCrypto {
 	fun verifyFirstRoot(s: SignedFirstRoot): Boolean =
 		Crypto.verify(firstRootSigningBytes(s.firstRoot), s.signature, s.firstRoot.ownerSignPub)
 
-	fun setProfileNameSigningBytes(r: SetProfileName, ownerSignPub: String): ByteArray =
+	fun setDisplayNameSigningBytes(r: SetDisplayName, ownerSignPub: String): ByteArray =
 		listOf(
-			"SET_PROFILE_NAME_V1",
+			"SET_DISPLAY_NAME_V1",
 			Crypto.fingerprint(ownerSignPub),
 			r.domainId,
-			r.profileName,
+			r.displayName,
 			r.issuedAt.toString(),
 			r.nonce,
 		).joinToString("\n").toByteArray(Charsets.UTF_8)
 
-	fun signSetProfileName(r: SetProfileName, ownerSignPriv: String, ownerSignPub: String): SignedSetProfileName =
-		SignedSetProfileName(
+	fun signSetDisplayName(r: SetDisplayName, ownerSignPriv: String, ownerSignPub: String): SignedSetDisplayName =
+		SignedSetDisplayName(
 			rename = r,
 			ownerSignPub = ownerSignPub,
-			signature = Crypto.sign(setProfileNameSigningBytes(r, ownerSignPub), ownerSignPriv),
+			signature = Crypto.sign(setDisplayNameSigningBytes(r, ownerSignPub), ownerSignPriv),
 		)
 
-	fun verifySetProfileName(s: SignedSetProfileName, expectedOwnerSignPub: String): Boolean =
+	fun verifySetDisplayName(s: SignedSetDisplayName, expectedOwnerSignPub: String): Boolean =
 		s.ownerSignPub == expectedOwnerSignPub &&
-			Crypto.verify(setProfileNameSigningBytes(s.rename, expectedOwnerSignPub), s.signature, expectedOwnerSignPub)
+			Crypto.verify(setDisplayNameSigningBytes(s.rename, expectedOwnerSignPub), s.signature, expectedOwnerSignPub)
 
 	/**
 	 * The cross-tenant roster request proof: the console proves it holds an admitted signing key by

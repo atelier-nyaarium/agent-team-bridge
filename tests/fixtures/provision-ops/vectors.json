@@ -1,5 +1,5 @@
 {
-	"_comment": "Cross-runtime vectors for the friend cross-Domain onboarding signing bytes (src/shared/enrollment.ts): provision_tenant (PROVISION_TENANT_V1), remove_tenant (REMOVE_TENANT_V1), first_root (FIRST_ROOT_V1, SELF-signed by the fresh owner key), set_profile_name (SET_PROFILE_NAME_V1). Read by src/__tests__/provision-ops.test.ts (TS) AND ProvisionOpsTest.kt (Kotlin), so the hand-authored Kotlin twin (ProvisionOpsCrypto.kt) cannot drift from this TS reference. signingBytes is the canonical newline-joined preimage (utf8 + hex + base64); signature is a node Ed25519 (RFC 8032 deterministic) signature over those bytes. adminFingerprint/ownerFingerprint inside the bytes are fingerprint(signerSignPub). Generated from the TS reference; never hand-authored.",
+	"_comment": "Cross-runtime vectors for the friend cross-Domain onboarding signing bytes (src/shared/enrollment.ts): provision_tenant (PROVISION_TENANT_V1), remove_tenant (REMOVE_TENANT_V1), first_root (FIRST_ROOT_V1, SELF-signed by the fresh owner key), set_display_name (SET_DISPLAY_NAME_V1). Read by src/__tests__/provision-ops.test.ts (TS) AND ProvisionOpsTest.kt (Kotlin), so the hand-authored Kotlin twin (ProvisionOpsCrypto.kt) cannot drift from this TS reference. signingBytes is the canonical newline-joined preimage (utf8 + hex + base64); signature is a node Ed25519 (RFC 8032 deterministic) signature over those bytes. adminFingerprint/ownerFingerprint inside the bytes are fingerprint(signerSignPub). Generated from the TS reference; never hand-authored.",
 	"adminSignPub": "F51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=",
 	"adminSignPriv": "zwAUh+WAfzZ5yWSxEtR7mRk9fIIzLTtwo4SsbeEAzLA=",
 	"adminFingerprint": "469E-3643-F81A-9EB8",
@@ -10,7 +10,7 @@
 	"provision": {
 		"value": {
 			"domainId": "carol",
-			"profileName": "Carol Network",
+			"displayName": "Carol Network",
 			"issuedAt": 1717171717171,
 			"nonce": "cHJvdmlzaW9uLW5vbmNl"
 		},
@@ -46,14 +46,14 @@
 	"rename": {
 		"value": {
 			"domainId": "carol",
-			"profileName": "Carol's Lab",
+			"displayName": "Carol's Lab",
 			"issuedAt": 1717171900000,
 			"nonce": "c2V0LW5hbWUtbm9uY2U="
 		},
-		"signingBytes": "SET_PROFILE_NAME_V1\nE3AF-DDB0-1F50-4DE2\ncarol\nCarol's Lab\n1717171900000\nc2V0LW5hbWUtbm9uY2U=",
-		"signingBytesHex": "5345545f50524f46494c455f4e414d455f56310a453341462d444442302d314635302d344445320a6361726f6c0a4361726f6c2773204c61620a313731373137313930303030300a633256304c57356862575574626d39755932553d",
-		"signingBytesBase64": "U0VUX1BST0ZJTEVfTkFNRV9WMQpFM0FGLUREQjAtMUY1MC00REUyCmNhcm9sCkNhcm9sJ3MgTGFiCjE3MTcxNzE5MDAwMDAKYzJWMExXNWhiV1V0Ym05dVkyVT0=",
-		"signature": "0tg/FRiYcin0t8gwtTrPBa4pUcPCZLqszJP0vDVnrCMSW/g9pSjcygOLvWrjXgOdT4AMxLha1YCQpjq26FYdCQ=="
+		"signingBytes": "SET_DISPLAY_NAME_V1\nE3AF-DDB0-1F50-4DE2\ncarol\nCarol's Lab\n1717171900000\nc2V0LW5hbWUtbm9uY2U=",
+		"signingBytesHex": "5345545f444953504c41595f4e414d455f56310a453341462d444442302d314635302d344445320a6361726f6c0a4361726f6c2773204c61620a313731373137313930303030300a633256304c57356862575574626d39755932553d",
+		"signingBytesBase64": "U0VUX0RJU1BMQVlfTkFNRV9WMQpFM0FGLUREQjAtMUY1MC00REUyCmNhcm9sCkNhcm9sJ3MgTGFiCjE3MTcxNzE5MDAwMDAKYzJWMExXNWhiV1V0Ym05dVkyVT0=",
+		"signature": "lopiDMiZlGmu7vmVbrfN/eRUn/0OW22t4I3t7DeiRZVsnKHSb8hUmQ7yVw3jlGExYdmqSMMQoorm5hp1NXj1CQ=="
 	},
 	"roster": {
 		"_comment": "rosterRequestSigningBytes + signRosterRequest (enrollment.ts): a console's ROSTER_V1 proof of possession, signed here by the friendOwner key as the console signer. Binds the RAW signer key + proofAt + nonce.",

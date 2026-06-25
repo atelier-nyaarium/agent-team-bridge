@@ -125,7 +125,7 @@ private fun HostedTenantRow(tenant: HostedTenant, onClick: () -> Unit) {
 	Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
 		Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 			Column(Modifier.weight(1f)) {
-				Text(tenant.profileName, style = MaterialTheme.typography.titleMedium)
+				Text(tenant.displayName, style = MaterialTheme.typography.titleMedium)
 				HostedStateLabel(tenant.state)
 			}
 			Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -252,7 +252,7 @@ fun HostedTenantDetailScreen(
 
 	if (confirmRemove) {
 		ConfirmDialog(
-			title = "Remove ${tenant.profileName}?",
+			title = "Remove ${tenant.displayName}?",
 			body = "Drops this network. If your friend set it up, they lose access and need a fresh invite to return.",
 			confirmText = "Remove",
 			onConfirm = {
@@ -275,7 +275,7 @@ fun HostedTenantDetailScreen(
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text(tenant.profileName) },
+				title = { Text(tenant.displayName) },
 				navigationIcon = {
 					IconButton(onClick = onBack) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -336,7 +336,7 @@ fun HostedTenantDetailScreen(
 					OutlinedButton(onClick = { saveLauncher(blob) }, modifier = Modifier.weight(1f)) { Text("Save as file") }
 				}
 				// After they scan in person, run the mutual 6-digit compare that commits the trust edge.
-				Button(onClick = { onVerify(blob, tenant.profileName) }, modifier = Modifier.fillMaxWidth()) {
+				Button(onClick = { onVerify(blob, tenant.displayName) }, modifier = Modifier.fillMaxWidth()) {
 					Text("Verify in person")
 				}
 				TextButton(
@@ -345,7 +345,7 @@ fun HostedTenantDetailScreen(
 						busy = true
 						status = "Regenerating..."
 						scope.launch {
-							repo.regenerateInvite(domainId, tenant.profileName)
+							repo.regenerateInvite(domainId, tenant.displayName)
 								.onSuccess {
 									repo.buildInviteBlob(it)
 										.onSuccess { b -> inviteBlob = b; status = "New invite ready. The old one no longer works." }
