@@ -797,7 +797,7 @@ data class XDomainLinkRevocation(
 @Serializable
 data class SignedProvisionTenant(
 	val provision: ProvisionTenant,
-	val operatorSignPub: String,
+	val adminSignPub: String,
 	val signature: String,
 )
 
@@ -812,7 +812,7 @@ data class ProvisionTenant(
 @Serializable
 data class SignedRemoveTenant(
 	val removal: RemoveTenant,
-	val operatorSignPub: String,
+	val adminSignPub: String,
 	val signature: String,
 )
 

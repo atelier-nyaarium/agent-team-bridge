@@ -21,45 +21,45 @@ import com.atelier_nyaarium.switchboard.proto.SignedSetProfileName
  * non-interchangeable. Never sign raw JSON.
  */
 object ProvisionOpsCrypto {
-	fun provisionSigningBytes(p: ProvisionTenant, operatorSignPub: String): ByteArray =
+	fun provisionSigningBytes(p: ProvisionTenant, adminSignPub: String): ByteArray =
 		listOf(
 			"PROVISION_TENANT_V1",
-			Crypto.fingerprint(operatorSignPub),
+			Crypto.fingerprint(adminSignPub),
 			p.domainId,
 			p.profileName,
 			p.issuedAt.toString(),
 			p.nonce,
 		).joinToString("\n").toByteArray(Charsets.UTF_8)
 
-	fun signProvision(p: ProvisionTenant, operatorSignPriv: String, operatorSignPub: String): SignedProvisionTenant =
+	fun signProvision(p: ProvisionTenant, adminSignPriv: String, adminSignPub: String): SignedProvisionTenant =
 		SignedProvisionTenant(
 			provision = p,
-			operatorSignPub = operatorSignPub,
-			signature = Crypto.sign(provisionSigningBytes(p, operatorSignPub), operatorSignPriv),
+			adminSignPub = adminSignPub,
+			signature = Crypto.sign(provisionSigningBytes(p, adminSignPub), adminSignPriv),
 		)
 
 	fun verifyProvision(s: SignedProvisionTenant, expectedOperatorSignPub: String): Boolean =
-		s.operatorSignPub == expectedOperatorSignPub &&
+		s.adminSignPub == expectedOperatorSignPub &&
 			Crypto.verify(provisionSigningBytes(s.provision, expectedOperatorSignPub), s.signature, expectedOperatorSignPub)
 
-	fun removeSigningBytes(r: RemoveTenant, operatorSignPub: String): ByteArray =
+	fun removeSigningBytes(r: RemoveTenant, adminSignPub: String): ByteArray =
 		listOf(
 			"REMOVE_TENANT_V1",
-			Crypto.fingerprint(operatorSignPub),
+			Crypto.fingerprint(adminSignPub),
 			r.domainId,
 			r.issuedAt.toString(),
 			r.nonce,
 		).joinToString("\n").toByteArray(Charsets.UTF_8)
 
-	fun signRemove(r: RemoveTenant, operatorSignPriv: String, operatorSignPub: String): SignedRemoveTenant =
+	fun signRemove(r: RemoveTenant, adminSignPriv: String, adminSignPub: String): SignedRemoveTenant =
 		SignedRemoveTenant(
 			removal = r,
-			operatorSignPub = operatorSignPub,
-			signature = Crypto.sign(removeSigningBytes(r, operatorSignPub), operatorSignPriv),
+			adminSignPub = adminSignPub,
+			signature = Crypto.sign(removeSigningBytes(r, adminSignPub), adminSignPriv),
 		)
 
 	fun verifyRemove(s: SignedRemoveTenant, expectedOperatorSignPub: String): Boolean =
-		s.operatorSignPub == expectedOperatorSignPub &&
+		s.adminSignPub == expectedOperatorSignPub &&
 			Crypto.verify(removeSigningBytes(s.removal, expectedOperatorSignPub), s.signature, expectedOperatorSignPub)
 
 	/**

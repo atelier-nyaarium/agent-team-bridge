@@ -63,18 +63,18 @@ class ProvisionOpsTest {
 	@Test
 	fun provisionCanonicalBytesMatchNode() {
 		val v = vectors()
-		val operatorSignPub = v["operatorSignPub"]!!.jsonPrimitive.content
+		val adminSignPub = v["adminSignPub"]!!.jsonPrimitive.content
 		val vec = v["provision"]!!.jsonObject
-		val bytes = ProvisionOpsCrypto.provisionSigningBytes(provision(vec["value"]!!.jsonObject), operatorSignPub)
+		val bytes = ProvisionOpsCrypto.provisionSigningBytes(provision(vec["value"]!!.jsonObject), adminSignPub)
 		CanonicalBytes.assertCanonicalBytes(bytes, vec)
 	}
 
 	@Test
 	fun removeCanonicalBytesMatchNode() {
 		val v = vectors()
-		val operatorSignPub = v["operatorSignPub"]!!.jsonPrimitive.content
+		val adminSignPub = v["adminSignPub"]!!.jsonPrimitive.content
 		val vec = v["removal"]!!.jsonObject
-		val bytes = ProvisionOpsCrypto.removeSigningBytes(removal(vec["value"]!!.jsonObject), operatorSignPub)
+		val bytes = ProvisionOpsCrypto.removeSigningBytes(removal(vec["value"]!!.jsonObject), adminSignPub)
 		CanonicalBytes.assertCanonicalBytes(bytes, vec)
 	}
 
@@ -135,17 +135,17 @@ class ProvisionOpsTest {
 	}
 
 	@Test
-	fun verifiesNodeSignedOperatorOps() {
+	fun verifiesNodeSignedAdminOps() {
 		val v = vectors()
-		val operatorSignPub = v["operatorSignPub"]!!.jsonPrimitive.content
+		val adminSignPub = v["adminSignPub"]!!.jsonPrimitive.content
 
 		val pVec = v["provision"]!!.jsonObject
-		val pBytes = ProvisionOpsCrypto.provisionSigningBytes(provision(pVec["value"]!!.jsonObject), operatorSignPub)
-		assertTrue(Crypto.verify(pBytes, pVec["signature"]!!.jsonPrimitive.content, operatorSignPub))
+		val pBytes = ProvisionOpsCrypto.provisionSigningBytes(provision(pVec["value"]!!.jsonObject), adminSignPub)
+		assertTrue(Crypto.verify(pBytes, pVec["signature"]!!.jsonPrimitive.content, adminSignPub))
 
 		val rVec = v["removal"]!!.jsonObject
-		val rBytes = ProvisionOpsCrypto.removeSigningBytes(removal(rVec["value"]!!.jsonObject), operatorSignPub)
-		assertTrue(Crypto.verify(rBytes, rVec["signature"]!!.jsonPrimitive.content, operatorSignPub))
+		val rBytes = ProvisionOpsCrypto.removeSigningBytes(removal(rVec["value"]!!.jsonObject), adminSignPub)
+		assertTrue(Crypto.verify(rBytes, rVec["signature"]!!.jsonPrimitive.content, adminSignPub))
 
 		// A different operator key must not verify either signature.
 		val other = Crypto.generateIdentity()

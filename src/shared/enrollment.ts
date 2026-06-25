@@ -1,4 +1,4 @@
-// SYNC-HASH: eb7c766e6a61a4ff92c12f1451d5a8ff
+// SYNC-HASH: 9dd7f4a301de746fa61565a663616ab4
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -210,7 +210,7 @@ export const SignedProvisionTenantSchema = z
 		// The operator's root signing public key (base64). evie checks it against the
 		// operator's known key, never trusting this field alone; the signing bytes carry
 		// its fingerprint.
-		operatorSignPub: b64Field(),
+		adminSignPub: b64Field(),
 		// The operator's Ed25519 signature over provisionTenantSigningBytes (base64).
 		signature: b64Field(),
 	})
@@ -228,7 +228,7 @@ export const RemoveTenantSchema = z
 export const SignedRemoveTenantSchema = z
 	.object({
 		removal: RemoveTenantSchema,
-		operatorSignPub: b64Field(),
+		adminSignPub: b64Field(),
 		signature: b64Field(),
 	})
 	.meta({ id: "SignedRemoveTenant" });
@@ -673,13 +673,13 @@ export function verifyXDomainLinkRevocation(s: SignedXDomainLinkRevocation, expe
 //  one can never replay as another). Do NOT sign raw JSON.
 
 /** PROVISION_TENANT_V1 signing bytes (operator-signed; NO ownerSignPub - the tenant is
- * pending / rootless). `operatorFingerprint` is the fingerprint of the operator key in
+ * pending / rootless). `adminFingerprint` is the fingerprint of the operator key in
  * the signed wrapper. */
-export function provisionTenantSigningBytes(p: ProvisionTenant, operatorSignPubB64: string): Buffer {
+export function provisionTenantSigningBytes(p: ProvisionTenant, adminSignPubB64: string): Buffer {
 	return Buffer.from(
 		[
 			"PROVISION_TENANT_V1",
-			fingerprint(operatorSignPubB64),
+			fingerprint(adminSignPubB64),
 			p.domainId,
 			p.profileName,
 			String(p.issuedAt),
@@ -689,23 +689,23 @@ export function provisionTenantSigningBytes(p: ProvisionTenant, operatorSignPubB
 	);
 }
 
-/** Operator-sign a pending-tenant provision. */
+/** Admin-sign a pending-tenant provision. */
 export function signProvisionTenant(
 	provision: ProvisionTenant,
-	operatorSignPrivB64: string,
-	operatorSignPubB64: string,
+	adminSignPrivB64: string,
+	adminSignPubB64: string,
 ): SignedProvisionTenant {
 	return {
 		provision,
-		operatorSignPub: operatorSignPubB64,
-		signature: sign(provisionTenantSigningBytes(provision, operatorSignPubB64), operatorSignPrivB64),
+		adminSignPub: adminSignPubB64,
+		signature: sign(provisionTenantSigningBytes(provision, adminSignPubB64), adminSignPrivB64),
 	};
 }
 
 /** True if the provision verifies under the EXPECTED operator key. The claimed
- * operatorSignPub must equal the expected key AND the signature must check. */
+ * adminSignPub must equal the expected key AND the signature must check. */
 export function verifyProvisionTenant(s: SignedProvisionTenant, expectedOperatorSignPubB64: string): boolean {
-	if (s.operatorSignPub !== expectedOperatorSignPubB64) return false;
+	if (s.adminSignPub !== expectedOperatorSignPubB64) return false;
 	return verify(
 		provisionTenantSigningBytes(s.provision, expectedOperatorSignPubB64),
 		s.signature,
@@ -714,29 +714,29 @@ export function verifyProvisionTenant(s: SignedProvisionTenant, expectedOperator
 }
 
 /** REMOVE_TENANT_V1 signing bytes (operator-signed). */
-export function removeTenantSigningBytes(r: RemoveTenant, operatorSignPubB64: string): Buffer {
+export function removeTenantSigningBytes(r: RemoveTenant, adminSignPubB64: string): Buffer {
 	return Buffer.from(
-		["REMOVE_TENANT_V1", fingerprint(operatorSignPubB64), r.domainId, String(r.issuedAt), r.nonce].join("\n"),
+		["REMOVE_TENANT_V1", fingerprint(adminSignPubB64), r.domainId, String(r.issuedAt), r.nonce].join("\n"),
 		"utf8",
 	);
 }
 
-/** Operator-sign a pending-tenant removal. */
+/** Admin-sign a pending-tenant removal. */
 export function signRemoveTenant(
 	removal: RemoveTenant,
-	operatorSignPrivB64: string,
-	operatorSignPubB64: string,
+	adminSignPrivB64: string,
+	adminSignPubB64: string,
 ): SignedRemoveTenant {
 	return {
 		removal,
-		operatorSignPub: operatorSignPubB64,
-		signature: sign(removeTenantSigningBytes(removal, operatorSignPubB64), operatorSignPrivB64),
+		adminSignPub: adminSignPubB64,
+		signature: sign(removeTenantSigningBytes(removal, adminSignPubB64), adminSignPrivB64),
 	};
 }
 
 /** True if the removal verifies under the EXPECTED operator key. */
 export function verifyRemoveTenant(s: SignedRemoveTenant, expectedOperatorSignPubB64: string): boolean {
-	if (s.operatorSignPub !== expectedOperatorSignPubB64) return false;
+	if (s.adminSignPub !== expectedOperatorSignPubB64) return false;
 	return verify(
 		removeTenantSigningBytes(s.removal, expectedOperatorSignPubB64),
 		s.signature,

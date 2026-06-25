@@ -50,9 +50,9 @@ interface SignedVec<T> {
 const vectors = JSON.parse(
 	fs.readFileSync(path.join(__dirname, "../../tests/fixtures/provision-ops/vectors.json"), "utf8"),
 ) as {
-	operatorSignPub: string;
-	operatorSignPriv: string;
-	operatorFingerprint: string;
+	adminSignPub: string;
+	adminSignPriv: string;
+	adminFingerprint: string;
 	friendOwnerSignPub: string;
 	friendOwnerSignPriv: string;
 	friendOwnerBoxPub: string;
@@ -66,60 +66,60 @@ const vectors = JSON.parse(
 };
 
 describe("provision_tenant vectors (operator-signed)", () => {
-	const { operatorSignPub, operatorSignPriv } = vectors;
+	const { adminSignPub, adminSignPriv } = vectors;
 
 	it("reproduces the canonical PROVISION_TENANT_V1 signing bytes", () => {
-		const bytes = provisionTenantSigningBytes(vectors.provision.value, operatorSignPub);
+		const bytes = provisionTenantSigningBytes(vectors.provision.value, adminSignPub);
 		assertCanonicalBytes(bytes, vectors.provision);
 	});
 
 	it("embeds the operator fingerprint in the signing bytes", () => {
-		// The signing bytes bind fingerprint(operatorSignPub), not the raw key, so the verifier
-		// can recompute it from the signed wrapper's operatorSignPub.
-		expect(vectors.operatorFingerprint).toBe(fingerprint(operatorSignPub));
-		expect(vectors.provision.signingBytes).toContain(`\n${vectors.operatorFingerprint}\n`);
+		// The signing bytes bind fingerprint(adminSignPub), not the raw key, so the verifier
+		// can recompute it from the signed wrapper's adminSignPub.
+		expect(vectors.adminFingerprint).toBe(fingerprint(adminSignPub));
+		expect(vectors.provision.signingBytes).toContain(`\n${vectors.adminFingerprint}\n`);
 	});
 
 	it("reproduces the recorded signature and verifies it", () => {
 		// Ed25519 is deterministic (RFC 8032), so re-signing with the fixed key reproduces the
 		// pinned signature byte-for-byte.
-		const signed = signProvisionTenant(vectors.provision.value, operatorSignPriv, operatorSignPub);
+		const signed = signProvisionTenant(vectors.provision.value, adminSignPriv, adminSignPub);
 		expect(signed.signature).toBe(vectors.provision.signature);
-		expect(verifyProvisionTenant(signed, operatorSignPub)).toBe(true);
+		expect(verifyProvisionTenant(signed, adminSignPub)).toBe(true);
 	});
 
 	it("rejects the provision under a different operator key", () => {
 		const forged = {
-			...signProvisionTenant(vectors.provision.value, operatorSignPriv, operatorSignPub),
-			operatorSignPub: "AAAA",
+			...signProvisionTenant(vectors.provision.value, adminSignPriv, adminSignPub),
+			adminSignPub: "AAAA",
 		};
-		expect(verifyProvisionTenant(forged, operatorSignPub)).toBe(false);
+		expect(verifyProvisionTenant(forged, adminSignPub)).toBe(false);
 	});
 
 	it("parses a provision_tenant enroll op and rejects a non-slug domainId", () => {
-		const signed = signProvisionTenant(vectors.provision.value, operatorSignPriv, operatorSignPub);
+		const signed = signProvisionTenant(vectors.provision.value, adminSignPriv, adminSignPub);
 		expect(EnrollOpSchema.safeParse({ kind: "provision_tenant", provision: signed }).success).toBe(true);
 		const badSlug = signProvisionTenant(
 			{ ...vectors.provision.value, domainId: "Has Spaces" } as ProvisionTenant,
-			operatorSignPriv,
-			operatorSignPub,
+			adminSignPriv,
+			adminSignPub,
 		);
 		expect(EnrollOpSchema.safeParse({ kind: "provision_tenant", provision: badSlug }).success).toBe(false);
 	});
 });
 
 describe("remove_tenant vectors (operator-signed)", () => {
-	const { operatorSignPub, operatorSignPriv } = vectors;
+	const { adminSignPub, adminSignPriv } = vectors;
 
 	it("reproduces the canonical REMOVE_TENANT_V1 signing bytes", () => {
-		const bytes = removeTenantSigningBytes(vectors.removal.value, operatorSignPub);
+		const bytes = removeTenantSigningBytes(vectors.removal.value, adminSignPub);
 		assertCanonicalBytes(bytes, vectors.removal);
 	});
 
 	it("reproduces the recorded signature and verifies it", () => {
-		const signed = signRemoveTenant(vectors.removal.value, operatorSignPriv, operatorSignPub);
+		const signed = signRemoveTenant(vectors.removal.value, adminSignPriv, adminSignPub);
 		expect(signed.signature).toBe(vectors.removal.signature);
-		expect(verifyRemoveTenant(signed, operatorSignPub)).toBe(true);
+		expect(verifyRemoveTenant(signed, adminSignPub)).toBe(true);
 	});
 
 	it("a provision signature never replays as a removal (distinct versioned prefix)", () => {
@@ -131,12 +131,12 @@ describe("remove_tenant vectors (operator-signed)", () => {
 			nonce: vectors.provision.value.nonce,
 		};
 		expect(
-			verify(removeTenantSigningBytes(asRemoval, operatorSignPub), vectors.provision.signature, operatorSignPub),
+			verify(removeTenantSigningBytes(asRemoval, adminSignPub), vectors.provision.signature, adminSignPub),
 		).toBe(false);
 	});
 
 	it("parses a remove_tenant enroll op", () => {
-		const signed = signRemoveTenant(vectors.removal.value, operatorSignPriv, operatorSignPub);
+		const signed = signRemoveTenant(vectors.removal.value, adminSignPriv, adminSignPub);
 		expect(EnrollOpSchema.safeParse({ kind: "remove_tenant", removal: signed }).success).toBe(true);
 	});
 });

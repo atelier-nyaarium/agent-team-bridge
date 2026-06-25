@@ -252,9 +252,9 @@ class ProvisioningStore(context: Context) {
 	 * shows it without a round-trip. The authoritative copy lives on the Domain at evie; this is
 	 * refreshed from discovery (the home session's profileName) and updated on a local rename. */
 	var profileName: String
-		get() = prefs.getString(KEY_OPERATOR_NAME, "") ?: ""
+		get() = prefs.getString(KEY_PROFILE_NAME, "") ?: ""
 		set(value) {
-			prefs.edit().putString(KEY_OPERATOR_NAME, value).apply()
+			prefs.edit().putString(KEY_PROFILE_NAME, value).apply()
 		}
 
 	/** The guest tenants this owner has staged (the "Networks you host" list), as a JSON array of
@@ -292,7 +292,7 @@ class ProvisioningStore(context: Context) {
 		const val KEY_CONSOLE_ADMITTED = "federation_console_admitted"
 		const val KEY_FIRST_ROOTED = "federation_first_rooted"
 		const val KEY_ENROLL_CEREMONY_DONE = "federation_enroll_ceremony_done"
-		const val KEY_OPERATOR_NAME = "federation_operator_name"
+		const val KEY_PROFILE_NAME = "federation_profile_name"
 		const val KEY_HOSTED_TENANTS = "federation_hosted_tenants"
 		const val KEY_TRUSTED_OWNERS = "federation_trusted_owners"
 		const val KEY_STTS_URL = "stts_url"
@@ -317,7 +317,7 @@ class ProvisioningStore(context: Context) {
 		 * Clear (a privacy/correctness regression). The partition is pinned by a unit test. */
 		val PROVISIONING_KEYS = listOf(
 			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
-			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_OPERATOR_NAME, KEY_HOSTED_TENANTS,
+			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_PROFILE_NAME, KEY_HOSTED_TENANTS,
 			KEY_TRUSTED_OWNERS,
 			KEY_THREADS, KEY_LABELS, KEY_DRAFTS, KEY_GATEWAY_ID, KEY_SYNC_EPOCH, KEY_SYNC_ACKED,
 			KEY_SYNC_DROPPED,

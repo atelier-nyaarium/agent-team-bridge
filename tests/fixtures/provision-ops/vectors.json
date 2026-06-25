@@ -1,8 +1,8 @@
 {
-	"_comment": "Cross-runtime vectors for the friend cross-Domain onboarding signing bytes (src/shared/enrollment.ts): provision_tenant (PROVISION_TENANT_V1), remove_tenant (REMOVE_TENANT_V1), first_root (FIRST_ROOT_V1, SELF-signed by the fresh owner key), set_profile_name (SET_PROFILE_NAME_V1). Read by src/__tests__/provision-ops.test.ts (TS) AND ProvisionOpsTest.kt (Kotlin), so the hand-authored Kotlin twin (ProvisionOpsCrypto.kt) cannot drift from this TS reference. signingBytes is the canonical newline-joined preimage (utf8 + hex + base64); signature is a node Ed25519 (RFC 8032 deterministic) signature over those bytes. operatorFingerprint/ownerFingerprint inside the bytes are fingerprint(signerSignPub). Generated from the TS reference; never hand-authored.",
-	"operatorSignPub": "F51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=",
-	"operatorSignPriv": "zwAUh+WAfzZ5yWSxEtR7mRk9fIIzLTtwo4SsbeEAzLA=",
-	"operatorFingerprint": "469E-3643-F81A-9EB8",
+	"_comment": "Cross-runtime vectors for the friend cross-Domain onboarding signing bytes (src/shared/enrollment.ts): provision_tenant (PROVISION_TENANT_V1), remove_tenant (REMOVE_TENANT_V1), first_root (FIRST_ROOT_V1, SELF-signed by the fresh owner key), set_profile_name (SET_PROFILE_NAME_V1). Read by src/__tests__/provision-ops.test.ts (TS) AND ProvisionOpsTest.kt (Kotlin), so the hand-authored Kotlin twin (ProvisionOpsCrypto.kt) cannot drift from this TS reference. signingBytes is the canonical newline-joined preimage (utf8 + hex + base64); signature is a node Ed25519 (RFC 8032 deterministic) signature over those bytes. adminFingerprint/ownerFingerprint inside the bytes are fingerprint(signerSignPub). Generated from the TS reference; never hand-authored.",
+	"adminSignPub": "F51f7ZK0ZWVrGJX86QsRwn40EeNZgIBI+ZL/Vw7jxoI=",
+	"adminSignPriv": "zwAUh+WAfzZ5yWSxEtR7mRk9fIIzLTtwo4SsbeEAzLA=",
+	"adminFingerprint": "469E-3643-F81A-9EB8",
 	"friendOwnerSignPub": "jGn787BASDt0fha5d8cjuYxZBQ2DZPVZzbEel3Cfcv4=",
 	"friendOwnerSignPriv": "hv4it8vBajVd4NohKuqkjiVeqvGiZaYkgN940TvrYrM=",
 	"friendOwnerBoxPub": "NNZvUCMX+V3Y209+2UFZ6A7NJE3npuKnCQf7nNmnYlc=",
