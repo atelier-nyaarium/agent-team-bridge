@@ -27,7 +27,8 @@
 import { randomBytes } from "node:crypto";
 import { $ } from "bun";
 import { sanitizeDomainId } from "../src/shared/domain-id.js";
-import { pendingAdminDomain, readAdminDomain } from "./bootstrap-domain.js";
+import { sanitizeGatewayId } from "../src/shared/host-id.js";
+import { pendingAdminDomain, readAdminDomain, removeDomain, removeGatewayAdmission } from "./bootstrap-domain.js";
 import {
 	applySecret,
 	ask,
@@ -249,6 +250,11 @@ async function purgeGateway(): Promise<void> {
 	console.log("Wipes .env + volumes/gateway (keypair, admissions, mailboxes).");
 	console.log("Re-configuring mints a new keypair, so the owner Console must re-admit this Gateway.");
 	if (!confirm("Purge everything?")) return;
+	// Drop this Gateway's admission from evie's Domain first (the admission stores the SANITIZED
+	// slug, so use it not the raw env), then erase the local state.
+	const domain = await envGet("FEDERATION_DOMAIN_ID");
+	const gw = sanitizeGatewayId((await envGet("GATEWAY_ID")) || (await gatewayHostname()));
+	await evieDelete((fed) => removeGatewayAdmission(fed, domain, gw));
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await wipeState();
 	await $`rm -f .env`.quiet().nothrow();
@@ -569,6 +575,20 @@ async function qrMenu(): Promise<void> {
 ////////////////////////////////
 //  Top-level operations
 
+/** Apply a purge mutation to evie's federation Secret in place and restart evie, best-effort. Reads
+ * the live Secret, runs `mutate` over its federation.json, server-side applies the result, and rolls
+ * evie. A no-op when no admin Domain id is set; failures are swallowed so the local wipe always
+ * proceeds (a purge must not stall on an unreachable cluster). */
+async function evieDelete(mutate: (fedJson: string) => string): Promise<void> {
+	const domain = await envGet("FEDERATION_DOMAIN_ID");
+	if (!domain) return;
+	try {
+		const fed = await readEvieFed();
+		await applySecret(FED_SECRET, { "federation.json": mutate(fed) }, true);
+		await k("rollout", "restart", EVIE_DEPLOY).quiet().nothrow();
+	} catch {}
+}
+
 /** The fresh-vs-reprovision state machine. After the cluster cutover it reads evie's admin Domain
  * slice: a FRESH (absent / unrooted) admin Domain is pre-staged as a PENDING tenant (display name + a
  * one-time invite nonce) and the blob carries `pendingTenant` so the admin's phone first-roots on
@@ -617,8 +637,10 @@ async function purgeFederation(): Promise<void> {
 		return;
 	}
 
-	await k("delete", "secret", FED_SECRET, "--ignore-not-found").quiet().nothrow();
-	await k("rollout", "restart", EVIE_DEPLOY).quiet().nothrow();
+	// Drop only THIS Domain from evie's Secret so a hosted friend tenant survives (the old
+	// whole-Secret delete took them down too).
+	const domain = await envGet("FEDERATION_DOMAIN_ID");
+	await evieDelete((fed) => removeDomain(fed, domain));
 	note("evie: owner + admissions wiped, restarting.");
 
 	await dx("rm", "-f", `${FED_DIR_IN}/federation-allowlist.json`).quiet().nothrow();

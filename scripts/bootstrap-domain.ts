@@ -307,3 +307,49 @@ export function readAdminDomain(
 	const displayName = adminSlice?.displayName ?? adminSlice?.pendingTenant?.displayName ?? null;
 	return { rooted: ownerSignPub != null, ownerSignPub, displayName };
 }
+
+////////////////////////////////
+//  Purge helpers (evie-side deletes for the setup-menu purges)
+//
+//  Both operate on the RAW parsed Secret JSON and mutate only the target Domain, then re-serialize.
+//  This is lossless: every untouched field of the target slice and every other Domain (including
+//  fields the setup write paths never carry - linkEdges, linkRevocations, isAdminDomain) survive
+//  verbatim, unlike composeFederationJson which only carries a known field subset.
+
+/** The v2 Secret as raw structure for a purge mutation: evie persists v2, so the enrollment is a
+ * domainId -> slice map. Slices are opaque here (the mutation only reads admissions/kind/gatewayId);
+ * everything else passes through untouched. */
+interface RawFederation {
+	schema?: number;
+	identity?: unknown;
+	enrollment?: Record<string, RawDomainSlice>;
+}
+
+interface RawDomainSlice {
+	admissions?: Array<{ admission?: { kind?: string; gatewayId?: string } }>;
+	[k: string]: unknown;
+}
+
+/** Drop a gateway's admission from one Domain's allowlist (purge gateway). Removes only
+ * `kind:"gateway"` entries whose `gatewayId` matches; console admissions, other gateways,
+ * revocations, and every other field of the slice and of other Domains are untouched. Idempotent
+ * when the Domain or the gateway id is absent. */
+export function removeGatewayAdmission(evieFedJson: string, domainId: string, gatewayId: string): string {
+	const fed = JSON.parse(evieFedJson) as RawFederation;
+	const slice = fed.enrollment?.[domainId];
+	if (!slice) return evieFedJson;
+	if (Array.isArray(slice.admissions)) {
+		slice.admissions = slice.admissions.filter(
+			(a) => !(a?.admission?.kind === "gateway" && a.admission.gatewayId === gatewayId),
+		);
+	}
+	return JSON.stringify(fed);
+}
+
+/** Drop a whole Domain from the Secret (purge federation), keeping evie's identity and every other
+ * Domain verbatim so a hosted friend tenant survives. Idempotent when the Domain is absent. */
+export function removeDomain(evieFedJson: string, domainId: string): string {
+	const fed = JSON.parse(evieFedJson) as RawFederation;
+	if (fed.enrollment) delete fed.enrollment[domainId];
+	return JSON.stringify(fed);
+}
