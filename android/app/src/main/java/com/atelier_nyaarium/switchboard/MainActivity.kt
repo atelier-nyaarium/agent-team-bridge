@@ -485,9 +485,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					repo.forget(openTeam!!)
 					openTeam = null
 				},
-				// Only a LOCAL host-agent or devcontainer has a tmux pane this Gateway can drive;
+				// Only a LOCAL devcontainer has a tmux pane this Gateway can drive from a session card;
 				// a remote-Gateway session is gated off in v1 (the cross-Gateway terminal is deferred).
-				terminalEligible = (kind == "gateway" || kind == "devcontainer") &&
+				// The host machine's own terminal is reached through the dedicated "host" target.
+				terminalEligible = kind == "devcontainer" &&
 					(session?.gatewayId.isNullOrEmpty() || session?.gatewayId == state.localGatewayId),
 				terminalRefreshMs = repo.terminalRefreshMs,
 				onTerminalPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
@@ -739,7 +740,7 @@ fun SessionsScreen(
 	actionTeam?.let { team ->
 		SessionActionsDialog(
 			label = state.label(team.name, state.localGatewayId),
-			canRename = team.kind != "devcontainer" && team.kind != "gateway",
+			canRename = team.kind != "devcontainer",
 			onRename = {
 				actionTeam = null
 				renameTeam = team
@@ -846,10 +847,9 @@ fun SessionsScreen(
 							)
 						}
 						if (!collapsed) {
-							val host = group.filter { it.kind == "gateway" }.sortedWith(order)
 							val projects = group.filter { it.kind == "devcontainer" }.sortedWith(order)
-							val loose = group.filter { it.kind != "gateway" && it.kind != "devcontainer" }.sortedWith(order)
-							items(host + projects + loose, key = { "team:${it.name}" }) { team ->
+							val loose = group.filter { it.kind != "devcontainer" }.sortedWith(order)
+							items(projects + loose, key = { "team:${it.name}" }) { team ->
 								SessionCard(
 									state = state,
 									team = team,
@@ -1078,10 +1078,9 @@ fun SectionLabel(text: String) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: () -> Unit) {
-	val display = if (team.kind == "gateway") "Gateway" else state.label(team.name, state.localGatewayId)
+	val display = state.label(team.name, state.localGatewayId)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
-	val isCli = team.mode == "cli"
 	// Wire vocabulary -> board vocabulary: online teams are live, catalog teams are
 	// available (wakeable), anything else is an ended loose session.
 	val (statusWord, statusColor) = when {
@@ -1089,12 +1088,10 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 		team.status == "available" -> "available" to Color(0xFF0969DA)
 		else -> "ended" to MaterialTheme.colorScheme.outline
 	}
-	// Long-press stays enabled for CLI cards: the action sheet's Forget is the only
-	// way to clear their local thread state. Only opening (tap) is gated off. The
-	// clip keeps the ripple inside the card's rounded corners.
+	// The clip keeps the ripple inside the card's rounded corners.
 	Card(
 		modifier = Modifier.fillMaxWidth().clip(CardDefaults.shape).combinedClickable(
-			onClick = { if (!isCli) onClick() },
+			onClick = onClick,
 			onLongClick = onLongPress,
 		),
 	) {
@@ -1111,7 +1108,7 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 			// Under a custom label, surface the session's short local name so the user
 			// can still tell which session it maps to. label() falls back to the short
 			// name, so an unlabeled session adds nothing here.
-			if (display != team.shortName && team.kind != "gateway") {
+			if (display != team.shortName) {
 				Text(
 					team.shortName,
 					style = MaterialTheme.typography.labelSmall,
@@ -1129,7 +1126,6 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 					if (v != BuildConfig.VERSION_NAME) StatusChip("v$v", MaterialTheme.colorScheme.outline)
 				}
 				if (live && state.working(team.name)) StatusChip("working...", Color(0xFFD29922))
-				if (isCli) StatusChip("cli", MaterialTheme.colorScheme.outline)
 				Spacer(Modifier.weight(1f))
 				state.lastActivity(team.name)?.let {
 					Text(
@@ -1138,13 +1134,6 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 						color = MaterialTheme.colorScheme.onSurfaceVariant,
 					)
 				}
-			}
-			if (isCli) {
-				Text(
-					"CLI agent - console chat is not supported",
-					style = MaterialTheme.typography.bodySmall,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
-				)
 			}
 			state.snippet(team.name)?.let {
 				Text(
