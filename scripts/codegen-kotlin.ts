@@ -114,12 +114,11 @@ const ROOTS: z.ZodType[] = [
 	GatewayTransportSchema,
 	GatewayBootstrapBundleSchema,
 	GatewayBootstrapFrameSchema,
-	// Emitted as a root so the Android owner can sign it; the console op that carries it (and the
-	// gateway handler that tombstones the foreign-owner trust) lands with the gateway phase.
+	// A root so the Android owner can sign it.
 	SignedXDomainUntrustSchema,
 	RosterRequestSchema,
 	RosterResultSchema,
-	// FLOW-2 trust rendezvous: the phone signs/encodes the handshake + the pending query.
+	// Trust rendezvous: the phone signs/encodes the handshake plus the pending query.
 	TrustHandshakeOpSchema,
 	TrustHandshakeResultSchema,
 	TrustPendingRequestSchema,
@@ -130,10 +129,9 @@ const ROOTS: z.ZodType[] = [
 ];
 
 // Encode-side discriminated unions that may emit as sealed classes. Anything
-// not listed emits open (decode-side rule). Maps schema id -> nothing needed;
-// the discriminator key is read from zod internals. EnrollOp is composed by the
-// console (owner enroll requests), so closure is safe; the scanned EnrollmentPayload
-// is DECODED and stays hand-parsed (forward-compatible) in the Android client.
+// not listed emits open (decode-side rule); the discriminator key is read from
+// zod internals. EnrollOp is composed by the console, so closure is safe; the
+// scanned EnrollmentPayload is decoded and stays hand-parsed in the client.
 const SEALED_ROOTS = new Set([
 	"ConsoleOp",
 	"EnrollOp",

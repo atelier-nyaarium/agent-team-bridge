@@ -42,8 +42,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** A rendered attachment on a message. `src` is what the WebView loads (a data URI
- * or an appassets-proxied local path); a null `src` renders as a download chip.
- * Real attachment plumbing decodes these to disk in a later phase. */
+ * or an appassets-proxied local path); a null `src` renders as a download chip. */
 data class MessageFile(val name: String, val mime: String, val src: String? = null)
 
 /** A scanned admit-gateway QR: the Gateway identity the owner is about to admit, plus the
@@ -62,16 +61,15 @@ data class ScannedGateway(
  * sealed bundle to hand-carry when LAN delivery was not possible (paste fallback). */
 data class EnrollDelivery(val admitted: Boolean, val message: String, val pasteBundle: String?)
 
-/** A linked friend Domain row for the Federation hub: the Domain id (plumbing), the friend's
- * display name (self-set, propagated over discovery - shown instead of
- * the opaque domainId when known), how many of its sessions are visible to me, and whether any is
- * online. `displayName` is null until a discovery session for the peer carries it. */
+/** A linked friend Domain row for the Federation hub: the Domain id, the friend's self-set
+ * display name (propagated over discovery, null until a peer session carries it), how many of its
+ * sessions are visible to me, and whether any is online. */
 data class LinkedDomain(
 	val domainId: String,
 	val displayName: String?,
 	val sessionCount: Int,
 	val online: Boolean,
-	// The friend OWNER's signing key (from the cross-Domain peer set), so a linked Domain joins to the
+	// The friend OWNER's signing key (from the cross-Domain peer set), so a linked Domain joins the
 	// owner-keyed roster. Null for a Domain seen only via discovery (no peer entry yet).
 	val ownerSignPub: String?,
 )
@@ -82,7 +80,7 @@ data class CrossDomainPairing(val pin: String, val result: com.atelier_nyaarium.
 
 /** A receiver-side pairing learned from a cross_domain_listen_state poll: the SAS to compare and
  * the friend (requester) keys the receiver owner-signs its own link over for confirm. The pin is
- * NOT here (the requester minted it); the receiver passes its own listening token, which the
+ * not here (the requester minted it); the receiver passes its own listening token, which the
  * gateway resolves to the pairing's pin. */
 data class CrossDomainReceiverPairing(
 	val sas: String,
@@ -112,27 +110,24 @@ data class Message(
 	/** Notification-bar line for broadcast notices. Notification-only: the thread
 	 * renders the body as usual and never shows this. */
 	val title: String? = null,
-	/** The Short tier of a notice, persisted for an upcoming feature; no UI
-	 * reads it yet. */
+	/** The Short tier of a notice, persisted but not yet read by any UI. */
 	val summary: String? = null,
-	/** Mailbox coordinates of the entry that produced this row. Used to dedupe an
+	/** Mailbox coordinates of the entry that produced this row, used to dedupe an
 	 * at-least-once re-drain so the same (epoch, seq) renders exactly once. 0 for
-	 * local/optimistic rows and legacy persisted rows from before this field. */
+	 * local/optimistic rows and legacy persisted rows. */
 	val epoch: Long = 0,
 	val seq: Long = 0,
 	/** The qualified `gateway/name` author header shown for an inbound (agent) row. Null
-	 * for our own rows (rendered as "you") and legacy rows. Not persisted: every row in a
-	 * thread shares the thread's one peer today, so it is re-derived from the thread key on
-	 * load; persisting it is what a future multiple-agents-in-one-chat would add. */
+	 * for our own rows (rendered as "you"). Not persisted: every row in a thread shares the
+	 * thread's one peer, so it is re-derived from the thread key on load. */
 	val from: String? = null,
 )
 
-/** The thread index a `sent` echo should replace, or -1 to append it as a new row. Folds an
- * at-least-once re-drain by (epoch, seq), then on the sending device matches this owner-message's
+/** The thread index a `sent` echo should replace, or -1 to append as a new row. Folds an
+ * at-least-once re-drain by (epoch, seq), then on the sending device matches this owner message's
  * row by opId whatever its current seq. Matching by opId alone (not just the seq-0 optimistic row)
- * means a duplicate echo - same opId, a fresh seq from a reconcile re-send across a gateway restart
- * - folds onto the already-upgraded row instead of stranding a second copy. Pure, so the reconcile
- * decision is unit-tested in isolation. */
+ * means a duplicate echo (same opId, a fresh seq from a reconcile re-send across a gateway restart)
+ * folds onto the already-upgraded row instead of stranding a second copy. */
 internal fun sentEchoMatch(thread: List<Message>, echo: Message): Int {
 	if (echo.seq > 0) {
 		val bySeq = thread.indexOfFirst { it.seq == echo.seq && it.epoch == echo.epoch }
@@ -163,19 +158,17 @@ data class ChatState(
 	 * is admitted but the route Gateway has not re-synced yet, so sealed ops transiently reject.
 	 * Drives the calm SYNCING header; cleared the moment an op succeeds or the grace lapses. */
 	val enrollingSince: Long = 0L,
-	/** The linked friend Domains the route Gateway reports from its cross-Domain peer set (the
-	 * cross_domain_list_peers roster). UNIONed with the discovery-derived Domains in linkedDomains()
-	 * so a freshly-linked peer is visible (and its detail reachable) even while its gateway is
-	 * offline and has shared nothing back - the gap that otherwise dead-locks the post-link sharing
-	 * flow. Refreshed alongside teams; an empty set just falls back to discovery-only. */
+	/** The linked friend Domains the route Gateway reports from its cross-Domain peer set
+	 * (cross_domain_list_peers). Unioned with the discovery-derived Domains in linkedDomains() so a
+	 * freshly-linked peer is visible (and its detail reachable) even while its gateway is offline and
+	 * has shared nothing back. Refreshed alongside teams; an empty set falls back to discovery-only. */
 	val linkedPeerOwners: Map<String, String> = emptyMap(),
-	/** This owner's own display name, for the profile field and the
-	 * MY NETWORK card. Seeded from the local cache and refreshed from discovery's local-session
-	 * displayName; empty until the owner sets one. */
+	/** This owner's own display name, for the profile field and the MY NETWORK card. Seeded from the
+	 * local cache and refreshed from discovery's local-session displayName; empty until set. */
 	val displayName: String = "",
-	/** True once this device has first-rooted a pending friend Domain from its invite blob. Mirrors
-	 * store.firstRooted into the UI state so the empty board can tell a friend who is set up but has
-	 * no host yet (-> the Setting-up-a-host pointer) from an admin who has not admitted a Gateway. */
+	/** True once this device has first-rooted a pending friend Domain from its invite blob. Lets the
+	 * empty board tell a friend who is set up but has no host yet (the Setting-up-a-host pointer)
+	 * from an admin who has not admitted a Gateway. */
 	val firstRooted: Boolean = false,
 ) {
 	/** Sessions shows live teams plus any team we already have a thread with
@@ -215,24 +208,22 @@ data class ChatState(
 		}
 
 	/** Terminal "no Gateway admitted yet": the board shows the Add-a-Gateway onboarding CTA rather
-	 * than a connection error. Keyed off the classified cause - classifyConnError emits the
-	 * "Add a Gateway ..." message for the no-gateway / empty-keyring case; keep that prefix in sync
-	 * (one match site, the same derive-from-state pattern as health). */
+	 * than a connection error. Keyed off the classified cause; classifyConnError emits the
+	 * "Add a Gateway ..." message for the no-gateway / empty-keyring case, so keep that prefix in
+	 * sync with the one match site. */
 	val needsGateway: Boolean
 		get() = error?.startsWith("Add a Gateway") == true
 
 	/** Which no-gateway empty-board guidance applies: the friend's just-set-up "bring up a host"
-	 * state vs the admin's Add-a-Gateway onboarding, split off the first-root latch. The board
-	 * keys its no-gateway copy + CTA off this instead of needsGateway alone. */
+	 * state vs the admin's Add-a-Gateway onboarding, split off the first-root latch. */
 	val noGatewayState: NoGatewayState
 		get() = FriendOnboarding.noGatewayState(needsGateway, firstRooted)
 
 	/** Last local activity time for a thread, for the session card subtitle. */
 	fun lastActivity(team: String): Long? = threads[team]?.maxByOrNull { it.at }?.at
 
-	/** One-line preview from the thread tail. */
-	// Prefer a notice's one-phrase title over its long report body, same as the
-	// notification line: this preview is a glance surface, not the thread.
+	/** One-line preview from the thread tail. Prefers a notice's title over its long report
+	 * body, the same as the notification line. */
 	fun snippet(team: String): String? = threads[team]?.lastOrNull()?.let { it.title ?: it.text }
 		?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
 
@@ -379,13 +370,12 @@ private fun enrollFold(prevSince: Long): Pair<String?, Long> {
 
 /**
  * Repair a persisted/legacy thread or label key to canonical form under a known Gateway id.
- * A bare name ("name") and - critically - an EMPTY-gateway qualified key ("/name", minted in
- * a session before the Gateway id was learned) both resolve to "<gatewayId>/name"; an already
- * canonical "gateway/name" is unchanged. When gatewayId is empty (Gateway not yet learned) the key
- * is returned unchanged and repaired later by recanonicalizeAllKeys once connect() learns
- * it. This closes the ghost-thread split where an inbound reply keys under "gateway/name"
- * but the persisted/open thread is stuck at the empty-gateway "/name", so the message renders
- * nowhere. `internal` so the unit test can pin the empty-gateway repair.
+ * A bare name ("name") and an EMPTY-gateway qualified key ("/name", minted before the Gateway id
+ * was learned) both resolve to "<gatewayId>/name"; an already canonical "gateway/name" is unchanged.
+ * When gatewayId is empty the key is returned unchanged and repaired later by recanonicalizeAllKeys
+ * once connect() learns it. This closes the ghost-thread split where an inbound reply keys under
+ * "gateway/name" but the open thread is stuck at "/name", so the message renders nowhere. `internal`
+ * so the unit test can pin the empty-gateway repair.
  */
 internal fun canonicalThreadKey(rawKey: String, gatewayId: String): String {
 	SessionId.parse(rawKey, gatewayId)?.let { sid ->
@@ -408,8 +398,7 @@ private data class Drained(val entry: MailboxEntry) : SyncEntry {
  * Chat state over a ConsoleClient. Holds per-team threads, an unread tally, the open
  * tab set, and a poll loop that drains the device mailbox, dedupes by mailbox seq,
  * and routes each reply to its team (parsed from the `conv:<id>:<team>` session id
- * or the entry's `from`). Transcripts persist (encrypted) so history survives
- * restarts; the durable gateway-side ledger is a later phase.
+ * or the entry's `from`). Transcripts persist encrypted so history survives restarts.
  */
 class ChatRepository(
 	private val store: ProvisioningStore,
@@ -437,9 +426,9 @@ class ChatRepository(
 	)
 	val state: StateFlow<ChatState> = _state
 
-	// Lazy clients are read and invalidated across threads (poll loop, main,
-	// the player's daemon thread); @Volatile gives the writes visibility. A
-	// rare double-construct race is harmless (last writer wins, cheap build).
+	// Read and invalidated across threads (poll loop, main, the player's daemon thread);
+	// @Volatile gives the writes visibility. A rare double-construct race is harmless
+	// (last writer wins, cheap build).
 	@Volatile private var client: ConsoleClient? = null
 	// The mailbox cursor is console-owned and durable: MailboxSync loads it from the store
 	// and the console resumes from its own consumption point, never re-adopting a server-
@@ -660,22 +649,21 @@ class ChatRepository(
 			return@withContext
 		}
 		store.save(blob)
-		// Phone-anchored model: the blob is transport-only. The Console owns its identity
-		// (generated locally) and resolves every Gateway's keys from the synced keyring, so
-		// nothing cryptographic is imported from the blob. A re-import is a fresh enrollment
-		// against a possibly re-rooted Domain, so clear the console-admitted gate to re-submit
-		// this Console's admission on the next connect.
+		// The blob is transport-only: the Console owns its locally-generated identity and resolves
+		// every Gateway's keys from the synced keyring, so nothing cryptographic is imported. A
+		// re-import is a fresh enrollment against a possibly re-rooted Domain, so clear the
+		// console-admitted gate to re-submit this Console's admission on the next connect.
 		store.consoleAdmitted = false
-		// A re-import may carry a fresh invite (a friend re-onboarding, or a regenerated QR), so
-		// clear the first-root latch: the next connect re-evaluates the blob's pendingTenant and
-		// re-roots if present. An ordinary already-rooted blob (no pendingTenant) skips the step.
+		// A re-import may carry a fresh invite (a friend re-onboarding, or a regenerated QR), so clear
+		// the first-root latch: the next connect re-evaluates the blob's pendingTenant and re-roots if
+		// present. An ordinary already-rooted blob (no pendingTenant) skips the step.
 		store.firstRooted = false
 		// A fresh invite is a fresh trust ceremony: re-offer the in-person compare on the next connect.
 		store.enrollCeremonyDone = false
 		client = null
 		sttsClient = null
-		// firstRooted=false mirrors the latch reset above so a re-imported fresh invite does not show
-		// the "already set up" host pointer before the next connect re-evaluates the new pendingTenant.
+		// firstRooted=false in the state mirrors the latch reset so a re-imported fresh invite does not
+		// show the "already set up" host pointer before the next connect re-evaluates the pendingTenant.
 		_state.update { it.copy(provisioned = true, error = null, deviceName = prov.device, firstRooted = false) }
 	}
 
@@ -704,9 +692,9 @@ class ChatRepository(
 			DebugLog.log("Connect", "apiReachable ok")
 			// First-root step (friend invite): a blob carrying a pendingTenant means this app must
 			// root that pending Domain at its silently-generated owner key BEFORE submitting its own
-			// admission (the admission is owner-signed, and evie only trusts it once the Domain is
-			// rooted at that owner key). A reject (expired / already-claimed invite) is terminal -
-			// the root was decided, not dropped - so stop with the friendly guidance.
+			// admission (evie only trusts the owner-signed admission once the Domain is rooted at that
+			// owner key). A reject (expired / already-claimed invite) is terminal: the root was
+			// decided, not dropped, so stop with the friendly guidance.
 			if (!firstRootIfPending()) return@withContext
 			// Reflect the first-root latch into the UI state now, so if the steps below fail with the
 			// no-gateway cause (a freshly-rooted friend has no host yet) the empty board shows the
@@ -729,9 +717,9 @@ class ChatRepository(
 				}
 				return@withContext
 			}
-			// register's cursor/epoch are no longer adopted: MailboxSync owns the durable
-			// cursor. We still register (to learn gatewayId, claim the mailbox, get the epoch
-			// the box is on); the poll loop's advance() reconciles any epoch change.
+			// MailboxSync owns the durable cursor, so register's cursor/epoch are not adopted. We
+			// still register to learn gatewayId, claim the mailbox, and get the epoch the box is on;
+			// the poll loop's advance() reconciles any epoch change.
 			val reg = client().register()
 			DebugLog.log("Connect", "register ok gateway=${reg.gatewayId}")
 			val id = reg.gatewayId
@@ -1073,7 +1061,7 @@ class ChatRepository(
 		}
 	}
 
-	/** Regenerate a pending tenant's one-time invite (D2): re-submit provision_tenant for the SAME
+	/** Regenerate a pending tenant's one-time invite: re-submit provision_tenant for the SAME
 	 * domainId, which mints a fresh nonce at evie (invalidating the prior one) without a remove +
 	 * re-add. Returns the refreshed row. */
 	suspend fun regenerateInvite(domainId: String, displayName: String): Result<HostedTenant> =
@@ -1095,13 +1083,13 @@ class ChatRepository(
 
 	/** Build the invite blob a hosted tenant's QR encodes: the CONSOLE-bridge transport creds the
 	 * admin was itself provisioned with (this owner's own blob) plus the pending tenant's
-	 * {domainId, nonce}. The friend reaches the SAME shared evie console-bridge as the admin, so it
-	 * first-roots over the console-bridge /relay path; sourcing the admin's own console-bridge SA +
-	 * CONSOLE_BRIDGE_TOKEN is what makes the friend's first_root authorize there. Sourcing the route
-	 * Gateway's bootstrap-transport instead would hand the friend the gateway-bridge SA + BRIDGE_TOKEN,
-	 * which the console-bridge service-proxy RBAC-403s and evie token-401s. The blob omits service/port
-	 * so the friend defaults to evie-console-bridge:20004. The JSON is exactly what the paste /
-	 * file-import path also accepts. */
+	 * {domainId, nonce}. The friend reaches the SAME shared evie console-bridge as the admin and
+	 * first-roots over the console-bridge /relay path; the admin's own console-bridge SA +
+	 * CONSOLE_BRIDGE_TOKEN is what authorizes the friend's first_root there. The route Gateway's
+	 * bootstrap-transport would instead hand over the gateway-bridge SA + BRIDGE_TOKEN, which the
+	 * console-bridge service-proxy RBAC-403s and evie token-401s. The blob omits service/port so the
+	 * friend defaults to evie-console-bridge:20004. The JSON is what the paste / file-import path
+	 * also accepts. */
 	suspend fun buildInviteBlob(tenant: HostedTenant): Result<String> = withContext(Dispatchers.IO) {
 		runCatching {
 			val blob = store.load() ?: error("This device is not provisioned. Re-import your setup blob first.")
@@ -1178,11 +1166,10 @@ class ChatRepository(
 	}
 
 	/** The linked friend Domains. The trust roster comes from the route Gateway's cross-Domain peer
-	 * set (state.linkedPeerDomains, fetched by refreshLinkedPeers): a peer is listed the moment it
-	 * is linked, regardless of whether its gateway is online or has shared anything back. That set
-	 * is UNIONed with the discovery-derived Domains so a just-linked peer is immediately visible
-	 * (and its detail reachable to start sharing) before any of its sessions surface in discovery -
-	 * the gap that otherwise dead-locked the post-link sharing flow. Discovery still supplies the
+	 * set (fetched by refreshLinkedPeers): a peer is listed the moment it is linked, regardless of
+	 * whether its gateway is online or has shared anything back. That set is unioned with the
+	 * discovery-derived Domains so a just-linked peer is immediately visible (and its detail reachable
+	 * to start sharing) before any of its sessions surface in discovery. Discovery still supplies the
 	 * session count + presence; a peer present only in the peer set shows zero sessions / offline. */
 	fun linkedDomains(): List<LinkedDomain> {
 		val adminDomain = confirmedDomainId() ?: return emptyList()
@@ -1207,8 +1194,8 @@ class ChatRepository(
 	fun peerSessions(domainId: String): List<Team> =
 		_state.value.teams.filter { it.domainId == domainId }.sortedBy { it.shortName }
 
-	/** My LOCAL devcontainer/loose sessions, the only kinds shareable to a friend Domain (never
-	 * the host-agent, the cli host, or a console). Drives the per-session share checkmarks. */
+	/** My LOCAL devcontainer/loose sessions, the only kinds shareable to a friend Domain (never the
+	 * host-agent, the cli host, or a console). Drives the per-session share checkmarks. */
 	fun shareableSessions(): List<Team> {
 		val adminDomain = confirmedDomainId() ?: return emptyList()
 		val gw = localGatewayId
@@ -1268,9 +1255,9 @@ class ChatRepository(
 		}
 
 	/** REQUESTER confirm: owner-sign this owner's link over the RECEIVER's keys (from the request
-	 * pairing the SAS just verified) and submit it. Model A: only this owner's side is sent; the
-	 * receiver confirms its own side independently. `linkNonce` is pinned by the wizard so a retry
-	 * reuses the same signed link. */
+	 * pairing the SAS just verified) and submit it. Only this owner's side is sent; the receiver
+	 * confirms its own side independently. `linkNonce` is pinned by the wizard so a retry reuses
+	 * the same signed link. */
 	suspend fun crossDomainConfirmRequester(pairing: CrossDomainPairing, linkNonce: String): Result<ConfirmOutcome> =
 		withContext(Dispatchers.IO) {
 			val r = pairing.result
@@ -1287,7 +1274,7 @@ class ChatRepository(
 
 	/** RECEIVER confirm: owner-sign this owner's link over the FRIEND (requester) keys learned from
 	 * the listen-state poll and submit it. Uses the pin the poll surfaced (the requester minted it;
-	 * the gateway resolves this window's pairing by it). Model A: only this owner's side is sent. */
+	 * the gateway resolves this window's pairing by it). Only this owner's side is sent. */
 	suspend fun crossDomainConfirmReceiver(
 		listeningToken: String,
 		friend: CrossDomainReceiverPairing,
@@ -1829,13 +1816,12 @@ class ChatRepository(
 		store.terminalRefreshMs = ms
 	}
 
-	/** Repair every in-memory key (threads, unread, labels, open tabs) to canonical once
-	 * the gateway id is known, merging any collisions, so a thread loaded under an empty or
-	 * unknown switch ("/name") can no longer shadow the canonical "gateway/name" an inbound
-	 * reply keys under. A no-op when every key is already canonical (the steady state),
-	 * so it costs nothing on a normal connect; only a one-time repair persists. The repair
-	 * lands at the startup connect() before any thread WebView is open (openTabs is not
-	 * persisted, so it is empty at launch) and is a no-op on every later reconnect, so it
+	/** Repair every in-memory key (threads, unread, labels, open tabs) to canonical once the gateway
+	 * id is known, merging any collisions, so a thread loaded under an empty or unknown gateway
+	 * ("/name") can no longer shadow the canonical "gateway/name" an inbound reply keys under. A
+	 * no-op when every key is already canonical (the steady state), so only a one-time repair
+	 * persists. The repair lands at the startup connect() before any thread WebView is open (openTabs
+	 * is not persisted, so it is empty at launch) and is a no-op on every later reconnect, so it
 	 * cannot reorder/merge a thread out from under a live renderer. */
 	private fun recanonicalizeAllKeys(gatewayId: String) {
 		if (gatewayId.isEmpty()) return
@@ -1871,9 +1857,9 @@ class ChatRepository(
 			_state.update { it.copy(error = "Attachments too large (max ${MAX_OUTGOING_BYTES / 1_000_000} MB).") }
 			return@withContext
 		}
-		// Local echo: persist the picked files so the sent message shows its own
-		// thumbnails through the same asset-loader path as inbound files. The echo
-		// starts "pending" and resolves to sent (null) or "error" when the op lands.
+		// Local echo: persist the picked files so the sent message shows its own thumbnails through
+		// the same asset-loader path as inbound files. The echo starts "pending" and resolves to
+		// sent (null) or "error" when the op lands.
 		val localFiles = Attachments.storeOutgoing(filesDir, "out-${System.currentTimeMillis()}", picked)
 		val opId = java.util.UUID.randomUUID().toString()
 		val echoId = append(
@@ -1884,10 +1870,9 @@ class ChatRepository(
 		val hasPlaceholder = _state.value.threads[team]?.any { !it.fromMe && it.status == "waking" } == true
 		var placeholderId: Long? = null
 		if (wasAvailable && !hasPlaceholder) {
-			// Cold wake takes minutes with no wire traffic; show one placeholder row
-			// that the first real reply resolves in place (appendInbound). "waking"
-			// is a local-only status, so a future wire "running" can never be
-			// mistaken for it.
+			// Cold wake takes minutes with no wire traffic; show one placeholder row that the first
+			// real reply resolves in place (appendInbound). "waking" is a local-only status, so a
+			// wire "running" can never be mistaken for it.
 			placeholderId = append(
 				team,
 				Message(false, "Waking $team... first boot can take a minute or two.", System.currentTimeMillis(), status = "waking"),
@@ -2056,12 +2041,10 @@ class ChatRepository(
 					val burst = mutableMapOf<String, MutableList<Message>>()
 					for (d in adv.fresh) {
 						val e = d.entry
-						// Determine which team key this entry belongs to.
-						// Notices thread under the sender canonical; conv sessions use the
-						// session target, except when the tail is THIS device (Face-4: an
-						// agent-initiated push whose session tail is our device name should
-						// thread under `from`, not under ourselves).
-						// Resolve the thread key for this entry; null means drop it.
+						// Resolve the thread key for this entry; null means drop it. Notices thread under
+						// the sender canonical; conv sessions use the session target, except when the
+						// tail is THIS device (an agent-initiated push whose session tail is our device
+						// name threads under `from`, not under ourselves).
 						val team: String? = if (e.kind == "notice") {
 							// Notice: prefer `from`, fall back to NoticeId parse.
 							e.from?.let { TeamAddress.parse(it, localGatewayId).canonical }
@@ -2071,7 +2054,7 @@ class ChatRepository(
 							if (sid != null) {
 								val thisDevice = TeamAddress.local(localGatewayId, currentDeviceName())
 								if (sid.target == thisDevice) {
-									// Face-4: session tail is this device; thread under sender.
+									// Session tail is this device; thread under sender.
 									e.from?.let { TeamAddress.parse(it, localGatewayId).canonical } ?: sid.target.canonical
 								} else {
 									sid.target.canonical

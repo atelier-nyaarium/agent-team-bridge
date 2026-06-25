@@ -323,7 +323,7 @@ describe("createConsoleHandler", () => {
 		const reply = await h.handler.handleFrame(frame({ kind: "list_teams" }));
 		expect(reply.ok).toBe(true);
 		const teams = (reply.result as { teams: { team: string }[] }).teams.map((t) => t.team);
-		// "gateway" (the host-agent) is now surfaced; the cli "host" daemon and the
+		// "gateway" (the host-agent) is surfaced; the cli "host" daemon and the
 		// device itself stay excluded.
 		expect(teams.sort()).toEqual(["gateway", "team-a"]);
 	});
@@ -875,8 +875,7 @@ describe("DeviceMailboxStore caps", () => {
 
 	it("a fresh instance gets a new epoch", () => {
 		// Epochs are random (the console compares them only for equality), so the
-		// contract is "different", not "greater" - greater was the old counter
-		// semantics that collided across gateway restarts.
+		// contract is "different", not "greater".
 		const store = new DeviceMailboxStore();
 		const e1 = store.ensure("x").epoch;
 		store.delete("x");
@@ -1267,7 +1266,7 @@ describe("console cross-Domain handshake ops", () => {
 		expect(reply.ok).toBe(true);
 		expect(reply.result).toEqual({ cancelled: true });
 		expect(h.calls.cancel).toHaveLength(1);
-		// Backward behavior: a bare cancel carries neither field, so the coordinator only sweeps.
+		// A bare cancel carries neither field, so the coordinator only sweeps.
 		expect(h.calls.cancel[0]).toEqual({ listeningToken: undefined, pin: undefined });
 	});
 
@@ -1636,10 +1635,10 @@ describe("console cross-Domain share ops", () => {
 		expect(lr.error).toContain("not available");
 	});
 
-	// Fix 5 regression: a BARE-name share must be stored under the CANONICAL gateway/name key,
-	// the same form the relay gate / sweep / discovery compare against. The OLD code stored the
-	// raw op.sessionTarget, so a bare-name share ("app") was filed as "app" and the relay's
-	// "test-host/app" lookup never matched - the share silently never took effect (fail-closed).
+	// A BARE-name share must be stored under the CANONICAL gateway/name key, the same form the
+	// relay gate / sweep / discovery compare against. A bare-name share ("app") stored raw is
+	// filed as "app", so the relay's "test-host/app" lookup never matches and the share silently
+	// never takes effect (fail-closed).
 	it("a bare-name share is stored under the canonical gateway/name key the relay looks up", async () => {
 		const h = makeShareHarness();
 		const reply = await h.handler.handleFrame(

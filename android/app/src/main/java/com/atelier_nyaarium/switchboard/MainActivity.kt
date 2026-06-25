@@ -188,10 +188,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// domainId, or null). Kept apart from the peer overlays so hosting never reads as linking.
 	var showHostNetworks by remember { mutableStateOf(false) }
 	var hostTenant by remember { mutableStateOf<String?>(null) }
-	// The FLOW-1 in-person enroll compare overlays (transient, like the link wizard). The ADMIN leg
-	// is launched from a tenant's detail ("Verify in person", carrying the QR blob + the tenant's
-	// label); the ENROLLEE leg is the freshly-rooted device's own context. Either non-null shows the
-	// ceremony; leaving cancels the broker window.
+	// The in-person enroll compare overlays (transient, like the link wizard). The admin leg is
+	// launched from a tenant's detail with the QR blob + label; the enrollee leg is the freshly-rooted
+	// device's own context. Either non-null shows the ceremony; leaving cancels the broker window.
 	var adminCeremonyCtx by remember { mutableStateOf<EnrollCeremonyContext?>(null) }
 	var adminCeremonyBlob by remember { mutableStateOf("") }
 	var adminCeremonyLabel by remember { mutableStateOf("") }
@@ -219,11 +218,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			viewer = OpenAttachment(file, file.name, wireMime ?: mimeForFile(file), rel)
 		}
 	}
-	// In-thread Play: buttons render only when STTS is provisioned; taps speak
-	// the full tier, and the player's now-playing pushes glyph state back.
-	// Re-evaluated per recomposition (cheap cached null-check) so provisioning
-	// in-session lights the buttons for renderers built afterward; a thread
-	// already open gains them on its next (re)open rather than never.
+	// In-thread Play buttons render only when STTS is provisioned; taps speak the full tier, and the
+	// player's now-playing pushes glyph state back. Re-evaluated per recomposition so provisioning
+	// in-session lights the buttons for renderers built afterward.
 	rendererPool.playEnabled = repo.sttsReady()
 	rendererPool.onPlayTap = { team, at -> repo.playMessage(team, at, SttsPlayer.Tier.FULL) }
 	DisposableEffect(Unit) {
@@ -408,10 +405,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		showManage ->
 			ManageScreen(repo = repo, onBack = { showManage = false }, onAddGateway = { showAddGateway = true })
 		// Settings is reachable from ANY state, so this branch is evaluated BEFORE the unprovisioned
-		// ProvisionScreen below: an unprovisioned user opens it from the setup screen's gear. It sits
-		// below the overlay branches above (showManage/showAddGateway are entered from Settings without
-		// clearing showSettings, so they must still win). SettingsScreen gates its provisioned-only
-		// rows on state.provisioned, so the unprovisioned hub shows only the System section.
+		// ProvisionScreen below (the setup screen's gear opens it). It sits below the overlay branches
+		// above, which are entered from Settings without clearing showSettings, so they must still win.
+		// SettingsScreen gates its provisioned-only rows, so the unprovisioned hub shows only System.
 		showSettings ->
 			SettingsScreen(
 				state = state,
@@ -815,10 +811,8 @@ fun SessionsScreen(
 				// Gateway): the local listing stamps it, so I can tell a peer Domain apart
 				// without threading a separate localDomainId through state. Empty until known.
 				val adminDomainId = sessions.firstOrNull { it.gatewayId == state.localGatewayId }?.domainId.orEmpty()
-				// Accordion grouped by the owning (Domain, Gateway) pair - a gateway id is unique
-				// only within a Domain, so two linked friend Domains sharing an id must not merge
-				// into one group. Within each: host agent, then devcontainer projects, then loose
-				// sessions. The local Gateway sorts first; peer Domains follow, ordered by Domain.
+				// Grouped by the owning (Domain, Gateway) pair. Within each group: devcontainer projects,
+				// then loose sessions. The local Gateway sorts first; peer Domains follow, ordered by Domain.
 				val byGateway = sessions
 					.groupBy { GatewayGroupKey(it.domainId.orEmpty().ifEmpty { adminDomainId }, it.gatewayId.ifEmpty { state.localGatewayId }) }
 					.toList()
@@ -864,11 +858,10 @@ fun SessionsScreen(
 	}
 }
 
-/** The single status surface when the board has no sessions. The HealthHeader is hidden in this
- * state (SessionsScreen shows it only ALONGSIDE a session list), so this is the ONLY place a status
- * renders: exactly one mutually exclusive branch, keyed on the connection state. A terminal cause is
- * checked before the enrolling/connecting spinners, so a hard error can never sit under a "Setting
- * up..." spinner, and it names the actual cause with a way forward instead of pointing elsewhere. */
+/** The single status surface when the board has no sessions (the HealthHeader is hidden in this
+ * state). Exactly one mutually exclusive branch renders, keyed on the connection state. A terminal
+ * cause is checked before the enrolling/connecting spinners, so a hard error can never sit under a
+ * "Setting up..." spinner, and it names the actual cause with a way forward. */
 @Composable
 private fun EmptyBoard(
 	state: ChatState,
@@ -1472,11 +1465,10 @@ fun SettingsScreen(
 	onClear: () -> Unit,
 	onCloseSettings: () -> Unit,
 ) {
-	// Settings opens from the pre-provision setup screen too. Before provisioning, the repo is not
-	// loaded, so the categories that read provisioned state (Profile, Voice, Networks, Security)
-	// would NPE or route into provisioned-only screens. Show ONLY the System section then (the
-	// updater + Clear & re-provision both work with no provisioning), and treat a stale saved
-	// sub-route as the hub so it can never render (or title) a provisioned-only screen unprovisioned.
+	// Settings opens from the pre-provision setup screen too. Before provisioning the repo is not
+	// loaded, so the provisioned-only categories (Profile, Voice, Networks, Security) would NPE or
+	// route into provisioned-only screens. Show ONLY the System section then, and treat a stale saved
+	// sub-route as the hub so it can never render a provisioned-only screen unprovisioned.
 	val provisioned = state.provisioned
 	val effectiveRoute =
 		if (!provisioned && route != SettingsRoute.HUB && route != SettingsRoute.SYSTEM) {
@@ -1724,12 +1716,10 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		onDispose { repo.stts.onPlaybackError = null }
 	}
 
-	// CONNECTION - the single honest status. The voice + playback controls below stay
-	// hidden until a Test confirms BOTH the service and a voice catalog, so a green
-	// status can never sit over a dimmed picker. Creds live in settings, not the blob.
-	// Plain remember, NOT rememberSaveable: the store is the durable source (re-read on
-	// composition), so a config change loses nothing, and the secret never enters the
-	// saved-instance-state Bundle. A half-typed key resetting on rotation is the right trade.
+	// The voice + playback controls below stay hidden until a Test confirms BOTH the service and a
+	// voice catalog, so a green status can never sit over a dimmed picker. Plain remember, NOT
+	// rememberSaveable: the store is the durable source, and the secret never enters the
+	// saved-instance-state Bundle (a half-typed key resetting on rotation is the right trade).
 	var url by remember { mutableStateOf(repo.sttsUrl) }
 	var key by remember { mutableStateOf(repo.sttsKey) }
 	var conn by remember { mutableStateOf(if (repo.sttsConfigured()) SttsConn.TESTING else SttsConn.NOT_SET_UP) }
@@ -2025,7 +2015,6 @@ private fun AppUpdateRow() {
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
 		}
-		// Variant selector to the left of the Update button.
 		ExposedDropdownMenuBox(
 			expanded = variantMenuOpen,
 			onExpandedChange = { if (!busy) variantMenuOpen = it },

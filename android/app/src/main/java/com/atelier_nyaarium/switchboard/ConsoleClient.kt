@@ -61,14 +61,13 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
- * Credential blob the console holds (pasted once). Reaches the console bridge through
- * the k8s API service-proxy: the SA token authenticates to the API server, the app
- * token (a separate forwarded header) authenticates to evie.
+ * Credential blob the console holds. Reaches the console bridge through the k8s API
+ * service-proxy: the SA token authenticates to the API server, the app token (a separate
+ * forwarded header) authenticates to evie.
  *
- * Thin wrapper over the generated proto.Provisioning (the wire shape): this class
- * owns the RUNTIME behavior a schema cannot express - device defaulting to
- * Build.MODEL, conversationId minting a UUID, trailing-slash URL normalization,
- * and the service-proxy defaults.
+ * Thin wrapper over the generated proto.Provisioning wire shape, adding the runtime
+ * behavior a schema cannot express: device defaulting to Build.MODEL, conversationId
+ * minting a UUID, trailing-slash URL normalization, the service-proxy defaults.
  */
 data class Provisioning(
 	val apiUrl: String,
@@ -80,13 +79,12 @@ data class Provisioning(
 	val port: Int,
 	val device: String,
 	val conversationId: String,
-	/** Present on a friend INVITE blob: the pending Domain id + the one-time invite nonce the
-	 * app first-roots with. Absent on an ordinary (already-rooted) admin blob, which just
-	 * provisions the console. The presence of this field IS what distinguishes the two paths. */
+	/** Present on a friend invite blob: the pending Domain id + one-time invite nonce the app
+	 * first-roots with. Its presence is what distinguishes an invite from an already-rooted admin blob. */
 	val pendingTenant: PendingTenantRef? = null,
-	/** Present on a friend ENROLL invite blob (alongside pendingTenant): the admin's owner keys +
-	 * Domain and the handshakeId + pin that seed the in-person FLOW-1 trust compare. The enrollee's
-	 * app reads it after first-rooting to run the ceremony as ENROLLEE. Absent on a plain invite. */
+	/** Present alongside pendingTenant on an enroll invite: the admin's owner keys + Domain and the
+	 * handshakeId + pin seeding the in-person trust compare. The enrollee reads it after first-rooting
+	 * to run the ceremony as enrollee. */
 	val enrollHandshake: EnrollHandshakeRef? = null,
 ) {
 	companion object {
@@ -109,33 +107,31 @@ data class Provisioning(
 	}
 }
 
-/** UI model for the sessions board. Mapped one-to-one from the wire TeamInfo in
- * `teams()`; also constructed locally for ended threads whose team has left the
- * bridge (a state that never exists on the wire). `name` is the gateway-qualified
- * composite key (`gateway/local`); `displayName`/`gatewayId` derive from it. */
+/** UI model for the sessions board. Mapped from the wire TeamInfo in `teams()`, and also
+ * constructed locally for ended threads whose team has left the bridge (a state that never
+ * exists on the wire). `name` is the gateway-qualified key (`gateway/local`); `displayName`
+ * and `gatewayId` derive from it. */
 data class Team(
 	val name: String,
 	val status: String,
 	val mode: String,
 	val queueDepth: Int,
 	val kind: String = "loose",
-	// Plugin version the agent's MCP process reported. Null for consoles, offline
-	// catalog entries, and pre-feature gateways. The board shows it only when it
-	// differs from this app's own expected version.
+	// Plugin version the agent's MCP process reported. Null for consoles, offline catalog
+	// entries, and gateways without the feature. The board shows it only when it differs
+	// from this app's own expected version.
 	val version: String? = null,
-	// The owning Gateway's Domain id (a separate typed field, NOT folded into `name`:
-	// the gateway/name address grammar stays two-part, so the Domain never aliases as
-	// a third segment). A gateway id is unique only within a Domain, so the board groups
-	// by the (domainId, gatewayId) pair and a cross-Domain (peer) group is shown under
-	// its Domain. Null for a pre-federation Gateway and for the locally-synthesized ended
-	// session (it has no live wire record).
+	// The owning Gateway's Domain id, kept a separate field rather than folded into `name` so
+	// the gateway/name grammar stays two-part. A gateway id is unique only within a Domain, so
+	// the board groups by the (domainId, gatewayId) pair. Null for a pre-federation Gateway and
+	// for the locally-synthesized ended session.
 	val domainId: String? = null,
-	// The owning Domain's display name, stamped by the gateway's discover for both local
-	// and peer sessions. The Peers list shows this instead of the opaque domainId. Null for a
-	// pre-feature gateway or a Domain that has not set a name yet.
+	// The owning Domain's display name, stamped by the gateway's discover. The Peers list shows
+	// this instead of the opaque domainId. Null for a gateway without the feature or a Domain
+	// that has not set a name yet.
 	val displayName: String? = null,
-	// True when the owning Domain is the admin's own (the evie-runner who provisions others), from
-	// the register reply via the gateway. The local session's value gates the admin surfaces.
+	// True when the owning Domain is the admin's own, from the register reply via the gateway.
+	// The local session's value gates the admin surfaces.
 	val isAdminDomain: Boolean = false,
 ) {
 	/** Short local name shown in the UI: the tail after the gateway qualifier. */
@@ -150,9 +146,8 @@ data class SendResult(val ok: Boolean, val status: String, val error: String?)
 /** A file the user picked to send. Bytes are base64-encoded onto the wire. */
 data class OutgoingFile(val name: String, val mime: String, val bytes: ByteArray)
 
-/** The owner enroll envelope: `enrollOp` (not `op`) routes to evie's enrollment
- * coordinator, which answers an EnrollResult directly instead of relaying to a
- * Gateway. */
+/** The owner enroll envelope: `enrollOp` (not `op`) routes to evie's enrollment coordinator,
+ * which answers an EnrollResult directly instead of relaying to a Gateway. */
 @Serializable
 private data class EnrollEnvelope(
 	val device: String,
@@ -165,52 +160,45 @@ private data class EnrollEnvelope(
 @Serializable
 private data class BounceBody(val error: String? = null, val retryable: Boolean = false)
 
-/** The first-root POST body: a top-level `firstRoot` field routes to evie's console-bridge
- * firstRoot intake (decided AT evie, never relayed to a Gateway), the symmetric twin of
- * `enrollOp` routing to the enrollment coordinator. */
+/** First-root POST body: a top-level `firstRoot` field routes to evie's console-bridge
+ * firstRoot intake, decided at evie and never relayed to a Gateway. */
 @Serializable
 private data class FirstRootEnvelope(val firstRoot: SignedFirstRoot)
 
-/** The enroll-handshake POST body: a top-level `enrollHandshake` field routes to evie's
- * console-bridge enroll-handshake broker (a dumb relay, never to a Gateway), the twin of
- * `firstRoot` routing. */
+/** Enroll-handshake POST body: a top-level `enrollHandshake` field routes to evie's
+ * console-bridge enroll-handshake broker, a dumb relay never sent to a Gateway. */
 @Serializable
 private data class EnrollHandshakeEnvelope(val enrollHandshake: EnrollHandshakeOp)
 
-/** The roster POST body: a top-level `roster` field routes to evie's cross-tenant roster handler
- * (answered AT evie, which aggregates across Domains a gateway cannot see), the twin of `firstRoot`
- * routing. */
+/** Roster POST body: a top-level `roster` field routes to evie's cross-tenant roster handler,
+ * which aggregates across Domains a gateway cannot see and answers itself. */
 @Serializable
 private data class RosterEnvelope(val roster: RosterRequest)
 
-/** The transport-request POST body: a top-level `transport` field routes to evie's console-bridge
- * transport intake (answered AT evie, which holds the gateway-bridge Secret), the twin of `firstRoot`
- * routing. */
+/** Transport-request POST body: a top-level `transport` field routes to evie's console-bridge
+ * transport intake, which holds the gateway-bridge Secret and answers itself. */
 @Serializable
 private data class TransportEnvelope(val transport: TransportRequest)
 
-/** The FLOW-2 trust-rendezvous POST bodies: top-level fields routing to evie's trust broker / pending
- * query (the twins of `roster` routing). */
+/** Trust-rendezvous POST bodies: top-level fields routing to evie's trust broker and pending query. */
 @Serializable
 private data class TrustHandshakeEnvelope(val trustHandshake: TrustHandshakeOp)
 
 @Serializable
 private data class TrustPendingEnvelope(val trustPending: TrustPendingRequest)
 
-/** evie's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the
- * minted one-time invite `nonce` (the admin's app builds the friend's QR from it). The wire
- * EnrollResult schema omits `nonce`, so this is a local richer decode (ignoreUnknownKeys keeps
- * it forward-compatible). */
+/** evie's reply to a provision_tenant enroll op. Mirrors EnrollResult but also carries the minted
+ * one-time invite `nonce` the admin's app builds the friend's QR from. The wire EnrollResult schema
+ * omits `nonce`, so this is a richer local decode. */
 @Serializable
 data class ProvisionTenantResult(val ok: Boolean, val error: String? = null, val nonce: String? = null)
 
-/** Decode posture for everything off the wire: unknown fields are tolerated
- * (additive protocol). Encode posture: the default config omits null-defaulted
- * optionals, which is exactly what the gateway's schemas accept. */
+/** Decode tolerates unknown fields (additive protocol). Encode omits null-defaulted optionals,
+ * which is what the gateway's schemas accept. */
 internal val wireJson = Json { ignoreUnknownKeys = true }
 
-/** Map a Crypto.SealedEnvelope to the proto.SealedEnvelope wire type. Fields
- * are identical by design; a small mapper avoids coupling the two class hierarchies. */
+/** Map a Crypto.SealedEnvelope to the proto.SealedEnvelope wire type. Fields are identical by
+ * design; the mapper avoids coupling the two class hierarchies. */
 private fun Crypto.SealedEnvelope.toProto(): SealedEnvelope =
 	SealedEnvelope(ephemeralPub, nonce, ciphertext, signature)
 
@@ -230,14 +218,13 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	var routeGateway: String? = null
 
 	/**
-	 * CA-pinned preflight of the ACTUAL transport: the console-bridge liveness probe through the API
-	 * service-proxy. Proves TLS pinning, reachability, and SA auth on the same path the real ops use.
+	 * CA-pinned preflight: the console-bridge liveness probe through the API service-proxy, on the
+	 * same path the real ops use, so it proves TLS pinning, reachability, and SA auth.
 	 *
-	 * It must NOT hit a raw cluster endpoint like `get namespace`: the console SA
-	 * (console-bridge-proxy) is scoped to the service-proxy verb only, so a namespace GET 403s and
-	 * would (and did) strand every connect before the admission submit, leaving the console forever
-	 * "not admitted". /health needs no app token, so a failure here means the cluster/tunnel is down,
-	 * cleanly separated from "the bridge rejected our creds".
+	 * It must NOT hit a raw cluster endpoint like `get namespace`: the console SA (console-bridge-proxy)
+	 * is scoped to the service-proxy verb only, so a namespace GET 403s and strands every connect before
+	 * the admission submit, leaving the console forever "not admitted". /health needs no app token, so a
+	 * failure here means the cluster or tunnel is down, separate from "the bridge rejected our creds".
 	 */
 	fun apiReachable(): String {
 		val req = Request.Builder()
@@ -252,10 +239,10 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
-	/** Resolve the console identity from the store. An ABSENT identity means the device is not
-	 * provisioned (re-provision hint); a CORRUPT one means present-but-unreadable bytes, which a
-	 * re-provision will not fix without a restore - so the two surface DISTINCT terminal causes
-	 * instead of one ambiguous "not enrolled". Never mints here: enrollment owns minting. */
+	/** Resolve the console identity from the store. Absent means not provisioned (re-provision hint);
+	 * corrupt means present-but-unreadable bytes that a re-provision will not fix without a restore, so
+	 * the two surface distinct causes instead of one ambiguous "not enrolled". Never mints here:
+	 * enrollment owns minting. */
 	private fun requireConsoleIdentity(): Crypto.Identity =
 		when (val load = store.loadIdentity()) {
 			is IdentityLoad.Loaded -> load.identity
@@ -263,31 +250,28 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-admin-domain.sh")
 		}
 
-	/** Resolve a Gateway's keys from the owner-rooted keyring, verifying its admission
-	 * before sealing to it. This is the device side of symmetric trust: the Console
-	 * seals to a Gateway because the owner admitted that Gateway's keys, never because a
-	 * provisioning blob named them. A Gateway absent from the keyring is a terminal gap
-	 * (admit it), worded with "not in the keyring" so it cannot collide with the
-	 * server-side "is not admitted to the Domain" sync-lag token. */
+	/** Resolve a Gateway's keys from the owner-rooted keyring, verifying its admission before sealing to
+	 * it. The device side of symmetric trust: the Console seals to a Gateway because the owner admitted
+	 * that Gateway's keys, never because a provisioning blob named them. A Gateway absent from the keyring
+	 * is worded "not in the keyring" so it cannot collide with the server-side "is not admitted to the
+	 * Domain" sync-lag token. */
 	private fun requireGatewayKeys(gatewayId: String): ProvisioningStore.GatewayKeys {
 		val keyring = Keyring.parse(store.loadDomain()) ?: error("Gateway \"$gatewayId\" is not in the keyring.")
 		val admission = keyring.resolveGateway(gatewayId) ?: error("Gateway \"$gatewayId\" is not in the keyring.")
 		return ProvisioningStore.GatewayKeys(admission.signPub, admission.boxPub)
 	}
 
-	/** The Gateway id to use for sealing, in priority order: (1) the live routeGateway set
-	 * after register, (2) the persisted Gateway id from a previous session. Throws when
-	 * neither is available - a fresh install before the owner has admitted any Gateway, where
-	 * the fix is to admit one (not re-provision); the "no gateway admitted" token routes the
-	 * banner to that guidance. */
+	/** The Gateway id to seal to, preferring the live routeGateway set after register, then the persisted
+	 * id from a previous session. Throws on a fresh install before the owner has admitted any Gateway,
+	 * where the fix is to admit one (not re-provision); the "no gateway admitted" token routes the banner
+	 * to that guidance. */
 	private fun resolveGatewayId(): String =
 		routeGateway?.takeIf { it.isNotEmpty() }
 			?: store.loadGatewayId().takeIf { it.isNotEmpty() }
 			?: error("No Gateway admitted yet - add one from Manage Gateways.")
 
-	/** Build a sealed ConsoleRelayFrame for one op. Called fresh for every send,
-	 * including retries, so each attempt uses a new ephemeral/nonce and the
-	 * server's replay guard never sees duplicate nonces. */
+	/** Build a sealed ConsoleRelayFrame for one op. Called fresh for every send including retries, so
+	 * each attempt uses a new ephemeral/nonce and the server's replay guard never sees a duplicate. */
 	private fun buildSealedFrame(
 		op: ConsoleOp,
 		opId: String,
@@ -320,13 +304,10 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		return wireJson.decodeFromString<ConsoleReplyBody>(plain.toString(Charsets.UTF_8))
 	}
 
-	/** Send a console op through the service-proxy to the console bridge. Mutating ops
-	 * pass their own stable opId so a retry after a lost reply replays the cached
-	 * result server-side instead of running the op twice (the protocol contract).
-	 * A held op (long-poll) passes a read timeout above its server-side hold.
-	 *
-	 * Every call builds a fresh sealed frame so retries produce a new ephemeral/nonce
-	 * and the replay guard never rejects a legitimate retry. */
+	/** Send a console op through the service-proxy to the console bridge. Mutating ops pass their own
+	 * stable opId so a retry after a lost reply replays the cached result server-side instead of running
+	 * the op twice. A held op (long-poll) passes a read timeout above its server-side hold. Every call
+	 * builds a fresh sealed frame so a retry produces a new ephemeral/nonce the replay guard accepts. */
 	private fun relay(
 		op: ConsoleOp,
 		opId: String = UUID.randomUUID().toString(),
@@ -334,9 +315,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		targetGateway: String? = null,
 	): ConsoleReplyBody {
 		val identity = requireConsoleIdentity()
-		// Direct multi-gateway: an op seals to the Gateway hosting its session (resolved from
-		// the keyring), naming it so evie routes there. Register/poll/list default to the
-		// route Gateway.
+		// An op seals to the Gateway hosting its session (resolved from the keyring), naming it so
+		// evie routes there. Register/poll/list default to the route Gateway.
 		val gatewayId = targetGateway?.takeIf { it.isNotEmpty() } ?: resolveGatewayId()
 		val hostKeys = requireGatewayKeys(gatewayId)
 
@@ -356,8 +336,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			val text = resp.body?.string().orEmpty()
 			if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(500)}")
 			val reply = wireJson.decodeFromString<ConsoleRelayReply>(text)
-			// Cleartext error path: console not admitted or pre-seal failure; surface it
-			// so the UI can prompt enrollment rather than showing a generic network error.
+			// Cleartext error path (console not admitted or pre-seal failure): surface it so the
+			// UI can prompt enrollment rather than show a generic network error.
 			if (reply.sealed == null) {
 				error(reply.error ?: "relay error (no sealed payload)")
 			}
@@ -365,10 +345,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
-	/** Submit an owner enroll op directly to evie (the Domain root). evie answers
-	 * with an EnrollResult, not a console_relay_reply: enroll ops are evie-direct and
-	 * never relayed to a Gateway, so they succeed even with no gateway connected. A
-	 * bounce (offline / 501 / malformed) is surfaced as a failed EnrollResult. */
+	/** Submit an owner enroll op directly to evie (the Domain root). Enroll ops are evie-direct and never
+	 * relayed to a Gateway, so they succeed with no gateway connected; evie answers an EnrollResult, not a
+	 * console_relay_reply. A bounce (offline, 501, malformed) is surfaced as a failed EnrollResult. */
 	fun enroll(op: EnrollOp): EnrollResult {
 		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), op)
 		val req = Request.Builder()
@@ -377,9 +356,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
 			.post(wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON))
 			.build()
-		// DEBUG trace: the exact URL the device POSTs to, plus the outcome. A transport throw means
-		// the device cannot reach evie's console-bridge at all (the trace then survives only in the
-		// on-device file); an HTTP code means it reached evie, so this is the coordinator's verdict.
+		// Trace the POST URL and outcome. A transport throw means the device cannot reach evie's
+		// console-bridge at all; an HTTP code means it reached evie, so the code is the coordinator's verdict.
 		DebugLog.log("Enroll", "POST $proxyBase/relay op=${op::class.simpleName}")
 		val resp =
 			try {
@@ -391,9 +369,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		resp.use {
 			val text = resp.body?.string().orEmpty()
 			DebugLog.log("Enroll", "resp HTTP ${resp.code} ${text.take(120)}")
-			// 2xx: a real EnrollResult. A coordinator rejection is 400 with an
-			// EnrollResult body; a transport bounce is {error, retryable}. Cross-check
-			// the status so a non-2xx body is never read as a successful enroll.
+			// 2xx is a real EnrollResult. A coordinator rejection is 400 with an EnrollResult body; a
+			// transport bounce is {error, retryable}. Cross-check the status so a non-2xx body is
+			// never read as a successful enroll.
 			if (resp.isSuccessful) {
 				return runCatching { wireJson.decodeFromString<EnrollResult>(text) }
 					.getOrElse { EnrollResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
@@ -404,11 +382,10 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
-	/** First-root a PENDING friend Domain at this device's silently-generated owner key. evie
-	 * decides it directly (self-signed frame + one-time invite nonce), with no gateway and no
-	 * admission, so it works before any Gateway is admitted. evie answers with an EnrollResult
-	 * (2xx ok, 400 reject, e.g. an expired or already-claimed invite). A reject is NOT retryable
-	 * (the root was decided), so the caller surfaces the message rather than spinning. */
+	/** First-root a pending friend Domain at this device's silently-generated owner key. evie decides it
+	 * directly from the self-signed frame + one-time invite nonce, with no gateway and no admission, so it
+	 * works before any Gateway is admitted. It answers an EnrollResult (2xx ok, 400 reject for an expired or
+	 * already-claimed invite). A reject is not retryable (the root was decided), so the caller surfaces it. */
 	fun firstRoot(signed: SignedFirstRoot): EnrollResult {
 		val envelope = FirstRootEnvelope(signed)
 		val req = Request.Builder()
@@ -439,10 +416,10 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	}
 
 	/** Pull this owner's network gateway-bridge transport (the proxy SA token + CA) from evie. POST
-	 * { transport } evie-direct, like firstRoot - evie holds the gateway-bridge Secret and answers
-	 * itself, scoping by the request's signed owner proof. ok=false is an opaque reject (bad proof or
-	 * not a rooted owner); a transport bounce maps to ok=false too. The Console seals the returned creds
-	 * into a bootstrap bundle for a creds-less Gateway it is enrolling. */
+	 * { transport } evie-direct like firstRoot: evie holds the gateway-bridge Secret and answers itself,
+	 * scoping by the request's signed owner proof. ok=false is an opaque reject (bad proof or not a rooted
+	 * owner); a transport bounce maps to ok=false too. The Console seals the returned creds into a bootstrap
+	 * bundle for a creds-less Gateway it is enrolling. */
 	fun requestGatewayTransport(req: TransportRequest): TransportResult {
 		val request = Request.Builder()
 			.url("$proxyBase/relay")
@@ -470,10 +447,10 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
-	/** Drive one enroll-handshake frame through evie's broker (POST { enrollHandshake }). evie relays
-	 * the peer's frame back (or pending); the phone computes the SAS locally. Pre-admission like
-	 * firstRoot - the fresh enrollee has no admission. A terminal failure is ok=false + error; ok=true
-	 * with the peer frame absent means keep polling (re-send the same step). */
+	/** Drive one enroll-handshake frame through evie's broker (POST { enrollHandshake }). evie relays the
+	 * peer's frame back, or reports pending; the phone computes the SAS locally. Pre-admission like firstRoot
+	 * (the fresh enrollee has no admission). A terminal failure is ok=false + error; ok=true with the peer
+	 * frame absent means keep polling (re-send the same step). */
 	fun enrollHandshake(op: EnrollHandshakeOp): EnrollHandshakeResult {
 		val envelope = EnrollHandshakeEnvelope(op)
 		val req = Request.Builder()
@@ -503,9 +480,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
-	/** Fetch the cross-tenant roster (the Users surface) from evie. POST { roster } evie-direct, like
-	 * firstRoot - evie aggregates across Domains a gateway cannot see and answers itself. The request
-	 * carries the console's signed ROSTER proof; a non-member comes back ok=false (opaque). */
+	/** Fetch the cross-tenant roster (the Users surface) from evie. POST { roster } evie-direct like
+	 * firstRoot: evie aggregates across Domains a gateway cannot see and answers itself. The request carries
+	 * the console's signed ROSTER proof; a non-member comes back ok=false (opaque). */
 	fun roster(req: RosterRequest): RosterResult {
 		val request = Request.Builder()
 			.url("$proxyBase/relay")
@@ -595,10 +572,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
-	/** Submit an admin-signed provision_tenant enroll op and decode the minted one-time invite
-	 * nonce evie returns (the admin's app builds the friend's QR from it). Same evie-direct path
-	 * as enroll(); the only difference is the richer result decode (the wire EnrollResult omits the
-	 * nonce, so this reads it directly). */
+	/** Submit an admin-signed provision_tenant enroll op and decode the minted one-time invite nonce evie
+	 * returns (the admin's app builds the friend's QR from it). Same evie-direct path as enroll(); only the
+	 * richer result decode differs, since the wire EnrollResult omits the nonce. */
 	fun provisionTenant(signed: SignedProvisionTenant): ProvisionTenantResult {
 		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), EnrollOp.ProvisionTenant(signed))
 		val req = Request.Builder()
@@ -628,8 +604,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		return wireJson.decodeFromJsonElement(result)
 	}
 
-	/** Claim this device's mailbox. Returns the starting cursor + epoch. Carries this
-	 * build's identity so the gateway logs which version/variant the console runs. */
+	/** Claim this device's mailbox, returning the starting cursor + epoch. Carries this build's identity
+	 * so the gateway logs which version and variant the console runs. */
 	fun register(): ConsoleRegisterResult = resultOf(
 		relay(
 			ConsoleOp.Register(
@@ -640,14 +616,13 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		"register",
 	)
 
-	/** List the bridge's sessions, each keyed by its gateway-qualified name. A
-	 * session's Gateway comes from the wire (`TeamInfo.gatewayId`, always stamped); an
-	 * empty value falls back to `localGatewayId` (this connection's Gateway, learned at
-	 * register) and leaves the name bare (single implicit Gateway). */
+	/** List the bridge's sessions, each keyed by its gateway-qualified name. A session's Gateway comes from
+	 * the wire (`TeamInfo.gatewayId`, always stamped); an empty value falls back to `localGatewayId` (this
+	 * connection's Gateway, learned at register) and leaves the name bare. */
 	fun teams(localGatewayId: String = ""): List<Team> {
 		val body = relay(ConsoleOp.ListTeams)
-		// Surface a relay failure instead of blanking the board with an empty list; the
-		// callers (connect, refreshTeams) wrap this in runCatching and keep the prior list.
+		// Surface a relay failure instead of blanking the board; the callers (connect, refreshTeams)
+		// wrap this in runCatching and keep the prior list.
 		if (!body.ok || body.result == null) error("list_teams relay failed: ${body.error ?: "no result"}")
 		val result =
 			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult>(body.result)
@@ -667,15 +642,11 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		}
 	}
 
-	// teams() now throws on a relay failure; this convenience wrapper keeps its
-	// list-returning contract (empty on failure) for any external caller.
+	// teams() throws on a relay failure; this wrapper keeps the list-returning contract (empty on failure).
 	fun listTeams(): List<String> = runCatching { teams().map { it.name } }.getOrDefault(emptyList())
 
-	/**
-	 * Send a message to a team. The reply may arrive inline (within the relay hold)
-	 * or land in the mailbox for a later poll; either way the conversation is keyed
-	 * server-side by (this device, team).
-	 */
+	/** Send a message to a team. The reply may arrive inline within the relay hold or land in the mailbox
+	 * for a later poll; either way the conversation is keyed server-side by (this device, team). */
 	fun send(
 		to: String,
 		body: String,
@@ -692,14 +663,14 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 				base64 = android.util.Base64.encodeToString(f.bytes, android.util.Base64.NO_WRAP),
 			)
 		}
-		// Carry the selected session's Domain so the Gateway resolves a cross-Domain seal target
-		// by the full (domainId, gatewayId) pair; null/local keeps the existing local resolution.
+		// Carry the selected session's Domain so the Gateway resolves a cross-Domain seal target by the full
+		// (domainId, gatewayId) pair; null/local keeps the local resolution.
 		val crossDomain = domainId?.ifEmpty { null }
 		val op = ConsoleOp.Send(to = to, domainId = crossDomain, body = body, files = wireFiles.ifEmpty { null })
-		// A same-Domain send seals directly to the Gateway hosting the target team (a bare name
-		// resolves to the local Gateway), so a cross-Gateway send goes E2E to that Gateway. A CROSS-Domain send
-		// must instead seal to the LOCAL Domain: the friend Gateway's keys are not in this owner's keyring (it
-		// is a separate Domain), so the local Gateway opens the op and relays it on to the friend over the mesh.
+		// A same-Domain send seals directly to the Gateway hosting the target team (a bare name resolves to
+		// the local Gateway), so a cross-Gateway send goes E2E to that Gateway. A cross-Domain send instead
+		// seals to the local Gateway: the friend Gateway's keys are not in this owner's keyring, so the local
+		// Gateway opens the op and relays it to the friend over the mesh.
 		val local = routeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()
 		val target = if (crossDomain != null) local else TeamAddress.parse(to, local).gatewayId
 		val replyBody = relay(op, opId, targetGateway = target)
@@ -709,13 +680,12 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 		return SendResult(ok = replyBody.ok, status = status.orEmpty(), error = replyBody.error)
 	}
 
-	/** Drain new mailbox entries since cursor (epoch-gated). With holdMs > 0 the
-	 * server long-polls: an empty mailbox holds the request open until a message
-	 * arrives or the hold expires, so delivery is near-instant at ~1 request per
-	 * hold window instead of constant fast polling. */
+	/** Drain new mailbox entries since cursor (epoch-gated). With holdMs > 0 the server long-polls: an empty
+	 * mailbox holds the request open until a message arrives or the hold expires, so delivery is near-instant
+	 * at about one request per hold window instead of constant fast polling. */
 	fun poll(cursor: Long, epoch: Long, holdMs: Long = 0): ConsolePollResult {
-		// Carry the synced keyring version so the route Gateway returns the snapshot only when
-		// it changed (a revocation made elsewhere reaches this Console within one cycle).
+		// Carry the synced keyring version so the route Gateway returns the snapshot only when it changed
+		// (a revocation made elsewhere reaches this Console within one cycle).
 		val knownVersion = store.loadDomainVersion().ifEmpty { null }
 		val op = ConsoleOp.Poll(
 			cursor = cursor,
@@ -756,12 +726,11 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	////////////////////////////////
 	//  Cross-Domain trust ops
 	//
-	//  Thin convenience wrappers over the same seal/relay/poll path as the ops above. All
-	//  default to the ROUTE Gateway: the cross-Domain handshake coordinator, the per-session
-	//  share state, and the unlink cleanup all run on this owner's own Gateway (the friend
-	//  Gateway is reached through the mesh, not sealed to directly). The reads (list/listen)
-	//  run fresh; the mutating ops carry a stable opId so a lost-reply retry replays the cached
-	//  result server-side rather than re-running, exactly like send/tmux_send.
+	//  Thin wrappers over the same seal/relay/poll path as the ops above, all defaulting to the route
+	//  Gateway: the handshake coordinator, the per-session share state, and the unlink cleanup all run on
+	//  this owner's own Gateway (the friend Gateway is reached through the mesh, not sealed to directly).
+	//  Reads run fresh; the mutating ops carry a stable opId so a lost-reply retry replays the cached
+	//  result rather than re-running, like send/tmux_send.
 
 	/** RECEIVER: open a listening window. Returns the short token to read to the friend plus
 	 * this Gateway's keys (for the SAS) and the window's expiry. */

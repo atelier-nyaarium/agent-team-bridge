@@ -21,52 +21,45 @@ import { verifyXDomainLink } from "../../shared/federation-protocol.js";
 import type { CrossDomainPeer, CrossDomainPeers } from "./crossDomainPeers.js";
 
 ////////////////////////////////
-//  Cross-Domain listening-mode handshake (cross-domain-federation.md)
+//  Cross-Domain listening-mode handshake
 //
-//  The mutual both-present pairing that establishes a persistent cross-Domain trust
-//  link between two Gateways owned by DIFFERENT owners. This coordinator owns the
-//  GATEWAY-side state (the listening window, the requester-minted pin pairing, the
-//  attempt cap, the commit-reveal SAS exchange) and is the ONLY writer of the disjoint
-//  CrossDomainPeers store. It does NOT route over the Router itself: a Gateway reaches
-//  the other Gateway through an injected `route` seam (the Router wiring is a separate
-//  slice), and a receiver Gateway feeds inbound relayed frames in via
-//  `handleIncomingCommit` / `handleIncomingReveal`.
+//  The both-present pairing that establishes a persistent cross-Domain trust link between two
+//  Gateways owned by DIFFERENT owners. This coordinator owns the gateway-side state (listening
+//  window, requester-minted pin pairing, attempt cap, commit-reveal SAS exchange) and is the
+//  only writer of the disjoint CrossDomainPeers store. It does not route over the Router itself:
+//  a Gateway reaches the other through an injected `route` seam, and a receiver Gateway feeds
+//  inbound relayed frames in via `handleIncomingCommit` / `handleIncomingReveal`.
 //
-//  The exchange is COMMIT-REVEAL so the content-blind Router cannot offline-grind the
-//  SAS. Each side first publishes a hiding commitment to its own keys+ids+salt, then
-//  reveals them; a reveal that does not reproduce the earlier commitment aborts. Because
-//  each side is committed BEFORE the other reveals, the Router cannot substitute keys and
-//  search for a colliding short code: it must pick its substitution before it learns the
-//  peer's, collapsing the attack to a single online 1-in-10^6 guess bounded by the
-//  attempt cap. The SAS is computed over the COMMITTED keys + both sides' ids + the pin.
+//  The exchange is COMMIT-REVEAL so the content-blind Router cannot offline-grind the SAS. Each
+//  side publishes a hiding commitment to its own keys+ids+salt before either reveals, so the
+//  Router must pick any key substitution before it learns the peer's keys. That collapses the
+//  attack to a single online 1-in-10^6 guess bounded by the attempt cap. A reveal that does not
+//  reproduce the earlier commitment aborts. The SAS is computed over the COMMITTED keys + both
+//  sides' ids + the pin.
 //
 //  Two round trips, both content-blind through the Router:
-//   1. commit:  requester -> receiver  (Ha) ; receiver -> requester  (Hb)
-//   2. reveal:  requester -> receiver  (A keys+salt) ; receiver -> requester (B keys+salt+SAS)
+//   1. commit:  requester -> receiver (Ha) ; receiver -> requester (Hb)
+//   2. reveal:  requester -> receiver (A keys+salt) ; receiver -> requester (B keys+salt+SAS)
 //
 //  Roles:
-//  - LISTENER (receiver): opens a window (`listen`), mints a single-use listening token,
-//    accepts ONE pairing bound to that token (`handleIncomingCommit` then
-//    `handleIncomingReveal`), and on the human's SAS match writes the friend as a peer
-//    (`confirm`). It accepts frames ONLY while its window is open + the token matches, so
-//    there is no unsolicited surface.
+//  - LISTENER (receiver): opens a window (`listen`), mints a single-use token, accepts ONE
+//    pairing bound to it (`handleIncomingCommit` then `handleIncomingReveal`), and on the SAS
+//    match writes the friend as a peer (`confirm`). It accepts frames only while its window is
+//    open and the token matches.
 //  - REQUESTER: pairs against the other side's token (`request`), driving both round trips
-//    to the receiver Gateway through the `route` seam, then on the human's SAS match writes
-//    the friend as a peer (`confirm`).
+//    through the `route` seam, then on the SAS match writes the friend as a peer (`confirm`).
 //
-//  Both confirms are INDEPENDENT and symmetric: each owner signs ONE link attesting the OTHER's
-//  keys (which both sides hold from the SAS-verified reveal), and each Gateway stores its OWN
-//  owner's attestation - no cross-Gateway link exchange, because the seal only uses the friend's
-//  box key from the pairing, so whose signature is on the stored link does not affect seal
-//  security. The pin pairs the two listening sessions; the SAS - over both committed parties + the
-//  pin - is the residual anti-MITM detector once the commitment closes the grind.
+//  Both confirms are independent and symmetric: each owner signs one link attesting the OTHER's
+//  keys (both sides hold them from the SAS-verified reveal) and each Gateway stores its own
+//  owner's attestation. No cross-Gateway link exchange is needed because the seal only uses the
+//  friend's box key from the pairing, so whose signature is on the stored link does not affect
+//  seal security.
 
 ////////////////////////////////
 //  Interfaces & Types
 
 /** Round 1, requester -> receiver: the rendezvous token + pin + the requester's hiding
- * commitment (no keys revealed). The Router relays it opaquely; the commitment makes the
- * SAS grind impossible, so this carries no keys and is not the trust root. */
+ * commitment. No keys revealed yet (the commitment binds them). */
 export interface XDomainCommitWire {
 	listeningToken: string;
 	pin: string;
@@ -80,8 +73,7 @@ export interface XDomainCommitReplyWire {
 }
 
 /** Round 2, requester -> receiver: the requester's revealed keys+ids + the salt that
- * un-hides its round-1 commitment. The receiver checks it reproduces the committed Ha
- * before computing the SAS. */
+ * un-hides its round-1 commitment. The receiver checks it reproduces Ha before the SAS. */
 export interface XDomainRevealWire {
 	listeningToken: string;
 	pin: string;
@@ -89,9 +81,8 @@ export interface XDomainRevealWire {
 	requesterSalt: string;
 }
 
-/** Round 2 reply, receiver -> requester: the receiver's revealed keys+ids + salt (which
- * must reproduce Hb) plus the SAS the receiver computed over both committed parties + the
- * pin. The requester verifies the reveal against Hb and recomputes the SAS as a cross-check. */
+/** Round 2 reply, receiver -> requester: the receiver's revealed keys+ids + salt (must
+ * reproduce Hb) plus the SAS over both committed parties + the pin. */
 export interface XDomainRevealReplyWire {
 	receiverParty: CrossDomainParty;
 	receiverSalt: string;
@@ -99,8 +90,7 @@ export interface XDomainRevealReplyWire {
 }
 
 /** The Router routing seam: drive each round trip to the receiver Gateway (named by the
- * token prefix) and await its reply. Injected so this coordinator never imports the
- * Router client. */
+ * token prefix) and await its reply. Injected so this coordinator never imports the Router. */
 export interface CrossDomainRouter {
 	sendCommit(receiverGatewayId: string, req: XDomainCommitWire): Promise<XDomainCommitReplyWire>;
 	sendReveal(receiverGatewayId: string, req: XDomainRevealWire): Promise<XDomainRevealReplyWire>;
@@ -109,9 +99,8 @@ export interface CrossDomainRouter {
 ////////////////////////////////
 //  Schemas
 
-/** Boundary validation for an inbound round-1 commit frame (the opaque `payload` the
- * Router relays verbatim). The receiver Gateway parses it before feeding
- * `handleIncomingCommit`, so a malformed pre-trust frame is rejected at the edge. */
+/** Boundary validation for an inbound round-1 commit frame (the opaque `payload` the Router
+ * relays verbatim), parsed before `handleIncomingCommit` so a malformed frame is rejected. */
 export const XDomainCommitWireSchema = z.object({
 	listeningToken: z.string().min(1).max(256),
 	pin: z.string().min(1).max(256),
@@ -156,9 +145,9 @@ export function parseRevealReply(raw: unknown): XDomainRevealReplyWire {
 	return XDomainRevealReplyWireSchema.parse(raw);
 }
 
-/** This Gateway's own identity for the handshake: the phone-held owner root key (public)
- * plus this Gateway's keys + ids. The owner SIGNS the link on the phone, so the gateway
- * carries only the public owner key (to compute the SAS and to verify its own signed link). */
+/** This Gateway's own identity for the handshake: the phone-held owner root key (public only)
+ * plus this Gateway's keys + ids. The owner signs the link on the phone, so the gateway holds
+ * only the public owner key, used to compute the SAS and verify its own signed link. */
 export interface CrossDomainSelf {
 	ownerSignPub: () => string | null;
 	gatewaySignPub: string;
@@ -167,9 +156,8 @@ export interface CrossDomainSelf {
 	gatewayId: string;
 }
 
-/** A paired listening session OR a requester-side pending pairing. Keyed by pin in both
- * roles: confirm only needs the FRIEND's keys (to verify the friend's link + store the
- * peer), which is exactly what a pairing holds. */
+/** A paired session (either role), keyed by pin. Confirm only needs the FRIEND's keys (to
+ * verify the link and store the peer), which is exactly what a pairing holds. */
 interface Pairing {
 	friendOwnerSignPub: string;
 	friendDomainId: string;
@@ -180,9 +168,8 @@ interface Pairing {
 	expiresAt: number;
 }
 
-/** Receiver round-1 state: the commitments exchanged and this side's salt, held between
- * the commit and reveal rounds. The friend's keys are NOT here yet (they arrive at
- * reveal); single-flight is enforced by this object's presence. */
+/** Receiver round-1 state held between the commit and reveal rounds: the commitments
+ * exchanged plus this side's salt. The friend's keys arrive only at reveal. */
 interface ReceiverCommit {
 	pin: string;
 	requesterCommitment: string;
@@ -190,8 +177,7 @@ interface ReceiverCommit {
 	receiverCommitment: string;
 }
 
-/** A receiver-side listening window: the minted token, its expiry, the attempt counter,
- * the in-progress commit (set by round 1), and the final pairing (set by round 2). */
+/** A receiver-side listening window. */
 interface ListeningSession {
 	token: string;
 	expiresAt: number;
@@ -209,8 +195,7 @@ export interface CrossDomainHandshakeDeps {
 	/** The Router routing seam (requester role). Absent when the Router is not wired, in
 	 * which case `request` errors instead of routing. */
 	route?: CrossDomainRouter;
-	/** Listening-window TTL (default 1 hour, intentionally long so a friend installing the app
-	 * from scratch does not time out mid-pairing). */
+	/** Listening-window TTL (default 1 hour). */
 	ttlMs?: number;
 	/** Hard cap on pairing attempts per listening token before it is invalidated. */
 	maxAttempts?: number;
@@ -220,32 +205,27 @@ export interface CrossDomainHandshakeDeps {
 ////////////////////////////////
 //  Constants
 
-// The listening window is intentionally long (1 hour) so a friend installing the app from
-// scratch does not time out mid-pairing. Leaving the pairing screen still cancels it.
+// Intentionally long (1 hour) so a friend installing the app from scratch does not time out
+// mid-pairing. Leaving the pairing screen still cancels it.
 const DEFAULT_TTL_MS = 3_600_000;
 
-// Tight single-digit cap on pairing attempts against ONE listening token. On cap-exceeded the
-// token + any pairing are invalidated, forcing a full restart (a fresh listen). This bound is
-// PER-TOKEN: a fresh listen() resets the counter, so it caps SAS guesses per window, not per
-// requester-owner relationship. At the 6-digit SAS width the residual therefore leans partly on
-// human retry tolerance (a mismatch surfaces as a "possible tampering" signal that discourages
-// blind retries); a global per-requester-owner / re-listen-rate cap would make the bound purely
-// cryptographic.
+// Per-token cap on pairing attempts; on cap-exceeded the token + pairing are invalidated and the
+// owner must re-listen. A fresh listen() resets the counter, so this caps SAS guesses per window,
+// not per requester-owner relationship.
 const DEFAULT_MAX_ATTEMPTS = 5;
 
 // The random tail of a listening token: 18 bytes base64url, matching the enrollment nonce.
 const TOKEN_RANDOM_BYTES = 18;
 
-// The per-side commitment salt: 18 random bytes base64url, hiding the (public) committed
-// keys so the commitment is binding without being guessable.
+// Per-side commitment salt: 18 random bytes base64url, hiding the (public) committed keys so the
+// commitment is binding without being guessable.
 const SALT_RANDOM_BYTES = 18;
 
 ////////////////////////////////
 //  Functions & Helpers
 
-/** Parse a listening token `<gatewayId>.<random>` into its receiver Gateway id. The
- * gateway-id prefix lets the requester route the request without a separate lookup.
- * Returns null when the token has no separator. */
+/** Parse a listening token `<gatewayId>.<random>` into its receiver Gateway id (the prefix
+ * lets the requester route without a lookup). Returns null when the token has no separator. */
 export function parseListeningToken(token: string): { gatewayId: string } | null {
 	const i = token.indexOf(".");
 	if (i <= 0) return null;
@@ -279,10 +259,9 @@ export class CrossDomainHandshakeCoordinator {
 		this.now = deps.now ?? Date.now;
 	}
 
-	/** RECEIVER: open a listening window. Mints a single-use token `<gatewayId>.<random>`
-	 * (the prefix names this Gateway for the requester's routing) and returns this
-	 * Gateway's own owner + gateway keys for the SAS. The owner reads the token to the
-	 * other owner out of band. Requires the Domain owner key to be present. */
+	/** RECEIVER: open a listening window. Mints a single-use token `<gatewayId>.<random>` (the
+	 * prefix names this Gateway for routing) and returns this Gateway's keys for the SAS. The
+	 * owner reads the token to the other owner out of band. Requires the Domain owner key. */
 	public listen(): CrossDomainListenResult {
 		this.sweep();
 		const ownerSignPub = this.self.ownerSignPub();
@@ -303,11 +282,9 @@ export class CrossDomainHandshakeCoordinator {
 		};
 	}
 
-	/** RECEIVER round 1: an inbound commit relayed from the requester's Gateway. Accepts
-	 * it ONLY while the named token's window is open; counts the attempt and invalidates
-	 * the token on cap-exceeded; rejects a second commit once one is in flight
-	 * (single-flight). On success it mints this side's salt + commitment (having seen ONLY
-	 * the requester's commitment) and returns this side's commitment - no keys yet. */
+	/** RECEIVER round 1: an inbound commit relayed from the requester. Accepted only while the
+	 * token's window is open; mints this side's salt + commitment (formed seeing only the
+	 * requester's commitment) and returns it. No keys revealed yet. */
 	public handleIncomingCommit(req: XDomainCommitWire): XDomainCommitReplyWire {
 		this.sweep();
 		const ownerSignPub = this.self.ownerSignPub();
@@ -340,10 +317,9 @@ export class CrossDomainHandshakeCoordinator {
 		return { receiverCommitment };
 	}
 
-	/** RECEIVER round 2: the requester reveals its keys + salt. Verifies the reveal
-	 * reproduces the round-1 commitment (abort on mismatch), computes the SAS over both
-	 * committed parties + the pin, records the pairing, and returns this side's revealed
-	 * keys + salt + the SAS. The pairing now holds the friend's keys for `confirm`. */
+	/** RECEIVER round 2: the requester reveals its keys + salt. Verifies the reveal reproduces
+	 * the round-1 commitment (abort on mismatch), computes the SAS over both committed parties +
+	 * the pin, and records the pairing (which then holds the friend's keys for `confirm`). */
 	public handleIncomingReveal(req: XDomainRevealWire): XDomainRevealReplyWire {
 		this.sweep();
 		const ownerSignPub = this.self.ownerSignPub();
@@ -375,11 +351,9 @@ export class CrossDomainHandshakeCoordinator {
 		return { receiverParty, receiverSalt: commit.receiverSalt, sas };
 	}
 
-	/** REQUESTER: pair against the OTHER side's listening token. Drives both round trips
-	 * (commit then reveal) to the receiver Gateway through the Router seam, verifies the
-	 * receiver's reveal against its commitment, recomputes the SAS as a cross-check, records
-	 * the receiver's keys as a pending pairing keyed by the pin, and returns the SAS for the
-	 * phone to display. The phone minted the pin; the gateway holds the keys + salts. */
+	/** REQUESTER: pair against the OTHER side's listening token. Drives both round trips through
+	 * the Router seam, verifies the receiver's reveal against its commitment, recomputes the SAS as
+	 * a cross-check, and records the receiver's keys as a pending pairing keyed by the pin. */
 	public async request(args: {
 		listeningToken: string;
 		pin: string;
@@ -460,17 +434,12 @@ export class CrossDomainHandshakeCoordinator {
 		};
 	}
 
-	/** EITHER ROLE: the human matched the SAS on the phone, which then owner-signed THIS
-	 * side's link and submitted it. Each owner confirms independently: look the pairing up
-	 * by pin, verify the owner-signed link under THIS Domain's owner key (and that it binds
-	 * the FRIEND's keys from the SAS-verified pairing), then write the friend as a
-	 * cross-Domain peer with this owner's own attestation as the stored link. No friend-link
-	 * exchange is needed: the seal uses only the friend's box key from the pairing, so the
-	 * stored link is an audit artifact and the local owner's signature on it is the
-	 * locally-verifiable authority. The pairing is consumed once, so a retried confirm at THIS
-	 * layer errors ("no pending pairing"); the console's opId cache replays the original
-	 * success reply for an honest retry. The peer store itself is idempotent on
-	 * `(domain, gateway)` (a re-link replaces). */
+	/** EITHER ROLE: the human matched the SAS, and the phone owner-signed THIS side's link and
+	 * submitted it. Look the pairing up by pin, verify the link under THIS Domain's owner key and
+	 * that it binds the FRIEND's keys from the SAS-verified pairing, then write the friend as a peer
+	 * with this owner's attestation as the stored link. No friend-link exchange is needed: the seal
+	 * uses only the friend's box key, so the stored link is an audit artifact. The pairing is consumed
+	 * once, so a retried confirm here errors; the console's opId cache replays the original reply. */
 	public confirm(args: { pin: string; mySignedLink: SignedXDomainLink }): CrossDomainConfirmResult {
 		this.sweep();
 		const ownerSignPub = this.self.ownerSignPub();
@@ -479,9 +448,8 @@ export class CrossDomainHandshakeCoordinator {
 		const pairing = this.takePairing(args.pin);
 		if (!pairing) throw new Error("no pending pairing for this pin");
 
-		// This owner's link side must be signed by our owner and bind the FRIEND's keys the SAS
-		// confirmed out of band, so the gateway (which never minted the link) checks the phone
-		// signed the exact channel it intended. The bound friend keys become the stored peer.
+		// The link must be signed by our owner and bind the FRIEND's keys the SAS confirmed, so the
+		// gateway (which never minted it) checks the phone signed the exact channel it intended.
 		const mine = args.mySignedLink;
 		if (!verifyXDomainLink(mine, ownerSignPub)) {
 			throw new Error("own link signature did not verify under this Domain's owner key");
@@ -509,12 +477,10 @@ export class CrossDomainHandshakeCoordinator {
 		return { ok: true };
 	}
 
-	/** RECEIVER: read a listening window's pairing state so the receiver phone learns a
-	 * pairing arrived. Before round 2 lands the pairing this returns pairingArrived=false
-	 * (with the window's expiry); once the requester's reveal records `session.pairing` it
-	 * returns the SAS the receiver computed plus the friend's keys the phone must owner-sign
-	 * a link over. Read-only: it does NOT consume or advance the window (confirm consumes it),
-	 * so the receiver can poll repeatedly. An unknown / swept token returns expired=true. */
+	/** RECEIVER: read a listening window's pairing state so the receiver phone learns a pairing
+	 * arrived. Returns pairingArrived=false until round 2 records `session.pairing`, then the SAS
+	 * plus the friend's keys the phone must owner-sign a link over. Read-only (confirm consumes the
+	 * window), so the receiver can poll repeatedly. An unknown / swept token returns expired=true. */
 	public listenState(listeningToken: string): CrossDomainListenStateResult {
 		this.sweep();
 		const session = this.listening.get(listeningToken);
@@ -536,9 +502,8 @@ export class CrossDomainHandshakeCoordinator {
 		};
 	}
 
-	/** EITHER ROLE: cancel the listening window and/or a pending pairing for this token /
-	 * pin (the owner left the pairing screen). Invalidates so a stale frame cannot
-	 * complete. Returns whether anything was cancelled. */
+	/** EITHER ROLE: cancel the listening window and/or pending pairing for this token / pin (the
+	 * owner left the pairing screen), so a stale frame cannot complete. Returns whether anything was. */
 	public cancel(args: { listeningToken?: string; pin?: string }): boolean {
 		let cancelled = false;
 		if (args.listeningToken && this.listening.has(args.listeningToken)) {
@@ -620,9 +585,8 @@ export class CrossDomainHandshakeCoordinator {
 //  the coordinator, and replies as the matching reply tool call. Mirrors the gateway-relay
 //  wiring in hostRelay.ts (one parse, one error surface).
 
-/** The inbound round-1 commit frame the Router routed to this Gateway (the receiver leg).
- * The outer envelope is validated here; the inner `payload` is parsed with
- * XDomainCommitWireSchema before dispatch. */
+/** The inbound round-1 commit frame the Router routed to this Gateway. The outer envelope is
+ * validated here; the inner `payload` is parsed with XDomainCommitWireSchema before dispatch. */
 const InboundCommitFrameSchema = z.object({
 	type: z.literal("cross_domain_handshake"),
 	handshakeId: z.string().min(1).max(128),
@@ -654,11 +618,10 @@ export interface CrossDomainHandshakePumpDeps {
 	sendRevealReply: (reply: CrossDomainHandshakeRevealReplyParams) => Promise<{ error?: string }>;
 }
 
-/** Validates an inbound cross_domain_handshake / cross_domain_handshake_reveal frame, runs
- * it through the receiver coordinator, and ships the reply back to the Router. A malformed
- * frame with no handshakeId is dropped (nothing to correlate); any other failure replies
- * with an error so the requester's held call settles fast. Returns a single pump that
- * dispatches on the frame `type`. */
+/** Validates an inbound cross_domain_handshake / cross_domain_handshake_reveal frame, runs it
+ * through the receiver coordinator, and ships the reply back to the Router. A malformed frame
+ * with no handshakeId is dropped (nothing to correlate); any other failure replies with an error
+ * so the requester's held call settles fast. */
 export function createCrossDomainHandshakePump({
 	handleIncomingCommit,
 	handleIncomingReveal,

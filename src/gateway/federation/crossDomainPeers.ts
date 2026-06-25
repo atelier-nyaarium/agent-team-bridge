@@ -6,14 +6,11 @@ import { SignedXDomainLinkSchema } from "../../shared/federation-protocol.js";
 ////////////////////////////////
 //  Schemas
 
-/** A single cross-Domain peer: a Gateway owned by a DIFFERENT owner (a different
- * Domain) that this Gateway has linked with. Keyed by `(friendDomainId,
- * friendGatewayId)` because a gateway id is NOT globally unique across Domains.
- * Carries the friend gateway's keys for the seal plus the LOCAL owner's signed link
- * attesting those keys (each owner confirms independently, signing its own side, so
- * the link verifies under THIS Domain's owner key, not the friend's). The link is an
- * audit artifact: the seal trust root is `friendBoxPub`, which came from the
- * SAS-verified reveal. */
+/** A Gateway owned by a different owner (a different Domain) that this Gateway has
+ * linked with. Keyed by `(friendDomainId, friendGatewayId)` because a gateway id is
+ * not globally unique across Domains. The seal trust root is `friendBoxPub` (from the
+ * SAS-verified reveal); the link is an audit artifact, signed under this Domain's own
+ * owner key since each owner confirms its own side independently. */
 const CrossDomainPeerSchema = z.object({
 	// The friend's owner root key (base64) - the trust anchor for this peer.
 	friendOwnerSignPub: z.string().min(1),
@@ -25,8 +22,7 @@ const CrossDomainPeerSchema = z.object({
 	friendSignPub: z.string().min(1),
 	// The friend gateway's raw X25519 box public key (base64).
 	friendBoxPub: z.string().min(1),
-	// The LOCAL owner's signed link side, attesting the friend keys above (verifiable
-	// under this Domain's own owner key).
+	// The local owner's signed link, verifiable under this Domain's own owner key.
 	link: SignedXDomainLinkSchema,
 });
 export type CrossDomainPeer = z.infer<typeof CrossDomainPeerSchema>;
@@ -41,13 +37,11 @@ type CrossDomainPeersFile = z.infer<typeof CrossDomainPeersFileSchema>;
 
 export const XDOMAIN_PEERS_FILE = "cross-domain-peers.json";
 
-/** The cross-Domain peer set on a Gateway: the Gateways owned by OTHER owners this
- * Gateway has linked with, persisted to the Gateway's volume (tight perms). This is
- * a DISJOINT store from the local allowlist: it is written ONLY by the handshake,
- * never by `allowlist.applySnapshot` or any evie-relayed snapshot, so a local-Domain
- * sync can never wipe it and it can never contaminate intra-Domain resolution. The
- * sealer resolves local peers FIRST (the allowlist), then falls back here, so a local
- * peer's seal path stays byte-for-byte unchanged. */
+/** The cross-Domain peer set, persisted to the Gateway's volume at 0600. Disjoint from
+ * the local allowlist: written only by the handshake, never by `allowlist.applySnapshot`
+ * or any evie-relayed snapshot, so a local-Domain sync can never wipe it and it cannot
+ * contaminate intra-Domain resolution. The sealer resolves local peers first, then falls
+ * back here, so a local peer's seal path is unchanged. */
 export class CrossDomainPeers {
 	private file: string;
 	private state: CrossDomainPeersFile;
@@ -72,10 +66,9 @@ export class CrossDomainPeers {
 		fs.writeFileSync(this.file, JSON.stringify(this.state), { mode: 0o600 });
 	}
 
-	/** Add (or replace) a cross-Domain peer. Idempotent on `(friendDomainId,
-	 * friendGatewayId)`: a re-link of the same peer replaces the prior entry (newest
-	 * keys / link win) rather than accumulating duplicates. Validates the shape before
-	 * it is stored. Returns false if the peer is malformed. */
+	/** Add or replace a cross-Domain peer. Idempotent on `(friendDomainId,
+	 * friendGatewayId)`: a re-link replaces the prior entry (newest keys win) rather than
+	 * accumulating duplicates. Returns false if the peer is malformed. */
 	add(peer: CrossDomainPeer): boolean {
 		const parsed = CrossDomainPeerSchema.safeParse(peer);
 		if (!parsed.success) return false;
@@ -98,16 +91,16 @@ export class CrossDomainPeers {
 		);
 	}
 
-	/** The peer whose friend gateway signing key matches, or null. A by-signPub lookup
-	 * for a caller that already holds the peer's static signing key; the relay open path
-	 * resolves by `(domainId, gatewayId)` instead, since the cleartext frame names no key. */
+	/** The peer whose friend gateway signing key matches, or null. For a caller that
+	 * already holds the static signing key; the relay open path resolves by
+	 * `(domainId, gatewayId)` instead, since the cleartext frame names no key. */
 	resolveBySignPub(signPub: string): CrossDomainPeer | null {
 		return this.state.peers.find((e) => e.friendSignPub === signPub) ?? null;
 	}
 
 	/** Drop every peer with this friend gateway id (across any Domain), returning the
-	 * number removed. A targeted per-gateway remove; an unlink drops the whole Domain
-	 * via removeByDomain. */
+	 * number removed. Targeted per-gateway remove; an unlink drops the whole Domain via
+	 * removeByDomain. */
 	remove(friendGatewayId: string): number {
 		const before = this.state.peers.length;
 		this.state.peers = this.state.peers.filter((e) => e.friendGatewayId !== friendGatewayId);
@@ -116,10 +109,9 @@ export class CrossDomainPeers {
 		return removed;
 	}
 
-	/** Drop EVERY peer of a friend Domain, across all its gateways (a Domain may run more
-	 * than one), returning the number removed. This is the unlink granularity: pulling
-	 * trust from a friend forgets all their gateways at once, so the sealer's
-	 * resolveByGateway then returns null for any of them and both seal legs refuse. */
+	/** Drop every peer of a friend Domain, across all its gateways, returning the number
+	 * removed. The unlink granularity: forgetting all of a Domain's gateways at once makes
+	 * resolveByGateway return null for any of them, so both seal legs refuse. */
 	removeByDomain(friendDomainId: string): number {
 		const before = this.state.peers.length;
 		this.state.peers = this.state.peers.filter((e) => e.friendDomainId !== friendDomainId);
@@ -128,11 +120,11 @@ export class CrossDomainPeers {
 		return removed;
 	}
 
-	/** Drop EVERY peer owned by a friend OWNER, across ALL their Domains + gateways (one owner may
-	 * run several Domains), returning the count removed + the distinct friend Domain ids affected. This
-	 * is the UNTRUST granularity (owner-keyed): untrusting a PERSON forgets every Gateway of every
-	 * Domain they own, so the sealer refuses all of them. The returned Domain ids let the caller drop
-	 * the per-session shares + settle the in-flight jobs for exactly those Domains. */
+	/** Drop every peer owned by a friend owner, across all their Domains and gateways,
+	 * returning the count removed plus the distinct friend Domain ids affected. The untrust
+	 * granularity (owner-keyed): one owner may run several Domains, and untrusting the person
+	 * forgets all of them so the sealer refuses all of them. The returned Domain ids let the
+	 * caller drop the per-session shares and settle in-flight jobs for exactly those Domains. */
 	removeByOwner(friendOwnerSignPub: string): { removed: number; domains: string[] } {
 		const owned = this.state.peers.filter((e) => e.friendOwnerSignPub === friendOwnerSignPub);
 		const domains = [...new Set(owned.map((e) => e.friendDomainId))];

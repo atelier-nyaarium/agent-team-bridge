@@ -22,11 +22,10 @@ sealed interface SttsProbe {
 }
 
 /** Validate + normalize an STTS base URL to a clean https origin (scheme://host[:port],
- * no trailing slash), or null if invalid. The ONE choke for every write into the stored
- * sttsUrl (the settings Test AND the blob migration). Rejects non-https, a missing host,
- * ANY userinfo (the real-looking@evilhost host-confusion that would ship the key to an
- * attacker), and any path/query/fragment (the base is host-rooted - requests append
- * "$baseUrl/health" and "$baseUrl/TextToSpeech/...", so a path would corrupt the endpoint). */
+ * no trailing slash), or null if invalid. The single choke for every write into the stored
+ * sttsUrl. Rejects non-https, a missing host, any userinfo (the real-looking@evilhost
+ * host-confusion that would ship the key to an attacker), and any path/query/fragment (the
+ * base is host-rooted, so a path would corrupt the appended endpoint). */
 internal fun normalizeSttsUrl(raw: String): String? {
 	val u = raw.trim().toHttpUrlOrNull() ?: return null
 	if (u.scheme != "https") return null
@@ -37,22 +36,18 @@ internal fun normalizeSttsUrl(raw: String): String? {
 }
 
 /**
- * Client for the VRCSTT "STTS" TTS service. Provider knowledge is DATA, not
- * code: each call passes an `SttsProvider` descriptor (from the bundled
- * assets/stts-providers.json catalog) carrying the URL path and a request-body
- * TEMPLATE. This client owns only the transport - URL assembly, auth header,
- * template substitution, and streaming the bytes to a file.
+ * Client for the VRCSTT "STTS" TTS service. Provider knowledge is data: each call passes an
+ * `SttsProvider` descriptor (from assets/stts-providers.json) carrying the URL path and a
+ * request-body template. This client owns only the transport.
  *
  * - POST /TextToSpeech/{path}/stream  -> audio streamed back
- * - POST /TextToSpeech/{path}/sample  -> short voice sample (providers without
- *   a sample route fall back to stream)
+ * - POST /TextToSpeech/{path}/sample  -> short voice sample (providers without one fall back to stream)
  * - GET  /health                      -> service liveness (gates the Play UI)
  * - Auth: "vrcstt-api-key" header, key from the provisioning blob (sttsKey).
  *
- * Response audio is MP3 or length-unbounded streaming WAV, always labeled
- * content-type audio/wav - the player sniffs the container, never trusts the
- * header. The descriptor's `container` field records the verified container
- * where known, but it is documentation; the player sniffs regardless.
+ * Response audio is always labeled audio/wav but may be MP3 or streaming WAV, so the player
+ * sniffs the container and never trusts the header. The descriptor's `container` field is
+ * documentation only.
  *
  * Blocking OkHttp like ConsoleClient: callers own the dispatcher boundary.
  */
@@ -108,10 +103,9 @@ class SttsClient(private val baseUrl: String, private val apiKey: String) {
 		}
 	}
 
-	/** Fill the descriptor's request template: the chosen voice falls back to
-	 * the descriptor default when blank. Fails loud if the template carries no
-	 * "$text" placeholder (a malformed descriptor would otherwise speak
-	 * nothing silently). */
+	/** Fill the descriptor's request template, falling back to the descriptor default voice
+	 * when blank. Fails loud if the template carries no "$text" placeholder, which would
+	 * otherwise speak nothing silently. */
 	private fun buildBody(provider: SttsProvider, text: String, voice: String?): String {
 		require(containsPlaceholder(provider.request, "\$text")) {
 			"STTS descriptor ${provider.id} has no \$text placeholder in its request template"
@@ -124,11 +118,10 @@ class SttsClient(private val baseUrl: String, private val apiKey: String) {
 		private val JSON = "application/json".toMediaType()
 
 		/**
-		 * Substitute placeholders in a request-body template tree. Replaces ONLY
-		 * string values exactly equal to "$text" or "$voice" - whole-value match,
-		 * never substring splicing - so nested objects, JSON numbers, and literal
-		 * strings pass through verbatim. The serializer JSON-encodes the
-		 * substituted values, so arbitrary synthesis text is never string-spliced.
+		 * Substitute placeholders in a request-body template tree. Replaces only string
+		 * values exactly equal to "$text" or "$voice" (whole-value match, never substring
+		 * splicing), so nested objects, numbers, and literal strings pass through. The
+		 * serializer JSON-encodes the substituted values, so synthesis text is never spliced.
 		 */
 		/** Whether any string VALUE in the template tree equals `placeholder`. */
 		fun containsPlaceholder(node: JsonElement, placeholder: String): Boolean = when (node) {

@@ -32,12 +32,10 @@ export interface MailboxSnapshotState {
 	respondableSessions?: string[];
 }
 
-// The cap is the OOM BACKSTOP, not the primary compactor: the watermark
-// (trimToMinCursor) removes entries every device has acked on each drain, so a
-// regularly-polled inbox stays small regardless of the cap. The cap only bounds
-// UNACKED accumulation for a dark/slow device, so it is generous - a slow console
-// keeps its mail instead of silently losing it to LRU (the dropped-gap bug). An
-// eviction here is logged, since it is now an exceptional backstop event.
+// The cap is an OOM backstop, not the primary compactor: trimToMinCursor removes
+// entries every device has acked on each drain, so a regularly-polled inbox stays
+// small regardless of the cap. The cap only bounds UNACKED accumulation for a
+// dark/slow device, so it is generous, and an eviction here is logged as exceptional.
 const DEFAULT_MAX_ENTRIES = 10_000;
 const DEFAULT_MAX_BYTES = 100_000_000;
 const DEFAULT_TTL_MS = 3_600_000;
@@ -55,11 +53,10 @@ function entryBytes(input: MailboxInput): number {
 }
 
 /** Random positive Int31 (the console parses epoch as a signed 32-bit int). The
- * console only compares epochs for equality, so what matters is that a mailbox
- * instance from a restarted gateway can never re-mint an epoch a console still
- * holds from the previous process. A counter base did exactly that: the console
- * could not detect the new instance, its stale cursor acked away every fresh
- * entry, and its seq dedupe silently ate the rest. */
+ * console only compares epochs for equality, so the invariant is that a restarted
+ * gateway's mailbox instance can never re-mint an epoch a console still holds from
+ * the previous process; otherwise the console cannot detect the new instance and its
+ * stale cursor acks away the fresh entries while seq dedupe eats the rest. */
 function mintEpoch(): number {
 	return 1 + Math.floor(Math.random() * 0x7ffffffe);
 }
@@ -157,9 +154,8 @@ export class DeviceMailbox {
 			evicted++;
 		}
 		if (evicted > 0) {
-			// The watermark is the primary compactor; the cap is an OOM backstop. An
-			// eviction here means a device fell far enough behind to drop UNACKED mail
-			// (a real gap the console will see), so it is logged, not silent.
+			// The watermark is the primary compactor; this eviction means a device fell
+			// far enough behind to drop UNACKED mail (a real gap the console sees), so log it.
 			console.warn(
 				`[mailbox] OOM backstop evicted ${evicted} unacked entr${evicted === 1 ? "y" : "ies"} (dropped total ${this.dropped})`,
 			);
@@ -206,26 +202,24 @@ export class DeviceMailbox {
 	}
 
 	/**
-	 * Ack everything at or below `cursor`, then return the entries above it
-	 * without removing them. Returned entries are dropped on the next drain whose
-	 * cursor covers them, giving at-least-once delivery (the console dedupes by seq).
+	 * Ack everything at or below `cursor`, then return the entries above it without
+	 * removing them. Returned entries are dropped on the next drain whose cursor covers
+	 * them, giving at-least-once delivery (the console dedupes by seq).
 	 *
-	 * Acking is epoch-gated: a cursor is only honored when `epoch` matches this
-	 * instance, because seq restarts at 1 in each instance, so a cursor carried
-	 * over from an evicted instance would otherwise silently ack away the new
-	 * instance's entries (even at the cursor==highWater boundary). When `epoch`
-	 * is omitted, fall back to a magnitude guard (only ack within range).
+	 * Acking is epoch-gated: a cursor is only honored when `epoch` matches this instance,
+	 * because seq restarts at 1 in each instance, so a cursor carried over from an evicted
+	 * instance would otherwise silently ack away the new instance's entries (even at the
+	 * cursor==highWater boundary). When `epoch` is omitted, fall back to a magnitude guard.
 	 *
-	 * `dropped` is a cumulative total, never reset server-side: a poll response
-	 * lost in transit cannot hide a gap. The console detects new gaps by comparing
-	 * against the previous total (or by any non-contiguous seq jump).
+	 * `dropped` is a cumulative total, never reset server-side, so a poll response lost in
+	 * transit cannot hide a gap. The console detects new gaps against the previous total
+	 * or by any non-contiguous seq jump.
 	 */
 	drain(cursor = 0, epoch?: number, consumerId?: string): MailboxSnapshot {
-		// Mark the device alive on every poll (even a cursor-0 first poll that does not
-		// yet advance a watermark), so sweepIdleConsumers only forgets a truly silent one.
-		// Register its watermark floor at 0 on first sight too: a freshly-joined consumer
-		// has acked nothing, so a sibling consumer's ack must not trim past mail this one
-		// received but has not yet acked. advanceConsumer raises the floor as it acks.
+		// Mark the device alive on every poll (even a cursor-0 first poll), so
+		// sweepIdleConsumers only forgets a truly silent one. Register its watermark floor
+		// at 0 on first sight so a sibling consumer's ack cannot trim past mail this consumer
+		// received but has not yet acked; advanceConsumer raises the floor as it acks.
 		if (consumerId !== undefined) {
 			this.consumerLastSeen.set(consumerId, Date.now());
 			if (!this.consumerCursors.has(consumerId)) this.consumerCursors.set(consumerId, 0);

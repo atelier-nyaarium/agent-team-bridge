@@ -7,11 +7,9 @@ import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 ////////////////////////////////
 //  Shared enum schemas
 //
-//  The single truth for the wire enums; the TS types in types.ts derive from
-//  these via z.infer. Decode-side tolerance note: these closed enums validate
-//  what OUR side composes or what a closed protocol surface accepts. Fields a
-//  console DECODES (e.g. MailboxEntry.request_type) stay open strings, per the
-//  additive decode-tolerance rule.
+//  The single truth for the wire enums; types.ts derives from these via z.infer.
+//  These closed enums validate what our side composes. Fields a console decodes
+//  (e.g. MailboxEntry.request_type) stay open strings.
 
 export const ConnectionModeSchema = z.enum(["channel"]).meta({ id: "ConnectionMode" });
 export const EffortLevelSchema = z.enum(["simple", "standard", "complex"]).meta({ id: "EffortLevel" });
@@ -20,21 +18,18 @@ export const TeamKindSchema = z.enum(["devcontainer", "loose", "console"]).meta(
 export const ResponseStatusSchema = z
 	.enum(["completed", "clarification", "deferred", "needs_human", "error", "timeout", "running"])
 	.meta({ id: "ResponseStatus" });
-// Whether a console's Domain is rooted yet. `unrooted` is a fresh, never-provisioned admin Domain (no
-// owner, no pending tenant); `pending` is an admin-staged tenant the friend has not yet
-// first-rooted; `rooted` just provisions the console. Mirrors evie's getDomainStatus 3-value
-// union. The gateway register reply only ever carries `rooted`/`unrooted` (a pending Domain has
-// no gateway to register against); `pending` reaches the app via the provisioning blob's
-// `pendingTenant` instead. Decode-side this stays an open String in Kotlin.
+// Whether a console's Domain is rooted yet. `unrooted` is a fresh, never-provisioned admin
+// Domain; `pending` is an admin-staged tenant not yet first-rooted; `rooted` provisions the
+// console. The gateway register reply only carries `rooted`/`unrooted` (a pending Domain has no
+// gateway to register against); `pending` reaches the app via the blob's `pendingTenant`.
 export const DomainStatusSchema = z.enum(["unrooted", "pending", "rooted"]).meta({ id: "DomainStatus" });
 
 ////////////////////////////////
 //  Channel Reply Schema
 //
 //  Channel-mode conversations are streams: the conversation stays open for the
-//  life of the process, and the agent can reply any number of times. There is
-//  no status because there is no "end". Every reply is just another message in
-//  the stream.
+//  life of the process and the agent can reply any number of times. There is no
+//  status because there is no end.
 
 export const ChannelReplySchema = z
 	.object({
@@ -79,10 +74,10 @@ export { ChannelFileSchema, ChannelFilesSchema } from "./evie-protocol.js";
 ////////////////////////////////
 //  WS Register Schema
 //
-//  Validates the register message at the bridge WebSocket boundary - the one
+//  Validates the register message at the bridge WebSocket boundary, the one
 //  message where a blind-cast team name could key the registry on undefined.
-//  mode stays an open string but every bridge connection is channel mode now;
-//  the handler normalizes it (CLI dispatch was retired with the host split).
+//  mode stays an open string; the handler normalizes it (every connection is
+//  channel mode).
 
 export const WsRegisterSchema = z.object({
 	type: z.literal("register"),
@@ -115,31 +110,26 @@ export const TeamInfoSchema = z
 		// Gateways' identically-named sessions apart. Always stamped by the gateway.
 		gatewayId: z.string(),
 		// The Domain id of the Gateway that owns this session. A gateway id is unique only
-		// within a Domain, so the full (domainId, gatewayId) pair is what addresses a
-		// session unambiguously: two linked friend Domains may run a gateway whose id
-		// collides with the local or each other's. The local listing stamps the local
-		// Domain id; a cross-Domain discovery entry is tagged with the peer's Domain id.
+		// within a Domain, so the full (domainId, gatewayId) pair addresses a session
+		// unambiguously: two linked friend Domains may run a gateway with a colliding id.
 		// Absent when this gateway has not resolved a Domain yet (arming mode); a consumer
 		// then treats the session as belonging to the local Gateway's own Domain.
 		domainId: z.string().optional(),
-		// The friendly display name of the Domain that owns this session, propagated
-		// over the discovery roster so a linked friend Domain shows the owner's self-set label
-		// (e.g. "Carol") instead of a local alias. Null when the Domain has no owner-set label;
-		// consumers fall back to the domainId / a local label.
+		// The friendly display name of the Domain that owns this session, propagated over the
+		// discovery roster so a linked friend Domain shows the owner's self-set label instead
+		// of a local alias. Null when the Domain has no owner-set label.
 		displayName: z.string().nullish(),
-		// True when the Domain that owns this session is the ADMIN's own Domain (the evie-runner
-		// who provisions others). The console reads it on its LOCAL session to decide whether to
-		// show the admin surfaces (hosting guests). Stamped only for the admin Domain (omitted
-		// when false), so consumers treat absence as false.
+		// True when the Domain that owns this session is the admin's own Domain (the evie-runner
+		// who provisions others). The console reads it on its local session to decide whether to
+		// show the admin surfaces. Stamped only for the admin Domain, so absence means false.
 		isAdminDomain: z.boolean().optional(),
 		status: z.enum(["online", "available"]),
 		mode: ConnectionModeSchema.optional(),
 		// loose | devcontainer | console. Always stamped by the gateway.
 		kind: TeamKindSchema,
 		// The plugin version the agent's MCP process reported at register. Absent for
-		// consoles and offline-catalog entries (no plugin process behind them). The
-		// console shows it as a chip only when it differs from the app's own expected
-		// version - a benign, self-correcting lag (the host auto-updates daily).
+		// consoles and offline-catalog entries (no plugin process behind them). The console
+		// shows it as a chip only when it differs from the app's own expected version.
 		version: z.string().optional(),
 		queue_depth: z.number().int().nonnegative(),
 	})
@@ -153,11 +143,10 @@ export const TeamInfoSchema = z
 //  blind-cast it. The console-protocol.ts types derive from these schemas via
 //  z.infer - this file is the single truth for the console wire.
 
-/** The audience a session is shared to: a SPECIFIC linked Domain, or EVERYONE the owner trusts. The
- * `everyone_trusted` target carries NO id - the gateway resolves it at the gate to "any requesting
- * Domain whose owner is in the cross-Domain peer set", so it tracks the live trust set (a newly linked
- * friend is included, an untrusted one drops out) without re-sharing. A share never reaches a Domain
- * the owner has not linked, whichever target. */
+/** The audience a session is shared to: a specific linked Domain, or everyone the owner trusts. The
+ * `everyone_trusted` target carries no id; the gateway resolves it at the gate to any requesting
+ * Domain whose owner is in the cross-Domain peer set, so it tracks the live trust set without
+ * re-sharing. A share never reaches a Domain the owner has not linked. */
 export const CrossDomainShareTargetSchema = z
 	.discriminatedUnion("kind", [
 		z.object({ kind: z.literal("domain"), domainId: z.string().min(1).max(64) }),
@@ -170,29 +159,25 @@ export const ConsoleOpSchema = z
 		z.object({
 			kind: z.literal("register"),
 			// Build identity for server-side observability: the gateway logs these at
-			// register so the admin never has to guess which build (and debug-vs-
-			// release variant) a console is running. Optional + additive: an older console
-			// that omits them still registers.
+			// register so the admin can see which build and variant a console runs.
+			// Optional and additive: an older console that omits them still registers.
 			clientVersion: z.string().max(64).optional(),
 			clientVariant: z.string().max(16).optional(),
 		}),
 		// First-root a PENDING (rootless) Domain at the friend's silently-generated owner key.
-		// A pending Domain has NO gateway, so first-rooting does NOT travel this op: the app
-		// learns it is pending plus the one-time invite nonce from the provisioning blob's
-		// `pendingTenant` (a register reply can never report pending - a sealed register to a
-		// gateway-less pending Domain 503s before any reply), then POSTs the SignedFirstRoot
-		// DIRECTLY to evie's console-bridge firstRoot intake. This gateway-side variant is a
-		// defensive reject: a gateway only exists once the Domain is already rooted, so a
-		// first_root reaching it is rejected (the Domain is past rooting).
+		// A pending Domain has no gateway, so first-rooting does not normally travel this op:
+		// the app reads the pending state plus the invite nonce from the blob's `pendingTenant`
+		// and POSTs the SignedFirstRoot directly to evie's console-bridge firstRoot intake.
+		// This gateway-side variant is a defensive reject: a gateway only exists once the
+		// Domain is already rooted, so a first_root reaching it is past rooting.
 		z.object({ kind: z.literal("first_root"), firstRoot: SignedFirstRootSchema }),
 		z.object({ kind: z.literal("list_teams") }),
 		z.object({
 			kind: z.literal("send"),
 			to: z.string().min(1).max(128),
-			// The Domain id of the target session, present only for a cross-Domain send (a session
-			// from a linked friend Domain). A gateway id is unique only within a Domain, so the
-			// gateway resolves the seal target by the full (domainId, gatewayId) pair when this is
-			// set; absent (or the local Domain) keeps the existing local/cross-Gateway resolution.
+			// The Domain id of the target session, present only for a cross-Domain send. A gateway
+			// id is unique only within a Domain, so the gateway resolves the seal target by the
+			// full (domainId, gatewayId) pair when set; absent keeps local/cross-Gateway resolution.
 			domainId: z.string().min(1).max(64).optional(),
 			request_type: RequestTypeSchema.optional(),
 			effort: z.enum(["simple", "standard", "complex", "auto"]).optional(),
@@ -213,15 +198,13 @@ export const ConsoleOpSchema = z
 			epoch: z.number().int().nonnegative().optional(),
 			holdMs: z.number().int().nonnegative().max(45_000).optional(),
 			// The keyring version the Console last synced; the Gateway returns the snapshot in
-			// the poll reply only when it differs, so the Console stays fresh within one poll
-			// cycle at near-zero steady cost.
+			// the poll reply only when it differs, so the Console stays fresh at near-zero cost.
 			knownDomainVersion: z.string().optional(),
 		}),
-		// Capture an agent's VISIBLE tmux pane for the console terminal view. `target` is the
-		// gateway-qualified session name; the gateway resolves it to the host-agent's own
-		// tmux or a devcontainer and relays to the host daemon. `sinceHash` lets the console
-		// skip an unchanged frame (the result returns unchanged=true with no ansi). (Scrollback
-		// browsing is deferred: a per-request line count would be an unbounded cache/exec key.)
+		// Capture an agent's visible tmux pane for the console terminal view. `target` is the
+		// gateway-qualified session name; the gateway resolves it to the host-agent's own tmux
+		// or a devcontainer and relays to the host daemon. `sinceHash` lets the console skip an
+		// unchanged frame (the result returns unchanged=true with no ansi).
 		z.object({
 			kind: z.literal("peek"),
 			target: z.string().min(1).max(128),
@@ -237,9 +220,9 @@ export const ConsoleOpSchema = z
 			key: z.string().max(32).optional(),
 		}),
 		// Start a new tmux session running a fresh agent on `target` (the host or a devcontainer),
-		// named `sessionName`. The daemon owns the launch command (model/effort/plugin); the console
-		// supplies only the target device + the new session name, so it can never inject a host
-		// command. The session name is slug-validated at the host tmux layer. Idempotent per opId.
+		// named `sessionName`. The daemon owns the launch command; the console supplies only the
+		// target device and the new session name, so it can never inject a host command. The
+		// session name is slug-validated at the host tmux layer. Idempotent per opId.
 		z.object({
 			kind: z.literal("create_session"),
 			target: z.string().min(1).max(128),
@@ -251,12 +234,11 @@ export const ConsoleOpSchema = z
 			kind: z.literal("reload_plugins"),
 			target: z.string().min(1).max(128),
 		}),
-		// Cross-Domain listening-mode handshake (cross-domain-federation.md). These four
-		// ops drive the mutual pairing that links two Gateways owned by DIFFERENT owners.
-		// The owner root key is phone-held, so each side SIGNS its link on the phone; the
-		// Gateway mints/holds the listening window + pin pairing and writes the confirmed
-		// peer. The Console only accepts a request while its listening window is open, so
-		// there is no unsolicited cross-Domain surface.
+		// Cross-Domain listening-mode handshake (cross-domain-federation.md). These ops drive
+		// the mutual pairing that links two Gateways owned by different owners. The owner root
+		// key is phone-held, so each side signs its link on the phone; the Gateway mints the
+		// listening window + pin pairing and writes the confirmed peer. The Console accepts a
+		// request only while its listening window is open, so there is no unsolicited surface.
 
 		// Open a listening window: the Gateway mints a single-use listening token and returns
 		// its own owner + gateway keys for the SAS. The phone shows the token to the other
@@ -299,11 +281,10 @@ export const ConsoleOpSchema = z
 		}),
 		// Poll a receiver's listening window so the receiver phone learns a pairing arrived. The
 		// receiver opens a window with cross_domain_listen, reads the token to the friend, then
-		// calls this on a short interval while on the link screen: the requester drives the
-		// commit-reveal, which lands the pairing on the receiver's window SILENTLY, so this read is
-		// the receiver's only path to the SAS + the friend's keys it must owner-sign a link over.
-		// Read-only: it does not advance or consume the window. An unknown / expired token returns
-		// pairingArrived=false (with expired=true) rather than an error.
+		// calls this on a short interval: the requester drives the commit-reveal, which lands the
+		// pairing on the receiver's window, so this read is the receiver's only path to the SAS
+		// and the friend's keys it must owner-sign a link over. Read-only. An unknown or expired
+		// token returns pairingArrived=false (with expired=true) rather than an error.
 		z.object({
 			kind: z.literal("cross_domain_listen_state"),
 			// The listening token cross_domain_listen minted (names this window).
@@ -318,13 +299,12 @@ export const ConsoleOpSchema = z
 			listeningToken: z.string().optional(),
 			pin: z.string().optional(),
 		}),
-		// Per-session sharing (cross-domain-federation.md). These three ops manage which of
-		// THIS owner's local sessions are offered to a LINKED friend Domain. Checking a share
-		// IS the consent (no double-confirm); the friend's agents may then reach the shared
-		// session. Only devcontainer/loose sessions may be shared - never the host-agent, the
-		// cli host, or a console - which the gateway enforces against its local team registry.
-		// Authenticated by the existing console seal (the frame is opened + the signer verified
-		// before dispatch), so there is no second signature scheme.
+		// Per-session sharing (cross-domain-federation.md). These ops manage which of this
+		// owner's local sessions are offered to a linked friend Domain. Checking a share is the
+		// consent; the friend's agents may then reach the shared session. Only devcontainer and
+		// loose sessions may be shared, never a host-agent or console, enforced against the
+		// local team registry. Authenticated by the existing console seal, so there is no second
+		// signature scheme.
 
 		// Mark a local session shared to an audience (a specific linked Domain, or everyone the owner
 		// trusts). Idempotent on `(sessionTarget, target)`: a re-share refreshes rather than duplicating.
@@ -344,26 +324,25 @@ export const ConsoleOpSchema = z
 		// Read this owner's current shares (so the console can render the share checkmarks).
 		z.object({ kind: z.literal("cross_domain_list_shares") }),
 		// Read the linked friend Domains from the gateway's cross-Domain peer set. Distinct from
-		// discovery: a peer is listed the moment it is linked, regardless of whether its gateway is
-		// online or has shared anything back, so the freshly-linked peer is visible (and its detail
-		// reachable) before any session crosses. Read-only roster; presence comes from discovery.
+		// discovery: a peer is listed the moment it is linked, regardless of whether its gateway
+		// is online, so a freshly-linked peer is visible before any session crosses. Read-only
+		// roster; presence comes from discovery.
 		z.object({ kind: z.literal("cross_domain_list_peers") }),
-		// Unlink a linked friend Domain: drop the LOCAL trust + share state for it (every
-		// peer gateway of that Domain, every share offered to it, and any in-flight job bound
-		// to it). Keyed by `domainId` (a Domain may run more than one gateway), so the whole
-		// Domain is forgotten at once. After this the sealer can no longer resolve that peer,
-		// so outbound seals + inbound opens to it fail closed. The owner's phone separately
-		// owner-signs + submits the link-edge revocation so the Router drops its relay edge.
+		// Unlink a linked friend Domain: drop the local trust and share state for it (every peer
+		// gateway of that Domain, every share offered to it, and any in-flight job bound to it).
+		// Keyed by `domainId`, so the whole Domain is forgotten at once. After this the sealer
+		// can no longer resolve that peer, so seals to it fail closed. The owner's phone
+		// separately owner-signs the link-edge revocation so the Router drops its relay edge.
 		z.object({
 			kind: z.literal("cross_domain_unlink"),
 			// The friend Domain (slug) to unlink.
 			domainId: z.string().min(1).max(64),
 		}),
-		// Untrust a PERSON by owner key: drop the LOCAL trust + share state for EVERY peer Gateway owned
-		// by that owner (across all their Domains) + every share to those Domains - the owner-keyed sibling
-		// of cross_domain_unlink (which forgets one Domain at a time). Console-sealed auth (an admitted
-		// console of this owner's Domain). The phone separately owner-signs the untrust tombstone for the
-		// Router-side relay-edge revoke; this op is the local-state half.
+		// Untrust a person by owner key: drop the local trust and share state for every peer
+		// Gateway owned by that owner (across all their Domains) plus every share to those
+		// Domains, the owner-keyed sibling of cross_domain_unlink. Console-sealed auth. The
+		// phone separately owner-signs the untrust tombstone for the Router-side relay-edge
+		// revoke; this op is the local-state half.
 		z.object({
 			kind: z.literal("cross_domain_untrust"),
 			// The friend OWNER's raw Ed25519 signing key (base64) to forget.
@@ -392,15 +371,15 @@ export const ConsoleRelayFrameSchema = z
 		type: z.literal("console_relay"),
 		v: z.number().int().positive(),
 		opId: z.string().min(1).max(128),
-		// The console's raw Ed25519 signing public key (base64). Selects the key the
-		// gateway verifies the seal against, then checked against the owner-signed
-		// allowlist (must be an admitted kind:console subject). Cleartext: it is a
-		// public key, not a secret. conversationId + device + the op move INSIDE the
-		// seal, so evie sees only this opaque blob - it cannot read or forge the op.
+		// The console's raw Ed25519 signing public key (base64). Selects the key the gateway
+		// verifies the seal against, then checked against the owner-signed allowlist (must be an
+		// admitted kind:console subject). Cleartext because it is a public key, not a secret.
+		// conversationId, device, and the op move inside the seal, so evie sees only this opaque
+		// blob and cannot read or forge the op.
 		signerSignPub: z.string().min(1),
-		// The Gateway this op targets, so evie routes per-target under direct multi-gateway
-		// routing (the Console seals to each Gateway directly). Plaintext routing metadata, like
-		// signerSignPub; absent falls back to evie's latest-Gateway routing (single-gateway).
+		// The Gateway this op targets, so evie routes per-target (the Console seals to each Gateway
+		// directly). Plaintext routing metadata, like signerSignPub; absent falls back to evie's
+		// latest-Gateway routing.
 		targetGateway: z.string().optional(),
 		sealed: SealedEnvelopeSchema,
 	})
@@ -498,14 +477,10 @@ export const ConsoleRegisterResultSchema = z
 		// Mailbox instance id. If it differs from the console's stored epoch, the
 		// mailbox was recreated and the console must reset its cursor to 0.
 		epoch: z.number().int().nonnegative(),
-		// Whether this console's Domain is rooted yet, as the connected gateway sees it. A
-		// gateway only exists for a Domain that is already past rooting, so this register reply
-		// only ever reports `rooted` (or `unrooted` for a fresh, never-provisioned admin Domain); it can
-		// NEVER report `pending`, because a pending Domain has no gateway to register against. The
-		// pending case is learned earlier, from the provisioning blob's `pendingTenant`, and the
-		// app first-roots DIRECTLY against evie. Absent until this gateway completes its own
-		// evie register (the value comes from evie's snapshot); the app then treats the Domain
-		// as already rooted.
+		// Whether this console's Domain is rooted yet, as the connected gateway sees it. A gateway
+		// only exists for a Domain past rooting, so this reply reports only `rooted` (or `unrooted`
+		// for a fresh admin Domain), never `pending`. Absent until this gateway completes its own
+		// evie register; the app then treats the Domain as already rooted.
 		domainStatus: DomainStatusSchema.optional(),
 	})
 	.meta({ id: "ConsoleRegisterResult" });
@@ -636,11 +611,10 @@ export const CrossDomainCancelResultSchema = z
 	.meta({ id: "CrossDomainCancelResult" });
 
 // The receiver's view of its listening window (the cross_domain_listen_state poll). Before a
-// pairing arrives it carries only pairingArrived=false (+ the window's expiry, or expired=true
+// pairing arrives it carries only pairingArrived=false (plus the window's expiry, or expired=true
 // once the window is gone). Once the requester's commit-reveal lands the pairing, it carries the
-// SAS the receiver computed (the same 6-digit value the requester sees) plus the friend's keys
-// the receiver phone must owner-sign its link over: the four friend* keys + the friend Domain /
-// Gateway ids. The phone transitions to the type-the-code compare on pairingArrived.
+// SAS the receiver computed plus the friend's keys the receiver phone must owner-sign its link
+// over. The phone transitions to the type-the-code compare on pairingArrived.
 export const CrossDomainListenStateResultSchema = z
 	.object({
 		// True once a requester paired against this window (the SAS + friend keys are then present).
@@ -792,17 +766,15 @@ export const ConsoleRelayReplySchema = z
 ////////////////////////////////
 //  Provisioning Schema
 //
-//  The blob the user pastes at console setup. Credentials + endpoints only;
-//  user taste lives in prefs. Runtime defaulting stays app-side (device from
-//  Build.MODEL, conversationId minting a UUID, trimEnd('/') URL normalization)
-//  - the schema carries the shape, the Kotlin wrapper owns those behaviors.
+//  The blob the user pastes at console setup. Credentials and endpoints only.
+//  Runtime defaulting stays app-side (device from Build.MODEL, conversationId
+//  minting a UUID, URL normalization); the schema carries only the shape.
 
 // The pending-Domain discriminator carried inside a provisioning blob. Present iff the blob is
-// for a PENDING (unrooted) Domain - both a friend invite AND the admin's own fresh
-// (R1) setup. A pending Domain has no gateway, so the app cannot learn it is pending from a
-// register reply; it reads this off the blob and first-roots DIRECTLY against evie with the
-// nonce. Absent for a re-provision of an already-rooted Domain (which just provisions the
-// console). Named (.meta id) so the codegen emits it as a nested Kotlin class.
+// for a pending (unrooted) Domain, both a friend invite and the admin's own fresh setup. A
+// pending Domain has no gateway, so the app cannot learn it is pending from a register reply;
+// it reads this off the blob and first-roots directly against evie with the nonce. Absent for a
+// re-provision of an already-rooted Domain. Named (.meta id) so the codegen emits a nested class.
 export const PendingTenantRefSchema = z
 	.object({
 		// The opaque pending Domain id the friend's first_root roots.
@@ -839,11 +811,10 @@ export const ProvisioningSchema = z
 		port: z.number().int().positive().optional(),
 		device: z.string().optional(),
 		conversationId: z.string().optional(),
-		// Set only for a PENDING (unrooted) Domain blob (a friend invite or the admin's own
-		// fresh admin Domain setup): the pending Domain id + the one-time invite nonce. Its presence is
-		// the discriminator - the app first-roots (POSTs the SignedFirstRoot to evie with this
-		// nonce) iff it is present, else it just provisions the console. Absent for a re-provision
-		// of an already-rooted Domain.
+		// Set only for a pending (unrooted) Domain blob (a friend invite or the admin's own fresh
+		// setup): the pending Domain id plus the one-time invite nonce. Its presence is the
+		// discriminator: the app first-roots iff it is present, else it just provisions the
+		// console. Absent for a re-provision of an already-rooted Domain.
 		pendingTenant: PendingTenantRefSchema.optional(),
 		// Present only on an ADMIN-ENROLL invite blob: the seed for the in-person mutual 6-digit
 		// compare the friend runs AFTER first-root (see EnrollHandshakeRef). Absent for a plain
@@ -884,7 +855,7 @@ export type GatewayBootstrapBundle = z.infer<typeof GatewayBootstrapBundleSchema
 //
 //  What the Console POSTs to the Gateway's LAN listener (or hands over as paste). The
 //  Gateway verifies the seal against `signerSignPub`, opens it with its box key, then
-//  pins the owner key from the enclosed snapshot - trust-on-first-use gated by the SAS
+//  pins the owner key from the enclosed snapshot. Trust-on-first-use gated by the SAS
 //  the human confirmed, the one-time nonce, and LAN proximity.
 
 export const GatewayBootstrapFrameSchema = z

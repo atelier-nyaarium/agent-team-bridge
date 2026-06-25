@@ -58,8 +58,7 @@ function v2Secret() {
 ////////////////////////////////
 //  Tests
 //
-//  displayName + slice fixtures shared by the pendingAdminDomain / readAdminDomain blocks,
-//  which cover the live fresh-vs-reprovision flow.
+//  displayName + slice fixtures shared by the pendingAdminDomain / readAdminDomain blocks.
 
 interface SliceWithName {
 	ownerSignPub: string | null;
@@ -110,9 +109,8 @@ describe("pendingAdminDomain (the fresh-setup pending admin slice)", () => {
 	});
 
 	it("mints the invite nonce as STANDARD base64 (not base64url - the wire field is a b64Field)", () => {
-		// randomBytes(18).toString("base64") is the byte-identical mint evie uses, and it must pass
-		// the b64Field charset that the first_root wire `nonce` enforces. A base64url nonce carrying
-		// -/_ would fail this, reintroducing the Phase 3 bug.
+		// The nonce must pass the b64Field charset the first_root wire `nonce` enforces; a base64url
+		// nonce carrying -/_ would fail it.
 		expect(b64Field().safeParse(NONCE).success).toBe(true);
 		expect(NONCE).not.toMatch(/[-_]/);
 	});

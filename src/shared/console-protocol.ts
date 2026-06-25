@@ -27,9 +27,8 @@ import type {
 	MailboxEntrySchema,
 	SealedEnvelopeSchema,
 } from "./schemas.js";
-// The session-id grammar constants are OWNED by session-id.ts now; imported for
-// the wire helpers below and re-exported so existing importers of this module
-// (codegen, host-id, un-migrated callers) keep resolving from here.
+// The session-id grammar constants are owned by session-id.ts; imported for the
+// wire helpers below and re-exported so existing importers keep resolving here.
 import { CONV_SESSION_PREFIX, GATEWAY_QUALIFIER_SEP, NOTICE_SESSION_PREFIX } from "./session-id.js";
 
 export { CONV_SESSION_PREFIX, GATEWAY_QUALIFIER_SEP, NOTICE_SESSION_PREFIX };
@@ -38,14 +37,12 @@ export { CONV_SESSION_PREFIX, GATEWAY_QUALIFIER_SEP, NOTICE_SESSION_PREFIX };
 //  Console bridge protocol
 //
 //  The Android app reaches the gateway through evie, which relays opaque
-//  envelopes between the console connection and the existing gateway<->evie
-//  WebSocket. Evie understands none of these shapes; it pipes by (device, opId).
-//  All console/chat semantics live in the gateway.
+//  envelopes by (device, opId) and understands none of these shapes. All
+//  console/chat semantics live in the gateway.
 //
-//  The wire SHAPES live as zod schemas in shared/schemas.ts (the single
-//  truth); this module derives the TS types from them and owns the protocol
-//  CONSTANTS and session-id grammars. The Kotlin side consumes generated
-//  types + constants from scripts/codegen-kotlin.ts.
+//  The wire shapes are zod schemas in shared/schemas.ts; this module derives
+//  the TS types from them and owns the protocol constants and session-id
+//  grammars. The Kotlin side consumes generated types from codegen-kotlin.ts.
 
 export const CONSOLE_PROTOCOL_VERSION = 1;
 
@@ -158,14 +155,11 @@ export function parseConvSessionTeam(sessionId: string): string | null {
 ////////////////////////////////
 //  Gateway qualification
 //
-//  A session's address is host-qualified as `<gatewayId>/<name>` so the console (and,
-//  in later federation phases, evie) can tell two Gateways' identically-named
-//  sessions apart. A BARE name (no separator) resolves to the local Gateway: the
-//  gateway canonicalizes an inbound target to the qualified form before keying
-//  the channel job, and the console normalizes a bare name off the wire to its
-//  connected Gateway. The separator is emitted into the generated Kotlin so the
-//  console never hand-mirrors it. Gateway ids and local names never contain the
-//  separator, so the FIRST separator splits Gateway id from name unambiguously.
+//  A session's address is host-qualified as `<gatewayId>/<name>` so two Gateways'
+//  identically-named sessions stay distinct. A bare name (no separator) resolves
+//  to the local Gateway. The separator is emitted into the generated Kotlin so
+//  the console never hand-mirrors it. Gateway ids and local names never contain
+//  the separator, so the FIRST separator splits Gateway id from name unambiguously.
 
 /** Qualify a bare local name under a Gateway id; a name that is already qualified
  * (contains the separator) is returned unchanged. */

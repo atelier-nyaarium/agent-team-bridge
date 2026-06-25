@@ -46,12 +46,10 @@ import kotlinx.coroutines.launch
 //  The Link pairing ceremony (the both-present cross-Domain handshake)
 
 /**
- * The mutual link ceremony, a transient overlay (leaving it cancels the pairing windows, so
- * there is no passive cross-Domain surface). Both owners coordinate however works (text, etc).
- * The flow is a clean two-step: a RENDEZVOUS (one owner shares a code, the other enters it) then
- * a VERIFY (both compute a safety code; each TYPES the code the other sends, and Confirm unlocks
- * ONLY on an exact local match - the anti-MITM gate). Either owner can be the one who shares or
- * the one who enters.
+ * The mutual link ceremony, a transient overlay (leaving it cancels the pairing windows, so there
+ * is no passive cross-Domain surface). Two steps: a RENDEZVOUS where one owner shares a code and
+ * the other enters it, then a VERIFY where both compute a safety code and each types the code the
+ * other sends. Confirm unlocks only on an exact local match, the anti-MITM gate.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,30 +60,27 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 	var role by remember { mutableStateOf<LinkRole?>(null) }
 	var step by remember { mutableStateOf<LinkStep>(LinkStep.Rendezvous) }
 
-	// Receiver: the open listening window (token + my keys + expiry), and the pairing once a
-	// requester lands (learned by polling the gateway's listen-state).
+	// Receiver: the open listening window, and the pairing once a requester lands (via listen-state poll).
 	var listening by remember { mutableStateOf<CrossDomainListenResult?>(null) }
 	var receiverPairing by remember { mutableStateOf<CrossDomainReceiverPairing?>(null) }
 	// Requester: the friend's listening token (entered) and the pairing once the exchange runs.
 	var enteredToken by remember { mutableStateOf("") }
 	var pairing by remember { mutableStateOf<CrossDomainPairing?>(null) }
-	// The owner-link nonce, pinned for the life of this pairing so a confirm retry reuses the
-	// same signed link bytes.
+	// Pinned for the life of this pairing so a confirm retry reuses the same signed link bytes.
 	val linkNonce = remember { repo.freshLinkNonce() }
 
 	var typed by remember { mutableStateOf("") }
 	var busy by remember { mutableStateOf(false) }
 	var note by remember { mutableStateOf("") }
 
-	// Leaving the screen (back or Cancel) closes the pairing windows on the gateway so a stale
-	// request cannot complete after the owner walked away. Fires once on dispose.
+	// Leaving the screen closes the pairing windows on the gateway so a stale request cannot
+	// complete after the owner walked away.
 	androidx.compose.runtime.DisposableEffect(Unit) {
 		onDispose {
 			val tok = listening?.listeningToken
 			val pin = pairing?.pin
-			// Closing the pairing windows must outlive this leaving composable, so it runs on a
-			// detached scope (best-effort fire-and-forget). The gateway also sweeps on its TTL, so a
-			// dropped cancel is bounded, never a leaked listening window.
+			// The close must outlive this composable, so it runs on a detached scope. The gateway
+			// also sweeps on its TTL, so a dropped cancel is bounded.
 			if (tok != null || pin != null) {
 				@Suppress("OPT_IN_USAGE")
 				kotlinx.coroutines.GlobalScope.launch { runCatching { repo.crossDomainCancel(tok, pin) } }
@@ -97,10 +92,9 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 		step = LinkStep.Failed(reason)
 	}
 
-	// RECEIVER poll: while the listening window is open and we are still on the rendezvous step,
-	// poll the gateway for the pairing the requester drives in SILENTLY. On arrival, stash the
-	// friend keys + SAS and transition to the verify (type-the-code) step - the receiver's only
-	// path out of "awaiting request". Keyed by the token so a fresh listen restarts the loop.
+	// RECEIVER poll: while the listening window is open on the rendezvous step, poll the gateway
+	// for the requester's pairing. On arrival, stash the friend keys + SAS and move to verify.
+	// Keyed by the token so a fresh listen restarts the loop.
 	val openToken = listening?.listeningToken
 	LaunchedEffect(openToken, step) {
 		if (role != LinkRole.RECEIVER || openToken == null || step !is LinkStep.Rendezvous) return@LaunchedEffect
@@ -179,9 +173,9 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 					onConfirm = {
 						busy = true
 						scope.launch {
-							// Each owner confirms INDEPENDENTLY with its OWN signed link side (Model A):
-							// the requester signs over the receiver keys from its request pairing; the
-							// receiver signs over the friend keys it learned from the listen-state poll.
+							// Each owner confirms independently with its own signed link side: the requester
+							// signs over the receiver keys from its request pairing; the receiver signs over
+							// the friend keys it learned from the listen-state poll.
 							val confirm: Result<ConfirmOutcome> = when (role) {
 								LinkRole.REQUESTER -> {
 									val p = pairing
@@ -201,10 +195,9 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 
 								null -> Result.failure(IllegalStateException("No role selected; start over."))
 							}
-							// The local peer write succeeded on a success; the edge submit may still have been
-							// rejected by the Router (RelayEdgeRejected), in which case the peer is linked
-							// locally but cross-Domain sends stay denied - surface that distinct state with a
-							// retry rather than a false "Linked".
+							// On success the local peer write landed, but the edge submit may still have been
+							// rejected by the Router (RelayEdgeRejected): linked locally, cross-Domain sends
+							// denied. Surface that distinct state with a retry rather than a false "Linked".
 							confirm
 								.onSuccess { outcome ->
 									step = when (outcome) {
@@ -368,9 +361,9 @@ private fun DonePanel(onDone: () -> Unit) {
 	Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Done") }
 }
 
-/** The trust is written locally, but the Router did not authorize the relay edge, so cross-Domain
- * sends to this peer would be denied. Offer a one-tap retry of JUST the edge (idempotent at the
- * Router, no unlink+relink). Closing leaves the peer linked locally; the user can retry later. */
+/** Trust is written locally, but the Router did not authorize the relay edge, so cross-Domain sends
+ * would be denied. Retry just the edge (idempotent at the Router, no unlink+relink). Closing leaves
+ * the peer linked locally; the user can retry later. */
 @Composable
 private fun LinkedNoRelayPanel(busy: Boolean, note: String, onRetry: () -> Unit, onDone: () -> Unit) {
 	Text("Linked locally - relay not authorized", style = MaterialTheme.typography.titleLarge)
@@ -413,8 +406,8 @@ private fun FailedPanel(reason: String, onRestart: () -> Unit, onClose: () -> Un
 ////////////////////////////////
 //  Bits
 
-// Copy a code to the clipboard so the owner can paste it into a text. Copies the raw value
-// (no spacing) so it pastes cleanly; the displayed CodeBlock keeps the grouped/spaced form.
+// Copies the raw value (no spacing) so it pastes cleanly; the displayed CodeBlock keeps the
+// grouped/spaced form.
 @Composable
 private fun CopyButton(value: String) {
 	val clipboard = LocalClipboard.current
@@ -427,8 +420,7 @@ private fun CopyButton(value: String) {
 ////////////////////////////////
 //  Helpers
 
-// How often the receiver polls the gateway for the pairing the requester drives. A short cadence
-// (the requester's exchange completes in one round trip) without hammering the relay.
+// How often the receiver polls the gateway for the requester's pairing.
 private const val LISTEN_POLL_MS = 2000L
 
 // Busy / InfoSurface / grouped are shared with the enroll ceremony (Federation.kt).

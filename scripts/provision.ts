@@ -1,27 +1,21 @@
 // Admin setup - the single bootstrap for this machine's gateway and the owner's Console. It
-// configures + enrolls the gateway, roots the owner's own Domain, and emits the bridge blob the
-// owner's Console imports. Driven by provision-admin-domain.sh, a thin launcher that execs this.
+// configures + enrolls the gateway and emits the bridge blob the owner's Console imports. Driven by
+// provision-admin-domain.sh, a thin launcher that execs this.
 //
 //   (no args)            interactive menu: set up this gateway, provision the admin Domain, or purge.
 //                        Non-TTY runs Provision direct.
 //   --gateway-transport  move the local Gateway off port-forward onto the service-proxy WS (run
 //                        AFTER validating WS-over-proxy on this cluster).
 //   --qr                 re-open the enrollment-QR menu for the current blob.
-//   --verify             health-probe the bridge + report what is / is not set up.
+//   --verify             health-probe the bridge.
 //   --help
 //
-// Phone-anchored trust: the Domain ROOT private key is generated SILENTLY on the Console and never
-// reaches the host, so this script never holds, prompts for, or roots with the owner key. Provision
-// is a fresh-vs-reprovision state machine keyed on whether the admin Domain is already rooted in
-// evie's federation Secret:
-//   - FRESH (admin Domain absent / unrooted): the trusted host bootstrap (direct Secret access) pre-stages
-//     the admin Domain as a PENDING tenant - an display name the admin types + a one-time invite
-//     nonce, no owner root - and emits a transport-ONLY blob carrying `pendingTenant`. The admin's
-//     phone reads it and first-roots the admin Domain at its silent owner key, exactly like a friend.
-//   - RE-PROVISION (admin Domain already rooted): skip staging; emit the blob only (no `pendingTenant`),
-//     preserving the existing display name.
-// The blob is transport-only (cluster creds; no identity, no Gateway keys). The Console generates its
-// own identity, admits itself, and admits each Gateway afterward.
+// The Domain ROOT private key is generated on the Console and never reaches the host, so this script
+// never holds, prompts for, or roots with the owner key. Provision branches on whether the admin
+// Domain is already rooted in evie's federation Secret: a fresh (absent/unrooted) Domain is pre-staged
+// as a PENDING tenant (display name + one-time invite nonce, no owner root) and the blob carries
+// `pendingTenant` so the phone first-roots on scan; an already-rooted Domain skips staging and emits
+// the blob only. The blob is transport-only (cluster creds; no identity, no Gateway keys).
 
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -442,15 +436,12 @@ async function readEvieFed(): Promise<string> {
 	return evieFed;
 }
 
-/** Pre-stage the admin Domain as a PENDING tenant (fresh setup): an display name + a one-time
- * invite nonce, NO owner root. The admin's phone first-roots it on scan at its silently-generated
- * owner key (the same root-on-connect path a friend takes). Writes evie's federation Secret directly
- * (the trusted host bootstrap has Secret access, so it pre-stages the admin Domain without an admin
- * signature - unlike the phone's admin-signed provision_tenant for FRIEND tenants). Returns the
- * minted invite nonce so the caller emits it in the blob's `pendingTenant`. */
+/** Pre-stage the admin Domain as a PENDING tenant (display name + one-time invite nonce, no owner
+ * root); the admin's phone first-roots it on scan at its silent owner key. Writes evie's federation
+ * Secret directly: the trusted host bootstrap has Secret access, so it stages without an admin
+ * signature, unlike the phone's admin-signed provision_tenant for friend tenants. Returns the nonce. */
 async function stageAdminPending(evieFed: string, adminDomainId: string): Promise<{ nonce: string }> {
-	// The owner's display name: from the environment for a scripted run, else
-	// prompted (D3). It is the same label the admin would type when hosting a friend.
+	// The owner's display name: from the environment for a scripted run, else prompted.
 	let displayName = (process.env.SB_DISPLAY_NAME ?? "").trim();
 	if (!displayName) {
 		if (!process.stdin.isTTY) {
@@ -490,10 +481,9 @@ async function stageAdminPending(evieFed: string, adminDomainId: string): Promis
 }
 
 /** Pull the console-bridge cluster creds into a TRANSPORT-ONLY provisioning blob (no identity, no
- * Gateway keys - the Console owns those). Also packs the gateway-bridge creds so the Console can
- * seal a bootstrap bundle for a creds-less Gateway it admits. `pendingTenant` is set only for a
- * fresh pending admin Domain (the admin domainId + the minted invite nonce), so the app first-roots
- * on scan; omitted for a re-provision of an already-rooted Domain (just provisions the console). */
+ * Gateway keys - the Console owns those). `pendingTenant` is set only for a fresh pending admin
+ * Domain (the admin domainId + the minted invite nonce) so the app first-roots on scan; omitted for
+ * a re-provision of an already-rooted Domain. */
 async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Promise<void> {
 	const { saToken, caPem } = await readSaCreds("console-bridge-proxy-token");
 	if (!saToken || !caPem) throw new Error("console-bridge SA token not ready yet - re-run in a few seconds");
@@ -506,14 +496,14 @@ async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Pr
 	);
 	const apiUrl = await clusterApiUrl();
 
-	// The gateway-bridge transport (the proxy SA token + CA) is NOT staged on the Gateway or carried
-	// in the blob anymore. The Console pulls it from evie on demand (a signed TRANSPORT_REQUEST_V1
-	// proof) when enrolling a creds-less Gateway, so a QR-sized blob fits and evie holds the one copy.
+	// The gateway-bridge transport (the proxy SA token + CA) is NOT in the blob. The Console pulls it
+	// from evie on demand (a signed TRANSPORT_REQUEST_V1 proof) when enrolling a creds-less Gateway,
+	// so a QR-sized blob fits and evie holds the one copy.
 
 	// writeProvisioningBlob VALIDATES against the shared ProvisioningSchema before writing, so a
 	// field drift fails loudly here, not silently on the device.
-	// NOTE: sttsUrl/sttsKey are NOT emitted. Voice creds are device-owned now (entered in the app's
-	// Voice settings, persisted on the phone), so a re-provision never wipes voice; do not re-add them.
+	// sttsUrl/sttsKey are NOT emitted: voice creds are device-owned (entered in the app's Voice
+	// settings, persisted on the phone), so a re-provision never wipes voice. Do not re-add them.
 	await writeProvisioningBlob(
 		{ apiUrl, caPem, saToken, appToken, namespace: NS, service: SERVICE, port: PORT, pendingTenant },
 		BLOB_FILE,
@@ -601,10 +591,9 @@ async function verify(): Promise<void> {
 ////////////////////////////////
 //  QR menu
 
-/** The blob, validated to fit a single QR. The gateway-bridge transport creds (the bulky half of
- * the old blob) are now pulled from evie on demand by the Console, not bundled, so the blob sits
- * well under a QR's ~2.9 KB ceiling. This guards against a future field pushing it over with a
- * clear error instead of qrcode-generator's raw overflow. */
+/** The blob, validated to fit a single QR. The gateway-bridge transport creds are pulled from evie
+ * on demand, not bundled, so the blob sits well under a QR's ~2.9 KB ceiling. Guards against a future
+ * field pushing it over with a clear error instead of qrcode-generator's raw overflow. */
 function qrPayload(blobText: string): string {
 	if (!fitsInQr(blobText)) {
 		throw new Error(`blob is ${blobText.length} bytes - too large for a QR; use paste or file import`);
@@ -693,10 +682,9 @@ async function evieDelete(mutate: (fedJson: string) => string): Promise<void> {
 }
 
 /** The fresh-vs-reprovision state machine. After the cluster cutover it reads evie's admin Domain
- * slice: a FRESH (absent / unrooted) admin Domain is pre-staged as a PENDING tenant (display name + a
- * one-time invite nonce) and the blob carries `pendingTenant` so the admin's phone first-roots on
- * scan at its silent owner key; an already-ROOTED admin Domain skips staging and emits the blob ONLY,
- * preserving the existing display name. Then it verifies the bridge path either way. */
+ * slice: a fresh (absent/unrooted) Domain is pre-staged as a PENDING tenant and the blob carries
+ * `pendingTenant` so the phone first-roots on scan; an already-rooted Domain skips staging and emits
+ * the blob only. Verifies the bridge path either way. */
 async function provision(): Promise<void> {
 	await cutover();
 	const evieFed = await readEvieFed();

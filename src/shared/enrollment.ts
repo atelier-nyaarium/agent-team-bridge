@@ -1,4 +1,4 @@
-// SYNC-HASH: 1952137769945c6969b74d91c9aa431b
+// SYNC-HASH: fa32be206216ed1c7d2ebb86e05658ee
 // SYNCED MODULE - source of truth: switchboard/src/shared/enrollment.ts
 // Copied verbatim into: evie-bot/app/features/bridge/enrollment.ts
 // MUST re-copy on change: cp src/shared/enrollment.ts ../evie-bot/app/features/bridge/enrollment.ts
@@ -103,12 +103,10 @@ export const SignedXDomainLinkEdgeSchema = z
 	.meta({ id: "SignedXDomainLinkEdge" });
 
 /** The owner-signed revocation of a cross-Domain link edge: it withdraws the owner's
- * attestation that traffic from its Domain (`srcDomainId`) may relay to a friend Domain
- * (`dstDomainId`). evie drops every matching edge for the pair, so its relay-affinity gate
- * refuses the cross-Domain `gateway_relay` again. Content-blind: it names only the two
- * Domain ids, never a session or a key, and both ids are slug-constrained so neither can
- * carry a newline that would make the signing bytes ambiguous against the other. The shape
- * mirrors the edge it revokes plus the admission Revocation's revoke-time/nonce fields. */
+ * attestation that traffic from `srcDomainId` may relay to `dstDomainId`. evie drops every
+ * matching edge for the pair, so its relay-affinity gate refuses the cross-Domain
+ * `gateway_relay` again. Content-blind and slug-constrained like the edge it revokes; the
+ * shape adds the admission Revocation's revoke-time/nonce fields. */
 export const XDomainLinkRevocationSchema = z
 	.object({
 		srcDomainId: z
@@ -139,36 +137,24 @@ export const SignedXDomainLinkRevocationSchema = z
 ////////////////////////////////
 //  Friend cross-Domain onboarding (pending tenant + first-root + display name)
 //
-//  The admin pre-stages a friend's Domain as a PENDING tenant (a domainId + an
-//  displayName display label, NO owner root), mints a one-time invite QR carrying
-//  the pending-Domain transport creds, and the friend's app FIRST-ROOTS the Domain at
-//  its silently-generated owner key on first connect. The four signing artifacts below
-//  ride the existing app-token-gated bridge to evie:
+//  The admin pre-stages a friend's Domain as a PENDING tenant (a domainId + a
+//  displayName label, NO owner root) and mints a one-time invite QR; the friend's app
+//  first-roots the Domain at its silently-generated owner key on first connect. The
+//  signing artifacts below ride the app-token-gated bridge to evie:
 //
-//  - provision_tenant / remove_tenant: ADMIN-signed (the admin's owner key). evie
-//    creates / drops the pending tenant.
+//  - provision_tenant / remove_tenant: ADMIN-signed. evie creates / drops the pending tenant.
 //  - first_root: SELF-signed by the friend's fresh owner key (no admission exists yet),
-//    carrying the one-time QR nonce; evie roots the pending Domain at it, idempotent on
-//    the same key, refusing a re-root at a different key.
-//  - set_display_name: OWNER-signed (the rooted owner of the Domain); evie CAS-merges
-//    the rename onto the Domain record and pushes it to the Domain's own gateways (so the
-//    owner's gateway reflects it at once); linked Peers see it on their next discovery refresh.
+//    carrying the one-time QR nonce; evie roots the pending Domain at it, idempotent on the
+//    same key, refusing a re-root at a different key.
+//  - set_display_name: OWNER-signed; evie CAS-merges the rename and pushes it to the Domain's
+//    own gateways, while linked Peers see it on their next discovery refresh.
 //
-//  Each signing-bytes preimage is the SAME versioned, newline-joined, fixed-order
-//  encoding as admissionSigningBytes: the slug-constrained `domainId` (the
-//  sanitizeDomainId output) and the grouped-hex `fingerprint(...)` / base64 `nonce` /
-//  decimal `issuedAt` fields can never contain a newline, so the encoding is unambiguous
-//  and reproduces byte-for-byte on switchboard, evie, and Android. These ops ENFORCE that
-//  claim at the schema boundary: every key field is base64-charset (`ownerSignPub`,
-//  `ownerBoxPub`, `nonce`, the `signature`), slug (`domainId`), or decimal (`issuedAt`),
-//  and `displayName` is constrained newline-free, so no field can carry a newline that
-//  would make the encoding ambiguous against the next. `displayName` is a free-text
-//  display label bounded only in length and the no-newline rule; under the cooperative /
-//  trusted-friends threat model (no attacker, names are shared team-style) it carries no
-//  trust weight, so its content cannot forge a different admin/owner identity, only
-//  re-spell the label the same admin chose. evie's first_root / provision handlers MUST
-//  read each value from the PARSED object, never by re-splitting the signed preimage. Do
-//  NOT sign raw JSON (key order is not canonical).
+//  Each preimage is the SAME versioned, newline-joined, fixed-order encoding as
+//  admissionSigningBytes, and every field is base64, slug, decimal, or a newline-free
+//  display string, so no field can carry a newline that makes the encoding ambiguous.
+//  `displayName` carries no trust weight under the cooperative threat model (it cannot
+//  forge an identity, only re-spell the label). Handlers MUST read each value from the
+//  PARSED object, never by re-splitting the preimage. Do NOT sign raw JSON.
 
 /** A pending (rootless) tenant the admin pre-stages: a domainId + an displayName
  * display label, the one-time invite nonce (issuedAt + ttlMs server-checked at evie),
@@ -258,10 +244,8 @@ export const SignedFirstRootSchema = z
 	.meta({ id: "SignedFirstRoot" });
 
 /** The owner's request to rename their Domain's display name (owner-signed). evie CAS-merges
- * it and pushes a domain_update to the renamed Domain's OWN gateways, so the rename takes effect
- * on the owner's own gateway immediately (its discover output reflects the new name without a
- * reconnect). Linked Peers pick the rename up lazily, on their next discovery refresh (which
- * stamps each session with the owner's current displayName). */
+ * it and pushes a domain_update to the Domain's OWN gateways, so the rename is immediate there;
+ * linked Peers pick it up lazily on their next discovery refresh. */
 export const SetDisplayNameSchema = z
 	.object({
 		domainId: slugField(),
@@ -300,12 +284,11 @@ export const EnrollOpSchema = z
 		z.object({ kind: z.literal("submit_revocation"), revocation: SignedRevocationSchema }),
 		z.object({ kind: z.literal("submit_xdomain_link"), edge: SignedXDomainLinkEdgeSchema }),
 		z.object({ kind: z.literal("revoke_xdomain_link"), revocation: SignedXDomainLinkRevocationSchema }),
-		// Friend cross-Domain onboarding: the admin pre-stages a pending tenant
-		// (provision_tenant) or drops it (remove_tenant), and the rooted owner renames their
-		// display name (set_display_name). The friend's first_root is NOT on this enroll surface
-		// either: a pending Domain has no gateway, so the friend's app POSTs the SignedFirstRoot
-		// DIRECTLY to evie's console-bridge firstRoot intake (it carries no admission to
-		// authenticate here pre-root, and the one-time invite nonce is its authorization).
+		// Friend cross-Domain onboarding: the admin stages (provision_tenant) or drops
+		// (remove_tenant) a pending tenant, and the rooted owner renames it (set_display_name).
+		// first_root is NOT on this surface: a pending Domain has no gateway, so the friend's app
+		// POSTs the SignedFirstRoot DIRECTLY to evie's console-bridge firstRoot intake (no
+		// admission exists yet pre-root; the one-time invite nonce is its authorization).
 		z.object({ kind: z.literal("provision_tenant"), provision: SignedProvisionTenantSchema }),
 		z.object({ kind: z.literal("remove_tenant"), removal: SignedRemoveTenantSchema }),
 		z.object({ kind: z.literal("set_display_name"), rename: SignedSetDisplayNameSchema }),
@@ -383,15 +366,14 @@ export const EnrollHandshakeResultSchema = z
 ////////////////////////////////
 //  Cross-tenant roster (the "Users" surface: everyone on this evie, name + presence)
 //
-//  The Users surface unifies a network's members into one list. evie is the source of truth (the
-//  per-Domain display names + owners are in its Secret; presence is its live gateway-connection table). The
-//  visibility model is Q1=A "full roster": every member on this evie is visible to every other
-//  member, non-transitive (the roster never reaches a member's linked peers). So the request only
-//  AUTHENTICATES the caller as some member of this evie (a console admitted in one of its Domains) -
-//  there is no per-row visibility predicate. A row carries the owner identity + display name +
-//  presence ONLY: NO gatewayId and NO box key, so a row is never a seal/probe handle (the trust
-//  ceremony resolves a target's gateway server-side); the phone derives the fingerprint from
-//  ownerSignPub. evie OPAQUE-REJECTS a caller it cannot place in a Domain.
+//  evie is the source of truth (per-Domain display names + owners in its Secret; presence is its
+//  live gateway-connection table). The visibility model is a full roster: every member on this evie
+//  is visible to every other member, non-transitive (the roster never reaches a member's linked
+//  peers). So the request only AUTHENTICATES the caller as some member of this evie (a console
+//  admitted in one of its Domains); there is no per-row visibility predicate. A row carries the
+//  owner identity + display name + presence ONLY: NO gatewayId and NO box key, so a row is never a
+//  seal/probe handle (the trust ceremony resolves a target's gateway server-side). evie
+//  OPAQUE-REJECTS a caller it cannot place in a Domain.
 
 /** A console's signed request for the roster. The console signs ROSTER_V1 over its own signing key
  * + a fresh timestamp + nonce (proof of possession); evie verifies the signature, freshness, and
@@ -521,10 +503,7 @@ export const TrustPendingResultSchema = z
 //  proofs. evie verifies the signature, freshness, and non-replay, then resolves the signer to a
 //  rooted owner and returns the transport.
 
-/** An owner's signed request for its network's gateway-bridge transport. The owner signs
- * TRANSPORT_REQUEST_V1 over its own owner signing key + a fresh timestamp + nonce; evie verifies
- * the proof, freshness, and non-replay, then resolves the signer to a rooted owner and returns the
- * transport. */
+/** An owner's signed request for its network's gateway-bridge transport. */
 export const TransportRequestSchema = z
 	.object({
 		signerSignPub: b64Field(),

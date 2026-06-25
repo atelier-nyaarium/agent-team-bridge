@@ -1,18 +1,15 @@
 ////////////////////////////////
 //  Mailbox sync cursor value object
 //
-//  The single owner of the console's mailbox CONSUMPTION state: the epoch, the acked
-//  sequence, and the dropped-gap baseline. It owns the TRANSITION RULES (how a poll
-//  result advances the cursor, how an epoch flip resets it, which entries are genuinely
-//  fresh, whether a gap opened) so the two runtimes (this gateway-side TS and the console's
-//  Kotlin twin) cannot disagree about consumption the way they disagreed about the
-//  address before SessionId.
+//  Owns the console's mailbox consumption state (epoch, acked sequence, dropped-gap
+//  baseline) and the transition rules that advance it, so the gateway-side TS and the
+//  console's Kotlin twin cannot disagree about what has been consumed.
 //
-//  Invariant: the cursor is CONSOLE-OWNED and DURABLE. The gateway never dictates it; the
-//  gateway's register returns the epoch + an informational high-water only, and the console
-//  keeps its own cursor across restarts (MailboxSync, console side). advance() is PURE - the
-//  console renders and persists threads FIRST, then commits the cursor LAST, so a crash
-//  between the two re-delivers (dedupe absorbs) rather than skips (red-team F1).
+//  Invariant: the cursor is console-owned and durable. The gateway never dictates it
+//  (register returns only the epoch plus an informational high-water), and the console
+//  keeps its own cursor across restarts. advance() is pure: the console persists threads
+//  first and commits the cursor last, so a crash between the two re-delivers (dedupe
+//  absorbs it) rather than skips.
 //
 //  The Kotlin twin lives at android/.../proto/SyncCursor.kt; the two are held equivalent
 //  by the shared vectors in tests/fixtures/sync-cursor/vectors.json, read by both runtimes.
@@ -41,7 +38,7 @@ export interface SyncAdvance<E extends SyncEntry = SyncEntry> {
 	gap: boolean;
 }
 
-/** The poll-op params the cursor produces; the ONLY producer, so the console cannot
+/** The poll-op params the cursor produces. The only producer, so the console cannot
  *  hand-build a {cursor, epoch} pair. */
 export interface PollParams {
 	cursor: number;
@@ -60,7 +57,7 @@ export class SyncCursor {
 
 	/** The initial cursor for a never-synced device. Epoch 0 is a reserved sentinel the
 	 *  gateway never mints (mintEpoch's range is [1, 2^31-1]), so the first poll against
-	 *  any real box always flips, resetting cleanly. */
+	 *  any real box always flips and resets cleanly. */
 	static initial(): SyncCursor {
 		return new SyncCursor(0, 0, 0);
 	}
@@ -76,20 +73,18 @@ export class SyncCursor {
 
 	/**
 	 * Fold a poll result into the next cursor, returning the genuinely-fresh entries and
-	 * whether a real gap opened. PURE: no persistence (the caller commits next AFTER the
-	 * entries are durable).
+	 * whether a real gap opened. Pure: the caller commits the next cursor after the entries
+	 * are durable.
 	 *
-	 * Epoch flip (result.epoch != epoch): the box is a NEW instance - gateway eviction
-	 * destroyed the old entries before minting the new epoch, so every entry is genuinely
-	 * new content. Reset ackedSeq to the result's high-water, baseline to the result's
-	 * dropped, and treat all entries as fresh; a fresh instance has no prior baseline so
-	 * gap is false (red-team F2).
+	 * Epoch flip (result.epoch != epoch): the box is a new instance, since gateway eviction
+	 * destroyed the old entries before minting the new epoch, so every entry is new content.
+	 * Reset ackedSeq to the result's high-water, baseline to the result's dropped, and treat
+	 * all entries as fresh; a fresh instance has no prior baseline so gap is false.
 	 *
-	 * Same epoch: fresh = entries with seq > ackedSeq (dedupes an at-least-once re-drain
-	 * of entries already rendered). Advance ackedSeq to the result's high-water. A gap
-	 * opened iff dropped grew past the persisted baseline (the producer's documented
-	 * delta protocol; the consumer must not flag on the cumulative level - red-team /
-	 * H4). Carry the new dropped as the next baseline.
+	 * Same epoch: fresh = entries with seq > ackedSeq (dedupes an at-least-once re-drain of
+	 * entries already rendered). Advance ackedSeq to the result's high-water. A gap opened
+	 * iff dropped grew past the persisted baseline; the consumer must compare the delta, not
+	 * flag on the cumulative level. Carry the new dropped as the next baseline.
 	 */
 	advance<E extends SyncEntry>(result: SyncPollResult<E>): SyncAdvance<E> {
 		if (result.epoch !== this.epoch) {

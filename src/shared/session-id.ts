@@ -2,23 +2,18 @@
 //  Session identity value objects
 //
 //  The single canonical form for a team address and a channel/notice session id.
-//  Identity used to be a raw string assembled and torn apart by a dozen ad-hoc
-//  builders (composeConvSessionId, deriveChannelJobId, qualifyTeam, teamFromSession,
-//  ...), so the same logical session could wear two unequal strings (`9cb5b9` and
-//  `switchboard/9cb5b9`) and different stores keyed by different ones. These types
-//  own the ONE canonical string, so a store key and a lookup key are the same value
-//  by construction, not by two builders happening to agree.
+//  These types own the ONE canonical string, so a store key and a lookup key are
+//  the same value by construction.
 //
-//  Boundary rule: a BARE wire name resolves to the local Gateway AT the boundary
-//  (`parse`/`local`), never stored bare. An explicit, possibly-remote Gateway id is KEPT
-//  (`remote`, and `parse` of an already-qualified string) so cross-Gateway session ids
-//  stay byte-stable across two gateways with different local Gateway ids.
+//  Boundary rule: a bare wire name resolves to the local Gateway at the boundary
+//  (`parse`/`local`), never stored bare. An explicit, possibly-remote Gateway id is
+//  kept (`remote`, and `parse` of an already-qualified string) so cross-Gateway
+//  session ids stay byte-stable across two gateways with different local Gateway ids.
 //
-//  The Kotlin twin lives at android/.../proto/SessionId.kt; the two are kept
-//  equivalent by the shared vectors in tests/fixtures/session-id/vectors.json,
-//  read by both runtimes. This module OWNS the session-id grammar constants below;
-//  console-protocol.ts re-exports them for its wire helpers, and codegen emits them
-//  into Protocol.kt (the Kotlin twin reads them from there).
+//  The Kotlin twin at android/.../proto/SessionId.kt is held equivalent by the shared
+//  vectors in tests/fixtures/session-id/vectors.json, read by both runtimes. This
+//  module owns the grammar constants below; console-protocol.ts re-exports them and
+//  codegen emits them into Protocol.kt.
 
 ////////////////////////////////
 //  Grammar constants
@@ -43,13 +38,13 @@ export class TeamAddress {
 	) {}
 
 	/** A local team. A bare name resolves to localGatewayId; an already-qualified
-	 * name keeps its (possibly remote) Gateway id. Idempotent, like the old qualifyTeam. */
+	 * name keeps its (possibly remote) Gateway id. Idempotent. */
 	static local(localGatewayId: string, name: string): TeamAddress {
 		return TeamAddress.parse(name, localGatewayId);
 	}
 
-	/** An explicit, possibly-remote Gateway id. The Gateway id is NOT re-resolved to
-	 * local; used for a cross-Gateway target where the destination Gateway is known. */
+	/** An explicit, possibly-remote Gateway id, not re-resolved to local. For a
+	 * cross-Gateway target where the destination Gateway is known. */
 	static remote(gatewayId: string, name: string): TeamAddress {
 		return new TeamAddress(gatewayId, name);
 	}
@@ -59,8 +54,8 @@ export class TeamAddress {
 	static parse(team: string, localGatewayId: string): TeamAddress {
 		const i = team.indexOf(GATEWAY_QUALIFIER_SEP);
 		if (i === -1) return new TeamAddress(localGatewayId, team);
-		// `i + SEP.length` (not a hardcoded `+ 1`) so the twin stays equivalent if the
-		// separator ever changes; the Kotlin side already splits this way.
+		// Slice by SEP.length, not a hardcoded 1, so the twin stays equivalent if the
+		// separator ever changes.
 		return new TeamAddress(team.slice(0, i), team.slice(i + GATEWAY_QUALIFIER_SEP.length));
 	}
 
@@ -88,10 +83,9 @@ export class SessionId {
 		return new SessionId(conversationId, target);
 	}
 
-	/** Parse a channel session id, or null if it is not one (a notice, a CLI uuid,
-	 * etc.). The conversation id is everything between the `conv:` prefix and the
-	 * LAST colon; the tail is the target team (conversation ids and team names
-	 * never contain a colon). An already-qualified target keeps its Gateway id. */
+	/** Parse a channel session id, or null if it is not one. The conversation id is
+	 * everything between the `conv:` prefix and the last colon; the tail is the target
+	 * team (conversation ids and team names never contain a colon). */
 	static parse(wire: string, localGatewayId: string): SessionId | null {
 		if (!wire.startsWith(CONV_SESSION_PREFIX)) return null;
 		const lastColon = wire.lastIndexOf(":");
@@ -99,9 +93,7 @@ export class SessionId {
 		if (lastColon < CONV_SESSION_PREFIX.length) return null;
 		const conversationId = wire.slice(CONV_SESSION_PREFIX.length, lastColon);
 		const team = wire.slice(lastColon + 1);
-		// A conversation id and a team name never contain a colon, so a third colon
-		// means a crafted/malformed id: reject it rather than mis-split (the conv id
-		// would otherwise absorb the extra colon). This keeps parse injective on the
+		// Reject a third colon rather than mis-split: it keeps parse injective on the
 		// legal alphabet, so an untrusted respond id cannot alias another session's key.
 		if (conversationId.length === 0 || team.length === 0 || conversationId.includes(":")) return null;
 		return new SessionId(conversationId, TeamAddress.parse(team, localGatewayId));

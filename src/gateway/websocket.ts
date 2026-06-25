@@ -137,15 +137,14 @@ export function createWebSocketHandlers({
 			}
 			const team = reg.data.team;
 			const subId = reg.data.subId || crypto.randomUUID().slice(0, 8);
-			// Every bridge connection is channel mode now (CLI dispatch was retired with the host split).
+			// Every bridge connection is channel mode.
 			const mode: ConnectionMode = "channel";
 			const conversationId = reg.data.conversationId ?? null;
 
 			// Host-daemon auth: the reserved "host" slot (which drives agent terminals and
 			// receives wakes) is admission-gated by a shared secret so a LAN peer cannot
-			// claim it. Fail-closed: a host register is refused unless the gateway has a
-			// HOST_WS_TOKEN configured AND the daemon presents the matching token. Other
-			// teams are unaffected.
+			// claim it. Refused unless the gateway has HOST_WS_TOKEN configured and the
+			// daemon presents the matching token.
 			if (team === "host" && (!config.hostWsToken || reg.data.token !== config.hostWsToken)) {
 				console.log(`[ws] rejected host register - bad or missing token`);
 				ws.send(JSON.stringify({ type: "register_reject", team, reason: "unauthorized" }));
@@ -333,7 +332,7 @@ export function createWebSocketHandlers({
 				if (subs.size === 0) {
 					registry.delete(teamName);
 					offlineCatalog.clear();
-					// Fail in-flight terminal ops now so a console peek/send returns at once instead
+					// Fail in-flight terminal ops so a console peek/send returns at once instead
 					// of waiting out its full timeout across the host restart.
 					hostOpCoordinator?.failAll("host daemon disconnected");
 					console.log(`[ws] host disconnected - offline catalog cleared`);

@@ -24,24 +24,21 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * Foreground service that owns the bridge connection and poll loop, so messages
- * keep arriving (and become notifications) while the Activity is backgrounded or
- * the screen is off. The Activity only observes the shared Repo state. Cadence is
- * adaptive: the repository polls fast while the Activity is visible and once a
- * minute otherwise, draining accumulated bursts.
+ * Foreground service owning the bridge connection and poll loop, so messages keep
+ * arriving while the Activity is backgrounded or the screen is off. The Activity
+ * only observes shared Repo state. The repository polls fast while the Activity is
+ * visible and once a minute otherwise.
  *
  * Deep doze still gates network unless the user grants the battery-optimization
- * exemption (Settings row); the service itself only guarantees process lifetime.
+ * exemption (Settings row); the service only guarantees process lifetime.
  */
 class SwitchboardService : Service() {
 	private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-	// Held for the service's polling lifetime so the poll loop's wall-clock sleep
-	// resumes through Doze (which otherwise parks the CPU, the "stops polling when
-	// backgrounded" bug). This keeps the CPU partially awake while the bridge runs -
-	// the deliberate battery cost of background delivery without a push service. Doze
-	// can still defer the NETWORK unless the battery-optimization exemption is granted
-	// (Settings -> Background delivery), so the two work together.
+	// Held for the poll loop's lifetime so its wall-clock sleep resumes through Doze,
+	// which otherwise parks the CPU. Keeps the CPU partially awake while the bridge
+	// runs. Doze can still defer the NETWORK unless the battery-optimization exemption
+	// is granted (Settings -> Background delivery).
 	private var wakeLock: PowerManager.WakeLock? = null
 
 	private fun acquireWakeLock() {
@@ -75,11 +72,10 @@ class SwitchboardService : Service() {
 		repo.onInbound = { team, messages -> notifyBurst(repo, team, messages) }
 		// Keep the CPU awake for the poll loop while the bridge runs (background delivery).
 		acquireWakeLock()
-		// connect() runs register (which sets the Gateway id, cursor, epoch) and the
-		// on-device gateway-id migration; start the poll loop only after it, so the
-		// loop never qualifies an inbound team under an as-yet-unknown Gateway id and
-		// strands a bare-keyed thread beside its migrated, qualified twin. connect()
-		// never throws (it catches internally), so the poll loop always starts.
+		// connect() runs register (setting the Gateway id, cursor, epoch) and the
+		// gateway-id migration; start the poll loop only after it, so the loop never
+		// qualifies an inbound team under an unknown Gateway id and strands a bare-keyed
+		// thread beside its migrated twin. connect() never throws, so polling starts.
 		scope.launch(Dispatchers.IO) {
 			repo.connect()
 			repo.reconcilePending()
@@ -154,10 +150,9 @@ class SwitchboardService : Service() {
 		)
 	}
 
-	/** Broadcast to NotificationReceiver for swipe/action handling. The request
-	 * code mixes team and action so per-team intents never collide; the message
-	 * `at` rides as an extra and FLAG_UPDATE_CURRENT keeps it on the burst-last
-	 * message, which is what the notification summarizes. */
+	/** Broadcast to NotificationReceiver for swipe/action handling. The request code
+	 * mixes team and action so per-team intents never collide; the message `at` rides
+	 * as an extra, and FLAG_UPDATE_CURRENT keeps it on the burst-last message. */
 	private fun actionIntent(team: String, action: String, at: Long? = null): PendingIntent {
 		val intent = Intent(this, NotificationReceiver::class.java).setAction(action).putExtra(EXTRA_OPEN_TEAM, team)
 		if (at != null) intent.putExtra(EXTRA_MESSAGE_AT, at)

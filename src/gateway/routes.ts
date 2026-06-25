@@ -34,8 +34,8 @@ export interface RoutesDeps {
 	tryWakeTeam: (team: string) => Promise<boolean>;
 	offlineCatalog: Map<string, string>;
 	// Durable team -> projectPath map (never cleared, unlike offlineCatalog which
-	// empties when the host daemon disconnects). Membership in either marks a
-	// team as devcontainer-backed.
+	// empties when the host daemon disconnects). Membership in either marks a team
+	// as devcontainer-backed.
 	knownTeamPaths: Map<string, string>;
 	// Console mailboxes, for broadcast notices (notify_human). Optional so test
 	// harnesses without a console bridge need not supply one.
@@ -50,7 +50,7 @@ export interface RoutesDeps {
 	crossDomainPeers?: import("./federation/crossDomainPeers.js").CrossDomainPeers | null;
 	// The owner's display name (learned from evie's register reply), stamped on
 	// every local TeamInfo so a linked friend Domain sees the owner's self-set label over the
-	// discovery roster (D1). Absent/null when unset or pre-feature.
+	// discovery roster. Absent/null when unset.
 	displayName?: (() => string | null | undefined) | null;
 	// Whether this Gateway's own Domain is the admin's (the evie-runner who provisions others),
 	// learned from the register reply. Stamped on the local TeamInfo so the console shows the
@@ -171,7 +171,7 @@ function getFirstWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket
 }
 
 /** Get the mode of a team, preferring real sockets over virtual console peers. Every bridge
- * connection is channel mode now, so this is effectively always "channel"; kept as the single
+ * connection is channel mode, so this is effectively always "channel"; kept as the single
  * source the teams listing and the send paths read. */
 function getTeamMode(subs: Map<string, ServerWebSocket<WsData>>): ConnectionMode {
 	let virtualMode: ConnectionMode | null = null;
@@ -253,8 +253,7 @@ export function createRoutes({
 
 	/** Resolve a wire target (bare or host-qualified) to a local registry name.
 	 * A bare name or one qualified with this Gateway resolves locally; a name
-	 * qualified with a DIFFERENT Gateway has no local route yet (federation routing
-	 * lands in a later phase), so it returns null. `qualified` is the canonical
+	 * qualified with a DIFFERENT Gateway returns null. `qualified` is the canonical
 	 * `localGatewayId/name` form used as the channel session-id target. */
 	function resolveLocalTarget(to: string): { name: string; qualified: string } | null {
 		const addr = TeamAddress.parse(to, localGatewayId);
@@ -312,8 +311,7 @@ export function createRoutes({
 	/** Relay a cross-Gateway op in the background, retrying on transient failure (evie
 	 * reconnecting, the origin Gateway restarting) with exponential backoff. The reply
 	 * it carries is already durable in the local anchor (poll-recoverable), so a
-	 * dropped first attempt no longer strands the origin's request the way the old
-	 * fire-and-forget did. */
+	 * dropped first attempt does not strand the origin's request. */
 	function relayWithRetry(dstGateway: string, op: FederatedOp, label: string): void {
 		const maxAttempts = 5;
 		let attempt = 0;
@@ -417,9 +415,9 @@ export function createRoutes({
 		const seen = new Set<string>();
 		const isDevcontainer = (name: string) => offlineCatalog.has(name) || knownTeamPaths.has(name);
 		// The owner's display name, stamped on every local session so a linked friend
-		// Domain sees the owner's self-set name over the discovery roster (D1). Spread in only
-		// when set, so a Gateway with no display name emits the same minimal TeamInfo as before
-		// (the field is nullish on the wire; the friend's gateway is the authoritative source).
+		// Domain sees the owner's self-set name over the discovery roster. Spread in only
+		// when set, so a Gateway with no display name emits a minimal TeamInfo (the field
+		// is nullish on the wire; the friend's gateway is the authoritative source).
 		const ownDisplayName = displayName?.();
 		const displayNameField = ownDisplayName ? { displayName: ownDisplayName } : {};
 		const isAdminDomainField = isAdminDomain?.() ? { isAdminDomain: true } : {};
@@ -509,8 +507,8 @@ export function createRoutes({
 				// Gateway knows which Domain it linked, while a friend on an older build might
 				// stamp none). The (domainId, gatewayId) pair is what the console groups by and
 				// the send path resolves the seal target from, since a gateway id collides
-				// across Domains. The peer's own displayName rides through the spread (the friend
-				// Gateway stamped its self-set display name), so Peers display the friend's name (D1).
+				// across Domains. The peer's own displayName rides through the spread, so Peers
+				// display the friend's name.
 				return peerTeams.map((t) => ({ ...t, domainId: peer.friendDomainId }));
 			}),
 		);
@@ -801,9 +799,8 @@ export function createRoutes({
 
 		// Push response back to the sender. For conversation-routed sends we target the
 		// specific sub-session via conversationRegistry so parallel host windows don't
-		// all receive each other's replies. Fall back to team broadcast if there
-		// is no conversation id on the entry (CLI mode that still uses waitForResult
-		// has already been satisfied above and won't hit this branch for a push).
+		// all receive each other's replies. Fall back to team broadcast when the entry
+		// has no conversation id.
 		const push: ResponsePushPayload = {
 			type: "response_push",
 			session_id: respondSessionId,

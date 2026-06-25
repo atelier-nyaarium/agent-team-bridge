@@ -37,8 +37,7 @@ function allowlistWithBoth(): Allowlist {
 	return a;
 }
 
-/** An empty cross-Domain peer set (the local tests carry no cross-Domain peers, so the
- * local seal path is exercised exactly as before). */
+/** An empty cross-Domain peer set, so the local seal path is exercised. */
 function noPeers(): CrossDomainPeers {
 	return new CrossDomainPeers(tmp());
 }
@@ -264,7 +263,7 @@ describe("sealer (cross-Domain v2)", () => {
 //  cross-Domain peers. Pre-unseal, the cleartext frame names only the gateway id, so
 //  without the Router-stamped srcDomain the receiver cannot tell the two peers apart.
 //  The srcDomain on the relay frame resolves the right peer by the full (domain, gateway)
-//  pair - the gap the bare-id scan left open.
+//  pair.
 
 const ownerP = generateIdentity(); // Domain "pat"
 const ownerQ = generateIdentity(); // Domain "quinn"
@@ -335,9 +334,8 @@ describe("sealer (cross-Domain srcDomain disambiguation)", () => {
 	});
 
 	it("without srcDomain, a colliding gateway id stays ambiguous (back-compat null)", () => {
-		// The pre-multi-tenant fallback: no srcDomain + two peers sharing the id -> the
-		// scan refuses (the safe interim), so the authentic frame fails to open rather
-		// than being attributed to the wrong peer.
+		// No srcDomain plus two peers sharing the id: the scan refuses, so the authentic
+		// frame fails to open rather than being attributed to the wrong peer.
 		const pSealer = createSealer(
 			P,
 			soloAllowlist(ownerP, "shared", P),

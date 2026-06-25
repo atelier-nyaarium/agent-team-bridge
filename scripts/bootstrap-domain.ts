@@ -1,21 +1,16 @@
 // Admin Domain seating for the owner setup flow.
 //
-// Phone-anchored trust: the owner root keypair is generated SILENTLY on the Console and never
-// reaches the host. So the host never holds, prompts for, or roots with the owner key. Instead the
-// trusted host bootstrap (it has direct Secret access) PRE-STAGES the admin Domain as a PENDING
-// tenant - an displayName label plus a one-time invite nonce, no owner root - and the admin's
-// phone first-roots it on scan, exactly like a friend. `pendingAdminDomain` builds that pending
-// slice.
+// The owner root keypair is generated on the Console and never reaches the host, so the host
+// pre-stages the admin Domain as a pending tenant (a displayName label plus a one-time invite
+// nonce, no owner root) and the admin's phone first-roots it on scan like any friend.
 //
-// Preserves evie's own identity verbatim (seating must not change evie's SAS).
+// evie's identity is preserved verbatim by every write path, since re-minting it would change
+// evie's SAS fingerprint. The federation Secret is the v2 multi-domain shape
+// (`{ schema:2, identity, enrollment: { <domainId>: state } }`); setup touches only the admin
+// slice and writes the whole map back so a friend Domain is never clobbered.
 //
-// Multi-tenant: evie's federation Secret is the v2 multi-domain shape
-// (`{ schema:2, identity, enrollment: { <domainId>: state } }`) hosting OTHER owners' Domains. Setup
-// touches only the ADMIN Domain, so the v2 Secret is read, the admin slice is replaced in place, and the
-// WHOLE map is written back - never clobbering a friend Domain or dropping the admin Domain's admissions.
-//
-// The persisted shapes mirror evie's EnrollmentState / PendingTenantRecord byte-for-byte: the host
-// writes the Secret evie reads, so a drift here would make evie reject the admin slice.
+// Persisted shapes mirror evie's EnrollmentState / PendingTenantRecord byte-for-byte: the host
+// writes the Secret evie reads, so any drift makes evie reject the admin slice.
 
 import type { SignedAdmission, SignedRevocation } from "../src/shared/admission.js";
 import type { Identity } from "../src/shared/crypto.js";
@@ -23,10 +18,9 @@ import type { Identity } from "../src/shared/crypto.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-/** A pending-tenant record on a not-yet-rooted Domain (an displayName display label + a
- * one-time invite nonce, no owner). Mirrors evie's `PendingTenantRecord` exactly (the wire
- * `PendingTenant` shape minus its `domainId`, which is the enrollment map key); the host writes
- * what evie reads. The friend's first_root spends the nonce and flips `rooted` true. */
+/** A pending-tenant record on a not-yet-rooted Domain. Mirrors evie's `PendingTenantRecord`
+ * exactly (the wire `PendingTenant` shape minus its `domainId`, which is the enrollment map key).
+ * The friend's first_root spends the nonce and flips `rooted` true. */
 export interface PendingTenantRecord {
 	displayName: string;
 	nonce: string;
@@ -35,10 +29,8 @@ export interface PendingTenantRecord {
 	rooted: boolean;
 }
 
-/** One Domain's slice (a v2 per-domain entry). `ownerSignPub`/`ownerBoxPub` are null on a
- * pending slice (no owner has rooted it yet) and set once rooted. `displayName` is the owner's
- * display name; `pendingTenant` marks a Domain pre-staged but not yet rooted. Mirrors evie's
- * `EnrollmentState` for the fields setup writes. */
+/** One Domain's slice (a v2 per-domain entry). `ownerSignPub`/`ownerBoxPub` are null on a pending
+ * slice and set once rooted. Mirrors evie's `EnrollmentState` for the fields setup writes. */
 interface DomainEnrollment {
 	ownerSignPub: string | null;
 	ownerBoxPub: string | null;
@@ -46,8 +38,8 @@ interface DomainEnrollment {
 	revocations: SignedRevocation[];
 	displayName?: string | null;
 	pendingTenant?: PendingTenantRecord;
-	// Marks the admin's own Domain so evie scopes the console relay to it. Only the admin
-	// slice this script writes carries it; a hosted guest Domain never does.
+	// Marks the admin's own Domain so evie scopes the console relay to it. Only the admin slice
+	// this script writes carries it; a hosted guest Domain never does.
 	isAdminDomain?: boolean;
 }
 
@@ -68,7 +60,7 @@ interface MultiDomainFederationJson {
 }
 
 /** A fresh pending setup: no `ownerSignPub` yet, so the caller emits the blob with a
- * `pendingTenant` discriminator and the admin's phone first-roots on scan. */
+ * `pendingTenant` discriminator for the phone to first-root on scan. */
 export interface PendingResult {
 	federationJson: MultiDomainFederationJson;
 }
@@ -78,9 +70,8 @@ const FEDERATION_SECRET_SCHEMA = 2;
 ////////////////////////////////
 //  Functions & Helpers
 
-/** Parse the live evie federation.json and pull out evie's identity, both validated with an
- * actionable message (not a raw SyntaxError). The identity is preserved verbatim by every write
- * path so seating never re-mints evie's keypair (which would change its SAS fingerprint). */
+/** Parse the live evie federation.json and pull out evie's identity, with an actionable error
+ * instead of a raw SyntaxError. */
 function readEvieFederation(evieFedJson: string): {
 	evieFed: MultiDomainEvieFederation;
 	evieIdentity: Identity;
@@ -108,9 +99,8 @@ function adminSliceOf(
 	return evieFed.enrollment?.[adminDomainId];
 }
 
-/** Normalize a non-admin Domain slice to the full shape so the written map is well-formed, while
- * carrying every field (including a friend Domain's displayName + pendingTenant) through
- * untouched. Setup only ever rewrites the admin slice; a friend Domain must survive verbatim. */
+/** Normalize a non-admin Domain slice to the full shape, carrying every field through untouched.
+ * Setup only rewrites the admin slice; a friend Domain must survive verbatim. */
 function carryOtherDomain(slice: Partial<DomainEnrollment> | undefined): DomainEnrollment {
 	return {
 		ownerSignPub: slice?.ownerSignPub ?? null,
@@ -123,8 +113,7 @@ function carryOtherDomain(slice: Partial<DomainEnrollment> | undefined): DomainE
 }
 
 /** Replace the admin slice in the incumbent v2 Secret and produce the federation.json to write
- * back: every other Domain is carried untouched and the whole map is written back with the v2
- * marker, so a friend Domain and the admin Domain's own admissions survive. */
+ * back, carrying every other Domain untouched so a friend Domain survives. */
 function composeFederationJson(
 	evieFed: MultiDomainEvieFederation,
 	evieIdentity: Identity,
@@ -141,11 +130,9 @@ function composeFederationJson(
 	return { schema: FEDERATION_SECRET_SCHEMA, identity: evieIdentity, enrollment };
 }
 
-/** Build the PENDING admin slice: an displayName label + a one-time invite nonce, NO owner root.
- * The fresh setup writes this so the admin's phone first-roots the admin Domain on scan, exactly
- * like a friend. Mirrors evie's pending slice (`{ ownerSignPub: null, ownerBoxPub: null, admissions:
- * [], revocations: [], displayName, pendingTenant }`) so evie reads it back without complaint. The
- * nonce is minted by the caller (standard base64, never base64url - the wire `nonce` is a b64Field). */
+/** Build the pending admin slice: a displayName label + a one-time invite nonce, no owner root.
+ * Mirrors evie's pending slice so evie reads it back without complaint. The caller mints the
+ * nonce as standard base64, never base64url, since the wire `nonce` is a b64Field. */
 function pendingAdminSlice(displayName: string, nonce: string, issuedAt: number, ttlMs: number): DomainEnrollment {
 	return {
 		ownerSignPub: null,
@@ -158,12 +145,9 @@ function pendingAdminSlice(displayName: string, nonce: string, issuedAt: number,
 	};
 }
 
-/** Pre-stage the admin Domain as a PENDING tenant in evie's Secret, preserving evie's identity +
- * every friend Domain. `evieFedJson` is the live evie federation.json text. The caller mints the
- * one-time invite `nonce` (standard base64) and emits it in the blob's `pendingTenant` so the
- * admin's phone first-roots on scan. This is the fresh-setup path: there is no owner key to
- * root with (it is generated silently on the phone), so the admin slice is rootless until the
- * first_root lands. */
+/** Pre-stage the admin Domain as a pending tenant in evie's Secret, preserving evie's identity and
+ * every friend Domain. `evieFedJson` is the live evie federation.json text. The owner key is
+ * generated on the phone, so the admin slice stays rootless until the phone's first_root lands. */
 export function pendingAdminDomain(
 	evieFedJson: string,
 	adminDomainId: string,
@@ -178,10 +162,8 @@ export function pendingAdminDomain(
 }
 
 /** Inspect the incumbent admin Domain slice to drive the fresh-vs-reprovision state machine.
- * `rooted` is true once an owner key is set (re-provision: emit the blob only). `ownerSignPub` is
- * that rooted owner key (so a re-provision can sanity-check a gateway's pinned owner against it).
- * `displayName` is the owner's display name if any (preserved across a re-provision). A malformed
- * Secret reads as a fresh, unrooted admin Domain (so setup pre-stages it) rather than throwing here. */
+ * `rooted` is true once an owner key is set. A malformed Secret reads as a fresh, unrooted admin
+ * Domain rather than throwing, so setup pre-stages it. */
 export function readAdminDomain(
 	evieFedJson: string,
 	adminDomainId: string,
@@ -205,14 +187,13 @@ export function readAdminDomain(
 ////////////////////////////////
 //  Purge helpers (evie-side deletes for the setup-menu purges)
 //
-//  Both operate on the RAW parsed Secret JSON and mutate only the target Domain, then re-serialize.
+//  Both operate on the raw parsed Secret JSON and mutate only the target Domain, then re-serialize.
 //  This is lossless: every untouched field of the target slice and every other Domain (including
-//  fields the setup write paths never carry - linkEdges, linkRevocations, isAdminDomain) survive
-//  verbatim, unlike composeFederationJson which only carries a known field subset.
+//  fields the setup write paths never carry, like linkEdges and isAdminDomain) survives verbatim,
+//  unlike composeFederationJson which only carries a known field subset.
 
-/** The v2 Secret as raw structure for a purge mutation: evie persists v2, so the enrollment is a
- * domainId -> slice map. Slices are opaque here (the mutation only reads admissions/kind/gatewayId);
- * everything else passes through untouched. */
+/** The v2 Secret as raw structure for a purge mutation. Slices are opaque here: the mutation only
+ * reads admissions/kind/gatewayId, and everything else passes through untouched. */
 interface RawFederation {
 	schema?: number;
 	identity?: unknown;

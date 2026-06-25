@@ -1,4 +1,4 @@
-// SYNC-HASH: a2dc70f9b42af9a3833efc747461615e
+// SYNC-HASH: 2de068140b7197ab6d10a76425aa0594
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -7,14 +7,13 @@ import { z } from "zod";
 ////////////////////////////////
 //  Evie bridge wire protocol
 //
-//  Frames exchanged over the gateway<->evie-bot WebSocket. SELF-CONTAINED on
-//  purpose: this module imports nothing but zod, so the verbatim copy needs
-//  no import surgery; sibling shared modules import FROM it, never into it.
+//  Frames exchanged over the gateway<->evie-bot WebSocket. Imports nothing but
+//  zod so the verbatim copy needs no import surgery; sibling shared modules
+//  import FROM it, never into it.
 //
-//  The console_relay member stays loose: the gateway's relay pump runs the
-//  full ConsoleRelayFrameSchema parse (shared/schemas.ts) with its own error
-//  path, so the envelope union only routes by type - one parse, one error
-//  surface, no divergent double-validation.
+//  The console_relay member stays loose so the gateway's relay pump owns the
+//  full ConsoleRelayFrameSchema parse (shared/schemas.ts): the union routes by
+//  type only, avoiding divergent double-validation.
 
 ////////////////////////////////
 //  Schemas
@@ -22,11 +21,10 @@ import { z } from "zod";
 /**
  * Channel attachment metadata carried over the bridge (console-origin files).
  *
- * Presence of `base64` means the sender included the bytes and the host MCP
- * plugin should materialize the file; absence means metadata-only (no re-fetch
- * path - the bytes were not transferred). No regex on `base64`: the field can
- * hold up to ~670 MB on the wire (the locked 500 MB hard backstop,
- * base64-inflated), so validation is shape-only.
+ * Presence of `base64` means the bytes are included and the host MCP plugin
+ * should materialize the file; absence means metadata-only (no re-fetch path).
+ * No regex on `base64`: it can hold ~670 MB (the 500 MB backstop, base64-inflated),
+ * so validation is shape-only.
  */
 export const ChannelFileSchema = z
 	.object({
@@ -59,15 +57,13 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 	z.looseObject({
 		type: z.literal("console_relay"),
 	}),
-	// Loose: a cross-Gateway frame evie routed to this Gateway. The gateway-relay pump runs
-	// the full federation parse (federation-protocol.ts); evie only routed it
-	// here by destination Gateway, never reading the inner payload.
+	// Loose: a cross-Gateway frame. The gateway-relay pump runs the full federation
+	// parse (federation-protocol.ts); evie routed by destination Gateway, never reading payload.
 	z.looseObject({
 		type: z.literal("gateway_relay"),
 	}),
-	// Loose: a pre-trust cross-Domain handshake frame the Router routed to this Gateway by
-	// destination Gateway id (round 1, the requester's commitment). The handshake pump runs
-	// its own validation; the Router never read the inner payload.
+	// Loose: a pre-trust cross-Domain handshake frame (round 1, the requester's
+	// commitment). The handshake pump validates; the Router never reads the payload.
 	z.looseObject({
 		type: z.literal("cross_domain_handshake"),
 	}),
@@ -77,14 +73,12 @@ export const EvieInboundFrameSchema = z.discriminatedUnion("type", [
 		type: z.literal("cross_domain_handshake_reveal"),
 	}),
 	// The mirrored Domain pushed live when the owner admits or revokes a member, so a
-	// revocation bites a connected Gateway within seconds instead of at its next
-	// register. `domain` stays opaque here (this leaf imports nothing but zod); the
-	// Gateway validates it with DomainSnapshotSchema. `version` is the keyring hash the
-	// Gateway can echo to skip a redundant apply. `displayName` carries the Domain's
-	// current display name so a rename pushed this way refreshes the owner's OWN
-	// Gateway immediately (the allowlist the snapshot feeds drops displayName, so the
-	// rename would otherwise not reach teams()/discover until a reconnect). This frame only
-	// ever reaches the renamed Domain's own gateways, so the name is unambiguously theirs.
+	// revocation bites a connected Gateway within seconds rather than at its next register.
+	// `domain` stays opaque here; the Gateway validates it with DomainSnapshotSchema.
+	// `version` is the keyring hash the Gateway can echo to skip a redundant apply.
+	// `displayName` carries the current display name because the allowlist the snapshot
+	// feeds drops it, so a rename would otherwise not reach teams()/discover until a
+	// reconnect. This frame only reaches the renamed Domain's own gateways.
 	z.object({
 		type: z.literal("domain_update"),
 		domain: z.unknown(),
@@ -118,11 +112,10 @@ export const FEDERATION_PROTOCOL_VERSION = 1;
 
 /** `gateway_register` tool-call params: a Gateway announces its id + wire version,
  * plus the optional admitted-identity proof (signPub/boxPub + an owner-signed
- * admission + a fresh possession proof). The auth fields stay opaque strings here
- * so this leaf keeps importing nothing but zod; evie parses `admission` with the
- * synced SignedAdmissionSchema and checks it with verifyRegistration. They are
- * optional at this parse layer (parse-then-verify); evie's verifyRegistration is the
- * gate that rejects an unadmitted Gateway - there is no bearer fallback. */
+ * admission + a fresh possession proof). The auth fields stay opaque strings here;
+ * evie parses `admission` and checks it with verifyRegistration. Optional at this
+ * parse layer (parse-then-verify): verifyRegistration is the gate that rejects an
+ * unadmitted Gateway, with no bearer fallback. */
 export const GatewayRegisterParamsSchema = z.object({
 	gatewayId: z.string().min(1).max(64),
 	// This Gateway's Domain id (multi-tenant evie). Optional + min(1) on the wire so a
@@ -149,10 +142,8 @@ export const GatewayRelayRouteSchema = z.object({
 	dstGateway: z.string().min(1).max(64),
 	// The sender's Domain id. The Router stamps it from the SENDER connection's
 	// registered Domain (content-blind) so the destination resolves the source by the
-	// full (domainId, gatewayId) pair - a gateway id is not globally unique across
-	// Domains. Optional + min(1) on the wire, but the Router stamps it from the sender's
-	// registered Domain id (which sanitizeDomainId already required at register), so a
-	// relayed frame always carries a real src Domain - there is no implicit default.
+	// full (domainId, gatewayId) pair, since a gateway id is not unique across Domains.
+	// Optional + min(1) on the wire, but the Router always stamps a real src Domain.
 	srcDomain: z.string().min(1).max(64).optional(),
 	// Opaque to evie. The destination gateway parses/unseals it.
 	payload: z.unknown(),
@@ -170,25 +161,21 @@ export const GatewayRelayReplyParamsSchema = z.object({
 ////////////////////////////////
 //  Cross-Domain handshake rendezvous (pre-trust, content-blind, commit-reveal)
 //
-//  The both-present pairing that links two Gateways owned by DIFFERENT owners runs
-//  BEFORE either side is in the other's trust, so it cannot ride the allowlist-gated
-//  gateway_relay (which routes within ONE Domain). It is a commit-reveal exchange over
-//  two round trips so the SAS cannot be offline-grinded by the Router: each side first
-//  publishes a hiding commitment to its keys, then reveals them. Both round trips route
-//  the same way - the requester Gateway calls a tool, the Router forwards the frame to
-//  the receiver Gateway named by `dstGateway` and holds the call open until the receiver
-//  answers (correlated by `handshakeId`). The Router never reads `payload`.
+//  Pairing two Gateways owned by DIFFERENT owners runs BEFORE either side trusts the
+//  other, so it cannot ride the allowlist-gated gateway_relay (which routes within ONE
+//  Domain). It is a commit-reveal exchange over two round trips so the Router cannot
+//  offline-grind the SAS: each side commits to its keys, then reveals them. Both rounds
+//  route the same way - the requester calls a tool, the Router forwards to `dstGateway`
+//  and holds the call open until the receiver answers (correlated by `handshakeId`),
+//  never reading `payload`.
 //
-//  Round 1 is `cross_domain_handshake` (the requester's commitment) ->
-//  `cross_domain_handshake_reply` (the receiver's commitment). Round 2 is
-//  `cross_domain_handshake_reveal` (the requester's revealed keys + salt) ->
-//  `cross_domain_handshake_reveal_reply` (the receiver's revealed keys + salt + the SAS).
+//  Round 1 is `cross_domain_handshake` (commitment) -> `cross_domain_handshake_reply`.
+//  Round 2 is `cross_domain_handshake_reveal` (keys + salt) ->
+//  `cross_domain_handshake_reveal_reply` (the receiver's keys + salt + the SAS).
 //
-//  These are the ONLY ops that may cross Domains pre-trust, so they are NOT
-//  allowlist-gated; the Router rate-limits the round-1 call (a pre-trust surface) with a
-//  hard attempt cap. The receiver Gateway accepts the inner frames only while its
-//  listening window is open, bound to a single-use token, so the routing being open does
-//  not create an unsolicited surface.
+//  As the ONLY pre-trust cross-Domain ops they are NOT allowlist-gated, so the Router
+//  rate-limits the round-1 call with a hard attempt cap, and the receiver accepts the
+//  inner frames only while its single-use listening window is open.
 
 /** `cross_domain_handshake` tool-call params: the routing envelope the Router routes on.
  * The requester knows the receiver's Gateway id (the listening-token prefix) but not its

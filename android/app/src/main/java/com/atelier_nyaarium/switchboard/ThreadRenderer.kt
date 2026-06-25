@@ -22,20 +22,17 @@ private const val THREAD_URL = "https://appassets.androidplatform.net/assets/thr
  * One WebView running the bundled thread renderer (assets/thread/). Messages flow
  * one way via evaluateJavascript. Agent markdown is semi-trusted, so beyond the
  * renderer's own html-off + link allowlist, every resource load outside the
- * appassets origin is blocked at shouldInterceptRequest (the callback that sees
- * subresources like img tags; shouldOverrideUrlLoading only sees navigations and
- * just routes link taps to the system browser).
+ * appassets origin is blocked at shouldInterceptRequest.
  *
- * The one JS-to-Kotlin bridge (`Android.openAttachment`) carries only an opaque
- * attachments-relative path; the Kotlin side validates it stays inside the
- * attachments directory and exposes no filesystem listing or token surface.
+ * The JS-to-Kotlin bridge carries only an opaque attachments-relative path; the
+ * Kotlin side validates it stays inside the attachments directory and exposes no
+ * filesystem listing or token surface.
  */
 class ThreadRenderer(context: Context) {
 	val webView: WebView = WebView(context)
 
-	/** Set by the owner; a crashed renderer means this WebView is unusable and
-	 * must be detached + destroyed, then recreated fresh (API contract of
-	 * onRenderProcessGone). */
+	/** A crashed renderer leaves this WebView unusable; the owner must detach,
+	 * destroy, and recreate it (onRenderProcessGone API contract). */
 	var onRendererGone: (() -> Unit)? = null
 
 	/** Set by the owner; called on the main thread with an attachments-relative
@@ -59,7 +56,6 @@ class ThreadRenderer(context: Context) {
 	private var renderedCount = 0
 
 	// Per-row content fingerprints of what is on screen, so an in-place change
-	// (echo pending -> sent/error, waking placeholder resolving into the reply)
 	// re-renders just that row via the id-replace path in appendMessages.
 	private var fingerprints = mapOf<Long, Int>()
 
@@ -135,9 +131,8 @@ class ThreadRenderer(context: Context) {
 			}
 
 			override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-				// Returning true keeps the app alive, but this WebView is dead per
-				// the API contract. Recovery (which destroys this WebView) must not
-				// run re-entrantly inside this callback, so post it to the main loop.
+				// Returning true keeps the app alive. Recovery destroys this WebView,
+				// which must not run re-entrantly inside this callback, so post it.
 				ready = false
 				renderedCount = 0
 				view.post { onRendererGone?.invoke() }
@@ -150,10 +145,9 @@ class ThreadRenderer(context: Context) {
 
 	/**
 	 * Feed the current transcript, sending only what changed so re-opening a thread
-	 * keeps its scroll position and rendered DOM. Threads are append-mostly: a grown
-	 * list appends the tail, rows whose content changed in place (send states, the
-	 * waking placeholder resolving) re-render by id, and a shrink (clear/forget)
-	 * replaces wholesale.
+	 * keeps its scroll position and rendered DOM. A grown list appends the tail,
+	 * rows whose content changed in place re-render by id, and a shrink replaces
+	 * wholesale.
 	 */
 	fun sync(messages: List<Message>) {
 		val prevRendered = renderedCount

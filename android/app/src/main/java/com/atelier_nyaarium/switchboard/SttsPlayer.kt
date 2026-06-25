@@ -53,10 +53,8 @@ class SttsPlayer(private val root: File) {
 		exec.execute(action)
 	}
 
-	/**
-	 * Play (or toggle-stop) one message tier. Synthesizes through `client` on
-	 * a cache miss, then plays the cached file. Safe to call from any thread.
-	 */
+	/** Play (or toggle-stop) one message tier. Synthesizes through `client` on a
+	 * cache miss, then plays the cached file. Safe to call from any thread. */
 	fun play(
 		client: SttsClient,
 		provider: SttsProvider,
@@ -91,10 +89,9 @@ class SttsPlayer(private val root: File) {
 	}
 
 	/** Pre-synthesize both tiers of one message into the cache without playing,
-	 * so a later Play is an instant cache hit. Blocking - call off the main
-	 * thread. Dedups when the two tiers speak the same text (most plain
-	 * messages): synthesize once and copy. Never throws; a failed tier just
-	 * leaves no cache entry and Play synthesizes on demand later. */
+	 * so a later Play is a cache hit. Blocking - call off the main thread.
+	 * Dedups when both tiers speak the same text: synthesize once and copy.
+	 * Never throws; a failed tier just synthesizes on demand at Play. */
 	fun preloadBoth(
 		client: SttsClient,
 		provider: SttsProvider,
@@ -243,10 +240,8 @@ class SttsPlayer(private val root: File) {
 		onPlayingChanged?.invoke(team, at, true)
 	}
 
-	// Provider PATH and voice ride the key so a settings change can never replay
-	// another voice's cached audio: distinct voices land in distinct files. The
-	// path (not the descriptor id) is the cache component so entries survive an
-	// id rename, and it matches the pre-descriptor key layout.
+	// The path (not the descriptor id) is the cache component so entries survive
+	// an id rename.
 	private fun key(team: String, at: Long, tier: Tier, provider: SttsProvider, voice: String?): String =
 		"$team/$at-${tier.suffix}-${provider.path}-${safeVoice(voice)}"
 
