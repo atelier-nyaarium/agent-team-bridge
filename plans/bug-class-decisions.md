@@ -114,7 +114,18 @@ ALSO rides here (same wire + field churn): the operator-ROLE -> `admin*` rename 
 `TenantAdmin`'s "operator" -> admin, and the Phase-0 marker `isPrimary` -> `isAdminDomain`. See the
 operator/primary locked decision for the full scope + the `*_V1` constant note (Phase 3).
 
-## Phase 3 - re-cut the `home`-bearing SIGNING vector corpora (Phase 1's hidden cost)
+## Phase 3 - re-cut the `home`-bearing SIGNING vector corpora. DONE.
+
+The three corpora (xdomain-link, cross-domain-sas, enroll-sas) + the decode-only protocol
+fixture were regenerated at `alice` from the real signing/SAS functions (a regen script, not
+hand-edited), cross-runtime verified by a forced Android `--rerun-tasks` (the Kotlin twins
+re-executed and agree). The provision-ops `SET_DISPLAY_NAME_V1` re-cut rode Phase 2. The `home`
+Domain-id sample data was then swept from the switchboard / evie / Android unit tests. The exact
+`"home"` literal now greps nowhere as a Domain id; `isPrimary` / `operatorName` / `operatorDomainId`
+/ `operatorSignPub` / `SET_OPERATOR_NAME` all gone. Residual is conceptual prose + identifiers
+(`homeOwner` var, `home-gw` gateway-id) only.
+
+## Phase 3 (original scope, for reference) - re-cut the `home`-bearing SIGNING vector corpora (Phase 1's hidden cost)
 
 THREE cross-runtime signed/hashed corpora embed `domainId:"home"` in the preimage (xdomain-link,
 enroll-sas, cross-domain-sas) + the protocol golden fixtures: the VALUE changes, so the bytes change and
