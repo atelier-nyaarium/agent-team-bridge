@@ -79,7 +79,7 @@ class FederationManager(private val store: ProvisioningStore) {
 		when (val load = store.loadIdentity()) {
 			is IdentityLoad.Loaded -> load.identity
 			IdentityLoad.Absent -> Crypto.generateIdentity().also { store.saveIdentity(it) }
-			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-console.sh")
+			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-admin-domain.sh")
 		}
 
 	/** Owner public material for DISPLAY only, or null when the stored owner key is unreadable

@@ -653,7 +653,7 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 	}
 }
 
-/** The tucked, text-only "Setting up a host" manual: the admin path (run provision-console.sh on
+/** The tucked, text-only "Setting up a host" manual: the admin path (run provision-admin-domain.sh on
  * a computer, paste back the setup blob it emits). No QR, no key prompt - the owner key is generated
  * silently and the script reads the PUBLIC keys. Reached from the fresh-open screen AND from the
  * empty board after a friend first-roots but has no host/gateway yet (the bring-up-a-host pointer). */
@@ -685,7 +685,7 @@ fun HostSetupHelpScreen(onBack: () -> Unit) {
 			HorizontalDivider()
 			Text(
 				"1. On the computer that will run your agents, clone switchboard and run " +
-					"./provision-console.sh --setup.\n\n" +
+					"./provision-admin-domain.sh --setup.\n\n" +
 					"2. It asks for a network name and sets everything up. No keys to paste - this app " +
 					"holds your owner key.\n\n" +
 					"3. It prints a setup code. Go back and scan or paste it.\n\n" +

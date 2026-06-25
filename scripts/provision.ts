@@ -1,5 +1,5 @@
-// Console setup - the SINGLE bootstrap for the Android Console. Driven by provision-console.sh,
-// a thin launcher that execs this.
+// Admin home Domain setup - roots the owner's own Domain and emits the bridge blob the owner's
+// Console imports. Driven by provision-admin-domain.sh, a thin launcher that execs this.
 //
 //   --setup              interactive menu: Provision (cutover + pre-stage the home Domain +
 //                        emit the transport blob) or Purge (clean-break wipe). Non-TTY runs
@@ -73,11 +73,11 @@ const INVITE_TTL_MS = 86_400_000;
 const USAGE = [
 	"Console setup - the SINGLE bootstrap for the Android Console.",
 	"",
-	"  ./provision-console.sh --setup              menu: Provision or Purge (non-TTY runs Provision direct)",
-	"  ./provision-console.sh --gateway-transport  move the local Gateway onto the service-proxy WS",
-	"  ./provision-console.sh --qr                 re-open the enrollment-QR menu for the current blob",
-	"  ./provision-console.sh --verify             health-probe the bridge",
-	"  ./provision-console.sh --help",
+	"  ./provision-admin-domain.sh --setup              menu: Provision or Purge (non-TTY runs Provision direct)",
+	"  ./provision-admin-domain.sh --gateway-transport  move the local Gateway onto the service-proxy WS",
+	"  ./provision-admin-domain.sh --qr                 re-open the enrollment-QR menu for the current blob",
+	"  ./provision-admin-domain.sh --verify             health-probe the bridge",
+	"  ./provision-admin-domain.sh --help",
 ].join("\n");
 
 ////////////////////////////////
@@ -272,7 +272,7 @@ async function verify(): Promise<void> {
 	);
 	await $`chmod 600 ${cfg}`.quiet().nothrow();
 	const url = `${apiUrl}/api/v1/namespaces/${NS}/services/${SERVICE}:${PORT}/proxy/ingest`;
-	const body = '{"conversationId":"provision-verify","lines":["provision-console.sh --verify auth probe"]}';
+	const body = '{"conversationId":"provision-verify","lines":["provision-admin-domain.sh --verify auth probe"]}';
 	try {
 		// ConsoleBridge binds 20004 a few seconds AFTER the evie pod reports ready, so the proxy
 		// returns 503 briefly after a (re)start. 401/404 are terminal - fail fast.

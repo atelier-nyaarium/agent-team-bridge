@@ -66,7 +66,7 @@ async function printQr(): Promise<void> {
 }
 
 /** A gateway is part of the mesh once a service-proxy transport has been delivered into its
- * federation dir (by provision-console.sh / enrollment). Absent = standalone, no mesh. */
+ * federation dir (by provision-admin-domain.sh / enrollment). Absent = standalone, no mesh. */
 async function hasTransport(): Promise<boolean> {
 	return (await $`test -f volumes/gateway/federation/transport.json`.quiet().nothrow()).exitCode === 0;
 }

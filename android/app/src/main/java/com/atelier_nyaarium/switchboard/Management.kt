@@ -76,7 +76,7 @@ fun OwnerKeysCard(repo: ChatRepository) {
 					style = MaterialTheme.typography.bodySmall,
 				)
 				Text("Fingerprint: ${keys.sas}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
-				// Both owner pubkeys as one JSON blob; provision-console.sh parses it. base64 needs no escaping.
+				// Both owner pubkeys as one JSON blob; provision-admin-domain.sh parses it. base64 needs no escaping.
 				OutlinedButton(
 					onClick = { copyToClipboard(context, "owner key", """{"signPub":"${keys.signPub}","boxPub":"${keys.boxPub}"}""") },
 					modifier = Modifier.fillMaxWidth(),

@@ -56,7 +56,7 @@ export function loadEvieTransport(federationDir: string): EvieTransport | null {
 }
 
 /** The bootstrap transport creds (the 4-field GatewayTransport) a creds-less Gateway needs to
- * reach evie, written into the federation dir by provision-console.sh. The Console fetches it via
+ * reach evie, written into the federation dir by provision-admin-domain.sh. The Console fetches it via
  * the get_gateway_transport op and seals it into a bundle for a Gateway it is enrolling, rather
  * than carrying these creds in its provisioning blob. Null when absent or malformed. */
 export function loadBootstrapTransport(federationDir: string): GatewayTransport | null {

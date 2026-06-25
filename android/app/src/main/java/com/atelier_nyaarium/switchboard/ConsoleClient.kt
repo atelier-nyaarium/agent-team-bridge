@@ -270,8 +270,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: Provision
 	private fun requireConsoleIdentity(): Crypto.Identity =
 		when (val load = store.loadIdentity()) {
 			is IdentityLoad.Loaded -> load.identity
-			IdentityLoad.Absent -> error("This device is not enrolled. Re-run provision-console.sh and re-import the setup blob.")
-			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-console.sh")
+			IdentityLoad.Absent -> error("This device is not enrolled. Re-run provision-admin-domain.sh and re-import the setup blob.")
+			IdentityLoad.Corrupt -> error("identity corrupt - the stored console key did not decode; restore from backup or re-run provision-admin-domain.sh")
 		}
 
 	/** Resolve a Gateway's keys from the owner-rooted keyring, verifying its admission

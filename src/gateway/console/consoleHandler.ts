@@ -615,7 +615,7 @@ export function createConsoleHandler({
 				const transport = bootstrapTransport?.() ?? null;
 				if (!transport) {
 					throw new Error(
-						"gateway transport not provisioned - run provision-console.sh --setup on the home Gateway",
+						"gateway transport not provisioned - run provision-admin-domain.sh --setup on the home Gateway",
 					);
 				}
 				return { transport };

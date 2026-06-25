@@ -306,7 +306,7 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 		// A rejected admission submission (e.g. the app's owner key does not match the Domain evie is
 		// rooted at) will NOT self-heal by waiting - surface it instead of the calm sync-lag above.
 		m.contains("admission rejected", ignoreCase = true) ->
-			"${m.take(100)} - re-run provision-console.sh, then re-import the setup blob" to ConnKind.TERMINAL
+			"${m.take(100)} - re-run provision-admin-domain.sh, then re-import the setup blob" to ConnKind.TERMINAL
 		// The Keystore-backed store failed to initialize, so the app fails closed (refuses to
 		// persist the federation key in cleartext). Re-running provision does not help; the device's
 		// secure storage must work. Distinct from "not enrolled" (which sounds fixable by re-running).
@@ -316,26 +316,26 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 		// over it (fail closed), so the only fixes are a backup restore or a deliberate recovery -
 		// distinct from "not enrolled" (which a re-import does fix).
 		m.contains("corrupt", ignoreCase = true) && m.contains("did not decode", ignoreCase = true) ->
-			"Stored key unreadable - restore from backup or re-run provision-console.sh" to ConnKind.TERMINAL
+			"Stored key unreadable - restore from backup or re-run provision-admin-domain.sh" to ConnKind.TERMINAL
 		m.contains("not enrolled", ignoreCase = true) ->
-			"Not enrolled - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
+			"Not enrolled - re-run provision-admin-domain.sh and re-import the setup blob" to ConnKind.TERMINAL
 		// A local provisioning gap (the blob did not carry the Gateway keys/id). Worded in
 		// ConsoleClient WITHOUT the "not admitted" token so it cannot collide with ENROLLING.
 		m.contains("keys are missing", ignoreCase = true) || m.contains("not provisioned", ignoreCase = true) ->
-			"Gateway not provisioned - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
+			"Gateway not provisioned - re-run provision-admin-domain.sh and re-import the setup blob" to ConnKind.TERMINAL
 		// The Console has no Gateway admitted yet (fresh setup), or none for this target in its
 		// keyring. The fix is to admit a Gateway from the management UI, not to re-provision.
 		// ChatState.needsGateway keys the board's Add-a-Gateway CTA off this message's prefix.
 		m.contains("not in the keyring", ignoreCase = true) || m.contains("no gateway admitted", ignoreCase = true) ->
 			"Add a Gateway from Manage Gateways to begin" to ConnKind.TERMINAL
 		m.startsWith("HTTP 400") ->
-			"App is out of date - update the app, or re-run provision-console.sh" to ConnKind.TERMINAL
+			"App is out of date - update the app, or re-run provision-admin-domain.sh" to ConnKind.TERMINAL
 		m.startsWith("HTTP 401") ->
-			"Sign-in rejected - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
+			"Sign-in rejected - re-run provision-admin-domain.sh and re-import the setup blob" to ConnKind.TERMINAL
 		m.startsWith("HTTP 403") ->
-			"Access expired - re-run provision-console.sh" to ConnKind.TERMINAL
+			"Access expired - re-run provision-admin-domain.sh" to ConnKind.TERMINAL
 		m.startsWith("HTTP 404") ->
-			"Server not set up - run provision-console.sh on the server" to ConnKind.TERMINAL
+			"Server not set up - run provision-admin-domain.sh on the server" to ConnKind.TERMINAL
 		m.startsWith("HTTP 409") ->
 			"A previous send is still finishing - retrying" to ConnKind.TRANSIENT
 		m.startsWith("HTTP 500") ->
@@ -346,7 +346,7 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 			"Server timed out - retrying" to ConnKind.TRANSIENT
 		e is javax.net.ssl.SSLHandshakeException || e is java.security.cert.CertificateException ||
 			m.contains("trust anchor", ignoreCase = true) || m.contains("CertPath", ignoreCase = true) ->
-			"Server certificate changed - re-run provision-console.sh" to ConnKind.TERMINAL
+			"Server certificate changed - re-run provision-admin-domain.sh" to ConnKind.TERMINAL
 		// Freshness/replay rejects clear on the next attempt (a retry carries a fresh
 		// timestamp + new nonce), so they are transient. Checked AFTER the TLS branch so a
 		// handshake-signature error is not mislabeled.
@@ -354,7 +354,7 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 			"Re-syncing the secure channel - retrying" to ConnKind.TRANSIENT
 		// A genuine key mismatch (bad signature / cannot decrypt) is terminal.
 		m.contains("signature", ignoreCase = true) || m.contains("decrypt", ignoreCase = true) ->
-			"Secure channel rejected - re-run provision-console.sh and re-import the setup blob" to ConnKind.TERMINAL
+			"Secure channel rejected - re-run provision-admin-domain.sh and re-import the setup blob" to ConnKind.TERMINAL
 		e is java.net.UnknownHostException ->
 			"Offline - no network" to ConnKind.TRANSIENT
 		e is java.net.ConnectException || e is java.net.SocketTimeoutException || e is java.io.InterruptedIOException ->
@@ -370,7 +370,7 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 private fun enrollFold(prevSince: Long): Pair<String?, Long> {
 	val since = if (prevSince == 0L) System.currentTimeMillis() else prevSince
 	return if (System.currentTimeMillis() - since > ENROLL_GRACE_MS) {
-		"Enrollment did not finish - re-run provision-console.sh and re-import the setup blob." to 0L
+		"Enrollment did not finish - re-run provision-admin-domain.sh and re-import the setup blob." to 0L
 	} else {
 		null to since
 	}
