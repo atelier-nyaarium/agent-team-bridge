@@ -97,16 +97,17 @@ export class Allowlist {
 	 * allowlist with the snapshot's owner-verified entries, so a re-sync converges
 	 * rather than accumulating duplicates. The first snapshot roots the Gateway
 	 * (trust-on-first-enroll); a later snapshot rooted at a different owner key is
-	 * ignored (recovery is a deliberate, separate path). */
-	applySnapshot(snapshot: DomainSnapshot): void {
+	 * ignored (recovery is a deliberate, separate path). Returns whether it applied. */
+	applySnapshot(snapshot: DomainSnapshot): boolean {
 		if (this.state.ownerSignPub && this.state.ownerSignPub !== snapshot.ownerSignPub) {
 			console.warn(`[allowlist] ignoring domain sync rooted at a different owner key`);
-			return;
+			return false;
 		}
 		this.state.ownerSignPub = snapshot.ownerSignPub;
 		this.state.admissions = snapshot.admissions.filter((s) => verifyAdmission(s, snapshot.ownerSignPub));
 		this.state.revocations = snapshot.revocations.filter((s) => verifyRevocation(s, snapshot.ownerSignPub));
 		this.persist();
+		return true;
 	}
 
 	/** Record an owner-signed admission (verified before it is stored). */

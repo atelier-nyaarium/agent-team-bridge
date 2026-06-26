@@ -20,7 +20,6 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { $ } from "bun";
-import { ADMIT_PAYLOAD_FILE } from "../src/gateway/federation/enrollQr.js";
 import { sanitizeDomainId } from "../src/shared/domain-id.js";
 import { sanitizeGatewayId } from "../src/shared/gateway-id.js";
 import { pendingAdminDomain, readAdminDomain, removeDomain, removeGatewayAdmission } from "./bootstrap-domain.js";
@@ -51,10 +50,10 @@ import { writeProvisioningBlob } from "./write-provisioning-blob.js";
 
 const HEALTH_URL = "http://localhost:20000/health";
 const ENROLL_URL = "http://localhost:20000/enroll";
+const ADMIT_PAYLOAD_URL = "http://localhost:20000/admit-payload";
 // The gateway's federation dir on the host (bind-mounted from FED_DIR_IN inside the container).
 const FED_DIR_HOST = "volumes/gateway/federation";
 const TRANSPORT_FILE_HOST = `${FED_DIR_HOST}/transport.json`; // enrollment writes this once a bundle installs
-const ADMIT_PAYLOAD_HOST = `${FED_DIR_HOST}/${ADMIT_PAYLOAD_FILE}`; // the raw admit payload the gateway writes while arming
 const EVIE_DEPLOY = "deploy/evie-bot-deployment";
 const FED_SECRET = "evie-federation";
 const BRIDGE_YAML = "../evie-bot/deploy/console-bridge.yaml";
@@ -162,7 +161,7 @@ async function clearTransport(): Promise<void> {
 /** Bring the gateway up with a fresh one-time enrollment nonce and its LAN address, so it opens the
  * /enroll listener and writes its admit payload. Each call arms a new nonce, so a slow scan never
  * hits the gateway's ~10 min one-shot window. */
-async function armGateway(): Promise<void> {
+async function armGateway(): Promise<string> {
 	const nonce = (await $`openssl rand -hex 16`.text()).trim();
 	const hostLine = (await $`hostname -I`.quiet().nothrow()).text().trim();
 	const host = hostLine.split(/\s+/)[0] || "0.0.0.0";
@@ -176,18 +175,25 @@ async function armGateway(): Promise<void> {
 	if (!(await waitHealth())) {
 		throw new Error("gateway not ready in 60s - run: docker logs switchboard");
 	}
+	return nonce;
 }
 
-/** Read the raw admit payload the gateway wrote while arming, polling briefly until it lands. */
-async function readAdmitPayload(): Promise<string> {
+/** Fetch the admit payload the gateway holds in memory while arming, gated by the enroll nonce we
+ * armed it with so the nonce + box key are not served unauthenticated on the LAN port. */
+async function readAdmitPayload(nonce: string): Promise<string> {
 	for (let i = 0; i < 15; i++) {
-		const text = await Bun.file(ADMIT_PAYLOAD_HOST)
-			.text()
-			.catch(() => "");
-		if (text.trim()) return text.trim();
+		try {
+			const res = await fetch(ADMIT_PAYLOAD_URL, { headers: { "x-enroll-nonce": nonce } });
+			if (res.ok) {
+				const text = (await res.text()).trim();
+				if (text) return text;
+			}
+		} catch {
+			// Gateway not up yet, or a dropped read - retry below.
+		}
 		await Bun.sleep(1000);
 	}
-	throw new Error(`no enrollment payload at ${ADMIT_PAYLOAD_HOST} - run: docker logs switchboard`);
+	throw new Error(`no enrollment payload from ${ADMIT_PAYLOAD_URL} - run: docker logs switchboard`);
 }
 
 /** Bring the gateway up normally (no enrollment nonce) so it connects with the delivered network id
@@ -298,8 +304,8 @@ async function setupGateway(): Promise<void> {
 		if (!confirm(`Gateway "${id}" already enrolled. Re-enroll?`)) return;
 	}
 
-	await armGateway();
-	const payload = await readAdmitPayload();
+	const nonce = await armGateway();
+	const payload = await readAdmitPayload(nonce);
 
 	try {
 		for (;;) {

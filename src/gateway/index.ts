@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ServerWebSocket } from "bun";
@@ -26,7 +26,7 @@ import {
 } from "./federation/crossDomainHandshake.js";
 import { CrossDomainPeers } from "./federation/crossDomainPeers.js";
 import { CrossDomainShareState } from "./federation/crossDomainShareState.js";
-import { ADMIT_PAYLOAD_FILE, admitGatewayPayload, logAdmitGatewayQr } from "./federation/enrollQr.js";
+import { type AdmitGatewayPayload, admitGatewayPayload, logAdmitGatewayQr } from "./federation/enrollQr.js";
 import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/gatewayRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
 import { ReplayGuard } from "./federation/replayGuard.js";
@@ -313,8 +313,9 @@ export async function startGateway(): Promise<void> {
 					console.warn(`[federation] dropped malformed domain sync: ${parsed.error.issues[0]?.message}`);
 					return;
 				}
-				allowlist.applySnapshot(parsed.data);
-				console.log(`[federation] domain sync applied (${parsed.data.admissions.length} admissions)`);
+				if (allowlist.applySnapshot(parsed.data)) {
+					console.log(`[federation] domain sync applied (${parsed.data.admissions.length} admissions)`);
+				}
 			},
 			onDomainMeta: (meta) => {
 				domainMeta = meta;
@@ -352,60 +353,58 @@ export async function startGateway(): Promise<void> {
 		});
 	}
 
-	// Creds-less enrollment: when armed with a one-time nonce (setup.sh (Enroll gateway))
-	// and not yet admitted, mint the identity, print the admit-gateway QR with the LAN
-	// target, and accept exactly one sealed bootstrap bundle over POST /enroll.
+	// Creds-less enrollment: when armed with a one-time nonce (setup.sh (Enroll gateway)), mint the
+	// identity, print the admit-gateway QR with the LAN target, hold the payload for
+	// GET /admit-payload, and accept exactly one sealed bootstrap bundle over POST /enroll.
 	let enrollInstall: ((frame: unknown) => string) | null = null;
+	let armedAdmitPayload: AdmitGatewayPayload | null = null;
 	const enrollNonce = process.env.ENROLL_NONCE;
 	if (enrollNonce && !evieTransport) {
 		const enrollAllowlist = new Allowlist(federationDir);
 		const enrollIdentity = loadOrCreateIdentity(federationDir);
-		if (!enrollAllowlist.selfAdmission(enrollIdentity.sign.pub)) {
-			const delivery = {
-				host: process.env.ENROLL_LAN_HOST || "0.0.0.0",
-				port: PORT,
-				nonce: enrollNonce,
-			};
-			logAdmitGatewayQr(enrollIdentity, localGatewayId, delivery);
-			// Also persist the raw payload so the setup script can re-render it (QR or pretty JSON)
-			// without scraping the rendered QR out of docker logs.
-			fs.writeFileSync(
-				path.join(federationDir, ADMIT_PAYLOAD_FILE),
-				JSON.stringify(admitGatewayPayload(enrollIdentity, localGatewayId, delivery)),
-				{ mode: 0o600 },
+		const delivery = {
+			host: process.env.ENROLL_LAN_HOST || "0.0.0.0",
+			port: PORT,
+			nonce: enrollNonce,
+		};
+		logAdmitGatewayQr(enrollIdentity, localGatewayId, delivery);
+		// Hold the payload in memory for setup.sh to GET /admit-payload over loopback, instead of
+		// a root-owned file the host user cannot read.
+		armedAdmitPayload = admitGatewayPayload(enrollIdentity, localGatewayId, delivery);
+		// The enrollment window closes after a bounded time; the nonce dies with it so a
+		// captured QR cannot be redeemed later. Re-arm via setup.sh (Enroll gateway) for a fresh nonce.
+		let enrollTimer: ReturnType<typeof setTimeout> | null = null;
+		enrollInstall = (frame) => {
+			const bundle = openBootstrapBundle(frame, enrollIdentity, enrollNonce, localGatewayId);
+			// Persist the owner-signed admission FIRST, then the transport creds: a failure
+			// must never leave creds installed without the admission that authorizes them. A
+			// foreign-owner re-root is refused, so no creds are written for it.
+			if (!enrollAllowlist.applySnapshot(bundle.domain)) {
+				throw new Error("bundle is rooted at a different owner than this gateway's Domain");
+			}
+			fs.writeFileSync(path.join(federationDir, "transport.json"), JSON.stringify(bundle.transport), {
+				mode: 0o600,
+			});
+			// Record the joined Domain so the post-enroll restart resolves the same Domain.
+			if (bundle.domainId) {
+				fs.writeFileSync(path.join(federationDir, DOMAIN_ID_FILE), bundle.domainId, { mode: 0o600 });
+			}
+			enrollInstall = null;
+			armedAdmitPayload = null;
+			if (enrollTimer) clearTimeout(enrollTimer);
+			console.log(
+				`[enroll] installed credentials for Gateway "${localGatewayId}". Restart the gateway to connect.`,
 			);
-			// The enrollment window closes after a bounded time; the nonce dies with it so a
-			// captured QR cannot be redeemed later. Re-run --enroll for a fresh nonce.
-			let enrollTimer: ReturnType<typeof setTimeout> | null = null;
-			enrollInstall = (frame) => {
-				const bundle = openBootstrapBundle(frame, enrollIdentity, enrollNonce, localGatewayId);
-				// Persist the owner-signed admission FIRST, then the transport creds: a failure
-				// must never leave creds installed without the admission that authorizes them.
-				enrollAllowlist.applySnapshot(bundle.domain);
-				fs.writeFileSync(path.join(federationDir, "transport.json"), JSON.stringify(bundle.transport), {
-					mode: 0o600,
-				});
-				// Record the joined Domain so the post-enroll restart resolves the same Domain.
-				if (bundle.domainId) {
-					fs.writeFileSync(path.join(federationDir, DOMAIN_ID_FILE), bundle.domainId, { mode: 0o600 });
-				}
-				// The admit payload's job ends once the bundle installs; drop it.
-				fs.rmSync(path.join(federationDir, ADMIT_PAYLOAD_FILE), { force: true });
+			return localGatewayId;
+		};
+		enrollTimer = setTimeout(() => {
+			if (enrollInstall) {
 				enrollInstall = null;
-				if (enrollTimer) clearTimeout(enrollTimer);
-				console.log(
-					`[enroll] installed credentials for Gateway "${localGatewayId}". Restart the gateway to connect.`,
-				);
-				return localGatewayId;
-			};
-			enrollTimer = setTimeout(() => {
-				if (enrollInstall) {
-					enrollInstall = null;
-					console.log("[enroll] enrollment window expired (~10 min); re-run setup.sh (Enroll gateway)");
-				}
-			}, 600_000);
-			enrollTimer.unref?.();
-		}
+				armedAdmitPayload = null;
+				console.log("[enroll] enrollment window expired (~10 min); re-run setup.sh (Enroll gateway)");
+			}
+		}, 600_000);
+		enrollTimer.unref?.();
 	}
 
 	const wsHandlers = createWebSocketHandlers({
@@ -662,6 +661,25 @@ export async function startGateway(): Promise<void> {
 					headers: { "Content-Type": "application/json" },
 				});
 			}
+		}
+		if (method === "GET" && url.pathname === "/admit-payload") {
+			// The payload carries the one-time nonce + box key, so gate it on the nonce the operator
+			// armed with: setup.sh has it, a LAN client that never armed does not. A source-IP check
+			// would not help - the docker proxy SNATs the host fetch to the bridge gateway anyway.
+			const presented = Buffer.from(req.headers.get("x-enroll-nonce") ?? "");
+			const expected = Buffer.from(enrollNonce ?? "");
+			const authed =
+				!!enrollNonce && presented.length === expected.length && timingSafeEqual(presented, expected);
+			if (!armedAdmitPayload || !authed) {
+				return new Response(JSON.stringify({ ok: false, error: "not in enrollment mode" }), {
+					status: 404,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			return new Response(JSON.stringify(armedAdmitPayload), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
 		}
 		if (method === "POST" && url.pathname === "/ingest") return routes.ingest(req, body);
 		if (method === "GET" && url.pathname === "/pending") return routes.pending();
