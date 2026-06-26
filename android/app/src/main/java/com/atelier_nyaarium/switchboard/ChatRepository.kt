@@ -1753,19 +1753,45 @@ class ChatRepository(
 		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub, prov.pendingTenant?.domainId)
 		val frameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), frame)
 		if (scanned.lanHost != null && scanned.lanPort != null && isPrivateLanHost(scanned.lanHost)) {
-			val ok = runCatching { postBundle(scanned.lanHost, scanned.lanPort, frameJson) }.getOrDefault(false)
-			if (ok) {
-				return@withContext EnrollDelivery(true, "Sent to the Gateway. It's coming online.", null)
+			val target = "${scanned.lanHost}:${scanned.lanPort}"
+			when (val r = postBundle(scanned.lanHost, scanned.lanPort, frameJson)) {
+				is BundlePost.Ok -> {
+					DebugLog.log("Enroll", "LAN delivery ok -> $target")
+					return@withContext EnrollDelivery(true, "Sent to the Gateway. It's coming online.", null)
+				}
+				is BundlePost.Rejected -> {
+					DebugLog.log("Enroll", "LAN delivery rejected $target HTTP ${r.code} body=${r.body}")
+					return@withContext EnrollDelivery(
+						true,
+						"The Gateway rejected the bundle (HTTP ${r.code}). Paste it into the Gateway's terminal instead.",
+						frameJson,
+					)
+				}
+				is BundlePost.Unreachable -> {
+					DebugLog.log("Enroll", "LAN delivery unreachable $target cause=${r.cause}")
+					return@withContext EnrollDelivery(
+						true,
+						"Couldn't reach the Gateway over the LAN. Paste the bundle into its terminal instead.",
+						frameJson,
+					)
+				}
 			}
-			return@withContext EnrollDelivery(true, "Couldn't reach the Gateway. Copy the bundle to its terminal instead.", frameJson)
 		}
 		EnrollDelivery(true, "Added. Copy the bundle to the Gateway's enrollment prompt.", frameJson)
 	}
 
-	/** Plain HTTP POST of the sealed bundle to the Gateway's nonce-gated LAN listener. No
-	 * TLS pinning: the bundle is already sealed to the Gateway box key, so the LAN is
-	 * trusted only for reachability, not confidentiality. */
-	private fun postBundle(host: String, port: Int, frameJson: String): Boolean {
+	/** The outcome of a LAN bundle POST, split so a Gateway-side rejection (a 4xx - meaning the bundle
+	 * WAS delivered) is never reported as "couldn't reach": the two need very different user fixes. */
+	private sealed interface BundlePost {
+		object Ok : BundlePost
+		data class Rejected(val code: Int, val body: String) : BundlePost
+		data class Unreachable(val cause: String) : BundlePost
+	}
+
+	/** Plain HTTP POST of the sealed bundle to the Gateway's nonce-gated LAN listener. No TLS
+	 * pinning: the bundle is already sealed to the Gateway box key, so the LAN is trusted only for
+	 * reachability, not confidentiality. Separates a connect failure from a Gateway-side rejection. */
+	private fun postBundle(host: String, port: Int, frameJson: String): BundlePost {
 		val client = OkHttpClient.Builder()
 			.connectTimeout(5, TimeUnit.SECONDS)
 			.writeTimeout(10, TimeUnit.SECONDS)
@@ -1775,7 +1801,14 @@ class ChatRepository(
 			.url("http://$host:$port/enroll")
 			.post(frameJson.toRequestBody("application/json".toMediaType()))
 			.build()
-		client.newCall(req).execute().use { return it.isSuccessful }
+		return try {
+			client.newCall(req).execute().use { resp ->
+				if (resp.isSuccessful) BundlePost.Ok
+				else BundlePost.Rejected(resp.code, resp.body?.string()?.take(200) ?: "")
+			}
+		} catch (e: Exception) {
+			BundlePost.Unreachable("${e.javaClass.simpleName}: ${e.message?.take(160) ?: ""}")
+		}
 	}
 
 	/** True only for a private / loopback / link-local IP LITERAL. The admit-gateway QR
