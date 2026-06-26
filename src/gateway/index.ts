@@ -433,7 +433,9 @@ export async function startGateway(): Promise<void> {
 			}
 			enrollInstall = null;
 			armedAdmitPayload = null;
-			enrollTlsServer?.stop(true);
+			// Graceful stop (not stop(true)): let the in-flight POST's 200 flush before the listener
+			// closes, so the Console sees success instead of a truncated-stream "delivery unreachable".
+			enrollTlsServer?.stop();
 			enrollTlsServer = null;
 			if (enrollTimer) clearTimeout(enrollTimer);
 			// no restart: activate evie in-process from the just-installed creds.

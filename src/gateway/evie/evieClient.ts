@@ -103,7 +103,10 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 
 		ws = new WebSocket(config.url, {
 			headers: config.headers,
-			...(config.tls ? { ca: config.tls.ca } : {}),
+			// Bun's WebSocket reads a pinned CA under `tls`, NOT a top-level `ca`. A top-level `ca` is
+			// silently ignored, so it falls back to the system trust store and rejects the private
+			// cluster-signed API server cert ("TLS handshake failed"). Verified against the live endpoint.
+			...(config.tls ? { tls: { ca: config.tls.ca } } : {}),
 		});
 
 		ws.on("open", () => {
