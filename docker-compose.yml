@@ -4,8 +4,12 @@ services:
     container_name: switchboard
     ports:
       - "20000:20000"
+      # Arming-only pinned-TLS listener for the phone's LAN bundle delivery (nothing binds it
+      # otherwise). The cert's SAN is the LAN IP, so the phone verifies hostname + pins the fingerprint.
+      - "20003:20003"
     environment:
       - PORT=20000
+      - ENROLL_TLS_PORT=20003
       # One Gateway per machine, named by the device hostname. start-gateway.sh
       # injects the host hostname into GATEWAY_ID; setting it explicitly is an escape
       # hatch for duplicate hostnames. Unset leaves the gateway to fall back to the

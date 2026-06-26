@@ -1,4 +1,4 @@
-// SYNC-HASH: 1630a1d83ca2eae26a704c4ec7caa86f
+// SYNC-HASH: 0fe768e73c21b05e08ef7a200318bd41
 // SYNCED MODULE - source of truth: switchboard/src/shared/federation-lifecycle.ts
 // Copied verbatim into: evie-bot/app/features/bridge/federation-lifecycle.ts
 // MUST re-copy on change: cp src/shared/federation-lifecycle.ts ../evie-bot/app/features/bridge/federation-lifecycle.ts
@@ -53,9 +53,17 @@ export const EnrollmentPayloadSchema = z
 			gatewayId: z.string().min(1),
 			signPub: z.string().min(1),
 			boxPub: z.string().min(1),
-			// Where the Console delivers the sealed bootstrap bundle. Present when the
-			// Gateway opened a LAN listener; absent when the admin chose manual paste.
-			lan: z.object({ host: z.string().min(1), port: z.number().int().positive() }).optional(),
+			// Where the Console delivers the sealed bootstrap bundle. Present when the Gateway opened a
+			// LAN listener; absent when the admin chose manual paste. certFp pins that listener's
+			// ephemeral self-signed TLS leaf (SHA-256 of the DER, hex): the Console delivers over pinned
+			// HTTPS when it is present, and falls back to paste when it is absent, so no cleartext POST.
+			lan: z
+				.object({
+					host: z.string().min(1),
+					port: z.number().int().positive(),
+					certFp: z.string().min(1).optional(),
+				})
+				.optional(),
 			// One-time nonce gating that listener; the Console echoes it inside the sealed
 			// bundle so a stale or cross-window delivery is rejected.
 			nonce: z.string().min(1).optional(),

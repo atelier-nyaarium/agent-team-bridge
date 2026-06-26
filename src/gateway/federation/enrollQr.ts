@@ -12,14 +12,15 @@ export interface AdmitGatewayPayload {
 	gatewayId: string;
 	signPub: string;
 	boxPub: string;
-	lan?: { host: string; port: number };
+	lan?: { host: string; port: number; certFp: string };
 	nonce?: string;
 }
 
 export interface EnrollDelivery {
-	host: string;
-	port: number;
 	nonce: string;
+	// The pinned-HTTPS LAN listener, set when the Gateway minted an enroll cert (it had a real LAN
+	// IP). Absent means no LAN listener: the Console enrolls by paste, using only the nonce.
+	lan?: { host: string; port: number; certFp: string };
 }
 
 ////////////////////////////////
@@ -35,7 +36,7 @@ export function admitGatewayPayload(
 		gatewayId,
 		signPub: identity.sign.pub,
 		boxPub: identity.box.pub,
-		...(delivery ? { lan: { host: delivery.host, port: delivery.port }, nonce: delivery.nonce } : {}),
+		...(delivery ? { nonce: delivery.nonce, ...(delivery.lan ? { lan: delivery.lan } : {}) } : {}),
 	};
 }
 
@@ -70,9 +71,9 @@ export function logAdmitGatewayQr(identity: Identity, gatewayId: string, deliver
 	console.log(`[federation] On the owner device, open Add Gateway and scan:\n`);
 	console.log(terminalQr(JSON.stringify(payload)));
 	console.log(`\n[federation] Confirm this fingerprint on the owner device: ${fingerprint(identity.sign.pub)}`);
-	if (delivery) {
+	if (delivery?.lan) {
 		console.log(
-			`[federation] Waiting for the admin Console to deliver credentials over the LAN (${delivery.host}:${delivery.port})...\n`,
+			`[federation] Waiting for the admin Console to deliver credentials over the LAN (${delivery.lan.host}:${delivery.lan.port})...\n`,
 		);
 	} else {
 		console.log("");
