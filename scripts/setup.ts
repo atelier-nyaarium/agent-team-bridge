@@ -64,6 +64,7 @@ const FED_DIR_IN = "/app/log/federation"; // the gateway's federation dir (allow
 const SECRETS_DIR = `${process.env.HOME}/.config/switchboard`; // host-local admin secrets (0700)
 const BLOB_FILE = `${SECRETS_DIR}/console-provisioning.json`; // the artifact the app imports
 const QR_GIF = `${SECRETS_DIR}/console-enrollment-qr.gif`; // optional saved QR image (menu opt 2)
+const CONSOLE_JSON_FILE = `${SECRETS_DIR}/console-enrollment.json`; // optional saved JSON (paste fallback)
 // Temp artifacts Setup Gateway can save so a far-away phone can scan/paste off-screen. Always
 // deleted on enrollment success, back-out, or ^C (see trackTemp / cleanupTemps).
 const GW_QR_GIF = `${SECRETS_DIR}/gateway-admit-qr.gif`;
@@ -260,6 +261,7 @@ async function tryClipboardCopy(text: string): Promise<boolean> {
  * and returns the path. Returns "continue" or "back". */
 async function presentArtifact(
 	heading: string,
+	continueLabel: string,
 	saveLabel: string,
 	render: () => void,
 	save: () => Promise<string>,
@@ -267,7 +269,7 @@ async function presentArtifact(
 	render();
 	for (;;) {
 		console.log(`\n  ${heading}`);
-		console.log("    1) Continue Enrollment - wait for the phone, then connect");
+		console.log(`    1) ${continueLabel}`);
 		console.log(`    2) ${saveLabel}`);
 		console.log("    b) Back");
 		const choice = ask("  >").toLowerCase();
@@ -280,6 +282,85 @@ async function presentArtifact(
 			} catch (e) {
 				err(e instanceof Error ? e.message : String(e));
 			}
+		} else {
+			err("Enter 1, 2, or b.");
+		}
+	}
+}
+
+/** The shared "send this to your phone" present-flow for both gateway enrollment and the admin
+ * Console enrollment: choose a QR or copy-paste JSON for the same payload, each with display, a
+ * clipboard copy (JSON), and a save-to-file fallback, in one consistent submenu. Returns "continue"
+ * (the caller's primary action - the gateway then waits for the bundle, the admin just finishes) or
+ * "back". Saves are tracked as temps so the caller's cleanupTemps() wipes them on exit. */
+async function presentEnrollment(
+	payload: string,
+	opts: {
+		title: string;
+		continueLabel: string;
+		qrScanHint: string;
+		jsonScanHint: string;
+		qrGifPath: string;
+		jsonFilePath: string;
+		qrSaveLabel: string;
+		jsonSaveLabel: string;
+	},
+): Promise<"continue" | "back"> {
+	for (;;) {
+		console.log(`\n${opts.title}`);
+		console.log("  1) Enroll with QR Code");
+		console.log("  2) Enroll with JSON Copy-pasta");
+		console.log("  b) Back");
+		const choice = ask(">").toLowerCase();
+
+		if (choice === "b") return "back";
+		if (choice === "1") {
+			const action = await presentArtifact(
+				opts.qrScanHint,
+				opts.continueLabel,
+				opts.qrSaveLabel,
+				() => {
+					// A payload too dense for a QR throws in qrPayload; offer JSON/save instead of crashing.
+					try {
+						const { ansi, modules } = renderQrTerminal(qrPayload(payload));
+						process.stdout.write(ansi);
+						console.error(`${modules}x${modules} modules, needs ~${modules + 4} terminal columns`);
+					} catch (e) {
+						err(e instanceof Error ? e.message : String(e));
+						console.log("  Too big for a QR - use option 2 (JSON) or Save below.");
+					}
+				},
+				async () => {
+					const { gif } = renderQrImageGif(qrPayload(payload));
+					await Bun.write(opts.qrGifPath, gif);
+					await $`chmod 600 ${opts.qrGifPath}`.quiet().nothrow();
+					trackTemp(opts.qrGifPath);
+					return opts.qrGifPath;
+				},
+			);
+			if (action === "continue") return "continue";
+		} else if (choice === "2") {
+			const pretty = JSON.stringify(JSON.parse(payload), null, 2);
+			const copied = await tryClipboardCopy(pretty);
+			const action = await presentArtifact(
+				opts.jsonScanHint,
+				opts.continueLabel,
+				opts.jsonSaveLabel,
+				() => {
+					console.log(
+						copied
+							? "\n  Copied the enrollment JSON to your clipboard. Try pasting it on your phone."
+							: "\n  Tried to copy the enrollment JSON to your clipboard. Try pasting; if nothing pastes, use Save below.",
+					);
+				},
+				async () => {
+					await Bun.write(opts.jsonFilePath, pretty);
+					await $`chmod 600 ${opts.jsonFilePath}`.quiet().nothrow();
+					trackTemp(opts.jsonFilePath);
+					return opts.jsonFilePath;
+				},
+			);
+			if (action === "continue") return "continue";
 		} else {
 			err("Enter 1, 2, or b.");
 		}
@@ -314,58 +395,17 @@ async function setupGateway(): Promise<void> {
 
 	try {
 		for (;;) {
-			console.log(`\nGateway "${id}" - send to your phone:`);
-			console.log("  1) Enroll with QR Code");
-			console.log("  2) Enroll with JSON Copy-pasta");
-			console.log("  b) Back");
-			const choice = ask(">").toLowerCase();
-
-			let action: "continue" | "back";
-			if (choice === "1") {
-				action = await presentArtifact(
-					"Scan this QR in your phone's Add Gateway screen.",
-					"Save Enrollment QR Instead",
-					() => {
-						const { ansi, modules } = renderQrTerminal(payload);
-						process.stdout.write(ansi);
-						console.error(`${modules}x${modules} modules, needs ~${modules + 4} terminal columns`);
-					},
-					async () => {
-						const { gif } = renderQrImageGif(payload);
-						await Bun.write(GW_QR_GIF, gif);
-						await $`chmod 600 ${GW_QR_GIF}`.quiet().nothrow();
-						trackTemp(GW_QR_GIF);
-						return GW_QR_GIF;
-					},
-				);
-			} else if (choice === "2") {
-				const pretty = JSON.stringify(JSON.parse(payload), null, 2);
-				const copied = await tryClipboardCopy(pretty);
-				action = await presentArtifact(
-					"Paste the enrollment JSON into your phone's Add Gateway screen.",
-					"Save Enrollment JSON Instead",
-					() => {
-						console.log(
-							copied
-								? "\n  Copied the enrollment JSON to your clipboard. Try pasting it into Add Gateway."
-								: "\n  Tried to copy the enrollment JSON to your clipboard. Try pasting; if nothing pastes, use Save below.",
-						);
-					},
-					async () => {
-						await Bun.write(GW_JSON_FILE, pretty);
-						await $`chmod 600 ${GW_JSON_FILE}`.quiet().nothrow();
-						trackTemp(GW_JSON_FILE);
-						return GW_JSON_FILE;
-					},
-				);
-			} else if (choice === "b") {
-				return;
-			} else {
-				err("Enter 1, 2, or b.");
-				continue;
-			}
-
-			if (action === "back") continue;
+			const action = await presentEnrollment(payload, {
+				title: `Gateway "${id}" - send to your phone:`,
+				continueLabel: "Done. Continue Enrollment",
+				qrScanHint: "Scan this QR in your phone's Add Gateway screen.",
+				jsonScanHint: "Paste the enrollment JSON into your phone's Add Gateway screen.",
+				qrGifPath: GW_QR_GIF,
+				jsonFilePath: GW_JSON_FILE,
+				qrSaveLabel: "Save Enrollment QR Instead",
+				jsonSaveLabel: "Save Enrollment JSON Instead",
+			});
+			if (action === "back") return;
 
 			// Continue: wait for the bundle (LAN delivery or a paste), then connect.
 			if ((await waitForInstall()) === "installed") {
@@ -390,7 +430,7 @@ async function purgeGateway(): Promise<void> {
 	await evieDelete((fed) => removeGatewayAdmission(fed, domain, gw));
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await wipeState();
-	await $`rm -f .env`.quiet().nothrow();
+	await $`rm -f .env ${GW_QR_GIF} ${GW_JSON_FILE}`.quiet().nothrow();
 	console.log("Purged.");
 }
 
@@ -614,67 +654,31 @@ function qrPayload(blobText: string): string {
 	return blobText;
 }
 
-/** Render the blob's QR in this terminal (wide - a full QR runs ~170+ modules). */
-async function showQrTerminal(): Promise<void> {
-	const blob = await Bun.file(BLOB_FILE)
-		.text()
-		.catch(() => "");
-	if (!blob) throw new Error("could not render the QR (is the blob present?)");
-	const { ansi, modules, ec } = renderQrTerminal(qrPayload(blob));
-	process.stdout.write(ansi);
-	console.error(`${modules}x${modules} modules, EC=${ec}, needs ~${modules + 4} terminal columns`);
-}
-
-/** Save the blob's QR as a 0600 GIF. Camera-friendly at any size. Returns the path. */
-async function saveQrImage(): Promise<string> {
-	const blob = await Bun.file(BLOB_FILE)
-		.text()
-		.catch(() => "");
-	if (!blob) throw new Error("could not read the blob (is it present?)");
-	const { gif } = renderQrImageGif(qrPayload(blob));
-	await Bun.write(QR_GIF, gif);
-	await $`chmod 600 ${QR_GIF}`.quiet().nothrow();
-	return QR_GIF;
-}
-
-/** Post-setup dial menu: show the enrollment QR in the terminal, or save it as an image. Quitting
- * deletes a saved QR (the only enrollment-process file left behind); the 0600 blob stays. */
+/** Post-setup: present the Console enrollment blob to the phone as a QR or copy-paste JSON, through
+ * the shared present-flow. Any saved artifact is wiped on exit; the durable 0600 blob stays. */
 async function qrMenu(): Promise<void> {
-	let saved = "";
-	for (;;) {
-		console.log("\n  Enrollment QR:");
-		console.log("    1) Display the QR in this terminal (wide)");
-		console.log(`    2) Save the QR as an image -> ${QR_GIF}`);
-		console.log(saved ? "    q) Delete the saved QR and quit" : "    q) Quit");
-		const choice = ask("  >");
-		if (choice === "1") {
-			console.log();
-			try {
-				await showQrTerminal();
-			} catch (e) {
-				err(e instanceof Error ? e.message : String(e));
-			}
-			console.log();
-		} else if (choice === "2") {
-			try {
-				saved = await saveQrImage();
-				trackTemp(saved);
-				note(`Saved: ${saved}`);
-			} catch (e) {
-				err(e instanceof Error ? e.message : String(e));
-				saved = "";
-			}
-		} else if (choice === "" || choice.toLowerCase() === "q") {
-			if (saved) {
-				await $`rm -f ${saved}`.quiet().nothrow();
-				note(`Deleted saved QR: ${saved}`);
-			}
-			note("Done.");
-			return;
-		} else {
-			err(`unknown option: '${choice}' (use 1, 2, or q)`);
-		}
+	const blob = await Bun.file(BLOB_FILE)
+		.text()
+		.catch(() => "");
+	if (!blob) {
+		err("could not read the blob (is it present?)");
+		return;
 	}
+	try {
+		await presentEnrollment(blob, {
+			title: "Console enrollment - send to your phone:",
+			continueLabel: "Done",
+			qrScanHint: "Scan this in the Switchboard app to enroll your phone.",
+			jsonScanHint: "Paste the enrollment JSON into the Switchboard app.",
+			qrGifPath: QR_GIF,
+			jsonFilePath: CONSOLE_JSON_FILE,
+			qrSaveLabel: "Save Enrollment QR Instead",
+			jsonSaveLabel: "Save Enrollment JSON Instead",
+		});
+	} finally {
+		cleanupTemps();
+	}
+	note("Done.");
 }
 
 ////////////////////////////////
@@ -736,7 +740,7 @@ async function purgeFederation(): Promise<void> {
 	await evieDelete((fed) => removeDomain(fed, domain));
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await wipeState();
-	await $`rm -f .env ${BLOB_FILE} ${QR_GIF}`.quiet().nothrow();
+	await $`rm -f .env ${BLOB_FILE} ${QR_GIF} ${CONSOLE_JSON_FILE} ${GW_QR_GIF} ${GW_JSON_FILE}`.quiet().nothrow();
 	// rmdir only succeeds on an empty dir, so this tidies the blob's home without touching other secrets.
 	await $`rmdir ${SECRETS_DIR}`.quiet().nothrow();
 	console.log("Purged.");
