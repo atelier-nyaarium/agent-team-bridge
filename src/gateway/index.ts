@@ -15,7 +15,7 @@ import { createConsoleDispatcher } from "./console/consoleHandler.js";
 import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { startEvieClient } from "./evie/evieClient.js";
-import { evieWsConnection, loadEvieTransport } from "./evie/transport.js";
+import { type EvieTransport, evieWsConnection, loadEvieTransport } from "./evie/transport.js";
 import { Allowlist } from "./federation/allowlist.js";
 import { openBootstrapBundle } from "./federation/bootstrapInstall.js";
 import {
@@ -57,7 +57,7 @@ export async function startGateway(): Promise<void> {
 	// The Gateway persists its federation identity, mirrored allowlist, and the enrollment-delivered
 	// transport.json + domain-id under this dir.
 	const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
-	const localDomainId = resolveLocalDomainId(federationDir);
+	let localDomainId = resolveLocalDomainId(federationDir);
 	console.log(`[gateway] Domain id: ${localDomainId ?? "(none - not yet enrolled)"}`);
 	const HEARTBEAT_INTERVAL_MS = 30000;
 	const MISSED_PINGS_LIMIT = 2;
@@ -206,7 +206,8 @@ export async function startGateway(): Promise<void> {
 
 	// The evie bridge activates only with both a delivered transport AND a resolved Domain id;
 	// missing either, the gateway stays standalone (no mesh) and serves /health + /enroll.
-	if (evieTransport && localDomainId) {
+	function activateFederation(transport: EvieTransport, domainId: string): void {
+		localDomainId = domainId;
 		// Load this Gateway's federation identity + mirrored allowlist from its volume,
 		// and build the E2E sealer (cross-Gateway frames are sealed peer-to-peer).
 		const allowlist = new Allowlist(federationDir);
@@ -285,10 +286,8 @@ export async function startGateway(): Promise<void> {
 		// The service-proxy WS: creds are delivered by enrollment, no kubeconfig mount, and it
 		// reaches a behind-NAT evie through the apiserver. The SA token authenticates to the API
 		// server (consumed there); the cluster CA is pinned for TLS.
-		const connection = evieWsConnection(evieTransport);
-		console.log(
-			`[evie] service-proxy transport -> ${evieTransport.apiUrl} (${evieTransport.service}:${evieTransport.port})`,
-		);
+		const connection = evieWsConnection(transport);
+		console.log(`[evie] service-proxy transport -> ${transport.apiUrl} (${transport.service}:${transport.port})`);
 
 		evieClient = startEvieClient({
 			url: connection.url,
@@ -385,16 +384,32 @@ export async function startGateway(): Promise<void> {
 			fs.writeFileSync(path.join(federationDir, "transport.json"), JSON.stringify(bundle.transport), {
 				mode: 0o600,
 			});
-			// Record the joined Domain so the post-enroll restart resolves the same Domain.
+			// Record the joined Domain so the gateway resolves it now and on any future boot.
 			if (bundle.domainId) {
 				fs.writeFileSync(path.join(federationDir, DOMAIN_ID_FILE), bundle.domainId, { mode: 0o600 });
 			}
 			enrollInstall = null;
 			armedAdmitPayload = null;
 			if (enrollTimer) clearTimeout(enrollTimer);
-			console.log(
-				`[enroll] installed credentials for Gateway "${localGatewayId}". Restart the gateway to connect.`,
-			);
+			// no restart: activate evie in-process from the just-installed creds.
+			const installedTransport = loadEvieTransport(federationDir);
+			const installedDomainId = resolveLocalDomainId(federationDir);
+			if (installedTransport && installedDomainId) {
+				try {
+					activateEvieBridge(installedTransport, installedDomainId);
+					console.log(`[enroll] installed credentials for Gateway "${localGatewayId}"; connecting to evie.`);
+				} catch (e) {
+					const msg = e instanceof Error ? e.message : String(e);
+					console.error(
+						`[enroll] credentials installed but evie activation failed: ${msg}. Re-run setup.sh (Setup Gateway).`,
+					);
+				}
+			} else {
+				// transport.json is now on disk, so a plain restart cannot self-arm; only a re-enroll recovers.
+				console.log(
+					`[enroll] credentials installed but no Domain id resolved; re-run setup.sh (Setup Gateway).`,
+				);
+			}
 			return localGatewayId;
 		};
 		enrollTimer = setTimeout(() => {
@@ -420,44 +435,49 @@ export async function startGateway(): Promise<void> {
 		},
 	});
 
-	const routes = createRoutes({
-		registry,
-		conversationRegistry,
-		store,
-		config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localGatewayId, localDomainId },
-		tryWakeTeam,
-		offlineCatalog,
-		knownTeamPaths,
-		mailboxStore,
-		evieClient,
-		sealer,
-		crossDomainPeers: crossDomainPeersForConsole,
-		// The owner's display name (from evie's register reply), stamped on every local TeamInfo
-		// so a linked friend Domain sees the owner's self-set label. Null until the first register.
-		displayName: () => domainMeta?.displayName ?? null,
-		// True when this Gateway's own Domain is the admin's (the evie-runner who provisions others).
-		// Stamped on the local TeamInfo so the console shows admin surfaces only on the admin's own
-		// session. Null (not false) until the first register, so "unknown" stays unknown.
-		isAdminDomain: () => domainMeta?.isAdminDomain ?? null,
-		// Local-first seal-target resolution on the send side: a target gateway the local
-		// allowlist admits seals v1 to the local Domain, mirroring the sealer's open-side ordering, so a
-		// local/friend gateway-id collision never routes a local send to the friend.
-		resolvesLocalGateway: allowlistForConsole
-			? (gatewayId) => allowlistForConsole!.resolveGateway(gatewayId) !== null
-			: null,
-		// teams() refreshes each online session's cross-Domain shares so presence keeps a
-		// share from auto-forgetting; the periodic sweep below reaps only absent sessions.
-		touchShares: crossDomainShareState ? (sessionTarget) => crossDomainShareState!.touch(sessionTarget) : null,
-		// respond re-reads the per-session share on a cross-Domain reply forward: a send
-		// accepted while shared, then un-shared, has its in-flight reply dropped here instead
-		// of relayed back to the origin (the un-share bites every direction, not just fresh sends).
-		isSharedToForReply: crossDomainShareState
-			? (sessionTarget, domainId) => crossDomainShareState!.isSharedTo(sessionTarget, domainId, isLinkedDomain)
-			: null,
-		resolveHandshake: wsHandlers.resolveHandshake,
-	});
+	function buildRoutes() {
+		return createRoutes({
+			registry,
+			conversationRegistry,
+			store,
+			config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localGatewayId, localDomainId },
+			tryWakeTeam,
+			offlineCatalog,
+			knownTeamPaths,
+			mailboxStore,
+			evieClient,
+			sealer,
+			crossDomainPeers: crossDomainPeersForConsole,
+			// The owner's display name (from evie's register reply), stamped on every local TeamInfo
+			// so a linked friend Domain sees the owner's self-set label. Null until the first register.
+			displayName: () => domainMeta?.displayName ?? null,
+			// True when this Gateway's own Domain is the admin's (the evie-runner who provisions others).
+			// Stamped on the local TeamInfo so the console shows admin surfaces only on the admin's own
+			// session. Null (not false) until the first register, so "unknown" stays unknown.
+			isAdminDomain: () => domainMeta?.isAdminDomain ?? null,
+			// Local-first seal-target resolution on the send side: a target gateway the local
+			// allowlist admits seals v1 to the local Domain, mirroring the sealer's open-side ordering, so a
+			// local/friend gateway-id collision never routes a local send to the friend.
+			resolvesLocalGateway: allowlistForConsole
+				? (gatewayId) => allowlistForConsole!.resolveGateway(gatewayId) !== null
+				: null,
+			// teams() refreshes each online session's cross-Domain shares so presence keeps a
+			// share from auto-forgetting; the periodic sweep below reaps only absent sessions.
+			touchShares: crossDomainShareState ? (sessionTarget) => crossDomainShareState!.touch(sessionTarget) : null,
+			// respond re-reads the per-session share on a cross-Domain reply forward: a send
+			// accepted while shared, then un-shared, has its in-flight reply dropped here instead
+			// of relayed back to the origin (the un-share bites every direction, not just fresh sends).
+			isSharedToForReply: crossDomainShareState
+				? (sessionTarget, domainId) =>
+						crossDomainShareState!.isSharedTo(sessionTarget, domainId, isLinkedDomain)
+				: null,
+			resolveHandshake: wsHandlers.resolveHandshake,
+		});
+	}
 
-	if (evieClient) {
+	let routes = buildRoutes();
+
+	function activateEvieHandlers(): void {
 		const consoleHandler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
@@ -605,26 +625,37 @@ export async function startGateway(): Promise<void> {
 	// month is dropped, UNLESS a live cross-Domain thread to that session still exists (a
 	// running collaboration must not lose its share mid-stream). teams() touches every live
 	// session's shares so presence keeps a share fresh; this timer reaps the absent ones.
-	if (crossDomainShareState && crossDomainPeersForConsole) {
-		const share = crossDomainShareState;
-		const peers = crossDomainPeersForConsole;
-		const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-		// "Live" means RECENTLY ACTIVE, not "ever touched": a persistent anchor refreshes its
-		// createdAt on every create + deliver, so a thread idle past this window stops
-		// suppressing the auto-forget (otherwise a single stale anchor pins a share forever).
-		const isLive = (sessionTarget: string): boolean =>
-			store.hasLiveCrossDomainThread(
-				sessionTarget,
-				(gatewayId) => peers.all().some((p) => p.friendGatewayId === gatewayId),
-				localGatewayId,
-				THIRTY_DAYS_MS,
-			);
-		const shareSweepTimer = setInterval(() => {
-			const dropped = share.sweep(Date.now(), THIRTY_DAYS_MS, isLive);
-			if (dropped > 0) console.log(`[federation] auto-forgot ${dropped} stale cross-Domain share(s)`);
-		}, 3_600_000);
-		shareSweepTimer.unref?.();
+	function startShareSweep(): void {
+		if (crossDomainShareState && crossDomainPeersForConsole) {
+			const share = crossDomainShareState;
+			const peers = crossDomainPeersForConsole;
+			const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+			// "Live" means RECENTLY ACTIVE, not "ever touched": a persistent anchor refreshes its
+			// createdAt on every create + deliver, so a thread idle past this window stops
+			// suppressing the auto-forget (otherwise a single stale anchor pins a share forever).
+			const isLive = (sessionTarget: string): boolean =>
+				store.hasLiveCrossDomainThread(
+					sessionTarget,
+					(gatewayId) => peers.all().some((p) => p.friendGatewayId === gatewayId),
+					localGatewayId,
+					THIRTY_DAYS_MS,
+				);
+			const shareSweepTimer = setInterval(() => {
+				const dropped = share.sweep(Date.now(), THIRTY_DAYS_MS, isLive);
+				if (dropped > 0) console.log(`[federation] auto-forgot ${dropped} stale cross-Domain share(s)`);
+			}, 3_600_000);
+			shareSweepTimer.unref?.();
+		}
 	}
+
+	function activateEvieBridge(transport: EvieTransport, domainId: string): void {
+		if (evieClient) return;
+		activateFederation(transport, domainId);
+		routes = buildRoutes();
+		activateEvieHandlers();
+		startShareSweep();
+	}
+	if (evieTransport && localDomainId) activateEvieBridge(evieTransport, localDomainId);
 
 	async function router(req: Request): Promise<Response> {
 		const url = new URL(req.url);

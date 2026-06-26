@@ -196,17 +196,6 @@ async function readAdmitPayload(nonce: string): Promise<string> {
 	throw new Error(`no enrollment payload from ${ADMIT_PAYLOAD_URL} - run: docker logs switchboard`);
 }
 
-/** Bring the gateway up normally (no enrollment nonce) so it connects with the delivered network id
- * and transport. */
-async function connectGateway(): Promise<void> {
-	console.log("Connecting");
-	await dc("down", "--remove-orphans").quiet().nothrow();
-	if ((await dc("up", "--build", "-d").nothrow()).exitCode !== 0) throw new Error("could not start the gateway");
-	if (!(await waitHealth())) {
-		throw new Error("gateway not ready in 60s - run: docker logs switchboard");
-	}
-}
-
 /** POST a pasted sealed bundle to the gateway's /enroll listener (the same intake the phone's LAN
  * POST hits). Returns whether the gateway accepted and installed it. */
 async function postPastedBundle(bundle: string): Promise<boolean> {
@@ -380,9 +369,8 @@ async function setupGateway(): Promise<void> {
 
 			// Continue: wait for the bundle (LAN delivery or a paste), then connect.
 			if ((await waitForInstall()) === "installed") {
-				await connectGateway();
 				console.log();
-				note(`Gateway "${id}" is connected.`);
+				note(`Gateway "${id}" enrolled; connecting to evie.`);
 				return;
 			}
 		}
