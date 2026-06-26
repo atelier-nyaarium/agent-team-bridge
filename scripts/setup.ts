@@ -737,6 +737,8 @@ async function purgeFederation(): Promise<void> {
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await wipeState();
 	await $`rm -f .env ${BLOB_FILE} ${QR_GIF}`.quiet().nothrow();
+	// rmdir only succeeds on an empty dir, so this tidies the blob's home without touching other secrets.
+	await $`rmdir ${SECRETS_DIR}`.quiet().nothrow();
 	console.log("Purged.");
 }
 
