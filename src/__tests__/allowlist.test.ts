@@ -84,11 +84,12 @@ describe("Allowlist", () => {
 
 	it("mirrors a Domain snapshot and surfaces the gateway's own admission", () => {
 		const a = new Allowlist(tmpDir());
-		a.applySnapshot({
+		const applied = a.applySnapshot({
 			ownerSignPub: owner.sign.pub,
 			admissions: [signAdmission(hostAdmission(), owner.sign.priv, owner.sign.pub)],
 			revocations: [],
 		});
+		expect(applied).toBe(true);
 		expect(a.ownerSignPub).toBe(owner.sign.pub);
 		expect(a.resolveGateway("laptop")?.boxPub).toBe(host.box.pub);
 		expect(a.selfAdmission(host.sign.pub)?.admission.gatewayId).toBe("laptop");
@@ -117,7 +118,7 @@ describe("Allowlist", () => {
 		const a = new Allowlist(tmpDir());
 		a.setOwner(owner.sign.pub);
 		const other = generateIdentity();
-		a.applySnapshot({ ownerSignPub: other.sign.pub, admissions: [], revocations: [] });
+		expect(a.applySnapshot({ ownerSignPub: other.sign.pub, admissions: [], revocations: [] })).toBe(false);
 		// The original root stands; the foreign snapshot is ignored.
 		expect(a.ownerSignPub).toBe(owner.sign.pub);
 	});
