@@ -26,7 +26,13 @@ import {
 } from "./federation/crossDomainHandshake.js";
 import { CrossDomainPeers } from "./federation/crossDomainPeers.js";
 import { CrossDomainShareState } from "./federation/crossDomainShareState.js";
-import { type AdmitGatewayPayload, admitGatewayPayload, logAdmitGatewayQr } from "./federation/enrollQr.js";
+import {
+	type AdmitGatewayPayload,
+	admitGatewayPayload,
+	type EnrollDelivery,
+	logAdmitGatewayQr,
+} from "./federation/enrollQr.js";
+import { generateEnrollCert } from "./federation/enrollTls.js";
 import { createGatewayRelayHandler, createGatewayRelayPump } from "./federation/gatewayRelay.js";
 import { loadOrCreateIdentity } from "./federation/identity.js";
 import { ReplayGuard } from "./federation/replayGuard.js";
@@ -41,6 +47,8 @@ import { createWebSocketHandlers, type WsData } from "./websocket.js";
 
 export async function startGateway(): Promise<void> {
 	const PORT = parseInt(process.env.PORT || "20000", 10);
+	// The arming-only pinned-TLS listener for the phone's LAN bundle delivery (see the arming block).
+	const ENROLL_TLS_PORT = parseInt(process.env.ENROLL_TLS_PORT || "20003", 10);
 	const LOG_PATH = path.join("/app", "log", "debug.log");
 
 	// Clear debug log on startup so it only contains entries from this run
@@ -361,11 +369,46 @@ export async function startGateway(): Promise<void> {
 	if (enrollNonce && !evieTransport) {
 		const enrollAllowlist = new Allowlist(federationDir);
 		const enrollIdentity = loadOrCreateIdentity(federationDir);
-		const delivery = {
-			host: process.env.ENROLL_LAN_HOST || "0.0.0.0",
-			port: PORT,
+		// The phone delivers the sealed bundle over a pinned-TLS listener the gateway opens only while
+		// armed: the bundle is already E2E sealed, so this exists only to satisfy Android's no-cleartext
+		// policy without an app-wide permit and to keep the LAN wire private. The phone pins the cert
+		// fingerprint carried in the QR; the SAN is the LAN IP, so its hostname check stays on. A
+		// non-LAN host (0.0.0.0) mints no cert -> no listener -> the Console enrolls by paste (nonce-gated).
+		const enrollLanHost = process.env.ENROLL_LAN_HOST || "0.0.0.0";
+		const enrollCert = generateEnrollCert(enrollLanHost);
+		let enrollTlsServer: ReturnType<typeof Bun.serve> | null = null;
+		const delivery: EnrollDelivery = {
 			nonce: enrollNonce,
+			...(enrollCert ? { lan: { host: enrollLanHost, port: ENROLL_TLS_PORT, certFp: enrollCert.certFp } } : {}),
 		};
+		if (enrollCert) {
+			enrollTlsServer = Bun.serve({
+				port: ENROLL_TLS_PORT,
+				tls: { cert: enrollCert.certPem, key: enrollCert.keyPem },
+				fetch: async (req) => {
+					const url = new URL(req.url);
+					if (req.method === "POST" && url.pathname === "/enroll") {
+						let body: Record<string, unknown> = {};
+						try {
+							body = (await req.json()) as Record<string, unknown>;
+						} catch {
+							return new Response(JSON.stringify({ ok: false, error: "Invalid JSON" }), {
+								status: 400,
+								headers: { "Content-Type": "application/json" },
+							});
+						}
+						return handleEnrollPost(body);
+					}
+					return new Response(JSON.stringify({ ok: false, error: "not found" }), {
+						status: 404,
+						headers: { "Content-Type": "application/json" },
+					});
+				},
+			});
+			console.log(
+				`[enroll] pinned-TLS delivery on ${enrollLanHost}:${ENROLL_TLS_PORT} (cert ${enrollCert.certFp.slice(0, 16)}...)`,
+			);
+		}
 		logAdmitGatewayQr(enrollIdentity, localGatewayId, delivery);
 		// Hold the payload in memory for setup.sh to GET /admit-payload over loopback, instead of
 		// a root-owned file the host user cannot read.
@@ -390,6 +433,8 @@ export async function startGateway(): Promise<void> {
 			}
 			enrollInstall = null;
 			armedAdmitPayload = null;
+			enrollTlsServer?.stop(true);
+			enrollTlsServer = null;
 			if (enrollTimer) clearTimeout(enrollTimer);
 			// no restart: activate evie in-process from the just-installed creds.
 			const installedTransport = loadEvieTransport(federationDir);
@@ -416,10 +461,35 @@ export async function startGateway(): Promise<void> {
 			if (enrollInstall) {
 				enrollInstall = null;
 				armedAdmitPayload = null;
+				enrollTlsServer?.stop(true);
+				enrollTlsServer = null;
 				console.log("[enroll] enrollment window expired (~10 min); re-run setup.sh (Enroll gateway)");
 			}
 		}, 600_000);
 		enrollTimer.unref?.();
+	}
+
+	// POST /enroll intake, shared by the main HTTP listener (host loopback paste) and the arming-only
+	// pinned-TLS listener (the phone's LAN delivery). Gated on enrollInstall, so it 404s off-window.
+	function handleEnrollPost(body: Record<string, unknown>): Response {
+		if (!enrollInstall) {
+			return new Response(JSON.stringify({ ok: false, error: "not in enrollment mode" }), {
+				status: 404,
+				headers: { "Content-Type": "application/json" },
+			});
+		}
+		try {
+			const gatewayId = enrollInstall(body);
+			return new Response(JSON.stringify({ ok: true, gatewayId }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		} catch (e) {
+			return new Response(JSON.stringify({ ok: false, error: e instanceof Error ? e.message : String(e) }), {
+				status: 400,
+				headers: { "Content-Type": "application/json" },
+			});
+		}
 	}
 
 	const wsHandlers = createWebSocketHandlers({
@@ -674,24 +744,7 @@ export async function startGateway(): Promise<void> {
 		}
 
 		if (method === "POST" && url.pathname === "/enroll") {
-			if (!enrollInstall) {
-				return new Response(JSON.stringify({ ok: false, error: "not in enrollment mode" }), {
-					status: 404,
-					headers: { "Content-Type": "application/json" },
-				});
-			}
-			try {
-				const gatewayId = enrollInstall(body);
-				return new Response(JSON.stringify({ ok: true, gatewayId }), {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
-			} catch (e) {
-				return new Response(JSON.stringify({ ok: false, error: e instanceof Error ? e.message : String(e) }), {
-					status: 400,
-					headers: { "Content-Type": "application/json" },
-				});
-			}
+			return handleEnrollPost(body);
 		}
 		if (method === "GET" && url.pathname === "/admit-payload") {
 			// The payload carries the one-time nonce + box key, so gate it on the nonce the operator

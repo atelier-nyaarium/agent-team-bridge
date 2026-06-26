@@ -28,6 +28,7 @@ RUN apt update && apt install -y \
 	ncdu \
 	neovim \
 	net-tools \
+	openssl \
 	procps \
 	rsync \
 	screen \

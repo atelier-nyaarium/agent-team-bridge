@@ -164,8 +164,11 @@ async function clearTransport(): Promise<void> {
  * hits the gateway's ~10 min one-shot window. */
 async function armGateway(): Promise<string> {
 	const nonce = (await $`openssl rand -hex 16`.text()).trim();
+	// Prefer the source IP on the default route (the interface that actually reaches the LAN), so a
+	// Docker-bridge or VPN address from `hostname -I` cannot win and break the phone's pinned-TLS dial.
+	const routeIp = (await $`ip route get 1.1.1.1`.quiet().nothrow()).text().match(/src\s+(\d+\.\d+\.\d+\.\d+)/)?.[1];
 	const hostLine = (await $`hostname -I`.quiet().nothrow()).text().trim();
-	const host = hostLine.split(/\s+/)[0] || "0.0.0.0";
+	const host = routeIp || hostLine.split(/\s+/)[0] || "0.0.0.0";
 	console.log(`Starting gateway, enrollment on ${host}:20000`);
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await clearTransport();
