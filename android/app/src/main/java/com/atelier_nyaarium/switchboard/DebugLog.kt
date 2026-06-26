@@ -1,11 +1,8 @@
 package com.atelier_nyaarium.switchboard
 
 import android.content.ContentUris
-import android.content.ContentValues
 import android.content.Context
-import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.provider.MediaStore
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
@@ -13,25 +10,20 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * On-device debug log the user can pull off the console. Writes to
- * Downloads/switchboard-debug.log via MediaStore with no storage permission,
- * truncating at each app start so a sent log is one session. Lines also go to
- * logcat under the `sb/<tag>` tag.
+ * Debug-only log stream. This build writes NO on-device file. DEBUG builds buffer the last RING_CAP
+ * lines and flush them to evie's POST /ingest once per poll cycle; release builds emit logcat only
+ * (every ring/ingest path sits inside `if (BuildConfig.DEBUG)`). Lines also go to logcat under the
+ * `sb/<tag>` tag.
  *
- * Logging must never crash the app, so every sink call is wrapped and failures
- * are swallowed. DEBUG builds also buffer the last RING_CAP lines and flush them
- * to evie's POST /ingest once per poll cycle. Release builds eliminate the ingest
- * path entirely (every call sits inside `if (BuildConfig.DEBUG)`).
+ * Older builds spilled a Downloads/switchboard-debug.log (plus rotated and .txt variants). Since this
+ * build creates none, [init] sweeps any the install still owns on EVERY start - best-effort, off the
+ * main thread - so the long tail of differently-named spills clears over the next several launches.
+ *
+ * Logging must never crash the app, so every sink call is wrapped and failures are swallowed.
  */
 object DebugLog {
-	private const val FILE_NAME = "switchboard-debug.log"
 	private val lock = Any()
 	private val fmt = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
-
-	@Volatile private var appContext: Context? = null
-
-	// Cached so each append is a single openOutputStream, not a query + insert.
-	@Volatile private var fileUri: Uri? = null
 
 	////////////////////////////////
 	//  DEBUG-only ingest state
@@ -55,13 +47,14 @@ object DebugLog {
 
 	fun init(context: Context) {
 		val ctx = context.applicationContext
-		appContext = ctx
-		synchronized(lock) {
-			fileUri = runCatching { freshSink(ctx) }.getOrNull()
-		}
-		log("DebugLog", "init build ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) sdk ${Build.VERSION.SDK_INT} debug=${BuildConfig.DEBUG}")
+		// This build writes no on-device log file; reap any older builds spilled (off-main, best-effort).
+		Thread { sweepSpilledLogs(ctx) }.apply { isDaemon = true }.start()
+		log(
+			"DebugLog",
+			"init build ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) sdk ${Build.VERSION.SDK_INT} debug=${BuildConfig.DEBUG}",
+		)
 
-		// Capture an otherwise-silent crash into the same file before the app dies.
+		// Surface an otherwise-silent crash to logcat (and the ring, on debug) before the app dies.
 		val prev = Thread.getDefaultUncaughtExceptionHandler()
 		Thread.setDefaultUncaughtExceptionHandler { thread, e ->
 			runCatching { log("CRASH", "uncaught on ${thread.name}: ${e.stackTraceToString()}") }
@@ -133,51 +126,46 @@ object DebugLog {
 
 	fun log(tag: String, msg: String) {
 		android.util.Log.d("sb/$tag", msg)
-		val line = "${fmt.format(Date())} [$tag] $msg\n"
-		val ctx = appContext ?: return
-		synchronized(lock) {
-			if (BuildConfig.DEBUG) {
-				ring.addLast(line.trimEnd())
+		if (BuildConfig.DEBUG) {
+			val line = "${fmt.format(Date())} [$tag] $msg"
+			synchronized(lock) {
+				ring.addLast(line)
 				while (ring.size > RING_CAP) ring.removeFirst()
-			}
-			runCatching {
-				val uri = fileUri
-				if (uri != null) {
-					ctx.contentResolver.openOutputStream(uri, "wa")?.use { it.write(line.toByteArray()) }
-				}
 			}
 		}
 	}
 
-	/** Create (or replace) the log file and write the session header; returns its
-	 * MediaStore uri, or null if it could not be created. */
-	private fun freshSink(ctx: Context): Uri? {
-		val header = "=== switchboard debug log; session start ${fmt.format(Date())} ===\n"
-		val resolver = ctx.contentResolver
-		val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+	// One regex for every name older builds spilled - switchboard-debug.log, .log.txt, and Android's
+	// " (N)" dedup suffix in either slot:
+	//   switchboard-debug.log | switchboard-debug.log.txt | switchboard-debug (1).log | switchboard-debug.log (1).txt
+	private val SPILL_RE = Regex("""^switchboard-debug( \(\d+\))?\.log( \(\d+\))?(\.txt)?$""")
 
-		// Drop any prior session's file so a sent log is only the current run.
-		resolver.query(
-			collection,
-			arrayOf(MediaStore.Downloads._ID),
-			"${MediaStore.Downloads.DISPLAY_NAME}=?",
-			arrayOf(FILE_NAME),
-			null,
-		)?.use { c ->
-			val idCol = c.getColumnIndexOrThrow(MediaStore.Downloads._ID)
-			while (c.moveToNext()) {
-				runCatching { resolver.delete(ContentUris.withAppendedId(collection, c.getLong(idCol)), null, null) }
+	/** Delete any switchboard-debug log files older builds left in Downloads. Best-effort, no storage
+	 * permission (this install's owned entries only, scoped storage). Runs every start so the long tail
+	 * of differently-named spills clears over the next launches; this build creates no new ones. */
+	private fun sweepSpilledLogs(ctx: Context) {
+		runCatching {
+			val resolver = ctx.contentResolver
+			val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+			resolver.query(
+				collection,
+				arrayOf(MediaStore.Downloads._ID, MediaStore.Downloads.DISPLAY_NAME),
+				"${MediaStore.Downloads.DISPLAY_NAME} LIKE ?",
+				arrayOf("switchboard-debug%"),
+				null,
+			)?.use { c ->
+				val idCol = c.getColumnIndexOrThrow(MediaStore.Downloads._ID)
+				val nameCol = c.getColumnIndexOrThrow(MediaStore.Downloads.DISPLAY_NAME)
+				while (c.moveToNext()) {
+					val name = c.getString(nameCol) ?: continue
+					if (SPILL_RE.matches(name)) {
+						runCatching {
+							resolver.delete(ContentUris.withAppendedId(collection, c.getLong(idCol)), null, null)
+						}
+					}
+				}
 			}
 		}
-
-		val values = ContentValues().apply {
-			put(MediaStore.Downloads.DISPLAY_NAME, FILE_NAME)
-			put(MediaStore.Downloads.MIME_TYPE, "text/plain")
-			put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-		}
-		val uri = resolver.insert(collection, values) ?: return null
-		resolver.openOutputStream(uri, "wt")?.use { it.write(header.toByteArray()) }
-		return uri
 	}
 
 	/** A TLS socket factory trusting ONLY the cluster CA, matching the relay's pinned
