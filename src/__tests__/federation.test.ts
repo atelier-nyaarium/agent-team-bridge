@@ -348,8 +348,10 @@ function lib(gw = "hostb"): TeamInfoLite {
 function scratch(gw = "hostb"): TeamInfoLite {
 	return { team: "scratch", gatewayId: gw, status: "online", kind: "loose", queue_depth: 0 };
 }
-function gatewayAgent(gw = "hostb"): TeamInfoLite {
-	return { team: "gateway", gatewayId: gw, status: "online", kind: "gateway", queue_depth: 0 };
+function unknownKindTeam(gw = "hostb"): TeamInfoLite {
+	// A roster entry whose kind the gateway does not recognize (e.g. a remote or forged roster).
+	// The share/kind gate must fail closed: only devcontainer/loose sessions are shareable.
+	return { team: "unknown-kind", gatewayId: gw, status: "online", kind: "unknown", queue_depth: 0 };
 }
 function consoleTeam(gw = "hostb"): TeamInfoLite {
 	return { team: "pixel", gatewayId: gw, status: "online", kind: "console", queue_depth: 0 };
@@ -363,7 +365,7 @@ const crossSend = (to: string): FederatedOp => ({
 	returnRoute: { srcGateway: "alice-gw", srcConversationId: "c1", srcSession: `conv:c1:hostb/${to}` },
 });
 
-describe("Phase D destination gate (cross-Domain relay handleOp)", () => {
+describe("destination gate (cross-Domain relay handleOp)", () => {
 	it("DENIES a cross-Domain send to a session NOT shared to the caller's Domain", async () => {
 		const { routes, sendCalls } = gateRoutes([lib()]);
 		// lib exists and is a devcontainer, but it is shared to "carol", not "alice".
@@ -408,18 +410,20 @@ describe("Phase D destination gate (cross-Domain relay handleOp)", () => {
 		expect(sendCalls).toHaveLength(1);
 	});
 
-	it("HARD-DENIES a cross-Domain send to the host-agent (kind gateway), even if 'shared'", async () => {
-		// A crafted share record for the host-agent must not open it: the kind gate is the
+	it("HARD-DENIES a cross-Domain send to a session of an unrecognized kind, even if 'shared'", async () => {
+		// A crafted share record for a non-shareable kind must not open it: the kind gate is the
 		// hard boundary (agents-only), checked before the share lookup.
-		const { routes, sendCalls } = gateRoutes([gatewayAgent()]);
-		const share = memShareState([["hostb/gateway", "alice"]]);
+		const { routes, sendCalls } = gateRoutes([unknownKindTeam()]);
+		const share = memShareState([["hostb/unknown-kind", "alice"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
 			shareState: share,
 		});
-		await expect(handleOp(crossSend("gateway"), "alice-gw", "alice")).rejects.toThrow(/cross-Domain op denied/);
+		await expect(handleOp(crossSend("unknown-kind"), "alice-gw", "alice")).rejects.toThrow(
+			/cross-Domain op denied/,
+		);
 		expect(sendCalls).toHaveLength(0);
 	});
 
@@ -556,10 +560,10 @@ describe("Phase D destination gate (cross-Domain relay handleOp)", () => {
 		expect(respondCalls).toHaveLength(0);
 	});
 
-	it("SAME-DOMAIN (srcDomainId null) is unchanged: no share gate, host-agent reachable", async () => {
-		// A same-Domain relay never consults the share state. Even the host-agent name lands
+	it("SAME-DOMAIN (srcDomainId null) is unchanged: no share gate, a non-shareable kind still reachable", async () => {
+		// A same-Domain relay never consults the share state. Even a non-shareable kind lands
 		// (the share/kind gate is cross-Domain only); intra-Domain trust is the existing model.
-		const { routes, sendCalls } = gateRoutes([gatewayAgent()]);
+		const { routes, sendCalls } = gateRoutes([unknownKindTeam()]);
 		const share = memShareState(); // empty - must not be consulted
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
@@ -567,19 +571,19 @@ describe("Phase D destination gate (cross-Domain relay handleOp)", () => {
 			localGatewayId: "hostb",
 			shareState: share,
 		});
-		const r = (await handleOp(crossSend("gateway"), "hostb-peer", null)) as { status: string };
+		const r = (await handleOp(crossSend("unknown-kind"), "hostb-peer", null)) as { status: string };
 		expect(r.status).toBe("running");
 		expect(sendCalls).toHaveLength(1);
 		expect(share.touched).toEqual([]); // never touched on a same-Domain op
 	});
 });
 
-describe("Phase D list_teams share filter (cross-Domain caller)", () => {
-	const allKinds = [lib(), scratch(), gatewayAgent(), consoleTeam()];
+describe("list_teams share filter (cross-Domain caller)", () => {
+	const allKinds = [lib(), scratch(), unknownKindTeam(), consoleTeam()];
 
 	it("a cross-Domain caller sees ONLY the sessions shared to its Domain", async () => {
 		const { routes } = gateRoutes(allKinds);
-		// lib + scratch shared to alice; the host-agent + console are never shareable anyway.
+		// lib + scratch shared to alice; the unknown kind + console are never shareable anyway.
 		const share = memShareState([
 			["hostb/lib", "alice"],
 			["hostb/scratch", "alice"],
@@ -631,7 +635,7 @@ describe("Phase D list_teams share filter (cross-Domain caller)", () => {
 			shareState: memShareState(), // empty - same-Domain ignores it
 		});
 		const { teams } = (await handleOp({ kind: "list_teams" }, "peer", null)) as { teams: TeamInfoLite[] };
-		expect(teams.map((t) => t.team).sort()).toEqual(["gateway", "lib", "pixel", "scratch"]);
+		expect(teams.map((t) => t.team).sort()).toEqual(["lib", "pixel", "scratch", "unknown-kind"]);
 	});
 });
 
@@ -953,7 +957,7 @@ function peersOf(...peers: CrossDomainPeer[]): CrossDomainPeers {
 	return s;
 }
 
-describe("Phase D cross-Domain send flow (E2E sealed v2)", () => {
+describe("cross-Domain send flow (E2E sealed v2)", () => {
 	it("seals a cross-Domain send v2 to the right peer and lands it at the destination share gate", async () => {
 		// bob's peer set knows alice; bob shares lib to alice. bob's relay handler opens the
 		// v2 frame, gates it (shared devcontainer), and lands the send.
@@ -1091,7 +1095,7 @@ describe("Phase D cross-Domain send flow (E2E sealed v2)", () => {
 		// is empty here; the cross-Domain leg queries bob, whose handler returns only shares.
 		const bobPeers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
 		const bobSealer = createSealer(bobGw, soloAllowlist(bobOwner, "bob-gw", bobGw), "bob-gw", bobPeers, "bob");
-		const { routes: bobRoutes } = gateRoutes([lib("bob-gw"), scratch("bob-gw"), gatewayAgent("bob-gw")]);
+		const { routes: bobRoutes } = gateRoutes([lib("bob-gw"), scratch("bob-gw"), unknownKindTeam("bob-gw")]);
 		const bobShare = memShareState([["bob-gw/lib", "alice"]]); // only lib shared to alice
 		const bobHandler = createGatewayRelayHandler({
 			routes: bobRoutes as never,
@@ -1133,7 +1137,7 @@ describe("Phase D cross-Domain send flow (E2E sealed v2)", () => {
 		const { discover } = createRoutes(ctx);
 
 		const teams = (await (await discover()).json()) as TeamInfoLite[];
-		// alice's own app (local) + bob's shared lib; bob's scratch + host-agent are NOT shared.
+		// alice's own app (local) + bob's shared lib; bob's scratch + the unknown kind are NOT shared.
 		expect(teams.map((t) => t.team).sort()).toEqual(["app", "lib"]);
 		const libEntry = teams.find((t) => t.team === "lib");
 		expect(libEntry?.gatewayId).toBe("bob-gw");

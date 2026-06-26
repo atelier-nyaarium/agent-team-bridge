@@ -680,7 +680,7 @@ async function evieDelete(mutate: (fedJson: string) => string): Promise<void> {
 	} catch {}
 }
 
-/** The fresh-vs-reprovision state machine. After the cluster cutover it reads evie's admin Domain
+/** The fresh-vs-reprovision state machine. After applying the bridge manifests it reads evie's admin Domain
  * slice: a fresh (absent/unrooted) Domain is pre-staged as a PENDING tenant and the blob carries
  * `pendingTenant` so the phone first-roots on scan; an already-rooted Domain skips staging and emits
  * the blob only. Verifies the bridge path either way. */
