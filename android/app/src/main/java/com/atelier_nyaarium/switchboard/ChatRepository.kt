@@ -20,9 +20,7 @@ import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
 import java.io.File
-import java.util.concurrent.TimeUnit
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.CoroutineScope
@@ -55,6 +53,9 @@ data class ScannedGateway(
 	val lanHost: String? = null,
 	val lanPort: Int? = null,
 	val nonce: String? = null,
+	// SHA-256 of the gateway's ephemeral self-signed enroll TLS leaf (the QR's lan.certFp). Present ->
+	// deliver over pinned HTTPS; absent -> paste only, never cleartext.
+	val certFp: String? = null,
 )
 
 /** The outcome of enrolling a Gateway: whether it was admitted, a human message, and the
@@ -1708,6 +1709,7 @@ class ChatRepository(
 			lanHost = lan?.optString("host")?.ifEmpty { null },
 			lanPort = lan?.optInt("port", 0)?.takeIf { it > 0 },
 			nonce = j.optString("nonce").ifEmpty { null },
+			certFp = lan?.optString("certFp")?.ifEmpty { null },
 		)
 	}.getOrNull()
 
@@ -1752,9 +1754,9 @@ class ChatRepository(
 		val transport = GatewayTransport(apiUrl = prov.apiUrl, saToken = result.saToken, caPem = result.caPem)
 		val frame = federation.sealBundle(nonce, transport, signed, scanned.boxPub, prov.pendingTenant?.domainId)
 		val frameJson = wireJson.encodeToString(GatewayBootstrapFrame.serializer(), frame)
-		if (scanned.lanHost != null && scanned.lanPort != null && isPrivateLanHost(scanned.lanHost)) {
+		if (scanned.lanHost != null && scanned.lanPort != null && scanned.certFp != null && isPrivateLanHost(scanned.lanHost)) {
 			val target = "${scanned.lanHost}:${scanned.lanPort}"
-			when (val r = postBundle(scanned.lanHost, scanned.lanPort, frameJson)) {
+			when (val r = postBundle(scanned.lanHost, scanned.lanPort, scanned.certFp, frameJson)) {
 				is BundlePost.Ok -> {
 					DebugLog.log("Enroll", "LAN delivery ok -> $target")
 					return@withContext EnrollDelivery(true, "Sent to the Gateway. It's coming online.", null)
@@ -1788,17 +1790,14 @@ class ChatRepository(
 		data class Unreachable(val cause: String) : BundlePost
 	}
 
-	/** Plain HTTP POST of the sealed bundle to the Gateway's nonce-gated LAN listener. No TLS
-	 * pinning: the bundle is already sealed to the Gateway box key, so the LAN is trusted only for
-	 * reachability, not confidentiality. Separates a connect failure from a Gateway-side rejection. */
-	private fun postBundle(host: String, port: Int, frameJson: String): BundlePost {
-		val client = OkHttpClient.Builder()
-			.connectTimeout(5, TimeUnit.SECONDS)
-			.writeTimeout(10, TimeUnit.SECONDS)
-			.readTimeout(10, TimeUnit.SECONDS)
-			.build()
+	/** POST the sealed bundle to the Gateway's arming-only LAN listener over TLS pinned to the leaf
+	 * fingerprint from the QR (see EnrollPinning). The bundle is already sealed to the Gateway box key,
+	 * so this TLS only satisfies Android's no-cleartext policy without an app-wide permit and keeps the
+	 * LAN wire private. Separates a connect failure from a Gateway-side rejection. */
+	private fun postBundle(host: String, port: Int, certFp: String, frameJson: String): BundlePost {
+		val client = buildLeafFingerprintPinnedClient(certFp)
 		val req = Request.Builder()
-			.url("http://$host:$port/enroll")
+			.url("https://$host:$port/enroll")
 			.post(frameJson.toRequestBody("application/json".toMediaType()))
 			.build()
 		return try {
