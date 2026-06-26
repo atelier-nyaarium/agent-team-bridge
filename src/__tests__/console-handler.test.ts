@@ -83,14 +83,14 @@ function makeHarness(
 			jsonRes([
 				{ team: "team-a", status: "online", mode: "channel", queue_depth: 0 },
 				{ team: "pixel", status: "online", mode: "channel", queue_depth: 0 },
-				{ team: "gateway", status: "online", mode: "channel", queue_depth: 0 },
+				{ team: "team-b", status: "online", mode: "channel", queue_depth: 0 },
 			]),
 		// list_teams fans out via discover; mirror the team list here.
 		discover: async () =>
 			jsonRes([
 				{ team: "team-a", status: "online", mode: "channel", queue_depth: 0 },
 				{ team: "pixel", status: "online", mode: "channel", queue_depth: 0 },
-				{ team: "gateway", status: "online", mode: "channel", queue_depth: 0 },
+				{ team: "team-b", status: "online", mode: "channel", queue_depth: 0 },
 			]),
 		...overrides,
 	};
@@ -318,14 +318,13 @@ describe("createConsoleDispatcher", () => {
 		expect(b.entries.some((e) => e.kind === "sent" && e.body === "hi all")).toBe(true);
 	});
 
-	it("list_teams surfaces the host-agent, excludes the device and the cli host daemon", async () => {
+	it("list_teams surfaces real teams and excludes the device itself", async () => {
 		const h = makeHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "list_teams" }));
 		expect(reply.ok).toBe(true);
 		const teams = (reply.result as { teams: { team: string }[] }).teams.map((t) => t.team);
-		// "gateway" (the host-agent) is surfaced; the cli "host" daemon and the
-		// device itself stay excluded.
-		expect(teams.sort()).toEqual(["gateway", "team-a"]);
+		// team-a and team-b are surfaced; the device itself (pixel) stays excluded.
+		expect(teams.sort()).toEqual(["team-a", "team-b"]);
 	});
 
 	it("send forwards from/fromConversationId/to and returns the session", async () => {
@@ -935,7 +934,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(reply.result).toEqual({ hash: "h1", unchanged: true });
 	});
 
-	it("rejects a loose session name (only host-agent + devcontainers are terminal-eligible)", async () => {
+	it("rejects a loose session name (only the host target + devcontainers are terminal-eligible)", async () => {
 		const h = makeTerminalHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "some-loose" }, "p4"));
 		expect(reply.ok).toBe(false);
@@ -1315,13 +1314,13 @@ describe("console cross-Domain handshake ops", () => {
 
 describe("console cross-Domain share ops", () => {
 	// A team list mixing every kind, so the kind gate can be exercised: a devcontainer and a
-	// loose session are shareable; the host-agent ("gateway"), a console-kind device, and an
+	// loose session are shareable; a session of an unrecognized kind, a console-kind device, and an
 	// unknown name are not. teams() carries each team's gatewayId (the canonical target's gw).
 	function teamsList(): Response {
 		return jsonRes([
 			{ team: "app", gatewayId: "test-host", status: "online", kind: "devcontainer", queue_depth: 0 },
 			{ team: "scratch-1", gatewayId: "test-host", status: "online", kind: "loose", queue_depth: 0 },
-			{ team: "gateway", gatewayId: "test-host", status: "online", kind: "gateway", queue_depth: 0 },
+			{ team: "unknown-kind", gatewayId: "test-host", status: "online", kind: "unknown", queue_depth: 0 },
 			{ team: "pixel", gatewayId: "test-host", status: "online", kind: "console", queue_depth: 0 },
 		]);
 	}
@@ -1477,13 +1476,13 @@ describe("console cross-Domain share ops", () => {
 		expect(h.calls.listShares).toHaveLength(1);
 	});
 
-	it("rejects sharing the host-agent (kind gateway) and never hits the store", async () => {
+	it("rejects sharing a session of an unrecognized kind and never hits the store", async () => {
 		const h = makeShareHarness();
 		const reply = await h.handler.handleFrame(
 			frame(
 				{
 					kind: "cross_domain_share",
-					sessionTarget: "test-host/gateway",
+					sessionTarget: "test-host/unknown-kind",
 					target: { kind: "domain", domainId: "carol" },
 				},
 				"g1",

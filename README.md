@@ -1,6 +1,6 @@
 # Switchboard
 
-Cross-team communication, devcontainer orchestration, and tool proxying for agent teams. Connects Claude Code, Cursor, Copilot, and Codex agents running in separate DevContainers through a central gateway (a Gateway).
+Cross-team communication and devcontainer coordination for Claude agent teams. Teams running in separate Dev Containers (and host sessions) reach each other through a central gateway, which also federates with the gateways on other machines and bridges a native Android console.
 
 ## Who it's for
 
@@ -8,12 +8,10 @@ This is aimed at people who already use **Dev Containers** and want agent teams 
 
 ## How it works
 
-Teams register with the gateway (a Gateway) over WebSocket. Any agent can call `crosstalk_send` to reach another team. The gateway handles message delivery, response lifecycle, and request serialization.
+Teams register with the gateway over WebSocket. Any agent can call `crosstalk_send` to reach another team. The gateway handles message delivery, the response lifecycle, and request serialization.
 
-- **Claude agents** use channel mode: messages arrive as push notifications, responses are pushed back automatically.
-- **CLI agents** (cursor, copilot, codex) use inject mode: the gateway spawns agent processes, sends prompts, and waits for completion.
-
-The gateway also bridges to **evie-bot** (a Discord bot running in Kubernetes), proxying its 46 action tools as MCP tools and forwarding Discord DMs into the host Claude session.
+- Agents use **channel mode**: messages arrive as push notifications and replies push back automatically, so there is no polling.
+- The gateway connects to **evie-bot** (a content-blind router running in Kubernetes) to reach the gateways on other machines and to relay the Android console. evie forwards end-to-end-sealed frames between gateways without reading them.
 
 See `skills/crosstalk/SKILL.md` for the full tool reference and response format.
 
@@ -22,22 +20,20 @@ See `skills/crosstalk/SKILL.md` for the full tool reference and response format.
 ```
 Host Machine
   start-host-daemon.sh
-    Claude Code (host orchestrator)
-      MCP Plugin (main-mcp.ts)
-        crosstalk_send / crosstalk_discover
-        dispatch_cli / dispatch_exec
-        session_peek / session_send
-        evie_* tools (46 proxied from evie-bot)
+    Host daemon (headless) - devcontainer wake + the console terminal view
+  start-session.sh <name>
+    Claude Code session - joins the gateway as a loose peer
+      MCP Plugin (main-mcp.ts): crosstalk_* / channel_reply / notify_human
 
 Docker: switchboard (port 20000)
   Gateway (main-gateway.ts)
     HTTP routes + WebSocket hub
-    Evie WS client over the k8s API service-proxy (SA token + admission)
+    Evie WS client over the k8s API service-proxy (SA token + owner-signed admission)
+      cross-gateway federation routing + Android console relay
 
 DevContainers (one per project)
-  Claude / Cursor / Copilot / Codex
-    MCP Plugin (main-mcp.ts)
-      crosstalk_send / channel_reply / crosstalk_reply
+  Claude Code
+    MCP Plugin (main-mcp.ts): crosstalk_* / channel_reply / notify_human
       Game client connector (port 20002)
 ```
 
@@ -92,43 +88,36 @@ This adds `switchboard-network` to your `.devcontainer/compose.yml`.
 
 ## MCP Tools
 
-### Host-only tools (orchestrator)
+Every session registers the same core tools; the game-client connector is the only container-only addition.
 
-| Tool | Description |
-|------|-------------|
-| `dispatch_cli` | Run a CLI agent (cursor/copilot/codex) inside a devcontainer |
-| `dispatch_exec` | Execute a shell command inside a devcontainer |
-| `session_peek` | Capture the visible tmux screen of a team's Claude session |
-| `session_send` | Send a line of input to a team's tmux session |
-| `crosstalk_send` | Send a request to another team |
-| `crosstalk_discover` | List all teams on the bridge |
-| `evie_*` | 46 proxied tools from evie-bot (Discord, Cloudflare, Linode, Cursor, etc) |
-
-### Container tools (all agents)
+### Every session
 
 | Tool | Description |
 |------|-------------|
 | `crosstalk_send` | Send a request to another team |
 | `crosstalk_discover` | List all teams on the bridge |
 | `crosstalk_wait` | Wait N seconds before retrying a deferred request |
-| `channel_reply` | Reply to an incoming channel message (Claude only) |
-| `crosstalk_reply` | Reply to an incoming bridge request (CLI agents only) |
-| `mcpConnectorStatus` | Game client connector status |
-| `mcpConnectorServe` | Start serving project tools on the connector port |
-| `mcpConnectorUnserve` | Stop serving project tools |
+| `channel_reply` | Reply to an incoming channel message |
+| `notify_human` | Push a notice to the owner's consoles |
+| `reload_plugins` | Run the plugin update + MCP reconnect sequence |
+| `set_effort_level` | Set the session's effort level |
+| `compact_session` | Compact the session's context |
+
+### Container-only
+
+| Tool | Description |
+|------|-------------|
+| `mcpConnectorStatus` / `mcpConnectorServe` / `mcpConnectorUnserve` | Game client connector control |
 | Project tools | Dynamic tools from the project's `mcp-schema.js` |
 
 ## Evie Bridge
 
-When a service-proxy transport (`transport.json`, delivered by enrollment) is present in the gateway's federation dir, the gateway connects to evie-bot over the Kubernetes API server's service-proxy. The transport's SA token authenticates to the API server (scoped by RBAC), the cluster CA is pinned for TLS, and registration is gated by the owner-signed admission. This enables:
+When a service-proxy transport (`transport.json`, delivered by enrollment) is present in the gateway's federation dir, the gateway connects to evie-bot over the Kubernetes API server's service-proxy. The transport's SA token authenticates to the API server (scoped by RBAC), the cluster CA is pinned for TLS, and registration is gated by the owner-signed admission.
 
-- **Tool proxying**: Evie's action registry (46 tools) is exported as JSON Schema and dynamically registered as MCP tools on the host, prefixed with `evie_`.
-- **DM forwarding**: Discord DMs from the bot owner are forwarded to the host orchestrator as channel push notifications.
-- **Tool calls**: The host can invoke any evie action through the proxied MCP tools.
+evie is a **content-blind router**: it relays sealed frames without reading them. It carries:
 
-## Using Cursor agents instead of Claude
-
-Set `AGENT_TYPE=cursor` in your devcontainer environment. The bridge auto-detects which CLI agent is available if not set.
+- **Cross-gateway federation**: a gateway reaches teams on another machine's gateway through evie, which routes each end-to-end-sealed frame by destination gateway id and never parses the payload.
+- **Console relay**: the native Android console reaches the gateway through evie, which relays the console's opaque frames over the same WebSocket.
 
 ## Circular dependency warning
 
