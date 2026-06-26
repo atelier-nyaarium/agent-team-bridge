@@ -250,6 +250,22 @@ async function waitForInstall(): Promise<"installed" | "back"> {
 	}
 }
 
+/** Best-effort copy to the system clipboard: OSC 52 (works over SSH, and in tmux with set-clipboard
+ * on) plus a platform tool when one is present. Returns whether a platform tool confirmed the copy -
+ * OSC 52 is fire-and-forget, so it cannot be confirmed. */
+async function tryClipboardCopy(text: string): Promise<boolean> {
+	process.stdout.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
+	for (const argv of [["wl-copy"], ["xclip", "-selection", "clipboard"], ["pbcopy"], ["clip.exe"]]) {
+		try {
+			const proc = Bun.spawn(argv, { stdin: new Blob([text]), stdout: "ignore", stderr: "ignore" });
+			if ((await proc.exited) === 0) return true;
+		} catch {
+			// Tool not installed - try the next.
+		}
+	}
+	return false;
+}
+
 /** Render + display the gateway's admit payload, then offer to continue, save it to a file, or back
  * out. `render` prints the artifact on screen; `save` writes it to a temp file (tracked for cleanup)
  * and returns the path. Returns "continue" or "back". */
@@ -262,7 +278,7 @@ async function presentArtifact(
 	render();
 	for (;;) {
 		console.log(`\n  ${heading}`);
-		console.log("    1) Continue - wait for the phone, then connect");
+		console.log("    1) Continue Enrollment - wait for the phone, then connect");
 		console.log(`    2) ${saveLabel}`);
 		console.log("    b) Back");
 		const choice = ask("  >").toLowerCase();
@@ -319,7 +335,7 @@ async function setupGateway(): Promise<void> {
 			if (choice === "1") {
 				action = await presentArtifact(
 					"Scan this QR in your phone's Add Gateway screen.",
-					"Save the QR as an image instead",
+					"Save Enrollment QR Instead",
 					() => {
 						const { ansi, modules } = renderQrTerminal(payload);
 						process.stdout.write(ansi);
@@ -335,12 +351,16 @@ async function setupGateway(): Promise<void> {
 				);
 			} else if (choice === "2") {
 				const pretty = JSON.stringify(JSON.parse(payload), null, 2);
+				const copied = await tryClipboardCopy(pretty);
 				action = await presentArtifact(
-					"Copy this JSON into your phone's Add Gateway screen.",
-					"Save the JSON to a file instead",
+					"Paste the enrollment JSON into your phone's Add Gateway screen.",
+					"Save Enrollment JSON Instead",
 					() => {
-						console.log();
-						console.log(pretty);
+						console.log(
+							copied
+								? "\n  Copied the enrollment JSON to your clipboard. Try pasting it into Add Gateway."
+								: "\n  Tried to copy the enrollment JSON to your clipboard. Try pasting; if nothing pastes, use Save below.",
+						);
 					},
 					async () => {
 						await Bun.write(GW_JSON_FILE, pretty);
