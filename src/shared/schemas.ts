@@ -137,6 +137,10 @@ export const TeamInfoSchema = z
 		// consoles and offline-catalog entries (no plugin process behind them). The console
 		// shows it as a chip only when it differs from the app's own expected version.
 		version: z.string().optional(),
+		// Epoch ms a session was last seen (from the session-resume map). Stamped for
+		// sessions the gateway has a resume entry for, so the console can order the list and
+		// show recency ("active 5m ago"). Absent for sessions with no resume record.
+		lastActive: z.number().int().optional(),
 		queue_depth: z.number().int().nonnegative(),
 	})
 	.meta({ id: "TeamInfo" });
@@ -238,6 +242,13 @@ export const ConsoleOpSchema = z
 		// gateway-qualified session to reload; the host runs the script detached. Idempotent per opId.
 		z.object({
 			kind: z.literal("reload_plugins"),
+			target: z.string().min(1).max(128),
+		}),
+		// Forget a session: kill its running tmux and drop its durable resume record, so it
+		// stops being listed as available. `target` must resolve to a composite session, not a
+		// bare spawn-point project. Idempotent per opId.
+		z.object({
+			kind: z.literal("forget"),
 			target: z.string().min(1).max(128),
 		}),
 		// Cross-Domain listening-mode handshake (cross-domain-federation.md). These ops drive
@@ -561,6 +572,14 @@ export const ConsoleReloadPluginsResultSchema = z
 	})
 	.meta({ id: "ConsoleReloadPluginsResult" });
 
+export const ConsoleForgetResultSchema = z
+	.object({
+		// The session's tmux was torn down and its resume record dropped (idempotent: also true
+		// when the session was already gone).
+		killed: z.boolean(),
+	})
+	.meta({ id: "ConsoleForgetResult" });
+
 ////////////////////////////////
 //  Cross-Domain handshake op results (gateway -> console)
 //
@@ -728,6 +747,7 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleTmuxSendResultSchema,
 	ConsoleCreateSessionResultSchema,
 	ConsoleReloadPluginsResultSchema,
+	ConsoleForgetResultSchema,
 	CrossDomainListenResultSchema,
 	CrossDomainRequestResultSchema,
 	CrossDomainConfirmResultSchema,

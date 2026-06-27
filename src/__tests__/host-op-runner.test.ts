@@ -15,6 +15,7 @@ function makeOps(): { ops: TmuxOps } {
 		sendKey: vi.fn(async () => {}),
 		createSession: vi.fn(async () => {}),
 		reloadPlugins: vi.fn(async () => {}),
+		killSession: vi.fn(async () => {}),
 	};
 	return { ops };
 }
@@ -123,6 +124,7 @@ describe("createHostOpRunner", () => {
 			sendKey: async () => {},
 			createSession: async () => {},
 			reloadPlugins: async () => {},
+			killSession: async () => {},
 		};
 		const runner = createHostOpRunner(ops, { minPeekIntervalMs: 0 });
 
@@ -151,6 +153,7 @@ describe("createHostOpRunner", () => {
 			sendKey: async () => {},
 			createSession: async () => {},
 			reloadPlugins: async () => {},
+			killSession: async () => {},
 		};
 		const runner = createHostOpRunner(ops, { minPeekIntervalMs: 0 });
 		await expect(runner.run({ kind: "peek", target: T })).rejects.toThrow();

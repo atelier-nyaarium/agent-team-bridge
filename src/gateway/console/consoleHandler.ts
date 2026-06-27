@@ -12,6 +12,7 @@ import {
 	type CrossDomainShareTarget,
 	type CrossDomainUnlinkResult,
 	DEFAULT_SESSION,
+	isComposite,
 	type MailboxInput,
 	type OpenedConsoleFrame,
 	parseQualifiedTeam,
@@ -95,6 +96,9 @@ export interface ConsoleHandlerDeps {
 	 * name: while the project sleeps, the console's virtual peer would squat the registry slot,
 	 * absorb sends meant for the project, and suppress its wake. */
 	isProjectName?: (name: string) => boolean;
+	/** Drop a session's durable resume record (the console's Forget), so it stops listing as
+	 * an available asleep session. */
+	dropSessionResume?: (team: string) => void;
 	/** The current keyring + its version hash. The poll reply carries the snapshot only when
 	 * the Console's known version differs. */
 	domain?: () => { version: string; snapshot: DomainSnapshot } | null;
@@ -203,6 +207,7 @@ function isMutatingOp(op: ConsoleOp): boolean {
 		op.kind === "tmux_send" ||
 		op.kind === "create_session" ||
 		op.kind === "reload_plugins" ||
+		op.kind === "forget" ||
 		op.kind === "cross_domain_listen" ||
 		op.kind === "cross_domain_request" ||
 		op.kind === "cross_domain_confirm" ||
@@ -222,6 +227,7 @@ export function createConsoleDispatcher({
 	localGatewayId,
 	sendBoundMs = SEND_BOUND_MS,
 	isProjectName,
+	dropSessionResume,
 	domain,
 	domainStatus,
 	relayToHost,
@@ -672,6 +678,23 @@ export function createConsoleDispatcher({
 				const r = await relayToHost({ kind: "reloadPlugins", target, dedupKey });
 				if (!r.ok) throw new Error(r.error ?? "reload failed");
 				return { initiated: true };
+			}
+
+			case "forget": {
+				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
+				// Forget tears down ONE named session; a bare spawn-point (or host) has no session to
+				// kill, so require a composite target and reject the spawn-point with a clear message.
+				const { name } = parseQualifiedTeam(op.target);
+				if (!isComposite(name)) {
+					throw new Error(`cannot forget "${op.target}": name a specific project.session, not a spawn-point`);
+				}
+				const target = resolveTmuxTarget(op.target);
+				const dedupKey = `${conversationId}:${opId}`;
+				const r = await relayToHost({ kind: "killSession", target, dedupKey });
+				if (!r.ok) throw new Error(r.error ?? "forget failed");
+				// Drop the durable resume record so the session stops listing as available.
+				dropSessionResume?.(name);
+				return { killed: true };
 			}
 
 			case "cross_domain_listen": {

@@ -75,7 +75,10 @@ export type HostOp =
 	// console can never inject an arbitrary host command.
 	| { kind: "createSession"; target: TmuxTarget; dedupKey?: string }
 	// Drive the target session's pane through the plugin update + MCP reconnect sequence.
-	| { kind: "reloadPlugins"; target: TmuxTarget; dedupKey?: string };
+	| { kind: "reloadPlugins"; target: TmuxTarget; dedupKey?: string }
+	// Tear down the target tmux session (the console's Forget). Idempotent: killing an
+	// already-gone session is treated as success.
+	| { kind: "killSession"; target: TmuxTarget; dedupKey?: string };
 
 /** A captured pane plus a short content hash, so the console can skip an unchanged frame. */
 export interface HostPeekResult {

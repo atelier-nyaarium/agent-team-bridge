@@ -10,6 +10,7 @@ export interface TmuxOps {
 	sendKey: (target: TmuxTarget, key: string) => Promise<void>;
 	createSession: (target: TmuxTarget) => Promise<void>;
 	reloadPlugins: (target: TmuxTarget) => Promise<void>;
+	killSession: (target: TmuxTarget) => Promise<void>;
 }
 
 ////////////////////////////////
@@ -118,6 +119,8 @@ export function createHostOpRunner(ops: TmuxOps, opts: { minPeekIntervalMs?: num
 			return runDeduped(op.dedupKey, () => ops.createSession(op.target), { created: true });
 		if (op.kind === "reloadPlugins")
 			return runDeduped(op.dedupKey, () => ops.reloadPlugins(op.target), { initiated: true });
+		if (op.kind === "killSession")
+			return runDeduped(op.dedupKey, () => ops.killSession(op.target), { killed: true });
 		throw new Error("unknown host op");
 	}
 

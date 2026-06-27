@@ -587,6 +587,7 @@ export async function startGateway(): Promise<void> {
 			tryWakeTeam,
 			offlineCatalog,
 			knownTeamPaths,
+			sessionResume,
 			mailboxStore,
 			evieClient,
 			sealer,
@@ -628,6 +629,8 @@ export async function startGateway(): Promise<void> {
 			routes,
 			localGatewayId,
 			isProjectName: (name) => !isComposite(name) && (offlineCatalog.has(name) || knownTeamPaths.has(name)),
+			// Forget drops the session's durable resume record so it stops listing as available.
+			dropSessionResume: (team) => sessionResume.delete(team),
 			domain: () => {
 				const snapshot = allowlistForConsole?.getSnapshot() ?? null;
 				return snapshot ? { version: allowlistForConsole?.version() ?? "", snapshot } : null;

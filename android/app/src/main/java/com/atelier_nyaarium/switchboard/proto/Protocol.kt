@@ -62,6 +62,7 @@ data class TeamInfo(
 	val mode: String? = null,
 	val kind: String,
 	val version: String? = null,
+	val lastActive: Long? = null,
 	val queue_depth: Long,
 )
 
@@ -177,6 +178,12 @@ sealed class ConsoleOp {
 	@Serializable
 	@SerialName("reload_plugins")
 	data class ReloadPlugins(
+		val target: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("forget")
+	data class Forget(
 		val target: String,
 	) : ConsoleOp()
 
@@ -731,6 +738,11 @@ data class ConsoleCreateSessionResult(
 @Serializable
 data class ConsoleReloadPluginsResult(
 	val initiated: Boolean,
+)
+
+@Serializable
+data class ConsoleForgetResult(
+	val killed: Boolean,
 )
 
 @Serializable

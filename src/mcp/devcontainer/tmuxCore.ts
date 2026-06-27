@@ -124,6 +124,17 @@ export async function createSession(target: TmuxTarget, command: string): Promis
 	await run(tmuxArgv(target, ["new-session", "-d", "-s", target.sessionName, command]), 15_000);
 }
 
+/** Tear down a tmux session. Idempotent: killing a session that is already gone (tmux exits
+ * non-zero with "can't find session") is treated as success, since the end state is identical. */
+export async function killSession(target: TmuxTarget): Promise<void> {
+	assertTmuxName(target.sessionName);
+	try {
+		await run(tmuxArgv(target, ["kill-session", "-t", target.sessionName]));
+	} catch {
+		// already gone is the desired end state
+	}
+}
+
 /** Whether `target.sessionName` exists. `has-session` exits non-zero when it does not, so a
  * non-zero exit is "absent", not a failure. Lets a caller reattach rather than re-launch. */
 export async function hasSession(target: TmuxTarget): Promise<boolean> {

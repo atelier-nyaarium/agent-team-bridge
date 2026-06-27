@@ -9,7 +9,7 @@ import { composeSessionName, parseSessionName } from "../../shared/session-id.js
 import { ensureContainerUpAsync, resolveProject } from "./helpers.js";
 import { createHostOpRunner } from "./hostOpRunner.js";
 import { spawnReloadPlugins } from "./reloadPlugins.js";
-import { ensureSession, isAgentReady, peekPane, sendKey, sendText } from "./tmuxCore.js";
+import { ensureSession, isAgentReady, killSession, peekPane, sendKey, sendText } from "./tmuxCore.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -347,6 +347,7 @@ const hostOpRunner = createHostOpRunner({
 	reloadPlugins: async (target) => {
 		spawnReloadPlugins(target);
 	},
+	killSession,
 });
 
 async function handleHostOp(reqId: string, op: HostOp): Promise<void> {

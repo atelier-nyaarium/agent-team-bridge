@@ -37,6 +37,10 @@ export interface RoutesDeps {
 	// empties when the host daemon disconnects). Membership in either marks a team
 	// as devcontainer-backed.
 	knownTeamPaths: Map<string, string>;
+	// Durable composite-session -> {claudeSessionId, lastSeen} map. teams() surfaces its
+	// entries as asleep "available" sessions so a session that exists but is not currently
+	// registered still lists. Optional for test harnesses with no resume tracking.
+	sessionResume?: Map<string, { claudeSessionId: string; lastSeen: number }>;
 	// Console mailboxes, for broadcast notices (notify_human). Optional so test
 	// harnesses without a console bridge need not supply one.
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
@@ -189,6 +193,7 @@ export function createRoutes({
 	tryWakeTeam,
 	offlineCatalog,
 	knownTeamPaths,
+	sessionResume,
 	mailboxStore,
 	config,
 	evieClient,
@@ -447,6 +452,7 @@ export function createRoutes({
 			// Plugin version reported by an active real socket (virtual console peers carry
 			// none); the same value across a team's sub-sessions in practice.
 			const version = getAllActiveRealWs(subs)[0]?.data.version;
+			const lastActive = sessionResume?.get(name)?.lastSeen;
 			teamsList.push({
 				team: name,
 				gatewayId: localGatewayId,
@@ -457,12 +463,14 @@ export function createRoutes({
 				mode: getTeamMode(subs),
 				kind: isConsole ? "console" : isDevcontainer(name) ? "devcontainer" : "loose",
 				version,
+				...(lastActive ? { lastActive } : {}),
 				queue_depth: 0,
 			});
 		}
 
 		for (const [name] of offlineCatalog) {
 			if (seen.has(name)) continue;
+			seen.add(name);
 			teamsList.push({
 				team: name,
 				gatewayId: localGatewayId,
@@ -471,6 +479,25 @@ export function createRoutes({
 				...isAdminDomainField,
 				status: "available",
 				kind: "devcontainer",
+				queue_depth: 0,
+			});
+		}
+
+		// Asleep named sessions: a composite the gateway has a resume record for but that is not
+		// currently registered. The resume map doubles as the durable known-session list, so a
+		// session that exists but whose container is asleep still lists as available.
+		for (const [name, { lastSeen }] of sessionResume ?? []) {
+			if (seen.has(name)) continue;
+			seen.add(name);
+			teamsList.push({
+				team: name,
+				gatewayId: localGatewayId,
+				...domainIdField,
+				...displayNameField,
+				...isAdminDomainField,
+				status: "available",
+				kind: "loose",
+				lastActive: lastSeen,
 				queue_depth: 0,
 			});
 		}

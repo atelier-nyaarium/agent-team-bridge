@@ -35,6 +35,7 @@ import {
 	ensureSession,
 	hasSession,
 	isAgentReady,
+	killSession,
 	peekPane,
 	sendKey,
 	sendText,
@@ -211,5 +212,32 @@ describe("tmuxCore isAgentReady", () => {
 
 	it("is true at a resumed REPL (no header, shows the shortcuts prompt)", () => {
 		expect(isAgentReady("...restored conversation...\n? for shortcuts")).toBe(true);
+	});
+});
+
+describe("tmuxCore killSession", () => {
+	it("kills the target session by name", async () => {
+		await killSession({ kind: "host", name: "host", sessionName: "scratch" });
+		expect(calls).toEqual([["tmux", "kill-session", "-t", "scratch"]]);
+	});
+
+	it("kills a devcontainer session via docker exec", async () => {
+		await killSession({ kind: "devcontainer", name: "recipe-app", sessionName: "scratch" });
+		expect(calls[0]).toEqual([
+			"docker",
+			"exec",
+			"-u",
+			"vscode",
+			"recipe-app_devcontainer-dev-1",
+			"tmux",
+			"kill-session",
+			"-t",
+			"scratch",
+		]);
+	});
+
+	it("treats an already-gone session as success (swallows the error)", async () => {
+		exitCode = 1; // kill-session exits non-zero when the session is absent
+		await expect(killSession({ kind: "host", name: "host", sessionName: "scratch" })).resolves.toBeUndefined();
 	});
 });
