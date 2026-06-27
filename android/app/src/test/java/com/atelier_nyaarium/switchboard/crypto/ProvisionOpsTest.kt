@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard.crypto
 
+import com.atelier_nyaarium.switchboard.proto.DeleteDomain
 import com.atelier_nyaarium.switchboard.proto.FirstRoot
 import com.atelier_nyaarium.switchboard.proto.ProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.RemoveTenant
@@ -60,6 +61,13 @@ class ProvisionOpsTest {
 			nonce = o["nonce"]!!.jsonPrimitive.content,
 		)
 
+	private fun deletion(o: JsonObject) =
+		DeleteDomain(
+			domainId = o["domainId"]!!.jsonPrimitive.content,
+			issuedAt = o["issuedAt"]!!.jsonPrimitive.content.toLong(),
+			nonce = o["nonce"]!!.jsonPrimitive.content,
+		)
+
 	@Test
 	fun provisionCanonicalBytesMatchNode() {
 		val v = vectors()
@@ -92,6 +100,15 @@ class ProvisionOpsTest {
 		val ownerSignPub = v["friendOwnerSignPub"]!!.jsonPrimitive.content
 		val vec = v["rename"]!!.jsonObject
 		val bytes = ProvisionOpsCrypto.setDisplayNameSigningBytes(rename(vec["value"]!!.jsonObject), ownerSignPub)
+		CanonicalBytes.assertCanonicalBytes(bytes, vec)
+	}
+
+	@Test
+	fun deleteDomainCanonicalBytesMatchNode() {
+		val v = vectors()
+		val ownerSignPub = v["friendOwnerSignPub"]!!.jsonPrimitive.content
+		val vec = v["deletion"]!!.jsonObject
+		val bytes = ProvisionOpsCrypto.deleteDomainSigningBytes(deletion(vec["value"]!!.jsonObject), ownerSignPub)
 		CanonicalBytes.assertCanonicalBytes(bytes, vec)
 	}
 
@@ -173,6 +190,31 @@ class ProvisionOpsTest {
 		val bytes = ProvisionOpsCrypto.setDisplayNameSigningBytes(rename(vec["value"]!!.jsonObject), ownerSignPub)
 		assertTrue(Crypto.verify(bytes, vec["signature"]!!.jsonPrimitive.content, ownerSignPub))
 		assertFalse(Crypto.verify(bytes, vec["signature"]!!.jsonPrimitive.content, Crypto.generateIdentity().sign.pub))
+	}
+
+	@Test
+	fun verifiesNodeSignedDeletion() {
+		val v = vectors()
+		val ownerSignPub = v["friendOwnerSignPub"]!!.jsonPrimitive.content
+		val vec = v["deletion"]!!.jsonObject
+		val bytes = ProvisionOpsCrypto.deleteDomainSigningBytes(deletion(vec["value"]!!.jsonObject), ownerSignPub)
+		assertTrue(Crypto.verify(bytes, vec["signature"]!!.jsonPrimitive.content, ownerSignPub))
+		assertFalse(Crypto.verify(bytes, vec["signature"]!!.jsonPrimitive.content, Crypto.generateIdentity().sign.pub))
+	}
+
+	@Test
+	fun deletionSignsAndVerifiesLocally() {
+		val owner = Crypto.generateIdentity()
+		val attacker = Crypto.generateIdentity()
+		val d = DeleteDomain("alice", 9000L, "ZA==")
+		val signed = ProvisionOpsCrypto.signDeleteDomain(d, owner.sign.priv, owner.sign.pub)
+		assertTrue(ProvisionOpsCrypto.verifyDeleteDomain(signed, owner.sign.pub))
+		assertFalse(ProvisionOpsCrypto.verifyDeleteDomain(signed, attacker.sign.pub))
+		assertFalse(ProvisionOpsCrypto.verifyDeleteDomain(signed.copy(deletion = d.copy(domainId = "bob")), owner.sign.pub))
+		// A rename signature must not replay as a deletion over the same fields (distinct version prefix).
+		val rename = SetDisplayName(d.domainId, "Whatever", d.issuedAt, d.nonce)
+		val signedRename = ProvisionOpsCrypto.signSetDisplayName(rename, owner.sign.priv, owner.sign.pub)
+		assertFalse(Crypto.verify(ProvisionOpsCrypto.deleteDomainSigningBytes(d, owner.sign.pub), signedRename.signature, owner.sign.pub))
 	}
 
 	@Test

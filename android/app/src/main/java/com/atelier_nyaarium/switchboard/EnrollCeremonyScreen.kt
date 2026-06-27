@@ -262,7 +262,7 @@ private fun LinkedNoRelayPanel(busy: Boolean, note: String, onRetry: () -> Unit,
 		modifier = Modifier.fillMaxWidth(),
 	) {
 		Text(
-			"The trust is saved, but the relay between your networks isn't authorized yet, so your agents can't " +
+			"The trust is saved, but the relay between your Domains isn't authorized yet, so your agents can't " +
 				"reach each other. Retry - no need to redo the scan.",
 			Modifier.padding(16.dp).fillMaxWidth(),
 			color = MaterialTheme.colorScheme.onErrorContainer,

@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,10 +13,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -24,17 +31,22 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Copy a value to the clipboard under a short label. */
@@ -67,12 +79,12 @@ fun OwnerKeysCard(repo: ChatRepository) {
 			Text("Owner key", style = MaterialTheme.typography.titleMedium)
 			if (keys == null) {
 				Text(
-					"Your owner key could not be read. Restore it from a backup below, or recover the network.",
+					"Your owner key could not be read. Restore it from a backup below, or recover the Domain.",
 					style = MaterialTheme.typography.bodySmall,
 				)
 			} else {
 				Text(
-					"The key your network trusts. Copy it if you re-run setup.",
+					"The key your Domain trusts. Copy it if you re-run setup.",
 					style = MaterialTheme.typography.bodySmall,
 				)
 				Text("Fingerprint: ${keys.sas}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
@@ -102,7 +114,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 			Text("Owner key backup", style = MaterialTheme.typography.titleMedium)
 			Text(
 				"Export a passphrase-encrypted backup and keep it offline. Anyone with the file and " +
-					"the passphrase controls your network, so pick a strong one.",
+					"the passphrase controls your Domain, so pick a strong one.",
 				style = MaterialTheme.typography.bodySmall,
 			)
 			OutlinedTextField(
@@ -167,48 +179,79 @@ fun OwnerBackupCard(repo: ChatRepository) {
 	}
 }
 
-/** Manage Members: the admitted members of the keyring, with revoke, plus Add Gateway. */
+/** Gateways: the computers admitted to your Domain. Per-gateway online + session count is derived from the
+ * live `teams`; the kebab manages that gateway's sharing or revokes it. Consoles live under Your devices. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ManageMembersScreen(repo: ChatRepository, onBack: () -> Unit, onAddGateway: () -> Unit) {
+fun GatewaysScreen(
+	repo: ChatRepository,
+	teams: List<Team>,
+	onBack: () -> Unit,
+	onAddGateway: () -> Unit,
+	onManageSharing: (String) -> Unit,
+) {
 	val scope = rememberCoroutineScope()
-	// Re-read after an admit/revoke so the board reflects the change.
+	val activity = LocalContext.current as? FragmentActivity
+	// Re-read after a revoke so the list reflects the change.
 	var refresh by remember { mutableStateOf(0) }
-	val members = remember(refresh) { repo.admittedMembers() }
-	Scaffold(topBar = { TopAppBar(title = { Text("Manage Members") }) }) { pad ->
+	val gateways = remember(refresh) { repo.admittedMembers().filter { it.kind == "gateway" } }
+	Scaffold(topBar = { TopAppBar(title = { Text("Gateways") }) }) { pad ->
 		Column(
 			Modifier.padding(pad).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(12.dp),
 		) {
-			if (members.isEmpty()) {
-				Text("No gateways yet. Add one to get started.", style = MaterialTheme.typography.bodyMedium)
+			Text("Computers that run your agents.", style = MaterialTheme.typography.bodyMedium)
+			if (gateways.isEmpty()) {
+				Text("No Gateways yet. Add one to get started.", style = MaterialTheme.typography.bodyMedium)
 			}
-			for (m in members) {
+			for (g in gateways) {
+				val gid = g.gatewayId ?: continue
+				val count = teams.count { it.gatewayId == gid }
+				val online = teams.any { it.gatewayId == gid && it.status == "online" }
 				Card(Modifier.fillMaxWidth()) {
-					Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-						val title = if (m.kind == "gateway") (m.gatewayId ?: "gateway") else "console"
-						Text(
-							if (m.isSelf) "$title  (this device)" else title,
-							style = MaterialTheme.typography.titleMedium,
-						)
-						Text(m.kind, style = MaterialTheme.typography.bodySmall)
-						Text(
-							Crypto.fingerprint(m.signPub),
-							fontFamily = FontFamily.Monospace,
-							style = MaterialTheme.typography.bodySmall,
-						)
-						if (!m.isSelf) {
-							TextButton(onClick = {
-								scope.launch {
-									repo.revokeMember(m.signPub)
-									refresh++
-								}
-							}) { Text("Revoke", color = MaterialTheme.colorScheme.error) }
+					Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+						Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+							Text(gid, style = MaterialTheme.typography.titleMedium)
+							Text(
+								"${if (online) "online" else "offline"} · $count session${if (count == 1) "" else "s"}",
+								style = MaterialTheme.typography.bodySmall,
+							)
+							Text(
+								Crypto.fingerprint(g.signPub),
+								fontFamily = FontFamily.Monospace,
+								style = MaterialTheme.typography.bodySmall,
+							)
+						}
+						var menuOpen by remember(g.signPub) { mutableStateOf(false) }
+						Box {
+							IconButton(onClick = { menuOpen = true }) {
+								Icon(Icons.Filled.MoreVert, contentDescription = "Gateway actions")
+							}
+							DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+								DropdownMenuItem(
+									text = { Text("Manage sharing") },
+									onClick = {
+										menuOpen = false
+										onManageSharing(gid)
+									},
+								)
+								DropdownMenuItem(
+									text = { Text("Revoke", color = MaterialTheme.colorScheme.error) },
+									onClick = {
+										menuOpen = false
+										scope.launch {
+											if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
+											repo.revokeMember(g.signPub)
+											refresh++
+										}
+									},
+								)
+							}
 						}
 					}
 				}
 			}
-			Button(onClick = onAddGateway, modifier = Modifier.fillMaxWidth()) { Text("Add Gateway") }
+			Button(onClick = onAddGateway, modifier = Modifier.fillMaxWidth()) { Text("Add a Gateway") }
 			OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back") }
 		}
 	}
@@ -222,6 +265,7 @@ fun ManageMembersScreen(repo: ChatRepository, onBack: () -> Unit, onAddGateway: 
 @Composable
 fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Unit) {
 	val scope = rememberCoroutineScope()
+	val activity = LocalContext.current as? FragmentActivity
 	val context = LocalContext.current
 	var scanning by remember { mutableStateOf(false) }
 	var scanned by remember { mutableStateOf<ScannedGateway?>(null) }
@@ -297,6 +341,11 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 								busy = true
 								status = "Enrolling..."
 								scope.launch {
+									if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) {
+										busy = false
+										status = ""
+										return@launch
+									}
 									val result = repo.enrollGateway(s)
 									busy = false
 									status = result.message
@@ -306,6 +355,159 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 							},
 						) { Text("Approve") }
 					}
+				}
+			}
+		}
+	}
+}
+
+/** Your devices: the consoles (phones, and a future browser) admitted to your Domain. This device is
+ * THIS DEVICE and not removable; another device's Remove owner-revokes its console admission (the
+ * security action, biometric-gated when the lock is on). "Add a device" arms a self-enroll window,
+ * shown disabled when the network has no public device-approval reach. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun YourDevicesScreen(repo: ChatRepository, onBack: () -> Unit, onAddDevice: () -> Unit) {
+	val scope = rememberCoroutineScope()
+	val activity = LocalContext.current as? FragmentActivity
+	// Re-read after a revoke so the removed device drops off the list.
+	var refresh by remember { mutableStateOf(0) }
+	val devices = remember(refresh) { repo.admittedMembers().filter { it.kind == "console" } }
+	val reach = remember { repo.deviceApprovalReach() }
+	Scaffold(topBar = { TopAppBar(title = { Text("Your devices") }) }) { pad ->
+		Column(
+			Modifier.padding(pad).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
+			verticalArrangement = Arrangement.spacedBy(12.dp),
+		) {
+			Text("The phones and apps signed in to your Domain.", style = MaterialTheme.typography.bodyMedium)
+			for (d in devices) {
+				Card(Modifier.fillMaxWidth()) {
+					Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+						Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+							Text(if (d.isSelf) "THIS DEVICE" else "Device", style = MaterialTheme.typography.titleMedium)
+							if (d.isSelf) Text("Active now", style = MaterialTheme.typography.bodySmall)
+							Text(Crypto.fingerprint(d.signPub), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+						}
+						if (!d.isSelf) {
+							TextButton(onClick = {
+								scope.launch {
+									if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
+									repo.revokeMember(d.signPub)
+									refresh++
+								}
+							}) { Text("Remove", color = MaterialTheme.colorScheme.error) }
+						}
+					}
+				}
+			}
+			if (reach != null) {
+				Button(onClick = onAddDevice, modifier = Modifier.fillMaxWidth()) { Text("Add a device") }
+			} else {
+				Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text("Add a device") }
+				Text(
+					"Add a device isn't set up for this network.",
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+				)
+			}
+			OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back") }
+		}
+	}
+}
+
+/** HELD device side of "Add a device": arm a one-time approval window, show the authorize-console QR
+ * the new device scans, poll for its join, and on a biometric-gated Approve owner-sign its admission
+ * and seal it the console transport. Only PUBLIC material leaves in the QR; the transport reaches the
+ * new device sealed. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ApprovalWindowScreen(repo: ChatRepository, onBack: () -> Unit) {
+	val scope = rememberCoroutineScope()
+	val activity = LocalContext.current as? FragmentActivity
+	var armed by remember { mutableStateOf<DeviceApprovalArmed?>(null) }
+	var join by remember { mutableStateOf<ConsoleApprovalJoin?>(null) }
+	var status by remember { mutableStateOf("Starting...") }
+	var busy by remember { mutableStateOf(false) }
+	var done by remember { mutableStateOf(false) }
+
+	fun leave() {
+		armed?.let { a -> scope.launch { repo.cancelDeviceApproval(a.approvalId) } }
+		onBack()
+	}
+
+	// Arm one window on entry.
+	LaunchedEffect(Unit) {
+		repo.armDeviceApproval()
+			.onSuccess {
+				armed = it
+				status = ""
+			}
+			.onFailure { status = it.message ?: "Couldn't start the approval window." }
+	}
+	// Poll for the new device's join until it arrives or the window terminates.
+	LaunchedEffect(armed?.approvalId) {
+		val id = armed?.approvalId ?: return@LaunchedEffect
+		while (join == null && !done) {
+			repo.pollDeviceApproval(id)
+				.onSuccess { j -> if (j != null) join = j }
+				.onFailure {
+					status = it.message ?: "The approval window closed."
+					return@LaunchedEffect
+				}
+			if (join != null) break
+			delay(2000)
+		}
+	}
+
+	Scaffold(topBar = { TopAppBar(title = { Text("Add a device") }) }) { pad ->
+		Column(
+			Modifier.padding(pad).padding(24.dp).fillMaxSize().verticalScroll(rememberScrollState()),
+			verticalArrangement = Arrangement.spacedBy(16.dp),
+		) {
+			val a = armed
+			val j = join
+			when {
+				done -> {
+					Text("Device added.", style = MaterialTheme.typography.titleMedium)
+					Text("The new device is provisioning now.", style = MaterialTheme.typography.bodyMedium)
+					Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+				}
+				j != null -> {
+					Text("A device wants to join.", style = MaterialTheme.typography.titleMedium)
+					Text("Confirm its fingerprint on the new device before approving:", style = MaterialTheme.typography.bodyMedium)
+					Text(Crypto.fingerprint(j.newSignPub), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.titleLarge)
+					if (status.isNotEmpty()) Text(status)
+					Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+						OutlinedButton(onClick = { leave() }, enabled = !busy) { Text("Cancel") }
+						Button(
+							enabled = !busy,
+							onClick = {
+								scope.launch {
+									if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
+									busy = true
+									status = "Approving..."
+									repo.approveDevice(a!!.approvalId, j)
+										.onSuccess {
+											done = true
+											status = ""
+										}
+										.onFailure { status = it.message ?: "Approve failed." }
+									busy = false
+								}
+							},
+						) { Text("Approve") }
+					}
+				}
+				a != null -> {
+					Text("Scan this on the new device", style = MaterialTheme.typography.titleMedium)
+					Text("Open Switchboard on the other device and scan to add it.", style = MaterialTheme.typography.bodyMedium)
+					QrCode(text = a.qr)
+					Text("Waiting for the device to scan...", style = MaterialTheme.typography.bodySmall)
+					OutlinedButton(onClick = { leave() }, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
+				}
+				else -> {
+					Text(status.ifEmpty { "Starting..." }, color = MaterialTheme.colorScheme.error)
+					OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back") }
 				}
 			}
 		}

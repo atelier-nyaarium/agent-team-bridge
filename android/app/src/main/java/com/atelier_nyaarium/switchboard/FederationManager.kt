@@ -8,6 +8,7 @@ import com.atelier_nyaarium.switchboard.crypto.ProvisionOpsCrypto
 import com.atelier_nyaarium.switchboard.crypto.XDomainLinkCrypto
 import com.atelier_nyaarium.switchboard.crypto.canonicalSnapshot
 import com.atelier_nyaarium.switchboard.proto.Admission
+import com.atelier_nyaarium.switchboard.proto.DeleteDomain
 import com.atelier_nyaarium.switchboard.proto.DomainSnapshot
 import com.atelier_nyaarium.switchboard.proto.FirstRoot
 import com.atelier_nyaarium.switchboard.proto.ProvisionTenant
@@ -16,6 +17,7 @@ import com.atelier_nyaarium.switchboard.proto.Revocation
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.SetDisplayName
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
+import com.atelier_nyaarium.switchboard.proto.SignedDeleteDomain
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
 import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
@@ -130,6 +132,33 @@ class FederationManager(private val store: AppStateStore) {
 		val owner = ownerIdentity()
 		val admission = Admission("gateway", signPub, boxPub, gatewayId, nowMs, nonce())
 		return AdmissionCrypto.signAdmission(admission, owner.sign.priv, owner.sign.pub)
+	}
+
+	/** Owner-sign a kind:console admission for a freshly-approved second device's console keys (the
+	 * "Add a device" self-enroll). The owner attests the new device's identity so a Gateway trusts its
+	 * sealed ops, exactly like this console's own admission - only the subject keys differ. */
+	fun admitConsole(signPub: String, boxPub: String, nowMs: Long): SignedAdmission {
+		val owner = ownerIdentity()
+		val admission = Admission("console", signPub, boxPub, null, nowMs, nonce())
+		return AdmissionCrypto.signAdmission(admission, owner.sign.priv, owner.sign.pub)
+	}
+
+	/** Seal a console-transport bundle to a new device's box key, SIGNED BY THE OWNER key, so the new
+	 * device verifies the seal against the owner signPub it pinned from the QR before it provisions.
+	 * A forged sealed reply from the public ingress fails that signature check. */
+	fun sealConsoleTransport(recipientBoxPub: String, plaintext: ByteArray): SealedEnvelope {
+		val owner = ownerIdentity()
+		val sealed = Crypto.seal(plaintext, recipientBoxPub, owner.sign.priv)
+		return SealedEnvelope(sealed.ephemeralPub, sealed.nonce, sealed.ciphertext, sealed.signature)
+	}
+
+	/** Unseal the console-transport reply on the NEW device, verifying it against the owner signPub
+	 * pinned from the QR and decrypting with this device's own console box key. Throws on a bad
+	 * signature (a forged reply) or wrong recipient. */
+	fun unsealConsoleTransport(sealed: SealedEnvelope, ownerSignPub: String): ByteArray {
+		val console = consoleIdentity()
+		val env = Crypto.SealedEnvelope(sealed.ephemeralPub, sealed.nonce, sealed.ciphertext, sealed.signature)
+		return Crypto.unseal(env, console.box.priv, ownerSignPub)
 	}
 
 	/** Owner-sign a revocation for a member's signing key. */
@@ -250,6 +279,10 @@ class FederationManager(private val store: AppStateStore) {
 	/** A fresh handshake id, minted by the admin into the enroll QR. Unguessable so a third party
 	 * who learned a Domain cannot target a real ceremony window. */
 	fun freshHandshakeId(): String = nonce()
+
+	/** A fresh device-approval token (approvalId or nonce) for the "Add a device" rendezvous. Standard
+	 * base64 so it satisfies the wire's b64 field; unguessable so the public ingress cannot be probed. */
+	fun freshApprovalToken(): String = nonce()
 
 	/** A fresh high-entropy enroll pin, minted by the admin into the QR. It rides the QR out of band
 	 * and is never sent to evie, so the untrusted broker cannot grind a candidate compare code; the
@@ -442,5 +475,14 @@ class FederationManager(private val store: AppStateStore) {
 		val owner = ownerIdentity()
 		val rename = SetDisplayName(domainId, displayName, nowMs, nonce())
 		return ProvisionOpsCrypto.signSetDisplayName(rename, owner.sign.priv, owner.sign.pub)
+	}
+
+	/** Owner-sign a request to purge this owner's OWN Domain (the app-only "Revoke and Delete Domain").
+	 * evie verifies the signature against the Domain's rooted owner key before dropping the whole slice.
+	 * The `domainId` is this owner's own rooted Domain. */
+	fun signDeleteDomain(domainId: String, nowMs: Long): SignedDeleteDomain {
+		val owner = ownerIdentity()
+		val deletion = DeleteDomain(domainId, nowMs, nonce())
+		return ProvisionOpsCrypto.signDeleteDomain(deletion, owner.sign.priv, owner.sign.pub)
 	}
 }

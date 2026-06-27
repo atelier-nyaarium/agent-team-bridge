@@ -35,6 +35,8 @@ import {
 	NOTICE_SESSION_PREFIX,
 } from "../src/shared/console-protocol.js";
 import {
+	ConsoleApprovalOpSchema,
+	ConsoleApprovalResultSchema,
 	EnrollHandshakeOpSchema,
 	EnrollHandshakeResultSchema,
 	EnrollOpSchema,
@@ -110,6 +112,9 @@ const ROOTS: z.ZodType[] = [
 	EnrollResultSchema,
 	EnrollHandshakeOpSchema,
 	EnrollHandshakeResultSchema,
+	// Device self-enroll approval: the held device composes the ops, decodes evie's broker reply.
+	ConsoleApprovalOpSchema,
+	ConsoleApprovalResultSchema,
 	PendingTenantSchema,
 	GatewayTransportSchema,
 	GatewayBootstrapBundleSchema,
@@ -136,6 +141,7 @@ const SEALED_ROOTS = new Set([
 	"ConsoleOp",
 	"EnrollOp",
 	"EnrollHandshakeOp",
+	"ConsoleApprovalOp",
 	"TrustHandshakeOp",
 	"CrossDomainShareTarget",
 ]);

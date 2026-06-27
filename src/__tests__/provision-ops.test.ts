@@ -3,6 +3,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { fingerprint, generateIdentity, verify } from "../shared/crypto.js";
 import {
+	type DeleteDomain,
+	deleteDomainSigningBytes,
 	EnrollOpSchema,
 	type FirstRoot,
 	firstRootSigningBytes,
@@ -13,6 +15,7 @@ import {
 	rosterRequestSigningBytes,
 	type SetDisplayName,
 	setDisplayNameSigningBytes,
+	signDeleteDomain,
 	signFirstRoot,
 	signProvisionTenant,
 	signRemoveTenant,
@@ -20,6 +23,7 @@ import {
 	signSetDisplayName,
 	signTrustPendingRequest,
 	trustPendingSigningBytes,
+	verifyDeleteDomain,
 	verifyFirstRoot,
 	verifyProvisionTenant,
 	verifyRemoveTenant,
@@ -61,6 +65,7 @@ const vectors = JSON.parse(
 	removal: SignedVec<RemoveTenant>;
 	firstRoot: SignedVec<FirstRoot>;
 	rename: SignedVec<SetDisplayName>;
+	deletion: SignedVec<DeleteDomain>;
 	roster: SignedVec<{ signerSignPub: string; proofAt: number; nonce: string }>;
 	trustPending: SignedVec<{ signerSignPub: string; proofAt: number; nonce: string }>;
 };
@@ -206,6 +211,32 @@ describe("set_display_name vectors (owner-signed)", () => {
 	it("parses a set_display_name enroll op", () => {
 		const signed = signSetDisplayName(vectors.rename.value, friendOwnerSignPriv, friendOwnerSignPub);
 		expect(EnrollOpSchema.safeParse({ kind: "set_display_name", rename: signed }).success).toBe(true);
+	});
+});
+
+describe("delete_domain vectors (owner-signed)", () => {
+	const { friendOwnerSignPub, friendOwnerSignPriv } = vectors;
+
+	it("reproduces the canonical DELETE_DOMAIN_V1 signing bytes", () => {
+		const bytes = deleteDomainSigningBytes(vectors.deletion.value, friendOwnerSignPub);
+		assertCanonicalBytes(bytes, vectors.deletion);
+	});
+
+	it("reproduces the recorded signature and verifies it", () => {
+		const signed = signDeleteDomain(vectors.deletion.value, friendOwnerSignPriv, friendOwnerSignPub);
+		expect(signed.signature).toBe(vectors.deletion.signature);
+		expect(verifyDeleteDomain(signed, friendOwnerSignPub)).toBe(true);
+	});
+
+	it("rejects the deletion under a different owner key", () => {
+		const attacker = generateIdentity();
+		const signed = signDeleteDomain(vectors.deletion.value, friendOwnerSignPriv, friendOwnerSignPub);
+		expect(verifyDeleteDomain(signed, attacker.sign.pub)).toBe(false);
+	});
+
+	it("parses a delete_domain enroll op", () => {
+		const signed = signDeleteDomain(vectors.deletion.value, friendOwnerSignPriv, friendOwnerSignPub);
+		expect(EnrollOpSchema.safeParse({ kind: "delete_domain", deletion: signed }).success).toBe(true);
 	});
 });
 

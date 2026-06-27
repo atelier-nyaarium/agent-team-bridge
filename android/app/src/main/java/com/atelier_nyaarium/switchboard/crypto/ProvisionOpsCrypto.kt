@@ -1,9 +1,11 @@
 package com.atelier_nyaarium.switchboard.crypto
 
+import com.atelier_nyaarium.switchboard.proto.DeleteDomain
 import com.atelier_nyaarium.switchboard.proto.FirstRoot
 import com.atelier_nyaarium.switchboard.proto.ProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.RemoveTenant
 import com.atelier_nyaarium.switchboard.proto.SetDisplayName
+import com.atelier_nyaarium.switchboard.proto.SignedDeleteDomain
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
 import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
@@ -104,6 +106,32 @@ object ProvisionOpsCrypto {
 	fun verifySetDisplayName(s: SignedSetDisplayName, expectedOwnerSignPub: String): Boolean =
 		s.ownerSignPub == expectedOwnerSignPub &&
 			Crypto.verify(setDisplayNameSigningBytes(s.rename, expectedOwnerSignPub), s.signature, expectedOwnerSignPub)
+
+	/**
+	 * delete_domain is the app-only "Revoke and Delete Domain": the rooted owner proves possession of
+	 * the rooted key to purge its whole Domain slice from evie. Owner-signed like set_display_name, so
+	 * the bytes bind fingerprint(ownerSignPub); the distinct version prefix keeps a rename signature
+	 * from replaying as a deletion over the same fields.
+	 */
+	fun deleteDomainSigningBytes(d: DeleteDomain, ownerSignPub: String): ByteArray =
+		listOf(
+			"DELETE_DOMAIN_V1",
+			Crypto.fingerprint(ownerSignPub),
+			d.domainId,
+			d.issuedAt.toString(),
+			d.nonce,
+		).joinToString("\n").toByteArray(Charsets.UTF_8)
+
+	fun signDeleteDomain(d: DeleteDomain, ownerSignPriv: String, ownerSignPub: String): SignedDeleteDomain =
+		SignedDeleteDomain(
+			deletion = d,
+			ownerSignPub = ownerSignPub,
+			signature = Crypto.sign(deleteDomainSigningBytes(d, ownerSignPub), ownerSignPriv),
+		)
+
+	fun verifyDeleteDomain(s: SignedDeleteDomain, expectedOwnerSignPub: String): Boolean =
+		s.ownerSignPub == expectedOwnerSignPub &&
+			Crypto.verify(deleteDomainSigningBytes(s.deletion, expectedOwnerSignPub), s.signature, expectedOwnerSignPub)
 
 	/**
 	 * The cross-tenant roster request proof: the console proves it holds an admitted signing key by

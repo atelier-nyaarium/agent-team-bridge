@@ -338,6 +338,7 @@ data class Provisioning(
 	val conversationId: String? = null,
 	val pendingTenant: PendingTenantRef? = null,
 	val enrollHandshake: EnrollHandshakeRef? = null,
+	val deviceApprovalReach: String? = null,
 )
 
 @Serializable
@@ -429,6 +430,12 @@ sealed class EnrollOp {
 	data class SetDisplayName(
 		val rename: SignedSetDisplayName,
 	) : EnrollOp()
+
+	@Serializable
+	@SerialName("delete_domain")
+	data class DeleteDomain(
+		val deletion: SignedDeleteDomain,
+	) : EnrollOp()
 }
 
 @Serializable
@@ -471,6 +478,62 @@ data class EnrollHandshakeResult(
 	val error: String? = null,
 	val peerCommitment: String? = null,
 	val peerReveal: EnrollReveal? = null,
+)
+
+@Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("step")
+sealed class ConsoleApprovalOp {
+	@Serializable
+	@SerialName("arm")
+	data class Arm(
+		val approvalId: String,
+		val nonce: String,
+	) : ConsoleApprovalOp()
+
+	@Serializable
+	@SerialName("join")
+	data class Join(
+		val approvalId: String,
+		val nonce: String,
+		val newSignPub: String,
+		val newBoxPub: String,
+		val device: String? = null,
+	) : ConsoleApprovalOp()
+
+	@Serializable
+	@SerialName("poll")
+	data class Poll(
+		val approvalId: String,
+	) : ConsoleApprovalOp()
+
+	@Serializable
+	@SerialName("approve")
+	data class Approve(
+		val approvalId: String,
+		val sealed: SealedEnvelope,
+	) : ConsoleApprovalOp()
+
+	@Serializable
+	@SerialName("fetch")
+	data class Fetch(
+		val approvalId: String,
+		val nonce: String,
+	) : ConsoleApprovalOp()
+
+	@Serializable
+	@SerialName("cancel")
+	data class Cancel(
+		val approvalId: String,
+	) : ConsoleApprovalOp()
+}
+
+@Serializable
+data class ConsoleApprovalResult(
+	val ok: Boolean,
+	val error: String? = null,
+	val join: ConsoleApprovalJoin? = null,
+	val sealed: SealedEnvelope? = null,
 )
 
 @Serializable
@@ -865,11 +928,32 @@ data class SetDisplayName(
 )
 
 @Serializable
+data class SignedDeleteDomain(
+	val deletion: DeleteDomain,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class DeleteDomain(
+	val domainId: String,
+	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
 data class EnrollReveal(
 	val ownerSignPub: String,
 	val ownerBoxPub: String,
 	val domainId: String,
 	val salt: String,
+)
+
+@Serializable
+data class ConsoleApprovalJoin(
+	val newSignPub: String,
+	val newBoxPub: String,
+	val device: String? = null,
 )
 
 @Serializable

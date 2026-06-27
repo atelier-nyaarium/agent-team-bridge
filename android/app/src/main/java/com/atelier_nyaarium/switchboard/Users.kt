@@ -135,7 +135,7 @@ fun UsersScreen(
 					// The federation actions live here now that Users is the main surface (no separate
 					// Federation hub). Guest networks is admin-only.
 					IconButton(onClick = { menuOpen = true }) {
-						Icon(Icons.Default.MoreVert, contentDescription = "Network actions")
+						Icon(Icons.Default.MoreVert, contentDescription = "Domain actions")
 					}
 					DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
 						DropdownMenuItem(text = { Text("Link with a peer") }, onClick = {
@@ -143,7 +143,7 @@ fun UsersScreen(
 							onLink()
 						})
 						if (isAdmin) {
-							DropdownMenuItem(text = { Text("Guest networks") }, onClick = {
+							DropdownMenuItem(text = { Text("Guest Domains") }, onClick = {
 								menuOpen = false
 								onHostNetworks()
 							})
@@ -162,7 +162,7 @@ fun UsersScreen(
 			verticalArrangement = Arrangement.spacedBy(12.dp),
 		) {
 			Text(
-				"Everyone on your network. Names are always visible; what each person can reach stays private until shared.",
+				"Everyone on your Domain. Names are always visible; what each person can reach stays private until shared.",
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)

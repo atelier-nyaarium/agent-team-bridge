@@ -771,7 +771,7 @@ async function topMenu(): Promise<void> {
 		console.log("  2) Evie Admin Provision - First-time setup of your Evie network\n");
 		console.log("Purge:");
 		console.log("  9) Purge Gateway        - Remove this gateway and erase its data");
-		console.log("  0) Purge Federation     - Delete your whole network and erase everything\n");
+		console.log("  0) Purge Federation     - Delete your whole Domain and erase everything\n");
 		console.log("  q) Quit\n");
 		const choice = ask(">").toLowerCase();
 		if (choice === "" || choice === "q") return;

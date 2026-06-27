@@ -96,7 +96,7 @@ object FriendOnboarding {
 				m.contains("already claimed", ignoreCase = true) ->
 				FirstRootReject("This setup code is expired or already used. Ask for a new one.", transient = false)
 			m.contains("not available", ignoreCase = true) || m.startsWith("HTTP 501") ->
-				FirstRootReject("This network isn't ready yet. Ask whoever invited you to finish their setup.", transient = false)
+				FirstRootReject("This Domain isn't ready yet. Ask whoever invited you to finish their setup.", transient = false)
 			m.contains("admin op is stale", ignoreCase = true) ->
 				FirstRootReject("Your device clock is off - sync the time and setup will retry.", transient = true)
 			m.contains("persist failed", ignoreCase = true) ->

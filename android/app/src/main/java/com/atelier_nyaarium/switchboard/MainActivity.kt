@@ -115,6 +115,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Process-lifetime repository so chat state survives Activity recreation. */
@@ -179,7 +180,14 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	var showSettings by rememberSaveable { mutableStateOf(false) }
 	var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.HUB) }
 	var showManage by remember { mutableStateOf(false) }
+	// The Gateways kebab "Manage sharing" routes here, scoped to that gateway's sessions.
+	var sharingGateway by remember { mutableStateOf<String?>(null) }
 	var showAddGateway by remember { mutableStateOf(false) }
+	// The account "Your devices" list, and the held-device "Add a device" approval window it opens.
+	var showYourDevices by remember { mutableStateOf(false) }
+	var showApproval by remember { mutableStateOf(false) }
+	// The board's "Running Gateway Setup" opens the host-setup manual.
+	var showHostHelp by remember { mutableStateOf(false) }
 	// Cross-Domain trust overlays: the Users surface (the hub for people + networks) and the
 	// transient link wizard (leaving it cancels the pairing windows).
 	var showUsers by remember { mutableStateOf(false) }
@@ -291,7 +299,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			showSettings = false
 			settingsRoute = SettingsRoute.HUB
 			showManage = false
+			sharingGateway = null
 			showAddGateway = false
+			showYourDevices = false
+			showApproval = false
+			showHostHelp = false
 			showUsers = false
 			showLinkWizard = false
 			showHostNetworks = false
@@ -315,9 +327,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 
 	// System back navigates within the app (thread/settings/manage -> back) instead of exiting.
 	BackHandler(
-		enabled = openTeam != null || showSettings || showManage || showAddGateway ||
-			showUsers || showLinkWizard || showHostNetworks ||
-			hostTenant != null || adminCeremonyCtx != null || enrolleeCeremonyCtx != null,
+		enabled = openTeam != null || showSettings || showManage || showAddGateway || showHostHelp ||
+			sharingGateway != null || showUsers || showLinkWizard || showHostNetworks ||
+			hostTenant != null || adminCeremonyCtx != null || enrolleeCeremonyCtx != null ||
+			showYourDevices || showApproval,
 	) {
 		when {
 			adminCeremonyCtx != null -> adminCeremonyCtx = null
@@ -326,7 +339,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			hostTenant != null -> hostTenant = null
 			showHostNetworks -> showHostNetworks = false
 			showUsers -> showUsers = false
+			showApproval -> showApproval = false
+			showYourDevices -> showYourDevices = false
 			showAddGateway -> showAddGateway = false
+			showHostHelp -> showHostHelp = false
+			sharingGateway != null -> sharingGateway = null
 			showManage -> showManage = false
 			openTeam != null -> openTeam = null
 			showSettings && settingsRoute != SettingsRoute.HUB -> settingsRoute = SettingsRoute.HUB
@@ -400,10 +417,28 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onHostNetworks = { showHostNetworks = true },
 				onAddGateway = { showAddGateway = true },
 			)
+		showApproval ->
+			ApprovalWindowScreen(repo = repo, onBack = { showApproval = false })
+		showYourDevices ->
+			YourDevicesScreen(
+				repo = repo,
+				onBack = { showYourDevices = false },
+				onAddDevice = { showApproval = true },
+			)
 		showAddGateway ->
 			AddGatewayScreen(repo = repo, onBack = { showAddGateway = false }, onDone = { showAddGateway = false })
+		showHostHelp ->
+			HostSetupHelpScreen(onBack = { showHostHelp = false })
+		sharingGateway != null ->
+			SharingScreen(repo = repo, gatewayId = sharingGateway, onBack = { sharingGateway = null })
 		showManage ->
-			ManageMembersScreen(repo = repo, onBack = { showManage = false }, onAddGateway = { showAddGateway = true })
+			GatewaysScreen(
+				repo = repo,
+				teams = state.teams,
+				onBack = { showManage = false },
+				onAddGateway = { showAddGateway = true },
+				onManageSharing = { gid -> sharingGateway = gid },
+			)
 		// Settings is reachable from ANY state, so this branch is evaluated BEFORE the unprovisioned
 		// ProvisionScreen below (the setup screen's gear opens it). It sits below the overlay branches
 		// above, which are entered from Settings without clearing showSettings, so they must still win.
@@ -417,6 +452,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onSetDeviceName = { scope.launch { repo.setDeviceName(it) } },
 				onToggleBiometric = { repo.setBiometricLock(it) },
 				onManage = { showManage = true },
+				onYourDevices = {
+					showSettings = false
+					settingsRoute = SettingsRoute.HUB
+					showYourDevices = true
+				},
 				onFederation = {
 					// Users is the federation surface; the federation actions live in its top-bar menu.
 					showSettings = false
@@ -424,7 +464,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					showUsers = true
 				},
 				onClear = {
-					scope.launch { repo.clearAll() }
+					// The Domain-delete transaction (repo.deleteDomain) owns the local wipe; this only
+					// navigates home once it completes.
 					showSettings = false
 					settingsRoute = SettingsRoute.HUB
 					openTeam = null
@@ -499,6 +540,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					showSettings = true
 				},
 				onManage = { showManage = true },
+				onAddGateway = { showAddGateway = true },
+				onHostHelp = { showHostHelp = true },
 				onOpen = { team ->
 					repo.openThread(team)
 					openTeam = team
@@ -548,6 +591,9 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 	var status by remember { mutableStateOf("") }
 	var scanning by remember { mutableStateOf(false) }
 	var showHostHelp by remember { mutableStateOf(false) }
+	// The "Add a device" self-enroll path: a fresh install joining an existing owner's Domain by
+	// scanning an authorize-console QR shown on a held device.
+	var addDevice by remember { mutableStateOf(false) }
 	// A blob that passes looksProvisionable() but fails the strict kotlinx parse inside provision()
 	// leaves us on this screen with provisioned=false and the real cause on state.error. Track the
 	// attempt so we can swap the local "Connecting..." for that cause instead of stalling on it.
@@ -592,6 +638,11 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 
 	if (showHostHelp) {
 		HostSetupHelpScreen(onBack = { showHostHelp = false })
+		return
+	}
+
+	if (addDevice) {
+		NewDeviceScreen(repo = repo, onBack = { addDevice = false })
 		return
 	}
 
@@ -641,9 +692,115 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 			}
 			Spacer(Modifier.height(8.dp))
 			HorizontalDivider()
+			// The "Add a device" self-enroll: a second phone for an EXISTING owner scans a code shown
+			// on a device they already use, instead of pasting a setup blob.
+			TextButton(onClick = { addDevice = true }) { Text("Adding another device to your account?") }
 			// Tucked, text-only host-setup manual behind a small link. The admin finds it here;
 			// a friend with an invite never opens it.
-			TextButton(onClick = { showHostHelp = true }) { Text("Setting up your own network?") }
+			TextButton(onClick = { showHostHelp = true }) { Text("Setting up your own Domain?") }
+		}
+	}
+}
+
+/** NEW device side of "Add a device": a fresh, unprovisioned app joining an EXISTING owner's Domain.
+ * It scans the held device's authorize-console QR, generates its own console identity, joins the
+ * public rendezvous, and polls for the held device's biometric-gated approval. On approval it unseals
+ * the console transport (verifying the owner signPub pinned from the QR) and provisions; the App's
+ * provisioned branch then takes over. No owner key and no SA token ever cross the QR. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun NewDeviceScreen(repo: ChatRepository, onBack: () -> Unit) {
+	val scope = rememberCoroutineScope()
+	var scanning by remember { mutableStateOf(false) }
+	var scan by remember { mutableStateOf<ScannedDeviceApproval?>(null) }
+	var status by remember { mutableStateOf("") }
+	var busy by remember { mutableStateOf(false) }
+	// True once this device has joined and is polling for the held device's approval.
+	var waiting by remember { mutableStateOf(false) }
+
+	// Poll the public ingress for the sealed reply; on arrival it installs + flips provisioned, and the
+	// App leaves this screen. A terminal failure (expired window) stops the loop and surfaces the cause.
+	LaunchedEffect(waiting) {
+		val s = scan
+		if (!waiting || s == null) return@LaunchedEffect
+		while (waiting) {
+			repo.newDeviceFetch(s)
+				.onSuccess { installed -> if (installed) return@LaunchedEffect }
+				.onFailure {
+					status = it.message ?: "The approval expired - ask your other device to add it again."
+					waiting = false
+					return@LaunchedEffect
+				}
+			delay(2000)
+		}
+	}
+
+	if (scanning) {
+		QrScanScreen(
+			onResult = { scanned ->
+				scanning = false
+				scope.launch {
+					val parsed = repo.parseAuthorizeConsole(scanned)
+					if (parsed == null) status = "That isn't an add-device code." else scan = parsed.also { status = "" }
+				}
+			},
+			onCancel = { scanning = false },
+		)
+		return
+	}
+
+	Scaffold(topBar = { TopAppBar(title = { Text("Add this device") }) }) { pad ->
+		Column(
+			Modifier.padding(pad).padding(24.dp).fillMaxSize().verticalScroll(rememberScrollState()),
+			verticalArrangement = Arrangement.spacedBy(16.dp),
+		) {
+			val s = scan
+			when {
+				s == null -> {
+					Text("Scan the add-device code shown on a device you already use.", style = MaterialTheme.typography.bodyMedium)
+					if (status.isNotEmpty()) Text(status, color = MaterialTheme.colorScheme.error)
+					Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
+					OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
+				}
+				waiting -> {
+					Text("Waiting for approval", style = MaterialTheme.typography.titleMedium)
+					Text("Approve this device on your other device. Its fingerprint:", style = MaterialTheme.typography.bodyMedium)
+					Text(s.sas, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.titleLarge)
+					if (status.isNotEmpty()) Text(status)
+					OutlinedButton(
+						onClick = {
+							waiting = false
+							onBack()
+						},
+						modifier = Modifier.fillMaxWidth(),
+					) { Text("Cancel") }
+				}
+				else -> {
+					Text("Add this device?", style = MaterialTheme.typography.titleMedium)
+					Text("This joins the Domain with fingerprint:", style = MaterialTheme.typography.bodyMedium)
+					Text(s.sas, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.titleLarge)
+					if (status.isNotEmpty()) Text(status)
+					Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+						OutlinedButton(onClick = onBack, enabled = !busy) { Text("Cancel") }
+						Button(
+							enabled = !busy,
+							onClick = {
+								scope.launch {
+									busy = true
+									status = "Joining..."
+									repo.newDeviceJoin(s)
+										.onSuccess {
+											waiting = true
+											status = ""
+										}
+										.onFailure { status = it.message ?: "Couldn't reach your other device." }
+									busy = false
+								}
+							},
+						) { Text("Add this device") }
+					}
+				}
+			}
 		}
 	}
 }
@@ -659,7 +816,7 @@ fun HostSetupHelpScreen(onBack: () -> Unit) {
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text("Set up your own network") },
+				title = { Text("Running Gateway Setup") },
 				navigationIcon = {
 					IconButton(onClick = onBack) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -720,6 +877,8 @@ fun SessionsScreen(
 	onRefresh: () -> Unit,
 	onSettings: () -> Unit,
 	onManage: () -> Unit,
+	onAddGateway: () -> Unit,
+	onHostHelp: () -> Unit,
 	onOpen: (String) -> Unit,
 	onRename: (String, String) -> Unit,
 	onForget: (String) -> Unit,
@@ -804,7 +963,7 @@ fun SessionsScreen(
 			if (sessions.isEmpty()) {
 				// Offer the still-owed in-person compare only on the awaiting-host board (a freshly-rooted
 				// enrollee who has not finished the trust step); EmptyBoard gates the button on that state.
-				EmptyBoard(state, onManage, onRefresh, onVerifyEnroll = onVerifyEnroll)
+				EmptyBoard(state, onManage, onAddGateway, onHostHelp, onRefresh, onVerifyEnroll = onVerifyEnroll)
 			} else {
 				val order = sessionOrder(state)
 				// My own Domain id, learned from a local session (one owned by the connected
@@ -866,6 +1025,8 @@ fun SessionsScreen(
 private fun EmptyBoard(
 	state: ChatState,
 	onManage: () -> Unit,
+	onAddGateway: () -> Unit,
+	onHostHelp: () -> Unit,
 	onRefresh: () -> Unit,
 	onVerifyEnroll: (() -> Unit)? = null,
 ) {
@@ -877,32 +1038,34 @@ private fun EmptyBoard(
 		when {
 			// A friend who just first-rooted has no host of their own yet (the invite omits gateway
 			// ids by design), and the admin's own fresh provision first-roots too - so both land
-			// here. The action goes straight to the Gateways screen (admit a Gateway by scanning its
-			// code); the friend with no computer yet still has the body's "set up a computer" guidance.
+			// here. Add a Gateway goes straight to the scanner; the friend with no computer yet still has
+			// the body's "set up a computer" guidance.
 			state.noGatewayState == NoGatewayState.AWAITING_HOST -> {
 				Text("You're all set up", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
-				BoardBody("Your network is ready. Set up a computer to run your agents, then add its Gateway here.")
+				BoardBody("Your Domain is ready. Set up a computer to run your agents, then add its Gateway here.")
 				// An outstanding in-person trust compare (the admin who invited you is waiting) takes the
 				// primary slot; adding a Gateway becomes the secondary step.
 				if (onVerifyEnroll != null) {
 					Spacer(Modifier.height(20.dp))
 					Button(onClick = onVerifyEnroll) { Text("Verify with the admin") }
 					Spacer(Modifier.height(4.dp))
-					TextButton(onClick = onManage) { Text("Add a Gateway") }
+					TextButton(onClick = onAddGateway) { Text("Add a Gateway") }
 				} else {
 					Spacer(Modifier.height(20.dp))
-					Button(onClick = onManage) { Text("Add a Gateway") }
+					Button(onClick = onAddGateway) { Text("Add a Gateway") }
 				}
 			}
-			// No Gateway admitted yet: the primary onboarding step, a real action straight to the
-			// Gateways screen.
+			// No Gateway admitted yet: the primary onboarding step goes straight to the scanner, with the
+			// setup manual as the secondary step.
 			state.noGatewayState == NoGatewayState.NEEDS_GATEWAY -> {
 				Text("No Gateways yet", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
-				BoardBody("Add a Gateway to reach your agents. No computer yet? Set one up first.")
+				BoardBody("The computer that runs your agents.")
 				Spacer(Modifier.height(20.dp))
-				Button(onClick = onManage) { Text("Add a Gateway") }
+				Button(onClick = onAddGateway) { Text("Add a Gateway") }
+				Spacer(Modifier.height(4.dp))
+				TextButton(onClick = onHostHelp) { Text("Running Gateway Setup") }
 			}
 			// A terminal failure that will not self-heal (secure storage, 401, admission rejected, or
 			// an enrollment that gave up past the grace window). Name the actual cause from `error`
@@ -914,7 +1077,7 @@ private fun EmptyBoard(
 				Spacer(Modifier.height(20.dp))
 				Button(onClick = onRefresh) { Text("Try again") }
 				Spacer(Modifier.height(4.dp))
-				TextButton(onClick = onManage) { Text("Manage Members") }
+				TextButton(onClick = onManage) { Text("Gateways") }
 			}
 			// Mid-enrollment, still self-healing: the poll loop keeps retrying and clears it on the
 			// first success; past the grace window it escalates into the terminal branch above.
@@ -1443,7 +1606,7 @@ private fun settingsTitle(route: SettingsRoute): String = when (route) {
 	SettingsRoute.HUB -> "Settings"
 	SettingsRoute.PROFILE -> "Profile"
 	SettingsRoute.VOICE -> "Voice & TTS"
-	SettingsRoute.NETWORKS -> "Networks & Trust"
+	SettingsRoute.NETWORKS -> "Domain & Trust"
 	SettingsRoute.SECURITY -> "Security"
 	SettingsRoute.SYSTEM -> "System"
 }
@@ -1461,6 +1624,7 @@ fun SettingsScreen(
 	onSetDeviceName: (String) -> Unit,
 	onToggleBiometric: (Boolean) -> Unit,
 	onManage: () -> Unit,
+	onYourDevices: () -> Unit,
 	onFederation: () -> Unit,
 	onClear: () -> Unit,
 	onCloseSettings: () -> Unit,
@@ -1496,14 +1660,14 @@ fun SettingsScreen(
 					if (provisioned) {
 						SettingsRow(Icons.Default.Person, "Profile") { onRoute(SettingsRoute.PROFILE) }
 						SettingsRow(Icons.Default.RecordVoiceOver, "Voice & TTS") { onRoute(SettingsRoute.VOICE) }
-						SettingsRow(Icons.Default.Hub, "Networks & Trust") { onRoute(SettingsRoute.NETWORKS) }
+						SettingsRow(Icons.Default.Hub, "Domain & Trust") { onRoute(SettingsRoute.NETWORKS) }
 						SettingsRow(Icons.Default.Lock, "Security") { onRoute(SettingsRoute.SECURITY) }
 					}
 					SettingsRow(Icons.Default.Tune, "System") { onRoute(SettingsRoute.SYSTEM) }
 				}
 				SettingsRoute.PROFILE -> ProfileSettings(state, repo, onSetDeviceName)
 				SettingsRoute.VOICE -> SttsVoiceSection(repo)
-				SettingsRoute.NETWORKS -> NetworksSettings(repo, onManage, onFederation)
+				SettingsRoute.NETWORKS -> NetworksSettings(repo, onManage, onYourDevices, onFederation)
 				SettingsRoute.SECURITY -> SecuritySettings(state, onToggleBiometric)
 				SettingsRoute.SYSTEM -> SystemSettings(repo, onClear)
 			}
@@ -1574,7 +1738,7 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 		) { Text(if (opBusy) "..." else "Save") }
 	}
 	if (domainResolving) {
-		Text("Loading your network...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+		Text("Loading your Domain...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 	} else if (opStatus.isNotEmpty()) {
 		Text(opStatus, style = MaterialTheme.typography.bodySmall)
 	}
@@ -1594,11 +1758,14 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 }
 
 @Composable
-private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onFederation: () -> Unit) {
-	// Two distinct concerns kept apart: managing gateways within YOUR network, and linking with a
-	// friend's separate network (cross-Domain trust).
-	Text("Your network", style = MaterialTheme.typography.titleSmall)
-	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Manage Members") }
+private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onYourDevices: () -> Unit, onFederation: () -> Unit) {
+	// Three distinct concerns kept apart: the gateways within YOUR network, the consoles signed in to
+	// your account (Your devices), and linking with a friend's separate network (cross-Domain trust).
+	Text("Your Domain", style = MaterialTheme.typography.titleSmall)
+	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Gateways") }
+	HorizontalDivider()
+	Text("Account", style = MaterialTheme.typography.titleSmall)
+	Button(onClick = onYourDevices, modifier = Modifier.fillMaxWidth()) { Text("Your devices") }
 	HorizontalDivider()
 	Text("People", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = onFederation, modifier = Modifier.fillMaxWidth()) { Text("Users") }
@@ -1619,11 +1786,18 @@ private fun SecuritySettings(state: ChatState, onToggleBiometric: (Boolean) -> U
 	)
 }
 
-/** System settings; the danger action (Clear & re-provision) sits at the bottom behind a
- * confirm, so a wipe is two levels deep (Settings -> System) plus an explicit confirmation. */
+/** System settings; the danger action (Revoke and Delete Domain) sits at the bottom behind a
+ * confirm, so a wipe is two levels deep (Settings -> System) plus an explicit confirmation. The
+ * action purges this owner's whole Domain from the servers, so it is hidden for an admin (who
+ * purges via setup.sh) and shown only to a confirmed app-only owner (see canDeleteOwnDomain). */
 @Composable
 private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
-	var confirmClear by remember { mutableStateOf(false) }
+	val scope = rememberCoroutineScope()
+	val activity = LocalContext.current as? FragmentActivity
+	var confirmDelete by remember { mutableStateOf(false) }
+	var deleting by remember { mutableStateOf(false) }
+	var deleteError by remember { mutableStateOf<String?>(null) }
+	var wipedUnconfirmed by remember { mutableStateOf(false) }
 	var refreshText by remember { mutableStateOf((repo.terminalRefreshMs / 1000.0).toString()) }
 	BatteryExemptionRow()
 	HorizontalDivider()
@@ -1650,27 +1824,72 @@ private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 		style = MaterialTheme.typography.bodySmall,
 		color = MaterialTheme.colorScheme.onSurfaceVariant,
 	)
-	HorizontalDivider()
-	Text("Danger", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
-	OutlinedButton(
-		onClick = { confirmClear = true },
-		colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-	) {
-		Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
-		Spacer(Modifier.width(4.dp))
-		Text("Clear & re-provision")
+	// Admins purge via setup.sh; an unconfirmed Domain (offline) hides it too, so an admin whose gateway
+	// is down can't read the unknown state as "not admin" and delete everything (see canDeleteOwnDomain).
+	if (repo.canDeleteOwnDomain()) {
+		HorizontalDivider()
+		Text("Danger", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+		OutlinedButton(
+			onClick = { deleteError = null; confirmDelete = true },
+			colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+		) {
+			Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+			Spacer(Modifier.width(4.dp))
+			Text("Revoke and Delete Domain")
+		}
+		Text(
+			"Purges your Domain from the servers and wipes this device. Voice settings are kept.",
+			style = MaterialTheme.typography.bodySmall,
+		)
 	}
-	Text(
-		"Removes the stored credential and chat history. Voice settings are kept.",
-		style = MaterialTheme.typography.bodySmall,
-	)
-	if (confirmClear) {
+	if (confirmDelete) {
 		AlertDialog(
-			onDismissRequest = { confirmClear = false },
-			title = { Text("Clear & re-provision?") },
-			text = { Text("Removes the stored credential and chat history from this device. Voice settings are kept.") },
-			confirmButton = { TextButton(onClick = { confirmClear = false; onClear() }) { Text("Clear") } },
-			dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+			onDismissRequest = { if (!deleting) confirmDelete = false },
+			title = { Text("Delete your Domain?") },
+			text = {
+				Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+					Text("This purges your Domain from the servers, not just this phone. It can't be undone.")
+					Text("- Your Domain is removed from evie", style = MaterialTheme.typography.bodySmall)
+					Text("- Every gateway + device is revoked", style = MaterialTheme.typography.bodySmall)
+					deleteError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+				}
+			},
+			confirmButton = {
+				TextButton(
+					enabled = !deleting,
+					onClick = {
+						scope.launch {
+							// Biometric-gate this destructive owner-key action, mirroring revoke/admit.
+							if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
+							deleting = true
+							deleteError = null
+							when (val outcome = repo.deleteDomain()) {
+								DeleteDomainOutcome.Deleted -> {
+									confirmDelete = false
+									onClear()
+								}
+								DeleteDomainOutcome.WipedUnconfirmed -> {
+									confirmDelete = false
+									wipedUnconfirmed = true
+								}
+								is DeleteDomainOutcome.Rejected -> {
+									deleting = false
+									deleteError = outcome.error
+								}
+							}
+						}
+					},
+				) { Text("Delete Domain") }
+			},
+			dismissButton = { TextButton(enabled = !deleting, onClick = { confirmDelete = false }) { Text("Cancel") } },
+		)
+	}
+	if (wipedUnconfirmed) {
+		AlertDialog(
+			onDismissRequest = { wipedUnconfirmed = false; onClear() },
+			title = { Text("Couldn't reach the servers") },
+			text = { Text("This device was wiped, but we couldn't confirm the purge. Ask the admin to purge it if it survived.") },
+			confirmButton = { TextButton(onClick = { wipedUnconfirmed = false; onClear() }) { Text("OK") } },
 		)
 	}
 }

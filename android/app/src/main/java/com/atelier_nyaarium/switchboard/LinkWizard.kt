@@ -369,7 +369,7 @@ private fun LinkedNoRelayPanel(busy: Boolean, note: String, onRetry: () -> Unit,
 	Text("Linked locally - relay not authorized", style = MaterialTheme.typography.titleLarge)
 	Surface(color = MaterialTheme.colorScheme.errorContainer, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
 		Text(
-			"The link is saved, but the Router hasn't authorized relay between your networks, " +
+			"The link is saved, but the Router hasn't authorized relay between your Domains, " +
 				"so your agents can't reach this peer yet. Retry - no need to unlink.",
 			Modifier.padding(16.dp).fillMaxWidth(),
 			color = MaterialTheme.colorScheme.onErrorContainer,

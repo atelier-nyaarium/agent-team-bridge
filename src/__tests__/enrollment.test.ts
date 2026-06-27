@@ -88,6 +88,9 @@ describe("enrollment", () => {
 			domainId: "d",
 			signPub: device.sign.pub,
 			boxPub: device.box.pub,
+			approvalId: "a",
+			nonce: "n",
+			reach: "https://evie.example/approve",
 		};
 		const signed = admissionFromScan(payload, owner.sign.priv, owner.sign.pub, 2000, "cg==");
 		expect(signed.admission.kind).toBe("console");

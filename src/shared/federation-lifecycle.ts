@@ -1,4 +1,4 @@
-// SYNC-HASH: 0fe768e73c21b05e08ef7a200318bd41
+// SYNC-HASH: f12bf00d979c3f2b91fbb4905377f887
 // SYNCED MODULE - source of truth: switchboard/src/shared/federation-lifecycle.ts
 // Copied verbatim into: evie-bot/app/features/bridge/federation-lifecycle.ts
 // MUST re-copy on change: cp src/shared/federation-lifecycle.ts ../evie-bot/app/features/bridge/federation-lifecycle.ts
@@ -73,6 +73,13 @@ export const EnrollmentPayloadSchema = z
 			domainId: z.string().min(1),
 			signPub: z.string().min(1),
 			boxPub: z.string().min(1),
+			// The device-approval rendezvous (the "Add a device" self-enroll). The held device arms a
+			// one-time window at evie and prints these beside the owner keys: `reach` is evie's public
+			// nonce-gated ingress the new device POSTs its fresh console keys to, under `approvalId`,
+			// gated by `nonce`. All public - never an SA token (the transport reaches the new device sealed).
+			approvalId: z.string().min(1),
+			nonce: z.string().min(1),
+			reach: z.string().min(1),
 		}),
 	])
 	.meta({ id: "EnrollmentPayload" });
@@ -275,6 +282,28 @@ export const SignedSetDisplayNameSchema = z
 	})
 	.meta({ id: "SignedSetDisplayName" });
 
+/** A user deleting their OWN Domain (the app-only "Revoke and Delete Domain"). The rooted owner
+ * signs a request to purge their whole Domain slice from evie - admissions, revocations, and links.
+ * evie verifies the signer IS the Domain's rooted owner before dropping the slice. */
+export const DeleteDomainSchema = z
+	.object({
+		domainId: slugField(),
+		issuedAt: z.number().int().nonnegative(),
+		nonce: b64Field(),
+	})
+	.meta({ id: "DeleteDomain" });
+
+export const SignedDeleteDomainSchema = z
+	.object({
+		deletion: DeleteDomainSchema,
+		// The rooted owner's root signing public key (base64). evie checks it against the
+		// Domain's rooted owner key, never trusting this field alone.
+		ownerSignPub: b64Field(),
+		// The owner's Ed25519 signature over deleteDomainSigningBytes (base64).
+		signature: b64Field(),
+	})
+	.meta({ id: "SignedDeleteDomain" });
+
 /** The owner device's enrollment requests to evie (NOT relayed to a Gateway - evie
  * is the Domain root). All are self-authenticating: `enroll_redeem` is authorized by
  * the single-use nonce evie minted, and the submit ops carry an owner-signed artifact
@@ -300,6 +329,9 @@ export const EnrollOpSchema = z
 		z.object({ kind: z.literal("provision_tenant"), provision: SignedProvisionTenantSchema }),
 		z.object({ kind: z.literal("remove_tenant"), removal: SignedRemoveTenantSchema }),
 		z.object({ kind: z.literal("set_display_name"), rename: SignedSetDisplayNameSchema }),
+		// A rooted owner purges their OWN Domain (app-only users; admins use setup.sh). evie
+		// verifies the signer is the rooted owner, then drops the whole slice.
+		z.object({ kind: z.literal("delete_domain"), deletion: SignedDeleteDomainSchema }),
 	])
 	.meta({ id: "EnrollOp" });
 
@@ -370,6 +402,76 @@ export const EnrollHandshakeResultSchema = z
 		peerReveal: EnrollRevealSchema.optional(),
 	})
 	.meta({ id: "EnrollHandshakeResult" });
+
+////////////////////////////////
+//  Device self-enroll approval (the "Add a device" rendezvous)
+//
+//  The owner authorizes their OWN new device, no admin. A held device H (an admitted,
+//  authenticated console) ARMs a one-time window; the fresh device N (no creds) JOINs over
+//  evie's public nonce-gated ingress with its generated console keys; H POLLs, shows N's
+//  fingerprint, and on a human Approve owner-signs a kind:console admission AND seals the
+//  console transport to N's box key, parking it via `approve`; N FETCHes the sealed reply
+//  (nonce-gated) and provisions. evie is the DUMB BROKER keyed by `approvalId`: it relays the
+//  join then the sealed reply, reading neither. The QR carries only PUBLIC material (owner
+//  keys + domainId + approvalId + nonce + reach); the SA token reaches N only sealed.
+
+/** A sealed envelope (shared/crypto.ts `seal()`): an ephemeral X25519 box + an Ed25519
+ * signature. Redefined inline because this synced leaf may import only ./admission.js +
+ * ./crypto.js, and crypto.ts exports the SealedEnvelope TYPE, not a zod schema. The shape is
+ * byte-identical to schemas.ts's SealedEnvelopeSchema, so codegen dedupes the two by their
+ * shared .meta id into a single Kotlin class. */
+const SealedEnvelopeSchema = z
+	.object({
+		ephemeralPub: z.string(),
+		nonce: z.string(),
+		ciphertext: z.string(),
+		signature: z.string(),
+	})
+	.meta({ id: "SealedEnvelope" });
+
+/** N's fresh console keys as H sees them on a poll: the new device's signing + box publics
+ * and an optional human device label. H derives the fingerprint it shows from newSignPub. */
+const ConsoleApprovalJoinSchema = z
+	.object({
+		newSignPub: b64Field(),
+		newBoxPub: b64Field(),
+		device: displayField(64).optional(),
+	})
+	.meta({ id: "ConsoleApprovalJoin" });
+
+/** A device-approval frame to evie's broker, by step. `arm`/`poll`/`approve`/`cancel` come from
+ * the AUTHENTICATED held device H (keyed by `approvalId`); `join`/`fetch` come from the fresh
+ * device N over the public nonce-gated ingress (`nonce` is the gate). `approve` parks the sealed
+ * transport reply; `fetch` retrieves it once H approved. */
+export const ConsoleApprovalOpSchema = z
+	.discriminatedUnion("step", [
+		z.object({ step: z.literal("arm"), approvalId: b64Field(), nonce: b64Field() }),
+		z.object({
+			step: z.literal("join"),
+			approvalId: b64Field(),
+			nonce: b64Field(),
+			newSignPub: b64Field(),
+			newBoxPub: b64Field(),
+			device: displayField(64).optional(),
+		}),
+		z.object({ step: z.literal("poll"), approvalId: b64Field() }),
+		z.object({ step: z.literal("approve"), approvalId: b64Field(), sealed: SealedEnvelopeSchema }),
+		z.object({ step: z.literal("fetch"), approvalId: b64Field(), nonce: b64Field() }),
+		z.object({ step: z.literal("cancel"), approvalId: b64Field() }),
+	])
+	.meta({ id: "ConsoleApprovalOp" });
+
+/** evie's reply to a device-approval frame. `ok:false` + `error` is terminal (window expired, a
+ * cap hit, or a nonce/identity mismatch). `join` is present on a `poll` once N has joined; `sealed`
+ * is present on a `fetch` once H approved (N unseals the transport with its box key). */
+export const ConsoleApprovalResultSchema = z
+	.object({
+		ok: z.boolean(),
+		error: z.string().optional(),
+		join: ConsoleApprovalJoinSchema.optional(),
+		sealed: SealedEnvelopeSchema.optional(),
+	})
+	.meta({ id: "ConsoleApprovalResult" });
 
 ////////////////////////////////
 //  Cross-tenant roster (the "Users" surface: everyone on this evie, name + presence)
@@ -541,6 +643,8 @@ export type EnrollResult = z.infer<typeof EnrollResultSchema>;
 export type EnrollReveal = z.infer<typeof EnrollRevealSchema>;
 export type EnrollHandshakeOp = z.infer<typeof EnrollHandshakeOpSchema>;
 export type EnrollHandshakeResult = z.infer<typeof EnrollHandshakeResultSchema>;
+export type ConsoleApprovalOp = z.infer<typeof ConsoleApprovalOpSchema>;
+export type ConsoleApprovalResult = z.infer<typeof ConsoleApprovalResultSchema>;
 export type PendingTenant = z.infer<typeof PendingTenantSchema>;
 export type ProvisionTenant = z.infer<typeof ProvisionTenantSchema>;
 export type SignedProvisionTenant = z.infer<typeof SignedProvisionTenantSchema>;
@@ -550,6 +654,8 @@ export type FirstRoot = z.infer<typeof FirstRootSchema>;
 export type SignedFirstRoot = z.infer<typeof SignedFirstRootSchema>;
 export type SetDisplayName = z.infer<typeof SetDisplayNameSchema>;
 export type SignedSetDisplayName = z.infer<typeof SignedSetDisplayNameSchema>;
+export type DeleteDomain = z.infer<typeof DeleteDomainSchema>;
+export type SignedDeleteDomain = z.infer<typeof SignedDeleteDomainSchema>;
 export type XDomainLinkEdge = z.infer<typeof XDomainLinkEdgeSchema>;
 export type SignedXDomainLinkEdge = z.infer<typeof SignedXDomainLinkEdgeSchema>;
 export type XDomainLinkRevocation = z.infer<typeof XDomainLinkRevocationSchema>;
@@ -814,6 +920,34 @@ export function signSetDisplayName(
 export function verifySetDisplayName(s: SignedSetDisplayName, expectedOwnerSignPubB64: string): boolean {
 	if (s.ownerSignPub !== expectedOwnerSignPubB64) return false;
 	return verify(setDisplayNameSigningBytes(s.rename, expectedOwnerSignPubB64), s.signature, expectedOwnerSignPubB64);
+}
+
+/** DELETE_DOMAIN_V1 signing bytes (owner-signed). The owner proves possession of the rooted key to
+ * purge the whole Domain; the fingerprint binds the request to that owner. */
+export function deleteDomainSigningBytes(d: DeleteDomain, ownerSignPubB64: string): Buffer {
+	return Buffer.from(
+		["DELETE_DOMAIN_V1", fingerprint(ownerSignPubB64), d.domainId, String(d.issuedAt), d.nonce].join("\n"),
+		"utf8",
+	);
+}
+
+/** Owner-sign a Domain deletion (the owner device holds the signing key). */
+export function signDeleteDomain(
+	deletion: DeleteDomain,
+	ownerSignPrivB64: string,
+	ownerSignPubB64: string,
+): SignedDeleteDomain {
+	return {
+		deletion,
+		ownerSignPub: ownerSignPubB64,
+		signature: sign(deleteDomainSigningBytes(deletion, ownerSignPubB64), ownerSignPrivB64),
+	};
+}
+
+/** True if the deletion verifies under the EXPECTED owner key (the Domain's rooted owner). */
+export function verifyDeleteDomain(s: SignedDeleteDomain, expectedOwnerSignPubB64: string): boolean {
+	if (s.ownerSignPub !== expectedOwnerSignPubB64) return false;
+	return verify(deleteDomainSigningBytes(s.deletion, expectedOwnerSignPubB64), s.signature, expectedOwnerSignPubB64);
 }
 
 ////////////////////////////////

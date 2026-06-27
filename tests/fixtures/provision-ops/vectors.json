@@ -55,6 +55,17 @@
 		"signingBytesBase64": "U0VUX0RJU1BMQVlfTkFNRV9WMQpFM0FGLUREQjAtMUY1MC00REUyCmNhcm9sCkNhcm9sJ3MgTGFiCjE3MTcxNzE5MDAwMDAKYzJWMExXNWhiV1V0Ym05dVkyVT0=",
 		"signature": "lopiDMiZlGmu7vmVbrfN/eRUn/0OW22t4I3t7DeiRZVsnKHSb8hUmQ7yVw3jlGExYdmqSMMQoorm5hp1NXj1CQ=="
 	},
+	"deletion": {
+		"value": {
+			"domainId": "carol",
+			"issuedAt": 1717172000000,
+			"nonce": "ZGVsZXRlLWRvbWFpbi1ub25jZQ=="
+		},
+		"signingBytes": "DELETE_DOMAIN_V1\nE3AF-DDB0-1F50-4DE2\ncarol\n1717172000000\nZGVsZXRlLWRvbWFpbi1ub25jZQ==",
+		"signingBytesHex": "44454c4554455f444f4d41494e5f56310a453341462d444442302d314635302d344445320a6361726f6c0a313731373137323030303030300a5a4756735a58526c4c57527662574670626931756232356a5a513d3d",
+		"signingBytesBase64": "REVMRVRFX0RPTUFJTl9WMQpFM0FGLUREQjAtMUY1MC00REUyCmNhcm9sCjE3MTcxNzIwMDAwMDAKWkdWc1pYUmxMV1J2YldGcGJpMXViMjVqWlE9PQ==",
+		"signature": "D5apKRLxK9HYATwWWItAuWCCbP75asnAGFQ4cAIdaleEZkSw3QWaRUCtj5MhkbMzxuXBSNpvvt0JBBQGbObQDQ=="
+	},
 	"roster": {
 		"_comment": "rosterRequestSigningBytes + signRosterRequest (enrollment.ts): a console's ROSTER_V1 proof of possession, signed here by the friendOwner key as the console signer. Binds the RAW signer key + proofAt + nonce.",
 		"value": {
