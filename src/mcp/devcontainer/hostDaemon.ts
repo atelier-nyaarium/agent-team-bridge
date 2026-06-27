@@ -9,7 +9,7 @@ import { composeSessionName, parseSessionName } from "../../shared/session-id.js
 import { ensureContainerUpAsync, resolveProject } from "./helpers.js";
 import { createHostOpRunner } from "./hostOpRunner.js";
 import { spawnReloadPlugins } from "./reloadPlugins.js";
-import { ensureSession, isAgentReady, killSession, peekPane, sendKey, sendText } from "./tmuxCore.js";
+import { awaitReady, ensureSession, killSession, peekPane, sendKey, sendText } from "./tmuxCore.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -228,35 +228,17 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		);
 		console.error(`[host-wake] ${msg.team} session ${created ? "started" : "already running"}`);
 
-		// For a fresh launch, poll the pane to auto-accept the dev-channels prompt and track whether it
-		// ever captured: a launch that exits instantly takes its tmux session down with it, so zero
-		// captures means a dead launch -> report a failed wake so /send fails fast. A slow-but-alive
-		// session captures at least once.
+		// For a fresh launch, poll the pane to clear the dev-channels + folder-trust menus (press "1")
+		// until the REPL composer shows, and track whether it ever captured: a launch that exits
+		// instantly takes its tmux session down with it, so zero captures means a dead launch ->
+		// report a failed wake so /send fails fast. A slow-but-alive session captures at least once.
 		let lastScreen = "";
 		let launchAlive = !created;
 		if (created) {
-			let captureOk = false;
-			for (let i = 0; i < 10; i++) {
-				await new Promise((r) => setTimeout(r, 1000));
-				try {
-					lastScreen = (await peekPane(target)).ansi;
-					captureOk = true;
-				} catch {
-					// a dead session's pane cannot be captured; keep polling
-				}
-				if (isAgentReady(lastScreen)) {
-					console.error(`[host-wake] ${msg.team} Claude is ready`);
-					break;
-				}
-				if (lastScreen.includes("Loading development channels")) {
-					try {
-						await sendKey(target, "Enter");
-					} catch {
-						// ignore send-keys errors
-					}
-				}
-			}
-			launchAlive = captureOk;
+			const res = await awaitReady(target);
+			lastScreen = res.screen;
+			launchAlive = res.alive;
+			console.error(`[host-wake] ${msg.team} ${res.ready ? "Claude is ready" : "did not reach the REPL"}`);
 		} else {
 			try {
 				lastScreen = (await peekPane(target)).ansi;
@@ -340,9 +322,16 @@ const hostOpRunner = createHostOpRunner({
 	sendText,
 	sendKey,
 	createSession: async (target) => {
-		// a create_session op for an existing session reattaches instead of erroring on a duplicate
-		// new-session.
-		await ensureSession(target, buildLaunchCommand(target));
+		// A create_session for an existing session reattaches instead of erroring on a duplicate
+		// new-session. For a fresh launch, clear the dev-channels + folder-trust menus in the
+		// BACKGROUND: the host op must return well under the gateway's 20s timeout, so we do not block
+		// on the REPL becoming ready (a large/slow launch would blow that budget).
+		const { created } = await ensureSession(target, buildLaunchCommand(target));
+		if (created) {
+			void awaitReady(target).catch(() => {
+				// best-effort menu-clearing; a failure self-heals on the next launch
+			});
+		}
 	},
 	reloadPlugins: async (target) => {
 		spawnReloadPlugins(target);

@@ -514,7 +514,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			// from the list) stays un-renameable rather than defaulting open.
 			val presence = when {
 				session == null -> null
-				session.status == "online" -> if (state.working(session.name)) "working..." else "live"
+				session.status == "online" -> when {
+					state.needsLogin(session.name) -> "check terminal"
+					state.working(session.name) -> "working..."
+					else -> "live"
+				}
 				session.status == "available" -> if (state.working(session.name)) "waking..." else "available"
 				else -> "ended"
 			}
@@ -1278,6 +1282,7 @@ private fun presenceColor(presence: String): Color = when (presence) {
 	"live" -> Color(0xFF2EA043)
 	"working...", "waking..." -> Color(0xFFD29922)
 	"available" -> Color(0xFF0969DA)
+	"check terminal" -> Color(0xFFDA3633)
 	else -> MaterialTheme.colorScheme.outline
 }
 
@@ -1405,7 +1410,11 @@ fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: 
 				team.version?.let { v ->
 					if (v != BuildConfig.VERSION_NAME) StatusChip("v$v", MaterialTheme.colorScheme.outline)
 				}
-				if (live && state.working(team.name)) StatusChip("working...", Color(0xFFD29922))
+				if (live && state.needsLogin(team.name)) {
+					StatusChip("check terminal", Color(0xFFDA3633))
+				} else if (live && state.working(team.name)) {
+					StatusChip("working...", Color(0xFFD29922))
+				}
 				Spacer(Modifier.weight(1f))
 				state.lastActivity(team.name)?.let {
 					Text(
