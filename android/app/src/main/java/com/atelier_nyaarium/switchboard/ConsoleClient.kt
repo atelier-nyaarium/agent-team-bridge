@@ -14,6 +14,8 @@ import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeRef
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeResult
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
+import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
 import com.atelier_nyaarium.switchboard.proto.ConsolePeekResult
@@ -86,6 +88,10 @@ data class Provisioning(
 	 * handshakeId + pin seeding the in-person trust compare. The enrollee reads it after first-rooting
 	 * to run the ceremony as enrollee. */
 	val enrollHandshake: EnrollHandshakeRef? = null,
+	/** evie's public nonce-gated device-approval ingress. A held device stamps it into the
+	 * authorize-console QR so a fresh device can reach evie with no creds; absent means this network
+	 * has no public ingress and the Add-a-device entry is disabled. */
+	val deviceApprovalReach: String? = null,
 ) {
 	companion object {
 		fun parse(blob: String): Provisioning {
@@ -102,6 +108,7 @@ data class Provisioning(
 				conversationId = p.conversationId ?: UUID.randomUUID().toString(),
 				pendingTenant = p.pendingTenant,
 				enrollHandshake = p.enrollHandshake,
+				deviceApprovalReach = p.deviceApprovalReach?.trimEnd('/'),
 			)
 		}
 	}
@@ -179,6 +186,12 @@ private data class RosterEnvelope(val roster: RosterRequest)
  * transport intake, which holds the gateway-bridge Secret and answers itself. */
 @Serializable
 private data class TransportEnvelope(val transport: TransportRequest)
+
+/** Device-approval POST body for the AUTHENTICATED held device: a top-level `consoleApproval` field
+ * routes to evie's console-bridge device-approval coordinator (arm/poll/approve/cancel). The public
+ * join/fetch steps go to the credential-less ingress instead (see postPublicApproval). */
+@Serializable
+private data class ConsoleApprovalEnvelope(val consoleApproval: ConsoleApprovalOp)
 
 /** Trust-rendezvous POST bodies: top-level fields routing to evie's trust broker and pending query. */
 @Serializable
@@ -379,6 +392,40 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			runCatching { wireJson.decodeFromString<EnrollResult>(text) }.getOrNull()?.let { return it }
 			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
 			return EnrollResult(ok = false, error = err ?: "HTTP ${resp.code}")
+		}
+	}
+
+	/** Drive one device-approval frame (arm/poll/approve/cancel) through evie's coordinator over the
+	 * AUTHENTICATED console-bridge. Mirrors enroll()'s envelope + POST: evie answers a
+	 * ConsoleApprovalResult directly (200 ok, 400 reject), never relaying to a Gateway. The public
+	 * join/fetch steps must NOT come here - they go to postPublicApproval. */
+	fun postConsoleApproval(op: ConsoleApprovalOp): ConsoleApprovalResult {
+		val req = Request.Builder()
+			.url("$proxyBase/relay")
+			.header("Authorization", "Bearer ${prov.saToken}")
+			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
+			.post(
+				wireJson.encodeToString(ConsoleApprovalEnvelope.serializer(), ConsoleApprovalEnvelope(op)).toRequestBody(JSON),
+			)
+			.build()
+		DebugLog.log("DeviceApproval", "POST $proxyBase/relay step=${op::class.simpleName}")
+		val resp =
+			try {
+				client.newCall(req).execute()
+			} catch (e: Exception) {
+				DebugLog.log("DeviceApproval", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+				throw e
+			}
+		resp.use {
+			val text = resp.body?.string().orEmpty()
+			DebugLog.log("DeviceApproval", "resp HTTP ${resp.code} ${text.take(160)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<ConsoleApprovalResult>(text) }
+					.getOrElse { ConsoleApprovalResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<ConsoleApprovalResult>(text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+			return ConsoleApprovalResult(ok = false, error = err ?: "HTTP ${resp.code}")
 		}
 	}
 
@@ -824,6 +871,41 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	companion object {
 		private val JSON = "application/json".toMediaType()
+
+		/** System-trust client for the PUBLIC device-approval ingress. No CA pin (the reach URL is a real
+		 * public cert) and no creds, so it is shared and built once. Short read timeout since the fresh
+		 * device polls fetch in a loop. */
+		private val publicClient: OkHttpClient by lazy {
+			OkHttpClient.Builder()
+				.connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+				.readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+				.build()
+		}
+
+		/** The fresh device N's public path: a plain HTTPS POST of the op JSON to evie's nonce-gated
+		 * ingress, carrying NO SA token and NO app token (N holds none). Only the join/fetch steps reach
+		 * here; the nonce in the op body is the gate. TLS is the public host's real cert (system trust).
+		 * Always answers a ConsoleApprovalResult (the ingress returns 200 with the ok flag in the body). */
+		fun postPublicApproval(reachUrl: String, op: ConsoleApprovalOp): ConsoleApprovalResult {
+			val req = Request.Builder()
+				.url(reachUrl)
+				.post(wireJson.encodeToString(ConsoleApprovalOp.serializer(), op).toRequestBody(JSON))
+				.build()
+			DebugLog.log("DeviceApproval", "PUBLIC POST $reachUrl step=${op::class.simpleName}")
+			val resp =
+				try {
+					publicClient.newCall(req).execute()
+				} catch (e: Exception) {
+					DebugLog.log("DeviceApproval", "public transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+					throw e
+				}
+			resp.use {
+				val text = resp.body?.string().orEmpty()
+				DebugLog.log("DeviceApproval", "public resp HTTP ${resp.code} ${text.take(160)}")
+				runCatching { wireJson.decodeFromString<ConsoleApprovalResult>(text) }.getOrNull()?.let { return it }
+				return ConsoleApprovalResult(ok = false, error = "HTTP ${resp.code}")
+			}
+		}
 
 		/** Trust ONLY the supplied cluster CA (the API server cert is cluster-signed). */
 		private fun buildPinnedClient(caPem: String): OkHttpClient {

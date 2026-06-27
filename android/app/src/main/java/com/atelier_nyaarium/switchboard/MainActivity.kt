@@ -115,6 +115,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Process-lifetime repository so chat state survives Activity recreation. */
@@ -182,6 +183,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// The Gateways kebab "Manage sharing" routes here, scoped to that gateway's sessions.
 	var sharingGateway by remember { mutableStateOf<String?>(null) }
 	var showAddGateway by remember { mutableStateOf(false) }
+	// The account "Your devices" list, and the held-device "Add a device" approval window it opens.
+	var showYourDevices by remember { mutableStateOf(false) }
+	var showApproval by remember { mutableStateOf(false) }
 	// The board's "Running Gateway Setup" opens the host-setup manual.
 	var showHostHelp by remember { mutableStateOf(false) }
 	// Cross-Domain trust overlays: the Users surface (the hub for people + networks) and the
@@ -297,6 +301,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			showManage = false
 			sharingGateway = null
 			showAddGateway = false
+			showYourDevices = false
+			showApproval = false
 			showHostHelp = false
 			showUsers = false
 			showLinkWizard = false
@@ -323,7 +329,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	BackHandler(
 		enabled = openTeam != null || showSettings || showManage || showAddGateway || showHostHelp ||
 			sharingGateway != null || showUsers || showLinkWizard || showHostNetworks ||
-			hostTenant != null || adminCeremonyCtx != null || enrolleeCeremonyCtx != null,
+			hostTenant != null || adminCeremonyCtx != null || enrolleeCeremonyCtx != null ||
+			showYourDevices || showApproval,
 	) {
 		when {
 			adminCeremonyCtx != null -> adminCeremonyCtx = null
@@ -332,6 +339,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			hostTenant != null -> hostTenant = null
 			showHostNetworks -> showHostNetworks = false
 			showUsers -> showUsers = false
+			showApproval -> showApproval = false
+			showYourDevices -> showYourDevices = false
 			showAddGateway -> showAddGateway = false
 			showHostHelp -> showHostHelp = false
 			sharingGateway != null -> sharingGateway = null
@@ -408,6 +417,14 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onHostNetworks = { showHostNetworks = true },
 				onAddGateway = { showAddGateway = true },
 			)
+		showApproval ->
+			ApprovalWindowScreen(repo = repo, onBack = { showApproval = false })
+		showYourDevices ->
+			YourDevicesScreen(
+				repo = repo,
+				onBack = { showYourDevices = false },
+				onAddDevice = { showApproval = true },
+			)
 		showAddGateway ->
 			AddGatewayScreen(repo = repo, onBack = { showAddGateway = false }, onDone = { showAddGateway = false })
 		showHostHelp ->
@@ -435,6 +452,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onSetDeviceName = { scope.launch { repo.setDeviceName(it) } },
 				onToggleBiometric = { repo.setBiometricLock(it) },
 				onManage = { showManage = true },
+				onYourDevices = {
+					showSettings = false
+					settingsRoute = SettingsRoute.HUB
+					showYourDevices = true
+				},
 				onFederation = {
 					// Users is the federation surface; the federation actions live in its top-bar menu.
 					showSettings = false
@@ -569,6 +591,9 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 	var status by remember { mutableStateOf("") }
 	var scanning by remember { mutableStateOf(false) }
 	var showHostHelp by remember { mutableStateOf(false) }
+	// The "Add a device" self-enroll path: a fresh install joining an existing owner's Domain by
+	// scanning an authorize-console QR shown on a held device.
+	var addDevice by remember { mutableStateOf(false) }
 	// A blob that passes looksProvisionable() but fails the strict kotlinx parse inside provision()
 	// leaves us on this screen with provisioned=false and the real cause on state.error. Track the
 	// attempt so we can swap the local "Connecting..." for that cause instead of stalling on it.
@@ -613,6 +638,11 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 
 	if (showHostHelp) {
 		HostSetupHelpScreen(onBack = { showHostHelp = false })
+		return
+	}
+
+	if (addDevice) {
+		NewDeviceScreen(repo = repo, onBack = { addDevice = false })
 		return
 	}
 
@@ -662,9 +692,113 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 			}
 			Spacer(Modifier.height(8.dp))
 			HorizontalDivider()
+			// The "Add a device" self-enroll: a second phone for an EXISTING owner scans a code shown
+			// on a device they already use, instead of pasting a setup blob.
+			TextButton(onClick = { addDevice = true }) { Text("Adding another device to your account?") }
 			// Tucked, text-only host-setup manual behind a small link. The admin finds it here;
 			// a friend with an invite never opens it.
 			TextButton(onClick = { showHostHelp = true }) { Text("Setting up your own Domain?") }
+		}
+	}
+}
+
+/** NEW device side of "Add a device": a fresh, unprovisioned app joining an EXISTING owner's Domain.
+ * It scans the held device's authorize-console QR, generates its own console identity, joins the
+ * public rendezvous, and polls for the held device's biometric-gated approval. On approval it unseals
+ * the console transport (verifying the owner signPub pinned from the QR) and provisions; the App's
+ * provisioned branch then takes over. No owner key and no SA token ever cross the QR. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun NewDeviceScreen(repo: ChatRepository, onBack: () -> Unit) {
+	val scope = rememberCoroutineScope()
+	var scanning by remember { mutableStateOf(false) }
+	var scan by remember { mutableStateOf<ScannedDeviceApproval?>(null) }
+	var status by remember { mutableStateOf("") }
+	var busy by remember { mutableStateOf(false) }
+	// True once this device has joined and is polling for the held device's approval.
+	var waiting by remember { mutableStateOf(false) }
+
+	// Poll the public ingress for the sealed reply; on arrival it installs + flips provisioned, and the
+	// App leaves this screen. A terminal failure (expired window) stops the loop and surfaces the cause.
+	LaunchedEffect(waiting) {
+		val s = scan
+		if (!waiting || s == null) return@LaunchedEffect
+		while (waiting) {
+			repo.newDeviceFetch(s)
+				.onSuccess { installed -> if (installed) return@LaunchedEffect }
+				.onFailure {
+					status = it.message ?: "The approval expired - ask your other device to add it again."
+					waiting = false
+					return@LaunchedEffect
+				}
+			delay(2000)
+		}
+	}
+
+	if (scanning) {
+		QrScanScreen(
+			onResult = {
+				scanning = false
+				val parsed = repo.parseAuthorizeConsole(it)
+				if (parsed == null) status = "That isn't an add-device code." else scan = parsed.also { status = "" }
+			},
+			onCancel = { scanning = false },
+		)
+		return
+	}
+
+	Scaffold(topBar = { TopAppBar(title = { Text("Add this device") }) }) { pad ->
+		Column(
+			Modifier.padding(pad).padding(24.dp).fillMaxSize().verticalScroll(rememberScrollState()),
+			verticalArrangement = Arrangement.spacedBy(16.dp),
+		) {
+			val s = scan
+			when {
+				s == null -> {
+					Text("Scan the add-device code shown on a device you already use.", style = MaterialTheme.typography.bodyMedium)
+					if (status.isNotEmpty()) Text(status, color = MaterialTheme.colorScheme.error)
+					Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
+					OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
+				}
+				waiting -> {
+					Text("Waiting for approval", style = MaterialTheme.typography.titleMedium)
+					Text("Approve this device on your other device. Its fingerprint:", style = MaterialTheme.typography.bodyMedium)
+					Text(s.sas, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.titleLarge)
+					if (status.isNotEmpty()) Text(status)
+					OutlinedButton(
+						onClick = {
+							waiting = false
+							onBack()
+						},
+						modifier = Modifier.fillMaxWidth(),
+					) { Text("Cancel") }
+				}
+				else -> {
+					Text("Add this device?", style = MaterialTheme.typography.titleMedium)
+					Text("This joins the Domain with fingerprint:", style = MaterialTheme.typography.bodyMedium)
+					Text(s.sas, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.titleLarge)
+					if (status.isNotEmpty()) Text(status)
+					Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+						OutlinedButton(onClick = onBack, enabled = !busy) { Text("Cancel") }
+						Button(
+							enabled = !busy,
+							onClick = {
+								scope.launch {
+									busy = true
+									status = "Joining..."
+									repo.newDeviceJoin(s)
+										.onSuccess {
+											waiting = true
+											status = ""
+										}
+										.onFailure { status = it.message ?: "Couldn't reach your other device." }
+									busy = false
+								}
+							},
+						) { Text("Add this device") }
+					}
+				}
+			}
 		}
 	}
 }
@@ -1488,6 +1622,7 @@ fun SettingsScreen(
 	onSetDeviceName: (String) -> Unit,
 	onToggleBiometric: (Boolean) -> Unit,
 	onManage: () -> Unit,
+	onYourDevices: () -> Unit,
 	onFederation: () -> Unit,
 	onClear: () -> Unit,
 	onCloseSettings: () -> Unit,
@@ -1530,7 +1665,7 @@ fun SettingsScreen(
 				}
 				SettingsRoute.PROFILE -> ProfileSettings(state, repo, onSetDeviceName)
 				SettingsRoute.VOICE -> SttsVoiceSection(repo)
-				SettingsRoute.NETWORKS -> NetworksSettings(repo, onManage, onFederation)
+				SettingsRoute.NETWORKS -> NetworksSettings(repo, onManage, onYourDevices, onFederation)
 				SettingsRoute.SECURITY -> SecuritySettings(state, onToggleBiometric)
 				SettingsRoute.SYSTEM -> SystemSettings(repo, onClear)
 			}
@@ -1621,11 +1756,14 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 }
 
 @Composable
-private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onFederation: () -> Unit) {
-	// Two distinct concerns kept apart: managing gateways within YOUR network, and linking with a
-	// friend's separate network (cross-Domain trust).
+private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onYourDevices: () -> Unit, onFederation: () -> Unit) {
+	// Three distinct concerns kept apart: the gateways within YOUR network, the consoles signed in to
+	// your account (Your devices), and linking with a friend's separate network (cross-Domain trust).
 	Text("Your Domain", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Gateways") }
+	HorizontalDivider()
+	Text("Account", style = MaterialTheme.typography.titleSmall)
+	Button(onClick = onYourDevices, modifier = Modifier.fillMaxWidth()) { Text("Your devices") }
 	HorizontalDivider()
 	Text("People", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = onFederation, modifier = Modifier.fillMaxWidth()) { Text("Users") }

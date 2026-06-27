@@ -338,6 +338,7 @@ data class Provisioning(
 	val conversationId: String? = null,
 	val pendingTenant: PendingTenantRef? = null,
 	val enrollHandshake: EnrollHandshakeRef? = null,
+	val deviceApprovalReach: String? = null,
 )
 
 @Serializable

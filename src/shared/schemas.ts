@@ -820,6 +820,11 @@ export const ProvisioningSchema = z
 		// compare the friend runs AFTER first-root (see EnrollHandshakeRef). Absent for a plain
 		// provision / re-provision.
 		enrollHandshake: EnrollHandshakeRefSchema.optional(),
+		// evie's public nonce-gated device-approval ingress, the reach a fresh device POSTs its
+		// join/fetch to in the "Add a device" self-enroll. A held device stamps it into the
+		// authorize-console QR; absent means this network has no public ingress and the Add-a-device
+		// entry is shown disabled.
+		deviceApprovalReach: z.string().optional(),
 	})
 	.meta({ id: "Provisioning" });
 

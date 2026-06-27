@@ -4,6 +4,8 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalJoin
+import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollParty
@@ -61,6 +63,40 @@ data class ScannedGateway(
 /** The outcome of enrolling a Gateway: whether it was admitted, a human message, and the
  * sealed bundle to hand-carry when LAN delivery was not possible (paste fallback). */
 data class EnrollDelivery(val admitted: Boolean, val message: String, val pasteBundle: String?)
+
+/** A held device's armed "Add a device" window: the rendezvous token, its one-time nonce, and the
+ * authorize-console QR text (public material only) the new device scans. */
+data class DeviceApprovalArmed(val approvalId: String, val nonce: String, val qr: String)
+
+/** A scanned authorize-console QR on the NEW device: the held network's owner keys + Domain (the
+ * owner signPub is pinned to verify the sealed reply), plus the rendezvous reach + token + nonce. */
+data class ScannedDeviceApproval(
+	val domainId: String,
+	val ownerSignPub: String,
+	val ownerBoxPub: String,
+	val approvalId: String,
+	val nonce: String,
+	val reach: String,
+	val sas: String,
+)
+
+/** The console transport a held device seals to a freshly-approved device: the provisioning creds
+ * (so the new device reaches evie) plus the owner's synced keyring + route Gateway (so it can seal
+ * to the Gateway the owner already admitted, without holding the owner key to re-sync). */
+@kotlinx.serialization.Serializable
+data class ConsoleTransport(
+	val apiUrl: String,
+	val caPem: String,
+	val saToken: String,
+	val appToken: String,
+	val namespace: String,
+	val service: String,
+	val port: Long,
+	val domainId: String? = null,
+	val gatewayId: String? = null,
+	val domainVersion: String? = null,
+	val domain: com.atelier_nyaarium.switchboard.proto.DomainSnapshot? = null,
+)
 
 /** Outcome of "Revoke and Delete Domain", so the UI can tell a confirmed purge from one it
  * wiped locally without reaching evie (warn the human) from an evie rejection (keep local
@@ -970,6 +1006,181 @@ class ChatRepository(
 
 	/** The admitted members of the keyring, for the management board. */
 	fun admittedMembers(): List<MemberInfo> = federation.members()
+
+	////////////////////////////////
+	//  Add a device (USER self-enroll: the owner authorizes their OWN fresh device, no admin)
+
+	/** evie's public device-approval reach for the authorize-console QR, or null when this network has
+	 * no public ingress (the Add-a-device entry is then shown disabled). */
+	fun deviceApprovalReach(): String? =
+		runCatching { store.load()?.let { Provisioning.parse(it) } }.getOrNull()?.deviceApprovalReach?.takeIf { it.isNotEmpty() }
+
+	/** HELD device: arm a one-time approval window and build the authorize-console QR. The QR carries
+	 * PUBLIC material only (owner keys + Domain + the reach/token/nonce), never an SA token. Fails when
+	 * the network has no public ingress or its Domain is not yet confirmed by a local session. */
+	suspend fun armDeviceApproval(): Result<DeviceApprovalArmed> = withContext(Dispatchers.IO) {
+		runCatching {
+			val reach = deviceApprovalReach() ?: error("This network has no device-approval reach configured.")
+			val domainId = confirmedDomainId() ?: error("Your Domain isn't confirmed yet - open a session first.")
+			val approvalId = federation.freshApprovalToken()
+			val nonce = federation.freshApprovalToken()
+			val result = client().postConsoleApproval(ConsoleApprovalOp.Arm(approvalId = approvalId, nonce = nonce))
+			if (!result.ok) error(result.error ?: "Couldn't arm the approval window.")
+			val qr = JSONObject()
+				.put("type", "authorize-console")
+				.put("domainId", domainId)
+				.put("signPub", federation.ownerSignPub())
+				.put("boxPub", federation.ownerBoxPub())
+				.put("approvalId", approvalId)
+				.put("nonce", nonce)
+				.put("reach", reach)
+				.toString()
+			DeviceApprovalArmed(approvalId, nonce, qr)
+		}
+	}
+
+	/** HELD device: poll the window for the fresh device's join (its generated console keys). Null
+	 * until it joins, so the screen keeps polling. */
+	suspend fun pollDeviceApproval(approvalId: String): Result<ConsoleApprovalJoin?> = withContext(Dispatchers.IO) {
+		runCatching {
+			val result = client().postConsoleApproval(ConsoleApprovalOp.Poll(approvalId = approvalId))
+			if (!result.ok) error(result.error ?: "approval window closed")
+			result.join
+		}
+	}
+
+	/** HELD device: approve the joined device. Owner-signs a kind:console admission for its keys and
+	 * submits it (the existing submit_admission path), then seals the console transport to its box key
+	 * and parks it for the device to fetch. The biometric gate is applied at the UI call site. */
+	suspend fun approveDevice(approvalId: String, join: ConsoleApprovalJoin): Result<Unit> = withContext(Dispatchers.IO) {
+		runCatching {
+			val signed = federation.admitConsole(join.newSignPub, join.newBoxPub, System.currentTimeMillis())
+			if (!submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitAdmission(it)) }, federation::mergeAdmission, "Approve failed")) {
+				error(_state.value.error ?: "The server rejected the new device.")
+			}
+			val transport = buildConsoleTransport()
+			val plain = wireJson.encodeToString(ConsoleTransport.serializer(), transport).toByteArray(Charsets.UTF_8)
+			val sealed = federation.sealConsoleTransport(join.newBoxPub, plain)
+			val result = client().postConsoleApproval(ConsoleApprovalOp.Approve(approvalId = approvalId, sealed = sealed))
+			if (!result.ok) error(result.error ?: "Couldn't deliver the sealed transport.")
+			Unit
+		}
+	}
+
+	/** HELD device: tear down the approval window when the owner leaves the screen (best-effort). */
+	suspend fun cancelDeviceApproval(approvalId: String) {
+		withContext(Dispatchers.IO) {
+			runCatching { client().postConsoleApproval(ConsoleApprovalOp.Cancel(approvalId = approvalId)) }
+		}
+	}
+
+	/** The console transport the held device seals to a new device: its own provisioning creds plus the
+	 * owner's synced keyring + route Gateway, so the new device can seal to the Gateway the owner
+	 * already admitted without holding the owner key to re-sync the keyring itself. */
+	private fun buildConsoleTransport(): ConsoleTransport {
+		val prov = Provisioning.parse(store.load() ?: error("not provisioned"))
+		return ConsoleTransport(
+			apiUrl = prov.apiUrl,
+			caPem = prov.caPem,
+			saToken = prov.saToken,
+			appToken = prov.appToken,
+			namespace = prov.namespace,
+			service = prov.service,
+			port = prov.port.toLong(),
+			domainId = confirmedDomainId(),
+			gatewayId = localGatewayId.takeIf { it.isNotEmpty() } ?: store.loadGatewayId().takeIf { it.isNotEmpty() },
+			domainVersion = store.loadDomainVersion().ifEmpty { null },
+			domain = federation.keyring().snapshot,
+		)
+	}
+
+	/** Parse a scanned authorize-console QR, or null if it is not one. The owner signPub is pinned to
+	 * verify the sealed reply; its fingerprint is shown so the human confirms the network. */
+	fun parseAuthorizeConsole(scanned: String): ScannedDeviceApproval? = runCatching {
+		val j = JSONObject(scanned.trim())
+		if (j.optString("type") != "authorize-console") return null
+		val ownerSignPub = j.getString("signPub")
+		ScannedDeviceApproval(
+			domainId = j.getString("domainId"),
+			ownerSignPub = ownerSignPub,
+			ownerBoxPub = j.getString("boxPub"),
+			approvalId = j.getString("approvalId"),
+			nonce = j.getString("nonce"),
+			reach = j.getString("reach"),
+			sas = Crypto.fingerprint(ownerSignPub),
+		)
+	}.getOrNull()
+
+	/** NEW device: announce this device's freshly-generated console keys to the held device by POSTing a
+	 * join to the public ingress (nonce-gated, no creds). consoleIdentity() mints+persists the keys on
+	 * first call, so the keys sent here are the SAME ones this device later unseals with. */
+	suspend fun newDeviceJoin(scan: ScannedDeviceApproval): Result<Unit> = withContext(Dispatchers.IO) {
+		runCatching {
+			val id = federation.consoleIdentity()
+			val op = ConsoleApprovalOp.Join(
+				approvalId = scan.approvalId,
+				nonce = scan.nonce,
+				newSignPub = id.sign.pub,
+				newBoxPub = id.box.pub,
+				device = android.os.Build.MODEL,
+			)
+			val result = ConsoleClient.postPublicApproval(scan.reach, op)
+			if (!result.ok) error(result.error ?: "The held device didn't accept this join.")
+			Unit
+		}
+	}
+
+	/** NEW device: poll the public ingress for the held device's sealed reply. Returns true once it
+	 * arrives - unseals it (verifying the owner signPub pinned from the QR) and installs the transport;
+	 * false while still pending, so the caller keeps polling. */
+	suspend fun newDeviceFetch(scan: ScannedDeviceApproval): Result<Boolean> = withContext(Dispatchers.IO) {
+		runCatching {
+			val op = ConsoleApprovalOp.Fetch(approvalId = scan.approvalId, nonce = scan.nonce)
+			val result = ConsoleClient.postPublicApproval(scan.reach, op)
+			if (!result.ok) error(result.error ?: "The approval window expired.")
+			val sealed = result.sealed ?: return@runCatching false
+			val plain = federation.unsealConsoleTransport(sealed, scan.ownerSignPub)
+			val transport = wireJson.decodeFromString(ConsoleTransport.serializer(), plain.toString(Charsets.UTF_8))
+			installApprovedDevice(transport)
+			true
+		}
+	}
+
+	/** NEW device: install the unsealed transport. Writes the provisioning blob through the EXISTING
+	 * provisioning store write, adopts the owner's synced keyring + route Gateway, and marks this device
+	 * admitted - the held device already owner-signed + submitted its admission, and this device holds
+	 * no owner key, so it must NEVER self-sign. provisioned flips LAST so the poll loop starts only
+	 * after consoleAdmitted is set, never racing a self-admission with a throwaway owner key. */
+	private fun installApprovedDevice(transport: ConsoleTransport) {
+		val prov = com.atelier_nyaarium.switchboard.proto.Provisioning(
+			apiUrl = transport.apiUrl,
+			caPem = transport.caPem,
+			saToken = transport.saToken,
+			appToken = transport.appToken,
+			namespace = transport.namespace,
+			service = transport.service,
+			port = transport.port,
+		)
+		val blob = wireJson.encodeToString(com.atelier_nyaarium.switchboard.proto.Provisioning.serializer(), prov)
+		store.save(blob)
+		store.consoleAdmitted = true
+		store.firstRooted = true
+		store.enrollCeremonyDone = true
+		transport.domain?.let { snap ->
+			store.saveDomain(
+				wireJson.encodeToString(com.atelier_nyaarium.switchboard.proto.DomainSnapshot.serializer(), snap),
+				transport.domainVersion ?: "",
+			)
+		}
+		transport.gatewayId?.takeIf { it.isNotEmpty() }?.let {
+			store.saveGatewayId(it)
+			localGatewayId = it
+		}
+		client = null
+		sttsClient = null
+		val parsed = Provisioning.parse(blob)
+		_state.update { it.copy(provisioned = true, error = null, deviceName = parsed.device, firstRooted = true) }
+	}
 
 	/** Fetch the cross-tenant roster (the Users surface): every member on this evie, by name +
 	 * presence. evie-direct + signed-proof scoped; a non-member or auth failure surfaces as a

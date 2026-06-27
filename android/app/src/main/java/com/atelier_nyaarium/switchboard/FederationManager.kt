@@ -134,6 +134,33 @@ class FederationManager(private val store: AppStateStore) {
 		return AdmissionCrypto.signAdmission(admission, owner.sign.priv, owner.sign.pub)
 	}
 
+	/** Owner-sign a kind:console admission for a freshly-approved second device's console keys (the
+	 * "Add a device" self-enroll). The owner attests the new device's identity so a Gateway trusts its
+	 * sealed ops, exactly like this console's own admission - only the subject keys differ. */
+	fun admitConsole(signPub: String, boxPub: String, nowMs: Long): SignedAdmission {
+		val owner = ownerIdentity()
+		val admission = Admission("console", signPub, boxPub, null, nowMs, nonce())
+		return AdmissionCrypto.signAdmission(admission, owner.sign.priv, owner.sign.pub)
+	}
+
+	/** Seal a console-transport bundle to a new device's box key, SIGNED BY THE OWNER key, so the new
+	 * device verifies the seal against the owner signPub it pinned from the QR before it provisions.
+	 * A forged sealed reply from the public ingress fails that signature check. */
+	fun sealConsoleTransport(recipientBoxPub: String, plaintext: ByteArray): SealedEnvelope {
+		val owner = ownerIdentity()
+		val sealed = Crypto.seal(plaintext, recipientBoxPub, owner.sign.priv)
+		return SealedEnvelope(sealed.ephemeralPub, sealed.nonce, sealed.ciphertext, sealed.signature)
+	}
+
+	/** Unseal the console-transport reply on the NEW device, verifying it against the owner signPub
+	 * pinned from the QR and decrypting with this device's own console box key. Throws on a bad
+	 * signature (a forged reply) or wrong recipient. */
+	fun unsealConsoleTransport(sealed: SealedEnvelope, ownerSignPub: String): ByteArray {
+		val console = consoleIdentity()
+		val env = Crypto.SealedEnvelope(sealed.ephemeralPub, sealed.nonce, sealed.ciphertext, sealed.signature)
+		return Crypto.unseal(env, console.box.priv, ownerSignPub)
+	}
+
 	/** Owner-sign a revocation for a member's signing key. */
 	fun revoke(signPub: String, nowMs: Long): SignedRevocation =
 		AdmissionCrypto.signRevocation(Revocation(signPub, nowMs, nonce()), ownerIdentity().sign.priv, ownerIdentity().sign.pub)
@@ -252,6 +279,10 @@ class FederationManager(private val store: AppStateStore) {
 	/** A fresh handshake id, minted by the admin into the enroll QR. Unguessable so a third party
 	 * who learned a Domain cannot target a real ceremony window. */
 	fun freshHandshakeId(): String = nonce()
+
+	/** A fresh device-approval token (approvalId or nonce) for the "Add a device" rendezvous. Standard
+	 * base64 so it satisfies the wire's b64 field; unguessable so the public ingress cannot be probed. */
+	fun freshApprovalToken(): String = nonce()
 
 	/** A fresh high-entropy enroll pin, minted by the admin into the QR. It rides the QR out of band
 	 * and is never sent to evie, so the untrusted broker cannot grind a candidate compare code; the
