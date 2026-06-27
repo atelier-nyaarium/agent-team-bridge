@@ -6,7 +6,7 @@ import { debugLog } from "../../shared/debug-log.js";
 import { type HostOp, isTmuxName, type TmuxTarget } from "../../shared/host-op.js";
 import { createReconnector } from "../../shared/reconnect.js";
 import { composeSessionName, parseSessionName } from "../../shared/session-id.js";
-import { ensureContainerUpAsync, execInContainer, resolveProject } from "./helpers.js";
+import { ensureContainerUpAsync, resolveProject } from "./helpers.js";
 import { createHostOpRunner } from "./hostOpRunner.js";
 import { spawnReloadPlugins } from "./reloadPlugins.js";
 import { ensureSession, isAgentReady, peekPane, sendKey, sendText } from "./tmuxCore.js";
@@ -218,76 +218,52 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 
 		console.error(`[host-wake] ${msg.team} container is up, starting Claude`);
 
+		// Reattach if the session is already alive, else launch it (with --resume baked into the
+		// command when an id is mapped). The container is up, so the tmux ops go through tmuxCore's
+		// docker exec - the proven terminal-op path, ~8x faster than the devcontainer CLI.
 		const target: TmuxTarget = { kind: "devcontainer", name: projectName, sessionName: session };
-		let sessionExists = false;
-		try {
-			await execInContainer({
-				projectPath: resolved,
-				command: ["tmux", "has-session", "-t", session],
-				timeoutMs: 10000,
-			});
-			sessionExists = true;
-		} catch {
-			// has-session exits non-zero if session doesn't exist
-		}
+		const { created } = await ensureSession(
+			target,
+			buildLaunchCommand(target, { resumeSessionId: msg.resumeSessionId }),
+		);
+		console.error(`[host-wake] ${msg.team} session ${created ? "started" : "already running"}`);
 
-		if (!sessionExists) {
-			await execInContainer({
-				projectPath: resolved,
-				command: [
-					"tmux",
-					"new-session",
-					"-d",
-					"-s",
-					session,
-					buildLaunchCommand(target, { resumeSessionId: msg.resumeSessionId }),
-				],
-				timeoutMs: 15000,
-			});
-			console.error(`[host-wake] ${msg.team} Claude session started`);
-		} else {
-			console.error(`[host-wake] ${msg.team} Claude session already exists`);
-		}
-
-		// Poll the pane to auto-accept the dev-channels prompt, tracking whether it ever captured: a
-		// launch that exits instantly takes its tmux session down with it, so every capture fails.
+		// A reattach is already alive. For a fresh launch, poll the pane to auto-accept the
+		// dev-channels prompt and track whether it ever captured: a launch that exits instantly takes
+		// its tmux session down with it, so zero captures means a dead launch -> report a failed wake
+		// so /send fails fast. A slow-but-alive session captures at least once.
 		let lastScreen = "";
-		let captureOk = false;
-		for (let i = 0; i < 10; i++) {
-			await new Promise((r) => setTimeout(r, 1000));
-			try {
-				lastScreen = await execInContainer({
-					projectPath: resolved,
-					command: ["tmux", "capture-pane", "-t", session, "-p"],
-					timeoutMs: 10000,
-				});
-				captureOk = true;
-			} catch {
-				// a dead session's pane cannot be captured; keep polling
-			}
-			if (isAgentReady(lastScreen)) {
-				console.error(`[host-wake] ${msg.team} Claude is ready`);
-				break;
-			}
-			if (lastScreen.includes("Loading development channels")) {
+		let launchAlive = !created;
+		if (created) {
+			let captureOk = false;
+			for (let i = 0; i < 10; i++) {
+				await new Promise((r) => setTimeout(r, 1000));
 				try {
-					await execInContainer({
-						projectPath: resolved,
-						command: ["tmux", "send-keys", "-t", session, "", "Enter"],
-						timeoutMs: 5000,
-					});
+					lastScreen = (await peekPane(target)).ansi;
+					captureOk = true;
 				} catch {
-					// ignore send-keys errors
+					// a dead session's pane cannot be captured; keep polling
+				}
+				if (isAgentReady(lastScreen)) {
+					console.error(`[host-wake] ${msg.team} Claude is ready`);
+					break;
+				}
+				if (lastScreen.includes("Loading development channels")) {
+					try {
+						await sendKey(target, "Enter");
+					} catch {
+						// ignore send-keys errors
+					}
 				}
 			}
+			launchAlive = captureOk;
+		} else {
+			try {
+				lastScreen = (await peekPane(target)).ansi;
+			} catch {
+				// reattach is alive regardless; the screen is best-effort
+			}
 		}
-
-		// Dead-launch detection: a launch that exits instantly (a bad ~/.bashrc, claude not on PATH, a
-		// wrong cwd) takes its tmux session down with it, so its pane never captures. A freshly
-		// launched session that captured zero times across the poll is gone -> report a failed wake so
-		// /send fails fast. A reattached or slow-but-alive session captured at least once, so a single
-		// transient capture error cannot flip the result.
-		const launchAlive = sessionExists || captureOk;
 
 		// #region Hypothesis L: log wake_result send state
 		debugLog("L", "hostDaemon.ts:handleWake", "sending wake_result success", {
