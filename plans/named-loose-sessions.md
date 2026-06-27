@@ -282,7 +282,7 @@ Files: `tmuxCore.ts` (`hasSession`/`ensureSession`), `hostDaemon.ts` (runner wir
 
 **`/questionaire` answers (human, 2026-06-27):**
 - **Q-P3a demote semantics = B) CLEAN BREAK (spawn-point-only).** No default session; every session is named `project.session`. A bare `project` is PURELY the catalog spawn-point (kind `devcontainer`, never a live chat). Existing bare-`project` phone threads go stale by design (re-created as named sessions). **This SIMPLIFIES P3: no bare<->composite canonicalization layer is needed.** Consequences to implement: nothing ever registers as bare `project` (the launch always overrides `PROJECT_NAME=project.session`); `doWakeTeam`/wake only ever target composites; bare-name sends/crosstalk to `project` no longer resolve (accepted break - the app + crosstalk move to composites; P6 carries crosstalk session-targeting).
-- **Q-P3b resume-map home = A (taken; non-blocking)** - keep the `session-resume` DurableStore under `/app/log` with the others for P3; the `DATA_DIR` landmine fix (moving federation private keys etc.) is split into its own dedicated change. (Human can override to B later; reversible.)
+- **Q-P3b resume-map home = B) MOVE DURABLE (human override 2026-06-27).** Introduce a real `DATA_DIR` independent of the debug-log filename and migrate ALL durable state off `/app/log`: pending-jobs, mailboxes, replay-guard, federation private keys (federationDir), and the new `session-resume` map. Fixes the "clear-logs-wipes-federation-identity" landmine. Requires: a `DATA_DIR` env (default e.g. `/app/data`), a docker volume for it, and a **one-time boot migration** that copies existing files from `/app/log` to `DATA_DIR` if absent there - CRITICAL: must not lose federation private keys. Implemented as its own green slice (it is orthogonal to the composite-session work).
 
 ### P3 - reassessed under the clean break
 
@@ -290,8 +290,15 @@ The clean break REMOVES the hardest part (canonicalization). Locked P3 scope:
 - **Identity pinning:** launch always overrides `PROJECT_NAME=<project.session>` (R1 form: `bash -c 'source ~/.bashrc; export PROJECT_NAME=<composite>; cd /workspace/<project>; exec claude <flags> [--resume <id>]'`).
 - **Catalog split (R3):** bare `project` = devcontainer (spawn-point, from the dir catalog); `project.session` = loose, NOT added to `knownTeamPaths`. `isDevcontainer(name)` false if `name.includes(SESSION_SEP)`.
 - **Composite wake (R2):** `doWakeTeam`/`findProjectPath`/`handleWake` parse the project segment; wake the named session; `handleWake` migrates to `tmuxCore` docker exec (keep `ensureContainerUpAsync` on the devcontainer CLI).
-- **Resume map (R4):** `claudeSessionId` added to `WsRegisterSchema` + `registerMsg` + gateway read; `session-resume` DurableStore (under `/app/log`); `openSession`/`handleWake` do reattach -> `claude --resume <id>` (from `/workspace/<project>`) -> fresh; readiness marker accepts the resumed-REPL shape; factor a shared idle-marker helper (P4 working-chip reuses it).
+- **Resume map (R4):** `claudeSessionId` added to `WsRegisterSchema` + `registerMsg` + gateway read; `session-resume` DurableStore (under the new `DATA_DIR`); the gateway's `doWakeTeam` looks up the map and threads `resumeSessionId` into the wake message; `handleWake`/`buildLaunchCommand` do reattach -> `claude --resume <id>` (from `/workspace/<project>`) -> fresh; create_session stays fresh (no resume); readiness marker accepts the resumed-REPL shape; factor a shared idle-marker helper (P4 working-chip reuses it).
+- **DATA_DIR migration (Q-P3b=B):** move all DurableStores + federationDir from `path.dirname(LOG_PATH)` to a `DATA_DIR` (env, default `/app/data`); boot-migrate existing files from `/app/log` if absent in `DATA_DIR` (federation keys must survive); docker-compose volume + env. Own slice.
 - **No canonicalization, no default-session back-compat** (the break). Existing bare threads are expected to go stale.
+
+**Implementation slices (each independently green, committed to main):**
+- **S0 - DATA_DIR migration** (orthogonal infra): move durable stores + federation dir to `DATA_DIR`, boot-migrate from `/app/log`.
+- **S1 - catalog split:** `isDevcontainer`/`isProjectName` false for composites; register does not add composites to `knownTeamPaths`.
+- **S2 - register `claudeSessionId` + `session-resume` map:** schema + helpers + gateway read + DurableStore + populate.
+- **S3 - composite launch + wake + resume:** `buildLaunchCommand` R1 form (PROJECT_NAME override + optional `--resume`), `WakeMessage.sessionName`/`resumeSessionId`, `doWakeTeam`/`findProjectPath`/`handleWake` parse + thread + migrate to docker exec, reattach->resume->fresh, readiness-marker + shared idle helper.
 
 ## Painpoints (P1 crust)
 
