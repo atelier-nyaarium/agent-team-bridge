@@ -182,6 +182,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// The Gateways kebab "Manage sharing" routes here, scoped to that gateway's sessions.
 	var sharingGateway by remember { mutableStateOf<String?>(null) }
 	var showAddGateway by remember { mutableStateOf(false) }
+	// The board's "Running Gateway Setup" opens the host-setup manual.
+	var showHostHelp by remember { mutableStateOf(false) }
 	// Cross-Domain trust overlays: the Users surface (the hub for people + networks) and the
 	// transient link wizard (leaving it cancels the pairing windows).
 	var showUsers by remember { mutableStateOf(false) }
@@ -295,6 +297,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			showManage = false
 			sharingGateway = null
 			showAddGateway = false
+			showHostHelp = false
 			showUsers = false
 			showLinkWizard = false
 			showHostNetworks = false
@@ -318,7 +321,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 
 	// System back navigates within the app (thread/settings/manage -> back) instead of exiting.
 	BackHandler(
-		enabled = openTeam != null || showSettings || showManage || showAddGateway ||
+		enabled = openTeam != null || showSettings || showManage || showAddGateway || showHostHelp ||
 			sharingGateway != null || showUsers || showLinkWizard || showHostNetworks ||
 			hostTenant != null || adminCeremonyCtx != null || enrolleeCeremonyCtx != null,
 	) {
@@ -330,6 +333,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			showHostNetworks -> showHostNetworks = false
 			showUsers -> showUsers = false
 			showAddGateway -> showAddGateway = false
+			showHostHelp -> showHostHelp = false
 			sharingGateway != null -> sharingGateway = null
 			showManage -> showManage = false
 			openTeam != null -> openTeam = null
@@ -406,6 +410,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			)
 		showAddGateway ->
 			AddGatewayScreen(repo = repo, onBack = { showAddGateway = false }, onDone = { showAddGateway = false })
+		showHostHelp ->
+			HostSetupHelpScreen(onBack = { showHostHelp = false })
 		sharingGateway != null ->
 			SharingScreen(repo = repo, gatewayId = sharingGateway, onBack = { sharingGateway = null })
 		showManage ->
@@ -511,6 +517,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					showSettings = true
 				},
 				onManage = { showManage = true },
+				onAddGateway = { showAddGateway = true },
+				onHostHelp = { showHostHelp = true },
 				onOpen = { team ->
 					repo.openThread(team)
 					openTeam = team
@@ -671,7 +679,7 @@ fun HostSetupHelpScreen(onBack: () -> Unit) {
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text("Set up your own network") },
+				title = { Text("Running Gateway Setup") },
 				navigationIcon = {
 					IconButton(onClick = onBack) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -732,6 +740,8 @@ fun SessionsScreen(
 	onRefresh: () -> Unit,
 	onSettings: () -> Unit,
 	onManage: () -> Unit,
+	onAddGateway: () -> Unit,
+	onHostHelp: () -> Unit,
 	onOpen: (String) -> Unit,
 	onRename: (String, String) -> Unit,
 	onForget: (String) -> Unit,
@@ -816,7 +826,7 @@ fun SessionsScreen(
 			if (sessions.isEmpty()) {
 				// Offer the still-owed in-person compare only on the awaiting-host board (a freshly-rooted
 				// enrollee who has not finished the trust step); EmptyBoard gates the button on that state.
-				EmptyBoard(state, onManage, onRefresh, onVerifyEnroll = onVerifyEnroll)
+				EmptyBoard(state, onManage, onAddGateway, onHostHelp, onRefresh, onVerifyEnroll = onVerifyEnroll)
 			} else {
 				val order = sessionOrder(state)
 				// My own Domain id, learned from a local session (one owned by the connected
@@ -878,6 +888,8 @@ fun SessionsScreen(
 private fun EmptyBoard(
 	state: ChatState,
 	onManage: () -> Unit,
+	onAddGateway: () -> Unit,
+	onHostHelp: () -> Unit,
 	onRefresh: () -> Unit,
 	onVerifyEnroll: (() -> Unit)? = null,
 ) {
@@ -889,8 +901,8 @@ private fun EmptyBoard(
 		when {
 			// A friend who just first-rooted has no host of their own yet (the invite omits gateway
 			// ids by design), and the admin's own fresh provision first-roots too - so both land
-			// here. The action goes straight to the Gateways screen (admit a Gateway by scanning its
-			// code); the friend with no computer yet still has the body's "set up a computer" guidance.
+			// here. Add a Gateway goes straight to the scanner; the friend with no computer yet still has
+			// the body's "set up a computer" guidance.
 			state.noGatewayState == NoGatewayState.AWAITING_HOST -> {
 				Text("You're all set up", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
@@ -901,20 +913,22 @@ private fun EmptyBoard(
 					Spacer(Modifier.height(20.dp))
 					Button(onClick = onVerifyEnroll) { Text("Verify with the admin") }
 					Spacer(Modifier.height(4.dp))
-					TextButton(onClick = onManage) { Text("Add a Gateway") }
+					TextButton(onClick = onAddGateway) { Text("Add a Gateway") }
 				} else {
 					Spacer(Modifier.height(20.dp))
-					Button(onClick = onManage) { Text("Add a Gateway") }
+					Button(onClick = onAddGateway) { Text("Add a Gateway") }
 				}
 			}
-			// No Gateway admitted yet: the primary onboarding step, a real action straight to the
-			// Gateways screen.
+			// No Gateway admitted yet: the primary onboarding step goes straight to the scanner, with the
+			// setup manual as the secondary step.
 			state.noGatewayState == NoGatewayState.NEEDS_GATEWAY -> {
 				Text("No Gateways yet", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
-				BoardBody("Add a Gateway to reach your agents. No computer yet? Set one up first.")
+				BoardBody("The computer that runs your agents.")
 				Spacer(Modifier.height(20.dp))
-				Button(onClick = onManage) { Text("Add a Gateway") }
+				Button(onClick = onAddGateway) { Text("Add a Gateway") }
+				Spacer(Modifier.height(4.dp))
+				TextButton(onClick = onHostHelp) { Text("Running Gateway Setup") }
 			}
 			// A terminal failure that will not self-heal (secure storage, 401, admission rejected, or
 			// an enrollment that gave up past the grace window). Name the actual cause from `error`
