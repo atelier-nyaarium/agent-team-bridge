@@ -59,13 +59,34 @@ export async function startGateway(): Promise<void> {
 		fs.writeFileSync(LOG_PATH, "");
 	} catch {}
 
+	// Durable state (federation private keys, pending-jobs, mailboxes, replay-guard, the session
+	// resume map) lives in DATA_DIR, deliberately SEPARATE from the debug-log dir so a "clear the
+	// logs" action can never wipe federation identity. One-time migration: durable state used to
+	// live beside debug.log; copy each item into DATA_DIR if absent there (runs once, never clobbers
+	// newer data, must not lose federation keys).
+	const DATA_DIR = process.env.DATA_DIR || "/app/data";
+	try {
+		fs.mkdirSync(DATA_DIR, { recursive: true });
+		const legacyDir = path.dirname(LOG_PATH);
+		for (const item of ["federation", "pending-jobs.json", "mailboxes.json", "replay-guard.json"]) {
+			const src = path.join(legacyDir, item);
+			const dst = path.join(DATA_DIR, item);
+			if (fs.existsSync(src) && !fs.existsSync(dst)) {
+				fs.cpSync(src, dst, { recursive: true });
+				console.log(`[data-migrate] moved ${item} to ${DATA_DIR}`);
+			}
+		}
+	} catch (err) {
+		console.error("[data-migrate] migration to DATA_DIR failed:", err);
+	}
+
 	const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "600000", 10);
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);
 	const localGatewayId = resolveLocalGatewayId();
 	console.log(`[gateway] Gateway id: ${localGatewayId}`);
 	// The Gateway persists its federation identity, mirrored allowlist, and the enrollment-delivered
-	// transport.json + domain-id under this dir.
-	const federationDir = process.env.FEDERATION_DIR || path.join(path.dirname(LOG_PATH), "federation");
+	// transport.json + domain-id under this dir (inside DATA_DIR, separate from the debug log).
+	const federationDir = process.env.FEDERATION_DIR || path.join(DATA_DIR, "federation");
 	let localDomainId = resolveLocalDomainId(federationDir);
 	console.log(`[gateway] Domain id: ${localDomainId ?? "(none - not yet enrolled)"}`);
 	const HEARTBEAT_INTERVAL_MS = 30000;
@@ -98,9 +119,9 @@ export async function startGateway(): Promise<void> {
 
 	// In-memory delivery state otherwise vanishes on restart, 404ing replies and losing queued
 	// mail. Snapshot the persistent job anchors and device mailboxes (each box keeps its epoch so
-	// the console's durable cursor still matches) to /app/log, reload on boot, re-save on a timer.
-	const jobsDurable = new DurableStore(path.dirname(LOG_PATH), "pending-jobs");
-	const mailboxDurable = new DurableStore(path.dirname(LOG_PATH), "mailboxes");
+	// the console's durable cursor still matches) to DATA_DIR, reload on boot, re-save on a timer.
+	const jobsDurable = new DurableStore(DATA_DIR, "pending-jobs");
+	const mailboxDurable = new DurableStore(DATA_DIR, "mailboxes");
 	try {
 		const jobs = jobsDurable.load();
 		if (Array.isArray(jobs)) store.restore(jobs as Parameters<typeof store.restore>[0]);
@@ -248,7 +269,7 @@ export async function startGateway(): Promise<void> {
 		const identity = loadOrCreateIdentity(federationDir);
 		// Durable replay-guard: persisted across restarts so an authentic sealed frame
 		// captured inside the 120s freshness window cannot replay once after a deploy.
-		const replayDurable = new DurableStore(path.dirname(LOG_PATH), "replay-guard");
+		const replayDurable = new DurableStore(DATA_DIR, "replay-guard");
 		const replayGuard = new ReplayGuard();
 		{
 			const persisted = replayDurable.load();
