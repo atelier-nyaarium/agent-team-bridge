@@ -2131,6 +2131,10 @@ class ChatRepository(
 		peekTerminal(team, null)
 	}
 
+	/** Spawn a new named session in a spawn-point project (the daemon launches it). */
+	suspend fun createSession(project: String, sessionName: String) =
+		withContext(Dispatchers.IO) { client().createSession(project, sessionName) }
+
 	/** Send text (submitted with Enter) or a named control key to an agent's tmux pane. */
 	suspend fun tmuxSend(team: String, text: String? = null, key: String? = null) =
 		withContext(Dispatchers.IO) { client().tmuxSend(team, text, key) }

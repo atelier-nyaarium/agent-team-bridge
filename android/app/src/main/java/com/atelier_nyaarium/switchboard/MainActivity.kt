@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Lock
@@ -116,7 +117,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
+import com.atelier_nyaarium.switchboard.proto.composeSessionName
 import com.atelier_nyaarium.switchboard.proto.isComposite
+import com.atelier_nyaarium.switchboard.proto.parseSessionName
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -572,6 +575,17 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				},
 				onRename = { team, name -> repo.setLabel(team, name) },
 				onForget = { team -> repo.forget(team) },
+				onSpawn = { project, session ->
+					// Spawn the named session on the daemon, then open its composite chat.
+					scope.launch {
+						val composite = composeSessionName(project, session)
+						runCatching { repo.createSession(project, session) }
+							.onSuccess {
+								repo.openThread(composite)
+								openTeam = composite
+							}
+					}
+				},
 				// Launch the enrollee compare from the empty board when one is still owed (the device
 				// rooted an enroll invite but has not completed the in-person trust step).
 				onVerifyEnroll = (if (state.provisioned) repo.pendingEnrolleeCeremony() else null)
@@ -905,10 +919,13 @@ fun SessionsScreen(
 	onOpen: (String) -> Unit,
 	onRename: (String, String) -> Unit,
 	onForget: (String) -> Unit,
+	onSpawn: (String, String) -> Unit,
 	onVerifyEnroll: (() -> Unit)? = null,
 ) {
 	// Long-press flow: action menu -> rename dialog or forget confirm.
 	var actionTeam by remember { mutableStateOf<Team?>(null) }
+	// Tapping a spawn-point header opens the session-name dialog for that project.
+	var spawnProject by remember { mutableStateOf<String?>(null) }
 	var renameTeam by remember { mutableStateOf<Team?>(null) }
 	var forgetTeam by remember { mutableStateOf<Team?>(null) }
 	// Per-Gateway accordion collapse state (default expanded).
@@ -950,6 +967,16 @@ fun SessionsScreen(
 				forgetTeam = null
 			},
 			onDismiss = { forgetTeam = null },
+		)
+	}
+	spawnProject?.let { project ->
+		SpawnDialog(
+			project = project,
+			onSpawn = { session ->
+				onSpawn(project, session)
+				spawnProject = null
+			},
+			onDismiss = { spawnProject = null },
 		)
 	}
 
@@ -1022,9 +1049,47 @@ fun SessionsScreen(
 							)
 						}
 						if (!collapsed) {
-							val projects = group.filter { it.kind == "devcontainer" }.sortedWith(order)
-							val loose = group.filter { it.kind != "devcontainer" }.sortedWith(order)
-							items(projects + loose, key = { "team:${it.name}" }) { team ->
+							// Clean break: a devcontainer entry is a non-chat SPAWN-POINT (its bare project);
+							// each project.session is a loose chat that nests under its project's header. The
+							// remaining non-composite loose peers (host-loose, etc.) stay flat.
+							fun localName(t: Team) = TeamAddress.parse(t.name, state.localGatewayId).name
+							val spawnPoints = group.filter { it.kind == "devcontainer" }.sortedWith(order)
+							val composites = group.filter { it.kind != "devcontainer" && isComposite(localName(it)) }
+							val flatLoose =
+								group.filter { it.kind != "devcontainer" && !isComposite(localName(it)) }.sortedWith(order)
+							val byProject = composites.groupBy { parseSessionName(localName(it)).project }
+							val spawnKeys = spawnPoints.map { localName(it) }.toSet()
+
+							fun renderProject(projectKey: String, header: @Composable () -> Unit) {
+								item(key = "spawn:$projectKey") { header() }
+								items(byProject[projectKey].orEmpty().sortedWith(order), key = { "team:${it.name}" }) { team ->
+									SessionCard(
+										state = state,
+										team = team,
+										nested = true,
+										onClick = { onOpen(team.name) },
+										onLongPress = { actionTeam = team },
+									)
+								}
+							}
+
+							for (sp in spawnPoints) {
+								val proj = localName(sp)
+								renderProject(proj) {
+									SpawnPointHeader(
+										project = proj,
+										online = sp.status == "online",
+										onSpawn = { spawnProject = proj },
+									)
+								}
+							}
+							// A composite whose spawn-point is not currently in the catalog still needs a home.
+							for (proj in (byProject.keys - spawnKeys).sorted()) {
+								renderProject(proj) {
+									SpawnPointHeader(project = proj, online = false, onSpawn = { spawnProject = proj })
+								}
+							}
+							items(flatLoose, key = { "team:${it.name}" }) { team ->
 								SessionCard(
 									state = state,
 									team = team,
@@ -1242,6 +1307,30 @@ private fun GatewayHeader(name: String, online: Boolean, collapsed: Boolean, onT
 	}
 }
 
+/** A devcontainer project's spawn-point row: tapping it opens the session-name dialog to spawn a
+ * new `project.session` chat. The project itself is never a chat (clean break). */
+@Composable
+private fun SpawnPointHeader(project: String, online: Boolean, onSpawn: () -> Unit) {
+	Row(
+		Modifier
+			.fillMaxWidth()
+			.clip(MaterialTheme.shapes.small)
+			.clickable(onClick = onSpawn)
+			.padding(horizontal = 4.dp, vertical = 6.dp),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
+		Icon(Icons.Default.Add, contentDescription = "New session", tint = MaterialTheme.colorScheme.primary)
+		Spacer(Modifier.width(10.dp))
+		Text(project, style = MaterialTheme.typography.titleSmall, fontFamily = FontFamily.Monospace)
+		Spacer(Modifier.weight(1f))
+		Text(
+			if (online) "awake" else "asleep",
+			style = MaterialTheme.typography.labelSmall,
+			color = MaterialTheme.colorScheme.onSurfaceVariant,
+		)
+	}
+}
+
 @Composable
 fun SectionLabel(text: String) {
 	Text(
@@ -1255,7 +1344,7 @@ fun SectionLabel(text: String) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: () -> Unit) {
+fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: () -> Unit, onLongPress: () -> Unit) {
 	val display = state.label(team.name, state.localGatewayId)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
@@ -1266,9 +1355,10 @@ fun SessionCard(state: ChatState, team: Team, onClick: () -> Unit, onLongPress: 
 		team.status == "available" -> "available" to Color(0xFF0969DA)
 		else -> "ended" to MaterialTheme.colorScheme.outline
 	}
-	// The clip keeps the ripple inside the card's rounded corners.
+	// The clip keeps the ripple inside the card's rounded corners. A nested session card indents
+	// under its spawn-point header.
 	Card(
-		modifier = Modifier.fillMaxWidth().clip(CardDefaults.shape).combinedClickable(
+		modifier = Modifier.fillMaxWidth().padding(start = if (nested) 16.dp else 0.dp).clip(CardDefaults.shape).combinedClickable(
 			onClick = onClick,
 			onLongClick = onLongPress,
 		),
@@ -2383,6 +2473,37 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 			}
 		},
 		confirmButton = { TextButton(onClick = { onSave(name) }) { Text("Save") } },
+		dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+	)
+}
+
+/** Name and spawn a new session in a spawn-point project. The session name is a slug (it becomes
+ * the tmux session + the composite identity), so the spawn button is disabled until it is valid. */
+@Composable
+fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Unit) {
+	var name by remember { mutableStateOf("") }
+	val valid = name.matches(Regex("^[a-z0-9][a-z0-9-]*$")) && name.length <= 64
+	AlertDialog(
+		onDismissRequest = onDismiss,
+		title = { Text("New session in $project") },
+		text = {
+			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+				OutlinedTextField(
+					value = name,
+					onValueChange = { name = it },
+					label = { Text("Session name") },
+					placeholder = { Text("e.g. scratch") },
+					singleLine = true,
+					isError = name.isNotEmpty() && !valid,
+				)
+				Text(
+					"Lowercase letters, digits and dashes.",
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+				)
+			}
+		},
+		confirmButton = { TextButton(enabled = valid, onClick = { onSpawn(name) }) { Text("Spawn") } },
 		dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
 	)
 }

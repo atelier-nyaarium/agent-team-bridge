@@ -777,6 +777,14 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		if (!body.ok) error("forget failed: ${body.error ?: "unknown error"}")
 	}
 
+	/** Spawn a new named session in a spawn-point project: the daemon launches `sessionName` in
+	 * `target`'s container under PROJECT_NAME `target.sessionName`. Idempotent per opId (reattaches
+	 * if it already exists). */
+	fun createSession(target: String, sessionName: String, opId: String = UUID.randomUUID().toString()) {
+		val body = relay(ConsoleOp.CreateSession(target = target, sessionName = sessionName), opId, targetGateway = targetGatewayOf(target))
+		if (!body.ok) error("create_session failed: ${body.error ?: "unknown error"}")
+	}
+
 	////////////////////////////////
 	//  Cross-Domain trust ops
 	//
