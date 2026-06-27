@@ -76,12 +76,12 @@ fun OwnerKeysCard(repo: ChatRepository) {
 			Text("Owner key", style = MaterialTheme.typography.titleMedium)
 			if (keys == null) {
 				Text(
-					"Your owner key could not be read. Restore it from a backup below, or recover the network.",
+					"Your owner key could not be read. Restore it from a backup below, or recover the Domain.",
 					style = MaterialTheme.typography.bodySmall,
 				)
 			} else {
 				Text(
-					"The key your network trusts. Copy it if you re-run setup.",
+					"The key your Domain trusts. Copy it if you re-run setup.",
 					style = MaterialTheme.typography.bodySmall,
 				)
 				Text("Fingerprint: ${keys.sas}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
@@ -111,7 +111,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 			Text("Owner key backup", style = MaterialTheme.typography.titleMedium)
 			Text(
 				"Export a passphrase-encrypted backup and keep it offline. Anyone with the file and " +
-					"the passphrase controls your network, so pick a strong one.",
+					"the passphrase controls your Domain, so pick a strong one.",
 				style = MaterialTheme.typography.bodySmall,
 			)
 			OutlinedTextField(

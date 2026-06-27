@@ -663,7 +663,7 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 			HorizontalDivider()
 			// Tucked, text-only host-setup manual behind a small link. The admin finds it here;
 			// a friend with an invite never opens it.
-			TextButton(onClick = { showHostHelp = true }) { Text("Setting up your own network?") }
+			TextButton(onClick = { showHostHelp = true }) { Text("Setting up your own Domain?") }
 		}
 	}
 }
@@ -906,7 +906,7 @@ private fun EmptyBoard(
 			state.noGatewayState == NoGatewayState.AWAITING_HOST -> {
 				Text("You're all set up", style = MaterialTheme.typography.titleLarge)
 				Spacer(Modifier.height(8.dp))
-				BoardBody("Your network is ready. Set up a computer to run your agents, then add its Gateway here.")
+				BoardBody("Your Domain is ready. Set up a computer to run your agents, then add its Gateway here.")
 				// An outstanding in-person trust compare (the admin who invited you is waiting) takes the
 				// primary slot; adding a Gateway becomes the secondary step.
 				if (onVerifyEnroll != null) {
@@ -1469,7 +1469,7 @@ private fun settingsTitle(route: SettingsRoute): String = when (route) {
 	SettingsRoute.HUB -> "Settings"
 	SettingsRoute.PROFILE -> "Profile"
 	SettingsRoute.VOICE -> "Voice & TTS"
-	SettingsRoute.NETWORKS -> "Networks & Trust"
+	SettingsRoute.NETWORKS -> "Domain & Trust"
 	SettingsRoute.SECURITY -> "Security"
 	SettingsRoute.SYSTEM -> "System"
 }
@@ -1522,7 +1522,7 @@ fun SettingsScreen(
 					if (provisioned) {
 						SettingsRow(Icons.Default.Person, "Profile") { onRoute(SettingsRoute.PROFILE) }
 						SettingsRow(Icons.Default.RecordVoiceOver, "Voice & TTS") { onRoute(SettingsRoute.VOICE) }
-						SettingsRow(Icons.Default.Hub, "Networks & Trust") { onRoute(SettingsRoute.NETWORKS) }
+						SettingsRow(Icons.Default.Hub, "Domain & Trust") { onRoute(SettingsRoute.NETWORKS) }
 						SettingsRow(Icons.Default.Lock, "Security") { onRoute(SettingsRoute.SECURITY) }
 					}
 					SettingsRow(Icons.Default.Tune, "System") { onRoute(SettingsRoute.SYSTEM) }
@@ -1600,7 +1600,7 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 		) { Text(if (opBusy) "..." else "Save") }
 	}
 	if (domainResolving) {
-		Text("Loading your network...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+		Text("Loading your Domain...", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 	} else if (opStatus.isNotEmpty()) {
 		Text(opStatus, style = MaterialTheme.typography.bodySmall)
 	}
@@ -1623,7 +1623,7 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onFederation: () -> Unit) {
 	// Two distinct concerns kept apart: managing gateways within YOUR network, and linking with a
 	// friend's separate network (cross-Domain trust).
-	Text("Your network", style = MaterialTheme.typography.titleSmall)
+	Text("Your Domain", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Gateways") }
 	HorizontalDivider()
 	Text("People", style = MaterialTheme.typography.titleSmall)

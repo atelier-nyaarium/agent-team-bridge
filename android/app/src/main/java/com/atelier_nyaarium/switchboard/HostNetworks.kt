@@ -83,7 +83,7 @@ fun HostNetworksScreen(repo: ChatRepository, onBack: () -> Unit, onTenant: (Stri
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text("Guest networks") },
+				title = { Text("Guest Domains") },
 				navigationIcon = {
 					IconButton(onClick = onBack) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -97,7 +97,7 @@ fun HostNetworksScreen(repo: ChatRepository, onBack: () -> Unit, onTenant: (Stri
 			verticalArrangement = Arrangement.spacedBy(16.dp),
 		) {
 			Text(
-				"Networks you set up for friends who have none. They scan a one-time invite and run their " +
+				"Domains you set up for friends who have none. They scan a one-time invite and run their " +
 					"own agents on their own computer. Hosting doesn't link you.",
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -111,7 +111,7 @@ fun HostNetworksScreen(repo: ChatRepository, onBack: () -> Unit, onTenant: (Stri
 			for (t in tenants) {
 				HostedTenantRow(tenant = t, onClick = { onTenant(t.domainId) })
 			}
-			Button(onClick = { showAdd = true }, modifier = Modifier.fillMaxWidth()) { Text("Add a network") }
+			Button(onClick = { showAdd = true }, modifier = Modifier.fillMaxWidth()) { Text("Add a Domain") }
 		}
 	}
 }
@@ -161,7 +161,7 @@ private fun AddNetworkScreen(repo: ChatRepository, onBack: () -> Unit, onDone: (
 	Scaffold(
 		topBar = {
 			TopAppBar(
-				title = { Text("Add a network") },
+				title = { Text("Add a Domain") },
 				navigationIcon = {
 					IconButton(onClick = onBack) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -174,7 +174,7 @@ private fun AddNetworkScreen(repo: ChatRepository, onBack: () -> Unit, onDone: (
 			Modifier.padding(pad).padding(24.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(16.dp),
 		) {
-			Text("Name your friend's network", style = MaterialTheme.typography.titleMedium)
+			Text("Name your friend's Domain", style = MaterialTheme.typography.titleMedium)
 			Text(
 				"Just a label; they can rename it once in.",
 				style = MaterialTheme.typography.bodySmall,
@@ -183,7 +183,7 @@ private fun AddNetworkScreen(repo: ChatRepository, onBack: () -> Unit, onDone: (
 			OutlinedTextField(
 				value = label,
 				onValueChange = { label = it },
-				label = { Text("Network name") },
+				label = { Text("Domain name") },
 				singleLine = true,
 				modifier = Modifier.fillMaxWidth(),
 			)
@@ -246,7 +246,7 @@ fun HostedTenantDetailScreen(
 	if (confirmRemove) {
 		ConfirmDialog(
 			title = "Remove ${tenant.displayName}?",
-			body = "Drops this network. If your friend set it up, they lose access and need a fresh invite to return.",
+			body = "Drops this Domain. If your friend set it up, they lose access and need a fresh invite to return.",
 			confirmText = "Remove",
 			onConfirm = {
 				confirmRemove = false
@@ -286,7 +286,7 @@ fun HostedTenantDetailScreen(
 			val blob = inviteBlob
 			if (blob == null) {
 				Text(
-					"Send your friend this one-time invite to scan or paste. Keep it private - whoever uses it first owns the network.",
+					"Send your friend this one-time invite to scan or paste. Keep it private - whoever uses it first owns the Domain.",
 					style = MaterialTheme.typography.bodyMedium,
 				)
 				Button(
@@ -361,14 +361,14 @@ fun HostedTenantDetailScreen(
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
-			OutlinedButton(onClick = onLink, modifier = Modifier.fillMaxWidth()) { Text("Link with this network") }
+			OutlinedButton(onClick = onLink, modifier = Modifier.fillMaxWidth()) { Text("Link with this Domain") }
 
 			HorizontalDivider()
 			OutlinedButton(
 				onClick = { confirmRemove = true },
 				enabled = !busy,
 				modifier = Modifier.fillMaxWidth(),
-			) { Text("Remove this network", color = MaterialTheme.colorScheme.error) }
+			) { Text("Remove this Domain", color = MaterialTheme.colorScheme.error) }
 		}
 	}
 }

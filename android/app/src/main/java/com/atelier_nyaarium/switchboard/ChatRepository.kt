@@ -320,7 +320,7 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 		// keyring. The fix is to admit a Gateway from the management UI, not to re-provision.
 		// ChatState.needsGateway keys the board's Add-a-Gateway CTA off this message's prefix.
 		m.contains("not in the keyring", ignoreCase = true) || m.contains("no gateway admitted", ignoreCase = true) ->
-			"Add a Gateway from Manage Members to begin" to ConnKind.TERMINAL
+			"Add a Gateway to begin" to ConnKind.TERMINAL
 		m.startsWith("HTTP 400") ->
 			"App is out of date - update the app, or re-run setup.sh" to ConnKind.TERMINAL
 		m.startsWith("HTTP 401") ->
