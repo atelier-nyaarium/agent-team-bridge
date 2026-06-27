@@ -480,6 +480,62 @@ data class EnrollHandshakeResult(
 )
 
 @Serializable
+@OptIn(ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("step")
+sealed class ConsoleApprovalOp {
+	@Serializable
+	@SerialName("arm")
+	data class Arm(
+		val approvalId: String,
+		val nonce: String,
+	) : ConsoleApprovalOp()
+
+	@Serializable
+	@SerialName("join")
+	data class Join(
+		val approvalId: String,
+		val nonce: String,
+		val newSignPub: String,
+		val newBoxPub: String,
+		val device: String? = null,
+	) : ConsoleApprovalOp()
+
+	@Serializable
+	@SerialName("poll")
+	data class Poll(
+		val approvalId: String,
+	) : ConsoleApprovalOp()
+
+	@Serializable
+	@SerialName("approve")
+	data class Approve(
+		val approvalId: String,
+		val sealed: SealedEnvelope,
+	) : ConsoleApprovalOp()
+
+	@Serializable
+	@SerialName("fetch")
+	data class Fetch(
+		val approvalId: String,
+		val nonce: String,
+	) : ConsoleApprovalOp()
+
+	@Serializable
+	@SerialName("cancel")
+	data class Cancel(
+		val approvalId: String,
+	) : ConsoleApprovalOp()
+}
+
+@Serializable
+data class ConsoleApprovalResult(
+	val ok: Boolean,
+	val error: String? = null,
+	val join: ConsoleApprovalJoin? = null,
+	val sealed: SealedEnvelope? = null,
+)
+
+@Serializable
 data class PendingTenant(
 	val domainId: String,
 	val displayName: String,
@@ -890,6 +946,13 @@ data class EnrollReveal(
 	val ownerBoxPub: String,
 	val domainId: String,
 	val salt: String,
+)
+
+@Serializable
+data class ConsoleApprovalJoin(
+	val newSignPub: String,
+	val newBoxPub: String,
+	val device: String? = null,
 )
 
 @Serializable
