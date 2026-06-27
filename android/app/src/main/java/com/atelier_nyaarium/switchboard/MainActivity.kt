@@ -297,7 +297,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// A notification tap routes straight to its thread.
 	LaunchedEffect(openTeamRequest.value) {
 		openTeamRequest.value?.let { team ->
-			repo.openThread(team)
+			val opened = repo.openThread(team)
 			// A tapped notification surfaces its thread - dismiss any settings/manage overlay so the
 			// thread is not masked (rendering shows settings before openTeam) and the next back press
 			// is not consumed invisibly clearing it.
@@ -315,7 +315,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			hostTenant = null
 			adminCeremonyCtx = null
 			enrolleeCeremonyCtx = null
-			openTeam = team
+			openTeam = opened
 			openTeamRequest.value = null
 		}
 	}
@@ -570,8 +570,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onAddGateway = { showAddGateway = true },
 				onHostHelp = { showHostHelp = true },
 				onOpen = { team ->
-					repo.openThread(team)
-					openTeam = team
+					openTeam = repo.openThread(team)
 					SwitchboardService.cancelTeamNotification(context, team)
 				},
 				onRename = { team, name -> repo.setLabel(team, name) },
@@ -582,8 +581,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 						val composite = composeSessionName(project, session)
 						runCatching { repo.createSession(project, session) }
 							.onSuccess {
-								repo.openThread(composite)
-								openTeam = composite
+								openTeam = repo.openThread(composite)
 							}
 					}
 				},

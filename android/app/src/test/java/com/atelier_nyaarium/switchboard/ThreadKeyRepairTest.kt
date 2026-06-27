@@ -28,6 +28,14 @@ class ThreadKeyRepairTest {
 	}
 
 	@Test
+	fun qualifiesBareCompositeToTheSameKeyAsTheBoard() {
+		// The spawn dialog opens the bare composite "project.session"; it must collapse to the same
+		// canonical key the board and inbound replies use, so openThread dedups it to one tab.
+		assertEquals("sakura/host.switchboard", canonicalThreadKey("host.switchboard", "sakura"))
+		assertEquals("sakura/host.switchboard", canonicalThreadKey("sakura/host.switchboard", "sakura"))
+	}
+
+	@Test
 	fun preservesExplicitRemoteHost() {
 		// A cross-Host key is not "ours" to re-assign; keep it byte-stable.
 		assertEquals("hostb/api", canonicalThreadKey("hostb/api", "switchboard"))
