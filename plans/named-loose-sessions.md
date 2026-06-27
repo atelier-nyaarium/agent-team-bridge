@@ -98,3 +98,61 @@ Per the human's model, **each phase below gets its own dedicated `/questionaire`
 - **P6 - Crosstalk session-addressing + multi-party.** `crosstalk_send` gains a session target (`project/session`); MISS -> `openSession` (create), HIT -> route into that session's thread; "this chat here" = the caller's current session id (the agent must learn its own session id); federation re-reach by composite address. Star/relay only - no thread-core change. *Verify:* one agent directs another into the human's session; 3-way relay brainstorm works; replies land in each sender's own chat.
 
 **Cross-cutting / risks:** the `/` separator collision (P1); back-compat for today's single-`claude` devcontainers (P1-P3); host-spawn security (P5, intersects gateway-auth-surface); the existing fragile TUI readiness screen-scrape is reused by `openSession` (P2, a logged painpoint); send still broadcasts to all subs of a team (fine - each `project/session` is its own team key, so no multi-sub send needed).
+
+---
+
+## P1 - detailed design (refinement lap 1)
+
+**Goal:** introduce the composite `project<SEP>session` address and make the console terminal-drive ops (peek / tmux_send / reload_plugins) session-aware *via the address*, de-hardcoding `"claude"` while preserving today's single-session devcontainers byte-for-byte. **Nothing spawns named sessions in P1** (that is P2); P1 only makes them addressable + drivable.
+
+**Separator decision (the crux).** Grounded in code: `TeamAddress.parse` / `parseQualifiedTeam` split on the FIRST `/`, but `qualifyTeam` decides "already qualified" with `name.includes("/")`; and `SessionId.parse` is `conv:<id>:<team>` splitting on the last `:` and rejecting a conv-id containing `:`. The tmux/docker layer validates every name to the slug `^[a-z0-9][a-z0-9-]*$` (tmuxCore `TEAM_NAME_RE`, reloadPlugins `SLUG_RE`). So the session separator must be `!= "/"`, `!= ":"`, and outside `[a-z0-9-]`.
+- **Proposed `SESSION_SEP = "."`** Both segments are slugs (no `.`), so a composite has exactly one `.` and splits unambiguously; it contains no `/` (qualifyTeam still prepends the gateway correctly; the first-`/` split is unaffected) and no `:` (SessionId.parse unaffected). The composite is NEVER used as a tmux name - only its `session` segment is - so the `.`-vs-pane-index (`session.0`) concern does not arise.
+
+**Grammar (`src/shared/session-id.ts`, the grammar owner):**
+- Add `SESSION_SEP = "."` + a guard/test asserting `SESSION_SEP ∉ {GATEWAY_QUALIFIER_SEP, ":"}`.
+- `DEFAULT_SESSION = "claude"` (back-compat).
+- `composeSessionName(project, session) -> "project.session"`; `parseSessionName(localName) -> {project, session}` where a bare name (no SEP) yields `{project: localName, session: DEFAULT_SESSION}`.
+- **Cross-language surface:** update `tests/fixtures/session-id/vectors.json` AND the Kotlin twin (`android/.../proto/SessionId.kt` + the `Protocol.kt` codegen that emits the separators) so both runtimes agree. (Audit must confirm the codegen path and that the app reads the new constant rather than hand-mirroring it.)
+
+**Console de-hardcode (`src/gateway/console/consoleHandler.ts`):**
+- `resolveTmuxTarget(qualifiedTarget, explicitSession?)`: strip the gateway, then `parseSessionName(name)` -> (project, session); `explicitSession` overrides the derived session when given. Map `project==="host"` -> `{kind:"host", name:"host", sessionName}`; `isProjectName(project)` -> `{kind:"devcontainer", name:project, sessionName}`; else reject. **`name` is now the PROJECT (container), never the composite**, so `containerName()` stays correct.
+- peek / tmux_send / reload_plugins: call `resolveTmuxTarget(op.target)` with no explicit session - the session rides in the address; the `"claude"` literal now lives ONLY in `parseSessionName`'s bare-name back-compat.
+- create_session: keep passing `explicitSession = op.sessionName` (untouched in P1; harmonized with `openSession` in P2).
+- `isProjectName` unchanged (tests the PROJECT segment against offlineCatalog/knownTeamPaths).
+
+**reloadPlugins.ts:** leave the in-session tool's `TMUX_SESSION="claude"` (an agent driving its OWN pane, conventionally claude until identity-pinning in P3). The daemon-side `spawnReloadPlugins` already honours `target.sessionName`, so it is session-aware the moment `resolveTmuxTarget` fills it.
+
+**Explicitly OUT of P1:** the daemon WAKE path's hardcoded claude (P2 `openSession`); MCP identity pinning + self-register as composite (P3); spawning (P2). Flagged for P3: a session reachable both as bare `project` and as `project.claude` is the same tmux pane but two distinct registry keys - P3 must canonicalize so they don't split identity.
+
+**Verification (P1):**
+- Unit: compose/parse round-trip; bare -> `claude`; `resolveTmuxTarget` maps composite -> (project, session), bare -> (project, claude), host; cross-gateway + unknown-project still reject.
+- Shared session-id vectors pass in TS and Kotlin.
+- Back-compat: an existing devcontainer addressed bare still drives the `claude` pane (peek/tmux_send/reload behaviour unchanged).
+- Integration: a hand-created tmux session `foo` in a running devcontainer is peekable via `project.foo`.
+- `bun run lint` (biome ci + tsc) and `bun run test` green.
+
+**Possible `/questionaire` fork (only if the audit finds a concrete problem):** `SESSION_SEP` char `.` vs `~`/`+` - readability vs any place that treats `.` as special in a name. Default to `.` unless the audit surfaces a real break.
+
+### P1 - audit refinements (lap 1)
+
+10-auditor fan-out (`wf_dbd68e42-cea`). Most findings just confirmed the plan's own TODO list (the helpers/constants "don't exist yet" - expected). Two REAL refinements survived triage; the `.` separator is kept (audit confirmed it safe).
+
+**R1 (real catch): project dir names are NOT slug-validated.** `scanDevcontainerProjects` (hostDaemon.ts) pushes the raw directory `entry` as the team name, so a dir like `my.app` enters the catalog. A naive split-on-first-`.` would misparse it as project=`my`, session=`app`. FIX - **catalog-first disambiguation in resolveTmuxTarget** (do NOT assume the project is a slug; do NOT filter the catalog - dotted-named devcontainers must keep working):
+1. If `name === "host"` or `isProjectName(name)` -> bare: `{project: name, session: explicitSession ?? DEFAULT_SESSION}`. A full-name catalog hit wins, so a real dotted project resolves correctly.
+2. Else `parseSessionName(name)` splits on the **LAST** `SESSION_SEP` (a session is a dotless slug, so last-`.` recovers it even if the project has dots) -> `(project, session)`; if `project === "host"` or `isProjectName(project)` -> `{project, session: explicitSession ?? session}`; else reject.
+   - `parseSessionName` is a mechanical splitter (bare -> `{project:name, session:DEFAULT_SESSION}`, else last-sep split); the catalog precedence lives in `resolveTmuxTarget` (it owns `isProjectName`).
+   - Rare residual collision (documented; enforced at spawn in P2): if both `foo` and `foo.bar` are real projects, `foo.bar` resolves AS the project, shadowing a `bar` session under `foo`. P2 rejects spawning a session name that would collide with an existing project.
+
+**R2 (phase boundary): P1 is SERVER-SIDE ONLY; the cross-language surface moves to P4.** In P1 the app still emits only BARE targets (it learns composites in the P4 UX), so no composite crosses from Android. Therefore the Kotlin twin (`android/.../proto/SessionId.kt` parseSessionName/composeSessionName), the shared FUNCTION vectors in `tests/fixtures/session-id/vectors.json`, and `SessionIdVectorsTest.kt` move to **P4**. P1 keeps the grammar + logic in TS only. The `SESSION_SEP`/`DEFAULT_SESSION` *constants* go in session-id.ts now; mirror them into `scripts/codegen-kotlin.ts` + Protocol.kt ONLY if a codegen-drift CI check requires it (trivial one-liner), else defer to P4 with the functions.
+
+**Confirmed clean by audit:** `.`-as-hazard (no durable-store / path / object-key / Android-storage breakage); federation cross-gateway round-trip (a dotted local name survives qualification + sealing); TmuxTarget dedup key stays unique (`devcontainer:proj:claude` vs `devcontainer:proj:foo`); every `TmuxTarget.name`/`.sessionName` consumer works with project-as-name; existing console-handler/tmux-core tests stay green given `parseSessionName("project") == {project:"project", session:"claude"}`.
+
+**Final P1 file list (server-only):**
+- `src/shared/session-id.ts` - add `SESSION_SEP="."`, `DEFAULT_SESSION="claude"`, `parseSessionName`, `composeSessionName`, + the `SESSION_SEP ∉ {"/",":"}` guard.
+- `src/shared/console-protocol.ts` - re-export the four new symbols (consoleHandler imports the addressing layer from here).
+- `src/gateway/console/consoleHandler.ts` - refactor `resolveTmuxTarget` (catalog-first disambiguation + optional `explicitSession`); peek/tmux_send/reload call sites unchanged (now session-aware via the address); create_session keeps `explicitSession = op.sessionName`.
+- `src/__tests__/session-id.test.ts` - compose/parse round-trip, bare->claude, last-sep split, dotted-project, the guard.
+- `src/__tests__/console-handler.test.ts` - resolveTmuxTarget cases: bare, composite, dotted-project-via-catalog, host, `host.session`, cross-gateway reject, unknown reject; back-compat unchanged.
+- NOT in P1: `android/*`, `scripts/codegen-kotlin.ts` (unless CI drift), shared function-vectors.
+
+**Status:** P1 design hardened. No `/questionaire` fork needed (the `.` separator concern is resolved by catalog-first disambiguation, not by changing the char). Ready for the implementation cycle.
