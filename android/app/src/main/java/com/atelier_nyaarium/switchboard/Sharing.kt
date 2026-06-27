@@ -62,9 +62,9 @@ private data class SessionShares(val everyone: Boolean, val domains: Set<String>
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SharingScreen(repo: ChatRepository, onBack: () -> Unit) {
+fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () -> Unit) {
 	val scope = rememberCoroutineScope()
-	val sessions = remember { repo.shareableSessions() }
+	val sessions = remember { repo.shareableSessions().filter { gatewayId == null || it.gatewayId == gatewayId } }
 	val people = remember { repo.linkedDomains() }
 	// Non-throwing read: a corrupt owner key degrades to empty rather than crashing the sheet.
 	val myOwner = remember { repo.ownerKeysForDisplay()?.signPub.orEmpty() }

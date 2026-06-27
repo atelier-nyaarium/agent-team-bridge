@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,10 +13,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -29,6 +36,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -167,48 +175,77 @@ fun OwnerBackupCard(repo: ChatRepository) {
 	}
 }
 
-/** Manage Members: the admitted members of the keyring, with revoke, plus Add Gateway. */
+/** Gateways: the computers admitted to your Domain. Per-gateway online + session count is derived from the
+ * live `teams`; the kebab manages that gateway's sharing or revokes it. Consoles live under Your devices. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ManageMembersScreen(repo: ChatRepository, onBack: () -> Unit, onAddGateway: () -> Unit) {
+fun GatewaysScreen(
+	repo: ChatRepository,
+	teams: List<Team>,
+	onBack: () -> Unit,
+	onAddGateway: () -> Unit,
+	onManageSharing: (String) -> Unit,
+) {
 	val scope = rememberCoroutineScope()
-	// Re-read after an admit/revoke so the board reflects the change.
+	// Re-read after a revoke so the list reflects the change.
 	var refresh by remember { mutableStateOf(0) }
-	val members = remember(refresh) { repo.admittedMembers() }
-	Scaffold(topBar = { TopAppBar(title = { Text("Manage Members") }) }) { pad ->
+	val gateways = remember(refresh) { repo.admittedMembers().filter { it.kind == "gateway" } }
+	Scaffold(topBar = { TopAppBar(title = { Text("Gateways") }) }) { pad ->
 		Column(
 			Modifier.padding(pad).padding(16.dp).fillMaxSize().verticalScroll(rememberScrollState()),
 			verticalArrangement = Arrangement.spacedBy(12.dp),
 		) {
-			if (members.isEmpty()) {
-				Text("No gateways yet. Add one to get started.", style = MaterialTheme.typography.bodyMedium)
+			Text("Computers that run your agents.", style = MaterialTheme.typography.bodyMedium)
+			if (gateways.isEmpty()) {
+				Text("No Gateways yet. Add one to get started.", style = MaterialTheme.typography.bodyMedium)
 			}
-			for (m in members) {
+			for (g in gateways) {
+				val gid = g.gatewayId ?: continue
+				val count = teams.count { it.gatewayId == gid }
+				val online = teams.any { it.gatewayId == gid && it.status == "online" }
 				Card(Modifier.fillMaxWidth()) {
-					Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-						val title = if (m.kind == "gateway") (m.gatewayId ?: "gateway") else "console"
-						Text(
-							if (m.isSelf) "$title  (this device)" else title,
-							style = MaterialTheme.typography.titleMedium,
-						)
-						Text(m.kind, style = MaterialTheme.typography.bodySmall)
-						Text(
-							Crypto.fingerprint(m.signPub),
-							fontFamily = FontFamily.Monospace,
-							style = MaterialTheme.typography.bodySmall,
-						)
-						if (!m.isSelf) {
-							TextButton(onClick = {
-								scope.launch {
-									repo.revokeMember(m.signPub)
-									refresh++
-								}
-							}) { Text("Revoke", color = MaterialTheme.colorScheme.error) }
+					Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+						Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+							Text(gid, style = MaterialTheme.typography.titleMedium)
+							Text(
+								"${if (online) "online" else "offline"} · $count session${if (count == 1) "" else "s"}",
+								style = MaterialTheme.typography.bodySmall,
+							)
+							Text(
+								Crypto.fingerprint(g.signPub),
+								fontFamily = FontFamily.Monospace,
+								style = MaterialTheme.typography.bodySmall,
+							)
+						}
+						var menuOpen by remember(g.signPub) { mutableStateOf(false) }
+						Box {
+							IconButton(onClick = { menuOpen = true }) {
+								Icon(Icons.Filled.MoreVert, contentDescription = "Gateway actions")
+							}
+							DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+								DropdownMenuItem(
+									text = { Text("Manage sharing") },
+									onClick = {
+										menuOpen = false
+										onManageSharing(gid)
+									},
+								)
+								DropdownMenuItem(
+									text = { Text("Revoke", color = MaterialTheme.colorScheme.error) },
+									onClick = {
+										menuOpen = false
+										scope.launch {
+											repo.revokeMember(g.signPub)
+											refresh++
+										}
+									},
+								)
+							}
 						}
 					}
 				}
 			}
-			Button(onClick = onAddGateway, modifier = Modifier.fillMaxWidth()) { Text("Add Gateway") }
+			Button(onClick = onAddGateway, modifier = Modifier.fillMaxWidth()) { Text("Add a Gateway") }
 			OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back") }
 		}
 	}

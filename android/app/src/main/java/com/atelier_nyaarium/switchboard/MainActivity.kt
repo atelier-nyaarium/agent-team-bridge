@@ -179,6 +179,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	var showSettings by rememberSaveable { mutableStateOf(false) }
 	var settingsRoute by rememberSaveable { mutableStateOf(SettingsRoute.HUB) }
 	var showManage by remember { mutableStateOf(false) }
+	// The Gateways kebab "Manage sharing" routes here, scoped to that gateway's sessions.
+	var sharingGateway by remember { mutableStateOf<String?>(null) }
 	var showAddGateway by remember { mutableStateOf(false) }
 	// Cross-Domain trust overlays: the Users surface (the hub for people + networks) and the
 	// transient link wizard (leaving it cancels the pairing windows).
@@ -291,6 +293,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			showSettings = false
 			settingsRoute = SettingsRoute.HUB
 			showManage = false
+			sharingGateway = null
 			showAddGateway = false
 			showUsers = false
 			showLinkWizard = false
@@ -316,7 +319,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// System back navigates within the app (thread/settings/manage -> back) instead of exiting.
 	BackHandler(
 		enabled = openTeam != null || showSettings || showManage || showAddGateway ||
-			showUsers || showLinkWizard || showHostNetworks ||
+			sharingGateway != null || showUsers || showLinkWizard || showHostNetworks ||
 			hostTenant != null || adminCeremonyCtx != null || enrolleeCeremonyCtx != null,
 	) {
 		when {
@@ -327,6 +330,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			showHostNetworks -> showHostNetworks = false
 			showUsers -> showUsers = false
 			showAddGateway -> showAddGateway = false
+			sharingGateway != null -> sharingGateway = null
 			showManage -> showManage = false
 			openTeam != null -> openTeam = null
 			showSettings && settingsRoute != SettingsRoute.HUB -> settingsRoute = SettingsRoute.HUB
@@ -402,8 +406,16 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			)
 		showAddGateway ->
 			AddGatewayScreen(repo = repo, onBack = { showAddGateway = false }, onDone = { showAddGateway = false })
+		sharingGateway != null ->
+			SharingScreen(repo = repo, gatewayId = sharingGateway, onBack = { sharingGateway = null })
 		showManage ->
-			ManageMembersScreen(repo = repo, onBack = { showManage = false }, onAddGateway = { showAddGateway = true })
+			GatewaysScreen(
+				repo = repo,
+				teams = state.teams,
+				onBack = { showManage = false },
+				onAddGateway = { showAddGateway = true },
+				onManageSharing = { gid -> sharingGateway = gid },
+			)
 		// Settings is reachable from ANY state, so this branch is evaluated BEFORE the unprovisioned
 		// ProvisionScreen below (the setup screen's gear opens it). It sits below the overlay branches
 		// above, which are entered from Settings without clearing showSettings, so they must still win.
@@ -914,7 +926,7 @@ private fun EmptyBoard(
 				Spacer(Modifier.height(20.dp))
 				Button(onClick = onRefresh) { Text("Try again") }
 				Spacer(Modifier.height(4.dp))
-				TextButton(onClick = onManage) { Text("Manage Members") }
+				TextButton(onClick = onManage) { Text("Gateways") }
 			}
 			// Mid-enrollment, still self-healing: the poll loop keeps retrying and clears it on the
 			// first success; past the grace window it escalates into the terminal branch above.
@@ -1598,7 +1610,7 @@ private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onFeder
 	// Two distinct concerns kept apart: managing gateways within YOUR network, and linking with a
 	// friend's separate network (cross-Domain trust).
 	Text("Your network", style = MaterialTheme.typography.titleSmall)
-	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Manage Members") }
+	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Gateways") }
 	HorizontalDivider()
 	Text("People", style = MaterialTheme.typography.titleSmall)
 	Button(onClick = onFederation, modifier = Modifier.fillMaxWidth()) { Text("Users") }
