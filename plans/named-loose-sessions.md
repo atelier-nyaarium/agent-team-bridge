@@ -280,7 +280,18 @@ Files: `tmuxCore.ts` (`hasSession`/`ensureSession`), `hostDaemon.ts` (runner wir
 - **R5 (DECISIVE - demote-to-loose needs canonicalization or it breaks existing threads):** the audit confirms fork **2b (spawn-point-only)** breaks ALL existing bare-`project` threads (phone keys `conv:<id>:gateway/project`), bare-name sends, and crosstalk-to-bare - and needs an app migration. Fork **2a (keep a default session + canonicalize bare<->composite)** preserves them: a bare `project` lookup/wake canonicalizes to a default session (e.g. `project` registers as `project.<default>` but a bare send/wake resolves to it). **Strong recommendation: 2a.** This is the demote-semantics `/questionaire` fork.
 - **Chip states (from channel, for P4):** distinguish IDLE (REPL `❯`, no spinner) from WORKING (the "esc to interrupt" spinner). Lifecycle: waking -> working (booting) -> **idle** (REPL ready, no task) -> working (a turn) -> idle. So a freshly kicked-off session at the REPL with no task is **idle, not working**. The shared idle-marker helper detects this; the P4 working-chip poll uses it.
 
-**Two `/questionaire` forks for the human (asked on the channel now):** (1) DATA_DIR (map home + the federation-keys-under-/app/log landmine: status quo vs introduce DATA_DIR + migrate all stores incl. federation private keys); (2) demote-to-loose semantics (2a keep-default-with-canonicalization [recommended] vs 2b spawn-point-only). Implementation waits on these.
+**`/questionaire` answers (human, 2026-06-27):**
+- **Q-P3a demote semantics = B) CLEAN BREAK (spawn-point-only).** No default session; every session is named `project.session`. A bare `project` is PURELY the catalog spawn-point (kind `devcontainer`, never a live chat). Existing bare-`project` phone threads go stale by design (re-created as named sessions). **This SIMPLIFIES P3: no bare<->composite canonicalization layer is needed.** Consequences to implement: nothing ever registers as bare `project` (the launch always overrides `PROJECT_NAME=project.session`); `doWakeTeam`/wake only ever target composites; bare-name sends/crosstalk to `project` no longer resolve (accepted break - the app + crosstalk move to composites; P6 carries crosstalk session-targeting).
+- **Q-P3b resume-map home = A (taken; non-blocking)** - keep the `session-resume` DurableStore under `/app/log` with the others for P3; the `DATA_DIR` landmine fix (moving federation private keys etc.) is split into its own dedicated change. (Human can override to B later; reversible.)
+
+### P3 - reassessed under the clean break
+
+The clean break REMOVES the hardest part (canonicalization). Locked P3 scope:
+- **Identity pinning:** launch always overrides `PROJECT_NAME=<project.session>` (R1 form: `bash -c 'source ~/.bashrc; export PROJECT_NAME=<composite>; cd /workspace/<project>; exec claude <flags> [--resume <id>]'`).
+- **Catalog split (R3):** bare `project` = devcontainer (spawn-point, from the dir catalog); `project.session` = loose, NOT added to `knownTeamPaths`. `isDevcontainer(name)` false if `name.includes(SESSION_SEP)`.
+- **Composite wake (R2):** `doWakeTeam`/`findProjectPath`/`handleWake` parse the project segment; wake the named session; `handleWake` migrates to `tmuxCore` docker exec (keep `ensureContainerUpAsync` on the devcontainer CLI).
+- **Resume map (R4):** `claudeSessionId` added to `WsRegisterSchema` + `registerMsg` + gateway read; `session-resume` DurableStore (under `/app/log`); `openSession`/`handleWake` do reattach -> `claude --resume <id>` (from `/workspace/<project>`) -> fresh; readiness marker accepts the resumed-REPL shape; factor a shared idle-marker helper (P4 working-chip reuses it).
+- **No canonicalization, no default-session back-compat** (the break). Existing bare threads are expected to go stale.
 
 ## Painpoints (P1 crust)
 
