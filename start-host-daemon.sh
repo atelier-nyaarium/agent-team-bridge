@@ -5,7 +5,8 @@ set -e
 # Launches the headless host daemon (src/main-host-daemon.ts) in a detached tmux session. The daemon
 # owns the gateway's reserved "host" WS slot: the devcontainer catalog + on-demand wake and the
 # console terminal-view host_op (peek + tmux_send). It runs no Claude session - conversational
-# agents on this machine start via start-session.sh as ordinary loose peers.
+# agents on this machine are spawned on demand through the console's host spawn-point (the daemon's
+# create_session) as ordinary loose peers.
 
 TMUX_SESSION="host-daemon"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

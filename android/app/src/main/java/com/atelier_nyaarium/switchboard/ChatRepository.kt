@@ -2542,13 +2542,19 @@ class ChatRepository(
 		_state.update { s -> s.copy(unread = s.unread - team) }
 	}
 
-	fun openThread(team: String) {
+	/** Open (or focus) a thread's tab, deduped by canonical key. The spawn dialog opens a bare
+	 * composite ("project.session") while the board and inbound replies use the gateway-qualified
+	 * form, so canonicalize before adding or the same session lands as two tabs. Returns the canonical
+	 * key so the caller can point its active-tab pointer at the same value. */
+	fun openThread(team: String): String {
+		val key = canonicalThreadKey(team, localGatewayId)
 		_state.update { s ->
 			s.copy(
-				unread = s.unread - team,
-				openTabs = if (team in s.openTabs) s.openTabs else s.openTabs + team,
+				unread = s.unread - key,
+				openTabs = if (key in s.openTabs) s.openTabs else s.openTabs + key,
 			)
 		}
+		return key
 	}
 
 	fun closeTab(team: String) {
