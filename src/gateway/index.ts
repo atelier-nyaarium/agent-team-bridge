@@ -100,14 +100,17 @@ export async function startGateway(): Promise<void> {
 	// the console's durable cursor still matches) to /app/log, reload on boot, re-save on a timer.
 	const jobsDurable = new DurableStore(path.dirname(LOG_PATH), "pending-jobs");
 	const mailboxDurable = new DurableStore(path.dirname(LOG_PATH), "mailboxes");
-	{
+	try {
 		const jobs = jobsDurable.load();
 		if (Array.isArray(jobs)) store.restore(jobs as Parameters<typeof store.restore>[0]);
 		const boxes = mailboxDurable.load();
 		if (boxes && typeof boxes === "object")
 			mailboxStore.restore(boxes as Parameters<typeof mailboxStore.restore>[0]);
-		console.log(`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size}`);
+	} catch (err) {
+		// A corrupt or partial snapshot must not crash-loop boot; start from empty delivery state.
+		console.error("[durability] restore failed, starting fresh:", err);
 	}
+	console.log(`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size}`);
 	// The federation replay-guard wires its own persistence here once built (it only
 	// exists when the evie bridge is configured); null-safe until then.
 	let replayPersist: (() => void) | null = null;
@@ -120,6 +123,14 @@ export async function startGateway(): Promise<void> {
 	persistTimer.unref?.();
 	process.on("SIGTERM", persistDelivery);
 	process.on("SIGINT", persistDelivery);
+	// An uncaughtException can fire mid-mutation, so the in-memory store may be inconsistent right
+	// now. Do NOT flush it - that would overwrite the last good snapshot with crash-moment state.
+	// Just log and exit: the last quiescent persist-timer/SIGTERM snapshot is consistent, and the
+	// docker restart policy restores from it. Boot restore is guarded so a bad snapshot cannot loop.
+	process.on("uncaughtException", (err) => {
+		console.error("[gateway] uncaughtException:", err);
+		process.exit(1);
+	});
 
 	// Concurrent sends to the same sleeping team must share ONE wake: two
 	// parallel `devcontainer up` runs for the same project race each other and
@@ -134,7 +145,9 @@ export async function startGateway(): Promise<void> {
 		}
 		const wake = doWakeTeam(team);
 		inflightWakes.set(team, wake);
-		void wake.finally(() => inflightWakes.delete(team));
+		// `.catch` before `.finally` so this cleanup-chain promise resolves; callers still receive
+		// the original `wake` (unchanged) and see any rejection via their own await.
+		void wake.catch(() => {}).finally(() => inflightWakes.delete(team));
 		return wake;
 	}
 

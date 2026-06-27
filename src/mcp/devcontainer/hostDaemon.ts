@@ -26,6 +26,16 @@ let projectDirs: string[] = [path.join(HOME, "projects")];
 let channelPushHandler: ChannelPushHandler | null = null;
 const reconnector = createReconnector(() => connect());
 
+// A send on a socket mid-close throws; the daemon must never die because a reply could not be
+// delivered. Swallow it - the caller retries on reconnect.
+function safeSend(payload: Record<string, unknown>): void {
+	try {
+		if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+	} catch (err) {
+		console.error("[host-daemon] ws send failed:", err instanceof Error ? err.message : err);
+	}
+}
+
 export function startHostDaemon(dirs?: string[], onChannelPush?: ChannelPushHandler): void {
 	if (dirs && dirs.length > 0) {
 		projectDirs = dirs;
@@ -74,11 +84,15 @@ function connect(): void {
 		}
 
 		if (msg.type === "wake") {
-			handleWake(msg as unknown as WakeMessage);
+			void handleWake(msg as unknown as WakeMessage).catch((e) =>
+				console.error("[host-wake] dispatch error:", e),
+			);
 		}
 
 		if (msg.type === "host_op" && typeof msg.reqId === "string") {
-			void handleHostOp(msg.reqId as string, msg.op as HostOp);
+			void handleHostOp(msg.reqId as string, msg.op as HostOp).catch((e) =>
+				console.error("[host-op] dispatch error:", e),
+			);
 		}
 
 		if (msg.type === "channel_push") {
@@ -321,8 +335,8 @@ const hostOpRunner = createHostOpRunner({
 async function handleHostOp(reqId: string, op: HostOp): Promise<void> {
 	try {
 		const result = await hostOpRunner.run(op);
-		ws?.send(JSON.stringify({ type: "host_op_reply", reqId, ok: true, result }));
+		safeSend({ type: "host_op_reply", reqId, ok: true, result });
 	} catch (err) {
-		ws?.send(JSON.stringify({ type: "host_op_reply", reqId, ok: false, error: (err as Error).message }));
+		safeSend({ type: "host_op_reply", reqId, ok: false, error: (err as Error).message });
 	}
 }

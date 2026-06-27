@@ -169,6 +169,9 @@ function writeAndSpawn(script: string): string {
 	const scriptPath = path.join(os.tmpdir(), `reload-plugins-${Date.now()}.sh`);
 	fs.writeFileSync(scriptPath, script, { mode: 0o755 });
 	const child = spawn("bash", [scriptPath], { detached: true, stdio: "ignore" });
+	// A spawn 'error' (e.g. resource exhaustion) on a child with no error listener throws as an
+	// uncaughtException; log it instead so a failed reload can never take the daemon down.
+	child.on("error", (err) => console.error("[reload-plugins] spawn failed:", err));
 	child.unref();
 	return scriptPath;
 }
