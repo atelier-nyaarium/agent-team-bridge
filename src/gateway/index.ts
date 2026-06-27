@@ -104,6 +104,10 @@ export async function startGateway(): Promise<void> {
 	const store = new PendingJobStore<ResponsePayload>();
 	const knownTeamPaths = new Map<string, string>();
 	const offlineCatalog = new Map<string, string>();
+	// A name is a spawn-point project iff it is in the catalog (the dir scan or a bare register).
+	// Composites are never added (the register write-guard), so membership alone is the signal -
+	// even for a dotted dir name that the mechanical isComposite test would misread as a session.
+	const isCatalogProject = (name: string) => offlineCatalog.has(name) || knownTeamPaths.has(name);
 	const wakeCoordinator = new WakeCoordinator();
 	const hostOpCoordinator = new HostOpCoordinator();
 
@@ -199,7 +203,7 @@ export async function startGateway(): Promise<void> {
 		// destination (the daemon would launch project.<default> under a name the waiter never sees),
 		// so fail fast instead of waiting out WAKE_TIMEOUT_MS. Catalog membership is the signal (a
 		// dotted dir name "my.app" is still a project); named sessions are never in the catalog.
-		if (offlineCatalog.has(team) || knownTeamPaths.has(team)) {
+		if (isCatalogProject(team)) {
 			console.log(`[wake] ${team} is a spawn-point project, not a session; not waking`);
 			return false;
 		}
@@ -629,7 +633,7 @@ export async function startGateway(): Promise<void> {
 			mailboxStore,
 			routes,
 			localGatewayId,
-			isProjectName: (name) => offlineCatalog.has(name) || knownTeamPaths.has(name),
+			isProjectName: isCatalogProject,
 			// Forget drops the session's durable resume record so it stops listing as available.
 			dropSessionResume: (team) => sessionResume.delete(team),
 			domain: () => {
