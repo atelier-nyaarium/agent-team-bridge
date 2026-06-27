@@ -214,3 +214,28 @@ also needs Slice 1's `kind` filter first.
    round. Cross-repo (Android generate/approve + scan/join; reuses the authorize-console schema, adds only
    the new-device->owner key-handoff envelope).
 3. **Your devices:** its OWN screen (not in Profile). Ship MINIMAL device data (no roster/presence yet).
+
+## Slice 4 build design (owner decision: nonce-gated evie ingress)
+
+Owner picked **"new nonce-gated evie ingress"** for the credential-less new device's reach (over a pinned-LAN relay or a bootstrap token in the QR).
+
+### Recon verdict (why this is the biggest slice)
+evie has NO public ingress today: both console-bridge and gateway-bridge k8s Services are ClusterIP, reached ONLY through the k8s API service-proxy, which authenticates the SA token. So a fresh device holding only the QR cannot reach evie at all today. Option 2 therefore needs evie's FIRST internet-facing surface: a new public, nonce-gated rendezvous endpoint (LoadBalancer/Ingress + TLS + rate-limit), not just a new route on the existing private bridge. The public-endpoint provisioning is cluster infra the owner applies; the code + the deploy YAML are buildable here.
+
+### The rendezvous protocol (held device = H, new device = N, all via evie)
+1. H (admitted console, authenticated console-bridge) ARMs a window: mints `approvalId` + a one-time `nonce`, registers them + its domain at evie's DeviceApprovalCoordinator. Shows a QR carrying { domainId, owner signPub/boxPub, approvalId, nonce, the PUBLIC ingress reach URL } - NEVER an SA token.
+2. N (fresh app, no creds) scans, generates its console sign+box identity, POSTs a JOIN frame { approvalId, newSignPub, newBoxPub, device? } to the PUBLIC nonce-gated ingress. evie validates the nonce against the armed window (rate-limited, TTL, window cap) and parks the join.
+3. H polls evie (authenticated) for the join, shows N's key fingerprint, and on biometric-gated Approve: owner-signs a kind:console admission for newSignPub, submits it (existing submit_admission enrollOp), AND seals the console transport (SA token + CA + app token + domainId) to newBoxPub. H POSTs the sealed reply to the window.
+4. N polls the PUBLIC ingress with { approvalId } (nonce-gated), receives the sealed blob, unseals with its box key (verifying H's sign key off the QR), provisions, and operates.
+
+### Security model
+Trust rests on: (a) the human Approve step on H (owner-sign) - no admission without it, so a malicious join just shows as an unexpected pending device the owner declines; (b) the nonce gate + window TTL + per-window attempt cap + global window cap (mirror EnrollHandshakeCoordinator) bounding the public surface to DoS-only; (c) the sealed transport (only newBoxPub opens it). The QR carries only public material.
+
+### Stages (schema-first, green-commit each)
+- S1 SCHEMA: `ConsoleApprovalOpSchema` (arm/join/poll/cancel) + `ConsoleApprovalResultSchema` (carries the join frame, then the sealed reply) in federation-lifecycle.ts (synced); extend the authorize-console QR payload with approvalId+nonce+reach. sync-leaf + codegen.
+- S2 EVIE: `DeviceApprovalCoordinator` (in-memory dumb broker mirroring EnrollHandshakeCoordinator) + `handleConsoleApproval` on ConsoleBridgeServer for the AUTHENTICATED arm/poll, plus a NEW public nonce-gated listener (+ deploy YAML: Service + Ingress/LoadBalancer + TLS) for the join/poll. Both repos lint+test.
+- S3 ANDROID: `YourDevicesScreen` (kind=="console", own Settings entry, Remove=revoke), `ApprovalWindowScreen` (H: arm, show QR, poll, biometric Approve, seal), the new-device join/scan path, `ConsoleClient.postConsoleApproval`. testDebugUnitTest + assembleRelease.
+
+### Integration points (from recon)
+- evie: ConsoleBridgeServer route table + app-token auth (handleEnrollHandshake is the handler template); EnrollHandshakeCoordinator (broker template); deploy/console-bridge.yaml (ClusterIP - the new public surface is separate).
+- switchboard: federation-lifecycle.ts handshake ops (`EnrollHandshakeOp`/`TrustHandshakeOp` arm/join/reveal) as schema templates; crypto.ts seal/unseal + consoleSealer.ts for the sealed transport; FederationManager.members()/MemberInfo + GatewaysScreen as the device-list template; AddGatewayScreen/QrScanScreen as the scan-flow template.
