@@ -11,9 +11,11 @@ import {
 	type CrossDomainRequestResult,
 	type CrossDomainShareTarget,
 	type CrossDomainUnlinkResult,
+	DEFAULT_SESSION,
 	type MailboxInput,
 	type OpenedConsoleFrame,
 	parseQualifiedTeam,
+	parseSessionName,
 } from "../../shared/console-protocol.js";
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
@@ -22,6 +24,7 @@ import {
 	type HostOp,
 	type HostOpResult,
 	type HostPeekResult,
+	isTmuxName,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
@@ -226,18 +229,34 @@ export function createConsoleDispatcher({
 	unlinkDomain,
 	untrustOwner,
 }: ConsoleHandlerDeps) {
-	/** Resolve a console terminal target (the gateway-qualified session name) to the host tmux it
-	 * maps to: the host machine for "host", a devcontainer for a known project. peek/tmux_send and
-	 * reload address an existing session (the conventional `claude`); create_session passes the new
-	 * session name. A cross-Gateway target or an unknown/loose name is rejected. */
-	function resolveTmuxTarget(qualifiedTarget: string, sessionName = "claude"): TmuxTarget {
+	/** Resolve a console terminal target to the host tmux it maps to. The local name is a bare
+	 * project (legacy; the session defaults to `claude`) or a composite `project.session`. A
+	 * whole-name catalog/host match wins first, so a devcontainer whose dir name contains a dot
+	 * still resolves as that project; otherwise the LAST separator splits the (dotless) session off.
+	 * `explicitSession` (create_session) overrides the derived session. A cross-Gateway target or an
+	 * unknown/loose name is rejected. */
+	function resolveTmuxTarget(qualifiedTarget: string, explicitSession?: string): TmuxTarget {
 		const { gatewayId, name } = parseQualifiedTeam(qualifiedTarget);
 		if (gatewayId && gatewayId !== localGatewayId) {
 			throw new Error(`terminal view is not available for a session on another Gateway`);
 		}
-		if (name === "host") return { kind: "host", name, sessionName };
-		if (isProjectName?.(name)) return { kind: "devcontainer", name, sessionName };
-		throw new Error(`terminal view is not available for "${name}" (only the host and devcontainers)`);
+		const target = ((): TmuxTarget => {
+			// Whole name first: a bare (possibly dotted) project/host keeps the default session.
+			if (name === "host") return { kind: "host", name: "host", sessionName: explicitSession ?? DEFAULT_SESSION };
+			if (isProjectName?.(name)) {
+				return { kind: "devcontainer", name, sessionName: explicitSession ?? DEFAULT_SESSION };
+			}
+			// Otherwise split a session segment off the local name and resolve the project part.
+			const { project, session } = parseSessionName(name);
+			const sessionName = explicitSession ?? session;
+			if (project === "host") return { kind: "host", name: "host", sessionName };
+			if (isProjectName?.(project)) return { kind: "devcontainer", name: project, sessionName };
+			throw new Error(`terminal view is not available for "${name}" (only the host and devcontainers)`);
+		})();
+		// Reject a malformed session at the boundary (empty from a trailing separator, bad chars,
+		// oversized) with a clear error instead of deferring to a cryptic host-side tmux failure.
+		if (!isTmuxName(target.sessionName)) throw new Error(`invalid session name "${target.sessionName}"`);
+		return target;
 	}
 	// The per-install conversationId is the device identity: it keys the registry sub, the
 	// signing-key binding, the idempotency cache, and the device-name binding. The mailbox is

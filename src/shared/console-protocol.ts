@@ -31,6 +31,9 @@ import type {
 // wire helpers below and re-exported so existing importers keep resolving here.
 import { CONV_SESSION_PREFIX, GATEWAY_QUALIFIER_SEP, NOTICE_SESSION_PREFIX } from "./session-id.js";
 
+// Composite project<SEP>session grammar + helpers, also owned by session-id.ts; re-exported so
+// consoleHandler resolves the whole addressing layer from one place.
+export { composeSessionName, DEFAULT_SESSION, parseSessionName, SESSION_SEP } from "./session-id.js";
 export { CONV_SESSION_PREFIX, GATEWAY_QUALIFIER_SEP, NOTICE_SESSION_PREFIX };
 
 ////////////////////////////////

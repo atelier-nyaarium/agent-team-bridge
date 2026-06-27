@@ -884,7 +884,7 @@ describe("DeviceMailboxStore caps", () => {
 });
 
 describe("console terminal ops (peek / tmux_send)", () => {
-	function makeTerminalHarness() {
+	function makeTerminalHarness(isProjectName: (n: string) => boolean = (n) => n === "recipe-app") {
 		const hostOps: Record<string, unknown>[] = [];
 		const routes: ConsoleRoutes = {
 			send: async () => jsonRes({ session_id: "s", status: "running" }),
@@ -898,7 +898,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			mailboxStore: new DeviceMailboxStore(),
 			localGatewayId: "test-host",
 			routes,
-			isProjectName: (n) => n === "recipe-app",
+			isProjectName,
 			relayToHost: async (op) => {
 				hostOps.push(op as unknown as Record<string, unknown>);
 				if (op.kind === "peek") return { ok: true, result: { ansi: "SCREEN", hash: "h1" } };
@@ -1061,6 +1061,87 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		const b = await h.handler.handleFrame(frame({ kind: "reload_plugins", target: "some-loose" }, "r2"));
 		expect(a.ok).toBe(false);
 		expect(b.ok).toBe(false);
+		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("peek resolves a composite project.session target to its session pane", async () => {
+		const h = makeTerminalHarness();
+		await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app.scratch" }, "pc1"));
+		expect(h.hostOps[0]).toMatchObject({
+			kind: "peek",
+			target: { kind: "devcontainer", name: "recipe-app", sessionName: "scratch" },
+		});
+	});
+
+	it("tmux_send targets the named session of a composite address", async () => {
+		const h = makeTerminalHarness();
+		await h.handler.handleFrame(frame({ kind: "tmux_send", target: "recipe-app.scratch", text: "hi" }, "sc1"));
+		expect(h.hostOps[0]).toMatchObject({
+			kind: "sendText",
+			target: { kind: "devcontainer", name: "recipe-app", sessionName: "scratch" },
+		});
+	});
+
+	it("peek resolves host.session to the host machine's named session", async () => {
+		const h = makeTerminalHarness();
+		await h.handler.handleFrame(frame({ kind: "peek", target: "host.scratch" }, "ph1"));
+		expect(h.hostOps[0]).toMatchObject({
+			kind: "peek",
+			target: { kind: "host", name: "host", sessionName: "scratch" },
+		});
+	});
+
+	it("resolves a dotted devcontainer dir name whole (catalog-first), not as a session split", async () => {
+		const h = makeTerminalHarness((n) => n === "my.app");
+		await h.handler.handleFrame(frame({ kind: "peek", target: "my.app" }, "pd1"));
+		expect(h.hostOps[0]).toMatchObject({
+			kind: "peek",
+			target: { kind: "devcontainer", name: "my.app", sessionName: "claude" },
+		});
+	});
+
+	it("splits a session off a dotted devcontainer dir name (last separator wins)", async () => {
+		const h = makeTerminalHarness((n) => n === "my.app");
+		await h.handler.handleFrame(frame({ kind: "peek", target: "my.app.scratch" }, "pd2"));
+		expect(h.hostOps[0]).toMatchObject({
+			kind: "peek",
+			target: { kind: "devcontainer", name: "my.app", sessionName: "scratch" },
+		});
+	});
+
+	it("rejects a trailing-separator target (empty session) cleanly, before any host op", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app." }, "pe1"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toMatch(/invalid session name/);
+		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("rejects a session segment with illegal characters", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app.Bad_Name" }, "pe2"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toMatch(/invalid session name/);
+		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("rejects an oversized session name", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "peek", target: `recipe-app.${"x".repeat(65)}` }, "pe3"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toMatch(/invalid session name/);
+		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("rejects create_session with an invalid explicit session name (a dot would break the composite)", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", sessionName: "bad.name" }, "ce1"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toMatch(/invalid session name/);
 		expect(h.hostOps).toHaveLength(0);
 	});
 });

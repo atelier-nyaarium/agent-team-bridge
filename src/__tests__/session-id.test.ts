@@ -1,7 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { NoticeId, SessionId, TeamAddress } from "../shared/session-id.js";
+import {
+	composeSessionName,
+	DEFAULT_SESSION,
+	GATEWAY_QUALIFIER_SEP,
+	NoticeId,
+	parseSessionName,
+	SessionId,
+	TeamAddress,
+} from "../shared/session-id.js";
 
 ////////////////////////////////
 //  Session identity vectors
@@ -91,5 +99,46 @@ describe("session identity vectors", () => {
 
 	it("a bare target resolves to the local host (not idempotent)", () => {
 		expect(SessionId.parse("conv:c:api", "hosta")?.key).toBe("conv:c:hosta/api");
+	});
+});
+
+describe("composite project.session grammar", () => {
+	it("a composite survives gateway-qualification and parses back (separator != '/')", () => {
+		const local = composeSessionName("recipe-app", "scratch");
+		const addr = TeamAddress.parse(`gw1${GATEWAY_QUALIFIER_SEP}${local}`, "local-gw");
+		expect(addr.gatewayId).toBe("gw1");
+		expect(parseSessionName(addr.name)).toEqual({ project: "recipe-app", session: "scratch" });
+	});
+
+	it("a composite team rides a conv: session id and parses back (separator != ':')", () => {
+		const team = `gw1${GATEWAY_QUALIFIER_SEP}${composeSessionName("recipe-app", "scratch")}`;
+		const sid = SessionId.channel("conv-abc", TeamAddress.parse(team, "local-gw"));
+		const back = SessionId.parse(sid.key, "local-gw");
+		expect(back?.target.canonical).toBe(team);
+		expect(parseSessionName(back!.target.name)).toEqual({ project: "recipe-app", session: "scratch" });
+	});
+
+	it("a bare name has no session and resolves to the default", () => {
+		expect(parseSessionName("recipe-app")).toEqual({ project: "recipe-app", session: DEFAULT_SESSION });
+	});
+
+	it("a composite name splits into project and session", () => {
+		expect(parseSessionName("recipe-app.scratch")).toEqual({ project: "recipe-app", session: "scratch" });
+	});
+
+	it("splits on the LAST separator so a dotted project name round-trips", () => {
+		expect(composeSessionName("my.app", "foo")).toBe("my.app.foo");
+		expect(parseSessionName("my.app.foo")).toEqual({ project: "my.app", session: "foo" });
+	});
+
+	it("is a mechanical split: a bare dotted name splits too (resolveTmuxTarget checks the catalog first)", () => {
+		expect(parseSessionName("my.app")).toEqual({ project: "my", session: "app" });
+	});
+
+	it("compose then parse round-trips a dotless project", () => {
+		expect(parseSessionName(composeSessionName("recipe-app", "scratch"))).toEqual({
+			project: "recipe-app",
+			session: "scratch",
+		});
 	});
 });

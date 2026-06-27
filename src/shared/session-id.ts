@@ -27,6 +27,28 @@ export const NOTICE_SESSION_PREFIX = "notice:";
 /** Separator in a gateway-qualified name (gatewayId then local name); the FIRST one splits Gateway id from local name. */
 export const GATEWAY_QUALIFIER_SEP = "/";
 
+/** Separator in a local terminal name (`project.session`); the LAST one splits the session off, so a dotted project round-trips. Distinct from "/" and ":". */
+export const SESSION_SEP = ".";
+
+/** Session a bare (sessionless) local name resolves to. */
+export const DEFAULT_SESSION = "claude";
+
+/** Split a local name into its (project, session). The session is a dotless slug, so the LAST
+ *  separator splits it off; the project may itself contain the separator. A bare name resolves to
+ *  DEFAULT_SESSION. This is a mechanical split: a caller that must distinguish a composite from a
+ *  bare-but-dotted project name (a dotted devcontainer dir) checks the catalog on the whole name
+ *  first, then falls back to this. */
+export function parseSessionName(localName: string): { project: string; session: string } {
+	const i = localName.lastIndexOf(SESSION_SEP);
+	if (i === -1) return { project: localName, session: DEFAULT_SESSION };
+	return { project: localName.slice(0, i), session: localName.slice(i + SESSION_SEP.length) };
+}
+
+/** Join a (project, session) into the local name `project<SEP>session`. */
+export function composeSessionName(project: string, session: string): string {
+	return `${project}${SESSION_SEP}${session}`;
+}
+
 ////////////////////////////////
 //  Class: TeamAddress
 

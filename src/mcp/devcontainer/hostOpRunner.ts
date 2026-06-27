@@ -71,6 +71,9 @@ export function createHostOpRunner(ops: TmuxOps, opts: { minPeekIntervalMs?: num
 		}
 		const result = await capture;
 		lastCapture.set(key, { at: now(), result });
+		// Drop captures past the cadence floor (never reused after that) so a user-varying session
+		// segment cannot grow the map without bound. Mirrors the sentCache cleanup above.
+		for (const [k, v] of lastCapture) if (now() - v.at >= minPeekIntervalMs) lastCapture.delete(k);
 		return result;
 	}
 

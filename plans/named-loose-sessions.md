@@ -156,3 +156,14 @@ Per the human's model, **each phase below gets its own dedicated `/questionaire`
 - NOT in P1: `android/*`, `scripts/codegen-kotlin.ts` (unless CI drift), shared function-vectors.
 
 **Status:** P1 design hardened. No `/questionaire` fork needed (the `.` separator concern is resolved by catalog-first disambiguation, not by changing the char). Ready for the implementation cycle.
+
+### P1 - implementation audits (audited-implementation lap 1)
+
+Implemented server-side per the spec. Files touched: `session-id.ts` (SESSION_SEP/DEFAULT_SESSION/parseSessionName/composeSessionName), `console-protocol.ts` (re-export), `consoleHandler.ts` (resolveTmuxTarget catalog-first + boundary validation), `host-op.ts` (shared `isTmuxName`), `hostOpRunner.ts` (lastCapture eviction), + tests. `bun run lint` and `bun run test` (713) green.
+
+- **Coding-guideline audit (2 Sonnet):** trimmed two over-long constant comments; replaced a state-assertion test (`SESSION_SEP !== "/"`) with two behavioral round-trip tests (composite survives gateway-qualification and the `conv:` grammar - which implicitly require the separators distinct).
+- **Alignment audit (5 agents):** fully aligned, zero misalignments.
+- **Red-team (5 agents):** injection confirmed SAFE (assertSlug/assertName gate the now-user-controlled session before any shell/argv sink). Two real fixes applied:
+  - **Boundary validation:** a malformed session (trailing-dot -> empty, bad chars, oversized) now rejects cleanly at `resolveTmuxTarget` via shared `isTmuxName` (slug + 64-char cap), instead of a cryptic late host-side failure. Also rejects a dot in a `create_session` session name (a dot would break the composite round-trip). 5 new rejection tests.
+  - **lastCapture eviction:** the peek cadence map (keyed by the now-user-varying `session`) gained TTL eviction (mirrors the proven sentCache cleanup), so it cannot grow unbounded.
+  - **Triaged OUT (not a P1 issue):** the "cross-tenant project access" finding is pre-existing and does not match the architecture - a gateway serves ONE Domain, and P1 does not widen WHICH projects are reachable (still the global catalog, already true pre-P1), only adds session granularity within an already-reachable project. Per-console scoping within a Domain, if ever wanted, belongs with `gateway-auth-surface.md`, not P1.

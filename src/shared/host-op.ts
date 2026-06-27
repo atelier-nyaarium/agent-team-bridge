@@ -39,6 +39,16 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
 	"M-BSpace",
 ]);
 
+/** The slug a tmux session/device name must match (lowercase alnum + hyphen, no leading hyphen,
+ * bounded). The host executor (tmuxCore.assertName, reloadPlugins.assertSlug) is the keystroke-level
+ * gate; the gateway applies the same rule at the boundary so a malformed or oversized session
+ * segment is rejected with a clear error before it is relayed. */
+export const TMUX_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+export const MAX_TMUX_NAME_LEN = 64;
+export function isTmuxName(name: string): boolean {
+	return name.length <= MAX_TMUX_NAME_LEN && TMUX_NAME_RE.test(name);
+}
+
 export type HostOp =
 	| { kind: "peek"; target: TmuxTarget }
 	// dedupKey = `${conversationId}:${opId}`: the host replays a completed mutating op's ack for a
