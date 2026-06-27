@@ -325,10 +325,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		openTeam?.let { SwitchboardService.cancelTeamNotification(context, it) }
 	}
 
-	// Working-chip polling (Q-F1). The OPEN chat is peeked continuously (expensive, accurate) to
-	// keep its chip live; every other listed session gets ONE cheap peek when the list changes (no
-	// rearm). Only local composite sessions have a daemon-drivable pane, so non-eligible names are
-	// skipped rather than failing a peek.
+	// Working-chip poll: the open chat is peeked continuously; other listed sessions get one cheap
+	// peek per list change (no rearm). Only local composite sessions have a daemon-drivable pane.
 	val boardSessions = state.sessions(state.localGatewayId)
 	LaunchedEffect(openTeam) {
 		val t = openTeam ?: return@LaunchedEffect
@@ -547,9 +545,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					repo.forget(openTeam!!)
 					openTeam = null
 				},
-				// Any LOCAL composite session is a tmux pane this Gateway can drive from the chat;
-				// a remote-Gateway session is gated off in v1 (the cross-Gateway terminal is deferred).
-				// The host machine's own terminal is reached through the dedicated "host" target.
+				// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off in v1,
+				// and the host machine's terminal is reached through the dedicated "host" target.
 				terminalEligible = isComposite(TeamAddress.parse(openTeam!!, state.localGatewayId).name) &&
 					(session?.gatewayId.isNullOrEmpty() || session?.gatewayId == state.localGatewayId),
 				terminalRefreshMs = repo.terminalRefreshMs,

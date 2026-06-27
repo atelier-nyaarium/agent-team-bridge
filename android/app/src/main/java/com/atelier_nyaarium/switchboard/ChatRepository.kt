@@ -241,10 +241,8 @@ data class ChatState(
 		return teams + extra
 	}
 
-	/** Whether the agent is actively working a turn. A tmux peek is the truth (the spinner marker);
-	 * before any peek lands we fall back to a message-status heuristic: we are awaiting a reply (the
-	 * thread ends on our pending or cleanly-sent message) or the tail is a waking/running placeholder.
-	 * An error-marked tail (failed send) is not "working". */
+	/** Whether the agent is actively working a turn: a tmux peek (the spinner marker) when one has
+	 * landed, else a message-status heuristic (a pending/sent tail, or a waking/running placeholder). */
 	fun working(team: String): Boolean {
 		sessionWorking[team]?.let { return it }
 		val last = threads[team]?.lastOrNull() ?: return false
@@ -2582,9 +2580,8 @@ class ChatRepository(
 		drafts.remove(team)
 		persistDrafts()
 		stts.purge(team)
-		// Tear the live session down on the gateway too (kill tmux + drop the resume record) so a
-		// forgotten session does not linger as "available". Only a composite session has one; a
-		// non-composite thread (host-loose, remote) has nothing to kill, so it is skipped. Best-effort.
+		// Also tear the live session down on the gateway (kill tmux + drop the resume record) so it
+		// stops listing as available. Composites only (a host-loose/remote thread has none); best-effort.
 		val localName = TeamAddress.parse(team, _state.value.localGatewayId).name
 		if (isComposite(localName)) {
 			pollScope?.launch(Dispatchers.IO) { runCatching { client().forget(team) } }
