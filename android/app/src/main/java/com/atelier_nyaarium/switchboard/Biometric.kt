@@ -4,6 +4,8 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import kotlin.coroutines.resume
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 private const val AUTHENTICATORS =
 	BiometricManager.Authenticators.BIOMETRIC_WEAK or BiometricManager.Authenticators.DEVICE_CREDENTIAL
@@ -12,10 +14,10 @@ fun deviceCanAuthenticate(activity: FragmentActivity): Boolean =
 	BiometricManager.from(activity).canAuthenticate(AUTHENTICATORS) == BiometricManager.BIOMETRIC_SUCCESS
 
 /** Show the biometric / device-credential prompt. Unlocks open if nothing is enrolled. */
-fun promptUnlock(activity: FragmentActivity, onResult: (Boolean) -> Unit) {
+fun promptUnlock(activity: FragmentActivity, onResult: (Boolean) -> Unit): BiometricPrompt? {
 	if (!deviceCanAuthenticate(activity)) {
 		onResult(true)
-		return
+		return null
 	}
 	val prompt = BiometricPrompt(
 		activity,
@@ -31,4 +33,13 @@ fun promptUnlock(activity: FragmentActivity, onResult: (Boolean) -> Unit) {
 		.setAllowedAuthenticators(AUTHENTICATORS)
 		.build()
 	prompt.authenticate(info)
+	return prompt
 }
+
+/** Suspends until the user passes the biometric / device-credential prompt; returns false on cancel or
+ * error. Gates owner-key actions (admit, revoke, delete) when the app lock is on. */
+suspend fun promptBiometric(activity: FragmentActivity): Boolean =
+	suspendCancellableCoroutine { cont ->
+		val prompt = promptUnlock(activity) { ok -> if (cont.isActive) cont.resume(ok) }
+		cont.invokeOnCancellation { prompt?.cancelAuthentication() }
+	}

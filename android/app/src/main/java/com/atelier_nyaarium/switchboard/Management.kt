@@ -42,6 +42,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import kotlinx.coroutines.launch
 
@@ -187,6 +188,7 @@ fun GatewaysScreen(
 	onManageSharing: (String) -> Unit,
 ) {
 	val scope = rememberCoroutineScope()
+	val activity = LocalContext.current as? FragmentActivity
 	// Re-read after a revoke so the list reflects the change.
 	var refresh by remember { mutableStateOf(0) }
 	val gateways = remember(refresh) { repo.admittedMembers().filter { it.kind == "gateway" } }
@@ -235,6 +237,7 @@ fun GatewaysScreen(
 									onClick = {
 										menuOpen = false
 										scope.launch {
+											if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
 											repo.revokeMember(g.signPub)
 											refresh++
 										}
@@ -259,6 +262,7 @@ fun GatewaysScreen(
 @Composable
 fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Unit) {
 	val scope = rememberCoroutineScope()
+	val activity = LocalContext.current as? FragmentActivity
 	val context = LocalContext.current
 	var scanning by remember { mutableStateOf(false) }
 	var scanned by remember { mutableStateOf<ScannedGateway?>(null) }
@@ -334,6 +338,11 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 								busy = true
 								status = "Enrolling..."
 								scope.launch {
+									if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) {
+										busy = false
+										status = ""
+										return@launch
+									}
 									val result = repo.enrollGateway(s)
 									busy = false
 									status = result.message
