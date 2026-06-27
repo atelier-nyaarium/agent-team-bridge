@@ -20,10 +20,9 @@ See `skills/crosstalk/SKILL.md` for the full tool reference and response format.
 ```
 Host Machine
   start-host-daemon.sh
-    Host daemon (headless) - devcontainer wake + the console terminal view
-  start-session.sh <name>
-    Claude Code session - joins the gateway as a loose peer
-      MCP Plugin (main-mcp.ts): crosstalk_* / channel_reply / notify_human
+    Host daemon (headless) - devcontainer wake, console terminal view, session spawn
+      Claude Code session (spawned on demand via create_session) - joins the gateway as a loose peer
+        MCP Plugin (main-mcp.ts): crosstalk_* / channel_reply / notify_human
 
 Docker: switchboard (port 20000)
   Gateway (main-gateway.ts)
