@@ -1096,20 +1096,25 @@ class ChatRepository(
 
 	/** Parse a scanned authorize-console QR, or null if it is not one. The owner signPub is pinned to
 	 * verify the sealed reply; its fingerprint is shown so the human confirms the network. */
-	fun parseAuthorizeConsole(scanned: String): ScannedDeviceApproval? = runCatching {
-		val j = JSONObject(scanned.trim())
-		if (j.optString("type") != "authorize-console") return null
-		val ownerSignPub = j.getString("signPub")
-		ScannedDeviceApproval(
-			domainId = j.getString("domainId"),
-			ownerSignPub = ownerSignPub,
-			ownerBoxPub = j.getString("boxPub"),
-			approvalId = j.getString("approvalId"),
-			nonce = j.getString("nonce"),
-			reach = j.getString("reach"),
-			sas = Crypto.fingerprint(ownerSignPub),
-		)
-	}.getOrNull()
+	suspend fun parseAuthorizeConsole(scanned: String): ScannedDeviceApproval? = withContext(Dispatchers.IO) {
+		runCatching {
+			val j = JSONObject(scanned.trim())
+			require(j.optString("type") == "authorize-console")
+			ScannedDeviceApproval(
+				domainId = j.getString("domainId"),
+				ownerSignPub = j.getString("signPub"),
+				ownerBoxPub = j.getString("boxPub"),
+				approvalId = j.getString("approvalId"),
+				nonce = j.getString("nonce"),
+				reach = j.getString("reach"),
+				// N's OWN console key fingerprint - the SAME value the held device renders (it shows
+				// fingerprint(newSignPub)) so the human can cross-check the two screens. An attacker who
+				// saw the QR and joined first then shows a different code and is caught. The owner key
+				// (signPub) is NOT shown here; it is only the unseal pin.
+				sas = Crypto.fingerprint(federation.consoleIdentity().sign.pub),
+			)
+		}.getOrNull()
+	}
 
 	/** NEW device: announce this device's freshly-generated console keys to the held device by POSTing a
 	 * join to the public ingress (nonce-gated, no creds). consoleIdentity() mints+persists the keys on

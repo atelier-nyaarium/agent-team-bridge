@@ -737,10 +737,12 @@ fun NewDeviceScreen(repo: ChatRepository, onBack: () -> Unit) {
 
 	if (scanning) {
 		QrScanScreen(
-			onResult = {
+			onResult = { scanned ->
 				scanning = false
-				val parsed = repo.parseAuthorizeConsole(it)
-				if (parsed == null) status = "That isn't an add-device code." else scan = parsed.also { status = "" }
+				scope.launch {
+					val parsed = repo.parseAuthorizeConsole(scanned)
+					if (parsed == null) status = "That isn't an add-device code." else scan = parsed.also { status = "" }
+				}
 			},
 			onCancel = { scanning = false },
 		)
