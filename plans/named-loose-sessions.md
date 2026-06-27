@@ -359,6 +359,13 @@ S1-S4 shipped + green on both runtimes (TS `bun run lint`+test 739; Android `:ap
 
 **Deferred P4 polish (cosmetic, on-device-tunable, NOT structural):** the `restored`/`started fresh` chip (needs the open/wake outcome threaded to the chip) and the `Check terminal` chip (a fallback for an unclean pane that taps into the Terminal view). The working chip + spawn flow + nesting are the structural deliverables and are done. These two chips are reads over already-available state (peek + status) and can land in a follow-up without reworking anything.
 
+## Painpoints (P4 crust)
+
+- `gateway/routes.ts : teams : lastActive` and `websocket.ts : recordSessionResume` - `lastActive` is the register time, not last-activity time, so the recency ("active 5m ago") reads stale for a long-lived session. Touch the resume entry's `lastSeen` on send/respond (not just register) when P6 wires the crosstalk-discover recency column.
+- `MainActivity.kt : board : composites/flatLoose split` - the app splits loose sessions into nested-composites vs flat-loose by the mechanical `isComposite` (dot) test, since there is no server field distinguishing a `project.session` from a flat host-loose peer. Host-loose names are 6-hex (no dots) today, so it is safe, but a dotted loose name would mis-nest. A server-stamped "session-of-project" hint would remove the heuristic.
+- `MainActivity.kt : board one-shot poll` - peeks every visible local composite session on each list change; bounded by `hostOpRunner` (cadence floor + concurrency cap 6) but could be a burst on a large board. Fine for now; revisit if boards get large.
+- **Deferred P4 chips** (`restored`/`started fresh`, `Check terminal`) - cosmetic reads over already-available state (the open/wake outcome + peek), land in a follow-up.
+
 ## Painpoints (P1 crust)
 
 Concrete leads surfaced while building P1. `file : scope : name`, no line numbers. Not fixed here.
