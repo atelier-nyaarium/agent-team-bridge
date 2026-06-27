@@ -3,6 +3,7 @@ import { DomainSnapshotSchema, SignedAdmissionSchema } from "./admission.js";
 import { b64Field, slugField } from "./crypto.js";
 import { SignedFirstRootSchema } from "./federation-lifecycle.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
+import { SHELL_SAFE_NAME_RE } from "./host-op.js";
 
 ////////////////////////////////
 //  Shared enum schemas
@@ -82,13 +83,8 @@ export { ChannelFileSchema, ChannelFilesSchema } from "./evie-protocol.js";
 export const WsRegisterSchema = z.object({
 	type: z.literal("register"),
 	// A bare slug (host, a devcontainer project, a loose hex name) or a composite `project.session`.
-	// Constrained to lowercase alnum + dot + hyphen so a team name can never carry a shell
-	// metacharacter into the daemon's launch command.
-	team: z
-		.string()
-		.min(1)
-		.max(64)
-		.regex(/^[a-z0-9][a-z0-9.-]*$/),
+	// Shell-safe so a team name can never carry a metacharacter into the daemon's launch command.
+	team: z.string().min(1).max(64).regex(SHELL_SAFE_NAME_RE),
 	mode: z.string().optional(),
 	subId: z.string().optional(),
 	conversationId: z.string().optional(),

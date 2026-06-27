@@ -24,6 +24,7 @@ import {
 	type HostOp,
 	type HostOpResult,
 	type HostPeekResult,
+	isShellSafeName,
 	isTmuxName,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
@@ -258,7 +259,7 @@ export function createConsoleDispatcher({
 		// name that may legitimately contain dots (a "my.app" dir), so it is checked shell-safe only
 		// (dots/hyphens allowed, quotes/semicolons/spaces not) - a non-slug project still fails later
 		// at the tmux layer, but never as an injection.
-		if (!/^[a-z0-9][a-z0-9.-]*$/.test(target.name)) throw new Error(`invalid project name "${target.name}"`);
+		if (!isShellSafeName(target.name)) throw new Error(`invalid project name "${target.name}"`);
 		if (!isTmuxName(target.sessionName)) throw new Error(`invalid session name "${target.sessionName}"`);
 		return target;
 	}

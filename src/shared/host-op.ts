@@ -54,6 +54,15 @@ export function assertTmuxName(name: string): void {
 	if (!isTmuxName(name)) throw new Error(`invalid tmux name "${name}"`);
 }
 
+/** A team/project name that reaches the daemon's shell launch command. Looser than a tmux slug - a
+ * catalog project may legitimately contain dots (a "my.app" dir) and a composite is `project.session`
+ * - but still free of any shell metacharacter (quote, semicolon, space, $), so it can never break out
+ * of the single-quoted launch command. */
+export const SHELL_SAFE_NAME_RE = /^[a-z0-9][a-z0-9.-]*$/;
+export function isShellSafeName(name: string): boolean {
+	return name.length <= MAX_TMUX_NAME_LEN && SHELL_SAFE_NAME_RE.test(name);
+}
+
 export type HostOp =
 	| { kind: "peek"; target: TmuxTarget }
 	// dedupKey = `${conversationId}:${opId}`: the host replays a completed mutating op's ack for a
