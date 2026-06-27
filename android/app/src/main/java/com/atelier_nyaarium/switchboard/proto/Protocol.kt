@@ -429,6 +429,12 @@ sealed class EnrollOp {
 	data class SetDisplayName(
 		val rename: SignedSetDisplayName,
 	) : EnrollOp()
+
+	@Serializable
+	@SerialName("delete_domain")
+	data class DeleteDomain(
+		val deletion: SignedDeleteDomain,
+	) : EnrollOp()
 }
 
 @Serializable
@@ -860,6 +866,20 @@ data class SignedSetDisplayName(
 data class SetDisplayName(
 	val domainId: String,
 	val displayName: String,
+	val issuedAt: Long,
+	val nonce: String,
+)
+
+@Serializable
+data class SignedDeleteDomain(
+	val deletion: DeleteDomain,
+	val ownerSignPub: String,
+	val signature: String,
+)
+
+@Serializable
+data class DeleteDomain(
+	val domainId: String,
 	val issuedAt: Long,
 	val nonce: String,
 )

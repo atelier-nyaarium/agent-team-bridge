@@ -1,4 +1,4 @@
-// SYNC-HASH: 0fe768e73c21b05e08ef7a200318bd41
+// SYNC-HASH: 5acdb8eb48f47c262d0836d782bce262
 // SYNCED MODULE - source of truth: switchboard/src/shared/federation-lifecycle.ts
 // Copied verbatim into: evie-bot/app/features/bridge/federation-lifecycle.ts
 // MUST re-copy on change: cp src/shared/federation-lifecycle.ts ../evie-bot/app/features/bridge/federation-lifecycle.ts
@@ -275,6 +275,28 @@ export const SignedSetDisplayNameSchema = z
 	})
 	.meta({ id: "SignedSetDisplayName" });
 
+/** A user deleting their OWN Domain (the app-only "Revoke and Delete Domain"). The rooted owner
+ * signs a request to purge their whole Domain slice from evie - admissions, revocations, and links.
+ * evie verifies the signer IS the Domain's rooted owner before dropping the slice. */
+export const DeleteDomainSchema = z
+	.object({
+		domainId: slugField(),
+		issuedAt: z.number().int().nonnegative(),
+		nonce: b64Field(),
+	})
+	.meta({ id: "DeleteDomain" });
+
+export const SignedDeleteDomainSchema = z
+	.object({
+		deletion: DeleteDomainSchema,
+		// The rooted owner's root signing public key (base64). evie checks it against the
+		// Domain's rooted owner key, never trusting this field alone.
+		ownerSignPub: b64Field(),
+		// The owner's Ed25519 signature over deleteDomainSigningBytes (base64).
+		signature: b64Field(),
+	})
+	.meta({ id: "SignedDeleteDomain" });
+
 /** The owner device's enrollment requests to evie (NOT relayed to a Gateway - evie
  * is the Domain root). All are self-authenticating: `enroll_redeem` is authorized by
  * the single-use nonce evie minted, and the submit ops carry an owner-signed artifact
@@ -300,6 +322,9 @@ export const EnrollOpSchema = z
 		z.object({ kind: z.literal("provision_tenant"), provision: SignedProvisionTenantSchema }),
 		z.object({ kind: z.literal("remove_tenant"), removal: SignedRemoveTenantSchema }),
 		z.object({ kind: z.literal("set_display_name"), rename: SignedSetDisplayNameSchema }),
+		// A rooted owner purges their OWN Domain (app-only users; admins use setup.sh). evie
+		// verifies the signer is the rooted owner, then drops the whole slice.
+		z.object({ kind: z.literal("delete_domain"), deletion: SignedDeleteDomainSchema }),
 	])
 	.meta({ id: "EnrollOp" });
 
@@ -550,6 +575,8 @@ export type FirstRoot = z.infer<typeof FirstRootSchema>;
 export type SignedFirstRoot = z.infer<typeof SignedFirstRootSchema>;
 export type SetDisplayName = z.infer<typeof SetDisplayNameSchema>;
 export type SignedSetDisplayName = z.infer<typeof SignedSetDisplayNameSchema>;
+export type DeleteDomain = z.infer<typeof DeleteDomainSchema>;
+export type SignedDeleteDomain = z.infer<typeof SignedDeleteDomainSchema>;
 export type XDomainLinkEdge = z.infer<typeof XDomainLinkEdgeSchema>;
 export type SignedXDomainLinkEdge = z.infer<typeof SignedXDomainLinkEdgeSchema>;
 export type XDomainLinkRevocation = z.infer<typeof XDomainLinkRevocationSchema>;
@@ -814,6 +841,34 @@ export function signSetDisplayName(
 export function verifySetDisplayName(s: SignedSetDisplayName, expectedOwnerSignPubB64: string): boolean {
 	if (s.ownerSignPub !== expectedOwnerSignPubB64) return false;
 	return verify(setDisplayNameSigningBytes(s.rename, expectedOwnerSignPubB64), s.signature, expectedOwnerSignPubB64);
+}
+
+/** DELETE_DOMAIN_V1 signing bytes (owner-signed). The owner proves possession of the rooted key to
+ * purge the whole Domain; the fingerprint binds the request to that owner. */
+export function deleteDomainSigningBytes(d: DeleteDomain, ownerSignPubB64: string): Buffer {
+	return Buffer.from(
+		["DELETE_DOMAIN_V1", fingerprint(ownerSignPubB64), d.domainId, String(d.issuedAt), d.nonce].join("\n"),
+		"utf8",
+	);
+}
+
+/** Owner-sign a Domain deletion (the owner device holds the signing key). */
+export function signDeleteDomain(
+	deletion: DeleteDomain,
+	ownerSignPrivB64: string,
+	ownerSignPubB64: string,
+): SignedDeleteDomain {
+	return {
+		deletion,
+		ownerSignPub: ownerSignPubB64,
+		signature: sign(deleteDomainSigningBytes(deletion, ownerSignPubB64), ownerSignPrivB64),
+	};
+}
+
+/** True if the deletion verifies under the EXPECTED owner key (the Domain's rooted owner). */
+export function verifyDeleteDomain(s: SignedDeleteDomain, expectedOwnerSignPubB64: string): boolean {
+	if (s.ownerSignPub !== expectedOwnerSignPubB64) return false;
+	return verify(deleteDomainSigningBytes(s.deletion, expectedOwnerSignPubB64), s.signature, expectedOwnerSignPubB64);
 }
 
 ////////////////////////////////
