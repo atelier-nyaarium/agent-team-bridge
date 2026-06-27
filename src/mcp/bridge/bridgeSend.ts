@@ -8,7 +8,12 @@ import { bridgeConversationId, bridgeProjectName, routerPost } from "./helpers.j
 
 const BridgeSendSchema = z
 	.object({
-		to: z.string().optional().describe(`Target team name. Use crosstalk_discover to find available teams.`),
+		to: z
+			.string()
+			.optional()
+			.describe(
+				`Target session. A devcontainer session is project.session; use crosstalk_discover to list them. An online session receives it directly; an asleep or not-yet-existing project.session is woken / created on send.`,
+			),
 		type: z.enum(["feature", "bugfix", "question"]).optional().describe(`The type of request you are making.`),
 		effort: z
 			.enum(["simple", "standard", "complex"])

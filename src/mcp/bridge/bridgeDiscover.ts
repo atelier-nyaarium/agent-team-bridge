@@ -5,12 +5,25 @@ import { bridgeProjectName, routerGet } from "./helpers.js";
 ////////////////////////////////
 //  Functions & Helpers
 
+/** A coarse "5m ago" / "2h ago" recency label for an asleep session's last-seen timestamp. */
+export function relativeAge(lastActiveMs: number, nowMs: number = Date.now()): string {
+	const s = Math.max(0, Math.floor((nowMs - lastActiveMs) / 1000));
+	if (s < 60) return "just now";
+	const m = Math.floor(s / 60);
+	if (m < 60) return `${m}m ago`;
+	const h = Math.floor(m / 60);
+	if (h < 24) return `${h}h ago`;
+	return `${Math.floor(h / 24)}d ago`;
+}
+
+const DESCRIPTION = `List the agent sessions reachable on the bridge (yours excluded). Each is an addressable session - a devcontainer session as project.session, or a loose / cross-gateway peer. Spawn-point projects and the human's console/host are hidden. You may also target a project.session that is NOT listed: crosstalk_send creates it on first send. Asleep sessions show when they were last seen.`;
+
 export function registerBridgeDiscover(mcpServer: McpServer): void {
 	mcpServer.registerTool(
 		"crosstalk_discover",
 		{
 			title: "Crosstalk Discover",
-			description: `List all teams on the bridge network (online and available).`,
+			description: DESCRIPTION,
 			inputSchema: {},
 		},
 		async () => {
@@ -23,29 +36,36 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 					host?: string;
 					status: string;
 					queue_depth: number;
-					kind?: string;
+					kind: string;
+					lastActive?: number;
 				}>;
-				// Consoles are the human's device, not a crosstalk peer - never advertise
-				// them to agents; reach the human via the reply tools or notify_human.
-				// The "host" agent is the human's control point (reached from the console),
-				// not an agent crosstalk peer, so it is hidden here too.
+				// Hide what an agent cannot address as a crosstalk peer: consoles (the human's
+				// device), the reserved "host" slot (the human's control point), and bare
+				// devcontainer spawn-points (you address a session, not a project - a MISS creates it).
 				const others = teams.filter(
-					(t) => t.team !== bridgeProjectName() && t.kind !== "console" && t.kind !== "host",
+					(t) =>
+						t.team !== bridgeProjectName() &&
+						t.kind !== "console" &&
+						t.kind !== "host" &&
+						t.kind !== "devcontainer",
 				);
 
 				if (others.length === 0) {
-					return { content: [{ type: "text" as const, text: `No other teams found.` }] };
+					return { content: [{ type: "text" as const, text: `No other sessions found.` }] };
 				}
 
 				const lines = others.map((t) => {
 					const name = t.host ? TeamAddress.remote(t.host, t.team).canonical : t.team;
-					if (t.status === "available") return `- ${name}: available`;
+					if (t.status === "available") {
+						const seen = t.lastActive ? `, last seen ${relativeAge(t.lastActive)}` : "";
+						return `- ${name}: asleep${seen}`;
+					}
 					const status = t.queue_depth > 0 ? `busy (${t.queue_depth} in queue)` : "online";
 					return `- ${name}: ${status}`;
 				});
 
 				return {
-					content: [{ type: "text" as const, text: `Teams on the bridge:\n${lines.join("\n")}` }],
+					content: [{ type: "text" as const, text: `Sessions on the bridge:\n${lines.join("\n")}` }],
 				};
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
