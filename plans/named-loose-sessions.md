@@ -269,6 +269,19 @@ Files: `tmuxCore.ts` (`hasSession`/`ensureSession`), `hostDaemon.ts` (runner wir
 
 **Verification (P3):** a spawned `project.session` registers under that composite name (mock/integration); a composite `/send` wakes + resolves (no 600s stall); the map persists + `--resume` is used when reattach fails; bare-`project` back-compat per the fork-2 decision; `bun run lint` + `bun run test` green. Plus a live smoke on evie-bot (spawn a named session, confirm it registers composite + the terminal drives it).
 
+### P3 - audit refinements (lap 1)
+
+7-auditor fan-out (`wf_67c3c0fd-cac`). Most "blockers" were the plan's own not-yet-built scope (expected). Real refinements + the decisive fork:
+
+- **R1 (launch-command shell ordering - real bug averted):** prefixing `PROJECT_NAME=x source ~/.bashrc && claude` is WRONG - the env assignment applies only to `source`, not past the `&&` to `claude`; and `~/.bashrc` could re-export the image `PROJECT_NAME`. Correct form: set it AFTER sourcing, inside one wrapper, e.g. `bash -c 'source ~/.bashrc; export PROJECT_NAME=<composite>; cd /workspace/<project>; exec claude <flags> [--resume <id>]'`. `buildLaunchCommand` gains the composite + optional resume id and emits this form.
+- **R2 (parse the project segment before catalog/path lookups):** `findProjectPath(team)` and `doWakeTeam(team)` must `parseSessionName` first - a composite `project.session` must resolve to the `project` dir/container, not a literal `project.session` dir. Thread the `session` through the wake message to `handleWake`.
+- **R3 (catalog keyed by BARE project only):** a composite session registers as **kind `loose`**, and must NOT be added to `knownTeamPaths`/`offlineCatalog` (those stay keyed by the bare project = the spawn-point). `isDevcontainer(name)` returns false for any `name.includes(SESSION_SEP)`. So the project stays the single catalog/spawn-point entity; its sessions are loose. (Only the bare project registration carries `projectPath`.)
+- **R4 (register schema):** the register message is zod-validated (`WsRegisterSchema`), so adding `claudeSessionId` means: the schema (`schemas.ts`), the hand-built `registerMsg` (`helpers.ts`), the gateway read (`websocket.ts`), and persisting it to the new `session-resume` DurableStore.
+- **R5 (DECISIVE - demote-to-loose needs canonicalization or it breaks existing threads):** the audit confirms fork **2b (spawn-point-only)** breaks ALL existing bare-`project` threads (phone keys `conv:<id>:gateway/project`), bare-name sends, and crosstalk-to-bare - and needs an app migration. Fork **2a (keep a default session + canonicalize bare<->composite)** preserves them: a bare `project` lookup/wake canonicalizes to a default session (e.g. `project` registers as `project.<default>` but a bare send/wake resolves to it). **Strong recommendation: 2a.** This is the demote-semantics `/questionaire` fork.
+- **Chip states (from channel, for P4):** distinguish IDLE (REPL `❯`, no spinner) from WORKING (the "esc to interrupt" spinner). Lifecycle: waking -> working (booting) -> **idle** (REPL ready, no task) -> working (a turn) -> idle. So a freshly kicked-off session at the REPL with no task is **idle, not working**. The shared idle-marker helper detects this; the P4 working-chip poll uses it.
+
+**Two `/questionaire` forks for the human (asked on the channel now):** (1) DATA_DIR (map home + the federation-keys-under-/app/log landmine: status quo vs introduce DATA_DIR + migrate all stores incl. federation private keys); (2) demote-to-loose semantics (2a keep-default-with-canonicalization [recommended] vs 2b spawn-point-only). Implementation waits on these.
+
 ## Painpoints (P1 crust)
 
 Concrete leads surfaced while building P1. `file : scope : name`, no line numbers. Not fixed here.
