@@ -442,7 +442,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					showUsers = true
 				},
 				onClear = {
-					scope.launch { repo.clearAll() }
+					// The Domain-delete transaction (repo.deleteDomain) owns the local wipe; this only
+					// navigates home once it completes.
 					showSettings = false
 					settingsRoute = SettingsRoute.HUB
 					openTeam = null
@@ -1645,11 +1646,18 @@ private fun SecuritySettings(state: ChatState, onToggleBiometric: (Boolean) -> U
 	)
 }
 
-/** System settings; the danger action (Clear & re-provision) sits at the bottom behind a
- * confirm, so a wipe is two levels deep (Settings -> System) plus an explicit confirmation. */
+/** System settings; the danger action (Revoke and Delete Domain) sits at the bottom behind a
+ * confirm, so a wipe is two levels deep (Settings -> System) plus an explicit confirmation. The
+ * action purges this owner's whole Domain from the servers, so it is hidden for an admin (who
+ * purges via setup.sh) and shown only to app-only owners. */
 @Composable
 private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
-	var confirmClear by remember { mutableStateOf(false) }
+	val scope = rememberCoroutineScope()
+	val activity = LocalContext.current as? FragmentActivity
+	var confirmDelete by remember { mutableStateOf(false) }
+	var deleting by remember { mutableStateOf(false) }
+	var deleteError by remember { mutableStateOf<String?>(null) }
+	var wipedUnconfirmed by remember { mutableStateOf(false) }
 	var refreshText by remember { mutableStateOf((repo.terminalRefreshMs / 1000.0).toString()) }
 	BatteryExemptionRow()
 	HorizontalDivider()
@@ -1676,27 +1684,71 @@ private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 		style = MaterialTheme.typography.bodySmall,
 		color = MaterialTheme.colorScheme.onSurfaceVariant,
 	)
-	HorizontalDivider()
-	Text("Danger", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
-	OutlinedButton(
-		onClick = { confirmClear = true },
-		colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-	) {
-		Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
-		Spacer(Modifier.width(4.dp))
-		Text("Clear & re-provision")
+	// Admins purge their Domain through setup.sh, so the in-app delete is offered only to app-only owners.
+	if (!repo.isAdmin()) {
+		HorizontalDivider()
+		Text("Danger", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+		OutlinedButton(
+			onClick = { deleteError = null; confirmDelete = true },
+			colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+		) {
+			Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+			Spacer(Modifier.width(4.dp))
+			Text("Revoke and Delete Domain")
+		}
+		Text(
+			"Purges your Domain from the servers and wipes this device. Voice settings are kept.",
+			style = MaterialTheme.typography.bodySmall,
+		)
 	}
-	Text(
-		"Removes the stored credential and chat history. Voice settings are kept.",
-		style = MaterialTheme.typography.bodySmall,
-	)
-	if (confirmClear) {
+	if (confirmDelete) {
 		AlertDialog(
-			onDismissRequest = { confirmClear = false },
-			title = { Text("Clear & re-provision?") },
-			text = { Text("Removes the stored credential and chat history from this device. Voice settings are kept.") },
-			confirmButton = { TextButton(onClick = { confirmClear = false; onClear() }) { Text("Clear") } },
-			dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+			onDismissRequest = { if (!deleting) confirmDelete = false },
+			title = { Text("Delete your Domain?") },
+			text = {
+				Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+					Text("This purges your Domain from the servers, not just this phone. It can't be undone.")
+					Text("- Your Domain is removed from evie", style = MaterialTheme.typography.bodySmall)
+					Text("- Every gateway + device is revoked", style = MaterialTheme.typography.bodySmall)
+					deleteError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+				}
+			},
+			confirmButton = {
+				TextButton(
+					enabled = !deleting,
+					onClick = {
+						scope.launch {
+							// Biometric-gate this destructive owner-key action, mirroring revoke/admit.
+							if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
+							deleting = true
+							deleteError = null
+							when (val outcome = repo.deleteDomain()) {
+								DeleteDomainOutcome.Deleted -> {
+									confirmDelete = false
+									onClear()
+								}
+								DeleteDomainOutcome.WipedUnconfirmed -> {
+									confirmDelete = false
+									wipedUnconfirmed = true
+								}
+								is DeleteDomainOutcome.Rejected -> {
+									deleting = false
+									deleteError = outcome.error
+								}
+							}
+						}
+					},
+				) { Text("Delete Domain") }
+			},
+			dismissButton = { TextButton(enabled = !deleting, onClick = { confirmDelete = false }) { Text("Cancel") } },
+		)
+	}
+	if (wipedUnconfirmed) {
+		AlertDialog(
+			onDismissRequest = { wipedUnconfirmed = false; onClear() },
+			title = { Text("Couldn't reach the servers") },
+			text = { Text("This device was wiped, but we couldn't confirm the purge. Ask the admin to purge it if it survived.") },
+			confirmButton = { TextButton(onClick = { wipedUnconfirmed = false; onClear() }) { Text("OK") } },
 		)
 	}
 }

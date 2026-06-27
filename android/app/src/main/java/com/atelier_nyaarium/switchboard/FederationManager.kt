@@ -8,6 +8,7 @@ import com.atelier_nyaarium.switchboard.crypto.ProvisionOpsCrypto
 import com.atelier_nyaarium.switchboard.crypto.XDomainLinkCrypto
 import com.atelier_nyaarium.switchboard.crypto.canonicalSnapshot
 import com.atelier_nyaarium.switchboard.proto.Admission
+import com.atelier_nyaarium.switchboard.proto.DeleteDomain
 import com.atelier_nyaarium.switchboard.proto.DomainSnapshot
 import com.atelier_nyaarium.switchboard.proto.FirstRoot
 import com.atelier_nyaarium.switchboard.proto.ProvisionTenant
@@ -16,6 +17,7 @@ import com.atelier_nyaarium.switchboard.proto.Revocation
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.SetDisplayName
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
+import com.atelier_nyaarium.switchboard.proto.SignedDeleteDomain
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
 import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
@@ -442,5 +444,14 @@ class FederationManager(private val store: AppStateStore) {
 		val owner = ownerIdentity()
 		val rename = SetDisplayName(domainId, displayName, nowMs, nonce())
 		return ProvisionOpsCrypto.signSetDisplayName(rename, owner.sign.priv, owner.sign.pub)
+	}
+
+	/** Owner-sign a request to purge this owner's OWN Domain (the app-only "Revoke and Delete Domain").
+	 * evie verifies the signature against the Domain's rooted owner key before dropping the whole slice.
+	 * The `domainId` is this owner's own rooted Domain. */
+	fun signDeleteDomain(domainId: String, nowMs: Long): SignedDeleteDomain {
+		val owner = ownerIdentity()
+		val deletion = DeleteDomain(domainId, nowMs, nonce())
+		return ProvisionOpsCrypto.signDeleteDomain(deletion, owner.sign.priv, owner.sign.pub)
 	}
 }

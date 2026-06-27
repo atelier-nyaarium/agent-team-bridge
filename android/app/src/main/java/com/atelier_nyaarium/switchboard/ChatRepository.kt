@@ -62,6 +62,22 @@ data class ScannedGateway(
  * sealed bundle to hand-carry when LAN delivery was not possible (paste fallback). */
 data class EnrollDelivery(val admitted: Boolean, val message: String, val pasteBundle: String?)
 
+/** Outcome of "Revoke and Delete Domain", so the UI can tell a confirmed purge from one it
+ * wiped locally without reaching evie (warn the human) from an evie rejection (keep local
+ * state so the owner key survives for a retry). */
+sealed class DeleteDomainOutcome {
+	/** evie verified the owner and dropped the slice; local state was wiped. */
+	object Deleted : DeleteDomainOutcome()
+
+	/** evie was unreachable or did not answer in time; local state was wiped anyway, but the
+	 * server-side purge is unconfirmed - tell the human to have the admin purge it if it survived. */
+	object WipedUnconfirmed : DeleteDomainOutcome()
+
+	/** evie answered but refused the deletion; local state is intact (the owner key still exists) so
+	 * the human can retry. */
+	data class Rejected(val error: String) : DeleteDomainOutcome()
+}
+
 /** A linked friend Domain row for the Federation hub: the Domain id, the friend's self-set
  * display name (propagated over discovery, null until a peer session carries it), how many of its
  * sessions are visible to me, and whether any is online. */
@@ -1028,6 +1044,41 @@ class ChatRepository(
 			if (!result.ok) error(result.error ?: "rename rejected")
 			store.displayName = trimmed
 			_state.update { it.copy(displayName = trimmed) }
+		}
+	}
+
+	/** Revoke and delete this owner's OWN Domain (the app-only path; admins purge via setup.sh).
+	 * Owner-sign the deletion FIRST, while the key still exists, then POST it evie-direct and await the
+	 * result under a 30s ceiling. A confirmed purge AND an unconfirmed timeout/unreachable both wipe
+	 * local state so the device is never left half-deleted; only an explicit evie rejection keeps state
+	 * so the owner key survives a retry. The biometric gate (a destructive owner-key action) is at the
+	 * call site, mirroring revoke/admit. */
+	suspend fun deleteDomain(): DeleteDomainOutcome = withContext(Dispatchers.IO) {
+		val domainId = confirmedDomainId()
+			?: runCatching { store.load()?.let { Provisioning.parse(it).pendingTenant?.domainId } }.getOrNull()
+		// No resolvable Domain id means nothing was ever rooted server-side; just wipe locally.
+		if (domainId.isNullOrEmpty()) {
+			clearAll()
+			return@withContext DeleteDomainOutcome.WipedUnconfirmed
+		}
+		val signed = federation.signDeleteDomain(domainId, System.currentTimeMillis())
+		// enroll() returns an EnrollResult when evie is reached (ok or reject) and THROWS when the
+		// console bridge is unreachable. Race it against a 30s ceiling so a hung POST never strands the
+		// user mid-delete: a null (timeout) and a failure (transport) both fall to the unconfirmed wipe.
+		val reached = withTimeoutOrNull(30_000) {
+			runCatching { client().enroll(EnrollOp.DeleteDomain(signed)) }
+		}
+		val result = reached?.getOrNull()
+		when {
+			result?.ok == true -> {
+				clearAll()
+				DeleteDomainOutcome.Deleted
+			}
+			reached?.isSuccess == true -> DeleteDomainOutcome.Rejected(result?.error ?: "delete rejected")
+			else -> {
+				clearAll()
+				DeleteDomainOutcome.WipedUnconfirmed
+			}
 		}
 	}
 
