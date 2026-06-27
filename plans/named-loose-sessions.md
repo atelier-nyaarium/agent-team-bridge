@@ -300,6 +300,18 @@ The clean break REMOVES the hardest part (canonicalization). Locked P3 scope:
 - **S2 - register `claudeSessionId` + `session-resume` map:** schema + helpers + gateway read + DurableStore + populate.
 - **S3 - composite launch + wake + resume:** `buildLaunchCommand` R1 form (PROJECT_NAME override + optional `--resume`), `WakeMessage.sessionName`/`resumeSessionId`, `doWakeTeam`/`findProjectPath`/`handleWake` parse + thread + migrate to docker exec, reattach->resume->fresh, readiness-marker + shared idle helper.
 
+### P3 - implementation audits (audited-implementation lap 1)
+
+Shipped in 5 slices (S0 DATA_DIR, S1 catalog split, S2 resume map, S3 composite launch/wake/resume, S4 docker-exec swap), each green. `bun run lint` + `bun run test` (728).
+- **Coding-guideline (2 Sonnet):** fixed dash-joins + stale caller notes; EXPORTED + unit-tested `buildLaunchCommand` (composite PROJECT_NAME, the `--resume` uuid guard, host vs devcontainer form), added `isComposite`/`isAgentReady` tests.
+- **Alignment (5):** fully aligned to the clean-break spec, zero misalignments.
+- **Red-team (5):** docker-exec swap confirmed safe; 6 real fixes applied:
+  - **Shell-safe name validation:** `resolveTmuxTarget` now validates `target.name` (shell-safe: dots/hyphens ok, metachars not) alongside the strict-slug session; `WsRegisterSchema.team` gained a `^[a-z0-9][a-z0-9.-]*$` regex so a registered name can never carry a shell metacharacter into the launch command.
+  - **Atomic migration:** the DATA_DIR migration copies to a temp then atomically renames, so a crash mid-copy can no longer leave a PARTIAL federation dir that the existsSync guard skips forever (federation-key loss).
+  - **Resume map hardening:** record only for COMPOSITE sessions (the corrected guard - the audit had it backwards; the map is FOR composites), and TTL-evict (30d) on the persist timer so it can't grow unbounded.
+  - **Clean-break edge:** a bare-`project` send now fails FAST in `doWakeTeam` (a spawn-point has no chat session) instead of hanging out `WAKE_TIMEOUT_MS` (600s).
+  - **Triaged OUT:** cross-session resume (owner-scoped, same container), auto-deleting the legacy `/app/log` key backup (kept until the migration code is removed).
+
 ## Painpoints (P1 crust)
 
 Concrete leads surfaced while building P1. `file : scope : name`, no line numbers. Not fixed here.

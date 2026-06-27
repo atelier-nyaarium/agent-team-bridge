@@ -253,8 +253,12 @@ export function createConsoleDispatcher({
 			if (isProjectName?.(project)) return { kind: "devcontainer", name: project, sessionName };
 			throw new Error(`terminal view is not available for "${name}" (only the host and devcontainers)`);
 		})();
-		// Reject a malformed session at the boundary (empty from a trailing separator, bad chars,
-		// oversized) with a clear error instead of deferring to a cryptic host-side tmux failure.
+		// Both name and session reach the host's shell launch command, so reject anything that could
+		// carry a metacharacter. The session is a strict slug (we mint it); the project is a catalog
+		// name that may legitimately contain dots (a "my.app" dir), so it is checked shell-safe only
+		// (dots/hyphens allowed, quotes/semicolons/spaces not) - a non-slug project still fails later
+		// at the tmux layer, but never as an injection.
+		if (!/^[a-z0-9][a-z0-9.-]*$/.test(target.name)) throw new Error(`invalid project name "${target.name}"`);
 		if (!isTmuxName(target.sessionName)) throw new Error(`invalid session name "${target.sessionName}"`);
 		return target;
 	}

@@ -81,7 +81,14 @@ export { ChannelFileSchema, ChannelFilesSchema } from "./evie-protocol.js";
 
 export const WsRegisterSchema = z.object({
 	type: z.literal("register"),
-	team: z.string().min(1).max(64),
+	// A bare slug (host, a devcontainer project, a loose hex name) or a composite `project.session`.
+	// Constrained to lowercase alnum + dot + hyphen so a team name can never carry a shell
+	// metacharacter into the daemon's launch command.
+	team: z
+		.string()
+		.min(1)
+		.max(64)
+		.regex(/^[a-z0-9][a-z0-9.-]*$/),
 	mode: z.string().optional(),
 	subId: z.string().optional(),
 	conversationId: z.string().optional(),

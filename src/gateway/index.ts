@@ -73,7 +73,13 @@ export async function startGateway(): Promise<void> {
 			const src = path.join(legacyDir, item);
 			const dst = path.join(DATA_DIR, item);
 			if (fs.existsSync(src) && !fs.existsSync(dst)) {
-				fs.cpSync(src, dst, { recursive: true });
+				// Copy to a temp then atomically rename, so a crash mid-copy never leaves a PARTIAL dst
+				// that the existsSync guard would then skip forever (losing federation keys). The legacy
+				// copy is left in place as a backup until the migration code is removed.
+				const tmp = `${dst}.migrating`;
+				fs.rmSync(tmp, { recursive: true, force: true });
+				fs.cpSync(src, tmp, { recursive: true });
+				fs.renameSync(tmp, dst);
 				console.log(`[data-migrate] moved ${item} to ${DATA_DIR}`);
 			}
 		}
@@ -123,7 +129,9 @@ export async function startGateway(): Promise<void> {
 	// the console's durable cursor still matches) to DATA_DIR, reload on boot, re-save on a timer.
 	const jobsDurable = new DurableStore(DATA_DIR, "pending-jobs");
 	const mailboxDurable = new DurableStore(DATA_DIR, "mailboxes");
-	// team -> the session's Claude harness id, so a later wake can `claude --resume <id>` it.
+	// team -> the session's Claude harness id, so a later wake can `claude --resume <id>` it. Entries
+	// past this TTL are swept on the persist timer so the map cannot grow without bound.
+	const SESSION_RESUME_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 	const sessionResume = new Map<string, { claudeSessionId: string; lastSeen: number }>();
 	const sessionResumeDurable = new DurableStore(DATA_DIR, "session-resume");
 	try {
@@ -149,6 +157,8 @@ export async function startGateway(): Promise<void> {
 	const persistDelivery = () => {
 		jobsDurable.save(store.snapshot());
 		mailboxDurable.save(mailboxStore.snapshot());
+		const cutoff = Date.now() - SESSION_RESUME_TTL_MS;
+		for (const [team, v] of sessionResume) if (v.lastSeen < cutoff) sessionResume.delete(team);
 		sessionResumeDurable.save(Object.fromEntries(sessionResume));
 		replayPersist?.();
 	};
@@ -185,6 +195,14 @@ export async function startGateway(): Promise<void> {
 	}
 
 	async function doWakeTeam(team: string): Promise<boolean> {
+		// Clean break: a bare project is a non-chat spawn-point, not a session. A send to it has no
+		// destination (the daemon would launch project.<default> under a name the waiter never sees),
+		// so fail fast instead of waiting out WAKE_TIMEOUT_MS. Named sessions are composites.
+		if (!isComposite(team) && (offlineCatalog.has(team) || knownTeamPaths.has(team))) {
+			console.log(`[wake] ${team} is a spawn-point project, not a session; not waking`);
+			return false;
+		}
+
 		const hostSubs = registry.get("host");
 		const hostWs = hostSubs ? [...hostSubs.values()].find((ws) => ws.readyState === 1) : undefined;
 

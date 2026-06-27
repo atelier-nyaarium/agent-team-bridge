@@ -235,8 +235,10 @@ export function createWebSocketHandlers({
 				knownTeamPaths.set(team, msg.projectPath);
 			}
 
-			// Remember the session's Claude harness id so a later wake can `claude --resume` it.
-			if (typeof msg.claudeSessionId === "string" && msg.claudeSessionId) {
+			// Remember a COMPOSITE session's Claude harness id so a later wake can `claude --resume`
+			// it. Only composites are daemon-woken devcontainer sessions; a bare project (spawn-point)
+			// or a host-loose peer is never resumed, so it does not belong in the map.
+			if (typeof msg.claudeSessionId === "string" && msg.claudeSessionId && isComposite(team)) {
 				recordSessionResume?.(team, msg.claudeSessionId);
 			}
 
