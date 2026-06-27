@@ -5,6 +5,7 @@ import {
 	composeSessionName,
 	DEFAULT_SESSION,
 	GATEWAY_QUALIFIER_SEP,
+	isComposite,
 	NoticeId,
 	parseSessionName,
 	SessionId,
@@ -140,5 +141,12 @@ describe("composite project.session grammar", () => {
 			project: "recipe-app",
 			session: "scratch",
 		});
+	});
+
+	it("isComposite is true only when a session segment is present", () => {
+		expect(isComposite("recipe-app")).toBe(false);
+		expect(isComposite("recipe-app.scratch")).toBe(true);
+		// Mechanical (separator-based); a dotted bare project reads composite, the catalog disambiguates upstream.
+		expect(isComposite("my.app")).toBe(true);
 	});
 });

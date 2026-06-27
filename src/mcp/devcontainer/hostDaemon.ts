@@ -220,7 +220,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 
 		// Reattach if the session is already alive, else launch it (with --resume baked into the
 		// command when an id is mapped). The container is up, so the tmux ops go through tmuxCore's
-		// docker exec - the proven terminal-op path, ~8x faster than the devcontainer CLI.
+		// docker exec (the proven terminal-op path).
 		const target: TmuxTarget = { kind: "devcontainer", name: projectName, sessionName: session };
 		const { created } = await ensureSession(
 			target,
@@ -228,10 +228,10 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		);
 		console.error(`[host-wake] ${msg.team} session ${created ? "started" : "already running"}`);
 
-		// A reattach is already alive. For a fresh launch, poll the pane to auto-accept the
-		// dev-channels prompt and track whether it ever captured: a launch that exits instantly takes
-		// its tmux session down with it, so zero captures means a dead launch -> report a failed wake
-		// so /send fails fast. A slow-but-alive session captures at least once.
+		// For a fresh launch, poll the pane to auto-accept the dev-channels prompt and track whether it
+		// ever captured: a launch that exits instantly takes its tmux session down with it, so zero
+		// captures means a dead launch -> report a failed wake so /send fails fast. A slow-but-alive
+		// session captures at least once.
 		let lastScreen = "";
 		let launchAlive = !created;
 		if (created) {
@@ -314,12 +314,12 @@ const CLAUDE_FLAGS =
 
 // The launch command for a session's tmux. The daemon owns it (callers supply only the target +
 // optional resume id), so an arbitrary host command can never be injected. The session registers
-// under its COMPOSITE name (`project.session`) by overriding PROJECT_NAME AFTER sourcing ~/.bashrc -
+// under its COMPOSITE name (`project.session`) by overriding PROJECT_NAME AFTER sourcing ~/.bashrc;
 // the override must run in the same shell as claude (a prefix on `source` would not survive), so the
 // whole chain is one `bash -c`. A host session keeps its pane alive with `exec bash` after Claude
 // exits; a devcontainer session opens in its workspace project. The target's name/sessionName are
 // slug-validated by callers; the resume id is uuid-shaped, so single-quote interpolation is safe.
-function buildLaunchCommand(target: TmuxTarget, opts: { resumeSessionId?: string } = {}): string {
+export function buildLaunchCommand(target: TmuxTarget, opts: { resumeSessionId?: string } = {}): string {
 	const composite = composeSessionName(target.name, target.sessionName);
 	const resume =
 		opts.resumeSessionId && /^[0-9a-fA-F-]{8,}$/.test(opts.resumeSessionId)

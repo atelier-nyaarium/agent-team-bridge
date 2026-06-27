@@ -30,7 +30,15 @@ vi.mock("node:child_process", () => ({
 	},
 }));
 
-import { createSession, ensureSession, hasSession, peekPane, sendKey, sendText } from "../mcp/devcontainer/tmuxCore.js";
+import {
+	createSession,
+	ensureSession,
+	hasSession,
+	isAgentReady,
+	peekPane,
+	sendKey,
+	sendText,
+} from "../mcp/devcontainer/tmuxCore.js";
 
 afterEach(() => {
 	calls.length = 0;
@@ -184,5 +192,24 @@ describe("tmuxCore hasSession / ensureSession", () => {
 	it("ensureSession surfaces the failure when the session is still absent after a failed create", async () => {
 		exitQueue.push(1, 1, 1); // absent, create fails, still absent
 		await expect(ensureSession({ kind: "host", name: "host", sessionName: "scratch" }, "claude")).rejects.toThrow();
+	});
+});
+
+describe("tmuxCore isAgentReady", () => {
+	it("is false for an empty or still-booting pane", () => {
+		expect(isAgentReady("")).toBe(false);
+		expect(isAgentReady("Loading development channels...")).toBe(false);
+	});
+
+	it("is false while the first-run wizard is showing, even past the header", () => {
+		expect(isAgentReady("Claude Code v2.1.0\nChoose the text style")).toBe(false);
+	});
+
+	it("is true at a fresh idle REPL (Claude Code header, no wizard)", () => {
+		expect(isAgentReady("Claude Code v2.1.0\n> ")).toBe(true);
+	});
+
+	it("is true at a resumed REPL (no header, shows the shortcuts prompt)", () => {
+		expect(isAgentReady("...restored conversation...\n? for shortcuts")).toBe(true);
 	});
 });

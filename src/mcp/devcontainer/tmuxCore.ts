@@ -138,8 +138,7 @@ export async function hasSession(target: TmuxTarget): Promise<boolean> {
 
 /** Whether a captured pane shows claude idle/ready: past the first-run wizard and at the REPL. A
  * fresh start shows the "Claude Code v" header; a resumed session jumps straight into the restored
- * conversation and shows the "? for shortcuts" prompt line instead. Shared by the wake readiness
- * poll and the working-chip idle check. */
+ * conversation and shows the "? for shortcuts" prompt line instead. */
 export function isAgentReady(screen: string): boolean {
 	if (screen.includes("Choose the text style")) return false;
 	return screen.includes("Claude Code v") || screen.includes("? for shortcuts");

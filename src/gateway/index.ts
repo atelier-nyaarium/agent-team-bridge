@@ -67,7 +67,7 @@ export async function startGateway(): Promise<void> {
 		fs.mkdirSync(DATA_DIR, { recursive: true });
 		// TODO(remove after a few days, ~2026-07): one-time migration of durable state that used to
 		// live beside debug.log into DATA_DIR. Copies each item only if absent there (runs once, never
-		// clobbers newer data, must not lose federation keys). Delete once all gateways have migrated.
+		// clobbers newer data, must not lose federation keys).
 		const legacyDir = path.dirname(LOG_PATH);
 		for (const item of ["federation", "pending-jobs.json", "mailboxes.json", "replay-guard.json"]) {
 			const src = path.join(legacyDir, item);
