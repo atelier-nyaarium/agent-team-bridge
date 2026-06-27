@@ -1080,8 +1080,23 @@ fun SessionsScreen(
 									)
 								}
 							}
-							// A composite whose spawn-point is not currently in the catalog still needs a home.
-							for (proj in (byProject.keys - spawnKeys).sorted()) {
+							// The host machine is a spawn point too, but it is not in the catalog (and the
+							// daemon's reserved "host" slot is hidden), so inject it synthetically for YOUR OWN
+							// gateway only - shown even with no host session yet, so the first one is spawnable.
+							val hostInjected = !isPeer && key.gatewayId == state.localGatewayId
+							if (hostInjected) {
+								renderProject("host") {
+									SpawnPointHeader(
+										project = "host",
+										online = byProject["host"].orEmpty().any { it.status == "online" },
+										onSpawn = { spawnProject = "host" },
+									)
+								}
+							}
+							// A composite whose spawn-point is not currently in the catalog still needs a home
+							// (excluding "host" when it was injected above, to avoid a duplicate header).
+							val orphanProjects = byProject.keys - spawnKeys - (if (hostInjected) setOf("host") else emptySet())
+							for (proj in orphanProjects.sorted()) {
 								renderProject(proj) {
 									SpawnPointHeader(project = proj, online = false, onSpawn = { spawnProject = proj })
 								}
