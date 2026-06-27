@@ -21,6 +21,7 @@ import com.atelier_nyaarium.switchboard.proto.GatewayTransport
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.SyncPollResult
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
+import com.atelier_nyaarium.switchboard.proto.isComposite
 import java.io.File
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -196,6 +197,9 @@ data class ChatState(
 	val threads: Map<String, List<Message>> = emptyMap(),
 	val unread: Map<String, Int> = emptyMap(),
 	val openTabs: List<String> = emptyList(),
+	/** Per-session working truth from a tmux peek (the spinner marker), keyed like working()'s
+	 * argument. Takes precedence over the message-status heuristic once a peek has landed. */
+	val sessionWorking: Map<String, Boolean> = emptyMap(),
 	val status: String = "",
 	val error: String? = null,
 	val gap: Boolean = false,
@@ -237,10 +241,12 @@ data class ChatState(
 		return teams + extra
 	}
 
-	/** Busy heuristic for the status board: we are awaiting a reply (the thread
-	 * ends on our pending or cleanly-sent message) or the tail is a waking/running
-	 * placeholder. An error-marked tail (failed send) is not "working". */
+	/** Whether the agent is actively working a turn. A tmux peek is the truth (the spinner marker);
+	 * before any peek lands we fall back to a message-status heuristic: we are awaiting a reply (the
+	 * thread ends on our pending or cleanly-sent message) or the tail is a waking/running placeholder.
+	 * An error-marked tail (failed send) is not "working". */
 	fun working(team: String): Boolean {
+		sessionWorking[team]?.let { return it }
 		val last = threads[team]?.lastOrNull() ?: return false
 		return (last.fromMe && (last.status == null || last.status == "pending")) ||
 			last.status == "running" || last.status == "waking"
@@ -2111,6 +2117,19 @@ class ChatRepository(
 	 * when the pane never loaded. */
 	suspend fun peekTerminal(team: String, sinceHash: String?): Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult> =
 		withContext(Dispatchers.IO) { runCatching { client().peek(team, sinceHash) } }
+			.onSuccess { it.ansi?.let { a -> noteScreen(team, a) } }
+
+	/** Update a session's working flag from a captured pane (the spinner marker is the truth). */
+	fun noteScreen(team: String, ansi: String) {
+		if (ansi.isEmpty()) return
+		_state.update { it.copy(sessionWorking = it.sessionWorking + (team to AgentScreen.isWorking(ansi))) }
+	}
+
+	/** A cheap one-shot peek that refreshes a session's working flag without rearming - for the
+	 * background session chips. The open chat polls peekTerminal continuously instead. */
+	suspend fun pokeWorking(team: String) {
+		peekTerminal(team, null)
+	}
 
 	/** Send text (submitted with Enter) or a named control key to an agent's tmux pane. */
 	suspend fun tmuxSend(team: String, text: String? = null, key: String? = null) =
@@ -2551,6 +2570,7 @@ class ChatRepository(
 				labels = s.labels - team,
 				unread = s.unread - team,
 				openTabs = s.openTabs - team,
+				sessionWorking = s.sessionWorking - team,
 			)
 		}
 		persistThreads(next.threads)
@@ -2558,6 +2578,13 @@ class ChatRepository(
 		drafts.remove(team)
 		persistDrafts()
 		stts.purge(team)
+		// Tear the live session down on the gateway too (kill tmux + drop the resume record) so a
+		// forgotten session does not linger as "available". Only a composite session has one; a
+		// non-composite thread (host-loose, remote) has nothing to kill, so it is skipped. Best-effort.
+		val localName = TeamAddress.parse(team, _state.value.localGatewayId).name
+		if (isComposite(localName)) {
+			pollScope?.launch(Dispatchers.IO) { runCatching { client().forget(team) } }
+		}
 	}
 
 	fun setBiometricLock(enabled: Boolean) {

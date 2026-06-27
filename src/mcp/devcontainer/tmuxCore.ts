@@ -155,6 +155,13 @@ export function isAgentReady(screen: string): boolean {
 	return screen.includes("Claude Code v") || screen.includes("? for shortcuts");
 }
 
+/** Whether a captured pane shows claude actively processing a turn: the spinner footer prints
+ * "esc to interrupt" only while a turn is running, so its absence at the REPL means idle. The
+ * console's working chip polls this on the open session (the Kotlin twin lives in AgentScreen.kt). */
+export function isAgentWorking(screen: string): boolean {
+	return screen.includes("esc to interrupt");
+}
+
 /** Reattach to `target.sessionName` if it is already alive, else launch a fresh agent. Returns
  * whether a new session was created, so a create_session op reattaches instead of double-launching
  * (a duplicate `new-session` on an existing name errors). */

@@ -35,6 +35,7 @@ import {
 	ensureSession,
 	hasSession,
 	isAgentReady,
+	isAgentWorking,
 	killSession,
 	peekPane,
 	sendKey,
@@ -239,5 +240,14 @@ describe("tmuxCore killSession", () => {
 	it("treats an already-gone session as success (swallows the error)", async () => {
 		exitCode = 1; // kill-session exits non-zero when the session is absent
 		await expect(killSession({ kind: "host", name: "host", sessionName: "scratch" })).resolves.toBeUndefined();
+	});
+});
+
+describe("tmuxCore isAgentWorking", () => {
+	it("is true only while the interrupt-spinner footer is showing", () => {
+		expect(isAgentWorking("✻ Thinking… (esc to interrupt)")).toBe(true);
+		expect(isAgentWorking("")).toBe(false);
+		expect(isAgentWorking("Claude Code v2.1.0\n> ")).toBe(false);
+		expect(isAgentWorking("...restored conversation...\n? for shortcuts")).toBe(false);
 	});
 });

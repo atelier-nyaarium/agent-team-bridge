@@ -115,6 +115,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
+import com.atelier_nyaarium.switchboard.proto.TeamAddress
+import com.atelier_nyaarium.switchboard.proto.isComposite
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -320,6 +322,27 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		openTeam?.let { SwitchboardService.cancelTeamNotification(context, it) }
 	}
 
+	// Working-chip polling (Q-F1). The OPEN chat is peeked continuously (expensive, accurate) to
+	// keep its chip live; every other listed session gets ONE cheap peek when the list changes (no
+	// rearm). Only local composite sessions have a daemon-drivable pane, so non-eligible names are
+	// skipped rather than failing a peek.
+	val boardSessions = state.sessions(state.localGatewayId)
+	LaunchedEffect(openTeam) {
+		val t = openTeam ?: return@LaunchedEffect
+		if (!isComposite(TeamAddress.parse(t, state.localGatewayId).name)) return@LaunchedEffect
+		while (true) {
+			repo.pokeWorking(t)
+			delay(repo.terminalRefreshMs)
+		}
+	}
+	LaunchedEffect(boardSessions.map { it.name }, openTeam) {
+		if (openTeam != null) return@LaunchedEffect
+		for (s in boardSessions) {
+			val local = s.gatewayId.isEmpty() || s.gatewayId == state.localGatewayId
+			if (local && isComposite(TeamAddress.parse(s.name, state.localGatewayId).name)) repo.pokeWorking(s.name)
+		}
+	}
+
 	val locked = state.provisioned && state.biometricLock && !unlocked
 	LaunchedEffect(locked) {
 		if (locked && activity != null) promptUnlock(activity) { ok -> if (ok) unlocked = true }
@@ -521,10 +544,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					repo.forget(openTeam!!)
 					openTeam = null
 				},
-				// Only a LOCAL devcontainer has a tmux pane this Gateway can drive from a session card;
+				// Any LOCAL composite session is a tmux pane this Gateway can drive from the chat;
 				// a remote-Gateway session is gated off in v1 (the cross-Gateway terminal is deferred).
 				// The host machine's own terminal is reached through the dedicated "host" target.
-				terminalEligible = kind == "devcontainer" &&
+				terminalEligible = isComposite(TeamAddress.parse(openTeam!!, state.localGatewayId).name) &&
 					(session?.gatewayId.isNullOrEmpty() || session?.gatewayId == state.localGatewayId),
 				terminalRefreshMs = repo.terminalRefreshMs,
 				onTerminalPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },

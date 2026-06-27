@@ -770,6 +770,13 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		if (!body.ok) error("tmux_send failed: ${body.error ?: "unknown error"}")
 	}
 
+	/** Forget a session: kill its tmux and drop its resume record. Idempotent per opId; the Gateway
+	 * rejects a bare spawn-point (a composite session is required). */
+	fun forget(target: String, opId: String = UUID.randomUUID().toString()) {
+		val body = relay(ConsoleOp.Forget(target = target), opId, targetGateway = targetGatewayOf(target))
+		if (!body.ok) error("forget failed: ${body.error ?: "unknown error"}")
+	}
+
 	////////////////////////////////
 	//  Cross-Domain trust ops
 	//
