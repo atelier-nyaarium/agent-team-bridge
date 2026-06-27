@@ -1649,7 +1649,7 @@ private fun SecuritySettings(state: ChatState, onToggleBiometric: (Boolean) -> U
 /** System settings; the danger action (Revoke and Delete Domain) sits at the bottom behind a
  * confirm, so a wipe is two levels deep (Settings -> System) plus an explicit confirmation. The
  * action purges this owner's whole Domain from the servers, so it is hidden for an admin (who
- * purges via setup.sh) and shown only to app-only owners. */
+ * purges via setup.sh) and shown only to a confirmed app-only owner (see canDeleteOwnDomain). */
 @Composable
 private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 	val scope = rememberCoroutineScope()
@@ -1684,8 +1684,9 @@ private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 		style = MaterialTheme.typography.bodySmall,
 		color = MaterialTheme.colorScheme.onSurfaceVariant,
 	)
-	// Admins purge their Domain through setup.sh, so the in-app delete is offered only to app-only owners.
-	if (!repo.isAdmin()) {
+	// Admins purge via setup.sh; an unconfirmed Domain (offline) hides it too, so an admin whose gateway
+	// is down can't read the unknown state as "not admin" and delete everything (see canDeleteOwnDomain).
+	if (repo.canDeleteOwnDomain()) {
 		HorizontalDivider()
 		Text("Danger", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
 		OutlinedButton(

@@ -1011,6 +1011,12 @@ class ChatRepository(
 		return _state.value.teams.any { (it.gatewayId.ifEmpty { gw }) == gw && it.isAdminDomain }
 	}
 
+	/** Whether to show "Revoke and Delete Domain": a CONFIRMED app-only user only. Never an admin (they
+	 * purge via setup.sh), and never while the Domain is unconfirmed. Both flags read the SAME local
+	 * session, so an unconfirmed id (offline, no teams) hides the action rather than letting an admin
+	 * whose gateway is down read the unknown state as "not admin" and delete their whole Domain. */
+	fun canDeleteOwnDomain(): Boolean = !isAdmin() && confirmedDomainId() != null
+
 	////////////////////////////////
 	//  Display name (this owner's display name)
 
@@ -1065,16 +1071,17 @@ class ChatRepository(
 		// enroll() returns an EnrollResult when evie is reached (ok or reject) and THROWS when the
 		// console bridge is unreachable. Race it against a 30s ceiling so a hung POST never strands the
 		// user mid-delete: a null (timeout) and a failure (transport) both fall to the unconfirmed wipe.
-		val reached = withTimeoutOrNull(30_000) {
-			runCatching { client().enroll(EnrollOp.DeleteDomain(signed)) }
-		}
-		val result = reached?.getOrNull()
+		// enroll() blocks on an OkHttp call (its own read timeout is the real ceiling) and THROWS when the
+		// console bridge is unreachable. A reached-but-refused result keeps the owner key for a retry; a
+		// throw (offline) falls to the unconfirmed wipe so a hung POST never strands the user mid-delete.
+		val attempt = runCatching { client().enroll(EnrollOp.DeleteDomain(signed)) }
+		val result = attempt.getOrNull()
 		when {
 			result?.ok == true -> {
 				clearAll()
 				DeleteDomainOutcome.Deleted
 			}
-			reached?.isSuccess == true -> DeleteDomainOutcome.Rejected(result?.error ?: "delete rejected")
+			attempt.isSuccess -> DeleteDomainOutcome.Rejected(result?.error ?: "delete rejected")
 			else -> {
 				clearAll()
 				DeleteDomainOutcome.WipedUnconfirmed
