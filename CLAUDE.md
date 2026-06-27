@@ -30,8 +30,8 @@
     - `index.ts` - MCP server initialization, mode detection (host vs container), tool registration
     - `bridge/` - **Crosstalk tools** - Cross-team communication via the gateway
       - `helpers.ts` - Bridge state, WebSocket connection to router, routerPost/routerGet
-      - `bridgeDiscover.ts` - `crosstalk_discover` tool: list teams on the bridge
-      - `bridgeSend.ts` - `crosstalk_send` tool: send request to another team, poll for response
+      - `bridgeDiscover.ts` - `crosstalk_discover` tool: list addressable SESSIONS on the bridge (`project.session` composites + loose/cross-gateway peers), hiding bare spawn-points and the console/host; asleep sessions show a `last seen Xm ago` recency from `TeamInfo.lastActive`
+      - `bridgeSend.ts` - `crosstalk_send` tool: send a request to a session and poll for the response. A `project.session` target that is online receives it directly; one that is asleep or does not exist yet is woken / created on send through the `doWakeTeam` path
       - `bridgeWait.ts` - `crosstalk_wait` tool: wait N seconds before retrying
       - `replyTool.ts` - Shared reply tool factory (used by channelReply and cliReply)
       - `registerBridgeTools.ts` - Container-side tool registration (crosstalk + reply tools)
