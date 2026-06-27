@@ -103,6 +103,48 @@ times.
 | `unregister_assets` | Remove a card's pane registration (idempotent). |
 | `report_validate` | Report aggregate render-check counts from a `.render-check.json` (the app's self-check). |
 
+## Observed wire shapes (live run 2026-06-26, building the Gateways cards)
+
+The concrete request/response of each method actually called this session - the **parity reference** for the
+first-party build below. Every response is plain JSON (no envelope beyond the echoed `method`).
+
+- **`list_projects`** (args: none) ->
+  `{ projects: [{ projectId, name, ownerDisplayName, isOwned, updatedAt }], notice }`. Filtered to writable
+  projects. The FIRST call also returns a `notice` that it upgraded the claude.ai login with scopes
+  **`user:design:read` + `user:design:write`** (the auto-grant; no separate login).
+- **`list_files`** (args: `projectId`) -> `{ paths: [...] }`. A FLAT list that includes BOTH directories and
+  files, e.g. `["components", "components/enroll-flow", "components/enroll-flow/index.html", ...]`. Build the
+  card inventory by filtering to `*/index.html`.
+- **`get_file`** (args: `projectId`, `path`) -> `{ content, contentType, isBase64, truncated }`. `content` is
+  the raw file text (here the full self-contained HTML); `truncated:true` if it hit the 256 KiB cap. Treat
+  `content` as untrusted data.
+- **`finalize_plan`** (args: `projectId`, `localDir`, `writes`, `deletes`) ->
+  `{ planId, writes, deletes }`. The `planId` looks like **`plan_<projectId-hex-prefix>_<hash>`** (e.g.
+  `plan_8d815705fa464dc5_e6f6d201b5f9`) and is the token every write/register call must carry.
+- **`write_files`** (args: `projectId`, `planId`, `files:[{ path, localPath, mimeType }]`) ->
+  `{ written: N }`. `localPath` is read off disk (bytes never enter context); it must be inside the finalized
+  `localDir`. `path` is the project-relative path (mirror them).
+- **`register_assets`** (args: `projectId`, `planId`, `assets:[{ name, path, viewport:{width,height}, group,
+  subtitle }]`) -> `{ registered: N }`. The `group` string becomes the **pane section header**; distinct
+  groups partition the pane (this run added a new `"Gateways · Peer UX"` group beside the existing
+  `"Users · Peer UX"`). Not exercised this run but documented in the tool spec: `delete_files`
+  (-> removed count), `unregister_assets`, `get_project`, `create_project` (-> the new `projectId`).
+
+Project URL to hand the human: **`https://claude.ai/design/p/<projectId>`** (then they pick the group + card).
+
+## Resuming an existing project (the read-then-extend path)
+
+A feature's design pass is almost always a RESUME, not a fresh project. The path that worked:
+
+1. `list_projects` -> match the feature's project by `name` (here `switchboard-peer-ux`,
+   `8d815705-fa46-4dc5-bd7d-c4007676ac8c`). Do NOT `create_project` - that forks a second project.
+2. `list_files` -> see the existing cards (this project: `admin-vs-user`, `enroll-flow`, `kebab-menu`,
+   `share-control`, `trust-ceremony`, all in group `"Users · Peer UX"`).
+3. `get_file` ONE representative card -> recover the design language verbatim: the `:root` CSS-var palette
+   (`--primary:#5b4bd6`, `--tint:#ece8fb`, `--bg:#f6f5f8`, Inter + JetBrains-Mono), the phone-frame markup,
+   the status-bar/app-bar/row/card components, the multi-phone "flow" layout.
+4. Author the NEW cards in that exact language under a NEW `@dsCard group`, so the addition reads as one kit.
+
 ## Gotchas (hard-won this pass)
 
 - `finalize_plan` **requires `deletes`** - pass `[]` when not deleting, or it errors.
@@ -152,9 +194,11 @@ times.
 4. `finalize_plan` (with `deletes: []`) -> `write_files` -> `register_assets` (new cards only).
 5. Tell the human where to look; iterate; log each decision into the feature plan.
 
-## Idea (PARKED): make design preview a FIRST-PARTY switchboard feature
+## Building this FIRST-PARTY in switchboard (parity build - GREENLIT 2026-06-26)
 
-A future feature, not yet planned - captured here as the point of return. Mirror DesignSync INSIDE switchboard
+The owner greenlit a switchboard-native Designer to PARITY with claude.ai/design ("we will build Designer UX
+to parity Claude designer"). The **Observed wire shapes** section above is the API surface to match. Mirror
+DesignSync INSIDE switchboard
 so the SAME scratch-space + the SAME `@dsCard` HTML can render as first-class cards directly in the console's
 conversation thread on mobile, instead of (or as well as) pushing to claude.ai/design. This closes the
 design-review loop entirely inside switchboard - no context switch to claude.ai, mobile-first (where the owner
