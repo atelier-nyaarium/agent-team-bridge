@@ -9,6 +9,7 @@ import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import type { HostOp, HostOpResult } from "../shared/host-op.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
+import { isComposite } from "../shared/session-id.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { createConsoleDispatcher } from "./console/consoleHandler.js";
@@ -569,7 +570,7 @@ export async function startGateway(): Promise<void> {
 			mailboxStore,
 			routes,
 			localGatewayId,
-			isProjectName: (name) => offlineCatalog.has(name) || knownTeamPaths.has(name),
+			isProjectName: (name) => !isComposite(name) && (offlineCatalog.has(name) || knownTeamPaths.has(name)),
 			domain: () => {
 				const snapshot = allowlistForConsole?.getSnapshot() ?? null;
 				return snapshot ? { version: allowlistForConsole?.version() ?? "", snapshot } : null;

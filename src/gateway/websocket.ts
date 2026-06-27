@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { debugLog } from "../shared/debug-log.js";
 import { WsRegisterSchema } from "../shared/schemas.js";
+import { isComposite } from "../shared/session-id.js";
 import type { ConnectionMode, WebSocketConfig } from "../shared/types.js";
 import type { WakeCoordinator } from "./wake.js";
 
@@ -225,7 +226,9 @@ export function createWebSocketHandlers({
 				conversationRegistry.set(conversationId, ws);
 			}
 
-			if (typeof msg.projectPath === "string" && msg.projectPath) {
+			// Only a bare project is a devcontainer catalog entry; a composite `project.session` is a
+			// loose session and must never land in knownTeamPaths (it would be misclassified).
+			if (typeof msg.projectPath === "string" && msg.projectPath && !isComposite(team)) {
 				knownTeamPaths.set(team, msg.projectPath);
 			}
 

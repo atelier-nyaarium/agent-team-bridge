@@ -33,7 +33,7 @@ import { CONV_SESSION_PREFIX, GATEWAY_QUALIFIER_SEP, NOTICE_SESSION_PREFIX } fro
 
 // Composite project<SEP>session grammar + helpers, also owned by session-id.ts; re-exported so
 // consoleHandler resolves the whole addressing layer from one place.
-export { composeSessionName, DEFAULT_SESSION, parseSessionName, SESSION_SEP } from "./session-id.js";
+export { composeSessionName, DEFAULT_SESSION, isComposite, parseSessionName, SESSION_SEP } from "./session-id.js";
 export { CONV_SESSION_PREFIX, GATEWAY_QUALIFIER_SEP, NOTICE_SESSION_PREFIX };
 
 ////////////////////////////////

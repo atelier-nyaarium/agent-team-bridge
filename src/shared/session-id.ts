@@ -49,6 +49,12 @@ export function composeSessionName(project: string, session: string): string {
 	return `${project}${SESSION_SEP}${session}`;
 }
 
+/** Whether a local name carries a session segment. A composite is a (loose) session, never the
+ * bare project that is the devcontainer catalog/spawn-point entry. */
+export function isComposite(name: string): boolean {
+	return name.includes(SESSION_SEP);
+}
+
 ////////////////////////////////
 //  Class: TeamAddress
 

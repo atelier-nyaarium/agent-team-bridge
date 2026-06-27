@@ -7,7 +7,7 @@ import type { SealedEnvelope } from "../shared/crypto.js";
 import { type FederatedOp, ReturnRouteSchema } from "../shared/federation-protocol.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
 import { ChannelFilesSchema } from "../shared/schemas.js";
-import { NoticeId, SessionId, TeamAddress } from "../shared/session-id.js";
+import { isComposite, NoticeId, SessionId, TeamAddress } from "../shared/session-id.js";
 import type {
 	ChannelFile,
 	ConnectionMode,
@@ -421,7 +421,9 @@ export function createRoutes({
 	function teams(): Response {
 		const teamsList: TeamInfo[] = [];
 		const seen = new Set<string>();
-		const isDevcontainer = (name: string) => offlineCatalog.has(name) || knownTeamPaths.has(name);
+		// A composite `project.session` is a loose session, never the bare project (the spawn-point).
+		const isDevcontainer = (name: string) =>
+			!isComposite(name) && (offlineCatalog.has(name) || knownTeamPaths.has(name));
 		// The owner's display name, stamped on every local session so a linked friend
 		// Domain sees the owner's self-set name over the discovery roster. Spread in only
 		// when set, so a Gateway with no display name emits a minimal TeamInfo (the field
