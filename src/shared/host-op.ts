@@ -48,6 +48,11 @@ export const MAX_TMUX_NAME_LEN = 64;
 export function isTmuxName(name: string): boolean {
 	return name.length <= MAX_TMUX_NAME_LEN && TMUX_NAME_RE.test(name);
 }
+/** Throwing form for the host executor sinks (tmuxCore, reloadPlugins), so the regex + length cap
+ * are enforced identically at the host as at the gateway boundary. */
+export function assertTmuxName(name: string): void {
+	if (!isTmuxName(name)) throw new Error(`invalid tmux name "${name}"`);
+}
 
 export type HostOp =
 	| { kind: "peek"; target: TmuxTarget }

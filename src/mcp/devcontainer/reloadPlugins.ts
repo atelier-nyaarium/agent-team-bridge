@@ -5,7 +5,7 @@ import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { isInsideContainer } from "../../shared/env.js";
-import type { TmuxTarget } from "../../shared/host-op.js";
+import { assertTmuxName, type TmuxTarget } from "../../shared/host-op.js";
 
 ////////////////////////////////
 //  Schemas
@@ -28,14 +28,6 @@ const reloadSchema: any = ReloadPluginsSchema;
 
 // The MCP tool drives the agent's own session, which always runs in the conventional "claude" pane.
 const TMUX_SESSION = "claude";
-
-// The session name reaches the script as the PANE token and the container name reaches the docker
-// exec prefix; both are shell-interpolated, so a non-slug would be an injection vector. The tmux
-// layer slug-validates the same way (tmuxCore.assertName).
-const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
-function assertSlug(s: string): void {
-	if (!SLUG_RE.test(s)) throw new Error(`invalid tmux name "${s}"`);
-}
 
 function buildTmuxFn(tmuxPrefix: string): string {
 	// For docker exec, wrap the tmux binary call; for local, call tmux directly
@@ -180,12 +172,14 @@ function writeAndSpawn(script: string): string {
  * host daemon runs on the host, so a host target uses bare tmux and a devcontainer target reaches
  * its tmux via docker exec. Returns immediately (the script runs detached). */
 export function spawnReloadPlugins(target: TmuxTarget): string {
-	assertSlug(target.sessionName);
+	// The session name reaches the script as the PANE token and the container name reaches the docker
+	// exec prefix; both are shell-interpolated, so a non-slug would be an injection vector.
+	assertTmuxName(target.sessionName);
 	let tmuxPrefix: string;
 	if (target.kind === "host") {
 		tmuxPrefix = "tmux";
 	} else {
-		assertSlug(target.name);
+		assertTmuxName(target.name);
 		tmuxPrefix = `docker exec -u vscode "${target.name}_devcontainer-dev-1" tmux`;
 	}
 	return writeAndSpawn(buildScript(tmuxPrefix, target.sessionName));

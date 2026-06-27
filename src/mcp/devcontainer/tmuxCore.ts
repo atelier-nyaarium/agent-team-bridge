@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
-import { ALLOWED_KEYS, type HostPeekResult, type TmuxTarget } from "../../shared/host-op.js";
+import { ALLOWED_KEYS, assertTmuxName, type HostPeekResult, type TmuxTarget } from "../../shared/host-op.js";
 
 ////////////////////////////////
 //  Constants
@@ -10,7 +10,6 @@ const containerName = (team: string): string => `${team}_devcontainer-dev-1`;
 // A name reaching docker exec must be a slug. The name is also passed as an argv
 // element (never interpolated into a shell), so this is defense in depth against a
 // crafted target, and rejects a bogus name early.
-const TEAM_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 const EXEC_TIMEOUT_MS = 8_000;
 // Hard cap on a captured pane so one peek can never return an unbounded payload over
 // the sealed reply path. Excess bytes are dropped (the visible pane is far smaller).
@@ -19,15 +18,11 @@ const MAX_CAPTURE_BYTES = 256_000;
 ////////////////////////////////
 //  Functions & Helpers
 
-function assertName(name: string): void {
-	if (!TEAM_NAME_RE.test(name)) throw new Error(`invalid tmux name "${name}"`);
-}
-
 /** The pane a host op addresses: the agent runs in pane 0 of its session, so the pane index is
  * fixed and only the session name varies (`<sessionName>.0`). The session name is an argv element
  * (never shell-interpolated) and slug-validated as defense in depth. */
 function paneTarget(target: TmuxTarget): string {
-	assertName(target.sessionName);
+	assertTmuxName(target.sessionName);
 	return `${target.sessionName}.0`;
 }
 
@@ -36,7 +31,7 @@ function paneTarget(target: TmuxTarget): string {
  * shell-interpolated, so it cannot be parsed as a shell token. */
 function tmuxArgv(target: TmuxTarget, sub: string[]): string[] {
 	if (target.kind === "host") return ["tmux", ...sub];
-	assertName(target.name);
+	assertTmuxName(target.name);
 	return ["docker", "exec", "-u", "vscode", containerName(target.name), "tmux", ...sub];
 }
 
@@ -125,6 +120,6 @@ export function sendKey(target: TmuxTarget, key: string): Promise<void> {
  * command is the shell-command tmux runs in the session; the daemon builds it (model/effort/plugin)
  * and it is never console-supplied, so an arbitrary host command cannot be injected here. */
 export async function createSession(target: TmuxTarget, command: string): Promise<void> {
-	assertName(target.sessionName);
+	assertTmuxName(target.sessionName);
 	await run(tmuxArgv(target, ["new-session", "-d", "-s", target.sessionName, command]), 15_000);
 }
