@@ -166,6 +166,66 @@ Implemented server-side per the spec. Files touched: `session-id.ts` (SESSION_SE
   - **lastCapture eviction:** the peek cadence map (keyed by the now-user-varying `session`) gained TTL eviction (mirrors the proven sentCache cleanup), so it cannot grow unbounded.
   - **Triaged OUT (not a P1 issue):** the "cross-tenant project access" finding is pre-existing and does not match the architecture - a gateway serves ONE Domain, and P1 does not widen WHICH projects are reachable (still the global catalog, already true pre-P1), only adds session granularity within an already-reachable project. Per-console scoping within a Domain, if ever wanted, belongs with `gateway-auth-surface.md`, not P1.
 
+## P2 - detailed design (refinement lap 1)
+
+**Goal:** one daemon-side `openSession` core that ensures a NAMED tmux session exists in a (woken) container/host - reattach if alive, create if absent, detect a dead launch - and de-hardcode the wake path off `"claude"`. Both the wake trigger and the console `create_session` op delegate to it. The durable `project.session -> claudeSessionId` map + actual `--resume` activate in P3 (see boundary below).
+
+**Reassessed P2/P3 boundary (the key reassessment).** Resume-by-id needs the map keyed by `project.session`, but a devcontainer session does not register under its composite name until **P3** (identity pinning). So in P2 the map cannot be populated and `--resume` would be inert. Therefore:
+- **P2 delivers:** the unified `openSession` core (wake-if-needed + has-session **reattach** / **create fresh** + **dead-launch detection**), session-name awareness across the wake path, one shared launch-command builder, and the durable-map *structure + read path* wired but dormant.
+- **P3 delivers:** composite-name self-registration (which POPULATES the map - register reports `CLAUDE_CODE_SESSION_ID`) and thereby ACTIVATES `--resume`. The P4 spawn UX rides on top.
+- Net: P2's restore is **reattach-or-fresh** (the common "container idle, claude still alive" case works immediately); the `--resume`-across-stop case lights up in P3 when the map fills. The Q6 chip is `restored` (reattached) vs `fresh` now; `resumed` joins in P3.
+
+**`openSession` core (daemon, `hostDaemon.ts` + `tmuxCore.ts`).**
+- Signature: `openSession(target: TmuxTarget): Promise<{ outcome: "restored" | "fresh" | "failed"; screen: string }>` where `target.sessionName` is the session to ensure (no longer hardcoded `claude`).
+- Steps: ensure container up (devcontainer) -> `tmux has-session -t <sessionName>` -> if alive, **reattach** (no relaunch; `outcome:"restored"`); else (P3) if a `claudeSessionId` is mapped, launch `claude --resume <id>` (`outcome:"resumed"`); else `tmux new-session -d -s <sessionName> <launchCommand>` (`outcome:"fresh"`) -> readiness poll.
+- **Dead-launch detection (closes the open root cause):** after create, poll for the idle marker; if the tmux server/pane is gone OR no claude prompt appears within the window, return `outcome:"failed"` with the captured screen, instead of today's unconditional `success:true`. The wake-result/host-op reply carries the real outcome.
+- One shared `buildLaunchCommand(target)` (already exists for create_session) replaces the duplicated inline `claudeCommand` in `handleWake`; host gets `exec bash` + effort low, devcontainer gets `cd /workspace/<project>` + effort high (unchanged behavior, single source).
+
+**De-hardcode the wake path (`hostDaemon.ts handleWake`, gateway `doWakeTeam`).**
+- `doWakeTeam(team)` parses the composite team via `parseSessionName` -> `(project, session)` and wakes THAT session (bare team -> session `claude`, back-compat). `handleWake` uses `target.sessionName` for has-session / new-session / capture / auto-accept (no literal `claude`).
+- The send-to-offline-devcontainer trigger stays the wake path; it now ensures the addressed session, not a fixed one.
+
+**Durable map (`shared/durable-store.ts` consumer in `gateway/index.ts`).**
+- `new DurableStore(<dataDir>, "session-resume")` storing `project.session -> { claudeSessionId, lastSeen }`. Structure + the openSession read path land in P2; population (register reporting the id) is P3.
+- **Landmine (flagged for /questionaire):** every durable store roots at `path.dirname(LOG_PATH)` = `/app/log` (federation keys, jobs, mailboxes live there too). Adding a 4th durable file deepens the "clear the logs wipes federation identity" trap. Options: (a) root the new map at the same dir for consistency (status quo, defer the rename), or (b) introduce a `DATA_DIR` independent of the debug-log filename now and move all durable stores onto it (bigger blast radius, fixes the landmine). This is a real fork for the human.
+
+**Wire.** Keep the console `create_session` op name (console-facing, P1-stable) but route its handler through `openSession`; keep `wake_result` for the wake trigger. No new console schema in P2. `outcome` rides the host-op reply / wake_result.
+
+**Out of P2 (explicit):** composite-name self-registration + map population + `--resume` activation (P3); the spawn-point UX + the restored/fresh chip rendering (P4); the in-session `reload_plugins` `args.team` injection (security pass); deleting the Hypothesis debug-log scaffolding that is intermixed in `handleWake` (separate cleanup - do NOT sweep it in P2, only edit the lines P2 must touch).
+
+**Verification (P2).**
+- Unit (host-op runner / a testable openSession seam): reattach when has-session succeeds (no new-session call); create when it fails; `failed` outcome when the post-create poll never sees the marker (dead-launch); session name is threaded (not `claude`).
+- Wake: `doWakeTeam("proj")` -> session `claude`; `doWakeTeam("proj.foo")` -> session `foo`.
+- Back-compat: an existing bare-`project` wake is byte-identical (session `claude`, same launch command).
+- `bun run lint` + `bun run test` green.
+
+**/questionaire forks (surface to the human after the audit):** (1) durable-map location - same `/app/log` dir vs a new `DATA_DIR` (landmine fix scope); (2) confirm the P2/P3 split (dormant map in P2, population in P3) vs pulling sessionId capture forward into P2; (3) dead-launch on the WAKE path - should a failed wake stop reporting `success:true` now (a behavior change to the chat wake path), or keep that for a focused fix.
+
+### P2 - audit refinements (lap 1)
+
+7-auditor fan-out (`wf_ed2eb74d-80e`). One BLOCKER drove a scope reassessment; it dissolves the two forks the proposal flagged.
+
+**BLOCKER (verified): a composite wake is P3-coupled.** Wake completion gates on the woken agent REGISTERING under the team name (`wakeCoordinator.notify(team)` in `websocket.ts` on register); `wake_result success:true` is IGNORED (only `success===false` is handled). Until P3 pins a session's identity to its composite name, a woken `proj.foo` agent registers under its `stableTeamName` hash (or bare `proj`), so `wakeCoordinator` never resolves `proj.foo` -> `/send` hangs to `WAKE_TIMEOUT_MS` (600s) and the send route's `registry.get("proj.foo")` is empty ("not connected"). There is also no composite wake TRIGGER before P3 (no composite registration, no spawn UX). So de-hardcoding the wake path for composite NAMES belongs in P3, with the registration change that makes it reachable.
+
+**Reassessed P2 scope (narrowed; standalone + testable, no P3 coupling, no open forks):**
+- **`hasSession(target)` in `tmuxCore.ts`** - new primitive (parallel to peekPane/sendText), so the reattach-vs-create split is clean (today the check is inline in `handleWake`).
+- **`openSession(target)` core** (daemon): ensure container up -> `hasSession` -> reattach (alive, no relaunch -> `restored`) / create (`fresh`). Drives the path that is NOT registration-gated.
+- **Console `create_session` routes through `openSession`** - the standalone-testable named-session path: it is reply-by-`reqId` (host-op), not registration-gated, so creating/reattaching `proj.foo` works and is unit-testable NOW. (Console reply stays `{created:true}`; the `restored`/`fresh` outcome is not surfaced to the UI until the P4 chip.) **Reattach is the behavior change:** create_session for an existing session no longer double-launches; it reattaches.
+- **`buildLaunchCommand` unification** - `handleWake`'s inline `claudeCommand` is replaced by the existing shared `buildLaunchCommand` (one source; bare `claude` behavior unchanged).
+- **Dead-launch detection on the WAKE path** (closes the open root cause): `handleWake` delegates its session-ensuring to `openSession` (session stays `claude`, bare project), and the readiness poll's result maps to the EXISTING `wake_result` boolean - if the idle marker never appears, send `success:false` (not today's unconditional `true`), so `/send` fails fast instead of stalling. **No `wake_result` wire change** (keep the boolean; map `openSession`'s outcome to it internally - the auditor confirmed changing the shape breaks `websocket.ts`'s `success===false` check).
+- **Timeout discipline:** the dead-launch readiness poll lives on the WAKE path only (it has the 600s budget). The console `create_session` path returns fast (create/reattach, no long poll) to stay within `HOST_OP_TIMEOUT_MS` (20s); a dead create-session pane is revealed by the terminal peek, not a blocking poll.
+
+**Moved to P3 (with the registration change that makes them reachable):**
+- De-hardcoding the wake path for COMPOSITE names (`doWakeTeam`/`handleWake` parsing `project.session`) - registration-gated.
+- The durable `project.session -> claudeSessionId` map + `--resume` activation + map population. **This removes the `DATA_DIR` fork from P2** (the map, and thus the "where does it live" question, lands in P3).
+- Composite-name self-registration (identity pinning).
+
+**handleWake edits:** touch only the session-ensuring core (delegate to `openSession`) + the inline-launch dedup; LEAVE the `#region Hypothesis K/L` debug blocks (pure logging, not load-bearing) for the separate debug-scaffolding cleanup. Do not sweep them.
+
+**Verification (P2):** `hasSession` true -> reattach (no new-session); false -> create. `openSession` via console `create_session` for `proj.foo` creates then reattaches on a retry. `handleWake` dead launch (marker never seen) -> `wake_result success:false`. Bare-project wake byte-identical (session `claude`, shared launch cmd). `bun run lint` + `bun run test` green.
+
+**No `/questionaire` needed for P2:** the reassessment resolved both flagged forks by deferral (the `DATA_DIR` decision and the sessionId-capture/P2-P3 split both move to P3). The narrowing is a sequencing consequence of the registration-gating constraint, not a preference fork. Surfaced to the human at the refinement checkpoint.
+
 ## Painpoints (P1 crust)
 
 Concrete leads surfaced while building P1. `file : scope : name`, no line numbers. Not fixed here.
