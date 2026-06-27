@@ -17,7 +17,9 @@ Work ONE phase at a time. For each phase, run this loop:
 
 Standing pre-authorization: launch Workflow audits at any point I decide. Commit direct to main (workflow preference).
 
-**Loop status:** P0 done (substrate mapped). **P1 DONE + sealed** (composite addressing + de-hardcode, shipped to main `3bd8d88`/`ca69866`/`ed88e37`). **P2 next** - start with its plan-refinement cycle.
+**Loop status:** P0 done (substrate mapped). **P1 DONE + sealed** (composite addressing + de-hardcode, `3bd8d88`/`ca69866`/`ed88e37`). **P2 DONE + sealed** (hasSession/ensureSession reattach + create_session routing + buildLaunchCommand unify + wake dead-launch detection, `e262d6e`/`bb18599`/`828bf12`; CI green, 719 tests). **P3 next** - start with its plan-refinement cycle.
+
+**Reassessment for P3 (after P2):** P3 now carries everything P2 deferred PLUS its original scope: composite-name self-registration (pin the MCP identity to `project.session` via env), which makes a woken named session register under its composite name (unblocking the composite WAKE de-hardcode in `doWakeTeam`/`handleWake`); the durable `project.session -> claudeSessionId` map + its population (register reports `CLAUDE_CODE_SESSION_ID`) + `--resume` activation in `openSession`/`handleWake`; and demoting the devcontainer fixed session to loose. The **DATA_DIR fork** surfaces here (the map's home - same `/app/log` dir vs a new `DATA_DIR` that fixes the federation-keys-under-the-log-dir landmine) - a likely `/questionaire` for the human. P2 left `tmuxCore.ensureSession` + the wake exec path ready to extend.
 
 ---
 
@@ -247,3 +249,10 @@ Concrete leads surfaced while building P1. `file : scope : name`, no line number
 - `src/mcp/devcontainer/hostDaemon.ts : handleWake : (hardcoded "claude")` - the wake path still hardcodes the `claude` session (has-session / new-session / capture / auto-accept). P2's `openSession` unifies this with the composite model. Until then a woken devcontainer only ever gets the `claude` session, so a composite `project.other` peek before P2 finds "no server running" for `other`.
 - `src/mcp/devcontainer/reloadPlugins.ts : module : TMUX_SESSION` - the in-session tool still hardcodes `claude`. P3 (MCP identity pinning) makes a spawned session register under its composite name, at which point the in-session tool should drive its own session name rather than the literal.
 - `src/mcp/devcontainer/hostDaemon.ts : handleWake : inline tmux ops` (P2 follow-up) - the wake path runs has-session / new-session / capture / send-keys inline via the devcontainer CLI (`execInContainer`), duplicating `tmuxCore`'s `hasSession`/`ensureSession`/`peekPane`/`sendText` (which use `docker exec`). Unifying onto `tmuxCore` would delete ~the duplicated orchestration and give wake the reattach-race + dead-launch logic for free, BUT it is an exec-mechanism change (devcontainer CLI -> docker exec) whose failure modes need a live container to verify - do it as its own change with a real devcontainer, not blind.
+
+## Painpoints (P2 crust)
+
+P2-specific follow-ups (mostly accounted for by later phases; listed so they are not lost).
+
+- `src/mcp/devcontainer/tmuxCore.ts : ensureSession` + `hostDaemon.ts : handleWake` - reattach checks only that the tmux SESSION exists, not that its claude is alive. A session whose agent exited (tmux pane survives) is reattached/reported alive. P3's `--resume` + P4's restored/fresh chip should detect a dead-but-present pane and offer a relaunch; until then a dead pane reads as "restored".
+- `src/mcp/devcontainer/hostDaemon.ts : hostOpRunner.createSession` - the host-op reply hardcodes `{created:true}`, discarding `ensureSession`'s `{created}`. P4 should surface restored-vs-fresh so the app can render the Q6 chip.
