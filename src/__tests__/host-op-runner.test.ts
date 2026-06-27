@@ -111,6 +111,53 @@ describe("createHostOpRunner", () => {
 		expect(h.ops.reloadPlugins).toHaveBeenCalledTimes(1);
 	});
 
+	// peekPane is a plain async closure here, NOT vi.fn: the spy wrapper's own promise around an
+	// async throw transiently trips Node's unhandled-rejection heuristic on a cold run, which would
+	// flake these leak/retry assertions.
+	it("a failing peek rejects to the caller without leaking an unhandled rejection", async () => {
+		const ops: TmuxOps = {
+			peekPane: async () => {
+				throw new Error("no server running on /tmp/tmux-1000/default");
+			},
+			sendText: async () => {},
+			sendKey: async () => {},
+			createSession: async () => {},
+			reloadPlugins: async () => {},
+		};
+		const runner = createHostOpRunner(ops, { minPeekIntervalMs: 0 });
+
+		const leaks: unknown[] = [];
+		const onLeak = (reason: unknown) => leaks.push(reason);
+		process.on("unhandledRejection", onLeak);
+		try {
+			await expect(runner.run({ kind: "peek", target: T })).rejects.toThrow(/no server running/);
+			// one tick lets any leaked rejection surface
+			await new Promise((r) => setTimeout(r, 0));
+			expect(leaks).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onLeak);
+		}
+	});
+
+	it("does not cache a failed peek: a later peek retries", async () => {
+		let calls = 0;
+		const ops: TmuxOps = {
+			peekPane: async () => {
+				calls++;
+				if (calls === 1) throw new Error("no server running on /tmp/tmux-1000/default");
+				return { ansi: "OK", hash: "h" };
+			},
+			sendText: async () => {},
+			sendKey: async () => {},
+			createSession: async () => {},
+			reloadPlugins: async () => {},
+		};
+		const runner = createHostOpRunner(ops, { minPeekIntervalMs: 0 });
+		await expect(runner.run({ kind: "peek", target: T })).rejects.toThrow();
+		expect(await runner.run({ kind: "peek", target: T })).toEqual({ ansi: "OK", hash: "h" });
+		expect(calls).toBe(2);
+	});
+
 	it("rejects an unknown op kind", async () => {
 		const h = makeOps();
 		const runner = createHostOpRunner(h.ops);

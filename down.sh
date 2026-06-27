@@ -2,7 +2,7 @@
 
 pushd "$(dirname "$0")" > /dev/null || exit 1
 
-TMUX_SESSION="claude"
+TMUX_SESSION="host-daemon"
 
 # Kill the host daemon tmux session
 if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then

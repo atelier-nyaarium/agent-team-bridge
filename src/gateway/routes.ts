@@ -316,11 +316,19 @@ export function createRoutes({
 		const maxAttempts = 5;
 		let attempt = 0;
 		const tryOnce = async (): Promise<void> => {
-			const r = await relayToGateway(dstGateway, op);
-			if (r.ok) return;
+			// A relay throw (evie disconnect mid-call, call timeout) is just another transient
+			// failure: fold it into the retry path so it never escapes as an unhandled rejection.
+			let error: string | undefined;
+			try {
+				const r = await relayToGateway(dstGateway, op);
+				if (r.ok) return;
+				error = r.error;
+			} catch (e) {
+				error = e instanceof Error ? e.message : String(e);
+			}
 			attempt += 1;
 			if (attempt >= maxAttempts) {
-				console.error(`[respond] ${label} to ${dstGateway} failed after ${maxAttempts} attempts: ${r.error}`);
+				console.error(`[respond] ${label} to ${dstGateway} failed after ${maxAttempts} attempts: ${error}`);
 				return;
 			}
 			setTimeout(() => void tryOnce(), Math.min(2000 * 2 ** (attempt - 1), 30_000));

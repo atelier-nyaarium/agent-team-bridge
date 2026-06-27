@@ -32,6 +32,30 @@ import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } fro
 import { ConsolePeer } from "./consolePeer.js";
 
 ////////////////////////////////
+//  Functions & Helpers
+
+// A peek whose tmux server/pane is absent (booting, just exited, or stopped) gets a calm lead in
+// place of raw stderr, but the original cause is appended so a PERMANENT absence (dead agent,
+// removed container) stays diagnosable instead of reading as "still starting" forever. Real
+// failures (timeout, offline host) pass through verbatim.
+const PEEK_ABSENT = [
+	"no server running",
+	"can't find session",
+	"can't find pane",
+	"no such container",
+	"is not running",
+];
+function friendlyPeekError(error?: string): string {
+	const raw = error ?? "peek failed";
+	const lower = raw.toLowerCase();
+	const isRealFailure = lower.includes("timed out") || lower.includes("tmux command exited");
+	if (!isRealFailure && PEEK_ABSENT.some((s) => lower.includes(s))) {
+		return `No session running - it may be starting or has stopped: ${raw}`;
+	}
+	return raw;
+}
+
+////////////////////////////////
 //  Interfaces & Types
 
 /** The subset of gateway HTTP routes the console handler reuses. */
@@ -575,7 +599,7 @@ export function createConsoleDispatcher({
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
 				const target = resolveTmuxTarget(op.target);
 				const r = await relayToHost({ kind: "peek", target });
-				if (!r.ok) throw new Error(r.error ?? "peek failed");
+				if (!r.ok) throw new Error(friendlyPeekError(r.error));
 				const { ansi, hash } = r.result as HostPeekResult;
 				// 304-style short-circuit: an idle pane the console already has costs only the hash.
 				if (op.sinceHash && op.sinceHash === hash) return { hash, unchanged: true };

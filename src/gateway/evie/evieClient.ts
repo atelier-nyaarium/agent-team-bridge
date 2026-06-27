@@ -236,51 +236,55 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			domainId: config.domainId,
 			protocolVersion: FEDERATION_PROTOCOL_VERSION,
 			...(config.buildRegisterAuth?.() ?? {}),
-		}).then((res) => {
-			const r = res.result as
-				| {
-						ok?: boolean;
-						pending?: boolean;
-						error?: string;
-						gateways?: string[];
-						domain?: unknown;
-						domainStatus?: string;
-						displayName?: string | null;
-						isAdminDomain?: boolean;
-				  }
-				| undefined;
-			if (res.error) {
-				console.error(`[evie-client] gateway_register failed: ${res.error}`);
-				return;
-			}
-			if (r?.ok === false) {
-				// A pending-tagged refusal is transient: the Domain is staged but not yet rooted.
-				// Retry on a bounded cadence so registration lands as soon as the root arrives.
-				// Any other ok:false is terminal (revoked / wrong-domain / version), so log only
-				// rather than mask a real denial behind an endless re-register loop.
-				if (r.pending) schedulePendingRetry(r.error);
-				else console.error(`[evie-client] Router rejected registration: ${r.error}`);
-				return;
-			}
-			// A successful register clears any pending-retry left from earlier attempts.
-			clearPendingRetry();
-			const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
-			console.log(`[evie-client] registered as Gateway "${config.gatewayId}"${peers}`);
-			if (r?.domain) config.onDomainSync?.(r.domain);
-			else
-				console.warn(
-					`[federation] registered but evie returned no Domain snapshot - the Domain may not be rooted, or evie is outdated`,
-				);
-			// Surface the Gateway's own Domain status + display name + admin-Domain flag to the
-			// console register reply / discovery roster.
-			if (r?.domainStatus !== undefined || r?.displayName !== undefined || r?.isAdminDomain !== undefined) {
-				config.onDomainMeta?.({
-					domainStatus: r.domainStatus,
-					displayName: r.displayName,
-					isAdminDomain: r.isAdminDomain,
-				});
-			}
-		});
+		})
+			.then((res) => {
+				const r = res.result as
+					| {
+							ok?: boolean;
+							pending?: boolean;
+							error?: string;
+							gateways?: string[];
+							domain?: unknown;
+							domainStatus?: string;
+							displayName?: string | null;
+							isAdminDomain?: boolean;
+					  }
+					| undefined;
+				if (res.error) {
+					console.error(`[evie-client] gateway_register failed: ${res.error}`);
+					return;
+				}
+				if (r?.ok === false) {
+					// A pending-tagged refusal is transient: the Domain is staged but not yet rooted.
+					// Retry on a bounded cadence so registration lands as soon as the root arrives.
+					// Any other ok:false is terminal (revoked / wrong-domain / version), so log only
+					// rather than mask a real denial behind an endless re-register loop.
+					if (r.pending) schedulePendingRetry(r.error);
+					else console.error(`[evie-client] Router rejected registration: ${r.error}`);
+					return;
+				}
+				// A successful register clears any pending-retry left from earlier attempts.
+				clearPendingRetry();
+				const peers = r?.gateways?.length ? `, peers: ${r.gateways.join(", ")}` : "";
+				console.log(`[evie-client] registered as Gateway "${config.gatewayId}"${peers}`);
+				if (r?.domain) config.onDomainSync?.(r.domain);
+				else
+					console.warn(
+						`[federation] registered but evie returned no Domain snapshot - the Domain may not be rooted, or evie is outdated`,
+					);
+				// Surface the Gateway's own Domain status + display name + admin-Domain flag to the
+				// console register reply / discovery roster.
+				if (r?.domainStatus !== undefined || r?.displayName !== undefined || r?.isAdminDomain !== undefined) {
+					config.onDomainMeta?.({
+						domainStatus: r.domainStatus,
+						displayName: r.displayName,
+						isAdminDomain: r.isAdminDomain,
+					});
+				}
+			})
+			.catch((e) =>
+				console.error(`[evie-client] gateway_register chain error: ${e instanceof Error ? e.message : e}`),
+			);
 	}
 
 	function schedulePendingRetry(reason?: string): void {

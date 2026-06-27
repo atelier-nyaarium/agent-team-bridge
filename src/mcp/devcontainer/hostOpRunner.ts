@@ -64,7 +64,10 @@ export function createHostOpRunner(ops: TmuxOps, opts: { minPeekIntervalMs?: num
 		if (!capture) {
 			capture = withPeekSlot(() => ops.peekPane(target));
 			inflightPeeks.set(key, capture);
-			void capture.finally(() => inflightPeeks.delete(key));
+			// `.catch` before `.finally` so the cleanup-chain promise resolves: a rejecting peek is
+			// still surfaced via the `await capture` below (the caller gets the error), but this
+			// derived promise must not be left unhandled or it crashes the process.
+			void capture.catch(() => {}).finally(() => inflightPeeks.delete(key));
 		}
 		const result = await capture;
 		lastCapture.set(key, { at: now(), result });
