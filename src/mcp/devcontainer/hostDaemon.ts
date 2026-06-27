@@ -3,12 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
 import { debugLog } from "../../shared/debug-log.js";
-import type { HostOp, TmuxTarget } from "../../shared/host-op.js";
+import { type HostOp, isTmuxName, type TmuxTarget } from "../../shared/host-op.js";
 import { createReconnector } from "../../shared/reconnect.js";
+import { composeSessionName, parseSessionName } from "../../shared/session-id.js";
 import { ensureContainerUpAsync, execInContainer, resolveProject } from "./helpers.js";
 import { createHostOpRunner } from "./hostOpRunner.js";
 import { spawnReloadPlugins } from "./reloadPlugins.js";
-import { ensureSession, peekPane, sendKey, sendText } from "./tmuxCore.js";
+import { ensureSession, isAgentReady, peekPane, sendKey, sendText } from "./tmuxCore.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -152,8 +153,12 @@ function scanDevcontainerProjects(): Array<{ team: string; projectPath: string }
 
 interface WakeMessage {
 	type: "wake";
+	// The composite `project.session` to wake; the daemon parses it into the project (container/dir)
+	// and the tmux session name.
 	team: string;
 	projectPath?: string;
+	// The Claude harness id to `--resume`, if the gateway has one mapped for this session.
+	resumeSessionId?: string;
 }
 
 function findProjectPath(team: string): string {
@@ -168,7 +173,19 @@ function findProjectPath(team: string): string {
 }
 
 async function handleWake(msg: WakeMessage): Promise<void> {
-	const projectPath = msg.projectPath || findProjectPath(msg.team);
+	// The composite carries (project, session); a bare name defaults the session to "claude". Both
+	// segments are interpolated into tmux/shell commands, so reject a non-slug before launching.
+	const { project, session } = parseSessionName(msg.team);
+	if (!isTmuxName(project) || !isTmuxName(session)) {
+		console.error(`[host-wake] refusing wake of "${msg.team}": invalid project/session name`);
+		if (ws?.readyState === WebSocket.OPEN) {
+			ws.send(
+				JSON.stringify({ type: "wake_result", team: msg.team, success: false, error: "invalid session name" }),
+			);
+		}
+		return;
+	}
+	const projectPath = msg.projectPath || findProjectPath(project);
 
 	// #region Hypothesis J: confirm wake message arrives at hostDaemon
 	debugLog("J", "hostDaemon.ts:handleWake", "wake received", {
@@ -201,11 +218,12 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 
 		console.error(`[host-wake] ${msg.team} container is up, starting Claude`);
 
+		const target: TmuxTarget = { kind: "devcontainer", name: projectName, sessionName: session };
 		let sessionExists = false;
 		try {
 			await execInContainer({
 				projectPath: resolved,
-				command: ["tmux", "has-session", "-t", "claude"],
+				command: ["tmux", "has-session", "-t", session],
 				timeoutMs: 10000,
 			});
 			sessionExists = true;
@@ -221,8 +239,8 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 					"new-session",
 					"-d",
 					"-s",
-					"claude",
-					buildLaunchCommand({ kind: "devcontainer", name: projectName, sessionName: "claude" }),
+					session,
+					buildLaunchCommand(target, { resumeSessionId: msg.resumeSessionId }),
 				],
 				timeoutMs: 15000,
 			});
@@ -240,15 +258,14 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			try {
 				lastScreen = await execInContainer({
 					projectPath: resolved,
-					command: ["tmux", "capture-pane", "-t", "claude", "-p"],
+					command: ["tmux", "capture-pane", "-t", session, "-p"],
 					timeoutMs: 10000,
 				});
 				captureOk = true;
 			} catch {
 				// a dead session's pane cannot be captured; keep polling
 			}
-			// "Claude Code v" appears on the idle prompt, not just the wizard
-			if (lastScreen.includes("Claude Code v") && !lastScreen.includes("Choose the text style")) {
+			if (isAgentReady(lastScreen)) {
 				console.error(`[host-wake] ${msg.team} Claude is ready`);
 				break;
 			}
@@ -256,7 +273,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 				try {
 					await execInContainer({
 						projectPath: resolved,
-						command: ["tmux", "send-keys", "-t", "claude", "", "Enter"],
+						command: ["tmux", "send-keys", "-t", session, "", "Enter"],
 						timeoutMs: 5000,
 					});
 				} catch {
@@ -319,15 +336,25 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 const CLAUDE_FLAGS =
 	"--dangerously-skip-permissions --dangerously-load-development-channels plugin:switchboard@atelier-nyaarium";
 
-// The launch command a create_session op runs in a fresh tmux session. The daemon owns it (the
-// console supplies only the target + session name), so an arbitrary host command can never be
-// injected. A host session is a loose conversational peer; `exec bash` keeps the pane alive after
-// Claude exits. A devcontainer session opens in its workspace project.
-function buildLaunchCommand(target: TmuxTarget): string {
+// The launch command for a session's tmux. The daemon owns it (callers supply only the target +
+// optional resume id), so an arbitrary host command can never be injected. The session registers
+// under its COMPOSITE name (`project.session`) by overriding PROJECT_NAME AFTER sourcing ~/.bashrc -
+// the override must run in the same shell as claude (a prefix on `source` would not survive), so the
+// whole chain is one `bash -c`. A host session keeps its pane alive with `exec bash` after Claude
+// exits; a devcontainer session opens in its workspace project. The target's name/sessionName are
+// slug-validated by callers; the resume id is uuid-shaped, so single-quote interpolation is safe.
+function buildLaunchCommand(target: TmuxTarget, opts: { resumeSessionId?: string } = {}): string {
+	const composite = composeSessionName(target.name, target.sessionName);
+	const resume =
+		opts.resumeSessionId && /^[0-9a-fA-F-]{8,}$/.test(opts.resumeSessionId)
+			? ` --resume ${opts.resumeSessionId}`
+			: "";
+	const effort = target.kind === "host" ? "low" : "high";
+	const claude = `claude --model default --effort ${effort} ${CLAUDE_FLAGS}${resume}`;
 	if (target.kind === "host") {
-		return `bash -c 'source ~/.bashrc && claude --model default --effort low ${CLAUDE_FLAGS}; exec bash'`;
+		return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${claude}; exec bash'`;
 	}
-	return `source ~/.bashrc && cd /workspace/${target.name} && claude --model default --effort high ${CLAUDE_FLAGS}`;
+	return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; cd /workspace/${target.name}; exec ${claude}'`;
 }
 
 // The executor owns single-flight + the peek cadence floor; this module only relays the

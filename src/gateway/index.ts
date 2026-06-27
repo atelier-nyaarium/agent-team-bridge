@@ -9,7 +9,7 @@ import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import type { HostOp, HostOpResult } from "../shared/host-op.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
-import { isComposite } from "../shared/session-id.js";
+import { isComposite, parseSessionName } from "../shared/session-id.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { createConsoleDispatcher } from "./console/consoleHandler.js";
@@ -201,12 +201,17 @@ export async function startGateway(): Promise<void> {
 			return false;
 		}
 
-		const projectPath = knownTeamPaths.get(team);
+		// A composite `project.session` resolves its container/path by the PROJECT segment (composites
+		// are never in knownTeamPaths); a mapped Claude id lets the daemon `--resume` the session.
+		const { project } = parseSessionName(team);
+		const projectPath = knownTeamPaths.get(project) ?? offlineCatalog.get(project);
+		const resumeSessionId = sessionResume.get(team)?.claudeSessionId;
 		hostWs.send(
 			JSON.stringify({
 				type: "wake",
 				team,
 				...(projectPath ? { projectPath } : {}),
+				...(resumeSessionId ? { resumeSessionId } : {}),
 			}),
 		);
 
