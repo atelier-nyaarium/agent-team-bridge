@@ -226,6 +226,18 @@ Implemented server-side per the spec. Files touched: `session-id.ts` (SESSION_SE
 
 **No `/questionaire` needed for P2:** the reassessment resolved both flagged forks by deferral (the `DATA_DIR` decision and the sessionId-capture/P2-P3 split both move to P3). The narrowing is a sequencing consequence of the registration-gating constraint, not a preference fork. Surfaced to the human at the refinement checkpoint.
 
+### P2 - implementation audits (audited-implementation lap 1)
+
+Files: `tmuxCore.ts` (`hasSession`/`ensureSession`), `hostDaemon.ts` (runner wiring -> `ensureSession`; `handleWake` uses `buildLaunchCommand` + dead-launch detection), `tmux-core.test.ts`. `bun run lint` + `bun run test` (719) green.
+
+- **Coding-guideline audit (2 Sonnet):** 4 nits fixed (timeless-comment wording, trimmed a JSDoc-restating comment, symmetric spawn-count assertion, removed a redundant default assignment).
+- **Alignment audit (5):** fully aligned to the reassessed spec, zero misalignments.
+- **Red-team (5):** two real fixes applied:
+  - **Wake dead-launch via `captureOk`:** the original final `has-session` check treated a transient docker timeout as a dead launch (false-negative -> /send fails fast). Replaced with "did any pane capture succeed across the 10-try poll" - a freshly launched session that captured zero times is gone; a reattached/slow-but-alive one captured at least once, so a single transient blip can't flip it. (`wake_result success:false` is the gateway's fail-fast signal; `success:true` defers to registration as before - so this only adds confident fast-fail, no regression.)
+  - **`ensureSession` idempotent on duplicate:** after a failed `new-session` (a racing create or a transient `has-session` miss), re-check `has-session`; if it now exists, treat as a reattach (`created:false`) instead of surfacing a "duplicate session" error. 2 new race tests.
+  - **Triaged OUT:** reattach-to-a-dead-pane (acceptable for P2; pane-health/`--resume` is P3, the chip is P4); the host-op reply's hardcoded `{created:true}` (P4 surfaces the outcome); the 600s wake-stall TOCTOU on `success:true` (pre-existing wake-stall painpoint, not introduced by P2); caching error results (rejected - retries should re-run, not replay an error).
+- **Framework (next step):** consolidation review.
+
 ## Painpoints (P1 crust)
 
 Concrete leads surfaced while building P1. `file : scope : name`, no line numbers. Not fixed here.

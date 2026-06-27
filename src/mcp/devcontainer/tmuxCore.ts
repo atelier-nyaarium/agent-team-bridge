@@ -123,3 +123,32 @@ export async function createSession(target: TmuxTarget, command: string): Promis
 	assertTmuxName(target.sessionName);
 	await run(tmuxArgv(target, ["new-session", "-d", "-s", target.sessionName, command]), 15_000);
 }
+
+/** Whether `target.sessionName` exists. `has-session` exits non-zero when it does not, so a
+ * non-zero exit is "absent", not a failure. Lets a caller reattach rather than re-launch. */
+export async function hasSession(target: TmuxTarget): Promise<boolean> {
+	assertTmuxName(target.sessionName);
+	try {
+		await run(tmuxArgv(target, ["has-session", "-t", target.sessionName]));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Reattach to `target.sessionName` if it is already alive, else launch a fresh agent. Returns
+ * whether a new session was created, so a create_session op reattaches instead of double-launching
+ * (a duplicate `new-session` on an existing name errors). */
+export async function ensureSession(target: TmuxTarget, command: string): Promise<{ created: boolean }> {
+	if (await hasSession(target)) return { created: false };
+	try {
+		await createSession(target, command);
+		return { created: true };
+	} catch (err) {
+		// A racing create, or a transient has-session miss above, can leave the session already
+		// present; tmux then rejects new-session as a duplicate. Re-check: if it now exists, that is
+		// the desired end state (reattach), else surface the real failure.
+		if (await hasSession(target)) return { created: false };
+		throw err;
+	}
+}

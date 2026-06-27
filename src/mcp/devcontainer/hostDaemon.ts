@@ -8,7 +8,7 @@ import { createReconnector } from "../../shared/reconnect.js";
 import { ensureContainerUpAsync, execInContainer, resolveProject } from "./helpers.js";
 import { createHostOpRunner } from "./hostOpRunner.js";
 import { spawnReloadPlugins } from "./reloadPlugins.js";
-import { createSession, peekPane, sendKey, sendText } from "./tmuxCore.js";
+import { ensureSession, peekPane, sendKey, sendText } from "./tmuxCore.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -214,7 +214,6 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		}
 
 		if (!sessionExists) {
-			const claudeCommand = `claude --model default --effort high --dangerously-skip-permissions --dangerously-load-development-channels plugin:switchboard@atelier-nyaarium`;
 			await execInContainer({
 				projectPath: resolved,
 				command: [
@@ -223,7 +222,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 					"-d",
 					"-s",
 					"claude",
-					`source ~/.bashrc && cd /workspace/${projectName} && ${claudeCommand}`,
+					buildLaunchCommand({ kind: "devcontainer", name: projectName, sessionName: "claude" }),
 				],
 				timeoutMs: 15000,
 			});
@@ -232,8 +231,10 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			console.error(`[host-wake] ${msg.team} Claude session already exists`);
 		}
 
-		// Poll tmux screen to auto-accept the dev channels prompt
+		// Poll the pane to auto-accept the dev-channels prompt, tracking whether it ever captured: a
+		// launch that exits instantly takes its tmux session down with it, so every capture fails.
 		let lastScreen = "";
+		let captureOk = false;
 		for (let i = 0; i < 10; i++) {
 			await new Promise((r) => setTimeout(r, 1000));
 			try {
@@ -242,8 +243,9 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 					command: ["tmux", "capture-pane", "-t", "claude", "-p"],
 					timeoutMs: 10000,
 				});
+				captureOk = true;
 			} catch {
-				// ignore capture errors
+				// a dead session's pane cannot be captured; keep polling
 			}
 			// "Claude Code v" appears on the idle prompt, not just the wizard
 			if (lastScreen.includes("Claude Code v") && !lastScreen.includes("Choose the text style")) {
@@ -263,6 +265,13 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			}
 		}
 
+		// Dead-launch detection: a launch that exits instantly (a bad ~/.bashrc, claude not on PATH, a
+		// wrong cwd) takes its tmux session down with it, so its pane never captures. A freshly
+		// launched session that captured zero times across the poll is gone -> report a failed wake so
+		// /send fails fast. A reattached or slow-but-alive session captured at least once, so a single
+		// transient capture error cannot flip the result.
+		const launchAlive = sessionExists || captureOk;
+
 		// #region Hypothesis L: log wake_result send state
 		debugLog("L", "hostDaemon.ts:handleWake", "sending wake_result success", {
 			team: msg.team,
@@ -272,13 +281,14 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		});
 		// #endregion
 
-		// Always send wake_result with a screen capture so the caller can assess
+		// Send wake_result with a screen capture so the caller can assess; success reflects whether
+		// the launched session is actually alive (dead-launch detection above).
 		if (ws?.readyState === WebSocket.OPEN) {
 			ws.send(
 				JSON.stringify({
 					type: "wake_result",
 					team: msg.team,
-					success: true,
+					success: launchAlive,
 					pluginsProvisioned,
 					screen: lastScreen,
 				}),
@@ -326,7 +336,11 @@ const hostOpRunner = createHostOpRunner({
 	peekPane,
 	sendText,
 	sendKey,
-	createSession: (target) => createSession(target, buildLaunchCommand(target)),
+	createSession: async (target) => {
+		// a create_session op for an existing session reattaches instead of erroring on a duplicate
+		// new-session.
+		await ensureSession(target, buildLaunchCommand(target));
+	},
 	reloadPlugins: async (target) => {
 		spawnReloadPlugins(target);
 	},
