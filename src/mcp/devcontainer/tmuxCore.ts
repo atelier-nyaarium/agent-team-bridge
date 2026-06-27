@@ -253,8 +253,11 @@ export async function awaitReady(
 			if (!captureOk && ++missedProbes >= DEAD_LAUNCH_PROBES) return { alive: false, ready: false, screen };
 			continue;
 		}
-		if (isAgentReady(screen)) return { alive: true, ready: true, screen };
-		if (STARTUP_PROMPT_RE.test(screen)) {
+		// capture-pane -e carries SGR escapes that precede the composer and split a prompt phrase, so
+		// match against the stripped text (isAgentReady strips internally; the prompt check must too).
+		const clean = stripAnsi(screen);
+		if (isAgentReady(clean)) return { alive: true, ready: true, screen };
+		if (STARTUP_PROMPT_RE.test(clean)) {
 			try {
 				await pressOne(target);
 			} catch {

@@ -334,6 +334,16 @@ describe("tmuxCore awaitReady", () => {
 		}
 	});
 
+	it('presses "1" when SGR escapes split the prompt phrase in a real -e capture', async () => {
+		// capture-pane -e wraps cells in SGR codes, so the phrase is not contiguous in the raw bytes;
+		// awaitReady must strip before matching, or the menu never gets cleared.
+		const esc = String.fromCharCode(27);
+		stdoutData = `  ${esc}[7m❯ 1.${esc}[0m I am ${esc}[1musing${esc}[0m this for ${esc}[2mlocal${esc}[0m development\n    2. Exit`;
+		const res = await awaitReady(target, { pollMs: 5, timeoutMs: 40 });
+		expect(res).toMatchObject({ alive: true, ready: false });
+		expect(calls).toContainEqual(["tmux", "send-keys", "-t", "scratch.0", "-l", "--", "1"]);
+	});
+
 	it("reports a dead launch (alive:false) early when the pane never captures", async () => {
 		exitCode = 1; // capture-pane always fails: the session exited on launch
 		// Budget large enough that the dead-launch early-out (not the deadline) is what returns.
