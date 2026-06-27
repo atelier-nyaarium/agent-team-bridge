@@ -88,6 +88,9 @@ export const WsRegisterSchema = z.object({
 	// The plugin version (package.json) the MCP process is running. Absent for
 	// non-plugin registrants (e.g. the host daemon); the plugin always reports it.
 	version: z.string().optional(),
+	// The Claude Code harness session id, reported so the gateway can persist a
+	// `team -> claudeSessionId` map and `claude --resume <id>` the session on a later wake.
+	claudeSessionId: z.string().optional(),
 	// Shared secret the host daemon presents so a LAN peer cannot squat the reserved
 	// "host" slot and drive agent terminals. Optional on the wire (only the host slot
 	// sends it), but the host slot is fail-closed: a host register is refused unless the

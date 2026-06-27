@@ -61,12 +61,13 @@ export async function startGateway(): Promise<void> {
 
 	// Durable state (federation private keys, pending-jobs, mailboxes, replay-guard, the session
 	// resume map) lives in DATA_DIR, deliberately SEPARATE from the debug-log dir so a "clear the
-	// logs" action can never wipe federation identity. One-time migration: durable state used to
-	// live beside debug.log; copy each item into DATA_DIR if absent there (runs once, never clobbers
-	// newer data, must not lose federation keys).
+	// logs" action can never wipe federation identity.
 	const DATA_DIR = process.env.DATA_DIR || "/app/data";
 	try {
 		fs.mkdirSync(DATA_DIR, { recursive: true });
+		// TODO(remove after a few days, ~2026-07): one-time migration of durable state that used to
+		// live beside debug.log into DATA_DIR. Copies each item only if absent there (runs once, never
+		// clobbers newer data, must not lose federation keys). Delete once all gateways have migrated.
 		const legacyDir = path.dirname(LOG_PATH);
 		for (const item of ["federation", "pending-jobs.json", "mailboxes.json", "replay-guard.json"]) {
 			const src = path.join(legacyDir, item);
@@ -122,23 +123,33 @@ export async function startGateway(): Promise<void> {
 	// the console's durable cursor still matches) to DATA_DIR, reload on boot, re-save on a timer.
 	const jobsDurable = new DurableStore(DATA_DIR, "pending-jobs");
 	const mailboxDurable = new DurableStore(DATA_DIR, "mailboxes");
+	// team -> the session's Claude harness id, so a later wake can `claude --resume <id>` it.
+	const sessionResume = new Map<string, { claudeSessionId: string; lastSeen: number }>();
+	const sessionResumeDurable = new DurableStore(DATA_DIR, "session-resume");
 	try {
 		const jobs = jobsDurable.load();
 		if (Array.isArray(jobs)) store.restore(jobs as Parameters<typeof store.restore>[0]);
 		const boxes = mailboxDurable.load();
 		if (boxes && typeof boxes === "object")
 			mailboxStore.restore(boxes as Parameters<typeof mailboxStore.restore>[0]);
+		const resume = sessionResumeDurable.load();
+		if (resume && typeof resume === "object")
+			for (const [team, v] of Object.entries(
+				resume as Record<string, { claudeSessionId: string; lastSeen: number }>,
+			))
+				sessionResume.set(team, v);
 	} catch (err) {
 		// A corrupt or partial snapshot must not crash-loop boot; start from empty delivery state.
 		console.error("[durability] restore failed, starting fresh:", err);
 	}
-	console.log(`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size}`);
+	console.log(`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size} resume=${sessionResume.size}`);
 	// The federation replay-guard wires its own persistence here once built (it only
 	// exists when the evie bridge is configured); null-safe until then.
 	let replayPersist: (() => void) | null = null;
 	const persistDelivery = () => {
 		jobsDurable.save(store.snapshot());
 		mailboxDurable.save(mailboxStore.snapshot());
+		sessionResumeDurable.save(Object.fromEntries(sessionResume));
 		replayPersist?.();
 	};
 	const persistTimer = setInterval(persistDelivery, 3_000);
@@ -540,6 +551,8 @@ export async function startGateway(): Promise<void> {
 		onVirtualPeerEvicted: (conversationId) => {
 			evictConsolePeer?.(conversationId);
 		},
+		recordSessionResume: (team, claudeSessionId) =>
+			sessionResume.set(team, { claudeSessionId, lastSeen: Date.now() }),
 	});
 
 	function buildRoutes() {

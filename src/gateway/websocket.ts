@@ -30,6 +30,8 @@ export interface WebSocketDeps {
 	// Fired when a real registration evicts a virtual console peer, so the console
 	// handler can clear its binding/mailbox and let the device re-register.
 	onVirtualPeerEvicted?: (conversationId: string) => void;
+	// Record a session's reported Claude harness id, keyed by team, for later `claude --resume`.
+	recordSessionResume?: (team: string, claudeSessionId: string) => void;
 }
 
 export interface WsData {
@@ -85,6 +87,7 @@ export function createWebSocketHandlers({
 	onTeamConnect,
 	onTeamDisconnect,
 	onVirtualPeerEvicted,
+	recordSessionResume,
 }: WebSocketDeps) {
 	const { HEARTBEAT_INTERVAL_MS = 30000, MISSED_PINGS_LIMIT = 2 } = config;
 
@@ -230,6 +233,11 @@ export function createWebSocketHandlers({
 			// loose session and must never land in knownTeamPaths (it would be misclassified).
 			if (typeof msg.projectPath === "string" && msg.projectPath && !isComposite(team)) {
 				knownTeamPaths.set(team, msg.projectPath);
+			}
+
+			// Remember the session's Claude harness id so a later wake can `claude --resume` it.
+			if (typeof msg.claudeSessionId === "string" && msg.claudeSessionId) {
+				recordSessionResume?.(team, msg.claudeSessionId);
 			}
 
 			wakeCoordinator.notify(team);

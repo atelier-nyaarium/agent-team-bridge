@@ -162,6 +162,10 @@ export function connectToRouter(): void {
 		if (process.env.PROJECT_HOST_PATH) {
 			registerMsg.projectPath = process.env.PROJECT_HOST_PATH;
 		}
+		// Report the harness session id so the gateway can `claude --resume <id>` this session later.
+		if (process.env.CLAUDE_CODE_SESSION_ID) {
+			registerMsg.claudeSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+		}
 		routerWs!.send(JSON.stringify(registerMsg));
 	});
 
