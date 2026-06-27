@@ -7,7 +7,7 @@ import type { SealedEnvelope } from "../shared/crypto.js";
 import { type FederatedOp, ReturnRouteSchema } from "../shared/federation-protocol.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
 import { ChannelFilesSchema } from "../shared/schemas.js";
-import { isComposite, NoticeId, SessionId, TeamAddress } from "../shared/session-id.js";
+import { NoticeId, SessionId, TeamAddress } from "../shared/session-id.js";
 import type {
 	ChannelFile,
 	ConnectionMode,
@@ -426,9 +426,11 @@ export function createRoutes({
 	function teams(): Response {
 		const teamsList: TeamInfo[] = [];
 		const seen = new Set<string>();
-		// A composite `project.session` is a loose session, never the bare project (the spawn-point).
-		const isDevcontainer = (name: string) =>
-			!isComposite(name) && (offlineCatalog.has(name) || knownTeamPaths.has(name));
+		// Catalog membership IS the spawn-point signal: only bare projects are ever in the catalog
+		// (the register write-guard keeps composites out), so a name that is literally in it is a
+		// devcontainer even when the dir name contains a dot ("my.app") - the mechanical isComposite
+		// test would wrongly read that as a session.
+		const isDevcontainer = (name: string) => offlineCatalog.has(name) || knownTeamPaths.has(name);
 		// The owner's display name, stamped on every local session so a linked friend
 		// Domain sees the owner's self-set name over the discovery roster. Spread in only
 		// when set, so a Gateway with no display name emits a minimal TeamInfo (the field
@@ -452,7 +454,6 @@ export function createRoutes({
 			// Plugin version reported by an active real socket (virtual console peers carry
 			// none); the same value across a team's sub-sessions in practice.
 			const version = getAllActiveRealWs(subs)[0]?.data.version;
-			const lastActive = sessionResume?.get(name)?.lastSeen;
 			teamsList.push({
 				team: name,
 				gatewayId: localGatewayId,
@@ -463,7 +464,8 @@ export function createRoutes({
 				mode: getTeamMode(subs),
 				kind: isConsole ? "console" : isDevcontainer(name) ? "devcontainer" : "loose",
 				version,
-				...(lastActive ? { lastActive } : {}),
+				// lastActive is omitted for an online session: it is active NOW, and the resume map's
+				// timestamp is the register time, which would read as stale. Only asleep sessions carry it.
 				queue_depth: 0,
 			});
 		}

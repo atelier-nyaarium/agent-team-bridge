@@ -336,7 +336,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			delay(repo.terminalRefreshMs)
 		}
 	}
-	LaunchedEffect(boardSessions.map { it.name }, openTeam) {
+	LaunchedEffect(boardSessions.map { it.name }.sorted(), openTeam) {
 		if (openTeam != null) return@LaunchedEffect
 		for (s in boardSessions) {
 			val local = s.gatewayId.isEmpty() || s.gatewayId == state.localGatewayId

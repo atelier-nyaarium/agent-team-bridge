@@ -9,7 +9,7 @@ import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import type { HostOp, HostOpResult } from "../shared/host-op.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
-import { isComposite, parseSessionName } from "../shared/session-id.js";
+import { parseSessionName } from "../shared/session-id.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { createConsoleDispatcher } from "./console/consoleHandler.js";
@@ -195,10 +195,11 @@ export async function startGateway(): Promise<void> {
 	}
 
 	async function doWakeTeam(team: string): Promise<boolean> {
-		// Clean break: a bare project is a non-chat spawn-point, not a session. A send to it has no
+		// Clean break: a catalog project is a non-chat spawn-point, not a session. A send to it has no
 		// destination (the daemon would launch project.<default> under a name the waiter never sees),
-		// so fail fast instead of waiting out WAKE_TIMEOUT_MS. Named sessions are composites.
-		if (!isComposite(team) && (offlineCatalog.has(team) || knownTeamPaths.has(team))) {
+		// so fail fast instead of waiting out WAKE_TIMEOUT_MS. Catalog membership is the signal (a
+		// dotted dir name "my.app" is still a project); named sessions are never in the catalog.
+		if (offlineCatalog.has(team) || knownTeamPaths.has(team)) {
 			console.log(`[wake] ${team} is a spawn-point project, not a session; not waking`);
 			return false;
 		}
@@ -628,7 +629,7 @@ export async function startGateway(): Promise<void> {
 			mailboxStore,
 			routes,
 			localGatewayId,
-			isProjectName: (name) => !isComposite(name) && (offlineCatalog.has(name) || knownTeamPaths.has(name)),
+			isProjectName: (name) => offlineCatalog.has(name) || knownTeamPaths.has(name),
 			// Forget drops the session's durable resume record so it stops listing as available.
 			dropSessionResume: (team) => sessionResume.delete(team),
 			domain: () => {
