@@ -2496,12 +2496,25 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 	)
 }
 
-/** Name and spawn a new session in a spawn-point project. The session name is a slug (it becomes
- * the tmux session + the composite identity), so the spawn button is disabled until it is valid. */
+// Runs of anything outside [a-z0-9] collapse to a single '-' (this is both the non-alnum replace and
+// the repeat-dash compress in one pass).
+private val SLUG_NON_ALNUM = Regex("[^a-z0-9]+")
+
+/** Lowercase, collapse non-[a-z0-9] runs to a single '-', trim '-' from both ends, cap at the
+ * tmux-name length. Applied ON SPAWN, not per keystroke: transforming the field value live would snap
+ * the cursor to the end (a String-backed TextField resets selection on value change), so the field
+ * keeps the raw text and SpawnDialog shows a live preview of this result instead. */
+internal fun slugifySessionName(raw: String): String =
+	raw.lowercase().replace(SLUG_NON_ALNUM, "-").trim('-').take(64).trimEnd('-')
+
+/** Name and spawn a new session in a spawn-point project. The session name becomes the tmux session
+ * + the composite identity, so any typed text is accepted and converted to a slug ON SPAWN (the field
+ * keeps the raw text so the cursor never jumps); a live preview shows the resulting slug and the spawn
+ * button is disabled only when that slug is empty. */
 @Composable
 fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Unit) {
 	var name by remember { mutableStateOf("") }
-	val valid = name.matches(Regex("^[a-z0-9][a-z0-9-]*$")) && name.length <= 64
+	val slug = slugifySessionName(name)
 	AlertDialog(
 		onDismissRequest = onDismiss,
 		title = { Text("New session in $project") },
@@ -2513,16 +2526,15 @@ fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Uni
 					label = { Text("Session name") },
 					placeholder = { Text("e.g. scratch") },
 					singleLine = true,
-					isError = name.isNotEmpty() && !valid,
 				)
 				Text(
-					"Lowercase letters, digits and dashes.",
+					if (slug.isEmpty()) "Type anything; it converts to a slug on spawn." else "Will create: $slug",
 					style = MaterialTheme.typography.bodySmall,
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 				)
 			}
 		},
-		confirmButton = { TextButton(enabled = valid, onClick = { onSpawn(name) }) { Text("Spawn") } },
+		confirmButton = { TextButton(enabled = slug.isNotEmpty(), onClick = { onSpawn(slug) }) { Text("Spawn") } },
 		dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
 	)
 }
