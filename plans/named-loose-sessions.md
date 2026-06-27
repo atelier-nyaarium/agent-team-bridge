@@ -349,6 +349,16 @@ Design verdict: SOUND. Every "blocker" the audit raised is a not-yet-built item 
 - **S3 SIMPLIFICATION (app-driven, NOT a server loop):** add `isAgentWorking(screen)` (the `esc to interrupt` spinner) beside `isAgentReady` in `tmuxCore` + the Kotlin twin (so the chip + terminal readiness agree). The poll lives in the APP, reusing the existing `peek` op: while a chat is OPEN the app peeks that one session continuously and sets working/idle from the marker; background sessions get ONE cheap peek when the list renders (no rearm). No `TeamInfo.working` field and no new server poll subsystem - the app holds the state. Replaces the heuristic `ChatRepository.working()` (last-message-status) with marker-based truth.
 - **S4 exact wiring:** parse the project segment app-side (S1 Kotlin) to group composites under their devcontainer spawn-point header; bare project header is NOT chat-tappable (opens the name dialog); children open chat. `terminalEligible` widens from `kind=='devcontainer'` to any local daemon-drivable target (composite session + host).
 
+### P4 - implemented (audited-implementation lap 1)
+
+S1-S4 shipped + green on both runtimes (TS `bun run lint`+test 739; Android `:app:testDebugUnitTest` BUILD SUCCESSFUL):
+- **S1:** `sessionName` shared vectors + `Protocol.kt` SESSION_SEP/DEFAULT_SESSION + `SessionId.kt` parse/compose/isComposite twin + cross-runtime tests.
+- **S2:** `teams()` surfaces resume-map composites as available (with `lastActive`); `killSession` host-op + `forget` console op (composite-guarded) + `dropSessionResume`.
+- **S3:** `isAgentWorking` marker on both runtimes (`AgentScreen.kt` twin); the working chip is peek-backed (open chat continuous, others one-shot no rearm); Forget fires the gateway op.
+- **S4:** board renders devcontainer projects as spawn-point headers with nested `project.session` chats; the session-name dialog (slug-validated) calls `create_session` then opens the composite; `terminalEligible` widened to any local composite; bare project no longer opens a chat.
+
+**Deferred P4 polish (cosmetic, on-device-tunable, NOT structural):** the `restored`/`started fresh` chip (needs the open/wake outcome threaded to the chip) and the `Check terminal` chip (a fallback for an unclean pane that taps into the Terminal view). The working chip + spawn flow + nesting are the structural deliverables and are done. These two chips are reads over already-available state (peek + status) and can land in a follow-up without reworking anything.
+
 ## Painpoints (P1 crust)
 
 Concrete leads surfaced while building P1. `file : scope : name`, no line numbers. Not fixed here.
