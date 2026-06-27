@@ -15,17 +15,15 @@ Work ONE phase at a time. For each phase, run this loop:
 3. **Implementation cycles** (`cycleStartPlan` cycle=`audited-implementation`).
 4. **Phase done -> on the NEXT loop, REASSESS the remaining phases** against what changed before starting them.
 
-Standing pre-authorization: launch Workflow audits at any point I decide. Commit direct to main (workflow preference). Currently executing: **P1**.
+Standing pre-authorization: launch Workflow audits at any point I decide. Commit direct to main (workflow preference).
+
+**Loop status:** P0 done (substrate mapped). **P1 DONE + sealed** (composite addressing + de-hardcode, shipped to main `3bd8d88`/`ca69866`/`ed88e37`). **P2 next** - start with its plan-refinement cycle.
 
 ---
 
-Phased delivery (each phase gets its own `/questionaire` + Workflows fan-out, verified one at a time):
-- **P0** - map the substrate (no code). <- current
-- **P1** - enumerate all sessions (host daemon as capture poller, read-only listing).
-- **P2** - de-hardcode the session name (thread a name through peek/tmux_send/reload/create_session + both gates).
-- **P3** - demote the devcontainer fixed session to loose (mirror the host precedent).
-- **P4** - the new wake UX (tap available -> session-name dialog -> wake + spawn named tmux -> restore if exists).
-- **P5** - surface host-loose sessions in the app.
+The authoritative phase breakdown is the **## Plan** section below (P1-P6), refined after P0. The pre-refinement P0-P5 sketch was superseded once Q5 (crosstalk) folded multi-party into one phase and the separator resolved to `.`.
+
+**Reassessment for P2 (after P1):** P1 already shipped the `project.session` grammar, the de-hardcode of the read ops (peek/tmux_send/reload), boundary validation, and the shared `assertTmuxName`. So P2 narrows to: the unified `openSession` op (wake + reattach/resume/fresh), the durable `project.session -> claudeSessionId` map, and de-hardcoding the **wake path** in `hostDaemon.ts` (still `claude`-only). The separator is settled (`.`), so no separator re-litigation. Pin a spawned session's MCP identity to its composite name (env) is P3.
 
 ## Questionaire
 
@@ -52,7 +50,7 @@ Six-reader Workflows fan-out (`wf_4551a0b8-51f`). Key substrate facts:
 
 **Q1 - addressable identity of a spawned session: A) composite `project/session`.**
 The container tile stays a non-chat spawn point; each spawned session is a loose card addressed `project/sessionname`. The address self-describes its container, so re-wake and federation re-reach need no separate durable mapping. (Chosen over a flat-name + side-map, and over container-stays-the-team sub-sessions which would break the broadcast-to-all-subs send model.)
-- Wire note to resolve in P2: `gateway/name` already uses `/` as the qualifier separator, so `gateway/project/session` has two segments after the gateway. Either `parseQualifiedTeam` must handle a multi-segment local name, or the intra-name separator is something other than `/` (e.g. `project:session`). Implementation detail, flagged.
+- Wire note (RESOLVED in P1): the intra-name separator is **`.`** (`SESSION_SEP`), not `/`. A composite local name is `project.session`; the gateway qualifier stays `/` (so a full wire name is `gateway/project.session`), `:` stays the session-id separator. So the addressable identity is `project.session`, not `project/session`.
 
 **Q2 - session lifecycle across container sleep: A) durable + resumable, UNTIL the chat is "Forget"-ed.**
 A spawned `project/session` is remembered after the container sleeps (shows "available", like a devcontainer does today); tapping it wakes the container and restores (reattach if tmux alive, else `claude --resume` the mapped session id, else fresh). The durable record (incl. the `name -> claudeSessionId` mapping) is the lifetime of the chat: pressing **Forget** on the chat is what drops the record (and should tear down / stop listing that session). So "Forget" becomes the single delete verb for a named session.
@@ -167,3 +165,12 @@ Implemented server-side per the spec. Files touched: `session-id.ts` (SESSION_SE
   - **Boundary validation:** a malformed session (trailing-dot -> empty, bad chars, oversized) now rejects cleanly at `resolveTmuxTarget` via shared `isTmuxName` (slug + 64-char cap), instead of a cryptic late host-side failure. Also rejects a dot in a `create_session` session name (a dot would break the composite round-trip). 5 new rejection tests.
   - **lastCapture eviction:** the peek cadence map (keyed by the now-user-varying `session`) gained TTL eviction (mirrors the proven sentCache cleanup), so it cannot grow unbounded.
   - **Triaged OUT (not a P1 issue):** the "cross-tenant project access" finding is pre-existing and does not match the architecture - a gateway serves ONE Domain, and P1 does not widen WHICH projects are reachable (still the global catalog, already true pre-P1), only adds session granularity within an already-reachable project. Per-console scoping within a Domain, if ever wanted, belongs with `gateway-auth-surface.md`, not P1.
+
+## Painpoints (P1 crust)
+
+Concrete leads surfaced while building P1. `file : scope : name`, no line numbers. Not fixed here.
+
+- `src/mcp/devcontainer/reloadPlugins.ts : registerReloadPlugins : args.team` - the in-session `reload_plugins` tool interpolates agent-supplied `args.team` into a `docker exec "${team}_devcontainer-dev-1"` shell string with NO validation. `assertTmuxName` is now imported in this file (P1), so guarding it is a one-liner. Pre-existing injection surface (also in `gateway-auth-surface.md`); out of P1 scope.
+- `src/gateway/console/consoleHandler.ts : resolveTmuxTarget : isProjectName scope` - `isProjectName` is the gateway-GLOBAL catalog, not per-owner/per-console. Harmless today (a gateway serves ONE Domain), but if multi-owner-per-gateway ever exists, terminal targeting would need per-console scoping. Track with `gateway-auth-surface.md`.
+- `src/mcp/devcontainer/hostDaemon.ts : handleWake : (hardcoded "claude")` - the wake path still hardcodes the `claude` session (has-session / new-session / capture / auto-accept). P2's `openSession` unifies this with the composite model. Until then a woken devcontainer only ever gets the `claude` session, so a composite `project.other` peek before P2 finds "no server running" for `other`.
+- `src/mcp/devcontainer/reloadPlugins.ts : module : TMUX_SESSION` - the in-session tool still hardcodes `claude`. P3 (MCP identity pinning) makes a spawned session register under its composite name, at which point the in-session tool should drive its own session name rather than the literal.
