@@ -200,6 +200,9 @@ data class ChatState(
 	/** Per-session working truth from a tmux peek (the spinner marker), keyed like working()'s
 	 * argument. Takes precedence over the message-status heuristic once a peek has landed. */
 	val sessionWorking: Map<String, Boolean> = emptyMap(),
+	/** Per-session not-logged-in truth from a tmux peek (the auth footer). A logged-out session still
+	 * renders a composer, so this is tracked apart from working/live and drives the check-terminal chip. */
+	val sessionNeedsLogin: Map<String, Boolean> = emptyMap(),
 	val status: String = "",
 	val error: String? = null,
 	val gap: Boolean = false,
@@ -249,6 +252,10 @@ data class ChatState(
 		return (last.fromMe && (last.status == null || last.status == "pending")) ||
 			last.status == "running" || last.status == "waking"
 	}
+
+	/** Whether the agent's session is logged out (its tmux auth footer shows "Not logged in"), from a
+	 * peek. Independent of working/live: a logged-out session still presents a composer. */
+	fun needsLogin(team: String): Boolean = sessionNeedsLogin[team] == true
 
 	/** Bridge link health for the dashboard header: green once registered and polling
 	 * cleanly, blue while finishing enrollment (allowlist syncing), amber while a poll-failure
@@ -2117,10 +2124,16 @@ class ChatRepository(
 		withContext(Dispatchers.IO) { runCatching { client().peek(team, sinceHash) } }
 			.onSuccess { it.ansi?.let { a -> noteScreen(team, a) } }
 
-	/** Update a session's working flag from a captured pane (the spinner marker is the truth). */
+	/** Update a session's working + needs-login flags from a captured pane (the spinner and auth
+	 * footer markers are the truth). */
 	fun noteScreen(team: String, ansi: String) {
 		if (ansi.isEmpty()) return
-		_state.update { it.copy(sessionWorking = it.sessionWorking + (team to AgentScreen.isWorking(ansi))) }
+		_state.update {
+			it.copy(
+				sessionWorking = it.sessionWorking + (team to AgentScreen.isWorking(ansi)),
+				sessionNeedsLogin = it.sessionNeedsLogin + (team to AgentScreen.isLoggedOut(ansi)),
+			)
+		}
 	}
 
 	/** A cheap one-shot peek that refreshes a session's working flag without rearming - for the
@@ -2573,6 +2586,7 @@ class ChatRepository(
 				unread = s.unread - team,
 				openTabs = s.openTabs - team,
 				sessionWorking = s.sessionWorking - team,
+				sessionNeedsLogin = s.sessionNeedsLogin - team,
 			)
 		}
 		persistThreads(next.threads)

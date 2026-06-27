@@ -15,6 +15,35 @@ const EXEC_TIMEOUT_MS = 8_000;
 // the sealed reply path. Excess bytes are dropped (the visible pane is far smaller).
 const MAX_CAPTURE_BYTES = 256_000;
 
+// Startup readiness polling. A large resumed history can take a while to render, so the budget is
+// generous; the wake path's gateway-side timeout is 10 minutes, so this never races it.
+const READY_TIMEOUT_MS = 90_000;
+const READY_POLL_MS = 1_000;
+// A live session (even a slow one) captures its booting/menu screen within a poll or two; a dead
+// launch (bad bashrc, claude off PATH) takes its tmux session down and never captures. Bail after
+// this many consecutive no-capture polls so a dead launch fails fast instead of stalling the budget.
+const DEAD_LAUNCH_PROBES = 8;
+
+// The ready composer prompt "❯" anchored at column 0. The dev-channels / folder-trust /
+// resume-picker menus show an INDENTED cursor ("  ❯ 1."), so the line-start anchor matches the real
+// composer and never a menu line.
+const COMPOSER_RE = /^❯/mu;
+// The settled spinner frame "✻". A turn is still running while its status line also shows the
+// ellipsis "…" or "Waiting for"; once it shows neither, the turn is done.
+const SNOWFLAKE = "✻";
+const ELLIPSIS_RE = /…|\.{3}/u;
+const WAITING_RE = /Waiting for/;
+// The launch menus cleared by pressing "1" (which selects and confirms the highlighted option):
+// dev-channels, folder-trust, and the fullscreen-renderer offer. They can appear in any order and
+// not all on every launch, so the loop re-checks each poll rather than assuming a fixed sequence.
+const STARTUP_PROMPT_RE =
+	/I am using this for local development|Is this a project you created|trust this folder|Try the new fullscreen renderer/;
+// The auth status renders in the bottom toolbar, below the composer's lower rule line (three U+2500
+// dashes). Scoping the logged-out check to the region after the last rule keeps "/login" typed into
+// the composer, or printed in the transcript above, from tripping it.
+const TOOLBAR_RULE = "───";
+const LOGGED_OUT_RE = /Not logged in|Run \/login/;
+
 ////////////////////////////////
 //  Functions & Helpers
 
@@ -147,19 +176,93 @@ export async function hasSession(target: TmuxTarget): Promise<boolean> {
 	}
 }
 
-/** Whether a captured pane shows claude idle/ready: past the first-run wizard and at the REPL. A
- * fresh start shows the "Claude Code v" header; a resumed session jumps straight into the restored
- * conversation and shows the "? for shortcuts" prompt line instead. */
-export function isAgentReady(screen: string): boolean {
-	if (screen.includes("Choose the text style")) return false;
-	return screen.includes("Claude Code v") || screen.includes("? for shortcuts");
+// capture-pane runs with -e, so the screen carries SGR color escapes. Strip them before matching: an
+// escape at the start of a line defeats the composer's ^ anchor, and one splitting a phrase defeats a
+// substring check. The Kotlin twin strips the same in AgentScreen.kt.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matches the literal ESC of an ANSI CSI sequence
+const ANSI_CSI_RE = /\x1b\[[0-9;?]*[A-Za-z]/g;
+function stripAnsi(screen: string): string {
+	return screen.replace(ANSI_CSI_RE, "");
 }
 
-/** Whether a captured pane shows claude actively processing a turn: the spinner footer prints
- * "esc to interrupt" only while a turn is running, so its absence at the REPL means idle. The
- * console's working chip polls this on the open session (the Kotlin twin lives in AgentScreen.kt). */
+/** Whether a captured pane shows claude at the idle REPL composer, i.e. startup finished (menus
+ * cleared, history rendered). The composer prompt sits at column 0; the dev-channels / folder-trust /
+ * resume-picker menus show an indented cursor, so the line-start anchor never matches a menu. Both a
+ * fresh launch and a resumed session settle here. Used once per wake or fresh spawn to know the
+ * session is up; the working/done state (isAgentWorking) takes over after the first message. The
+ * Kotlin twin lives in AgentScreen.kt. */
+export function isAgentReady(screen: string): boolean {
+	return COMPOSER_RE.test(stripAnsi(screen));
+}
+
+/** Whether a captured pane shows claude actively working a turn. The status line is the last line
+ * carrying the settled spinner; the turn is running while that line shows the ellipsis or "Waiting
+ * for". A pane with no spinner line is idle (a fresh REPL) or done, not working - so the chip can
+ * poll this across all listed sessions without lighting a freshly-spawned idle one. Meaningful after
+ * a message has been sent (the Kotlin twin lives in AgentScreen.kt). */
 export function isAgentWorking(screen: string): boolean {
-	return screen.includes("esc to interrupt");
+	const status = stripAnsi(screen)
+		.split("\n")
+		.findLast((line) => line.includes(SNOWFLAKE));
+	if (status === undefined) return false;
+	return ELLIPSIS_RE.test(status) || WAITING_RE.test(status);
+}
+
+/** Whether the captured pane shows claude logged out: its bottom toolbar prints "Not logged in" /
+ * "Run /login". Independent of ready/working - a logged-out session still renders the composer, so a
+ * caller must check this separately. Detectable at any peek (the footer persists), including a token
+ * that expires mid-session. The Kotlin twin lives in AgentScreen.kt. */
+export function isLoggedOut(screen: string): boolean {
+	const lines = stripAnsi(screen).split("\n");
+	const lastRule = lines.findLastIndex((line) => line.includes(TOOLBAR_RULE));
+	const footer = lines.slice(lastRule + 1).join("\n");
+	return LOGGED_OUT_RE.test(footer);
+}
+
+/** Press the literal "1" key: it selects AND confirms the highlighted option on the launch menus
+ * (no trailing Enter). The daemon presses it itself to clear the dev-channels and folder-trust
+ * prompts, so it does not pass through the console keystroke whitelist. */
+function pressOne(target: TmuxTarget): Promise<void> {
+	return serialized(targetKey(target), async () => {
+		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), "-l", "--", "1"]));
+	});
+}
+
+/** Poll the pane until the REPL composer appears, pressing "1" through the dev-channels and
+ * folder-trust menus as they show. Returns whether the launch is alive: a launch that exits
+ * instantly takes its tmux session down with it, so a pane that never captures is a dead launch. */
+export async function awaitReady(
+	target: TmuxTarget,
+	opts: { timeoutMs?: number; pollMs?: number } = {},
+): Promise<{ alive: boolean; ready: boolean; screen: string }> {
+	const timeoutMs = opts.timeoutMs ?? READY_TIMEOUT_MS;
+	const pollMs = opts.pollMs ?? READY_POLL_MS;
+	const deadline = Date.now() + timeoutMs;
+	let captureOk = false;
+	let missedProbes = 0;
+	let screen = "";
+	while (Date.now() < deadline) {
+		await new Promise((r) => setTimeout(r, pollMs));
+		try {
+			screen = (await peekPane(target)).ansi;
+			captureOk = true;
+		} catch {
+			// A dead pane cannot be captured. If it has NEVER captured, bail early as a dead launch
+			// rather than waiting out the full (resume-sized) budget. Once it has captured at least
+			// once it is alive, so a later transient peek failure does not trip the dead-launch out.
+			if (!captureOk && ++missedProbes >= DEAD_LAUNCH_PROBES) return { alive: false, ready: false, screen };
+			continue;
+		}
+		if (isAgentReady(screen)) return { alive: true, ready: true, screen };
+		if (STARTUP_PROMPT_RE.test(screen)) {
+			try {
+				await pressOne(target);
+			} catch {
+				// a transient send failure self-heals on the next poll
+			}
+		}
+	}
+	return { alive: captureOk, ready: isAgentReady(screen), screen };
 }
 
 /** Reattach to `target.sessionName` if it is already alive, else launch a fresh agent. Returns

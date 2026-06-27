@@ -22,8 +22,11 @@ vi.mock("node:child_process", () => ({
 		child.stdout = new EventEmitter();
 		child.stderr = new EventEmitter();
 		child.kill = () => {};
+		// Only a capture-pane returns a screen; a send-keys / has-session / etc. has no stdout, so a
+		// scripted screen is not consumed by the "1" keypresses awaitReady interleaves with its peeks.
+		const out = args.includes("capture-pane") ? stdoutData : "";
 		queueMicrotask(() => {
-			if (stdoutData) child.stdout.emit("data", Buffer.from(stdoutData));
+			if (out) child.stdout.emit("data", Buffer.from(out));
 			child.emit("close", code);
 		});
 		return child;
@@ -31,11 +34,13 @@ vi.mock("node:child_process", () => ({
 }));
 
 import {
+	awaitReady,
 	createSession,
 	ensureSession,
 	hasSession,
 	isAgentReady,
 	isAgentWorking,
+	isLoggedOut,
 	killSession,
 	peekPane,
 	sendKey,
@@ -203,16 +208,22 @@ describe("tmuxCore isAgentReady", () => {
 		expect(isAgentReady("Loading development channels...")).toBe(false);
 	});
 
-	it("is false while the first-run wizard is showing, even past the header", () => {
-		expect(isAgentReady("Claude Code v2.1.0\nChoose the text style")).toBe(false);
+	it("is false at an indented menu cursor (a launch menu, not the composer)", () => {
+		expect(isAgentReady("  ❯ 1. I am using this for local development\n    2. Exit")).toBe(false);
 	});
 
-	it("is true at a fresh idle REPL (Claude Code header, no wizard)", () => {
-		expect(isAgentReady("Claude Code v2.1.0\n> ")).toBe(true);
+	it("is true at the column-0 composer prompt (fresh idle REPL)", () => {
+		expect(isAgentReady("❯ ")).toBe(true);
 	});
 
-	it("is true at a resumed REPL (no header, shows the shortcuts prompt)", () => {
-		expect(isAgentReady("...restored conversation...\n? for shortcuts")).toBe(true);
+	it("is true at a resumed REPL whose header scrolled off (composer still shows)", () => {
+		expect(isAgentReady("...restored conversation...\n❯ ")).toBe(true);
+	});
+
+	it("sees the composer through the SGR escapes a real -e capture prefixes it with", () => {
+		// capture-pane -e renders the composer line as e.g. "\e[39m❯ \e[2mTry\e[0m".
+		const esc = String.fromCharCode(27);
+		expect(isAgentReady(`${esc}[39m❯ ${esc}[2mTry${esc}[0m`)).toBe(true);
 	});
 });
 
@@ -244,10 +255,89 @@ describe("tmuxCore killSession", () => {
 });
 
 describe("tmuxCore isAgentWorking", () => {
-	it("is true only while the interrupt-spinner footer is showing", () => {
-		expect(isAgentWorking("✻ Thinking… (esc to interrupt)")).toBe(true);
+	it("is working when the last spinner line shows the ellipsis or Waiting for", () => {
+		expect(isAgentWorking("✻ Prestidigitating…")).toBe(true);
+		expect(isAgentWorking("✻ Waiting for 1 dynamic workflow to finish")).toBe(true);
+	});
+
+	it("is not working at an idle composer, an empty pane, or a settled spinner", () => {
 		expect(isAgentWorking("")).toBe(false);
-		expect(isAgentWorking("Claude Code v2.1.0\n> ")).toBe(false);
-		expect(isAgentWorking("...restored conversation...\n? for shortcuts")).toBe(false);
+		expect(isAgentWorking("❯ ")).toBe(false);
+		expect(isAgentWorking("✻ Brewed for 7s")).toBe(false);
+		expect(isAgentWorking("✻ Brewed for 19s · 1 monitor still running")).toBe(false);
+	});
+
+	it("keys off the LAST spinner line, ignoring a stale done marker in scrollback", () => {
+		expect(isAgentWorking("✻ Brewed for 1h 25m\n✻ Prestidigitating…")).toBe(true);
+		// A prose ellipsis above the live settled line is ignored: only the ✻ line is read.
+		expect(isAgentWorking("● done thinking…\n✻ Brewed for 7s")).toBe(false);
+	});
+
+	it("strips the SGR escapes around a real -e spinner line", () => {
+		const esc = String.fromCharCode(27);
+		expect(isAgentWorking(`${esc}[38;5;1m✻${esc}[0m Prestidigitating${esc}[2m…${esc}[0m`)).toBe(true);
+	});
+});
+
+describe("tmuxCore isLoggedOut", () => {
+	const rule = "─".repeat(40);
+
+	it("is true when the toolbar below the last rule shows the auth footer", () => {
+		const screen = `❯ \n${rule}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents    Not logged in · Run /login\n  ◐ medium · /effort`;
+		expect(isLoggedOut(screen)).toBe(true);
+	});
+
+	it("is false at a logged-in REPL (no auth footer in the toolbar)", () => {
+		const screen = `❯ \n${rule}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents`;
+		expect(isLoggedOut(screen)).toBe(false);
+	});
+
+	it("ignores the phrase above the last rule (transcript or composer), not anywhere in the body", () => {
+		const screen = `● The DB replied: Not logged in. Run /login there.\n${rule}\n❯ Run /login\n${rule}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents`;
+		expect(isLoggedOut(screen)).toBe(false);
+	});
+
+	it("strips the SGR escapes a real -e capture wraps the footer in", () => {
+		const esc = String.fromCharCode(27);
+		const ruleAnsi = `${esc}[2m${rule}${esc}[0m`;
+		const screen = `❯ \n${ruleAnsi}\n  ⏵⏵ for agents  ${esc}[33mNot logged in${esc}[0m · ${esc}[1mRun /login${esc}[0m`;
+		expect(isLoggedOut(screen)).toBe(true);
+	});
+});
+
+describe("tmuxCore awaitReady", () => {
+	const target = { kind: "host", name: "host", sessionName: "scratch" } as const;
+
+	it("returns ready+alive once the composer appears, pressing no key", async () => {
+		stdoutData = "...restored...\n❯ ";
+		const res = await awaitReady(target, { pollMs: 5, timeoutMs: 200 });
+		expect(res).toMatchObject({ alive: true, ready: true });
+		expect(calls.some((c) => c.includes("send-keys") && c.includes("1"))).toBe(false);
+	});
+
+	it('presses "1" to clear the dev-channels menu while not yet at the REPL', async () => {
+		stdoutData = "  ❯ 1. I am using this for local development\n    2. Exit";
+		const res = await awaitReady(target, { pollMs: 5, timeoutMs: 40 });
+		expect(res).toMatchObject({ alive: true, ready: false });
+		expect(calls).toContainEqual(["tmux", "send-keys", "-t", "scratch.0", "-l", "--", "1"]);
+	});
+
+	it('presses "1" on the folder-trust and fullscreen-renderer prompts too', async () => {
+		for (const menu of [
+			"  Is this a project you created or one you trust?\n  ❯ 1. Yes, I trust this folder\n    2. No, exit",
+			"  Try the new fullscreen renderer?\n  ❯ 1. Yes, try it\n    2. Not now",
+		]) {
+			calls.length = 0;
+			stdoutData = menu;
+			await awaitReady(target, { pollMs: 5, timeoutMs: 30 });
+			expect(calls).toContainEqual(["tmux", "send-keys", "-t", "scratch.0", "-l", "--", "1"]);
+		}
+	});
+
+	it("reports a dead launch (alive:false) early when the pane never captures", async () => {
+		exitCode = 1; // capture-pane always fails: the session exited on launch
+		// Budget large enough that the dead-launch early-out (not the deadline) is what returns.
+		const res = await awaitReady(target, { pollMs: 2, timeoutMs: 5_000 });
+		expect(res).toMatchObject({ alive: false, ready: false });
 	});
 });
