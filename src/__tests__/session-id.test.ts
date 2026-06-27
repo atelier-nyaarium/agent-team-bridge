@@ -39,6 +39,13 @@ interface NoticeVector {
 	senderCanonical: string;
 	key: string;
 }
+interface SessionNameVector {
+	input: string;
+	project: string;
+	session: string;
+	composite: boolean;
+	composed: string;
+}
 
 const vectors = JSON.parse(
 	fs.readFileSync(path.join(__dirname, "../../tests/fixtures/session-id/vectors.json"), "utf8"),
@@ -48,6 +55,7 @@ const vectors = JSON.parse(
 	notice: NoticeVector[];
 	notSession: string[];
 	notNotice: string[];
+	sessionName: SessionNameVector[];
 };
 
 describe("session identity vectors", () => {
@@ -83,6 +91,13 @@ describe("session identity vectors", () => {
 
 	it.each(vectors.notNotice.map((s) => [JSON.stringify(s), s] as const))("NoticeId.parse rejects %s", (_, s) => {
 		expect(NoticeId.parse(s, "anyhost")).toBeNull();
+	});
+
+	// The composite project.session grammar is shared with the Kotlin twin via these vectors.
+	it.each(vectors.sessionName.map((v) => [v.input, v] as const))("sessionName grammar %s", (_, v) => {
+		expect(parseSessionName(v.input)).toEqual({ project: v.project, session: v.session });
+		expect(isComposite(v.input)).toBe(v.composite);
+		expect(composeSessionName(v.project, v.session)).toBe(v.composed);
 	});
 
 	it("remote() preserves an explicit host and equals a parsed qualified address", () => {

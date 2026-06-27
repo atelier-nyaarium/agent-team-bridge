@@ -34,6 +34,12 @@ object Protocol {
 
 	/** Separator in a gateway-qualified name (gateway then local name); the first one splits gateway from local name. */
 	const val GATEWAY_QUALIFIER_SEP: String = "/"
+
+	/** Separator inside a composite local name (project then session); the LAST one splits project from session. */
+	const val SESSION_SEP: String = "."
+
+	/** The session a bare project name defaults to when it carries no session segment. */
+	const val DEFAULT_SESSION: String = "claude"
 }
 
 @Serializable

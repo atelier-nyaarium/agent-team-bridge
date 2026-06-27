@@ -108,5 +108,27 @@
 		"conv:a:conv:b:team",
 		"conv:c:team:withcolon"
 	],
-	"notNotice": ["conv:c:api", "gateway", "notice:", ""]
+	"notNotice": ["conv:c:api", "gateway", "notice:", ""],
+	"_comment_sessionName": "Composite local-name grammar project.session: parseSessionName splits on the LAST separator (a dotted project round-trips), a bare name defaults the session to DEFAULT_SESSION (\"claude\"), isComposite is the mechanical separator test, composed = composeSessionName(project, session).",
+	"sessionName": [
+		{
+			"input": "recipe-app",
+			"project": "recipe-app",
+			"session": "claude",
+			"composite": false,
+			"composed": "recipe-app.claude"
+		},
+		{
+			"input": "recipe-app.scratch",
+			"project": "recipe-app",
+			"session": "scratch",
+			"composite": true,
+			"composed": "recipe-app.scratch"
+		},
+		{ "input": "my.app.foo", "project": "my.app", "session": "foo", "composite": true, "composed": "my.app.foo" },
+		{ "input": "my.app", "project": "my", "session": "app", "composite": true, "composed": "my.app" },
+		{ "input": "a.b.c.d", "project": "a.b.c", "session": "d", "composite": true, "composed": "a.b.c.d" },
+		{ "input": "x.", "project": "x", "session": "", "composite": true, "composed": "x." },
+		{ "input": ".y", "project": "", "session": "y", "composite": true, "composed": ".y" }
+	]
 }

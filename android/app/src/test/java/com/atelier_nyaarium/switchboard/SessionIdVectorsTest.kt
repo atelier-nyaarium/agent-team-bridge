@@ -3,7 +3,11 @@ package com.atelier_nyaarium.switchboard
 import com.atelier_nyaarium.switchboard.proto.NoticeId
 import com.atelier_nyaarium.switchboard.proto.SessionId
 import com.atelier_nyaarium.switchboard.proto.TeamAddress
+import com.atelier_nyaarium.switchboard.proto.composeSessionName
+import com.atelier_nyaarium.switchboard.proto.isComposite
+import com.atelier_nyaarium.switchboard.proto.parseSessionName
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -84,6 +88,23 @@ class SessionIdVectorsTest {
 		val wire = "conv:c:hostb/api"
 		for (localGatewayId in listOf("hosta", "hostb", "whatever")) {
 			assertEquals(wire, SessionId.parse(wire, localGatewayId)!!.key)
+		}
+	}
+
+	@Test
+	fun sessionNameVectors() {
+		for (v in vectors()["sessionName"]!!.jsonArray) {
+			val o = v.jsonObject
+			val input = o["input"]!!.jsonPrimitive.content
+			val parsed = parseSessionName(input)
+			assertEquals(input, o["project"]!!.jsonPrimitive.content, parsed.project)
+			assertEquals(input, o["session"]!!.jsonPrimitive.content, parsed.session)
+			assertEquals(input, o["composite"]!!.jsonPrimitive.boolean, isComposite(input))
+			assertEquals(
+				input,
+				o["composed"]!!.jsonPrimitive.content,
+				composeSessionName(o["project"]!!.jsonPrimitive.content, o["session"]!!.jsonPrimitive.content),
+			)
 		}
 	}
 

@@ -31,8 +31,10 @@ import {
 import {
 	CONSOLE_PROTOCOL_VERSION,
 	CONV_SESSION_PREFIX,
+	DEFAULT_SESSION,
 	GATEWAY_QUALIFIER_SEP,
 	NOTICE_SESSION_PREFIX,
+	SESSION_SEP,
 } from "../src/shared/console-protocol.js";
 import {
 	ConsoleApprovalOpSchema,
@@ -408,6 +410,12 @@ ${INDENT}const val CONV_SESSION_PREFIX: String = ${kotlinString(CONV_SESSION_PRE
 
 ${INDENT}/** Separator in a gateway-qualified name (gateway then local name); the first one splits gateway from local name. */
 ${INDENT}const val GATEWAY_QUALIFIER_SEP: String = ${kotlinString(GATEWAY_QUALIFIER_SEP)}
+
+${INDENT}/** Separator inside a composite local name (project then session); the LAST one splits project from session. */
+${INDENT}const val SESSION_SEP: String = ${kotlinString(SESSION_SEP)}
+
+${INDENT}/** The session a bare project name defaults to when it carries no session segment. */
+${INDENT}const val DEFAULT_SESSION: String = ${kotlinString(DEFAULT_SESSION)}
 }`;
 
 const output = `${[header, ...blocks].join("\n\n")}\n`;

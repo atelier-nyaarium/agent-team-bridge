@@ -10,6 +10,23 @@ package com.atelier_nyaarium.switchboard.proto
  * one source. See the TS file for the design rationale.
  */
 
+/** A composite local name split into its project and session segments. */
+data class ParsedSessionName(val project: String, val session: String)
+
+/** Split a composite local name `project.session` on the LAST separator (so a dotted project name
+ * round-trips); a bare name defaults the session to DEFAULT_SESSION. Twin of session-id.ts. */
+fun parseSessionName(localName: String): ParsedSessionName {
+	val i = localName.lastIndexOf(Protocol.SESSION_SEP)
+	if (i == -1) return ParsedSessionName(localName, Protocol.DEFAULT_SESSION)
+	return ParsedSessionName(localName.substring(0, i), localName.substring(i + Protocol.SESSION_SEP.length))
+}
+
+/** Join a project and session into a composite local name. */
+fun composeSessionName(project: String, session: String): String = "$project${Protocol.SESSION_SEP}$session"
+
+/** Whether a local name carries a session segment (the mechanical separator test). */
+fun isComposite(name: String): Boolean = name.contains(Protocol.SESSION_SEP)
+
 /** A team's address: an explicit Gateway id plus a local name. */
 class TeamAddress private constructor(val gatewayId: String, val name: String) {
 	companion object {
