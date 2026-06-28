@@ -63,6 +63,13 @@ export function isShellSafeName(name: string): boolean {
 	return name.length <= MAX_TMUX_NAME_LEN && SHELL_SAFE_NAME_RE.test(name);
 }
 
+/** A conversationId must be a dotless slug so it stays ONE injective segment of a flattened channel
+ * key (the upcoming dot-delimited grammar splits store keys on "."). Capped at 128 - it is a key
+ * component, not a tmux name, so it is looser on length than a slug but identical on charset. Every
+ * producer already complies (crypto.randomUUID, the console sha256 hex owner id). */
+export const CONVERSATION_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+export const MAX_CONVERSATION_ID_LEN = 128;
+
 export type HostOp =
 	| { kind: "peek"; target: TmuxTarget }
 	// dedupKey = `${conversationId}:${opId}`: the host replays a completed mutating op's ack for a

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { sign, verify } from "./crypto.js";
 import { ChannelFilesSchema } from "./evie-protocol.js";
+import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
 
 ////////////////////////////////
 //  Federation inner protocol (gateway <-> gateway, via evie)
@@ -21,7 +22,7 @@ export { FEDERATION_PROTOCOL_VERSION } from "./evie-protocol.js";
  * Gateways so neither side has to translate. */
 export const ReturnRouteSchema = z.object({
 	srcGateway: z.string().min(1).max(64),
-	srcConversationId: z.string().min(1).max(128),
+	srcConversationId: z.string().min(1).max(MAX_CONVERSATION_ID_LEN).regex(CONVERSATION_ID_RE),
 	srcSession: z.string().min(1).max(256),
 });
 

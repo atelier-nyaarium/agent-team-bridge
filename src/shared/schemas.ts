@@ -3,7 +3,7 @@ import { DomainSnapshotSchema, SignedAdmissionSchema } from "./admission.js";
 import { b64Field, slugField } from "./crypto.js";
 import { SignedFirstRootSchema } from "./federation-lifecycle.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
-import { SHELL_SAFE_NAME_RE } from "./host-op.js";
+import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN, SHELL_SAFE_NAME_RE } from "./host-op.js";
 
 ////////////////////////////////
 //  Shared enum schemas
@@ -87,7 +87,7 @@ export const WsRegisterSchema = z.object({
 	team: z.string().min(1).max(64).regex(SHELL_SAFE_NAME_RE),
 	mode: z.string().optional(),
 	subId: z.string().optional(),
-	conversationId: z.string().optional(),
+	conversationId: z.string().regex(CONVERSATION_ID_RE).max(MAX_CONVERSATION_ID_LEN).optional(),
 	// The plugin version (package.json) the MCP process is running. Absent for
 	// non-plugin registrants (e.g. the host daemon); the plugin always reports it.
 	version: z.string().optional(),
@@ -411,7 +411,7 @@ export const ConsoleRelayFrameSchema = z
 export const ConsoleOpEnvelopeSchema = z
 	.object({
 		v: z.number().int().positive(),
-		conversationId: z.string().min(1).max(128),
+		conversationId: z.string().min(1).max(MAX_CONVERSATION_ID_LEN).regex(CONVERSATION_ID_RE),
 		device: z.string().min(1).max(64),
 		at: z.number().int().nonnegative(),
 		op: ConsoleOpSchema,
@@ -836,7 +836,7 @@ export const ProvisioningSchema = z
 		service: z.string().optional(),
 		port: z.number().int().positive().optional(),
 		device: z.string().optional(),
-		conversationId: z.string().optional(),
+		conversationId: z.string().regex(CONVERSATION_ID_RE).max(MAX_CONVERSATION_ID_LEN).optional(),
 		// Set only for a pending (unrooted) Domain blob (a friend invite or the admin's own fresh
 		// setup): the pending Domain id plus the one-time invite nonce. Its presence is the
 		// discriminator: the app first-roots iff it is present, else it just provisions the

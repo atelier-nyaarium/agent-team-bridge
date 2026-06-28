@@ -5,6 +5,7 @@ import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import type { SealedEnvelope } from "../shared/crypto.js";
 import { type FederatedOp, ReturnRouteSchema } from "../shared/federation-protocol.js";
+import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "../shared/host-op.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
 import { ChannelFilesSchema } from "../shared/schemas.js";
 import { NoticeId, SessionId, TeamAddress } from "../shared/session-id.js";
@@ -81,7 +82,7 @@ export interface RoutesDeps {
 
 const SendRequestSchema = z.object({
 	from: z.string(),
-	fromConversationId: z.string().optional(),
+	fromConversationId: z.string().regex(CONVERSATION_ID_RE).max(MAX_CONVERSATION_ID_LEN).optional(),
 	to: z.string(),
 	// The Domain id of a cross-Domain target (a session from a linked friend Domain). A
 	// gateway id is unique only within a Domain, so when this is set the seal target is
