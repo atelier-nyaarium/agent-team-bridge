@@ -467,16 +467,19 @@ export function createRoutes({
 
 		for (const [name, subs] of registry) {
 			if (name === "host") continue;
+			// A team whose only live sockets are virtual console peers is the operator's own device,
+			// not a listable session: it registers under a human Device Name (not an addressable
+			// slug), and every consumer either hides it (agent discovery) or would choke qualifying
+			// the non-slug name to an Address (the cross-Domain share filter). Skip it here; it stays
+			// in the registry for crosstalk routing.
+			if (getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0) continue;
 			seen.add(name);
 			// An online local session keeps its cross-Domain shares fresh: refresh lastSeenAt
 			// so a session that is actively connected is never auto-forgotten by the absence
 			// sweep, even with no live thread. No-op when sharing is not wired.
 			touchShares?.(localAddress(name).canonical);
-			// A team whose only live sockets are virtual console peers is the human's
-			// device, not a crosstalk peer - mark it so the agent-facing listing hides it.
-			const isConsole = getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0;
-			// Plugin version reported by an active real socket (virtual console peers carry
-			// none); the same value across a team's sub-sessions in practice.
+			// Plugin version reported by an active real socket; the same value across a team's
+			// sub-sessions in practice.
 			const version = getAllActiveRealWs(subs)[0]?.data.version;
 			teamsList.push({
 				team: name,
@@ -486,7 +489,7 @@ export function createRoutes({
 				...isAdminDomainField,
 				status: "online",
 				mode: getTeamMode(subs),
-				kind: isConsole ? "console" : isDevcontainer(name) ? "devcontainer" : "loose",
+				kind: isDevcontainer(name) ? "devcontainer" : "loose",
 				version,
 				// lastActive is omitted for an online session: it is active NOW, and the resume map's
 				// timestamp is the register time, which would read as stale. Only asleep sessions carry it.

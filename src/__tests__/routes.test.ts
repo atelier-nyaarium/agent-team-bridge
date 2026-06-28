@@ -163,10 +163,12 @@ describe("routes", () => {
 			]);
 		});
 
-		it("marks a team whose only socket is a virtual console peer as kind console", async () => {
+		it("excludes a virtual console peer (its human Device Name is not an addressable slug)", async () => {
 			const registry = makeRegistry({
 				"proj-a": { readyState: 1, data: { mode: "channel" } },
-				Aqua: { readyState: 1, data: { virtual: true, mode: "channel" } },
+				// A real device name has spaces, so qualifying it to an Address throws; it must be
+				// skipped, not listed (and never reach a consumer that addresses the team name).
+				"Pixel 10 Pro XL": { readyState: 1, data: { virtual: true, mode: "channel" } },
 			});
 			const knownTeamPaths = new Map<string, string>([["proj-a", "/home/user/proj-a"]]);
 			const ctx = makeCtx({ registry, knownTeamPaths });
@@ -179,15 +181,6 @@ describe("routes", () => {
 					status: "online",
 					mode: "channel",
 					kind: "devcontainer",
-					queue_depth: 0,
-				},
-				{
-					team: "Aqua",
-					gatewayId: "test-host",
-					domainId: "alice",
-					status: "online",
-					mode: "channel",
-					kind: "console",
 					queue_depth: 0,
 				},
 			]);
