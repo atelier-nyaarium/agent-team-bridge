@@ -633,6 +633,7 @@ export async function startGateway(): Promise<void> {
 			mailboxStore,
 			routes,
 			localGatewayId,
+			localDomainId: localDomainId ?? "",
 			isProjectName: isCatalogProject,
 			// Forget drops the session's durable resume record so it stops listing as available.
 			dropSessionResume: (team) => sessionResume.delete(team),
@@ -677,7 +678,7 @@ export async function startGateway(): Promise<void> {
 									target.kind === "domain"
 										? [target.domainId]
 										: [...new Set(crossDomainPeersForConsole!.all().map((p) => p.friendDomainId))];
-								for (const d of domains) store.expireBySession(sessionTarget, d, localGatewayId);
+								for (const d of domains) store.expireBySession(sessionTarget, d);
 							},
 							listShares: () =>
 								crossDomainShareState!
@@ -732,6 +733,7 @@ export async function startGateway(): Promise<void> {
 			routes,
 			tryWakeTeam,
 			localGatewayId,
+			localDomainId: localDomainId ?? "",
 			shareState: crossDomainShareState
 				? {
 						isSharedTo: (sessionTarget, domainId) =>
@@ -744,7 +746,7 @@ export async function startGateway(): Promise<void> {
 			// Gateway recorded when IT created the job (the friend Domain it was routed to /
 			// came from), not on the friend-controlled bare gateway id, so a friend cannot
 			// forge a reply into another friend's job or hijack an unrelated job's reply route.
-			crossDomainBinding: (sessionId) => store.crossDomainBinding(sessionId, localGatewayId),
+			crossDomainBinding: (sessionId) => store.crossDomainBinding(sessionId),
 		});
 		handleGatewayRelay = createGatewayRelayPump({
 			sealer: sealer!,
@@ -788,7 +790,6 @@ export async function startGateway(): Promise<void> {
 				store.hasLiveCrossDomainThread(
 					sessionTarget,
 					(gatewayId) => peers.all().some((p) => p.friendGatewayId === gatewayId),
-					localGatewayId,
 					THIRTY_DAYS_MS,
 				);
 			const shareSweepTimer = setInterval(() => {

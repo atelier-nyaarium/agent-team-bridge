@@ -8,7 +8,16 @@ import { type FederatedOp, ReturnRouteSchema } from "../shared/federation-protoc
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "../shared/host-op.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
 import { ChannelFilesSchema } from "../shared/schemas.js";
-import { NoticeId, SessionId, TeamAddress } from "../shared/session-id.js";
+import {
+	Address,
+	composeSessionName,
+	LOCAL_DOMAIN_SENTINEL,
+	parseSessionName,
+	parseStoreKey,
+	parseTarget,
+	SpawnPoint,
+	storeKey,
+} from "../shared/session-id.js";
 import type {
 	ChannelFile,
 	ConnectionMode,
@@ -208,6 +217,18 @@ export function createRoutes({
 	resolveHandshake,
 }: RoutesDeps) {
 	const { LOG_PATH, localGatewayId, localDomainId } = config;
+	// The local Domain segment for every address we mint. Null (arming mode, pre-enrollment)
+	// resolves to the sentinel so a key still forms; a real domain id is lowercase hex.
+	const localDomain = localDomainId ?? LOCAL_DOMAIN_SENTINEL;
+
+	/** Build the canonical Address of a LOCAL session from its registry team field (`spawn` or
+	 * `spawn.session`). The session segment defaults to DEFAULT_SESSION for a bare spawn name. This
+	 * is the ONE producer of a local session's canonical, so the share key, the relay gate, and the
+	 * job's store-key address all agree byte-for-byte. */
+	function localAddress(name: string): Address {
+		const { project, session } = parseSessionName(name);
+		return Address.local(localDomain, localGatewayId, project, session);
+	}
 
 	/** Resolve a target Gateway id to a SealTarget, LOCAL-FIRST (mirroring the sealer's own
 	 * resolution order). A gateway id the local single-owner allowlist resolves is the
@@ -257,14 +278,16 @@ export function createRoutes({
 		}
 	}
 
-	/** Resolve a wire target (bare or host-qualified) to a local registry name.
-	 * A bare name or one qualified with this Gateway resolves locally; a name
-	 * qualified with a DIFFERENT Gateway returns null. `qualified` is the canonical
-	 * `localGatewayId/name` form used as the channel session-id target. */
-	function resolveLocalTarget(to: string): { name: string; qualified: string } | null {
-		const addr = TeamAddress.parse(to, localGatewayId);
-		if (addr.gatewayId !== localGatewayId) return null;
-		return { name: addr.name, qualified: addr.canonical };
+	/** Resolve a wire target to a local registry name + its canonical Address. A target whose
+	 * (domain, gateway) is ours resolves locally (the local-collapse rule); a different gateway or
+	 * Domain returns null (the cross-Gateway branch's job). A spawn-point (arity 1/3) is not an
+	 * addressable session and returns null too (the send handler fails it fast with a clear error).
+	 * `name` is the registry team field (`spawn.session`); `address` is the channel session target. */
+	function resolveLocalTarget(to: string): { name: string; address: Address } | null {
+		const t = parseTarget(to, localDomain, localGatewayId);
+		if (t instanceof SpawnPoint) return null;
+		if (t.domain !== localDomain || t.gateway !== localGatewayId) return null;
+		return { name: composeSessionName(t.spawn, t.session), address: t };
 	}
 
 	/** Forward a federated op to another Gateway through the Router and unwrap the
@@ -364,12 +387,17 @@ export function createRoutes({
 		if (!fromConversationId) {
 			return jsonResponse({ error: `fromConversationId is required for a cross-Gateway send` }, 400);
 		}
-		const targetAddr = TeamAddress.remote(targetGateway, targetName);
+		// Resolve the destination Domain ONCE so the address's domain segment and the anchor's
+		// dstDomainId binding are byte-identical (the reply gate compares them). The address carries
+		// the DESTINATION's domain so its store key matches the destination's own local key.
+		const resolvedDomain = targetDomainId(targetGateway, targetDomain);
+		const { project: tSpawn, session: tSession } = parseSessionName(targetName);
+		const targetAddr = Address.remote(resolvedDomain ?? localDomain, targetGateway, tSpawn, tSession);
 		const qualifiedTo = targetAddr.canonical;
-		const srcSession = SessionId.channel(fromConversationId, targetAddr).key;
+		const srcSession = storeKey({ kind: "conv", conversationId: fromConversationId, address: targetAddr });
 		const op: FederatedOp = {
 			kind: "send",
-			from: TeamAddress.local(localGatewayId, from).canonical,
+			from: localAddress(from).canonical,
 			to: targetName,
 			request_type: type,
 			effort,
@@ -389,7 +417,7 @@ export function createRoutes({
 		store.create(srcSession, from, qualifiedTo, {
 			persistent: true,
 			fromConversationId,
-			dstDomainId: targetDomainId(targetGateway, targetDomain) ?? undefined,
+			dstDomainId: resolvedDomain ?? undefined,
 		});
 		return jsonResponse({
 			session_id: srcSession,
@@ -448,7 +476,7 @@ export function createRoutes({
 			// An online local session keeps its cross-Domain shares fresh: refresh lastSeenAt
 			// so a session that is actively connected is never auto-forgotten by the absence
 			// sweep, even with no live thread. No-op when sharing is not wired.
-			touchShares?.(TeamAddress.local(localGatewayId, name).canonical);
+			touchShares?.(localAddress(name).canonical);
 			// A team whose only live sockets are virtual console peers is the human's
 			// device, not a crosstalk peer - mark it so the agent-facing listing hides it.
 			const isConsole = getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0;
@@ -587,15 +615,27 @@ export function createRoutes({
 			}
 		}
 
-		// Cross-Gateway OUTBOUND: a target qualified with another Gateway routes through
-		// the Router. An INBOUND federated send (the gateway-relay handler) arrives with
-		// a bare `to` plus an explicit sessionId, so it skips this and lands locally.
-		const parsedTarget = TeamAddress.parse(to, localGatewayId);
-		if (!inboundSessionId && parsedTarget.gatewayId !== localGatewayId) {
+		// Classify the target by arity. An INBOUND federated send (the gateway-relay handler) arrives
+		// with a bare local `to` plus an explicit sessionId, so it skips classification and lands
+		// locally. A spawn-point (arity 1/3) is not an addressable session - fail fast.
+		const parsedTarget = inboundSessionId ? null : parseTarget(to, localDomain, localGatewayId);
+		if (parsedTarget instanceof SpawnPoint) {
+			return jsonResponse(
+				{ error: `"${to}" is a spawn-point, not a session; address a session as spawn.session` },
+				400,
+			);
+		}
+		// Cross-Gateway OUTBOUND: an Address whose (domain, gateway) is not ours routes through the
+		// Router. The local-collapse rule keeps an our-(domain,gateway) target local.
+		if (parsedTarget && (parsedTarget.domain !== localDomain || parsedTarget.gateway !== localGatewayId)) {
+			const realDomain =
+				parsedTarget.domain !== localDomain && parsedTarget.domain !== LOCAL_DOMAIN_SENTINEL
+					? parsedTarget.domain
+					: targetDomain;
 			return await sendCrossGateway({
-				targetGateway: parsedTarget.gatewayId,
-				targetName: parsedTarget.name,
-				targetDomain,
+				targetGateway: parsedTarget.gateway,
+				targetName: composeSessionName(parsedTarget.spawn, parsedTarget.session),
+				targetDomain: realDomain,
 				from,
 				fromConversationId,
 				type,
@@ -605,16 +645,14 @@ export function createRoutes({
 			});
 		}
 
-		// Resolve the (bare or host-qualified) target to a local registry name. A
-		// local-qualified or bare name resolves here; a remote-qualified name was
-		// handled by the cross-Gateway branch above. `qualifiedTo` is the canonical
-		// local form used as the channel session-id target.
+		// Resolve the target to a local registry name + its canonical Address. A local target
+		// resolves here; a remote one took the cross-Gateway branch above.
 		const target = resolveLocalTarget(to);
 		if (!target) {
 			return jsonResponse({ error: `Gateway for "${to}" is not reachable from this Gateway` }, 404);
 		}
 		const localName = target.name;
-		const qualifiedTo = target.qualified;
+		const qualifiedTo = target.address.canonical;
 
 		// The headless "host" daemon is never a direct crosstalk target (it carries no agent).
 		if (localName === "host") {
@@ -645,9 +683,7 @@ export function createRoutes({
 			return jsonResponse(
 				{
 					error: `Team "${qualifiedTo}" is not connected`,
-					available: [...registry.keys()]
-						.filter((k) => k !== "host")
-						.map((k) => TeamAddress.local(localGatewayId, k).canonical),
+					available: [...registry.keys()].filter((k) => k !== "host").map((k) => localAddress(k).canonical),
 				},
 				404,
 			);
@@ -678,7 +714,7 @@ export function createRoutes({
 				const channelJobId =
 					inboundSessionId ??
 					(fromConversationId
-						? SessionId.channel(fromConversationId, TeamAddress.parse(qualifiedTo, localGatewayId)).key
+						? storeKey({ kind: "conv", conversationId: fromConversationId, address: target.address })
 						: null);
 				if (!channelJobId) {
 					return jsonResponse({ error: `fromConversationId is required for channel-mode targets` }, 400);
@@ -786,8 +822,9 @@ export function createRoutes({
 			}
 		}
 
-		const canonicalSessionId = SessionId.parse(respondSessionId, localGatewayId)?.key ?? respondSessionId;
-		const deliverResult = store.deliver(canonicalSessionId, response);
+		// The respond session_id is the opaque store key the agent echoes verbatim; under the
+		// fully-qualified grammar there is no bare form to normalize, so deliver against it directly.
+		const deliverResult = store.deliver(respondSessionId, response);
 		if (!deliverResult) {
 			console.log(
 				`[respond] 404 - no pending job for ${respondSessionId.slice(0, 8)}... (already delivered or expired)`,
@@ -811,7 +848,8 @@ export function createRoutes({
 			// (origin-set) session key, the form the share is keyed by. A same-Domain federated reply
 			// (dstDomainId null) skips the gate, unchanged.
 			if (deliverResult.dstDomainId) {
-				const sessionTarget = SessionId.parse(rr.srcSession, localGatewayId)?.target.canonical;
+				const pinned = parseStoreKey(rr.srcSession);
+				const sessionTarget = pinned?.kind === "conv" ? pinned.address.canonical : undefined;
 				if (!sessionTarget || !isSharedToForReply?.(sessionTarget, deliverResult.dstDomainId)) {
 					console.log(
 						`[respond] ${respondSessionId} DROPPED: session no longer shared to Domain "${deliverResult.dstDomainId}"`,
@@ -980,7 +1018,7 @@ export function createRoutes({
 		mailboxStore.forEach((_conversationId, box) => {
 			box.append({
 				kind: "notice",
-				session_id: NoticeId.of(TeamAddress.local(localGatewayId, from)).key,
+				session_id: storeKey({ kind: "notice", sender: localAddress(from) }),
 				from,
 				title,
 				summary,

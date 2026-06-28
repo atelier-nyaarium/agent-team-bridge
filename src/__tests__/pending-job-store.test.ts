@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { PendingJobStore, type WaitResult } from "../shared/pending-job-store.js";
+import { Address, storeKey } from "../shared/session-id.js";
+
+////////////////////////////////
+//  Shared addressing helpers
+//
+//  A conv store key is the fully-qualified `conv.<conv>.<domain>.<gateway>.<spawn>.<session>`
+//  (6 dot-segments) built by storeKey({kind:"conv", ...}). For a destination job the address
+//  segments are the LOCAL gateway's (domain `bob`, gateway `hostb`); the verified sending friend
+//  Domain rides separately as dstDomainId. The share is keyed by the address's canonical
+//  `domain.gateway.spawn.session`, which is what expireBySession matches on. The old bare team
+//  names become composite (`lib` -> spawn `lib`, session `dev`).
+
+const DOMAIN = "bob";
+const GW = "hostb";
+
+/** A fully-qualified conv store key on the local (`bob`/`hostb`) gateway. */
+function convKey(conv: string, spawn: string, session = "dev"): string {
+	return storeKey({ kind: "conv", conversationId: conv, address: Address.of(DOMAIN, GW, spawn, session) });
+}
+
+/** The canonical `domain.gateway.spawn.session` a share/expiry targets. */
+function sessionTarget(spawn: string, session = "dev"): string {
+	return Address.of(DOMAIN, GW, spawn, session).canonical;
+}
 
 ////////////////////////////////
 //  PendingJobStore.expireByDomain
@@ -13,26 +37,31 @@ import { PendingJobStore, type WaitResult } from "../shared/pending-job-store.js
 describe("PendingJobStore.expireByDomain", () => {
 	it("settles only matching-dstDomainId jobs and returns the count", () => {
 		const store = new PendingJobStore<string>();
-		store.create("carol-job-1", "a", "b", { dstDomainId: "carol" });
-		store.create("carol-job-2", "a", "c", { dstDomainId: "carol" });
-		store.create("dave-job", "a", "d", { dstDomainId: "dave" }); // a DIFFERENT Domain
-		store.create("local-job", "a", "e"); // local (dstDomainId null)
+		const carol1 = convKey("c1", "lib");
+		const carol2 = convKey("c2", "docs");
+		const dave1 = convKey("c3", "app"); // a DIFFERENT Domain
+		const local1 = convKey("c4", "tools"); // local (dstDomainId null)
+		store.create(carol1, "a", "b", { dstDomainId: "carol" });
+		store.create(carol2, "a", "c", { dstDomainId: "carol" });
+		store.create(dave1, "a", "d", { dstDomainId: "dave" });
+		store.create(local1, "a", "e");
 
 		expect(store.expireByDomain("carol")).toBe(2);
 
 		// The two Carol jobs are gone; the other-Domain and local jobs survive.
-		expect(store.has("carol-job-1")).toBe(false);
-		expect(store.has("carol-job-2")).toBe(false);
-		expect(store.has("dave-job")).toBe(true);
-		expect(store.has("local-job")).toBe(true);
+		expect(store.has(carol1)).toBe(false);
+		expect(store.has(carol2)).toBe(false);
+		expect(store.has(dave1)).toBe(true);
+		expect(store.has(local1)).toBe(true);
 	});
 
 	it("settles the waiting promise with a clear expiry error", async () => {
 		const store = new PendingJobStore<string>();
-		store.create("carol-job", "a", "b", { dstDomainId: "carol" });
+		const carol = convKey("c1", "lib");
+		store.create(carol, "a", "b", { dstDomainId: "carol" });
 
 		let settled: WaitResult<string> | null = null;
-		const waiting = store.waitForResult("carol-job", 60_000).then((r) => {
+		const waiting = store.waitForResult(carol, 60_000).then((r) => {
 			settled = r;
 		});
 
@@ -46,10 +75,11 @@ describe("PendingJobStore.expireByDomain", () => {
 
 	it("uses a caller-supplied error message when given", async () => {
 		const store = new PendingJobStore<string>();
-		store.create("carol-job", "a", "b", { dstDomainId: "carol" });
+		const carol = convKey("c1", "lib");
+		store.create(carol, "a", "b", { dstDomainId: "carol" });
 
 		let settled: WaitResult<string> | null = null;
-		const waiting = store.waitForResult("carol-job", 60_000).then((r) => {
+		const waiting = store.waitForResult(carol, 60_000).then((r) => {
 			settled = r;
 		});
 
@@ -61,12 +91,14 @@ describe("PendingJobStore.expireByDomain", () => {
 
 	it("leaves a same-Domain job's waiter untouched", async () => {
 		const store = new PendingJobStore<string>();
-		store.create("carol-job", "a", "b", { dstDomainId: "carol" });
-		store.create("dave-job", "a", "c", { dstDomainId: "dave" });
+		const carol = convKey("c1", "lib");
+		const dave = convKey("c2", "docs");
+		store.create(carol, "a", "b", { dstDomainId: "carol" });
+		store.create(dave, "a", "c", { dstDomainId: "dave" });
 
 		// A live waiter on the NON-targeted job must keep waiting (not settle).
 		let daveSettled = false;
-		store.waitForResult("dave-job", 60_000).then(() => {
+		store.waitForResult(dave, 60_000).then(() => {
 			daveSettled = true;
 		});
 
@@ -75,27 +107,30 @@ describe("PendingJobStore.expireByDomain", () => {
 		await Promise.resolve();
 
 		expect(daveSettled).toBe(false);
-		expect(store.has("dave-job")).toBe(true);
+		expect(store.has(dave)).toBe(true);
 		// The still-waiting job can still be delivered normally.
-		expect(store.deliver("dave-job", "ok")).not.toBe(false);
+		expect(store.deliver(dave, "ok")).not.toBe(false);
 	});
 
 	it("returns 0 when no job is bound to the Domain", () => {
 		const store = new PendingJobStore<string>();
-		store.create("local-job", "a", "b"); // local
-		store.create("dave-job", "a", "c", { dstDomainId: "dave" });
+		const local1 = convKey("c1", "lib");
+		const dave = convKey("c2", "docs");
+		store.create(local1, "a", "b"); // local
+		store.create(dave, "a", "c", { dstDomainId: "dave" });
 		expect(store.expireByDomain("carol")).toBe(0);
-		expect(store.has("local-job")).toBe(true);
-		expect(store.has("dave-job")).toBe(true);
+		expect(store.has(local1)).toBe(true);
+		expect(store.has(dave)).toBe(true);
 	});
 
 	it("expires a stored (not-yet-polled) cross-Domain job too", () => {
 		const store = new PendingJobStore<string>();
 		// A persistent cross-Domain job that already received and stored a reply.
-		store.create("carol-conv", "a", "b", { dstDomainId: "carol", persistent: true });
-		store.deliver("carol-conv", "hello"); // async (channel) delivery -> stored
+		const carolConv = convKey("c1", "lib");
+		store.create(carolConv, "a", "b", { dstDomainId: "carol", persistent: true });
+		store.deliver(carolConv, "hello"); // async (channel) delivery -> stored
 		expect(store.expireByDomain("carol")).toBe(1);
-		expect(store.has("carol-conv")).toBe(false);
+		expect(store.has(carolConv)).toBe(false);
 	});
 });
 
@@ -105,18 +140,17 @@ describe("PendingJobStore.expireByDomain", () => {
 //  When a SINGLE session's share to a friend Domain is withdrawn (not the whole-Domain
 //  unlink), only the jobs for that (session, friend) pair must be settled - other sessions
 //  shared to the same friend, and the same session shared to another friend, keep waiting.
-//  The match is on the job's own session-id target (the canonical gateway/name the share is
-//  keyed by), since a destination job stores `entry.to` as the BARE local name.
+//  The match is on the job's own conv store key (the canonical domain.gateway.spawn.session
+//  the share is keyed by), since a destination job stores `entry.to` as the BARE local name.
 
 describe("PendingJobStore.expireBySession", () => {
 	// A destination job mirrors what gatewayRelay.handleOp + routes.send create for a
-	// cross-Domain inbound send: the id is the origin-set canonical session key
-	// (conv:<conv>:<thisGateway>/<name>), `to` is the BARE local name, and dstDomainId is the
-	// verified sending friend Domain.
-	const GW = "hostb";
-	function destJob(store: PendingJobStore<string>, conv: string, name: string, friendDomain: string): string {
-		const id = `conv:${conv}:${GW}/${name}`;
-		store.create(id, "alice/app", name, { dstDomainId: friendDomain, persistent: true });
+	// cross-Domain inbound send: the id is the origin-set canonical conv store key
+	// (conv.<conv>.<localDomain>.<localGateway>.<spawn>.<session>), `to` is the BARE local
+	// name, and dstDomainId is the verified sending friend Domain.
+	function destJob(store: PendingJobStore<string>, conv: string, spawn: string, friendDomain: string): string {
+		const id = convKey(conv, spawn);
+		store.create(id, "alice.app", spawn, { dstDomainId: friendDomain, persistent: true });
 		return id;
 	}
 
@@ -126,8 +160,8 @@ describe("PendingJobStore.expireBySession", () => {
 		const docsForAlice = destJob(store, "c2", "docs", "alice"); // same friend, OTHER session
 		const libForCarol = destJob(store, "c3", "lib", "carol"); // same session, OTHER friend
 
-		// Un-share lib from alice: the share key is the canonical gateway/name.
-		expect(store.expireBySession(`${GW}/lib`, "alice", GW)).toBe(1);
+		// Un-share lib from alice: the share key is the canonical domain.gateway.spawn.session.
+		expect(store.expireBySession(sessionTarget("lib"), "alice")).toBe(1);
 
 		expect(store.has(libForAlice)).toBe(false); // dropped
 		expect(store.has(docsForAlice)).toBe(true); // other session to the same friend - kept
@@ -143,7 +177,7 @@ describe("PendingJobStore.expireBySession", () => {
 			settled = r;
 		});
 
-		const count = store.expireBySession(`${GW}/lib`, "alice", GW);
+		const count = store.expireBySession(sessionTarget("lib"), "alice");
 		await waiting;
 
 		expect(count).toBe(1);
@@ -160,7 +194,7 @@ describe("PendingJobStore.expireBySession", () => {
 		});
 
 		// Un-sharing lib from ALICE must not touch the lib<->carol job.
-		expect(store.expireBySession(`${GW}/lib`, "alice", GW)).toBe(0);
+		expect(store.expireBySession(sessionTarget("lib"), "alice")).toBe(0);
 		await Promise.resolve();
 		expect(settled).toBe(false);
 		expect(store.has(id)).toBe(true);
@@ -170,15 +204,16 @@ describe("PendingJobStore.expireBySession", () => {
 	it("ignores a local / same-Domain job (dstDomainId null) for the same session name", () => {
 		const store = new PendingJobStore<string>();
 		// A local channel anchor for the same canonical session, no Domain binding.
-		store.create(`conv:c1:${GW}/lib`, "x", "lib");
-		expect(store.expireBySession(`${GW}/lib`, "alice", GW)).toBe(0);
-		expect(store.has(`conv:c1:${GW}/lib`)).toBe(true);
+		const local = convKey("c1", "lib");
+		store.create(local, "x", "lib");
+		expect(store.expireBySession(sessionTarget("lib"), "alice")).toBe(0);
+		expect(store.has(local)).toBe(true);
 	});
 
 	it("returns 0 when no job matches", () => {
 		const store = new PendingJobStore<string>();
 		destJob(store, "c1", "lib", "alice");
-		expect(store.expireBySession(`${GW}/ghost`, "alice", GW)).toBe(0);
-		expect(store.expireBySession(`${GW}/lib`, "dave", GW)).toBe(0);
+		expect(store.expireBySession(sessionTarget("ghost"), "alice")).toBe(0);
+		expect(store.expireBySession(sessionTarget("lib"), "dave")).toBe(0);
 	});
 });

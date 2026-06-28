@@ -28,14 +28,7 @@ import {
 	SignedAdmissionSchema,
 	SignedRevocationSchema,
 } from "../src/shared/admission.js";
-import {
-	CONSOLE_PROTOCOL_VERSION,
-	CONV_SESSION_PREFIX,
-	DEFAULT_SESSION,
-	GATEWAY_QUALIFIER_SEP,
-	NOTICE_SESSION_PREFIX,
-	SESSION_SEP,
-} from "../src/shared/console-protocol.js";
+import { CONSOLE_PROTOCOL_VERSION } from "../src/shared/console-protocol.js";
 import {
 	ConsoleApprovalOpSchema,
 	ConsoleApprovalResultSchema,
@@ -76,6 +69,15 @@ import {
 	ProvisioningSchema,
 	TeamInfoSchema,
 } from "../src/shared/schemas.js";
+import {
+	ADDRESS_SEP,
+	CONV_TAG,
+	DEFAULT_SESSION,
+	MAX_CONV_ID_LEN,
+	MAX_SLUG_LEN,
+	NOTICE_TAG,
+	SLUG_RE,
+} from "../src/shared/session-id.js";
 import { SttsProvidersSchema } from "../src/shared/stts-providers.js";
 
 ////////////////////////////////
@@ -402,20 +404,24 @@ import kotlinx.serialization.json.JsonObject
 object Protocol {
 ${INDENT}const val CONSOLE_PROTOCOL_VERSION: Int = ${CONSOLE_PROTOCOL_VERSION}
 
-${INDENT}/** Session-id prefix for broadcast notices; the sender follows it. */
-${INDENT}const val NOTICE_SESSION_PREFIX: String = ${kotlinString(NOTICE_SESSION_PREFIX)}
+${INDENT}/** The one structural separator for every address / store / thread key. */
+${INDENT}const val ADDRESS_SEP: String = ${kotlinString(ADDRESS_SEP)}
 
-${INDENT}/** Session-id prefix for channel conversations; the target team is the tail after the LAST colon. */
-${INDENT}const val CONV_SESSION_PREFIX: String = ${kotlinString(CONV_SESSION_PREFIX)}
+${INDENT}/** Position-0 store-key tag for a channel conversation key. */
+${INDENT}const val CONV_TAG: String = ${kotlinString(CONV_TAG)}
 
-${INDENT}/** Separator in a gateway-qualified name (gateway then local name); the first one splits gateway from local name. */
-${INDENT}const val GATEWAY_QUALIFIER_SEP: String = ${kotlinString(GATEWAY_QUALIFIER_SEP)}
+${INDENT}/** Position-0 store-key tag for a broadcast notice key. */
+${INDENT}const val NOTICE_TAG: String = ${kotlinString(NOTICE_TAG)}
 
-${INDENT}/** Separator inside a composite local name (project then session); the LAST one splits project from session. */
-${INDENT}const val SESSION_SEP: String = ${kotlinString(SESSION_SEP)}
-
-${INDENT}/** The session a bare project name defaults to when it carries no session segment. */
+${INDENT}/** The session a bare spawn-point name defaults to as a wake / UI default. */
 ${INDENT}const val DEFAULT_SESSION: String = ${kotlinString(DEFAULT_SESSION)}
+
+${INDENT}/** The one address-segment slug pattern (lowercase alnum, internal / trailing hyphen). */
+${INDENT}const val SLUG_PATTERN: String = ${kotlinString(SLUG_RE.source)}
+
+${INDENT}const val MAX_SLUG_LEN: Int = ${MAX_SLUG_LEN}
+
+${INDENT}const val MAX_CONV_ID_LEN: Int = ${MAX_CONV_ID_LEN}
 }`;
 
 const output = `${[header, ...blocks].join("\n\n")}\n`;

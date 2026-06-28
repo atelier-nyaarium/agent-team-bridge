@@ -294,7 +294,7 @@ describe("routes", () => {
 				expect(snap.entries).toHaveLength(1);
 				expect(snap.entries[0]).toMatchObject({
 					kind: "notice",
-					session_id: "notice:test-host/recipe-app",
+					session_id: "notice.alice.test-host.recipe-app.claude",
 					from: "recipe-app",
 					title: "cycle done",
 					summary: "All phases shipped. Nothing is blocked.",
@@ -489,9 +489,11 @@ describe("routes", () => {
 		it("returns 404 when target not in registry", async () => {
 			const ctx = makeCtx();
 			const { send } = createRoutes(ctx);
+			// A composite spawn.session chat target (arity 2) resolves locally; with an empty
+			// registry it is not connected and the wake fails, so the send 404s.
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
 				from: "a",
-				to: "b",
+				to: "b.dev",
 				body: "hi",
 			});
 			expect(res.status).toBe(404);
@@ -510,12 +512,12 @@ describe("routes", () => {
 		});
 
 		it("returns 404 when target ws.readyState !== 1", async () => {
-			const registry = makeRegistry({ b: { readyState: 3, data: { mode: "channel" } } });
+			const registry = makeRegistry({ "b.dev": { readyState: 3, data: { mode: "channel" } } });
 			const ctx = makeCtx({ registry });
 			const { send } = createRoutes(ctx);
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
 				from: "a",
-				to: "b",
+				to: "b.dev",
 				body: "hi",
 			});
 			expect(res.status).toBe(404);
@@ -530,25 +532,26 @@ describe("routes", () => {
 					pushed.push(JSON.parse(data));
 				},
 			};
-			const registry = makeRegistry({ "proj-a": fakeWs });
+			const registry = makeRegistry({ "proj-a.dev": fakeWs });
 			const ctx = makeCtx({ registry });
 			const { send } = createRoutes(ctx);
 
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
 				from: "pixel",
 				fromConversationId: "conv-1",
-				to: "proj-a",
+				to: "proj-a.dev",
 				body: "hi",
 				channelOnly: true,
 			});
 			const json = await res.json();
-			// The channel session id carries the canonical host-qualified target so
-			// the console threads the reply under (gatewayId, name).
-			expect(json.session_id).toBe("conv:conv-1:test-host/proj-a");
+			// The channel session id carries the canonical fully-qualified target
+			// (conv.<conv>.<domain>.<gateway>.<spawn>.<session>) so the console threads
+			// the reply under the resolved address.
+			expect(json.session_id).toBe("conv.conv-1.alice.test-host.proj-a.dev");
 			expect(json.status).toBe("running");
 			expect(pushed.length).toBe(1);
 			expect(pushed[0].type).toBe("channel_push");
-			expect((pushed[0] as { session_id: string }).session_id).toBe("conv:conv-1:test-host/proj-a");
+			expect((pushed[0] as { session_id: string }).session_id).toBe("conv.conv-1.alice.test-host.proj-a.dev");
 		});
 
 		it("resolves a host-qualified local target to the local session", async () => {
@@ -560,37 +563,37 @@ describe("routes", () => {
 					pushed.push(JSON.parse(data));
 				},
 			};
-			const registry = makeRegistry({ "proj-a": fakeWs });
+			const registry = makeRegistry({ "proj-a.dev": fakeWs });
 			const ctx = makeCtx({ registry });
 			const { send } = createRoutes(ctx);
 
-			// The console targets the qualified name; the gateway strips the local
-			// host and resolves to the bare registry entry.
+			// The console targets the fully-qualified address; its (domain, gateway) is ours,
+			// so the local-collapse rule resolves it to the local spawn.session registry entry.
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
 				from: "pixel",
 				fromConversationId: "conv-1",
-				to: "test-host/proj-a",
+				to: "alice.test-host.proj-a.dev",
 				body: "hi",
 				channelOnly: true,
 			});
 			const json = await res.json();
-			expect(json.session_id).toBe("conv:conv-1:test-host/proj-a");
+			expect(json.session_id).toBe("conv.conv-1.alice.test-host.proj-a.dev");
 			expect(pushed.length).toBe(1);
 		});
 
 		it("routes a target qualified with a different Gateway, 503 when the Router is down", async () => {
 			const fakeWs = { readyState: 1, data: { mode: "channel" }, send() {} };
-			const registry = makeRegistry({ "proj-a": fakeWs });
+			const registry = makeRegistry({ "proj-a.dev": fakeWs });
 			// No evieClient in this ctx: the Router is unavailable, so a cross-Gateway
-			// target reports 503 rather than misresolving to the same-named local
-			// session.
+			// target (an arity-4 address whose gateway differs from ours) reports 503
+			// rather than misresolving to the same-named local session.
 			const ctx = makeCtx({ registry });
 			const { send } = createRoutes(ctx);
 
 			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
 				from: "pixel",
 				fromConversationId: "conv-1",
-				to: "other-host/proj-a",
+				to: "alice.other-host.proj-a.dev",
 				body: "hi",
 				channelOnly: true,
 			});

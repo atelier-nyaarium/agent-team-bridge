@@ -27,15 +27,6 @@ import type {
 	MailboxEntrySchema,
 	SealedEnvelopeSchema,
 } from "./schemas.js";
-// The session-id grammar constants are owned by session-id.ts; imported for the
-// wire helpers below and re-exported so existing importers keep resolving here.
-import { CONV_SESSION_PREFIX, GATEWAY_QUALIFIER_SEP, NOTICE_SESSION_PREFIX } from "./session-id.js";
-
-// Composite project<SEP>session grammar + helpers, also owned by session-id.ts; re-exported so
-// consoleHandler resolves the whole addressing layer from one place.
-export { composeSessionName, DEFAULT_SESSION, isComposite, parseSessionName, SESSION_SEP } from "./session-id.js";
-export { CONV_SESSION_PREFIX, GATEWAY_QUALIFIER_SEP, NOTICE_SESSION_PREFIX };
-
 ////////////////////////////////
 //  Console bridge protocol
 //
@@ -122,61 +113,6 @@ export type CrossDomainListSharesResult = z.infer<typeof CrossDomainListSharesRe
 export type CrossDomainListPeersResult = z.infer<typeof CrossDomainListPeersResultSchema>;
 export type CrossDomainUnlinkResult = z.infer<typeof CrossDomainUnlinkResultSchema>;
 export type ConsoleOpResult = z.infer<typeof ConsoleOpResultSchema>;
-
-////////////////////////////////
-//  Session-id grammars
-//
-//  Two grammars cross the language boundary; both constants are emitted into
-//  the generated Kotlin so the console never hand-mirrors them.
-
-// Broadcast notices: the console parses the sender out of the session id to
-// thread the notice under the sender's name. Never respondable.
-export function noticeSessionId(from: string): string {
-	return `${NOTICE_SESSION_PREFIX}${from}`;
-}
-
-/** The sender of a notice session id, or null if the id is not a notice. */
-export function parseNoticeSession(sessionId: string): string | null {
-	return sessionId.startsWith(NOTICE_SESSION_PREFIX) ? sessionId.slice(NOTICE_SESSION_PREFIX.length) : null;
-}
-
-// Channel conversations: one string serves as the pending-job store key, the
-// wire session_id, and the console's thread-attribution tail-parse. The tail
-// after the LAST colon is the target team (conversation ids never contain
-// colons; team names may not either, but last-colon parsing matches the
-// Kotlin client's substringAfterLast).
-export function composeConvSessionId(conversationId: string, team: string): string {
-	return `${CONV_SESSION_PREFIX}${conversationId}:${team}`;
-}
-
-/** The target team of a conv session id, or null if the id is not a conv. */
-export function parseConvSessionTeam(sessionId: string): string | null {
-	if (!sessionId.startsWith(CONV_SESSION_PREFIX)) return null;
-	return sessionId.slice(sessionId.lastIndexOf(":") + 1) || null;
-}
-
-////////////////////////////////
-//  Gateway qualification
-//
-//  A session's address is host-qualified as `<gatewayId>/<name>` so two Gateways'
-//  identically-named sessions stay distinct. A bare name (no separator) resolves
-//  to the local Gateway. The separator is emitted into the generated Kotlin so
-//  the console never hand-mirrors it. Gateway ids and local names never contain
-//  the separator, so the FIRST separator splits Gateway id from name unambiguously.
-
-/** Qualify a bare local name under a Gateway id; a name that is already qualified
- * (contains the separator) is returned unchanged. */
-export function qualifyTeam(gatewayId: string, name: string): string {
-	return name.includes(GATEWAY_QUALIFIER_SEP) ? name : `${gatewayId}${GATEWAY_QUALIFIER_SEP}${name}`;
-}
-
-/** Split a (possibly qualified) team into its Gateway id and local name. A bare name
- * yields a null gatewayId (caller resolves it to the local Gateway). */
-export function parseQualifiedTeam(team: string): { gatewayId: string | null; name: string } {
-	const i = team.indexOf(GATEWAY_QUALIFIER_SEP);
-	if (i === -1) return { gatewayId: null, name: team };
-	return { gatewayId: team.slice(0, i), name: team.slice(i + 1) };
-}
 
 ////////////////////////////////
 //  Mailbox

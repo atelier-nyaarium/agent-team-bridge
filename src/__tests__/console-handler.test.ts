@@ -100,6 +100,7 @@ function makeHarness(
 		conversationRegistry,
 		mailboxStore,
 		localGatewayId: "test-host",
+		localDomainId: "test-domain",
 		routes,
 		domainStatus: deps.domainStatus,
 	});
@@ -228,6 +229,7 @@ describe("createConsoleDispatcher", () => {
 			conversationRegistry,
 			mailboxStore,
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			routes: {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
@@ -386,14 +388,16 @@ describe("createConsoleDispatcher", () => {
 	it("respond forwards a received thread to routes.respond", async () => {
 		const h = makeHarness();
 		await h.handler.handleFrame(frame({ kind: "register" }));
-		deliverInbound(h, "conv:team-a:pixel");
+		// The session id is the opaque, fully-qualified store key the console echoes.
+		const sid = "conv.team-a.test-domain.test-host.pixel.dev";
+		deliverInbound(h, sid);
 
-		const reply = await h.handler.handleFrame(
-			frame({ kind: "respond", session_id: "conv:team-a:pixel", response: "ok" }, "op2"),
-		);
+		const reply = await h.handler.handleFrame(frame({ kind: "respond", session_id: sid, response: "ok" }, "op2"));
 		expect(reply.ok).toBe(true);
 		expect(reply.result).toEqual({ delivered: true });
-		expect(h.respondCalls[0]).toMatchObject({ session_id: "conv:team-a:test-host/pixel", response: "ok" });
+		// The store key reaches routes.respond verbatim - no bare->qualified normalization
+		// under the fully-qualified grammar.
+		expect(h.respondCalls[0]).toMatchObject({ session_id: sid, response: "ok" });
 	});
 
 	it("respond rejects a session never delivered to this device (and never reaches resolveHandshake)", async () => {
@@ -574,6 +578,7 @@ describe("createConsoleDispatcher", () => {
 			conversationRegistry,
 			mailboxStore,
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			sendBoundMs: 50,
 			routes: {
 				send: () => new Promise<Response>(() => {}),
@@ -583,10 +588,13 @@ describe("createConsoleDispatcher", () => {
 			},
 		});
 
-		const reply = await handler.handleFrame(frame({ kind: "send", to: "asleep-team", body: "hi" }));
+		const reply = await handler.handleFrame(frame({ kind: "send", to: "asleep-team.dev", body: "hi" }));
 		expect(reply.ok).toBe(true);
-		// The deterministic session id carries the canonical host-qualified target.
-		expect(reply.result).toEqual({ session_id: `conv:${OWNER}:test-host/asleep-team`, status: "running" });
+		// The deterministic session id is the canonical, fully-qualified store key.
+		expect(reply.result).toEqual({
+			session_id: `conv.${OWNER}.test-domain.test-host.asleep-team.dev`,
+			status: "running",
+		});
 	});
 
 	it("TTL sweep evicts the peer together with its mailbox", async () => {
@@ -668,6 +676,7 @@ describe("createConsoleDispatcher", () => {
 			conversationRegistry,
 			mailboxStore,
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			sendBoundMs: 20,
 			routes: {
 				send: () =>
@@ -680,8 +689,11 @@ describe("createConsoleDispatcher", () => {
 			},
 		});
 
-		const reply = await handler.handleFrame(frame({ kind: "send", to: "asleep", body: "hi" }));
-		expect(reply.result).toEqual({ session_id: `conv:${OWNER}:test-host/asleep`, status: "running" });
+		const reply = await handler.handleFrame(frame({ kind: "send", to: "asleep.dev", body: "hi" }));
+		expect(reply.result).toEqual({
+			session_id: `conv.${OWNER}.test-domain.test-host.asleep.dev`,
+			status: "running",
+		});
 
 		resolveSend?.(jsonRes({ error: 'Team "asleep" is not connected' }, 404));
 		await new Promise((r) => setTimeout(r, 10));
@@ -691,7 +703,7 @@ describe("createConsoleDispatcher", () => {
 		expect(entries).toHaveLength(1);
 		expect(entries[0]).toMatchObject({
 			status: "error",
-			session_id: `conv:${OWNER}:test-host/asleep`,
+			session_id: `conv.${OWNER}.test-domain.test-host.asleep.dev`,
 		});
 		expect(entries[0].body).toContain("not connected");
 	});
@@ -710,6 +722,7 @@ describe("createConsoleDispatcher", () => {
 			conversationRegistry,
 			mailboxStore,
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			sendBoundMs: 20,
 			routes: {
 				send: () =>
@@ -722,8 +735,11 @@ describe("createConsoleDispatcher", () => {
 			},
 		});
 
-		const reply = await handler.handleFrame(frame({ kind: "send", to: "sleepy-cli", body: "hi" }));
-		expect(reply.result).toEqual({ session_id: `conv:${OWNER}:test-host/sleepy-cli`, status: "running" });
+		const reply = await handler.handleFrame(frame({ kind: "send", to: "sleepy-cli.dev", body: "hi" }));
+		expect(reply.result).toEqual({
+			session_id: `conv.${OWNER}.test-domain.test-host.sleepy-cli.dev`,
+			status: "running",
+		});
 
 		resolveSend?.(
 			jsonRes(
@@ -736,7 +752,10 @@ describe("createConsoleDispatcher", () => {
 		const poll = await handler.handleFrame(frame({ kind: "poll" }, "op2"));
 		const entries = (poll.result as { entries: { body?: string; status?: string; session_id: string }[] }).entries;
 		expect(entries).toHaveLength(1);
-		expect(entries[0]).toMatchObject({ session_id: `conv:${OWNER}:test-host/sleepy-cli`, status: "error" });
+		expect(entries[0]).toMatchObject({
+			session_id: `conv.${OWNER}.test-domain.test-host.sleepy-cli.dev`,
+			status: "error",
+		});
 		expect(entries[0].body).toContain("CLI-mode");
 	});
 
@@ -799,6 +818,7 @@ describe("createConsoleDispatcher", () => {
 			conversationRegistry,
 			mailboxStore,
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			sendBoundMs: 20,
 			routes: {
 				send: () => new Promise<Response>((resolve) => (resolveSend = resolve)),
@@ -897,6 +917,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			routes,
 			isProjectName,
 			relayToHost: async (op) => {
@@ -944,7 +965,10 @@ describe("console terminal ops (peek / tmux_send)", () => {
 
 	it("rejects a cross-Gateway target", async () => {
 		const h = makeTerminalHarness();
-		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "other-gw/recipe-app" }, "p5"));
+		// A fully-qualified address whose gateway segment is not the local Gateway.
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "peek", target: "test-domain.other-gw.recipe-app.dev" }, "p5"),
+		);
 		expect(reply.ok).toBe(false);
 		expect(reply.error).toContain("another Gateway");
 		expect(h.hostOps).toHaveLength(0);
@@ -1091,29 +1115,13 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		});
 	});
 
-	it("resolves a dotted devcontainer dir name whole (catalog-first), not as a session split", async () => {
-		const h = makeTerminalHarness((n) => n === "my.app");
-		await h.handler.handleFrame(frame({ kind: "peek", target: "my.app" }, "pd1"));
-		expect(h.hostOps[0]).toMatchObject({
-			kind: "peek",
-			target: { kind: "devcontainer", name: "my.app", sessionName: "claude" },
-		});
-	});
-
-	it("splits a session off a dotted devcontainer dir name (last separator wins)", async () => {
-		const h = makeTerminalHarness((n) => n === "my.app");
-		await h.handler.handleFrame(frame({ kind: "peek", target: "my.app.scratch" }, "pd2"));
-		expect(h.hostOps[0]).toMatchObject({
-			kind: "peek",
-			target: { kind: "devcontainer", name: "my.app", sessionName: "scratch" },
-		});
-	});
-
 	it("rejects a trailing-separator target (empty session) cleanly, before any host op", async () => {
 		const h = makeTerminalHarness();
+		// A trailing dot yields an empty trailing segment that fails the slug check at
+		// Address construction (inside parseTarget), before any host op.
 		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app." }, "pe1"));
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toMatch(/invalid session name/);
+		expect(reply.error).toMatch(/invalid address segment/);
 		expect(h.hostOps).toHaveLength(0);
 	});
 
@@ -1121,7 +1129,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		const h = makeTerminalHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app.Bad_Name" }, "pe2"));
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toMatch(/invalid session name/);
+		expect(reply.error).toMatch(/invalid address segment/);
 		expect(h.hostOps).toHaveLength(0);
 	});
 
@@ -1131,7 +1139,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			frame({ kind: "peek", target: `recipe-app.${"x".repeat(65)}` }, "pe3"),
 		);
 		expect(reply.ok).toBe(false);
-		expect(reply.error).toMatch(/invalid session name/);
+		expect(reply.error).toMatch(/invalid address segment/);
 		expect(h.hostOps).toHaveLength(0);
 	});
 
@@ -1226,6 +1234,7 @@ describe("console cross-Domain handshake ops", () => {
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			routes,
 			crossDomain,
 		});
@@ -1380,6 +1389,7 @@ describe("console cross-Domain handshake ops", () => {
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			routes: {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
@@ -1396,13 +1406,14 @@ describe("console cross-Domain handshake ops", () => {
 describe("console cross-Domain share ops", () => {
 	// A team list mixing every kind, so the kind gate can be exercised: a devcontainer and a
 	// loose session are shareable; a session of an unrecognized kind, a console-kind device, and an
-	// unknown name are not. teams() carries each team's gatewayId (the canonical target's gw).
+	// unknown name are not. Each team is a composite `spawn.session` local field; teams() carries
+	// each team's gatewayId (the canonical target's gw).
 	function teamsList(): Response {
 		return jsonRes([
-			{ team: "app", gatewayId: "test-host", status: "online", kind: "devcontainer", queue_depth: 0 },
-			{ team: "scratch-1", gatewayId: "test-host", status: "online", kind: "loose", queue_depth: 0 },
-			{ team: "unknown-kind", gatewayId: "test-host", status: "online", kind: "unknown", queue_depth: 0 },
-			{ team: "pixel", gatewayId: "test-host", status: "online", kind: "console", queue_depth: 0 },
+			{ team: "app.dev", gatewayId: "test-host", status: "online", kind: "devcontainer", queue_depth: 0 },
+			{ team: "scratch-1.dev", gatewayId: "test-host", status: "online", kind: "loose", queue_depth: 0 },
+			{ team: "unknown-kind.dev", gatewayId: "test-host", status: "online", kind: "unknown", queue_depth: 0 },
+			{ team: "pixel.dev", gatewayId: "test-host", status: "online", kind: "console", queue_depth: 0 },
 		]);
 	}
 
@@ -1443,6 +1454,7 @@ describe("console cross-Domain share ops", () => {
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			routes,
 			crossDomainShare,
 		});
@@ -1455,7 +1467,7 @@ describe("console cross-Domain share ops", () => {
 			frame(
 				{
 					kind: "cross_domain_share",
-					sessionTarget: "test-host/app",
+					sessionTarget: "test-domain.test-host.app.dev",
 					target: { kind: "domain", domainId: "carol" },
 				},
 				"s1",
@@ -1464,7 +1476,7 @@ describe("console cross-Domain share ops", () => {
 		expect(reply.ok).toBe(true);
 		expect(reply.result).toEqual({ ok: true });
 		expect(h.calls.share).toEqual([
-			{ sessionTarget: "test-host/app", target: { kind: "domain", domainId: "carol" } },
+			{ sessionTarget: "test-domain.test-host.app.dev", target: { kind: "domain", domainId: "carol" } },
 		]);
 	});
 
@@ -1474,7 +1486,7 @@ describe("console cross-Domain share ops", () => {
 			frame(
 				{
 					kind: "cross_domain_share",
-					sessionTarget: "test-host/scratch-1",
+					sessionTarget: "test-domain.test-host.scratch-1.dev",
 					target: { kind: "domain", domainId: "carol" },
 				},
 				"s2",
@@ -1490,7 +1502,7 @@ describe("console cross-Domain share ops", () => {
 			frame(
 				{
 					kind: "cross_domain_share",
-					sessionTarget: "test-host/app",
+					sessionTarget: "test-domain.test-host.app.dev",
 					target: { kind: "domain", domainId: "carol" },
 				},
 				"s1",
@@ -1500,7 +1512,7 @@ describe("console cross-Domain share ops", () => {
 			frame(
 				{
 					kind: "cross_domain_unshare",
-					sessionTarget: "test-host/app",
+					sessionTarget: "test-domain.test-host.app.dev",
 					target: { kind: "domain", domainId: "carol" },
 				},
 				"u1",
@@ -1509,13 +1521,13 @@ describe("console cross-Domain share ops", () => {
 		expect(reply.ok).toBe(true);
 		expect(reply.result).toEqual({ ok: true });
 		expect(h.calls.unshare).toEqual([
-			{ sessionTarget: "test-host/app", target: { kind: "domain", domainId: "carol" } },
+			{ sessionTarget: "test-domain.test-host.app.dev", target: { kind: "domain", domainId: "carol" } },
 		]);
 		expect(h.set.size).toBe(0);
 		// The un-share also settled any in-flight cross-Domain job for this (session, friend)
 		// pair so an already-accepted send's reply stops at the destination, not just fresh sends.
 		expect(h.calls.expireSessionJobs).toEqual([
-			{ sessionTarget: "test-host/app", target: { kind: "domain", domainId: "carol" } },
+			{ sessionTarget: "test-domain.test-host.app.dev", target: { kind: "domain", domainId: "carol" } },
 		]);
 	});
 
@@ -1526,7 +1538,7 @@ describe("console cross-Domain share ops", () => {
 			frame(
 				{
 					kind: "cross_domain_unshare",
-					sessionTarget: "test-host/app",
+					sessionTarget: "test-domain.test-host.app.dev",
 					target: { kind: "domain", domainId: "carol" },
 				},
 				"u1",
@@ -1543,7 +1555,7 @@ describe("console cross-Domain share ops", () => {
 			frame(
 				{
 					kind: "cross_domain_share",
-					sessionTarget: "test-host/app",
+					sessionTarget: "test-domain.test-host.app.dev",
 					target: { kind: "domain", domainId: "carol" },
 				},
 				"s1",
@@ -1552,7 +1564,7 @@ describe("console cross-Domain share ops", () => {
 		const reply = await h.handler.handleFrame(frame({ kind: "cross_domain_list_shares" }, "ls1"));
 		expect(reply.ok).toBe(true);
 		expect(reply.result).toEqual({
-			shares: [{ sessionTarget: "test-host/app", target: { kind: "domain", domainId: "carol" } }],
+			shares: [{ sessionTarget: "test-domain.test-host.app.dev", target: { kind: "domain", domainId: "carol" } }],
 		});
 		expect(h.calls.listShares).toHaveLength(1);
 	});
@@ -1563,7 +1575,7 @@ describe("console cross-Domain share ops", () => {
 			frame(
 				{
 					kind: "cross_domain_share",
-					sessionTarget: "test-host/unknown-kind",
+					sessionTarget: "test-domain.test-host.unknown-kind.dev",
 					target: { kind: "domain", domainId: "carol" },
 				},
 				"g1",
@@ -1580,7 +1592,7 @@ describe("console cross-Domain share ops", () => {
 			frame(
 				{
 					kind: "cross_domain_share",
-					sessionTarget: "test-host/pixel",
+					sessionTarget: "test-domain.test-host.pixel.dev",
 					target: { kind: "domain", domainId: "carol" },
 				},
 				"c1",
@@ -1597,7 +1609,7 @@ describe("console cross-Domain share ops", () => {
 			frame(
 				{
 					kind: "cross_domain_share",
-					sessionTarget: "test-host/nope",
+					sessionTarget: "test-domain.test-host.nope.dev",
 					target: { kind: "domain", domainId: "carol" },
 				},
 				"n1",
@@ -1614,7 +1626,7 @@ describe("console cross-Domain share ops", () => {
 			frame(
 				{
 					kind: "cross_domain_share",
-					sessionTarget: "other-gw/app",
+					sessionTarget: "test-domain.other-gw.app.dev",
 					target: { kind: "domain", domainId: "carol" },
 				},
 				"x1",
@@ -1631,7 +1643,7 @@ describe("console cross-Domain share ops", () => {
 			frame(
 				{
 					kind: "cross_domain_share",
-					sessionTarget: "test-host/app",
+					sessionTarget: "test-domain.test-host.app.dev",
 					target: { kind: "domain", domainId: "dave" },
 				},
 				"d1",
@@ -1647,7 +1659,7 @@ describe("console cross-Domain share ops", () => {
 		const f = frame(
 			{
 				kind: "cross_domain_share",
-				sessionTarget: "test-host/app",
+				sessionTarget: "test-domain.test-host.app.dev",
 				target: { kind: "domain", domainId: "carol" },
 			},
 			"dup-s",
@@ -1665,7 +1677,7 @@ describe("console cross-Domain share ops", () => {
 			frame(
 				{
 					kind: "cross_domain_share",
-					sessionTarget: "test-host/app",
+					sessionTarget: "test-domain.test-host.app.dev",
 					target: { kind: "domain", domainId: "carol" },
 				},
 				"s1",
@@ -1674,7 +1686,7 @@ describe("console cross-Domain share ops", () => {
 		const f = frame(
 			{
 				kind: "cross_domain_unshare",
-				sessionTarget: "test-host/app",
+				sessionTarget: "test-domain.test-host.app.dev",
 				target: { kind: "domain", domainId: "carol" },
 			},
 			"dup-u",
@@ -1691,6 +1703,7 @@ describe("console cross-Domain share ops", () => {
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			routes: {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
@@ -1715,49 +1728,54 @@ describe("console cross-Domain share ops", () => {
 		expect(lr.error).toContain("not available");
 	});
 
-	// A BARE-name share must be stored under the CANONICAL gateway/name key, the same form the
-	// relay gate / sweep / discovery compare against. A bare-name share ("app") stored raw is
-	// filed as "app", so the relay's "test-host/app" lookup never matches and the share silently
-	// never takes effect (fail-closed).
-	it("a bare-name share is stored under the canonical gateway/name key the relay looks up", async () => {
+	// An UNDER-QUALIFIED share (the local `spawn.session` form, without the domain.gateway prefix)
+	// must be stored under the CANONICAL `domain.gateway.spawn.session` key, the same form the relay
+	// gate / sweep / discovery compare against. A local-form share ("app.dev") stored raw is filed as
+	// "app.dev", so the relay's "test-domain.test-host.app.dev" lookup never matches and the share
+	// silently never takes effect (fail-closed).
+	it("an under-qualified share is stored under the canonical key the relay looks up", async () => {
 		const h = makeShareHarness();
 		const reply = await h.handler.handleFrame(
 			frame(
-				{ kind: "cross_domain_share", sessionTarget: "app", target: { kind: "domain", domainId: "carol" } },
+				{ kind: "cross_domain_share", sessionTarget: "app.dev", target: { kind: "domain", domainId: "carol" } },
 				"bare-s",
 			),
 		);
 		expect(reply.ok).toBe(true);
-		// The store was handed the CANONICAL "test-host/app", not the raw bare "app" - so the
-		// relay gate, which looks up "test-host/app", will actually find it.
+		// The store was handed the CANONICAL "test-domain.test-host.app.dev", not the raw local
+		// "app.dev" - so the relay gate, which looks up the canonical key, will actually find it.
 		expect(h.calls.share).toEqual([
-			{ sessionTarget: "test-host/app", target: { kind: "domain", domainId: "carol" } },
+			{ sessionTarget: "test-domain.test-host.app.dev", target: { kind: "domain", domainId: "carol" } },
 		]);
 		// And the canonical form is what list_shares (the console's read) reports.
 		const lr = await h.handler.handleFrame(frame({ kind: "cross_domain_list_shares" }, "bare-ls"));
 		expect(lr.result).toEqual({
-			shares: [{ sessionTarget: "test-host/app", target: { kind: "domain", domainId: "carol" } }],
+			shares: [{ sessionTarget: "test-domain.test-host.app.dev", target: { kind: "domain", domainId: "carol" } }],
 		});
 	});
 
-	it("a bare-name unshare withdraws the canonical share it created", async () => {
+	it("an under-qualified unshare withdraws the canonical share it created", async () => {
 		const h = makeShareHarness();
 		await h.handler.handleFrame(
 			frame(
-				{ kind: "cross_domain_share", sessionTarget: "app", target: { kind: "domain", domainId: "carol" } },
+				{ kind: "cross_domain_share", sessionTarget: "app.dev", target: { kind: "domain", domainId: "carol" } },
 				"bare-s",
 			),
 		);
 		const reply = await h.handler.handleFrame(
 			frame(
-				{ kind: "cross_domain_unshare", sessionTarget: "app", target: { kind: "domain", domainId: "carol" } },
+				{
+					kind: "cross_domain_unshare",
+					sessionTarget: "app.dev",
+					target: { kind: "domain", domainId: "carol" },
+				},
 				"bare-u",
 			),
 		);
 		expect(reply.ok).toBe(true);
 		// The unshare canonicalizes too, so it keys identically to the share and removes it.
 		expect(h.calls.unshare).toEqual([
-			{ sessionTarget: "test-host/app", target: { kind: "domain", domainId: "carol" } },
+			{ sessionTarget: "test-domain.test-host.app.dev", target: { kind: "domain", domainId: "carol" } },
 		]);
 		expect(h.set.size).toBe(0);
 	});
@@ -1783,6 +1801,7 @@ describe("console cross-Domain unlink op", () => {
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			routes,
 			// An unknown/already-unlinked Domain yields zero counts (the real primitives return 0).
 			unlinkDomain: (domainId) => {
@@ -1827,6 +1846,7 @@ describe("console cross-Domain unlink op", () => {
 			conversationRegistry: new Map(),
 			mailboxStore: new DeviceMailboxStore(),
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			routes: {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),
