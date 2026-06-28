@@ -1,21 +1,52 @@
 # Network-addressing migration: implementation progress
 
-## STATUS: Phase 0 + Phase 1 COMPLETE (committed, push held)
+## STATUS: Phase 0 + Phase 1 SHIPPED + LIVE IN PRODUCTION (7.0.0)
 
-Commits: 51e6a73 plan · 7214eff Phase 0 · ffbb500 value objects · 5f8382d TS flip · c87a9a8
-wipe/mint/resume · b4d4945 Android · f4ae894 caps · 41c170b red-team fixes. Both runtimes green
-(TS lint + 733 tests; Android :app:testDebugUnitTest + :app:assembleRelease). Red-teamed: canonical
-invariant + TS<->Kotlin equivalence hold.
+Merged via PR #84 (CI + main-push.yml green, APK built). Cutover done: a console round-trip now
+carries the new dot-grammar session_id (`conv.<conv>.a95dd4e979aa3be5.sakura.host.switchboard`).
+Both runtimes green (TS lint + 733 tests; Android :app:testDebugUnitTest + :app:assembleRelease).
+Red-teamed: canonical invariant + TS<->Kotlin equivalence hold.
 
-NEXT (owner): the cutover - push, `./down.sh && ./start-gateway.sh && ./start-host-daemon.sh`,
-install the APK, reload_plugins, then validate. AFTER that: Phase 2 (security review + retire the
-forge-guard at routes.ts:691 - DO NOT do this pre-deploy). Phase 3 (struct wire) optional.
+The "android/Evie side purge of loose stores" the owner asked for is DONE: the Android purge IS
+`AppStateStore.migrateSchemaIfNeeded` (schema v2, ran on the cutover); evie has nothing to purge
+(content-blind router; only the grammar-independent evie-federation k8s Secret, NEVER touch it).
 
-Deferred LOW (post-cutover cleanup): regenerate tests/fixtures/protocol/*.json old-grammar
-session_ids (they decode fine today); the wipe-sentinel cross-dir edge under a custom FEDERATION_DIR;
-add cross-runtime length-boundary vectors to vectors.json; the full host re-wake branch (currently
-the simpler resume-exclusion). The old-grammar literals in code COMMENTS (gatewayRelay:182,
-federation-protocol:21, team-name:14, ChatRepository:446) are cosmetic.
+NEXT: Phase 2 (security review + retire the redundant forge-guard at gatewayRelay.ts:178-194 /
+routes.ts:691 - gated on the live deploy being proven, DO the review first). Phase 3 (struct wire)
+optional.
+
+## Post-migration cleanup backlog (from the cleanup audit, 2026-06-28)
+
+Done this pass: purged dead `volumes/arbiter/`; fixed CLAUDE.md addressing-doc drift (lines 65/66/
+116/136 -> dot grammar).
+
+BUNDLE WITH PHASE 2 (gateway/APK code, needs a deploy to take effect - no urgency):
+- Remove the past-due one-time DATA_DIR migration block (src/gateway/index.ts ~68-89, its own TODO
+  ~2026-07). Enables purging the legacy federation backups below.
+- Harden the session-resume LISTING (routes.ts:520) against a stale dotted-project / host-spawn
+  entry surfacing as a phantom (no current impact - session-resume.json is `{}`).
+- Android: call `stts.purgeAll()` + `Attachments.root().deleteRecursively()` ONCE in
+  ChatRepository.init under the SAME schema-version latch (the SharedPreferences wipe never reached
+  filesDir, so old-grammar `stts/<gateway/name>/` audio + orphaned attachment buckets linger; low
+  harm, audio regenerable). Add a unit test pinning the grammar-bearing prefs keys as a subset of
+  the migrate wipe set (mirror ClearProvisioningPartitionTest's mustWipe).
+- Regenerate `tests/fixtures/protocol/*.json` old-grammar session_id/to/from (decode fine today, but
+  misleading reference data; cross-runtime - re-run BOTH `bun run test` AND `:app:testDebugUnitTest`).
+- Reword the stale old-grammar COMMENTS (TS: routes/consoleHandler/crossDomainShareState/gatewayRelay/
+  pending-job-store/schemas/federation-protocol/team-name + session-id/owner-id/console-protocol
+  headers; Android: ChatRepository:446/175, SttsPlayer:180, ConsoleClient:153/687 - KEEP the
+  intentional from->to migration comments at AppStateStore.kt:135-139 + ChatRepository.kt:457-460).
+- The cross-runtime length-boundary vectors + the full host re-wake branch (currently the simpler
+  resume-exclusion).
+
+NEEDS OWNER OK (destructive, host filesystem, NOT code - 0600 private keys):
+- Delete the stale pre-migration federation backup `volumes/gateway/federation/` (+
+  `volumes/gateway/replay-guard.json`). VERIFIED safe: the LIVE copy is `volumes/gateway-data/
+  federation/` (DATA_DIR=/app/data, FEDERATION_DIR unset), Jun 27-28; the backup is the Jun 26
+  /app/log copy left by the one-time migration. Confirm before deleting any key file.
+
+DO NOT: touch the evie-federation k8s Secret; replace SHELL_SAFE_NAME_RE/isShellSafeName (still used
+at consoleHandler.ts:278 for the tmux shell-safe check); blanket-purge session-resume.json.
 
 ---
 
