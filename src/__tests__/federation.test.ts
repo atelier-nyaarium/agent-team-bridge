@@ -17,7 +17,7 @@ import {
 } from "../shared/federation-protocol.js";
 import type { CrossDomainBinding } from "../shared/pending-job-store.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
-import { SessionId, TeamAddress } from "../shared/session-id.js";
+import { Address, storeKey } from "../shared/session-id.js";
 import type { ResponsePayload } from "../shared/types.js";
 
 ////////////////////////////////
@@ -109,33 +109,33 @@ describe("federation routing (E2E sealed)", () => {
 			srcGateway: "hosta",
 			handle: (op) => {
 				seen = op;
-				return { session_id: "conv:conv-1:hostb/api", status: "running" };
+				return { session_id: "conv.conv-1.alice.hostb.api.dev", status: "running" };
 			},
 		});
 		const ctx = makeCtx("hosta", { evieClient: evie.client, sealer: sealerA });
 		const { send } = createRoutes(ctx);
 
 		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
-			from: "recipe-app",
+			from: "recipe-app.dev",
 			fromConversationId: "conv-1",
-			to: "hostb/api",
+			to: "alice.hostb.api.dev",
 			body: "status?",
 			channelOnly: true,
 		});
 		const json = await res.json();
-		expect(json.session_id).toBe("conv:conv-1:hostb/api");
+		expect(json.session_id).toBe("conv.conv-1.alice.hostb.api.dev");
 		// The destination decrypted exactly the op we sealed (proves the E2E seal).
 		expect(seen).toMatchObject({
 			kind: "send",
-			to: "api",
-			from: "hosta/recipe-app",
-			returnRoute: { srcGateway: "hosta", srcSession: "conv:conv-1:hostb/api" },
+			to: "api.dev",
+			from: "alice.hosta.recipe-app.dev",
+			returnRoute: { srcGateway: "hosta", srcSession: "conv.conv-1.alice.hostb.api.dev" },
 		});
 		// evie only ever saw an opaque sealed envelope, never the op.
 		const relay = evie.calls.find((c) => c.action === "gateway_relay");
 		expect((relay?.params.payload as { sealed: SealedEnvelope }).sealed.ciphertext).toBeTruthy();
 		expect(JSON.stringify(relay?.params.payload)).not.toContain("recipe-app");
-		expect(ctx.store.has("conv:conv-1:hostb/api")).toBe(true);
+		expect(ctx.store.has("conv.conv-1.alice.hostb.api.dev")).toBe(true);
 	});
 
 	it("ORIGIN: 503 when the Router is unavailable", async () => {
@@ -145,7 +145,7 @@ describe("federation routing (E2E sealed)", () => {
 		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
 			from: "x",
 			fromConversationId: "conv-1",
-			to: "hostb/api",
+			to: "alice.hostb.api.dev",
 			body: "hi",
 			channelOnly: true,
 		});
@@ -166,18 +166,23 @@ describe("federation routing (E2E sealed)", () => {
 		const ctx = makeCtx("hostb", {
 			evieClient: evie.client,
 			sealer: sealerB,
-			registry: registryWith({ api: channelWs(pushed) }),
+			registry: registryWith({ "api.dev": channelWs(pushed) }),
 		});
 		const routes = createRoutes(ctx);
-		const handler = createGatewayRelayHandler({ routes, tryWakeTeam: ctx.tryWakeTeam, localGatewayId: "hostb" });
+		const handler = createGatewayRelayHandler({
+			routes,
+			tryWakeTeam: ctx.tryWakeTeam,
+			localGatewayId: "hostb",
+			localDomainId: "alice",
+		});
 
-		const srcSession = "conv:conv-1:hostb/api";
+		const srcSession = "conv.conv-1.alice.hostb.api.dev";
 		// A same-Domain relay (srcDomainId null): the share gate is not consulted.
 		const result = (await handler.handleOp(
 			{
 				kind: "send",
-				from: "hosta/recipe-app",
-				to: "api",
+				from: "alice.hosta.recipe-app.dev",
+				to: "api.dev",
 				body: "status?",
 				returnRoute: { srcGateway: "hosta", srcConversationId: "conv-1", srcSession },
 			},
@@ -185,7 +190,11 @@ describe("federation routing (E2E sealed)", () => {
 			null,
 		)) as { session_id: string };
 		expect(result.session_id).toBe(srcSession);
-		expect(pushed[0]).toMatchObject({ type: "channel_push", from: "hosta/recipe-app", session_id: srcSession });
+		expect(pushed[0]).toMatchObject({
+			type: "channel_push",
+			from: "alice.hosta.recipe-app.dev",
+			session_id: srcSession,
+		});
 
 		const respondRes = routes.respond(new Request("http://gateway/respond", { method: "POST" }), {
 			session_id: srcSession,
@@ -202,10 +211,18 @@ describe("federation routing (E2E sealed)", () => {
 		const conversationRegistry = new Map() as RoutesDeps["conversationRegistry"];
 		conversationRegistry.set("conv-1", channelWs(senderPushes) as never);
 		const ctx = makeCtx("hosta", { conversationRegistry });
-		const srcSession = "conv:conv-1:hostb/api";
-		ctx.store.create(srcSession, "recipe-app", "hostb/api", { persistent: true, fromConversationId: "conv-1" });
+		const srcSession = "conv.conv-1.alice.hostb.api.dev";
+		ctx.store.create(srcSession, "recipe-app.dev", "alice.hostb.api.dev", {
+			persistent: true,
+			fromConversationId: "conv-1",
+		});
 		const routes = createRoutes(ctx);
-		const handler = createGatewayRelayHandler({ routes, tryWakeTeam: ctx.tryWakeTeam, localGatewayId: "hosta" });
+		const handler = createGatewayRelayHandler({
+			routes,
+			tryWakeTeam: ctx.tryWakeTeam,
+			localGatewayId: "hosta",
+			localDomainId: "alice",
+		});
 
 		const result = (await handler.handleOp(
 			{ kind: "response_push", session_id: srcSession, status: "completed", response: "all good" },
@@ -223,7 +240,7 @@ describe("federation routing (E2E sealed)", () => {
 			handle: () => ({
 				teams: [
 					{
-						team: "api",
+						team: "api.dev",
 						gatewayId: "hostb",
 						displayName: "Carol's Lab",
 						status: "online",
@@ -238,8 +255,8 @@ describe("federation routing (E2E sealed)", () => {
 		const ctx = makeCtx("hosta", {
 			evieClient: evie.client,
 			sealer: sealerA,
-			registry: registryWith({ "recipe-app": channelWs([]) }),
-			knownTeamPaths: new Map([["recipe-app", "/x"]]),
+			registry: registryWith({ "recipe-app.dev": channelWs([]) }),
+			knownTeamPaths: new Map([["recipe-app.dev", "/x"]]),
 			displayName: () => "My Lab",
 		});
 		const { discover } = createRoutes(ctx);
@@ -249,13 +266,13 @@ describe("federation routing (E2E sealed)", () => {
 			gatewayId?: string;
 			displayName?: string;
 		}[];
-		expect(teams.find((t) => t.team === "recipe-app")?.gatewayId).toBe("hosta");
+		expect(teams.find((t) => t.team === "recipe-app.dev")?.gatewayId).toBe("hosta");
 		// The local Gateway stamps its own display name on its sessions.
-		expect(teams.find((t) => t.team === "recipe-app")?.displayName).toBe("My Lab");
+		expect(teams.find((t) => t.team === "recipe-app.dev")?.displayName).toBe("My Lab");
 		// A peer's display name rides through the merge unchanged (the peer Gateway is the
 		// authoritative source of its own self-set display name).
-		expect(teams.find((t) => t.team === "api")?.gatewayId).toBe("hostb");
-		expect(teams.find((t) => t.team === "api")?.displayName).toBe("Carol's Lab");
+		expect(teams.find((t) => t.team === "api.dev")?.gatewayId).toBe("hostb");
+		expect(teams.find((t) => t.team === "api.dev")?.displayName).toBe("Carol's Lab");
 	});
 });
 
@@ -343,70 +360,73 @@ type TeamInfoLite = {
 // (routes.teams() always stamps the local gateway id), so the list_teams share filter -
 // which keys by each team's canonical gateway/name - lines up with the share records.
 function lib(gw = "hostb"): TeamInfoLite {
-	return { team: "lib", gatewayId: gw, status: "online", kind: "devcontainer", queue_depth: 0 };
+	return { team: "lib.dev", gatewayId: gw, status: "online", kind: "devcontainer", queue_depth: 0 };
 }
 function scratch(gw = "hostb"): TeamInfoLite {
-	return { team: "scratch", gatewayId: gw, status: "online", kind: "loose", queue_depth: 0 };
+	return { team: "scratch.dev", gatewayId: gw, status: "online", kind: "loose", queue_depth: 0 };
 }
 function unknownKindTeam(gw = "hostb"): TeamInfoLite {
 	// A roster entry whose kind the gateway does not recognize (e.g. a remote or forged roster).
 	// The share/kind gate must fail closed: only devcontainer/loose sessions are shareable.
-	return { team: "unknown-kind", gatewayId: gw, status: "online", kind: "unknown", queue_depth: 0 };
+	return { team: "unknown-kind.dev", gatewayId: gw, status: "online", kind: "unknown", queue_depth: 0 };
 }
 function consoleTeam(gw = "hostb"): TeamInfoLite {
-	return { team: "pixel", gatewayId: gw, status: "online", kind: "console", queue_depth: 0 };
+	return { team: "pixel.dev", gatewayId: gw, status: "online", kind: "console", queue_depth: 0 };
 }
 
 const crossSend = (to: string): FederatedOp => ({
 	kind: "send",
-	from: "alice/app",
+	from: "alice.alice-gw.app.dev",
 	to,
 	body: "collab?",
-	returnRoute: { srcGateway: "alice-gw", srcConversationId: "c1", srcSession: `conv:c1:hostb/${to}` },
+	returnRoute: { srcGateway: "alice-gw", srcConversationId: "c1", srcSession: `conv.c1.alice.hostb.${to}` },
 });
 
 describe("destination gate (cross-Domain relay handleOp)", () => {
 	it("DENIES a cross-Domain send to a session NOT shared to the caller's Domain", async () => {
 		const { routes, sendCalls } = gateRoutes([lib()]);
 		// lib exists and is a devcontainer, but it is shared to "carol", not "alice".
-		const share = memShareState([["hostb/lib", "carol"]]);
+		const share = memShareState([["alice.hostb.lib.dev", "carol"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: share,
 		});
-		await expect(handleOp(crossSend("lib"), "alice-gw", "alice")).rejects.toThrow(/cross-Domain op denied/);
+		await expect(handleOp(crossSend("lib.dev"), "alice-gw", "alice")).rejects.toThrow(/cross-Domain op denied/);
 		expect(sendCalls).toHaveLength(0); // never reached routes.send
 	});
 
 	it("ALLOWS a cross-Domain send to a shared devcontainer and touches the share", async () => {
 		const { routes, sendCalls } = gateRoutes([lib()]);
-		const share = memShareState([["hostb/lib", "alice"]]);
+		const share = memShareState([["alice.hostb.lib.dev", "alice"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: share,
 		});
-		const result = (await handleOp(crossSend("lib"), "alice-gw", "alice")) as { status: string };
+		const result = (await handleOp(crossSend("lib.dev"), "alice-gw", "alice")) as { status: string };
 		expect(result.status).toBe("running");
 		expect(sendCalls).toHaveLength(1);
-		expect(sendCalls[0]).toMatchObject({ to: "lib", from: "alice/app", channelOnly: true });
+		expect(sendCalls[0]).toMatchObject({ to: "lib.dev", from: "alice.alice-gw.app.dev", channelOnly: true });
 		// A permitted delivery refreshed the share so a live thread does not auto-forget.
-		expect(share.touched).toEqual(["hostb/lib"]);
+		expect(share.touched).toEqual(["alice.hostb.lib.dev"]);
 	});
 
 	it("ALLOWS a cross-Domain send to a shared LOOSE session", async () => {
 		const { routes, sendCalls } = gateRoutes([scratch()]);
-		const share = memShareState([["hostb/scratch", "alice"]]);
+		const share = memShareState([["alice.hostb.scratch.dev", "alice"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: share,
 		});
-		await handleOp(crossSend("scratch"), "alice-gw", "alice");
+		await handleOp(crossSend("scratch.dev"), "alice-gw", "alice");
 		expect(sendCalls).toHaveLength(1);
 	});
 
@@ -414,14 +434,15 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		// A crafted share record for a non-shareable kind must not open it: the kind gate is the
 		// hard boundary (agents-only), checked before the share lookup.
 		const { routes, sendCalls } = gateRoutes([unknownKindTeam()]);
-		const share = memShareState([["hostb/unknown-kind", "alice"]]);
+		const share = memShareState([["alice.hostb.unknown-kind.dev", "alice"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: share,
 		});
-		await expect(handleOp(crossSend("unknown-kind"), "alice-gw", "alice")).rejects.toThrow(
+		await expect(handleOp(crossSend("unknown-kind.dev"), "alice-gw", "alice")).rejects.toThrow(
 			/cross-Domain op denied/,
 		);
 		expect(sendCalls).toHaveLength(0);
@@ -429,27 +450,29 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 
 	it("HARD-DENIES a cross-Domain send to a console-kind session", async () => {
 		const { routes, sendCalls } = gateRoutes([consoleTeam()]);
-		const share = memShareState([["hostb/pixel", "alice"]]);
+		const share = memShareState([["alice.hostb.pixel.dev", "alice"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: share,
 		});
-		await expect(handleOp(crossSend("pixel"), "alice-gw", "alice")).rejects.toThrow(/cross-Domain op denied/);
+		await expect(handleOp(crossSend("pixel.dev"), "alice-gw", "alice")).rejects.toThrow(/cross-Domain op denied/);
 		expect(sendCalls).toHaveLength(0);
 	});
 
 	it("DENIES a cross-Domain send to an unknown session name", async () => {
 		const { routes, sendCalls } = gateRoutes([lib()]);
-		const share = memShareState([["hostb/ghost", "alice"]]);
+		const share = memShareState([["alice.hostb.ghost.dev", "alice"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: share,
 		});
-		await expect(handleOp(crossSend("ghost"), "alice-gw", "alice")).rejects.toThrow(/cross-Domain op denied/);
+		await expect(handleOp(crossSend("ghost.dev"), "alice-gw", "alice")).rejects.toThrow(/cross-Domain op denied/);
 		expect(sendCalls).toHaveLength(0);
 	});
 
@@ -462,11 +485,12 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: memShareState(), // nothing shared to alice
 		});
-		const existsUnshared = await handleOp(crossSend("lib"), "alice-gw", "alice").catch((e: Error) => e.message);
-		const nonexistent = await handleOp(crossSend("ghost"), "alice-gw", "alice").catch((e: Error) => e.message);
-		const wrongKind = await handleOp(crossSend("lib"), "alice-gw", "alice").catch((e: Error) => e.message);
+		const existsUnshared = await handleOp(crossSend("lib.dev"), "alice-gw", "alice").catch((e: Error) => e.message);
+		const nonexistent = await handleOp(crossSend("ghost.dev"), "alice-gw", "alice").catch((e: Error) => e.message);
+		const wrongKind = await handleOp(crossSend("lib.dev"), "alice-gw", "alice").catch((e: Error) => e.message);
 		expect(existsUnshared).toBe(nonexistent);
 		expect(existsUnshared).toBe(wrongKind);
 		// And the message leaks neither the name nor the kind nor the Domain.
@@ -476,7 +500,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 	it("a cross-Domain WAKE is gated like a send (only a shared devcontainer/loose may wake)", async () => {
 		const { routes } = gateRoutes([lib()]);
 		let woke = false;
-		const share = memShareState([["hostb/lib", "alice"]]);
+		const share = memShareState([["alice.hostb.lib.dev", "alice"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
 			tryWakeTeam: async () => {
@@ -484,21 +508,22 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 				return true;
 			},
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: share,
 		});
 		// Unshared wake denied, no wake fired.
-		await expect(handleOp({ kind: "wake", team: "scratch" }, "alice-gw", "alice")).rejects.toThrow(/denied/);
+		await expect(handleOp({ kind: "wake", team: "scratch.dev" }, "alice-gw", "alice")).rejects.toThrow(/denied/);
 		expect(woke).toBe(false);
 		// Shared wake allowed.
-		expect(await handleOp({ kind: "wake", team: "lib" }, "alice-gw", "alice")).toEqual({ ok: true });
+		expect(await handleOp({ kind: "wake", team: "lib.dev" }, "alice-gw", "alice")).toEqual({ ok: true });
 		expect(woke).toBe(true);
 	});
 
 	// A reply gate keyed on the job's RECORDED, verified target Domain (not the bare,
 	// friend-controlled gateway id in the session string). alice's anchor for
-	// `conv:c1:bob-gw/lib` records dstDomainId "bob": a reply lands only when the VERIFIED
+	// `conv.c1.bob.bob-gw.lib.dev` records dstDomainId "bob": a reply lands only when the VERIFIED
 	// sender is Domain "bob" AND gateway "bob-gw" (the gateway in the job's own origin-set key).
-	const aliceAnchors = memBinding({ "conv:c1:bob-gw/lib": { dstDomainId: "bob", keyGateway: "bob-gw" } });
+	const aliceAnchors = memBinding({ "conv.c1.bob.bob-gw.lib.dev": { dstDomainId: "bob", keyGateway: "bob-gw" } });
 
 	it("DELIVERS a cross-Domain response_push from the friend the send was routed to (no local team needed)", async () => {
 		// The origin has NO local 'lib' team (lib lives on bob-gw); the reply must still land.
@@ -507,16 +532,17 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "alice-gw",
+			localDomainId: "alice",
 			shareState: memShareState(),
 			crossDomainBinding: aliceAnchors,
 		});
 		const r = (await handleOp(
-			{ kind: "response_push", session_id: "conv:c1:bob-gw/lib", status: "completed", response: "done" },
+			{ kind: "response_push", session_id: "conv.c1.bob.bob-gw.lib.dev", status: "completed", response: "done" },
 			"bob-gw",
 			"bob",
 		)) as { ok: boolean };
 		expect(r.ok).toBe(true);
-		expect(respondCalls[0]).toMatchObject({ session_id: "conv:c1:bob-gw/lib", response: "done" });
+		expect(respondCalls[0]).toMatchObject({ session_id: "conv.c1.bob.bob-gw.lib.dev", response: "done" });
 	});
 
 	it("DENIES a cross-Domain response_push from a DIFFERENT linked friend than the one targeted", async () => {
@@ -527,12 +553,13 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "alice-gw",
+			localDomainId: "alice",
 			shareState: memShareState(),
 			crossDomainBinding: aliceAnchors,
 		});
 		await expect(
 			handleOp(
-				{ kind: "response_push", session_id: "conv:c1:bob-gw/lib", status: "completed", response: "x" },
+				{ kind: "response_push", session_id: "conv.c1.bob.bob-gw.lib.dev", status: "completed", response: "x" },
 				"carol-gw",
 				"carol",
 			),
@@ -547,12 +574,13 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "alice-gw",
+			localDomainId: "alice",
 			shareState: memShareState(),
 			crossDomainBinding: aliceAnchors,
 		});
 		await expect(
 			handleOp(
-				{ kind: "response_push", session_id: "conv:c1:eve-gw/lib", status: "completed", response: "x" },
+				{ kind: "response_push", session_id: "conv.c1.eve.eve-gw.lib.dev", status: "completed", response: "x" },
 				"eve-gw",
 				"eve",
 			),
@@ -569,9 +597,10 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: share,
 		});
-		const r = (await handleOp(crossSend("unknown-kind"), "hostb-peer", null)) as { status: string };
+		const r = (await handleOp(crossSend("unknown-kind.dev"), "hostb-peer", null)) as { status: string };
 		expect(r.status).toBe("running");
 		expect(sendCalls).toHaveLength(1);
 		expect(share.touched).toEqual([]); // never touched on a same-Domain op
@@ -585,33 +614,35 @@ describe("list_teams share filter (cross-Domain caller)", () => {
 		const { routes } = gateRoutes(allKinds);
 		// lib + scratch shared to alice; the unknown kind + console are never shareable anyway.
 		const share = memShareState([
-			["hostb/lib", "alice"],
-			["hostb/scratch", "alice"],
+			["alice.hostb.lib.dev", "alice"],
+			["alice.hostb.scratch.dev", "alice"],
 		]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: share,
 		});
 		const { teams } = (await handleOp({ kind: "list_teams" }, "alice-gw", "alice")) as { teams: TeamInfoLite[] };
-		expect(teams.map((t) => t.team).sort()).toEqual(["lib", "scratch"]);
+		expect(teams.map((t) => t.team).sort()).toEqual(["lib.dev", "scratch.dev"]);
 	});
 
 	it("a cross-Domain caller in a DIFFERENT Domain sees only ITS shares (never another Domain's)", async () => {
 		const { routes } = gateRoutes(allKinds);
 		const share = memShareState([
-			["hostb/lib", "alice"],
-			["hostb/scratch", "carol"],
+			["alice.hostb.lib.dev", "alice"],
+			["alice.hostb.scratch.dev", "carol"],
 		]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: share,
 		});
 		const carol = (await handleOp({ kind: "list_teams" }, "carol-gw", "carol")) as { teams: TeamInfoLite[] };
-		expect(carol.teams.map((t) => t.team)).toEqual(["scratch"]);
+		expect(carol.teams.map((t) => t.team)).toEqual(["scratch.dev"]);
 	});
 
 	it("a cross-Domain caller with NO shares sees an empty list (never leaks names)", async () => {
@@ -620,6 +651,7 @@ describe("list_teams share filter (cross-Domain caller)", () => {
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: memShareState(),
 		});
 		const { teams } = (await handleOp({ kind: "list_teams" }, "alice-gw", "alice")) as { teams: TeamInfoLite[] };
@@ -632,10 +664,11 @@ describe("list_teams share filter (cross-Domain caller)", () => {
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "hostb",
+			localDomainId: "alice",
 			shareState: memShareState(), // empty - same-Domain ignores it
 		});
 		const { teams } = (await handleOp({ kind: "list_teams" }, "peer", null)) as { teams: TeamInfoLite[] };
-		expect(teams.map((t) => t.team).sort()).toEqual(["lib", "pixel", "scratch", "unknown-kind"]);
+		expect(teams.map((t) => t.team).sort()).toEqual(["lib.dev", "pixel.dev", "scratch.dev", "unknown-kind.dev"]);
 	});
 });
 
@@ -657,8 +690,9 @@ describe("Fix 1: response_push reply gate binds to the job's verified target Dom
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "alice-gw",
+			localDomainId: "alice",
 			shareState: memShareState(),
-			crossDomainBinding: (sessionId) => store.crossDomainBinding(sessionId, "alice-gw"),
+			crossDomainBinding: (sessionId) => store.crossDomainBinding(sessionId),
 		});
 		return { handleOp, respondCalls };
 	}
@@ -667,7 +701,7 @@ describe("Fix 1: response_push reply gate binds to the job's verified target Dom
 		// alice's origin anchor: a send routed to bob (Domain "bob", gateway "dev"). The store
 		// records dstDomainId "bob" and the key gateway "dev".
 		const store = new PendingJobStore<ResponsePayload>();
-		store.create("conv:c1:dev/lib", "alice/app", "dev/lib", {
+		store.create("conv.c1.bob.dev.lib.dev", "alice.alice-gw.app.dev", "bob.dev.lib.dev", {
 			persistent: true,
 			fromConversationId: "c1",
 			dstDomainId: "bob",
@@ -678,7 +712,12 @@ describe("Fix 1: response_push reply gate binds to the job's verified target Dom
 		// verified srcGateway "dev" MATCHES the key gateway, but her Domain does not.
 		await expect(
 			handleOp(
-				{ kind: "response_push", session_id: "conv:c1:dev/lib", status: "completed", response: "pwned" },
+				{
+					kind: "response_push",
+					session_id: "conv.c1.bob.dev.lib.dev",
+					status: "completed",
+					response: "pwned",
+				},
 				"dev",
 				"carol",
 			),
@@ -687,19 +726,19 @@ describe("Fix 1: response_push reply gate binds to the job's verified target Dom
 
 		// The legitimate friend bob (Domain "bob", gateway "dev") still delivers.
 		const ok = (await handleOp(
-			{ kind: "response_push", session_id: "conv:c1:dev/lib", status: "completed", response: "real" },
+			{ kind: "response_push", session_id: "conv.c1.bob.dev.lib.dev", status: "completed", response: "real" },
 			"dev",
 			"bob",
 		)) as { ok: boolean };
 		expect(ok.ok).toBe(true);
-		expect(respondCalls[0]).toMatchObject({ session_id: "conv:c1:dev/lib", response: "real" });
+		expect(respondCalls[0]).toMatchObject({ session_id: "conv.c1.bob.dev.lib.dev", response: "real" });
 	});
 
 	it("a friend whose GATEWAY_ID equals the local gateway id CANNOT deliver into a LOCAL job", async () => {
 		// A purely LOCAL channel job (no dstDomainId, no returnRoute), keyed under the local
 		// gateway id "alice-gw". A friend who named its own gateway "alice-gw" must not reach it.
 		const store = new PendingJobStore<ResponsePayload>();
-		store.create("conv:owner1:alice-gw/secret", "alice/app", "secret", {
+		store.create("conv.owner1.alice.alice-gw.secret.dev", "alice.alice-gw.app.dev", "secret.dev", {
 			persistent: true,
 			fromConversationId: "owner1",
 		});
@@ -709,7 +748,7 @@ describe("Fix 1: response_push reply gate binds to the job's verified target Dom
 			handleOp(
 				{
 					kind: "response_push",
-					session_id: "conv:owner1:alice-gw/secret",
+					session_id: "conv.owner1.alice.alice-gw.secret.dev",
 					status: "completed",
 					response: "pwned",
 				},
@@ -726,18 +765,22 @@ describe("Fix 1: response_push reply gate binds to the job's verified target Dom
 		// reply. The route must ignore it (only an inbound federated send stamps the binding), so
 		// the local job's binding stays null and the response_push gate hard-denies any friend.
 		const pushed: Record<string, unknown>[] = [];
-		const ctx = makeCtx("alice-gw", { registry: registryWith({ app: channelWs(pushed) }) });
+		const ctx = makeCtx("alice-gw", { registry: registryWith({ "app.dev": channelWs(pushed) }) });
 		const { send } = createRoutes(ctx);
 		await send(new Request("http://gateway/send", { method: "POST" }), {
-			from: "app",
+			from: "app.dev",
 			fromConversationId: "owner1",
-			to: "app",
+			to: "app.dev",
 			body: "local",
 			channelOnly: true,
 			dstDomainId: "carol", // spoof attempt
 		});
-		const jobKey = SessionId.channel("owner1", TeamAddress.local("alice-gw", "app")).key;
-		expect(ctx.store.crossDomainBinding(jobKey, "alice-gw")?.dstDomainId).toBeNull();
+		const jobKey = storeKey({
+			kind: "conv",
+			conversationId: "owner1",
+			address: Address.local("alice", "alice-gw", "app", "dev"),
+		});
+		expect(ctx.store.crossDomainBinding(jobKey)?.dstDomainId).toBeNull();
 	});
 });
 
@@ -753,7 +796,7 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 			// dstDomainId the handler passes, so a follow-up collision check sees a real entry.
 			send: async (_req: Request, body: Record<string, unknown>) => {
 				sendCalls.push(body);
-				store.create(body.sessionId as string, body.from as string, "lib", {
+				store.create(body.sessionId as string, body.from as string, "lib.dev", {
 					persistent: true,
 					returnRoute: body.returnRoute as never,
 					dstDomainId: body.dstDomainId as string | undefined,
@@ -769,8 +812,9 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 			routes: routes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "alice-gw",
-			shareState: memShareState(sharedTo.map((d) => ["alice-gw/lib", d] as [string, string])),
-			crossDomainBinding: (sessionId) => store.crossDomainBinding(sessionId, "alice-gw"),
+			localDomainId: "alice",
+			shareState: memShareState(sharedTo.map((d) => ["alice.alice-gw.lib.dev", d] as [string, string])),
+			crossDomainBinding: (sessionId) => store.crossDomainBinding(sessionId),
 		});
 		return { handleOp, sendCalls };
 	}
@@ -784,13 +828,13 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 			handleOp(
 				{
 					kind: "send",
-					from: "bob/app",
-					to: "lib",
+					from: "bob.bob-gw.app.dev",
+					to: "lib.dev",
 					body: "collab?",
 					returnRoute: {
 						srcGateway: "carol-gw",
 						srcConversationId: "c1",
-						srcSession: "conv:c1:alice-gw/lib",
+						srcSession: "conv.c1.alice.alice-gw.lib.dev",
 					},
 				},
 				"bob-gw",
@@ -798,14 +842,14 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 			),
 		).rejects.toThrow(/return-route does not point back to the sending Gateway/);
 		expect(sendCalls).toHaveLength(0); // never landed, never relayed
-		expect(store.has("conv:c1:alice-gw/lib")).toBe(false);
+		expect(store.has("conv.c1.alice.alice-gw.lib.dev")).toBe(false);
 	});
 
 	it("a send whose returnRoute.srcSession collides with an UNRELATED job does NOT overwrite it", async () => {
 		const store = new PendingJobStore<ResponsePayload>();
 		// A pre-existing, unrelated job: a LOCAL channel job at this key (returnRoute null). Its
 		// reply must keep routing locally; a friend must not be able to repoint it.
-		store.create("conv:victim:alice-gw/lib", "alice/app", "lib", {
+		store.create("conv.victim.alice.alice-gw.lib.dev", "alice.alice-gw.app.dev", "lib.dev", {
 			persistent: true,
 			fromConversationId: "victim",
 		});
@@ -817,13 +861,13 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 			handleOp(
 				{
 					kind: "send",
-					from: "bob/app",
-					to: "lib",
+					from: "bob.bob-gw.app.dev",
+					to: "lib.dev",
 					body: "hijack",
 					returnRoute: {
 						srcGateway: "bob-gw",
 						srcConversationId: "victim",
-						srcSession: "conv:victim:alice-gw/lib",
+						srcSession: "conv.victim.alice.alice-gw.lib.dev",
 					},
 				},
 				"bob-gw",
@@ -832,7 +876,7 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 		).rejects.toThrow(/session collides with an unrelated job/);
 		expect(sendCalls).toHaveLength(0);
 		// The victim job is untouched: still a local job, no returnRoute grafted on.
-		const binding = store.crossDomainBinding("conv:victim:alice-gw/lib", "alice-gw");
+		const binding = store.crossDomainBinding("conv.victim.alice.alice-gw.lib.dev");
 		expect(binding?.dstDomainId).toBeNull();
 		expect(binding?.returnGateway).toBeNull();
 	});
@@ -842,16 +886,20 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 		const { handleOp, sendCalls } = destHandler(store);
 		const send = {
 			kind: "send" as const,
-			from: "bob/app",
-			to: "lib",
+			from: "bob.bob-gw.app.dev",
+			to: "lib.dev",
 			body: "collab?",
-			returnRoute: { srcGateway: "bob-gw", srcConversationId: "c1", srcSession: "conv:c1:alice-gw/lib" },
+			returnRoute: {
+				srcGateway: "bob-gw",
+				srcConversationId: "c1",
+				srcSession: "conv.c1.alice.alice-gw.lib.dev",
+			},
 		};
 		await handleOp(send, "bob-gw", "bob");
 		// A re-send from the same verified friend reuses its own job (idempotent), not a hijack.
 		await handleOp(send, "bob-gw", "bob");
 		expect(sendCalls).toHaveLength(2);
-		const binding = store.crossDomainBinding("conv:c1:alice-gw/lib", "alice-gw");
+		const binding = store.crossDomainBinding("conv.c1.alice.alice-gw.lib.dev");
 		expect(binding?.dstDomainId).toBe("bob");
 		expect(binding?.returnGateway).toBe("bob-gw");
 	});
@@ -865,10 +913,14 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 		await handleOp(
 			{
 				kind: "send",
-				from: "bob/app",
-				to: "lib",
+				from: "bob.bob-gw.app.dev",
+				to: "lib.dev",
 				body: "collab?",
-				returnRoute: { srcGateway: "bob-gw", srcConversationId: "c1", srcSession: "conv:c1:alice-gw/lib" },
+				returnRoute: {
+					srcGateway: "bob-gw",
+					srcConversationId: "c1",
+					srcSession: "conv.c1.alice.alice-gw.lib.dev",
+				},
 			},
 			"bob-gw",
 			"bob",
@@ -882,10 +934,14 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 			handleOp(
 				{
 					kind: "send",
-					from: "carol/app",
-					to: "lib",
+					from: "carol.bob-gw.app.dev",
+					to: "lib.dev",
 					body: "hijack",
-					returnRoute: { srcGateway: "bob-gw", srcConversationId: "c1", srcSession: "conv:c1:alice-gw/lib" },
+					returnRoute: {
+						srcGateway: "bob-gw",
+						srcConversationId: "c1",
+						srcSession: "conv.c1.alice.alice-gw.lib.dev",
+					},
 				},
 				"bob-gw",
 				"carol",
@@ -893,7 +949,7 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 		).rejects.toThrow(/session collides with an unrelated job/);
 		expect(sendCalls).toHaveLength(1); // carol's send never landed
 		// bob's binding is intact.
-		const binding = store.crossDomainBinding("conv:c1:alice-gw/lib", "alice-gw");
+		const binding = store.crossDomainBinding("conv.c1.alice.alice-gw.lib.dev");
 		expect(binding?.dstDomainId).toBe("bob");
 	});
 });
@@ -901,7 +957,7 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 ////////////////////////////////
 //  Cross-Domain send flow (real crypto, two Domains)
 //
-//  alice-gw (Domain "alice") sends to bob-gw/lib (Domain "bob"). The seal MUST be v2
+//  alice-gw (Domain "alice") sends to bob.bob-gw.lib.dev (Domain "bob"). The seal MUST be v2
 //  (resolved by the (domainId, gatewayId) pair from the disjoint peer set), evie stays
 //  content-blind, and the op lands at bob's destination share gate. The local seal path
 //  is untouched (covered by the same-Domain tests above).
@@ -964,11 +1020,12 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 		const bobPeers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
 		const bobSealer = createSealer(bobGw, soloAllowlist(bobOwner, "bob-gw", bobGw), "bob-gw", bobPeers, "bob");
 		const { routes: bobRoutes, sendCalls } = gateRoutes([lib()]);
-		const bobShare = memShareState([["bob-gw/lib", "alice"]]);
+		const bobShare = memShareState([["bob.bob-gw.lib.dev", "alice"]]);
 		const bobHandler = createGatewayRelayHandler({
 			routes: bobRoutes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "bob-gw",
+			localDomainId: "bob",
 			shareState: bobShare,
 		});
 
@@ -1009,23 +1066,23 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 		const { send } = createRoutes(ctx);
 
 		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
-			from: "app",
+			from: "app.dev",
 			fromConversationId: "c1",
-			to: "bob-gw/lib",
+			to: "bob.bob-gw.lib.dev",
 			body: "collab?",
 			channelOnly: true,
 		});
 		const json = await res.json();
-		expect(json.session_id).toBe("conv:c1:bob-gw/lib");
-		expect(ctx.store.has("conv:c1:bob-gw/lib")).toBe(true);
+		expect(json.session_id).toBe("conv.c1.bob.bob-gw.lib.dev");
+		expect(ctx.store.has("conv.c1.bob.bob-gw.lib.dev")).toBe(true);
 
 		// The op crossed sealed (evie saw only ciphertext, never the body), landed gated.
 		const relay = evie.calls.find((c) => c.action === "gateway_relay");
 		expect(relay?.params.srcDomain).toBe("alice");
 		expect(JSON.stringify(relay?.params.payload)).not.toContain("collab");
-		expect(landed).toMatchObject({ kind: "send", to: "lib", from: "alice-gw/app" });
+		expect(landed).toMatchObject({ kind: "send", to: "lib.dev", from: "alice.alice-gw.app.dev" });
 		expect(sendCalls).toHaveLength(1); // bob's gate permitted it (lib is shared to alice)
-		expect(bobShare.touched).toEqual(["bob-gw/lib"]);
+		expect(bobShare.touched).toEqual(["bob.bob-gw.lib.dev"]);
 	});
 
 	it("a cross-Domain send to an UNSHARED friend session fails (bob's gate denies, no land)", async () => {
@@ -1037,6 +1094,7 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 			routes: bobRoutes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "bob-gw",
+			localDomainId: "bob",
 			shareState: bobShare,
 		});
 
@@ -1077,9 +1135,9 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 		const { send } = createRoutes(ctx);
 
 		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
-			from: "app",
+			from: "app.dev",
 			fromConversationId: "c1",
-			to: "bob-gw/lib",
+			to: "bob.bob-gw.lib.dev",
 			body: "collab?",
 			channelOnly: true,
 		});
@@ -1087,7 +1145,7 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 		expect(res.status).toBe(502);
 		expect((await res.json()).error).toMatch(/cross-Domain op denied/);
 		expect(sendCalls).toHaveLength(0);
-		expect(ctx.store.has("conv:c1:bob-gw/lib")).toBe(false);
+		expect(ctx.store.has("conv.c1.bob.bob-gw.lib.dev")).toBe(false);
 	});
 
 	it("DISCOVERY merges a linked peer's shared sessions (the peer's gate filters them)", async () => {
@@ -1096,11 +1154,12 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 		const bobPeers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
 		const bobSealer = createSealer(bobGw, soloAllowlist(bobOwner, "bob-gw", bobGw), "bob-gw", bobPeers, "bob");
 		const { routes: bobRoutes } = gateRoutes([lib("bob-gw"), scratch("bob-gw"), unknownKindTeam("bob-gw")]);
-		const bobShare = memShareState([["bob-gw/lib", "alice"]]); // only lib shared to alice
+		const bobShare = memShareState([["bob.bob-gw.lib.dev", "alice"]]); // only lib shared to alice
 		const bobHandler = createGatewayRelayHandler({
 			routes: bobRoutes as never,
 			tryWakeTeam: () => Promise.resolve(false),
 			localGatewayId: "bob-gw",
+			localDomainId: "bob",
 			shareState: bobShare,
 		});
 
@@ -1130,22 +1189,22 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 			evieClient: evie.client,
 			sealer: aliceSealer,
 			crossDomainPeers: alicePeers,
-			registry: registryWith({ app: channelWs([]) }),
-			knownTeamPaths: new Map([["app", "/x"]]),
+			registry: registryWith({ "app.dev": channelWs([]) }),
+			knownTeamPaths: new Map([["app.dev", "/x"]]),
 		});
 		ctx.config.localDomainId = "alice";
 		const { discover } = createRoutes(ctx);
 
 		const teams = (await (await discover()).json()) as TeamInfoLite[];
 		// alice's own app (local) + bob's shared lib; bob's scratch + the unknown kind are NOT shared.
-		expect(teams.map((t) => t.team).sort()).toEqual(["app", "lib"]);
-		const libEntry = teams.find((t) => t.team === "lib");
+		expect(teams.map((t) => t.team).sort()).toEqual(["app.dev", "lib.dev"]);
+		const libEntry = teams.find((t) => t.team === "lib.dev");
 		expect(libEntry?.gatewayId).toBe("bob-gw");
 		// The cross-Domain entry is tagged with the PEER's Domain id (bob), authoritative from
 		// alice's own peer set, so the console groups it under bob even if bob's build stamped no
 		// domainId. alice's local app carries her own Domain id.
 		expect(libEntry?.domainId).toBe("bob");
-		expect(teams.find((t) => t.team === "app")?.domainId).toBe("alice");
+		expect(teams.find((t) => t.team === "app.dev")?.domainId).toBe("alice");
 	});
 });
 
@@ -1177,27 +1236,36 @@ describe("cross-Domain unlink local cleanup (the dep over the real stores)", () 
 		// jobs bound to alice (created with dstDomainId "alice").
 		const peers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
 		const shares = memShareStateStore([
-			["bob-gw/lib", "alice"],
-			["bob-gw/api", "alice"],
+			["bob.bob-gw.lib.dev", "alice"],
+			["bob.bob-gw.api.dev", "alice"],
 		]);
 		const store = new PendingJobStore<ResponsePayload>();
-		store.create("conv:c1:alice-gw/lib", "alice-gw/lib", "alice-gw", { persistent: true, dstDomainId: "alice" });
-		store.create("conv:c2:alice-gw/api", "alice-gw/api", "alice-gw", { persistent: true, dstDomainId: "alice" });
+		store.create("conv.c1.alice.alice-gw.lib.dev", "alice.alice-gw.lib.dev", "alice-gw", {
+			persistent: true,
+			dstDomainId: "alice",
+		});
+		store.create("conv.c2.alice.alice-gw.api.dev", "alice.alice-gw.api.dev", "alice-gw", {
+			persistent: true,
+			dstDomainId: "alice",
+		});
 		// A DIFFERENT Domain's job must survive the alice unlink.
-		store.create("conv:c3:carol-gw/docs", "carol-gw/docs", "carol-gw", { persistent: true, dstDomainId: "carol" });
+		store.create("conv.c3.carol.carol-gw.docs.dev", "carol.carol-gw.docs.dev", "carol-gw", {
+			persistent: true,
+			dstDomainId: "carol",
+		});
 
 		const counts = unlinkDep(peers, shares, store)("alice");
 		expect(counts).toEqual({ peersRemoved: 1, sharesDropped: 2, jobsExpired: 2 });
 		// The peer set, the shares to alice, and alice's jobs are gone; carol's job is untouched.
 		expect(peers.all()).toHaveLength(0);
 		expect(shares.all()).toHaveLength(0);
-		expect(store.has("conv:c1:alice-gw/lib")).toBe(false);
-		expect(store.has("conv:c3:carol-gw/docs")).toBe(true);
+		expect(store.has("conv.c1.alice.alice-gw.lib.dev")).toBe(false);
+		expect(store.has("conv.c3.carol.carol-gw.docs.dev")).toBe(true);
 	});
 
 	it("unlinking an unknown / already-unlinked Domain is a clean zero-count no-op", () => {
 		const peers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
-		const shares = memShareStateStore([["bob-gw/lib", "alice"]]);
+		const shares = memShareStateStore([["bob.bob-gw.lib.dev", "alice"]]);
 		const store = new PendingJobStore<ResponsePayload>();
 		const dep = unlinkDep(peers, shares, store);
 
@@ -1356,9 +1424,9 @@ describe("sealTargetFor local-first (gateway-id collision)", () => {
 		const { send } = createRoutes(ctx);
 
 		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
-			from: "app",
+			from: "app.dev",
 			fromConversationId: "c1",
-			to: "gw1/team",
+			to: "alice.gw1.team.dev",
 			body: "local please",
 			channelOnly: true,
 		});
@@ -1422,15 +1490,15 @@ describe("sealTargetFor (domainId, gatewayId) disambiguation", () => {
 		const { ctx } = senderCtx({ evieClient: fakeEvie({}).client });
 		const { send } = createRoutes(ctx);
 		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
-			from: "app",
+			from: "app.dev",
 			fromConversationId: "c1",
-			to: "shared-gw/lib",
+			to: "local.shared-gw.lib.dev",
 			body: "collab?",
 			channelOnly: true,
 		});
 		expect(res.status).toBe(502);
 		expect((await res.json()).error).toMatch(/ambiguous across linked Domains/);
-		expect(ctx.store.has("conv:c1:shared-gw/lib")).toBe(false);
+		expect(ctx.store.has("conv.c1.alice.shared-gw.lib.dev")).toBe(false);
 	});
 
 	it("a send carrying targetDomainId resolves the right peer and seals v2 to that Domain", async () => {
@@ -1461,18 +1529,18 @@ describe("sealTargetFor (domainId, gatewayId) disambiguation", () => {
 		const { send } = createRoutes(ctx);
 
 		const res = await send(new Request("http://gateway/send", { method: "POST" }), {
-			from: "app",
+			from: "app.dev",
 			fromConversationId: "c1",
-			to: "shared-gw/lib",
+			to: "local.shared-gw.lib.dev",
 			targetDomainId: "friend2",
 			body: "collab?",
 			channelOnly: true,
 		});
 		expect(res.status).toBe(200);
-		expect((await res.json()).session_id).toBe("conv:c1:shared-gw/lib");
+		expect((await res.json()).session_id).toBe("conv.c1.friend2.shared-gw.lib.dev");
 		expect(openedByFriend2).toBeDefined();
 		// The anchor records the resolved target Domain so a reply is bound to friend2.
-		expect(ctx.store.crossDomainBinding("conv:c1:shared-gw/lib", "sender-gw")?.dstDomainId).toBe("friend2");
+		expect(ctx.store.crossDomainBinding("conv.c1.friend2.shared-gw.lib.dev")?.dstDomainId).toBe("friend2");
 	});
 });
 
@@ -1490,17 +1558,11 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 	// The exact predicate the gateway wires in startGateway(): a live persistent cross-Domain
 	// thread (a pending job with a returnRoute whose origin Gateway is a linked friend peer)
 	// for the canonical session target.
-	function isLiveFor(
-		store: PendingJobStore<ResponsePayload>,
-		peers: CrossDomainPeers,
-		localGatewayId: string,
-		now: number = Date.now(),
-	) {
+	function isLiveFor(store: PendingJobStore<ResponsePayload>, peers: CrossDomainPeers, now: number = Date.now()) {
 		return (sessionTarget: string): boolean =>
 			store.hasLiveCrossDomainThread(
 				sessionTarget,
 				(gatewayId) => peers.all().some((p) => p.friendGatewayId === gatewayId),
-				localGatewayId,
 				THIRTY_DAYS_MS,
 				now,
 			);
@@ -1512,7 +1574,7 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 		const realNow = Date.now;
 		Date.now = () => at;
 		try {
-			store.create(id, "alice/app", "lib", {
+			store.create(id, "alice.alice-gw.app.dev", "lib.dev", {
 				persistent: true,
 				fromConversationId: "c1",
 				returnRoute: { srcGateway, srcConversationId: "c1", srcSession: id },
@@ -1526,22 +1588,22 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 		const share = new CrossDomainShareState(
 			path.join(os.tmpdir(), `fed-sweep-${Math.random().toString(36).slice(2)}`),
 		);
-		share.share("bob-gw/lib", { kind: "domain", domainId: "alice" }); // will be kept by a RECENTLY-ACTIVE thread
-		share.share("bob-gw/old", { kind: "domain", domainId: "alice" }); // stale, thread-less -> dropped
+		share.share("bob.bob-gw.lib.dev", { kind: "domain", domainId: "alice" }); // will be kept by a RECENTLY-ACTIVE thread
+		share.share("bob.bob-gw.old.dev", { kind: "domain", domainId: "alice" }); // stale, thread-less -> dropped
 
 		// Sweep far in the future so BOTH shares are past their absence TTL. The live thread's
 		// anchor is pinned recent relative to that sweep instant (ongoing traffic refreshes
-		// createdAt), so it counts as live; bob-gw/old has no thread at all.
+		// createdAt), so it counts as live; bob.bob-gw.old.dev has no thread at all.
 		const sweepNow = Date.now() + THIRTY_DAYS_MS + 1;
 		const store = new PendingJobStore<ResponsePayload>();
-		anchorAt(store, "conv:c1:bob-gw/lib", "alice-gw", sweepNow);
+		anchorAt(store, "conv.c1.bob.bob-gw.lib.dev", "alice-gw", sweepNow);
 		const peers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
-		const isLive = isLiveFor(store, peers, "bob-gw", sweepNow);
+		const isLive = isLiveFor(store, peers, sweepNow);
 
 		const dropped = share.sweep(sweepNow, THIRTY_DAYS_MS, isLive);
-		expect(dropped).toBe(1); // bob-gw/old only
-		expect(share.isSharedTo("bob-gw/lib", "alice", () => true)).toBe(true); // recent thread kept it
-		expect(share.isSharedTo("bob-gw/old", "alice", () => true)).toBe(false); // stale, forgotten
+		expect(dropped).toBe(1); // bob.bob-gw.old.dev only
+		expect(share.isSharedTo("bob.bob-gw.lib.dev", "alice", () => true)).toBe(true); // recent thread kept it
+		expect(share.isSharedTo("bob.bob-gw.old.dev", "alice", () => true)).toBe(false); // stale, forgotten
 	});
 
 	// isLive must mean RECENTLY ACTIVE, not "ever touched": a single long-dead anchor must not
@@ -1556,41 +1618,45 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 		const share = new CrossDomainShareState(
 			path.join(os.tmpdir(), `fed-stale-${Math.random().toString(36).slice(2)}`),
 		);
-		share.share("bob-gw/lib", { kind: "domain", domainId: "alice" }); // lastSeenAt ~= base, so it is past TTL at sweepNow
+		share.share("bob.bob-gw.lib.dev", { kind: "domain", domainId: "alice" }); // lastSeenAt ~= base, so it is past TTL at sweepNow
 
 		// A persistent cross-Domain anchor that last saw traffic at `base` (its createdAt), so by
 		// sweepNow it is older than the recency window: it must NOT suppress the forget.
 		const store = new PendingJobStore<ResponsePayload>();
-		anchorAt(store, "conv:c1:bob-gw/lib", "alice-gw", base);
-		expect(isLiveFor(store, peers, "bob-gw", sweepNow)("bob-gw/lib")).toBe(false);
-		const dropped = share.sweep(sweepNow, THIRTY_DAYS_MS, isLiveFor(store, peers, "bob-gw", sweepNow));
+		anchorAt(store, "conv.c1.bob.bob-gw.lib.dev", "alice-gw", base);
+		expect(isLiveFor(store, peers, sweepNow)("bob.bob-gw.lib.dev")).toBe(false);
+		const dropped = share.sweep(sweepNow, THIRTY_DAYS_MS, isLiveFor(store, peers, sweepNow));
 		expect(dropped).toBe(1);
-		expect(share.isSharedTo("bob-gw/lib", "alice", () => true)).toBe(false);
+		expect(share.isSharedTo("bob.bob-gw.lib.dev", "alice", () => true)).toBe(false);
 
 		// Contrast: an anchor touched recently (createdAt at sweepNow) still suppresses the forget.
 		const live = new PendingJobStore<ResponsePayload>();
-		anchorAt(live, "conv:c1:bob-gw/lib", "alice-gw", sweepNow);
-		expect(isLiveFor(live, peers, "bob-gw", sweepNow)("bob-gw/lib")).toBe(true);
+		anchorAt(live, "conv.c1.bob.bob-gw.lib.dev", "alice-gw", sweepNow);
+		expect(isLiveFor(live, peers, sweepNow)("bob.bob-gw.lib.dev")).toBe(true);
 	});
 
 	it("isLive is false for a job whose returnRoute origin is NOT a linked peer (same-Domain federated)", () => {
 		const store = new PendingJobStore<ResponsePayload>();
 		// A federated job, but its origin Gateway is a SAME-Domain peer (not in the cross set).
-		store.create("conv:c1:bob-gw/lib", "x", "lib", {
+		store.create("conv.c1.bob.bob-gw.lib.dev", "x", "lib.dev", {
 			persistent: true,
-			returnRoute: { srcGateway: "local-peer", srcConversationId: "c1", srcSession: "conv:c1:bob-gw/lib" },
+			returnRoute: {
+				srcGateway: "local-peer",
+				srcConversationId: "c1",
+				srcSession: "conv.c1.bob.bob-gw.lib.dev",
+			},
 		});
 		const peers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
-		const isLive = isLiveFor(store, peers, "bob-gw");
-		expect(isLive("bob-gw/lib")).toBe(false);
+		const isLive = isLiveFor(store, peers);
+		expect(isLive("bob.bob-gw.lib.dev")).toBe(false);
 	});
 
 	it("isLive is false for a local (non-returnRoute) persistent job targeting the session", () => {
 		const store = new PendingJobStore<ResponsePayload>();
 		// A plain local channel job (no returnRoute) must not count as a cross-Domain thread.
-		store.create("conv:c1:bob-gw/lib", "x", "lib", { persistent: true, fromConversationId: "c1" });
+		store.create("conv.c1.bob.bob-gw.lib.dev", "x", "lib.dev", { persistent: true, fromConversationId: "c1" });
 		const peers = peersOf(xdPeer(aliceOwner, "alice", "alice-gw", aliceGw, bobOwner));
-		expect(isLiveFor(store, peers, "bob-gw")("bob-gw/lib")).toBe(false);
+		expect(isLiveFor(store, peers)("bob.bob-gw.lib.dev")).toBe(false);
 	});
 });
 
@@ -1603,14 +1669,14 @@ describe("share auto-forget wiring (isLive predicate + sweep)", () => {
 //  re-reads the share on the cross-Domain reply forward and DROPS it when no longer shared.
 
 describe("destination reply forward re-checks the per-session share (cross-Domain)", () => {
-	const SRC_SESSION = "conv:c1:hostb/lib"; // B's own gateway id in the origin-set key
+	const SRC_SESSION = "conv.c1.alice.hostb.lib.dev"; // B's own gateway id in the origin-set key
 	const RETURN_ROUTE = { srcGateway: "hosta", srcConversationId: "c1", srcSession: SRC_SESSION };
 
 	/** Seed a DESTINATION job on B exactly as the cross-Domain inbound send path does: id is
 	 * the origin-set canonical session key, `to` the bare local name, with the verified friend
 	 * Domain + return-route pinned. */
 	function seedDestJob(store: PendingJobStore<ResponsePayload>): void {
-		store.create(SRC_SESSION, "alice/app", "lib", {
+		store.create(SRC_SESSION, "alice.alice-gw.app.dev", "lib.dev", {
 			persistent: true,
 			fromConversationId: "c1",
 			returnRoute: RETURN_ROUTE,
@@ -1625,7 +1691,7 @@ describe("destination reply forward re-checks the per-session share (cross-Domai
 			evieClient: evie.client,
 			sealer: sealerB,
 			isSharedToForReply: (sessionTarget, domainId) =>
-				isShared && sessionTarget === "hostb/lib" && domainId === "alice",
+				isShared && sessionTarget === "alice.hostb.lib.dev" && domainId === "alice",
 		});
 		seedDestJob(ctx.store);
 		const routes = createRoutes(ctx);
@@ -1668,7 +1734,7 @@ describe("destination reply forward re-checks the per-session share (cross-Domai
 			sealer: sealerB,
 			isSharedToForReply: () => false, // would drop IF consulted
 		});
-		ctx.store.create(SRC_SESSION, "peer/app", "lib", {
+		ctx.store.create(SRC_SESSION, "alice.peer.app.dev", "lib.dev", {
 			persistent: true,
 			fromConversationId: "c1",
 			returnRoute: RETURN_ROUTE,

@@ -79,6 +79,7 @@ function makePump(device: Identity, replies: ConsoleRelayReply[]) {
 		conversationRegistry,
 		mailboxStore: new DeviceMailboxStore(),
 		localGatewayId: "test-host",
+		localDomainId: "test-domain",
 		routes: {
 			send: async () => jsonRes({}),
 			respond: () => jsonRes({}),
@@ -195,6 +196,7 @@ describe("createConsoleRelayPump (sealed)", () => {
 			conversationRegistry,
 			mailboxStore: new DeviceMailboxStore(),
 			localGatewayId: "test-host",
+			localDomainId: "test-domain",
 			routes: {
 				send: async () => jsonRes({}),
 				respond: () => jsonRes({}),

@@ -43,7 +43,12 @@ import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
 import com.atelier_nyaarium.switchboard.proto.SignedRemoveTenant
 import com.atelier_nyaarium.switchboard.proto.SignedSetDisplayName
 import com.atelier_nyaarium.switchboard.proto.SignedXDomainLink
-import com.atelier_nyaarium.switchboard.proto.TeamAddress
+import com.atelier_nyaarium.switchboard.proto.Address
+import com.atelier_nyaarium.switchboard.proto.LOCAL_DOMAIN_SENTINEL
+import com.atelier_nyaarium.switchboard.proto.SpawnPoint
+import com.atelier_nyaarium.switchboard.proto.composeSessionName
+import com.atelier_nyaarium.switchboard.proto.parseSessionName
+import com.atelier_nyaarium.switchboard.proto.parseTarget
 import com.atelier_nyaarium.switchboard.proto.TransportRequest
 import com.atelier_nyaarium.switchboard.proto.TransportResult
 import java.io.ByteArrayInputStream
@@ -114,10 +119,26 @@ data class Provisioning(
 	}
 }
 
+/** The local team field (`spawn` or `spawn.session`) of a canonical address string, for the UI's
+ * short labels and the board's spawn-point nesting. A SpawnPoint (arity 3) yields its bare spawn; an
+ * Address (arity 4) yields `spawn.session`. */
+internal fun localFieldOf(canonical: String): String =
+	when (val t = parseTarget(canonical, "", "")) {
+		is Address -> composeSessionName(t.spawn, t.session)
+		is SpawnPoint -> t.spawn
+	}
+
+/** The Gateway segment of a canonical address string. */
+internal fun gatewayOf(canonical: String): String =
+	when (val t = parseTarget(canonical, "", "")) {
+		is Address -> t.gateway
+		is SpawnPoint -> t.gateway
+	}
+
 /** UI model for the sessions board. Mapped from the wire TeamInfo in `teams()`, and also
  * constructed locally for ended threads whose team has left the bridge (a state that never
- * exists on the wire). `name` is the gateway-qualified key (`gateway/local`); `displayName`
- * and `gatewayId` derive from it. */
+ * exists on the wire). `name` is the canonical address key (`domain.gateway.spawn.session`, or
+ * `domain.gateway.spawn` for a spawn-point); `shortName` and `gatewayId` derive from it. */
 data class Team(
 	val name: String,
 	val status: String,
@@ -141,11 +162,11 @@ data class Team(
 	// The local session's value gates the admin surfaces.
 	val isAdminDomain: Boolean = false,
 ) {
-	/** Short local name shown in the UI: the tail after the gateway qualifier. */
-	val shortName: String get() = TeamAddress.parse(name, "").name
+	/** Short local field shown in the UI: `spawn` or `spawn.session` from the canonical address. */
+	val shortName: String get() = localFieldOf(name)
 
-	/** Owning Gateway id (the segment before the qualifier), or "" for a bare name. */
-	val gatewayId: String get() = TeamAddress.parse(name, "").gatewayId
+	/** Owning Gateway id (the gateway segment of the canonical address). */
+	val gatewayId: String get() = gatewayOf(name)
 }
 
 data class SendResult(val ok: Boolean, val status: String, val error: String?)
@@ -675,8 +696,20 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult>(body.result)
 		return result.teams.map {
 			val gatewayId = it.gatewayId.ifEmpty { localGatewayId }
+			// Mirror the gateway's address minting: a spawn-point (kind devcontainer) is the
+			// non-addressable `domain.gateway.spawn` (arity 3); every chat is the full
+			// `domain.gateway.spawn.session` (arity 4), a bare team field defaulting its session to
+			// DEFAULT_SESSION exactly as the gateway's localAddress does, so a chat's Team.name is
+			// byte-equal to the address a session_id carries (no thread/team join mismatch).
+			val domain = it.domainId?.ifEmpty { null } ?: LOCAL_DOMAIN_SENTINEL
+			val parsed = parseSessionName(it.team)
+			val canonicalName = if (it.kind == "devcontainer") {
+				SpawnPoint.of(domain, gatewayId, parsed.project).canonical
+			} else {
+				Address.of(domain, gatewayId, parsed.project, parsed.session).canonical
+			}
 			Team(
-				name = TeamAddress.parse(it.team, gatewayId).canonical,
+				name = canonicalName,
 				status = it.status,
 				mode = it.mode ?: "",
 				queueDepth = it.queue_depth.toInt(),
@@ -719,7 +752,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		// seals to the local Gateway: the friend Gateway's keys are not in this owner's keyring, so the local
 		// Gateway opens the op and relays it to the friend over the mesh.
 		val local = routeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()
-		val target = if (crossDomain != null) local else TeamAddress.parse(to, local).gatewayId
+		val target = if (crossDomain != null) local else gatewayOfTarget(to, local)
 		val replyBody = relay(op, opId, targetGateway = target)
 		val status = replyBody.result?.let {
 			runCatching { wireJson.decodeFromJsonElement<ConsoleSendResult>(it).status }.getOrNull()
@@ -753,10 +786,18 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		return wireJson.decodeFromJsonElement<ConsolePollResult>(body.result)
 	}
 
+	/** The Gateway segment of a wire target. A local form (arity 1/2) resolves its gateway to
+	 * [localGateway]; a fully-qualified form (arity 3/4) keeps its explicit gateway. */
+	private fun gatewayOfTarget(to: String, localGateway: String): String =
+		when (val t = parseTarget(to, "", localGateway)) {
+			is Address -> t.gateway
+			is SpawnPoint -> t.gateway
+		}
+
 	/** The Gateway that hosts a target session (a bare name resolves to the local Gateway), so a peek/send
 	 * seals E2E to that Gateway. Mirrors send(). */
 	private fun targetGatewayOf(target: String): String =
-		TeamAddress.parse(target, routeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()).gatewayId
+		gatewayOfTarget(target, routeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId())
 
 	/** Capture the target's visible tmux pane for the terminal view. Pass the last hash so the
 	 * Gateway returns unchanged=true (no ansi) for an idle pane. */

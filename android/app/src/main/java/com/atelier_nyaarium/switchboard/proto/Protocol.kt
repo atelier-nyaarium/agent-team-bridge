@@ -26,20 +26,24 @@ import kotlinx.serialization.json.JsonObject
 object Protocol {
 	const val CONSOLE_PROTOCOL_VERSION: Int = 1
 
-	/** Session-id prefix for broadcast notices; the sender follows it. */
-	const val NOTICE_SESSION_PREFIX: String = "notice:"
+	/** The one structural separator for every address / store / thread key. */
+	const val ADDRESS_SEP: String = "."
 
-	/** Session-id prefix for channel conversations; the target team is the tail after the LAST colon. */
-	const val CONV_SESSION_PREFIX: String = "conv:"
+	/** Position-0 store-key tag for a channel conversation key. */
+	const val CONV_TAG: String = "conv"
 
-	/** Separator in a gateway-qualified name (gateway then local name); the first one splits gateway from local name. */
-	const val GATEWAY_QUALIFIER_SEP: String = "/"
+	/** Position-0 store-key tag for a broadcast notice key. */
+	const val NOTICE_TAG: String = "notice"
 
-	/** Separator inside a composite local name (project then session); the LAST one splits project from session. */
-	const val SESSION_SEP: String = "."
-
-	/** The session a bare project name defaults to when it carries no session segment. */
+	/** The session a bare spawn-point name defaults to as a wake / UI default. */
 	const val DEFAULT_SESSION: String = "claude"
+
+	/** The one address-segment slug pattern (lowercase alnum, internal / trailing hyphen). */
+	const val SLUG_PATTERN: String = "^[a-z0-9][a-z0-9-]*\$"
+
+	const val MAX_SLUG_LEN: Int = 64
+
+	const val MAX_CONV_ID_LEN: Int = 128
 }
 
 @Serializable

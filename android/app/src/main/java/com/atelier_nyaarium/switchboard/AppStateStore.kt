@@ -132,6 +132,24 @@ class AppStateStore(context: Context) {
 			prefs.edit().putString(KEY_STTS_KEY, value).apply()
 		}
 
+	/** One-shot grammar-version wipe. The network-addressing migration changed the store-key grammar
+	 * (`gateway/name` -> `domain.gateway.spawn.session`), so old-grammar persisted thread/label/draft
+	 * keys and the mailbox sync cursor are cleared on upgrade rather than migrated (clean break). Runs
+	 * only when the stored version differs from [CURRENT_SCHEMA_VERSION]; idempotent thereafter. Must
+	 * be called BEFORE the first thread/label load-parse so a stale-grammar key never reaches a parser. */
+	fun migrateSchemaIfNeeded() {
+		if (prefs.getInt(KEY_SCHEMA_VERSION, 0) == CURRENT_SCHEMA_VERSION) return
+		prefs.edit().apply {
+			remove(KEY_THREADS)
+			remove(KEY_LABELS)
+			remove(KEY_DRAFTS)
+			remove(KEY_SYNC_EPOCH)
+			remove(KEY_SYNC_ACKED)
+			remove(KEY_SYNC_DROPPED)
+			putInt(KEY_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION)
+		}.apply()
+	}
+
 	fun saveThreads(json: String) = prefs.edit().putString(KEY_THREADS, json).apply()
 
 	fun loadThreads(): String? = prefs.getString(KEY_THREADS, null)
@@ -292,6 +310,11 @@ class AppStateStore(context: Context) {
 		const val KEY_SYNC_EPOCH = "sync_epoch"
 		const val KEY_SYNC_ACKED = "sync_acked"
 		const val KEY_SYNC_DROPPED = "sync_dropped"
+
+		/** Persisted grammar-schema version. Bumped to 2 for the unified address grammar; a stored
+		 * value below this triggers the one-shot grammar-bearing-key wipe in [migrateSchemaIfNeeded]. */
+		const val KEY_SCHEMA_VERSION = "schema_version"
+		const val CURRENT_SCHEMA_VERSION = 2
 
 		/** The keys a re-provision wipes. Everything else is preserved by omission (voice creds +
 		 * taste, the biometric lock), so any new provisioning/identity/transcript key MUST be added

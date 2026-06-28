@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { GATEWAY_QUALIFIER_SEP } from "./console-protocol.js";
+import { isSlug, MAX_SLUG_LEN } from "./session-id.js";
 
 ////////////////////////////////
 //  Constants
@@ -11,18 +11,18 @@ export const DOMAIN_ID_FILE = "domain-id";
 ////////////////////////////////
 //  Functions & Helpers
 
-/** Sanitize a raw Domain id into a stable slug: lower case, non-alphanumerics collapse to single
- * dashes, ends trimmed. The qualifier separator can never survive, so a Domain id never splits a
- * qualified name wrong. Empty / all-separator input THROWS: every Domain id names a real Domain, so
- * an unnameable id is a caller bug, not a value to default. */
+/** Sanitize a raw Domain id into a stable address segment: lower case, non-alphanumerics collapse to
+ * single dashes, ends trimmed, capped at the slug length. The output is a dotless slug, so a Domain
+ * id can never split an address wrong. Empty / all-separator input THROWS: every Domain id names a
+ * real Domain, so an unnameable id is a caller bug, not a value to default. */
 export function sanitizeDomainId(raw: string): string {
 	const slug = raw
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-	if (slug.includes(GATEWAY_QUALIFIER_SEP))
-		throw new Error("sanitized Domain id must not contain the qualifier separator");
-	if (!slug) throw new Error("domain id is empty after sanitizing");
+		.replace(/^-+|-+$/g, "")
+		.slice(0, MAX_SLUG_LEN)
+		.replace(/-+$/g, "");
+	if (!isSlug(slug)) throw new Error("domain id is empty after sanitizing");
 	return slug;
 }
 

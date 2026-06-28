@@ -116,7 +116,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
-import com.atelier_nyaarium.switchboard.proto.TeamAddress
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.composeSessionName
 import com.atelier_nyaarium.switchboard.proto.isComposite
 import com.atelier_nyaarium.switchboard.proto.parseSessionName
@@ -330,7 +330,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	val boardSessions = state.sessions(state.localGatewayId)
 	LaunchedEffect(openTeam) {
 		val t = openTeam ?: return@LaunchedEffect
-		if (!isComposite(TeamAddress.parse(t, state.localGatewayId).name)) return@LaunchedEffect
+		if (!isComposite(localFieldOf(t))) return@LaunchedEffect
 		while (true) {
 			repo.pokeWorking(t)
 			delay(repo.terminalRefreshMs)
@@ -340,7 +340,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		if (openTeam != null) return@LaunchedEffect
 		for (s in boardSessions) {
 			val local = s.gatewayId.isEmpty() || s.gatewayId == state.localGatewayId
-			if (local && isComposite(TeamAddress.parse(s.name, state.localGatewayId).name)) repo.pokeWorking(s.name)
+			if (local && isComposite(s.shortName)) repo.pokeWorking(s.name)
 		}
 	}
 
@@ -524,10 +524,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			}
 			ThreadScreen(
 				team = openTeam!!,
-				label = state.titleLabel(openTeam!!, state.localGatewayId),
+				label = tabLabelFor(state, openTeam!!),
 				presence = presence,
 				tabs = state.openTabs,
-				tabLabel = { state.label(it, state.localGatewayId) },
+				tabLabel = { tabLabelFor(state, it) },
 				messages = state.threads[openTeam].orEmpty(),
 				error = state.error,
 				rendererPool = rendererPool,
@@ -551,7 +551,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				},
 				// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off in v1,
 				// and the host machine's terminal is reached through the dedicated "host" target.
-				terminalEligible = isComposite(TeamAddress.parse(openTeam!!, state.localGatewayId).name) &&
+				terminalEligible = isComposite(localFieldOf(openTeam!!)) &&
 					(session?.gatewayId.isNullOrEmpty() || session?.gatewayId == state.localGatewayId),
 				terminalRefreshMs = repo.terminalRefreshMs,
 				onTerminalPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
@@ -906,6 +906,21 @@ private fun sessionOrder(state: ChatState): Comparator<Team> =
 		.thenByDescending { state.lastActivity(it.name) ?: 0L }
 		.thenBy { it.name }
 
+/** Tab/title label for an open thread: the user's custom label, else the shortest suffix of the
+ * address path (the session segment, then `spawn.session`, then `gateway.spawn.session`, ...) that
+ * is unique among the currently open tabs. So a lone open session shows just its leaf, and two tabs
+ * that collide on the leaf escalate to exactly the suffix that disambiguates them. */
+private fun tabLabelFor(state: ChatState, team: String): String {
+	state.labels[team]?.let { return it }
+	val mine = team.split(Protocol.ADDRESS_SEP)
+	val others = state.openTabs.filter { it != team }.map { it.split(Protocol.ADDRESS_SEP) }
+	for (n in 1..mine.size) {
+		val suffix = mine.takeLast(n)
+		if (others.none { it.takeLast(n) == suffix }) return suffix.joinToString(Protocol.ADDRESS_SEP)
+	}
+	return team
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionsScreen(
@@ -1051,7 +1066,7 @@ fun SessionsScreen(
 							// Clean break: a devcontainer entry is a non-chat SPAWN-POINT (its bare project);
 							// each project.session is a loose chat that nests under its project's header. The
 							// remaining non-composite loose peers (host-loose, etc.) stay flat.
-							fun localName(t: Team) = TeamAddress.parse(t.name, state.localGatewayId).name
+							fun localName(t: Team) = t.shortName
 							val spawnPoints = group.filter { it.kind == "devcontainer" }.sortedWith(order)
 							val composites = group.filter { it.kind != "devcontainer" && isComposite(localName(it)) }
 							val flatLoose =
@@ -1539,9 +1554,9 @@ fun ThreadScreen(
 
 	if (showRename) {
 		RenameDialog(
-			// `team` is the host-qualified id; show only the short local name (tail
-			// after the "/" qualifier) as the rename context.
-			team = team.substringAfter('/'),
+			// `team` is the canonical address; show only the short local field
+			// (`spawn` / `spawn.session`) as the rename context.
+			team = localFieldOf(team),
 			current = label,
 			onSave = {
 				onRename(it)
@@ -2496,12 +2511,25 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 	)
 }
 
-/** Name and spawn a new session in a spawn-point project. The session name is a slug (it becomes
- * the tmux session + the composite identity), so the spawn button is disabled until it is valid. */
+// Runs of anything outside [a-z0-9] collapse to a single '-' (this is both the non-alnum replace and
+// the repeat-dash compress in one pass).
+private val SLUG_NON_ALNUM = Regex("[^a-z0-9]+")
+
+/** Lowercase, collapse non-[a-z0-9] runs to a single '-', trim '-' from both ends, cap at the
+ * tmux-name length. Applied ON SPAWN, not per keystroke: transforming the field value live would snap
+ * the cursor to the end (a String-backed TextField resets selection on value change), so the field
+ * keeps the raw text and SpawnDialog shows a live preview of this result instead. */
+internal fun slugifySessionName(raw: String): String =
+	raw.lowercase().replace(SLUG_NON_ALNUM, "-").trim('-').take(64).trimEnd('-')
+
+/** Name and spawn a new session in a spawn-point project. The session name becomes the tmux session
+ * + the composite identity, so any typed text is accepted and converted to a slug ON SPAWN (the field
+ * keeps the raw text so the cursor never jumps); a live preview shows the resulting slug and the spawn
+ * button is disabled only when that slug is empty. */
 @Composable
 fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Unit) {
 	var name by remember { mutableStateOf("") }
-	val valid = name.matches(Regex("^[a-z0-9][a-z0-9-]*$")) && name.length <= 64
+	val slug = slugifySessionName(name)
 	AlertDialog(
 		onDismissRequest = onDismiss,
 		title = { Text("New session in $project") },
@@ -2513,16 +2541,15 @@ fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Uni
 					label = { Text("Session name") },
 					placeholder = { Text("e.g. scratch") },
 					singleLine = true,
-					isError = name.isNotEmpty() && !valid,
 				)
 				Text(
-					"Lowercase letters, digits and dashes.",
+					if (slug.isEmpty()) "Type anything; it converts to a slug on spawn." else "Will create: $slug",
 					style = MaterialTheme.typography.bodySmall,
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 				)
 			}
 		},
-		confirmButton = { TextButton(enabled = valid, onClick = { onSpawn(name) }) { Text("Spawn") } },
+		confirmButton = { TextButton(enabled = slug.isNotEmpty(), onClick = { onSpawn(slug) }) { Text("Spawn") } },
 		dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
 	)
 }

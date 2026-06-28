@@ -1,7 +1,7 @@
 import type { GatewayRelayReplyParams } from "../../shared/evie-protocol.js";
 import { type FederatedOp, FederatedOpSchema, GatewayRelayFrameSchema } from "../../shared/federation-protocol.js";
 import type { CrossDomainBinding } from "../../shared/pending-job-store.js";
-import { TeamAddress } from "../../shared/session-id.js";
+import { Address, parseSessionName } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
 import type { Sealer } from "./sealer.js";
 
@@ -28,9 +28,11 @@ export interface RelayShareState {
 export interface GatewayRelayHandlerDeps {
 	routes: FederationRoutes;
 	tryWakeTeam: (team: string) => Promise<boolean>;
-	/** This Gateway's id, used to compose a bare federated `op.to` into the canonical
-	 * `gateway/name` share key (and to parse the local session out of a response_push id). */
+	/** This Gateway's id and Domain id, used to compose a local `op.to` team field into the
+	 * canonical `domain.gateway.spawn.session` share key. Must match the canonical the share state
+	 * and the pending-job store produce, or shares silently stop matching. */
 	localGatewayId: string;
+	localDomainId: string;
 	/** The per-session share set, read to gate cross-Domain ops to shared sessions and to
 	 * filter a cross-Domain caller's list_teams. Absent when federation sharing is not wired. */
 	shareState?: RelayShareState;
@@ -67,9 +69,16 @@ export function createGatewayRelayHandler({
 	routes,
 	tryWakeTeam,
 	localGatewayId,
+	localDomainId,
 	shareState,
 	crossDomainBinding,
 }: GatewayRelayHandlerDeps) {
+	/** The canonical Address of a LOCAL session by its team field, the form the share state is
+	 * keyed by (identical to routes' localAddress and the pending-job store's jobAddress). */
+	function localShareTarget(name: string): string {
+		const { project, session } = parseSessionName(name);
+		return Address.local(localDomainId, localGatewayId, project, session).canonical;
+	}
 	/** The kind of a LOCAL session by its bare name, from the same classification teams()
 	 * applies. Undefined for an unknown name. */
 	async function localKind(bareName: string): Promise<TeamInfo["kind"] | undefined> {
@@ -86,7 +95,7 @@ export function createGatewayRelayHandler({
 	 * letting a friend probe which session names exist or what kind they are. */
 	async function gateCrossDomainTarget(bareName: string, srcDomainId: string): Promise<void> {
 		const kind = await localKind(bareName);
-		const sessionTarget = TeamAddress.local(localGatewayId, bareName).canonical;
+		const sessionTarget = localShareTarget(bareName);
 		const shareable = kind === "devcontainer" || kind === "loose";
 		if (!shareable || !shareState?.isSharedTo(sessionTarget, srcDomainId)) {
 			throw new Error(XDOMAIN_TARGET_DENIED);
@@ -154,9 +163,7 @@ export function createGatewayRelayHandler({
 				if (srcDomainId !== null) {
 					const shared = new Set(shareState?.sharesFor(srcDomainId) ?? []);
 					return {
-						teams: teams.filter((t) =>
-							shared.has(TeamAddress.local(t.gatewayId ?? localGatewayId, t.team).canonical),
-						),
+						teams: teams.filter((t) => shared.has(localShareTarget(t.team))),
 					};
 				}
 				return { teams };

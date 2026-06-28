@@ -2,9 +2,17 @@
 //  Interfaces & Types
 
 import type { ReturnRoute } from "./federation-protocol.js";
-import { SessionId } from "./session-id.js";
+import { type Address, parseStoreKey } from "./session-id.js";
 
 export type JobState = "waiting" | "timed_out" | "stored";
+
+/** The chat address a job's store-key id resolves to, or null if the id is not a conv key. The job
+ * id is the origin-set, trusted store key, so its address segments are the share-match and forge-guard
+ * inputs (never a friend-controlled wire field). */
+function jobAddress(id: string): Address | null {
+	const k = parseStoreKey(id);
+	return k?.kind === "conv" ? k.address : null;
+}
 
 interface JobEntry<T> {
 	id: string;
@@ -257,20 +265,15 @@ export class PendingJobStore<T> {
 	 * friend Domain is withdrawn: expire every job whose `dstDomainId` matches AND whose session
 	 * id resolves to the canonical `sessionTarget` (`gateway/name`). Match is on the job's own
 	 * session-id target, not `entry.to`: a destination job stores `entry.to` as the bare local
-	 * name while its id (the origin-set session key) carries the canonical `gateway/name` the
-	 * share is keyed by. Each match is settled through the TTL-timeout not-delivered path and
-	 * removed, so an in-flight reply the sealer would still forward cannot strand its waiter.
+	 * name while its id (the origin-set session key) carries the canonical address the share is
+	 * keyed by. Each match is settled through the TTL-timeout not-delivered path and removed, so an
+	 * in-flight reply the sealer would still forward cannot strand its waiter.
 	 */
-	expireBySession(
-		sessionTarget: string,
-		dstDomainId: string,
-		localGatewayId: string,
-		error = "cross-domain session unshared",
-	): number {
+	expireBySession(sessionTarget: string, dstDomainId: string, error = "cross-domain session unshared"): number {
 		let expired = 0;
 		for (const [id, entry] of this.entries) {
 			if (entry.dstDomainId !== dstDomainId) continue;
-			if (SessionId.parse(entry.id, localGatewayId)?.target.canonical !== sessionTarget) continue;
+			if (jobAddress(entry.id)?.canonical !== sessionTarget) continue;
 			if (entry.timer) clearTimeout(entry.timer);
 			entry.timer = null;
 			entry.state = "timed_out";
@@ -318,12 +321,12 @@ export class PendingJobStore<T> {
 	 * handler reads it to gate a cross-Domain reply (origin anchor) and to refuse a cross-Domain
 	 * inbound send that would hijack an unrelated job (destination job). Both gates compare the
 	 * verified sender against this binding, never the bare gateway id the friend put on the wire. */
-	crossDomainBinding(id: string, localGatewayId: string): CrossDomainBinding | undefined {
+	crossDomainBinding(id: string): CrossDomainBinding | undefined {
 		const entry = this.entries.get(id);
 		if (!entry) return undefined;
 		return {
 			dstDomainId: entry.dstDomainId,
-			keyGateway: SessionId.parse(entry.id, localGatewayId)?.target.gatewayId ?? null,
+			keyGateway: jobAddress(entry.id)?.gateway ?? null,
 			returnGateway: entry.returnRoute?.srcGateway ?? null,
 		};
 	}
@@ -337,7 +340,6 @@ export class PendingJobStore<T> {
 	hasLiveCrossDomainThread(
 		sessionTarget: string,
 		isCrossDomainPeer: (gatewayId: string) => boolean,
-		localGatewayId: string,
 		maxAgeMs: number,
 		now: number = Date.now(),
 	): boolean {
@@ -345,7 +347,7 @@ export class PendingJobStore<T> {
 			if (!entry.persistent || !entry.returnRoute) continue;
 			if (now - entry.createdAt > maxAgeMs) continue;
 			if (!isCrossDomainPeer(entry.returnRoute.srcGateway)) continue;
-			if (SessionId.parse(entry.id, localGatewayId)?.target.canonical === sessionTarget) return true;
+			if (jobAddress(entry.id)?.canonical === sessionTarget) return true;
 		}
 		return false;
 	}

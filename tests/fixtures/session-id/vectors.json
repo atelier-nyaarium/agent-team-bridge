@@ -1,134 +1,96 @@
 {
-	"_comment": "Cross-runtime vectors for the Session Identity value objects. Read by src/__tests__/session-id.test.ts (TS) AND android/.../SessionIdVectorsTest.kt (Kotlin) so the twin cannot drift. The REMOTE sessionId case pins localGatewayId != gatewayId: a twin that re-resolves a qualified gateway to local would change the key and false-pass if localGatewayId == gatewayId.",
-	"teamAddress": [
+	"_comment": "Cross-runtime vectors for the unified address grammar. Read by BOTH src/__tests__/session-id.test.ts and android/.../proto/SessionIdVectorsTest.kt, so the hand-authored Kotlin twin cannot drift from the TS source: a canonical string either side produces differently fails one of the two runtimes.",
+	"address": [
 		{
-			"input": "9cb5b9",
-			"localGatewayId": "switchboard",
-			"gatewayId": "switchboard",
-			"name": "9cb5b9",
-			"canonical": "switchboard/9cb5b9"
+			"domain": "a95dd4e979aa3be5",
+			"gateway": "sakura",
+			"spawn": "nyaadot",
+			"session": "ik-tracking",
+			"canonical": "a95dd4e979aa3be5.sakura.nyaadot.ik-tracking",
+			"spawnPointCanonical": "a95dd4e979aa3be5.sakura.nyaadot"
 		},
 		{
-			"input": "gateway",
-			"localGatewayId": "switchboard",
-			"gatewayId": "switchboard",
-			"name": "gateway",
-			"canonical": "switchboard/gateway"
-		},
-		{
-			"input": "switchboard/9cb5b9",
-			"localGatewayId": "switchboard",
-			"gatewayId": "switchboard",
-			"name": "9cb5b9",
-			"canonical": "switchboard/9cb5b9"
-		},
-		{
-			"input": "hostb/api",
-			"localGatewayId": "hosta",
-			"gatewayId": "hostb",
-			"name": "api",
-			"canonical": "hostb/api"
-		},
-		{ "input": "a/b/c", "localGatewayId": "x", "gatewayId": "a", "name": "b/c", "canonical": "a/b/c" },
-		{ "input": "", "localGatewayId": "x", "gatewayId": "x", "name": "", "canonical": "x/" },
-		{ "input": "h😀/n😀", "localGatewayId": "x", "gatewayId": "h😀", "name": "n😀", "canonical": "h😀/n😀" }
-	],
-	"sessionId": [
-		{
-			"input": "conv:c:api",
-			"localGatewayId": "hosta",
-			"conversationId": "c",
-			"targetCanonical": "hosta/api",
-			"key": "conv:c:hosta/api"
-		},
-		{
-			"input": "conv:c:hostb/api",
-			"localGatewayId": "hosta",
-			"conversationId": "c",
-			"targetCanonical": "hostb/api",
-			"key": "conv:c:hostb/api"
-		},
-		{
-			"input": "conv:console-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4:switchboard/9cb5b9",
-			"localGatewayId": "switchboard",
-			"conversationId": "console-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4",
-			"targetCanonical": "switchboard/9cb5b9",
-			"key": "conv:console-98f7a89d-9658-4ff8-af98-2ab6f9e0b7a4:switchboard/9cb5b9"
-		},
-		{
-			"input": "conv:console-x:9cb5b9",
-			"localGatewayId": "switchboard",
-			"conversationId": "console-x",
-			"targetCanonical": "switchboard/9cb5b9",
-			"key": "conv:console-x:switchboard/9cb5b9"
-		},
-		{
-			"input": "conv:c:a/b/c",
-			"localGatewayId": "x",
-			"conversationId": "c",
-			"targetCanonical": "a/b/c",
-			"key": "conv:c:a/b/c"
-		},
-		{
-			"input": "conv:a/b:host/team",
-			"localGatewayId": "x",
-			"conversationId": "a/b",
-			"targetCanonical": "host/team",
-			"key": "conv:a/b:host/team"
-		},
-		{
-			"input": "conv:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae:switchboard/gateway",
-			"localGatewayId": "switchboard",
-			"conversationId": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
-			"targetCanonical": "switchboard/gateway",
-			"key": "conv:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae:switchboard/gateway"
+			"domain": "local",
+			"gateway": "sakura",
+			"spawn": "host",
+			"session": "cooking",
+			"canonical": "local.sakura.host.cooking",
+			"spawnPointCanonical": "local.sakura.host"
 		}
 	],
-	"notice": [
+	"parseTarget": [
 		{
-			"input": "notice:gateway",
-			"localGatewayId": "switchboard",
-			"senderCanonical": "switchboard/gateway",
-			"key": "notice:switchboard/gateway"
+			"input": "nyaadot",
+			"localDomain": "a95dd4e979aa3be5",
+			"localGateway": "sakura",
+			"kind": "spawn",
+			"canonical": "a95dd4e979aa3be5.sakura.nyaadot"
 		},
 		{
-			"input": "notice:hostb/agent",
-			"localGatewayId": "hosta",
-			"senderCanonical": "hostb/agent",
-			"key": "notice:hostb/agent"
+			"input": "nyaadot.ik-tracking",
+			"localDomain": "a95dd4e979aa3be5",
+			"localGateway": "sakura",
+			"kind": "address",
+			"canonical": "a95dd4e979aa3be5.sakura.nyaadot.ik-tracking"
+		},
+		{
+			"input": "other.gw.proj",
+			"localDomain": "a95dd4e979aa3be5",
+			"localGateway": "sakura",
+			"kind": "spawn",
+			"canonical": "other.gw.proj"
+		},
+		{
+			"input": "other.gw.proj.sess",
+			"localDomain": "a95dd4e979aa3be5",
+			"localGateway": "sakura",
+			"kind": "address",
+			"canonical": "other.gw.proj.sess"
 		}
 	],
-	"notSession": [
-		"notice:gateway",
-		"5f3a9c12",
-		"conv:",
-		"conv:onlyconv",
-		"",
-		"conv:a:b:team",
-		"conv:a:conv:b:team",
-		"conv:c:team:withcolon"
+	"parseTargetReject": ["", "a.b.c.d.e", "Bad.gateway.spawn.session", "a..b.c"],
+	"storeKey": [
+		{
+			"kind": "conv",
+			"conversationId": "abc123-def",
+			"domain": "a95dd4e979aa3be5",
+			"gateway": "sakura",
+			"spawn": "nyaadot",
+			"session": "ik-tracking",
+			"key": "conv.abc123-def.a95dd4e979aa3be5.sakura.nyaadot.ik-tracking"
+		},
+		{
+			"kind": "notice",
+			"domain": "a95dd4e979aa3be5",
+			"gateway": "sakura",
+			"spawn": "host",
+			"session": "cooking",
+			"key": "notice.a95dd4e979aa3be5.sakura.host.cooking"
+		}
 	],
-	"notNotice": ["conv:c:api", "gateway", "notice:", ""],
-	"_comment_sessionName": "Composite local-name grammar project.session: parseSessionName splits on the LAST separator (a dotted project round-trips), a bare name defaults the session to DEFAULT_SESSION (\"claude\"), isComposite is the mechanical separator test, composed = composeSessionName(project, session).",
+	"parseStoreKeyReject": [
+		"conv.c.d.g.s",
+		"notice.d.g.s",
+		"bogus.c.d.g.s.x",
+		"conv.c.d.g.spawn.UP",
+		"conv.c.d.g.spawn",
+		"notice.d.g.spawn.session.extra"
+	],
 	"sessionName": [
 		{
-			"input": "recipe-app",
-			"project": "recipe-app",
+			"input": "nyaadot",
+			"project": "nyaadot",
 			"session": "claude",
 			"composite": false,
-			"composed": "recipe-app.claude"
+			"composed": "nyaadot.claude"
 		},
 		{
-			"input": "recipe-app.scratch",
-			"project": "recipe-app",
-			"session": "scratch",
+			"input": "nyaadot.ik-tracking",
+			"project": "nyaadot",
+			"session": "ik-tracking",
 			"composite": true,
-			"composed": "recipe-app.scratch"
+			"composed": "nyaadot.ik-tracking"
 		},
-		{ "input": "my.app.foo", "project": "my.app", "session": "foo", "composite": true, "composed": "my.app.foo" },
-		{ "input": "my.app", "project": "my", "session": "app", "composite": true, "composed": "my.app" },
-		{ "input": "a.b.c.d", "project": "a.b.c", "session": "d", "composite": true, "composed": "a.b.c.d" },
-		{ "input": "x.", "project": "x", "session": "", "composite": true, "composed": "x." },
-		{ "input": ".y", "project": "", "session": "y", "composite": true, "composed": ".y" }
+		{ "input": "host", "project": "host", "session": "claude", "composite": false, "composed": "host.claude" }
 	]
 }

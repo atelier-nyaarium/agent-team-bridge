@@ -1,22 +1,18 @@
 import type { DomainSnapshot } from "../../shared/admission.js";
-import {
-	type ConsoleOp,
-	type ConsoleOpResult,
-	type ConsoleReplyBody,
-	type CrossDomainConfirmResult,
-	type CrossDomainListenResult,
-	type CrossDomainListenStateResult,
-	type CrossDomainListPeersResult,
-	type CrossDomainListSharesResult,
-	type CrossDomainRequestResult,
-	type CrossDomainShareTarget,
-	type CrossDomainUnlinkResult,
-	DEFAULT_SESSION,
-	isComposite,
-	type MailboxInput,
-	type OpenedConsoleFrame,
-	parseQualifiedTeam,
-	parseSessionName,
+import type {
+	ConsoleOp,
+	ConsoleOpResult,
+	ConsoleReplyBody,
+	CrossDomainConfirmResult,
+	CrossDomainListenResult,
+	CrossDomainListenStateResult,
+	CrossDomainListPeersResult,
+	CrossDomainListSharesResult,
+	CrossDomainRequestResult,
+	CrossDomainShareTarget,
+	CrossDomainUnlinkResult,
+	MailboxInput,
+	OpenedConsoleFrame,
 } from "../../shared/console-protocol.js";
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
@@ -31,7 +27,18 @@ import {
 } from "../../shared/host-op.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
 import { DomainStatusSchema } from "../../shared/schemas.js";
-import { SessionId, TeamAddress } from "../../shared/session-id.js";
+import {
+	Address,
+	composeSessionName,
+	DEFAULT_SESSION,
+	isComposite,
+	LOCAL_DOMAIN_SENTINEL,
+	parseSessionName,
+	parseStoreKey,
+	parseTarget,
+	SpawnPoint,
+	storeKey,
+} from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
 import { ConsolePeer } from "./consolePeer.js";
@@ -91,6 +98,7 @@ export interface ConsoleHandlerDeps {
 	 * (gatewayId, name) key, and used to canonicalize a send target to the qualified
 	 * session-id form (matching routes.send). */
 	localGatewayId: string;
+	localDomainId: string;
 	sendBoundMs?: number;
 	/** True when the name belongs to a devcontainer project. A device must not take such a
 	 * name: while the project sleeps, the console's virtual peer would squat the registry slot,
@@ -225,6 +233,7 @@ export function createConsoleDispatcher({
 	mailboxStore,
 	routes,
 	localGatewayId,
+	localDomainId,
 	sendBoundMs = SEND_BOUND_MS,
 	isProjectName,
 	dropSessionResume,
@@ -236,35 +245,36 @@ export function createConsoleDispatcher({
 	unlinkDomain,
 	untrustOwner,
 }: ConsoleHandlerDeps) {
-	/** Resolve a console terminal target to the host tmux it maps to. The local name is a bare
-	 * project (legacy; the session defaults to `claude`) or a composite `project.session`. A
-	 * whole-name catalog/host match wins first, so a devcontainer whose dir name contains a dot
-	 * still resolves as that project; otherwise the LAST separator splits the (dotless) session off.
+	// The local Domain segment for every canonical address we mint here. Null (arming mode) maps to
+	// the sentinel, so a key still forms.
+	const localDomain = localDomainId || LOCAL_DOMAIN_SENTINEL;
+
+	/** The canonical Address of a LOCAL session by its team field - the form the share state and the
+	 * pending-job store key by (identical to routes' localAddress and the relay gate's, so a console
+	 * share key matches the gate byte-for-byte). */
+	function localAddress(name: string): Address {
+		const { project, session } = parseSessionName(name);
+		return Address.local(localDomain, localGatewayId, project, session);
+	}
+
+	/** Resolve a console terminal target to the host tmux it maps to. The target is a local team
+	 * field (`spawn` -> default session, or `spawn.session`) or its fully-qualified Address;
 	 * `explicitSession` (create_session) overrides the derived session. A cross-Gateway target or an
-	 * unknown/loose name is rejected. */
+	 * unknown/loose name is rejected. The grammar is dotless, so a session segment is unambiguous -
+	 * no catalog dot-disambiguation. */
 	function resolveTmuxTarget(qualifiedTarget: string, explicitSession?: string): TmuxTarget {
-		const { gatewayId, name } = parseQualifiedTeam(qualifiedTarget);
-		if (gatewayId && gatewayId !== localGatewayId) {
+		const t = parseTarget(qualifiedTarget, localDomain, localGatewayId);
+		if (t.domain !== localDomain || t.gateway !== localGatewayId) {
 			throw new Error(`terminal view is not available for a session on another Gateway`);
 		}
-		const target = ((): TmuxTarget => {
-			// Whole name first: a bare (possibly dotted) project/host keeps the default session.
-			if (name === "host") return { kind: "host", name: "host", sessionName: explicitSession ?? DEFAULT_SESSION };
-			if (isProjectName?.(name)) {
-				return { kind: "devcontainer", name, sessionName: explicitSession ?? DEFAULT_SESSION };
-			}
-			// Otherwise split a session segment off the local name and resolve the project part.
-			const { project, session } = parseSessionName(name);
-			const sessionName = explicitSession ?? session;
-			if (project === "host") return { kind: "host", name: "host", sessionName };
-			if (isProjectName?.(project)) return { kind: "devcontainer", name: project, sessionName };
-			throw new Error(`terminal view is not available for "${name}" (only the host and devcontainers)`);
-		})();
-		// Both name and session reach the host's shell launch command, so reject anything that could
-		// carry a metacharacter. The session is a strict slug (we mint it); the project is a catalog
-		// name that may legitimately contain dots (a "my.app" dir), so it is checked shell-safe only
-		// (dots/hyphens allowed, quotes/semicolons/spaces not) - a non-slug project still fails later
-		// at the tmux layer, but never as an injection.
+		const project = t.spawn;
+		const sessionName = explicitSession ?? (t instanceof SpawnPoint ? DEFAULT_SESSION : t.session);
+		let target: TmuxTarget;
+		if (project === "host") target = { kind: "host", name: "host", sessionName };
+		else if (isProjectName?.(project)) target = { kind: "devcontainer", name: project, sessionName };
+		else throw new Error(`terminal view is not available for "${project}" (only the host and devcontainers)`);
+		// Both name and session reach the host's shell launch command; the grammar makes both strict
+		// dotless slugs, so assert it at the boundary regardless (defense in depth).
 		if (!isShellSafeName(target.name)) throw new Error(`invalid project name "${target.name}"`);
 		if (!isTmuxName(target.sessionName)) throw new Error(`invalid session name "${target.sessionName}"`);
 		return target;
@@ -293,11 +303,10 @@ export function createConsoleDispatcher({
 	});
 
 	function recordInbound(ownerId: string, sessionId: string): void {
-		// Canonicalize so respond's gate compares canonical against canonical whether the session
-		// id arrived bare or qualified. Recorded on the durable owner inbox so respondability
-		// survives a restart.
-		const canonical = SessionId.parse(sessionId, localGatewayId)?.key ?? sessionId;
-		mailboxStore.get(ownerId)?.recordSession(canonical);
+		// The session id is the opaque store key the console echoes; under the fully-qualified
+		// grammar there is no bare form to normalize. Recorded on the durable owner inbox so
+		// respondability survives a restart.
+		mailboxStore.get(ownerId)?.recordSession(sessionId);
 	}
 
 	/** Append only if the device is still live, so a late continuation cannot
@@ -502,14 +511,15 @@ export function createConsoleDispatcher({
 			}
 
 			case "send": {
-				// The console may target a gateway-qualified name (`gateway/name`); strip the
-				// gateway for the local registry probe.
-				const localTarget = parseQualifiedTeam(op.to).name;
-
 				// Canonical session id matching what routes.send composes, so the backgrounded-send
-				// path hands back the same id the in-time path would. Keyed by ownerId, so every
-				// device of the owner shares the one thread.
-				const expectedSession = SessionId.channel(ownerId, TeamAddress.local(localGatewayId, localTarget)).key;
+				// path hands back the same id the in-time path would. The target resolves to its
+				// Address; keyed by ownerId, so every device of the owner shares the one thread. A
+				// spawn-point target has no session (routes rejects it), so it has no pre-computed id.
+				const targetAddr = parseTarget(op.to, localDomain, localGatewayId);
+				const expectedSession =
+					targetAddr instanceof SpawnPoint
+						? ""
+						: storeKey({ kind: "conv", conversationId: ownerId, address: targetAddr });
 				const sendPromise = routes.send(FAKE_REQ, {
 					from: device,
 					fromConversationId: ownerId,
@@ -577,14 +587,13 @@ export function createConsoleDispatcher({
 			case "respond": {
 				// A console may only settle a thread that was delivered to it. This blocks forging
 				// another conversation's reply and keeps op.session_id away from resolveHandshake
-				// (handshake ids are never recorded as inbound). Canonicalize via SessionId.parse so
-				// a bare session id matches the qualified key recorded on inbound delivery.
-				const canonicalRespondId = SessionId.parse(op.session_id, localGatewayId)?.key ?? op.session_id;
-				if (!mailboxStore.get(ownerId)?.canRespond(canonicalRespondId)) {
+				// (handshake ids are never recorded as inbound). The session id is the opaque store
+				// key the console echoes verbatim - no bare form to normalize under this grammar.
+				if (!mailboxStore.get(ownerId)?.canRespond(op.session_id)) {
 					throw new Error(`Unknown session_id; you can only respond to a thread delivered to you`);
 				}
 				const res = routes.respond(FAKE_REQ, {
-					session_id: canonicalRespondId,
+					session_id: op.session_id,
 					status: op.status,
 					response: op.response,
 					replyAsJson: op.replyAsJson,
@@ -684,10 +693,11 @@ export function createConsoleDispatcher({
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
 				// Forget tears down ONE named session; a bare spawn-point (or host) has no session to
 				// kill, so require a composite target and reject the spawn-point with a clear message.
-				const { name } = parseQualifiedTeam(op.target);
-				if (!isComposite(name)) {
+				const t = parseTarget(op.target, localDomain, localGatewayId);
+				if (t instanceof SpawnPoint) {
 					throw new Error(`cannot forget "${op.target}": name a specific project.session, not a spawn-point`);
 				}
+				const name = composeSessionName(t.spawn, t.session);
 				const target = resolveTmuxTarget(op.target);
 				const dedupKey = `${conversationId}:${opId}`;
 				const r = await relayToHost({ kind: "killSession", target, dedupKey });
@@ -799,11 +809,13 @@ export function createConsoleDispatcher({
 		}
 	}
 
-	/** The canonical `gateway/name` key a session is shared under, the single form every
-	 * read path (the relay gate, the sweep, discovery) compares against. A bare name resolves
-	 * to this Gateway; an already-qualified local name is preserved. */
+	/** The canonical `domain.gateway.spawn.session` key a session is shared under, the single form
+	 * every read path (the relay gate, the sweep, discovery) compares against. Built via the shared
+	 * localAddress so it matches the relay gate and the pending-job store byte-for-byte. */
 	function canonicalShareTarget(sessionTarget: string): string {
-		return TeamAddress.local(localGatewayId, parseQualifiedTeam(sessionTarget).name).canonical;
+		const t = parseTarget(sessionTarget, localDomain, localGatewayId);
+		const name = t instanceof SpawnPoint ? t.spawn : composeSessionName(t.spawn, t.session);
+		return localAddress(name).canonical;
 	}
 
 	/** Gate a share request and return the canonical key to store it under: the session must be a
@@ -817,16 +829,20 @@ export function createConsoleDispatcher({
 		if (target.kind === "domain" && !crossDomainShare?.isLinkedDomain(target.domainId)) {
 			throw new Error(`cannot share to "${target.domainId}": not a linked Domain`);
 		}
-		const { gatewayId, name } = parseQualifiedTeam(sessionTarget);
-		if (gatewayId && gatewayId !== localGatewayId) {
+		const parsedShare = parseTarget(sessionTarget, localDomain, localGatewayId);
+		if (parsedShare.domain !== localDomain || parsedShare.gateway !== localGatewayId) {
 			throw new Error(`cannot share "${sessionTarget}": only local sessions can be shared`);
 		}
+		const name =
+			parsedShare instanceof SpawnPoint
+				? parsedShare.spawn
+				: composeSessionName(parsedShare.spawn, parsedShare.session);
 		const teams = (await routes.teams().json()) as TeamInfo[];
 		const team = teams.find((t) => t.team === name);
 		if (!team || (team.kind !== "devcontainer" && team.kind !== "loose")) {
 			throw new Error(`cannot share "${name}": only devcontainer and loose sessions can be shared`);
 		}
-		return TeamAddress.local(localGatewayId, name).canonical;
+		return localAddress(name).canonical;
 	}
 
 	async function runFrame(frame: OpenedConsoleFrame): Promise<ConsoleReplyBody> {

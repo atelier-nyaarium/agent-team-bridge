@@ -218,6 +218,9 @@ export function registerReloadPlugins(mcpServer: McpServer): void {
 					tmuxPrefix = "tmux";
 					targetLabel = "self (container)";
 				} else if (args.team) {
+					// team is shell-interpolated into the docker exec prefix; assert the slug here too
+					// (the daemon path spawnReloadPlugins already does), or a crafted name injects.
+					assertTmuxName(args.team);
 					const container = `${args.team}_devcontainer-dev-1`;
 					tmuxPrefix = `docker exec -u vscode "${container}" tmux`;
 					targetLabel = `container: ${container}`;

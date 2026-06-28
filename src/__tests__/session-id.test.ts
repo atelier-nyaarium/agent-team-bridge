@@ -2,41 +2,46 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	Address,
 	composeSessionName,
-	DEFAULT_SESSION,
-	GATEWAY_QUALIFIER_SEP,
 	isComposite,
-	NoticeId,
 	parseSessionName,
-	SessionId,
-	TeamAddress,
+	parseStoreKey,
+	parseTarget,
+	type SessionKey,
+	SpawnPoint,
+	storeKey,
 } from "../shared/session-id.js";
 
 ////////////////////////////////
-//  Session identity vectors
+//  Cross-runtime address vectors
 //
-//  vectors.json is read by BOTH this suite and SessionIdVectorsTest.kt, so the
-//  hand-authored Kotlin twin cannot drift from the TS source: a canonical string
-//  either side produces differently fails one of the two runtimes.
+//  vectors.json is read by BOTH this suite and SessionIdVectorsTest.kt, so the hand-authored Kotlin
+//  twin cannot drift from the TS source: a canonical string either side produces differently fails
+//  one of the two runtimes.
 
-interface TeamVector {
+interface AddressVector {
+	domain: string;
+	gateway: string;
+	spawn: string;
+	session: string;
+	canonical: string;
+	spawnPointCanonical: string;
+}
+interface ParseTargetVector {
 	input: string;
-	localGatewayId: string;
-	gatewayId: string;
-	name: string;
+	localDomain: string;
+	localGateway: string;
+	kind: "spawn" | "address";
 	canonical: string;
 }
-interface SessionVector {
-	input: string;
-	localGatewayId: string;
-	conversationId: string;
-	targetCanonical: string;
-	key: string;
-}
-interface NoticeVector {
-	input: string;
-	localGatewayId: string;
-	senderCanonical: string;
+interface StoreKeyVector {
+	kind: "conv" | "notice";
+	conversationId?: string;
+	domain: string;
+	gateway: string;
+	spawn: string;
+	session: string;
 	key: string;
 }
 interface SessionNameVector {
@@ -50,118 +55,73 @@ interface SessionNameVector {
 const vectors = JSON.parse(
 	fs.readFileSync(path.join(__dirname, "../../tests/fixtures/session-id/vectors.json"), "utf8"),
 ) as {
-	teamAddress: TeamVector[];
-	sessionId: SessionVector[];
-	notice: NoticeVector[];
-	notSession: string[];
-	notNotice: string[];
+	address: AddressVector[];
+	parseTarget: ParseTargetVector[];
+	parseTargetReject: string[];
+	storeKey: StoreKeyVector[];
+	parseStoreKeyReject: string[];
 	sessionName: SessionNameVector[];
 };
 
-describe("session identity vectors", () => {
-	it.each(vectors.teamAddress.map((v) => [v.input, v] as const))("TeamAddress.parse(%s)", (_, v) => {
-		const a = TeamAddress.parse(v.input, v.localGatewayId);
-		expect(a.gatewayId).toBe(v.gatewayId);
-		expect(a.name).toBe(v.name);
+describe("address vectors", () => {
+	it.each(vectors.address.map((v) => [v.canonical, v] as const))("Address %s", (_, v) => {
+		const a = Address.of(v.domain, v.gateway, v.spawn, v.session);
 		expect(a.canonical).toBe(v.canonical);
-		// local() is the idempotent qualifier: same canonical for bare or qualified input.
-		expect(TeamAddress.local(v.localGatewayId, v.input).canonical).toBe(v.canonical);
+		expect(a.spawnPoint.canonical).toBe(v.spawnPointCanonical);
 	});
 
-	it.each(vectors.sessionId.map((v) => [v.input, v] as const))("SessionId.parse(%s)", (_, v) => {
-		const s = SessionId.parse(v.input, v.localGatewayId);
-		expect(s).not.toBeNull();
-		expect(s?.conversationId).toBe(v.conversationId);
-		expect(s?.target.canonical).toBe(v.targetCanonical);
-		expect(s?.key).toBe(v.key);
-		// channel(...).key reproduces the parsed key (store-key == lookup-key).
-		expect(SessionId.channel(v.conversationId, s!.target).key).toBe(v.key);
+	it.each(vectors.parseTarget.map((v) => [v.input, v] as const))("parseTarget %s", (_, v) => {
+		const t = parseTarget(v.input, v.localDomain, v.localGateway);
+		expect(t instanceof SpawnPoint ? "spawn" : "address").toBe(v.kind);
+		expect(t.canonical).toBe(v.canonical);
 	});
 
-	it.each(vectors.notice.map((v) => [v.input, v] as const))("NoticeId.parse(%s)", (_, v) => {
-		const n = NoticeId.parse(v.input, v.localGatewayId);
-		expect(n).not.toBeNull();
-		expect(n?.sender.canonical).toBe(v.senderCanonical);
-		expect(n?.key).toBe(v.key);
+	it.each(vectors.parseTargetReject.map((s) => [JSON.stringify(s), s] as const))("parseTarget rejects %s", (_, s) => {
+		expect(() => parseTarget(s, "local", "gw")).toThrow();
 	});
 
-	it.each(vectors.notSession.map((s) => [JSON.stringify(s), s] as const))("SessionId.parse rejects %s", (_, s) => {
-		expect(SessionId.parse(s, "anyhost")).toBeNull();
+	it.each(vectors.storeKey.map((v) => [v.key, v] as const))("storeKey %s", (_, v) => {
+		const k: SessionKey =
+			v.kind === "conv"
+				? {
+						kind: "conv",
+						conversationId: v.conversationId ?? "",
+						address: Address.of(v.domain, v.gateway, v.spawn, v.session),
+					}
+				: { kind: "notice", sender: Address.of(v.domain, v.gateway, v.spawn, v.session) };
+		expect(storeKey(k)).toBe(v.key);
+		// parseStoreKey is the exact inverse (store-key == lookup-key).
+		expect(parseStoreKey(v.key)).toEqual(k);
 	});
 
-	it.each(vectors.notNotice.map((s) => [JSON.stringify(s), s] as const))("NoticeId.parse rejects %s", (_, s) => {
-		expect(NoticeId.parse(s, "anyhost")).toBeNull();
+	it.each(
+		vectors.parseStoreKeyReject.map((s) => [JSON.stringify(s), s] as const),
+	)("parseStoreKey rejects %s", (_, s) => {
+		expect(parseStoreKey(s)).toBeNull();
 	});
 
-	// The composite project.session grammar is shared with the Kotlin twin via these vectors.
-	it.each(vectors.sessionName.map((v) => [v.input, v] as const))("sessionName grammar %s", (_, v) => {
+	it.each(vectors.sessionName.map((v) => [v.input, v] as const))("local team-field codec %s", (_, v) => {
 		expect(parseSessionName(v.input)).toEqual({ project: v.project, session: v.session });
 		expect(isComposite(v.input)).toBe(v.composite);
 		expect(composeSessionName(v.project, v.session)).toBe(v.composed);
 	});
-
-	it("remote() preserves an explicit host and equals a parsed qualified address", () => {
-		const r = TeamAddress.remote("hostb", "api");
-		expect(r.canonical).toBe("hostb/api");
-		expect(r.equals(TeamAddress.parse("hostb/api", "hosta"))).toBe(true);
-	});
-
-	it("a cross-Gateway key is byte-stable regardless of the parsing host", () => {
-		const s = "conv:c:hostb/api";
-		for (const localGatewayId of ["hosta", "hostb", "whatever"]) {
-			expect(SessionId.parse(s, localGatewayId)?.key).toBe(s);
-		}
-	});
-
-	it("a bare target resolves to the local host (not idempotent)", () => {
-		expect(SessionId.parse("conv:c:api", "hosta")?.key).toBe("conv:c:hosta/api");
-	});
 });
 
-describe("composite project.session grammar", () => {
-	it("a composite survives gateway-qualification and parses back (separator != '/')", () => {
-		const local = composeSessionName("recipe-app", "scratch");
-		const addr = TeamAddress.parse(`gw1${GATEWAY_QUALIFIER_SEP}${local}`, "local-gw");
-		expect(addr.gatewayId).toBe("gw1");
-		expect(parseSessionName(addr.name)).toEqual({ project: "recipe-app", session: "scratch" });
+describe("address grammar invariants", () => {
+	it("a store key is byte-stable regardless of the parsing gateway (fully qualified, no local resolution)", () => {
+		const key = "conv.c.a95dd4e979aa3be5.sakura.nyaadot.ik-tracking";
+		expect(parseStoreKey(key)).not.toBeNull();
+		expect(storeKey(parseStoreKey(key) as SessionKey)).toBe(key);
 	});
 
-	it("a composite team rides a conv: session id and parses back (separator != ':')", () => {
-		const team = `gw1${GATEWAY_QUALIFIER_SEP}${composeSessionName("recipe-app", "scratch")}`;
-		const sid = SessionId.channel("conv-abc", TeamAddress.parse(team, "local-gw"));
-		const back = SessionId.parse(sid.key, "local-gw");
-		expect(back?.target.canonical).toBe(team);
-		expect(parseSessionName(back!.target.name)).toEqual({ project: "recipe-app", session: "scratch" });
+	it("a dotted segment is rejected at construction (no ambiguous split)", () => {
+		expect(() => Address.of("d", "g", "my.app", "s")).toThrow(/invalid address segment/);
 	});
 
-	it("a bare name has no session and resolves to the default", () => {
-		expect(parseSessionName("recipe-app")).toEqual({ project: "recipe-app", session: DEFAULT_SESSION });
-	});
-
-	it("a composite name splits into project and session", () => {
-		expect(parseSessionName("recipe-app.scratch")).toEqual({ project: "recipe-app", session: "scratch" });
-	});
-
-	it("splits on the LAST separator so a dotted project name round-trips", () => {
-		expect(composeSessionName("my.app", "foo")).toBe("my.app.foo");
-		expect(parseSessionName("my.app.foo")).toEqual({ project: "my.app", session: "foo" });
-	});
-
-	it("is a mechanical split: a bare dotted name splits too (resolveTmuxTarget checks the catalog first)", () => {
-		expect(parseSessionName("my.app")).toEqual({ project: "my", session: "app" });
-	});
-
-	it("compose then parse round-trips a dotless project", () => {
-		expect(parseSessionName(composeSessionName("recipe-app", "scratch"))).toEqual({
-			project: "recipe-app",
-			session: "scratch",
-		});
-	});
-
-	it("isComposite is true only when a session segment is present", () => {
-		expect(isComposite("recipe-app")).toBe(false);
-		expect(isComposite("recipe-app.scratch")).toBe(true);
-		// Mechanical (separator-based); a dotted bare project reads composite, the catalog disambiguates upstream.
-		expect(isComposite("my.app")).toBe(true);
+	it("a local target with our (domain, gateway) round-trips through parseTarget", () => {
+		const t = parseTarget("nyaadot.ik-tracking", "a95dd4e979aa3be5", "sakura");
+		expect(t).toBeInstanceOf(Address);
+		expect((t as Address).domain).toBe("a95dd4e979aa3be5");
+		expect((t as Address).gateway).toBe("sakura");
 	});
 });
