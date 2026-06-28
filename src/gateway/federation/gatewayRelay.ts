@@ -11,7 +11,7 @@ import type { Sealer } from "./sealer.js";
 /** The subset of gateway HTTP routes the gateway-relay handler reuses. A federated op
  * runs against the same local routes a local sender would hit. */
 export interface FederationRoutes {
-	send: (req: Request, body: Record<string, unknown>) => Promise<Response>;
+	send: (req: Request, body: Record<string, unknown>, opts?: { trustedInbound?: boolean }) => Promise<Response>;
 	respond: (req: Request, body: Record<string, unknown>) => Response;
 	teams: () => Response;
 }
@@ -138,18 +138,25 @@ export function createGatewayRelayHandler({
 				// id, with the return-route pinned so respond forwards it back to the origin. For a
 				// cross-Domain send, stamp the VERIFIED origin Domain on the destination job so the
 				// reply and any colliding re-send are bound to the friend that originated it.
-				const res = await routes.send(FAKE_REQ, {
-					from: op.from,
-					to: op.to,
-					type: op.request_type,
-					effort: op.effort,
-					body: op.body,
-					files: op.files,
-					channelOnly: true,
-					sessionId: op.returnRoute.srcSession,
-					returnRoute: op.returnRoute,
-					...(srcDomainId !== null ? { dstDomainId: srcDomainId } : {}),
-				});
+				const res = await routes.send(
+					FAKE_REQ,
+					{
+						from: op.from,
+						to: op.to,
+						type: op.request_type,
+						effort: op.effort,
+						body: op.body,
+						files: op.files,
+						channelOnly: true,
+						sessionId: op.returnRoute.srcSession,
+						returnRoute: op.returnRoute,
+						...(srcDomainId !== null ? { dstDomainId: srcDomainId } : {}),
+						// Trusted internal path: this op was opened from a verified seal, so the
+						// inbound-only fields (sessionId/returnRoute/dstDomainId) above are honored. An
+						// external HTTP /send never sets this flag, so it can never forge them.
+					},
+					{ trustedInbound: true },
+				);
 				const json = (await res.json()) as { session_id?: string; status?: string; error?: string };
 				if (!res.ok) throw new Error(json.error ?? `send from Gateway ${srcGateway} failed`);
 				return { session_id: json.session_id ?? op.returnRoute.srcSession, status: json.status ?? "running" };

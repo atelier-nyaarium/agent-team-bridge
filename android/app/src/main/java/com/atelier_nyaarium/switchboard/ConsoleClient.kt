@@ -149,10 +149,10 @@ data class Team(
 	// entries, and gateways without the feature. The board shows it only when it differs
 	// from this app's own expected version.
 	val version: String? = null,
-	// The owning Gateway's Domain id, kept a separate field rather than folded into `name` so
-	// the gateway/name grammar stays two-part. A gateway id is unique only within a Domain, so
-	// the board groups by the (domainId, gatewayId) pair. Null for a pre-federation Gateway and
-	// for the locally-synthesized ended session.
+	// The owning Gateway's Domain id, kept a separate field rather than folded into the canonical
+	// address. A gateway id is unique only within a Domain, so the board groups by the
+	// (domainId, gatewayId) pair. Null for a pre-federation Gateway and for the
+	// locally-synthesized ended session.
 	val domainId: String? = null,
 	// The owning Domain's display name, stamped by the gateway's discover. The Peers list shows
 	// this instead of the opaque domainId. Null for a gateway without the feature or a Domain
@@ -684,9 +684,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		"register",
 	)
 
-	/** List the bridge's sessions, each keyed by its gateway-qualified name. A session's Gateway comes from
-	 * the wire (`TeamInfo.gatewayId`, always stamped); an empty value falls back to `localGatewayId` (this
-	 * connection's Gateway, learned at register) and leaves the name bare. */
+	/** List the bridge's sessions, each keyed by its canonical `domain.gateway.spawn.session` address. A
+	 * session's Gateway comes from the wire (`TeamInfo.gatewayId`, always stamped); an empty value falls
+	 * back to `localGatewayId` (this connection's Gateway, learned at register). */
 	fun teams(localGatewayId: String = ""): List<Team> {
 		val body = relay(ConsoleOp.ListTeams)
 		// Surface a relay failure instead of blanking the board; the callers (connect, refreshTeams)

@@ -172,7 +172,7 @@ data class Message(
 	 * local/optimistic rows and legacy persisted rows. */
 	val epoch: Long = 0,
 	val seq: Long = 0,
-	/** The qualified `gateway/name` author header shown for an inbound (agent) row. Null
+	/** The canonical `domain.gateway.spawn.session` author header shown for an inbound (agent) row. Null
 	 * for our own rows (rendered as "you"). Not persisted: every row in a thread shares the
 	 * thread's one peer, so it is re-derived from the thread key on load. */
 	val from: String? = null,
@@ -443,8 +443,8 @@ private data class Drained(val entry: MailboxEntry) : SyncEntry {
 /**
  * Chat state over a ConsoleClient. Holds per-team threads, an unread tally, the open
  * tab set, and a poll loop that drains the device mailbox, dedupes by mailbox seq,
- * and routes each reply to its team (parsed from the `conv:<id>:<team>` session id
- * or the entry's `from`). Transcripts persist encrypted so history survives restarts.
+ * and routes each reply to its team (parsed from the `conv.<id>.<domain>.<gateway>.<spawn>.<session>`
+ * session id or the entry's `from`). Transcripts persist encrypted so history survives restarts.
  */
 class ChatRepository(
 	private val store: AppStateStore,
@@ -454,12 +454,21 @@ class ChatRepository(
 	// Repo.get. Empty only if the asset is missing/corrupt (Play stays dark).
 	private val sttsCatalog: List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = emptyList(),
 ) {
+	/** TTS playback engine; cache lives under filesDir/stts/<team>/. Declared before the migration
+	 * init block so the one-shot wipe can purge its cache root. */
+	val stts = SttsPlayer(filesDir)
+
 	// One-shot grammar-version wipe. MUST run before the first thread/label load-parse below, so a
 	// stale-grammar persisted key (`gateway/name`) never reaches the new parser. Kotlin runs init
 	// blocks and property initializers top-to-bottom, so this clears the old keys before _state's
 	// loadPersistedThreads()/loadPersistedLabels() read them.
 	init {
-		store.migrateSchemaIfNeeded()
+		if (store.migrateSchemaIfNeeded()) {
+			// The prefs wipe never touched filesDir, so the matching grammar-era caches (attachment
+			// bytes + TTS audio) would otherwise stay stranded. Purge them on the same one-shot latch.
+			stts.purgeAll()
+			Attachments.purgeAll(filesDir)
+		}
 	}
 
 	// Declared before _state so loadPersistedThreads/Labels read it. Kotlin initializes fields in
@@ -539,8 +548,6 @@ class ChatRepository(
 	// notification (so the audio is cached before the user is pinged).
 	private var pollScope: CoroutineScope? = null
 
-	/** TTS playback engine; cache lives under filesDir/stts/<team>/. */
-	val stts = SttsPlayer(filesDir)
 	@Volatile private var sttsClient: SttsClient? = null
 
 	/** True while the Activity is started; drives the poll cadence (5s visible,

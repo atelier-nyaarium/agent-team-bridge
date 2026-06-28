@@ -782,6 +782,44 @@ describe("Fix 1: response_push reply gate binds to the job's verified target Dom
 		});
 		expect(ctx.store.crossDomainBinding(jobKey)?.dstDomainId).toBeNull();
 	});
+
+	it("a LOCAL /send cannot pin the job key or binding via a crafted sessionId (inbound fields are trusted-only)", async () => {
+		// The structural hardening: sessionId/returnRoute/dstDomainId are honored ONLY on the trusted
+		// internal gateway-relay path (opts.trustedInbound). An external /send that smuggles a crafted
+		// sessionId (to choose the job key + its forged domain segment) plus a binding + return-route
+		// must have ALL THREE ignored: the job lands at the DERIVED local key, binding null, no
+		// return-route - so a colluding friend can neither target a chosen key nor get the reply gate
+		// to accept a forged reply.
+		const pushed: Record<string, unknown>[] = [];
+		const ctx = makeCtx("alice-gw", { registry: registryWith({ "app.dev": channelWs(pushed) }) });
+		const { send } = createRoutes(ctx);
+		const craftedKey = storeKey({
+			kind: "conv",
+			conversationId: "owner1",
+			address: Address.of("mallory", "alice-gw", "app", "dev"),
+		});
+		await send(new Request("http://gateway/send", { method: "POST" }), {
+			from: "app.dev",
+			fromConversationId: "owner1",
+			to: "app.dev",
+			body: "local",
+			channelOnly: true,
+			sessionId: craftedKey, // attempt to pin the job key (and its forged "mallory" domain)
+			dstDomainId: "mallory",
+			returnRoute: { srcGateway: "alice-gw", srcConversationId: "owner1", srcSession: craftedKey },
+		});
+		// The crafted key was ignored - no job created there.
+		expect(ctx.store.crossDomainBinding(craftedKey)).toBeUndefined();
+		// The job landed at the DERIVED local key, with no binding and no return-route.
+		const derivedKey = storeKey({
+			kind: "conv",
+			conversationId: "owner1",
+			address: Address.local("alice", "alice-gw", "app", "dev"),
+		});
+		const binding = ctx.store.crossDomainBinding(derivedKey);
+		expect(binding?.dstDomainId).toBeNull();
+		expect(binding?.returnGateway).toBeNull();
+	});
 });
 
 describe("Fix 2: inbound cross-Domain send validates the attacker-controlled returnRoute", () => {

@@ -136,18 +136,17 @@ class AppStateStore(context: Context) {
 	 * (`gateway/name` -> `domain.gateway.spawn.session`), so old-grammar persisted thread/label/draft
 	 * keys and the mailbox sync cursor are cleared on upgrade rather than migrated (clean break). Runs
 	 * only when the stored version differs from [CURRENT_SCHEMA_VERSION]; idempotent thereafter. Must
-	 * be called BEFORE the first thread/label load-parse so a stale-grammar key never reaches a parser. */
-	fun migrateSchemaIfNeeded() {
-		if (prefs.getInt(KEY_SCHEMA_VERSION, 0) == CURRENT_SCHEMA_VERSION) return
+	 * be called BEFORE the first thread/label load-parse so a stale-grammar key never reaches a parser.
+	 * Returns true on the one-shot transition that ran the wipe (false when already current) so the
+	 * caller purges the matching filesDir caches (stranded attachment bytes + TTS audio) on the same
+	 * latch. */
+	fun migrateSchemaIfNeeded(): Boolean {
+		if (prefs.getInt(KEY_SCHEMA_VERSION, 0) == CURRENT_SCHEMA_VERSION) return false
 		prefs.edit().apply {
-			remove(KEY_THREADS)
-			remove(KEY_LABELS)
-			remove(KEY_DRAFTS)
-			remove(KEY_SYNC_EPOCH)
-			remove(KEY_SYNC_ACKED)
-			remove(KEY_SYNC_DROPPED)
+			SCHEMA_WIPE_KEYS.forEach { remove(it) }
 			putInt(KEY_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION)
 		}.apply()
+		return true
 	}
 
 	fun saveThreads(json: String) = prefs.edit().putString(KEY_THREADS, json).apply()
@@ -311,15 +310,24 @@ class AppStateStore(context: Context) {
 		const val KEY_SYNC_ACKED = "sync_acked"
 		const val KEY_SYNC_DROPPED = "sync_dropped"
 
-		/** Persisted grammar-schema version. Bumped to 2 for the unified address grammar; a stored
-		 * value below this triggers the one-shot grammar-bearing-key wipe in [migrateSchemaIfNeeded]. */
+		/** Persisted grammar-schema version. The unified address grammar wiped grammar-bearing prefs at
+		 * v2; v3 re-runs the one-shot wipe so the caller also purges the filesDir caches (attachment
+		 * bytes + TTS audio) that v2 left stranded. A stored value below this triggers the wipe in
+		 * [migrateSchemaIfNeeded]. */
 		const val KEY_SCHEMA_VERSION = "schema_version"
-		const val CURRENT_SCHEMA_VERSION = 2
+		const val CURRENT_SCHEMA_VERSION = 3
 
 		/** The keys a re-provision wipes. Everything else is preserved by omission (voice creds +
 		 * taste, the biometric lock), so any new provisioning/identity/transcript key MUST be added
 		 * here or it silently survives a Clear (a privacy/correctness regression). The partition is
 		 * pinned by a unit test. */
+		/** The grammar-bearing keys the one-shot schema wipe clears (thread/label/draft store keys plus
+		 * the mailbox sync cursor). Any NEW address-keyed pref MUST be added here or it survives the
+		 * grammar migration carrying a stale-grammar key. The set is pinned by a unit test. */
+		val SCHEMA_WIPE_KEYS = listOf(
+			KEY_THREADS, KEY_LABELS, KEY_DRAFTS, KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED,
+		)
+
 		val PROVISIONING_KEYS = listOf(
 			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
 			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_PROFILE_NAME, KEY_HOSTED_TENANTS,
