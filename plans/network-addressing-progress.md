@@ -27,8 +27,14 @@ TS repoint surface (14 files, ~116 refs):
 - [ ] `src/shared/gateway-id.ts` / `domain-id.ts` - end sanitizers with `assertSlug`, drop the
       separator guard.
 - [ ] `src/shared/owner-id.ts` - check (owner-id hex segment usage).
-- [ ] `src/shared/pending-job-store.ts` - key by `SessionKey` (flatten at the Map boundary only);
-      keep `dstDomainId`/`crossDomainBinding` seal-sourced.
+- [x] `src/shared/pending-job-store.ts` - DONE (uncommitted). Added `jobAddress(id)` =
+      `parseStoreKey(id)` conv -> `Address`; repointed the share-match (`expireBySession`,
+      `hasLiveCrossDomainThread`) onto `jobAddress(id)?.canonical` and the forge-guard `keyGateway`
+      onto `jobAddress(id)?.gateway`. Dropped the now-unused `localGatewayId` param from
+      `expireBySession`/`crossDomainBinding`/`hasLiveCrossDomainThread` (the new store key is fully
+      qualified, no local resolution). CALLERS TO FIX: `index.ts:680,747,788`; tests
+      `federation.test.ts` + `pending-job-store.test.ts` (drop the arg + port the old-grammar key
+      literals like `conv:victim:alice-gw/lib` -> `conv.<conv>.<domain>.<gw>.<spawn>.<session>`).
 - [ ] `src/gateway/routes.ts` - send/respond/wake/discover; `storeKey`/`parseStoreKey`;
       `Address.remote(resolved targetDomainId)`; gateway local-collapse on (domain,gateway); keep the
       forge-guard.
@@ -66,3 +72,78 @@ Cross-runtime (same commit):
 
 Gates before the commit: `bun run lint && bun run test`; `cd android && ./gradlew :app:testDebugUnitTest`
 AND `:app:assembleRelease`. Port `federation.test.ts` + `pending-job-store.test.ts` forge-guard cases.
+
+## Update: entire non-test TS source flipped + GREEN (uncommitted WIP)
+
+`bunx tsc --noEmit` is 0 errors across all of `src/` (non-test). Done this push (all uncommitted):
+session-id.ts (legacy TeamAddress/SessionId/NoticeId + old constants DELETED; local codec kept,
+rewritten onto ADDRESS_SEP; CONV_TAG/NOTICE_TAG exported), routes.ts (full repoint: storeKey/
+parseStoreKey, parseTarget + spawn-point fail-fast, Address.remote with resolved domain, gateway
+local-collapse, localAddress helper), pending-job-store.ts, gatewayRelay.ts (localDomainId threaded,
+localShareTarget), index.ts (relay + console deps get localDomainId; dropped-arg callers fixed),
+bridgeDiscover.ts (domain.gateway.spawn.session display), consoleHandler.ts (parseTarget everywhere,
+localAddress, resolveTmuxTarget simplified), console-protocol.ts (shadow grammar DELETED),
+gateway-id.ts / domain-id.ts (assertSlug), codegen-kotlin.ts (emits ADDRESS_SEP/CONV_TAG/NOTICE_TAG/
+SLUG_PATTERN/MAX_*), Protocol.kt REGENERATED. Test deps fixed: console-handler.test.ts +
+relay-pump.test.ts (localDomainId added); gateway-naming.test.ts DELETED.
+
+INVARIANT held: routes.localAddress == gatewayRelay.localShareTarget == consoleHandler.localAddress ==
+pending-job-store.jobAddress(id).canonical, all `domain.gateway.spawn.session`. The origin builds the
+remote key with the RESOLVED targetDomainId (== the destination's localDomainId), so cross-domain
+share keys + the forge-guard stay byte-identical.
+
+## Remaining to GREEN (the red is now ONLY tests + Kotlin/Android)
+
+1. `src/__tests__/federation.test.ts` (SECURITY SUITE - careful): add `localDomainId` to each
+   createGatewayRelayHandler dep; drop the localGatewayId arg from crossDomainBinding/expireBySession/
+   hasLiveCrossDomainThread; re-model every scenario onto COMPOSITE session names (old bare "api"/"lib"
+   are now arity-1 spawn-points) and rewrite every key literal `conv:c1:bob-gw/lib` ->
+   `conv.c1.<domain>.bob-gw.<spawn>.<session>`, share keys `hostb/lib` -> `<domain>.hostb.<spawn>.<sess>`.
+   KEEP all four forge-guard cases asserting the same behavior. Remove the SessionId/TeamAddress import.
+2. `src/__tests__/session-id.test.ts` + `tests/fixtures/session-id/vectors.json`: rewrite the vectors
+   for Address/SpawnPoint/parseTarget/storeKey/parseStoreKey + the local codec; this suite + the Kotlin
+   SessionIdVectorsTest.kt both read vectors.json.
+3. Then `bun run lint && bun run test` GREEN -> commit the TS-side milestone.
+4. Kotlin twin `android/.../proto/SessionId.kt` rewrite (Address/SpawnPoint/SessionKey + arity, using
+   the generated Protocol.kt constants); `ChatRepository.kt` (drop canonicalThreadKey/recanonicalize,
+   schema-version wipe, isComposite -> arity, display accessors); `MainActivity.kt` (isComposite sites
+   333/343/554, board nesting, tab labels, substringAfter('/')); `ChatStateSessionsTest.kt`; rewrite
+   `SessionIdVectorsTest.kt`; `tests/fixtures/protocol/*.json` golden session_ids.
+5. Gateway one-shot wipe sentinel in index.ts (+ cross-domain-share-state.json) - still TODO.
+6. mcp/team-name.ts + mcp/index.ts unconditional composite mint - still TODO.
+7. Android gates: `./gradlew :app:testDebugUnitTest` + `:app:assembleRelease`.
+
+## Resume notes (earlier; superseded by the Update above)
+
+The tree is RED mid-flip (expected). Last GREEN commit: `a99a2e8`. Uncommitted edits so far:
+`session-id.ts` (slice 1a already committed in `ffbb500`; nothing new uncommitted there) and
+`pending-job-store.ts` (above). `git diff` shows the in-progress edits.
+
+Next, in order:
+1. `routes.ts` - the central producer/consumer. Replace `SessionId.channel(cid, addr).key` ->
+   `storeKey({kind:"conv", conversationId, address})`; `SessionId.parse(id).key` ->
+   re-canonicalize via `parseStoreKey`; `NoticeId.of(...).key` -> notice `storeKey`;
+   `TeamAddress.parse(to)` -> `parseTarget(to, localDomainId, localGatewayId)` (branch
+   Address vs SpawnPoint for the fail-fast); cross-gateway uses
+   `Address.remote(targetDomainId(targetGateway,targetDomain) ?? localDomainId, ...)`; add the
+   gateway local-collapse (route cross-gateway only when (domain,gateway) != local). KEEP the
+   forge-guard at `routes.ts:691`.
+2. CROSS-DOMAIN SHARE KEYING (security-critical, trace carefully - do NOT rush):
+   - `gatewayRelay.ts:89,158` build `sessionTarget` via `TeamAddress.local(localGatewayId,name)`.
+     Under the new grammar the share key is the full `Address.canonical`
+     (`localDomain.localGateway.spawn.session`). Thread `localDomainId` into
+     `GatewayRelayHandlerDeps` and build `Address.local(localDomainId, localGatewayId, ...parse
+     bareName...)`. The friend's `op.to` is the local team field (spawn / spawn.session).
+   - `crossDomainShareState.ts` keys shares by the canonical session target - must use the SAME
+     new `Address.canonical`. Confirm `routes`/`index` `touchShares`/`isSharedTo` all agree.
+   - INVARIANT: the share key, the `gatewayRelay` gate, and `pending-job-store.jobAddress` must
+     produce byte-identical canonical strings, or shares silently stop matching.
+3. `websocket.ts` register write-guards `isComposite` -> arity (keep the resume/known-path writes).
+4. `index.ts` - the 3 pending-job-store callers (drop `localGatewayId`); catalog; the one-shot wipe
+   sentinel (after federationDir resolves ~L97, before restore ~L142) incl `cross-domain-share-state.json`.
+5. `consoleHandler.ts` `parseQualifiedTeam`/`resolveTmuxTarget`; `bridgeDiscover.ts`; `hostDaemon.ts`.
+6. `mcp/team-name.ts` + `mcp/index.ts` unconditional composite mint; host wake branch.
+7. `host-op.ts`/`gateway-id.ts`/`domain-id.ts`/`owner-id.ts` slug consolidation.
+8. `federation-protocol.ts` caps >=400; `console-protocol.ts` shadow delete; DELETE legacy classes.
+9. Rewrite TS tests (session-id/gateway-naming/federation/pending-job-store); `bun run lint && test`.
+10. codegen + Protocol.kt + SessionId.kt twin + vectors + protocol fixtures + Android wipe/UI; Android gates.
