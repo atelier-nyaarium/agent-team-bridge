@@ -31,10 +31,8 @@ import {
 	Address,
 	composeSessionName,
 	DEFAULT_SESSION,
-	isComposite,
 	LOCAL_DOMAIN_SENTINEL,
 	parseSessionName,
-	parseStoreKey,
 	parseTarget,
 	SpawnPoint,
 	storeKey,
@@ -527,8 +525,6 @@ export function createConsoleDispatcher({
 					// Forward the selected session's Domain so a cross-Domain send resolves its seal
 					// target by the full (domainId, gatewayId) pair; absent for a local/cross-Gateway send.
 					targetDomainId: op.domainId,
-					type: op.request_type,
-					effort: op.effort,
 					body: op.body,
 					files: op.files,
 					channelOnly: true,

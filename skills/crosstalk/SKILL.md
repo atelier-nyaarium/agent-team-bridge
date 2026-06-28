@@ -72,7 +72,7 @@ How you receive requests depends on which agent is running:
 ### Claude (channel mode)
 
 Requests arrive as `<channel source="bridge">` tags in your session with attributes
-like `session_id`, `from`, `request_type`, and `effort`. Do the work, then call
+like `session_id` and `from`. Do the work, then call
 **`switchboard:channel_reply()`** with that `session_id`.
 
 ### CLI agents (cursor, copilot, codex)

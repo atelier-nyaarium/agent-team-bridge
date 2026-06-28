@@ -2,8 +2,6 @@ import type { z } from "zod";
 import type {
 	ChannelFileSchema,
 	ConnectionModeSchema,
-	EffortLevelSchema,
-	RequestTypeSchema,
 	ResponseStatusSchema,
 	TeamInfoSchema,
 	TeamKindSchema,
@@ -26,8 +24,6 @@ import type {
 export type ChannelFile = z.infer<typeof ChannelFileSchema>;
 
 export type ConnectionMode = z.infer<typeof ConnectionModeSchema>;
-export type EffortLevel = z.infer<typeof EffortLevelSchema>;
-export type RequestType = z.infer<typeof RequestTypeSchema>;
 export type ResponseStatus = z.infer<typeof ResponseStatusSchema>;
 
 ////////////////////////////////
@@ -37,14 +33,10 @@ export type ResponseStatus = z.infer<typeof ResponseStatusSchema>;
 export interface ChannelPushPayload {
 	type: "channel_push";
 	from: string;
-	request_type: RequestType;
 	body: string;
-	effort: EffortLevel | "auto";
 	session_id: string;
-	is_follow_up: boolean;
 	replyJsonSchema?: string;
 	message_id?: string;
-	discord_message_id?: string;
 	files?: ChannelFile[];
 }
 
@@ -66,12 +58,6 @@ export interface ResponsePushPayload {
 	session_id: string;
 	status?: string;
 	response?: string;
-	replyAsJson?: Record<string, unknown>;
-	question?: string;
-	reason?: string;
-	estimated_minutes?: number;
-	what_to_decide?: string;
-	message?: string;
 	files?: ChannelFile[];
 }
 

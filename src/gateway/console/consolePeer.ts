@@ -60,9 +60,6 @@ export class ConsolePeer {
 				session_id: p.session_id,
 				from: p.from,
 				body: p.body,
-				request_type: p.request_type,
-				effort: p.effort,
-				is_follow_up: p.is_follow_up,
 				files: p.files,
 			});
 			this.onInboundSession?.(p.session_id);
@@ -78,9 +75,6 @@ export class ConsolePeer {
 				session_id: p.session_id,
 				body: p.response,
 				status: p.status,
-				replyAsJson: p.replyAsJson,
-				question: p.question,
-				reason: p.reason,
 				files: p.files,
 			});
 		}

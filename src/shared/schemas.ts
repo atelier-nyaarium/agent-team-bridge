@@ -11,11 +11,9 @@ import { ADDRESS_SEP, isSlug } from "./session-id.js";
 //
 //  The single truth for the wire enums; types.ts derives from these via z.infer.
 //  These closed enums validate what our side composes. Fields a console decodes
-//  (e.g. MailboxEntry.request_type) stay open strings.
+//  stay open strings.
 
 export const ConnectionModeSchema = z.enum(["channel"]).meta({ id: "ConnectionMode" });
-export const EffortLevelSchema = z.enum(["simple", "standard", "complex"]).meta({ id: "EffortLevel" });
-export const RequestTypeSchema = z.enum(["feature", "bugfix", "question"]).meta({ id: "RequestType" });
 export const TeamKindSchema = z.enum(["devcontainer", "loose", "console"]).meta({ id: "TeamKind" });
 export const ResponseStatusSchema = z
 	.enum(["completed", "clarification", "deferred", "needs_human", "error", "timeout", "running"])
@@ -198,8 +196,6 @@ export const ConsoleOpSchema = z
 			// id is unique only within a Domain, so the gateway resolves the seal target by the
 			// full (domainId, gatewayId) pair when set; absent keeps local/cross-Gateway resolution.
 			domainId: z.string().min(1).max(64).optional(),
-			request_type: RequestTypeSchema.optional(),
-			effort: z.enum(["simple", "standard", "complex", "auto"]).optional(),
 			body: z.string().min(1),
 			files: ChannelFilesSchema.optional(),
 		}),
@@ -432,9 +428,7 @@ export const ConsoleOpEnvelopeSchema = z
 //
 //  Composed by the gateway, decoded by the console. `kind` is closed here
 //  because the gateway owns composition; the GENERATED Kotlin keeps it an
-//  open String (decode-side rule). `request_type` is open even here: the
-//  gateway itself composes out-of-union values (e.g. "handoff" on transfer
-//  briefs), so a closed enum would reject real traffic.
+//  open String (decode-side rule).
 
 export const MailboxEntrySchema = z
 	.object({
@@ -460,9 +454,6 @@ export const MailboxEntrySchema = z
 		replyAsJson: z.record(z.string(), z.unknown()).optional(),
 		question: z.string().optional(),
 		reason: z.string().optional(),
-		request_type: z.string().optional(),
-		effort: z.string().optional(),
-		is_follow_up: z.boolean().optional(),
 		files: ChannelFilesSchema.optional(),
 	})
 	.meta({ id: "MailboxEntry" });

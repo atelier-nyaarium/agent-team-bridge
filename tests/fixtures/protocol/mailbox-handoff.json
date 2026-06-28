@@ -1,9 +1,0 @@
-{
-	"seq": 45,
-	"at": 1781300977000,
-	"kind": "message",
-	"session_id": "conv:99999999-8888-7777-6666-555555555555:pixel-test",
-	"from": "host",
-	"body": "transfer brief",
-	"request_type": "handoff"
-}

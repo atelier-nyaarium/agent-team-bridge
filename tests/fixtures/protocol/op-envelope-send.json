@@ -6,8 +6,6 @@
 	"op": {
 		"kind": "send",
 		"to": "switchboard",
-		"request_type": "question",
-		"effort": "auto",
 		"body": "status?",
 		"files": [
 			{

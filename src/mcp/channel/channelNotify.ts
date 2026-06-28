@@ -12,16 +12,15 @@ import { materializeFiles, renderFilesBlock } from "./evieFiles.js";
  */
 export async function emitChannelNotification(server: Server, payload: ChannelPushPayload): Promise<void> {
 	let filesBlock = "";
-	// Discord files key the bucket by discord_message_id; console-origin files lack
-	// one, so fall back to the channel message_id.
-	const bucketKey = payload.discord_message_id ?? payload.message_id;
+	// Console-origin files key the materialization bucket by the channel message_id.
+	const bucketKey = payload.message_id;
 	if (payload.files && payload.files.length > 0 && bucketKey) {
 		const materialized = materializeFiles({ discordMessageId: bucketKey, files: payload.files });
 		filesBlock = renderFilesBlock({ discordMessageId: bucketKey, files: materialized });
 	}
 
 	// content is the message prose ONLY (plus the [FILES] block, which is paths the agent must Read).
-	// Every structured field - session_id, message_id, reply_schema, from, etc. - rides in `meta`,
+	// Every structured field - session_id, from, reply_schema - rides in `meta`,
 	// which the harness renders as <channel ...> tag attributes; nothing is jammed as a prose preamble.
 	// The how-to-reply guidance lives once in the MCP `instructions`, not re-stamped on every message.
 	const content = filesBlock ? `${payload.body}\n\n${filesBlock}` : payload.body;
@@ -42,10 +41,6 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 			meta: {
 				session_id: payload.session_id,
 				from: payload.from,
-				request_type: payload.request_type,
-				effort: String(payload.effort),
-				is_follow_up: String(payload.is_follow_up),
-				...(payload.message_id ? { message_id: payload.message_id } : {}),
 				...(payload.replyJsonSchema ? { reply_schema: payload.replyJsonSchema } : {}),
 			},
 		},
@@ -59,9 +54,7 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 	});
 	// #endregion
 
-	console.error(
-		`[channel] pushed ${payload.is_follow_up ? "follow-up" : "request"} from ${payload.from} [${payload.session_id.slice(0, 8)}...]`,
-	);
+	console.error(`[channel] pushed from ${payload.from} [${payload.session_id.slice(0, 8)}...]`);
 }
 
 export async function emitResponseNotification(server: Server, payload: ResponsePushPayload): Promise<void> {
@@ -78,15 +71,12 @@ export async function emitResponseNotification(server: Server, payload: Response
 		await server.notification({
 			method: "notifications/claude/channel",
 			params: {
-				// The reply prose only; status/question/reason ride structured in meta, not as
-				// "Status:"/"Question:" labels flattened into the body.
+				// The reply prose only; status rides structured in meta, not as a
+				// "Status:" label flattened into the body.
 				content: payload.response ?? "",
 				meta: {
 					session_id: payload.session_id,
-					type: "response",
 					...(payload.status ? { status: payload.status } : {}),
-					...(payload.question ? { question: payload.question } : {}),
-					...(payload.reason ? { reason: payload.reason } : {}),
 				},
 			},
 		});

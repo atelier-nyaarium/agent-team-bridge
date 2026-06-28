@@ -105,12 +105,6 @@ class ProtocolFixturesTest {
 	}
 
 	@Test
-	fun toleratesOutOfUnionRequestType() {
-		val entry = json.decodeFromString<MailboxEntry>(fixture("mailbox-handoff.json"))
-		assertEquals("handoff", entry.request_type)
-	}
-
-	@Test
 	fun looseTeamCarriesRequiredGatewayIdAndKindOmitsDomainId() {
 		val result = json.decodeFromString<ConsoleListTeamsResult>(fixture("list-teams-result.json"))
 		assertEquals(2, result.teams.size)

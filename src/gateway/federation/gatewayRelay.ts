@@ -143,8 +143,6 @@ export function createGatewayRelayHandler({
 					{
 						from: op.from,
 						to: op.to,
-						type: op.request_type,
-						effort: op.effort,
 						body: op.body,
 						files: op.files,
 						channelOnly: true,
