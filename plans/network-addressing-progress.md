@@ -1,5 +1,25 @@
 # Network-addressing migration: implementation progress
 
+## STATUS: Phase 0 + Phase 1 COMPLETE (committed, push held)
+
+Commits: 51e6a73 plan · 7214eff Phase 0 · ffbb500 value objects · 5f8382d TS flip · c87a9a8
+wipe/mint/resume · b4d4945 Android · f4ae894 caps · 41c170b red-team fixes. Both runtimes green
+(TS lint + 733 tests; Android :app:testDebugUnitTest + :app:assembleRelease). Red-teamed: canonical
+invariant + TS<->Kotlin equivalence hold.
+
+NEXT (owner): the cutover - push, `./down.sh && ./start-gateway.sh && ./start-host-daemon.sh`,
+install the APK, reload_plugins, then validate. AFTER that: Phase 2 (security review + retire the
+forge-guard at routes.ts:691 - DO NOT do this pre-deploy). Phase 3 (struct wire) optional.
+
+Deferred LOW (post-cutover cleanup): regenerate tests/fixtures/protocol/*.json old-grammar
+session_ids (they decode fine today); the wipe-sentinel cross-dir edge under a custom FEDERATION_DIR;
+add cross-runtime length-boundary vectors to vectors.json; the full host re-wake branch (currently
+the simpler resume-exclusion). The old-grammar literals in code COMMENTS (gatewayRelay:182,
+federation-protocol:21, team-name:14, ChatRepository:446) are cosmetic.
+
+---
+
+
 Resumable checklist for the Phase 1 atomic flip (see `network-addressing.md` for the design).
 Driven by the `audited-implementation` cycle on `network-addressing.md`. On resume: re-read the plan,
 `git log --oneline` for landed slices, `git diff` for in-progress edits, `bunx tsc --noEmit` for the
