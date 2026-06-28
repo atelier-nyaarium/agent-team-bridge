@@ -20,10 +20,16 @@ export { FEDERATION_PROTOCOL_VERSION } from "./evie-protocol.js";
  * session. `srcSession` is the origin's channel job key
  * (`conv:<srcConversationId>:<dstGateway>/<name>`), used as the job key on BOTH
  * Gateways so neither side has to translate. */
+// Worst-case lengths under the dot-address grammar. A flattened store key is
+// `conv.<conversationId(<=128)>.<4 slugs(<=64)>` + delimiters (~393); a qualified address is 4
+// slugs + dots (~259). Cap with headroom so a fully-qualified key/address never trips validation.
+const MAX_STORE_KEY_LEN = 512;
+const MAX_ADDRESS_LEN = 320;
+
 export const ReturnRouteSchema = z.object({
 	srcGateway: z.string().min(1).max(64),
 	srcConversationId: z.string().min(1).max(MAX_CONVERSATION_ID_LEN).regex(CONVERSATION_ID_RE),
-	srcSession: z.string().min(1).max(256),
+	srcSession: z.string().min(1).max(MAX_STORE_KEY_LEN),
 });
 
 /** The op a Gateway executes on a peer's behalf. Always carried E2E-sealed inside the
@@ -31,10 +37,10 @@ export const ReturnRouteSchema = z.object({
 export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	z.object({
 		kind: z.literal("send"),
-		// The qualified sender (srcGateway/name) for display on the destination.
-		from: z.string().min(1).max(128),
-		// The BARE local team name on the destination Gateway.
-		to: z.string().min(1).max(128),
+		// The qualified sender address (domain.gateway.spawn.session) for display on the destination.
+		from: z.string().min(1).max(MAX_ADDRESS_LEN),
+		// The local team field (spawn.session) on the destination Gateway.
+		to: z.string().min(1).max(MAX_ADDRESS_LEN),
 		request_type: z.string().optional(),
 		effort: z.string().optional(),
 		body: z.string(),
@@ -44,11 +50,11 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	// Discovery fan-out: the asking Gateway queries each online peer for its teams.
 	z.object({ kind: z.literal("list_teams") }),
 	// Wake-across-Gateways: bring up a sleeping devcontainer on the destination.
-	z.object({ kind: z.literal("wake"), team: z.string().min(1).max(128) }),
+	z.object({ kind: z.literal("wake"), team: z.string().min(1).max(MAX_ADDRESS_LEN) }),
 	// The destination's reply, pinned to the origin: delivered to `session_id` on the origin.
 	z.object({
 		kind: z.literal("response_push"),
-		session_id: z.string().min(1).max(256),
+		session_id: z.string().min(1).max(MAX_STORE_KEY_LEN),
 		status: z.string().optional(),
 		response: z.string().optional(),
 		replyAsJson: z.record(z.string(), z.unknown()).optional(),
