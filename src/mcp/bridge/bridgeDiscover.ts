@@ -1,8 +1,23 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Address, isComposite, parseSessionName, SpawnPoint } from "../../shared/session-id.js";
 import { bridgeProjectName, routerGet } from "./helpers.js";
 
 ////////////////////////////////
 //  Functions & Helpers
+
+/** The agent-facing canonical address of a discovered peer, built via the value objects (never a
+ * hand-concat, so a bare team field becomes the right form, not an accidental 3-segment spawn-point).
+ * Falls back to the raw team on a malformed segment, since this is display, not a trust boundary. */
+function displayTarget(domainId: string, gatewayId: string, team: string): string {
+	try {
+		const { project, session } = parseSessionName(team);
+		return isComposite(team)
+			? Address.of(domainId, gatewayId, project, session).canonical
+			: SpawnPoint.of(domainId, gatewayId, project).canonical;
+	} catch {
+		return team;
+	}
+}
 
 /** A coarse "5m ago" / "2h ago" recency label for an asleep session's last-seen timestamp. */
 export function relativeAge(lastActiveMs: number, nowMs: number = Date.now()): string {
@@ -56,7 +71,7 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 				}
 
 				const lines = others.map((t) => {
-					const name = t.gatewayId && t.domainId ? `${t.domainId}.${t.gatewayId}.${t.team}` : t.team;
+					const name = t.gatewayId && t.domainId ? displayTarget(t.domainId, t.gatewayId, t.team) : t.team;
 					if (t.status === "available") {
 						const seen = t.lastActive ? `, last seen ${relativeAge(t.lastActive)}` : "";
 						return `- ${name}: asleep${seen}`;

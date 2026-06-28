@@ -3,7 +3,8 @@ import { DomainSnapshotSchema, SignedAdmissionSchema } from "./admission.js";
 import { b64Field, slugField } from "./crypto.js";
 import { SignedFirstRootSchema } from "./federation-lifecycle.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
-import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN, SHELL_SAFE_NAME_RE } from "./host-op.js";
+import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
+import { ADDRESS_SEP, isSlug } from "./session-id.js";
 
 ////////////////////////////////
 //  Shared enum schemas
@@ -84,7 +85,15 @@ export const WsRegisterSchema = z.object({
 	type: z.literal("register"),
 	// A bare slug (host, a devcontainer project, a loose hex name) or a composite `project.session`.
 	// Shell-safe so a team name can never carry a metacharacter into the daemon's launch command.
-	team: z.string().min(1).max(64).regex(SHELL_SAFE_NAME_RE),
+	// A live registrant is a spawn-point (arity 1) or a chat (arity 2); each segment a dotless slug.
+	team: z
+		.string()
+		.min(1)
+		.max(129)
+		.refine((t) => {
+			const segs = t.split(ADDRESS_SEP);
+			return segs.length <= 2 && segs.every(isSlug);
+		}, "team must be a slug spawn-point or spawn.session"),
 	mode: z.string().optional(),
 	subId: z.string().optional(),
 	conversationId: z.string().regex(CONVERSATION_ID_RE).max(MAX_CONVERSATION_ID_LEN).optional(),

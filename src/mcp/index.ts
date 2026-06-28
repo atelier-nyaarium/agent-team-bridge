@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import packageJson from "../../package.json";
 import { isInsideContainer } from "../shared/env.js";
-import { composeSessionName } from "../shared/session-id.js";
+import { composeSessionName, isComposite, parseSessionName } from "../shared/session-id.js";
 import { closeRouter, connectToRouter } from "./bridge/helpers.js";
 import { detectAgentType, registerBridgeTools } from "./bridge/registerBridgeTools.js";
 import { registerHumanTools } from "./channel/humanTools.js";
@@ -33,12 +33,18 @@ export async function startMcp(): Promise<void> {
 	// falls back to a fresh random name. Peers reach the gateway on the docker network inside a
 	// container or the forwarded localhost port elsewhere. The host plumbing (wake + terminal view)
 	// lives in the headless host daemon, not here.
-	if (!process.env.PROJECT_NAME) {
-		// An ad-hoc/host Claude (no assigned project) joins as a COMPOSITE session under the host
-		// spawn-point, so its registered name is arity-2 (an addressable chat). A bare arity-1 name is
-		// reserved for catalog spawn-points only, the load-bearing invariant of the address grammar.
+	// Every LIVE registrant is an addressable chat, so it must register a COMPOSITE (arity-2) name; a
+	// bare arity-1 name is reserved for catalog spawn-points only (the load-bearing invariant of the
+	// address grammar). An unset PROJECT_NAME joins under the host spawn-point; a set-but-BARE one
+	// (image ENV, manual/VS-Code-direct launch) is normalized to a session under that spawn. A name
+	// already composite (the daemon's `project.session`) is used as-is.
+	const explicitProject = process.env.PROJECT_NAME;
+	if (!explicitProject) {
 		const adhoc = stableTeamName(process.env.CLAUDE_CODE_SESSION_ID) ?? randomTeamId();
 		process.env.PROJECT_NAME = composeSessionName("host", adhoc);
+	} else if (!isComposite(explicitProject)) {
+		const adhoc = stableTeamName(process.env.CLAUDE_CODE_SESSION_ID) ?? randomTeamId();
+		process.env.PROJECT_NAME = composeSessionName(explicitProject, adhoc);
 	}
 	if (!process.env.BRIDGE_ROUTER_URL) {
 		process.env.BRIDGE_ROUTER_URL = inContainer ? "http://switchboard:20000" : "http://localhost:20000";
@@ -63,9 +69,11 @@ export async function startMcp(): Promise<void> {
 	registerCompactSession(mcpServer);
 	registerHumanTools(mcpServer);
 
-	// The game-client connector serves /workspace project schemas, so it is container-only.
+	// The game-client connector serves /workspace project schemas, so it is container-only. The
+	// registered name is composite (`project.session`); the workspace dir + schema are keyed by the
+	// PROJECT (spawn) segment, so resolve that, not the full session name.
 	if (inContainer) {
-		const projectName = process.env.PROJECT_NAME;
+		const projectName = process.env.PROJECT_NAME ? parseSessionName(process.env.PROJECT_NAME).project : undefined;
 		const port = Number(process.env.MCP_CONNECTOR_PORT) || 20002;
 
 		if (projectName) {

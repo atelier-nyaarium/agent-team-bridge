@@ -97,18 +97,25 @@ export async function startGateway(): Promise<void> {
 	let localDomainId = resolveLocalDomainId(federationDir);
 	console.log(`[gateway] Domain id: ${localDomainId ?? "(none - not yet enrolled)"}`);
 
-	// One-shot schema wipe: the address grammar changed with NO back-compat, so every persisted
-	// store that embeds a session key (pending jobs, mailboxes, the resume map, cross-domain shares)
-	// is stale on upgrade and would orphan under the new parser. Gated on a version sentinel so it
-	// runs exactly once, AFTER federationDir/localDomainId resolve and BEFORE the durable restore.
-	// The federation keypair/allowlist/transport/domain-id are NOT touched (only the named files).
+	// One-shot schema wipe: the address grammar changed with NO back-compat, so the stores whose keys
+	// embed a fully-qualified session address (pending jobs, mailboxes, cross-domain shares) are stale
+	// on upgrade and would orphan under the new parser. Gated on a version sentinel so it runs exactly
+	// once, AFTER federationDir/localDomainId resolve and BEFORE the durable restore. The federation
+	// keypair/allowlist/transport/domain-id are NOT touched, and session-resume.json is NOT wiped: it
+	// is keyed by the LOCAL team field (`spawn.session`), whose dot grammar is unchanged, so those
+	// `claude --resume` records + the known-session list parse fine and must survive the upgrade.
 	const SCHEMA_VERSION = "2";
 	try {
 		const sentinelPath = path.join(DATA_DIR, "schema-version");
 		const current = fs.existsSync(sentinelPath) ? fs.readFileSync(sentinelPath, "utf8").trim() : "";
 		if (current !== SCHEMA_VERSION) {
-			for (const f of ["pending-jobs.json", "mailboxes.json", "session-resume.json"]) {
+			const legacyDir = path.dirname(LOG_PATH);
+			for (const f of ["pending-jobs.json", "mailboxes.json"]) {
 				fs.rmSync(path.join(DATA_DIR, f), { force: true });
+				// Also drop the legacy-dir copy, so the temporary legacy->DATA_DIR migration (gated only
+				// on dst-absent, not this sentinel) cannot re-seed an old-grammar file after a crash
+				// between this wipe and the first durable re-snapshot.
+				fs.rmSync(path.join(legacyDir, f), { force: true });
 			}
 			// Keyed by the old canonical; drop the single file, never the federation dir around it.
 			fs.rmSync(path.join(federationDir, "cross-domain-share-state.json"), { force: true });
