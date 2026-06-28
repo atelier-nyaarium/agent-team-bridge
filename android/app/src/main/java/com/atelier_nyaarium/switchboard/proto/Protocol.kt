@@ -85,9 +85,6 @@ data class MailboxEntry(
 	val replyAsJson: JsonObject? = null,
 	val question: String? = null,
 	val reason: String? = null,
-	val request_type: String? = null,
-	val effort: String? = null,
-	val is_follow_up: Boolean? = null,
 	val files: List<ChannelFile>? = null,
 )
 
@@ -132,8 +129,6 @@ sealed class ConsoleOp {
 	data class Send(
 		val to: String,
 		val domainId: String? = null,
-		val request_type: String? = null,
-		val effort: String? = null,
 		val body: String,
 		val files: List<ChannelFile>? = null,
 	) : ConsoleOp()

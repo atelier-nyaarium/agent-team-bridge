@@ -22,8 +22,8 @@ import {
 //  unit tests (ProtocolFixturesTest.kt) iterate it, so a fixture cannot be
 //  covered by one runtime and forgotten by the other. This suite additionally
 //  asserts the directory and the manifest agree, so an unlisted fixture file
-//  cannot exist. Targeted semantics (Long bait, tolerance stripping, the
-//  out-of-union request_type) keep their own focused tests below the loop.
+//  cannot exist. Targeted semantics (Long bait, tolerance stripping) keep their
+//  own focused tests below the loop.
 
 const FIXTURES = path.join(__dirname, "../../tests/fixtures/protocol");
 
@@ -82,11 +82,6 @@ describe("protocol fixtures", () => {
 		const result = MailboxEntrySchema.safeParse(fixture("tolerance-extra-field.json"));
 		expect(result.success).toBe(true);
 		expect(result.data).not.toHaveProperty("field_from_the_future");
-	});
-
-	it("carries the live out-of-union request_type", () => {
-		const entry = MailboxEntrySchema.parse(fixture("mailbox-handoff.json"));
-		expect(entry.request_type).toBe("handoff");
 	});
 
 	it("a loose team carries required gatewayId+kind but omits the optional domainId", () => {

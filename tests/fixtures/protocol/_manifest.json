@@ -11,7 +11,6 @@
 		{ "file": "mailbox-message.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "mailbox-reply.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "mailbox-notice.json", "schema": "MailboxEntry", "expect": "pass" },
-		{ "file": "mailbox-handoff.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "mailbox-reply-files.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "mailbox-sent.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "tolerance-extra-field.json", "schema": "MailboxEntry", "expect": "pass" },

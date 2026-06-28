@@ -41,8 +41,6 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 		from: z.string().min(1).max(MAX_ADDRESS_LEN),
 		// The local team field (spawn.session) on the destination Gateway.
 		to: z.string().min(1).max(MAX_ADDRESS_LEN),
-		request_type: z.string().optional(),
-		effort: z.string().optional(),
 		body: z.string(),
 		files: ChannelFilesSchema.optional(),
 		returnRoute: ReturnRouteSchema,

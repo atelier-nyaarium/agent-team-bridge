@@ -100,8 +100,6 @@ const SendRequestSchema = z.object({
 	// resolved by the full (domainId, gatewayId) pair; absent keeps the local/cross-Gateway
 	// (bare gateway id) resolution. Console-supplied from the selected session's Domain.
 	targetDomainId: z.string().optional(),
-	type: z.string().optional(),
-	effort: z.string().optional(),
 	body: z.string().optional(),
 	session_id: z.string().optional(),
 	debug: z.boolean().optional(),
@@ -377,12 +375,10 @@ export function createRoutes({
 		targetDomain?: string;
 		from: string;
 		fromConversationId: string | undefined;
-		type?: string;
-		effort?: string;
 		body?: string;
 		files?: ChannelFile[];
 	}): Promise<Response> {
-		const { targetGateway, targetName, targetDomain, from, fromConversationId, type, effort, body, files } = args;
+		const { targetGateway, targetName, targetDomain, from, fromConversationId, body, files } = args;
 		if (!evieClient?.isConnected()) {
 			return jsonResponse({ error: `Router unavailable; cannot reach Gateway "${targetGateway}"` }, 503);
 		}
@@ -401,8 +397,6 @@ export function createRoutes({
 			kind: "send",
 			from: localAddress(from).canonical,
 			to: targetName,
-			request_type: type,
-			effort,
 			body: body ?? "",
 			...(files && files.length > 0 ? { files } : {}),
 			returnRoute: { srcGateway: localGatewayId, srcConversationId: fromConversationId, srcSession },
@@ -606,8 +600,6 @@ export function createRoutes({
 			fromConversationId,
 			to,
 			targetDomainId: targetDomain,
-			type,
-			effort,
 			body: msgBody,
 			replyJsonSchema,
 			files,
@@ -658,8 +650,6 @@ export function createRoutes({
 				targetDomain: realDomain,
 				from,
 				fromConversationId,
-				type,
-				effort,
 				body: msgBody,
 				files,
 			});
@@ -740,7 +730,6 @@ export function createRoutes({
 					return jsonResponse({ error: `fromConversationId is required for channel-mode targets` }, 400);
 				}
 
-				const isFollowUp = store.has(channelJobId);
 				// Honor a Domain binding ONLY on an inbound federated send (the gateway-relay
 				// handler sets inboundSessionId + dstDomainId together from the verified seal). A
 				// plain local /send must never stamp it from the request body, or a local caller
@@ -757,12 +746,9 @@ export function createRoutes({
 				const channelPayload: Record<string, unknown> = {
 					type: "channel_push",
 					from,
-					request_type: type || "question",
 					body: msgBody || "",
-					effort: effort || "auto",
 					session_id: channelJobId,
 					message_id: messageId,
-					is_follow_up: isFollowUp,
 				};
 				if (replyJsonSchema) channelPayload.replyJsonSchema = replyJsonSchema;
 				// message_id becomes the materialization bucket key in the target container.
@@ -884,9 +870,6 @@ export function createRoutes({
 					session_id: rr.srcSession,
 					...(response.status ? { status: response.status } : {}),
 					...(response.response ? { response: response.response } : {}),
-					...(response.replyAsJson ? { replyAsJson: response.replyAsJson } : {}),
-					...(response.question ? { question: response.question } : {}),
-					...(response.reason ? { reason: response.reason } : {}),
 					...(files && files.length > 0 ? { files } : {}),
 				},
 				"cross-Gateway reply-pin",
@@ -903,9 +886,6 @@ export function createRoutes({
 			type: "response_push",
 			session_id: respondSessionId,
 			response: response.response,
-			replyAsJson: response.replyAsJson,
-			question: response.question,
-			reason: response.reason,
 		};
 		if (response.status) push.status = response.status;
 		// The push carries the full bytes (the store kept metadata only).
@@ -929,9 +909,6 @@ export function createRoutes({
 					session_id: respondSessionId,
 					body: response.response,
 					status: response.status,
-					replyAsJson: response.replyAsJson,
-					question: response.question,
-					reason: response.reason,
 					files: files && files.length > 0 ? files : undefined,
 				});
 				pushedViaConversation = true;

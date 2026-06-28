@@ -115,11 +115,8 @@ describe("ConsolePeer", () => {
 			JSON.stringify({
 				type: "channel_push",
 				from: "team-a",
-				request_type: "question",
 				body: "need a hand",
-				effort: "standard",
 				session_id: "conv:team-a:pixel",
-				is_follow_up: false,
 			}),
 		);
 		const snap = box.drain(0);
@@ -376,11 +373,8 @@ describe("createConsoleDispatcher", () => {
 			JSON.stringify({
 				type: "channel_push",
 				from: "team-a",
-				request_type: "question",
 				body: "ping",
-				effort: "standard",
 				session_id: sessionId,
-				is_follow_up: false,
 			}),
 		);
 	}
@@ -423,11 +417,8 @@ describe("createConsoleDispatcher", () => {
 			JSON.stringify({
 				type: "channel_push",
 				from: "team-a",
-				request_type: "question",
 				body: "ping from agent",
-				effort: "standard",
 				session_id: "conv:team-a:pixel",
-				is_follow_up: false,
 			}),
 		);
 

@@ -14,11 +14,6 @@ const BridgeSendSchema = z
 			.describe(
 				`Target session. A devcontainer session is project.session; use crosstalk_discover to list them. An online session receives it directly; an asleep or not-yet-existing project.session is woken / created on send.`,
 			),
-		type: z.enum(["feature", "bugfix", "question"]).optional().describe(`The type of request you are making.`),
-		effort: z
-			.enum(["simple", "standard", "complex"])
-			.optional()
-			.describe(`How much effort it should take to understand and handle this request.`),
 		body: z
 			.string()
 			.optional()
@@ -47,7 +42,7 @@ const description = `
 Send a request to another team.
 
 Two call patterns:
-1. Send: provide to + type + effort + body. The conversation with that team is automatically reused across all your messages — you do not manage session_ids.
+1. Send: provide to + body. The conversation with that team is automatically reused across all your messages — you do not manage session_ids.
 2. Poll: provide session_id only (no body). Peeks at the latest stored result for an existing conversation without consuming it. Rarely needed for channel-mode teams since responses arrive via push.
 
 Channel-mode teams (Claude): responses are pushed back automatically as <channel> notifications. No polling needed. The target team can reply multiple times (progress updates, phase reports) without closing the conversation; just keep watching the channel.
@@ -101,7 +96,7 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
 			inputSchema: BridgeSendSchema as any,
 		},
-		async ({ to, type, effort, body, session_id }: BridgeSendArgs) => {
+		async ({ to, body, session_id }: BridgeSendArgs) => {
 			try {
 				// Poll mode: session_id present, no body
 				if (session_id && !body) {
@@ -117,17 +112,15 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 					return formatResult(result, to);
 				}
 
-				// Send mode: requires to, type, effort, body
-				if (!to || !type || !effort || !body) {
-					throw new Error(`Provide to + type + effort + body for sending, or just session_id for polling.`);
+				// Send mode: requires to, body
+				if (!to || !body) {
+					throw new Error(`Provide to + body for sending, or just session_id for polling.`);
 				}
 
 				const result = (await routerPost("/send", {
 					from: bridgeProjectName(),
 					fromConversationId: bridgeConversationId(),
 					to,
-					type,
-					effort,
 					body,
 				})) as SendResult;
 
