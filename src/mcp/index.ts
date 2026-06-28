@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import packageJson from "../../package.json";
 import { isInsideContainer } from "../shared/env.js";
+import { composeSessionName } from "../shared/session-id.js";
 import { closeRouter, connectToRouter } from "./bridge/helpers.js";
 import { detectAgentType, registerBridgeTools } from "./bridge/registerBridgeTools.js";
 import { registerHumanTools } from "./channel/humanTools.js";
@@ -33,7 +34,11 @@ export async function startMcp(): Promise<void> {
 	// container or the forwarded localhost port elsewhere. The host plumbing (wake + terminal view)
 	// lives in the headless host daemon, not here.
 	if (!process.env.PROJECT_NAME) {
-		process.env.PROJECT_NAME = stableTeamName(process.env.CLAUDE_CODE_SESSION_ID) ?? randomTeamId();
+		// An ad-hoc/host Claude (no assigned project) joins as a COMPOSITE session under the host
+		// spawn-point, so its registered name is arity-2 (an addressable chat). A bare arity-1 name is
+		// reserved for catalog spawn-points only, the load-bearing invariant of the address grammar.
+		const adhoc = stableTeamName(process.env.CLAUDE_CODE_SESSION_ID) ?? randomTeamId();
+		process.env.PROJECT_NAME = composeSessionName("host", adhoc);
 	}
 	if (!process.env.BRIDGE_ROUTER_URL) {
 		process.env.BRIDGE_ROUTER_URL = inContainer ? "http://switchboard:20000" : "http://localhost:20000";

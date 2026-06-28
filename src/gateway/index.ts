@@ -96,6 +96,29 @@ export async function startGateway(): Promise<void> {
 	const federationDir = process.env.FEDERATION_DIR || path.join(DATA_DIR, "federation");
 	let localDomainId = resolveLocalDomainId(federationDir);
 	console.log(`[gateway] Domain id: ${localDomainId ?? "(none - not yet enrolled)"}`);
+
+	// One-shot schema wipe: the address grammar changed with NO back-compat, so every persisted
+	// store that embeds a session key (pending jobs, mailboxes, the resume map, cross-domain shares)
+	// is stale on upgrade and would orphan under the new parser. Gated on a version sentinel so it
+	// runs exactly once, AFTER federationDir/localDomainId resolve and BEFORE the durable restore.
+	// The federation keypair/allowlist/transport/domain-id are NOT touched (only the named files).
+	const SCHEMA_VERSION = "2";
+	try {
+		const sentinelPath = path.join(DATA_DIR, "schema-version");
+		const current = fs.existsSync(sentinelPath) ? fs.readFileSync(sentinelPath, "utf8").trim() : "";
+		if (current !== SCHEMA_VERSION) {
+			for (const f of ["pending-jobs.json", "mailboxes.json", "session-resume.json"]) {
+				fs.rmSync(path.join(DATA_DIR, f), { force: true });
+			}
+			// Keyed by the old canonical; drop the single file, never the federation dir around it.
+			fs.rmSync(path.join(federationDir, "cross-domain-share-state.json"), { force: true });
+			fs.writeFileSync(sentinelPath, SCHEMA_VERSION);
+			console.log(`[schema-wipe] cleared old-grammar delivery state (schema ${SCHEMA_VERSION})`);
+		}
+	} catch (err) {
+		console.error("[schema-wipe] failed:", err);
+	}
+
 	const HEARTBEAT_INTERVAL_MS = 30000;
 	const MISSED_PINGS_LIMIT = 2;
 
