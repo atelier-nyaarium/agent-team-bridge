@@ -103,7 +103,6 @@ const SendRequestSchema = z.object({
 	body: z.string().optional(),
 	session_id: z.string().optional(),
 	debug: z.boolean().optional(),
-	replyJsonSchema: z.string().optional(),
 	files: ChannelFilesSchema.optional(),
 	// Console-originated sends: reject CLI-mode targets instead of entering the
 	// CLI branch, which mints a random session id the console can never thread.
@@ -601,7 +600,6 @@ export function createRoutes({
 			to,
 			targetDomainId: targetDomain,
 			body: msgBody,
-			replyJsonSchema,
 			files,
 			channelOnly,
 		} = parsed.data;
@@ -742,17 +740,20 @@ export function createRoutes({
 					dstDomainId: inboundDstDomainId,
 				});
 
-				const messageId = crypto.randomUUID();
 				const channelPayload: Record<string, unknown> = {
 					type: "channel_push",
 					from,
 					body: msgBody || "",
 					session_id: channelJobId,
-					message_id: messageId,
 				};
-				if (replyJsonSchema) channelPayload.replyJsonSchema = replyJsonSchema;
-				// message_id becomes the materialization bucket key in the target container.
-				if (files && files.length > 0) channelPayload.files = files;
+				// message_id is the file-materialization bucket key, read only when files are present.
+				// Mint it (and send it) only then; a fileless send carries no message_id.
+				const hasFiles = files !== undefined && files.length > 0;
+				const messageId = hasFiles ? crypto.randomUUID() : undefined;
+				if (hasFiles) {
+					channelPayload.message_id = messageId;
+					channelPayload.files = files;
+				}
 				const payload = JSON.stringify(channelPayload);
 
 				const activeWs = getAllActiveWs(subs);
@@ -765,7 +766,7 @@ export function createRoutes({
 				}
 
 				console.log(
-					`[send] channel_push to ${qualifiedTo} [${channelJobId}] msg=${messageId.slice(0, 8)} from ${from} (${activeWs.length} sub-session${activeWs.length > 1 ? "s" : ""})`,
+					`[send] channel_push to ${qualifiedTo} [${channelJobId}]${messageId ? ` msg=${messageId.slice(0, 8)}` : ""} from ${from} (${activeWs.length} sub-session${activeWs.length > 1 ? "s" : ""})`,
 				);
 
 				return jsonResponse({
