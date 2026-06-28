@@ -11,17 +11,6 @@ import { materializeFiles, renderFilesBlock } from "./evieFiles.js";
  * The message arrives as a <channel source="bridge" ...>body</channel> tag.
  */
 export async function emitChannelNotification(server: Server, payload: ChannelPushPayload): Promise<void> {
-	const replyInstruction =
-		"┃ Reply with the `channel_reply` tool: pass the session_id below and your prose in the `respondAsMarkdownString` field (it renders as markdown + mermaid for the human; use `respondAsStructuredData` only for a structured Reply Schema). The conversation stays open, so you can reply multiple times; each call is another message in the stream (no status or finality). Do not output text outside the tool call.";
-	const lines = [replyInstruction, `┃ session_id: \`${payload.session_id}\``];
-	if (payload.message_id) {
-		lines.push(`┃ message_id: \`${payload.message_id}\``);
-	}
-	if (payload.replyJsonSchema) {
-		lines.push(`┃ Reply Schema: ${payload.replyJsonSchema}`);
-	}
-	const replyReminder = lines.join("\n");
-
 	let filesBlock = "";
 	// Discord files key the bucket by discord_message_id; console-origin files lack
 	// one, so fall back to the channel message_id.
@@ -31,7 +20,11 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 		filesBlock = renderFilesBlock({ discordMessageId: bucketKey, files: materialized });
 	}
 
-	const bodyWithFiles = filesBlock ? `${payload.body}\n\n${filesBlock}` : payload.body;
+	// content is the message prose ONLY (plus the [FILES] block, which is paths the agent must Read).
+	// Every structured field - session_id, message_id, reply_schema, from, etc. - rides in `meta`,
+	// which the harness renders as <channel ...> tag attributes; nothing is jammed as a prose preamble.
+	// The how-to-reply guidance lives once in the MCP `instructions`, not re-stamped on every message.
+	const content = filesBlock ? `${payload.body}\n\n${filesBlock}` : payload.body;
 
 	// #region Hypothesis A: channel_push received by this sub-process
 	debugLog("A", "src/mcp/channel/channelNotify.ts:emitChannelNotification", "channel_push received", {
@@ -45,13 +38,15 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 	await server.notification({
 		method: "notifications/claude/channel",
 		params: {
-			content: `${replyReminder}\n\n${bodyWithFiles}`,
+			content,
 			meta: {
 				session_id: payload.session_id,
 				from: payload.from,
 				request_type: payload.request_type,
 				effort: String(payload.effort),
 				is_follow_up: String(payload.is_follow_up),
+				...(payload.message_id ? { message_id: payload.message_id } : {}),
+				...(payload.replyJsonSchema ? { reply_schema: payload.replyJsonSchema } : {}),
 			},
 		},
 	});
@@ -70,12 +65,6 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 }
 
 export async function emitResponseNotification(server: Server, payload: ResponsePushPayload): Promise<void> {
-	const parts: string[] = [];
-	if (payload.status) parts.push(`Status: ${payload.status}`);
-	if (payload.response) parts.push(payload.response);
-	if (payload.question) parts.push(`Question: ${payload.question}`);
-	if (payload.reason) parts.push(`Reason: ${payload.reason}`);
-
 	// #region Hypothesis A: response_push received by this sub-process
 	debugLog("A", "src/mcp/channel/channelNotify.ts:emitResponseNotification", "response_push received", {
 		pid: process.pid,
@@ -89,8 +78,16 @@ export async function emitResponseNotification(server: Server, payload: Response
 		await server.notification({
 			method: "notifications/claude/channel",
 			params: {
-				content: parts.join("\n"),
-				meta: { session_id: payload.session_id, type: "response" },
+				// The reply prose only; status/question/reason ride structured in meta, not as
+				// "Status:"/"Question:" labels flattened into the body.
+				content: payload.response ?? "",
+				meta: {
+					session_id: payload.session_id,
+					type: "response",
+					...(payload.status ? { status: payload.status } : {}),
+					...(payload.question ? { question: payload.question } : {}),
+					...(payload.reason ? { reason: payload.reason } : {}),
+				},
 			},
 		});
 
