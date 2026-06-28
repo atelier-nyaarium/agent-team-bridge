@@ -176,9 +176,9 @@ class SttsPlayer(private val root: File) {
 		clearNowPlaying()
 	}
 
-	/** Delete a team's cached audio; wired into ChatRepository.forget. A
-	 * gateway-qualified team ("gateway/name") nests one level deeper under stts/, which
-	 * is fine: the team string is the unique path, so two distinct sessions never
+	/** Delete a team's cached audio; wired into ChatRepository.forget. Under the dot grammar a
+	 * team address ("domain.gateway.spawn.session") is a flat path segment with no slash, so it
+	 * does not nest a subdir: the team string is the unique path, so two distinct sessions never
 	 * share a cache dir. */
 	fun purge(team: String) {
 		if (currentKey?.startsWith("$team/") == true) stop()

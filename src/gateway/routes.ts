@@ -11,6 +11,8 @@ import { ChannelFilesSchema } from "../shared/schemas.js";
 import {
 	Address,
 	composeSessionName,
+	isComposite,
+	isSlug,
 	LOCAL_DOMAIN_SENTINEL,
 	parseSessionName,
 	parseStoreKey,
@@ -519,6 +521,13 @@ export function createRoutes({
 		// session that exists but whose container is asleep still lists as available.
 		for (const [name, { lastSeen }] of sessionResume ?? []) {
 			if (seen.has(name)) continue;
+			// Defensive mirror of the record-time guard (websocket.ts): a host-spawn session is not
+			// devcontainer-wakeable, and a non-composite / non-slug entry is not a valid chat, so neither
+			// should surface as an available asleep session (it would be an un-wakeable phantom).
+			const parts = parseSessionName(name);
+			if (!isComposite(name) || parts.project === "host" || !isSlug(parts.project) || !isSlug(parts.session)) {
+				continue;
+			}
 			seen.add(name);
 			teamsList.push({
 				team: name,
@@ -583,7 +592,11 @@ export function createRoutes({
 		return jsonResponse([...local, ...sameDomain.flat(), ...crossDomain.flat()]);
 	}
 
-	async function send(req: Request, body: Record<string, unknown>): Promise<Response> {
+	async function send(
+		req: Request,
+		body: Record<string, unknown>,
+		opts: { trustedInbound?: boolean } = {},
+	): Promise<Response> {
 		const parsed = SendRequestSchema.safeParse(body);
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
@@ -599,10 +612,17 @@ export function createRoutes({
 			replyJsonSchema,
 			files,
 			channelOnly,
-			sessionId: inboundSessionId,
-			returnRoute,
-			dstDomainId,
 		} = parsed.data;
+		// The federated-inbound-only fields are honored ONLY when the call comes from the trusted
+		// internal gateway-relay path (opts.trustedInbound). An external HTTP /send caller cannot set
+		// them - they are structurally seal-sourced - so a local caller can never forge a cross-Domain
+		// `dstDomainId` binding (the keystone the response_push hard-deny rests on), nor pin the channel
+		// job key / skip arity classification via a crafted `sessionId`. `targetDomainId` stays
+		// caller-supplied: it is a routing HINT resolved via crossDomainPeers, never a trust input.
+		const trustedInbound = opts.trustedInbound === true;
+		const inboundSessionId = trustedInbound ? parsed.data.sessionId : undefined;
+		const returnRoute = trustedInbound ? parsed.data.returnRoute : undefined;
+		const dstDomainId = trustedInbound ? parsed.data.dstDomainId : undefined;
 
 		// Raw-bytes backstop at the trust boundary before the payload is pushed.
 		if (files && files.length > 0) {

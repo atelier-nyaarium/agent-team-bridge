@@ -63,29 +63,7 @@ export async function startGateway(): Promise<void> {
 	// resume map) lives in DATA_DIR, deliberately SEPARATE from the debug-log dir so a "clear the
 	// logs" action can never wipe federation identity.
 	const DATA_DIR = process.env.DATA_DIR || "/app/data";
-	try {
-		fs.mkdirSync(DATA_DIR, { recursive: true });
-		// TODO(remove after a few days, ~2026-07): one-time migration of durable state that used to
-		// live beside debug.log into DATA_DIR. Copies each item only if absent there (runs once, never
-		// clobbers newer data, must not lose federation keys).
-		const legacyDir = path.dirname(LOG_PATH);
-		for (const item of ["federation", "pending-jobs.json", "mailboxes.json", "replay-guard.json"]) {
-			const src = path.join(legacyDir, item);
-			const dst = path.join(DATA_DIR, item);
-			if (fs.existsSync(src) && !fs.existsSync(dst)) {
-				// Copy to a temp then atomically rename, so a crash mid-copy never leaves a PARTIAL dst
-				// that the existsSync guard would then skip forever (losing federation keys). The legacy
-				// copy is left in place as a backup until the migration code is removed.
-				const tmp = `${dst}.migrating`;
-				fs.rmSync(tmp, { recursive: true, force: true });
-				fs.cpSync(src, tmp, { recursive: true });
-				fs.renameSync(tmp, dst);
-				console.log(`[data-migrate] moved ${item} to ${DATA_DIR}`);
-			}
-		}
-	} catch (err) {
-		console.error("[data-migrate] migration to DATA_DIR failed:", err);
-	}
+	fs.mkdirSync(DATA_DIR, { recursive: true });
 
 	const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "600000", 10);
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);

@@ -19,6 +19,13 @@ object Attachments {
 
 	fun root(filesDir: File): File = File(filesDir, DIR)
 
+	/** Delete every materialized attachment under the attachments root. Wired into the one-shot
+	 * schema migration so grammar-era message bytes do not stay stranded on disk after the prefs
+	 * wipe (which never touched filesDir). */
+	fun purgeAll(filesDir: File) {
+		root(filesDir).deleteRecursively()
+	}
+
 	/** Basename only, with anything outside a safe charset collapsed to '_'. */
 	fun safeName(name: String): String {
 		val base = name.substringAfterLast('/').substringAfterLast('\\').trim()
