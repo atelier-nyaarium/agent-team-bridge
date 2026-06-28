@@ -10,18 +10,19 @@ import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollParty
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
+import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
-import com.atelier_nyaarium.switchboard.proto.NoticeId
 import com.atelier_nyaarium.switchboard.proto.SasCrypto
 import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
-import com.atelier_nyaarium.switchboard.proto.SessionId
+import com.atelier_nyaarium.switchboard.proto.SessionKey
 import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
 import com.atelier_nyaarium.switchboard.proto.GatewayTransport
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.SyncPollResult
-import com.atelier_nyaarium.switchboard.proto.TeamAddress
-import com.atelier_nyaarium.switchboard.proto.isComposite
+import com.atelier_nyaarium.switchboard.proto.parseSessionName
+import com.atelier_nyaarium.switchboard.proto.parseStoreKey
+import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.io.File
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -237,10 +238,11 @@ data class ChatState(
 	 * Both sides are compared by their canonical key so a bare vs qualified form
 	 * of the same team never produces a phantom "ended" entry. */
 	fun sessions(localGatewayId: String): List<Team> {
-		val known = teams.associateBy { TeamAddress.parse(it.name, localGatewayId).canonical }
-		val extra = threads.keys
-			.filter { TeamAddress.parse(it, localGatewayId).canonical !in known }
-			.map { Team(it, "ended", "", 0) }
+		// Team names and thread keys are both the canonical address string now, so the join is a
+		// direct set membership test - no per-key re-canonicalization (the grammar is already
+		// canonical, and a one-shot schema wipe cleared any old-grammar persisted keys).
+		val known = teams.mapTo(HashSet()) { it.name }
+		val extra = threads.keys.filter { it !in known }.map { Team(it, "ended", "", 0) }
 		return teams + extra
 	}
 
@@ -291,22 +293,12 @@ data class ChatState(
 	fun snippet(team: String): String? = threads[team]?.lastOrNull()?.let { it.title ?: it.text }
 		?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
 
-	/** The user's friendly name for a team, falling back to its short local name
-	 * (the tail after the gateway qualifier; the whole key when bare). The qualified
-	 * `gateway/local` key is never shown raw. */
+	/** The user's friendly name for a team, falling back to the session leaf of its canonical
+	 * address. The board nests under a spawn-point header, so the leaf alone identifies the session;
+	 * SessionCard surfaces the fuller `spawn.session` as a secondary line. The raw canonical key is
+	 * never shown. */
 	fun label(team: String, localGatewayId: String = ""): String =
-		labels[team] ?: TeamAddress.parse(team, localGatewayId).name
-
-	/** Drill-down / title-bar label: a user's custom name if set, else the qualified
-	 * `gateway/name` for a REMOTE session (the originating Gateway is not otherwise on screen
-	 * here) and the bare name for a local one (its Gateway is the implicit local Gateway). The grouped
-	 * session board uses [label]; this is the flat-context form per the rendering rules. */
-	fun titleLabel(team: String, localGatewayId: String = ""): String {
-		labels[team]?.let { return it }
-		val addr = TeamAddress.parse(team, localGatewayId)
-		val remote = addr.gatewayId.isNotEmpty() && localGatewayId.isNotEmpty() && addr.gatewayId != localGatewayId
-		return if (remote) addr.canonical else addr.name
-	}
+		labels[team] ?: sessionLeaf(team)
 }
 
 /** A just-enrolled device's first ops can transiently reject while the route Gateway
@@ -432,25 +424,15 @@ private fun enrollFold(prevSince: Long): Pair<String?, Long> {
 	}
 }
 
-/**
- * Repair a persisted/legacy thread or label key to canonical form under a known Gateway id.
- * A bare name ("name") and an EMPTY-gateway qualified key ("/name", minted before the Gateway id
- * was learned) both resolve to "<gatewayId>/name"; an already canonical "gateway/name" is unchanged.
- * When gatewayId is empty the key is returned unchanged and repaired later by recanonicalizeAllKeys
- * once connect() learns it. This closes the ghost-thread split where an inbound reply keys under
- * "gateway/name" but the open thread is stuck at "/name", so the message renders nowhere. `internal`
- * so the unit test can pin the empty-gateway repair.
- */
-internal fun canonicalThreadKey(rawKey: String, gatewayId: String): String {
-	SessionId.parse(rawKey, gatewayId)?.let { sid ->
-		val t = sid.target
-		val target = if (t.gatewayId.isEmpty() && gatewayId.isNotEmpty()) TeamAddress.remote(gatewayId, t.name) else t
-		return SessionId.channel(sid.conversationId, target).key
-	}
-	val a = TeamAddress.parse(rawKey, gatewayId)
-	val fixed = if (a.gatewayId.isEmpty() && gatewayId.isNotEmpty()) TeamAddress.remote(gatewayId, a.name) else a
-	return fixed.canonical
-}
+/** The leaf (session) segment of a canonical address string - the natural per-session label. A
+ * spawn-point (arity 3) yields its spawn segment; an unparseable value falls back to itself. */
+internal fun sessionLeaf(canonical: String): String =
+	runCatching {
+		when (val t = parseTarget(canonical, "", "")) {
+			is Address -> t.session
+			else -> canonical.substringAfterLast('.')
+		}
+	}.getOrDefault(canonical)
 
 /** Wraps a drained MailboxEntry as a SyncEntry so the SyncCursor rules can dedupe/advance
  * by seq while the poll loop keeps the full entry to render. */
@@ -472,8 +454,16 @@ class ChatRepository(
 	// Repo.get. Empty only if the asset is missing/corrupt (Play stays dark).
 	private val sttsCatalog: List<com.atelier_nyaarium.switchboard.proto.SttsProvider> = emptyList(),
 ) {
-	// Declared before _state so loadPersistedThreads/Labels can normalize keys
-	// through TeamAddress. Kotlin initializes fields in declaration order.
+	// One-shot grammar-version wipe. MUST run before the first thread/label load-parse below, so a
+	// stale-grammar persisted key (`gateway/name`) never reaches the new parser. Kotlin runs init
+	// blocks and property initializers top-to-bottom, so this clears the old keys before _state's
+	// loadPersistedThreads()/loadPersistedLabels() read them.
+	init {
+		store.migrateSchemaIfNeeded()
+	}
+
+	// Declared before _state so loadPersistedThreads/Labels read it. Kotlin initializes fields in
+	// declaration order.
 	@Volatile private var localGatewayId: String = store.loadGatewayId()
 
 	private val _state = MutableStateFlow(
@@ -489,6 +479,39 @@ class ChatRepository(
 		),
 	)
 	val state: StateFlow<ChatState> = _state
+
+	////////////////////////////////
+	//  Address helpers
+	//
+	//  The store grammar is the canonical Address (`domain.gateway.spawn.session`); thread/team keys
+	//  ARE that canonical string. These resolve a wire/local target to it, mirroring the gateway's own
+	//  minting so a console-derived key is byte-equal to a gateway-derived session_id.
+
+	/** The local Domain id for minting/comparing local addresses, learned from a local session. Empty
+	 * (arming mode / not yet confirmed) is passed through to parseTarget, which maps it to the sentinel
+	 * - the same fallback the gateway uses. */
+	private fun localDomain(): String = confirmedDomainId() ?: ""
+
+	/** Canonicalize a target to its full address key. Accepts a local `spawn`/`spawn.session` (from the
+	 * spawn dialog) or an already-canonical address (from the board). Guarded so a malformed value
+	 * falls back to itself rather than throwing into the UI. */
+	private fun canonicalTarget(team: String): String =
+		runCatching { parseTarget(team, localDomain(), localGatewayId).canonical }.getOrDefault(team)
+
+	/** A `from` field (a canonical address, or a local team field) resolved to its canonical address
+	 * for thread attribution. Guarded; falls back to the raw value. */
+	private fun fromCanonical(from: String): String =
+		runCatching { parseTarget(from, localDomain(), localGatewayId).canonical }.getOrDefault(from)
+
+	/** This device's own session address, the way the gateway mints it for an agent->console push
+	 * (localAddress(device): the device name as the spawn, its session defaulting to DEFAULT_SESSION).
+	 * Null when the device name is not a valid address segment - which is also when the gateway cannot
+	 * address it, so the Face-4 self-thread check simply never fires. */
+	private fun thisDeviceAddress(): Address? =
+		runCatching {
+			val pn = parseSessionName(currentDeviceName())
+			Address.local(localDomain(), localGatewayId, pn.project, pn.session)
+		}.getOrNull()
 
 	// Read and invalidated across threads (poll loop, main, the player's daemon thread);
 	// @Volatile gives the writes visibility. A rare double-construct race is harmless
@@ -791,10 +814,6 @@ class ChatRepository(
 				localGatewayId = id
 				store.saveGatewayId(id)
 			}
-			// Repair any thread/label/unread/tab key minted under an empty/unknown gateway
-			// now that the real gateway id is known, so an inbound reply (keyed gateway/name)
-			// can no longer file into a ghost "/name" thread the open tab cannot read.
-			recanonicalizeAllKeys(localGatewayId)
 			// Pin every subsequent relay to this route Gateway so the Gateway routes there
 			// even once other Gateways join the mesh.
 			client().routeGateway = localGatewayId.ifEmpty { null }
@@ -2156,40 +2175,6 @@ class ChatRepository(
 		store.terminalRefreshMs = ms
 	}
 
-	/** Repair every in-memory key (threads, unread, labels, open tabs) to canonical once the gateway
-	 * id is known, merging any collisions, so a thread loaded under an empty or unknown gateway
-	 * ("/name") can no longer shadow the canonical "gateway/name" an inbound reply keys under. A
-	 * no-op when every key is already canonical (the steady state), so only a one-time repair
-	 * persists. The repair lands at the startup connect() before any thread WebView is open (openTabs
-	 * is not persisted, so it is empty at launch) and is a no-op on every later reconnect, so it
-	 * cannot reorder/merge a thread out from under a live renderer. */
-	private fun recanonicalizeAllKeys(gatewayId: String) {
-		if (gatewayId.isEmpty()) return
-		val s0 = _state.value
-		val dirty = s0.threads.keys.any { it != canonicalThreadKey(it, gatewayId) } ||
-			s0.labels.keys.any { it != canonicalThreadKey(it, gatewayId) } ||
-			s0.unread.keys.any { it != canonicalThreadKey(it, gatewayId) } ||
-			s0.openTabs.any { it != canonicalThreadKey(it, gatewayId) }
-		if (!dirty) return
-		val next = _state.updateAndGet { s ->
-			val threads = LinkedHashMap<String, MutableList<Message>>()
-			for ((k, msgs) in s.threads) threads.getOrPut(canonicalThreadKey(k, gatewayId)) { mutableListOf() }.addAll(msgs)
-			val mergedThreads =
-				threads.mapValues { (_, m) -> m.sortedBy { it.at }.mapIndexed { i, x -> x.copy(id = i.toLong()) } }
-			val unread = LinkedHashMap<String, Int>()
-			for ((k, n) in s.unread) {
-				val ck = canonicalThreadKey(k, gatewayId)
-				unread[ck] = (unread[ck] ?: 0) + n
-			}
-			val labels = LinkedHashMap<String, String>()
-			for ((k, v) in s.labels) labels[canonicalThreadKey(k, gatewayId)] = v
-			val openTabs = s.openTabs.map { canonicalThreadKey(it, gatewayId) }.distinct()
-			s.copy(threads = mergedThreads, unread = unread, labels = labels, openTabs = openTabs)
-		}
-		persistThreads(next.threads)
-		persistLabels(next.labels)
-	}
-
 	suspend fun send(team: String, text: String, uris: List<Uri> = emptyList()) = withContext(Dispatchers.IO) {
 		val picked = uris.mapNotNull { readUri(it) }
 		val total = picked.sumOf { it.bytes.size }
@@ -2275,8 +2260,9 @@ class ChatRepository(
 			// gateway resolves the seal target by the full (domainId, gatewayId) pair; a local /
 			// same-Domain session resolves to null and keeps the existing routing.
 			val adminDomain = confirmedDomainId()
+			val canonical = canonicalTarget(team)
 			val targetDomain = _state.value.teams
-				.firstOrNull { TeamAddress.parse(it.name, localGatewayId).canonical == TeamAddress.parse(team, localGatewayId).canonical }
+				.firstOrNull { it.name == canonical }
 				?.domainId
 				?.takeIf { it.isNotEmpty() && adminDomain != null && it != adminDomain }
 			val r = client().send(team, text, picked, opId, targetDomain)
@@ -2379,29 +2365,28 @@ class ChatRepository(
 					}
 					if (adv.gap) _state.update { it.copy(gap = true) }
 					val burst = mutableMapOf<String, MutableList<Message>>()
+					val deviceAddr = thisDeviceAddress()
 					for (d in adv.fresh) {
 						val e = d.entry
 						// Resolve the thread key for this entry; null means drop it. Notices thread under
-						// the sender canonical; conv sessions use the session target, except when the
-						// tail is THIS device (an agent-initiated push whose session tail is our device
-						// name threads under `from`, not under ourselves).
+						// the sender's canonical address; conv sessions use the session address, except
+						// when that address is THIS device (an agent-initiated push to our own session
+						// threads under `from`, the sender, not under ourselves).
 						val team: String? = if (e.kind == "notice") {
-							// Notice: prefer `from`, fall back to NoticeId parse.
-							e.from?.let { TeamAddress.parse(it, localGatewayId).canonical }
-								?: NoticeId.parse(e.session_id, localGatewayId)?.sender?.canonical
+							// Notice: prefer `from`, fall back to the notice store key's sender.
+							e.from?.let { fromCanonical(it) }
+								?: (parseStoreKey(e.session_id) as? SessionKey.Notice)?.sender?.canonical
 						} else {
-							val sid = SessionId.parse(e.session_id, localGatewayId)
-							if (sid != null) {
-								val thisDevice = TeamAddress.local(localGatewayId, currentDeviceName())
-								if (sid.target == thisDevice) {
-									// Session tail is this device; thread under sender.
-									e.from?.let { TeamAddress.parse(it, localGatewayId).canonical } ?: sid.target.canonical
-								} else {
-									sid.target.canonical
-								}
-							} else {
-								// Not a conv session id; fall back to `from` if present.
-								e.from?.let { TeamAddress.parse(it, localGatewayId).canonical }
+							when (val sk = parseStoreKey(e.session_id)) {
+								is SessionKey.Conv ->
+									if (deviceAddr != null && sk.address == deviceAddr) {
+										// Session address is this device; thread under the sender.
+										e.from?.let { fromCanonical(it) } ?: sk.address.canonical
+									} else {
+										sk.address.canonical
+									}
+								// Not a conv store key; fall back to `from` if present.
+								else -> e.from?.let { fromCanonical(it) }
 							}
 						}
 						if (team == null) {
@@ -2542,12 +2527,12 @@ class ChatRepository(
 		_state.update { s -> s.copy(unread = s.unread - team) }
 	}
 
-	/** Open (or focus) a thread's tab, deduped by canonical key. The spawn dialog opens a bare
-	 * composite ("project.session") while the board and inbound replies use the gateway-qualified
-	 * form, so canonicalize before adding or the same session lands as two tabs. Returns the canonical
-	 * key so the caller can point its active-tab pointer at the same value. */
+	/** Open (or focus) a thread's tab, deduped by canonical key. The spawn dialog opens a local
+	 * `spawn.session` while the board and inbound replies use the full canonical address, so
+	 * canonicalize before adding or the same session lands as two tabs. Returns the canonical key so
+	 * the caller can point its active-tab pointer at the same value. */
 	fun openThread(team: String): String {
-		val key = canonicalThreadKey(team, localGatewayId)
+		val key = canonicalTarget(team)
 		_state.update { s ->
 			s.copy(
 				unread = s.unread - key,
@@ -2601,9 +2586,10 @@ class ChatRepository(
 		persistDrafts()
 		stts.purge(team)
 		// Also tear the live session down on the gateway (kill tmux + drop the resume record) so it
-		// stops listing as available. Composites only (a host-loose/remote thread has none); best-effort.
-		val localName = TeamAddress.parse(team, _state.value.localGatewayId).name
-		if (isComposite(localName)) {
+		// stops listing as available. Local addressable sessions only (a remote thread or a non-address
+		// spawn-point has no local pane to kill); best-effort, the gateway no-ops an absent session.
+		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
+		if (t is Address && t.gateway == _state.value.localGatewayId) {
 			pollScope?.launch(Dispatchers.IO) { runCatching { client().forget(team) } }
 		}
 	}
@@ -2752,12 +2738,11 @@ class ChatRepository(
 		val json = store.loadThreads() ?: return emptyMap()
 		return runCatching {
 			val root = JSONObject(json)
-			// Accumulate per canonical key so two legacy keys that repair to the same
-			// canonical thread (e.g. "/9cb5b9" and "switchboard/9cb5b9") MERGE instead of
-			// the second silently dropping the first.
+			// Keys are already canonical address strings (the one-shot schema wipe cleared any
+			// old-grammar persisted state), so each key maps straight through.
 			val merged = LinkedHashMap<String, MutableList<Message>>()
 			for (rawKey in root.keys()) {
-				val canonicalKey = canonicalThreadKey(rawKey, localGatewayId)
+				val canonicalKey = rawKey
 				val arr = root.getJSONArray(rawKey)
 				val loaded = (0 until arr.length()).map {
 					val m = arr.getJSONObject(it)
@@ -2810,11 +2795,9 @@ class ChatRepository(
 		val json = store.loadLabels() ?: return emptyMap()
 		return runCatching {
 			val root = JSONObject(json)
-			// Normalize legacy bare/empty-gateway keys to canonical form on load.
+			// Keys are already canonical (the schema wipe cleared old-grammar state).
 			buildMap {
-				for (rawKey in root.keys()) {
-					put(canonicalThreadKey(rawKey, localGatewayId), root.getString(rawKey))
-				}
+				for (rawKey in root.keys()) put(rawKey, root.getString(rawKey))
 			}
 		}.getOrDefault(emptyMap())
 	}
@@ -2829,9 +2812,9 @@ class ChatRepository(
 		val json = store.loadDrafts() ?: return mutableMapOf()
 		return runCatching {
 			val root = JSONObject(json)
-			// Normalize legacy bare/empty-gateway keys to canonical on load (mirrors labels).
+			// Keys are already canonical (the schema wipe cleared old-grammar state).
 			val out = mutableMapOf<String, String>()
-			for (rawKey in root.keys()) out[canonicalThreadKey(rawKey, localGatewayId)] = root.getString(rawKey)
+			for (rawKey in root.keys()) out[rawKey] = root.getString(rawKey)
 			out
 		}.getOrDefault(mutableMapOf())
 	}

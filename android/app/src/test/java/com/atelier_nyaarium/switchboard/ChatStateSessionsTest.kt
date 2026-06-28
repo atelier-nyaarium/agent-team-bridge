@@ -1,20 +1,23 @@
 package com.atelier_nyaarium.switchboard
 
-import com.atelier_nyaarium.switchboard.proto.NoticeId
-import com.atelier_nyaarium.switchboard.proto.SessionId
-import com.atelier_nyaarium.switchboard.proto.TeamAddress
+import com.atelier_nyaarium.switchboard.proto.Address
+import com.atelier_nyaarium.switchboard.proto.SessionKey
+import com.atelier_nyaarium.switchboard.proto.parseStoreKey
+import com.atelier_nyaarium.switchboard.proto.parseTarget
+import com.atelier_nyaarium.switchboard.proto.storeKey
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Unit tests for Slice 3 behavior: the presence-join fix and the Face-4 mis-thread rule.
+ * Unit tests for the presence-join and thread-attribution behavior under the unified address
+ * grammar. Team names and thread keys are both the canonical `domain.gateway.spawn.session` address
+ * now, so the join is a direct equality and the gateway-minted session_id parses straight to that
+ * canonical (no bare-vs-qualified repair, no Face-4 device/agent confusion).
  *
- * These tests do not require Android context (no Robolectric): they exercise pure
- * data-class logic on ChatState and the SessionId/TeamAddress/NoticeId twin.
+ * Pure data-class + value-object logic, no Android context (no Robolectric).
  */
 class ChatStateSessionsTest {
 
@@ -36,180 +39,103 @@ class ChatStateSessionsTest {
 		localGatewayId = localGatewayId,
 	)
 
-	// -- Presence join tests --
+	// -- Presence join --
 
 	@Test
-	fun sessionsDoesNotSynthesizeEndedForLiveTeam_qualifiedMatch() {
-		// Both team list and thread key use the same canonical qualified form.
-		val localGatewayId = "switchboard"
-		val canonical = "switchboard/api"
+	fun sessionsDoesNotSynthesizeEndedForLiveTeam() {
+		// Team name and thread key are the SAME canonical address, so the join is a direct hit and no
+		// phantom "ended" entry is synthesized for a live team.
+		val canonical = "local.sakura.api.claude"
 		val state = stateWith(
 			teams = listOf(makeTeam(canonical, "online")),
 			threads = mapOf(canonical to listOf(makeMsg())),
-			localGatewayId = localGatewayId,
+			localGatewayId = "sakura",
 		)
-		val sessions = state.sessions(localGatewayId)
+		val sessions = state.sessions("sakura")
 		assertEquals(1, sessions.size)
 		assertEquals("online", sessions[0].status)
-		assertFalse("live session must never be synthesized as ended",
-			sessions.any { it.status == "ended" })
-	}
-
-	@Test
-	fun sessionsDoesNotSynthesizeEndedForLiveTeam_bareVsQualified() {
-		// Bug scenario: thread key was stored bare ("api") but the team list carries
-		// the qualified form ("switchboard/api"). Without the canonical join these two
-		// disagree, producing a phantom "ended" entry. FAILS on the old raw-string getter.
-		val localGatewayId = "switchboard"
-		val state = stateWith(
-			teams = listOf(makeTeam("switchboard/api", "online")),
-			threads = mapOf("api" to listOf(makeMsg())),
-			localGatewayId = localGatewayId,
+		assertFalse(
+			"live session must never be synthesized as ended",
+			sessions.any { it.status == "ended" },
 		)
-		val sessions = state.sessions(localGatewayId)
-		assertEquals(1, sessions.size)
-		assertEquals("online", sessions[0].status)
-		assertFalse("live session must never be synthesized as ended",
-			sessions.any { it.status == "ended" })
-	}
-
-	@Test
-	fun sessionsDoesNotSynthesizeEndedForLiveTeam_crossBareQualifiedTransition() {
-		// A thread persisted under the bare name ("api", pre-federation) against a live
-		// team carrying the qualified name. The canonical join resolves the bare thread
-		// key to the live team's value, so no phantom "ended". The load-normalize
-		// primitive that upgrades the persisted key is asserted alongside.
-		val localGatewayId = "switchboard"
-		assertEquals("switchboard/api", TeamAddress.parse("api", localGatewayId).canonical)
-		val state = stateWith(
-			teams = listOf(makeTeam("switchboard/api", "online")),
-			threads = mapOf("api" to listOf(makeMsg())),
-			localGatewayId = localGatewayId,
-		)
-		val sessions = state.sessions(localGatewayId)
-		assertEquals("must be exactly 1 session (no phantom ended)", 1, sessions.size)
-		assertEquals("online", sessions[0].status)
-		assertFalse("bare thread key must not synthesize ended against a qualified live team",
-			sessions.any { it.status == "ended" })
 	}
 
 	@Test
 	fun sessionsDoSynthesizeEndedForTrulyGoneTeam() {
-		// A thread with no matching live team should still produce an "ended" entry.
-		val localGatewayId = "switchboard"
+		// A thread with no matching live team still produces an "ended" entry.
 		val state = stateWith(
 			teams = emptyList(),
-			threads = mapOf("switchboard/gone" to listOf(makeMsg())),
-			localGatewayId = localGatewayId,
+			threads = mapOf("local.sakura.gone.claude" to listOf(makeMsg())),
+			localGatewayId = "sakura",
 		)
-		val sessions = state.sessions(localGatewayId)
+		val sessions = state.sessions("sakura")
 		assertEquals(1, sessions.size)
 		assertEquals("ended", sessions[0].status)
 	}
 
-	// -- Face-4 mis-thread tests (SessionId + NoticeId, no Android context needed) --
+	// -- The join backbone: a gateway-minted conv session_id parses straight to the team's canonical --
 
 	@Test
-	fun face4_sessionTailIsThisDevice_targetEqualsLocal() {
-		// When the session tail resolves to the device itself, the Face-4 rule kicks in.
-		// Verify that SessionId.parse produces a target equal to TeamAddress.local when
-		// the session tail is the device name (qualified).
-		val localGatewayId = "switchboard"
-		val deviceName = "Pixel9"
-		// An agent sends to the console's own session: conv:<conv>:switchboard/Pixel9
-		val sessionId = "conv:abc123:switchboard/Pixel9"
-		val sid = SessionId.parse(sessionId, localGatewayId)
-		assertNotNull(sid)
-		val thisDevice = TeamAddress.local(localGatewayId, deviceName)
-		assertEquals("session tail must equal this device's TeamAddress",
-			thisDevice, sid!!.target)
+	fun inboundConvSessionThreadsToItsLiveTeam() {
+		// The gateway's session_id for a chat is conv.<conv>.<domain>.<gateway>.<spawn>.<session>; the
+		// console threads by address.canonical, which equals the team's name -> no phantom ended.
+		val addr = Address.of("local", "sakura", "api", "claude")
+		val sessionId = storeKey(SessionKey.Conv("conv-1", addr))
+		val parsed = parseStoreKey(sessionId)
+		assertTrue(parsed is SessionKey.Conv)
+		val threadKey = (parsed as SessionKey.Conv).address.canonical
+		val state = stateWith(
+			teams = listOf(makeTeam(addr.canonical, "online")),
+			threads = mapOf(threadKey to listOf(makeMsg())),
+			localGatewayId = "sakura",
+		)
+		val sessions = state.sessions("sakura")
+		assertEquals("must be exactly 1 session (no phantom ended)", 1, sessions.size)
+		assertEquals("online", sessions[0].status)
+		assertFalse(sessions.any { it.status == "ended" })
+	}
+
+	// -- Notice routing: the notice store key threads under the sender's canonical address --
+
+	@Test
+	fun noticeStoreKeyParsesToCanonicalSender() {
+		val sender = Address.of("local", "sakura", "host-agent", "claude")
+		val key = storeKey(SessionKey.Notice(sender))
+		val parsed = parseStoreKey(key)
+		assertTrue(parsed is SessionKey.Notice)
+		assertEquals("local.sakura.host-agent.claude", (parsed as SessionKey.Notice).sender.canonical)
+		assertEquals(key, storeKey(parsed))
 	}
 
 	@Test
-	fun face4_sessionTailIsOtherTeam_targetNotLocal() {
-		// A normal agent->console conversation: the session tail is the agent team,
-		// not this device. The Face-4 branch must NOT fire.
-		val localGatewayId = "switchboard"
-		val deviceName = "Pixel9"
-		val sessionId = "conv:abc123:switchboard/my-project"
-		val sid = SessionId.parse(sessionId, localGatewayId)
-		assertNotNull(sid)
-		val thisDevice = TeamAddress.local(localGatewayId, deviceName)
-		assertFalse("session tail must not equal this device",
-			sid!!.target == thisDevice)
+	fun convSessionIsNotParsedAsNotice() {
+		val addr = Address.of("local", "sakura", "api", "claude")
+		assertTrue(parseStoreKey(storeKey(SessionKey.Conv("c", addr))) is SessionKey.Conv)
 	}
 
+	// -- Face-4 grammar fact: an agent->console push carries the DEVICE address, not the agent's --
+
 	@Test
-	fun face4_bareDeviceNameDoesNotLiterallyMatchQualifiedTail() {
-		// Confirms the fix: a bare deviceName string-equals check against a
-		// qualified tail ("switchboard/Pixel9" vs "Pixel9") would silently miss.
-		// The value-equals check via TeamAddress is correct; this test documents why.
-		val localGatewayId = "switchboard"
-		val deviceName = "Pixel9"
-		val sessionId = "conv:abc123:switchboard/Pixel9"
-		val sid = SessionId.parse(sessionId, localGatewayId)!!
-		val tailLiteral = sessionId.substringAfterLast(':')
-		assertFalse("bare deviceName must NOT equal the qualified tail string",
-			tailLiteral == deviceName)
-		// But value-compare via TeamAddress DOES match:
-		val thisDevice = TeamAddress.local(localGatewayId, deviceName)
-		assertEquals(thisDevice, sid.target)
+	fun face4_deviceSessionVsAgentSession() {
+		val device = Address.of("local", "sakura", "pixel9", "claude")
+		val agent = Address.of("local", "sakura", "my-project", "claude")
+		// A push TO the console's own session: the session address IS this device, so the poll loop
+		// threads it under `from` (the sender) instead of under ourselves.
+		val toDevice = parseStoreKey(storeKey(SessionKey.Conv("c", device))) as SessionKey.Conv
+		assertEquals(device, toDevice.address)
+		// A normal agent->console conversation: the session address is the agent, not the device.
+		val fromAgent = parseStoreKey(storeKey(SessionKey.Conv("c", agent))) as SessionKey.Conv
+		assertNotEquals(device, fromAgent.address)
 	}
 
-	// -- NoticeId routing --
+	// -- The spawn dialog's local `spawn.session` canonicalizes to the same key the board/threads use --
 
 	@Test
-	fun noticeIdParsesAndProducesCanonicalSender() {
-		val localGatewayId = "switchboard"
-		val wire = "notice:switchboard/host-agent"
-		val n = NoticeId.parse(wire, localGatewayId)
-		assertNotNull(n)
-		assertEquals("switchboard/host-agent", n!!.sender.canonical)
-		assertEquals(wire, n.key)
-	}
-
-	@Test
-	fun noticeIdBareFromIsNormalizedToCanonical() {
-		val localGatewayId = "switchboard"
-		val wire = "notice:host-agent"
-		val n = NoticeId.parse(wire, localGatewayId)
-		assertNotNull(n)
-		// Bare sender normalizes to canonical under localGatewayId
-		assertEquals("switchboard/host-agent", n!!.sender.canonical)
-	}
-
-	@Test
-	fun sessionIdIsNotParsedAsNotice() {
-		val localGatewayId = "switchboard"
-		assertNull(NoticeId.parse("conv:c:switchboard/api", localGatewayId))
-	}
-
-	@Test
-	fun noticeIdIsNotParsedAsSession() {
-		val localGatewayId = "switchboard"
-		assertNull(SessionId.parse("notice:switchboard/host-agent", localGatewayId))
-	}
-
-	// -- TeamAddress load-normalize round-trip --
-
-	@Test
-	fun teamAddressNormalizeBareKey() {
-		val localGatewayId = "switchboard"
-		val bare = "my-project"
-		val canonical = TeamAddress.parse(bare, localGatewayId).canonical
-		assertEquals("switchboard/my-project", canonical)
-		// Idempotent: re-parsing the canonical produces the same result
-		assertEquals(canonical, TeamAddress.parse(canonical, localGatewayId).canonical)
-	}
-
-	@Test
-	fun sessionIdNormalizeBareThreadKey() {
-		val localGatewayId = "switchboard"
-		// A bare session key from a pre-migration persist (hypothetical; actual
-		// persisted keys are team keys not session keys, but confirms the parser).
-		val bare = "conv:abc:my-project"
-		val sid = SessionId.parse(bare, localGatewayId)
-		assertNotNull(sid)
-		assertEquals("conv:abc:switchboard/my-project", sid!!.key)
+	fun localTeamFieldResolvesToBoardCanonical() {
+		val t = parseTarget("api.claude", "local", "sakura")
+		assertTrue(t is Address)
+		assertEquals("local.sakura.api.claude", t.canonical)
+		// Idempotent: re-parsing the canonical (arity 4) yields the same value.
+		assertEquals("local.sakura.api.claude", parseTarget("local.sakura.api.claude", "other", "other").canonical)
 	}
 }

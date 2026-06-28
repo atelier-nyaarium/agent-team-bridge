@@ -116,7 +116,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
-import com.atelier_nyaarium.switchboard.proto.TeamAddress
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.composeSessionName
 import com.atelier_nyaarium.switchboard.proto.isComposite
 import com.atelier_nyaarium.switchboard.proto.parseSessionName
@@ -330,7 +330,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	val boardSessions = state.sessions(state.localGatewayId)
 	LaunchedEffect(openTeam) {
 		val t = openTeam ?: return@LaunchedEffect
-		if (!isComposite(TeamAddress.parse(t, state.localGatewayId).name)) return@LaunchedEffect
+		if (!isComposite(localFieldOf(t))) return@LaunchedEffect
 		while (true) {
 			repo.pokeWorking(t)
 			delay(repo.terminalRefreshMs)
@@ -340,7 +340,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		if (openTeam != null) return@LaunchedEffect
 		for (s in boardSessions) {
 			val local = s.gatewayId.isEmpty() || s.gatewayId == state.localGatewayId
-			if (local && isComposite(TeamAddress.parse(s.name, state.localGatewayId).name)) repo.pokeWorking(s.name)
+			if (local && isComposite(s.shortName)) repo.pokeWorking(s.name)
 		}
 	}
 
@@ -524,10 +524,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			}
 			ThreadScreen(
 				team = openTeam!!,
-				label = state.titleLabel(openTeam!!, state.localGatewayId),
+				label = tabLabelFor(state, openTeam!!),
 				presence = presence,
 				tabs = state.openTabs,
-				tabLabel = { state.label(it, state.localGatewayId) },
+				tabLabel = { tabLabelFor(state, it) },
 				messages = state.threads[openTeam].orEmpty(),
 				error = state.error,
 				rendererPool = rendererPool,
@@ -551,7 +551,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				},
 				// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off in v1,
 				// and the host machine's terminal is reached through the dedicated "host" target.
-				terminalEligible = isComposite(TeamAddress.parse(openTeam!!, state.localGatewayId).name) &&
+				terminalEligible = isComposite(localFieldOf(openTeam!!)) &&
 					(session?.gatewayId.isNullOrEmpty() || session?.gatewayId == state.localGatewayId),
 				terminalRefreshMs = repo.terminalRefreshMs,
 				onTerminalPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
@@ -906,6 +906,21 @@ private fun sessionOrder(state: ChatState): Comparator<Team> =
 		.thenByDescending { state.lastActivity(it.name) ?: 0L }
 		.thenBy { it.name }
 
+/** Tab/title label for an open thread: the user's custom label, else the shortest suffix of the
+ * address path (the session segment, then `spawn.session`, then `gateway.spawn.session`, ...) that
+ * is unique among the currently open tabs. So a lone open session shows just its leaf, and two tabs
+ * that collide on the leaf escalate to exactly the suffix that disambiguates them. */
+private fun tabLabelFor(state: ChatState, team: String): String {
+	state.labels[team]?.let { return it }
+	val mine = team.split(Protocol.ADDRESS_SEP)
+	val others = state.openTabs.filter { it != team }.map { it.split(Protocol.ADDRESS_SEP) }
+	for (n in 1..mine.size) {
+		val suffix = mine.takeLast(n)
+		if (others.none { it.takeLast(n) == suffix }) return suffix.joinToString(Protocol.ADDRESS_SEP)
+	}
+	return team
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionsScreen(
@@ -1051,7 +1066,7 @@ fun SessionsScreen(
 							// Clean break: a devcontainer entry is a non-chat SPAWN-POINT (its bare project);
 							// each project.session is a loose chat that nests under its project's header. The
 							// remaining non-composite loose peers (host-loose, etc.) stay flat.
-							fun localName(t: Team) = TeamAddress.parse(t.name, state.localGatewayId).name
+							fun localName(t: Team) = t.shortName
 							val spawnPoints = group.filter { it.kind == "devcontainer" }.sortedWith(order)
 							val composites = group.filter { it.kind != "devcontainer" && isComposite(localName(it)) }
 							val flatLoose =
@@ -1539,9 +1554,9 @@ fun ThreadScreen(
 
 	if (showRename) {
 		RenameDialog(
-			// `team` is the host-qualified id; show only the short local name (tail
-			// after the "/" qualifier) as the rename context.
-			team = team.substringAfter('/'),
+			// `team` is the canonical address; show only the short local field
+			// (`spawn` / `spawn.session`) as the rename context.
+			team = localFieldOf(team),
 			current = label,
 			onSave = {
 				onRename(it)
