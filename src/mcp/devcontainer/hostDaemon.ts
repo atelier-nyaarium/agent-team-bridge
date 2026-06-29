@@ -50,14 +50,6 @@ export function startHostDaemon(dirs?: string[], onChannelPush?: ChannelPushHand
 	connect();
 }
 
-export function stopHostWakeListener(): void {
-	if (ws) {
-		ws.removeAllListeners();
-		ws.close();
-		ws = null;
-	}
-}
-
 function connect(): void {
 	ws = new WebSocket(`${gatewayUrl}/bridge`);
 

@@ -14,7 +14,7 @@ MCP-plugin code needs `reload_plugins`.
 
 - `src/mcp/devcontainer/helpers.ts : ensureContainerUp` (sync) - zero callers; a ~45-line near-dup of `ensureContainerUpAsync` (the only live variant). Remove. (reload_plugins)
 - `src/mcp/devcontainer/hostDaemon.ts : stopHostWakeListener` - exported, never called (not even in `main-host-daemon.ts`). Remove. (reload_plugins)
-- `src/gateway/routes.ts : send : unreachable CLI-mode return` - keep the LIVE `channelOnly` guard (used by `consoleHandler` + `gatewayRelay`); remove ONLY the vestigial `return jsonResponse({ error: "CLI-mode agents are no longer supported." }, 400)`, unreachable because `ConnectionModeSchema` is single-value `'channel'`. It is one line, not "branches". (gateway)
+- `src/gateway/routes.ts : send : stale CLI-mode return` - the trailing `return` is unreachable (`ConnectionModeSchema` is single-value `'channel'`), but TS still requires it as `send`'s fall-through return (a single-value enum does not narrow to `never`). DONE by NEUTRALIZING, not deleting: dropped the stale "CLI-mode agents are no longer supported" wording for a generic "unsupported connection mode" + an unreachable-fallback comment. The LIVE `channelOnly` guard (used by `consoleHandler` + `gatewayRelay`) stays. (gateway)
 
 ## Phase 1b - RESPONSE_TIMEOUT_MS: incomplete wiring, not dead code (decide). Deploy: gateway.
 
@@ -57,3 +57,25 @@ speculative. So drop the mega-extraction and keep only the clear wins:
 ## Open root cause (track, not yet scheduled). Deploy: reload_plugins.
 
 - `src/mcp/devcontainer/hostDaemon.ts : buildLaunchCommand` - the in-container agent launches as a single `bash -c '...source ~/.bashrc...; exec claude...'`; if any step fails instantly (bashrc error, claude off PATH, bad cwd) the tmux session dies. Dead-launch DETECTION ships (`launchAlive` -> `wake_result success:false`, after ~8 probes / ~8s). Hardening is tractable but partial: pre-flight checks (bashrc readable, `which claude`, devcontainer cwd exists) catch the common static cases early; runtime failures still need the dead-launch fallback. The single `bash -c` is intentional (the env must be shared with `exec claude`; a multi-step spawn breaks env inheritance), so prefer pre-flight + stderr capture over splitting it. Devcontainer launches lack the host's `exec bash` fallback, so a crash leaves no diagnostic pane - consider adding one.
+
+## Painpoints (deferred follow-ups, surfaced by the Phase 1+2 audits)
+
+The connector SSRF was closed by gating on `offlineCatalog` (trusted), but the audits surfaced a
+broader pattern worth a dedicated follow-up. These are NOT fixed; they need deliberate design
+(the trusted-vs-durable tradeoff below), so they were left out of this lap.
+
+### Trusted-vs-untrusted catalog conflation
+
+`isCatalogProject` and its clone union a TRUSTED source (`offlineCatalog`, host-token-gated) with an
+UNTRUSTED, durable one (`knownTeamPaths`, written by the unauthenticated `/bridge` register). The
+connector now gates on `offlineCatalog` only; these other sites still union, so an unauthenticated
+register can influence them:
+- `src/gateway/routes.ts : createRoutes : isDevcontainer` - sets `TeamInfo.kind`; an attacker-registered name can make a loose team show as a devcontainer spawn-point (console UI confusion, failed terminal-view). Severity medium.
+- `src/gateway/console/consoleHandler.ts : createConsoleDispatcher : isProjectName` - device-name collision gate; an attacker register of a device name blocks that console from registering (transient DoS). Severity low.
+- `src/gateway/console/consoleHandler.ts : resolveTmuxTarget` - terminal-view devcontainer resolution; benign today (the `docker exec` on a bogus `<name>_devcontainer-dev-1` fails gracefully) but inconsistent.
+- `src/gateway/index.ts : startGateway : isCatalogProject` (+ its `doWakeTeam` use) - the shared union predicate; `doWakeTeam` is currently safe (composites can never be catalog members) but reads on the untrusted half.
+- Systemic fix: a named trusted predicate (`isTrustedCatalogProject` = offlineCatalog-only) or a typed `Catalog` value object exposing trusted vs any membership, applied per site. The tradeoff to weigh: `knownTeamPaths` is the durability fallback for a host-daemon outage (offlineCatalog clears on disconnect), so flipping a site to trusted-only degrades it during an outage. Decide per site whether trust or durability wins. ROOT cause (unauthenticated `/bridge` register) is `gateway-auth-surface.md`'s (postponed).
+
+### Outbound-target validation pattern
+
+- `src/gateway/connectorProxy.ts : setupProxy` - dials `ws://<project>:20002` and trusts the caller validated `project` (now documented via JSDoc, gated in index.ts). There is no systematic outbound-target validator (contrast the sealed-frame pumps' schema-then-semantic validation). A `outbound-validators` module with a guard per outbound class would make SSRF prevention systematic rather than per-call. Defer (large).

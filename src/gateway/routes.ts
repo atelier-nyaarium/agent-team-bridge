@@ -770,7 +770,9 @@ export function createRoutes({
 			}
 		}
 
-		return jsonResponse({ error: "CLI-mode agents are no longer supported." }, 400);
+		// Unreachable: targetMode is the single-value `channel` literal, so the block above always
+		// returns. Retained as the function's fall-through return (TS does not narrow it to never).
+		return jsonResponse({ error: "unsupported connection mode" }, 400);
 	}
 
 	function respond(req: Request, body: Record<string, unknown>): Response {

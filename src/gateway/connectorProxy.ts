@@ -4,6 +4,12 @@ import type { WsData } from "./websocket.js";
 
 const upstreamMap = new Map<ServerWebSocket<WsData>, WebSocket>();
 
+/**
+ * Bridges a client WebSocket to the per-project connector at ws://<project>:20002/ws.
+ * The caller MUST validate `project` against the trusted host catalog (offlineCatalog) first:
+ * this dials the name verbatim, so an unvalidated value is an SSRF vector. That gate lives at the
+ * /connector upgrade site in index.ts, not here.
+ */
 export function setupProxy(clientWs: ServerWebSocket<WsData>, project: string, authHeader: string): void {
 	const url = `ws://${project}:20002/ws`;
 	const upstream = new WebSocket(url, { headers: authHeader ? { Authorization: authHeader } : {} });
