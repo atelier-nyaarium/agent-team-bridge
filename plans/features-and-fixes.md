@@ -8,43 +8,11 @@ Scoped items across the terminal view, TTS playback, message rendering, and atta
 
 | # | Item | Surface | Code change | Deploy target |
 |---|------|---------|-------------|---------------|
-| 1 | tmux pane is 80-wide | host / TS | `tmuxCore.ts` + `start-host-daemon.sh` + test | reload_plugins (+ host restart) |
 | 3 | autoplay tier collapses to full on plain msgs | Android / TTS | `SttsPlayer.kt` | APK |
-| 4 | play/stop out of sync | Android / TTS | `SttsPlayer.kt` + `ChatRepository.kt` + `MainActivity.kt` | APK |
 | 5 | TTS volume slider (0-200%, default 100%) | Android / TTS | `SttsPlayer.kt` + `ChatRepository.kt` + `ProvisioningStore.kt` + `MainActivity.kt` | APK |
 | 6 | slash macros: `/context`, `/resume`, `/compact [msg]` | Android / terminal | `TerminalView.kt` | APK |
-| 7 | single newlines collapse in Markdown | Android / rendering | `assets/thread/thread.js` | APK |
 
-Two deploy targets total: the plugin (item 1) and the Android APK (items 3-7). No wire-schema change anywhere -> no Kotlin codegen (`scripts/codegen-kotlin.ts`), no synced-leaf restamp (none of the touched symbols appear in `src/shared/schemas.ts`).
-
----
-
-# Host / TypeScript
-
-## Item 1 - tmux pane size (resize to 58x40)
-
-**Root cause.** The console terminal view captures `claude.0` (session `claude`, pane 0) on both the host (`kind:"gateway"` -> local tmux) and a devcontainer (`kind:"devcontainer"` -> `docker exec <name>_devcontainer-dev-1 tmux`). Nothing sizes that session: `src/mcp/devcontainer/tmuxCore.ts:peekPane` issues a single `capture-pane` with no prior resize, and there are no col/row constants in the file. The host session is created by `start-host-daemon.sh` (`tmux new-session -d -s "$TMUX_SESSION" ...`, `TMUX_SESSION="claude"`) with no `-x/-y`, so it defaults to 80x24; the devcontainer's own `claude` session is created by the devcontainer (switchboard never touches its creation). So the captured pane is 80 wide and overflows the phone.
-
-**Current state (verified).**
-- `src/mcp/devcontainer/tmuxCore.ts:peekPane` - one `run(tmuxArgv(target, ["capture-pane", "-t", TMUX_PANE, "-e", "-p"]))`, hashes, returns. No resize.
-- `src/mcp/devcontainer/tmuxCore.ts:tmuxArgv` - the argv builder (prepends `docker exec -u vscode <container> tmux` for a devcontainer, bare `tmux` for gateway). Reuse it so one resize call covers host AND every devcontainer.
-- `src/mcp/devcontainer/tmuxCore.ts:TMUX_PANE` = `"claude.0"`. There is NO standalone session constant - the session is embedded in the pane string. `resize-window` needs a session target, so a `TMUX_SESSION` const must be added.
-
-**Fix.**
-- `src/mcp/devcontainer/tmuxCore.ts`: add `const TMUX_SESSION = "claude"` (keep `TMUX_PANE = "claude.0"`), `const TMUX_COLS = 58`, `const TMUX_ROWS = 40`. In `peekPane`, before the capture, run a BEST-EFFORT resize as a SEPARATE `run()` call:
-  ```ts
-  await run(tmuxArgv(target, ["resize-window", "-t", TMUX_SESSION, "-x", String(TMUX_COLS), "-y", String(TMUX_ROWS)])).catch(() => {});
-  const ansi = await run(tmuxArgv(target, ["capture-pane", "-t", TMUX_PANE, "-e", "-p"]));
-  ```
-  Best-effort (`.catch`) so an old tmux without `resize-window`, or a transient error, just captures at the current size. Two separate `run()` calls (not `;`-chained) so a resize failure can never fail the capture.
-- `start-host-daemon.sh`: add `-x 58 -y 40` to the `tmux new-session` so the host session is born at 58x40 (cosmetic given the peek-resize, but correct from the start).
-- `src/__tests__/tmux-core.test.ts` - the test `describe("tmuxCore peekPane")` / `it("captures the visible pane with ANSI and returns a content hash")` asserts `calls[0]` is the capture argv. With the resize prepended, `calls[0]` becomes the resize and `calls[1]` the capture - UPDATE it to assert `calls[0]` is the `resize-window` argv and `calls[1]` the `capture-pane` argv. The slug-rejection test (`it("rejects a target name that is not a slug before reaching docker")`) is unaffected.
-
-**Why resize-window holds.** The `claude` session has no attached tmux CLIENT (claude runs as the pane process; the console only `capture-pane`s, never attaches). A detached session keeps the size set by `resize-window`, so 58x40 sticks. Re-resizing to the same size each peek (~2s) is a no-op in tmux (no redraw), so the cost is one cheap extra spawn per peek.
-
-**Edge cases.** 58 cols is narrow for Claude's TUI - it will reflow/wrap; that's the user's explicit choice (fit the phone). A manual `tmux attach` for debugging would resize to that terminal (window-size latest), but that's a deliberate debug action, not the capture path.
-
-**Verify.** Open the terminal view on the host-agent and on a devcontainer; the captured pane is 58x40 and fits.
+One deploy target: the Android APK (items 3, 5, 6). No wire-schema change anywhere -> no Kotlin codegen (`scripts/codegen-kotlin.ts`), no synced-leaf restamp (none of the touched symbols appear in `src/shared/schemas.ts`).
 
 ---
 
@@ -82,26 +50,6 @@ Add `android/.../SttsPlayer.kt:SttsPlayer.Companion:deriveTitle` and `:deriveSum
 **Tests.** Add unit tests for `ttsText` (pure): explicit title/summary used as-is; no title -> derived first line; no summary -> derived first paragraph; caps enforced; a one-line message reads the same at all tiers.
 
 **Verify.** Autoplay=Title on a fresh plain reply reads one sentence; Summary reads the first paragraph; Full reads everything; a `notify_human` notice uses its explicit tiers.
-
-## Item 4 - play/stop button out of sync
-
-**Root cause (verified).** `android/.../MainActivity.kt:App` wires the play button to FULL: `rendererPool.onPlayTap = { team, at -> repo.playMessage(team, at, SttsPlayer.Tier.FULL) }` (field `android/.../ThreadRendererPool.kt:ThreadRendererPool:onPlayTap`). The toggle in `android/.../SttsPlayer.kt:SttsPlayer:play` only stops when `currentKey == k`, where `k` is built from `android/.../SttsPlayer.kt:SttsPlayer:key` (`"$team/$at-${tier.suffix}-${provider.path}-${voice}"`, tier included). During an autoplay of a DIFFERENT tier (e.g. Title), `currentKey` holds the title-suffixed key, so the tap's FULL key never matches - instead of stopping it synthesizes and plays FULL on top (the user hears it "play twice"). The glyph is fine: `android/.../SttsPlayer.kt:SttsPlayer:onPlayingChanged` -> `android/.../ThreadRendererPool.kt:ThreadRendererPool:setPlaying` -> `android/.../ThreadRenderer.kt:ThreadRenderer:setPlaying` is keyed by message `at` (any tier). The existing `android/.../SttsPlayer.kt:SttsPlayer:isPlaying` takes a tier, so it can't answer "is this message playing in any tier".
-
-**Fix.** Make the BUTTON toggle by message (leave `SttsPlayer:play` per-tier, since autoplay/notifications must still play a specific tier without toggling):
-- `android/.../SttsPlayer.kt:SttsPlayer:isPlayingMessage` - add `fun isPlayingMessage(team: String, at: Long): Boolean = currentKey != null && currentTeam == team && currentAt == at` (backing fields `currentTeam`/`currentAt` already exist, set in `SttsPlayer:playFile`, cleared in `SttsPlayer:clearNowPlaying`).
-- `android/.../ChatRepository.kt` - add `fun isMessagePlaying(team, at) = stts.isPlayingMessage(team, at)` and `fun stopPlayback() = stts.stop()` (alongside `ChatRepository:playMessage`).
-- `android/.../MainActivity.kt:App` - change the `onPlayTap` lambda:
-  ```kotlin
-  rendererPool.onPlayTap = { team, at ->
-      if (repo.isMessagePlaying(team, at)) repo.stopPlayback()
-      else repo.playMessage(team, at, SttsPlayer.Tier.FULL)
-  }
-  ```
-- Manual tap still plays FULL when nothing is playing (deliberate "read me the whole thing"). Leave the `android/.../NotificationReceiver.kt` `ACTION_PLAY_FULL`/`ACTION_PLAY_SUMMARY` hardcodes alone - those are deliberate explicit-tier actions.
-
-**Edge case.** A tap during the synth window (chosen tier synthesizing but not yet playing, so `currentTeam`/`currentAt` unset) won't see it as playing and starts FULL; the last `playFile` wins. Narrow sub-second race; self-heals. Not worth gating on an in-flight flag - note it.
-
-**Verify.** Autoplay a message (any tier) -> its button shows stop -> tap stops it. Tap again -> plays full -> tap stops.
 
 ## Item 5 - TTS volume slider (0-200%, default 100%)
 
@@ -177,71 +125,33 @@ Add `android/.../SttsPlayer.kt:SttsPlayer.Companion:deriveTitle` and `:deriveSum
 
 ---
 
-# Android - rendering
-
-## Item 7 - single newlines collapse in Markdown
-
-**Root cause.** The thread renderer is a WebView loading `android/app/src/main/assets/thread/thread.html`, which vendors **markdown-it 14.1.0** locally (`android/app/src/main/assets/thread/vendor/markdown-it.min.js`, no CDN) and renders in `android/app/src/main/assets/thread/thread.js`. The config object `thread.js:(anonymous IIFE):md` (`window.markdownit({ html: false, linkify: true, highlight: ... })`) has NO `breaks` key, so markdown-it defaults `breaks: false` - a single `\n` is a soft break rendered as whitespace. Hence:
-```
-**Subject**:
-Some item
-```
-collapses to `**Subject**: Some item`.
-
-**No upstream stripping (verified).** The text reaches the parser intact: `android/.../ThreadRenderer.kt:ThreadRenderer:toJson` puts the raw `m.text` into JSON and `ThreadRenderer:sync` injects it via `webView.evaluateJavascript` -> `window.thread.setMessages(...)`; `thread.js:setMessages`/`appendMessages` pass `m.body` straight to `thread.js:buildRow`, which calls `md.render(m.body || "")` with no pre-processing. The `@JavascriptInterface` bridge carries only attachment/id callbacks (JS->Kotlin), never message text, so it's irrelevant here. Enabling `breaks` is the complete fix.
-
-**Fix.** Add `breaks: true` to the markdown-it options at `android/app/src/main/assets/thread/thread.js:(anonymous IIFE):md`:
-```js
-const md = window.markdownit({
-    html: false,
-    breaks: true,   // single \n -> <br> (GitHub-style line breaks)
-    linkify: true,
-    highlight: function (code, lang) { ... },
-});
-```
-That's the markdown-it equivalent of GitHub line breaks; every single `\n` inside a paragraph becomes `<br>`. (`gfm`/`pedantic` are marked options, not markdown-it; `linkify` is already on. Code fences are handled by the separate `md.renderer.rules.fence` override and are unaffected.)
-
-**Notes.** Pure JS asset change - the minified vendor lib is untouched, no Kotlin rebuild needed for the logic, no proguard/`@JavascriptInterface` impact. It still ships through the normal APK build.
-
-**Verify.** A message with single newlines between lines renders each line separately; a `**Subject**:` line stays above its value instead of joining.
-
----
-
 # Build + deploy
 
 ## Code change list
 
 | File | Change | Items |
 |------|--------|-------|
-| `src/mcp/devcontainer/tmuxCore.ts` | `peekPane` resize + `TMUX_SESSION`/`TMUX_COLS`/`TMUX_ROWS` consts | 1 |
-| `src/__tests__/tmux-core.test.ts` | assert `calls[0]` resize + `calls[1]` capture | 1 |
-| `start-host-daemon.sh` | `-x 58 -y 40` on `tmux new-session` | 1 |
 | `android/.../SttsPlayer.kt` | `ttsText` derive + `deriveTitle`/`deriveSummary`; `isPlayingMessage`; `volumePct` param + `LoudnessEnhancer` + pure mapping helper | 3, 4, 5 |
 | `android/.../ChatRepository.kt` | `isMessagePlaying` + `stopPlayback`; `sttsVolume` passthrough + thread into `playMessage` | 4, 5 |
 | `android/.../ProvisioningStore.kt` | `sttsVolume` (Int, default 100) + `KEY_STTS_VOLUME` | 5 |
 | `android/.../MainActivity.kt` | `onPlayTap` toggle; volume `Slider` | 4, 5 |
 | `android/.../TerminalView.kt` | `/context` + `/resume` in `PALETTE_SLASH`; `/compact` insert-into-composer chip | 6 |
-| `android/app/src/main/assets/thread/thread.js` | `breaks: true` in the `markdownit` config | 7 |
-| `.claude-plugin/plugin.json` + `package.json` | 5.0.23 -> 5.0.24 | 1 |
 
 `src/mcp/index.ts:new McpServer` reads `packageJson.version`, so the MCP server version follows `package.json` automatically - 2 version files, not 3.
 
 ## Gates (before push)
 
-- **TS:** `bun run lint && bun run test` (covers `tmuxCore` + the updated `tmux-core.test.ts`). `lint` = `biome ci . && bunx tsc --noEmit`.
 - **Android** (the only pre-merge Kotlin gate - `ci.yml` does NOT compile Kotlin):
   ```bash
   cd android
   JAVA_HOME=/home/nyaarium/android-dev/jdk ANDROID_HOME=/home/nyaarium/android-dev/sdk \
     ./gradlew :app:testDebugUnitTest --console=plain
   ```
-  Compiles Kotlin + runs unit tests (incl. the new `ttsText` + volume-mapping tests). For the R8/minify gate also run `./gradlew :app:assembleRelease` (testDebugUnitTest runs un-minified and won't catch a strip). Item 7 is a JS asset, so the gradle build only packages it - no Kotlin compile for that one, but it still ships in the APK.
+  Compiles Kotlin + runs unit tests (incl. the new `ttsText` + volume-mapping tests). For the R8/minify gate also run `./gradlew :app:assembleRelease` (testDebugUnitTest runs un-minified and won't catch a strip).
 
 ## Deploy sequence (after the PR merges + the APK builds)
 
-1. `reload_plugins` on the host-daemon - deliver item 1's `tmuxCore` resize (needs the version bump merged first). The peek-resize then forces 58x40 with no host restart.
-2. (optional) `./start-host-daemon.sh` - clean 58x40 host session from birth.
-3. Update the Android app (in-app updater or sideload) - items 3, 4, 5, 6, 7.
+1. Update the Android app (in-app updater or sideload) - items 3, 5, 6.
 
 ## Open decisions for review
 
