@@ -3,6 +3,7 @@
 	"directories": [
 		"cross-domain-sas",
 		"enroll-sas",
+		"owner-id",
 		"provision-ops",
 		"session-id",
 		"sync-cursor",

@@ -138,6 +138,37 @@ describe("federation routing (E2E sealed)", () => {
 		expect(ctx.store.has("conv.conv-1.alice.hostb.api.dev")).toBe(true);
 	});
 
+	it("ORIGIN: a console cross-Gateway send builds an owner-id sender address, never throwing on a non-slug Device Name", async () => {
+		let seen: FederatedOp | undefined;
+		const evie = fakeEvie({
+			destSealer: sealerB,
+			srcGateway: "hosta",
+			handle: (op) => {
+				seen = op;
+				return { session_id: "conv.owner-1.alice.hostb.api.dev", status: "running" };
+			},
+		});
+		const ctx = makeCtx("hosta", { evieClient: evie.client, sealer: sealerA });
+		const { send } = createRoutes(ctx);
+
+		// A console's `from` is a free-form Device Name (not a slug); fromConversationId is the 64-hex
+		// owner id. consoleSender makes the sealed sender address come from the owner id, so the send
+		// never assertSlug-throws on the device name (the bug this fix closes).
+		const ownerId = "a".repeat(64);
+		await send(
+			new Request("http://gateway/send", { method: "POST" }),
+			{
+				from: "Pixel 10 Pro XL",
+				fromConversationId: ownerId,
+				to: "alice.hostb.api.dev",
+				body: "hi",
+				channelOnly: true,
+			},
+			{ consoleSender: true },
+		);
+		expect(seen).toMatchObject({ kind: "send", from: `alice.hosta.${ownerId}.claude` });
+	});
+
 	it("ORIGIN: 503 when the Router is unavailable", async () => {
 		const evie = fakeEvie({});
 		(evie.client as { isConnected: () => boolean }).isConnected = () => false;
