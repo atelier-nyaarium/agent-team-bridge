@@ -9,6 +9,7 @@ export interface ReconnectorOptions {
 export interface Reconnector {
 	schedule(): void;
 	reset(): void;
+	cancel(): void;
 }
 
 ////////////////////////////////
@@ -34,5 +35,12 @@ export function createReconnector(connectFn: () => void, options: ReconnectorOpt
 		delay = initialDelayMs;
 	}
 
-	return { schedule, reset };
+	function cancel(): void {
+		if (timer) {
+			clearTimeout(timer);
+			timer = null;
+		}
+	}
+
+	return { schedule, reset, cancel };
 }

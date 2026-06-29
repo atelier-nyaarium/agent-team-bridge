@@ -60,7 +60,6 @@ export async function startGateway(): Promise<void> {
 	const DATA_DIR = process.env.DATA_DIR || "/app/data";
 	fs.mkdirSync(DATA_DIR, { recursive: true });
 
-	const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "600000", 10);
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);
 	const localGatewayId = resolveLocalGatewayId();
 	console.log(`[gateway] Gateway id: ${localGatewayId}`);
@@ -583,7 +582,7 @@ export async function startGateway(): Promise<void> {
 			registry,
 			conversationRegistry,
 			store,
-			config: { RESPONSE_TIMEOUT_MS, localGatewayId, localDomainId },
+			config: { localGatewayId, localDomainId },
 			tryWakeTeam,
 			offlineCatalog,
 			knownTeamPaths,

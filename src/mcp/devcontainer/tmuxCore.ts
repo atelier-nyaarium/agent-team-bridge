@@ -22,7 +22,8 @@ const TMUX_COLS = 58;
 const TMUX_ROWS = 40;
 
 // Startup readiness polling. A large resumed history can take a while to render, so the budget is
-// generous; the wake path's gateway-side timeout is 10 minutes, so this never races it.
+// generous; the gateway-side wake wait runs until the woken container registers (bounded well above
+// this budget), so this readiness poll never races it.
 const READY_TIMEOUT_MS = 90_000;
 const READY_POLL_MS = 1_000;
 // A live session (even a slow one) captures its booting/menu screen within a poll or two; a dead

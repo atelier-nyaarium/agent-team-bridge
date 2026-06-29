@@ -16,6 +16,7 @@ import path from "node:path";
  */
 export class DurableStore {
 	private readonly file: string;
+	private lastError: string | null = null;
 
 	constructor(dir: string, name: string) {
 		this.file = path.join(dir, `${name}.json`);
@@ -37,8 +38,20 @@ export class DurableStore {
 			const tmp = `${this.file}.tmp.${process.pid}`;
 			fs.writeFileSync(tmp, JSON.stringify(state));
 			fs.renameSync(tmp, this.file);
-		} catch {
-			// Durability is best-effort; a disk error must never take down delivery.
+			this.lastError = null;
+		} catch (e) {
+			// Best-effort durability must never crash delivery, but a persistent write failure (full
+			// or read-only disk) is otherwise invisible. Surface it once per distinct error so a
+			// recurring failure does not spam every save interval; clear on the next success.
+			const msg = e instanceof Error ? e.message : String(e);
+			if (msg !== this.lastError) {
+				this.lastError = msg;
+				// Logging itself must never break the best-effort contract (a thrown console.error
+				// would propagate out of this catch and crash the save).
+				try {
+					console.error(`[durable-store] save failed for ${path.basename(this.file)}: ${msg}`);
+				} catch {}
+			}
 		}
 	}
 }

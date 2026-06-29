@@ -17,7 +17,6 @@ services:
       # hatch for duplicate hostnames. Unset leaves the gateway to fall back to the
       # container's own hostname.
       - GATEWAY_ID=${GATEWAY_ID:-}
-      - RESPONSE_TIMEOUT_MS=600000
       # Shared secret for the reserved "host" WS slot (which drives agent terminals via the
       # console). start-gateway.sh provisions it into .env so a LAN peer cannot squat the slot.
       - HOST_WS_TOKEN=${HOST_WS_TOKEN:-}
