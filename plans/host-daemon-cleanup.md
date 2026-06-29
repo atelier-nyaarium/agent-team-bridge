@@ -1,15 +1,12 @@
-# Host daemon cleanup - remaining work
+# Host daemon cleanup - parked items + follow-ups
 
-Shipped: Phase 1 dead-code + Phase 2 connector SSRF gate (PR #96); Phase 1b `RESPONSE_TIMEOUT_MS`
-removal, Phase 3 wake two-tier timeout + durable-store error log, Phase 4 evieClient reconnector, and
-the `wake_result` host-gate (PR #97). Remaining below. Locations are `file : scope : name`.
+Phases 1-4 are shipped: Phase 1 dead-code + Phase 2 connector SSRF gate (PR #96); Phase 1b
+`RESPONSE_TIMEOUT_MS` removal, Phase 3 wake two-tier timeout + durable-store error log, Phase 4
+evieClient reconnector + the `wake_result` host-gate (PR #97); the Phase 4 closeout (the tmux drivers
+through `tmuxCore.selfSessionTarget`/`sendText` + a host-side `classifyPeekError`). What is left is
+PARKED or a deferred backlog. Locations are `file : scope : name`.
 
-## Phase 4 (remaining) - Targeted refactors. Deploy: gateway / reload_plugins.
-
-- `src/mcp/devcontainer/setEffortLevel.ts` + `compactSession.ts` - `execSync("bash -c ... base64 -d")` tmux drivers that bypass tmuxCore's safe no-shell `sendText`/`sendKey`. Route through tmuxCore. (reload_plugins). Watch for an impedance mismatch: tmuxCore's `sendText`/`sendKey` take a `TmuxTarget` and run via the host daemon, while these drive the session's OWN pane in-process - confirm the target model fits before routing.
-- `src/gateway/console/consoleHandler.ts : friendlyPeekError` - classifies by substring-matching tmux/docker stderr. Add a structured error-kind on the host-op layer (`shared/host-op.ts`) so classification does not depend on stderr wording (also helps the Android twin). Cross-layer (host-op type + tmuxCore classification + consoleHandler consumption). Lowest priority.
-
-## Phase 5 - Fragile TUI automation (mostly upstream; revisit). Deploy: reload_plugins.
+## Phase 5 - Fragile TUI automation (parked; mostly upstream). Deploy: reload_plugins.
 
 - `src/mcp/devcontainer/reloadPlugins.ts : buildScript` - ACTIVELY drives the Claude Code TUI: fixed sleeps, greps for the `❯` glyph + menu strings, hardcoded key nav; breaks on any UI change. Genuinely upstream-fragile; the real fix is a Claude Code `--update-plugins`/`--reconnect-mcp` flag. Until then it is a known-fragility script to hand-update on TUI changes.
 - `src/mcp/devcontainer/tmuxCore.ts : awaitReady / STARTUP_PROMPT_RE` - clears startup menus by matching English strings ("I am using this for local development", "Is this a project you created", "trust this folder", "Try the new fullscreen renderer"). NOTE: the core readiness check (`isAgentReady` = `COMPOSER_RE /^❯/`) is glyph-based and column-anchored, so it is STABLE; only the startup-menu clearing is string-fragile. A structured readiness signal from Claude Code would help `awaitReady` but not `buildScript` (which needs active control) - distinct problems.
@@ -47,3 +44,8 @@ The shared `Reconnector` now exposes `cancel()`; evieClient and `closeRouter` us
 
 - The four waiter/timeout coordinators (`WakeCoordinator`, `gateway/hostOpCoordinator`, `evie/evieClient` pendingCalls, `shared/pending-job-store`) share a request-wait-resolve-timeout shape; a `TimedWaiter` abstraction could consolidate them. SAME over-abstraction caveat as the dropped Phase 4 keyedSingleFlight: they differ (multi-waiter vs single, the mutable re-arm in `ackReceived`, persistence + TTL in PendingJobStore). Only worth it if a clean shared core emerges; otherwise tailored is clearer.
 - Wake timeouts are split: `WAKE_TIMEOUT_MS` (`gateway/index.ts`) and `REGISTER_WINDOW_MS` (`gateway/websocket.ts`). A single timeout-config owner would make them discoverable. Minor.
+
+### In-process tmux driver consistency (surfaced by the Phase 4 closeout)
+
+- `src/mcp/devcontainer/reloadPlugins.ts : registerReloadPlugins` - still drives its own pane by GENERATING and spawning a detached bash script (the old pattern), while `set_effort_level` / `compact_session` now route through `tmuxCore.sendText` + the shared `selfSessionTarget()`. Migrating reloadPlugins to a structured op through tmuxCore would unify all three in-process drivers and drop the shell-script generation. Large-defer (its TUI-driving sequence is the Phase 5 fragility, so the two are intertwined).
+- `src/shared/host-op.ts : classifyPeekError : PEEK_ABSENT_PATTERNS` - inherent to classifying tmux/docker stderr: a future tmux/docker that renames a "session absent" message would fall through to `failure`. Acceptable (the list is now in ONE place); validate the patterns on a major tmux/docker upgrade.
