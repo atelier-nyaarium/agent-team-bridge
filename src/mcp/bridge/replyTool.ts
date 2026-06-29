@@ -13,6 +13,10 @@ interface ReplyArgsBase {
 	status?: string;
 	respondAsMarkdownString?: string;
 	respondAsStructuredData?: string;
+	// Optional notice-style tiers; forwarded to /respond via the rest spread and read by the
+	// console for the notification bar + text-to-speech tier selection.
+	title?: string;
+	summary?: string;
 	attachments?: string[];
 }
 

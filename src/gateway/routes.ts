@@ -120,6 +120,10 @@ const RespondBodySchema = z.object({
 	session_id: z.string(),
 	status: z.string().optional(),
 	response: z.string().optional(),
+	// Optional notice-style tiers on a reply (title = notification-bar line + shortest TTS tier,
+	// summary = medium tier). The console reads them like a notice's; absent on a plain reply.
+	title: z.string().optional(),
+	summary: z.string().optional(),
 	replyAsJson: z.record(z.string(), z.unknown()).optional(),
 	question: z.string().optional(),
 	reason: z.string().optional(),
@@ -798,6 +802,8 @@ export function createRoutes({
 			session_id: respondSessionId,
 			status: rest.status as ResponsePayload["status"] | undefined,
 			response: rest.response,
+			title: rest.title,
+			summary: rest.summary,
 			question: rest.question,
 			reason: rest.reason,
 			estimated_minutes: rest.estimated_minutes,
@@ -894,6 +900,8 @@ export function createRoutes({
 					kind: "reply",
 					session_id: respondSessionId,
 					body: response.response,
+					title: response.title,
+					summary: response.summary,
 					status: response.status,
 					files: files && files.length > 0 ? files : undefined,
 				});

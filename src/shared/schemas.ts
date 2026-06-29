@@ -46,6 +46,18 @@ export const ChannelReplySchema = z
 			.describe(
 				`Your structured reply, as a JSON string (object/array). Use ONLY when the request specifies a Reply Schema; pass valid JSON matching it. For ordinary prose use respondAsMarkdownString instead. Mutually exclusive with respondAsMarkdownString.`,
 			),
+		title: z
+			.string()
+			.optional()
+			.describe(
+				`Optional one-line headline (a few words) for this reply - shown in the notification bar and read as the shortest text-to-speech tier. Add it when prettifying a substantial reply; omit for a short or plain one. respondAsMarkdownString stays the full body.`,
+			),
+		summary: z
+			.string()
+			.optional()
+			.describe(
+				`Optional short summary (a few sentences) of this reply, read as the medium text-to-speech tier. Omit for a short or plain reply.`,
+			),
 		attachments: z
 			.array(z.string())
 			.optional()

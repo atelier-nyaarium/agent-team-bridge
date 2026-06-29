@@ -44,6 +44,10 @@ export interface ResponsePayload {
 	session_id: string;
 	status?: ResponseStatus;
 	response?: string;
+	// Optional notice-style tiers on a reply: title (notification-bar line + shortest TTS tier)
+	// and summary (medium tier). Absent on a plain reply; response stays the full body.
+	title?: string;
+	summary?: string;
 	replyAsJson?: Record<string, unknown>;
 	question?: string;
 	reason?: string;
