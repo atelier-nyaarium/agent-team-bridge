@@ -5,7 +5,7 @@
 	"at": 1700000000000,
 	"op": {
 		"kind": "send",
-		"to": "laptop/switchboard",
+		"to": "alice.laptop.switchboard.main",
 		"body": "status?"
 	}
 }

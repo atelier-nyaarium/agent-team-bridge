@@ -78,11 +78,11 @@ export interface RoutesDeps {
 	// whose id collides with a friend's gateway id is sealed v1 to the local Domain (the bare-string
 	// shorthand) rather than hijacked to the friend. Absent when federation crypto is off.
 	resolvesLocalGateway?: ((gatewayId: string) => boolean) | null;
-	// Refresh the share lastSeenAt for a live local session (its canonical gateway/name),
+	// Refresh the share lastSeenAt for a live local session (its canonical domain.gateway.spawn.session),
 	// called from teams() per online team so a session's presence keeps its shares from
 	// auto-forgetting. Absent when federation sharing is not wired.
 	touchShares?: ((sessionTarget: string) => void) | null;
-	// Whether a local session (canonical gateway/name) is still shared to a friend Domain,
+	// Whether a local session (canonical domain.gateway.spawn.session) is still shared to a friend Domain,
 	// re-read on the destination cross-Domain reply forward: an already-accepted send whose
 	// session was un-shared has its in-flight reply DROPPED here rather than relayed back to the origin. The
 	// share state is the single source both the inbound gate and this reply gate read, so an
@@ -563,7 +563,7 @@ export function createRoutes({
 		// Cross-Domain leg: query each linked peer for its shared sessions. The returned
 		// TeamInfo carries the peer's own gatewayId, which the send path resolves back to the
 		// peer's Domain via crossDomainPeers (the SealTarget's separate domainId field, per the
-		// Addressing decision - the Domain is never folded into the gateway/name string). One
+		// Addressing decision - the Domain is resolved from the peer's gatewayId, not parsed from the session address). One
 		// gateway is queried once even if a Domain runs several gateways, keyed by its
 		// (domainId, gatewayId) pair (a gateway id is unique within a Domain).
 		const peers = crossDomainPeers?.all() ?? [];
@@ -854,7 +854,7 @@ export function createRoutes({
 			// verified friend Domain): an already-accepted send whose session was un-shared after it
 			// landed must have its in-flight reply DROPPED, not relayed back to the origin. The share state is the
 			// same source the inbound op gate reads, so an un-share bites every direction without
-			// evie. The session target is the canonical gateway/name parsed from the job's own
+			// evie. The session target is the canonical domain.gateway.spawn.session parsed from the job's own
 			// (origin-set) session key, the form the share is keyed by. A same-Domain federated reply
 			// (dstDomainId null) skips the gate, unchanged.
 			if (deliverResult.dstDomainId) {

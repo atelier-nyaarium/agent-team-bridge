@@ -2,6 +2,6 @@
 	"seq": 47,
 	"at": 1781300979000,
 	"kind": "message",
-	"from": "evie-bot",
+	"from": "alice.laptop.evie-bot.main",
 	"body": "session_id is missing - must fail BOTH sides"
 }

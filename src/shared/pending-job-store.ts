@@ -263,7 +263,7 @@ export class PendingJobStore<T> {
 	/**
 	 * The per-session counterpart of expireByDomain, used when a single session's share to a
 	 * friend Domain is withdrawn: expire every job whose `dstDomainId` matches AND whose session
-	 * id resolves to the canonical `sessionTarget` (`gateway/name`). Match is on the job's own
+	 * id resolves to the canonical `sessionTarget` (`domain.gateway.spawn.session`). Match is on the job's own
 	 * session-id target, not `entry.to`: a destination job stores `entry.to` as the bare local
 	 * name while its id (the origin-set session key) carries the canonical address the share is
 	 * keyed by. Each match is settled through the TTL-timeout not-delivered path and removed, so an
@@ -332,7 +332,7 @@ export class PendingJobStore<T> {
 	}
 
 	/** Whether a recently-active persistent cross-Domain thread targets `sessionTarget` (the
-	 * canonical `gateway/name`). Matches when a returnRoute-bearing job resolves to
+	 * canonical `domain.gateway.spawn.session`). Matches when a returnRoute-bearing job resolves to
 	 * `sessionTarget`, its returnRoute's origin Gateway is a linked cross-Domain peer
 	 * (`isCrossDomainPeer`), and it was touched within `maxAgeMs`. The share auto-forget sweep
 	 * uses this to keep a session with live cross-Domain traffic; the recency bound stops a

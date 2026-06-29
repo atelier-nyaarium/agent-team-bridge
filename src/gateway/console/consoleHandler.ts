@@ -162,7 +162,7 @@ export interface CrossDomainConsoleHandlers {
 
 /** The subset of the per-session share state the console handler drives. A narrow seam
  * so the handler stays mockable and never imports the store class. `sessionTarget` is the
- * canonical `gateway/name` of a LOCAL session; `domainId` is a linked friend Domain. */
+ * canonical `domain.gateway.spawn.session` of a LOCAL session; `domainId` is a linked friend Domain. */
 export interface CrossDomainShareHandlers {
 	share: (sessionTarget: string, target: CrossDomainShareTarget) => void;
 	/** Withdraw a session's share from an audience, returning whether a record was removed
@@ -499,7 +499,7 @@ export function createConsoleDispatcher({
 
 			case "list_teams": {
 				// Fan out across the mesh so the console sees every Gateway's sessions, each
-				// carrying its own `gatewayId` (the console keys threads by gateway/name).
+				// carrying its own `gatewayId` (the console keys threads by domain.gateway.spawn.session).
 				const teams = (await (await routes.discover()).json()) as TeamInfo[];
 				// A console does not list other consoles as send targets, and excludes itself.
 				// teams() already drops the headless "host" daemon.
@@ -750,7 +750,7 @@ export function createConsoleDispatcher({
 
 			case "cross_domain_share": {
 				if (!crossDomainShare) throw new Error("cross-Domain sharing is not available on this Gateway");
-				// Store under the canonical gateway/name key, the same form the relay gate, the
+				// Store under the canonical domain.gateway.spawn.session key, the same form the relay gate, the
 				// sweep, and discovery compare against; a bare-name share would otherwise never
 				// match and silently never take effect.
 				const canonicalTarget = await assertShareable(op.sessionTarget, op.target);

@@ -332,7 +332,7 @@ export const ConsoleOpSchema = z
 		// trusts). Idempotent on `(sessionTarget, target)`: a re-share refreshes rather than duplicating.
 		z.object({
 			kind: z.literal("cross_domain_share"),
-			// The canonical `gateway/name` target of the local session to share.
+			// The canonical `domain.gateway.spawn.session` target of the local session to share.
 			sessionTarget: z.string().min(1).max(128),
 			// Who the session is shared TO (a linked Domain, or everyone trusted).
 			target: CrossDomainShareTargetSchema,
