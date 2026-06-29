@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.atelier_nyaarium.switchboard.crypto.Crypto
+import com.atelier_nyaarium.switchboard.crypto.ownerKeyId
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalJoin
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
@@ -513,13 +514,6 @@ class ChatRepository(
 	 * would otherwise become an unsendable ghost chat. */
 	private fun fromCanonical(from: String): String? =
 		runCatching { parseTarget(from, localDomain(), localGatewayId).canonical }.getOrNull()
-
-	/** The owner id: sha256 of the DECODED owner signing-key bytes, lowercase hex (the gateway's
-	 * `ownerKeyId` twin). Keys the owner's shared inbox and is the console's own address spawn segment. */
-	private fun ownerKeyId(signPubB64: String): String =
-		java.security.MessageDigest.getInstance("SHA-256")
-			.digest(java.util.Base64.getDecoder().decode(signPubB64))
-			.joinToString("") { "%02x".format(it) }
 
 	/** This device's own session address. The spawn segment is the OWNER id (matching the gateway's
 	 * consoleSelfAddress), NOT the free-form device name, so a device name with spaces/capitals no

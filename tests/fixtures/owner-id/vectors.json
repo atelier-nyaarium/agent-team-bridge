@@ -1,0 +1,17 @@
+{
+	"_comment": "Cross-runtime vectors for ownerKeyId (sha256 of the DECODED base64 owner sign-pub, lowercase hex). Read by BOTH src/__tests__/owner-id.test.ts and android/.../OwnerIdVectorsTest.kt, so the gateway (shared/owner-id.ts) and the Kotlin twin (crypto/OwnerId.kt) cannot diverge: a differing owner id would silently break the console self-address match (a mailbox / self-thread miss).",
+	"cases": [
+		{
+			"signPub": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+			"ownerKeyId": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925"
+		},
+		{
+			"signPub": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+			"ownerKeyId": "72cd6e8422c407fb6d098690f1130b7ded7ec2f7f5e1d30bd9d521f015363793"
+		},
+		{
+			"signPub": "bnlhYXJpdW0tb3duZXItc2lnbmluZy1rZXktdGVzdCE=",
+			"ownerKeyId": "d98916fa50820e9a02d07a4e117320a8b6b549650939dbac3b5319c7a3388a9e"
+		}
+	]
+}
