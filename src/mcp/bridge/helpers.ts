@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import WebSocket from "ws";
 import packageJson from "../../../package.json";
-import { debugLog } from "../../shared/debug-log.js";
 import { createReconnector } from "../../shared/reconnect.js";
 import type { ChannelPushPayload, ConnectionMode, ResponsePushPayload } from "../../shared/types.js";
 import { emitChannelNotification, emitResponseNotification } from "../channel/channelNotify.js";
@@ -35,7 +34,6 @@ let AGENT_TYPE = "";
 const CONVERSATION_ID: string = crypto.randomUUID();
 
 let routerWs: WebSocket | null = null;
-let previousSubId: string | null = null;
 let suppressReconnect = false;
 const reconnector = createReconnector(() => connectToRouter());
 
@@ -140,17 +138,6 @@ export function connectToRouter(): void {
 		reconnector.reset();
 		const subId = crypto.randomUUID().slice(0, 8);
 
-		// #region Hypothesis F: track subId lifecycle across reconnects
-		debugLog("F", "src/mcp/bridge/helpers.ts:connectToRouter", "registering new subId", {
-			pid: process.pid,
-			team: PROJECT_NAME,
-			newSubId: subId,
-			previousSubId: previousSubId ?? "none",
-			mode,
-		});
-		previousSubId = subId;
-		// #endregion
-
 		const registerMsg: Record<string, string> = {
 			type: "register",
 			team: PROJECT_NAME,
@@ -182,14 +169,6 @@ export function connectToRouter(): void {
 			if (isMainOrLeadAgent !== null) {
 				const hsSessionId = msg.session_id as string;
 				console.error(`[bridge] handshake auto-reply [${hsSessionId}], isMainOrLead=${isMainOrLeadAgent}`);
-				// #region Hypothesis H: confirm auto-reply fires with correct payload
-				debugLog("H", "src/mcp/bridge/helpers.ts:handshake", "auto-reply firing", {
-					sessionId: hsSessionId,
-					isMainOrLeadAgent,
-					team: PROJECT_NAME,
-					replyPayload: { isMainOrLead: isMainOrLeadAgent },
-				});
-				// #endregion
 				routerPost("/respond", {
 					session_id: hsSessionId,
 					status: "completed",
@@ -226,14 +205,6 @@ export function connectToRouter(): void {
 	});
 
 	routerWs.on("close", () => {
-		// #region Hypothesis F: log disconnect with subId that gateway should clean up
-		debugLog("F", "src/mcp/bridge/helpers.ts:connectToRouter", "disconnected", {
-			pid: process.pid,
-			team: PROJECT_NAME,
-			subId: previousSubId ?? "unknown",
-			suppressReconnect,
-		});
-		// #endregion
 		console.error(`[bridge] disconnected`);
 		if (!suppressReconnect) {
 			reconnector.schedule();
@@ -241,14 +212,6 @@ export function connectToRouter(): void {
 	});
 
 	routerWs.on("error", (err: Error) => {
-		// #region Hypothesis F: log connection error
-		debugLog("F", "src/mcp/bridge/helpers.ts:connectToRouter", "ws error", {
-			pid: process.pid,
-			team: PROJECT_NAME,
-			subId: previousSubId ?? "unknown",
-			error: err.message,
-		});
-		// #endregion
 		console.error(`[bridge] ws error: ${err.message}`);
 	});
 }

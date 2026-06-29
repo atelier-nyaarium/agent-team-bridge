@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
-import { debugLog } from "../../shared/debug-log.js";
 import { type HostOp, isTmuxName, type TmuxTarget } from "../../shared/host-op.js";
 import { createReconnector } from "../../shared/reconnect.js";
 import { composeSessionName, parseSessionName } from "../../shared/session-id.js";
@@ -97,13 +96,6 @@ function connect(): void {
 		}
 
 		if (msg.type === "channel_push") {
-			// #region Hypothesis N: host daemon received channel_push fallback
-			debugLog("N", "hostDaemon.ts:onMessage", "channel_push received via host", {
-				from: msg.from,
-				sessionId: String(msg.session_id ?? "").slice(0, 8),
-				hasHandler: !!channelPushHandler,
-			});
-			// #endregion
 			if (channelPushHandler) {
 				channelPushHandler(msg);
 			}
@@ -187,34 +179,12 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 	}
 	const projectPath = msg.projectPath || findProjectPath(project);
 
-	// #region Hypothesis J: confirm wake message arrives at hostDaemon
-	debugLog("J", "hostDaemon.ts:handleWake", "wake received", {
-		team: msg.team,
-		projectPath,
-		wsReadyState: ws?.readyState ?? null,
-	});
-	// #endregion
-
 	try {
 		const resolved = resolveProject(projectPath);
 		const projectName = path.basename(resolved);
 		console.error(`[host-wake] starting ${msg.team} at ${resolved}`);
 
-		// #region Hypothesis K: log before ensureContainerUpAsync
-		debugLog("K", "hostDaemon.ts:handleWake", "starting container", {
-			team: msg.team,
-			resolved,
-		});
-		// #endregion
-
 		const { pluginsProvisioned } = await ensureContainerUpAsync(resolved);
-
-		// #region Hypothesis K: log after ensureContainerUpAsync
-		debugLog("K", "hostDaemon.ts:handleWake", "container up", {
-			team: msg.team,
-			pluginsProvisioned,
-		});
-		// #endregion
 
 		console.error(`[host-wake] ${msg.team} container is up, starting Claude`);
 
@@ -247,15 +217,6 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			}
 		}
 
-		// #region Hypothesis L: log wake_result send state
-		debugLog("L", "hostDaemon.ts:handleWake", "sending wake_result success", {
-			team: msg.team,
-			wsReadyState: ws?.readyState ?? null,
-			wsOpen: ws?.readyState === WebSocket.OPEN,
-			screenSnippet: lastScreen.slice(0, 200),
-		});
-		// #endregion
-
 		// Send wake_result with a screen capture so the caller can assess; success reflects whether
 		// the launched session is actually alive (dead-launch detection above).
 		if (ws?.readyState === WebSocket.OPEN) {
@@ -272,15 +233,6 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		console.error(`[host-wake] failed to wake ${msg.team}: ${message}`);
-
-		// #region Hypothesis K: log wake failure with error details
-		debugLog("K", "hostDaemon.ts:handleWake", "wake failed", {
-			team: msg.team,
-			error: message,
-			wsReadyState: ws?.readyState ?? null,
-			wsOpen: ws?.readyState === WebSocket.OPEN,
-		});
-		// #endregion
 
 		if (ws?.readyState === WebSocket.OPEN) {
 			ws.send(JSON.stringify({ type: "wake_result", team: msg.team, success: false, error: message }));

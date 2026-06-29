@@ -77,7 +77,7 @@ function makeCtx(localGatewayId: string, over: Partial<RoutesDeps> = {}): Routes
 		registry: new Map() as RoutesDeps["registry"],
 		conversationRegistry: new Map() as RoutesDeps["conversationRegistry"],
 		store: new PendingJobStore<ResponsePayload>(),
-		config: { LOG_PATH: "/tmp/fed-test.log", RESPONSE_TIMEOUT_MS: 500, localGatewayId, localDomainId: "alice" },
+		config: { RESPONSE_TIMEOUT_MS: 500, localGatewayId, localDomainId: "alice" },
 		tryWakeTeam: () => Promise.resolve(false),
 		offlineCatalog: new Map(),
 		knownTeamPaths: new Map(),

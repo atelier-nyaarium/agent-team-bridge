@@ -87,7 +87,6 @@ export interface CatalogMessage {
 //  Config Types
 
 export interface GatewayConfig {
-	LOG_PATH: string;
 	RESPONSE_TIMEOUT_MS: number;
 	// This Gateway's id, qualifying every local session name on the wire (GATEWAY_ID
 	// env override, else the sanitized machine hostname).

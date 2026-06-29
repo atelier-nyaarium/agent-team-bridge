@@ -1,6 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import type { SealedEnvelope } from "../shared/crypto.js";
@@ -215,7 +213,7 @@ export function createRoutes({
 	isSharedToForReply,
 	resolveHandshake,
 }: RoutesDeps) {
-	const { LOG_PATH, localGatewayId, localDomainId } = config;
+	const { localGatewayId, localDomainId } = config;
 	// The local Domain segment for every address we mint. Null (arming mode, pre-enrollment)
 	// resolves to the sentinel so a key still forms; a real domain id is lowercase hex.
 	const localDomain = localDomainId ?? LOCAL_DOMAIN_SENTINEL;
@@ -419,22 +417,6 @@ export function createRoutes({
 			status: "running",
 			message: `Message routed to ${qualifiedTo} via the Router. Responses will be pushed back automatically.`,
 		});
-	}
-
-	function ingest(req: Request, body: Record<string, unknown>): Response {
-		const payload: Record<string, unknown> = body && typeof body === "object" ? body : { message: String(body) };
-		payload.timestamp = payload.timestamp ?? Date.now();
-		const line = `${JSON.stringify(payload)}\n`;
-		try {
-			const dir = path.dirname(LOG_PATH);
-			if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-			fs.appendFileSync(LOG_PATH, line);
-			return jsonResponse({ ok: true });
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			console.error(`[ingest]`, message);
-			return jsonResponse({ ok: false, error: message }, 500);
-		}
 	}
 
 	function pending(): Response {
@@ -1033,7 +1015,6 @@ export function createRoutes({
 	}
 
 	return {
-		ingest,
 		pending,
 		teams,
 		discover,

@@ -26,7 +26,6 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		conversationRegistry,
 		store,
 		config: {
-			LOG_PATH: "/tmp/test-debug.log",
 			RESPONSE_TIMEOUT_MS: 500,
 			localGatewayId: "test-host",
 			localDomainId: "alice",
