@@ -146,6 +146,18 @@ describe("createWebSocketHandlers", () => {
 		expect(hostOpCoordinator.failAll).toHaveBeenCalledWith("host daemon disconnected");
 	});
 
+	it("fails an in-flight wake when the host socket disconnects (no full-timeout stall)", async () => {
+		const { handlers, wakeCoordinator } = setup();
+		const ws = createMockWs();
+		handlers.open(ws);
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
+		// doWakeTeam awaits this with WAKE_TIMEOUT_MS (10 min in prod). The long timeout stands in for
+		// that: if the host drop does not fail the waiter, this never resolves and the test times out.
+		const wake = wakeCoordinator.waitFor("proj-a.main", 10_000);
+		handlers.close(ws);
+		await expect(wake).resolves.toBe(false);
+	}, 2000);
+
 	it("register message adds team to registry", () => {
 		const { handlers, registry } = setup();
 		const ws = createMockWs();

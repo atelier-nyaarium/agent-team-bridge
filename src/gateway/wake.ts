@@ -34,6 +34,19 @@ export class WakeCoordinator {
 		this.waiters.delete(team);
 	}
 
+	/** Fail every in-flight wake now (the host daemon socket dropped, so no wake_result can arrive),
+	 * resolving each waiter false so a `/send` awaiting a wake returns at once instead of stalling the
+	 * full WAKE_TIMEOUT_MS. Mirrors HostOpCoordinator.failAll. */
+	failAll(): void {
+		for (const entries of this.waiters.values()) {
+			for (const entry of entries) {
+				clearTimeout(entry.timer);
+				entry.resolve(false);
+			}
+		}
+		this.waiters.clear();
+	}
+
 	private removeWaiter(team: string, target: WakeWaiter): void {
 		const entries = this.waiters.get(team);
 		if (!entries) return;

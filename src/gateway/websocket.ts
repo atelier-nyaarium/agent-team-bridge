@@ -308,9 +308,10 @@ export function createWebSocketHandlers({
 				if (subs.size === 0) {
 					registry.delete(teamName);
 					offlineCatalog.clear();
-					// Fail in-flight terminal ops so a console peek/send returns at once instead
-					// of waiting out its full timeout across the host restart.
+					// Fail in-flight terminal ops AND wakes so a console peek/send or a /send awaiting a
+					// wake returns at once instead of waiting out its full timeout across the host restart.
 					hostOpCoordinator?.failAll("host daemon disconnected");
+					wakeCoordinator.failAll();
 					console.log(`[ws] host disconnected - offline catalog cleared`);
 					onTeamDisconnect?.(teamName);
 				} else {
