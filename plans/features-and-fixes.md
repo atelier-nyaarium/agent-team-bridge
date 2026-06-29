@@ -10,9 +10,8 @@ Scoped items across the terminal view, TTS playback, message rendering, and atta
 |---|------|---------|-------------|---------------|
 | 3 | autoplay tier collapses to full on plain msgs | Android / TTS | `SttsPlayer.kt` | APK |
 | 5 | TTS volume slider (0-200%, default 100%) | Android / TTS | `SttsPlayer.kt` + `ChatRepository.kt` + `ProvisioningStore.kt` + `MainActivity.kt` | APK |
-| 6 | slash macros: `/context`, `/resume`, `/compact [msg]` | Android / terminal | `TerminalView.kt` | APK |
 
-One deploy target: the Android APK (items 3, 5, 6). No wire-schema change anywhere -> no Kotlin codegen (`scripts/codegen-kotlin.ts`), no synced-leaf restamp (none of the touched symbols appear in `src/shared/schemas.ts`).
+One deploy target: the Android APK (items 3, 5). No wire-schema change anywhere -> no Kotlin codegen (`scripts/codegen-kotlin.ts`), no synced-leaf restamp (none of the touched symbols appear in `src/shared/schemas.ts`).
 
 ---
 
@@ -97,34 +96,6 @@ Add `android/.../SttsPlayer.kt:SttsPlayer.Companion:deriveTitle` and `:deriveSum
 
 ---
 
-# Android - terminal
-
-## Item 6 - slash macros: `/context`, `/resume`, `/compact [message]`
-
-**Current state.** `android/.../TerminalView.kt:PALETTE_SLASH` = `listOf("/model", "/effort", "/usage", "/workflows", "/plugin", "/mcp")`. Each entry is rendered one-shot in the `PALETTE_SLASH.forEach` loop in `android/.../TerminalView.kt:TerminalView`: `AssistChip(onClick = { fire(cmd, null) }, ...)`. `TerminalView:fire` calls `onSend(text, key)`; a text send appends a trailing CR atomically on the host (`src/mcp/devcontainer/tmuxCore.ts:sendText`), so a slash chip **types the command AND submits Enter immediately** - it never touches the composer. There is an editable composer: `android/.../TerminalView.kt:TerminalView:input` (a `mutableStateOf("")`), bound to an `OutlinedTextField`, with a Send `FilledIconButton` that does `fire(input, null); input = ""` (or a bare `Enter` when empty). NO chip currently writes into `input` - an insert-without-send affordance does not exist yet.
-
-**Fix.**
-- **`/context`** and **`/resume`** - pure one-shot. Append both to `PALETTE_SLASH`:
-  ```kotlin
-  private val PALETTE_SLASH = listOf("/model", "/effort", "/usage", "/context", "/resume", "/workflows", "/plugin", "/mcp")
-  ```
-  The existing `forEach` loop renders them; no other wiring. (`/context` inserted after `/usage` per the original ask.)
-- **`/compact [message]`** - the FIRST arg-taking macro. The optional trailing message must be typed by the human before submit, so it CANNOT be a one-shot chip (that would fire `/compact` + Enter instantly). Render it as a separate chip whose `onClick` PRE-FILLS the composer instead of firing:
-  ```kotlin
-  // after the PALETTE_SLASH.forEach loop, in the same chip Row:
-  AssistChip(
-      onClick = { input = "/compact " },   // insert, no Enter; user appends optional message, then Send
-      label = { Text("/compact", fontFamily = FontFamily.Monospace) },
-  )
-  ```
-  This reuses the existing Send button (sends `input` + CR, clears it) with zero new submit logic. Empty-message case: tap `/compact`, tap Send. Message case: tap `/compact`, type after the space, tap Send. Optionally add a `FocusRequester` to focus the TextField after insert for nicer UX (not required for correctness).
-
-**Note.** If more arg-taking macros are coming, consider generalizing the palette to declarative `(label, oneShot|insert)` entries rather than a bespoke chip per macro - but that's more than this change needs.
-
-**Verify.** `/context`, `/resume` fire immediately like the other chips. Tapping `/compact` puts `/compact ` in the composer; Send with nothing appended compacts bare, Send with a typed message compacts with that message.
-
----
-
 # Build + deploy
 
 ## Code change list
@@ -135,7 +106,6 @@ Add `android/.../SttsPlayer.kt:SttsPlayer.Companion:deriveTitle` and `:deriveSum
 | `android/.../ChatRepository.kt` | `isMessagePlaying` + `stopPlayback`; `sttsVolume` passthrough + thread into `playMessage` | 4, 5 |
 | `android/.../ProvisioningStore.kt` | `sttsVolume` (Int, default 100) + `KEY_STTS_VOLUME` | 5 |
 | `android/.../MainActivity.kt` | `onPlayTap` toggle; volume `Slider` | 4, 5 |
-| `android/.../TerminalView.kt` | `/context` + `/resume` in `PALETTE_SLASH`; `/compact` insert-into-composer chip | 6 |
 
 `src/mcp/index.ts:new McpServer` reads `packageJson.version`, so the MCP server version follows `package.json` automatically - 2 version files, not 3.
 
@@ -151,13 +121,12 @@ Add `android/.../SttsPlayer.kt:SttsPlayer.Companion:deriveTitle` and `:deriveSum
 
 ## Deploy sequence (after the PR merges + the APK builds)
 
-1. Update the Android app (in-app updater or sideload) - items 3, 5, 6.
+1. Update the Android app (in-app updater or sideload) - items 3, 5.
 
 ## Open decisions for review
 
 - **Item 3 heuristic:** title = first line/sentence, summary = first paragraph, caps 140/400. Confirm or adjust.
 - **Item 5 volume:** (a) continuous slider vs stepped (e.g. 5% increments); (b) the pct->mB mapping - simple linear `(pct-100)*6` vs a log-accurate dB curve; (c) whether 200% is the right ceiling (LoudnessEnhancer can push higher but distortion grows).
-- **Item 6 `/compact`:** confirm the insert-into-composer UX (tap pre-fills `/compact `, user edits, standard Send submits) over any alternative, and whether to auto-focus the composer on insert.
 
 ---
 
