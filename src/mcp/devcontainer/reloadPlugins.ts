@@ -6,6 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { isInsideContainer } from "../../shared/env.js";
 import { assertTmuxName, type TmuxTarget } from "../../shared/host-op.js";
+import { DEFAULT_SESSION } from "../../shared/session-id.js";
 
 ////////////////////////////////
 //  Schemas
@@ -26,8 +27,8 @@ const reloadSchema: any = ReloadPluginsSchema;
 ////////////////////////////////
 //  Functions & Helpers
 
-// The MCP tool drives the agent's own session, which always runs in the conventional "claude" pane.
-const TMUX_SESSION = "claude";
+// The MCP tool drives the agent's own session, which always runs in the conventional default pane.
+const TMUX_SESSION = DEFAULT_SESSION;
 
 function buildTmuxFn(tmuxPrefix: string): string {
 	// For docker exec, wrap the tmux binary call; for local, call tmux directly

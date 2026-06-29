@@ -895,7 +895,10 @@ describe("DeviceMailboxStore caps", () => {
 });
 
 describe("console terminal ops (peek / tmux_send)", () => {
-	function makeTerminalHarness(isProjectName: (n: string) => boolean = (n) => n === "recipe-app") {
+	function makeTerminalHarness(
+		isProjectName: (n: string) => boolean = (n) => n === "recipe-app",
+		relayPeek?: () => { ok: boolean; result?: unknown; error?: string; errorKind?: "absent" | "failure" },
+	) {
 		const hostOps: Record<string, unknown>[] = [];
 		const routes: ConsoleRoutes = {
 			send: async () => jsonRes({ session_id: "s", status: "running" }),
@@ -913,7 +916,8 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			isProjectName,
 			relayToHost: async (op) => {
 				hostOps.push(op as unknown as Record<string, unknown>);
-				if (op.kind === "peek") return { ok: true, result: { ansi: "SCREEN", hash: "h1" } };
+				if (op.kind === "peek")
+					return relayPeek ? relayPeek() : { ok: true, result: { ansi: "SCREEN", hash: "h1" } };
 				return { ok: true, result: { sent: true } };
 			},
 		});
@@ -952,6 +956,27 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(reply.ok).toBe(false);
 		expect(reply.error).toContain("not available");
 		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("an 'absent' peek error renders the calm not-running message; a 'failure' passes through raw", async () => {
+		const absent = makeTerminalHarness(undefined, () => ({
+			ok: false,
+			error: "no server running",
+			errorKind: "absent",
+		}));
+		const r1 = await absent.handler.handleFrame(frame({ kind: "peek", target: "recipe-app" }, "pe1"));
+		expect(r1.ok).toBe(false);
+		expect(r1.error).toContain("No session running");
+
+		const failure = makeTerminalHarness(undefined, () => ({
+			ok: false,
+			error: "tmux command timed out",
+			errorKind: "failure",
+		}));
+		const r2 = await failure.handler.handleFrame(frame({ kind: "peek", target: "recipe-app" }, "pe2"));
+		expect(r2.ok).toBe(false);
+		expect(r2.error).toContain("timed out");
+		expect(r2.error).not.toContain("No session running");
 	});
 
 	it("rejects a cross-Gateway target", async () => {

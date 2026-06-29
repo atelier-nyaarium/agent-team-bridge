@@ -93,9 +93,32 @@ export interface HostPeekResult {
 	hash: string;
 }
 
-/** The gateway-side resolution of a host op: ok + a result, or an error string. */
+/** What kind of failure a peek hit: the pane is merely ABSENT (booting, exited, or stopped - a calm
+ * transient) vs a real FAILURE (timeout, offline host). */
+export type PeekErrorKind = "absent" | "failure";
+
+/** The gateway-side resolution of a host op: ok + a result, or an error string (plus an `errorKind`
+ * for a failed peek, classified at the host so consumers read a kind, not stderr wording). */
 export interface HostOpResult {
 	ok: boolean;
 	result?: unknown;
 	error?: string;
+	errorKind?: PeekErrorKind;
+}
+
+// A peek whose tmux server/pane/container is gone emits one of these stderr fragments; a timeout or
+// any other exit is a real failure. The single classifier, so the absent-vs-failure decision lives
+// in one place (here, at the host) rather than re-derived from stderr wording at each consumer.
+const PEEK_ABSENT_PATTERNS = [
+	"no server running",
+	"can't find session",
+	"can't find pane",
+	"no such container",
+	"is not running",
+];
+export function classifyPeekError(error: string): PeekErrorKind {
+	const lower = error.toLowerCase();
+	if (lower.includes("timed out") || lower.includes("tmux command exited")) return "failure";
+	if (PEEK_ABSENT_PATTERNS.some((s) => lower.includes(s))) return "absent";
+	return "failure";
 }

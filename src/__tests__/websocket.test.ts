@@ -55,7 +55,10 @@ describe("createWebSocketHandlers", () => {
 			wakeCoordinator,
 			hostOpCoordinator: overrides.hostOpCoordinator as
 				| {
-						settle: (reqId: string, result: { ok: boolean; result?: unknown; error?: string }) => void;
+						settle: (
+							reqId: string,
+							result: { ok: boolean; result?: unknown; error?: string; errorKind?: "absent" | "failure" },
+						) => void;
 						failAll: (error: string) => void;
 				  }
 				| undefined,

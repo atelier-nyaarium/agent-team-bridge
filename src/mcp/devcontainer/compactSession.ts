@@ -1,6 +1,6 @@
-import { execSync } from "node:child_process";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { selfSessionTarget, sendText } from "./tmuxCore.js";
 
 ////////////////////////////////
 //  Schemas
@@ -9,7 +9,13 @@ const CompactSessionSchema = z.object({
 	instructions: z
 		.string()
 		.min(1)
-		.refine((v) => !/[\r\n]/.test(v), { message: "instructions must be a single line (no newlines)" })
+		// Capped well above any real compaction prompt but below ARG_MAX, since the text now rides as a
+		// single argv element. Null bytes are rejected: argv is null-terminated, so a stray NUL would
+		// silently truncate the line (the old base64 path masked this).
+		.max(16384)
+		.refine((v) => !/[\r\n]/.test(v) && !v.includes("\u0000"), {
+			message: "instructions must be a single line (no newlines or null bytes)",
+		})
 		.describe(
 			`
 One long single line of plain-text prose steering the compaction pass (no newlines). Spell out:
@@ -28,8 +34,6 @@ const compactSchema: any = CompactSessionSchema;
 ////////////////////////////////
 //  Functions & Helpers
 
-const TMUX_TARGET = "claude.0";
-
 const description = `
 Compact the local Claude Code session by sending "/compact <instructions>" to tmux pane 0.
 
@@ -47,11 +51,7 @@ export function registerCompactSession(mcpServer: McpServer): void {
 		async (args: CompactSessionArgs) => {
 			try {
 				const command = `/compact ${args.instructions}`;
-				const b64 = Buffer.from(args.instructions).toString("base64");
-				execSync(
-					`bash -c "tmux send-keys -t ${TMUX_TARGET} '/compact ' && tmux send-keys -t ${TMUX_TARGET} -l \\"\\$(echo '${b64}' | base64 -d)\\" && tmux send-keys -t ${TMUX_TARGET} Enter"`,
-					{ encoding: "utf-8", timeout: 10_000 },
-				);
+				await sendText(selfSessionTarget(), command);
 
 				return {
 					content: [

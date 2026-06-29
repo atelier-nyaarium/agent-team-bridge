@@ -20,7 +20,10 @@ export interface WebSocketDeps {
 	// Settles a host_op (peek/send) reply by reqId, and fails all in-flight ops when the host
 	// drops. Absent in tests that do not exercise the console terminal relay.
 	hostOpCoordinator?: {
-		settle: (reqId: string, result: { ok: boolean; result?: unknown; error?: string }) => void;
+		settle: (
+			reqId: string,
+			result: { ok: boolean; result?: unknown; error?: string; errorKind?: "absent" | "failure" },
+		) => void;
 		failAll: (error: string) => void;
 	};
 	config: WebSocketConfig;
@@ -280,6 +283,7 @@ export function createWebSocketHandlers({
 				ok: msg.ok === true,
 				result: msg.result,
 				error: typeof msg.error === "string" ? msg.error : undefined,
+				errorKind: msg.errorKind === "absent" || msg.errorKind === "failure" ? msg.errorKind : undefined,
 			});
 		}
 

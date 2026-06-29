@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
-import { type HostOp, isTmuxName, type TmuxTarget } from "../../shared/host-op.js";
+import { classifyPeekError, type HostOp, isTmuxName, type TmuxTarget } from "../../shared/host-op.js";
 import { createReconnector } from "../../shared/reconnect.js";
 import { composeSessionName, parseSessionName } from "../../shared/session-id.js";
 import { ensureContainerUpAsync, resolveProject } from "./helpers.js";
@@ -288,6 +288,10 @@ async function handleHostOp(reqId: string, op: HostOp): Promise<void> {
 		const result = await hostOpRunner.run(op);
 		safeSend({ type: "host_op_reply", reqId, ok: true, result });
 	} catch (err) {
-		safeSend({ type: "host_op_reply", reqId, ok: false, error: (err as Error).message });
+		const message = err instanceof Error ? err.message : String(err);
+		// Classify a peek failure at the source (the stderr is freshest here) so the gateway/console
+		// read a kind instead of re-matching tmux/docker wording.
+		const errorKind = op.kind === "peek" ? classifyPeekError(message) : undefined;
+		safeSend({ type: "host_op_reply", reqId, ok: false, error: message, errorKind });
 	}
 }

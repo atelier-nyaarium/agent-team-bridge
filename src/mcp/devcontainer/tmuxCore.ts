@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import { ALLOWED_KEYS, assertTmuxName, type HostPeekResult, type TmuxTarget } from "../../shared/host-op.js";
+import { DEFAULT_SESSION } from "../../shared/session-id.js";
 
 ////////////////////////////////
 //  Constants
@@ -53,6 +54,14 @@ const LOGGED_OUT_RE = /Not logged in|Run \/login/;
 
 ////////////////////////////////
 //  Functions & Helpers
+
+/** The target for the local agent's OWN tmux session: bare `tmux` (kind "host" = local, not docker
+ * exec), the conventional `DEFAULT_SESSION` pane. The single source for an in-process tool that
+ * drives its own session (set_effort_level, compact_session), so the session name is anchored to one
+ * constant rather than re-hardcoded per tool. */
+export function selfSessionTarget(): TmuxTarget {
+	return { kind: "host", name: "host", sessionName: DEFAULT_SESSION };
+}
 
 /** The pane a host op addresses: the agent runs in pane 0 of its session, so the pane index is
  * fixed and only the session name varies (`<sessionName>.0`). The session name is an argv element
