@@ -7,10 +7,8 @@ scaffolding and the items confirmed done have been removed; what remains below i
 ### The actual incident root cause (still open)
 - `src/mcp/devcontainer/hostDaemon.ts : handleWake / buildLaunchCommand : in-container claude launch` — the in-container agent is launched as a single shell string `tmux new-session -d -s claude "source ~/.bashrc && cd /workspace/<proj> && claude ..."`. If that command exits instantly (a `~/.bashrc` error, `claude` not on PATH, a rejected flag, or a wrong cwd), the session's tmux server dies and the next peek finds "no server running" — the exact symptom that started this. This is the real trigger to chase; the crash fix only makes it non-fatal + legible. (Dead-launch DETECTION now ships via `launchAlive`, so a dead launch reports `wake_result success:false` instead of a false success; the launch hardening itself is still open.)
 
-### Wake-stall landmines (a host disconnect mid-wake hangs `/send`)
-- `src/gateway/wake.ts : WakeCoordinator : (missing) failAll` — has no failAll, unlike its siblings (`HostOpCoordinator.failAll`, evieClient pendingCalls on disconnect).
-- `src/gateway/websocket.ts : createWebSocketHandlers/close : host-disconnect branch` — on host WS drop it calls `hostOpCoordinator.failAll(...)` but never fails the wakeCoordinator; in-flight terminal ops are rescued, in-flight wakes are stranded.
-- `src/gateway/index.ts : doWakeTeam : WAKE_TIMEOUT_MS` — defaults to 600000 (10 min) and `routes.send` awaits the wake INLINE, so a host disconnect mid-wake hangs `/send` up to 10 min. The gateway also ignores `wake_result success:true` (relies only on registration), so a woken-but-unregistered container stalls the same 10 min despite a positive ack on the wire.
+### Wake-stall landmines
+- `src/gateway/index.ts : doWakeTeam : wake_result success:true ignored` — the gateway acts only on a failed `wake_result` plus the woken container's registration; it ignores `wake_result success:true`, so a woken-but-unregistered container stalls the full WAKE_TIMEOUT_MS (10 min) despite a positive ack on the wire. (The host-disconnect-mid-wake stall is fixed: the close handler now calls `wakeCoordinator.failAll`.)
 
 ### Security (overlaps `plans/gateway-auth-surface.md`)
 - `src/gateway/connectorProxy.ts : setupProxy` — unvalidated `{project}` segment dialed as `ws://${project}:20002/ws` with no gateway-side auth (the SSRF noted in gateway-auth-surface).
