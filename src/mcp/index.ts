@@ -23,6 +23,7 @@ const CHANNEL_INSTRUCTIONS = [
 	'Cross-team messages arrive as <channel source="..." ...> tags. ALL metadata rides as tag attributes (session_id, from, and reply_schema when the request specifies one); the tag body is the message itself, nothing is jammed into it.',
 	"Read the request and do the work.",
 	"Reply with the channel_reply tool: pass the session_id from the tag attributes and put your prose in respondAsMarkdownString (renders as markdown + mermaid for the human); use respondAsStructuredData only when the tag carries a reply_schema. The conversation stays open, so you may reply multiple times (interim updates, etc.) with no finality.",
+	"For a substantial reply you may also pass an optional title (a one-line headline) and summary (a few sentences); the console shows the title in its notification bar and uses the tiers for text-to-speech. Omit them for short or plain replies.",
 ].join(" ");
 
 export async function startMcp(): Promise<void> {
