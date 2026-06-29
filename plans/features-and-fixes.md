@@ -8,47 +8,15 @@ Scoped items across the terminal view, TTS playback, message rendering, and atta
 
 | # | Item | Surface | Code change | Deploy target |
 |---|------|---------|-------------|---------------|
-| 3 | autoplay tier collapses to full on plain msgs | Android / TTS | `SttsPlayer.kt` | APK |
 | 5 | TTS volume slider (0-200%, default 100%) | Android / TTS | `SttsPlayer.kt` + `ChatRepository.kt` + `ProvisioningStore.kt` + `MainActivity.kt` | APK |
 
-One deploy target: the Android APK (items 3, 5). No wire-schema change anywhere -> no Kotlin codegen (`scripts/codegen-kotlin.ts`), no synced-leaf restamp (none of the touched symbols appear in `src/shared/schemas.ts`).
+One deploy target: the Android APK (item 5). No wire-schema change anywhere -> no Kotlin codegen (`scripts/codegen-kotlin.ts`), no synced-leaf restamp (none of the touched symbols appear in `src/shared/schemas.ts`).
 
 ---
 
 # Android - TTS
 
 All three items are in `android/.../SttsPlayer.kt` and friends. No tests exist for `SttsPlayer` today (`android/.../test/.../` has only `SttsMigrationTest.kt` + `SttsVoiceTest.kt`).
-
-## Item 3 - autoplay Title/Summary collapses to full on plain messages
-
-**Premise correction (since the original plan).** `ttsText` is ALREADY tier-aware - the old "every tier reads the whole message" framing no longer matches the tree. Current `android/.../SttsPlayer.kt:SttsPlayer.Companion:ttsText`:
-```kotlin
-fun ttsText(m: Message, tier: Tier): String = when (tier) {
-    Tier.SUMMARY -> m.summary ?: m.title ?: sanitize(m.text)
-    Tier.TITLE   -> m.title   ?: m.summary ?: sanitize(m.text)
-    Tier.FULL    -> sanitize(m.text)
-}
-```
-The wiring around it is correct too: the selector persists (`android/.../ChatRepository.kt:ChatRepository:sttsAutoPlay`, default `"off"` via `android/.../ProvisioningStore.kt:ProvisioningStore:autoPlay`), and the autoplay trigger `android/.../ChatRepository.kt:ChatRepository:poll` maps the setting through `android/.../ChatRepository.kt:ChatRepository:autoPlayTier` and calls `playMessage(t, at, autoTier)` with the chosen tier - it does NOT hardcode FULL.
-
-**The actual remaining gap.** A plain message (a `channel_reply`, like normal chat) has no `title`/`summary` (those `Message` fields - `android/.../ChatRepository.kt:Message` - ride in only on a `notify_human` notice). So for a plain message both TITLE and SUMMARY fall through to `sanitize(m.text)`: with autoplay set to Title or Summary, a plain reply still reads the whole body. (Tier enum `android/.../SttsPlayer.kt:SttsPlayer:Tier` = FULL/SUMMARY/TITLE.)
-
-**Fix.** Derive a title/summary from the text when none is supplied. In `android/.../SttsPlayer.kt:SttsPlayer.Companion:ttsText`:
-```kotlin
-Tier.SUMMARY -> m.summary ?: m.title ?: deriveSummary(m.text)
-Tier.TITLE   -> m.title   ?: deriveTitle(m.text)
-Tier.FULL    -> sanitize(m.text)              // unchanged
-```
-Add `android/.../SttsPlayer.kt:SttsPlayer.Companion:deriveTitle` and `:deriveSummary`. Notices with explicit tiers keep theirs (the `?:` short-circuits before the derive).
-
-**The heuristic (OPEN DECISION - see end).**
-- `deriveTitle(text)`: first non-blank line (split on `\n`), sanitized; cut at the first sentence end (`.`/`!`/`?`) before ~140 chars, else cap ~140 chars on a word boundary (+ "…"). One-sentence headline.
-- `deriveSummary(text)`: first paragraph (up to the first blank line) or first ~3 sentences, sanitized, capped ~400 chars on a word boundary.
-- A short message whose derived title equals the whole body just reads fully at every tier (fine).
-
-**Tests.** Add unit tests for `ttsText` (pure): explicit title/summary used as-is; no title -> derived first line; no summary -> derived first paragraph; caps enforced; a one-line message reads the same at all tiers.
-
-**Verify.** Autoplay=Title on a fresh plain reply reads one sentence; Summary reads the first paragraph; Full reads everything; a `notify_human` notice uses its explicit tiers.
 
 ## Item 5 - TTS volume slider (0-200%, default 100%)
 
@@ -102,10 +70,10 @@ Add `android/.../SttsPlayer.kt:SttsPlayer.Companion:deriveTitle` and `:deriveSum
 
 | File | Change | Items |
 |------|--------|-------|
-| `android/.../SttsPlayer.kt` | `ttsText` derive + `deriveTitle`/`deriveSummary`; `isPlayingMessage`; `volumePct` param + `LoudnessEnhancer` + pure mapping helper | 3, 4, 5 |
-| `android/.../ChatRepository.kt` | `isMessagePlaying` + `stopPlayback`; `sttsVolume` passthrough + thread into `playMessage` | 4, 5 |
+| `android/.../SttsPlayer.kt` | `volumePct` param + `LoudnessEnhancer` + pure mapping helper | 5 |
+| `android/.../ChatRepository.kt` | `sttsVolume` passthrough + thread into `playMessage` | 5 |
 | `android/.../ProvisioningStore.kt` | `sttsVolume` (Int, default 100) + `KEY_STTS_VOLUME` | 5 |
-| `android/.../MainActivity.kt` | `onPlayTap` toggle; volume `Slider` | 4, 5 |
+| `android/.../MainActivity.kt` | volume `Slider` | 5 |
 
 `src/mcp/index.ts:new McpServer` reads `packageJson.version`, so the MCP server version follows `package.json` automatically - 2 version files, not 3.
 
@@ -117,15 +85,14 @@ Add `android/.../SttsPlayer.kt:SttsPlayer.Companion:deriveTitle` and `:deriveSum
   JAVA_HOME=/home/nyaarium/android-dev/jdk ANDROID_HOME=/home/nyaarium/android-dev/sdk \
     ./gradlew :app:testDebugUnitTest --console=plain
   ```
-  Compiles Kotlin + runs unit tests (incl. the new `ttsText` + volume-mapping tests). For the R8/minify gate also run `./gradlew :app:assembleRelease` (testDebugUnitTest runs un-minified and won't catch a strip).
+  Compiles Kotlin + runs unit tests (incl. the new volume-mapping tests). For the R8/minify gate also run `./gradlew :app:assembleRelease` (testDebugUnitTest runs un-minified and won't catch a strip).
 
 ## Deploy sequence (after the PR merges + the APK builds)
 
-1. Update the Android app (in-app updater or sideload) - items 3, 5.
+1. Update the Android app (in-app updater or sideload) - item 5.
 
 ## Open decisions for review
 
-- **Item 3 heuristic:** title = first line/sentence, summary = first paragraph, caps 140/400. Confirm or adjust.
 - **Item 5 volume:** (a) continuous slider vs stepped (e.g. 5% increments); (b) the pct->mB mapping - simple linear `(pct-100)*6` vs a log-accurate dB curve; (c) whether 200% is the right ceiling (LoudnessEnhancer can push higher but distortion grows).
 
 ---
