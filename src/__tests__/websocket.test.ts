@@ -316,6 +316,18 @@ describe("createWebSocketHandlers", () => {
 		expect(knownTeamPaths.get("proj-a")).toBe("/existing/path");
 		expect(knownTeamPaths.get("proj-b")).toBe("/catalog/proj-b");
 	});
+
+	it("a non-host register seeds knownTeamPaths but never offlineCatalog (the connector SSRF gate trusts only the host catalog)", () => {
+		const { handlers, knownTeamPaths, offlineCatalog } = setup();
+		const ws = createMockWs();
+		handlers.open(ws);
+		// An unauthenticated /bridge register can name itself anything (no host token), so it may land in
+		// knownTeamPaths - but must never reach offlineCatalog, the host-token-gated source the connector
+		// proxy gate dials from. Otherwise a register of "localhost" could SSRF ws://localhost:20002.
+		handlers.message(ws, JSON.stringify({ type: "register", team: "localhost", subId: "s1", projectPath: "/tmp" }));
+		expect(knownTeamPaths.get("localhost")).toBe("/tmp");
+		expect(offlineCatalog.has("localhost")).toBe(false);
+	});
 });
 
 describe("virtual peer awareness", () => {

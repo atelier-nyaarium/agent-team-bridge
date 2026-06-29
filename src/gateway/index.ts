@@ -863,6 +863,15 @@ export async function startGateway(): Promise<void> {
 			const proxyMatch = url.pathname.match(/^\/connector\/([^/]+)\/ws$/);
 			if (proxyMatch) {
 				const project = proxyMatch[1];
+				// SSRF guard: `project` is dialed as ws://<project>:20002/ws, so only a project from the
+				// host daemon's trusted catalog (offlineCatalog, written only under the HOST_WS_TOKEN gate)
+				// may be proxied. Deliberately NOT isCatalogProject: that also trusts knownTeamPaths, which
+				// an unauthenticated /bridge register can poison with a hostile name (e.g. "localhost").
+				// Requires the host daemon connected; the broader unauth-/bridge surface is
+				// gateway-auth-surface.md's (postponed).
+				if (!offlineCatalog.has(project)) {
+					return new Response("Unknown connector project", { status: 404 });
+				}
 				const authHeader = req.headers.get("Authorization") || "";
 				if (
 					server.upgrade(req, {

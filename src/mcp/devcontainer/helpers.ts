@@ -44,13 +44,7 @@ function devcontainerBin(): string {
 	return cachedBin;
 }
 
-// Environment & project validation
-
-export function assertNotContainer(): void {
-	if (fs.existsSync("/.dockerenv") || process.env.REMOTE_CONTAINERS) {
-		throw new Error(`This tool runs on the host, not inside a container.`);
-	}
-}
+// Project validation
 
 export function resolveProject(projectPath: string): string {
 	if (projectPath.includes("..")) {
@@ -194,52 +188,6 @@ function provisionPluginSettings(projectPath: string): void {
 		timeout: 10_000,
 	});
 	console.log(`[devcontainer] provisioned plugins for '${projectPath}'`);
-}
-
-export function ensureContainerUp(projectPath: string): ContainerUpResult {
-	if (isContainerReady(projectPath)) {
-		return { wasAlreadyRunning: true, pluginsProvisioned: false };
-	}
-
-	teardownContainer(projectPath);
-
-	const bin = devcontainerBin();
-
-	let output: string;
-	try {
-		output = execSync(`"${bin}" up --workspace-folder "${projectPath}" --remove-existing-container`, {
-			encoding: "utf-8",
-			maxBuffer: 10 * 1024 * 1024,
-		});
-	} catch (e) {
-		const msg = e instanceof Error ? e.message : String(e);
-		throw new Error(`devcontainer up failed for '${projectPath}':\n${msg}`);
-	}
-
-	parseDevcontainerOutput(output, projectPath);
-
-	// Run lifecycle commands (postCreateCommand, postStartCommand) so the
-	// home directory gets provisioned and plugins are available.
-	try {
-		execSync(`"${bin}" run-user-commands --workspace-folder "${projectPath}"`, {
-			encoding: "utf-8",
-			maxBuffer: 10 * 1024 * 1024,
-		});
-	} catch {
-		console.error(`[devcontainer] run-user-commands failed for '${projectPath}' (non-fatal)`);
-	}
-
-	let pluginsProvisioned = false;
-	if (!hasPluginSettings(projectPath)) {
-		try {
-			provisionPluginSettings(projectPath);
-			pluginsProvisioned = true;
-		} catch (e) {
-			console.error(`[devcontainer] plugin provisioning failed: ${(e as Error).message}`);
-		}
-	}
-
-	return { wasAlreadyRunning: false, pluginsProvisioned };
 }
 
 export function ensureContainerUpAsync(projectPath: string): Promise<ContainerUpResult> {
