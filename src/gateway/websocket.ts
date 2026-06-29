@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
-import { debugLog } from "../shared/debug-log.js";
 import { WsRegisterSchema } from "../shared/schemas.js";
 import { isComposite, parseSessionName } from "../shared/session-id.js";
 import type { ConnectionMode, WebSocketConfig } from "../shared/types.js";
@@ -92,21 +91,12 @@ export function createWebSocketHandlers({
 	const { HEARTBEAT_INTERVAL_MS = 30000, MISSED_PINGS_LIMIT = 2 } = config;
 
 	const heartbeatInterval = setInterval(() => {
-		for (const [teamName, subs] of registry) {
-			for (const [subId, ws] of subs) {
+		for (const subs of registry.values()) {
+			for (const ws of subs.values()) {
 				const data = ws.data as WsData;
 				if (data.virtual) continue;
 				data.missedPings = (data.missedPings || 0) + 1;
 				if (data.missedPings >= MISSED_PINGS_LIMIT) {
-					// #region Hypothesis E: heartbeat evicting stale socket
-					debugLog("E", "src/gateway/websocket.ts:heartbeat", "evicting stale socket", {
-						team: teamName,
-						subId,
-						missedPings: data.missedPings,
-						readyState: ws.readyState,
-						totalSubsForTeam: subs.size,
-					});
-					// #endregion
 					ws.close();
 					continue;
 				}
@@ -201,18 +191,6 @@ export function createWebSocketHandlers({
 				existing.close();
 			}
 
-			// #region Hypothesis D/F: log register with pre-existing sub-session state
-			debugLog("D", "src/gateway/websocket.ts:register", "team registered", {
-				team,
-				subId,
-				mode,
-				conversationId: conversationId ?? "none",
-				existingSubIds: Array.from(subs.keys()),
-				existingSubCount: subs.size,
-				replacedExisting: !!existing,
-			});
-			// #endregion
-
 			ws.data.teamName = team;
 			ws.data.subId = subId;
 			ws.data.conversationId = conversationId;
@@ -274,19 +252,13 @@ export function createWebSocketHandlers({
 			onTeamConnect?.(team, ws);
 		}
 
-		// #region Hypothesis M: log all wake_results (gateway only handles success=false)
+		// The gateway only acts on a failed wake_result; a success is confirmed by the woken
+		// container's own register, so the success branch is intentionally a no-op here.
 		if (msg.type === "wake_result" && typeof msg.team === "string") {
-			debugLog("M", "src/gateway/websocket.ts:wake_result", "wake_result received", {
-				team: msg.team as string,
-				success: msg.success as boolean,
-				error: (msg.error as string) ?? null,
-				screen: typeof msg.screen === "string" ? (msg.screen as string).slice(0, 200) : null,
-			});
 			if (msg.success === false) {
 				wakeCoordinator.notify(msg.team, false);
 			}
 		}
-		// #endregion
 
 		// The host daemon's reply to a peek/send relay, correlated by reqId. Only the
 		// authenticated host socket may settle a host op (matching the catalog branch).
@@ -321,20 +293,6 @@ export function createWebSocketHandlers({
 	function close(ws: ServerWebSocket<WsData>): void {
 		const teamName = ws.data.teamName;
 		const subId = ws.data.subId;
-
-		// #region Hypothesis D: log close event with registry state
-		if (teamName && teamName !== "host") {
-			const subs = registry.get(teamName);
-			debugLog("D", "src/gateway/websocket.ts:close", "socket closing", {
-				team: teamName,
-				subId,
-				isStale: ws.data.isStale,
-				readyState: ws.readyState,
-				subsBeforeClose: subs ? Array.from(subs.keys()) : [],
-				subsCount: subs?.size ?? 0,
-			});
-		}
-		// #endregion
 
 		if (ws.data.isStale) {
 			console.log(`[ws] stale socket closed for ${teamName}/${subId} - ignoring`);
@@ -411,19 +369,6 @@ export function createWebSocketHandlers({
 		} else if (response) {
 			isMainOrLead = /true/i.test(response);
 		}
-
-		// #region Hypothesis G: log resolveHandshake inputs and result
-		debugLog("G", "src/gateway/websocket.ts:resolveHandshake", "handshake resolution", {
-			sessionId,
-			team: pending.team,
-			subId: pending.subId,
-			replyAsJson: replyAsJson ?? null,
-			response: response ?? null,
-			isMainOrLead,
-			replyAsJsonType: typeof replyAsJson,
-			fieldType: replyAsJson ? typeof replyAsJson.isMainOrLead : "n/a",
-		});
-		// #endregion
 
 		if (isMainOrLead) {
 			ws.data.handshakeConfirmed = true;

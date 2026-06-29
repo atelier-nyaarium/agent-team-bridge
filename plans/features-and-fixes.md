@@ -9,14 +9,13 @@ Scoped items across the terminal view, TTS playback, message rendering, and atta
 | # | Item | Surface | Code change | Deploy target |
 |---|------|---------|-------------|---------------|
 | 1 | tmux pane is 80-wide | host / TS | `tmuxCore.ts` + `start-host-daemon.sh` + test | reload_plugins (+ host restart) |
-| 2 | BSpace disallowed | gateway + host | NONE (stale process) | `./start-gateway.sh` + reload_plugins |
 | 3 | autoplay tier collapses to full on plain msgs | Android / TTS | `SttsPlayer.kt` | APK |
 | 4 | play/stop out of sync | Android / TTS | `SttsPlayer.kt` + `ChatRepository.kt` + `MainActivity.kt` | APK |
 | 5 | TTS volume slider (0-200%, default 100%) | Android / TTS | `SttsPlayer.kt` + `ChatRepository.kt` + `ProvisioningStore.kt` + `MainActivity.kt` | APK |
 | 6 | slash macros: `/context`, `/resume`, `/compact [msg]` | Android / terminal | `TerminalView.kt` | APK |
 | 7 | single newlines collapse in Markdown | Android / rendering | `assets/thread/thread.js` | APK |
 
-Three deploy targets total: the plugin (item 1), a gateway rebuild (item 2), and the Android APK (items 3-7). No wire-schema change anywhere -> no Kotlin codegen (`scripts/codegen-kotlin.ts`), no synced-leaf restamp (none of the touched symbols appear in `src/shared/schemas.ts`).
+Two deploy targets total: the plugin (item 1) and the Android APK (items 3-7). No wire-schema change anywhere -> no Kotlin codegen (`scripts/codegen-kotlin.ts`), no synced-leaf restamp (none of the touched symbols appear in `src/shared/schemas.ts`).
 
 ---
 
@@ -46,18 +45,6 @@ Three deploy targets total: the plugin (item 1), a gateway rebuild (item 2), and
 **Edge cases.** 58 cols is narrow for Claude's TUI - it will reflow/wrap; that's the user's explicit choice (fit the phone). A manual `tmux attach` for debugging would resize to that terminal (window-size latest), but that's a deliberate debug action, not the capture path.
 
 **Verify.** Open the terminal view on the host-agent and on a devcontainer; the captured pane is 58x40 and fits.
-
-## Item 2 - `tmux_send failed: disallowed key BSpace`
-
-**Root cause.** NOT a code bug. The app sends exactly `"BSpace"` / `"M-BSpace"` from `android/.../TerminalView.kt:TerminalView` (the `BackspaceKey` call: `onTap = { fire(null, "BSpace") }`, `onHoldRepeat = { fire(null, "M-BSpace") }`), and the source allowlist `src/shared/host-op.ts:ALLOWED_KEYS` already contains both. The error means a RUNNING process is on pre-allowlist code.
-
-**Which process is stale.** TWO gates throw the identical `disallowed key "..."` string and BOTH import the same `ALLOWED_KEYS`:
-- `src/gateway/console/consoleHandler.ts` - the `tmux_send` op fail-fast, runs in the gateway Docker container.
-- `src/mcp/devcontainer/tmuxCore.ts:sendKey` - the host executor gate, runs in the host daemon.
-
-The stale process could be EITHER, so fix both: `./start-gateway.sh` rebuilds the gateway (git pull + Docker rebuild bakes in the current `ALLOWED_KEYS`), and `reload_plugins` on the host-daemon (delivered alongside item 1) refreshes the host gate.
-
-**Verify.** After both: tap = one backspace, hold = repeat Alt+Backspace (delete-word).
 
 ---
 
@@ -252,10 +239,9 @@ That's the markdown-it equivalent of GitHub line breaks; every single `\n` insid
 
 ## Deploy sequence (after the PR merges + the APK builds)
 
-1. `./start-gateway.sh` - rebuild the gateway (item 2 BSpace gateway gate; git pull + Docker rebuild).
-2. `reload_plugins` on the host-daemon - deliver item 1's `tmuxCore` resize AND refresh the host-side `sendKey` gate for item 2 (needs the 5.0.24 bump merged first). The peek-resize then forces 58x40 with no host restart.
-3. (optional) `./start-host-daemon.sh` - clean 58x40 host session from birth.
-4. Update the Android app (in-app updater or sideload) - items 3, 4, 5, 6, 7.
+1. `reload_plugins` on the host-daemon - deliver item 1's `tmuxCore` resize (needs the version bump merged first). The peek-resize then forces 58x40 with no host restart.
+2. (optional) `./start-host-daemon.sh` - clean 58x40 host session from birth.
+3. Update the Android app (in-app updater or sideload) - items 3, 4, 5, 6, 7.
 
 ## Open decisions for review
 

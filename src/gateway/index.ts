@@ -50,18 +50,13 @@ export async function startGateway(): Promise<void> {
 	const PORT = parseInt(process.env.PORT || "20000", 10);
 	// The arming-only pinned-TLS listener for the phone's LAN bundle delivery (see the arming block).
 	const ENROLL_TLS_PORT = parseInt(process.env.ENROLL_TLS_PORT || "20003", 10);
-	const LOG_PATH = path.join("/app", "log", "debug.log");
-
-	// Clear debug log on startup so it only contains entries from this run
-	try {
-		const dir = path.dirname(LOG_PATH);
-		if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-		fs.writeFileSync(LOG_PATH, "");
-	} catch {}
+	// The legacy pre-DATA_DIR durable-state dir, kept only so the one-shot schema wipe below can
+	// drop any old-grammar files left there by the historical legacy->DATA_DIR migration.
+	const LOG_DIR = path.join("/app", "log");
 
 	// Durable state (federation private keys, pending-jobs, mailboxes, replay-guard, the session
-	// resume map) lives in DATA_DIR, deliberately SEPARATE from the debug-log dir so a "clear the
-	// logs" action can never wipe federation identity.
+	// resume map) lives in DATA_DIR, deliberately SEPARATE from the legacy /app/log volume so a
+	// "clear the logs" action can never wipe federation identity.
 	const DATA_DIR = process.env.DATA_DIR || "/app/data";
 	fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -87,7 +82,7 @@ export async function startGateway(): Promise<void> {
 		const sentinelPath = path.join(DATA_DIR, "schema-version");
 		const current = fs.existsSync(sentinelPath) ? fs.readFileSync(sentinelPath, "utf8").trim() : "";
 		if (current !== SCHEMA_VERSION) {
-			const legacyDir = path.dirname(LOG_PATH);
+			const legacyDir = LOG_DIR;
 			for (const f of ["pending-jobs.json", "mailboxes.json"]) {
 				fs.rmSync(path.join(DATA_DIR, f), { force: true });
 				// Also drop the legacy-dir copy, so the temporary legacy->DATA_DIR migration (gated only
@@ -218,14 +213,6 @@ export async function startGateway(): Promise<void> {
 
 		const hostSubs = registry.get("host");
 		const hostWs = hostSubs ? [...hostSubs.values()].find((ws) => ws.readyState === 1) : undefined;
-
-		// #region Hypothesis I: check host WebSocket state when wake fires
-		const hostSubCount = hostSubs?.size ?? 0;
-		const hostWsStates = hostSubs ? [...hostSubs.values()].map((ws) => ws.readyState) : [];
-		console.log(
-			`[wake] host state: subs=${hostSubCount}, readyStates=[${hostWsStates.join(",")}], foundAlive=${!!hostWs}`,
-		);
-		// #endregion
 
 		if (!hostWs) {
 			console.log(`[wake] cannot wake ${team} - host is not connected`);
@@ -596,7 +583,7 @@ export async function startGateway(): Promise<void> {
 			registry,
 			conversationRegistry,
 			store,
-			config: { LOG_PATH, RESPONSE_TIMEOUT_MS, localGatewayId, localDomainId },
+			config: { RESPONSE_TIMEOUT_MS, localGatewayId, localDomainId },
 			tryWakeTeam,
 			offlineCatalog,
 			knownTeamPaths,
@@ -855,7 +842,6 @@ export async function startGateway(): Promise<void> {
 				headers: { "Content-Type": "application/json" },
 			});
 		}
-		if (method === "POST" && url.pathname === "/ingest") return routes.ingest(req, body);
 		if (method === "GET" && url.pathname === "/pending") return routes.pending();
 		if (method === "GET" && url.pathname === "/teams") return routes.teams();
 		if (method === "GET" && url.pathname === "/discover") return routes.discover();
