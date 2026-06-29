@@ -60,7 +60,7 @@ function friendlyPeekError(error?: string, kind?: PeekErrorKind): string {
 
 /** The subset of gateway HTTP routes the console handler reuses. */
 export interface ConsoleRoutes {
-	send: (req: Request, body: Record<string, unknown>) => Promise<Response>;
+	send: (req: Request, body: Record<string, unknown>, opts?: { consoleSender?: boolean }) => Promise<Response>;
 	respond: (req: Request, body: Record<string, unknown>) => Response;
 	teams: () => Response;
 	// Mesh-wide team list (local + every online peer Gateway). A console roams all Gateways.
@@ -508,17 +508,23 @@ export function createConsoleDispatcher({
 					targetAddr instanceof SpawnPoint
 						? ""
 						: storeKey({ kind: "conv", conversationId: ownerId, address: targetAddr });
-				const sendPromise = routes.send(FAKE_REQ, {
-					from: device,
-					fromConversationId: ownerId,
-					to: op.to,
-					// Forward the selected session's Domain so a cross-Domain send resolves its seal
-					// target by the full (domainId, gatewayId) pair; absent for a local/cross-Gateway send.
-					targetDomainId: op.domainId,
-					body: op.body,
-					files: op.files,
-					channelOnly: true,
-				});
+				const sendPromise = routes.send(
+					FAKE_REQ,
+					{
+						from: device,
+						fromConversationId: ownerId,
+						to: op.to,
+						// Forward the selected session's Domain so a cross-Domain send resolves its seal
+						// target by the full (domainId, gatewayId) pair; absent for a local/cross-Gateway send.
+						targetDomainId: op.domainId,
+						body: op.body,
+						files: op.files,
+						channelOnly: true,
+					},
+					// The console's `from` is a free-form Device Name (not a slug); consoleSender makes
+					// routes.send build the sender address from the owner id, not localAddress(from).
+					{ consoleSender: true },
+				);
 
 				let boundTimer: ReturnType<typeof setTimeout> | undefined;
 				const bound = new Promise<null>((resolve) => {

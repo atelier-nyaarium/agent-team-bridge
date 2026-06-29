@@ -20,7 +20,7 @@ import com.atelier_nyaarium.switchboard.proto.GatewayBootstrapFrame
 import com.atelier_nyaarium.switchboard.proto.GatewayTransport
 import com.atelier_nyaarium.switchboard.proto.SyncEntry
 import com.atelier_nyaarium.switchboard.proto.SyncPollResult
-import com.atelier_nyaarium.switchboard.proto.parseSessionName
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.parseStoreKey
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.io.File
@@ -507,19 +507,26 @@ class ChatRepository(
 	private fun canonicalTarget(team: String): String =
 		runCatching { parseTarget(team, localDomain(), localGatewayId).canonical }.getOrDefault(team)
 
-	/** A `from` field (a canonical address, or a local team field) resolved to its canonical address
-	 * for thread attribution. Guarded; falls back to the raw value. */
-	private fun fromCanonical(from: String): String =
-		runCatching { parseTarget(from, localDomain(), localGatewayId).canonical }.getOrDefault(from)
+	/** A `from` field (a canonical address or a local team field) resolved to its canonical address
+	 * for thread attribution, or null when it is not an address (a free-form Device Name). Null lets
+	 * the caller fall back to the store-key sender instead of keying a thread by a non-address - which
+	 * would otherwise become an unsendable ghost chat. */
+	private fun fromCanonical(from: String): String? =
+		runCatching { parseTarget(from, localDomain(), localGatewayId).canonical }.getOrNull()
 
-	/** This device's own session address, the way the gateway mints it for an agent->console push
-	 * (localAddress(device): the device name as the spawn, its session defaulting to DEFAULT_SESSION).
-	 * Null when the device name is not a valid address segment - which is also when the gateway cannot
-	 * address it, so the Face-4 self-thread check simply never fires. */
+	/** The owner id: sha256 of the DECODED owner signing-key bytes, lowercase hex (the gateway's
+	 * `ownerKeyId` twin). Keys the owner's shared inbox and is the console's own address spawn segment. */
+	private fun ownerKeyId(signPubB64: String): String =
+		java.security.MessageDigest.getInstance("SHA-256")
+			.digest(java.util.Base64.getDecoder().decode(signPubB64))
+			.joinToString("") { "%02x".format(it) }
+
+	/** This device's own session address. The spawn segment is the OWNER id (matching the gateway's
+	 * consoleSelfAddress), NOT the free-form device name, so a device name with spaces/capitals no
+	 * longer breaks the self-thread check. Null only when the owner key is not yet available. */
 	private fun thisDeviceAddress(): Address? =
 		runCatching {
-			val pn = parseSessionName(currentDeviceName())
-			Address.local(localDomain(), localGatewayId, pn.project, pn.session)
+			Address.local(localDomain(), localGatewayId, ownerKeyId(federation.ownerSignPub()), Protocol.DEFAULT_SESSION)
 		}.getOrNull()
 
 	// Read and invalidated across threads (poll loop, main, the player's daemon thread);
@@ -2391,7 +2398,9 @@ class ChatRepository(
 							when (val sk = parseStoreKey(e.session_id)) {
 								is SessionKey.Conv ->
 									if (deviceAddr != null && sk.address == deviceAddr) {
-										// Session address is this device; thread under the sender.
+										// Push to our own session: thread under the sender, falling back to our own
+										// self-address - a non-address `from` (a raw Device Name) would otherwise become
+										// an unsendable ghost-chat key.
 										e.from?.let { fromCanonical(it) } ?: sk.address.canonical
 									} else {
 										sk.address.canonical
@@ -2745,14 +2754,22 @@ class ChatRepository(
 		runCatching { store.saveThreads(root.toString()) }
 	}
 
+	/** A persisted thread/label/draft key is a canonical 4-segment address (domain.gateway.spawn.session).
+	 * Anything else - a prior device-name-as-segment bug key, or any non-canonical shorter form - is
+	 * dropped on load so it cannot resurface as an unsendable ghost chat; re-saving the cleaned map
+	 * drops it for good. The exact-3-dots check enforces arity 4 (parseTarget alone also accepts arity
+	 * 1/2/3). The domain arg is "" not localDomain(): this runs during _state construction (localDomain()
+	 * reads _state and would NPE), and a 4-segment key carries its own domain so the arg is unused. */
+	private fun isAddressKey(rawKey: String): Boolean =
+		rawKey.count { it == '.' } == 3 && runCatching { parseTarget(rawKey, "", localGatewayId) }.isSuccess
+
 	private fun loadPersistedThreads(): Map<String, List<Message>> {
 		val json = store.loadThreads() ?: return emptyMap()
 		return runCatching {
 			val root = JSONObject(json)
-			// Keys are already canonical address strings (the one-shot schema wipe cleared any
-			// old-grammar persisted state), so each key maps straight through.
 			val merged = LinkedHashMap<String, MutableList<Message>>()
 			for (rawKey in root.keys()) {
+				if (!isAddressKey(rawKey)) continue
 				val canonicalKey = rawKey
 				val arr = root.getJSONArray(rawKey)
 				val loaded = (0 until arr.length()).map {
@@ -2806,9 +2823,11 @@ class ChatRepository(
 		val json = store.loadLabels() ?: return emptyMap()
 		return runCatching {
 			val root = JSONObject(json)
-			// Keys are already canonical (the schema wipe cleared old-grammar state).
 			buildMap {
-				for (rawKey in root.keys()) put(rawKey, root.getString(rawKey))
+				for (rawKey in root.keys()) {
+					if (!isAddressKey(rawKey)) continue
+					put(rawKey, root.getString(rawKey))
+				}
 			}
 		}.getOrDefault(emptyMap())
 	}
@@ -2823,9 +2842,11 @@ class ChatRepository(
 		val json = store.loadDrafts() ?: return mutableMapOf()
 		return runCatching {
 			val root = JSONObject(json)
-			// Keys are already canonical (the schema wipe cleared old-grammar state).
 			val out = mutableMapOf<String, String>()
-			for (rawKey in root.keys()) out[rawKey] = root.getString(rawKey)
+			for (rawKey in root.keys()) {
+				if (!isAddressKey(rawKey)) continue
+				out[rawKey] = root.getString(rawKey)
+			}
 			out
 		}.getOrDefault(mutableMapOf())
 	}

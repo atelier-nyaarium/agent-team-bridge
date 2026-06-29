@@ -491,6 +491,22 @@ describe("routes", () => {
 			expect((await res.json()).error).toContain("not connected");
 		});
 
+		it("the not-found `available` list skips a non-slug Device Name registry key instead of throwing", async () => {
+			// A console registers under a free-form human Device Name (not an address slug). A send that
+			// 404s maps registry keys to canonical addresses for `available`; the device-name key must be
+			// skipped (tryLocalAddress), not throw "invalid address segment".
+			const registry = makeRegistry({ "Pixel 10 Pro XL": { readyState: 1, data: { mode: "channel" } } });
+			const ctx = makeCtx({ registry });
+			const { send } = createRoutes(ctx);
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "a",
+				to: "b.dev",
+				body: "hi",
+			});
+			expect(res.status).toBe(404);
+			expect((await res.json()).available).toEqual([]);
+		});
+
 		it("blocks a crosstalk send to the reserved host daemon with 400", async () => {
 			const ctx = makeCtx();
 			const { send } = createRoutes(ctx);

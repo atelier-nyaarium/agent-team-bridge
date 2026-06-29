@@ -9,6 +9,7 @@ import { ChannelFilesSchema } from "../shared/schemas.js";
 import {
 	Address,
 	composeSessionName,
+	DEFAULT_SESSION,
 	isComposite,
 	isSlug,
 	LOCAL_DOMAIN_SENTINEL,
@@ -231,6 +232,23 @@ export function createRoutes({
 		return Address.local(localDomain, localGatewayId, project, session);
 	}
 
+	/** A console is registry-keyed by a free-form human Device Name (not a slug), so its canonical
+	 * sender address uses the owner id (a slug, the shared inbox key) as the spawn segment, never the
+	 * device name. The device name stays a display label. */
+	function consoleSelfAddress(ownerId: string): Address {
+		return Address.local(localDomain, localGatewayId, ownerId, DEFAULT_SESSION);
+	}
+
+	/** Null instead of throwing for a non-addressable registry key (a console's device name), so a
+	 * registry iteration silently skips the operator's own device. */
+	function tryLocalAddress(name: string): Address | null {
+		try {
+			return localAddress(name);
+		} catch {
+			return null;
+		}
+	}
+
 	/** Resolve a target Gateway id to a SealTarget, LOCAL-FIRST (mirroring the sealer's own
 	 * resolution order). A gateway id the local single-owner allowlist resolves is the
 	 * bare-string shorthand and seals v1 - checked BEFORE the cross-Domain scan, so a send to
@@ -375,11 +393,15 @@ export function createRoutes({
 		targetName: string;
 		targetDomain?: string;
 		from: string;
+		// Pre-built canonical sender address. The console sets it (owner-id based) because its `from`
+		// is a free-form Device Name that is not a slug; an agent send leaves it unset and the sender
+		// address is derived from its slug team field instead.
+		fromAddress?: string;
 		fromConversationId: string | undefined;
 		body?: string;
 		files?: ChannelFile[];
 	}): Promise<Response> {
-		const { targetGateway, targetName, targetDomain, from, fromConversationId, body, files } = args;
+		const { targetGateway, targetName, targetDomain, from, fromAddress, fromConversationId, body, files } = args;
 		if (!evieClient?.isConnected()) {
 			return jsonResponse({ error: `Router unavailable; cannot reach Gateway "${targetGateway}"` }, 503);
 		}
@@ -396,7 +418,7 @@ export function createRoutes({
 		const srcSession = storeKey({ kind: "conv", conversationId: fromConversationId, address: targetAddr });
 		const op: FederatedOp = {
 			kind: "send",
-			from: localAddress(from).canonical,
+			from: fromAddress ?? localAddress(from).canonical,
 			to: targetName,
 			body: body ?? "",
 			...(files && files.length > 0 ? { files } : {}),
@@ -463,7 +485,8 @@ export function createRoutes({
 			// An online local session keeps its cross-Domain shares fresh: refresh lastSeenAt
 			// so a session that is actively connected is never auto-forgotten by the absence
 			// sweep, even with no live thread. No-op when sharing is not wired.
-			touchShares?.(localAddress(name).canonical);
+			const selfAddr = tryLocalAddress(name);
+			if (selfAddr) touchShares?.(selfAddr.canonical);
 			// Plugin version reported by an active real socket; the same value across a team's
 			// sub-sessions in practice.
 			const version = getAllActiveRealWs(subs)[0]?.data.version;
@@ -577,7 +600,7 @@ export function createRoutes({
 	async function send(
 		req: Request,
 		body: Record<string, unknown>,
-		opts: { trustedInbound?: boolean } = {},
+		opts: { trustedInbound?: boolean; consoleSender?: boolean } = {},
 	): Promise<Response> {
 		const parsed = SendRequestSchema.safeParse(body);
 		if (!parsed.success) {
@@ -636,6 +659,13 @@ export function createRoutes({
 				targetName: composeSessionName(parsedTarget.spawn, parsedTarget.session),
 				targetDomain: realDomain,
 				from,
+				// A console send carries a non-slug Device Name as `from`; build its sender address from
+				// the owner id instead. For a console send fromConversationId IS the slug owner id (the
+				// shared inbox key), not a device conversation id. An agent send leaves fromAddress unset.
+				fromAddress:
+					opts.consoleSender && fromConversationId
+						? consoleSelfAddress(fromConversationId).canonical
+						: undefined,
 				fromConversationId,
 				body: msgBody,
 				files,
@@ -680,7 +710,10 @@ export function createRoutes({
 			return jsonResponse(
 				{
 					error: `Team "${qualifiedTo}" is not connected`,
-					available: [...registry.keys()].filter((k) => k !== "host").map((k) => localAddress(k).canonical),
+					available: [...registry.keys()]
+						.filter((k) => k !== "host")
+						.map((k) => tryLocalAddress(k)?.canonical)
+						.filter((c): c is string => c != null),
 				},
 				404,
 			);
@@ -1011,6 +1044,9 @@ export function createRoutes({
 		mailboxStore.forEach((_conversationId, box) => {
 			box.append({
 				kind: "notice",
+				// `from` is agent-origin (the notifying session's PROJECT_NAME, a slug), so localAddress
+				// never throws here - unlike a console send's free-form Device Name. notify_human is an
+				// agent-only tool; a console never posts a notice, so the sender is always a slug.
 				session_id: storeKey({ kind: "notice", sender: localAddress(from) }),
 				from,
 				title,
