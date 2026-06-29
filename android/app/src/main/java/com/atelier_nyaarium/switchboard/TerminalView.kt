@@ -222,7 +222,7 @@ private val PALETTE_KEYS = listOf(
 )
 
 // One-tap slash commands (sent as literal text + Enter) for the agent's TUI.
-private val PALETTE_SLASH = listOf("/model", "/effort", "/usage", "/workflows", "/plugin", "/mcp")
+private val PALETTE_SLASH = listOf("/model", "/effort", "/usage", "/context", "/resume", "/workflows", "/plugin", "/mcp")
 
 // Backspace press-and-hold: the delay before a hold starts repeating, then the repeat cadence.
 private const val BACKSPACE_HOLD_MS = 350L
@@ -330,6 +330,12 @@ fun TerminalView(
 			PALETTE_SLASH.forEach { cmd ->
 				AssistChip(onClick = { fire(cmd, null) }, label = { Text(cmd, fontFamily = FontFamily.Monospace) })
 			}
+			// /compact can take an optional trailing message, so it pre-fills the input box instead of
+			// firing; the user appends a message (or not) and taps Send.
+			AssistChip(
+				onClick = { input = "/compact " },
+				label = { Text("/compact", fontFamily = FontFamily.Monospace) },
+			)
 		}
 		Row(
 			Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
