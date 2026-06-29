@@ -15,6 +15,12 @@ const EXEC_TIMEOUT_MS = 8_000;
 // the sealed reply path. Excess bytes are dropped (the visible pane is far smaller).
 const MAX_CAPTURE_BYTES = 256_000;
 
+// The detached agent session is sized to fit the phone's terminal view before each capture. A
+// detached session keeps the resize-window size (no attached client overrides it), and a same-size
+// resize is a no-op redraw, so the cost is one cheap spawn per peek.
+const TMUX_COLS = 58;
+const TMUX_ROWS = 40;
+
 // Startup readiness polling. A large resumed history can take a while to render, so the budget is
 // generous; the wake path's gateway-side timeout is 10 minutes, so this never races it.
 const READY_TIMEOUT_MS = 90_000;
@@ -120,7 +126,14 @@ function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
 
 /** Capture the VISIBLE pane with ANSI colors (a live snapshot, not scrollback). */
 export async function peekPane(target: TmuxTarget): Promise<HostPeekResult> {
-	const ansi = await run(tmuxArgv(target, ["capture-pane", "-t", paneTarget(target), "-e", "-p"]));
+	const pane = paneTarget(target);
+	// Best-effort resize before the capture so the view fits the phone. Separate run() with a
+	// swallowed failure: an old tmux without resize-window, or a transient error, must not fail the
+	// capture itself.
+	await run(
+		tmuxArgv(target, ["resize-window", "-t", target.sessionName, "-x", String(TMUX_COLS), "-y", String(TMUX_ROWS)]),
+	).catch(() => {});
+	const ansi = await run(tmuxArgv(target, ["capture-pane", "-t", pane, "-e", "-p"]));
 	const hash = crypto.createHash("sha256").update(ansi).digest("hex").slice(0, 16);
 	return { ansi, hash };
 }

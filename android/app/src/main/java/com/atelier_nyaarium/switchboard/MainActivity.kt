@@ -235,7 +235,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// player's now-playing pushes glyph state back. Re-evaluated per recomposition so provisioning
 	// in-session lights the buttons for renderers built afterward.
 	rendererPool.playEnabled = repo.sttsReady()
-	rendererPool.onPlayTap = { team, at -> repo.playMessage(team, at, SttsPlayer.Tier.FULL) }
+	rendererPool.onPlayTap = { team, at ->
+		// Toggle by message: a tap stops whatever tier is playing for this message (autoplay may have
+		// chosen Title/Summary), else plays it FULL. Avoids synthesizing FULL on top of an autoplay.
+		if (repo.isMessagePlaying(team, at)) repo.stopPlayback() else repo.playMessage(team, at, SttsPlayer.Tier.FULL)
+	}
 	DisposableEffect(Unit) {
 		// Fires on the player's daemon thread; the pool's renderer map is
 		// main-owned, so hop through the composition scope (main-dispatched).

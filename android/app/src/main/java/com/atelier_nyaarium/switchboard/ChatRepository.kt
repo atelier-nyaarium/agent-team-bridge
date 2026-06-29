@@ -672,6 +672,10 @@ class ChatRepository(
 		}
 	}
 
+	fun isMessagePlaying(team: String, at: Long): Boolean = stts.isPlayingMessage(team, at)
+
+	fun stopPlayback() = stts.stop()
+
 	/** When on, an incoming message for a followed (open) thread is
 	 * pre-synthesized before its notification. Persisted in prefs. */
 	var sttsAutoGen: Boolean
