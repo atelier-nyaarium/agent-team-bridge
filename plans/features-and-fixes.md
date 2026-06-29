@@ -112,24 +112,6 @@ Captured for later. No investigation depth beyond a quick grounding pass; revisi
 
 **Open questions to revisit.** PIN recovery vs. hard loss (acceptable UX?); whether evie persists any plaintext message bodies at rest; key-derivation (PIN -> KEK) + rate-limiting/brute-force; what "delete account" guarantees server-side.
 
-## Item 9 - cleanup response prose -> structured `instructions` field
-
-**Idea.** Stop jamming behavioral rules onto every inbound message body as a prefixed block:
-```
-┃ Reply with the `channel_reply` tool: pass the session_id ... in the `respondAsMarkdownString` field ...
-┃ session_id: `...`
-```
-Instead, since the wire can carry structured objects, attach an `"instructions": "..."` field on the JSON delivered to the agent. The agent reads it as behavioral context and replies as a structured object - no `┃ Reply with the...` preheader on the body.
-
-**Quick grounding - structured I/O already exists (so this is feasible).**
-- **Outbound (agent -> console):** `channel_reply` already takes `respondAsStructuredData` (a JSON string) at `src/shared/schemas.ts:ChannelReplySchema`, handled in `src/mcp/bridge/replyTool.ts:registerReplyTool` -> `payload.replyAsJson` (mutually exclusive with `respondAsMarkdownString` -> `payload.response`). So "reply as structured object" is already supported.
-- **Inbound (console -> agent):** the message is pushed via `src/mcp/channel/channelNotify.ts:emitChannelNotification` as a `notifications/claude/channel` notification. Structured fields ALREADY ride in `params.meta` (`session_id`, `from`, `request_type`, `effort`, `is_follow_up`) and surface to the agent as the `<channel ...>` tag attributes. The prose-jamming is the `replyInstruction` + `replyReminder` strings prepended to `params.content` in that same function (and the `Status:`/`Question:`/`Reason:` labels in `emitResponseNotification`).
-- **Precedent for an instructions field:** `src/mcp/index.ts` already sets a server-level `instructions: CHANNEL_INSTRUCTIONS` for channel mode - the one-time "how to behave in this channel" text. The cleanup could lean on that (state the reply protocol ONCE at session init) and/or add a per-message `meta.instructions` for context-specific guidance, dropping the per-message `┃` block from `content`.
-
-**Sketch (to scope later).** Move the reply-protocol prose out of `emitChannelNotification`'s `content` into either the existing server-level `CHANNEL_INSTRUCTIONS` (stated once) or a `meta.instructions` field; keep `content` as just the message body (+ files block). Decide whether replies become structured-by-default or stay markdown-prose with structured as the opt-in. Verify the harness surfaces `meta.instructions` to the agent the way it surfaces the other `meta` attributes.
-
-**Open questions to revisit.** Does the harness reliably expose a new `meta.*` key to the agent? Once-at-init instructions vs. per-message (does guidance vary per message)? Backward-compat for any consumer that parses the current `content` preheader.
-
 ## Item 10 - attachment button: raise the per-file cap to 500 MB + manual round-trip test
 
 ### Part A - CODE: raise the max upload cap per file to 500 MB (Discord-Nitro-on-a-server parity)
