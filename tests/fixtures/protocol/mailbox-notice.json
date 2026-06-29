@@ -2,8 +2,8 @@
 	"seq": 44,
 	"at": 1781300976000,
 	"kind": "notice",
-	"session_id": "notice:switchboard",
-	"from": "switchboard",
+	"session_id": "notice.alice.laptop.switchboard.main",
+	"from": "alice.laptop.switchboard.main",
 	"title": "Phase 0 done: deps mature-pinned",
 	"summary": "Every package now sits at the newest stable version at least seven days old.",
 	"body": "Full markdown report body."

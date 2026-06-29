@@ -2,7 +2,7 @@
 	"seq": 12,
 	"at": 1781301050000,
 	"kind": "sent",
-	"session_id": "conv:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae:sakura/gateway",
+	"session_id": "conv.2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae.alice.sakura.gateway.main",
 	"opId": "c0ffee00-1111-2222-3333-444455556666",
 	"body": "ship it"
 }

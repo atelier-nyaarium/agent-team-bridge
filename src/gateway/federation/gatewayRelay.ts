@@ -17,7 +17,7 @@ export interface FederationRoutes {
 }
 
 /** The per-session share state the relay handler reads to enforce destination-side
- * scoping. `sessionTarget` is the canonical `gateway/name` of a LOCAL session; `domainId`
+ * scoping. `sessionTarget` is the canonical `domain.gateway.spawn.session` of a LOCAL session; `domainId`
  * is the calling friend Domain. `touch` keeps a live cross-Domain share from auto-forgetting. */
 export interface RelayShareState {
 	isSharedTo(sessionTarget: string, domainId: string): boolean;
@@ -163,7 +163,7 @@ export function createGatewayRelayHandler({
 				const teams = (await routes.teams().json()) as TeamInfo[];
 				// A cross-Domain caller sees ONLY the sessions shared to its Domain, never the
 				// full session list (that would leak every name). A same-Domain caller gets the
-				// full list. The share keys are canonical gateway/name, so compare against each
+				// full list. The share keys are canonical domain.gateway.spawn.session, so compare against each
 				// team's canonical target.
 				if (srcDomainId !== null) {
 					const shared = new Set(shareState?.sharesFor(srcDomainId) ?? []);
@@ -184,7 +184,7 @@ export function createGatewayRelayHandler({
 				// A reply pinned to the origin: deliver it to the local origin job, which pushes
 				// to the originating conversation (its returnRoute is null, so respond does not
 				// re-forward). A cross-Domain response_push arrives at the ORIGIN Gateway, so its
-				// session_id points at the REMOTE destination (`conv:<conv>:<friendGateway>/<name>`),
+				// session_id points at the REMOTE destination (`conv.<conv>.<friendDomain>.<friendGateway>.<spawn>.<session>`),
 				// which is NOT a local team, so the local-kind check does not apply. Gate instead on
 				// the origin anchor's recorded binding: the reply's VERIFIED Domain must equal the
 				// Domain the send was routed to, and the verified sender must equal the destination

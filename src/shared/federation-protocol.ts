@@ -18,7 +18,7 @@ export { FEDERATION_PROTOCOL_VERSION } from "./evie-protocol.js";
 
 /** How a destination Gateway pins a reply back to the originating Gateway's exact
  * session. `srcSession` is the origin's channel job key
- * (`conv:<srcConversationId>:<dstGateway>/<name>`), used as the job key on BOTH
+ * (`conv.<srcConversationId>.<dstDomain>.<dstGateway>.<spawn>.<session>`), used as the job key on BOTH
  * Gateways so neither side has to translate. */
 // Worst-case lengths under the dot-address grammar. A flattened store key is
 // `conv.<conversationId(<=128)>.<4 slugs(<=64)>` + delimiters (~393); a qualified address is 4

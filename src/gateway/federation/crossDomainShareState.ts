@@ -12,7 +12,7 @@ type CrossDomainShareTarget = z.infer<typeof CrossDomainShareTargetSchema>;
  * Domain, or everyone the owner trusts), keyed by `(sessionTarget, targetKey)`. Plain state, not an
  * owner-signed artifact: the submit op is already authenticated by the console seal, so no second signature. */
 const ShareRecordSchema = z.object({
-	// The canonical SessionId target (`gateway/name`). Only devcontainer/loose sessions are
+	// The canonical SessionId target (`domain.gateway.spawn.session`). Only devcontainer/loose sessions are
 	// shared; the caller enforces that, and the store is kind-agnostic.
 	sessionTarget: z.string().min(1),
 	// Who the session is shared TO: a specific linked Domain, or everyone trusted.
