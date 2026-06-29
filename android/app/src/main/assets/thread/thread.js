@@ -16,6 +16,7 @@
 
 	const md = window.markdownit({
 		html: false,
+		breaks: true,
 		linkify: true,
 		highlight: function (code, lang) {
 			if (lang && window.hljs.getLanguage(lang)) {

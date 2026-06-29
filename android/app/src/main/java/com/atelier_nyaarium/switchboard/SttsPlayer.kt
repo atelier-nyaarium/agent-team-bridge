@@ -46,6 +46,10 @@ class SttsPlayer(private val root: File) {
 	fun isPlaying(team: String, at: Long, tier: Tier): Boolean =
 		currentKey?.startsWith("$team/$at-${tier.suffix}-") == true
 
+	/** Whether this message is playing in ANY tier. The play button toggles by message (it cannot
+	 * know which tier an autoplay chose), unlike [isPlaying] which is tier-specific. */
+	fun isPlayingMessage(team: String, at: Long): Boolean = currentKey != null && currentTeam == team && currentAt == at
+
 	/** Run work on the player's daemon thread. Lets callers move credential
 	 * loading and message resolution off their own thread (a broadcast
 	 * receiver's main thread must hold zero disk or crypto work). */
