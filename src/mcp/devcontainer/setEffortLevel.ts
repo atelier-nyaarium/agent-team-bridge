@@ -1,6 +1,6 @@
-import { execSync } from "node:child_process";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { selfSessionTarget, sendText } from "./tmuxCore.js";
 
 ////////////////////////////////
 //  Schemas
@@ -27,8 +27,6 @@ const setEffortSchema: any = SetEffortLevelSchema;
 ////////////////////////////////
 //  Functions & Helpers
 
-const TMUX_TARGET = "claude.0";
-
 const description = `
 Set the effort level on the local Claude Code session by sending "/effort <level>" to tmux pane 0.
 
@@ -46,11 +44,7 @@ export function registerSetEffortLevel(mcpServer: McpServer): void {
 		async (args: SetEffortLevelArgs) => {
 			try {
 				const command = `/effort ${args.level}`;
-				const b64 = Buffer.from(command).toString("base64");
-				execSync(
-					`bash -c "tmux send-keys -t ${TMUX_TARGET} -l \\"\\$(echo '${b64}' | base64 -d)\\" && tmux send-keys -t ${TMUX_TARGET} Enter"`,
-					{ encoding: "utf-8", timeout: 10_000 },
-				);
+				await sendText(selfSessionTarget(), command);
 
 				return {
 					content: [
