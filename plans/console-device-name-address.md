@@ -119,3 +119,28 @@ so the arg is unused.
 ## Deploy
 
 Gateway rebuild + `reload_plugins` for the TS side; an APK rebuild + app update for the client.
+
+## Painpoints (crust scout - record only, out of scope for this fix)
+
+### init-order `_state`-access NPE class
+`loadPersisted*` run during `_state` construction (before `_state` is assigned), so anything they
+reach that reads `_state.value` NPEs and a surrounding `runCatching` swallows it silently (exactly the
+`isAddressKey` bug, now fixed by passing `""`). These siblings read `_state.value` via `localDomain()`
+-> `confirmedDomainId()` and are SAFE today only because nothing calls them during construction - each
+breaks the moment it becomes init-reachable:
+- `ChatRepository.kt : canonicalTarget`
+- `ChatRepository.kt : fromCanonical`
+- `ChatRepository.kt : thisDeviceAddress`
+- `ChatRepository.kt : forget` (also reads `_state.value.localGatewayId` directly)
+Durable fix (deferred): make `confirmedDomainId()` / `localDomain()` null-safe (return `""` when
+`_state` is not yet initialized), retiring the class.
+
+### `PROJECT_NAME` / `from` not slug-validated -> `localAddress` throws
+`PROJECT_NAME` is read from env and propagated as the sender `from` with no slug check, so a non-slug
+value (spaces/caps) makes `localAddress(from)` throw uncaught:
+- `src/mcp/index.ts : startMcp` - the root: `PROJECT_NAME` is never asserted to be a slug
+- `src/gateway/routes.ts : humanNotify` - `localAddress(from)` (the schema validates length, not slug); a non-slug `PROJECT_NAME` crashes `/human/notify`
+- `src/gateway/routes.ts : sendCrossGateway` - `localAddress(from)` on an agent cross-Gateway send throws on a non-slug team field
+
+### non-address fallback leaks
+- `ChatRepository.kt : canonicalTarget` - `runCatching { parseTarget(...).canonical }.getOrDefault(team)` returns the raw `team` on failure, then used as a thread-lookup key + openTabs membership; the same class fixed in `fromCanonical` (which now returns null). A malformed team silently misses rather than corrupts, so lower severity.
