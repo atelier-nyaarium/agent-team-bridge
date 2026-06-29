@@ -160,7 +160,7 @@ describe("evieClient pending-Domain re-register", () => {
 		});
 
 		await waitFor(() => (registersPerConn[0] ?? 0) >= 1);
-		// Drop the first socket; the client reconnects (RECONNECT_DELAY_MS) and re-registers.
+		// Drop the first socket; the client reconnects (initial backoff delay) and re-registers.
 		evie.sockets[0].terminate();
 
 		await waitFor(() => client?.isConnected() === true, 10_000);

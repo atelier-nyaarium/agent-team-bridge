@@ -217,5 +217,7 @@ export function connectToRouter(): void {
 }
 
 export function closeRouter(): void {
+	// Cancel a pending reconnect first, else its timer fires connectToRouter() after the close.
+	reconnector.cancel();
 	if (routerWs) routerWs.close();
 }

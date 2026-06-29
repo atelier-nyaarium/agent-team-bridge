@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import WebSocket from "ws";
 import { EvieInboundFrameSchema, FEDERATION_PROTOCOL_VERSION, type ToolCallFrame } from "../../shared/evie-protocol.js";
+import { createReconnector } from "../../shared/reconnect.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -67,7 +68,6 @@ export interface EvieClient {
 ////////////////////////////////
 //  Functions & Helpers
 
-const RECONNECT_DELAY_MS = 5_000;
 const TOOL_CALL_TIMEOUT_MS = 120_000;
 // When evie refuses gateway_register because the Domain is still pending (staged but not
 // yet rooted), re-register on this cadence. The open-handler's register fires before the
@@ -85,7 +85,7 @@ const MISSED_PONGS_LIMIT = 2;
 export function startEvieClient(config: EvieClientConfig): EvieClient {
 	let ws: WebSocket | null = null;
 	let stopped = false;
-	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	const reconnector = createReconnector(connect, { initialDelayMs: 5_000, maxDelayMs: 30_000 });
 	let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 	let pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
 	let pendingRetryAttempts = 0;
@@ -112,6 +112,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		ws.on("open", () => {
 			console.log(`[evie-client] connected`);
 			missedPongs = 0;
+			reconnector.reset();
 			// Drop any pending-retry timer left from a prior socket so its cadence does not
 			// double up with the new open-handler's register.
 			clearPendingRetry();
@@ -210,20 +211,14 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 			pendingCalls.clear();
 			config.onDisconnect?.();
 			if (!stopped) {
-				console.error(`[evie-client] disconnected, reconnecting in ${RECONNECT_DELAY_MS / 1000}s...`);
-				scheduleReconnect();
+				console.error(`[evie-client] disconnected, reconnecting with backoff...`);
+				reconnector.schedule();
 			}
 		});
 
 		ws.on("error", (err: Error) => {
 			console.error(`[evie-client] error: ${err.message}`);
 		});
-	}
-
-	function scheduleReconnect(): void {
-		if (stopped) return;
-		if (reconnectTimer) clearTimeout(reconnectTimer);
-		reconnectTimer = setTimeout(connect, RECONNECT_DELAY_MS);
 	}
 
 	// Register this Gateway with the Router so cross-Gateway frames can find it. Fired from
@@ -370,7 +365,7 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 		stopped = true;
 		stopHeartbeat();
 		clearPendingRetry();
-		if (reconnectTimer) clearTimeout(reconnectTimer);
+		reconnector.cancel();
 		for (const [, pending] of pendingCalls) {
 			clearTimeout(pending.timer);
 			pending.resolve({ callId: "", error: `Client stopped` });

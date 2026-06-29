@@ -58,6 +58,13 @@ export interface WsData {
 
 export const RESERVED_TEAM_NAMES = new Set(["host"]);
 
+// After a positive wake_result (the container started), how long to wait for its register before
+// failing the wake. Register normally arrives BEFORE the ack (the in-container MCP connects during
+// boot, ahead of the daemon's readiness probe), so this is a backstop for the rare started-but-
+// never-registered case (a crashed or unreachable MCP). A generous 60s avoids failing a slow
+// register while still bounding the stall far below the full WAKE_TIMEOUT_MS (~10 min).
+const REGISTER_WINDOW_MS = 60_000;
+
 export function getAllActiveWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData>[] {
 	const result: ServerWebSocket<WsData>[] = [];
 	for (const [, ws] of subs) {
@@ -252,11 +259,17 @@ export function createWebSocketHandlers({
 			onTeamConnect?.(team, ws);
 		}
 
-		// The gateway only acts on a failed wake_result; a success is confirmed by the woken
-		// container's own register, so the success branch is intentionally a no-op here.
-		if (msg.type === "wake_result" && typeof msg.team === "string") {
+		// Only the authenticated host socket may report a wake outcome (matching host_op_reply and
+		// catalog), so a LAN peer cannot forge a wake_result to fail or shorten an in-flight wake.
+		// A failed wake_result fails the wait at once. A success proves the container started but is
+		// not deliverable until it registers, so it shortens the wait to the registration window (the
+		// woken container's own register resolves it true) instead of stalling WAKE_TIMEOUT_MS if the
+		// agent crashed before registering.
+		if (msg.type === "wake_result" && ws.data.teamName === "host" && typeof msg.team === "string") {
 			if (msg.success === false) {
 				wakeCoordinator.notify(msg.team, false);
+			} else {
+				wakeCoordinator.ackReceived(msg.team, REGISTER_WINDOW_MS);
 			}
 		}
 

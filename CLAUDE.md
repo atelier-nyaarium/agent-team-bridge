@@ -114,7 +114,7 @@ Every bridge connection is **channel mode** now (the CLI dispatch path - cursor/
 Channel-mode agents (Claude windows and devcontainer Claudes) have persistent conversations. Each MCP process generates a stable `conversation_id` on startup and reuses it across WebSocket reconnects for the life of that process.
 
 - The gateway derives a deterministic channel job key via `storeKey({kind:"conv", conversationId: senderConversationId, address})` = `conv.<conversationId>.<domain>.<gateway>.<spawn>.<session>`. Every `crosstalk_send` between the same (sender window, target session) pair lands in the same store entry; the caller does not manage session_ids.
-- Pending-job entries for channel conversations are marked `persistent: true` and are never swept by the store's TTL cleanup. Transient (non-persistent) entries still time out after `RESPONSE_TIMEOUT_MS`.
+- Pending-job entries for channel conversations are marked `persistent: true` and are never swept by the store's TTL cleanup. Transient (non-persistent) entries still time out after the `PendingJobStore` default TTL (600s).
 - `channel_reply` may be called multiple times on the same session_id. Use `status: "running"` for interim updates (phase reports, ACKs, partial results) and `status: "completed"` for the final answer. The conversation only closes when a process exits.
 - Responses push back to the specific sender sub-session via `conversationRegistry`, so parallel host windows targeting the same devcontainer do not receive each other's replies.
 - Reconnects rebind the conversation: the same `conversation_id` shows up with a new WebSocket, the gateway swaps the registry pointer, and the conversation resumes without losing state.
@@ -272,7 +272,6 @@ File structure follows categorized sections:
 **Gateway (Docker):**
 - `PORT` - HTTP/WS port (default: 20000)
 - `GATEWAY_ID` - This Gateway's id, qualifying every local session name on the wire (default: the sanitized machine hostname)
-- `RESPONSE_TIMEOUT_MS` - How long to wait for a team response (default: 600000)
 - `HOST_WS_TOKEN` - Shared secret the host daemon presents to claim the reserved `host` WS slot (which drives the console terminal view). Auto-provisioned into `.env` by `start-gateway.sh`. Fail-closed: a host-slot registration is refused unless the gateway has this set AND the daemon presents the matching token, so a LAN peer cannot squat the slot. See Console terminal view above.
 - `EVIE_NAMESPACE` - K8s namespace (default: evie-bot)
 - `FEDERATION_DOMAIN_ID` - This Gateway's Domain id, the admin box's OWN-Domain record (written by Provision, read back by re-provision + the purges). It is NOT fail-closed: when unset (and no enrollment-delivered `domain-id` file is present) the gateway boots standalone in arming mode and opens its `/enroll` listener; a Domain id is needed only to connect to evie. The enrollment-delivered `domain-id` file takes precedence over this env. A friend's enrolled gateway has no env value and gets its Domain id from the delivered bundle.

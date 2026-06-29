@@ -158,6 +158,34 @@ describe("createWebSocketHandlers", () => {
 		await expect(wake).resolves.toBe(false);
 	}, 2000);
 
+	it("routes a host wake_result success to ackReceived and a failure to notify", () => {
+		const { handlers, wakeCoordinator } = setup();
+		const ws = createMockWs();
+		handlers.open(ws);
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
+		const ack = vi.spyOn(wakeCoordinator, "ackReceived");
+		const notify = vi.spyOn(wakeCoordinator, "notify");
+
+		handlers.message(ws, JSON.stringify({ type: "wake_result", team: "proj-a.main", success: true }));
+		expect(ack).toHaveBeenCalledWith("proj-a.main", expect.any(Number));
+		expect(notify).not.toHaveBeenCalled();
+
+		handlers.message(ws, JSON.stringify({ type: "wake_result", team: "proj-b.main", success: false }));
+		expect(notify).toHaveBeenCalledWith("proj-b.main", false);
+	});
+
+	it("a wake_result from a NON-host socket is ignored (cannot forge a wake outcome)", () => {
+		const { handlers, wakeCoordinator } = setup();
+		const ws = createMockWs();
+		handlers.open(ws);
+		handlers.message(ws, JSON.stringify({ type: "register", team: "alpha", subId: "s1" }));
+		const ack = vi.spyOn(wakeCoordinator, "ackReceived");
+		const notify = vi.spyOn(wakeCoordinator, "notify");
+		handlers.message(ws, JSON.stringify({ type: "wake_result", team: "victim", success: false }));
+		expect(ack).not.toHaveBeenCalled();
+		expect(notify).not.toHaveBeenCalled();
+	});
+
 	it("register message adds team to registry", () => {
 		const { handlers, registry } = setup();
 		const ws = createMockWs();

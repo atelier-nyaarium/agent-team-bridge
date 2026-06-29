@@ -34,6 +34,22 @@ export class WakeCoordinator {
 		this.waiters.delete(team);
 	}
 
+	/** A positive wake_result proves the container started, but it is not deliverable until it
+	 * registers. Shorten each in-flight waiter to the registration window so a started-but-never-
+	 * registered team (Claude crashed on boot) fails fast instead of stalling the full WAKE_TIMEOUT_MS;
+	 * the woken container's own register still resolves it true if it lands within the window. */
+	ackReceived(team: string, registerWindowMs: number): void {
+		const entries = this.waiters.get(team);
+		if (!entries) return;
+		for (const entry of entries) {
+			clearTimeout(entry.timer);
+			entry.timer = setTimeout(() => {
+				this.removeWaiter(team, entry);
+				entry.resolve(false);
+			}, registerWindowMs);
+		}
+	}
+
 	/** Fail every in-flight wake now (the host daemon socket dropped, so no wake_result can arrive),
 	 * resolving each waiter false so a `/send` awaiting a wake returns at once instead of stalling the
 	 * full WAKE_TIMEOUT_MS. Mirrors HostOpCoordinator.failAll. */
