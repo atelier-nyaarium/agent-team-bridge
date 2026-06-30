@@ -89,7 +89,7 @@ fun TrustCompareScreen(
 			TopAppBar(
 				title = { Text("Trust $who") },
 				navigationIcon = {
-					IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+					IconButton(onClick = hapticClick(onClose)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
 				},
 			)
 		},
@@ -112,7 +112,7 @@ fun TrustCompareScreen(
 						Busy("Recording trust...")
 					} else {
 						Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-							Button(onClick = {
+							Button(onClick = hapticClick {
 								confirmed.set(true)
 								busy = true
 								scope.launch {
@@ -132,19 +132,19 @@ fun TrustCompareScreen(
 									busy = false
 								}
 							}) { Text("Yes, codes match") }
-							OutlinedButton(onClick = onClose) { Text("No") }
+							OutlinedButton(onClick = hapticClick(onClose)) { Text("No") }
 						}
 					}
 				}
 
 				is TrustCompareStep.Done -> {
 					InfoSurface("You and $who now trust each other.")
-					Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+					Button(onClick = hapticClick(onClose), modifier = Modifier.fillMaxWidth()) { Text("Done") }
 				}
 
 				is TrustCompareStep.Failed -> {
 					InfoSurface(s.reason)
-					Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Back") }
+					Button(onClick = hapticClick(onClose), modifier = Modifier.fillMaxWidth()) { Text("Back") }
 				}
 			}
 		}

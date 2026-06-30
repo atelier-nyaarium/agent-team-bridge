@@ -90,7 +90,7 @@ fun OwnerKeysCard(repo: ChatRepository) {
 				Text("Fingerprint: ${keys.sas}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
 				// Both owner pubkeys as one JSON blob; setup.sh parses it. base64 needs no escaping.
 				OutlinedButton(
-					onClick = { copyToClipboard(context, "owner key", """{"signPub":"${keys.signPub}","boxPub":"${keys.boxPub}"}""") },
+					onClick = hapticClick { copyToClipboard(context, "owner key", """{"signPub":"${keys.signPub}","boxPub":"${keys.boxPub}"}""") },
 					modifier = Modifier.fillMaxWidth(),
 				) { Text("Copy key") }
 			}
@@ -133,7 +133,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 			)
 			Button(
 				enabled = pass1.length >= 8 && pass1 == pass2,
-				onClick = {
+				onClick = hapticClick {
 					status = ""
 					scope.launch {
 						val blob = repo.exportOwnerBackup(pass1)
@@ -161,7 +161,7 @@ fun OwnerBackupCard(repo: ChatRepository) {
 			)
 			Button(
 				enabled = restoreBlob.isNotBlank() && restorePass.isNotBlank(),
-				onClick = {
+				onClick = hapticClick {
 					status = ""
 					scope.launch {
 						status = when (repo.importOwnerBackup(restoreBlob.trim(), restorePass)) {
@@ -224,20 +224,20 @@ fun GatewaysScreen(
 						}
 						var menuOpen by remember(g.signPub) { mutableStateOf(false) }
 						Box {
-							IconButton(onClick = { menuOpen = true }) {
+							IconButton(onClick = hapticClick { menuOpen = true }) {
 								Icon(Icons.Filled.MoreVert, contentDescription = "Gateway actions")
 							}
 							DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
 								DropdownMenuItem(
 									text = { Text("Manage sharing") },
-									onClick = {
+									onClick = hapticClick {
 										menuOpen = false
 										onManageSharing(gid)
 									},
 								)
 								DropdownMenuItem(
 									text = { Text("Revoke", color = MaterialTheme.colorScheme.error) },
-									onClick = {
+									onClick = hapticClick {
 										menuOpen = false
 										scope.launch {
 											if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
@@ -251,8 +251,8 @@ fun GatewaysScreen(
 					}
 				}
 			}
-			Button(onClick = onAddGateway, modifier = Modifier.fillMaxWidth()) { Text("Add a Gateway") }
-			OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back") }
+			Button(onClick = hapticClick(onAddGateway), modifier = Modifier.fillMaxWidth()) { Text("Add a Gateway") }
+			OutlinedButton(onClick = hapticClick(onBack), modifier = Modifier.fillMaxWidth()) { Text("Back") }
 		}
 	}
 }
@@ -305,7 +305,7 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 			if (s == null) {
 				Text("Scan the Gateway's enrollment code, or paste it as JSON.", style = MaterialTheme.typography.bodyMedium)
 				if (status.isNotEmpty()) Text(status, color = MaterialTheme.colorScheme.error)
-				Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
+				Button(onClick = hapticClick { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
 				OutlinedTextField(
 					value = pasteText,
 					onValueChange = { pasteText = it },
@@ -314,11 +314,11 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 					minLines = 3,
 				)
 				Button(
-					onClick = { adopt(pasteText.trim(), "code") },
+					onClick = hapticClick { adopt(pasteText.trim(), "code") },
 					enabled = pasteText.isNotBlank(),
 					modifier = Modifier.fillMaxWidth(),
 				) { Text("Use pasted code") }
-				OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
+				OutlinedButton(onClick = hapticClick(onBack), modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
 			} else {
 				Text("Scanned: ${s.gatewayId}", style = MaterialTheme.typography.titleMedium)
 				Text("Confirm this matches the Gateway terminal:", style = MaterialTheme.typography.bodyMedium)
@@ -328,16 +328,16 @@ fun AddGatewayScreen(repo: ChatRepository, onBack: () -> Unit, onDone: () -> Uni
 				if (paste != null) {
 					// LAN delivery was not possible: hand the admin the sealed bundle to paste.
 					Button(
-						onClick = { copyToClipboard(context, "gateway bundle", paste) },
+						onClick = hapticClick { copyToClipboard(context, "gateway bundle", paste) },
 						modifier = Modifier.fillMaxWidth(),
 					) { Text("Copy bundle") }
-					OutlinedButton(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+					OutlinedButton(onClick = hapticClick(onDone), modifier = Modifier.fillMaxWidth()) { Text("Done") }
 				} else {
 					Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-						OutlinedButton(onClick = onBack, enabled = !busy) { Text("Cancel") }
+						OutlinedButton(onClick = hapticClick(onBack), enabled = !busy) { Text("Cancel") }
 						Button(
 							enabled = !busy,
-							onClick = {
+							onClick = hapticClick {
 								busy = true
 								status = "Enrolling..."
 								scope.launch {
@@ -389,7 +389,7 @@ fun YourDevicesScreen(repo: ChatRepository, onBack: () -> Unit, onAddDevice: () 
 							Text(Crypto.fingerprint(d.signPub), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
 						}
 						if (!d.isSelf) {
-							TextButton(onClick = {
+							TextButton(onClick = hapticClick {
 								scope.launch {
 									if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
 									repo.revokeMember(d.signPub)
@@ -401,7 +401,7 @@ fun YourDevicesScreen(repo: ChatRepository, onBack: () -> Unit, onAddDevice: () 
 				}
 			}
 			if (reach != null) {
-				Button(onClick = onAddDevice, modifier = Modifier.fillMaxWidth()) { Text("Add a device") }
+				Button(onClick = hapticClick(onAddDevice), modifier = Modifier.fillMaxWidth()) { Text("Add a device") }
 			} else {
 				Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text("Add a device") }
 				Text(
@@ -410,7 +410,7 @@ fun YourDevicesScreen(repo: ChatRepository, onBack: () -> Unit, onAddDevice: () 
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 				)
 			}
-			OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back") }
+			OutlinedButton(onClick = hapticClick(onBack), modifier = Modifier.fillMaxWidth()) { Text("Back") }
 		}
 	}
 }
@@ -470,7 +470,7 @@ fun ApprovalWindowScreen(repo: ChatRepository, onBack: () -> Unit) {
 				done -> {
 					Text("Device added.", style = MaterialTheme.typography.titleMedium)
 					Text("The new device is provisioning now.", style = MaterialTheme.typography.bodyMedium)
-					Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+					Button(onClick = hapticClick(onBack), modifier = Modifier.fillMaxWidth()) { Text("Done") }
 				}
 				j != null -> {
 					Text("A device wants to join.", style = MaterialTheme.typography.titleMedium)
@@ -478,10 +478,10 @@ fun ApprovalWindowScreen(repo: ChatRepository, onBack: () -> Unit) {
 					Text(Crypto.fingerprint(j.newSignPub), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.titleLarge)
 					if (status.isNotEmpty()) Text(status)
 					Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-						OutlinedButton(onClick = { leave() }, enabled = !busy) { Text("Cancel") }
+						OutlinedButton(onClick = hapticClick { leave() }, enabled = !busy) { Text("Cancel") }
 						Button(
 							enabled = !busy,
-							onClick = {
+							onClick = hapticClick {
 								scope.launch {
 									if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
 									busy = true
@@ -503,11 +503,11 @@ fun ApprovalWindowScreen(repo: ChatRepository, onBack: () -> Unit) {
 					Text("Open Switchboard on the other device and scan to add it.", style = MaterialTheme.typography.bodyMedium)
 					QrCode(text = a.qr)
 					Text("Waiting for the device to scan...", style = MaterialTheme.typography.bodySmall)
-					OutlinedButton(onClick = { leave() }, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
+					OutlinedButton(onClick = hapticClick { leave() }, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
 				}
 				else -> {
 					Text(status.ifEmpty { "Starting..." }, color = MaterialTheme.colorScheme.error)
-					OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Back") }
+					OutlinedButton(onClick = hapticClick(onBack), modifier = Modifier.fillMaxWidth()) { Text("Back") }
 				}
 			}
 		}

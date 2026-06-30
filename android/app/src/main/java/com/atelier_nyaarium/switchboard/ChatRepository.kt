@@ -2178,8 +2178,8 @@ class ChatRepository(
 		withContext(Dispatchers.IO) { client().createSession(project, sessionName) }
 
 	/** Send text (submitted with Enter) or a named control key to an agent's tmux pane. */
-	suspend fun tmuxSend(team: String, text: String? = null, key: String? = null) =
-		withContext(Dispatchers.IO) { client().tmuxSend(team, text, key) }
+	suspend fun tmuxSend(team: String, text: String? = null, key: String? = null, submit: Boolean = true) =
+		withContext(Dispatchers.IO) { client().tmuxSend(team, text, key, submit) }
 
 	val terminalRefreshMs: Long get() = store.terminalRefreshMs
 

@@ -155,14 +155,17 @@ export async function peekPane(target: TmuxTarget): Promise<HostPeekResult> {
 	return { ansi, hash };
 }
 
-/** Type a literal line and submit it, atomically in ONE send-keys: the trailing CR is the
- * Enter key, so the text and its submission can never be torn apart by a failure between two
- * commands. The `--` ends option parsing so text starting with a dash is typed literally (and
- * it would swallow a `;` command separator, which is why the CR rides inside the literal). */
-export function sendText(target: TmuxTarget, text: string): Promise<void> {
+/** Type a literal line into the pane. When `submit` (default), the trailing CR (the Enter key)
+ * rides inside the SAME send-keys literal, so the text and its submission are atomic and can never be
+ * torn apart by a failure between two commands. With `submit=false` the text is typed without the CR,
+ * staging it in the agent's composer for a later deliberate submit. The `--` ends option parsing so
+ * text starting with a dash is typed literally (it would also swallow a `;`, which is why a submit's
+ * CR rides inside the literal rather than as a separate key). */
+export function sendText(target: TmuxTarget, text: string, submit = true): Promise<void> {
 	return serialized(targetKey(target), async () => {
 		assertNotReservedHostSink(target);
-		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), "-l", "--", `${text}\r`]));
+		const literal = submit ? `${text}\r` : text;
+		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), "-l", "--", literal]));
 	});
 }
 

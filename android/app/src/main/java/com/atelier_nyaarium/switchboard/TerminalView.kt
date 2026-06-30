@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -12,7 +13,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -20,7 +20,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -36,7 +35,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -236,6 +237,8 @@ private const val BACKSPACE_REPEAT_MS = 120L
 @Composable
 private fun BackspaceKey(onTap: () -> Unit, onHoldRepeat: () -> Unit, modifier: Modifier = Modifier) {
 	val scope = rememberCoroutineScope()
+	val haptics = LocalHapticFeedback.current
+	val strong = rememberStrongHaptic()
 	Surface(
 		shape = CircleShape,
 		color = MaterialTheme.colorScheme.secondaryContainer,
@@ -249,6 +252,7 @@ private fun BackspaceKey(onTap: () -> Unit, onHoldRepeat: () -> Unit, modifier: 
 					val job = scope.launch {
 						delay(BACKSPACE_HOLD_MS)
 						repeated = true
+						strong()
 						while (true) {
 							onHoldRepeat()
 							delay(BACKSPACE_REPEAT_MS)
@@ -256,12 +260,51 @@ private fun BackspaceKey(onTap: () -> Unit, onHoldRepeat: () -> Unit, modifier: 
 					}
 					waitForUpOrCancellation()
 					job.cancel()
-					if (!repeated) onTap()
+					if (!repeated) {
+						haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+						onTap()
+					}
 				}
 			},
 	) {
 		Box(contentAlignment = Alignment.Center) {
 			Icon(Icons.AutoMirrored.Filled.Backspace, contentDescription = "Backspace (hold to delete words)")
+		}
+	}
+}
+
+/**
+ * The terminal Send control: a TAP types the current input into the agent's composer WITHOUT Enter
+ * (staging it on screen so it can be reviewed), a LONG-PRESS submits with Enter. Built on
+ * detectTapGestures so the two gestures are distinct, with BackspaceKey's filled-circle styling.
+ * Each gesture fires a haptic tick.
+ */
+@Composable
+private fun SendKey(onTap: () -> Unit, onLongPress: () -> Unit, modifier: Modifier = Modifier) {
+	val haptics = LocalHapticFeedback.current
+	val strong = rememberStrongHaptic()
+	Surface(
+		shape = CircleShape,
+		color = MaterialTheme.colorScheme.primary,
+		contentColor = MaterialTheme.colorScheme.onPrimary,
+		modifier = modifier
+			.size(48.dp)
+			.pointerInput(Unit) {
+				detectTapGestures(
+					// Light tick to stage text; a firmer buzz when the long-press actually submits.
+					onTap = {
+						haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+						onTap()
+					},
+					onLongPress = {
+						strong()
+						onLongPress()
+					},
+				)
+			},
+	) {
+		Box(contentAlignment = Alignment.Center) {
+			Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send (tap to type, long-press to submit)")
 		}
 	}
 }
@@ -277,7 +320,7 @@ fun TerminalView(
 	team: String,
 	refreshMs: Long,
 	onPeek: suspend (sinceHash: String?) -> Result<ConsolePeekResult>,
-	onSend: suspend (text: String?, key: String?) -> Unit,
+	onSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
 	modifier: Modifier = Modifier,
 ) {
 	var ansi by remember(team) { mutableStateOf("") }
@@ -305,10 +348,10 @@ fun TerminalView(
 		}
 	}
 
-	fun fire(text: String?, key: String?) {
+	fun fire(text: String?, key: String?, submit: Boolean = true) {
 		scope.launch {
 			sendError = null
-			runCatching { onSend(text, key) }.onFailure { sendError = it.message ?: "send failed" }
+			runCatching { onSend(text, key, submit) }.onFailure { sendError = it.message ?: "send failed" }
 		}
 	}
 
@@ -328,12 +371,12 @@ fun TerminalView(
 			horizontalArrangement = Arrangement.spacedBy(6.dp),
 		) {
 			PALETTE_SLASH.forEach { cmd ->
-				AssistChip(onClick = { fire(cmd, null) }, label = { Text(cmd, fontFamily = FontFamily.Monospace) })
+				AssistChip(onClick = hapticClick { fire(cmd, null) }, label = { Text(cmd, fontFamily = FontFamily.Monospace) })
 			}
 			// /compact can take an optional trailing message, so it pre-fills the input box instead of
-			// firing; the user appends a message (or not) and taps Send.
+			// firing; the user appends a message (or not), then long-presses Send to submit.
 			AssistChip(
-				onClick = { input = "/compact " },
+				onClick = hapticClick { input = "/compact " },
 				label = { Text("/compact", fontFamily = FontFamily.Monospace) },
 			)
 		}
@@ -342,7 +385,7 @@ fun TerminalView(
 			horizontalArrangement = Arrangement.spacedBy(6.dp),
 		) {
 			PALETTE_KEYS.forEach { (label, key) ->
-				AssistChip(onClick = { fire(null, key) }, label = { Text(label, fontFamily = FontFamily.Monospace) })
+				AssistChip(onClick = hapticClick { fire(null, key) }, label = { Text(label, fontFamily = FontFamily.Monospace) })
 			}
 		}
 		Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
@@ -363,20 +406,25 @@ fun TerminalView(
 					onTap = { fire(null, "BSpace") },
 					onHoldRepeat = { fire(null, "M-BSpace") },
 				)
-				FilledIconButton(
-					// Empty input sends a bare Enter; non-empty submits the typed text.
-					onClick = {
-						if (input.isEmpty()) {
-							fire(null, "Enter")
-						} else {
-							fire(input, null)
+				// A TAP types the input into the agent's composer WITHOUT Enter (staged for review); a
+				// LONG-PRESS submits. With the box empty, a long-press sends a bare Enter to submit
+				// whatever is already staged in the composer.
+				SendKey(
+					onTap = {
+						if (input.isNotEmpty()) {
+							fire(input, null, submit = false)
 							input = ""
 						}
 					},
-					modifier = Modifier.widthIn(min = 48.dp),
-				) {
-					Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send to terminal")
-				}
+					onLongPress = {
+						if (input.isEmpty()) {
+							fire(null, "Enter")
+						} else {
+							fire(input, null, submit = true)
+							input = ""
+						}
+					},
+				)
 			}
 		}
 	}

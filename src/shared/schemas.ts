@@ -237,14 +237,17 @@ export const ConsoleOpSchema = z
 			target: z.string().min(1).max(128),
 			sinceHash: z.string().max(64).optional(),
 		}),
-		// Send input to an agent's tmux pane: a literal text line (sent with a trailing Enter)
-		// OR a single named control key (Enter, Escape, C-c, Up, Down, Left, Right, Tab, BTab).
-		// Exactly one of text/key; the gateway whitelists the key name. Idempotent per opId.
+		// Send input to an agent's tmux pane: a literal text line OR a single named control key
+		// (Enter, Escape, C-c, Up, Down, Left, Right, Tab, BTab). Exactly one of text/key; the gateway
+		// whitelists the key name. Idempotent per opId. `submit` (text only, default true) controls the
+		// trailing Enter: a chip/slash command fires with submit:true, while the terminal Send button
+		// taps with submit:false (type into the composer without submitting) and long-presses with true.
 		z.object({
 			kind: z.literal("tmux_send"),
 			target: z.string().min(1).max(128),
 			text: z.string().max(4096).optional(),
 			key: z.string().max(32).optional(),
+			submit: z.boolean().optional(),
 		}),
 		// Start a new tmux session running a fresh agent on `target` (the host or a devcontainer),
 		// named `sessionName`. The daemon owns the launch command; the console supplies only the

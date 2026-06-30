@@ -659,7 +659,7 @@ export function createConsoleDispatcher({
 					if (!ALLOWED_KEYS.has(op.key)) throw new Error(`disallowed key "${op.key}"`);
 					hostOp = { kind: "sendKey", target, key: op.key, dedupKey };
 				} else {
-					hostOp = { kind: "sendText", target, text: op.text ?? "", dedupKey };
+					hostOp = { kind: "sendText", target, text: op.text ?? "", submit: op.submit ?? true, dedupKey };
 				}
 				const r = await relayToHost(hostOp);
 				if (!r.ok) throw new Error(r.error ?? "send failed");

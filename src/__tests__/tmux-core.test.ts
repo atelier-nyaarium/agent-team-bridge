@@ -67,6 +67,11 @@ describe("tmuxCore sendText", () => {
 		expect(calls).toEqual([["tmux", "send-keys", "-t", "claude.0", "-l", "--", "-l hello\r"]]);
 	});
 
+	it("omits the trailing CR when submit is false (types into the composer without submitting)", async () => {
+		await sendText({ kind: "host", name: "host", sessionName: "claude" }, "hello", false);
+		expect(calls).toEqual([["tmux", "send-keys", "-t", "claude.0", "-l", "--", "hello"]]);
+	});
+
 	it("targets a devcontainer via docker exec by the compose container name", async () => {
 		await sendText({ kind: "devcontainer", name: "recipe-app", sessionName: "claude" }, "hi");
 		expect(calls[0]).toEqual([
