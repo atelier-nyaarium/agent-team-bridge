@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
-import { ALLOWED_KEYS, assertTmuxName, type HostPeekResult, type TmuxTarget } from "../../shared/host-op.js";
+import {
+	ALLOWED_KEYS,
+	assertTmuxName,
+	type HostPeekResult,
+	isReservedHostSession,
+	type TmuxTarget,
+} from "../../shared/host-op.js";
 import { DEFAULT_SESSION } from "../../shared/session-id.js";
 
 ////////////////////////////////
@@ -173,13 +179,24 @@ export function sendKey(target: TmuxTarget, key: string): Promise<void> {
  * and it is never console-supplied, so an arbitrary host command cannot be injected here. */
 export async function createSession(target: TmuxTarget, command: string): Promise<void> {
 	assertTmuxName(target.sessionName);
+	assertNotReservedHostSink(target);
 	await run(tmuxArgv(target, ["new-session", "-d", "-s", target.sessionName, command]), 15_000);
+}
+
+/** The destructive sink's last line of defense: never create or kill a reserved host session (the
+ * daemon's own supervisor pane). The console boundary and the wake handler guard this upstream, but
+ * the sink owns the invariant so a future caller cannot bypass it. */
+function assertNotReservedHostSink(target: TmuxTarget): void {
+	if (target.kind === "host" && isReservedHostSession(target.sessionName)) {
+		throw new Error(`refusing to operate reserved host session "${target.sessionName}"`);
+	}
 }
 
 /** Tear down a tmux session. Idempotent: killing a session that is already gone (tmux exits
  * non-zero with "can't find session") is treated as success, since the end state is identical. */
 export async function killSession(target: TmuxTarget): Promise<void> {
 	assertTmuxName(target.sessionName);
+	assertNotReservedHostSink(target);
 	try {
 		await run(tmuxArgv(target, ["kill-session", "-t", target.sessionName]));
 	} catch {

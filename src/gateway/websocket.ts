@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { WsRegisterSchema } from "../shared/schemas.js";
-import { isComposite, parseSessionName } from "../shared/session-id.js";
+import { isComposite } from "../shared/session-id.js";
 import type { ConnectionMode, WebSocketConfig } from "../shared/types.js";
 import type { WakeCoordinator } from "./wake.js";
 
@@ -224,17 +224,10 @@ export function createWebSocketHandlers({
 			}
 
 			// Remember a COMPOSITE session's Claude harness id so a later wake can `claude --resume`
-			// it. Only composites are daemon-woken devcontainer sessions; a bare project (spawn-point)
-			// or a host-loose peer is never resumed, so it does not belong in the map. An ad-hoc host
-			// Claude registers as `host.<hex>` (composite, addressable) but is NOT devcontainer-backed,
-			// so the host spawn is excluded - it would list as asleep but the devcontainer-only wake
-			// path cannot re-launch it.
-			if (
-				typeof msg.claudeSessionId === "string" &&
-				msg.claudeSessionId &&
-				isComposite(team) &&
-				parseSessionName(team).project !== "host"
-			) {
+			// it. A bare project (spawn-point) or bare loose peer has no session to resume. Host
+			// sessions (`host.<name>` user-named or `host.<hex>` ad-hoc) are composite and wakeable, so
+			// they belong here.
+			if (typeof msg.claudeSessionId === "string" && msg.claudeSessionId && isComposite(team)) {
 				recordSessionResume?.(team, msg.claudeSessionId);
 			}
 

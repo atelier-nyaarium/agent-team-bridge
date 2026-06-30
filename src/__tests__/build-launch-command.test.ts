@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildLaunchCommand } from "../mcp/devcontainer/hostDaemon.js";
+import { buildLaunchCommand, resolveHostWorkdir } from "../mcp/devcontainer/hostDaemon.js";
 
 const dc = { kind: "devcontainer" as const, name: "recipe-app", sessionName: "scratch" };
 
@@ -29,5 +32,36 @@ describe("buildLaunchCommand", () => {
 		expect(cmd).toContain("export PROJECT_NAME=host.foo");
 		expect(cmd).toContain("; exec bash");
 		expect(cmd).not.toContain("cd /workspace");
+		expect(cmd).not.toContain('cd "');
+	});
+
+	it("cds a host session to its resolved workdir and resumes by id", () => {
+		const cmd = buildLaunchCommand(
+			{ kind: "host", name: "host", sessionName: "nyaadot" },
+			{ workdir: "/home/nyaarium/projects/nyaadot", resumeSessionId: "12345678-1234-1234-1234-123456789abc" },
+		);
+		expect(cmd).toContain('cd "/home/nyaarium/projects/nyaadot"');
+		expect(cmd).toContain("--resume 12345678-1234-1234-1234-123456789abc");
+		expect(cmd).toContain("; exec bash");
+		expect(cmd).not.toContain("cd /workspace");
+	});
+
+	it("drops the cd when the workdir holds a single quote that would break the outer bash -c", () => {
+		const cmd = buildLaunchCommand(
+			{ kind: "host", name: "host", sessionName: "foo" },
+			{ workdir: "/home/it's/projects/foo" },
+		);
+		expect(cmd).not.toContain('cd "');
+		expect(cmd).not.toContain("it's");
+	});
+});
+
+describe("resolveHostWorkdir", () => {
+	it("picks the first projectDir/<session> that exists, else home", () => {
+		const base = fs.mkdtempSync(path.join(os.tmpdir(), "hostwd-"));
+		fs.mkdirSync(path.join(base, "myproj"));
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "home-"));
+		expect(resolveHostWorkdir("myproj", [base], home)).toBe(path.join(base, "myproj"));
+		expect(resolveHostWorkdir("absent", [base], home)).toBe(home);
 	});
 });
