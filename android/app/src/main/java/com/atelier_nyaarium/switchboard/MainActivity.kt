@@ -534,7 +534,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				tabs = state.openTabs,
 				tabLabel = { tabLabelFor(state, it) },
 				messages = state.threads[openTeam].orEmpty(),
-				error = state.error,
+				// During a wake the "Waking..." placeholder already explains the wait, so suppress the
+				// auto-retry connection banner (the transient "... - retrying" causes). A real error
+				// (terminal causes never end in "retrying") still surfaces.
+				error = state.error?.takeUnless { presence == "waking..." && it.endsWith("retrying") },
 				rendererPool = rendererPool,
 				canRename = kind == "loose",
 				onGateway = { openTeam = it },
