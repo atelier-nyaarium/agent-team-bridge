@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Icon
@@ -274,13 +275,14 @@ private fun BackspaceKey(onTap: () -> Unit, onHoldRepeat: () -> Unit, modifier: 
 }
 
 /**
- * The terminal Send control: a TAP types the current input into the agent's composer WITHOUT Enter
- * (staging it on screen so it can be reviewed), a LONG-PRESS submits with Enter. Built on
- * detectTapGestures so the two gestures are distinct, with BackspaceKey's filled-circle styling.
- * Each gesture fires a haptic tick.
- */
+ * The terminal Send control, behaving by whether the input box is empty:
+ *  - EMPTY: a TAP submits a bare Enter (so you can fire Enter repeatedly); the icon is a return arrow.
+ *  - WITH TEXT: a TAP types the text into the composer WITHOUT Enter (staged for review), a LONG-PRESS
+ *    submits with Enter; the icon is the Send paper-plane.
+ * The submit gestures get the firm buzz, staging gets the light tick. The pointerInput is keyed on
+ * `inputEmpty` so the gesture closure always reflects the current emptiness. */
 @Composable
-private fun SendKey(onTap: () -> Unit, onLongPress: () -> Unit, modifier: Modifier = Modifier) {
+private fun SendKey(inputEmpty: Boolean, onTap: () -> Unit, onLongPress: () -> Unit, modifier: Modifier = Modifier) {
 	val haptics = LocalHapticFeedback.current
 	val strong = rememberStrongHaptic()
 	Surface(
@@ -289,11 +291,12 @@ private fun SendKey(onTap: () -> Unit, onLongPress: () -> Unit, modifier: Modifi
 		contentColor = MaterialTheme.colorScheme.onPrimary,
 		modifier = modifier
 			.size(48.dp)
-			.pointerInput(Unit) {
+			.pointerInput(inputEmpty) {
 				detectTapGestures(
-					// Light tick to stage text; a firmer buzz when the long-press actually submits.
+					// An empty-box tap IS the submit, so it gets the firm buzz; with text, a tap only
+					// stages it (light tick). Long-press always submits (firm).
 					onTap = {
-						haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+						if (inputEmpty) strong() else haptics.performHapticFeedback(HapticFeedbackType.LongPress)
 						onTap()
 					},
 					onLongPress = {
@@ -304,7 +307,11 @@ private fun SendKey(onTap: () -> Unit, onLongPress: () -> Unit, modifier: Modifi
 			},
 	) {
 		Box(contentAlignment = Alignment.Center) {
-			Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send (tap to type, long-press to submit)")
+			if (inputEmpty) {
+				Icon(Icons.AutoMirrored.Filled.KeyboardReturn, contentDescription = "Submit (press Enter)")
+			} else {
+				Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send (tap to type, long-press to submit)")
+			}
 		}
 	}
 }
@@ -406,12 +413,15 @@ fun TerminalView(
 					onTap = { fire(null, "BSpace") },
 					onHoldRepeat = { fire(null, "M-BSpace") },
 				)
-				// A TAP types the input into the agent's composer WITHOUT Enter (staged for review); a
-				// LONG-PRESS submits. With the box empty, a long-press sends a bare Enter to submit
-				// whatever is already staged in the composer.
+				// Empty box: a TAP submits a bare Enter (fire it repeatedly). With text: a TAP stages it
+				// into the composer WITHOUT Enter, and a LONG-PRESS types it AND submits. The icon flips
+				// between a return-arrow (empty) and the Send plane (text) to signal which it'll do.
 				SendKey(
+					inputEmpty = input.isEmpty(),
 					onTap = {
-						if (input.isNotEmpty()) {
+						if (input.isEmpty()) {
+							fire(null, "Enter")
+						} else {
 							fire(input, null, submit = false)
 							input = ""
 						}

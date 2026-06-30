@@ -294,11 +294,14 @@ describe("tmuxCore isAgentWorking", () => {
 		expect(isAgentWorking("✻ Waiting for 1 dynamic workflow to finish")).toBe(true);
 	});
 
-	it("is not working at an idle composer, an empty pane, or a settled spinner", () => {
-		expect(isAgentWorking("")).toBe(false);
-		expect(isAgentWorking("❯ ")).toBe(false);
+	it("a settled '✻ Brewed for Ns' line (no ellipsis) is the done summary, not working", () => {
 		expect(isAgentWorking("✻ Brewed for 7s")).toBe(false);
 		expect(isAgentWorking("✻ Brewed for 19s · 1 monitor still running")).toBe(false);
+	});
+
+	it("treats a pane with NO spinner line as working", () => {
+		expect(isAgentWorking("")).toBe(true);
+		expect(isAgentWorking("❯ ")).toBe(true);
 	});
 
 	it("keys off the LAST spinner line, ignoring a stale done marker in scrollback", () => {

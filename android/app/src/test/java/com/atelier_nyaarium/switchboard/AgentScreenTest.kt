@@ -18,12 +18,14 @@ class AgentScreenTest {
 
 	@Test
 	fun working() {
+		// An active "✻ verb…" / "Waiting for" line is working; a settled "✻ Brewed for Ns" line is done.
 		assertEquals(true, AgentScreen.isWorking("✻ Prestidigitating…"))
 		assertEquals(true, AgentScreen.isWorking("✻ Waiting for 1 dynamic workflow to finish"))
-		assertEquals(false, AgentScreen.isWorking(""))
-		assertEquals(false, AgentScreen.isWorking("Claude Code v2.1.0\n❯ "))
 		assertEquals(false, AgentScreen.isWorking("✻ Brewed for 7s"))
 		assertEquals(false, AgentScreen.isWorking("✻ Brewed for 19s · 1 monitor still running"))
+		// No spinner line means mid-turn (between frames or scrolled off), so working.
+		assertEquals(true, AgentScreen.isWorking(""))
+		assertEquals(true, AgentScreen.isWorking("Claude Code v2.1.0\n❯ "))
 	}
 
 	@Test

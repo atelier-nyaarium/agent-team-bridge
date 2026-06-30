@@ -43,8 +43,8 @@ const DEAD_LAUNCH_PROBES = 8;
 // resume-picker menus show an INDENTED cursor ("  ❯ 1."), so the line-start anchor matches the real
 // composer and never a menu line.
 const COMPOSER_RE = /^❯/mu;
-// The settled spinner frame "✻". A turn is still running while its status line also shows the
-// ellipsis "…" or "Waiting for"; once it shows neither, the turn is done.
+// The settled spinner frame "✻". A turn is still running while its status line shows the ellipsis
+// "…" or "Waiting for"; a settled "✻ Brewed for Ns" line (neither) is the done summary.
 const SNOWFLAKE = "✻";
 const ELLIPSIS_RE = /…|\.{3}/u;
 const WAITING_RE = /Waiting for/;
@@ -248,16 +248,16 @@ export function isAgentReady(screen: string): boolean {
 	return COMPOSER_RE.test(stripAnsi(screen));
 }
 
-/** Whether a captured pane shows claude actively working a turn. The status line is the last line
- * carrying the settled spinner; the turn is running while that line shows the ellipsis or "Waiting
- * for". A pane with no spinner line is idle (a fresh REPL) or done, not working - so the chip can
- * poll this across all listed sessions without lighting a freshly-spawned idle one. Meaningful after
- * a message has been sent (the Kotlin twin lives in AgentScreen.kt). */
+/** Whether a captured pane shows claude actively working a turn. The last line carrying the settled
+ * spinner is working while it shows the ellipsis or "Waiting for"; a settled "✻ Brewed for Ns" line is
+ * the done summary. A pane with NO spinner line is treated as working: the spinner is momentarily
+ * between frames or scrolled off by tool output, so a missing spinner means mid-turn, not idle. The
+ * Kotlin twin lives in AgentScreen.kt. */
 export function isAgentWorking(screen: string): boolean {
 	const status = stripAnsi(screen)
 		.split("\n")
 		.findLast((line) => line.includes(SNOWFLAKE));
-	if (status === undefined) return false;
+	if (status === undefined) return true; // no spinner line: between frames or scrolled off, so mid-turn
 	return ELLIPSIS_RE.test(status) || WAITING_RE.test(status);
 }
 
