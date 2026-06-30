@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { classifyPeekError } from "../shared/host-op.js";
+import { classifyPeekError, isReservedHostSession } from "../shared/host-op.js";
+
+describe("isReservedHostSession", () => {
+	it("reserves the daemon's supervisor session but not the conventional agent session", () => {
+		expect(isReservedHostSession("host-daemon")).toBe(true);
+		expect(isReservedHostSession("claude")).toBe(false);
+		expect(isReservedHostSession("nyaadot")).toBe(false);
+	});
+});
 
 describe("classifyPeekError", () => {
 	it("classifies an absent session, pane, or container as absent", () => {

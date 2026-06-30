@@ -990,6 +990,14 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(h.hostOps).toHaveLength(0);
 	});
 
+	it("rejects a reserved host session name (the daemon's own supervisor pane)", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "host.host-daemon" }, "p6"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("reserved");
+		expect(h.hostOps).toHaveLength(0);
+	});
+
 	it("tmux_send with text relays sendText", async () => {
 		const h = makeTerminalHarness();
 		const reply = await h.handler.handleFrame(

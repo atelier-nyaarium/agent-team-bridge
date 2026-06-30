@@ -54,6 +54,18 @@ export function assertTmuxName(name: string): void {
 	if (!isTmuxName(name)) throw new Error(`invalid tmux name "${name}"`);
 }
 
+/** Host tmux session names the bridge must never drive, create, or kill: the daemon's own supervisor
+ * session shares the bare host tmux server, so a forget would take down the wake plumbing and a
+ * create/wake would relaunch over that non-agent pane. Enforced at four sites: the console op boundary
+ * (resolveTmuxTarget, which blocks every host op), the wake dispatch (gateway doWakeTeam) and the wake
+ * handler (daemon handleWake), and the destructive tmux sink (createSession/killSession backstop). The
+ * conventional host agent session (DEFAULT_SESSION) is intentionally absent; reattaching to a live
+ * agent is expected. */
+export const RESERVED_HOST_SESSIONS: ReadonlySet<string> = new Set(["host-daemon"]);
+export function isReservedHostSession(session: string): boolean {
+	return RESERVED_HOST_SESSIONS.has(session);
+}
+
 /** A team/project name that reaches the daemon's shell launch command. Looser than a tmux slug - a
  * catalog project may legitimately contain dots (a "my.app" dir) and a composite is `project.session`
  * - but still free of any shell metacharacter (quote, semicolon, space, $), so it can never break out

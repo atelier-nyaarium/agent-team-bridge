@@ -21,6 +21,7 @@ import {
 	type HostOp,
 	type HostOpResult,
 	type HostPeekResult,
+	isReservedHostSession,
 	isShellSafeName,
 	isTmuxName,
 	type PeekErrorKind,
@@ -258,8 +259,10 @@ export function createConsoleDispatcher({
 		const project = t.spawn;
 		const sessionName = explicitSession ?? (t instanceof SpawnPoint ? DEFAULT_SESSION : t.session);
 		let target: TmuxTarget;
-		if (project === "host") target = { kind: "host", name: "host", sessionName };
-		else if (isProjectName?.(project)) target = { kind: "devcontainer", name: project, sessionName };
+		if (project === "host") {
+			if (isReservedHostSession(sessionName)) throw new Error(`"${sessionName}" is a reserved host session`);
+			target = { kind: "host", name: "host", sessionName };
+		} else if (isProjectName?.(project)) target = { kind: "devcontainer", name: project, sessionName };
 		else throw new Error(`terminal view is not available for "${project}" (only the host and devcontainers)`);
 		// Both name and session reach the host's shell launch command; the grammar makes both strict
 		// dotless slugs, so assert it at the boundary regardless (defense in depth).

@@ -7,7 +7,7 @@ import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
-import type { HostOp, HostOpResult } from "../shared/host-op.js";
+import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { parseSessionName } from "../shared/session-id.js";
 import type { ResponsePayload } from "../shared/types.js";
@@ -220,7 +220,13 @@ export async function startGateway(): Promise<void> {
 
 		// A composite `project.session` resolves its container/path by the PROJECT segment (composites
 		// are never in knownTeamPaths); a mapped Claude id lets the daemon `--resume` the session.
-		const { project } = parseSessionName(team);
+		const { project, session } = parseSessionName(team);
+		// Never dispatch a wake that would relaunch over the host-daemon's own supervisor pane (the
+		// daemon refuses it too; this stops the wake message at the source).
+		if (project === "host" && isReservedHostSession(session)) {
+			console.log(`[wake] ${team} is a reserved host session; not waking`);
+			return false;
+		}
 		const projectPath = knownTeamPaths.get(project) ?? offlineCatalog.get(project);
 		const resumeSessionId = sessionResume.get(team)?.claudeSessionId;
 		hostWs.send(

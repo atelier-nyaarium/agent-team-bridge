@@ -526,11 +526,10 @@ export function createRoutes({
 		// session that exists but whose container is asleep still lists as available.
 		for (const [name, { lastSeen }] of sessionResume ?? []) {
 			if (seen.has(name)) continue;
-			// Defensive mirror of the record-time guard (websocket.ts): a host-spawn session is not
-			// devcontainer-wakeable, and a non-composite / non-slug entry is not a valid chat, so neither
-			// should surface as an available asleep session (it would be an un-wakeable phantom).
+			// Mirror of the record-time gate (websocket.ts): a non-composite / non-slug entry is not a
+			// valid chat, so it must not surface as an available asleep session (an un-wakeable phantom).
 			const parts = parseSessionName(name);
-			if (!isComposite(name) || parts.project === "host" || !isSlug(parts.project) || !isSlug(parts.session)) {
+			if (!isComposite(name) || !isSlug(parts.project) || !isSlug(parts.session)) {
 				continue;
 			}
 			seen.add(name);
