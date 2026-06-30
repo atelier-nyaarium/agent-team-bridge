@@ -2,7 +2,6 @@ package com.atelier_nyaarium.switchboard
 
 import android.content.ClipData
 import android.content.Context
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -85,7 +84,7 @@ fun HostNetworksScreen(repo: ChatRepository, onBack: () -> Unit, onTenant: (Stri
 			TopAppBar(
 				title = { Text("Guest Domains") },
 				navigationIcon = {
-					IconButton(onClick = onBack) {
+					IconButton(onClick = hapticClick(onBack)) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
 					}
 				},
@@ -111,7 +110,7 @@ fun HostNetworksScreen(repo: ChatRepository, onBack: () -> Unit, onTenant: (Stri
 			for (t in tenants) {
 				HostedTenantRow(tenant = t, onClick = { onTenant(t.domainId) })
 			}
-			Button(onClick = { showAdd = true }, modifier = Modifier.fillMaxWidth()) { Text("Add a Domain") }
+			Button(onClick = hapticClick { showAdd = true }, modifier = Modifier.fillMaxWidth()) { Text("Add a Domain") }
 		}
 	}
 }
@@ -119,7 +118,7 @@ fun HostNetworksScreen(repo: ChatRepository, onBack: () -> Unit, onTenant: (Stri
 /** One hosted-tenant row: the network name with a state chip and a drill-in chevron. */
 @Composable
 private fun HostedTenantRow(tenant: HostedTenant, onClick: () -> Unit) {
-	Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+	Card(Modifier.fillMaxWidth().hapticClickable(onClick = onClick)) {
 		Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 			Column(Modifier.weight(1f)) {
 				Text(tenant.displayName, style = MaterialTheme.typography.titleMedium)
@@ -163,7 +162,7 @@ private fun AddNetworkScreen(repo: ChatRepository, onBack: () -> Unit, onDone: (
 			TopAppBar(
 				title = { Text("Add a Domain") },
 				navigationIcon = {
-					IconButton(onClick = onBack) {
+					IconButton(onClick = hapticClick(onBack)) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
 					}
 				},
@@ -189,7 +188,7 @@ private fun AddNetworkScreen(repo: ChatRepository, onBack: () -> Unit, onDone: (
 			)
 			Button(
 				enabled = label.isNotBlank() && !busy,
-				onClick = {
+				onClick = hapticClick {
 					busy = true
 					status = "Creating..."
 					scope.launch {
@@ -270,7 +269,7 @@ fun HostedTenantDetailScreen(
 			TopAppBar(
 				title = { Text(tenant.displayName) },
 				navigationIcon = {
-					IconButton(onClick = onBack) {
+					IconButton(onClick = hapticClick(onBack)) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
 					}
 				},
@@ -291,7 +290,7 @@ fun HostedTenantDetailScreen(
 				)
 				Button(
 					enabled = !busy,
-					onClick = {
+					onClick = hapticClick {
 						busy = true
 						status = "Preparing invite..."
 						scope.launch {
@@ -322,18 +321,18 @@ fun HostedTenantDetailScreen(
 					}
 				}
 				Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-					OutlinedButton(onClick = { copyInvite(context, blob); status = "Copied." }, modifier = Modifier.weight(1f)) {
+					OutlinedButton(onClick = hapticClick { copyInvite(context, blob); status = "Copied." }, modifier = Modifier.weight(1f)) {
 						Text("Copy")
 					}
-					OutlinedButton(onClick = { saveLauncher(blob) }, modifier = Modifier.weight(1f)) { Text("Save as file") }
+					OutlinedButton(onClick = hapticClick { saveLauncher(blob) }, modifier = Modifier.weight(1f)) { Text("Save as file") }
 				}
 				// After they scan in person, run the mutual 6-digit compare that commits the trust edge.
-				Button(onClick = { onVerify(blob, tenant.displayName) }, modifier = Modifier.fillMaxWidth()) {
+				Button(onClick = hapticClick { onVerify(blob, tenant.displayName) }, modifier = Modifier.fillMaxWidth()) {
 					Text("Verify in person")
 				}
 				TextButton(
 					enabled = !busy,
-					onClick = {
+					onClick = hapticClick {
 						busy = true
 						status = "Regenerating..."
 						scope.launch {
@@ -361,11 +360,11 @@ fun HostedTenantDetailScreen(
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
-			OutlinedButton(onClick = onLink, modifier = Modifier.fillMaxWidth()) { Text("Link with this Domain") }
+			OutlinedButton(onClick = hapticClick(onLink), modifier = Modifier.fillMaxWidth()) { Text("Link with this Domain") }
 
 			HorizontalDivider()
 			OutlinedButton(
-				onClick = { confirmRemove = true },
+				onClick = hapticClick { confirmRemove = true },
 				enabled = !busy,
 				modifier = Modifier.fillMaxWidth(),
 			) { Text("Remove this Domain", color = MaterialTheme.colorScheme.error) }

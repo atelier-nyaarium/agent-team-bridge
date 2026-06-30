@@ -71,8 +71,8 @@ fun QrScanScreen(onResult: (String) -> Unit, onCancel: () -> Unit) {
 	if (!granted) {
 		Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
 			Text("Camera permission is needed to scan the enrollment QR.", color = MaterialTheme.colorScheme.error)
-			Button(onClick = { permLauncher.launch(Manifest.permission.CAMERA) }) { Text("Grant camera access") }
-			OutlinedButton(onClick = onCancel) { Text("Cancel") }
+			Button(onClick = hapticClick { permLauncher.launch(Manifest.permission.CAMERA) }) { Text("Grant camera access") }
+			OutlinedButton(onClick = hapticClick(onCancel)) { Text("Cancel") }
 		}
 		return
 	}
@@ -109,7 +109,7 @@ fun QrScanScreen(onResult: (String) -> Unit, onCancel: () -> Unit) {
 				"Camera couldn't start: ${camError ?: "barcode scanner unavailable"}\n\nGo back and use Paste or Open file instead.",
 				color = MaterialTheme.colorScheme.error,
 			)
-			OutlinedButton(onClick = onCancel) { Text("Back") }
+			OutlinedButton(onClick = hapticClick(onCancel)) { Text("Back") }
 		}
 		return
 	}
@@ -177,7 +177,7 @@ fun QrScanScreen(onResult: (String) -> Unit, onCancel: () -> Unit) {
 			},
 		)
 		OutlinedButton(
-			onClick = onCancel,
+			onClick = hapticClick(onCancel),
 			modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(24.dp),
 		) {
 			Text("Cancel")

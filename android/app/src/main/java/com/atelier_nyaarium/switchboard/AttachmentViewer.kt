@@ -133,12 +133,12 @@ private fun FullscreenMedia(
 					overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
 					modifier = Modifier.weight(1f),
 				)
-				TextButton(onClick = {
+				TextButton(onClick = hapticClick {
 					val ok = saveToDownloads(context, att)
 					Toast.makeText(context, if (ok) "Saved to Downloads" else "Save failed", Toast.LENGTH_SHORT).show()
 				}) { Text("Save", color = Color.White) }
-				TextButton(onClick = onOpenWith) { Text("Open with", color = Color.White) }
-				TextButton(onClick = onDismiss) { Text("Close", color = Color.White) }
+				TextButton(onClick = hapticClick(onOpenWith)) { Text("Open with", color = Color.White) }
+				TextButton(onClick = hapticClick(onDismiss)) { Text("Close", color = Color.White) }
 			}
 		}
 	}
@@ -204,14 +204,14 @@ private fun FileInfoDialog(att: OpenAttachment, onOpenWith: () -> Unit, onDismis
 		},
 		confirmButton = {
 			Row {
-				TextButton(onClick = {
+				TextButton(onClick = hapticClick {
 					val ok = saveToDownloads(context, att)
 					Toast.makeText(context, if (ok) "Saved to Downloads" else "Save failed", Toast.LENGTH_SHORT).show()
 					onDismiss()
 				}) { Text("Save to Downloads") }
-				TextButton(onClick = onOpenWith) { Text("Open with...") }
+				TextButton(onClick = hapticClick(onOpenWith)) { Text("Open with...") }
 			}
 		},
-		dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
 	)
 }

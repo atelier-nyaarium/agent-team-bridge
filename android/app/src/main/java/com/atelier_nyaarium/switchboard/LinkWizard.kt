@@ -115,7 +115,7 @@ fun LinkWizard(repo: ChatRepository, onDone: () -> Unit, onCancel: () -> Unit) {
 			TopAppBar(
 				title = { Text(if (role == null) "Link with a peer" else "Link") },
 				navigationIcon = {
-					IconButton(onClick = onCancel) {
+					IconButton(onClick = hapticClick(onCancel)) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Cancel")
 					}
 				},
@@ -273,8 +273,8 @@ private fun RendezvousPanel(
 	when (role) {
 		null -> {
 			Spacer(Modifier.height(8.dp))
-			Button(onClick = onPickReceiver, modifier = Modifier.fillMaxWidth()) { Text("Show my code") }
-			OutlinedButton(onClick = onPickRequester, modifier = Modifier.fillMaxWidth()) { Text("Enter my friend's code") }
+			Button(onClick = hapticClick(onPickReceiver), modifier = Modifier.fillMaxWidth()) { Text("Show my code") }
+			OutlinedButton(onClick = hapticClick(onPickRequester), modifier = Modifier.fillMaxWidth()) { Text("Enter my friend's code") }
 		}
 
 		LinkRole.RECEIVER -> {
@@ -301,7 +301,7 @@ private fun RendezvousPanel(
 				modifier = Modifier.fillMaxWidth(),
 			)
 			Button(
-				onClick = onRequest,
+				onClick = hapticClick(onRequest),
 				enabled = enteredToken.isNotBlank() && !busy,
 				modifier = Modifier.fillMaxWidth(),
 			) { Text(if (busy) "Pairing..." else "Pair") }
@@ -344,8 +344,8 @@ private fun VerifyPanel(
 		)
 	}
 	Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-		OutlinedButton(onClick = onAbort, enabled = !busy, modifier = Modifier.weight(1f)) { Text("Abort") }
-		Button(onClick = onConfirm, enabled = confirmEnabled, modifier = Modifier.weight(1f)) {
+		OutlinedButton(onClick = hapticClick(onAbort), enabled = !busy, modifier = Modifier.weight(1f)) { Text("Abort") }
+		Button(onClick = hapticClick(onConfirm), enabled = confirmEnabled, modifier = Modifier.weight(1f)) {
 			Text(if (busy) "Linking..." else "Confirm")
 		}
 	}
@@ -358,7 +358,7 @@ private fun DonePanel(onDone: () -> Unit) {
 	InfoSurface(
 		"Linked on both sides. Choose what to share from the peer's detail; nothing is shared until you pick it.",
 	)
-	Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+	Button(onClick = hapticClick(onDone), modifier = Modifier.fillMaxWidth()) { Text("Done") }
 }
 
 /** Trust is written locally, but the Router did not authorize the relay edge, so cross-Domain sends
@@ -378,8 +378,8 @@ private fun LinkedNoRelayPanel(busy: Boolean, note: String, onRetry: () -> Unit,
 	}
 	if (note.isNotEmpty()) InfoSurface(note)
 	Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-		OutlinedButton(onClick = onDone, enabled = !busy, modifier = Modifier.weight(1f)) { Text("Later") }
-		Button(onClick = onRetry, enabled = !busy, modifier = Modifier.weight(1f)) {
+		OutlinedButton(onClick = hapticClick(onDone), enabled = !busy, modifier = Modifier.weight(1f)) { Text("Later") }
+		Button(onClick = hapticClick(onRetry), enabled = !busy, modifier = Modifier.weight(1f)) {
 			Text(if (busy) "Retrying..." else "Retry")
 		}
 	}
@@ -398,8 +398,8 @@ private fun FailedPanel(reason: String, onRestart: () -> Unit, onClose: () -> Un
 		)
 	}
 	Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-		OutlinedButton(onClick = onClose, modifier = Modifier.weight(1f)) { Text("Close") }
-		Button(onClick = onRestart, modifier = Modifier.weight(1f)) { Text("Start over") }
+		OutlinedButton(onClick = hapticClick(onClose), modifier = Modifier.weight(1f)) { Text("Close") }
+		Button(onClick = hapticClick(onRestart), modifier = Modifier.weight(1f)) { Text("Start over") }
 	}
 }
 
@@ -412,7 +412,7 @@ private fun FailedPanel(reason: String, onRestart: () -> Unit, onClose: () -> Un
 private fun CopyButton(value: String) {
 	val clipboard = LocalClipboard.current
 	val scope = rememberCoroutineScope()
-	OutlinedButton(onClick = {
+	OutlinedButton(onClick = hapticClick {
 		scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", value))) }
 	}) { Text("Copy") }
 }

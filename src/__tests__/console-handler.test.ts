@@ -1009,6 +1009,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			kind: "sendText",
 			target: { kind: "devcontainer", name: "recipe-app", sessionName: "claude" },
 			text: "/model opus",
+			submit: true,
 			dedupKey: "conv-pixel:s1",
 		});
 	});

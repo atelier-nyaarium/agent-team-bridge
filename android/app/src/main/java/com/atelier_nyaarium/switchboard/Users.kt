@@ -127,28 +127,28 @@ fun UsersScreen(
 			TopAppBar(
 				title = { Text("Users") },
 				navigationIcon = {
-					IconButton(onClick = onBack) {
+					IconButton(onClick = hapticClick(onBack)) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
 					}
 				},
 				actions = {
 					// The federation actions live here now that Users is the main surface (no separate
 					// Federation hub). Guest networks is admin-only.
-					IconButton(onClick = { menuOpen = true }) {
+					IconButton(onClick = hapticClick { menuOpen = true }) {
 						Icon(Icons.Default.MoreVert, contentDescription = "Domain actions")
 					}
 					DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-						DropdownMenuItem(text = { Text("Link with a peer") }, onClick = {
+						DropdownMenuItem(text = { Text("Link with a peer") }, onClick = hapticClick {
 							menuOpen = false
 							onLink()
 						})
 						if (isAdmin) {
-							DropdownMenuItem(text = { Text("Guest Domains") }, onClick = {
+							DropdownMenuItem(text = { Text("Guest Domains") }, onClick = hapticClick {
 								menuOpen = false
 								onHostNetworks()
 							})
 						}
-						DropdownMenuItem(text = { Text("Add gateway") }, onClick = {
+						DropdownMenuItem(text = { Text("Add gateway") }, onClick = hapticClick {
 							menuOpen = false
 							onAddGateway()
 						})
@@ -177,7 +177,7 @@ fun UsersScreen(
 				}
 			}
 			if (isAdmin) {
-				Button(onClick = onEnrollUser, modifier = Modifier.fillMaxWidth()) { Text("Enroll a user") }
+				Button(onClick = hapticClick(onEnrollUser), modifier = Modifier.fillMaxWidth()) { Text("Enroll a user") }
 			}
 
 			SectionLabel("PEOPLE")
@@ -312,7 +312,7 @@ private fun UserRow(
 			PresenceDot(online = member.online)
 			if (onTrust != null) {
 				Spacer(Modifier.width(8.dp))
-				Button(onClick = onTrust) { Text(if (isPending) "Trust back" else "Trust") }
+				Button(onClick = hapticClick(onTrust)) { Text(if (isPending) "Trust back" else "Trust") }
 			}
 			if (onUntrust != null) {
 				Spacer(Modifier.width(8.dp))
@@ -342,14 +342,14 @@ private fun RowKebab(onManageShares: (() -> Unit)?, onUntrust: () -> Unit) {
 	var open by remember { mutableStateOf(false) }
 	var confirm by remember { mutableStateOf(false) }
 	Box {
-		IconButton(onClick = { open = true }) {
+		IconButton(onClick = hapticClick { open = true }) {
 			Icon(Icons.Default.MoreVert, contentDescription = "Actions")
 		}
 		DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
 			if (onManageShares != null) {
 				DropdownMenuItem(
 					text = { Text("Manage shares") },
-					onClick = {
+					onClick = hapticClick {
 						open = false
 						onManageShares()
 					},
@@ -357,7 +357,7 @@ private fun RowKebab(onManageShares: (() -> Unit)?, onUntrust: () -> Unit) {
 			}
 			DropdownMenuItem(
 				text = { Text("Untrust") },
-				onClick = {
+				onClick = hapticClick {
 					open = false
 					confirm = true
 				},

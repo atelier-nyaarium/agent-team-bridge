@@ -95,7 +95,7 @@ fun EnrollCeremonyScreen(
 			TopAppBar(
 				title = { Text("Verify in person") },
 				navigationIcon = {
-					IconButton(onClick = onCancel) {
+					IconButton(onClick = hapticClick(onCancel)) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Cancel")
 					}
 				},
@@ -235,8 +235,8 @@ private fun ComparePanel(
 		Busy("Recording the trust...")
 	} else {
 		Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-			OutlinedButton(onClick = onDiffer, modifier = Modifier.weight(1f)) { Text("They differ") }
-			Button(onClick = onMatch, modifier = Modifier.weight(1f)) { Text("They match") }
+			OutlinedButton(onClick = hapticClick(onDiffer), modifier = Modifier.weight(1f)) { Text("They differ") }
+			Button(onClick = hapticClick(onMatch), modifier = Modifier.weight(1f)) { Text("They match") }
 		}
 	}
 }
@@ -248,7 +248,7 @@ private fun DonePanel(peerLabel: String, onDone: () -> Unit) {
 		"You and $peerLabel can now share sessions with each other. Nothing is shared until you choose it from " +
 			"their detail.",
 	)
-	Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Done") }
+	Button(onClick = hapticClick(onDone), modifier = Modifier.fillMaxWidth()) { Text("Done") }
 }
 
 /** The trust edge is recorded but the Router did not authorize the relay, so cross-Domain sends
@@ -271,8 +271,8 @@ private fun LinkedNoRelayPanel(busy: Boolean, note: String, onRetry: () -> Unit,
 	}
 	if (note.isNotEmpty()) InfoSurface(note)
 	Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-		OutlinedButton(onClick = onLater, enabled = !busy, modifier = Modifier.weight(1f)) { Text("Later") }
-		Button(onClick = onRetry, enabled = !busy, modifier = Modifier.weight(1f)) {
+		OutlinedButton(onClick = hapticClick(onLater), enabled = !busy, modifier = Modifier.weight(1f)) { Text("Later") }
+		Button(onClick = hapticClick(onRetry), enabled = !busy, modifier = Modifier.weight(1f)) {
 			Text(if (busy) "Retrying..." else "Retry")
 		}
 	}
@@ -294,7 +294,7 @@ private fun FailedPanel(reason: String, onClose: () -> Unit) {
 			style = MaterialTheme.typography.bodyMedium,
 		)
 	}
-	Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Close") }
+	Button(onClick = hapticClick(onClose), modifier = Modifier.fillMaxWidth()) { Text("Close") }
 }
 
 ////////////////////////////////

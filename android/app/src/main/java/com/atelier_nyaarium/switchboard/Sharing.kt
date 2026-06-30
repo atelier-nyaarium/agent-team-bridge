@@ -1,6 +1,5 @@
 package com.atelier_nyaarium.switchboard
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -133,7 +132,7 @@ fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () ->
 			TopAppBar(
 				title = { Text("Sharing") },
 				navigationIcon = {
-					IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+					IconButton(onClick = hapticClick(onBack)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
 				},
 			)
 		},
@@ -158,7 +157,7 @@ fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () ->
 			}
 			for (s in sessions) {
 				val st = shares[s.name] ?: SessionShares(false, emptySet())
-				Card(Modifier.fillMaxWidth().clickable { active = s.name }) {
+				Card(Modifier.fillMaxWidth().hapticClickable { active = s.name }) {
 					Column(Modifier.padding(16.dp)) {
 						Text(s.shortName, style = MaterialTheme.typography.titleMedium)
 						Text(
@@ -190,7 +189,7 @@ private fun SessionShareScreen(
 			TopAppBar(
 				title = { Text(sessionName) },
 				navigationIcon = {
-					IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+					IconButton(onClick = hapticClick(onBack)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
 				},
 			)
 		},
@@ -223,7 +222,7 @@ private fun SessionShareScreen(
 				}
 				for (p in people) {
 					Row(
-						Modifier.fillMaxWidth().clickable {
+						Modifier.fillMaxWidth().hapticClickable {
 							onToggleDomain(p.domainId, p.domainId !in current.domains)
 						}.padding(vertical = 4.dp),
 						verticalAlignment = Alignment.CenterVertically,
@@ -258,7 +257,7 @@ private fun SessionShareScreen(
 @Composable
 private fun ModeRow(title: String, subtitle: String, selected: Boolean, onSelect: () -> Unit) {
 	Row(
-		Modifier.fillMaxWidth().clickable(onClick = onSelect).padding(vertical = 4.dp),
+		Modifier.fillMaxWidth().hapticClickable(onClick = onSelect).padding(vertical = 4.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
 		RadioButton(selected = selected, onClick = onSelect)

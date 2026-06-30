@@ -6,7 +6,7 @@ import type { HostOp, HostPeekResult, TmuxTarget } from "../../shared/host-op.js
 /** The tmux primitives the runner orchestrates (injected so it is unit-testable). */
 export interface TmuxOps {
 	peekPane: (target: TmuxTarget) => Promise<HostPeekResult>;
-	sendText: (target: TmuxTarget, text: string) => Promise<void>;
+	sendText: (target: TmuxTarget, text: string, submit?: boolean) => Promise<void>;
 	sendKey: (target: TmuxTarget, key: string) => Promise<void>;
 	createSession: (target: TmuxTarget) => Promise<void>;
 	reloadPlugins: (target: TmuxTarget) => Promise<void>;
@@ -108,7 +108,8 @@ export function createHostOpRunner(ops: TmuxOps, opts: { minPeekIntervalMs?: num
 	}
 
 	function runSend(op: Extract<HostOp, { kind: "sendText" | "sendKey" }>): Promise<unknown> {
-		const exec = () => (op.kind === "sendText" ? ops.sendText(op.target, op.text) : ops.sendKey(op.target, op.key));
+		const exec = () =>
+			op.kind === "sendText" ? ops.sendText(op.target, op.text, op.submit) : ops.sendKey(op.target, op.key);
 		return runDeduped(op.dedupKey, exec, { sent: true });
 	}
 

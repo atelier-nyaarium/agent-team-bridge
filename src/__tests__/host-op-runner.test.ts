@@ -55,9 +55,18 @@ describe("createHostOpRunner", () => {
 		const h = makeOps();
 		const runner = createHostOpRunner(h.ops);
 		expect(await runner.run({ kind: "sendText", target: T, text: "hi" })).toEqual({ sent: true });
-		expect(h.ops.sendText).toHaveBeenCalledWith(T, "hi");
+		expect(h.ops.sendText).toHaveBeenCalledWith(T, "hi", undefined);
 		expect(await runner.run({ kind: "sendKey", target: T, key: "C-c" })).toEqual({ sent: true });
 		expect(h.ops.sendKey).toHaveBeenCalledWith(T, "C-c");
+	});
+
+	it("threads submit:false to sendText so the text is typed without a trailing Enter", async () => {
+		const h = makeOps();
+		const runner = createHostOpRunner(h.ops);
+		expect(await runner.run({ kind: "sendText", target: T, text: "/model", submit: false })).toEqual({
+			sent: true,
+		});
+		expect(h.ops.sendText).toHaveBeenCalledWith(T, "/model", false);
 	});
 
 	it("dedups a re-relayed send by dedupKey: the keystrokes are injected once", async () => {

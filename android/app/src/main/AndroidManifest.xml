@@ -9,6 +9,10 @@
          "stops polling" bug). Paired with the battery-optimization exemption row. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- A heavier confirmation buzz for the consequential gestures (long-press submit, hold-to-
+         delete-word). The light per-tap feedback uses Compose performHapticFeedback (no permission);
+         this is the stronger predefined Vibrator effect, which does need VIBRATE. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />

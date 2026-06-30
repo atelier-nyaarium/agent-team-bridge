@@ -13,7 +13,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -110,7 +109,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -559,7 +560,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					(session?.gatewayId.isNullOrEmpty() || session?.gatewayId == state.localGatewayId),
 				terminalRefreshMs = repo.terminalRefreshMs,
 				onTerminalPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
-				onTerminalSend = { text, key -> repo.tmuxSend(openTeam!!, text, key) },
+				onTerminalSend = { text, key, submit -> repo.tmuxSend(openTeam!!, text, key, submit) },
 			)
 		}
 		else ->
@@ -614,7 +615,7 @@ fun LockScreen(onUnlock: () -> Unit) {
 	Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
 		Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
 			Text("Switchboard is locked", style = MaterialTheme.typography.titleLarge)
-			Button(onClick = onUnlock) { Text("Unlock") }
+			Button(onClick = hapticClick(onUnlock)) { Text("Unlock") }
 		}
 	}
 }
@@ -691,7 +692,7 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 			TopAppBar(
 				title = { Text("Set up") },
 				actions = {
-					IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, contentDescription = "Settings") }
+					IconButton(onClick = hapticClick(onSettings)) { Icon(Icons.Default.Settings, contentDescription = "Settings") }
 				},
 			)
 		},
@@ -705,14 +706,14 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 				"Scan or paste the one-time code you were sent.",
 				style = MaterialTheme.typography.bodyMedium,
 			)
-			Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
+			Button(onClick = hapticClick { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
 			Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
 				OutlinedButton(
-					onClick = { tryProvision(readClipboard(context), "clipboard") },
+					onClick = hapticClick { tryProvision(readClipboard(context), "clipboard") },
 					modifier = Modifier.weight(1f),
 				) { Text("Paste") }
 				OutlinedButton(
-					onClick = { fileLauncher.launch(arrayOf("*/*")) },
+					onClick = hapticClick { fileLauncher.launch(arrayOf("*/*")) },
 					modifier = Modifier.weight(1f),
 				) { Text("Open file") }
 			}
@@ -734,10 +735,10 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 			HorizontalDivider()
 			// The "Add a device" self-enroll: a second phone for an EXISTING owner scans a code shown
 			// on a device they already use, instead of pasting a setup blob.
-			TextButton(onClick = { addDevice = true }) { Text("Adding another device to your account?") }
+			TextButton(onClick = hapticClick { addDevice = true }) { Text("Adding another device to your account?") }
 			// Tucked, text-only host-setup manual behind a small link. The admin finds it here;
 			// a friend with an invite never opens it.
-			TextButton(onClick = { showHostHelp = true }) { Text("Setting up your own Domain?") }
+			TextButton(onClick = hapticClick { showHostHelp = true }) { Text("Setting up your own Domain?") }
 		}
 	}
 }
@@ -799,8 +800,8 @@ fun NewDeviceScreen(repo: ChatRepository, onBack: () -> Unit) {
 				s == null -> {
 					Text("Scan the add-device code shown on a device you already use.", style = MaterialTheme.typography.bodyMedium)
 					if (status.isNotEmpty()) Text(status, color = MaterialTheme.colorScheme.error)
-					Button(onClick = { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
-					OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
+					Button(onClick = hapticClick { scanning = true }, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
+					OutlinedButton(onClick = hapticClick(onBack), modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
 				}
 				waiting -> {
 					Text("Waiting for approval", style = MaterialTheme.typography.titleMedium)
@@ -808,7 +809,7 @@ fun NewDeviceScreen(repo: ChatRepository, onBack: () -> Unit) {
 					Text(s.sas, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.titleLarge)
 					if (status.isNotEmpty()) Text(status)
 					OutlinedButton(
-						onClick = {
+						onClick = hapticClick {
 							waiting = false
 							onBack()
 						},
@@ -821,10 +822,10 @@ fun NewDeviceScreen(repo: ChatRepository, onBack: () -> Unit) {
 					Text(s.sas, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.titleLarge)
 					if (status.isNotEmpty()) Text(status)
 					Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-						OutlinedButton(onClick = onBack, enabled = !busy) { Text("Cancel") }
+						OutlinedButton(onClick = hapticClick(onBack), enabled = !busy) { Text("Cancel") }
 						Button(
 							enabled = !busy,
-							onClick = {
+							onClick = hapticClick {
 								scope.launch {
 									busy = true
 									status = "Joining..."
@@ -858,7 +859,7 @@ fun HostSetupHelpScreen(onBack: () -> Unit) {
 			TopAppBar(
 				title = { Text("Running Gateway Setup") },
 				navigationIcon = {
-					IconButton(onClick = onBack) {
+					IconButton(onClick = hapticClick(onBack)) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
 					}
 				},
@@ -1003,8 +1004,8 @@ fun SessionsScreen(
 			TopAppBar(
 				title = { Text("Agent Sessions") },
 				actions = {
-					IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Refresh") }
-					TextButton(onClick = onSettings) { Text("Settings") }
+					IconButton(onClick = hapticClick(onRefresh)) { Icon(Icons.Default.Refresh, contentDescription = "Refresh") }
+					TextButton(onClick = hapticClick(onSettings)) { Text("Settings") }
 				},
 			)
 		},
@@ -1085,7 +1086,7 @@ fun SessionsScreen(
 										state = state,
 										team = team,
 										nested = true,
-										onClick = { onOpen(team.name) },
+										onClick = hapticClick { onOpen(team.name) },
 										onLongPress = { actionTeam = team },
 									)
 								}
@@ -1126,7 +1127,7 @@ fun SessionsScreen(
 								SessionCard(
 									state = state,
 									team = team,
-									onClick = { onOpen(team.name) },
+									onClick = hapticClick { onOpen(team.name) },
 									onLongPress = { actionTeam = team },
 								)
 							}
@@ -1169,12 +1170,12 @@ private fun EmptyBoard(
 				// primary slot; adding a Gateway becomes the secondary step.
 				if (onVerifyEnroll != null) {
 					Spacer(Modifier.height(20.dp))
-					Button(onClick = onVerifyEnroll) { Text("Verify with the admin") }
+					Button(onClick = hapticClick(onVerifyEnroll)) { Text("Verify with the admin") }
 					Spacer(Modifier.height(4.dp))
-					TextButton(onClick = onAddGateway) { Text("Add a Gateway") }
+					TextButton(onClick = hapticClick(onAddGateway)) { Text("Add a Gateway") }
 				} else {
 					Spacer(Modifier.height(20.dp))
-					Button(onClick = onAddGateway) { Text("Add a Gateway") }
+					Button(onClick = hapticClick(onAddGateway)) { Text("Add a Gateway") }
 				}
 			}
 			// No Gateway admitted yet: the primary onboarding step goes straight to the scanner, with the
@@ -1184,9 +1185,9 @@ private fun EmptyBoard(
 				Spacer(Modifier.height(8.dp))
 				BoardBody("The computer that runs your agents.")
 				Spacer(Modifier.height(20.dp))
-				Button(onClick = onAddGateway) { Text("Add a Gateway") }
+				Button(onClick = hapticClick(onAddGateway)) { Text("Add a Gateway") }
 				Spacer(Modifier.height(4.dp))
-				TextButton(onClick = onHostHelp) { Text("Running Gateway Setup") }
+				TextButton(onClick = hapticClick(onHostHelp)) { Text("Running Gateway Setup") }
 			}
 			// A terminal failure that will not self-heal (secure storage, 401, admission rejected, or
 			// an enrollment that gave up past the grace window). Name the actual cause from `error`
@@ -1196,9 +1197,9 @@ private fun EmptyBoard(
 				Spacer(Modifier.height(8.dp))
 				BoardBody(state.error ?: "Couldn't reach your Gateway.")
 				Spacer(Modifier.height(20.dp))
-				Button(onClick = onRefresh) { Text("Try again") }
+				Button(onClick = hapticClick(onRefresh)) { Text("Try again") }
 				Spacer(Modifier.height(4.dp))
-				TextButton(onClick = onManage) { Text("Gateways") }
+				TextButton(onClick = hapticClick(onManage)) { Text("Gateways") }
 			}
 			// Mid-enrollment, still self-healing: the poll loop keeps retrying and clears it on the
 			// first success; past the grace window it escalates into the terminal branch above.
@@ -1320,7 +1321,7 @@ private fun GatewayHeader(name: String, online: Boolean, collapsed: Boolean, onT
 		Modifier
 			.fillMaxWidth()
 			.clip(MaterialTheme.shapes.small)
-			.clickable(onClick = onToggle)
+			.hapticClickable(onClick = onToggle)
 			.padding(horizontal = 4.dp, vertical = 8.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
@@ -1349,7 +1350,7 @@ private fun SpawnPointHeader(project: String, online: Boolean, onSpawn: () -> Un
 		Modifier
 			.fillMaxWidth()
 			.clip(MaterialTheme.shapes.small)
-			.clickable(onClick = onSpawn)
+			.hapticClickable(onClick = onSpawn)
 			.padding(horizontal = 4.dp, vertical = 6.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
@@ -1379,6 +1380,8 @@ fun SectionLabel(text: String) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: () -> Unit, onLongPress: () -> Unit) {
+	val haptics = LocalHapticFeedback.current
+	val strong = rememberStrongHaptic()
 	val display = state.label(team.name, state.localGatewayId)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
@@ -1393,8 +1396,14 @@ fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: 
 	// under its spawn-point header.
 	Card(
 		modifier = Modifier.fillMaxWidth().padding(start = if (nested) 16.dp else 0.dp).clip(CardDefaults.shape).combinedClickable(
-			onClick = onClick,
-			onLongClick = onLongPress,
+			onClick = {
+				haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+				onClick()
+			},
+			onLongClick = {
+				strong()
+				onLongPress()
+			},
 		),
 	) {
 		Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1468,7 +1477,7 @@ fun SessionActionsDialog(
 		text = {
 			Column {
 				if (canRename) {
-					TextButton(onClick = onRename, modifier = Modifier.fillMaxWidth()) { Text("Rename") }
+					TextButton(onClick = hapticClick(onRename), modifier = Modifier.fillMaxWidth()) { Text("Rename") }
 				} else {
 					Text(
 						"Project names come from the Gateway and cannot be renamed.",
@@ -1476,10 +1485,10 @@ fun SessionActionsDialog(
 						color = MaterialTheme.colorScheme.onSurfaceVariant,
 					)
 				}
-				TextButton(onClick = onForget, modifier = Modifier.fillMaxWidth()) { Text("Forget...") }
+				TextButton(onClick = hapticClick(onForget), modifier = Modifier.fillMaxWidth()) { Text("Forget...") }
 			}
 		},
-		confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+		confirmButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
 	)
 }
 
@@ -1489,8 +1498,8 @@ fun ConfirmDialog(title: String, body: String, confirmText: String, onConfirm: (
 		onDismissRequest = onDismiss,
 		title = { Text(title) },
 		text = { Text(body) },
-		confirmButton = { TextButton(onClick = onConfirm) { Text(confirmText) } },
-		dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+		confirmButton = { TextButton(onClick = hapticClick(onConfirm)) { Text(confirmText) } },
+		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
 	)
 }
 
@@ -1531,7 +1540,7 @@ fun ThreadScreen(
 	terminalEligible: Boolean,
 	terminalRefreshMs: Long,
 	onTerminalPeek: suspend (sinceHash: String?) -> Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult>,
-	onTerminalSend: suspend (text: String?, key: String?) -> Unit,
+	onTerminalSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
 ) {
 	// Seeded from the per-session saved draft and re-keyed on team, so switching tabs or
 	// leaving and reopening a thread restores what you were typing. onDraftChange writes
@@ -1598,13 +1607,13 @@ fun ThreadScreen(
 					}
 				},
 				navigationIcon = {
-					IconButton(onClick = onSessions) {
+					IconButton(onClick = hapticClick(onSessions)) {
 						Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to sessions")
 					}
 				},
 				actions = {
 					if (terminalEligible) {
-						IconButton(onClick = { terminalMode = !terminalMode }) {
+						IconButton(onClick = hapticClick { terminalMode = !terminalMode }) {
 							if (terminalMode) {
 								Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Back to chat")
 							} else {
@@ -1612,12 +1621,12 @@ fun ThreadScreen(
 							}
 						}
 					}
-					IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "More options") }
+					IconButton(onClick = hapticClick { showMenu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "More options") }
 					DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
 						if (canRename) {
 							DropdownMenuItem(
 								text = { Text("Rename") },
-								onClick = {
+								onClick = hapticClick {
 									showMenu = false
 									showRename = true
 								},
@@ -1625,14 +1634,14 @@ fun ThreadScreen(
 						}
 						DropdownMenuItem(
 							text = { Text("Close tab") },
-							onClick = {
+							onClick = hapticClick {
 								showMenu = false
 								onCloseTab(team)
 							},
 						)
 						DropdownMenuItem(
 							text = { Text("Forget...") },
-							onClick = {
+							onClick = hapticClick {
 								showMenu = false
 								confirmForget = true
 							},
@@ -1649,7 +1658,7 @@ fun ThreadScreen(
 				val selected = tabs.indexOf(team).coerceAtLeast(0)
 				PrimaryScrollableTabRow(selectedTabIndex = selected, edgePadding = 8.dp) {
 					tabs.forEachIndexed { i, t ->
-						Tab(selected = i == selected, onClick = { onGateway(t) }, text = { Text(tabLabel(t)) })
+						Tab(selected = i == selected, onClick = hapticClick { onGateway(t) }, text = { Text(tabLabel(t)) })
 					}
 				}
 			}
@@ -1712,7 +1721,7 @@ fun ThreadScreen(
 									overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
 									modifier = Modifier.widthIn(max = 120.dp),
 								)
-								IconButton(onClick = { attachments = attachments - uri }) {
+								IconButton(onClick = hapticClick { attachments = attachments - uri }) {
 									Icon(Icons.Default.Close, contentDescription = "Remove attachment")
 								}
 							}
@@ -1730,12 +1739,12 @@ fun ThreadScreen(
 				// Attach stacks above Send in a narrow right column, so the text field
 				// takes the remaining width.
 				Column(Modifier.padding(start = 8.dp), horizontalAlignment = Alignment.End) {
-					IconButton(onClick = { picker.launch(arrayOf("*/*")) }) {
+					IconButton(onClick = hapticClick { picker.launch(arrayOf("*/*")) }) {
 							Icon(Icons.Default.AttachFile, contentDescription = "Attach file")
 						}
 					FilledIconButton(
 						enabled = draft.isNotBlank() || attachments.isNotEmpty(),
-						onClick = {
+						onClick = hapticClick {
 							onSend(draft, attachments)
 							draft = ""
 							onDraftChange("")
@@ -1797,7 +1806,7 @@ fun SettingsScreen(
 			TopAppBar(
 				title = { Text(settingsTitle(effectiveRoute)) },
 				navigationIcon = {
-					IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+					IconButton(onClick = hapticClick(onBack)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
 				},
 			)
 		},
@@ -1831,7 +1840,7 @@ fun SettingsScreen(
 @Composable
 private fun SettingsRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 	Row(
-		Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+		Modifier.fillMaxWidth().hapticClickable(onClick = onClick).padding(vertical = 8.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
 		Icon(
@@ -1875,7 +1884,7 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 		)
 		Button(
 			enabled = displayName.isNotBlank() && displayName.trim() != state.displayName && !opBusy && !domainResolving,
-			onClick = {
+			onClick = hapticClick {
 				opBusy = true
 				opStatus = ""
 				scope.launch {
@@ -1902,7 +1911,7 @@ private fun ProfileSettings(state: ChatState, repo: ChatRepository, onSetDeviceN
 		OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, modifier = Modifier.weight(1f))
 		Button(
 			enabled = name.isNotBlank() && name != state.deviceName,
-			onClick = { onSetDeviceName(name.trim()) },
+			onClick = hapticClick { onSetDeviceName(name.trim()) },
 			modifier = Modifier.padding(start = 8.dp),
 		) { Text("Save") }
 	}
@@ -1913,13 +1922,13 @@ private fun NetworksSettings(repo: ChatRepository, onManage: () -> Unit, onYourD
 	// Three distinct concerns kept apart: the gateways within YOUR network, the consoles signed in to
 	// your account (Your devices), and linking with a friend's separate network (cross-Domain trust).
 	Text("Your Domain", style = MaterialTheme.typography.titleSmall)
-	Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) { Text("Gateways") }
+	Button(onClick = hapticClick(onManage), modifier = Modifier.fillMaxWidth()) { Text("Gateways") }
 	HorizontalDivider()
 	Text("Account", style = MaterialTheme.typography.titleSmall)
-	Button(onClick = onYourDevices, modifier = Modifier.fillMaxWidth()) { Text("Your devices") }
+	Button(onClick = hapticClick(onYourDevices), modifier = Modifier.fillMaxWidth()) { Text("Your devices") }
 	HorizontalDivider()
 	Text("People", style = MaterialTheme.typography.titleSmall)
-	Button(onClick = onFederation, modifier = Modifier.fillMaxWidth()) { Text("Users") }
+	Button(onClick = hapticClick(onFederation), modifier = Modifier.fillMaxWidth()) { Text("Users") }
 	HorizontalDivider()
 	OwnerKeysCard(repo)
 	OwnerBackupCard(repo)
@@ -1972,7 +1981,7 @@ private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 		label = { Text("Refresh speed (seconds)") },
 		singleLine = true,
 		trailingIcon = {
-			TextButton(onClick = {
+			TextButton(onClick = hapticClick {
 				val secs = refreshText.toDoubleOrNull()
 				if (secs != null) repo.setTerminalRefreshMs((secs * 1000).toLong())
 				// Always re-seed from the stored value: a valid entry reflects the clamp, and
@@ -1992,7 +2001,7 @@ private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 		HorizontalDivider()
 		Text("Danger", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
 		OutlinedButton(
-			onClick = { deleteError = null; confirmDelete = true },
+			onClick = hapticClick { deleteError = null; confirmDelete = true },
 			colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
 		) {
 			Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -2019,7 +2028,7 @@ private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 			confirmButton = {
 				TextButton(
 					enabled = !deleting,
-					onClick = {
+					onClick = hapticClick {
 						scope.launch {
 							// Biometric-gate this destructive owner-key action, mirroring revoke/admit.
 							if (repo.state.value.biometricLock && (activity == null || !promptBiometric(activity))) return@launch
@@ -2043,7 +2052,7 @@ private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 					},
 				) { Text("Delete Domain") }
 			},
-			dismissButton = { TextButton(enabled = !deleting, onClick = { confirmDelete = false }) { Text("Cancel") } },
+			dismissButton = { TextButton(enabled = !deleting, onClick = hapticClick { confirmDelete = false }) { Text("Cancel") } },
 		)
 	}
 	if (wipedUnconfirmed) {
@@ -2051,7 +2060,7 @@ private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 			onDismissRequest = { wipedUnconfirmed = false; onClear() },
 			title = { Text("Couldn't reach the servers") },
 			text = { Text("This device was wiped, but we couldn't confirm the purge. Ask the admin to purge it if it survived.") },
-			confirmButton = { TextButton(onClick = { wipedUnconfirmed = false; onClear() }) { Text("OK") } },
+			confirmButton = { TextButton(onClick = hapticClick { wipedUnconfirmed = false; onClear() }) { Text("OK") } },
 		)
 	}
 }
@@ -2161,7 +2170,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 		)
 		Button(
 			enabled = conn != SttsConn.TESTING,
-			onClick = {
+			onClick = hapticClick {
 				// setSttsCreds is the validate+persist choke: it normalizes the URL (rejecting
 				// userinfo / path / non-https that would send the key to the wrong host), stores the
 				// clean origin, and returns it (null = invalid, nothing persisted).
@@ -2215,7 +2224,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 	// Voice + Playback unlock only when fully Connected.
 	if (conn != SttsConn.CONNECTED) return
 	Row(verticalAlignment = Alignment.CenterVertically) {
-		OutlinedButton(onClick = { pickerOpen = true }) { Text(current?.label ?: providerId.ifEmpty { "Provider" }) }
+		OutlinedButton(onClick = hapticClick { pickerOpen = true }) { Text(current?.label ?: providerId.ifEmpty { "Provider" }) }
 		ExposedDropdownMenuBox(
 			expanded = voiceMenuOpen,
 			onExpandedChange = { voiceMenuOpen = it },
@@ -2248,7 +2257,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 			ExposedDropdownMenu(expanded = voiceMenuOpen, onDismissRequest = { voiceMenuOpen = false }) {
 				DropdownMenuItem(
 					text = { Text("Default voice") },
-					onClick = {
+					onClick = hapticClick {
 						voice = ""
 						repo.setSttsVoiceFor(providerId, "")
 						voiceMenuOpen = false
@@ -2268,7 +2277,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 								}
 							}
 						},
-						onClick = {
+						onClick = hapticClick {
 							voice = v.id
 							repo.setSttsVoiceFor(providerId, v.id)
 							voiceMenuOpen = false
@@ -2295,7 +2304,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 	}
 	Button(
 		enabled = current != null,
-		onClick = {
+		onClick = hapticClick {
 			sampleError = null
 			repo.playSttsSample()
 		},
@@ -2339,7 +2348,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 			autoPlayOptions.forEachIndexed { index, (value, label) ->
 				SegmentedButton(
 					selected = autoPlay == value,
-					onClick = {
+					onClick = hapticClick {
 						autoPlay = value
 						repo.sttsAutoPlay = value
 					},
@@ -2359,7 +2368,7 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 			text = {
 				Column {
 					for (p in providers) {
-						TextButton(onClick = {
+						TextButton(onClick = hapticClick {
 							providerId = p.id
 							repo.sttsProviderId = p.id
 							voice = repo.sttsVoiceFor(p.id)
@@ -2415,7 +2424,7 @@ private fun AppUpdateRow() {
 				for (v in variants) {
 					DropdownMenuItem(
 						text = { Text(v) },
-						onClick = {
+						onClick = hapticClick {
 							variant = v
 							variantMenuOpen = false
 						},
@@ -2425,7 +2434,7 @@ private fun AppUpdateRow() {
 		}
 		Button(
 			enabled = !busy,
-			onClick = {
+			onClick = hapticClick {
 				busy = true
 				status = "Checking for updates..."
 				val chosen = variant
@@ -2475,7 +2484,7 @@ private fun BatteryExemptionRow() {
 		if (exempt) {
 			Text("Allowed", color = MaterialTheme.colorScheme.primary)
 		} else {
-			Button(onClick = {
+			Button(onClick = hapticClick {
 				runCatching {
 					context.startActivity(
 						Intent(
@@ -2510,8 +2519,8 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 				)
 			}
 		},
-		confirmButton = { TextButton(onClick = { onSave(name) }) { Text("Save") } },
-		dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+		confirmButton = { TextButton(onClick = hapticClick { onSave(name) }) { Text("Save") } },
+		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
 	)
 }
 
@@ -2553,8 +2562,8 @@ fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Uni
 				)
 			}
 		},
-		confirmButton = { TextButton(enabled = slug.isNotEmpty(), onClick = { onSpawn(slug) }) { Text("Spawn") } },
-		dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+		confirmButton = { TextButton(enabled = slug.isNotEmpty(), onClick = hapticClick { onSpawn(slug) }) { Text("Spawn") } },
+		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
 	)
 }
 

@@ -804,10 +804,18 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	fun peek(target: String, sinceHash: String? = null): ConsolePeekResult =
 		resultOf(relay(ConsoleOp.Peek(target = target, sinceHash = sinceHash), targetGateway = targetGatewayOf(target)), "peek")
 
-	/** Send literal text (submitted with Enter) OR a named control key to the target's tmux pane.
-	 * Idempotent per opId (the host replays a re-relayed send instead of re-injecting). */
-	fun tmuxSend(target: String, text: String? = null, key: String? = null, opId: String = UUID.randomUUID().toString()) {
-		val body = relay(ConsoleOp.TmuxSend(target = target, text = text, key = key), opId, targetGateway = targetGatewayOf(target))
+	/** Send literal text OR a named control key to the target's tmux pane. `submit` (text only, default
+	 * true) controls the trailing Enter: false types into the composer without submitting. Idempotent
+	 * per opId (the host replays a re-relayed send instead of re-injecting). */
+	fun tmuxSend(
+		target: String,
+		text: String? = null,
+		key: String? = null,
+		submit: Boolean = true,
+		opId: String = UUID.randomUUID().toString(),
+	) {
+		val body =
+			relay(ConsoleOp.TmuxSend(target = target, text = text, key = key, submit = submit), opId, targetGateway = targetGatewayOf(target))
 		if (!body.ok) error("tmux_send failed: ${body.error ?: "unknown error"}")
 	}
 

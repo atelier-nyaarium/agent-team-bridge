@@ -165,6 +165,7 @@ sealed class ConsoleOp {
 		val target: String,
 		val text: String? = null,
 		val key: String? = null,
+		val submit: Boolean? = null,
 	) : ConsoleOp()
 
 	@Serializable
