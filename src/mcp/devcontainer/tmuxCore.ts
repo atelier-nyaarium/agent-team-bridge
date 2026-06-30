@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import {
 	ALLOWED_KEYS,
 	assertTmuxName,
+	classifyPeekError,
 	type HostPeekResult,
 	isReservedHostSession,
 	type TmuxTarget,
@@ -160,6 +161,7 @@ export async function peekPane(target: TmuxTarget): Promise<HostPeekResult> {
  * it would swallow a `;` command separator, which is why the CR rides inside the literal). */
 export function sendText(target: TmuxTarget, text: string): Promise<void> {
 	return serialized(targetKey(target), async () => {
+		assertNotReservedHostSink(target);
 		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), "-l", "--", `${text}\r`]));
 	});
 }
@@ -168,6 +170,7 @@ export function sendText(target: TmuxTarget, text: string): Promise<void> {
  * not spawn) when the key is not on the whitelist. */
 export function sendKey(target: TmuxTarget, key: string): Promise<void> {
 	return serialized(targetKey(target), async () => {
+		assertNotReservedHostSink(target);
 		if (!ALLOWED_KEYS.has(key)) throw new Error(`disallowed key "${key}"`);
 		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), key]));
 	});
@@ -183,9 +186,10 @@ export async function createSession(target: TmuxTarget, command: string): Promis
 	await run(tmuxArgv(target, ["new-session", "-d", "-s", target.sessionName, command]), 15_000);
 }
 
-/** The destructive sink's last line of defense: never create or kill a reserved host session (the
- * daemon's own supervisor pane). The console boundary and the wake handler guard this upstream, but
- * the sink owns the invariant so a future caller cannot bypass it. */
+/** The mutating sinks' last line of defense: never create, kill, or inject a keystroke into a
+ * reserved host session (the daemon's own supervisor pane). The console boundary and the wake
+ * handler guard this upstream, but the sinks own the invariant so a future caller cannot bypass it.
+ * Host-scoped: the reserved set names host sessions only, so a devcontainer target is never reserved. */
 function assertNotReservedHostSink(target: TmuxTarget): void {
 	if (target.kind === "host" && isReservedHostSession(target.sessionName)) {
 		throw new Error(`refusing to operate reserved host session "${target.sessionName}"`);
@@ -199,9 +203,15 @@ export async function killSession(target: TmuxTarget): Promise<void> {
 	assertNotReservedHostSink(target);
 	try {
 		await run(tmuxArgv(target, ["kill-session", "-t", target.sessionName]));
-	} catch {
-		// already gone is the desired end state
+	} catch (err) {
+		// A session that is already gone (no tmux server, no such session, dead container) is the
+		// desired end state, so it counts as success. A timeout or unknown exit leaves the kill
+		// UNCONFIRMED: rethrow so the caller does not drop the resume record over a still-live tmux.
+		if (classifyPeekError(err instanceof Error ? err.message : String(err)) !== "absent") throw err;
 	}
+	// The session is gone (a rethrow above skips this): drop its serialize chain so the map cannot
+	// grow by every session that ever received a keystroke.
+	sendChains.delete(targetKey(target));
 }
 
 /** Whether `target.sessionName` exists. `has-session` exits non-zero when it does not, so a
