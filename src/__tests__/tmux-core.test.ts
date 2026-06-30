@@ -9,6 +9,9 @@ let exitCode = 0;
 // drive a multi-spawn sequence (e.g. has-session fails, then new-session succeeds).
 const exitQueue: number[] = [];
 let stdoutData = "";
+// Scripted stderr emitted on a non-zero exit, so a test can drive the exact failure wording
+// killSession classifies on (e.g. tmux's "can't find session" vs an unrecognized failure).
+let stderrData = "";
 
 vi.mock("node:child_process", () => ({
 	spawn: (cmd: string, args: string[]) => {
@@ -27,6 +30,7 @@ vi.mock("node:child_process", () => ({
 		const out = args.includes("capture-pane") ? stdoutData : "";
 		queueMicrotask(() => {
 			if (out) child.stdout.emit("data", Buffer.from(out));
+			if (code !== 0 && stderrData) child.stderr.emit("data", Buffer.from(stderrData));
 			child.emit("close", code);
 		});
 		return child;
@@ -52,6 +56,7 @@ afterEach(() => {
 	exitCode = 0;
 	exitQueue.length = 0;
 	stdoutData = "";
+	stderrData = "";
 });
 
 describe("tmuxCore sendText", () => {
@@ -79,6 +84,13 @@ describe("tmuxCore sendText", () => {
 			"hi\r",
 		]);
 	});
+
+	it("refuses to inject text into a reserved host session without spawning anything", async () => {
+		await expect(sendText({ kind: "host", name: "host", sessionName: "host-daemon" }, "hi")).rejects.toThrow(
+			/reserved host session/,
+		);
+		expect(calls).toHaveLength(0);
+	});
 });
 
 describe("tmuxCore sendKey", () => {
@@ -90,6 +102,13 @@ describe("tmuxCore sendKey", () => {
 	it("rejects a key not on the whitelist without spawning anything", async () => {
 		await expect(sendKey({ kind: "host", name: "host", sessionName: "claude" }, "rm -rf")).rejects.toThrow(
 			/disallowed key/,
+		);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("refuses a control key to a reserved host session without spawning anything", async () => {
+		await expect(sendKey({ kind: "host", name: "host", sessionName: "host-daemon" }, "C-c")).rejects.toThrow(
+			/reserved host session/,
 		);
 		expect(calls).toHaveLength(0);
 	});
@@ -249,9 +268,18 @@ describe("tmuxCore killSession", () => {
 		]);
 	});
 
-	it("treats an already-gone session as success (swallows the error)", async () => {
+	it("treats an already-gone session as success (swallows the absent error)", async () => {
 		exitCode = 1; // kill-session exits non-zero when the session is absent
+		stderrData = "can't find session: scratch";
 		await expect(killSession({ kind: "host", name: "host", sessionName: "scratch" })).resolves.toBeUndefined();
+	});
+
+	it("rethrows when the kill is unconfirmed (not a recognized absent error)", async () => {
+		// A timeout or unrecognized exit means the kill is unconfirmed; rethrow so a forget does not
+		// drop the resume record over a still-live tmux. The generic non-zero exit classifies as a
+		// failure (no absent stderr), the conservative default.
+		exitCode = 1;
+		await expect(killSession({ kind: "host", name: "host", sessionName: "scratch" })).rejects.toThrow();
 	});
 });
 

@@ -347,6 +347,12 @@ export function createWebSocketHandlers({
 		subs.delete(subId);
 		console.log(`[ws] ${teamName}/${subId} disconnected (${subs.size} remaining)`);
 
+		// Clear any pending lead-handshake owned by this socket: a socket that drops before it answers
+		// would otherwise leave its entry in the map forever (resolveHandshake never fires for it).
+		for (const [hsId, pending] of handshakePending) {
+			if (pending.team === teamName && pending.subId === subId) handshakePending.delete(hsId);
+		}
+
 		// Clear conversation registry entry if it still points at this ws.
 		const closingConversationId = ws.data.conversationId;
 		if (closingConversationId && conversationRegistry.get(closingConversationId) === ws) {
