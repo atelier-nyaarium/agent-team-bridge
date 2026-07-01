@@ -2555,7 +2555,6 @@ fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Uni
 					value = name,
 					onValueChange = { name = it },
 					label = { Text("Session name") },
-					placeholder = { Text("e.g. scratch") },
 					singleLine = true,
 				)
 				Text(
