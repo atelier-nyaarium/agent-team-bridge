@@ -327,8 +327,7 @@ export function buildLaunchCommand(
 		opts.resumeSessionId && /^[0-9a-fA-F-]{8,}$/.test(opts.resumeSessionId)
 			? ` --resume ${opts.resumeSessionId}`
 			: "";
-	const effort = target.kind === "host" ? "low" : "high";
-	const claude = `claude --model default --effort ${effort} ${CLAUDE_FLAGS}${resume}`;
+	const claude = `claude --model opus --effort xhigh ${CLAUDE_FLAGS}${resume}`;
 	if (target.kind === "host") {
 		const cd = opts.workdir && !opts.workdir.includes("'") ? `cd "${opts.workdir}"; ` : "";
 		return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${cd}${claude}; exec bash'`;

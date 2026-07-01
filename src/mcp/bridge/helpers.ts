@@ -13,6 +13,10 @@ export interface BridgeConfig {
 	routerUrl: string;
 	projectName: string;
 	agentType: string;
+	// True when the session name was self-composed (no daemon launched this process), so the register
+	// must omit the resume id: there is no pane to reattach, and a durable record would only strand a
+	// phantom "available" card after exit.
+	adhoc: boolean;
 }
 
 interface RouterPostOptions {
@@ -27,6 +31,7 @@ interface RouterPostOptions {
 let ROUTER_URL = "";
 let PROJECT_NAME = "";
 let AGENT_TYPE = "";
+let IS_ADHOC = false;
 
 // Stable conversation id for the life of this MCP process. Regenerated on process start,
 // reused across WebSocket reconnects so the gateway can keep the conversation tied to the
@@ -48,6 +53,7 @@ export function initBridge(config: BridgeConfig): void {
 	ROUTER_URL = config.routerUrl;
 	PROJECT_NAME = config.projectName;
 	AGENT_TYPE = config.agentType;
+	IS_ADHOC = config.adhoc;
 }
 
 export function setChannelServer(server: Server): void {
@@ -124,6 +130,29 @@ export async function routerGet(
 	throw lastErr;
 }
 
+/** Build the register message from the bridge module state (rebuilt fresh on every reconnect).
+ * The harness session id rides along so the gateway can `claude --resume <id>` the session on a
+ * later wake - but only for a daemon-launched session. An ad-hoc session (self-composed name, no
+ * pane to reattach) omits it, so the gateway never writes a durable resume record that would strand
+ * a phantom "available" card after exit. Pure given (module state, env), exported for tests. */
+export function buildRegisterMsg(subId: string, mode: ConnectionMode = "channel"): Record<string, string> {
+	const registerMsg: Record<string, string> = {
+		type: "register",
+		team: PROJECT_NAME,
+		mode,
+		subId,
+		conversationId: CONVERSATION_ID,
+		version: packageJson.version,
+	};
+	if (process.env.PROJECT_HOST_PATH) {
+		registerMsg.projectPath = process.env.PROJECT_HOST_PATH;
+	}
+	if (!IS_ADHOC && process.env.CLAUDE_CODE_SESSION_ID) {
+		registerMsg.claudeSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+	}
+	return registerMsg;
+}
+
 // WebSocket connection to router
 
 export function connectToRouter(): void {
@@ -136,24 +165,7 @@ export function connectToRouter(): void {
 	routerWs.on("open", () => {
 		console.error(`[bridge] connected to router (mode: ${mode})`);
 		reconnector.reset();
-		const subId = crypto.randomUUID().slice(0, 8);
-
-		const registerMsg: Record<string, string> = {
-			type: "register",
-			team: PROJECT_NAME,
-			mode,
-			subId,
-			conversationId: CONVERSATION_ID,
-			version: packageJson.version,
-		};
-		if (process.env.PROJECT_HOST_PATH) {
-			registerMsg.projectPath = process.env.PROJECT_HOST_PATH;
-		}
-		// Report the harness session id so the gateway can `claude --resume <id>` this session later.
-		if (process.env.CLAUDE_CODE_SESSION_ID) {
-			registerMsg.claudeSessionId = process.env.CLAUDE_CODE_SESSION_ID;
-		}
-		routerWs!.send(JSON.stringify(registerMsg));
+		routerWs!.send(JSON.stringify(buildRegisterMsg(crypto.randomUUID().slice(0, 8), mode)));
 	});
 
 	routerWs.on("message", (raw: WebSocket.Data) => {

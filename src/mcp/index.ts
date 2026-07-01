@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import packageJson from "../../package.json";
 import { isInsideContainer } from "../shared/env.js";
-import { composeSessionName, isComposite, parseSessionName } from "../shared/session-id.js";
+import { parseSessionName } from "../shared/session-id.js";
 import { closeRouter, connectToRouter } from "./bridge/helpers.js";
 import { detectAgentType, registerBridgeTools } from "./bridge/registerBridgeTools.js";
 import { registerHumanTools } from "./channel/humanTools.js";
@@ -14,7 +14,7 @@ import { registerStubTool } from "./connector/utils.js";
 import { registerCompactSession } from "./devcontainer/compactSession.js";
 import { registerReloadPlugins } from "./devcontainer/reloadPlugins.js";
 import { registerSetEffortLevel } from "./devcontainer/setEffortLevel.js";
-import { randomTeamId, stableTeamName } from "./team-name.js";
+import { resolveSessionNaming } from "./team-name.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -28,25 +28,16 @@ const CHANNEL_INSTRUCTIONS = [
 
 export async function startMcp(): Promise<void> {
 	const inContainer = isInsideContainer();
-	// Every session is a bridge peer: a devcontainer (PROJECT_NAME set) or a host/ad-hoc Claude that
-	// joins under a STABLE per-session name derived from the harness session id, so a reload /
-	// restart+resume re-registers the same name and the phone thread resumes. A missing session id
-	// falls back to a fresh random name. Peers reach the gateway on the docker network inside a
-	// container or the forwarded localhost port elsewhere. The host plumbing (wake + terminal view)
-	// lives in the headless host daemon, not here.
-	// Every LIVE registrant is an addressable chat, so it must register a COMPOSITE (arity-2) name; a
-	// bare arity-1 name is reserved for catalog spawn-points only (the load-bearing invariant of the
-	// address grammar). An unset PROJECT_NAME joins under the host spawn-point; a set-but-BARE one
-	// (image ENV, manual/VS-Code-direct launch) is normalized to a session under that spawn. A name
-	// already composite (the daemon's `project.session`) is used as-is.
-	const explicitProject = process.env.PROJECT_NAME;
-	if (!explicitProject) {
-		const adhoc = stableTeamName(process.env.CLAUDE_CODE_SESSION_ID) ?? randomTeamId();
-		process.env.PROJECT_NAME = composeSessionName("host", adhoc);
-	} else if (!isComposite(explicitProject)) {
-		const adhoc = stableTeamName(process.env.CLAUDE_CODE_SESSION_ID) ?? randomTeamId();
-		process.env.PROJECT_NAME = composeSessionName(explicitProject, adhoc);
-	}
+	// Every session is a bridge peer. The composite register name + the ad-hoc provenance flag both
+	// come from resolveSessionNaming (see team-name.ts for the composition rules); an ad-hoc session
+	// registers as a live chat but reports no resume id, so it never strands a durable record. Peers
+	// reach the gateway on the docker network inside a container or the forwarded localhost port
+	// elsewhere. The host plumbing (wake + terminal view) lives in the headless host daemon, not here.
+	const { projectName: resolvedName, adhoc } = resolveSessionNaming(
+		process.env.PROJECT_NAME,
+		process.env.CLAUDE_CODE_SESSION_ID,
+	);
+	process.env.PROJECT_NAME = resolvedName;
 	if (!process.env.BRIDGE_ROUTER_URL) {
 		process.env.BRIDGE_ROUTER_URL = inContainer ? "http://switchboard:20000" : "http://localhost:20000";
 	}
@@ -64,7 +55,7 @@ export async function startMcp(): Promise<void> {
 			: undefined,
 	);
 
-	registerBridgeTools(mcpServer);
+	registerBridgeTools(mcpServer, adhoc);
 	registerReloadPlugins(mcpServer);
 	registerSetEffortLevel(mcpServer);
 	registerCompactSession(mcpServer);

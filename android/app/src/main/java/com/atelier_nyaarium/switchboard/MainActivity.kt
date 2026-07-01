@@ -2555,11 +2555,10 @@ fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Uni
 					value = name,
 					onValueChange = { name = it },
 					label = { Text("Session name") },
-					placeholder = { Text("e.g. scratch") },
 					singleLine = true,
 				)
 				Text(
-					if (slug.isEmpty()) "Type anything; it converts to a slug on spawn." else "Will create: $slug",
+					if (slug.isEmpty()) "Enter a name." else "$slug",
 					style = MaterialTheme.typography.bodySmall,
 					color = MaterialTheme.colorScheme.onSurfaceVariant,
 				)
