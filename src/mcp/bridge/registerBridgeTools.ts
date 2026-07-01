@@ -28,7 +28,11 @@ export function detectAgentType(): string {
 	return "claude";
 }
 
-export function registerBridgeTools(mcpServer: McpServer): void {
+/** `adhoc` = the caller (startMcp) composed the session name itself rather than receiving a
+ * daemon-composed composite; such a session must not report a resume id (see startMcp). It cannot be
+ * re-derived here - by this point PROJECT_NAME is already a composite string indistinguishable from a
+ * daemon-composed one - so the composition site threads it through. */
+export function registerBridgeTools(mcpServer: McpServer, adhoc: boolean): void {
 	const projectName = process.env.PROJECT_NAME;
 
 	if (!projectName) {
@@ -79,6 +83,7 @@ export function registerBridgeTools(mcpServer: McpServer): void {
 		routerUrl: process.env.BRIDGE_ROUTER_URL || "http://switchboard:20000",
 		projectName,
 		agentType,
+		adhoc,
 	});
 
 	// Shared outgoing tools (all agents)
