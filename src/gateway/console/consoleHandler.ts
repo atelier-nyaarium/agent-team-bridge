@@ -283,6 +283,16 @@ export function createConsoleDispatcher({
 		if (!isTmuxName(target.sessionName)) throw new Error(`invalid session name "${target.sessionName}"`);
 		return target;
 	}
+
+	/** Reject a terminal-DRIVE op (peek/tmux_send/reload) against a record whose live incarnation is
+	 * an alias (a user-launched `claude --resume` under a different name): there is no daemon pane at
+	 * `spawn.id` to drive. Card ops (forget) and create are exempt - they proceed regardless. */
+	function assertDaemonDrivable(target: TmuxTarget): void {
+		const record = sessionStore?.getByTeam(composeSessionName(target.name, target.sessionName));
+		if (record?.liveTeam && record.liveTeam.team !== sessionStore!.teamOf(record)) {
+			throw new Error(`terminal view unavailable for a user-launched session; end it from your terminal`);
+		}
+	}
 	// The per-install conversationId is the device identity: it keys the registry sub, the
 	// signing-key binding, the idempotency cache, and the device-name binding. The mailbox is
 	// keyed by owner (below), so an owner's devices share one inbox while each keeps its own
@@ -645,6 +655,7 @@ export function createConsoleDispatcher({
 			case "peek": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
 				const target = resolveTmuxTarget(op.target);
+				assertDaemonDrivable(target);
 				const r = await relayToHost({ kind: "peek", target });
 				if (!r.ok) throw new Error(friendlyPeekError(r.error, r.errorKind));
 				const { ansi, hash } = r.result as HostPeekResult;
@@ -661,6 +672,7 @@ export function createConsoleDispatcher({
 					throw new Error("tmux_send requires exactly one of text or key");
 				}
 				const target = resolveTmuxTarget(op.target);
+				assertDaemonDrivable(target);
 				// The host replays a completed send for this dedupKey instead of re-injecting, so a
 				// relay timeout or a gateway restart that drops the gateway-side opCache cannot
 				// double-type. The gateway opCache still single-flights concurrent same-opId.
@@ -721,6 +733,7 @@ export function createConsoleDispatcher({
 			case "reload_plugins": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
 				const target = resolveTmuxTarget(op.target);
+				assertDaemonDrivable(target);
 				const dedupKey = `${conversationId}:${opId}`;
 				const r = await relayToHost({ kind: "reloadPlugins", target, dedupKey });
 				if (!r.ok) throw new Error(r.error ?? "reload failed");

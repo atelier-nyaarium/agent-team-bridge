@@ -1186,6 +1186,18 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(store.getByTeam("recipe-app.scratch")?.sessionLabel).toBe("keep");
 	});
 
+	it("peek on an alias-served record (a user-launched session) is refused with no host op", async () => {
+		const store = new SessionStore();
+		store.adoptById("main", { spawn: "recipe-app" });
+		// liveTeam under a DIFFERENT name than the record's own = an alias (user-launched) incarnation.
+		store.confirm("recipe-app.main", { team: "recipe-app.other", subId: "s" });
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app.main" }, "pk-alias"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("user-launched");
+		expect(h.hostOps).toHaveLength(0);
+	});
+
 	it("reload_plugins relays a reloadPlugins host op for the resolved session", async () => {
 		const h = makeTerminalHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "reload_plugins", target: "recipe-app" }, "r1"));

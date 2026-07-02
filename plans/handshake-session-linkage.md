@@ -425,6 +425,18 @@ machine independently)
 
 ## Noted (declined by design)
 
+- `assertDaemonDrivable` judges "user-launched" from `liveTeam.team != teamOf(record)` (alias-served),
+  not a fresh registry probe. Correct for the intended alias case. The one divergence is a
+  pathological wake to a composite whose SESSION segment equals a catalog project name (tier-4 mint
+  desyncs the record id from the requested team), where a daemon-launched session reads
+  "user-launched" - but that session's terminal is already broken by the name mismatch, so it is a
+  misleading message in a rare edge, not a new regression.
+- `forget` on an alias-served (user-launched) record issues killSession against the record's OWN
+  canonical name, never the user's alias process (a different name), then drops the record - so it
+  honors "cannot kill the user's terminal." A reconnect-race (a canonical pane whose tmux is alive
+  but whose WS dropped, with an alias having taken over liveTeam) could kill that reconnecting daemon
+  pane, but "forget tears down the daemon session" is defensible and the window is exotic.
+
 - The 6-hex id recipe is hand-rolled in four small sites (session-store `randomId`, team-name
   `randomTeamId`/`stableTeamName`, consoleHandler `mintedSessionId`). Factoring a shared
   `randomSlugId`/`stableSlugId` into session-id.ts was declined: the gain is cosmetic DRY of trivial

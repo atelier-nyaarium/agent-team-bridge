@@ -178,14 +178,6 @@ function jsonResponse(data: unknown, status = 200): Response {
 	});
 }
 
-/** Get the first active WebSocket for a team (any sub-session). */
-function getFirstWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData> | undefined {
-	for (const [, ws] of subs) {
-		if (ws.readyState === 1) return ws;
-	}
-	return undefined;
-}
-
 /** Get the mode of a team, preferring real sockets over virtual console peers. Every bridge
  * connection is channel mode, so this is effectively always "channel"; kept as the single
  * source the teams listing and the send paths read. */
@@ -659,8 +651,10 @@ export function createRoutes({
 			);
 		}
 
-		let subs = registry.get(localName);
-		let targetWs = subs ? getFirstWs(subs) : undefined;
+		// Resolve the live incarnation serving this record: its canonical pane, else an alias
+		// re-incarnation stamped as liveTeam. A send delivers to whichever is live, so a manual
+		// `claude --resume` under a different name still receives sends addressed to the record.
+		let targetWs = resolveLiveIncarnation(registry, sessionStore, localName);
 
 		// If offline, attempt to wake the container.
 		if (!targetWs) {
@@ -669,11 +663,13 @@ export function createRoutes({
 				// Claude Code needs time after MCP connect to initialize its channel listener.
 				// Registration happens instantly but channel notifications aren't ready yet.
 				await new Promise((r) => setTimeout(r, 3000));
-				subs = registry.get(localName);
-				targetWs = subs ? getFirstWs(subs) : undefined;
+				targetWs = resolveLiveIncarnation(registry, sessionStore, localName);
 			}
 		}
 
+		// Deliver to the resolved incarnation's own team subs (localName for a canonical pane, the
+		// alias team for a re-incarnation).
+		const subs = targetWs ? registry.get(targetWs.data.teamName ?? localName) : undefined;
 		if (!targetWs || !subs) {
 			return jsonResponse(
 				{

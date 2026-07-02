@@ -527,6 +527,36 @@ describe("routes", () => {
 			expect((pushed[0] as { session_id: string }).session_id).toBe("conv.conv-1.alice.test-host.proj-a.dev");
 		});
 
+		it("delivers to an alias re-incarnation via the record's liveTeam (no canonical pane)", async () => {
+			const pushed: Record<string, unknown>[] = [];
+			const aliasWs = {
+				readyState: 1,
+				data: { mode: "channel", teamName: "proj-a.alias", handshakeConfirmed: true },
+				send(data: string) {
+					pushed.push(JSON.parse(data));
+				},
+			};
+			// The live socket is registered under a DIFFERENT name; nothing under proj-a.dev.
+			const registry = makeRegistry({ "proj-a.alias": aliasWs });
+			const sessionStore = new SessionStore();
+			sessionStore.adoptById("dev", { spawn: "proj-a" });
+			sessionStore.confirm("proj-a.dev", { team: "proj-a.alias", subId: "sub-1" });
+			const { send } = createRoutes(makeCtx({ registry, sessionStore }));
+
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "proj-a.dev",
+				body: "hi",
+				channelOnly: true,
+			});
+			const json = await res.json();
+			// The session id keys on the TARGET record address, regardless of the alias delivery socket.
+			expect(json.session_id).toBe("conv.conv-1.alice.test-host.proj-a.dev");
+			expect(pushed.length).toBe(1);
+			expect((pushed[0] as { session_id: string }).session_id).toBe("conv.conv-1.alice.test-host.proj-a.dev");
+		});
+
 		it("resolves a host-qualified local target to the local session", async () => {
 			const pushed: Record<string, unknown>[] = [];
 			const fakeWs = {

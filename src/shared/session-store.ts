@@ -151,14 +151,21 @@ export class SessionStore {
 		return record ? this.bind(record, extra) : null;
 	}
 
+	/** The record holding a Claude transcript, or undefined - a read-only lookup so a caller can
+	 * apply first-binding-holds (refuse a second live incarnation of the same transcript) before
+	 * binding. */
+	resumeRecord(claudeSessionId: string): SessionRecord | undefined {
+		for (const record of this.records.values()) {
+			if (record.claudeSessionId === claudeSessionId) return record;
+		}
+		return undefined;
+	}
+
 	/** Bind a live registrant to the record holding its Claude transcript (a manual `--resume`
 	 * re-incarnation). Confirm tier 2. */
 	bindResume(claudeSessionId: string, extra: { live?: LiveRef } = {}): SessionRecord | null {
-		for (const record of this.records.values()) {
-			if (record.claudeSessionId === claudeSessionId)
-				return this.bind(record, { claudeSessionId, live: extra.live });
-		}
-		return null;
+		const record = this.resumeRecord(claudeSessionId);
+		return record ? this.bind(record, { claudeSessionId, live: extra.live }) : null;
 	}
 
 	/** Stamp a completed lead handshake: confirmedAt plus the optional live incarnation pointer. */

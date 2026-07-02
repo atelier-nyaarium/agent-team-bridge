@@ -98,11 +98,13 @@ export function getAllActiveRealWs(subs: Map<string, ServerWebSocket<WsData>>): 
 }
 
 /**
- * The live socket serving a session record: its canonical pane (registered under the record's own
- * `spawn.id`, preferring a confirmed sub so a multi-sub team reads confirmed) if live, else the
- * alias incarnation the confirm stamped as `liveTeam`. Excludes virtual console peers. The single
- * authoritative record -> live-socket resolution order, consulted by presence listing, send/wake
- * routing, and terminal-op resolution.
+ * The live socket serving a session record. Resolution order: a CONFIRMED canonical pane (a real
+ * sub under the record's own `spawn.id` that answered the lead handshake), else the CONFIRMED alias
+ * incarnation the record stamped as `liveTeam`, else an unconfirmed-but-live canonical socket (a
+ * session still verifying, with no confirmed lead anywhere). A confirmed lead therefore always wins
+ * over an unconfirmed or stray registration under either name, so a bare register cannot intercept a
+ * confirmed alias's traffic. Excludes virtual console peers. The single authoritative record ->
+ * live-socket resolution order, consulted by presence listing, send/wake routing, and terminal ops.
  */
 export function resolveLiveIncarnation(
 	registry: TeamRegistry,
@@ -110,11 +112,16 @@ export function resolveLiveIncarnation(
 	team: string,
 ): ServerWebSocket<WsData> | undefined {
 	const canonical = getAllActiveRealWs(registry.get(team) ?? new Map());
-	if (canonical.length) return canonical.find((s) => s.data.handshakeConfirmed) ?? canonical[0];
+	const confirmedCanonical = canonical.find((s) => s.data.handshakeConfirmed);
+	if (confirmedCanonical) return confirmedCanonical;
 	const alias = sessionStore?.resolveLive(team);
-	if (!alias) return undefined;
-	const s = registry.get(alias.team)?.get(alias.subId);
-	return s && s.readyState === 1 && !s.data.virtual ? s : undefined;
+	if (alias) {
+		const s = registry.get(alias.team)?.get(alias.subId);
+		// The stamped incarnation was confirmed; require it still be, so a fresh unconfirmed
+		// registrant that lands on the same (team, subId) slot cannot inherit the record's traffic.
+		if (s && s.readyState === 1 && !s.data.virtual && s.data.handshakeConfirmed) return s;
+	}
+	return canonical[0];
 }
 
 export function createWebSocketHandlers({
@@ -430,11 +437,29 @@ export function createWebSocketHandlers({
 	}
 
 	/** Establish the durable session record for a confirmed lead. The binding-order precedence lives
-	 * in the store; here we just supply the stashed register ids and the confirming incarnation. */
+	 * in the store; here we supply the stashed register ids and the confirming incarnation, and apply
+	 * first-binding-holds (a registry probe the store cannot make). */
 	function establishRecord(ws: ServerWebSocket<WsData>, pending: { team: string; subId: string }): void {
 		if (!sessionStore) return;
+		const claudeSessionId = ws.data.claudeSessionId;
+		// First-binding-holds: if this transcript already lives on a DIFFERENT record's live
+		// incarnation, refuse to re-bind it here (the first binding holds), so a second live process on
+		// one transcript never steals the card. The session's own segment (a daemon relaunch of the
+		// same record) is exempt - that is a legitimate rebind, not a steal.
+		if (claudeSessionId) {
+			const holder = sessionStore.resumeRecord(claudeSessionId);
+			if (holder && sessionStore.teamOf(holder) !== pending.team) {
+				const live = resolveLiveIncarnation(registry, sessionStore, sessionStore.teamOf(holder));
+				if (live && live !== registry.get(pending.team)?.get(pending.subId)) {
+					console.log(
+						`[ws] first-binding-holds: ${pending.team}/${pending.subId} claims a transcript already live on ${sessionStore.teamOf(holder)}; refusing`,
+					);
+					return;
+				}
+			}
+		}
 		const record = sessionStore.establishOnConfirm(pending.team, {
-			claudeSessionId: ws.data.claudeSessionId,
+			claudeSessionId,
 			label: ws.data.cwdName,
 			live: { team: pending.team, subId: pending.subId },
 		});

@@ -42,7 +42,7 @@ import { createSealer, type Sealer } from "./federation/sealer.js";
 import { HostOpCoordinator } from "./hostOpCoordinator.js";
 import { createRoutes } from "./routes.js";
 import { WakeCoordinator } from "./wake.js";
-import { createWebSocketHandlers, type WsData } from "./websocket.js";
+import { createWebSocketHandlers, resolveLiveIncarnation, type WsData } from "./websocket.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -207,6 +207,14 @@ export async function startGateway(): Promise<void> {
 		if (isCatalogProject(team)) {
 			console.log(`[wake] ${team} is a spawn-point project, not a session; not waking`);
 			return false;
+		}
+
+		// A live incarnation already serves this record - its canonical pane, or an alias re-incarnation
+		// (a manual `claude --resume` under a different name) stamped as liveTeam. Routing reaches it, so
+		// relaunching would spawn a duplicate on the same transcript. Report it up rather than wake.
+		if (resolveLiveIncarnation(registry, sessionStore, team)) {
+			console.log(`[wake] ${team} already has a live incarnation; not waking`);
+			return true;
 		}
 
 		const hostSubs = registry.get("host");
