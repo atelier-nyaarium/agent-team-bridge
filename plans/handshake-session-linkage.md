@@ -499,6 +499,10 @@ scopes the refusal to a LIVE holder); see the plan-completeness note. The two le
 - `src/shared/session-id.ts : module header : unified-address-grammar migration comment` - **legacy-landmine** - header describes the grammar as added "alongside the legacy TeamAddress/SessionId/NoticeId ... deleted at the wire flip," but those classes are already gone and the wire has flipped, so it narrates a completed migration as in-progress.
 - `src/gateway/console/consoleHandler.ts : ConsoleHandlerDeps.domainStatus : pre-feature-evie fallback` - **legacy-landmine** - the omit-and-fall-back-to-already-rooted branch (and mirrored ConsoleRegisterResultSchema optionality) is back-compat for evie pods predating the status field; removable once all pods report domainStatus.
 
+**Cosmetic DRY (framework audit, declined - no correctness gain)**
+- `src/shared/session-store.ts : SessionStore : create` - **cosmetic** - workdirHint is seeded identical to the sessionLabel seed at all four record-creation sites; create() could default `workdirHint ?? sessionLabel` so call sites drop the redundant param. Already-correct everywhere, so pure hardening.
+- `src/gateway/index.ts + consoleHandler.ts : provisional-record rollback` - **cosmetic** - the adopt-then-forget-on-failure recipe is orchestrated at two sites, but the rollback predicates legitimately differ (create rolls back synchronously on a launch-op failure; doWakeTeam guards on confirmedAt + live over the WAKE_TIMEOUT window), so they stay separate by design; only the shared load-bearing `hostWorkdirHint` precedence was consolidated.
+
 ## Verification (live)
 
 - Phone create -> card instant -> boots -> `verifying` -> confirm -> `online`; reboot -> wake ->
