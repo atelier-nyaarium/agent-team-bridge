@@ -161,12 +161,20 @@ data class Team(
 	// True when the owning Domain is the admin's own, from the register reply via the gateway.
 	// The local session's value gates the admin surfaces.
 	val isAdminDomain: Boolean = false,
+	// The gateway-authoritative free-form label the board renders for this session. Distinct from
+	// displayName (the owning Domain's network name). Null for a spawn-point, a session with no
+	// record, or an older gateway that does not send it (the app falls back to a local label / leaf).
+	val sessionLabel: String? = null,
 ) {
 	/** Short local field shown in the UI: `spawn` or `spawn.session` from the canonical address. */
 	val shortName: String get() = localFieldOf(name)
 
 	/** Owning Gateway id (the gateway segment of the canonical address). */
 	val gatewayId: String get() = gatewayOf(name)
+
+	/** A live socket serves this session: confirmed online, or verifying its handshake (connected
+	 * but the LLM has not re-answered, e.g. across a gateway restart). Both count as awake. */
+	val isLive: Boolean get() = status == "online" || status == "verifying"
 }
 
 data class SendResult(val ok: Boolean, val status: String, val error: String?)
@@ -718,6 +726,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 				domainId = it.domainId,
 				displayName = it.displayName,
 				isAdminDomain = it.isAdminDomain ?: false,
+				sessionLabel = it.sessionLabel,
 			)
 		}
 	}

@@ -128,7 +128,7 @@ object FriendOnboarding {
 		val sessions = teams.filter { it.domainId == domainId }
 		return when {
 			sessions.isEmpty() -> HostedTenantState.AWAITING_SETUP
-			sessions.any { it.status == "online" } -> HostedTenantState.ONLINE
+			sessions.any { it.isLive } -> HostedTenantState.ONLINE
 			else -> HostedTenantState.OFFLINE
 		}
 	}

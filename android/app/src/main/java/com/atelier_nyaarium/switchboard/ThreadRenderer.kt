@@ -47,6 +47,10 @@ class ThreadRenderer(context: Context) {
 	 * user taps an agent row's Play button. */
 	var onPlayMessage: ((Long) -> Unit)? = null
 
+	/** Set by the owner; maps a message's `from` canonical address to the session's human label at
+	 * render time (so a notice shows "My Work" rather than the opaque address). Identity when unset. */
+	var resolveFrom: ((String) -> String)? = null
+
 	/** Whether agent rows render a Play button. The owner sets it before sync
 	 * (false when STTS is unprovisioned). */
 	var playEnabled = false
@@ -172,6 +176,9 @@ class ThreadRenderer(context: Context) {
 		var h = m.text.hashCode()
 		h = 31 * h + (m.status?.hashCode() ?: 0)
 		h = 31 * h + m.files.size
+		// The rendered sender is resolveFrom(m.from), which changes on a rename; include it so a
+		// re-sync re-pushes already-rendered rows instead of leaving stale sender labels.
+		h = 31 * h + (m.from?.let { resolveFrom?.invoke(it) ?: it }?.hashCode() ?: 0)
 		return h
 	}
 
@@ -204,7 +211,7 @@ class ThreadRenderer(context: Context) {
 			val obj = JSONObject()
 				.put("id", m.id)
 				.put("role", if (m.fromMe) "user" else "agent")
-				.put("from", if (m.fromMe) "you" else (m.from ?: ""))
+				.put("from", if (m.fromMe) "you" else (m.from?.let { resolveFrom?.invoke(it) ?: it } ?: ""))
 				.put("at", m.at)
 				.put("body", m.text)
 			if (playEnabled && !m.fromMe) obj.put("canPlay", true)

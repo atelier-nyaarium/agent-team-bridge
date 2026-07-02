@@ -32,6 +32,10 @@ class ThreadRendererPool(private val context: Context) {
 	/** Whether agent rows render Play buttons. Set before threads first sync. */
 	var playEnabled = false
 
+	/** Set by the owner; maps a message's `from` canonical address to a human label. Forwarded to
+	 * every renderer, read at render time, so setting it after renderers exist still takes effect. */
+	var resolveFrom: ((String) -> String)? = null
+
 	fun get(team: String): ThreadRenderer =
 		renderers.getOrPut(team) {
 			ThreadRenderer(context).also {
@@ -40,6 +44,7 @@ class ThreadRendererPool(private val context: Context) {
 				it.onOpenAttachment = { rel -> onAttachmentTap?.invoke(rel) ?: openAttachment(rel) }
 				it.onRetryMessage = { id -> onRetry?.invoke(team, id) }
 				it.onPlayMessage = { at -> onPlayTap?.invoke(team, at) }
+				it.resolveFrom = { addr -> resolveFrom?.invoke(addr) ?: addr }
 			}
 		}
 

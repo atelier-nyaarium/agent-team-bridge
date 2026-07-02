@@ -17,7 +17,8 @@ import {
 } from "../shared/federation-protocol.js";
 import type { CrossDomainBinding } from "../shared/pending-job-store.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
-import { Address, storeKey } from "../shared/session-id.js";
+import { Address, parseSessionName, storeKey } from "../shared/session-id.js";
+import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 
 ////////////////////////////////
@@ -96,6 +97,16 @@ function registryWith(entries: Record<string, unknown>): RoutesDeps["registry"] 
 		registry.set(team, subs);
 	}
 	return registry;
+}
+// A session is visible only if it has a store record, so a discovery test seeds one per local
+// composite session it expects teams() to list.
+function storeWith(...composites: string[]): SessionStore {
+	const store = new SessionStore();
+	for (const c of composites) {
+		const { project, session } = parseSessionName(c);
+		store.adoptById(session, { spawn: project });
+	}
+	return store;
 }
 
 ////////////////////////////////
@@ -288,6 +299,7 @@ describe("federation routing (E2E sealed)", () => {
 			sealer: sealerA,
 			registry: registryWith({ "recipe-app.dev": channelWs([]) }),
 			knownTeamPaths: new Map([["recipe-app.dev", "/x"]]),
+			sessionStore: storeWith("recipe-app.dev"),
 			displayName: () => "My Lab",
 		});
 		const { discover } = createRoutes(ctx);
@@ -1260,6 +1272,7 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 			crossDomainPeers: alicePeers,
 			registry: registryWith({ "app.dev": channelWs([]) }),
 			knownTeamPaths: new Map([["app.dev", "/x"]]),
+			sessionStore: storeWith("app.dev"),
 		});
 		ctx.config.localDomainId = "alice";
 		const { discover } = createRoutes(ctx);

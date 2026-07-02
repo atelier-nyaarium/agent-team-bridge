@@ -151,10 +151,17 @@ export const TeamInfoSchema = z
 		// who provisions others). The console reads it on its local session to decide whether to
 		// show the admin surfaces. Stamped only for the admin Domain, so absence means false.
 		isAdminDomain: z.boolean().optional(),
-		status: z.enum(["online", "available"]),
+		// online = a live incarnation that has confirmed its lead handshake; verifying = a live
+		// incarnation that has not (re)confirmed yet (e.g. re-registered after a gateway restart, still
+		// waiting on its LLM to answer); available = a record with no live incarnation (asleep, wakeable).
+		status: z.enum(["online", "verifying", "available"]),
 		mode: ConnectionModeSchema.optional(),
 		// loose | devcontainer | console. Always stamped by the gateway.
 		kind: TeamKindSchema,
+		// The free-form human label the board renders for a session record (typed at create, else the
+		// cwd basename, else the id). Distinct from `displayName` (the owning Domain's network name).
+		// Absent for spawn-points and sessions with no record.
+		sessionLabel: z.string().optional(),
 		// The plugin version the agent's MCP process reported at register. Absent for
 		// consoles and offline-catalog entries (no plugin process behind them). The console
 		// shows it as a chip only when it differs from the app's own expected version.

@@ -266,6 +266,13 @@ Gateway side (`src/gateway/websocket.ts` + store):
   back to the typed composite against an old gateway); create dialog drops slug validation when
   talking to a new gateway (sends displayLabel); rename UI entry point (thread menu) drives
   rename_session.
+- Label authority flip (Phase C left the LOCAL rename map winning in `label()`/`tabLabelFor` so an
+  existing rename survives the APK update and the rename UI keeps working before a server rename
+  exists). This phase makes the server authoritative: `rename_session` becomes the write path, a
+  one-shot connect-time seed pushes each still-present local label to the gateway via
+  `rename_session`, then the local `labels` map + its `setLabel`/persist path retire so a rename
+  from another device converges. Sequenced here because the flip is only coherent once the server
+  rename op exists.
 - `forget` unchanged in spirit: kills tmux by id, drops the record.
 
 ## Phase E - re-incarnation alias (gateway-side)
@@ -385,6 +392,17 @@ machine independently)
   sessions are outside the gate (intended).
 - The `hs-` reply path does not require the team to be listed, so a `verifying` session can always
   complete its confirm.
+- An alias-served record (a manual `claude --resume` re-incarnation registered under a DIFFERENT
+  self-composed name than its record's segment) has no way for teams() to resolve its live socket
+  until the incarnation re-confirms: liveTeam is stamped only at confirm, and restore() strips it,
+  so in the pre-confirm window (and after a gateway restart) the record reads `available` and a send
+  can wake a second incarnation. Accepted: the window is small (a resume confirms at the end of its
+  first turn) and confined to the manual-resume-under-a-different-name flow; the daemon path re-wakes
+  under the same composite (canonical lookup hits -> verifying -> online). Phase E's wake-suppression
+  consumes liveTeam once stamped.
+- A devcontainer live under a BARE project name (no `.session`) reads `available` (a spawn-point),
+  not `online`: a non-composite name never becomes a record, and the wake path always launches the
+  composite `project.session`, so a bare live register is not a normal flow.
 - A grammar-ambiguous composite team (a dotted project like `my.app.foo`, parsed as a non-slug
   session segment) is not stored as a record. The old resume map stored it by raw key, but the old
   teams() asleep filter's isComposite+isSlug guard already hid it from the board and it was never

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
+import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 
 /** Wrap a fake WebSocket into the nested registry structure: team → subId → ws */
@@ -33,7 +34,10 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		offlineCatalog,
 		knownTeamPaths,
 		mailboxStore: overrides.mailboxStore,
+		sessionStore: overrides.sessionStore,
 		displayName: overrides.displayName,
+		isAdminDomain: overrides.isAdminDomain,
+		touchShares: overrides.touchShares,
 	};
 }
 
@@ -82,176 +86,138 @@ describe("routes", () => {
 			]);
 		});
 
-		it("active teams take precedence over catalog", async () => {
-			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
-			const offlineCatalog = new Map<string, string>();
-			offlineCatalog.set("proj-a", "/home/user/proj-a");
-			offlineCatalog.set("proj-b", "/home/user/proj-b");
-			const ctx = makeCtx({ registry, offlineCatalog });
-			const { teams } = createRoutes(ctx);
-			const res = teams();
-			const json = await res.json();
+		it("lists a confirmed live record as online with its version, label, and mode", async () => {
+			const sessionStore = new SessionStore();
+			sessionStore.adoptById("main", { spawn: "proj-a", sessionLabel: "My Work" });
+			const registry = makeRegistry({
+				"proj-a.main": {
+					readyState: 1,
+					data: { mode: "channel", version: "5.0.14", handshakeConfirmed: true },
+				},
+			});
+			const json = await createRoutes(makeCtx({ registry, sessionStore })).teams().json();
 			expect(json).toEqual([
 				{
-					team: "proj-a",
+					team: "proj-a.main",
 					gatewayId: "test-host",
 					domainId: "alice",
 					status: "online",
 					mode: "channel",
-					kind: "devcontainer",
+					kind: "loose",
+					version: "5.0.14",
+					sessionLabel: "My Work",
 					queue_depth: 0,
 				},
+			]);
+		});
+
+		it("lists a live-but-unconfirmed record as verifying (re-registered, LLM not re-answered)", async () => {
+			const sessionStore = new SessionStore();
+			sessionStore.adoptById("main", { spawn: "proj-a", sessionLabel: "My Work" });
+			const registry = makeRegistry({
+				"proj-a.main": { readyState: 1, data: { mode: "channel", handshakeConfirmed: false } },
+			});
+			const json = (await createRoutes(makeCtx({ registry, sessionStore })).teams().json()) as {
+				status: string;
+			}[];
+			expect(json[0]?.status).toBe("verifying");
+		});
+
+		it("lists a record with no live incarnation as available, with its recency and label", async () => {
+			const sessionStore = new SessionStore({ now: () => 4242 });
+			sessionStore.adoptById("main", { spawn: "proj-a", sessionLabel: "My Work" });
+			const json = await createRoutes(makeCtx({ sessionStore })).teams().json();
+			expect(json).toEqual([
 				{
-					team: "proj-b",
+					team: "proj-a.main",
 					gatewayId: "test-host",
 					domainId: "alice",
 					status: "available",
-					kind: "devcontainer",
-					queue_depth: 0,
-				},
-			]);
-		});
-
-		it("surfaces the plugin version an online team reported at register", async () => {
-			const registry = makeRegistry({
-				"proj-a": { readyState: 1, data: { mode: "channel", version: "5.0.14" } },
-			});
-			const ctx = makeCtx({ registry });
-			const json = (await createRoutes(ctx).teams().json()) as { team: string; version?: string }[];
-			expect(json[0]?.version).toBe("5.0.14");
-		});
-
-		it("omits version for a team whose socket reported none (pre-feature plugin / console peer)", async () => {
-			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
-			const ctx = makeCtx({ registry });
-			const json = (await createRoutes(ctx).teams().json()) as { team: string; version?: string }[];
-			expect(json[0]?.version).toBeUndefined();
-		});
-
-		it("flags online teams as devcontainer via knownTeamPaths even when the catalog is empty", async () => {
-			// offlineCatalog clears when the host daemon disconnects; knownTeamPaths
-			// is the durable fallback, so catalog loss must not demote a project.
-			const registry = makeRegistry({
-				"proj-a": { readyState: 1, data: { mode: "channel" } },
-				"2fb1f8": { readyState: 1, data: { mode: "channel" } },
-			});
-			const knownTeamPaths = new Map<string, string>([["proj-a", "/home/user/proj-a"]]);
-			const ctx = makeCtx({ registry, knownTeamPaths });
-			const { teams } = createRoutes(ctx);
-			const json = await teams().json();
-			expect(json).toEqual([
-				{
-					team: "proj-a",
-					gatewayId: "test-host",
-					domainId: "alice",
-					status: "online",
-					mode: "channel",
-					kind: "devcontainer",
-					queue_depth: 0,
-				},
-				{
-					team: "2fb1f8",
-					gatewayId: "test-host",
-					domainId: "alice",
-					status: "online",
-					mode: "channel",
 					kind: "loose",
+					sessionLabel: "My Work",
+					lastActive: 4242,
 					queue_depth: 0,
 				},
 			]);
 		});
 
-		it("excludes a virtual console peer (its human Device Name is not an addressable slug)", async () => {
+		it("resolves a record's status through its alias liveTeam when no canonical pane is registered", async () => {
+			const sessionStore = new SessionStore();
+			sessionStore.adoptById("abc", { spawn: "host", sessionLabel: "resumed" });
+			// A manual `claude --resume` re-incarnation registered under a fresh self-composed name.
+			sessionStore.confirm("host.abc", { team: "host.xyz", subId: "sub-1" });
 			const registry = makeRegistry({
-				"proj-a": { readyState: 1, data: { mode: "channel" } },
-				// A real device name has spaces, so qualifying it to an Address throws; it must be
-				// skipped, not listed (and never reach a consumer that addresses the team name).
-				"Pixel 10 Pro XL": { readyState: 1, data: { virtual: true, mode: "channel" } },
+				"host.xyz": { readyState: 1, data: { mode: "channel", handshakeConfirmed: true } },
 			});
-			const knownTeamPaths = new Map<string, string>([["proj-a", "/home/user/proj-a"]]);
-			const ctx = makeCtx({ registry, knownTeamPaths });
-			const json = await createRoutes(ctx).teams().json();
+			const json = (await createRoutes(makeCtx({ registry, sessionStore })).teams().json()) as {
+				team: string;
+				status: string;
+			}[];
+			// Folds into the record's own entry, never a second listing for the alias name.
 			expect(json).toEqual([
-				{
-					team: "proj-a",
-					gatewayId: "test-host",
-					domainId: "alice",
-					status: "online",
-					mode: "channel",
-					kind: "devcontainer",
-					queue_depth: 0,
-				},
+				expect.objectContaining({ team: "host.abc", status: "online", sessionLabel: "resumed" }),
 			]);
 		});
 
-		it("classifies a loose host session as kind loose (no host-agent special case)", async () => {
+		it("hides recordless live peers: a loose session that never confirmed, a virtual console, the host", async () => {
+			const sessionStore = new SessionStore();
 			const registry = makeRegistry({
-				"host-agent": { readyState: 1, data: { mode: "channel" } },
-				"proj-a": { readyState: 1, data: { mode: "channel" } },
+				"host.flagless": { readyState: 1, data: { mode: "channel", handshakeConfirmed: false } },
+				"Pixel 10 Pro XL": {
+					readyState: 1,
+					data: { virtual: true, mode: "channel", handshakeConfirmed: true },
+				},
+				host: { readyState: 1, data: { mode: "channel", handshakeConfirmed: true } },
 			});
-			const knownTeamPaths = new Map<string, string>([["proj-a", "/home/user/proj-a"]]);
-			const ctx = makeCtx({ registry, knownTeamPaths });
-			const json = await createRoutes(ctx).teams().json();
-			expect(json).toEqual([
-				{
-					team: "host-agent",
-					gatewayId: "test-host",
-					domainId: "alice",
-					status: "online",
-					mode: "channel",
-					kind: "loose",
-					queue_depth: 0,
-				},
-				{
-					team: "proj-a",
-					gatewayId: "test-host",
-					domainId: "alice",
-					status: "online",
-					mode: "channel",
-					kind: "devcontainer",
-					queue_depth: 0,
-				},
+			const json = await createRoutes(makeCtx({ registry, sessionStore })).teams().json();
+			expect(json).toEqual([]);
+		});
+
+		it("lists spawn-points from the catalog as available devcontainers alongside their session records", async () => {
+			const sessionStore = new SessionStore();
+			sessionStore.adoptById("main", { spawn: "proj-a", sessionLabel: "My Work" });
+			const registry = makeRegistry({
+				"proj-a.main": { readyState: 1, data: { mode: "channel", handshakeConfirmed: true } },
+			});
+			const offlineCatalog = new Map<string, string>([
+				["proj-a", "/home/user/proj-a"],
+				["proj-b", "/home/user/proj-b"],
+			]);
+			const json = (await createRoutes(makeCtx({ registry, sessionStore, offlineCatalog })).teams().json()) as {
+				team: string;
+				status: string;
+				kind: string;
+			}[];
+			expect(json.map((t) => [t.team, t.status, t.kind])).toEqual([
+				["proj-a.main", "online", "loose"],
+				["proj-a", "available", "devcontainer"],
+				["proj-b", "available", "devcontainer"],
 			]);
 		});
 
-		it("stamps the local Domain id on every team (the (domainId, gatewayId) pair addresses a session)", async () => {
-			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
+		it("stamps the local Domain id and display name on both records and spawn-points", async () => {
+			const sessionStore = new SessionStore();
+			sessionStore.adoptById("main", { spawn: "proj-a", sessionLabel: "My Work" });
+			const registry = makeRegistry({
+				"proj-a.main": { readyState: 1, data: { mode: "channel", handshakeConfirmed: true } },
+			});
 			const offlineCatalog = new Map<string, string>([["proj-b", "/home/user/proj-b"]]);
-			const ctx = makeCtx({ registry, offlineCatalog });
+			const ctx = makeCtx({ registry, sessionStore, offlineCatalog, displayName: () => "Carol's Lab" });
 			ctx.config.localDomainId = "sakura";
-			const json = (await createRoutes(ctx).teams().json()) as { team: string; domainId?: string }[];
-			// Both the online registry team and the offline-catalog team carry the configured
-			// local Domain id; a colliding friend gateway id is disambiguated by this pair.
-			expect(json.map((t) => [t.team, t.domainId])).toEqual([
-				["proj-a", "sakura"],
-				["proj-b", "sakura"],
-			]);
-		});
-
-		it("excludes the cli host wake-daemon from the listing", async () => {
-			const registry = makeRegistry({
-				host: { readyState: 1, data: { mode: "channel" } },
-				"team-a": { readyState: 1, data: { mode: "channel" } },
-			});
-			const ctx = makeCtx({ registry });
-			const json = (await createRoutes(ctx).teams().json()) as { team: string }[];
-			expect(json.map((t) => t.team)).toEqual(["team-a"]);
-		});
-
-		it("stamps the Gateway's display name on every team so Peers see the display name (D1)", async () => {
-			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
-			const offlineCatalog = new Map<string, string>([["proj-b", "/home/user/proj-b"]]);
-			const ctx = makeCtx({ registry, offlineCatalog, displayName: () => "Carol's Lab" });
-			const json = (await createRoutes(ctx).teams().json()) as { team: string; displayName?: string }[];
-			expect(json.map((t) => [t.team, t.displayName])).toEqual([
-				["proj-a", "Carol's Lab"],
-				["proj-b", "Carol's Lab"],
+			const json = (await createRoutes(ctx).teams().json()) as {
+				team: string;
+				domainId?: string;
+				displayName?: string;
+			}[];
+			expect(json.map((t) => [t.team, t.domainId, t.displayName])).toEqual([
+				["proj-a.main", "sakura", "Carol's Lab"],
+				["proj-b", "sakura", "Carol's Lab"],
 			]);
 		});
 
 		it("OMITS displayName when the Gateway has none (minimal wire, unchanged for a pre-feature Gateway)", async () => {
-			const registry = makeRegistry({ "proj-a": { readyState: 1, data: { mode: "channel" } } });
-			const ctx = makeCtx({ registry, displayName: () => null });
+			const offlineCatalog = new Map<string, string>([["proj-a", "/home/user/proj-a"]]);
+			const ctx = makeCtx({ offlineCatalog, displayName: () => null });
 			const json = (await createRoutes(ctx).teams().json()) as Record<string, unknown>[];
 			expect(json[0]).not.toHaveProperty("displayName");
 		});

@@ -65,6 +65,7 @@ data class TeamInfo(
 	val status: String,
 	val mode: String? = null,
 	val kind: String,
+	val sessionLabel: String? = null,
 	val version: String? = null,
 	val lastActive: Long? = null,
 	val queue_depth: Long,

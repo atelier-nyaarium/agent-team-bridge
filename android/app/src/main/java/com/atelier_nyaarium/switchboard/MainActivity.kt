@@ -219,6 +219,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// destroyed with the Activity.
 	val rendererPool = remember { ThreadRendererPool(context.applicationContext) }
 	rendererPool.onRetry = { team, id -> scope.launch { repo.retrySend(team, id) } }
+	// Attribute a message's sender by its human label (a notice's `from` is a canonical address).
+	// Reads the live state at render time so a rename reflects without rebuilding the pool.
+	rendererPool.resolveFrom = { addr -> repo.state.value.label(addr, repo.state.value.localGatewayId) }
 	// Attachment taps open the in-app viewer; the path is re-validated against the
 	// attachments root before any file is touched. The wire mime (what the agent
 	// declared) is preferred over extension guessing.
@@ -524,6 +527,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					state.working(session.name) -> "working..."
 					else -> "live"
 				}
+				session.status == "verifying" -> "verifying"
 				session.status == "available" -> if (state.working(session.name)) "waking..." else "available"
 				else -> "ended"
 			}
@@ -910,16 +914,23 @@ private data class GatewayGroupKey(val domainId: String, val gatewayId: String)
 
 /** Live first, then most recent activity, then name, within each section. */
 private fun sessionOrder(state: ChatState): Comparator<Team> =
-	compareByDescending<Team> { it.status == "online" }
+	compareByDescending<Team> { it.isLive }
 		.thenByDescending { state.lastActivity(it.name) ?: 0L }
 		.thenBy { it.name }
 
-/** Tab/title label for an open thread: the user's custom label, else the shortest suffix of the
- * address path (the session segment, then `spawn.session`, then `gateway.spawn.session`, ...) that
- * is unique among the currently open tabs. So a lone open session shows just its leaf, and two tabs
- * that collide on the leaf escalate to exactly the suffix that disambiguates them. */
+/** A session's label without address disambiguation: a local rename, else the gateway's
+ * sessionLabel. Null when neither exists (an unlabeled or unlisted session). */
+private fun sessionLabelOnly(state: ChatState, team: String): String? =
+	state.labels[team] ?: state.teams.firstOrNull { it.name == team }?.sessionLabel
+
+/** Tab/title label for an open thread: the session's label when it is unique among the open tabs,
+ * else the shortest suffix of the address path (the session segment, then `spawn.session`, then
+ * `gateway.spawn.session`, ...) that disambiguates it. So a lone open session shows its label or
+ * leaf, and two tabs that would collide (same label, or same leaf) escalate to the suffix that tells
+ * them apart. */
 private fun tabLabelFor(state: ChatState, team: String): String {
-	state.labels[team]?.let { return it }
+	val label = sessionLabelOnly(state, team)
+	if (label != null && state.openTabs.none { it != team && sessionLabelOnly(state, it) == label }) return label
 	val mine = team.split(Protocol.ADDRESS_SEP)
 	val others = state.openTabs.filter { it != team }.map { it.split(Protocol.ADDRESS_SEP) }
 	for (n in 1..mine.size) {
@@ -1065,7 +1076,7 @@ fun SessionsScreen(
 						item(key = "sw:$composite") {
 							GatewayHeader(
 								name = headerName,
-								online = group.any { it.status == "online" },
+								online = group.any { it.isLive },
 								collapsed = collapsed,
 								onToggle = { collapsedGateways[composite] = !collapsed },
 							)
@@ -1100,7 +1111,9 @@ fun SessionsScreen(
 								renderProject(proj) {
 									SpawnPointHeader(
 										project = proj,
-										online = sp.status == "online",
+										// A spawn-point is always available itself; its dot reflects whether any
+										// session nested under it is live.
+										online = byProject[proj].orEmpty().any { it.isLive },
 										onSpawn = { spawnProject = proj },
 									)
 								}
@@ -1113,7 +1126,7 @@ fun SessionsScreen(
 								renderProject("host") {
 									SpawnPointHeader(
 										project = "host",
-										online = byProject["host"].orEmpty().any { it.status == "online" },
+										online = byProject["host"].orEmpty().any { it.isLive },
 										onSpawn = { spawnProject = "host" },
 									)
 								}
@@ -1301,7 +1314,7 @@ fun HealthHeader(state: ChatState) {
 @Composable
 private fun presenceColor(presence: String): Color = when (presence) {
 	"live" -> Color(0xFF2EA043)
-	"working...", "waking..." -> Color(0xFFD29922)
+	"working...", "waking...", "verifying" -> Color(0xFFD29922)
 	"available" -> Color(0xFF0969DA)
 	"check terminal" -> Color(0xFFDA3633)
 	else -> MaterialTheme.colorScheme.outline
@@ -1388,10 +1401,12 @@ fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: 
 	val display = state.label(team.name, state.localGatewayId)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
-	// Wire vocabulary -> board vocabulary: online teams are live, catalog teams are
-	// available (wakeable), anything else is an ended loose session.
+	// Wire vocabulary -> board vocabulary: online teams are live, verifying teams are connected but
+	// have not confirmed their handshake yet, catalog teams are available (wakeable), anything else
+	// is an ended loose session.
 	val (statusWord, statusColor) = when {
 		live -> "live" to Color(0xFF2EA043)
+		team.status == "verifying" -> "verifying" to Color(0xFFD29922)
 		team.status == "available" -> "available" to Color(0xFF0969DA)
 		else -> "ended" to MaterialTheme.colorScheme.outline
 	}
@@ -1686,6 +1701,7 @@ fun ThreadScreen(
 							"available", "waking..." ->
 								"No messages yet. Sending will wake $label - first boot can take a minute or two."
 							"live", "working..." -> "No messages yet. $label is live."
+							"verifying" -> "No messages yet. $label is connecting."
 							"ended" -> "This session has ended."
 							else -> "No messages yet."
 						},

@@ -458,11 +458,6 @@ export function createRoutes({
 	function teams(): Response {
 		const teamsList: TeamInfo[] = [];
 		const seen = new Set<string>();
-		// Catalog membership IS the spawn-point signal: only bare projects are ever in the catalog
-		// (the register write-guard keeps composites out), so a name that is literally in it is a
-		// devcontainer even when the dir name contains a dot ("my.app") - the mechanical isComposite
-		// test would wrongly read that as a session.
-		const isDevcontainer = (name: string) => offlineCatalog.has(name) || knownTeamPaths.has(name);
 		// The owner's display name, stamped on every local session so a linked friend
 		// Domain sees the owner's self-set name over the discovery roster. Spread in only
 		// when set, so a Gateway with no display name emits a minimal TeamInfo (the field
@@ -472,80 +467,66 @@ export function createRoutes({
 		const isAdminDomainField = isAdminDomain?.() ? { isAdminDomain: true } : {};
 		// Omit when null so the field is absent rather than null on the wire.
 		const domainIdField = localDomainId ? { domainId: localDomainId } : {};
+		const commonFields = {
+			gatewayId: localGatewayId,
+			...domainIdField,
+			...displayNameField,
+			...isAdminDomainField,
+		};
 
-		for (const [name, subs] of registry) {
-			if (name === "host") continue;
-			// A team whose only live sockets are virtual console peers is the operator's own device,
-			// not a listable session: it registers under a human Device Name (not an addressable
-			// slug), and every consumer either hides it (agent discovery) or would choke qualifying
-			// the non-slug name to an Address (the cross-Domain share filter). Skip it here; it stays
-			// in the registry for crosstalk routing.
-			if (getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0) continue;
-			seen.add(name);
-			// An online local session keeps its cross-Domain shares fresh: refresh lastSeenAt
-			// so a session that is actively connected is never auto-forgotten by the absence
-			// sweep, even with no live thread. No-op when sharing is not wired.
-			const selfAddr = tryLocalAddress(name);
-			if (selfAddr) touchShares?.(selfAddr.canonical);
-			// Plugin version reported by an active real socket; the same value across a team's
-			// sub-sessions in practice.
-			const version = getAllActiveRealWs(subs)[0]?.data.version;
-			teamsList.push({
-				team: name,
-				gatewayId: localGatewayId,
-				...domainIdField,
-				...displayNameField,
-				...isAdminDomainField,
-				status: "online",
-				mode: getTeamMode(subs),
-				kind: isDevcontainer(name) ? "devcontainer" : "loose",
-				version,
-				// lastActive is omitted for an online session: it is active NOW, and the resume map's
-				// timestamp is the register time, which would read as stale. Only asleep sessions carry it.
-				queue_depth: 0,
-			});
-		}
+		// The live socket serving a record: its canonical daemon pane (registered under `spawn.id`) if
+		// live, else the alias incarnation the confirm stamped as liveTeam. Excludes virtual console
+		// peers, whose readyState is hardwired open.
+		const liveSocketFor = (team: string): ServerWebSocket<WsData> | undefined => {
+			// Prefer a confirmed sub-socket so a team with several live subs reads online (its status
+			// keys off the returned socket's handshakeConfirmed), not verifying off an unconfirmed one.
+			const canonical = getAllActiveRealWs(registry.get(team) ?? new Map());
+			if (canonical.length) return canonical.find((s) => s.data.handshakeConfirmed) ?? canonical[0];
+			const alias = sessionStore?.resolveLive(team);
+			if (!alias) return undefined;
+			const s = registry.get(alias.team)?.get(alias.subId);
+			return s && s.readyState === 1 && !s.data.virtual ? s : undefined;
+		};
 
-		for (const [name] of offlineCatalog) {
-			if (seen.has(name)) continue;
-			seen.add(name);
-			teamsList.push({
-				team: name,
-				gatewayId: localGatewayId,
-				...domainIdField,
-				...displayNameField,
-				...isAdminDomainField,
-				status: "available",
-				kind: "devcontainer",
-				queue_depth: 0,
-			});
-		}
-
-		// Asleep named sessions: a record the gateway holds but that is not currently registered.
-		// The session store doubles as the durable known-session list, so a session that exists
-		// but whose container is asleep still lists as available.
+		// Visible sessions are exactly the store records. A confirmed live session always has a record;
+		// recordless live peers (flag-less loose sessions, workers, the operator's own console device)
+		// stay hidden. A record with a live incarnation is online (that socket has confirmed its lead
+		// handshake) or verifying (it has not yet, e.g. re-registered across a gateway restart); a
+		// record with no live incarnation is available (asleep, wakeable).
 		for (const record of sessionStore?.list() ?? []) {
 			const name = sessionStore!.teamOf(record);
-			if (seen.has(name)) continue;
 			// A record's spawn/id are slugs by construction, but a hand-edited store file is not; a
 			// non-composite / non-slug name is not a valid chat and must not surface as an
 			// un-wakeable phantom.
 			const parts = parseSessionName(name);
-			if (!isComposite(name) || !isSlug(parts.project) || !isSlug(parts.session)) {
-				continue;
-			}
+			if (!isComposite(name) || !isSlug(parts.project) || !isSlug(parts.session)) continue;
 			seen.add(name);
+			const live = liveSocketFor(name);
+			if (live) {
+				// A live session keeps its cross-Domain shares fresh and its record touch-refreshed, so
+				// neither the absence sweep nor the record TTL can reap a session that is connected now.
+				const selfAddr = tryLocalAddress(name);
+				if (selfAddr) touchShares?.(selfAddr.canonical);
+				sessionStore!.touchLive(name);
+			}
 			teamsList.push({
 				team: name,
-				gatewayId: localGatewayId,
-				...domainIdField,
-				...displayNameField,
-				...isAdminDomainField,
-				status: "available",
+				...commonFields,
+				// online/verifying omit lastActive (active NOW); only asleep carries recency.
+				status: live ? (live.data.handshakeConfirmed ? "online" : "verifying") : "available",
+				...(live ? { mode: live.data.mode, version: live.data.version } : { lastActive: record.lastSeen }),
 				kind: "loose",
-				lastActive: record.lastSeen,
+				sessionLabel: record.sessionLabel,
 				queue_depth: 0,
 			});
+		}
+
+		// Spawn-points: the devcontainer catalog. A bare project is the wakeable spawn-point; its named
+		// sessions list above as records.
+		for (const [name] of offlineCatalog) {
+			if (seen.has(name)) continue;
+			seen.add(name);
+			teamsList.push({ team: name, ...commonFields, status: "available", kind: "devcontainer", queue_depth: 0 });
 		}
 
 		return jsonResponse(teamsList);
