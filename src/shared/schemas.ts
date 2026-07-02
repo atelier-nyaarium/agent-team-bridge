@@ -259,14 +259,17 @@ export const ConsoleOpSchema = z
 			key: z.string().max(32).optional(),
 			submit: z.boolean().optional(),
 		}),
-		// Start a new tmux session running a fresh agent on `target` (the host or a devcontainer),
-		// named `sessionName`. The daemon owns the launch command; the console supplies only the
-		// target device and the new session name, so it can never inject a host command. The
-		// session name is slug-validated at the host tmux layer. Idempotent per opId.
+		// Start a new tmux session running a fresh agent on `target` (the host or a devcontainer).
+		// The daemon owns the launch command; the console supplies only the target device plus a
+		// name, so it can never inject a host command. Two forms (the handler requires exactly one
+		// path): `sessionName` is a typed slug adopted as the session id (slug-validated at the host
+		// tmux layer); `displayLabel` is a free-form label for which the gateway MINTS the id (that
+		// minted id is the tmux name). Idempotent per opId.
 		z.object({
 			kind: z.literal("create_session"),
 			target: z.string().min(1).max(128),
-			sessionName: z.string().min(1).max(64),
+			sessionName: z.string().min(1).max(64).optional(),
+			displayLabel: z.string().min(1).max(64).optional(),
 		}),
 		// Drive a session through the plugin update + MCP reconnect sequence. `target` is the
 		// gateway-qualified session to reload; the host runs the script detached. Idempotent per opId.
@@ -280,6 +283,14 @@ export const ConsoleOpSchema = z
 		z.object({
 			kind: z.literal("forget"),
 			target: z.string().min(1).max(128),
+		}),
+		// Rename a session: set the gateway-authoritative sessionLabel on its record. `target` is
+		// the gateway-qualified composite session (like forget). The gateway sanitizes + per-spawn
+		// dedups the label. Idempotent per opId.
+		z.object({
+			kind: z.literal("rename_session"),
+			target: z.string().min(1).max(128),
+			sessionLabel: z.string().min(1).max(64),
 		}),
 		// Cross-Domain listening-mode handshake (cross-domain-federation.md). These ops drive
 		// the mutual pairing that links two Gateways owned by different owners. The owner root
@@ -587,6 +598,11 @@ export const ConsoleCreateSessionResultSchema = z
 		// The daemon detaches the new session immediately; the agent boots after this returns,
 		// so the console polls a peek to see it come up.
 		created: z.boolean(),
+		// The session id the gateway recorded (minted for a displayLabel create, else the adopted
+		// sessionName) and the label it stored, so the console opens the thread keyed on the id.
+		// Absent from an older gateway that only reported `created`.
+		id: z.string().optional(),
+		sessionLabel: z.string().optional(),
 	})
 	.meta({ id: "ConsoleCreateSessionResult" });
 
@@ -604,6 +620,15 @@ export const ConsoleForgetResultSchema = z
 		killed: z.boolean(),
 	})
 	.meta({ id: "ConsoleForgetResult" });
+
+export const ConsoleRenameSessionResultSchema = z
+	.object({
+		// The record was found and relabeled (false when no record matched the target).
+		renamed: z.boolean(),
+		// The label actually applied, after the gateway's sanitize + per-spawn dedup.
+		sessionLabel: z.string().optional(),
+	})
+	.meta({ id: "ConsoleRenameSessionResult" });
 
 ////////////////////////////////
 //  Cross-Domain handshake op results (gateway -> console)
@@ -773,6 +798,7 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleCreateSessionResultSchema,
 	ConsoleReloadPluginsResultSchema,
 	ConsoleForgetResultSchema,
+	ConsoleRenameSessionResultSchema,
 	CrossDomainListenResultSchema,
 	CrossDomainRequestResultSchema,
 	CrossDomainConfirmResultSchema,

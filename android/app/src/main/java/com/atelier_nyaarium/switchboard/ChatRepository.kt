@@ -294,9 +294,9 @@ data class ChatState(
 	fun snippet(team: String): String? = threads[team]?.lastOrNull()?.let { it.title ?: it.text }
 		?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
 
-	/** A team's label without address disambiguation: a local rename wins (the only rename path until
-	 * the sealed server-side rename ships), then the gateway's sessionLabel. Null when neither exists
-	 * (an older gateway, or a thread-only ended peer). The single owner of the label precedence. */
+	/** A team's label without address disambiguation: a local rename wins, then the gateway's
+	 * sessionLabel. Null when neither exists (an older gateway, or a thread-only ended peer). The
+	 * single owner of the label precedence. */
 	fun labelOrNull(team: String): String? = labels[team] ?: teams.firstOrNull { it.name == team }?.sessionLabel
 
 	/** The friendly name for a team, falling back to the session leaf of the canonical address. The
@@ -2176,9 +2176,11 @@ class ChatRepository(
 		peekTerminal(team, null)
 	}
 
-	/** Spawn a new named session in a spawn-point project (the daemon launches it). */
-	suspend fun createSession(project: String, sessionName: String) =
-		withContext(Dispatchers.IO) { client().createSession(project, sessionName) }
+	/** Spawn a new session in a spawn-point project (the daemon launches it). Sends both a slugified
+	 * sessionName (an old gateway adopts it) and the free-form displayLabel (a new gateway mints the
+	 * id); the reply's id names the thread to open. */
+	suspend fun createSession(project: String, sessionName: String?, displayLabel: String) =
+		withContext(Dispatchers.IO) { client().createSession(project, sessionName = sessionName, displayLabel = displayLabel) }
 
 	/** Send text (submitted with Enter) or a named control key to an agent's tmux pane. */
 	suspend fun tmuxSend(team: String, text: String? = null, key: String? = null, submit: Boolean = true) =
@@ -2575,13 +2577,28 @@ class ChatRepository(
 		persistDrafts()
 	}
 
-	/** Give a team a local display label (or clear it with a blank name). */
+	/** Give a team a local display label (or clear it with a blank name). Local-only: the optimistic
+	 * cache that shows immediately and the fallback against a gateway with no server label. */
 	fun setLabel(team: String, name: String) {
 		val labels = _state.updateAndGet { s ->
 			val next = if (name.isBlank()) s.labels - team else s.labels + (team to name.trim())
 			s.copy(labels = next)
 		}.labels
 		persistLabels(labels)
+	}
+
+	/** Rename a session: set it locally for immediate feedback, then push it to the gateway so the
+	 * label persists server-side, and reconcile the local label to whatever the gateway actually
+	 * applied (it sanitizes and per-spawn dedups, so "foo" may land as "foo-2"). A blank name clears
+	 * the local label only. On an unreachable/older gateway the optimistic local label stays. */
+	suspend fun rename(team: String, name: String) {
+		setLabel(team, name)
+		val trimmed = name.trim()
+		if (trimmed.isEmpty()) return
+		val applied = withContext(Dispatchers.IO) { runCatching { client().renameSession(team, trimmed) }.getOrNull() }
+			?.takeIf { it.renamed }
+			?.sessionLabel
+		if (applied != null && applied != trimmed) setLabel(team, applied)
 	}
 
 	/** Drop a peer from this device: its thread, unread, tab, label, and any

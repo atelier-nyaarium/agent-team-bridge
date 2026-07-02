@@ -637,6 +637,7 @@ export async function startGateway(): Promise<void> {
 			dropSessionResume: (team) => {
 				sessionStore.forget(team);
 			},
+			sessionStore,
 			domain: () => {
 				const snapshot = allowlistForConsole?.getSnapshot() ?? null;
 				return snapshot ? { version: allowlistForConsole?.version() ?? "", snapshot } : null;

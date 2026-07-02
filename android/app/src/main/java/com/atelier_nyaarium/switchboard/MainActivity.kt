@@ -555,7 +555,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onSend = { text, uris -> scope.launch { repo.send(openTeam!!, text, uris) } },
 				initialDraft = repo.draft(openTeam!!),
 				onDraftChange = { repo.setDraft(openTeam!!, it) },
-				onRename = { name -> repo.setLabel(openTeam!!, name) },
+				onRename = { name -> scope.launch { repo.rename(openTeam!!, name) } },
 				onForget = {
 					repo.forget(openTeam!!)
 					openTeam = null
@@ -584,15 +584,21 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					openTeam = repo.openThread(team)
 					SwitchboardService.cancelTeamNotification(context, team)
 				},
-				onRename = { team, name -> repo.setLabel(team, name) },
+				onRename = { team, name -> scope.launch { repo.rename(team, name) } },
 				onForget = { team -> repo.forget(team) },
-				onSpawn = { project, session ->
-					// Spawn the named session on the daemon, then open its composite chat.
+				onSpawn = { project, label ->
+					// Send both forms for cross-version compatibility: a new gateway mints the id from
+					// displayLabel and returns it, an old one adopts the slugified sessionName (omitted
+					// when the label has no ASCII to slug). Refresh teams so the thread title shows the
+					// server label, not the opaque minted id.
 					scope.launch {
-						val composite = composeSessionName(project, session)
-						runCatching { repo.createSession(project, session) }
-							.onSuccess {
-								openTeam = repo.openThread(composite)
+						val slug = slugifySessionName(label).ifEmpty { null }
+						runCatching { repo.createSession(project, sessionName = slug, displayLabel = label) }
+							.onSuccess { result ->
+								(result.id ?: slug)?.let { id ->
+									repo.refreshTeams()
+									openTeam = repo.openThread(composeSessionName(project, id))
+								}
 							}
 					}
 				},
@@ -2544,39 +2550,31 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 private val SLUG_NON_ALNUM = Regex("[^a-z0-9]+")
 
 /** Lowercase, collapse non-[a-z0-9] runs to a single '-', trim '-' from both ends, cap at the
- * tmux-name length. Applied ON SPAWN, not per keystroke: transforming the field value live would snap
- * the cursor to the end (a String-backed TextField resets selection on value change), so the field
- * keeps the raw text and SpawnDialog shows a live preview of this result instead. */
+ * tmux-name length. Produces the back-compat sessionName an older gateway adopts as the session id;
+ * empty when the label has no ASCII characters to slug. */
 internal fun slugifySessionName(raw: String): String =
 	raw.lowercase().replace(SLUG_NON_ALNUM, "-").trim('-').take(64).trimEnd('-')
 
-/** Name and spawn a new session in a spawn-point project. The session name becomes the tmux session
- * + the composite identity, so any typed text is accepted and converted to a slug ON SPAWN (the field
- * keeps the raw text so the cursor never jumps); a live preview shows the resulting slug and the spawn
- * button is disabled only when that slug is empty. */
+/** Name and spawn a new session in a spawn-point project. The label is free-form: the gateway mints
+ * the session id, so the field accepts any text and the spawn button is enabled once it is non-blank. */
 @Composable
 fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Unit) {
+	// A free-form label: the gateway mints the session id, so the label is not slug-constrained.
 	var name by remember { mutableStateOf("") }
-	val slug = slugifySessionName(name)
 	AlertDialog(
 		onDismissRequest = onDismiss,
 		title = { Text("New session in $project") },
 		text = {
-			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-				OutlinedTextField(
-					value = name,
-					onValueChange = { name = it },
-					label = { Text("Session name") },
-					singleLine = true,
-				)
-				Text(
-					if (slug.isEmpty()) "Enter a name." else "$slug",
-					style = MaterialTheme.typography.bodySmall,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
-				)
-			}
+			OutlinedTextField(
+				value = name,
+				onValueChange = { name = it },
+				label = { Text("Session name") },
+				singleLine = true,
+			)
 		},
-		confirmButton = { TextButton(enabled = slug.isNotEmpty(), onClick = hapticClick { onSpawn(slug) }) { Text("Spawn") } },
+		confirmButton = {
+			TextButton(enabled = name.isNotBlank(), onClick = hapticClick { onSpawn(name.trim()) }) { Text("Spawn") }
+		},
 		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
 	)
 }

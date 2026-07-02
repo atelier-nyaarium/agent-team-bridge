@@ -266,13 +266,15 @@ Gateway side (`src/gateway/websocket.ts` + store):
   back to the typed composite against an old gateway); create dialog drops slug validation when
   talking to a new gateway (sends displayLabel); rename UI entry point (thread menu) drives
   rename_session.
-- Label authority flip (Phase C left the LOCAL rename map winning in `label()`/`tabLabelFor` so an
-  existing rename survives the APK update and the rename UI keeps working before a server rename
-  exists). This phase makes the server authoritative: `rename_session` becomes the write path, a
-  one-shot connect-time seed pushes each still-present local label to the gateway via
-  `rename_session`, then the local `labels` map + its `setLabel`/persist path retire so a rename
-  from another device converges. Sequenced here because the flip is only coherent once the server
-  rename op exists.
+- Label authority: the rename UI now DUAL-WRITES via `repo.rename` - it sets the local label
+  (immediate feedback + the fallback against a gateway with no server label) AND pushes
+  `rename_session` to the gateway (authoritative, agent-visible via teams(), reaches other devices).
+  `label()`/`labelOrNull` stay local-first (`local ?: server ?: leaf`), so an existing rename
+  survives and a session THIS device never renamed converges on the server label. Chosen over a
+  one-shot seed-then-flip-then-retire migration: dual-write delivers server-side authoritative
+  renames with no risky one-time migration and no old-gateway conditionality. Fully retiring the
+  local map (server-only authority + cross-device convergence for a session both devices renamed) is
+  a deferred cleanup, not required for the feature.
 - `forget` unchanged in spirit: kills tmux by id, drops the record.
 
 ## Phase E - re-incarnation alias (gateway-side)
@@ -403,6 +405,11 @@ machine independently)
 - A devcontainer live under a BARE project name (no `.session`) reads `available` (a spawn-point),
   not `online`: a non-composite name never becomes a record, and the wake path always launches the
   composite `project.session`, so a bare live register is not a normal flow.
+- A create with an all-non-ASCII label (slugifies to empty, so no `sessionName` is sent) works
+  against a new gateway (it mints from `displayLabel`) but fails against an OLD gateway (its schema
+  requires `sessionName`); the failure is currently silent (onSpawn has no error surface). Accepted:
+  the deploy order upgrades the gateway before the APK, so the new-APK-vs-old-gateway window is
+  transient, and a surfaced create error is a follow-up UX nicety.
 - A grammar-ambiguous composite team (a dotted project like `my.app.foo`, parsed as a non-slug
   session segment) is not stored as a record. The old resume map stored it by raw key, but the old
   teams() asleep filter's isComposite+isSlug guard already hid it from the board and it was never

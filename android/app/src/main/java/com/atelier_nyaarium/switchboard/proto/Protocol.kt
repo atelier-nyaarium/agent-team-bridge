@@ -173,7 +173,8 @@ sealed class ConsoleOp {
 	@SerialName("create_session")
 	data class CreateSession(
 		val target: String,
-		val sessionName: String,
+		val sessionName: String? = null,
+		val displayLabel: String? = null,
 	) : ConsoleOp()
 
 	@Serializable
@@ -186,6 +187,13 @@ sealed class ConsoleOp {
 	@SerialName("forget")
 	data class Forget(
 		val target: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("rename_session")
+	data class RenameSession(
+		val target: String,
+		val sessionLabel: String,
 	) : ConsoleOp()
 
 	@Serializable
@@ -734,6 +742,8 @@ data class DomainSnapshot(
 @Serializable
 data class ConsoleCreateSessionResult(
 	val created: Boolean,
+	val id: String? = null,
+	val sessionLabel: String? = null,
 )
 
 @Serializable
@@ -744,6 +754,12 @@ data class ConsoleReloadPluginsResult(
 @Serializable
 data class ConsoleForgetResult(
 	val killed: Boolean,
+)
+
+@Serializable
+data class ConsoleRenameSessionResult(
+	val renamed: Boolean,
+	val sessionLabel: String? = null,
 )
 
 @Serializable

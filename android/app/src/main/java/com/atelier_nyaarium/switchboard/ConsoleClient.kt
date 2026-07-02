@@ -16,9 +16,11 @@ import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleCreateSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
 import com.atelier_nyaarium.switchboard.proto.ConsolePeekResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleRenameSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleRegisterResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleRelayFrame
@@ -835,13 +837,37 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		if (!body.ok) error("forget failed: ${body.error ?: "unknown error"}")
 	}
 
-	/** Spawn a new named session in a spawn-point project: the daemon launches `sessionName` in
-	 * `target`'s container under PROJECT_NAME `target.sessionName`. Idempotent per opId (reattaches
-	 * if it already exists). */
-	fun createSession(target: String, sessionName: String, opId: String = UUID.randomUUID().toString()) {
-		val body = relay(ConsoleOp.CreateSession(target = target, sessionName = sessionName), opId, targetGateway = targetGatewayOf(target))
+	/** Spawn a new session in a spawn-point project. A `displayLabel` lets the gateway mint the id
+	 * (the minted id is the tmux name) and returns it; a `sessionName` is adopted as the id (the
+	 * old form, against a gateway that does not mint). Idempotent per opId (reattaches if it already
+	 * exists). Returns the gateway's reply; `id` is absent from an older gateway. */
+	fun createSession(
+		target: String,
+		sessionName: String? = null,
+		displayLabel: String? = null,
+		opId: String = UUID.randomUUID().toString(),
+	): ConsoleCreateSessionResult {
+		val body = relay(
+			ConsoleOp.CreateSession(target = target, sessionName = sessionName, displayLabel = displayLabel),
+			opId,
+			targetGateway = targetGatewayOf(target),
+		)
 		if (!body.ok) error("create_session failed: ${body.error ?: "unknown error"}")
+		return body.result?.let { wireJson.decodeFromJsonElement<ConsoleCreateSessionResult>(it) }
+			?: ConsoleCreateSessionResult(created = true)
 	}
+
+	/** Rename a session: set the gateway-authoritative sessionLabel on its record. Idempotent per
+	 * opId. Returns the label the gateway actually applied (after its sanitize + per-spawn dedup). */
+	fun renameSession(
+		target: String,
+		sessionLabel: String,
+		opId: String = UUID.randomUUID().toString(),
+	): ConsoleRenameSessionResult =
+		resultOf(
+			relay(ConsoleOp.RenameSession(target = target, sessionLabel = sessionLabel), opId, targetGateway = targetGatewayOf(target)),
+			"rename_session",
+		)
 
 	////////////////////////////////
 	//  Cross-Domain trust ops

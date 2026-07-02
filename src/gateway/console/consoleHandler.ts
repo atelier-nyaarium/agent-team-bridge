@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { DomainSnapshot } from "../../shared/admission.js";
 import type {
 	ConsoleOp,
@@ -56,6 +57,13 @@ function friendlyPeekError(error?: string, kind?: PeekErrorKind): string {
 	return raw;
 }
 
+// The session id a displayLabel create mints: a 6-hex digest of (conversationId, opId), NOT a fresh
+// random, so a retried or post-restart re-dispatch of the same op derives the SAME id and reattaches
+// its record instead of minting a phantom second one. Matches the host-op dedupKey's (conv, opId).
+function mintedSessionId(conversationId: string, opId: string): string {
+	return crypto.createHash("sha256").update(`${conversationId}:${opId}`).digest("hex").slice(0, 6);
+}
+
 ////////////////////////////////
 //  Interfaces & Types
 
@@ -96,6 +104,9 @@ export interface ConsoleHandlerDeps {
 	/** Drop a session's durable resume record (the console's Forget), so it stops listing as
 	 * an available asleep session. */
 	dropSessionResume?: (team: string) => void;
+	/** The authoritative session store. create_session mints/adopts a record here (the minted id is
+	 * the tmux session name); rename_session relabels one. Absent in harnesses with no store. */
+	sessionStore?: import("../../shared/session-store.js").SessionStore;
 	/** The current keyring + its version hash. The poll reply carries the snapshot only when
 	 * the Console's known version differs. */
 	domain?: () => { version: string; snapshot: DomainSnapshot } | null;
@@ -205,6 +216,7 @@ function isMutatingOp(op: ConsoleOp): boolean {
 		op.kind === "create_session" ||
 		op.kind === "reload_plugins" ||
 		op.kind === "forget" ||
+		op.kind === "rename_session" ||
 		op.kind === "cross_domain_listen" ||
 		op.kind === "cross_domain_request" ||
 		op.kind === "cross_domain_confirm" ||
@@ -226,6 +238,7 @@ export function createConsoleDispatcher({
 	sendBoundMs = SEND_BOUND_MS,
 	isProjectName,
 	dropSessionResume,
+	sessionStore,
 	domain,
 	domainStatus,
 	relayToHost,
@@ -668,11 +681,35 @@ export function createConsoleDispatcher({
 
 			case "create_session": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
-				const target = resolveTmuxTarget(op.target, op.sessionName);
+				if (!op.sessionName && !op.displayLabel) {
+					throw new Error("create_session needs a sessionName or a displayLabel");
+				}
+				const spawn = parseTarget(op.target, localDomain, localGatewayId).spawn;
 				const dedupKey = `${conversationId}:${opId}`;
-				const r = await relayToHost({ kind: "createSession", target, dedupKey });
-				if (!r.ok) throw new Error(r.error ?? "create session failed");
-				return { created: true };
+				// The id (and tmux session name) is the typed sessionName, else a deterministic digest of
+				// this op so a retry reattaches its own record rather than minting a second. The label is
+				// the displayLabel, else the id. adoptById is idempotent: a re-dispatch of the same op
+				// reattaches (created is null) instead of duplicating.
+				const sessionId = op.sessionName ?? mintedSessionId(conversationId, opId);
+				const label = op.displayLabel ?? sessionId;
+				const created = sessionStore?.adoptById(sessionId, { spawn, sessionLabel: label, workdirHint: label });
+				const record = created ?? sessionStore?.getByTeam(composeSessionName(spawn, sessionId));
+				// A store-backed id that could be neither created nor reattached collides with a catalog
+				// project or reserved name; refuse rather than launch a recordless (hidden) session.
+				if (sessionStore && !record) {
+					throw new Error(`cannot create session "${sessionId}": the name is reserved or a project`);
+				}
+				try {
+					const target = resolveTmuxTarget(op.target, sessionId);
+					const r = await relayToHost({ kind: "createSession", target, dedupKey });
+					if (!r.ok) throw new Error(r.error ?? "create session failed");
+				} catch (e) {
+					// Roll back only a record THIS op created, so a reattach of an existing session is
+					// never destroyed by a transient launch failure.
+					if (created) sessionStore?.forget(sessionStore.teamOf(created));
+					throw e;
+				}
+				return { created: true, id: record?.id ?? sessionId, sessionLabel: record?.sessionLabel };
 			}
 
 			case "reload_plugins": {
@@ -700,6 +737,21 @@ export function createConsoleDispatcher({
 				// Drop the durable resume record so the session stops listing as available.
 				dropSessionResume?.(name);
 				return { killed: true };
+			}
+
+			case "rename_session": {
+				// Relabel a session's record. A bare spawn-point has no record to rename, and the record
+				// store is local, so a foreign-Gateway target must be rejected rather than collide with a
+				// same-named local record (the other ops get this via resolveTmuxTarget).
+				const t = parseTarget(op.target, localDomain, localGatewayId);
+				if (t instanceof SpawnPoint) {
+					throw new Error(`cannot rename "${op.target}": name a specific project.session, not a spawn-point`);
+				}
+				if (t.domain !== localDomain || t.gateway !== localGatewayId) {
+					throw new Error(`cannot rename a session on another Gateway`);
+				}
+				const applied = sessionStore?.rename(composeSessionName(t.spawn, t.session), op.sessionLabel) ?? null;
+				return { renamed: applied !== null, sessionLabel: applied ?? undefined };
 			}
 
 			case "cross_domain_listen": {
