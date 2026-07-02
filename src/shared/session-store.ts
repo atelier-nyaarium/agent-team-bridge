@@ -160,6 +160,35 @@ export class SessionStore {
 		return record;
 	}
 
+	/**
+	 * Establish the durable record for a confirmed lead, one record per Claude transcript. Runs the
+	 * binding-order precedence and stamps the confirm, so this write-invariant lives here rather than
+	 * in the caller. A bare (spawn-point) team returns undefined - it never becomes a session record.
+	 *  1. own segment names an existing record (preemptive create, legacy, daemon relaunch)
+	 *  2. the resume id matches a record (a manual `claude --resume` re-incarnation)
+	 *  3. the segment is free -> adopt it (a hand-set composite name, and every flag-enabled loose
+	 *     launch, whose self-composed segment is free by construction)
+	 *  4. else mint a fresh id (reached only when the segment collides with the catalog / reserved
+	 *     names).
+	 * A re-confirm converges on the same record via its segment (tier 1) or transcript id (tier 2);
+	 * only a colliding-segment session with no transcript id falls to the tier-4 mint fallback.
+	 */
+	establishOnConfirm(
+		team: string,
+		{ claudeSessionId, label, live }: { claudeSessionId?: string; label?: string; live: LiveRef },
+	): SessionRecord | undefined {
+		if (!isComposite(team)) return undefined;
+		let record = this.bindBySegment(team, { claudeSessionId });
+		if (!record && claudeSessionId) record = this.bindResume(claudeSessionId);
+		if (!record) {
+			const { project: spawn, session: id } = parseSessionName(team);
+			record =
+				this.adoptById(id, { spawn, sessionLabel: label, workdirHint: label ?? id, claudeSessionId }) ??
+				this.mint({ spawn, sessionLabel: label, workdirHint: label, claudeSessionId });
+		}
+		return this.confirm(this.teamOf(record), live);
+	}
+
 	/** Apply a new label (sealed rename op). Returns the label actually applied after sanitization
 	 * + per-spawn dedup, or null when the record is gone or nothing safe remained. */
 	rename(team: string, label: string): string | null {

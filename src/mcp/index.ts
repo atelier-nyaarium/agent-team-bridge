@@ -32,10 +32,7 @@ export async function startMcp(): Promise<void> {
 	// resolveSessionNaming (see team-name.ts for the composition rules). Peers reach the gateway on
 	// the docker network inside a container or the forwarded localhost port elsewhere. The host
 	// plumbing (wake + terminal view) lives in the headless host daemon, not here.
-	process.env.PROJECT_NAME = resolveSessionNaming(
-		process.env.PROJECT_NAME,
-		process.env.CLAUDE_CODE_SESSION_ID,
-	).projectName;
+	process.env.PROJECT_NAME = resolveSessionNaming(process.env.PROJECT_NAME, process.env.CLAUDE_CODE_SESSION_ID);
 	if (!process.env.BRIDGE_ROUTER_URL) {
 		process.env.BRIDGE_ROUTER_URL = inContainer ? "http://switchboard:20000" : "http://localhost:20000";
 	}

@@ -2,14 +2,6 @@ import crypto from "node:crypto";
 import { composeSessionName, isComposite } from "../shared/session-id.js";
 
 ////////////////////////////////
-//  Interfaces & Types
-
-/** The register identity a session runs under: its composite `spawn.session` name. */
-export interface SessionNaming {
-	projectName: string;
-}
-
-////////////////////////////////
 //  Functions & Helpers
 
 /** Random 6-char id for an unnamed peer session. The console gives it a friendly label. */
@@ -50,12 +42,12 @@ export function stableTeamName(sessionId: string | undefined): string | null {
 export function resolveSessionNaming(
 	explicitProject: string | undefined,
 	harnessSessionId: string | undefined,
-): SessionNaming {
+): string {
 	if (!explicitProject) {
-		return { projectName: composeSessionName("host", stableTeamName(harnessSessionId) ?? randomTeamId()) };
+		return composeSessionName("host", stableTeamName(harnessSessionId) ?? randomTeamId());
 	}
 	if (!isComposite(explicitProject)) {
-		return { projectName: composeSessionName(explicitProject, stableTeamName(harnessSessionId) ?? randomTeamId()) };
+		return composeSessionName(explicitProject, stableTeamName(harnessSessionId) ?? randomTeamId());
 	}
-	return { projectName: explicitProject };
+	return explicitProject;
 }

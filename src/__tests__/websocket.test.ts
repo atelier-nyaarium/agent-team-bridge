@@ -507,46 +507,6 @@ describe("handshake-established session records", () => {
 		expect(ws.data.handshakeConfirmed).toBe(true);
 	});
 
-	it("a lead confirm binds a preemptive record instead of creating a duplicate (tier 1)", () => {
-		const { handlers, sessionStore } = setup();
-		// Phone preemptively created the record; the session boots and confirms.
-		sessionStore.adoptById("mywork", { spawn: "host", sessionLabel: "My Work" });
-		const ws = createMockWs();
-		register(handlers, ws, { team: "host.mywork", subId: "s1", claudeSessionId: "tx-9" });
-		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
-
-		expect(sessionStore.size).toBe(1);
-		expect(sessionStore.getByTeam("host.mywork")).toMatchObject({
-			sessionLabel: "My Work",
-			claudeSessionId: "tx-9",
-			liveTeam: { team: "host.mywork", subId: "s1" },
-		});
-	});
-
-	it("a re-incarnation with a matching resume id binds the existing transcript record (tier 2)", () => {
-		const { handlers, sessionStore } = setup();
-		sessionStore.adoptById("orig", { spawn: "host", sessionLabel: "orig", claudeSessionId: "tx-7" });
-		// Manual `claude --resume` re-registers under a fresh self-composed segment carrying the same id.
-		const ws = createMockWs();
-		register(handlers, ws, { team: "host.fresh1", subId: "s2", claudeSessionId: "tx-7" });
-		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
-
-		expect(sessionStore.size).toBe(1);
-		expect(sessionStore.getByTeam("host.orig")?.liveTeam).toEqual({ team: "host.fresh1", subId: "s2" });
-		expect(sessionStore.getByTeam("host.fresh1")).toBeUndefined();
-	});
-
-	it("a segment colliding with a reserved id mints a fresh record instead (tier 4)", () => {
-		const store = new SessionStore({ clash: (id) => id === "evie-bot", idGen: () => "minted1" });
-		const { handlers, sessionStore } = setup(store);
-		const ws = createMockWs();
-		register(handlers, ws, { team: "host.evie-bot", subId: "s1", claudeSessionId: "tx-1", cwdName: "evie-bot" });
-		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
-
-		expect(sessionStore.getByTeam("host.evie-bot")).toBeUndefined();
-		expect(sessionStore.getByTeam("host.minted1")).toMatchObject({ id: "minted1", sessionLabel: "evie-bot" });
-	});
-
 	it("a worker reply records nothing and fully removes the socket from the registry", () => {
 		const { handlers, registry, conversationRegistry, sessionStore } = setup();
 		const ws = createMockWs();
@@ -621,14 +581,6 @@ describe("handshake-established session records", () => {
 
 		expect(worker.close).toHaveBeenCalled();
 		expect(sessionStore.getByTeam("host.abc123")?.liveTeam).toEqual({ team: "host.abc123", subId: "s1" });
-	});
-
-	it("a bare spawn-point team that confirms establishes no record", () => {
-		const { handlers, sessionStore } = setup();
-		const ws = createMockWs();
-		register(handlers, ws, { team: "someproj", subId: "s1", claudeSessionId: "tx-1" });
-		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
-		expect(sessionStore.size).toBe(0);
 	});
 
 	it("re-registering a subId prunes the evicted socket's pending handshake", () => {

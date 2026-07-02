@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { WsRegisterSchema } from "../shared/schemas.js";
-import { isComposite, parseSessionName } from "../shared/session-id.js";
-import type { LiveRef, SessionStore } from "../shared/session-store.js";
+import { isComposite } from "../shared/session-id.js";
+import type { SessionStore } from "../shared/session-store.js";
 import type { ConnectionMode, WebSocketConfig } from "../shared/types.js";
 import type { WakeCoordinator } from "./wake.js";
 
@@ -409,33 +409,20 @@ export function createWebSocketHandlers({
 		}
 	}
 
-	/** Establish or bind the durable session record for a confirmed lead, following the binding order
-	 * (one record per Claude transcript). A re-confirm converges on the same record via its segment
-	 * (tier 1) or its transcript id (tier 2); only a colliding-segment session with no transcript id
-	 * falls to the tier-4 mint fallback. A bare (spawn-point) team never establishes a record.
-	 *  1. own segment names an existing record (preemptive create, legacy, daemon relaunch)
-	 *  2. the resume id matches a record (a manual `claude --resume` re-incarnation)
-	 *  3. the segment is free -> adopt it (a hand-set composite name, and every flag-enabled loose
-	 *     launch, whose self-composed segment is free by construction)
-	 *  4. else mint a fresh id (reached only when the segment collides with the catalog / reserved
-	 *     names). */
+	/** Establish the durable session record for a confirmed lead. The binding-order precedence lives
+	 * in the store; here we just supply the stashed register ids and the confirming incarnation. */
 	function establishRecord(ws: ServerWebSocket<WsData>, pending: { team: string; subId: string }): void {
-		if (!sessionStore || !isComposite(pending.team)) return;
-		const { team, subId } = pending;
-		const claudeSessionId = ws.data.claudeSessionId;
-		const label = ws.data.cwdName;
-
-		let record = sessionStore.bindBySegment(team, { claudeSessionId });
-		if (!record && claudeSessionId) record = sessionStore.bindResume(claudeSessionId);
-		if (!record) {
-			const { project: spawn, session: id } = parseSessionName(team);
-			record =
-				sessionStore.adoptById(id, { spawn, sessionLabel: label, workdirHint: label ?? id, claudeSessionId }) ??
-				sessionStore.mint({ spawn, sessionLabel: label, workdirHint: label, claudeSessionId });
+		if (!sessionStore) return;
+		const record = sessionStore.establishOnConfirm(pending.team, {
+			claudeSessionId: ws.data.claudeSessionId,
+			label: ws.data.cwdName,
+			live: { team: pending.team, subId: pending.subId },
+		});
+		if (record) {
+			console.log(
+				`[ws] session record ${sessionStore.teamOf(record)} confirmed (label "${record.sessionLabel}")`,
+			);
 		}
-		const live: LiveRef = { team, subId };
-		sessionStore.confirm(sessionStore.teamOf(record), live);
-		console.log(`[ws] session record ${sessionStore.teamOf(record)} confirmed (label "${record.sessionLabel}")`);
 	}
 
 	/** Resolve a handshake response. Returns true if it was a handshake session. */

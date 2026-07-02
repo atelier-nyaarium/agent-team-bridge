@@ -34,32 +34,26 @@ describe("stableTeamName", () => {
 // catalog spawn-point. Pin each normalization branch.
 describe("resolveSessionNaming", () => {
 	it("unset PROJECT_NAME composes host.<stable-hex>", () => {
-		const r = resolveSessionNaming(undefined, SID_A);
-		expect(r.projectName).toBe(`host.${stableTeamName(SID_A)}`);
+		expect(resolveSessionNaming(undefined, SID_A)).toBe(`host.${stableTeamName(SID_A)}`);
 	});
 
 	it("empty PROJECT_NAME behaves as unset (under host)", () => {
-		const r = resolveSessionNaming("", SID_A);
-		expect(r.projectName).toBe(`host.${stableTeamName(SID_A)}`);
+		expect(resolveSessionNaming("", SID_A)).toBe(`host.${stableTeamName(SID_A)}`);
 	});
 
 	it("a bare image-ENV name is normalized to a session under that spawn", () => {
-		const r = resolveSessionNaming("evie-bot", SID_A);
-		expect(r.projectName).toBe(`evie-bot.${stableTeamName(SID_A)}`);
+		expect(resolveSessionNaming("evie-bot", SID_A)).toBe(`evie-bot.${stableTeamName(SID_A)}`);
 	});
 
 	it("a daemon-composed composite passes through untouched", () => {
-		const r = resolveSessionNaming("host.nyaadot", SID_A);
-		expect(r).toEqual({ projectName: "host.nyaadot" });
+		expect(resolveSessionNaming("host.nyaadot", SID_A)).toBe("host.nyaadot");
 	});
 
 	it("an explicitly hand-set composite passes through (the escape hatch for a named terminal session)", () => {
-		const r = resolveSessionNaming("host.mywork", undefined);
-		expect(r).toEqual({ projectName: "host.mywork" });
+		expect(resolveSessionNaming("host.mywork", undefined)).toBe("host.mywork");
 	});
 
 	it("no harness session id falls back to a random name", () => {
-		const r = resolveSessionNaming(undefined, undefined);
-		expect(r.projectName).toMatch(/^host\.[0-9a-f]{6}$/);
+		expect(resolveSessionNaming(undefined, undefined)).toMatch(/^host\.[0-9a-f]{6}$/);
 	});
 });

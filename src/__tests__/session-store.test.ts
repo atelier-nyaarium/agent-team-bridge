@@ -178,6 +178,59 @@ describe("SessionStore confirm-time binding", () => {
 	});
 });
 
+describe("SessionStore establishOnConfirm binding order", () => {
+	const live = { team: "host.abc123", subId: "s1" };
+
+	it("tier 1: binds an existing record its segment names, without duplicating", () => {
+		const store = new SessionStore();
+		store.adoptById("mywork", { spawn: "host", sessionLabel: "My Work" });
+		const rec = store.establishOnConfirm("host.mywork", {
+			claudeSessionId: "tx-9",
+			live: { team: "host.mywork", subId: "s1" },
+		});
+		expect(store.size).toBe(1);
+		expect(rec).toMatchObject({
+			sessionLabel: "My Work",
+			claudeSessionId: "tx-9",
+			liveTeam: { team: "host.mywork", subId: "s1" },
+		});
+		expect(rec?.confirmedAt).toBeGreaterThan(0);
+	});
+
+	it("tier 2: binds the record holding a matching transcript id, under a fresh segment", () => {
+		const store = new SessionStore();
+		store.adoptById("orig", { spawn: "host", claudeSessionId: "tx-7" });
+		const rec = store.establishOnConfirm("host.fresh1", {
+			claudeSessionId: "tx-7",
+			live: { team: "host.fresh1", subId: "s2" },
+		});
+		expect(store.size).toBe(1);
+		expect(rec && store.teamOf(rec)).toBe("host.orig");
+		expect(store.getByTeam("host.fresh1")).toBeUndefined();
+	});
+
+	it("tier 3: adopts a free segment and labels it by the reported cwd", () => {
+		const store = new SessionStore();
+		const rec = store.establishOnConfirm("host.abc123", { claudeSessionId: "tx-1", label: "switchboard", live });
+		expect(rec).toMatchObject({ id: "abc123", sessionLabel: "switchboard", claudeSessionId: "tx-1" });
+	});
+
+	it("tier 4: mints a fresh id when the segment collides with a reserved id", () => {
+		const store = new SessionStore({ clash: (id) => id === "evie-bot", idGen: scriptedIds("minted1") });
+		const rec = store.establishOnConfirm("host.evie-bot", { label: "evie-bot", live });
+		expect(store.getByTeam("host.evie-bot")).toBeUndefined();
+		expect(rec).toMatchObject({ id: "minted1", sessionLabel: "evie-bot" });
+	});
+
+	it("a bare spawn-point team establishes no record", () => {
+		const store = new SessionStore();
+		expect(
+			store.establishOnConfirm("someproj", { claudeSessionId: "tx-1", live: { team: "someproj", subId: "s1" } }),
+		).toBeUndefined();
+		expect(store.size).toBe(0);
+	});
+});
+
 describe("SessionStore labels", () => {
 	it("dedups labels per spawn with a -# suffix; other spawns may reuse the label", () => {
 		const store = new SessionStore({ idGen: scriptedIds("id1", "id2", "id3") });
