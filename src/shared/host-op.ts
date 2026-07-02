@@ -92,9 +92,10 @@ export type HostOp =
 	| { kind: "sendText"; target: TmuxTarget; text: string; submit?: boolean; dedupKey?: string }
 	| { kind: "sendKey"; target: TmuxTarget; key: string; dedupKey?: string }
 	// Start a new tmux session on the target running a fresh agent. The daemon owns the launch
-	// command (model/effort/plugin); the op carries only the target + the chosen session name, so a
-	// console can never inject an arbitrary host command.
-	| { kind: "createSession"; target: TmuxTarget; dedupKey?: string }
+	// command (model/effort/plugin); the op carries only the target, the session name, and an optional
+	// host-only workdirHint (resolved by the daemon's resolveHostWorkdir), so a console can never
+	// inject an arbitrary host command or path.
+	| { kind: "createSession"; target: TmuxTarget; workdirHint?: string; dedupKey?: string }
 	// Drive the target session's pane through the plugin update + MCP reconnect sequence.
 	| { kind: "reloadPlugins"; target: TmuxTarget; dedupKey?: string }
 	// Tear down the target tmux session (the console's Forget). Idempotent: killing an

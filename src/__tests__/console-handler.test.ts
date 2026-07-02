@@ -1074,7 +1074,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(h.hostOps).toHaveLength(0);
 	});
 
-	it("create_session relays a createSession host op carrying the new session name", async () => {
+	it("create_session relays a createSession host op carrying the new session name and workdir hint", async () => {
 		const h = makeTerminalHarness();
 		const reply = await h.handler.handleFrame(
 			frame({ kind: "create_session", target: "recipe-app", sessionName: "scratch" }, "c1"),
@@ -1083,6 +1083,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(h.hostOps[0]).toEqual({
 			kind: "createSession",
 			target: { kind: "devcontainer", name: "recipe-app", sessionName: "scratch" },
+			workdirHint: "scratch",
 			dedupKey: "conv-pixel:c1",
 		});
 	});
@@ -1110,6 +1111,22 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			target: { kind: "devcontainer", name: "recipe-app", sessionName: res.id },
 		});
 		expect(store.getByTeam(`recipe-app.${res.id}`)?.sessionLabel).toBe("My Work");
+	});
+
+	it("create_session sends the un-deduped workdir hint when a display label collides", async () => {
+		const store = new SessionStore();
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const r1 = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "host", displayLabel: "app" }, "cwd1"),
+		);
+		const r2 = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "host", displayLabel: "app" }, "cwd2"),
+		);
+		// The board label dedups, but the workdir intent does not: both sessions open ~/projects/app,
+		// so the host op must carry the workdirHint field ("app"), not the deduped sessionLabel ("app-2").
+		expect((r1.result as { sessionLabel: string }).sessionLabel).toBe("app");
+		expect((r2.result as { sessionLabel: string }).sessionLabel).toBe("app-2");
+		expect((h.hostOps[1] as { workdirHint?: string }).workdirHint).toBe("app");
 	});
 
 	it("a re-dispatched displayLabel create reattaches its record instead of minting a phantom (restart-safe)", async () => {

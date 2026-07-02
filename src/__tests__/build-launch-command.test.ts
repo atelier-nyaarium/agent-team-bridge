@@ -54,14 +54,35 @@ describe("buildLaunchCommand", () => {
 		expect(cmd).not.toContain('cd "');
 		expect(cmd).not.toContain("it's");
 	});
+
+	it("drops the cd when the workdir holds a double quote that would break the cd's own quoting", () => {
+		const cmd = buildLaunchCommand(
+			{ kind: "host", name: "host", sessionName: "foo" },
+			{ workdir: '/home/projects/a"; rm -rf ~ #' },
+		);
+		expect(cmd).not.toContain('cd "');
+		expect(cmd).not.toContain("rm -rf");
+	});
 });
 
 describe("resolveHostWorkdir", () => {
-	it("picks the first projectDir/<session> that exists, else home", () => {
+	it("picks the first projectDir/<hint> that exists, else home", () => {
 		const base = fs.mkdtempSync(path.join(os.tmpdir(), "hostwd-"));
 		fs.mkdirSync(path.join(base, "myproj"));
 		const home = fs.mkdtempSync(path.join(os.tmpdir(), "home-"));
 		expect(resolveHostWorkdir("myproj", [base], home)).toBe(path.join(base, "myproj"));
 		expect(resolveHostWorkdir("absent", [base], home)).toBe(home);
+	});
+
+	it("falls back to home for a missing hint or one that is not a single path segment", () => {
+		const base = fs.mkdtempSync(path.join(os.tmpdir(), "hostwd-"));
+		fs.mkdirSync(path.join(base, "myproj"));
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "home-"));
+		expect(resolveHostWorkdir(undefined, [base], home)).toBe(home);
+		expect(resolveHostWorkdir("", [base], home)).toBe(home);
+		expect(resolveHostWorkdir(".", [base], home)).toBe(home);
+		expect(resolveHostWorkdir("..", [base], home)).toBe(home);
+		expect(resolveHostWorkdir("../myproj", [base], home)).toBe(home);
+		expect(resolveHostWorkdir("sub/dir", [base], home)).toBe(home);
 	});
 });

@@ -8,7 +8,7 @@ import {
 	isReservedHostSession,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
-import { DEFAULT_SESSION } from "../../shared/session-id.js";
+import { parseSessionName } from "../../shared/session-id.js";
 
 ////////////////////////////////
 //  Constants
@@ -62,12 +62,16 @@ const LOGGED_OUT_RE = /Not logged in|Run \/login/;
 ////////////////////////////////
 //  Functions & Helpers
 
-/** The target for the local agent's OWN tmux session: bare `tmux` (kind "host" = local, not docker
- * exec), the conventional `DEFAULT_SESSION` pane. The single source for an in-process tool that
- * drives its own session (set_effort_level, compact_session), so the session name is anchored to one
- * constant rather than re-hardcoded per tool. */
+/** The target for the local agent's OWN tmux session: bare `tmux` (kind "host" = this process's own
+ * tmux, not a docker exec into another container - true whether the agent itself runs on the host or
+ * inside a container). The session name is the session segment of PROJECT_NAME (the composite the
+ * daemon launched under), so a session running under a minted id drives its own pane rather than the
+ * conventional `claude` one; a bare or unset PROJECT_NAME parses to DEFAULT_SESSION. The single
+ * source for every in-process tool that drives its own session (set_effort_level, compact_session,
+ * the self path of reload_plugins), so the session name is derived in one place rather than
+ * re-hardcoded per tool. */
 export function selfSessionTarget(): TmuxTarget {
-	return { kind: "host", name: "host", sessionName: DEFAULT_SESSION };
+	return { kind: "host", name: "host", sessionName: parseSessionName(process.env.PROJECT_NAME ?? "").session };
 }
 
 /** The pane a host op addresses: the agent runs in pane 0 of its session, so the pane index is

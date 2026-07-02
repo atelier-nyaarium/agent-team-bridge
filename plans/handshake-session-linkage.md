@@ -159,8 +159,17 @@ SessionRecord {
   retry wake.
 - **Send-woken** (crosstalk or console send to an asleep/unknown composite): the wake ADOPTS the
   addressed segment as the record id (adopt-by-id, NOT mint - minting would strand the woken
-  session at an address nobody used); sessionLabel = the segment (a slug), refined by the register
-  cwdName when it lands; workdirHint = the segment.
+  session at an address nobody used); sessionLabel = the segment (a slug); workdirHint = the segment.
+  The addressed segment stays the label: the daemon-launched session confirms via binding order tier
+  1 (segment match), which records the transcript id but does NOT overwrite the label. That is
+  deliberate - the human addressed this specific segment, and a devcontainer's cwdName is the less
+  specific project basename (shared across its sessions), so the segment is the better board label.
+  The provisional record is ROLLED BACK if the wake never comes online (a bogus/removed project, a
+  dead launch): doWakeTeam forgets a record IT created when the wake fails and the record is still
+  unconfirmed with no live incarnation, so a typo'd or dead send-wake leaves no phantom "available"
+  card (mirroring create_session's launch-failure rollback). A host session whose segment CLASHES
+  with a catalog project adopts no record (clash predicate), but the wake still sends the segment as
+  workdirHint so it opens in ~/projects/<segment> rather than $HOME.
 - **Computer-started with the channels flag**: registers, confirms, binds per the order above.
 - **Computer-started without the flag**: registers (outbound crosstalk works), never confirms,
   never records, never appears. This is the strand-proof default.
@@ -422,6 +431,13 @@ machine independently)
   not lower it. The tier-4 mint fallback is non-idempotent only for an adversarial reserved/catalog-
   colliding segment (a legitimate session's segment is a hex or daemon name and converges via tier 1
   or tier 2), so its growth folds into the same deferred surface.
+- Daemon/gateway version skew (a NEW daemon taking a wake from an OLD gateway that sends no
+  workdirHint) makes a host session open in $HOME instead of ~/projects/<segment>, because the new
+  daemon no longer derives the workdir from the opaque session segment. Accepted: the documented
+  deploy (`down.sh && start-gateway.sh && start-host-daemon.sh`) runs NO daemon during the gateway
+  swap, so the skew window never opens; it is transient and self-heals once the gateway image is
+  rebuilt. Not worth a segment-fallback shim in the daemon (which would re-key the workdir on the
+  opaque id the plan deliberately moved off).
 
 ## Noted (declined by design)
 

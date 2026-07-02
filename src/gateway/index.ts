@@ -9,7 +9,7 @@ import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
-import { parseSessionName } from "../shared/session-id.js";
+import { isComposite, parseSessionName } from "../shared/session-id.js";
 import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
@@ -234,14 +234,36 @@ export async function startGateway(): Promise<void> {
 			console.log(`[wake] ${team} is a reserved host session; not waking`);
 			return false;
 		}
+		// A send-woken composite adopts its addressed segment as a provisional record (adopt-by-id, not
+		// mint: minting a fresh id would strand the woken session at an address the sender never used).
+		// This lands it in teams() and hands the daemon a workdir hint; the daemon always launches with
+		// the channels flag, so the session confirms and binds to this record via tier 1. Idempotent - a
+		// re-wake reattaches the same record. A bare (non-composite) wake keeps the legacy convention and
+		// gets no record.
+		let provisionalCreated = false;
+		if (isComposite(team)) {
+			const adopted = sessionStore.adoptOrReattach(session, {
+				spawn: project,
+				sessionLabel: session,
+				workdirHint: session,
+			});
+			provisionalCreated = adopted?.created === true;
+		}
 		const projectPath = knownTeamPaths.get(project) ?? offlineCatalog.get(project);
-		const resumeSessionId = sessionStore.getByTeam(team)?.claudeSessionId;
+		const record = sessionStore.getByTeam(team);
+		const resumeSessionId = record?.claudeSessionId;
+		// The host workdir hint: the record's intent field, else the addressed segment (never the opaque
+		// id - a minted hex just falls through to $HOME). The segment fallback keeps a host session whose
+		// name clashes with a catalog project (so no record was adopted) opening in ~/projects/<segment>.
+		// The daemon opens a host session there; a devcontainer ignores the hint.
+		const workdirHint = record?.workdirHint ?? record?.sessionLabel ?? (isComposite(team) ? session : undefined);
 		hostWs.send(
 			JSON.stringify({
 				type: "wake",
 				team,
 				...(projectPath ? { projectPath } : {}),
 				...(resumeSessionId ? { resumeSessionId } : {}),
+				...(workdirHint ? { workdirHint } : {}),
 			}),
 		);
 
@@ -249,6 +271,16 @@ export async function startGateway(): Promise<void> {
 
 		const success = await wakeCoordinator.waitFor(team, WAKE_TIMEOUT_MS);
 		console.log(`[wake] ${team} ${success ? "is now online" : "failed to come online"}`);
+		// Roll back a provisional record THIS wake created if the launch never came online (a bogus or
+		// removed project, a dead launch), so a failed send-wake leaves no persisted phantom "available"
+		// card (mirrors create_session). A record a confirm has since bound (confirmedAt set, or a live
+		// incarnation) is left intact - the wake may have timed out while a slow session was confirming.
+		if (!success && provisionalCreated) {
+			const rec = sessionStore.getByTeam(team);
+			if (rec && rec.confirmedAt === undefined && !resolveLiveIncarnation(registry, sessionStore, team)) {
+				sessionStore.forget(team);
+			}
+		}
 		return success;
 	}
 

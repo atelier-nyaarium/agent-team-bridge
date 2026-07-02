@@ -166,6 +166,9 @@ interface WakeMessage {
 	projectPath?: string;
 	// The Claude harness id to `--resume`, if the gateway has one mapped for this session.
 	resumeSessionId?: string;
+	// A host session's workdir hint (the record's label): the pane opens in ~/projects/<hint>. Absent
+	// for a devcontainer wake (its workdir is fixed at /workspace/<project>).
+	workdirHint?: string;
 }
 
 function findProjectPath(team: string): string {
@@ -179,14 +182,22 @@ function findProjectPath(team: string): string {
 	return path.join(projectDirs[0], team);
 }
 
-/** Working directory for a host session: the first `<projectDir>/<session>` that is a real directory
- * (a plain dir, unlike findProjectPath it does not require a .devcontainer), else home. Keeps a host
- * agent out of the daemon's own cwd. An ad-hoc `host.<hex>` name has no project dir and lands in home.
- * dirs/home are injectable for tests. */
-export function resolveHostWorkdir(session: string, dirs: string[] = projectDirs, home: string = HOME): string {
+/** Working directory for a host session: the first `<projectDir>/<hint>` that is a real directory
+ * (a plain dir, unlike findProjectPath it does not require a .devcontainer), else home. The hint is
+ * the record's human label (never the opaque session id, which has no matching project dir), so a
+ * session created as "myproject" opens in ~/projects/myproject. A missing hint, or one that is not a
+ * single path segment (a `/` or `\`, or `.`/`..`), lands in home rather than escaping the project
+ * roots - belt and suspenders over the store's label sanitization. dirs/home are injectable for
+ * tests. */
+export function resolveHostWorkdir(
+	hint: string | undefined,
+	dirs: string[] = projectDirs,
+	home: string = HOME,
+): string {
+	if (!hint || hint === "." || hint === ".." || hint.includes("/") || hint.includes("\\")) return home;
 	for (const dir of dirs) {
 		const resolved = path.isAbsolute(dir) ? dir : path.join(home, dir);
-		const candidate = path.join(resolved, session);
+		const candidate = path.join(resolved, hint);
 		try {
 			if (fs.statSync(candidate).isDirectory()) return candidate;
 		} catch {
@@ -216,7 +227,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		const target: TmuxTarget = { kind: "host", name: "host", sessionName: session };
 		const launch = buildLaunchCommand(target, {
 			resumeSessionId: msg.resumeSessionId,
-			workdir: resolveHostWorkdir(session),
+			workdir: resolveHostWorkdir(msg.workdirHint),
 		});
 		console.error(`[host-wake] starting host session ${msg.team}`);
 		try {
@@ -315,9 +326,8 @@ const CLAUDE_FLAGS =
 // whole chain is one `bash -c`. A host session keeps its pane alive with `exec bash` after Claude
 // exits; a devcontainer session opens in its workspace project. The
 // target's name/sessionName are slug-validated by callers; the resume id is uuid-shaped and the
-// workdir is a resolved fs path, double-quoted for spaces. A workdir holding a single quote (which
-// would close the outer `bash -c '...'`) is dropped rather than escaped - the agent then starts in
-// the daemon's cwd, which only happens for a pathological projectDirs base.
+// workdir is a resolved fs path, double-quoted for spaces (a workdir bearing a quote is dropped, see
+// below).
 export function buildLaunchCommand(
 	target: TmuxTarget,
 	opts: { resumeSessionId?: string; workdir?: string } = {},
@@ -329,7 +339,12 @@ export function buildLaunchCommand(
 			: "";
 	const claude = `claude --model opus --effort xhigh ${CLAUDE_FLAGS}${resume}`;
 	if (target.kind === "host") {
-		const cd = opts.workdir && !opts.workdir.includes("'") ? `cd "${opts.workdir}"; ` : "";
+		// The workdir is double-quoted for spaces. A single quote would close the outer `bash -c '...'`
+		// and a double quote would close the cd's own quoting to run injected commands; a workdir with
+		// either is dropped rather than escaped (the agent then starts in the daemon's cwd). The label
+		// sanitizer forbids path separators but not quotes, so both are guarded here.
+		const safeWorkdir = opts.workdir && !opts.workdir.includes("'") && !opts.workdir.includes('"');
+		const cd = safeWorkdir ? `cd "${opts.workdir}"; ` : "";
 		return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${cd}${claude}; exec bash'`;
 	}
 	return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; cd /workspace/${target.name}; exec ${claude}'`;
@@ -341,12 +356,12 @@ const hostOpRunner = createHostOpRunner({
 	peekPane,
 	sendText,
 	sendKey,
-	createSession: async (target) => {
+	createSession: async (target, workdirHint) => {
 		// A create_session for an existing session reattaches instead of erroring on a duplicate
 		// new-session. For a fresh launch, clear the dev-channels + folder-trust menus in the
 		// BACKGROUND: the host op must return well under the gateway's 20s timeout, so we do not block
 		// on the REPL becoming ready (a large/slow launch would blow that budget).
-		const workdir = target.kind === "host" ? resolveHostWorkdir(target.sessionName) : undefined;
+		const workdir = target.kind === "host" ? resolveHostWorkdir(workdirHint) : undefined;
 		const { created } = await ensureSession(target, buildLaunchCommand(target, { workdir }));
 		if (created) {
 			void awaitReady(target).catch(() => {
