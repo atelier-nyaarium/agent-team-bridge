@@ -109,6 +109,14 @@ export class SessionStore {
 		return composeSessionName(record.spawn, record.id);
 	}
 
+	/** The host workdir hint the daemon resolves to ~/projects/<hint>: the frozen workdirHint, else the
+	 * current sessionLabel. workdirHint FIRST is load-bearing - rename() mutates only sessionLabel, so a
+	 * renamed session's workdir must stay pinned to its original label. The one owner of this precedence
+	 * so the wake and create paths cannot drift apart. */
+	hostWorkdirHint(record: SessionRecord): string {
+		return record.workdirHint ?? record.sessionLabel;
+	}
+
 	/** The record a composite team field names, or undefined. */
 	getByTeam(team: string): SessionRecord | undefined {
 		return isComposite(team) ? this.records.get(team) : undefined;

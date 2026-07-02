@@ -715,11 +715,11 @@ export function createConsoleDispatcher({
 				}
 				try {
 					const target = resolveTmuxTarget(op.target, sessionId);
-					// The record's workdirHint field is the host workdir intent (the daemon opens a host
-					// session in ~/projects/<hint>, and ignores it for a devcontainer). Use it, not the
-					// sessionLabel, so a display-label collision (label deduped to "-2", workdirHint left at
-					// the original) opens the same dir the wake path uses; the daemon guards traversal too.
-					const workdirHint = adopted?.record.workdirHint ?? label;
+					// The host workdir hint (the daemon opens a host session in ~/projects/<hint>, ignoring
+					// it for a devcontainer). The store owns the workdirHint-over-sessionLabel precedence, so
+					// this matches the wake path: a display-label collision (label deduped to "-2",
+					// workdirHint pinned to the original) opens the same dir. The daemon guards traversal too.
+					const workdirHint = sessionStore && adopted ? sessionStore.hostWorkdirHint(adopted.record) : label;
 					const r = await relayToHost({ kind: "createSession", target, workdirHint, dedupKey });
 					if (!r.ok) throw new Error(r.error ?? "create session failed");
 				} catch (e) {

@@ -252,11 +252,12 @@ export async function startGateway(): Promise<void> {
 		const projectPath = knownTeamPaths.get(project) ?? offlineCatalog.get(project);
 		const record = sessionStore.getByTeam(team);
 		const resumeSessionId = record?.claudeSessionId;
-		// The host workdir hint: the record's intent field, else the addressed segment (never the opaque
-		// id - a minted hex just falls through to $HOME). The segment fallback keeps a host session whose
-		// name clashes with a catalog project (so no record was adopted) opening in ~/projects/<segment>.
-		// The daemon opens a host session there; a devcontainer ignores the hint.
-		const workdirHint = record?.workdirHint ?? record?.sessionLabel ?? (isComposite(team) ? session : undefined);
+		// The host workdir hint: the record's hint (workdirHint ?? sessionLabel, owned by the store),
+		// else the addressed segment (never the opaque id - a minted hex just falls through to $HOME).
+		// The segment fallback keeps a host session whose name clashes with a catalog project (so no
+		// record was adopted) opening in ~/projects/<segment>. The daemon opens a host session there; a
+		// devcontainer ignores the hint.
+		const workdirHint = record ? sessionStore.hostWorkdirHint(record) : isComposite(team) ? session : undefined;
 		hostWs.send(
 			JSON.stringify({
 				type: "wake",

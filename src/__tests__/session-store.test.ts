@@ -294,6 +294,17 @@ describe("SessionStore labels", () => {
 		expect(rec.sessionLabel).toBe("safe01");
 		expect(rec.workdirHint).toBeUndefined();
 	});
+
+	it("hostWorkdirHint pins the workdir to the original label across a rename, else falls back to the label", () => {
+		const store = new SessionStore({ idGen: scriptedIds("id1", "id2") });
+		const rec = store.mint({ spawn: "host", sessionLabel: "app", workdirHint: "app" });
+		store.rename("host.id1", "renamed"); // rename mutates only the label
+		expect(rec.sessionLabel).toBe("renamed");
+		expect(store.hostWorkdirHint(rec)).toBe("app"); // workdir stays pinned to the original
+		const bare = store.mint({ spawn: "host", sessionLabel: "solo" });
+		expect(bare.workdirHint).toBeUndefined();
+		expect(store.hostWorkdirHint(bare)).toBe("solo"); // no hint -> current label
+	});
 });
 
 describe("SessionStore TTL", () => {
