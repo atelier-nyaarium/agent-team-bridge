@@ -527,9 +527,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					state.working(session.name) -> "working..."
 					else -> "live"
 				}
-				session.status == "verifying" -> "verifying"
 				session.status == "available" -> if (state.working(session.name)) "waking..." else "available"
-				else -> "ended"
+				else -> statusWord(session.status)
 			}
 			ThreadScreen(
 				team = openTeam!!,
@@ -918,19 +917,14 @@ private fun sessionOrder(state: ChatState): Comparator<Team> =
 		.thenByDescending { state.lastActivity(it.name) ?: 0L }
 		.thenBy { it.name }
 
-/** A session's label without address disambiguation: a local rename, else the gateway's
- * sessionLabel. Null when neither exists (an unlabeled or unlisted session). */
-private fun sessionLabelOnly(state: ChatState, team: String): String? =
-	state.labels[team] ?: state.teams.firstOrNull { it.name == team }?.sessionLabel
-
 /** Tab/title label for an open thread: the session's label when it is unique among the open tabs,
  * else the shortest suffix of the address path (the session segment, then `spawn.session`, then
  * `gateway.spawn.session`, ...) that disambiguates it. So a lone open session shows its label or
  * leaf, and two tabs that would collide (same label, or same leaf) escalate to the suffix that tells
  * them apart. */
 private fun tabLabelFor(state: ChatState, team: String): String {
-	val label = sessionLabelOnly(state, team)
-	if (label != null && state.openTabs.none { it != team && sessionLabelOnly(state, it) == label }) return label
+	val label = state.labelOrNull(team)
+	if (label != null && state.openTabs.none { it != team && state.labelOrNull(it) == label }) return label
 	val mine = team.split(Protocol.ADDRESS_SEP)
 	val others = state.openTabs.filter { it != team }.map { it.split(Protocol.ADDRESS_SEP) }
 	for (n in 1..mine.size) {
@@ -1311,6 +1305,15 @@ fun HealthHeader(state: ChatState) {
 }
 
 /** Chip color for the board/thread presence vocabulary. */
+/** The base board/thread word for a wire status, before any working/waking/login refinement. The
+ * single owner of the status-word vocabulary; pair with presenceColor for the chip color. */
+private fun statusWord(status: String): String = when (status) {
+	"online" -> "live"
+	"verifying" -> "verifying"
+	"available" -> "available"
+	else -> "ended"
+}
+
 @Composable
 private fun presenceColor(presence: String): Color = when (presence) {
 	"live" -> Color(0xFF2EA043)
@@ -1401,15 +1404,8 @@ fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: 
 	val display = state.label(team.name, state.localGatewayId)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
-	// Wire vocabulary -> board vocabulary: online teams are live, verifying teams are connected but
-	// have not confirmed their handshake yet, catalog teams are available (wakeable), anything else
-	// is an ended loose session.
-	val (statusWord, statusColor) = when {
-		live -> "live" to Color(0xFF2EA043)
-		team.status == "verifying" -> "verifying" to Color(0xFFD29922)
-		team.status == "available" -> "available" to Color(0xFF0969DA)
-		else -> "ended" to MaterialTheme.colorScheme.outline
-	}
+	val statusWord = statusWord(team.status)
+	val statusColor = presenceColor(statusWord)
 	// The clip keeps the ripple inside the card's rounded corners. A nested session card indents
 	// under its spawn-point header.
 	Card(

@@ -294,13 +294,15 @@ data class ChatState(
 	fun snippet(team: String): String? = threads[team]?.lastOrNull()?.let { it.title ?: it.text }
 		?.replace(Regex("\\s+"), " ")?.trim()?.takeIf { it.isNotEmpty() }
 
-	/** The friendly name for a team: a local rename wins (the only rename path until the sealed
-	 * server-side rename ships), then the gateway's sessionLabel, then the session leaf of the
-	 * canonical address (an older gateway, or a thread-only ended peer). The board nests under a
-	 * spawn-point header, so the leaf alone identifies the session. The raw canonical key is never
-	 * shown. */
-	fun label(team: String, localGatewayId: String = ""): String =
-		labels[team] ?: teams.firstOrNull { it.name == team }?.sessionLabel ?: sessionLeaf(team)
+	/** A team's label without address disambiguation: a local rename wins (the only rename path until
+	 * the sealed server-side rename ships), then the gateway's sessionLabel. Null when neither exists
+	 * (an older gateway, or a thread-only ended peer). The single owner of the label precedence. */
+	fun labelOrNull(team: String): String? = labels[team] ?: teams.firstOrNull { it.name == team }?.sessionLabel
+
+	/** The friendly name for a team, falling back to the session leaf of the canonical address. The
+	 * board nests under a spawn-point header, so the leaf alone identifies the session. The raw
+	 * canonical key is never shown. */
+	fun label(team: String, localGatewayId: String = ""): String = labelOrNull(team) ?: sessionLeaf(team)
 }
 
 /** A just-enrolled device's first ops can transiently reject while the route Gateway

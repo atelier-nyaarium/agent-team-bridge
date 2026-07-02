@@ -97,6 +97,26 @@ export function getAllActiveRealWs(subs: Map<string, ServerWebSocket<WsData>>): 
 	return getAllActiveWs(subs).filter((ws) => !ws.data.virtual);
 }
 
+/**
+ * The live socket serving a session record: its canonical pane (registered under the record's own
+ * `spawn.id`, preferring a confirmed sub so a multi-sub team reads confirmed) if live, else the
+ * alias incarnation the confirm stamped as `liveTeam`. Excludes virtual console peers. The single
+ * authoritative record -> live-socket resolution order, consulted by presence listing, send/wake
+ * routing, and terminal-op resolution.
+ */
+export function resolveLiveIncarnation(
+	registry: TeamRegistry,
+	sessionStore: SessionStore | undefined,
+	team: string,
+): ServerWebSocket<WsData> | undefined {
+	const canonical = getAllActiveRealWs(registry.get(team) ?? new Map());
+	if (canonical.length) return canonical.find((s) => s.data.handshakeConfirmed) ?? canonical[0];
+	const alias = sessionStore?.resolveLive(team);
+	if (!alias) return undefined;
+	const s = registry.get(alias.team)?.get(alias.subId);
+	return s && s.readyState === 1 && !s.data.virtual ? s : undefined;
+}
+
 export function createWebSocketHandlers({
 	registry,
 	conversationRegistry,

@@ -29,8 +29,8 @@ import type {
 } from "../shared/types.js";
 import {
 	type ConversationRegistry,
-	getAllActiveRealWs,
 	getAllActiveWs,
+	resolveLiveIncarnation,
 	type TeamRegistry,
 	type WsData,
 } from "./websocket.js";
@@ -474,20 +474,6 @@ export function createRoutes({
 			...isAdminDomainField,
 		};
 
-		// The live socket serving a record: its canonical daemon pane (registered under `spawn.id`) if
-		// live, else the alias incarnation the confirm stamped as liveTeam. Excludes virtual console
-		// peers, whose readyState is hardwired open.
-		const liveSocketFor = (team: string): ServerWebSocket<WsData> | undefined => {
-			// Prefer a confirmed sub-socket so a team with several live subs reads online (its status
-			// keys off the returned socket's handshakeConfirmed), not verifying off an unconfirmed one.
-			const canonical = getAllActiveRealWs(registry.get(team) ?? new Map());
-			if (canonical.length) return canonical.find((s) => s.data.handshakeConfirmed) ?? canonical[0];
-			const alias = sessionStore?.resolveLive(team);
-			if (!alias) return undefined;
-			const s = registry.get(alias.team)?.get(alias.subId);
-			return s && s.readyState === 1 && !s.data.virtual ? s : undefined;
-		};
-
 		// Visible sessions are exactly the store records. A confirmed live session always has a record;
 		// recordless live peers (flag-less loose sessions, workers, the operator's own console device)
 		// stay hidden. A record with a live incarnation is online (that socket has confirmed its lead
@@ -501,7 +487,7 @@ export function createRoutes({
 			const parts = parseSessionName(name);
 			if (!isComposite(name) || !isSlug(parts.project) || !isSlug(parts.session)) continue;
 			seen.add(name);
-			const live = liveSocketFor(name);
+			const live = resolveLiveIncarnation(registry, sessionStore, name);
 			if (live) {
 				// A live session keeps its cross-Domain shares fresh and its record touch-refreshed, so
 				// neither the absence sweep nor the record TTL can reap a session that is connected now.
