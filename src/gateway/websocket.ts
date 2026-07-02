@@ -104,7 +104,8 @@ export function getAllActiveRealWs(subs: Map<string, ServerWebSocket<WsData>>): 
  * session still verifying, with no confirmed lead anywhere). A confirmed lead therefore always wins
  * over an unconfirmed or stray registration under either name, so a bare register cannot intercept a
  * confirmed alias's traffic. Excludes virtual console peers. The single authoritative record ->
- * live-socket resolution order, consulted by presence listing, send/wake routing, and terminal ops.
+ * live-socket resolution order, consulted by presence listing and send/wake routing. (The terminal
+ * ops gate on the record's liveTeam field directly, a narrower confirmed-only question.)
  */
 export function resolveLiveIncarnation(
 	registry: TeamRegistry,
