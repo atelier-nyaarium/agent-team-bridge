@@ -98,21 +98,21 @@ describe("SessionStore migration", () => {
 	});
 });
 
-describe("SessionStore register + wake wiring", () => {
-	it("recordRegister creates on first sight and binds the resume id on a re-register", () => {
+describe("SessionStore composite keying", () => {
+	it("bindBySegment rebinds the resume id onto the same record without duplicating", () => {
 		const store = new SessionStore();
-		store.recordRegister("host.abc123", "t-1");
+		store.adoptById("abc123", { spawn: "host", claudeSessionId: "t-1" });
 		expect(store.getByTeam("host.abc123")).toMatchObject({ id: "abc123", spawn: "host", claudeSessionId: "t-1" });
-		// A reconnect re-registers the same team with a refreshed id; one record, no duplicate.
-		store.recordRegister("host.abc123", "t-2");
+		// A reconnect re-confirms the same team; one record, resume id refreshed.
+		store.bindBySegment("host.abc123", { claudeSessionId: "t-2" });
 		expect(store.size).toBe(1);
 		expect(store.getByTeam("host.abc123")?.claudeSessionId).toBe("t-2");
 	});
 
-	it("two spawns registering the same segment stay separate, each resumable by its own transcript", () => {
+	it("two spawns sharing a segment stay separate, each resumable by its own transcript", () => {
 		const store = new SessionStore();
-		store.recordRegister("host.claude", "host-tx");
-		store.recordRegister("recipe-app.claude", "app-tx");
+		store.adoptById("claude", { spawn: "host", claudeSessionId: "host-tx" });
+		store.adoptById("claude", { spawn: "recipe-app", claudeSessionId: "app-tx" });
 		expect(store.size).toBe(2);
 		expect(store.getByTeam("host.claude")?.claudeSessionId).toBe("host-tx");
 		expect(store.getByTeam("recipe-app.claude")?.claudeSessionId).toBe("app-tx");
@@ -156,16 +156,16 @@ describe("SessionStore confirm-time binding", () => {
 		expect(store.bindResume("unknown-transcript")).toBeNull();
 	});
 
-	it("clearLive drops every pointer at the closing team, and only those", () => {
+	it("clearLive drops only the exact (team, subId) incarnation, not a sibling sharing the team", () => {
 		const store = new SessionStore();
 		store.adoptById("aaa111", { spawn: "host" });
 		store.adoptById("bbb222", { spawn: "host" });
-		// An alias-bound incarnation: the live socket's team differs from the record's own address.
+		// Two records whose live sockets share a team but differ by subId (alias-bound incarnations).
 		store.bindBySegment("host.aaa111", { live: { team: "host.zzz", subId: "s1" } });
-		store.bindBySegment("host.bbb222", { live: { team: "host.bbb222", subId: "s2" } });
-		store.clearLive("host.zzz");
+		store.bindBySegment("host.bbb222", { live: { team: "host.zzz", subId: "s2" } });
+		store.clearLive("host.zzz", "s1");
 		expect(store.resolveLive("host.aaa111")).toBeUndefined();
-		expect(store.resolveLive("host.bbb222")).toBeDefined();
+		expect(store.resolveLive("host.bbb222")).toEqual({ team: "host.zzz", subId: "s2" });
 	});
 
 	it("confirm stamps the handshake time on a known team and is a no-op on an unknown one", () => {

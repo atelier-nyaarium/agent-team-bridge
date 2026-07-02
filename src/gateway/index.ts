@@ -578,9 +578,7 @@ export async function startGateway(): Promise<void> {
 		onVirtualPeerEvicted: (conversationId) => {
 			evictConsolePeer?.(conversationId);
 		},
-		recordSessionResume: (team, claudeSessionId) => {
-			sessionStore.recordRegister(team, claudeSessionId);
-		},
+		sessionStore,
 	});
 
 	function buildRoutes() {

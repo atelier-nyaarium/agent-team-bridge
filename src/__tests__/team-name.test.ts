@@ -30,41 +30,36 @@ describe("stableTeamName", () => {
 	});
 });
 
-// adhoc is the durability gate: an ad-hoc register omits its resume id, so a wrong classification
-// either strands phantom "available" cards (under-suppress) or strips resume from daemon sessions
-// (over-suppress). Pin every provenance case.
+// Every live registrant must be a composite `spawn.session`; a bare arity-1 name is reserved for a
+// catalog spawn-point. Pin each normalization branch.
 describe("resolveSessionNaming", () => {
-	it("unset PROJECT_NAME composes host.<stable-hex> and is ad-hoc", () => {
+	it("unset PROJECT_NAME composes host.<stable-hex>", () => {
 		const r = resolveSessionNaming(undefined, SID_A);
 		expect(r.projectName).toBe(`host.${stableTeamName(SID_A)}`);
-		expect(r.adhoc).toBe(true);
 	});
 
-	it("empty PROJECT_NAME behaves as unset (ad-hoc under host)", () => {
+	it("empty PROJECT_NAME behaves as unset (under host)", () => {
 		const r = resolveSessionNaming("", SID_A);
 		expect(r.projectName).toBe(`host.${stableTeamName(SID_A)}`);
-		expect(r.adhoc).toBe(true);
 	});
 
-	it("a bare image-ENV name is normalized to a session under that spawn and is ad-hoc", () => {
+	it("a bare image-ENV name is normalized to a session under that spawn", () => {
 		const r = resolveSessionNaming("evie-bot", SID_A);
 		expect(r.projectName).toBe(`evie-bot.${stableTeamName(SID_A)}`);
-		expect(r.adhoc).toBe(true);
 	});
 
-	it("a daemon-composed composite passes through untouched and stays durable", () => {
+	it("a daemon-composed composite passes through untouched", () => {
 		const r = resolveSessionNaming("host.nyaadot", SID_A);
-		expect(r).toEqual({ projectName: "host.nyaadot", adhoc: false });
+		expect(r).toEqual({ projectName: "host.nyaadot" });
 	});
 
-	it("an explicitly hand-set composite is durable (the escape hatch for a named terminal session)", () => {
+	it("an explicitly hand-set composite passes through (the escape hatch for a named terminal session)", () => {
 		const r = resolveSessionNaming("host.mywork", undefined);
-		expect(r).toEqual({ projectName: "host.mywork", adhoc: false });
+		expect(r).toEqual({ projectName: "host.mywork" });
 	});
 
-	it("no harness session id falls back to a random name, still ad-hoc", () => {
+	it("no harness session id falls back to a random name", () => {
 		const r = resolveSessionNaming(undefined, undefined);
 		expect(r.projectName).toMatch(/^host\.[0-9a-f]{6}$/);
-		expect(r.adhoc).toBe(true);
 	});
 });

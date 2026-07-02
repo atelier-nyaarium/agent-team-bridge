@@ -113,6 +113,9 @@ export const WsRegisterSchema = z.object({
 	// The Claude Code harness session id, reported so the gateway can persist a
 	// `team -> claudeSessionId` map and `claude --resume <id>` the session on a later wake.
 	claudeSessionId: z.string().optional(),
+	// The plugin's cwd basename, the default session label for a self-appearing (manually launched)
+	// session. Bounded here; the store sanitizes and caps it to a single printable path segment.
+	cwdName: z.string().max(256).optional(),
 	// Shared secret the host daemon presents so a LAN peer cannot squat the reserved
 	// "host" slot and drive agent terminals. Optional on the wire (only the host slot
 	// sends it), but the host slot is fail-closed: a host register is refused unless the

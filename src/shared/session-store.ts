@@ -133,18 +133,6 @@ export class SessionStore {
 		return this.create(id, opts);
 	}
 
-	/** Register a live session: bind the resume id onto the record its team names, else create one
-	 * (label + workdir hint seeded from the segment). The composite team is globally unique, so this
-	 * can neither fail nor conflate two sessions. */
-	recordRegister(team: string, claudeSessionId: string): SessionRecord | undefined {
-		if (!isComposite(team)) return undefined;
-		const { project: spawn, session: id } = parseSessionName(team);
-		if (!isSlug(spawn) || !isSlug(id)) return undefined;
-		const existing = this.records.get(team);
-		if (existing) return this.bind(existing, { claudeSessionId });
-		return this.create(id, { spawn, sessionLabel: id, workdirHint: id, claudeSessionId });
-	}
-
 	/** Bind the resume id (and optional live pointer) onto the record a team names. Confirm tier 1. */
 	bindBySegment(team: string, extra: { claudeSessionId?: string; live?: LiveRef } = {}): SessionRecord | null {
 		const record = this.getByTeam(team);
@@ -154,16 +142,20 @@ export class SessionStore {
 	/** Bind a live registrant to the record holding its Claude transcript (a manual `--resume`
 	 * re-incarnation). Confirm tier 2. */
 	bindResume(claudeSessionId: string, extra: { live?: LiveRef } = {}): SessionRecord | null {
-		const record = this.list().find((r) => r.claudeSessionId === claudeSessionId);
-		return record ? this.bind(record, { claudeSessionId, live: extra.live }) : null;
+		for (const record of this.records.values()) {
+			if (record.claudeSessionId === claudeSessionId)
+				return this.bind(record, { claudeSessionId, live: extra.live });
+		}
+		return null;
 	}
 
-	/** Stamp a completed lead handshake. */
-	confirm(team: string): SessionRecord | undefined {
+	/** Stamp a completed lead handshake: confirmedAt plus the optional live incarnation pointer. */
+	confirm(team: string, live?: LiveRef): SessionRecord | undefined {
 		const record = this.records.get(team);
 		if (record) {
 			record.confirmedAt = this.now();
 			record.lastSeen = this.now();
+			if (live) record.liveTeam = live;
 		}
 		return record;
 	}
@@ -199,10 +191,12 @@ export class SessionStore {
 		return this.records.get(team)?.liveTeam;
 	}
 
-	/** Disconnect hook: drop every live pointer that named the closing team. */
-	clearLive(team: string): void {
+	/** Disconnect hook: drop the live pointer of the record the closing (team, subId) incarnation
+	 * served. Matches BOTH fields so a sibling sub-session under the same team cannot clear a
+	 * still-live incarnation's pointer. */
+	clearLive(team: string, subId: string): void {
 		for (const record of this.records.values()) {
-			if (record.liveTeam?.team === team) record.liveTeam = undefined;
+			if (record.liveTeam?.team === team && record.liveTeam.subId === subId) record.liveTeam = undefined;
 		}
 	}
 

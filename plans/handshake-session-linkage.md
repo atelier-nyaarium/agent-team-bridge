@@ -290,7 +290,12 @@ Gateway side (`src/gateway/websocket.ts` + store):
   succeeds) - the reply says so explicitly ("session is user-launched; end it from your terminal")
   so the orphaned-but-running process is never a silent surprise.
 - First-binding-holds: a confirm claiming a claudeSessionId bound to a DIFFERENT record with a
-  live incarnation is refused and logged.
+  live incarnation is refused and logged. This closes the tier-2 cross-record hijack. The tier-1
+  overwrite of an ASLEEP record's claudeSessionId (a forged confirm re-pointing a named record's
+  resume id) is indistinguishable from a legitimate daemon relaunch without authenticating the
+  register, so its residual stays in `gateway-auth-surface.md` (owner-deferred); the daemon's
+  `/^[0-9a-fA-F-]{8,}$/` resume-id guard already blocks it from becoming shell injection, and a real
+  re-confirm self-heals the value.
 
 ## Phase F - daemon/tmux paths on ids
 
@@ -385,6 +390,13 @@ machine independently)
   teams() asleep filter's isComposite+isSlug guard already hid it from the board and it was never
   wakeable, so refusing to record it is a consistency win, not a regression (the listing surface is
   byte-identical).
+- Unbounded record growth from an unauthenticated register + `/respond` flood (each confirm minting
+  a record, no count cap, 30-day TTL, whole-store 3s snapshot) is the same unauthenticated-surface
+  DoS as before and stays deferred to `gateway-auth-surface.md`. Phase B RAISES the bar for it (a
+  record now needs a completed handshake, and the raw register path does zero store work); it does
+  not lower it. The tier-4 mint fallback is non-idempotent only for an adversarial reserved/catalog-
+  colliding segment (a legitimate session's segment is a hex or daemon name and converges via tier 1
+  or tier 2), so its growth folds into the same deferred surface.
 
 ## Verification (live)
 

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { basename } from "node:path";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import WebSocket from "ws";
 import packageJson from "../../../package.json";
@@ -13,10 +14,6 @@ export interface BridgeConfig {
 	routerUrl: string;
 	projectName: string;
 	agentType: string;
-	// True when the session name was self-composed (no daemon launched this process), so the register
-	// must omit the resume id: there is no pane to reattach, and a durable record would only strand a
-	// phantom "available" card after exit.
-	adhoc: boolean;
 }
 
 interface RouterPostOptions {
@@ -31,7 +28,6 @@ interface RouterPostOptions {
 let ROUTER_URL = "";
 let PROJECT_NAME = "";
 let AGENT_TYPE = "";
-let IS_ADHOC = false;
 
 // Stable conversation id for the life of this MCP process. Regenerated on process start,
 // reused across WebSocket reconnects so the gateway can keep the conversation tied to the
@@ -53,7 +49,6 @@ export function initBridge(config: BridgeConfig): void {
 	ROUTER_URL = config.routerUrl;
 	PROJECT_NAME = config.projectName;
 	AGENT_TYPE = config.agentType;
-	IS_ADHOC = config.adhoc;
 }
 
 export function setChannelServer(server: Server): void {
@@ -132,9 +127,10 @@ export async function routerGet(
 
 /** Build the register message from the bridge module state (rebuilt fresh on every reconnect).
  * The harness session id rides along so the gateway can `claude --resume <id>` the session on a
- * later wake - but only for a daemon-launched session. An ad-hoc session (self-composed name, no
- * pane to reattach) omits it, so the gateway never writes a durable resume record that would strand
- * a phantom "available" card after exit. Pure given (module state, env), exported for tests. */
+ * later wake; the cwd basename is the default session label for a self-appearing (manually
+ * launched) session. The gateway records neither until the handshake confirms, so a channel-less
+ * session that never answers never becomes a durable card. Pure given (module state, env),
+ * exported for tests. */
 export function buildRegisterMsg(subId: string, mode: ConnectionMode = "channel"): Record<string, string> {
 	const registerMsg: Record<string, string> = {
 		type: "register",
@@ -147,9 +143,11 @@ export function buildRegisterMsg(subId: string, mode: ConnectionMode = "channel"
 	if (process.env.PROJECT_HOST_PATH) {
 		registerMsg.projectPath = process.env.PROJECT_HOST_PATH;
 	}
-	if (!IS_ADHOC && process.env.CLAUDE_CODE_SESSION_ID) {
+	if (process.env.CLAUDE_CODE_SESSION_ID) {
 		registerMsg.claudeSessionId = process.env.CLAUDE_CODE_SESSION_ID;
 	}
+	const cwdName = basename(process.cwd());
+	if (cwdName) registerMsg.cwdName = cwdName;
 	return registerMsg;
 }
 
