@@ -443,6 +443,46 @@ machine independently)
   one-liners and it would add a `node:crypto` dependency to the pure address-grammar module (which
   has a hand-authored Kotlin twin). Left as independent one-liners.
 
+## Painpoints
+
+Read-only crust sweep (4 scouts + synthesis), most-actionable first. These are follow-up work, NOT
+gates on this plan. The bug classes flagged in Phase E's own surface (establishRecord asleep-holder,
+resolveHandshake confirm-ordering) sit beyond the plan's stated first-binding-holds invariant (which
+scopes the refusal to a LIVE holder); see the plan-completeness note. The two legacy-landmines marked
+`(tracked)` are already scheduled for post-upgrade removal by Phase G's migration-temp TODO.
+
+**Bug classes**
+- `src/gateway/websocket.ts : createWebSocketHandlers : establishRecord` - **bug-class** - first-binding-holds only refuses a LIVE holder, so an asleep holder lets tier-1 bindBySegment bind the same claudeSessionId onto a second record, breaking one-record-per-transcript and spawning duplicate `--resume` processes on wake. (Beyond the plan's live-holder invariant; needs a resumeRecord check even when the holder is asleep.)
+- `src/shared/session-store.ts : SessionStore : sweep` - **bug-class** - TTL sweep drops a still-connected record because lastSeen is refreshed only by teams()->touchLive (never the heartbeat), making a live session invisible in teams() and re-mintable while resolveLiveIncarnation still routes to it; the comment's "can never delete a live session" is false. (30-day window; the fix is to touchLive from the heartbeat or spare live records in sweep.)
+- `src/gateway/websocket.ts : createWebSocketHandlers : resolveHandshake` - **bug-class** - ws.data.handshakeConfirmed is set before establishRecord, so a first-binding-holds refusal leaves a confirmed-but-recordless socket that resolveLiveIncarnation reports as canonical live, producing a routable-but-invisible duplicate. (Compounds the establishRecord finding; set confirmed only after establishRecord succeeds.)
+- `src/gateway/console/consoleHandler.ts : createConsoleDispatcher : handleFrame` - **bug-class** - opCache evicts oldest past size 256 regardless of settle state; a retried opId older than 256 re-runs its op, losing at-most-once for side effects (duplicate channel_push, re-minted handshake window) with no host-side dedupKey backstop.
+- `src/gateway/console/consoleHandler.ts : createConsoleDispatcher : mintedSessionId` - **bug-class** - 6-hex (24-bit) sha256 truncation with no re-roll on the deterministic create path; two colliding (conversationId, opId) creates in one spawn make the second silently reattach the first session instead of minting.
+
+**Dead code & stale names**
+- `src/shared/session-store.ts : SessionRecord : workdirHint` - **dead-code** - written, sanitized, persisted, and restored but never read; the daemon infers workdir from the session id, so its "drives ~/projects/<hint>" comment describes unwired behavior. (Phase F wires this - resolve there, not a standalone cleanup.)
+- `src/gateway/routes.ts : createRoutes : send (channelOnly CLI-mode guard)` - **dead-code** - the `channelOnly && targetMode !== "channel"` branch is unreachable since ConnectionMode is single-value "channel", and its "is a CLI-mode agent" error names a concept retired with the host split.
+- `android/.../switchboard/ChatRepository.kt : ChatState : label` - **stale-name** - the localGatewayId parameter is unused by the body (sessionLeaf ignores gateway id) yet still threaded through all six call sites, implying a relevance that no longer exists.
+
+**Framework & dup-logic**
+- `src/shared/session-id.ts : Address : (missing) localName + isLocalTo methods` - **framework-violation** - Address/SpawnPoint own .canonical but not the locality predicate or local-team-field projection every gateway caller needs, forcing both to be hand-reimplemented at every site (all findings below); the value object should own them.
+- `src/gateway/routes.ts : createRoutes : localAddress` - **dup-logic** - the `parseSessionName -> Address.local(...)` builder is triplicated (routes.localAddress, consoleHandler.localAddress, gatewayRelay.localShareTarget), each carrying a "must match byte-for-byte" comment that is exactly the missing-single-owner smell; should be Address.localFromName.
+- `src/gateway/console/consoleHandler.ts : resolveTmuxTarget/rename_session/assertShareable : local-gateway check` - **framework-violation** - the raw `t.domain !== localDomain || t.gateway !== localGatewayId` locality test is re-implemented at 5 sites (plus routes resolveLocalTarget and send); belongs on an Address.isLocalTo predicate.
+- `src/gateway/console/consoleHandler.ts : canonicalShareTarget/assertShareable/forget : SpawnPoint->local-name collapse` - **dup-logic** - the `t instanceof SpawnPoint ? t.spawn : composeSessionName(t.spawn, t.session)` collapse recurs across 6 sites; should be a single Address/SpawnPoint .localName projection.
+- `src/gateway/console/consoleHandler.ts : dispatch : dedupKey / mintedSessionId` - **dup-logic** - the `${conversationId}:${opId}` idempotency key is spelled inline in four ops and re-hashed by mintedSessionId, so the at-most-once key has no single producer and a recipe change must be mirrored in five places.
+- `src/gateway/federation/gatewayRelay.ts : createGatewayRelayHandler : localKind` - **dup-logic** - "what kind is this session" materializes the whole teams().json() array and .find()s it in 3 sites (localKind, the inbound list-filter, assertShareable); should share one kind-classifier with teams().
+- `src/gateway/index.ts : startGateway : doWakeTeam / relayToHost host-ws resolution` - **dup-logic** - the live-host-socket lookup (`registry.get("host")` then find readyState===1) is copied verbatim in doWakeTeam and relayToHost; "the one live host socket" is an ownerless resolver concept mirroring resolveLiveIncarnation.
+- `src/gateway/routes.ts : createRoutes : sealTargetFor` - **dup-logic** - sealTargetFor re-encodes the sealer's local-then-cross-Domain-then-throw precedence that sealer.seal resolves again, so the seal-target collision rule lives in two owners that must stay in lockstep.
+- `src/gateway/routes.ts : createRoutes : localDomain sentinel normalization` - **dup-logic** - the LOCAL_DOMAIN_SENTINEL fallback is applied three inconsistent ways (`?? SENTINEL`, `|| SENTINEL`, raw + Address.local internal) that treat empty-string differently; Address.local already owns this, so the call-site fallbacks are redundant and drift-prone.
+
+**Legacy landmines**
+- `src/gateway/index.ts : startGateway : SCHEMA_VERSION one-shot wipe` - **legacy-landmine** - the SCHEMA_VERSION="2" block wipes old-grammar pending-jobs/mailboxes/cross-domain-share-state on first boot after the address-grammar flip; pure temp migration code, the whole try-block plus sentinel read/write is removable once all gateways have booted past schema-2.
+- `src/shared/session-store.ts : SessionStore : restore()` - **legacy-landmine** (tracked) - the `!persisted` branch reads the OLD `{claudeSessionId,lastSeen}` resume-map shape and synthesizes a record; every persist tick re-snapshots the new shape, so the branch (and its guard/ternaries) is dead once all gateways have re-written session-resume.json.
+- `src/gateway/index.ts : startGateway : LOG_DIR legacy-dir cleanup` - **legacy-landmine** - LOG_DIR=/app/log exists only so the schema wipe can rmSync legacy-dir copies of the old files; nothing else reads it, so it dies with the schema-wipe block.
+- `src/shared/schemas.ts : TeamInfoSchema : gatewayId / ConsoleRegisterResultSchema.gatewayId` - **legacy-landmine** - both comments describe the retired slash grammar (`gateway/team`, "migrates bare-keyed threads") though the live grammar is the dot path and the console runs a one-shot bare-keyed wipe on upgrade.
+- `src/shared/schemas.ts : WsRegisterSchema : claudeSessionId` - **legacy-landmine** (tracked) - the comment describes a `team -> claudeSessionId` map that SessionStore replaced (index.ts now reads sessionStore.getByTeam(team)); the field is live but the comment points at a removed structure.
+- `src/shared/session-id.ts : module header : unified-address-grammar migration comment` - **legacy-landmine** - header describes the grammar as added "alongside the legacy TeamAddress/SessionId/NoticeId ... deleted at the wire flip," but those classes are already gone and the wire has flipped, so it narrates a completed migration as in-progress.
+- `src/gateway/console/consoleHandler.ts : ConsoleHandlerDeps.domainStatus : pre-feature-evie fallback` - **legacy-landmine** - the omit-and-fall-back-to-already-rooted branch (and mirrored ConsoleRegisterResultSchema optionality) is back-compat for evie pods predating the status field; removable once all pods report domainStatus.
+
 ## Verification (live)
 
 - Phone create -> card instant -> boots -> `verifying` -> confirm -> `online`; reboot -> wake ->
