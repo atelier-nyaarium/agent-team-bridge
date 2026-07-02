@@ -96,7 +96,7 @@ object CrossDomainLink {
 					// wins; null until a session carries one, where the UI falls back to the domainId.
 					displayName = sessions.firstNotNullOfOrNull { it.displayName?.ifEmpty { null } },
 					sessionCount = sessions.size,
-					online = sessions.any { it.status == "online" },
+					online = sessions.any { it.isLive },
 					// Null for a discovery-only Domain.
 					ownerSignPub = peerOwners[domainId],
 				)

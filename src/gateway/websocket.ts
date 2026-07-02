@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { WsRegisterSchema } from "../shared/schemas.js";
 import { isComposite } from "../shared/session-id.js";
+import type { SessionStore } from "../shared/session-store.js";
 import type { ConnectionMode, WebSocketConfig } from "../shared/types.js";
 import type { WakeCoordinator } from "./wake.js";
 
@@ -32,8 +33,10 @@ export interface WebSocketDeps {
 	// Fired when a real registration evicts a virtual console peer, so the console
 	// handler can clear its binding/mailbox and let the device re-register.
 	onVirtualPeerEvicted?: (conversationId: string) => void;
-	// Record a session's reported Claude harness id, keyed by team, for later `claude --resume`.
-	recordSessionResume?: (team: string, claudeSessionId: string) => void;
+	// The gateway's authoritative session store. The handshake confirm establishes/binds a record
+	// here (register only stashes the reported ids on the socket); disconnect clears the live pointer.
+	// Absent in tests that do not exercise session recording.
+	sessionStore?: SessionStore;
 }
 
 export interface WsData {
@@ -45,6 +48,11 @@ export interface WsData {
 	// teams() so the console can flag a version-lagging agent. Undefined for virtual
 	// console peers and non-plugin registrants (e.g. the host daemon).
 	version?: string;
+	// Stashed at register, consumed at handshake-confirm to establish the durable record (no store
+	// write happens at register). claudeSessionId is the harness resume id; cwdName is the default
+	// session label for a self-appearing session.
+	claudeSessionId?: string;
+	cwdName?: string;
 	missedPings: number;
 	isStale: boolean;
 	handshakeConfirmed: boolean;
@@ -68,6 +76,10 @@ export const RESERVED_TEAM_NAMES = new Set(["host"]);
 // register while still bounding the stall far below the full WAKE_TIMEOUT_MS (~10 min).
 const REGISTER_WINDOW_MS = 60_000;
 
+// How long an unanswered handshake entry lingers before the heartbeat sweep drops it. Generous so a
+// long first LLM turn still confirms; a flag-less session never answers and is swept after this.
+const HANDSHAKE_PENDING_TTL_MS = 30 * 60_000;
+
 export function getAllActiveWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData>[] {
 	const result: ServerWebSocket<WsData>[] = [];
 	for (const [, ws] of subs) {
@@ -85,6 +97,34 @@ export function getAllActiveRealWs(subs: Map<string, ServerWebSocket<WsData>>): 
 	return getAllActiveWs(subs).filter((ws) => !ws.data.virtual);
 }
 
+/**
+ * The live socket serving a session record. Resolution order: a CONFIRMED canonical pane (a real
+ * sub under the record's own `spawn.id` that answered the lead handshake), else the CONFIRMED alias
+ * incarnation the record stamped as `liveTeam`, else an unconfirmed-but-live canonical socket (a
+ * session still verifying, with no confirmed lead anywhere). A confirmed lead therefore always wins
+ * over an unconfirmed or stray registration under either name, so a bare register cannot intercept a
+ * confirmed alias's traffic. Excludes virtual console peers. The single authoritative record ->
+ * live-socket resolution order, consulted by presence listing and send/wake routing. (The terminal
+ * ops gate on the record's liveTeam field directly, a narrower confirmed-only question.)
+ */
+export function resolveLiveIncarnation(
+	registry: TeamRegistry,
+	sessionStore: SessionStore | undefined,
+	team: string,
+): ServerWebSocket<WsData> | undefined {
+	const canonical = getAllActiveRealWs(registry.get(team) ?? new Map());
+	const confirmedCanonical = canonical.find((s) => s.data.handshakeConfirmed);
+	if (confirmedCanonical) return confirmedCanonical;
+	const alias = sessionStore?.resolveLive(team);
+	if (alias) {
+		const s = registry.get(alias.team)?.get(alias.subId);
+		// The stamped incarnation was confirmed; require it still be, so a fresh unconfirmed
+		// registrant that lands on the same (team, subId) slot cannot inherit the record's traffic.
+		if (s && s.readyState === 1 && !s.data.virtual && s.data.handshakeConfirmed) return s;
+	}
+	return canonical[0];
+}
+
 export function createWebSocketHandlers({
 	registry,
 	conversationRegistry,
@@ -96,7 +136,7 @@ export function createWebSocketHandlers({
 	onTeamConnect,
 	onTeamDisconnect,
 	onVirtualPeerEvicted,
-	recordSessionResume,
+	sessionStore,
 }: WebSocketDeps) {
 	const { HEARTBEAT_INTERVAL_MS = 30000, MISSED_PINGS_LIMIT = 2 } = config;
 
@@ -113,10 +153,43 @@ export function createWebSocketHandlers({
 				ws.ping();
 			}
 		}
+		// A flag-less loose session keeps its socket open but never answers the handshake, so its
+		// pending entry would sit forever. Age unanswered entries out (a genuinely slow first turn
+		// still confirms well within this window).
+		const cutoff = Date.now() - HANDSHAKE_PENDING_TTL_MS;
+		for (const [hsId, p] of handshakePending) {
+			if (p.createdAt < cutoff) handshakePending.delete(hsId);
+		}
 	}, HEARTBEAT_INTERVAL_MS);
 
-	// Maps handshake session_id -> { team, subId } so we can resolve handshake responses
-	const handshakePending = new Map<string, { team: string; subId: string }>();
+	// Maps handshake session_id -> the socket that owes a lead/worker reply, so we can resolve
+	// handshake responses. createdAt bounds the map via the sweep above.
+	const handshakePending = new Map<string, { team: string; subId: string; createdAt: number }>();
+
+	/** Drop any pending handshake owned by a (team, subId) - a socket that will never answer. */
+	function forgetPending(team: string, subId: string): void {
+		for (const [hsId, p] of handshakePending) {
+			if (p.team === team && p.subId === subId) handshakePending.delete(hsId);
+		}
+	}
+
+	/** Fully evict a socket the register path is replacing: mark stale, drop it from its team's subs,
+	 * its pending handshake, its live-record pointer, and its conversation pointer, then close. close()
+	 * short-circuits on isStale, so without this those would leak (an eviction is a disconnect of the
+	 * old socket and must clear the same state a clean disconnect does). */
+	function evictSocket(victim: ServerWebSocket<WsData>): void {
+		victim.data.isStale = true;
+		const vTeam = victim.data.teamName;
+		if (vTeam) {
+			const vSubs = registry.get(vTeam);
+			if (vSubs?.get(victim.data.subId) === victim) vSubs.delete(victim.data.subId);
+			forgetPending(vTeam, victim.data.subId);
+			sessionStore?.clearLive(vTeam, victim.data.subId);
+		}
+		const vConv = victim.data.conversationId;
+		if (vConv && conversationRegistry.get(vConv) === victim) conversationRegistry.delete(vConv);
+		victim.close();
+	}
 
 	function open(ws: ServerWebSocket<WsData>): void {
 		ws.data.missedPings = 0;
@@ -194,11 +267,10 @@ export function createWebSocketHandlers({
 				}
 			}
 
-			// If this subId already exists with a different socket, close the old one
+			// If this subId already exists with a different socket, evict the old one
 			const existing = subs.get(subId);
 			if (existing && existing !== ws) {
-				existing.data.isStale = true;
-				existing.close();
+				evictSocket(existing);
 			}
 
 			ws.data.teamName = team;
@@ -206,13 +278,15 @@ export function createWebSocketHandlers({
 			ws.data.conversationId = conversationId;
 			ws.data.mode = mode;
 			ws.data.version = reg.data.version;
+			// Stashed for the handshake confirm to establish the record; no store write at register.
+			ws.data.claudeSessionId = reg.data.claudeSessionId;
+			ws.data.cwdName = reg.data.cwdName;
 			subs.set(subId, ws);
 
 			if (conversationId) {
 				const priorConversationWs = conversationRegistry.get(conversationId);
 				if (priorConversationWs && priorConversationWs !== ws && priorConversationWs.readyState === 1) {
-					priorConversationWs.data.isStale = true;
-					priorConversationWs.close();
+					evictSocket(priorConversationWs);
 				}
 				conversationRegistry.set(conversationId, ws);
 			}
@@ -223,21 +297,13 @@ export function createWebSocketHandlers({
 				knownTeamPaths.set(team, msg.projectPath);
 			}
 
-			// Remember a COMPOSITE session's Claude harness id so a later wake can `claude --resume`
-			// it. A bare project (spawn-point) or bare loose peer has no session to resume. Host
-			// sessions (`host.<name>` user-named or `host.<hex>` ad-hoc) are composite and wakeable, so
-			// they belong here.
-			if (typeof msg.claudeSessionId === "string" && msg.claudeSessionId && isComposite(team)) {
-				recordSessionResume?.(team, msg.claudeSessionId);
-			}
-
 			wakeCoordinator.notify(team);
 			console.log(`[ws] ${team}/${subId} connected (mode: ${mode})`);
 
 			// Handshake: ask channel-mode connections if they are the main/lead agent
 			if (mode === "channel" && team !== "host") {
 				const hsSessionId = `hs-${crypto.randomUUID().slice(0, 8)}`;
-				handshakePending.set(hsSessionId, { team, subId });
+				handshakePending.set(hsSessionId, { team, subId, createdAt: Date.now() });
 				ws.send(
 					JSON.stringify({
 						type: "channel_push",
@@ -349,9 +415,11 @@ export function createWebSocketHandlers({
 
 		// Clear any pending lead-handshake owned by this socket: a socket that drops before it answers
 		// would otherwise leave its entry in the map forever (resolveHandshake never fires for it).
-		for (const [hsId, pending] of handshakePending) {
-			if (pending.team === teamName && pending.subId === subId) handshakePending.delete(hsId);
-		}
+		forgetPending(teamName, subId);
+
+		// Drop the record's live pointer if this exact incarnation was serving it, so send/wake
+		// resolution stops probing a dead incarnation.
+		sessionStore?.clearLive(teamName, subId);
 
 		// Clear conversation registry entry if it still points at this ws.
 		const closingConversationId = ws.data.conversationId;
@@ -369,6 +437,40 @@ export function createWebSocketHandlers({
 		}
 	}
 
+	/** Establish the durable session record for a confirmed lead. The binding-order precedence lives
+	 * in the store; here we supply the stashed register ids and the confirming incarnation, and apply
+	 * first-binding-holds (a registry probe the store cannot make). */
+	function establishRecord(ws: ServerWebSocket<WsData>, pending: { team: string; subId: string }): void {
+		if (!sessionStore) return;
+		const claudeSessionId = ws.data.claudeSessionId;
+		// First-binding-holds: if this transcript already lives on a DIFFERENT record's live
+		// incarnation, refuse to re-bind it here (the first binding holds), so a second live process on
+		// one transcript never steals the card. The session's own segment (a daemon relaunch of the
+		// same record) is exempt - that is a legitimate rebind, not a steal.
+		if (claudeSessionId) {
+			const holder = sessionStore.resumeRecord(claudeSessionId);
+			if (holder && sessionStore.teamOf(holder) !== pending.team) {
+				const live = resolveLiveIncarnation(registry, sessionStore, sessionStore.teamOf(holder));
+				if (live && live !== registry.get(pending.team)?.get(pending.subId)) {
+					console.log(
+						`[ws] first-binding-holds: ${pending.team}/${pending.subId} claims a transcript already live on ${sessionStore.teamOf(holder)}; refusing`,
+					);
+					return;
+				}
+			}
+		}
+		const record = sessionStore.establishOnConfirm(pending.team, {
+			claudeSessionId,
+			label: ws.data.cwdName,
+			live: { team: pending.team, subId: pending.subId },
+		});
+		if (record) {
+			console.log(
+				`[ws] session record ${sessionStore.teamOf(record)} confirmed (label "${record.sessionLabel}")`,
+			);
+		}
+	}
+
 	/** Resolve a handshake response. Returns true if it was a handshake session. */
 	function resolveHandshake(sessionId: string, replyAsJson?: Record<string, unknown>, response?: string): boolean {
 		const pending = handshakePending.get(sessionId);
@@ -378,6 +480,9 @@ export function createWebSocketHandlers({
 		const subs = registry.get(pending.team);
 		const ws = subs?.get(pending.subId);
 		if (!ws) return true;
+		// Honor a confirm only for a still-open socket: a reply arriving after the socket dropped or
+		// was evicted must not resurrect a record or mutate registry state.
+		if (ws.readyState !== 1) return true;
 
 		// Determine if this agent claims to be the lead
 		let isMainOrLead = false;
@@ -389,12 +494,12 @@ export function createWebSocketHandlers({
 
 		if (isMainOrLead) {
 			ws.data.handshakeConfirmed = true;
+			establishRecord(ws, pending);
 			console.log(`[ws] handshake confirmed: ${pending.team}/${pending.subId} is lead`);
 		} else {
 			console.log(`[ws] handshake rejected: ${pending.team}/${pending.subId} is worker, closing`);
-			ws.data.isStale = true;
 			ws.send(JSON.stringify({ type: "handshake_reject" }));
-			ws.close();
+			evictSocket(ws);
 		}
 		return true;
 	}

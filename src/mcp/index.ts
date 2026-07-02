@@ -28,16 +28,11 @@ const CHANNEL_INSTRUCTIONS = [
 
 export async function startMcp(): Promise<void> {
 	const inContainer = isInsideContainer();
-	// Every session is a bridge peer. The composite register name + the ad-hoc provenance flag both
-	// come from resolveSessionNaming (see team-name.ts for the composition rules); an ad-hoc session
-	// registers as a live chat but reports no resume id, so it never strands a durable record. Peers
-	// reach the gateway on the docker network inside a container or the forwarded localhost port
-	// elsewhere. The host plumbing (wake + terminal view) lives in the headless host daemon, not here.
-	const { projectName: resolvedName, adhoc } = resolveSessionNaming(
-		process.env.PROJECT_NAME,
-		process.env.CLAUDE_CODE_SESSION_ID,
-	);
-	process.env.PROJECT_NAME = resolvedName;
+	// Every session is a bridge peer registering under a composite `spawn.session` name from
+	// resolveSessionNaming (see team-name.ts for the composition rules). Peers reach the gateway on
+	// the docker network inside a container or the forwarded localhost port elsewhere. The host
+	// plumbing (wake + terminal view) lives in the headless host daemon, not here.
+	process.env.PROJECT_NAME = resolveSessionNaming(process.env.PROJECT_NAME, process.env.CLAUDE_CODE_SESSION_ID);
 	if (!process.env.BRIDGE_ROUTER_URL) {
 		process.env.BRIDGE_ROUTER_URL = inContainer ? "http://switchboard:20000" : "http://localhost:20000";
 	}
@@ -55,7 +50,7 @@ export async function startMcp(): Promise<void> {
 			: undefined,
 	);
 
-	registerBridgeTools(mcpServer, adhoc);
+	registerBridgeTools(mcpServer);
 	registerReloadPlugins(mcpServer);
 	registerSetEffortLevel(mcpServer);
 	registerCompactSession(mcpServer);

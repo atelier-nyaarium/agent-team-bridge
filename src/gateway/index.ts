@@ -9,7 +9,8 @@ import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
-import { parseSessionName } from "../shared/session-id.js";
+import { isComposite, parseSessionName } from "../shared/session-id.js";
+import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { createConsoleDispatcher } from "./console/consoleHandler.js";
@@ -41,7 +42,7 @@ import { createSealer, type Sealer } from "./federation/sealer.js";
 import { HostOpCoordinator } from "./hostOpCoordinator.js";
 import { createRoutes } from "./routes.js";
 import { WakeCoordinator } from "./wake.js";
-import { createWebSocketHandlers, type WsData } from "./websocket.js";
+import { createWebSocketHandlers, resolveLiveIncarnation, type WsData } from "./websocket.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -135,10 +136,14 @@ export async function startGateway(): Promise<void> {
 	// the console's durable cursor still matches) to DATA_DIR, reload on boot, re-save on a timer.
 	const jobsDurable = new DurableStore(DATA_DIR, "pending-jobs");
 	const mailboxDurable = new DurableStore(DATA_DIR, "mailboxes");
-	// team -> the session's Claude harness id, so a later wake can `claude --resume <id>` it. Entries
-	// past this TTL are swept on the persist timer so the map cannot grow without bound.
+	// Session records: the durable known-session list (id-keyed, with the Claude harness resume id
+	// so a later wake can `claude --resume <id>`). Entries past this TTL are swept on the persist
+	// timer so the store cannot grow without bound. Mint/adopt ids must never land on a catalog
+	// project or a reserved host session, so the clash space is injected here.
 	const SESSION_RESUME_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-	const sessionResume = new Map<string, { claudeSessionId: string; lastSeen: number }>();
+	const sessionStore = new SessionStore({
+		clash: (id) => isCatalogProject(id) || isReservedHostSession(id),
+	});
 	const sessionResumeDurable = new DurableStore(DATA_DIR, "session-resume");
 	try {
 		const jobs = jobsDurable.load();
@@ -146,26 +151,20 @@ export async function startGateway(): Promise<void> {
 		const boxes = mailboxDurable.load();
 		if (boxes && typeof boxes === "object")
 			mailboxStore.restore(boxes as Parameters<typeof mailboxStore.restore>[0]);
-		const resume = sessionResumeDurable.load();
-		if (resume && typeof resume === "object")
-			for (const [team, v] of Object.entries(
-				resume as Record<string, { claudeSessionId: string; lastSeen: number }>,
-			))
-				sessionResume.set(team, v);
+		sessionStore.restore(sessionResumeDurable.load());
 	} catch (err) {
 		// A corrupt or partial snapshot must not crash-loop boot; start from empty delivery state.
 		console.error("[durability] restore failed, starting fresh:", err);
 	}
-	console.log(`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size} resume=${sessionResume.size}`);
+	console.log(`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size} resume=${sessionStore.size}`);
 	// The federation replay-guard wires its own persistence here once built (it only
 	// exists when the evie bridge is configured); null-safe until then.
 	let replayPersist: (() => void) | null = null;
 	const persistDelivery = () => {
 		jobsDurable.save(store.snapshot());
 		mailboxDurable.save(mailboxStore.snapshot());
-		const cutoff = Date.now() - SESSION_RESUME_TTL_MS;
-		for (const [team, v] of sessionResume) if (v.lastSeen < cutoff) sessionResume.delete(team);
-		sessionResumeDurable.save(Object.fromEntries(sessionResume));
+		sessionStore.sweep(SESSION_RESUME_TTL_MS);
+		sessionResumeDurable.save(sessionStore.snapshot());
 		replayPersist?.();
 	};
 	const persistTimer = setInterval(persistDelivery, 3_000);
@@ -210,6 +209,14 @@ export async function startGateway(): Promise<void> {
 			return false;
 		}
 
+		// A live incarnation already serves this record - its canonical pane, or an alias re-incarnation
+		// (a manual `claude --resume` under a different name) stamped as liveTeam. Routing reaches it, so
+		// relaunching would spawn a duplicate on the same transcript. Report it up rather than wake.
+		if (resolveLiveIncarnation(registry, sessionStore, team)) {
+			console.log(`[wake] ${team} already has a live incarnation; not waking`);
+			return true;
+		}
+
 		const hostSubs = registry.get("host");
 		const hostWs = hostSubs ? [...hostSubs.values()].find((ws) => ws.readyState === 1) : undefined;
 
@@ -227,14 +234,37 @@ export async function startGateway(): Promise<void> {
 			console.log(`[wake] ${team} is a reserved host session; not waking`);
 			return false;
 		}
+		// A send-woken composite adopts its addressed segment as a provisional record (adopt-by-id, not
+		// mint: minting a fresh id would strand the woken session at an address the sender never used).
+		// This lands it in teams() and hands the daemon a workdir hint; the daemon always launches with
+		// the channels flag, so the session confirms and binds to this record via tier 1. Idempotent - a
+		// re-wake reattaches the same record. A bare (non-composite) wake keeps the legacy convention and
+		// gets no record.
+		let provisionalCreated = false;
+		if (isComposite(team)) {
+			const adopted = sessionStore.adoptOrReattach(session, {
+				spawn: project,
+				sessionLabel: session,
+				workdirHint: session,
+			});
+			provisionalCreated = adopted?.created === true;
+		}
 		const projectPath = knownTeamPaths.get(project) ?? offlineCatalog.get(project);
-		const resumeSessionId = sessionResume.get(team)?.claudeSessionId;
+		const record = sessionStore.getByTeam(team);
+		const resumeSessionId = record?.claudeSessionId;
+		// The host workdir hint: the record's hint (workdirHint ?? sessionLabel, owned by the store),
+		// else the addressed segment (never the opaque id - a minted hex just falls through to $HOME).
+		// The segment fallback keeps a host session whose name clashes with a catalog project (so no
+		// record was adopted) opening in ~/projects/<segment>. The daemon opens a host session there; a
+		// devcontainer ignores the hint.
+		const workdirHint = record ? sessionStore.hostWorkdirHint(record) : isComposite(team) ? session : undefined;
 		hostWs.send(
 			JSON.stringify({
 				type: "wake",
 				team,
 				...(projectPath ? { projectPath } : {}),
 				...(resumeSessionId ? { resumeSessionId } : {}),
+				...(workdirHint ? { workdirHint } : {}),
 			}),
 		);
 
@@ -242,6 +272,16 @@ export async function startGateway(): Promise<void> {
 
 		const success = await wakeCoordinator.waitFor(team, WAKE_TIMEOUT_MS);
 		console.log(`[wake] ${team} ${success ? "is now online" : "failed to come online"}`);
+		// Roll back a provisional record THIS wake created if the launch never came online (a bogus or
+		// removed project, a dead launch), so a failed send-wake leaves no persisted phantom "available"
+		// card (mirrors create_session). A record a confirm has since bound (confirmedAt set, or a live
+		// incarnation) is left intact - the wake may have timed out while a slow session was confirming.
+		if (!success && provisionalCreated) {
+			const rec = sessionStore.getByTeam(team);
+			if (rec && rec.confirmedAt === undefined && !resolveLiveIncarnation(registry, sessionStore, team)) {
+				sessionStore.forget(team);
+			}
+		}
 		return success;
 	}
 
@@ -579,8 +619,7 @@ export async function startGateway(): Promise<void> {
 		onVirtualPeerEvicted: (conversationId) => {
 			evictConsolePeer?.(conversationId);
 		},
-		recordSessionResume: (team, claudeSessionId) =>
-			sessionResume.set(team, { claudeSessionId, lastSeen: Date.now() }),
+		sessionStore,
 	});
 
 	function buildRoutes() {
@@ -592,7 +631,7 @@ export async function startGateway(): Promise<void> {
 			tryWakeTeam,
 			offlineCatalog,
 			knownTeamPaths,
-			sessionResume,
+			sessionStore,
 			mailboxStore,
 			evieClient,
 			sealer,
@@ -636,7 +675,10 @@ export async function startGateway(): Promise<void> {
 			localDomainId: localDomainId ?? "",
 			isProjectName: isCatalogProject,
 			// Forget drops the session's durable resume record so it stops listing as available.
-			dropSessionResume: (team) => sessionResume.delete(team),
+			dropSessionResume: (team) => {
+				sessionStore.forget(team);
+			},
+			sessionStore,
 			domain: () => {
 				const snapshot = allowlistForConsole?.getSnapshot() ?? null;
 				return snapshot ? { version: allowlistForConsole?.version() ?? "", snapshot } : null;

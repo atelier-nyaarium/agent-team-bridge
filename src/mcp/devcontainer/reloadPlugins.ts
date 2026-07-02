@@ -7,6 +7,7 @@ import { z } from "zod";
 import { isInsideContainer } from "../../shared/env.js";
 import { assertTmuxName, type TmuxTarget } from "../../shared/host-op.js";
 import { DEFAULT_SESSION } from "../../shared/session-id.js";
+import { selfSessionTarget } from "./tmuxCore.js";
 
 ////////////////////////////////
 //  Schemas
@@ -26,9 +27,6 @@ const reloadSchema: any = ReloadPluginsSchema;
 
 ////////////////////////////////
 //  Functions & Helpers
-
-// The MCP tool drives the agent's own session, which always runs in the conventional default pane.
-const TMUX_SESSION = DEFAULT_SESSION;
 
 function buildTmuxFn(tmuxPrefix: string): string {
 	// For docker exec, wrap the tmux binary call; for local, call tmux directly
@@ -214,10 +212,16 @@ export function registerReloadPlugins(mcpServer: McpServer): void {
 
 				let tmuxPrefix: string;
 				let targetLabel: string;
+				// A self target (this process's own tmux, host or container) drives the session it actually
+				// registered under, derived from PROJECT_NAME - so a session running under a minted id
+				// reloads its own pane, not the conventional `claude` one. The cross-container team path
+				// has only the team name (no session id), so it drives that container's conventional pane.
+				let sessionName: string;
 
 				if (inContainer) {
 					tmuxPrefix = "tmux";
 					targetLabel = "self (container)";
+					sessionName = selfSessionTarget().sessionName;
 				} else if (args.team) {
 					// team is shell-interpolated into the docker exec prefix; assert the slug here too
 					// (the daemon path spawnReloadPlugins already does), or a crafted name injects.
@@ -225,12 +229,18 @@ export function registerReloadPlugins(mcpServer: McpServer): void {
 					const container = `${args.team}_devcontainer-dev-1`;
 					tmuxPrefix = `docker exec -u vscode "${container}" tmux`;
 					targetLabel = `container: ${container}`;
+					sessionName = DEFAULT_SESSION;
 				} else {
 					tmuxPrefix = "tmux";
 					targetLabel = "self (host)";
+					sessionName = selfSessionTarget().sessionName;
 				}
 
-				const scriptPath = writeAndSpawn(buildScript(tmuxPrefix, TMUX_SESSION));
+				// The session name is interpolated into the generated script's PANE token, so assert the
+				// slug (the daemon path spawnReloadPlugins and tmuxCore.paneTarget assert it too). The self
+				// paths derive it from PROJECT_NAME, which a hand-set composite could make non-slug.
+				assertTmuxName(sessionName);
+				const scriptPath = writeAndSpawn(buildScript(tmuxPrefix, sessionName));
 
 				return {
 					content: [

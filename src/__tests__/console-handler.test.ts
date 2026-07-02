@@ -6,6 +6,7 @@ import type { ConversationRegistry, TeamRegistry, WsData } from "../gateway/webs
 import type { ConsoleOp, OpenedConsoleFrame } from "../shared/console-protocol.js";
 import { DeviceMailbox, DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { ownerKeyId } from "../shared/owner-id.js";
+import { SessionStore } from "../shared/session-store.js";
 
 function jsonRes(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -898,6 +899,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 	function makeTerminalHarness(
 		isProjectName: (n: string) => boolean = (n) => n === "recipe-app",
 		relayPeek?: () => { ok: boolean; result?: unknown; error?: string; errorKind?: "absent" | "failure" },
+		opts: { sessionStore?: SessionStore; relayFails?: boolean } = {},
 	) {
 		const hostOps: Record<string, unknown>[] = [];
 		const routes: ConsoleRoutes = {
@@ -914,14 +916,16 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			localDomainId: "test-domain",
 			routes,
 			isProjectName,
+			sessionStore: opts.sessionStore,
 			relayToHost: async (op) => {
 				hostOps.push(op as unknown as Record<string, unknown>);
+				if (opts.relayFails) return { ok: false, error: "launch failed" };
 				if (op.kind === "peek")
 					return relayPeek ? relayPeek() : { ok: true, result: { ansi: "SCREEN", hash: "h1" } };
 				return { ok: true, result: { sent: true } };
 			},
 		});
-		return { handler, hostOps };
+		return { handler, hostOps, sessionStore: opts.sessionStore };
 	}
 
 	it("peek resolves a devcontainer target and returns the captured pane + hash", async () => {
@@ -1070,15 +1074,16 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(h.hostOps).toHaveLength(0);
 	});
 
-	it("create_session relays a createSession host op carrying the new session name", async () => {
+	it("create_session relays a createSession host op carrying the new session name and workdir hint", async () => {
 		const h = makeTerminalHarness();
 		const reply = await h.handler.handleFrame(
 			frame({ kind: "create_session", target: "recipe-app", sessionName: "scratch" }, "c1"),
 		);
-		expect(reply.result).toEqual({ created: true });
+		expect(reply.result).toMatchObject({ created: true, id: "scratch" });
 		expect(h.hostOps[0]).toEqual({
 			kind: "createSession",
 			target: { kind: "devcontainer", name: "recipe-app", sessionName: "scratch" },
+			workdirHint: "scratch",
 			dedupKey: "conv-pixel:c1",
 		});
 	});
@@ -1089,6 +1094,125 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		const [r1, r2] = await Promise.all([h.handler.handleFrame(f), h.handler.handleFrame(f)]);
 		expect(r1.ok && r2.ok).toBe(true);
 		expect(h.hostOps).toHaveLength(1);
+	});
+
+	it("create_session with a displayLabel mints a deterministic id, records it, and launches under it", async () => {
+		const store = new SessionStore();
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", displayLabel: "My Work" }, "cv2"),
+		);
+		const res = reply.result as { created: boolean; id: string; sessionLabel: string };
+		expect(res.created).toBe(true);
+		expect(res.id).toMatch(/^[0-9a-f]{6}$/);
+		expect(res.sessionLabel).toBe("My Work");
+		expect(h.hostOps[0]).toMatchObject({
+			kind: "createSession",
+			target: { kind: "devcontainer", name: "recipe-app", sessionName: res.id },
+		});
+		expect(store.getByTeam(`recipe-app.${res.id}`)?.sessionLabel).toBe("My Work");
+	});
+
+	it("create_session sends the un-deduped workdir hint when a display label collides", async () => {
+		const store = new SessionStore();
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const r1 = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "host", displayLabel: "app" }, "cwd1"),
+		);
+		const r2 = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "host", displayLabel: "app" }, "cwd2"),
+		);
+		// The board label dedups, but the workdir intent does not: both sessions open ~/projects/app,
+		// so the host op must carry the workdirHint field ("app"), not the deduped sessionLabel ("app-2").
+		expect((r1.result as { sessionLabel: string }).sessionLabel).toBe("app");
+		expect((r2.result as { sessionLabel: string }).sessionLabel).toBe("app-2");
+		expect((h.hostOps[1] as { workdirHint?: string }).workdirHint).toBe("app");
+	});
+
+	it("a re-dispatched displayLabel create reattaches its record instead of minting a phantom (restart-safe)", async () => {
+		const store = new SessionStore();
+		const f = frame({ kind: "create_session", target: "recipe-app", displayLabel: "My Work" }, "cvrestart");
+		// A fresh handler (cold op-cache, shared store) stands in for a gateway restart re-running the op.
+		const r1 = await makeTerminalHarness(undefined, undefined, { sessionStore: store }).handler.handleFrame(f);
+		const r2 = await makeTerminalHarness(undefined, undefined, { sessionStore: store }).handler.handleFrame(f);
+		expect((r1.result as { id: string }).id).toBe((r2.result as { id: string }).id);
+		expect(store.size).toBe(1);
+	});
+
+	it("create_session with only a sessionName adopts it as the id (old-app path)", async () => {
+		const store = new SessionStore();
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", sessionName: "scratch" }, "cv3"),
+		);
+		expect(reply.result).toMatchObject({ created: true, id: "scratch", sessionLabel: "scratch" });
+		expect(store.getByTeam("recipe-app.scratch")).toBeDefined();
+	});
+
+	it("a failed launch rolls back the freshly-minted record (no orphan)", async () => {
+		const store = new SessionStore({ idGen: () => "minted1" });
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store, relayFails: true });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", displayLabel: "My Work" }, "cv4"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(store.size).toBe(0);
+	});
+
+	it("a rejected target (validation throw after mint) rolls back the record too", async () => {
+		const store = new SessionStore({ idGen: () => "minted1" });
+		const h = makeTerminalHarness(() => false, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "bogus-project", displayLabel: "My Work" }, "cv5"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(store.size).toBe(0);
+	});
+
+	it("rename_session relabels the record and returns the applied label", async () => {
+		const store = new SessionStore();
+		store.adoptById("scratch", { spawn: "recipe-app", sessionLabel: "old" });
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "rename_session", target: "recipe-app.scratch", sessionLabel: "New Name" }, "rn1"),
+		);
+		expect(reply.result).toEqual({ renamed: true, sessionLabel: "New Name" });
+		expect(store.getByTeam("recipe-app.scratch")?.sessionLabel).toBe("New Name");
+	});
+
+	it("rename_session on a bare spawn-point is rejected", async () => {
+		const store = new SessionStore();
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "rename_session", target: "recipe-app", sessionLabel: "x" }, "rn2"),
+		);
+		expect(reply.ok).toBe(false);
+	});
+
+	it("rename_session refuses a foreign-Gateway target rather than hitting a same-named local record", async () => {
+		const store = new SessionStore();
+		store.adoptById("scratch", { spawn: "recipe-app", sessionLabel: "keep" });
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(
+			frame(
+				{ kind: "rename_session", target: "other-domain.other-gw.recipe-app.scratch", sessionLabel: "hijack" },
+				"rn3",
+			),
+		);
+		expect(reply.ok).toBe(false);
+		expect(store.getByTeam("recipe-app.scratch")?.sessionLabel).toBe("keep");
+	});
+
+	it("peek on an alias-served record (a user-launched session) is refused with no host op", async () => {
+		const store = new SessionStore();
+		store.adoptById("main", { spawn: "recipe-app" });
+		// liveTeam under a DIFFERENT name than the record's own = an alias (user-launched) incarnation.
+		store.confirm("recipe-app.main", { team: "recipe-app.other", subId: "s" });
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app.main" }, "pk-alias"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("user-launched");
+		expect(h.hostOps).toHaveLength(0);
 	});
 
 	it("reload_plugins relays a reloadPlugins host op for the resolved session", async () => {

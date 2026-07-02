@@ -54,6 +54,7 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 					queue_depth: number;
 					kind: string;
 					lastActive?: number;
+					sessionLabel?: string;
 				}>;
 				// Hide what an agent cannot address as a crosstalk peer: consoles (the human's
 				// device), the reserved "host" slot (the human's control point), and bare
@@ -71,11 +72,15 @@ export function registerBridgeDiscover(mcpServer: McpServer): void {
 				}
 
 				const lines = others.map((t) => {
-					const name = t.gatewayId && t.domainId ? displayTarget(t.domainId, t.gatewayId, t.team) : t.team;
+					const address = t.gatewayId && t.domainId ? displayTarget(t.domainId, t.gatewayId, t.team) : t.team;
+					// Lead with the human label when the gateway supplies one, so a crosstalk agent sees
+					// the owner's name for the session beside its addressable form.
+					const name = t.sessionLabel ? `${t.sessionLabel} (${address})` : address;
 					if (t.status === "available") {
 						const seen = t.lastActive ? `, last seen ${relativeAge(t.lastActive)}` : "";
 						return `- ${name}: asleep${seen}`;
 					}
+					if (t.status === "verifying") return `- ${name}: connecting`;
 					const status = t.queue_depth > 0 ? `busy (${t.queue_depth} in queue)` : "online";
 					return `- ${name}: ${status}`;
 				});

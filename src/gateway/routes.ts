@@ -29,8 +29,8 @@ import type {
 } from "../shared/types.js";
 import {
 	type ConversationRegistry,
-	getAllActiveRealWs,
 	getAllActiveWs,
+	resolveLiveIncarnation,
 	type TeamRegistry,
 	type WsData,
 } from "./websocket.js";
@@ -48,10 +48,10 @@ export interface RoutesDeps {
 	// empties when the host daemon disconnects). Membership in either marks a team
 	// as devcontainer-backed.
 	knownTeamPaths: Map<string, string>;
-	// Durable composite-session -> {claudeSessionId, lastSeen} map. teams() surfaces its
-	// entries as asleep "available" sessions so a session that exists but is not currently
-	// registered still lists. Optional for test harnesses with no resume tracking.
-	sessionResume?: Map<string, { claudeSessionId: string; lastSeen: number }>;
+	// The durable session-record store. teams() surfaces its records as asleep "available"
+	// sessions so a session that exists but is not currently registered still lists. Optional
+	// for test harnesses with no resume tracking.
+	sessionStore?: import("../shared/session-store.js").SessionStore;
 	// Console mailboxes, for broadcast notices (notify_human). Optional so test
 	// harnesses without a console bridge need not supply one.
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
@@ -178,14 +178,6 @@ function jsonResponse(data: unknown, status = 200): Response {
 	});
 }
 
-/** Get the first active WebSocket for a team (any sub-session). */
-function getFirstWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData> | undefined {
-	for (const [, ws] of subs) {
-		if (ws.readyState === 1) return ws;
-	}
-	return undefined;
-}
-
 /** Get the mode of a team, preferring real sockets over virtual console peers. Every bridge
  * connection is channel mode, so this is effectively always "channel"; kept as the single
  * source the teams listing and the send paths read. */
@@ -205,7 +197,7 @@ export function createRoutes({
 	tryWakeTeam,
 	offlineCatalog,
 	knownTeamPaths,
-	sessionResume,
+	sessionStore,
 	mailboxStore,
 	config,
 	evieClient,
@@ -458,11 +450,6 @@ export function createRoutes({
 	function teams(): Response {
 		const teamsList: TeamInfo[] = [];
 		const seen = new Set<string>();
-		// Catalog membership IS the spawn-point signal: only bare projects are ever in the catalog
-		// (the register write-guard keeps composites out), so a name that is literally in it is a
-		// devcontainer even when the dir name contains a dot ("my.app") - the mechanical isComposite
-		// test would wrongly read that as a session.
-		const isDevcontainer = (name: string) => offlineCatalog.has(name) || knownTeamPaths.has(name);
 		// The owner's display name, stamped on every local session so a linked friend
 		// Domain sees the owner's self-set name over the discovery roster. Spread in only
 		// when set, so a Gateway with no display name emits a minimal TeamInfo (the field
@@ -472,78 +459,52 @@ export function createRoutes({
 		const isAdminDomainField = isAdminDomain?.() ? { isAdminDomain: true } : {};
 		// Omit when null so the field is absent rather than null on the wire.
 		const domainIdField = localDomainId ? { domainId: localDomainId } : {};
+		const commonFields = {
+			gatewayId: localGatewayId,
+			...domainIdField,
+			...displayNameField,
+			...isAdminDomainField,
+		};
 
-		for (const [name, subs] of registry) {
-			if (name === "host") continue;
-			// A team whose only live sockets are virtual console peers is the operator's own device,
-			// not a listable session: it registers under a human Device Name (not an addressable
-			// slug), and every consumer either hides it (agent discovery) or would choke qualifying
-			// the non-slug name to an Address (the cross-Domain share filter). Skip it here; it stays
-			// in the registry for crosstalk routing.
-			if (getAllActiveWs(subs).length > 0 && getAllActiveRealWs(subs).length === 0) continue;
+		// Visible sessions are exactly the store records. A confirmed live session always has a record;
+		// recordless live peers (flag-less loose sessions, workers, the operator's own console device)
+		// stay hidden. A record with a live incarnation is online (that socket has confirmed its lead
+		// handshake) or verifying (it has not yet, e.g. re-registered across a gateway restart); a
+		// record with no live incarnation is available (asleep, wakeable).
+		for (const record of sessionStore?.list() ?? []) {
+			const name = sessionStore!.teamOf(record);
+			// A record's spawn/id are slugs by construction, but a hand-edited store file is not; a
+			// non-composite / non-slug name is not a valid chat and must not surface as an
+			// un-wakeable phantom.
+			const parts = parseSessionName(name);
+			if (!isComposite(name) || !isSlug(parts.project) || !isSlug(parts.session)) continue;
 			seen.add(name);
-			// An online local session keeps its cross-Domain shares fresh: refresh lastSeenAt
-			// so a session that is actively connected is never auto-forgotten by the absence
-			// sweep, even with no live thread. No-op when sharing is not wired.
-			const selfAddr = tryLocalAddress(name);
-			if (selfAddr) touchShares?.(selfAddr.canonical);
-			// Plugin version reported by an active real socket; the same value across a team's
-			// sub-sessions in practice.
-			const version = getAllActiveRealWs(subs)[0]?.data.version;
+			const live = resolveLiveIncarnation(registry, sessionStore, name);
+			if (live) {
+				// A live session keeps its cross-Domain shares fresh and its record touch-refreshed, so
+				// neither the absence sweep nor the record TTL can reap a session that is connected now.
+				const selfAddr = tryLocalAddress(name);
+				if (selfAddr) touchShares?.(selfAddr.canonical);
+				sessionStore!.touchLive(name);
+			}
 			teamsList.push({
 				team: name,
-				gatewayId: localGatewayId,
-				...domainIdField,
-				...displayNameField,
-				...isAdminDomainField,
-				status: "online",
-				mode: getTeamMode(subs),
-				kind: isDevcontainer(name) ? "devcontainer" : "loose",
-				version,
-				// lastActive is omitted for an online session: it is active NOW, and the resume map's
-				// timestamp is the register time, which would read as stale. Only asleep sessions carry it.
+				...commonFields,
+				// online/verifying omit lastActive (active NOW); only asleep carries recency.
+				status: live ? (live.data.handshakeConfirmed ? "online" : "verifying") : "available",
+				...(live ? { mode: live.data.mode, version: live.data.version } : { lastActive: record.lastSeen }),
+				kind: "loose",
+				sessionLabel: record.sessionLabel,
 				queue_depth: 0,
 			});
 		}
 
+		// Spawn-points: the devcontainer catalog. A bare project is the wakeable spawn-point; its named
+		// sessions list above as records.
 		for (const [name] of offlineCatalog) {
 			if (seen.has(name)) continue;
 			seen.add(name);
-			teamsList.push({
-				team: name,
-				gatewayId: localGatewayId,
-				...domainIdField,
-				...displayNameField,
-				...isAdminDomainField,
-				status: "available",
-				kind: "devcontainer",
-				queue_depth: 0,
-			});
-		}
-
-		// Asleep named sessions: a composite the gateway has a resume record for but that is not
-		// currently registered. The resume map doubles as the durable known-session list, so a
-		// session that exists but whose container is asleep still lists as available.
-		for (const [name, { lastSeen }] of sessionResume ?? []) {
-			if (seen.has(name)) continue;
-			// Mirror of the record-time gate (websocket.ts): a non-composite / non-slug entry is not a
-			// valid chat, so it must not surface as an available asleep session (an un-wakeable phantom).
-			const parts = parseSessionName(name);
-			if (!isComposite(name) || !isSlug(parts.project) || !isSlug(parts.session)) {
-				continue;
-			}
-			seen.add(name);
-			teamsList.push({
-				team: name,
-				gatewayId: localGatewayId,
-				...domainIdField,
-				...displayNameField,
-				...isAdminDomainField,
-				status: "available",
-				kind: "loose",
-				lastActive: lastSeen,
-				queue_depth: 0,
-			});
+			teamsList.push({ team: name, ...commonFields, status: "available", kind: "devcontainer", queue_depth: 0 });
 		}
 
 		return jsonResponse(teamsList);
@@ -690,8 +651,10 @@ export function createRoutes({
 			);
 		}
 
-		let subs = registry.get(localName);
-		let targetWs = subs ? getFirstWs(subs) : undefined;
+		// Resolve the live incarnation serving this record: its canonical pane, else an alias
+		// re-incarnation stamped as liveTeam. A send delivers to whichever is live, so a manual
+		// `claude --resume` under a different name still receives sends addressed to the record.
+		let targetWs = resolveLiveIncarnation(registry, sessionStore, localName);
 
 		// If offline, attempt to wake the container.
 		if (!targetWs) {
@@ -700,11 +663,13 @@ export function createRoutes({
 				// Claude Code needs time after MCP connect to initialize its channel listener.
 				// Registration happens instantly but channel notifications aren't ready yet.
 				await new Promise((r) => setTimeout(r, 3000));
-				subs = registry.get(localName);
-				targetWs = subs ? getFirstWs(subs) : undefined;
+				targetWs = resolveLiveIncarnation(registry, sessionStore, localName);
 			}
 		}
 
+		// Deliver to the resolved incarnation's own team subs (localName for a canonical pane, the
+		// alias team for a re-incarnation).
+		const subs = targetWs ? registry.get(targetWs.data.teamName ?? localName) : undefined;
 		if (!targetWs || !subs) {
 			return jsonResponse(
 				{

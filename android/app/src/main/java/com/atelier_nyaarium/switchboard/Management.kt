@@ -207,7 +207,7 @@ fun GatewaysScreen(
 			for (g in gateways) {
 				val gid = g.gatewayId ?: continue
 				val count = teams.count { it.gatewayId == gid }
-				val online = teams.any { it.gatewayId == gid && it.status == "online" }
+				val online = teams.any { it.gatewayId == gid && it.isLive }
 				Card(Modifier.fillMaxWidth()) {
 					Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 						Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {

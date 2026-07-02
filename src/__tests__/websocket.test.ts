@@ -3,9 +3,11 @@ import { WakeCoordinator } from "../gateway/wake.js";
 import {
 	type ConversationRegistry,
 	createWebSocketHandlers,
+	resolveLiveIncarnation,
 	type TeamRegistry,
 	type WsData,
 } from "../gateway/websocket.js";
+import { SessionStore } from "../shared/session-store.js";
 
 const HOST_TOKEN = "host-secret";
 
@@ -17,6 +19,13 @@ function createMockWs() {
 		ping: vi.fn(),
 		send: vi.fn(),
 	} as unknown as import("bun").ServerWebSocket<WsData>;
+}
+
+/** The random `hs-...` session id the gateway sent this socket in its handshake push. */
+function handshakeIdFrom(ws: import("bun").ServerWebSocket<WsData>): string {
+	const calls = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map((c) => JSON.parse(c[0] as string));
+	const hs = calls.reverse().find((m) => m.type === "channel_push" && m.from === "gateway" && m.replyJsonSchema);
+	return hs.session_id as string;
 }
 
 describe("createWebSocketHandlers", () => {
@@ -436,5 +445,240 @@ describe("virtual peer awareness", () => {
 		// Virtual sub keeps the entry alive; the real sub's slot is cleaned up.
 		expect(registry.get("teamx")?.size).toBe(1);
 		expect(registry.get("teamx")?.has("conv-1")).toBe(true);
+	});
+});
+
+// The handshake confirm is the ceremony that establishes a durable session record: register only
+// stashes the reported ids, the confirm binds/creates and stamps liveTeam. These pin the binding
+// order, the register-time no-write, the readyState gate, and full socket eviction cleanup.
+describe("handshake-established session records", () => {
+	let intervals: ReturnType<typeof setInterval>[] = [];
+	afterEach(() => {
+		for (const id of intervals) clearInterval(id);
+		intervals = [];
+	});
+
+	function setup(sessionStore = new SessionStore()) {
+		const registry: TeamRegistry = new Map();
+		const conversationRegistry: ConversationRegistry = new Map();
+		const handlers = createWebSocketHandlers({
+			registry,
+			conversationRegistry,
+			config: { HEARTBEAT_INTERVAL_MS: 100000, MISSED_PINGS_LIMIT: 2 },
+			knownTeamPaths: new Map(),
+			offlineCatalog: new Map(),
+			wakeCoordinator: new WakeCoordinator(),
+			sessionStore,
+		});
+		intervals.push(handlers.heartbeatInterval);
+		return { handlers, registry, conversationRegistry, sessionStore };
+	}
+
+	function register(
+		handlers: ReturnType<typeof setup>["handlers"],
+		ws: ReturnType<typeof createMockWs>,
+		msg: object,
+	) {
+		handlers.open(ws);
+		handlers.message(ws, JSON.stringify({ type: "register", mode: "channel", ...msg }));
+	}
+
+	it("register alone writes no record (recording is deferred to the confirm)", () => {
+		const { handlers, sessionStore } = setup();
+		const ws = createMockWs();
+		register(handlers, ws, { team: "host.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
+		expect(sessionStore.size).toBe(0);
+	});
+
+	it("a lead confirm on a free segment adopts it, labels by cwd, and stamps the record live", () => {
+		const { handlers, sessionStore } = setup();
+		const ws = createMockWs();
+		register(handlers, ws, { team: "host.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
+		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
+
+		const record = sessionStore.getByTeam("host.abc123");
+		expect(record).toMatchObject({
+			id: "abc123",
+			spawn: "host",
+			sessionLabel: "switchboard",
+			claudeSessionId: "tx-1",
+			liveTeam: { team: "host.abc123", subId: "s1" },
+		});
+		expect(record?.confirmedAt).toBeGreaterThan(0);
+		expect(ws.data.handshakeConfirmed).toBe(true);
+	});
+
+	it("a worker reply records nothing and fully removes the socket from the registry", () => {
+		const { handlers, registry, conversationRegistry, sessionStore } = setup();
+		const ws = createMockWs();
+		register(handlers, ws, { team: "host.abc123", subId: "s1", conversationId: "conv-w", claudeSessionId: "tx-1" });
+		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: false });
+
+		expect(sessionStore.size).toBe(0);
+		expect(registry.get("host.abc123")?.has("s1")).toBeFalsy();
+		expect(conversationRegistry.has("conv-w")).toBe(false);
+		expect(ws.close).toHaveBeenCalled();
+		expect((ws.send as ReturnType<typeof vi.fn>).mock.calls.flat().join()).toContain("handshake_reject");
+	});
+
+	it("a confirm arriving after the socket went un-open is ignored (no record)", () => {
+		const { handlers, sessionStore } = setup();
+		const ws = createMockWs();
+		register(handlers, ws, { team: "host.abc123", subId: "s1", claudeSessionId: "tx-1" });
+		const hsId = handshakeIdFrom(ws);
+		(ws as { readyState: number }).readyState = 3;
+		expect(handlers.resolveHandshake(hsId, { isMainOrLead: true })).toBe(true);
+		expect(sessionStore.size).toBe(0);
+		expect(ws.data.handshakeConfirmed).toBe(false);
+	});
+
+	it("disconnect clears the live pointer but keeps the record (asleep, resumable)", () => {
+		const { handlers, sessionStore } = setup();
+		const ws = createMockWs();
+		register(handlers, ws, { team: "host.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
+		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
+		handlers.close(ws);
+
+		const record = sessionStore.getByTeam("host.abc123");
+		expect(record).toBeDefined();
+		expect(record?.liveTeam).toBeUndefined();
+		expect(record?.claudeSessionId).toBe("tx-1");
+	});
+
+	it("evicting a confirmed socket on reconnect clears its now-stale live pointer", () => {
+		const { handlers, sessionStore } = setup();
+		const ws1 = createMockWs();
+		register(handlers, ws1, {
+			team: "host.abc123",
+			subId: "s1",
+			conversationId: "conv-x",
+			claudeSessionId: "tx-1",
+		});
+		handlers.resolveHandshake(handshakeIdFrom(ws1), { isMainOrLead: true });
+		expect(sessionStore.getByTeam("host.abc123")?.liveTeam).toEqual({ team: "host.abc123", subId: "s1" });
+
+		// The same process reconnects: a fresh subId under the stable conversationId evicts ws1.
+		const ws2 = createMockWs();
+		register(handlers, ws2, { team: "host.abc123", subId: "s2", conversationId: "conv-x" });
+		expect(ws1.close).toHaveBeenCalled();
+		expect(sessionStore.getByTeam("host.abc123")?.liveTeam).toBeUndefined();
+	});
+
+	it("a sibling sub-session's worker-reject does not clear the confirmed lead's live pointer", () => {
+		const { handlers, sessionStore } = setup();
+		const lead = createMockWs();
+		register(handlers, lead, {
+			team: "host.abc123",
+			subId: "s1",
+			conversationId: "conv-a",
+			claudeSessionId: "tx-1",
+		});
+		handlers.resolveHandshake(handshakeIdFrom(lead), { isMainOrLead: true });
+
+		// A separate sub-session under the same team answers as worker and is evicted.
+		const worker = createMockWs();
+		register(handlers, worker, { team: "host.abc123", subId: "s2", conversationId: "conv-b" });
+		handlers.resolveHandshake(handshakeIdFrom(worker), { isMainOrLead: false });
+
+		expect(worker.close).toHaveBeenCalled();
+		expect(sessionStore.getByTeam("host.abc123")?.liveTeam).toEqual({ team: "host.abc123", subId: "s1" });
+	});
+
+	it("first-binding-holds: a second live incarnation of the same transcript is refused a record", () => {
+		const { handlers, sessionStore } = setup();
+		const ws1 = createMockWs();
+		register(handlers, ws1, { team: "host.abc", subId: "s1", claudeSessionId: "tx-1" });
+		handlers.resolveHandshake(handshakeIdFrom(ws1), { isMainOrLead: true });
+		expect(sessionStore.getByTeam("host.abc")?.liveTeam).toEqual({ team: "host.abc", subId: "s1" });
+
+		// A second live socket under a DIFFERENT segment claims the same transcript while ws1 is live.
+		const ws2 = createMockWs();
+		register(handlers, ws2, { team: "host.def", subId: "s2", claudeSessionId: "tx-1" });
+		handlers.resolveHandshake(handshakeIdFrom(ws2), { isMainOrLead: true });
+
+		// Refused: no record for the second segment, and the first record's live pointer is not stolen.
+		expect(sessionStore.getByTeam("host.def")).toBeUndefined();
+		expect(sessionStore.getByTeam("host.abc")?.liveTeam).toEqual({ team: "host.abc", subId: "s1" });
+		expect(sessionStore.size).toBe(1);
+	});
+
+	it("re-registering a subId prunes the evicted socket's pending handshake", () => {
+		const { handlers } = setup();
+		const ws1 = createMockWs();
+		register(handlers, ws1, { team: "host.abc123", subId: "s1" });
+		const staleHsId = handshakeIdFrom(ws1);
+
+		const ws2 = createMockWs();
+		register(handlers, ws2, { team: "host.abc123", subId: "s1" });
+		expect(ws1.close).toHaveBeenCalled();
+
+		expect(handlers.resolveHandshake(staleHsId, { isMainOrLead: true })).toBe(false);
+		expect(handlers.resolveHandshake(handshakeIdFrom(ws2), { isMainOrLead: true })).toBe(true);
+	});
+});
+
+// resolveLiveIncarnation is the ONE record -> live-socket resolver shared by presence listing, send
+// routing, and wake suppression: canonical pane (confirmed-preferred) else the alias liveTeam probe.
+describe("resolveLiveIncarnation", () => {
+	function mk(confirmed: boolean): import("bun").ServerWebSocket<WsData> {
+		const ws = createMockWs();
+		ws.data.handshakeConfirmed = confirmed;
+		return ws;
+	}
+
+	it("returns the canonical pane, preferring a confirmed sub over an unconfirmed one", () => {
+		const registry: TeamRegistry = new Map();
+		const confirmed = mk(true);
+		registry.set(
+			"host.abc",
+			new Map([
+				["s1", mk(false)],
+				["s2", confirmed],
+			]),
+		);
+		expect(resolveLiveIncarnation(registry, new SessionStore(), "host.abc")).toBe(confirmed);
+	});
+
+	it("falls back to the alias liveTeam socket when no canonical pane is registered", () => {
+		const registry: TeamRegistry = new Map();
+		const store = new SessionStore();
+		store.adoptById("abc", { spawn: "host" });
+		store.confirm("host.abc", { team: "host.xyz", subId: "s1" });
+		const aliasWs = mk(true);
+		registry.set("host.xyz", new Map([["s1", aliasWs]]));
+		expect(resolveLiveIncarnation(registry, store, "host.abc")).toBe(aliasWs);
+	});
+
+	it("returns undefined when neither the canonical pane nor an alias is live", () => {
+		const store = new SessionStore();
+		store.adoptById("abc", { spawn: "host" });
+		expect(resolveLiveIncarnation(new Map(), store, "host.abc")).toBeUndefined();
+	});
+
+	it("a confirmed alias wins over an unconfirmed socket squatting the canonical name", () => {
+		const registry: TeamRegistry = new Map();
+		const store = new SessionStore();
+		store.adoptById("dev", { spawn: "proj-a" });
+		store.confirm("proj-a.dev", { team: "proj-a.alias", subId: "s1" });
+		const aliasWs = mk(true);
+		registry.set("proj-a.alias", new Map([["s1", aliasWs]]));
+		registry.set("proj-a.dev", new Map([["evil", mk(false)]]));
+		expect(resolveLiveIncarnation(registry, store, "proj-a.dev")).toBe(aliasWs);
+	});
+
+	it("returns an unconfirmed canonical socket only when no confirmed lead exists (verifying)", () => {
+		const registry: TeamRegistry = new Map();
+		const verifying = mk(false);
+		registry.set("proj-a.dev", new Map([["s1", verifying]]));
+		expect(resolveLiveIncarnation(registry, new SessionStore(), "proj-a.dev")).toBe(verifying);
+	});
+
+	it("does not resolve an unconfirmed socket that re-took the alias slot", () => {
+		const registry: TeamRegistry = new Map();
+		const store = new SessionStore();
+		store.adoptById("dev", { spawn: "proj-a" });
+		store.confirm("proj-a.dev", { team: "proj-a.alias", subId: "s1" });
+		registry.set("proj-a.alias", new Map([["s1", mk(false)]]));
+		expect(resolveLiveIncarnation(registry, store, "proj-a.dev")).toBeUndefined();
 	});
 });

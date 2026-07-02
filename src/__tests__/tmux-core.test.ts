@@ -47,9 +47,11 @@ import {
 	isLoggedOut,
 	killSession,
 	peekPane,
+	selfSessionTarget,
 	sendKey,
 	sendText,
 } from "../mcp/devcontainer/tmuxCore.js";
+import { DEFAULT_SESSION } from "../shared/session-id.js";
 
 afterEach(() => {
 	calls.length = 0;
@@ -386,5 +388,25 @@ describe("tmuxCore awaitReady", () => {
 		// Budget large enough that the dead-launch early-out (not the deadline) is what returns.
 		const res = await awaitReady(target, { pollMs: 2, timeoutMs: 5_000 });
 		expect(res).toMatchObject({ alive: false, ready: false });
+	});
+});
+
+describe("tmuxCore selfSessionTarget", () => {
+	const saved = process.env.PROJECT_NAME;
+	afterEach(() => {
+		if (saved === undefined) delete process.env.PROJECT_NAME;
+		else process.env.PROJECT_NAME = saved;
+	});
+
+	it("derives the session name from the session segment of a composite PROJECT_NAME", () => {
+		process.env.PROJECT_NAME = "recipe-app.scratch";
+		expect(selfSessionTarget()).toEqual({ kind: "host", name: "host", sessionName: "scratch" });
+	});
+
+	it("uses the default session for a bare or unset PROJECT_NAME", () => {
+		process.env.PROJECT_NAME = "recipe-app";
+		expect(selfSessionTarget().sessionName).toBe(DEFAULT_SESSION);
+		delete process.env.PROJECT_NAME;
+		expect(selfSessionTarget().sessionName).toBe(DEFAULT_SESSION);
 	});
 });

@@ -12,9 +12,11 @@ Residual painpoints from shipped work, collected by crust scouts (record only, n
   again - up to ~180s before `wake_result`. The devcontainer branch avoids this by peeking once for a
   reattach and only `awaitReady`ing a fresh `created` launch. Fix: peek-first in the host reattach
   (return immediately if ready/working), reserve `awaitReady` for the post-relaunch path.
-- [medium] `hostDaemon.ts : buildLaunchCommand : effort` - `--effort low` is hardcoded for every host
-  session including resumes, so a host agent silently drops to low on each wake with no signal. The
-  resume record carries no effort. Consider persisting/restoring effort or surfacing the downgrade.
+- [medium] `hostDaemon.ts : buildLaunchCommand : effort` - the model/effort flags are hardcoded for
+  every host session including resumes, so a host agent relaunches on its hardcoded tier on each wake
+  with no signal. STILL OPEN: `handshake-session-linkage.md` deliberately left SessionRecord carrying
+  no model/effort (out of that plan's scope); persisting/restoring them, or surfacing the reset, is
+  follow-up work.
 - [medium] `shared/host-op.ts : HostOp : createSession` (+ `hostDaemon.ts : hostOpRunner.createSession`)
   - the `create_session` op carries no `resumeSessionId`, so tapping "New Session" on a host name the
   gateway already has a resume id for starts fresh and abandons the saved transcript. Only the wake
@@ -28,9 +30,19 @@ Residual painpoints from shipped work, collected by crust scouts (record only, n
 Owner-deferred (decision A); the root fix is `plans/gateway-auth-surface.md`. The host-resume lift
 widens the blast radius of the pre-existing hole, it does not create it.
 
+`plans/handshake-session-linkage.md` PARTIALLY closed the seeded-phantom-card sting below: a record
+now needs a completed lead handshake (the raw register path does zero store work), and a failed
+send-wake rolls back the provisional record it created, so a typo'd or dead send no longer leaves a
+phantom "available" card. It did NOT close the underlying unauthenticated `/bridge` surface - a
+malicious unauthenticated flood still grows the store unboundedly (no count cap) - so full closure
+stays with `gateway-auth-surface.md`. The `host.foo` reserved-guard and `claudeSessionId`-format
+items below are unchanged.
+
 - [high] `websocket.ts : createWebSocketHandlers : message` - the host-token gate + `RESERVED_TEAM_NAMES`
-  match the bare `host` exactly, so a composite `host.foo` bypasses both and `recordSessionResume`
-  writes an attacker-controlled `claudeSessionId` into the durable map.
+  match the bare `host` exactly, so a composite `host.foo` bypasses both. Recording moved to
+  confirm-time (`establishOnConfirm`), so writing an attacker-controlled `claudeSessionId` now needs a
+  completed lead handshake or a send-wake (see the partial-closure note above); a bare register writes
+  no record.
 - [medium] `routes.ts : teams` - an attacker-seeded `host.foo` passes the asleep-listing guards
   (`host` is a valid slug) and surfaces as a phantom available card.
 - [medium] `index.ts : doWakeTeam` - the reserved guard only blocks `host-daemon`; any other `host.*`

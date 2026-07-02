@@ -219,6 +219,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// destroyed with the Activity.
 	val rendererPool = remember { ThreadRendererPool(context.applicationContext) }
 	rendererPool.onRetry = { team, id -> scope.launch { repo.retrySend(team, id) } }
+	// Attribute a message's sender by its human label (a notice's `from` is a canonical address).
+	// Reads the live state at render time so a rename reflects without rebuilding the pool.
+	rendererPool.resolveFrom = { addr -> repo.state.value.label(addr, repo.state.value.localGatewayId) }
 	// Attachment taps open the in-app viewer; the path is re-validated against the
 	// attachments root before any file is touched. The wire mime (what the agent
 	// declared) is preferred over extension guessing.
@@ -525,7 +528,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					else -> "live"
 				}
 				session.status == "available" -> if (state.working(session.name)) "waking..." else "available"
-				else -> "ended"
+				else -> statusWord(session.status)
 			}
 			ThreadScreen(
 				team = openTeam!!,
@@ -552,7 +555,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onSend = { text, uris -> scope.launch { repo.send(openTeam!!, text, uris) } },
 				initialDraft = repo.draft(openTeam!!),
 				onDraftChange = { repo.setDraft(openTeam!!, it) },
-				onRename = { name -> repo.setLabel(openTeam!!, name) },
+				onRename = { name -> scope.launch { repo.rename(openTeam!!, name) } },
 				onForget = {
 					repo.forget(openTeam!!)
 					openTeam = null
@@ -581,15 +584,21 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					openTeam = repo.openThread(team)
 					SwitchboardService.cancelTeamNotification(context, team)
 				},
-				onRename = { team, name -> repo.setLabel(team, name) },
+				onRename = { team, name -> scope.launch { repo.rename(team, name) } },
 				onForget = { team -> repo.forget(team) },
-				onSpawn = { project, session ->
-					// Spawn the named session on the daemon, then open its composite chat.
+				onSpawn = { project, label ->
+					// Send both forms for cross-version compatibility: a new gateway mints the id from
+					// displayLabel and returns it, an old one adopts the slugified sessionName (omitted
+					// when the label has no ASCII to slug). Refresh teams so the thread title shows the
+					// server label, not the opaque minted id.
 					scope.launch {
-						val composite = composeSessionName(project, session)
-						runCatching { repo.createSession(project, session) }
-							.onSuccess {
-								openTeam = repo.openThread(composite)
+						val slug = slugifySessionName(label).ifEmpty { null }
+						runCatching { repo.createSession(project, sessionName = slug, displayLabel = label) }
+							.onSuccess { result ->
+								(result.id ?: slug)?.let { id ->
+									repo.refreshTeams()
+									openTeam = repo.openThread(composeSessionName(project, id))
+								}
 							}
 					}
 				},
@@ -910,16 +919,18 @@ private data class GatewayGroupKey(val domainId: String, val gatewayId: String)
 
 /** Live first, then most recent activity, then name, within each section. */
 private fun sessionOrder(state: ChatState): Comparator<Team> =
-	compareByDescending<Team> { it.status == "online" }
+	compareByDescending<Team> { it.isLive }
 		.thenByDescending { state.lastActivity(it.name) ?: 0L }
 		.thenBy { it.name }
 
-/** Tab/title label for an open thread: the user's custom label, else the shortest suffix of the
- * address path (the session segment, then `spawn.session`, then `gateway.spawn.session`, ...) that
- * is unique among the currently open tabs. So a lone open session shows just its leaf, and two tabs
- * that collide on the leaf escalate to exactly the suffix that disambiguates them. */
+/** Tab/title label for an open thread: the session's label when it is unique among the open tabs,
+ * else the shortest suffix of the address path (the session segment, then `spawn.session`, then
+ * `gateway.spawn.session`, ...) that disambiguates it. So a lone open session shows its label or
+ * leaf, and two tabs that would collide (same label, or same leaf) escalate to the suffix that tells
+ * them apart. */
 private fun tabLabelFor(state: ChatState, team: String): String {
-	state.labels[team]?.let { return it }
+	val label = state.labelOrNull(team)
+	if (label != null && state.openTabs.none { it != team && state.labelOrNull(it) == label }) return label
 	val mine = team.split(Protocol.ADDRESS_SEP)
 	val others = state.openTabs.filter { it != team }.map { it.split(Protocol.ADDRESS_SEP) }
 	for (n in 1..mine.size) {
@@ -1065,7 +1076,7 @@ fun SessionsScreen(
 						item(key = "sw:$composite") {
 							GatewayHeader(
 								name = headerName,
-								online = group.any { it.status == "online" },
+								online = group.any { it.isLive },
 								collapsed = collapsed,
 								onToggle = { collapsedGateways[composite] = !collapsed },
 							)
@@ -1100,7 +1111,9 @@ fun SessionsScreen(
 								renderProject(proj) {
 									SpawnPointHeader(
 										project = proj,
-										online = sp.status == "online",
+										// A spawn-point is always available itself; its dot reflects whether any
+										// session nested under it is live.
+										online = byProject[proj].orEmpty().any { it.isLive },
 										onSpawn = { spawnProject = proj },
 									)
 								}
@@ -1113,7 +1126,7 @@ fun SessionsScreen(
 								renderProject("host") {
 									SpawnPointHeader(
 										project = "host",
-										online = byProject["host"].orEmpty().any { it.status == "online" },
+										online = byProject["host"].orEmpty().any { it.isLive },
 										onSpawn = { spawnProject = "host" },
 									)
 								}
@@ -1298,10 +1311,19 @@ fun HealthHeader(state: ChatState) {
 }
 
 /** Chip color for the board/thread presence vocabulary. */
+/** The base board/thread word for a wire status, before any working/waking/login refinement. The
+ * single owner of the status-word vocabulary; pair with presenceColor for the chip color. */
+private fun statusWord(status: String): String = when (status) {
+	"online" -> "live"
+	"verifying" -> "verifying"
+	"available" -> "available"
+	else -> "ended"
+}
+
 @Composable
 private fun presenceColor(presence: String): Color = when (presence) {
 	"live" -> Color(0xFF2EA043)
-	"working...", "waking..." -> Color(0xFFD29922)
+	"working...", "waking...", "verifying" -> Color(0xFFD29922)
 	"available" -> Color(0xFF0969DA)
 	"check terminal" -> Color(0xFFDA3633)
 	else -> MaterialTheme.colorScheme.outline
@@ -1388,13 +1410,8 @@ fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: 
 	val display = state.label(team.name, state.localGatewayId)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
-	// Wire vocabulary -> board vocabulary: online teams are live, catalog teams are
-	// available (wakeable), anything else is an ended loose session.
-	val (statusWord, statusColor) = when {
-		live -> "live" to Color(0xFF2EA043)
-		team.status == "available" -> "available" to Color(0xFF0969DA)
-		else -> "ended" to MaterialTheme.colorScheme.outline
-	}
+	val statusWord = statusWord(team.status)
+	val statusColor = presenceColor(statusWord)
 	// The clip keeps the ripple inside the card's rounded corners. A nested session card indents
 	// under its spawn-point header.
 	Card(
@@ -1686,6 +1703,7 @@ fun ThreadScreen(
 							"available", "waking..." ->
 								"No messages yet. Sending will wake $label - first boot can take a minute or two."
 							"live", "working..." -> "No messages yet. $label is live."
+							"verifying" -> "No messages yet. $label is connecting."
 							"ended" -> "This session has ended."
 							else -> "No messages yet."
 						},
@@ -2532,39 +2550,31 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 private val SLUG_NON_ALNUM = Regex("[^a-z0-9]+")
 
 /** Lowercase, collapse non-[a-z0-9] runs to a single '-', trim '-' from both ends, cap at the
- * tmux-name length. Applied ON SPAWN, not per keystroke: transforming the field value live would snap
- * the cursor to the end (a String-backed TextField resets selection on value change), so the field
- * keeps the raw text and SpawnDialog shows a live preview of this result instead. */
+ * tmux-name length. Produces the back-compat sessionName an older gateway adopts as the session id;
+ * empty when the label has no ASCII characters to slug. */
 internal fun slugifySessionName(raw: String): String =
 	raw.lowercase().replace(SLUG_NON_ALNUM, "-").trim('-').take(64).trimEnd('-')
 
-/** Name and spawn a new session in a spawn-point project. The session name becomes the tmux session
- * + the composite identity, so any typed text is accepted and converted to a slug ON SPAWN (the field
- * keeps the raw text so the cursor never jumps); a live preview shows the resulting slug and the spawn
- * button is disabled only when that slug is empty. */
+/** Name and spawn a new session in a spawn-point project. The label is free-form: the gateway mints
+ * the session id, so the field accepts any text and the spawn button is enabled once it is non-blank. */
 @Composable
 fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Unit) {
+	// A free-form label: the gateway mints the session id, so the label is not slug-constrained.
 	var name by remember { mutableStateOf("") }
-	val slug = slugifySessionName(name)
 	AlertDialog(
 		onDismissRequest = onDismiss,
 		title = { Text("New session in $project") },
 		text = {
-			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-				OutlinedTextField(
-					value = name,
-					onValueChange = { name = it },
-					label = { Text("Session name") },
-					singleLine = true,
-				)
-				Text(
-					if (slug.isEmpty()) "Enter a name." else "$slug",
-					style = MaterialTheme.typography.bodySmall,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
-				)
-			}
+			OutlinedTextField(
+				value = name,
+				onValueChange = { name = it },
+				label = { Text("Session name") },
+				singleLine = true,
+			)
 		},
-		confirmButton = { TextButton(enabled = slug.isNotEmpty(), onClick = hapticClick { onSpawn(slug) }) { Text("Spawn") } },
+		confirmButton = {
+			TextButton(enabled = name.isNotBlank(), onClick = hapticClick { onSpawn(name.trim()) }) { Text("Spawn") }
+		},
 		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
 	)
 }

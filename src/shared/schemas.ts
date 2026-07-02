@@ -113,6 +113,9 @@ export const WsRegisterSchema = z.object({
 	// The Claude Code harness session id, reported so the gateway can persist a
 	// `team -> claudeSessionId` map and `claude --resume <id>` the session on a later wake.
 	claudeSessionId: z.string().optional(),
+	// The plugin's cwd basename, the default session label for a self-appearing (manually launched)
+	// session. Bounded here; the store sanitizes and caps it to a single printable path segment.
+	cwdName: z.string().max(256).optional(),
 	// Shared secret the host daemon presents so a LAN peer cannot squat the reserved
 	// "host" slot and drive agent terminals. Optional on the wire (only the host slot
 	// sends it), but the host slot is fail-closed: a host register is refused unless the
@@ -148,10 +151,17 @@ export const TeamInfoSchema = z
 		// who provisions others). The console reads it on its local session to decide whether to
 		// show the admin surfaces. Stamped only for the admin Domain, so absence means false.
 		isAdminDomain: z.boolean().optional(),
-		status: z.enum(["online", "available"]),
+		// online = a live incarnation that has confirmed its lead handshake; verifying = a live
+		// incarnation that has not (re)confirmed yet (e.g. re-registered after a gateway restart, still
+		// waiting on its LLM to answer); available = a record with no live incarnation (asleep, wakeable).
+		status: z.enum(["online", "verifying", "available"]),
 		mode: ConnectionModeSchema.optional(),
 		// loose | devcontainer | console. Always stamped by the gateway.
 		kind: TeamKindSchema,
+		// The free-form human label the board renders for a session record (typed at create, else the
+		// cwd basename, else the id). Distinct from `displayName` (the owning Domain's network name).
+		// Absent for spawn-points and sessions with no record.
+		sessionLabel: z.string().optional(),
 		// The plugin version the agent's MCP process reported at register. Absent for
 		// consoles and offline-catalog entries (no plugin process behind them). The console
 		// shows it as a chip only when it differs from the app's own expected version.
@@ -249,14 +259,17 @@ export const ConsoleOpSchema = z
 			key: z.string().max(32).optional(),
 			submit: z.boolean().optional(),
 		}),
-		// Start a new tmux session running a fresh agent on `target` (the host or a devcontainer),
-		// named `sessionName`. The daemon owns the launch command; the console supplies only the
-		// target device and the new session name, so it can never inject a host command. The
-		// session name is slug-validated at the host tmux layer. Idempotent per opId.
+		// Start a new tmux session running a fresh agent on `target` (the host or a devcontainer).
+		// The daemon owns the launch command; the console supplies only the target device plus a
+		// name, so it can never inject a host command. Two forms (the handler requires exactly one
+		// path): `sessionName` is a typed slug adopted as the session id (slug-validated at the host
+		// tmux layer); `displayLabel` is a free-form label for which the gateway MINTS the id (that
+		// minted id is the tmux name). Idempotent per opId.
 		z.object({
 			kind: z.literal("create_session"),
 			target: z.string().min(1).max(128),
-			sessionName: z.string().min(1).max(64),
+			sessionName: z.string().min(1).max(64).optional(),
+			displayLabel: z.string().min(1).max(64).optional(),
 		}),
 		// Drive a session through the plugin update + MCP reconnect sequence. `target` is the
 		// gateway-qualified session to reload; the host runs the script detached. Idempotent per opId.
@@ -270,6 +283,14 @@ export const ConsoleOpSchema = z
 		z.object({
 			kind: z.literal("forget"),
 			target: z.string().min(1).max(128),
+		}),
+		// Rename a session: set the gateway-authoritative sessionLabel on its record. `target` is
+		// the gateway-qualified composite session (like forget). The gateway sanitizes + per-spawn
+		// dedups the label. Idempotent per opId.
+		z.object({
+			kind: z.literal("rename_session"),
+			target: z.string().min(1).max(128),
+			sessionLabel: z.string().min(1).max(64),
 		}),
 		// Cross-Domain listening-mode handshake (cross-domain-federation.md). These ops drive
 		// the mutual pairing that links two Gateways owned by different owners. The owner root
@@ -577,6 +598,11 @@ export const ConsoleCreateSessionResultSchema = z
 		// The daemon detaches the new session immediately; the agent boots after this returns,
 		// so the console polls a peek to see it come up.
 		created: z.boolean(),
+		// The session id the gateway recorded (minted for a displayLabel create, else the adopted
+		// sessionName) and the label it stored, so the console opens the thread keyed on the id.
+		// Absent from an older gateway that only reported `created`.
+		id: z.string().optional(),
+		sessionLabel: z.string().optional(),
 	})
 	.meta({ id: "ConsoleCreateSessionResult" });
 
@@ -594,6 +620,15 @@ export const ConsoleForgetResultSchema = z
 		killed: z.boolean(),
 	})
 	.meta({ id: "ConsoleForgetResult" });
+
+export const ConsoleRenameSessionResultSchema = z
+	.object({
+		// The record was found and relabeled (false when no record matched the target).
+		renamed: z.boolean(),
+		// The label actually applied, after the gateway's sanitize + per-spawn dedup.
+		sessionLabel: z.string().optional(),
+	})
+	.meta({ id: "ConsoleRenameSessionResult" });
 
 ////////////////////////////////
 //  Cross-Domain handshake op results (gateway -> console)
@@ -763,6 +798,7 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleCreateSessionResultSchema,
 	ConsoleReloadPluginsResultSchema,
 	ConsoleForgetResultSchema,
+	ConsoleRenameSessionResultSchema,
 	CrossDomainListenResultSchema,
 	CrossDomainRequestResultSchema,
 	CrossDomainConfirmResultSchema,

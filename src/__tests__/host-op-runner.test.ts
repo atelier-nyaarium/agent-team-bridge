@@ -98,9 +98,16 @@ describe("createHostOpRunner", () => {
 		const h = makeOps();
 		const runner = createHostOpRunner(h.ops);
 		expect(await runner.run({ kind: "createSession", target: T })).toEqual({ created: true });
-		expect(h.ops.createSession).toHaveBeenCalledWith(T);
+		expect(h.ops.createSession).toHaveBeenCalledWith(T, undefined);
 		expect(await runner.run({ kind: "reloadPlugins", target: T })).toEqual({ initiated: true });
 		expect(h.ops.reloadPlugins).toHaveBeenCalledWith(T);
+	});
+
+	it("forwards a createSession workdirHint to the tmux op", async () => {
+		const h = makeOps();
+		const runner = createHostOpRunner(h.ops);
+		await runner.run({ kind: "createSession", target: T, workdirHint: "myproject" });
+		expect(h.ops.createSession).toHaveBeenCalledWith(T, "myproject");
 	});
 
 	it("dedups a re-relayed createSession by dedupKey: the session is created once", async () => {

@@ -7,6 +7,8 @@
 		{ "file": "op-envelope-send-qualified.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
 		{ "file": "op-envelope-respond.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
 		{ "file": "op-envelope-poll.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
+		{ "file": "op-envelope-create-session-v2.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
+		{ "file": "op-envelope-rename-session.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
 		{ "file": "frame-sealed.json", "schema": "ConsoleRelayFrame", "expect": "pass" },
 		{ "file": "mailbox-message.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "mailbox-reply.json", "schema": "MailboxEntry", "expect": "pass" },
@@ -22,6 +24,7 @@
 		{ "file": "register-result.json", "schema": "ConsoleRegisterResult", "expect": "pass" },
 		{ "file": "register-result-gateway.json", "schema": "ConsoleRegisterResult", "expect": "pass" },
 		{ "file": "send-result.json", "schema": "ConsoleSendResult", "expect": "pass" },
-		{ "file": "list-teams-result.json", "schema": "ConsoleListTeamsResult", "expect": "pass" }
+		{ "file": "list-teams-result.json", "schema": "ConsoleListTeamsResult", "expect": "pass" },
+		{ "file": "list-teams-result-v2.json", "schema": "ConsoleListTeamsResult", "expect": "pass" }
 	]
 }

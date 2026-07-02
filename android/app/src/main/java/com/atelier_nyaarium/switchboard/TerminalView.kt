@@ -364,8 +364,16 @@ fun TerminalView(
 
 	Column(modifier) {
 		if (ansi.isEmpty() && peekError != null) {
+			// A user-launched session has no daemon pane to drive; that is an expected state, not a
+			// failure, so it reads calm rather than alarming-red.
+			val calm = peekError!!.contains("user-launched")
 			Box(Modifier.weight(1f).fillMaxWidth().background(TERMINAL_BG), contentAlignment = Alignment.Center) {
-				Text(peekError!!, Modifier.padding(24.dp), color = MaterialTheme.colorScheme.error, fontFamily = FontFamily.Monospace)
+				Text(
+					peekError!!,
+					Modifier.padding(24.dp),
+					color = if (calm) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+					fontFamily = FontFamily.Monospace,
+				)
 			}
 		} else {
 			TerminalPane(ansi, Modifier.weight(1f).fillMaxWidth())
