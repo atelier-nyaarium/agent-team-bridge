@@ -206,7 +206,10 @@ export class SessionStore {
 		}
 	}
 
-	/** Drop records not seen inside the TTL. Live records survive via touchLive refreshes. */
+	/** Drop records not seen inside the TTL. Live records survive via touchLive refreshes.
+	 * Deliberately caller-driven (the TTL is a per-call arg, unlike the self-timer sibling stores)
+	 * so the gateway can sweep immediately BEFORE snapshot() on the persist tick - the persisted
+	 * file then never carries a just-expired record. */
 	sweep(ttlMs: number): void {
 		const cutoff = this.now() - ttlMs;
 		for (const [team, record] of this.records) {

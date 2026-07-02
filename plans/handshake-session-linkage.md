@@ -331,6 +331,10 @@ Gateway side (`src/gateway/websocket.ts` + store):
   and any transitional fallbacks) is marked with a removal TODO and CLEANED UP IN A FOLLOW-UP
   after the upgrade lands successfully (owner directive) - same pattern as the DATA_DIR boot
   migration.
+- Post-upgrade cleanup backlog (owner-flagged, do AFTER everything is verified working; not part
+  of this feature): remove the aggressive per-launch Downloads sweep in `DebugLog.kt` `init`
+  (deletes old `switchboard-debug.log*` spills every app start) once the long tail of old-build
+  spills has cleared - it is dead weight on every launch by then.
 - Gates: session-store vitest (migration round-trip incl. rename-survives-restart + cross-spawn
   segment collision, mint clash incl. reserved names, the FULL binding order incl. escape-hatch
   adoption + first-binding-holds refusal, label dedup per-spawn,
