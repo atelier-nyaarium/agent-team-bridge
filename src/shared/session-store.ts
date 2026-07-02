@@ -114,9 +114,10 @@ export class SessionStore {
 		return isComposite(team) ? this.records.get(team) : undefined;
 	}
 
-	/** Create a record under a fresh random id (create_session). Re-rolls on any clash with an
-	 * existing record in this spawn or the injected id-space; the space is 16^6 against a handful of
-	 * records, so the retry cap is unreachable in practice and exists to make a broken idGen loud. */
+	/** Create a record under a fresh random id. Re-rolls on any clash with an existing record in this
+	 * spawn or the injected id-space; the space is 16^6 against a handful of records, so the retry cap
+	 * is unreachable in practice and exists to make a broken idGen loud. Used by establishOnConfirm's
+	 * tier-4 fallback (a confirming session whose segment collides with a reserved/catalog name). */
 	mint(opts: CreateOpts): SessionRecord {
 		for (let i = 0; i < 64; i++) {
 			const id = this.idGen();
@@ -131,6 +132,17 @@ export class SessionStore {
 		if (!isSlug(id) || this.clash(id)) return null;
 		if (this.records.has(composeSessionName(opts.spawn, id))) return null;
 		return this.create(id, opts);
+	}
+
+	/** The idempotent create path: adopt a caller-supplied id, else REATTACH the record already under
+	 * it (a retry / post-restart re-dispatch of the same create). Returns `{record, created}` (created
+	 * true iff a fresh record was made), or null when the id is reserved/clashing and no record holds
+	 * it - the caller refuses rather than launch a recordless session. */
+	adoptOrReattach(id: string, opts: CreateOpts): { record: SessionRecord; created: boolean } | null {
+		const created = this.adoptById(id, opts);
+		if (created) return { record: created, created: true };
+		const existing = this.records.get(composeSessionName(opts.spawn, id));
+		return existing ? { record: existing, created: false } : null;
 	}
 
 	/** Bind the resume id (and optional live pointer) onto the record a team names. Confirm tier 1. */

@@ -143,6 +143,18 @@ describe("SessionStore mint / adopt", () => {
 		// The SAME id under a different spawn is a different session and is allowed.
 		expect(store.adoptById("mywork", { spawn: "recipe-app" })?.id).toBe("mywork");
 	});
+
+	it("adoptOrReattach creates fresh, reattaches an existing record, and refuses a reserved id", () => {
+		const store = new SessionStore({ clash: (id) => id === "host-daemon" });
+		const first = store.adoptOrReattach("work", { spawn: "host", sessionLabel: "Work" });
+		expect(first).toMatchObject({ created: true, record: { id: "work", sessionLabel: "Work" } });
+		// A re-dispatch of the same id reattaches (no duplicate, no new label).
+		const again = store.adoptOrReattach("work", { spawn: "host", sessionLabel: "ignored" });
+		expect(again).toMatchObject({ created: false, record: { id: "work", sessionLabel: "Work" } });
+		expect(store.size).toBe(1);
+		// A reserved/clashing id with no record is refused.
+		expect(store.adoptOrReattach("host-daemon", { spawn: "host" })).toBeNull();
+	});
 });
 
 describe("SessionStore confirm-time binding", () => {

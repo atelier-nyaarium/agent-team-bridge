@@ -846,16 +846,15 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		sessionName: String? = null,
 		displayLabel: String? = null,
 		opId: String = UUID.randomUUID().toString(),
-	): ConsoleCreateSessionResult {
-		val body = relay(
-			ConsoleOp.CreateSession(target = target, sessionName = sessionName, displayLabel = displayLabel),
-			opId,
-			targetGateway = targetGatewayOf(target),
+	): ConsoleCreateSessionResult =
+		resultOf(
+			relay(
+				ConsoleOp.CreateSession(target = target, sessionName = sessionName, displayLabel = displayLabel),
+				opId,
+				targetGateway = targetGatewayOf(target),
+			),
+			"create_session",
 		)
-		if (!body.ok) error("create_session failed: ${body.error ?: "unknown error"}")
-		return body.result?.let { wireJson.decodeFromJsonElement<ConsoleCreateSessionResult>(it) }
-			?: ConsoleCreateSessionResult(created = true)
-	}
 
 	/** Rename a session: set the gateway-authoritative sessionLabel on its record. Idempotent per
 	 * opId. Returns the label the gateway actually applied (after its sanitize + per-spawn dedup). */

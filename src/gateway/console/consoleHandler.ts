@@ -688,15 +688,17 @@ export function createConsoleDispatcher({
 				const dedupKey = `${conversationId}:${opId}`;
 				// The id (and tmux session name) is the typed sessionName, else a deterministic digest of
 				// this op so a retry reattaches its own record rather than minting a second. The label is
-				// the displayLabel, else the id. adoptById is idempotent: a re-dispatch of the same op
-				// reattaches (created is null) instead of duplicating.
+				// the displayLabel, else the id.
 				const sessionId = op.sessionName ?? mintedSessionId(conversationId, opId);
 				const label = op.displayLabel ?? sessionId;
-				const created = sessionStore?.adoptById(sessionId, { spawn, sessionLabel: label, workdirHint: label });
-				const record = created ?? sessionStore?.getByTeam(composeSessionName(spawn, sessionId));
+				const adopted = sessionStore?.adoptOrReattach(sessionId, {
+					spawn,
+					sessionLabel: label,
+					workdirHint: label,
+				});
 				// A store-backed id that could be neither created nor reattached collides with a catalog
 				// project or reserved name; refuse rather than launch a recordless (hidden) session.
-				if (sessionStore && !record) {
+				if (sessionStore && !adopted) {
 					throw new Error(`cannot create session "${sessionId}": the name is reserved or a project`);
 				}
 				try {
@@ -706,10 +708,14 @@ export function createConsoleDispatcher({
 				} catch (e) {
 					// Roll back only a record THIS op created, so a reattach of an existing session is
 					// never destroyed by a transient launch failure.
-					if (created) sessionStore?.forget(sessionStore.teamOf(created));
+					if (adopted?.created) sessionStore?.forget(sessionStore.teamOf(adopted.record));
 					throw e;
 				}
-				return { created: true, id: record?.id ?? sessionId, sessionLabel: record?.sessionLabel };
+				return {
+					created: true,
+					id: adopted?.record.id ?? sessionId,
+					sessionLabel: adopted?.record.sessionLabel,
+				};
 			}
 
 			case "reload_plugins": {

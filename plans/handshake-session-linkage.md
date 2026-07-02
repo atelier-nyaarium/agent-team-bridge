@@ -423,6 +423,14 @@ machine independently)
   colliding segment (a legitimate session's segment is a hex or daemon name and converges via tier 1
   or tier 2), so its growth folds into the same deferred surface.
 
+## Noted (declined by design)
+
+- The 6-hex id recipe is hand-rolled in four small sites (session-store `randomId`, team-name
+  `randomTeamId`/`stableTeamName`, consoleHandler `mintedSessionId`). Factoring a shared
+  `randomSlugId`/`stableSlugId` into session-id.ts was declined: the gain is cosmetic DRY of trivial
+  one-liners and it would add a `node:crypto` dependency to the pure address-grammar module (which
+  has a hand-authored Kotlin twin). Left as independent one-liners.
+
 ## Verification (live)
 
 - Phone create -> card instant -> boots -> `verifying` -> confirm -> `online`; reboot -> wake ->
