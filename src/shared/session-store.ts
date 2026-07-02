@@ -292,6 +292,11 @@ export class SessionStore {
 	 */
 	restore(raw: unknown): void {
 		if (!raw || typeof raw !== "object") return;
+		// TODO(post-upgrade cleanup): the `!persisted` legacy branch below reads the OLD
+		// {claudeSessionId, lastSeen} resume-map shape. Every persist tick re-snapshots in the new
+		// record shape, so once every gateway has re-written session-resume.json this branch (and its
+		// `persisted` ternaries) is dead and should be dropped, leaving only the record-shaped load.
+		// Same one-shot pattern as the DATA_DIR boot migration.
 		for (const [team, value] of Object.entries(raw as Record<string, unknown>)) {
 			if (!value || typeof value !== "object") continue;
 			// A non-composite / non-slug key was never a valid chat; skip it (a hand-edited file).

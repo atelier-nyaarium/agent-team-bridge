@@ -95,4 +95,24 @@ describe("protocol fixtures", () => {
 		// consumers fall back to the local Domain.
 		expect(result.teams[1].domainId).toBeUndefined();
 	});
+
+	it("a v2 list carries the verifying and online statuses with per-session sessionLabels", () => {
+		const result = ConsoleListTeamsResultSchema.parse(fixture("list-teams-result-v2.json"));
+		expect(result.teams[0].status).toBe("verifying");
+		expect(result.teams[0].sessionLabel).toBe("recipe-app");
+		expect(result.teams[1].status).toBe("online");
+		expect(result.teams[1].sessionLabel).toBe("My Work");
+	});
+
+	it("a create_session op envelope carries the displayLabel form", () => {
+		const env = ConsoleOpEnvelopeSchema.parse(fixture("op-envelope-create-session-v2.json"));
+		expect(env.op.kind).toBe("create_session");
+		if (env.op.kind === "create_session") expect(env.op.displayLabel).toBe("My Work");
+	});
+
+	it("a rename_session op envelope carries the target and sessionLabel", () => {
+		const env = ConsoleOpEnvelopeSchema.parse(fixture("op-envelope-rename-session.json"));
+		expect(env.op.kind).toBe("rename_session");
+		if (env.op.kind === "rename_session") expect(env.op.sessionLabel).toBe("Renamed Work");
+	});
 });

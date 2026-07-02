@@ -76,6 +76,8 @@ class ProtocolFixturesTest {
 			"op-envelope-send.json" to ConsoleOp.Send::class,
 			"op-envelope-respond.json" to ConsoleOp.Respond::class,
 			"op-envelope-poll.json" to ConsoleOp.Poll::class,
+			"op-envelope-create-session-v2.json" to ConsoleOp.CreateSession::class,
+			"op-envelope-rename-session.json" to ConsoleOp.RenameSession::class,
 		)
 		for ((name, expected) in ops) {
 			val envelope = json.decodeFromString<ConsoleOpEnvelope>(fixture(name))
@@ -115,6 +117,23 @@ class ProtocolFixturesTest {
 		// domainId is absent for a session whose gateway has not resolved a Domain (arming);
 		// consumers fall back to the local Domain.
 		assertNull(result.teams[1].domainId)
+	}
+
+	@Test
+	fun v2FixturesCarryVerifyingStatusAndLabels() {
+		val teams = json.decodeFromString<ConsoleListTeamsResult>(fixture("list-teams-result-v2.json")).teams
+		assertEquals("verifying", teams[0].status)
+		assertEquals("recipe-app", teams[0].sessionLabel)
+		assertEquals("online", teams[1].status)
+		assertEquals("My Work", teams[1].sessionLabel)
+
+		val create = json.decodeFromString<ConsoleOpEnvelope>(fixture("op-envelope-create-session-v2.json")).op
+		assertTrue("expected CreateSession op", create is ConsoleOp.CreateSession)
+		assertEquals("My Work", (create as ConsoleOp.CreateSession).displayLabel)
+
+		val rename = json.decodeFromString<ConsoleOpEnvelope>(fixture("op-envelope-rename-session.json")).op
+		assertTrue("expected RenameSession op", rename is ConsoleOp.RenameSession)
+		assertEquals("Renamed Work", (rename as ConsoleOp.RenameSession).sessionLabel)
 	}
 
 	@Test
