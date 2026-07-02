@@ -165,33 +165,36 @@ SessionRecord {
 - **Computer-started without the flag**: registers (outbound crosstalk works), never confirms,
   never records, never appears. This is the strand-proof default.
 
-## Phases
+## Phases (one per implementation lap)
 
-### Phase A - session store (gateway)
+## Phase A - session store (gateway)
 
-- NEW `src/shared/session-store.ts`: a SessionStore class owning the SessionRecord map. API (all
-  write invariants live here): `snapshot()/restore()` (DurableStore round-trip), `get(id)`,
-  `list()`, `mint(opts)` (random short hex, re-roll via a clash predicate covering records +
-  catalog project names + RESERVED_HOST_SESSIONS - the predicate is a constructor injection since
-  the catalog lives in gateway state), `adoptById(id, opts)` (caller-supplied id when free - the
-  send-wake and escape-hatch path), `bindBySegment()`, `bindResume()` (both stamping `liveTeam`),
-  `confirm()`, `rename()`, `forget()`, `sweep()`, `touchLive()`,
-  `resolveLive(id) -> liveTeam`, `clearLive(team)` (disconnect hook).
-- Same DurableStore file (`session-resume`); boot migration keyed on the DISCRIMINATOR "record has
-  an `id` field": legacy `{claudeSessionId, lastSeen}` entries become
-  `{id: segment, sessionLabel: segment, spawn, workdirHint: segment, claudeSessionId, confirmedAt: lastSeen, lastSeen}`;
-  already-migrated records pass through untouched (a rename must survive any number of restarts -
-  pinned by a migrate -> rename -> restore round-trip test). Migration collision policy: two legacy
-  composites sharing a bare segment across spawns qualify the migrated id with the spawn
-  (`<spawn>-<segment>`), deterministically, once. Apply the isComposite+isSlug read-guard
-  (routes.ts:530) during migration.
+- NEW `src/shared/session-store.ts`: a SessionStore class owning the SessionRecord map, KEYED BY
+  the composite `spawn.id` team (globally unique, exactly the address a session registers and lists
+  under - so `id` need only be unique within its spawn, as the address grammar already is, and no
+  cross-spawn qualifier is ever needed). API (all write invariants live here): `snapshot()/restore()`
+  (DurableStore round-trip), `getByTeam(team)`, `list()`, `teamOf(record)`, `mint(opts)` (random
+  short hex, re-roll via a clash predicate covering catalog project names + RESERVED_HOST_SESSIONS -
+  the predicate is a constructor injection since the catalog lives in gateway state), `adoptById(id,
+  opts)` (caller-supplied id when free in its spawn), `recordRegister(team, cid)` (the register path:
+  bind-or-create by composite, cannot fail or conflate), `bindBySegment()`, `bindResume()` (both
+  stamping `liveTeam`), `confirm()`, `rename()`, `forget()`, `sweep()`, `touchLive()`,
+  `resolveLive(team) -> liveTeam`, `clearLive(team)` (disconnect hook). A per-spawn label index
+  keeps dedup O(1) (an unauthenticated register must not amplify to an O(n^2) event-loop stall).
+- Same DurableStore file (`session-resume`); boot migration reads both shapes off the SAME composite
+  key: a legacy value `{claudeSessionId, lastSeen}` becomes a full record (label + workdir hint
+  seeded from the segment, confirmedAt = lastSeen since it was recorded under the old
+  trusted-provenance regime); a persisted record (value carries `id`) loads as is (a rename survives
+  any number of restarts because a loaded record is never re-derived) with its label re-sanitized
+  against a hand-edited file. The isComposite+isSlug read-guard (routes.ts:530) applies during
+  migration.
 - Write-boundary validation (the gateway is the authority): sessionLabel / cwdName / workdirHint
   capped ~64 chars, printable, TRIMMED, and a SINGLE PATH SEGMENT (reject separators and `..` -
   the label drives a filesystem path join in resolveHostWorkdir; an unauthenticated LAN register
   must not steer a launch cwd or inject markup into the owner's board). The rest of the
   unauthenticated-surface hardening stays deferred to `plans/gateway-auth-surface.md`.
 
-### Phase B - confirm-time recording + handshake hygiene
+## Phase B - confirm-time recording + handshake hygiene
 
 Plugin side (`src/mcp/`):
 - `helpers.ts`: `claudeSessionId` returns to the register unconditionally; drop `BridgeConfig.adhoc`
@@ -215,7 +218,7 @@ Gateway side (`src/gateway/websocket.ts` + store):
   worker-reject branch runs full registry cleanup instead of the isStale short-circuit.
 - Disconnect clears `liveTeam` for records bound to the closing team (`clearLive`).
 
-### Phase C - visibility = records (+ verifying status, sessionLabel on the wire)
+## Phase C - visibility = records (+ verifying status, sessionLabel on the wire)
 
 - `routes.ts teams()`: list spawn-points + records only. Record with a live incarnation
   (registry.get(spawn.id) OR resolveLive alias) -> `online` or `verifying`, keyed on the RESOLVED
@@ -243,7 +246,7 @@ Gateway side (`src/gateway/websocket.ts` + store):
   stamps only the Domain displayName; the privacy guarantee is per-gateway until the mesh upgrades
   (single-owner fleets upgrade together - accepted transitional).
 
-### Phase D - create_session v2 + rename op
+## Phase D - create_session v2 + rename op
 
 - `create_session` op - ADDITIVE-SAFE wire migration: `sessionName` becomes OPTIONAL and a new
   optional `displayLabel` is added, with a cross-field refine requiring at least one. Handler
@@ -265,7 +268,7 @@ Gateway side (`src/gateway/websocket.ts` + store):
   rename_session.
 - `forget` unchanged in spirit: kills tmux by id, drops the record.
 
-### Phase E - re-incarnation alias (gateway-side)
+## Phase E - re-incarnation alias (gateway-side)
 
 - Confirm stamps `liveTeam` ({team, subId}); disconnect clears it; restore() nulls it. **Send
   resolution** (routes.ts send path, the registry.get site): the ONE authoritative order (see
@@ -289,7 +292,7 @@ Gateway side (`src/gateway/websocket.ts` + store):
 - First-binding-holds: a confirm claiming a claudeSessionId bound to a DIFFERENT record with a
   live incarnation is refused and logged.
 
-### Phase F - daemon/tmux paths on ids
+## Phase F - daemon/tmux paths on ids
 
 - Wire shapes (mirroring Phase B's precision): `shared/host-op.ts` createSession HostOp variant
   gains `workdirHint?`; `hostOpRunner.ts` TmuxOps.createSession signature threads it; the wake
@@ -310,7 +313,7 @@ Gateway side (`src/gateway/websocket.ts` + store):
   session still relaunches with the hardcoded `--model opus --effort xhigh` flags; closing that
   painpoint is follow-up work, not this plan.
 
-### Phase G - docs, fixtures, painpoints, gates
+## Phase G - docs, fixtures, painpoints, gates
 
 - Protocol golden fixtures: NEW files (never mutate existing fixtures in place -
   index-based assertions pin them): `op-envelope-create-session-v2.json` (displayLabel form),
@@ -324,6 +327,10 @@ Gateway side (`src/gateway/websocket.ts` + store):
 - `plans/pain-points.md`: partially closes the seeded-phantom-card sting (no record without a
   completed handshake; full closure still `gateway-auth-surface.md`); note the model/effort
   deferral stays open.
+- Migration temp code (the legacy-entry boot migration, the create_session `sessionName` alias,
+  and any transitional fallbacks) is marked with a removal TODO and CLEANED UP IN A FOLLOW-UP
+  after the upgrade lands successfully (owner directive) - same pattern as the DATA_DIR boot
+  migration.
 - Gates: session-store vitest (migration round-trip incl. rename-survives-restart + cross-spawn
   segment collision, mint clash incl. reserved names, the FULL binding order incl. escape-hatch
   adoption + first-binding-holds refusal, label dedup per-spawn,
@@ -369,6 +376,11 @@ machine independently)
   sessions are outside the gate (intended).
 - The `hs-` reply path does not require the team to be listed, so a `verifying` session can always
   complete its confirm.
+- A grammar-ambiguous composite team (a dotted project like `my.app.foo`, parsed as a non-slug
+  session segment) is not stored as a record. The old resume map stored it by raw key, but the old
+  teams() asleep filter's isComposite+isSlug guard already hid it from the board and it was never
+  wakeable, so refusing to record it is a consistency win, not a regression (the listing surface is
+  byte-identical).
 
 ## Verification (live)
 

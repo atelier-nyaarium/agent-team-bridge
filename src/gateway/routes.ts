@@ -48,10 +48,10 @@ export interface RoutesDeps {
 	// empties when the host daemon disconnects). Membership in either marks a team
 	// as devcontainer-backed.
 	knownTeamPaths: Map<string, string>;
-	// Durable composite-session -> {claudeSessionId, lastSeen} map. teams() surfaces its
-	// entries as asleep "available" sessions so a session that exists but is not currently
-	// registered still lists. Optional for test harnesses with no resume tracking.
-	sessionResume?: Map<string, { claudeSessionId: string; lastSeen: number }>;
+	// The durable session-record store. teams() surfaces its records as asleep "available"
+	// sessions so a session that exists but is not currently registered still lists. Optional
+	// for test harnesses with no resume tracking.
+	sessionStore?: import("../shared/session-store.js").SessionStore;
 	// Console mailboxes, for broadcast notices (notify_human). Optional so test
 	// harnesses without a console bridge need not supply one.
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
@@ -205,7 +205,7 @@ export function createRoutes({
 	tryWakeTeam,
 	offlineCatalog,
 	knownTeamPaths,
-	sessionResume,
+	sessionStore,
 	mailboxStore,
 	config,
 	evieClient,
@@ -521,13 +521,15 @@ export function createRoutes({
 			});
 		}
 
-		// Asleep named sessions: a composite the gateway has a resume record for but that is not
-		// currently registered. The resume map doubles as the durable known-session list, so a
-		// session that exists but whose container is asleep still lists as available.
-		for (const [name, { lastSeen }] of sessionResume ?? []) {
+		// Asleep named sessions: a record the gateway holds but that is not currently registered.
+		// The session store doubles as the durable known-session list, so a session that exists
+		// but whose container is asleep still lists as available.
+		for (const record of sessionStore?.list() ?? []) {
+			const name = sessionStore!.teamOf(record);
 			if (seen.has(name)) continue;
-			// Mirror of the record-time gate (websocket.ts): a non-composite / non-slug entry is not a
-			// valid chat, so it must not surface as an available asleep session (an un-wakeable phantom).
+			// A record's spawn/id are slugs by construction, but a hand-edited store file is not; a
+			// non-composite / non-slug name is not a valid chat and must not surface as an
+			// un-wakeable phantom.
 			const parts = parseSessionName(name);
 			if (!isComposite(name) || !isSlug(parts.project) || !isSlug(parts.session)) {
 				continue;
@@ -541,7 +543,7 @@ export function createRoutes({
 				...isAdminDomainField,
 				status: "available",
 				kind: "loose",
-				lastActive: lastSeen,
+				lastActive: record.lastSeen,
 				queue_depth: 0,
 			});
 		}
