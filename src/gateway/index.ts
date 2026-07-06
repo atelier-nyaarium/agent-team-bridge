@@ -629,6 +629,7 @@ export async function startGateway(): Promise<void> {
 			store,
 			config: { localGatewayId, localDomainId },
 			tryWakeTeam,
+			isWakeInFlight: (team) => inflightWakes.has(team),
 			offlineCatalog,
 			knownTeamPaths,
 			sessionStore,

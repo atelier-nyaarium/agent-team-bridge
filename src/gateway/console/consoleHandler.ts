@@ -206,8 +206,8 @@ const SEND_BOUND_MS = 25_000;
 // Same reasoning and ceiling as SEND_BOUND_MS, for create_session's devcontainer-wake launch (which
 // can likewise run for up to WAKE_TIMEOUT_MS cold-starting a container). Past this bound the op
 // returns the already-adopted session id with status "pending" and the launch continues in the
-// background; the console's own placeholder times out locally rather than needing a push-delivery
-// mechanism for the rare backgrounded failure.
+// background; a backgrounded failure rolls the record back with no push, so its tile simply drops off
+// the console's board on the next teams() refresh rather than needing a push-delivery mechanism.
 const CREATE_SESSION_BOUND_MS = 25_000;
 
 // Ceiling on a poll's long-poll hold. Must clear the relay chain with headroom: evie holds the
@@ -772,9 +772,8 @@ export function createConsoleDispatcher({
 					if (winner === null) {
 						// Still bringing up a cold container; hand back the already-adopted deterministic id
 						// now and let the launch finish in the background. A backgrounded failure rolls the
-						// record back the same as the fast path below, silently - the console's own
-						// placeholder times out and surfaces this locally rather than needing a new
-						// push-delivery mechanism for this rare case.
+						// record back the same as the fast path below, silently - the session's tile then
+						// drops off the board on the next teams() refresh, no push-delivery mechanism needed.
 						void launch
 							.then((r) => {
 								if (!r.ok && adopted?.created)

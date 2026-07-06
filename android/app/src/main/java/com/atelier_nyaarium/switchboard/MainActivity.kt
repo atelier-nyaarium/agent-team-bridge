@@ -566,6 +566,14 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				// and the host machine's terminal is reached through the dedicated "host" target.
 				terminalEligible = isComposite(localFieldOf(openTeam!!)) &&
 					(session?.gatewayId.isNullOrEmpty() || session?.gatewayId == state.localGatewayId),
+				// The terminal view opens by default (docker-logs then tmux) for a session that is not
+				// yet live, so a booting or stuck session is visible without a manual toggle; the Wake
+				// button reattaches an asleep one.
+				sessionStatus = session?.status,
+				// A "verifying" session is coming up (a wake in flight, through the MCP handshake), so the
+				// terminal seeds "Waking..." rather than "asleep"; a plain asleep session reads "asleep".
+				wakePending = session?.status == "verifying",
+				onWake = { repo.wakeSession(openTeam!!) },
 				terminalRefreshMs = repo.terminalRefreshMs,
 				onTerminalPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
 				onTerminalSend = { text, key, submit -> repo.tmuxSend(openTeam!!, text, key, submit) },
@@ -598,37 +606,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				},
 				onRename = { team, name -> scope.launch { repo.rename(team, name) } },
 				onForget = { team -> repo.forget(team) },
-				onSpawn = { project, label ->
-					// A placeholder row appears the instant Spawn is tapped, before the network round
-					// trip even starts, so the board never just sits there looking unchanged.
-					val pendingKey = repo.beginCreateSession(project, label)
-					// Send both forms for cross-version compatibility: a new gateway mints the id from
-					// displayLabel and returns it, an old one adopts the slugified sessionName (omitted
-					// when the label has no ASCII to slug). Refresh teams so the thread title shows the
-					// server label, not the opaque minted id.
-					scope.launch {
-						val slug = slugifySessionName(label).ifEmpty { null }
-						runCatching { repo.createSession(project, sessionName = slug, displayLabel = label) }
-							.onSuccess { result ->
-								val id = result.id ?: slug
-								if (id == null) {
-									repo.endCreateSession(pendingKey)
-									return@onSuccess
-								}
-								val localTeamName = composeSessionName(project, id)
-								val pending = result.status == "pending"
-								repo.updateCreateSession(pendingKey, localTeamName, pending)
-								repo.refreshTeams()
-								// A cold container bring-up is still in flight - stay on the board and let the
-								// placeholder's text reflect that; the real card takes over once it comes up.
-								// The fast path already has a live-enough record to open right away, as before.
-								if (!pending) openTeam = repo.openThread(localTeamName)
-							}
-							.onFailure { e ->
-								repo.endCreateSession(pendingKey, e.message ?: "Failed to create \"$label\"")
-							}
-					}
-				},
+				// Fire the create and stay on the board: the gateway adopts the session's record
+				// synchronously, so its own tile appears via the teams() refresh (spinner while it boots).
+				// Tapping the tile opens its terminal view. A failure surfaces as a Snackbar.
+				onSpawn = { project, label -> scope.launch { repo.spawnSession(project, label) } },
 				// Launch the enrollee compare from the empty board when one is still owed (the device
 				// rooted an enroll invite but has not completed the in-person trust step).
 				onVerifyEnroll = (if (state.provisioned) repo.pendingEnrolleeCeremony() else null)
@@ -1134,10 +1115,6 @@ fun SessionsScreen(
 										onLongPress = { actionTeam = team },
 									)
 								}
-								items(
-									state.pendingCreates.filter { it.project == projectKey },
-									key = { "pending:${it.key}" },
-								) { pending -> PendingCreateCard(pending) }
 							}
 
 							for (sp in spawnPoints) {
@@ -1482,6 +1459,12 @@ fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: 
 				)
 			}
 			Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+				// A spinner while the session is coming up. The gateway reports "verifying" from the moment
+				// a wake is in flight (spawn/wake) through the MCP handshake, so this covers the whole boot;
+				// an online or plainly-asleep tile has none.
+				if (team.status == "verifying") {
+					CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Color(0xFFD29922))
+				}
 				StatusChip(statusWord, statusColor)
 				// Plugin-version chip: shown only when the agent's running plugin differs from
 				// this app's expected version (BuildConfig.VERSION_NAME, derived from the same
@@ -1512,30 +1495,6 @@ fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: 
 					maxLines = 1,
 					overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
 				)
-			}
-		}
-	}
-}
-
-/** A create_session tap in flight, nested under its project header exactly where the real
- * SessionCard will appear once the session shows up. Not clickable - there is nothing to open yet. */
-@Composable
-fun PendingCreateCard(pending: PendingCreate) {
-	val text = if (pending.status == "waking-docker") {
-		"Waking Docker... first boot can take a minute or two"
-	} else {
-		"Creating..."
-	}
-	Card(modifier = Modifier.fillMaxWidth().padding(start = 16.dp)) {
-		Row(
-			Modifier.padding(14.dp),
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.spacedBy(10.dp),
-		) {
-			CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFFD29922))
-			Column {
-				Text(pending.label, style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace)
-				Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 			}
 		}
 	}
@@ -1616,6 +1575,9 @@ fun ThreadScreen(
 	// Terminal view: only the host-agent and devcontainers are eligible. The peek/send are
 	// team-bound suspend closures (the screen supplies the team).
 	terminalEligible: Boolean,
+	sessionStatus: String?,
+	wakePending: Boolean,
+	onWake: () -> Unit,
 	terminalRefreshMs: Long,
 	onTerminalPeek: suspend (sinceHash: String?) -> Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult>,
 	onTerminalSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
@@ -1628,8 +1590,12 @@ fun ThreadScreen(
 	var showRename by remember { mutableStateOf(false) }
 	var confirmForget by remember { mutableStateOf(false) }
 	var attachments by remember { mutableStateOf<List<Uri>>(emptyList()) }
-	// The raw-tmux terminal view, toggled from the top bar; re-keyed off when switching session.
-	var terminalMode by remember(team) { mutableStateOf(false) }
+	// The raw-tmux terminal view, toggled from the top bar; re-keyed when switching session. Defaults
+	// on for a not-yet-live session so its boot is watchable without a manual toggle (see the call site).
+	// Keyed off the known asleep/booting statuses so an unrecognized status opens chat, not terminal.
+	var terminalMode by remember(team) {
+		mutableStateOf(terminalEligible && sessionStatus in setOf(null, "available", "verifying"))
+	}
 	if (terminalMode) BackHandler { terminalMode = false }
 	val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
 		if (uris.isNotEmpty()) attachments = attachments + uris
@@ -1744,6 +1710,8 @@ fun ThreadScreen(
 				TerminalView(
 					team = team,
 					refreshMs = terminalRefreshMs,
+					wakePending = wakePending,
+					onWake = onWake,
 					onPeek = onTerminalPeek,
 					onSend = onTerminalSend,
 					modifier = Modifier.weight(1f).fillMaxWidth(),

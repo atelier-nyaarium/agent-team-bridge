@@ -43,6 +43,10 @@ export interface RoutesDeps {
 	conversationRegistry: ConversationRegistry;
 	store: PendingJobStore<ResponsePayload>;
 	tryWakeTeam: (team: string) => Promise<boolean>;
+	/** Whether a wake is in flight for a composite team. An asleep record with a wake in flight is
+	 * reported as `verifying` (coming up) rather than `available`, so a booting session shows as such
+	 * from the moment it is spawned/woken, not only once its MCP registers. */
+	isWakeInFlight?: (team: string) => boolean;
 	offlineCatalog: Map<string, string>;
 	// Durable team -> projectPath map (never cleared, unlike offlineCatalog which
 	// empties when the host daemon disconnects). Membership in either marks a team
@@ -195,6 +199,7 @@ export function createRoutes({
 	conversationRegistry,
 	store,
 	tryWakeTeam,
+	isWakeInFlight,
 	offlineCatalog,
 	knownTeamPaths,
 	sessionStore,
@@ -490,8 +495,16 @@ export function createRoutes({
 			teamsList.push({
 				team: name,
 				...commonFields,
-				// online/verifying omit lastActive (active NOW); only asleep carries recency.
-				status: live ? (live.data.handshakeConfirmed ? "online" : "verifying") : "available",
+				// online/verifying omit lastActive (active NOW); only asleep carries recency. An asleep
+				// record with a wake in flight reads verifying (coming up), so a booting session shows a
+				// spinner from spawn/wake, not only once its MCP registers.
+				status: live
+					? live.data.handshakeConfirmed
+						? "online"
+						: "verifying"
+					: isWakeInFlight?.(name)
+						? "verifying"
+						: "available",
 				...(live ? { mode: live.data.mode, version: live.data.version } : { lastActive: record.lastSeen }),
 				kind: "loose",
 				sessionLabel: record.sessionLabel,

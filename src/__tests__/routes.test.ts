@@ -31,6 +31,7 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 			localDomainId: "alice",
 		},
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
+		isWakeInFlight: overrides.isWakeInFlight,
 		offlineCatalog,
 		knownTeamPaths,
 		mailboxStore: overrides.mailboxStore,
@@ -139,6 +140,17 @@ describe("routes", () => {
 					queue_depth: 0,
 				},
 			]);
+		});
+
+		it("lists an asleep record with a wake in flight as verifying (coming up), not available", async () => {
+			const sessionStore = new SessionStore();
+			sessionStore.adoptById("main", { spawn: "proj-a", sessionLabel: "My Work" });
+			const json = (await createRoutes(
+				makeCtx({ sessionStore, isWakeInFlight: (team) => team === "proj-a.main" }),
+			)
+				.teams()
+				.json()) as { status: string }[];
+			expect(json[0]?.status).toBe("verifying");
 		});
 
 		it("resolves a record's status through its alias liveTeam when no canonical pane is registered", async () => {

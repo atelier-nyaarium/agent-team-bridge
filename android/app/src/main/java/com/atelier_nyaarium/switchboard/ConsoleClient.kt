@@ -837,6 +837,14 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		if (!body.ok) error("forget failed: ${body.error ?: "unknown error"}")
 	}
 
+	/** Close a session: kill its tmux but KEEP its resume record (a restart / mop-up), so it stays
+	 * listed as available. Idempotent per opId; the Gateway rejects a bare spawn-point, refuses while
+	 * a wake is in flight, and reports a user-launched session rather than a false success. */
+	fun closeSession(target: String, opId: String = UUID.randomUUID().toString()) {
+		val body = relay(ConsoleOp.CloseSession(target = target), opId, targetGateway = targetGatewayOf(target))
+		if (!body.ok) error("close failed: ${body.error ?: "unknown error"}")
+	}
+
 	/** Spawn a new session in a spawn-point project. A `displayLabel` lets the gateway mint the id
 	 * (the minted id is the tmux name) and returns it; a `sessionName` is adopted as the id (the
 	 * old form, against a gateway that does not mint). Idempotent per opId (reattaches if it already

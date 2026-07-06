@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -29,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -317,24 +319,40 @@ private fun SendKey(inputEmpty: Boolean, onTap: () -> Unit, onLongPress: () -> U
 }
 
 /**
- * A live ANSI pane (auto-refreshed while RESUMED, so it pauses in the background and when toggled off)
- * over a fixed palette (control keys + slash commands) and a text input that injects via tmux_send.
- * onPeek carries the last hash so an idle pane round-trips only the hash, and returns a Result so a
- * never-loaded pane can show the backend's reason instead of staying blank.
+ * The console terminal view. It always peeks; the render follows the peek result:
+ *  - a live tmux pane (ANSI, auto-refreshed while RESUMED) with the control-key + slash palette and a
+ *    text input that injects via tmux_send;
+ *  - a read-only container-logs snapshot while the session's tmux pane does not exist yet (a booting
+ *    devcontainer), with no input since there is nothing to type into;
+ *  - a centered Wake button when the session is off (peek finds no container/pane), or "Waking..." +
+ *    Retry once a wake has been asked for.
+ * onPeek carries the last hash so an idle frame round-trips only the hash, and returns a Result so a
+ * never-loaded pane can show the backend's reason instead of staying blank. `wakePending` seeds the
+ * waking state for a session opened straight off a create/wake, so it reads "Waking..." not "asleep".
  */
 @Composable
 fun TerminalView(
 	team: String,
 	refreshMs: Long,
+	wakePending: Boolean,
+	onWake: () -> Unit,
 	onPeek: suspend (sinceHash: String?) -> Result<ConsolePeekResult>,
 	onSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
 	modifier: Modifier = Modifier,
 ) {
 	var ansi by remember(team) { mutableStateOf("") }
+	var logs by remember(team) { mutableStateOf("") }
+	var kind by remember(team) { mutableStateOf<String?>(null) }
 	var lastHash by remember(team) { mutableStateOf<String?>(null) }
 	var input by remember(team) { mutableStateOf("") }
 	var sendError by remember(team) { mutableStateOf<String?>(null) }
 	var peekError by remember(team) { mutableStateOf<String?>(null) }
+	// Consecutive peek failures. A single blip keeps the last frame (no flicker); a run of them means
+	// the session actually went away, so the wake/error screen takes over even after a frame had loaded.
+	var failCount by remember(team) { mutableIntStateOf(0) }
+	// A wake has been asked for (a create/wake opened this thread, or the Wake button was tapped), so
+	// the off-session screen reads "Waking..." and offers Retry rather than a first-time "Wake".
+	var wakeRequested by remember(team) { mutableStateOf(wakePending) }
 	val scope = rememberCoroutineScope()
 	val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -343,14 +361,34 @@ fun TerminalView(
 			while (true) {
 				onPeek(lastHash)
 					.onSuccess { r ->
-						if (r.unchanged != true && r.ansi != null) ansi = r.ansi
+						// The frame is a live pane (ansi) or a pre-pane container-logs snapshot (text),
+						// tagged by kind; an unchanged frame carries neither and keeps the last one.
+						if (r.unchanged != true) {
+							when (r.kind) {
+								"container-logs" -> if (r.text != null) {
+									logs = r.text
+									kind = "container-logs"
+								}
+								else -> if (r.ansi != null) {
+									ansi = r.ansi
+									kind = "tmux"
+									// A LIVE PANE (not a still-booting container-logs frame) means it is
+									// up: drop the waking latch so a later sleep re-offers Wake.
+									wakeRequested = false
+								}
+							}
+						}
 						lastHash = r.hash
 						peekError = null
+						failCount = 0
 					}
-					// Surface a failure only before any frame has loaded; once a frame is up, a
-					// transient blip keeps the last frame so the pane does not flicker.
-					.onFailure { if (ansi.isEmpty()) peekError = it.message ?: "terminal unavailable" }
-				delay(refreshMs)
+					.onFailure {
+						peekError = it.message ?: "terminal unavailable"
+						failCount++
+					}
+				// Back off while the session is not answering (asleep, stuck, or user-launched) so a
+				// long-open terminal does not docker-exec every cycle forever; a success resets to base.
+				delay(refreshMs * failCount.coerceIn(1, 8).toLong())
 			}
 		}
 	}
@@ -362,87 +400,149 @@ fun TerminalView(
 		}
 	}
 
+	val frameEmpty = ansi.isEmpty() && logs.isEmpty()
+	// The wake/error screen shows once there is no frame to display (a failed peek, or a wake in flight
+	// before the first frame lands), or after a run of failures a prior frame has gone stale; a lone
+	// transient failure keeps the last frame so it does not flicker.
+	val showOffSession = (peekError != null && (frameEmpty || failCount >= 2)) || (wakeRequested && frameEmpty)
+
 	Column(modifier) {
-		if (ansi.isEmpty() && peekError != null) {
-			// A user-launched session has no daemon pane to drive; that is an expected state, not a
-			// failure, so it reads calm rather than alarming-red.
-			val calm = peekError!!.contains("user-launched")
-			Box(Modifier.weight(1f).fillMaxWidth().background(TERMINAL_BG), contentAlignment = Alignment.Center) {
-				Text(
-					peekError!!,
-					Modifier.padding(24.dp),
-					color = if (calm) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-					fontFamily = FontFamily.Monospace,
-				)
+		when {
+			showOffSession && peekError?.contains("user-launched") == true -> {
+				// A user-launched session has no daemon pane to drive; that is an expected state, not a
+				// failure, so it reads calm rather than alarming-red, with no wake affordance.
+				Box(Modifier.weight(1f).fillMaxWidth().background(TERMINAL_BG), contentAlignment = Alignment.Center) {
+					Text(
+						peekError!!,
+						Modifier.padding(24.dp),
+						color = MaterialTheme.colorScheme.onSurfaceVariant,
+						fontFamily = FontFamily.Monospace,
+					)
+				}
 			}
-		} else {
-			TerminalPane(ansi, Modifier.weight(1f).fillMaxWidth())
-		}
-		if (sendError != null) {
-			Text(sendError!!, Modifier.padding(horizontal = 12.dp, vertical = 2.dp), color = MaterialTheme.colorScheme.error)
-		}
-		Row(
-			Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
-			horizontalArrangement = Arrangement.spacedBy(6.dp),
-		) {
-			PALETTE_SLASH.forEach { cmd ->
-				AssistChip(onClick = hapticClick { fire(cmd, null) }, label = { Text(cmd, fontFamily = FontFamily.Monospace) })
-			}
-			// /compact can take an optional trailing message, so it pre-fills the input box instead of
-			// firing; the user appends a message (or not), then long-presses Send to submit.
-			AssistChip(
-				onClick = hapticClick { input = "/compact " },
-				label = { Text("/compact", fontFamily = FontFamily.Monospace) },
-			)
-		}
-		Row(
-			Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
-			horizontalArrangement = Arrangement.spacedBy(6.dp),
-		) {
-			PALETTE_KEYS.forEach { (label, key) ->
-				AssistChip(onClick = hapticClick { fire(null, key) }, label = { Text(label, fontFamily = FontFamily.Monospace) })
-			}
-		}
-		Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
-			OutlinedTextField(
-				value = input,
-				onValueChange = { input = it },
-				label = { Text("Type into the terminal") },
-				modifier = Modifier.weight(1f),
-			)
-			Column(
-				Modifier.padding(start = 8.dp),
-				verticalArrangement = Arrangement.spacedBy(8.dp),
-				horizontalAlignment = Alignment.CenterHorizontally,
-			) {
-				// Backspace sits directly above Send: a tap erases one char; press-and-hold
-				// repeat-fires Alt+Backspace (delete-word) until release.
-				BackspaceKey(
-					onTap = { fire(null, "BSpace") },
-					onHoldRepeat = { fire(null, "M-BSpace") },
-				)
-				// Empty box: a TAP submits a bare Enter (fire it repeatedly). With text: a TAP stages it
-				// into the composer WITHOUT Enter, and a LONG-PRESS types it AND submits. The icon flips
-				// between a return-arrow (empty) and the Send plane (text) to signal which it'll do.
-				SendKey(
-					inputEmpty = input.isEmpty(),
-					onTap = {
-						if (input.isEmpty()) {
-							fire(null, "Enter")
-						} else {
-							fire(input, null, submit = false)
-							input = ""
+			showOffSession -> {
+				// The session is off (no container/pane) or its wake stalled. Offer an explicit Wake, or
+				// Retry once one is in flight, rather than a silent bring-up.
+				Box(Modifier.weight(1f).fillMaxWidth().background(TERMINAL_BG), contentAlignment = Alignment.Center) {
+					Column(
+						horizontalAlignment = Alignment.CenterHorizontally,
+						verticalArrangement = Arrangement.spacedBy(12.dp),
+					) {
+						Text(
+							if (wakeRequested) "Waking..." else "This session is asleep.",
+							color = MaterialTheme.colorScheme.onSurfaceVariant,
+							fontFamily = FontFamily.Monospace,
+						)
+						FilledTonalButton(onClick = hapticClick { wakeRequested = true; onWake() }) {
+							Text(if (wakeRequested) "Retry" else "Wake")
 						}
-					},
-					onLongPress = {
-						if (input.isEmpty()) {
-							fire(null, "Enter")
-						} else {
-							fire(input, null, submit = true)
-							input = ""
-						}
-					},
-				)
+					}
+				}
+			}
+			kind == "container-logs" -> {
+				// Pre-pane: the devcontainer is still booting, so show its docker logs read-only (no
+				// pane to type into yet). The pane replaces this the instant tmux comes up.
+				Column(Modifier.weight(1f).fillMaxWidth()) {
+					Text(
+						"Container logs - waking",
+						Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+						color = MaterialTheme.colorScheme.onSurfaceVariant,
+						fontFamily = FontFamily.Monospace,
+						fontSize = 11.sp,
+					)
+					TerminalPane(logs, Modifier.weight(1f).fillMaxWidth())
+				}
+			}
+			frameEmpty -> {
+				// Pre-first-frame (no error, no wake pending): a neutral placeholder rather than an
+				// empty pane with a live-looking palette.
+				Box(Modifier.weight(1f).fillMaxWidth().background(TERMINAL_BG), contentAlignment = Alignment.Center) {
+					Text(
+						"Connecting...",
+						color = MaterialTheme.colorScheme.onSurfaceVariant,
+						fontFamily = FontFamily.Monospace,
+					)
+				}
+			}
+			else -> {
+				TerminalPane(ansi, Modifier.weight(1f).fillMaxWidth())
+				if (sendError != null) {
+					Text(
+						sendError!!,
+						Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+						color = MaterialTheme.colorScheme.error,
+					)
+				}
+				Row(
+					Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+					horizontalArrangement = Arrangement.spacedBy(6.dp),
+				) {
+					PALETTE_SLASH.forEach { cmd ->
+						AssistChip(
+							onClick = hapticClick { fire(cmd, null) },
+							label = { Text(cmd, fontFamily = FontFamily.Monospace) },
+						)
+					}
+					// /compact can take an optional trailing message, so it pre-fills the input box
+					// instead of firing; the user appends a message (or not), then long-presses Send.
+					AssistChip(
+						onClick = hapticClick { input = "/compact " },
+						label = { Text("/compact", fontFamily = FontFamily.Monospace) },
+					)
+				}
+				Row(
+					Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+					horizontalArrangement = Arrangement.spacedBy(6.dp),
+				) {
+					PALETTE_KEYS.forEach { (label, key) ->
+						AssistChip(
+							onClick = hapticClick { fire(null, key) },
+							label = { Text(label, fontFamily = FontFamily.Monospace) },
+						)
+					}
+				}
+				Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
+					OutlinedTextField(
+						value = input,
+						onValueChange = { input = it },
+						label = { Text("Type into the terminal") },
+						modifier = Modifier.weight(1f),
+					)
+					Column(
+						Modifier.padding(start = 8.dp),
+						verticalArrangement = Arrangement.spacedBy(8.dp),
+						horizontalAlignment = Alignment.CenterHorizontally,
+					) {
+						// Backspace sits directly above Send: a tap erases one char; press-and-hold
+						// repeat-fires Alt+Backspace (delete-word) until release.
+						BackspaceKey(
+							onTap = { fire(null, "BSpace") },
+							onHoldRepeat = { fire(null, "M-BSpace") },
+						)
+						// Empty box: a TAP submits a bare Enter. With text: a TAP stages it into the
+						// composer WITHOUT Enter, and a LONG-PRESS types it AND submits. The icon flips
+						// between a return-arrow (empty) and the Send plane (text) to signal which.
+						SendKey(
+							inputEmpty = input.isEmpty(),
+							onTap = {
+								if (input.isEmpty()) {
+									fire(null, "Enter")
+								} else {
+									fire(input, null, submit = false)
+									input = ""
+								}
+							},
+							onLongPress = {
+								if (input.isEmpty()) {
+									fire(null, "Enter")
+								} else {
+									fire(input, null, submit = true)
+									input = ""
+								}
+							},
+						)
+					}
+				}
 			}
 		}
 	}

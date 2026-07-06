@@ -25,7 +25,6 @@ import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.parseStoreKey
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.io.File
-import java.util.UUID
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -33,6 +32,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -180,42 +180,6 @@ data class Message(
 	val from: String? = null,
 )
 
-/** A create_session tap in flight, rendered as a loading row under its project header until the
- * real session appears (or the attempt is abandoned). Purely local UI state - never sent or
- * received over the wire. `expectedTeamName` is filled in once createSession() resolves (fast or
- * pending) with the real, already-adopted composite address, so the poll loop can tell when the
- * real Team has shown up and retire this placeholder. */
-data class PendingCreate(
-	val key: String,
-	val project: String,
-	val label: String,
-	val status: String = "creating",
-	val expectedTeamName: String? = null,
-	val createdAtMs: Long = 0L,
-)
-
-/** Which pending-create placeholders survive a fresh teams() snapshot, and which one (if any)
- * should be reported as abandoned. A placeholder is retired the moment its expected session shows
- * up for real (even if that happens to land past `timeoutMs` - a late match is still a success, not
- * an abandonment); one that has been pending past `timeoutMs` with no match is dropped and named as
- * abandoned. At most one abandonment is reported per call, so a burst of simultaneous timeouts still
- * surfaces one message at a time - the caller re-runs this on the next refresh for any others. Pure
- * and free of Android/state so it is directly testable, mirroring sentEchoMatch above. */
-internal fun reconcilePendingCreateList(
-	pending: List<PendingCreate>,
-	knownTeamNames: Set<String>,
-	now: Long,
-	timeoutMs: Long,
-): Pair<List<PendingCreate>, PendingCreate?> {
-	var abandoned: PendingCreate? = null
-	val retained = pending.filter { p ->
-		val matched = p.expectedTeamName != null && p.expectedTeamName in knownTeamNames
-		val expired = now - p.createdAtMs > timeoutMs
-		if (expired && !matched && abandoned == null) abandoned = p
-		!matched && !expired
-	}
-	return retained to abandoned
-}
 
 /** The thread index a `sent` echo should replace, or -1 to append as a new row. Folds an
  * at-least-once re-drain by (epoch, seq), then on the sending device matches this owner message's
@@ -270,13 +234,10 @@ data class ChatState(
 	 * empty board tell a friend who is set up but has no host yet (the Setting-up-a-host pointer)
 	 * from an admin who has not admitted a Gateway. */
 	val firstRooted: Boolean = false,
-	/** In-flight create_session taps, rendered as a loading row under their project header. Retired
-	 * by the poll loop once the real session shows up in `teams`, or after a generous timeout. */
-	val pendingCreates: List<PendingCreate> = emptyList(),
-	/** A one-shot message for a transient event (a create_session failure or abandonment) to show as
-	 * a Snackbar. Deliberately separate from `error`, which drives the STICKY connection-health
-	 * header/EmptyBoard cause - writing a one-off message there would bleed into an unrelated later
-	 * health render. Consumed via consumeTransientMessage(). */
+	/** A one-shot message for a transient event (a create/close/wake failure) to show as a Snackbar.
+	 * Deliberately separate from `error`, which drives the STICKY connection-health header/EmptyBoard
+	 * cause - writing a one-off message there would bleed into an unrelated later health render.
+	 * Consumed via consumeTransientMessage(). */
 	val transientMessage: String? = null,
 ) {
 	/** Sessions shows live teams plus any team we already have a thread with
@@ -2222,54 +2183,25 @@ class ChatRepository(
 		peekTerminal(team, null)
 	}
 
-	/** Spawn a new session in a spawn-point project (the daemon launches it). Sends both a slugified
-	 * sessionName (an old gateway adopts it) and the free-form displayLabel (a new gateway mints the
-	 * id); the reply's id names the thread to open. */
-	suspend fun createSession(project: String, sessionName: String?, displayLabel: String) =
-		withContext(Dispatchers.IO) { client().createSession(project, sessionName = sessionName, displayLabel = displayLabel) }
-
-	/** Add a "Creating..." placeholder row under `project`'s header, shown the instant the Spawn
-	 * dialog is confirmed (before the network round trip even starts). Returns the key to update or
-	 * end it with. */
-	fun beginCreateSession(project: String, label: String): String {
-		val key = "pending-${UUID.randomUUID()}"
-		_state.update {
-			it.copy(pendingCreates = it.pendingCreates + PendingCreate(
-				key = key,
-				project = project,
-				label = label,
-				createdAtMs = System.currentTimeMillis(),
-			))
+	/** Spawn a session in a spawn-point project with a free-form label. The gateway adopts the
+	 * session's record synchronously, so its own tile appears via the next teams() refresh - there is
+	 * no separate placeholder. A failure surfaces as a transient Snackbar message and re-syncs teams
+	 * so a rolled-back record's tile does not linger. Runs on the caller's scope (the Activity's), so
+	 * a tap always fires even before the poll loop's scope exists. */
+	suspend fun spawnSession(project: String, label: String) = coroutineScope {
+		val slug = slugifySessionName(label).ifEmpty { null }
+		// Nudge a refresh shortly after firing so the just-adopted record's tile shows promptly,
+		// without waiting on a cold container's (up to ~25s) create reply.
+		launch {
+			delay(400)
+			runCatching { refreshTeams() }
 		}
-		return key
-	}
-
-	/** Record the real, already-adopted session address once createSession() resolves, so the poll
-	 * loop's reconciliation (see startPolling) can retire this placeholder once that session shows up
-	 * in `teams`. `pending` switches the row's text to the cold-container-bringup wording.
-	 * `localTeamName` is the bare `project.id` form (same convention as openThread's `team` param);
-	 * canonicalized here since `teams()` reports each Team.name as the full qualified address, and a
-	 * bare-vs-qualified mismatch would mean this placeholder never matches and always times out. */
-	fun updateCreateSession(key: String, localTeamName: String, pending: Boolean) {
-		val expectedTeamName = canonicalTarget(localTeamName)
-		_state.update { s ->
-			s.copy(pendingCreates = s.pendingCreates.map {
-				if (it.key != key) it
-				else it.copy(expectedTeamName = expectedTeamName, status = if (pending) "waking-docker" else it.status)
-			})
-		}
-	}
-
-	/** Drop a placeholder: createSession() threw (or the reply named no usable id), so there is no
-	 * session to wait for. `transientError`, if given, surfaces as a Snackbar via
-	 * consumeTransientMessage() rather than the sticky `ChatState.error`. */
-	fun endCreateSession(key: String, transientError: String? = null) {
-		_state.update { s ->
-			s.copy(
-				pendingCreates = s.pendingCreates.filterNot { it.key == key },
-				transientMessage = transientError ?: s.transientMessage,
-			)
-		}
+		runCatching { withContext(Dispatchers.IO) { client().createSession(project, sessionName = slug, displayLabel = label) } }
+			.onSuccess { runCatching { refreshTeams() } }
+			.onFailure { e ->
+				_state.update { it.copy(transientMessage = e.message ?: "Failed to create \"$label\"") }
+				runCatching { refreshTeams() }
+			}
 	}
 
 	/** Take and clear the one-shot transient message, so a recomposition never re-shows it. */
@@ -2277,24 +2209,6 @@ class ChatRepository(
 		val msg = _state.value.transientMessage
 		if (msg != null) _state.update { it.copy(transientMessage = null) }
 		return msg
-	}
-
-	/** Retire a placeholder once its real session shows up in a fresh `teams` list, or once it has
-	 * been pending long enough to be considered abandoned (a background launch failure rolls its
-	 * record back server-side with no push, so this timeout is the only way the client ever learns
-	 * of that rare case). Called from the poll loop's own teams() refresh - no separate watcher. */
-	private fun reconcilePendingCreates(teams: List<Team>) {
-		if (_state.value.pendingCreates.isEmpty()) return
-		val (retained, abandoned) = reconcilePendingCreateList(
-			_state.value.pendingCreates,
-			teams.mapTo(HashSet()) { it.name },
-			System.currentTimeMillis(),
-			PENDING_CREATE_TIMEOUT_MS,
-		)
-		_state.update { it.copy(pendingCreates = retained) }
-		abandoned?.let { p ->
-			_state.update { s -> s.copy(transientMessage = "\"${p.label}\" never came up - check the project") }
-		}
 	}
 
 	/** Send text (submitted with Enter) or a named control key to an agent's tmux pane. */
@@ -2466,7 +2380,6 @@ class ChatRepository(
 						runCatching { client().teams(localGatewayId) }.onSuccess { t ->
 							_state.update { it.copy(teams = t) }
 							refreshDisplayNameFromTeams()
-							reconcilePendingCreates(t)
 						}
 					}
 					// Visible: long-poll (the hold IS the wait; re-poll immediately).
@@ -2677,8 +2590,33 @@ class ChatRepository(
 		return key
 	}
 
+	/** Close a tab: drop it locally AND, for a local addressable session, kill its tmux on the gateway
+	 * while KEEPING its resume record (so it stays listed as available for a re-wake). The record
+	 * surviving is what distinguishes Close from Forget. Best-effort; a gateway rejection (e.g. mid-
+	 * wake, or a user-launched session) surfaces as a transient message rather than blocking the local
+	 * tab close. */
 	fun closeTab(team: String) {
 		_state.update { it.copy(openTabs = it.openTabs - team) }
+		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
+		if (t is Address && t.gateway == _state.value.localGatewayId) {
+			pollScope?.launch(Dispatchers.IO) {
+				runCatching { client().closeSession(team) }
+					.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "close failed") } }
+			}
+		}
+	}
+
+	/** Wake an asleep session (the terminal-view Wake button): reattach its record and bring its
+	 * container/tmux back up. Reuses create_session's reattach-and-wake path keyed on the session's
+	 * own spawn + leaf, so an existing record resumes rather than a duplicate being minted.
+	 * Best-effort; a failure surfaces as a transient message. */
+	fun wakeSession(team: String) {
+		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
+		if (t !is Address || t.gateway != _state.value.localGatewayId) return
+		pollScope?.launch(Dispatchers.IO) {
+			runCatching { client().createSession(target = t.spawn, sessionName = t.session) }
+				.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "wake failed") } }
+		}
 	}
 
 	// Per-session composer drafts, persisted so a power-management kill (or any process
@@ -2989,10 +2927,6 @@ class ChatRepository(
 		const val LONG_POLL_HOLD_MS = 40_000L
 		// Refresh the team list at most this often, regardless of poll cadence.
 		const val TEAMS_REFRESH_MS = 30_000L
-		// A create_session placeholder gives up after this long with no matching real session -
-		// safely above the gateway's own WAKE_TIMEOUT_MS (10 min default) so a genuinely slow but
-		// still-in-flight cold start is never abandoned early.
-		const val PENDING_CREATE_TIMEOUT_MS = 11 * 60_000L
 		const val MAX_OUTGOING_BYTES = 10_000_000
 	}
 }

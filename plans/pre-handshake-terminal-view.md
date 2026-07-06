@@ -221,6 +221,43 @@ precedent.
   reachable path is resize (<=8s, near-instant in practice) + fast absent capture + `docker logs`
   (<=5s) ~= 13s, under the 20s budget.
 
+## UX correction (owner feedback, supersedes the placeholder + navigate-on-create decisions)
+
+The owner rejected the two-card board (a separate spinner placeholder card alongside the real
+session card) shown in a live screenshot: "replace that spinner tile with the main tile as soon as
+docker responds... the placeholder should probably be the actual session." Corrected model:
+
+- **One tile per session.** The whole `PendingCreate` placeholder mechanism is DELETED (data class,
+  `reconcilePendingCreateList`, state, `beginCreateSession`/`endCreateSession`, `PendingCreateCard`,
+  its test, the timeout const). The gateway adopts a session's record synchronously on
+  `create_session`, so the normal `SessionCard` (via `teams()`) is the only tile.
+- **Spinner on the session tile while it comes up.** The gateway now reports an asleep record with a
+  wake in flight as `verifying` (not `available`) - `routes.ts teams()` reads an injected
+  `isWakeInFlight`. So a spawned/woken session reads `verifying` from spawn through the MCP
+  handshake, and `SessionCard` shows a `CircularProgressIndicator` for `status == "verifying"`. This
+  is the reliable signal; the earlier `working`-based guess never fired during the actual boot.
+- **Spawn stays on the board** (no auto-navigate). `onSpawn` just calls `repo.spawnSession`.
+- **Tap opens the terminal until fully handshaked.** `terminalMode` defaults on for
+  `status in {null, available, verifying}` (terminal view: docker logs then tmux); `online`
+  (handshake confirmed) opens chat. `wakePending` keys off `verifying` too.
+
+Accepted tradeoff: a backgrounded (post-25s-bound) cold-container create failure drops its tile off
+the board on the next `teams()` refresh with no message (the vanishing tile is the signal); the old
+11-minute placeholder timeout message is gone with the placeholder.
+
+## Known residuals (Android lap, red-team-accepted)
+
+- **Close removes the tab optimistically.** `closeTab` drops the local tab immediately, then fires
+  `close_session` best-effort; a gateway refusal (mid-wake, or a user-launched session) surfaces a
+  transient message but the tab is already gone. Accepted by design: a tab is a local view, the
+  session's record survives (Close keeps the store), so it stays on the board and is reopenable, and
+  the refusal message explains why it was not killed. Blocking the tab close on a network round-trip
+  would be worse UX.
+- **The terminal view peeks continuously while open, with a capped backoff.** Since the view always
+  peeks (needed so a booting session shows its logs), an asleep/stuck/user-launched session that is
+  left open keeps peeking. It backs off to 8x the base cadence on consecutive failures and only runs
+  while the thread is open and RESUMED (foreground), so it is bounded, not a background drain.
+
 ## Implementation status
 
 - **Lap 1 (backend): DONE + gated green.** Phase A (daemon peek fallback + exact-match tmux
@@ -341,3 +378,78 @@ Open, non-blocking questions for the next refinement pass or implementation time
 for the new peek-result fields (`text`/`kind` as drafted above, open to a better name); exact
 read-only-log-view visual treatment (a banner label, monospace styling, etc); whether tmux's `-t
 =<name>` exact-match syntax needs any compatibility check against the installed tmux version.
+
+## Painpoints
+
+Read-only crust sweep of the touched surface (5 scouts). Record only, NOT fixed - follow-up work,
+not gates on this plan. Most-actionable first.
+
+**Pre-existing bug-classes this feature threw into relief (worth a near-term follow-up):**
+- `src/gateway/console/consoleHandler.ts : forget` - **bug-class** - `forget` has NO
+  `isWakeInFlight` guard, though `close_session` (its new sibling) added exactly that. A `forget`
+  fired mid-wake kills a not-yet-up pane (no-op) then the in-flight wake completes and re-mints the
+  record on confirm - resurrecting a session the human PERMANENTLY forgot (worse than close's
+  keep-record case). Give forget the same guard.
+- `android/.../ChatRepository.kt : forget` - **bug-class** - `forget()` deletes local state
+  synchronously then fires `client().forget(team)` in a bare `runCatching` with NO `onFailure`, so a
+  gateway-side failure is swallowed silently, leaving the UI showing the session gone while its tmux
+  + record may still be alive. `closeTab`/`wakeSession` (same commit) both attach an `onFailure`
+  transient message; forget, the more destructive op, was left the odd one out.
+
+**Dead code from the `updateCreateSession` removal (a clean-up cascade this feature opened):**
+- `android/.../ChatRepository.kt : PendingCreate : expectedTeamName, status` - **dead-code** -
+  both fields are now write-once-to-default (nothing sets them); the kdoc admits it but the fields
+  remain live and are still read downstream.
+- `android/.../ChatRepository.kt : reconcilePendingCreateList : matched-by-expectedTeamName branch`
+  - **dead-code** - `matched` can never be true in prod (expectedTeamName always null); retirement
+  now happens via `onSpawn`'s direct `endCreateSession`, bypassing this function's success path. It
+  only ever returns still-pending or timed-out now.
+- `android/.../MainActivity.kt : PendingCreateCard : status == "waking-docker" branch` -
+  **dead-code** - unreachable (status never leaves "creating"); the card renders "Creating..."
+  unconditionally, the "Waking Docker..." string is inert.
+- `android/.../PendingCreateReconcileTest.kt` - **dead-code / stale-name** - three tests exercise
+  the dead matched-by-name branch (false confidence); one comment references the removed
+  `updateCreateSession`. The real retirement path (onSpawn -> endCreateSession) is untested.
+  A clean follow-up removes `expectedTeamName`/`status` from `PendingCreate`, simplifies
+  `reconcilePendingCreateList` to timeout-only, collapses `PendingCreateCard` to one text, and
+  rewrites the test.
+
+**Dup-logic introduced by close_session (a shared helper would fold it):**
+- `consoleHandler.ts : forget / close_session` - **dup-logic** - close_session hand-duplicates
+  forget's target-validate + composeSessionName + resolveTmuxTarget + dedupKey + killSession tail;
+  only the error verb and the drop-vs-keep-record delta differ. Should be one parameterized helper.
+- `consoleHandler.ts : close_session vs assertDaemonDrivable` - **dup-logic** - close_session
+  inlines the alias-detection condition already in `assertDaemonDrivable`, and leaves that helper's
+  docstring stale ("close_session ... exempt" - it actually enforces the check itself now). A future
+  edit to the condition silently diverges the copy.
+- `android/.../ChatRepository.kt : closeTab/forget/wakeSession` - **dup-logic** - each repeats the
+  identical 2-line "is this a local addressable session" guard; extract one predicate.
+
+**Stale names from run() now serving docker too (commit 3f165e8):**
+- `src/shared/host-op.ts : classifyPeekError` - **dead-code** - the `"tmux command exited"`
+  substring branch is now partly dead: `run()`'s fallback message became `"command exited N"`, so
+  that branch only matches a caller still emitting the tmux wording; the default already returns
+  "failure", so behavior is unchanged.
+- `src/mcp/devcontainer/tmuxCore.ts : run()` - **stale-name** - the timeout rejects with
+  `"tmux command timed out"` even for a `docker logs`/`docker exec` argv (run() is shared now). The
+  message is internal-only (captureContainerLogs swallows + rethrows the original), so it is cosmetic.
+
+**Minor Android state-machine watch items (post-fix):**
+- `android/.../TerminalView.kt : showOffSession user-launched branch` - **legacy-landmine** - the
+  calm-vs-wake distinction keys on `peekError?.contains("user-launched")`, a substring match on a
+  gateway message string. The gateway does not surface a machine-readable errorKind to the console
+  result, so this is the only signal; a message reword would silently flip the branch.
+- `android/.../TerminalView.kt : showOffSession generic branch` - **cosmetic** - a genuine
+  non-absent failure (a persistent timeout) renders "This session is asleep." rather than the actual
+  error text (peekError is used only to gate + test the user-launched substring). Tapping Wake
+  retries, so it self-heals, but the label is imprecise for a true failure.
+- `android/.../MainActivity.kt : ThreadScreen : terminalMode` - **cosmetic** - the comment says
+  "an unrecognized status opens chat" while the seed lumps `null` (unknown) in with the
+  asleep/booting set that opens terminal; the intent (null = a fresh create) is right, the comment
+  wording is loose.
+
+**Also flagged (pre-existing, out of this feature's scope):**
+- `consoleHandler.ts : create_session rollback sites` - **bug-class** - both rollbacks call
+  `sessionStore.forget(...)` on `!ok` with no re-check of `confirmedAt`/live-incarnation, so a launch
+  that reports failure after the session actually confirmed could drop a live record. (Same class as
+  the handshake-linkage plan's documented rollback races.)
