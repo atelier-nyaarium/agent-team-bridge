@@ -97,6 +97,7 @@ export interface ConsoleHandlerDeps {
 	localGatewayId: string;
 	localDomainId: string;
 	sendBoundMs?: number;
+	createSessionBoundMs?: number;
 	/** True when the name belongs to a devcontainer project. A device must not take such a
 	 * name: while the project sleeps, the console's virtual peer would squat the registry slot,
 	 * absorb sends meant for the project, and suppress its wake. */
@@ -119,6 +120,12 @@ export interface ConsoleHandlerDeps {
 	/** Relay a tmux op to the local host daemon and await its reply. Drives the console terminal
 	 * view; absent when no host daemon is wired (the op then errors "terminal unavailable"). */
 	relayToHost?: (op: HostOp) => Promise<HostOpResult>;
+	/** Wake a team (the same trigger send() uses for an asleep target), bringing up a devcontainer's
+	 * cold container if needed. create_session uses this instead of relayToHost for a devcontainer
+	 * target, since only this path brings the container up first. Absent when no host daemon is
+	 * wired (create_session then falls back to relayToHost, which will fail against a cold container -
+	 * matching what happens today without this dependency). */
+	tryWakeTeam?: (team: string) => Promise<boolean>;
 	/** The cross-Domain listening-mode handshake coordinator. Absent when federation is not
 	 * wired (the cross_domain_* ops then error "not available"). The console drives the mutual
 	 * pairing; the gateway owns the listening window and writes the peer. */
@@ -192,6 +199,13 @@ const FAKE_REQ = new Request("http://gateway/console");
 // answer landing in the mailbox via the persistent conversation.
 const SEND_BOUND_MS = 25_000;
 
+// Same reasoning and ceiling as SEND_BOUND_MS, for create_session's devcontainer-wake launch (which
+// can likewise run for up to WAKE_TIMEOUT_MS cold-starting a container). Past this bound the op
+// returns the already-adopted session id with status "pending" and the launch continues in the
+// background; the console's own placeholder times out locally rather than needing a push-delivery
+// mechanism for the rare backgrounded failure.
+const CREATE_SESSION_BOUND_MS = 25_000;
+
 // Ceiling on a poll's long-poll hold. Must clear the relay chain with headroom: evie holds the
 // console's HTTP request 55s and the apiserver proxy allows 60s.
 const HOLD_CAP_MS = 45_000;
@@ -236,12 +250,14 @@ export function createConsoleDispatcher({
 	localGatewayId,
 	localDomainId,
 	sendBoundMs = SEND_BOUND_MS,
+	createSessionBoundMs = CREATE_SESSION_BOUND_MS,
 	isProjectName,
 	dropSessionResume,
 	sessionStore,
 	domain,
 	domainStatus,
 	relayToHost,
+	tryWakeTeam,
 	crossDomain,
 	crossDomainShare,
 	unlinkDomain,
@@ -720,8 +736,51 @@ export function createConsoleDispatcher({
 					// this matches the wake path: a display-label collision (label deduped to "-2",
 					// workdirHint pinned to the original) opens the same dir. The daemon guards traversal too.
 					const workdirHint = sessionStore && adopted ? sessionStore.hostWorkdirHint(adopted.record) : label;
-					const r = await relayToHost({ kind: "createSession", target, workdirHint, dedupKey });
-					if (!r.ok) throw new Error(r.error ?? "create session failed");
+
+					// A devcontainer target may need a cold container bring-up (tryWakeTeam's
+					// ensureContainerUpAsync), which the host-op channel's HOST_OP_TIMEOUT_MS (20s) cannot
+					// afford - go through the wake path instead of relayToHost for that target kind
+					// (relayToHost's createSession op assumes the container is already running). A host
+					// target has no container to bring up - the daemon is definitionally already up if
+					// relayToHost can reach it at all - so it keeps the direct host-op path.
+					const launch: Promise<HostOpResult> =
+						target.kind === "devcontainer" && tryWakeTeam
+							? tryWakeTeam(composeSessionName(target.name, target.sessionName)).then(
+									(ok): HostOpResult =>
+										ok ? { ok: true } : { ok: false, error: `failed to wake "${sessionId}"` },
+								)
+							: relayToHost({ kind: "createSession", target, workdirHint, dedupKey });
+
+					let boundTimer: ReturnType<typeof setTimeout> | undefined;
+					const bound = new Promise<null>((resolve) => {
+						boundTimer = setTimeout(() => resolve(null), createSessionBoundMs);
+					});
+					const winner = await Promise.race([launch, bound]);
+					clearTimeout(boundTimer);
+
+					if (winner === null) {
+						// Still bringing up a cold container; hand back the already-adopted deterministic id
+						// now and let the launch finish in the background. A backgrounded failure rolls the
+						// record back the same as the fast path below, silently - the console's own
+						// placeholder times out and surfaces this locally rather than needing a new
+						// push-delivery mechanism for this rare case.
+						void launch
+							.then((r) => {
+								if (!r.ok && adopted?.created)
+									sessionStore?.forget(sessionStore.teamOf(adopted.record));
+							})
+							.catch(() => {
+								if (adopted?.created) sessionStore?.forget(sessionStore.teamOf(adopted.record));
+							});
+						return {
+							created: true,
+							id: adopted?.record.id ?? sessionId,
+							sessionLabel: adopted?.record.sessionLabel,
+							status: "pending" as const,
+						};
+					}
+
+					if (!winner.ok) throw new Error(winner.error ?? "create session failed");
 				} catch (e) {
 					// Roll back only a record THIS op created, so a reattach of an existing session is
 					// never destroyed by a transient launch failure.

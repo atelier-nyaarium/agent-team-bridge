@@ -1,6 +1,7 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
+import com.atelier_nyaarium.switchboard.proto.ConsoleCreateSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
@@ -46,6 +47,7 @@ class ProtocolFixturesTest {
 			"ConsoleSendResult" -> json.decodeFromString<ConsoleSendResult>(body)
 			"ConsoleRespondResult" -> json.decodeFromString<ConsoleRespondResult>(body)
 			"ConsolePollResult" -> json.decodeFromString<ConsolePollResult>(body)
+			"ConsoleCreateSessionResult" -> json.decodeFromString<ConsoleCreateSessionResult>(body)
 			else -> throw AssertionError("unknown manifest schema: $schema")
 		}
 	}
@@ -134,6 +136,15 @@ class ProtocolFixturesTest {
 		val rename = json.decodeFromString<ConsoleOpEnvelope>(fixture("op-envelope-rename-session.json")).op
 		assertTrue("expected RenameSession op", rename is ConsoleOp.RenameSession)
 		assertEquals("Renamed Work", (rename as ConsoleOp.RenameSession).sessionLabel)
+	}
+
+	@Test
+	fun createSessionResultCarriesPendingStatus() {
+		val result = json.decodeFromString<ConsoleCreateSessionResult>(fixture("create-session-result-pending.json"))
+		assertEquals(true, result.created)
+		assertEquals("a1b2c3", result.id)
+		assertEquals("My Work", result.sessionLabel)
+		assertEquals("pending", result.status)
 	}
 
 	@Test

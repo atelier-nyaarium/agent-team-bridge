@@ -687,6 +687,7 @@ export async function startGateway(): Promise<void> {
 			// evie's register reply) so the app knows to first-root vs just-provision.
 			domainStatus: () => domainMeta?.domainStatus,
 			relayToHost,
+			tryWakeTeam,
 			crossDomain: crossDomainCoordinator
 				? {
 						listen: () => crossDomainCoordinator!.listen(),

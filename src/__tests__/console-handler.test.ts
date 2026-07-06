@@ -899,7 +899,12 @@ describe("console terminal ops (peek / tmux_send)", () => {
 	function makeTerminalHarness(
 		isProjectName: (n: string) => boolean = (n) => n === "recipe-app",
 		relayPeek?: () => { ok: boolean; result?: unknown; error?: string; errorKind?: "absent" | "failure" },
-		opts: { sessionStore?: SessionStore; relayFails?: boolean } = {},
+		opts: {
+			sessionStore?: SessionStore;
+			relayFails?: boolean;
+			tryWakeTeam?: (team: string) => Promise<boolean>;
+			createSessionBoundMs?: number;
+		} = {},
 	) {
 		const hostOps: Record<string, unknown>[] = [];
 		const routes: ConsoleRoutes = {
@@ -917,6 +922,8 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			routes,
 			isProjectName,
 			sessionStore: opts.sessionStore,
+			tryWakeTeam: opts.tryWakeTeam,
+			createSessionBoundMs: opts.createSessionBoundMs,
 			relayToHost: async (op) => {
 				hostOps.push(op as unknown as Record<string, unknown>);
 				if (opts.relayFails) return { ok: false, error: "launch failed" };
@@ -1127,6 +1134,99 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect((r1.result as { sessionLabel: string }).sessionLabel).toBe("app");
 		expect((r2.result as { sessionLabel: string }).sessionLabel).toBe("app-2");
 		expect((h.hostOps[1] as { workdirHint?: string }).workdirHint).toBe("app");
+	});
+
+	it("create_session on a devcontainer target wakes it instead of relaying a raw createSession host op", async () => {
+		const woken: string[] = [];
+		const h = makeTerminalHarness(undefined, undefined, {
+			tryWakeTeam: async (team) => {
+				woken.push(team);
+				return true;
+			},
+		});
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", sessionName: "scratch" }, "c1"),
+		);
+		expect(reply.result).toMatchObject({ created: true, id: "scratch" });
+		expect(woken).toEqual(["recipe-app.scratch"]);
+		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("create_session on a host target still relays through relayToHost, ignoring tryWakeTeam", async () => {
+		const woken: string[] = [];
+		const h = makeTerminalHarness(undefined, undefined, {
+			tryWakeTeam: async (team) => {
+				woken.push(team);
+				return true;
+			},
+		});
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "host", sessionName: "scratch" }, "c1"),
+		);
+		expect(reply.result).toMatchObject({ created: true, id: "scratch" });
+		expect(woken).toEqual([]);
+		expect(h.hostOps).toHaveLength(1);
+	});
+
+	it("a devcontainer create past the bound returns a pending status and settles once the wake resolves", async () => {
+		const store = new SessionStore();
+		let resolveWake: ((ok: boolean) => void) | undefined;
+		const h = makeTerminalHarness(undefined, undefined, {
+			sessionStore: store,
+			createSessionBoundMs: 20,
+			tryWakeTeam: () =>
+				new Promise<boolean>((resolve) => {
+					resolveWake = resolve;
+				}),
+		});
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", sessionName: "scratch" }, "c1"),
+		);
+		expect(reply.result).toEqual({ created: true, id: "scratch", sessionLabel: "scratch", status: "pending" });
+		// The record is already adopted (visible to teams()) while the wake is still in flight.
+		expect(store.getByTeam("recipe-app.scratch")).toBeDefined();
+
+		resolveWake?.(true);
+		await new Promise((r) => setTimeout(r, 10));
+		// A successful backgrounded wake leaves the record in place.
+		expect(store.getByTeam("recipe-app.scratch")).toBeDefined();
+	});
+
+	it("a devcontainer create's backgrounded wake failure rolls back the record it created", async () => {
+		const store = new SessionStore();
+		let resolveWake: ((ok: boolean) => void) | undefined;
+		const h = makeTerminalHarness(undefined, undefined, {
+			sessionStore: store,
+			createSessionBoundMs: 20,
+			tryWakeTeam: () =>
+				new Promise<boolean>((resolve) => {
+					resolveWake = resolve;
+				}),
+		});
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", sessionName: "scratch" }, "c1"),
+		);
+		expect(reply.result).toMatchObject({ status: "pending" });
+		expect(store.getByTeam("recipe-app.scratch")).toBeDefined();
+
+		resolveWake?.(false);
+		await new Promise((r) => setTimeout(r, 10));
+		// The failed backgrounded wake rolls back the record this op created, same as a fast failure.
+		expect(store.getByTeam("recipe-app.scratch")).toBeUndefined();
+	});
+
+	it("a devcontainer create whose wake fails within the bound throws and rolls back synchronously", async () => {
+		const store = new SessionStore();
+		const h = makeTerminalHarness(undefined, undefined, {
+			sessionStore: store,
+			tryWakeTeam: async () => false,
+		});
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", sessionName: "scratch" }, "c1"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("scratch");
+		expect(store.getByTeam("recipe-app.scratch")).toBeUndefined();
 	});
 
 	it("a re-dispatched displayLabel create reattaches its record instead of minting a phantom (restart-safe)", async () => {

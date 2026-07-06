@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import {
+	ConsoleCreateSessionResultSchema,
 	ConsoleListTeamsResultSchema,
 	ConsoleOpEnvelopeSchema,
 	ConsolePollResultSchema,
@@ -38,6 +39,7 @@ const SCHEMAS: Record<string, z.ZodType> = {
 	ConsoleSendResult: ConsoleSendResultSchema,
 	ConsoleRespondResult: ConsoleRespondResultSchema,
 	ConsolePollResult: ConsolePollResultSchema,
+	ConsoleCreateSessionResult: ConsoleCreateSessionResultSchema,
 };
 
 interface ManifestEntry {
@@ -114,5 +116,10 @@ describe("protocol fixtures", () => {
 		const env = ConsoleOpEnvelopeSchema.parse(fixture("op-envelope-rename-session.json"));
 		expect(env.op.kind).toBe("rename_session");
 		if (env.op.kind === "rename_session") expect(env.op.sessionLabel).toBe("Renamed Work");
+	});
+
+	it("a create_session result carries the pending status once the launch outran the bound", () => {
+		const result = ConsoleCreateSessionResultSchema.parse(fixture("create-session-result-pending.json"));
+		expect(result).toEqual({ created: true, id: "a1b2c3", sessionLabel: "My Work", status: "pending" });
 	});
 });

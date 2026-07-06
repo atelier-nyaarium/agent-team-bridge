@@ -603,6 +603,11 @@ export const ConsoleCreateSessionResultSchema = z
 		// Absent from an older gateway that only reported `created`.
 		id: z.string().optional(),
 		sessionLabel: z.string().optional(),
+		// Present only when a cold devcontainer bring-up outran the gateway's bound and the launch is
+		// continuing in the background (id/sessionLabel are still the real, already-adopted values -
+		// only the launch itself is still in flight). Absent means the launch already completed by the
+		// time this reply was sent.
+		status: z.enum(["pending"]).optional(),
 	})
 	.meta({ id: "ConsoleCreateSessionResult" });
 

@@ -744,6 +744,7 @@ data class ConsoleCreateSessionResult(
 	val created: Boolean,
 	val id: String? = null,
 	val sessionLabel: String? = null,
+	val status: String? = null,
 )
 
 @Serializable
