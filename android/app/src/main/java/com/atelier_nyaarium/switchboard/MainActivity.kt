@@ -990,6 +990,7 @@ fun SessionsScreen(
 	var spawnProject by remember { mutableStateOf<String?>(null) }
 	var renameTeam by remember { mutableStateOf<Team?>(null) }
 	var forgetTeam by remember { mutableStateOf<Team?>(null) }
+	var showConnectDialog by remember { mutableStateOf(false) }
 	// Per-Gateway accordion collapse state (default expanded).
 	val collapsedGateways = remember { mutableStateMapOf<String, Boolean>() }
 
@@ -1041,6 +1042,17 @@ fun SessionsScreen(
 			onDismiss = { spawnProject = null },
 		)
 	}
+	if (showConnectDialog) {
+		ConnectDialog(
+			// Reuses onOpen verbatim: connecting by typed address IS opening a thread, the same call
+			// a card tap makes (openThread does no existence check either way).
+			onConnect = { address ->
+				onOpen(address)
+				showConnectDialog = false
+			},
+			onDismiss = { showConnectDialog = false },
+		)
+	}
 
 	Scaffold(
 		topBar = {
@@ -1048,6 +1060,9 @@ fun SessionsScreen(
 				title = { Text("Agent Sessions") },
 				actions = {
 					IconButton(onClick = hapticClick(onRefresh)) { Icon(Icons.Default.Refresh, contentDescription = "Refresh") }
+					IconButton(onClick = hapticClick { showConnectDialog = true }) {
+						Icon(Icons.Default.Terminal, contentDescription = "Connect to session")
+					}
 					TextButton(onClick = hapticClick(onSettings)) { Text("Settings") }
 				},
 			)
@@ -2632,6 +2647,43 @@ fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Uni
 		},
 		confirmButton = {
 			TextButton(enabled = name.isNotBlank(), onClick = hapticClick { onSpawn(name.trim()) }) { Text("Spawn") }
+		},
+		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
+	)
+}
+
+/** Open a session by typed address (e.g. "story-designer.story", or bare "host") instead of tapping
+ * an existing card. openThread does no existence check and terminalEligible passes for any address
+ * shaped like spawn/spawn.session, so this reaches a session whose board card is missing - a tmux
+ * pane that is alive but never completed its handshake (its record was rolled back, or never
+ * existed) has no other way to be found and peeked/driven from the phone. */
+@Composable
+fun ConnectDialog(onConnect: (String) -> Unit, onDismiss: () -> Unit) {
+	var address by remember { mutableStateOf("") }
+	AlertDialog(
+		onDismissRequest = onDismiss,
+		title = { Text("Connect to session") },
+		text = {
+			Column {
+				OutlinedTextField(
+					value = address,
+					onValueChange = { address = it },
+					label = { Text("Address") },
+					placeholder = { Text("story-designer.story") },
+					singleLine = true,
+				)
+				Text(
+					"For a session with no card - e.g. one stuck before it could confirm.",
+					style = MaterialTheme.typography.labelSmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+					modifier = Modifier.padding(top = 4.dp),
+				)
+			}
+		},
+		confirmButton = {
+			TextButton(enabled = address.isNotBlank(), onClick = hapticClick { onConnect(address.trim()) }) {
+				Text("Connect")
+			}
 		},
 		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
 	)
