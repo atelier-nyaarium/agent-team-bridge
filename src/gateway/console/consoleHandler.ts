@@ -933,7 +933,11 @@ export function createConsoleDispatcher({
 			);
 			return { ok: true, result };
 		} catch (err) {
-			return { ok: false, error: (err as Error).message };
+			const message = (err as Error).message;
+			// The reply carrying this message is E2E-sealed before it leaves handleFrame (relayPump.ts),
+			// so this is the only point where an op failure is visible server-side at all.
+			console.error(`[console] ${frame.op.kind} op failed for ${frame.device}: ${message}`);
+			return { ok: false, error: message };
 		}
 	}
 

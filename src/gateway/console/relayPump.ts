@@ -56,11 +56,13 @@ export function createConsoleRelayPump({ sealer, handleFrame, sendReply }: Relay
 			try {
 				({ env, ownerSignPub } = sealer.open(frame.signerSignPub, frame.sealed));
 			} catch (err) {
+				const message = (err as Error).message;
+				console.error(`[console] unseal failed for opId ${frame.opId.slice(0, 8)}: ${message}`);
 				await sendReply({
 					type: "console_relay_reply",
 					v: CONSOLE_PROTOCOL_VERSION,
 					opId: frame.opId,
-					error: `unseal failed: ${(err as Error).message}`,
+					error: `unseal failed: ${message}`,
 				});
 				return;
 			}
@@ -87,11 +89,13 @@ export function createConsoleRelayPump({ sealer, handleFrame, sendReply }: Relay
 					sealed: sealer.seal(frame.signerSignPub, body),
 				};
 			} catch (err) {
+				const message = (err as Error).message;
+				console.error(`[console] seal failed for opId ${frame.opId.slice(0, 8)}: ${message}`);
 				reply = {
 					type: "console_relay_reply",
 					v: CONSOLE_PROTOCOL_VERSION,
 					opId: frame.opId,
-					error: `seal failed: ${(err as Error).message}`,
+					error: `seal failed: ${message}`,
 				};
 			}
 
