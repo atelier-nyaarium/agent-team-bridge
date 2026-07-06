@@ -9,7 +9,7 @@ function makeOps(): { ops: TmuxOps } {
 	const ops: TmuxOps = {
 		peekPane: vi.fn(async () => {
 			n++;
-			return { ansi: "SCREEN", hash: `h${n}` };
+			return { kind: "tmux" as const, ansi: "SCREEN", hash: `h${n}` };
 		}),
 		sendText: vi.fn(async () => {}),
 		sendKey: vi.fn(async () => {}),
@@ -28,8 +28,8 @@ describe("createHostOpRunner", () => {
 			runner.run({ kind: "peek", target: T }),
 			runner.run({ kind: "peek", target: T }),
 		]);
-		expect(a).toEqual({ ansi: "SCREEN", hash: "h1" });
-		expect(b).toEqual({ ansi: "SCREEN", hash: "h1" });
+		expect(a).toEqual({ kind: "tmux", ansi: "SCREEN", hash: "h1" });
+		expect(b).toEqual({ kind: "tmux", ansi: "SCREEN", hash: "h1" });
 		expect(h.ops.peekPane).toHaveBeenCalledTimes(1);
 	});
 
@@ -163,7 +163,7 @@ describe("createHostOpRunner", () => {
 			peekPane: async () => {
 				calls++;
 				if (calls === 1) throw new Error("no server running on /tmp/tmux-1000/default");
-				return { ansi: "OK", hash: "h" };
+				return { kind: "tmux" as const, ansi: "OK", hash: "h" };
 			},
 			sendText: async () => {},
 			sendKey: async () => {},
@@ -173,7 +173,7 @@ describe("createHostOpRunner", () => {
 		};
 		const runner = createHostOpRunner(ops, { minPeekIntervalMs: 0 });
 		await expect(runner.run({ kind: "peek", target: T })).rejects.toThrow();
-		expect(await runner.run({ kind: "peek", target: T })).toEqual({ ansi: "OK", hash: "h" });
+		expect(await runner.run({ kind: "peek", target: T })).toEqual({ kind: "tmux", ansi: "OK", hash: "h" });
 		expect(calls).toBe(2);
 	});
 

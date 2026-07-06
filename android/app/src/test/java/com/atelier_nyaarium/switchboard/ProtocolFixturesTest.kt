@@ -1,10 +1,12 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
+import com.atelier_nyaarium.switchboard.proto.ConsoleCloseSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleCreateSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
+import com.atelier_nyaarium.switchboard.proto.ConsolePeekResult
 import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleRegisterResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleRelayFrame
@@ -48,6 +50,8 @@ class ProtocolFixturesTest {
 			"ConsoleRespondResult" -> json.decodeFromString<ConsoleRespondResult>(body)
 			"ConsolePollResult" -> json.decodeFromString<ConsolePollResult>(body)
 			"ConsoleCreateSessionResult" -> json.decodeFromString<ConsoleCreateSessionResult>(body)
+			"ConsoleCloseSessionResult" -> json.decodeFromString<ConsoleCloseSessionResult>(body)
+			"ConsolePeekResult" -> json.decodeFromString<ConsolePeekResult>(body)
 			else -> throw AssertionError("unknown manifest schema: $schema")
 		}
 	}
@@ -80,6 +84,7 @@ class ProtocolFixturesTest {
 			"op-envelope-poll.json" to ConsoleOp.Poll::class,
 			"op-envelope-create-session-v2.json" to ConsoleOp.CreateSession::class,
 			"op-envelope-rename-session.json" to ConsoleOp.RenameSession::class,
+			"op-envelope-close-session.json" to ConsoleOp.CloseSession::class,
 		)
 		for ((name, expected) in ops) {
 			val envelope = json.decodeFromString<ConsoleOpEnvelope>(fixture(name))
@@ -145,6 +150,30 @@ class ProtocolFixturesTest {
 		assertEquals("a1b2c3", result.id)
 		assertEquals("My Work", result.sessionLabel)
 		assertEquals("pending", result.status)
+	}
+
+	@Test
+	fun closeSessionResultDecodes() {
+		val result = json.decodeFromString<ConsoleCloseSessionResult>(fixture("close-session-result.json"))
+		assertEquals(true, result.closed)
+	}
+
+	@Test
+	fun peekResultCarriesContainerLogsAsTextAndKind() {
+		val result = json.decodeFromString<ConsolePeekResult>(fixture("peek-result-container-logs.json"))
+		assertEquals("container-logs", result.kind)
+		assertTrue(result.text!!.contains("postCreate"))
+		assertNull(result.ansi)
+	}
+
+	@Test
+	fun legacyBarePeekReplyStillDecodes() {
+		// An old gateway's reply carries neither kind nor text; the new class must decode it with no
+		// MissingFieldException (the optional-field wire-compat guarantee).
+		val result = json.decodeFromString<ConsolePeekResult>(fixture("peek-result-legacy.json"))
+		assertNull(result.kind)
+		assertNull(result.text)
+		assertTrue(result.ansi!!.isNotEmpty())
 	}
 
 	@Test

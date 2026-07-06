@@ -284,6 +284,13 @@ export const ConsoleOpSchema = z
 			kind: z.literal("forget"),
 			target: z.string().min(1).max(128),
 		}),
+		// Close a session: kill its running tmux but KEEP its durable resume record, so it stays
+		// listed as available and can be re-woken (a restart / mop-up, distinct from forget's
+		// permanent drop). Same target rules as forget. Idempotent per opId.
+		z.object({
+			kind: z.literal("close_session"),
+			target: z.string().min(1).max(128),
+		}),
 		// Rename a session: set the gateway-authoritative sessionLabel on its record. `target` is
 		// the gateway-qualified composite session (like forget). The gateway sanitizes + per-spawn
 		// dedups the label. Idempotent per opId.
@@ -578,10 +585,17 @@ export const ConsolePollResultSchema = z
 
 export const ConsolePeekResultSchema = z
 	.object({
-		// The captured pane, ANSI-colored. Absent when unchanged (the console's sinceHash
-		// matched), so an idle terminal costs only the hash round-trip.
+		// The captured pane, ANSI-colored. Present for a tmux peek. Absent when unchanged (the
+		// console's sinceHash matched), so an idle terminal costs only the hash round-trip.
 		ansi: z.string().optional(),
-		// Short content hash of the pane; the console sends it back as sinceHash next cycle.
+		// The devcontainer's `docker logs` tail, present INSTEAD of `ansi` while the session's tmux
+		// pane does not exist yet (still booting). Read-only (no pane to send input to).
+		text: z.string().optional(),
+		// Which payload this frame carries: "tmux" (a live pane in `ansi`) or "container-logs" (a
+		// boot-log snapshot in `text`). A flat optional field, NOT a discriminated union: the Kotlin
+		// codegen silently drops a decode-side union root. Absent from an older gateway (treat as tmux).
+		kind: z.enum(["tmux", "container-logs"]).optional(),
+		// Short content hash of the frame; the console sends it back as sinceHash next cycle.
 		hash: z.string(),
 		unchanged: z.boolean().optional(),
 	})
@@ -625,6 +639,14 @@ export const ConsoleForgetResultSchema = z
 		killed: z.boolean(),
 	})
 	.meta({ id: "ConsoleForgetResult" });
+
+export const ConsoleCloseSessionResultSchema = z
+	.object({
+		// The session's tmux was torn down but its resume record kept (idempotent: also true when
+		// the session was already gone).
+		closed: z.boolean(),
+	})
+	.meta({ id: "ConsoleCloseSessionResult" });
 
 export const ConsoleRenameSessionResultSchema = z
 	.object({
@@ -803,6 +825,7 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleCreateSessionResultSchema,
 	ConsoleReloadPluginsResultSchema,
 	ConsoleForgetResultSchema,
+	ConsoleCloseSessionResultSchema,
 	ConsoleRenameSessionResultSchema,
 	CrossDomainListenResultSchema,
 	CrossDomainRequestResultSchema,

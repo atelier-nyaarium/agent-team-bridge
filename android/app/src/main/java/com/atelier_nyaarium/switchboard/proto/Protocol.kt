@@ -190,6 +190,12 @@ sealed class ConsoleOp {
 	) : ConsoleOp()
 
 	@Serializable
+	@SerialName("close_session")
+	data class CloseSession(
+		val target: String,
+	) : ConsoleOp()
+
+	@Serializable
 	@SerialName("rename_session")
 	data class RenameSession(
 		val target: String,
@@ -338,6 +344,8 @@ data class ConsolePollResult(
 @Serializable
 data class ConsolePeekResult(
 	val ansi: String? = null,
+	val text: String? = null,
+	val kind: String? = null,
 	val hash: String,
 	val unchanged: Boolean? = null,
 )
@@ -755,6 +763,11 @@ data class ConsoleReloadPluginsResult(
 @Serializable
 data class ConsoleForgetResult(
 	val killed: Boolean,
+)
+
+@Serializable
+data class ConsoleCloseSessionResult(
+	val closed: Boolean,
 )
 
 @Serializable

@@ -102,11 +102,21 @@ export type HostOp =
 	// already-gone session is treated as success.
 	| { kind: "killSession"; target: TmuxTarget; dedupKey?: string };
 
-/** A captured pane plus a short content hash, so the console can skip an unchanged frame. */
-export interface HostPeekResult {
+/** A captured tmux pane plus a short content hash, so the console can skip an unchanged frame. The
+ * raw return of `peekPane`; `peekWithFallback` wraps it into the tagged `HostPeekResult` below. */
+export interface TmuxPeek {
 	ansi: string;
 	hash: string;
 }
+
+/** The console terminal view's peek result over the host WS: a live tmux pane once this session's
+ * pane exists, else a snapshot of the devcontainer's `docker logs` while it is still booting (no
+ * pane yet). The two carry different payloads (a pane's ANSI vs the log text), tagged by `kind`.
+ * Host-WS-only (type-only, not codegen'd), so a discriminated union is safe here; the console-facing
+ * schema (ConsolePeekResultSchema) stays a flat object for codegen reasons. */
+export type HostPeekResult =
+	| { kind: "tmux"; ansi: string; hash: string }
+	| { kind: "container-logs"; text: string; hash: string };
 
 /** What kind of failure a peek hit: the pane is merely ABSENT (booting, exited, or stopped - a calm
  * transient) vs a real FAILURE (timeout, offline host). */

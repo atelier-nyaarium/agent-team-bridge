@@ -21,6 +21,7 @@ import {
 	isAgentWorking,
 	killSession,
 	peekPane,
+	peekWithFallback,
 	sendKey,
 	sendText,
 } from "./tmuxCore.js";
@@ -353,7 +354,9 @@ export function buildLaunchCommand(
 // The executor owns single-flight + the peek cadence floor; this module only relays the
 // reply onto the host WS, correlated by reqId.
 const hostOpRunner = createHostOpRunner({
-	peekPane,
+	// The console-facing peek falls back to container logs while a pane does not exist yet; the raw
+	// peekPane serves the internal wake/ready callers that need its reject-on-absent.
+	peekPane: peekWithFallback,
 	sendText,
 	sendKey,
 	createSession: async (target, workdirHint) => {

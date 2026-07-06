@@ -12,6 +12,9 @@ let stdoutData = "";
 // Scripted stderr emitted on a non-zero exit, so a test can drive the exact failure wording
 // killSession classifies on (e.g. tmux's "can't find session" vs an unrecognized failure).
 let stderrData = "";
+// Scripted stderr for a `docker logs` spawn, emitted regardless of exit code (docker sends a
+// container's stderr there on a clean run). Lets a test drive the mergeStderr fold.
+let logsStderr = "";
 
 vi.mock("node:child_process", () => ({
 	spawn: (cmd: string, args: string[]) => {
@@ -27,9 +30,10 @@ vi.mock("node:child_process", () => ({
 		child.kill = () => {};
 		// Only a capture-pane returns a screen; a send-keys / has-session / etc. has no stdout, so a
 		// scripted screen is not consumed by the "1" keypresses awaitReady interleaves with its peeks.
-		const out = args.includes("capture-pane") ? stdoutData : "";
+		const out = args.includes("capture-pane") || args.includes("logs") ? stdoutData : "";
 		queueMicrotask(() => {
 			if (out) child.stdout.emit("data", Buffer.from(out));
+			if (args.includes("logs") && logsStderr) child.stderr.emit("data", Buffer.from(logsStderr));
 			if (code !== 0 && stderrData) child.stderr.emit("data", Buffer.from(stderrData));
 			child.emit("close", code);
 		});
@@ -47,10 +51,12 @@ import {
 	isLoggedOut,
 	killSession,
 	peekPane,
+	peekWithFallback,
 	selfSessionTarget,
 	sendKey,
 	sendText,
 } from "../mcp/devcontainer/tmuxCore.js";
+import type { TmuxTarget } from "../shared/host-op.js";
 import { DEFAULT_SESSION } from "../shared/session-id.js";
 
 afterEach(() => {
@@ -59,6 +65,7 @@ afterEach(() => {
 	exitQueue.length = 0;
 	stdoutData = "";
 	stderrData = "";
+	logsStderr = "";
 });
 
 describe("tmuxCore sendText", () => {
@@ -66,12 +73,12 @@ describe("tmuxCore sendText", () => {
 		await sendText({ kind: "host", name: "host", sessionName: "claude" }, "-l hello");
 		// One invocation: the CR (the Enter key) rides inside the literal so text and submission
 		// cannot be torn apart by a failure between two commands.
-		expect(calls).toEqual([["tmux", "send-keys", "-t", "claude.0", "-l", "--", "-l hello\r"]]);
+		expect(calls).toEqual([["tmux", "send-keys", "-t", "=claude.0", "-l", "--", "-l hello\r"]]);
 	});
 
 	it("omits the trailing CR when submit is false (types into the composer without submitting)", async () => {
 		await sendText({ kind: "host", name: "host", sessionName: "claude" }, "hello", false);
-		expect(calls).toEqual([["tmux", "send-keys", "-t", "claude.0", "-l", "--", "hello"]]);
+		expect(calls).toEqual([["tmux", "send-keys", "-t", "=claude.0", "-l", "--", "hello"]]);
 	});
 
 	it("targets a devcontainer via docker exec by the compose container name", async () => {
@@ -85,7 +92,7 @@ describe("tmuxCore sendText", () => {
 			"tmux",
 			"send-keys",
 			"-t",
-			"claude.0",
+			"=claude.0",
 			"-l",
 			"--",
 			"hi\r",
@@ -103,7 +110,7 @@ describe("tmuxCore sendText", () => {
 describe("tmuxCore sendKey", () => {
 	it("sends an allowed control key with no -l and no trailing Enter", async () => {
 		await sendKey({ kind: "host", name: "host", sessionName: "claude" }, "C-c");
-		expect(calls).toEqual([["tmux", "send-keys", "-t", "claude.0", "C-c"]]);
+		expect(calls).toEqual([["tmux", "send-keys", "-t", "=claude.0", "C-c"]]);
 	});
 
 	it("rejects a key not on the whitelist without spawning anything", async () => {
@@ -125,8 +132,8 @@ describe("tmuxCore peekPane", () => {
 	it("resizes the detached session to fit the phone, then captures the visible pane with a hash", async () => {
 		stdoutData = "screen contents";
 		const r = await peekPane({ kind: "host", name: "host", sessionName: "claude" });
-		expect(calls[0]).toEqual(["tmux", "resize-window", "-t", "claude", "-x", "58", "-y", "40"]);
-		expect(calls[1]).toEqual(["tmux", "capture-pane", "-t", "claude.0", "-e", "-p"]);
+		expect(calls[0]).toEqual(["tmux", "resize-window", "-t", "=claude", "-x", "58", "-y", "40"]);
+		expect(calls[1]).toEqual(["tmux", "capture-pane", "-t", "=claude.0", "-e", "-p"]);
 		expect(r.ansi).toBe("screen contents");
 		expect(r.hash).toMatch(/^[0-9a-f]{16}$/);
 	});
@@ -141,6 +148,60 @@ describe("tmuxCore peekPane", () => {
 	it("rejects a crafted session name before reaching tmux", async () => {
 		await expect(peekPane({ kind: "host", name: "host", sessionName: "a;b" })).rejects.toThrow(/invalid tmux name/);
 		expect(calls).toHaveLength(0);
+	});
+});
+
+describe("tmuxCore peekWithFallback", () => {
+	const dev: TmuxTarget = { kind: "devcontainer", name: "recipe-app", sessionName: "scratch" };
+
+	it("returns the tmux pane tagged kind:tmux when the pane exists", async () => {
+		stdoutData = "PANE";
+		const r = await peekWithFallback(dev);
+		expect(r).toMatchObject({ kind: "tmux", ansi: "PANE" });
+	});
+
+	it("falls back to container logs (kind:container-logs) when the pane is absent", async () => {
+		stdoutData = "postCreate installing deps";
+		stderrData = "can't find session";
+		// resize (ok), capture-pane (absent), then docker logs (ok).
+		exitQueue.push(0, 1, 0);
+		const r = await peekWithFallback(dev);
+		expect(r.kind).toBe("container-logs");
+		if (r.kind === "container-logs") expect(r.text).toBe("postCreate installing deps");
+		// The tail count + compose container-name convention reach docker verbatim.
+		expect(calls.find((c) => c.includes("logs"))).toEqual([
+			"docker",
+			"logs",
+			"--tail",
+			"200",
+			"recipe-app_devcontainer-dev-1",
+		]);
+	});
+
+	it("folds a container's stderr into the log text so a boot error is not lost", async () => {
+		stdoutData = "starting";
+		stderrData = "can't find session";
+		logsStderr = "postCreate.sh: line 3: npm: command not found";
+		exitQueue.push(0, 1, 0); // resize ok, capture absent, docker logs ok
+		const r = await peekWithFallback(dev);
+		expect(r.kind).toBe("container-logs");
+		if (r.kind === "container-logs") {
+			expect(r.text).toContain("starting");
+			expect(r.text).toContain("command not found");
+		}
+	});
+
+	it("rethrows a real failure without trying container logs", async () => {
+		stderrData = "tmux command exited 2";
+		exitQueue.push(0, 1); // resize ok, capture a non-absent failure
+		await expect(peekWithFallback(dev)).rejects.toThrow(/exited 2/);
+		expect(calls.some((c) => c.includes("logs"))).toBe(false);
+	});
+
+	it("rethrows the original absent peek error when the container is also gone", async () => {
+		stderrData = "can't find session";
+		exitQueue.push(0, 1, 1); // resize ok, capture absent, docker logs also fails
+		await expect(peekWithFallback(dev)).rejects.toThrow(/can't find session/);
 	});
 });
 
@@ -188,7 +249,7 @@ describe("tmuxCore hasSession / ensureSession", () => {
 			"tmux",
 			"has-session",
 			"-t",
-			"scratch",
+			"=scratch",
 		]);
 	});
 
@@ -202,14 +263,14 @@ describe("tmuxCore hasSession / ensureSession", () => {
 		const r = await ensureSession({ kind: "host", name: "host", sessionName: "scratch" }, "claude");
 		expect(r).toEqual({ created: false });
 		expect(calls).toHaveLength(1); // only has-session, no new-session
-		expect(calls[0]).toEqual(["tmux", "has-session", "-t", "scratch"]);
+		expect(calls[0]).toEqual(["tmux", "has-session", "-t", "=scratch"]);
 	});
 
 	it("ensureSession launches a fresh session when absent", async () => {
 		exitQueue.push(1, 0); // has-session absent, then new-session succeeds
 		const r = await ensureSession({ kind: "host", name: "host", sessionName: "scratch" }, "claude");
 		expect(r).toEqual({ created: true });
-		expect(calls[0]).toEqual(["tmux", "has-session", "-t", "scratch"]);
+		expect(calls[0]).toEqual(["tmux", "has-session", "-t", "=scratch"]);
 		expect(calls[1]).toEqual(["tmux", "new-session", "-d", "-s", "scratch", "claude"]);
 		expect(calls).toHaveLength(2);
 	});
@@ -257,7 +318,7 @@ describe("tmuxCore isAgentReady", () => {
 describe("tmuxCore killSession", () => {
 	it("kills the target session by name", async () => {
 		await killSession({ kind: "host", name: "host", sessionName: "scratch" });
-		expect(calls).toEqual([["tmux", "kill-session", "-t", "scratch"]]);
+		expect(calls).toEqual([["tmux", "kill-session", "-t", "=scratch"]]);
 	});
 
 	it("kills a devcontainer session via docker exec", async () => {
@@ -271,7 +332,7 @@ describe("tmuxCore killSession", () => {
 			"tmux",
 			"kill-session",
 			"-t",
-			"scratch",
+			"=scratch",
 		]);
 	});
 
@@ -358,7 +419,7 @@ describe("tmuxCore awaitReady", () => {
 		stdoutData = "  ❯ 1. I am using this for local development\n    2. Exit";
 		const res = await awaitReady(target, { pollMs: 5, timeoutMs: 40 });
 		expect(res).toMatchObject({ alive: true, ready: false });
-		expect(calls).toContainEqual(["tmux", "send-keys", "-t", "scratch.0", "-l", "--", "1"]);
+		expect(calls).toContainEqual(["tmux", "send-keys", "-t", "=scratch.0", "-l", "--", "1"]);
 	});
 
 	it('presses "1" on the folder-trust and fullscreen-renderer prompts too', async () => {
@@ -369,7 +430,7 @@ describe("tmuxCore awaitReady", () => {
 			calls.length = 0;
 			stdoutData = menu;
 			await awaitReady(target, { pollMs: 5, timeoutMs: 30 });
-			expect(calls).toContainEqual(["tmux", "send-keys", "-t", "scratch.0", "-l", "--", "1"]);
+			expect(calls).toContainEqual(["tmux", "send-keys", "-t", "=scratch.0", "-l", "--", "1"]);
 		}
 	});
 
@@ -380,7 +441,7 @@ describe("tmuxCore awaitReady", () => {
 		stdoutData = `  ${esc}[7m❯ 1.${esc}[0m I am ${esc}[1musing${esc}[0m this for ${esc}[2mlocal${esc}[0m development\n    2. Exit`;
 		const res = await awaitReady(target, { pollMs: 5, timeoutMs: 40 });
 		expect(res).toMatchObject({ alive: true, ready: false });
-		expect(calls).toContainEqual(["tmux", "send-keys", "-t", "scratch.0", "-l", "--", "1"]);
+		expect(calls).toContainEqual(["tmux", "send-keys", "-t", "=scratch.0", "-l", "--", "1"]);
 	});
 
 	it("reports a dead launch (alive:false) early when the pane never captures", async () => {

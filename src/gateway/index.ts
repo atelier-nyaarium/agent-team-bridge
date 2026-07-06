@@ -688,6 +688,7 @@ export async function startGateway(): Promise<void> {
 			domainStatus: () => domainMeta?.domainStatus,
 			relayToHost,
 			tryWakeTeam,
+			isWakeInFlight: (team) => inflightWakes.has(team),
 			crossDomain: crossDomainCoordinator
 				? {
 						listen: () => crossDomainCoordinator!.listen(),

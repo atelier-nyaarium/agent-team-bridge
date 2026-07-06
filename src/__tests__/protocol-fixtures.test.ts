@@ -3,9 +3,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import {
+	ConsoleCloseSessionResultSchema,
 	ConsoleCreateSessionResultSchema,
 	ConsoleListTeamsResultSchema,
 	ConsoleOpEnvelopeSchema,
+	ConsolePeekResultSchema,
 	ConsolePollResultSchema,
 	ConsoleRegisterResultSchema,
 	ConsoleRelayFrameSchema,
@@ -40,6 +42,8 @@ const SCHEMAS: Record<string, z.ZodType> = {
 	ConsoleRespondResult: ConsoleRespondResultSchema,
 	ConsolePollResult: ConsolePollResultSchema,
 	ConsoleCreateSessionResult: ConsoleCreateSessionResultSchema,
+	ConsoleCloseSessionResult: ConsoleCloseSessionResultSchema,
+	ConsolePeekResult: ConsolePeekResultSchema,
 };
 
 interface ManifestEntry {
@@ -121,5 +125,25 @@ describe("protocol fixtures", () => {
 	it("a create_session result carries the pending status once the launch outran the bound", () => {
 		const result = ConsoleCreateSessionResultSchema.parse(fixture("create-session-result-pending.json"));
 		expect(result).toEqual({ created: true, id: "a1b2c3", sessionLabel: "My Work", status: "pending" });
+	});
+
+	it("a close_session op envelope carries the target", () => {
+		const env = ConsoleOpEnvelopeSchema.parse(fixture("op-envelope-close-session.json"));
+		expect(env.op.kind).toBe("close_session");
+		if (env.op.kind === "close_session") expect(env.op.target).toBe("recipe-app.scratch");
+	});
+
+	it("a peek result carries a container-logs frame as text + kind (no ansi)", () => {
+		const result = ConsolePeekResultSchema.parse(fixture("peek-result-container-logs.json"));
+		expect(result.kind).toBe("container-logs");
+		expect(result.text).toContain("postCreate");
+		expect(result.ansi).toBeUndefined();
+	});
+
+	it("a legacy bare {ansi, hash} peek reply still decodes (old gateway, new schema)", () => {
+		const result = ConsolePeekResultSchema.parse(fixture("peek-result-legacy.json"));
+		expect(result.ansi).toBeDefined();
+		expect(result.text).toBeUndefined();
+		expect(result.kind).toBeUndefined();
 	});
 });

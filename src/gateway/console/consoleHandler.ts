@@ -126,6 +126,10 @@ export interface ConsoleHandlerDeps {
 	 * wired (create_session then falls back to relayToHost, which will fail against a cold container -
 	 * matching what happens today without this dependency). */
 	tryWakeTeam?: (team: string) => Promise<boolean>;
+	/** Whether a wake is currently in flight for a composite team. `close_session` consults it to
+	 * refuse a close mid-wake (which would no-op then resurrect once the wake registers). Absent when
+	 * no wake path is wired; a close then proceeds unguarded (matching today's behavior). */
+	isWakeInFlight?: (team: string) => boolean;
 	/** The cross-Domain listening-mode handshake coordinator. Absent when federation is not
 	 * wired (the cross_domain_* ops then error "not available"). The console drives the mutual
 	 * pairing; the gateway owns the listening window and writes the peer. */
@@ -230,6 +234,7 @@ function isMutatingOp(op: ConsoleOp): boolean {
 		op.kind === "create_session" ||
 		op.kind === "reload_plugins" ||
 		op.kind === "forget" ||
+		op.kind === "close_session" ||
 		op.kind === "rename_session" ||
 		op.kind === "cross_domain_listen" ||
 		op.kind === "cross_domain_request" ||
@@ -258,6 +263,7 @@ export function createConsoleDispatcher({
 	domainStatus,
 	relayToHost,
 	tryWakeTeam,
+	isWakeInFlight,
 	crossDomain,
 	crossDomainShare,
 	unlinkDomain,
@@ -302,7 +308,8 @@ export function createConsoleDispatcher({
 
 	/** Reject a terminal-DRIVE op (peek/tmux_send/reload) against a record whose live incarnation is
 	 * an alias (a user-launched `claude --resume` under a different name): there is no daemon pane at
-	 * `spawn.id` to drive. Card ops (forget) and create are exempt - they proceed regardless. */
+	 * `spawn.id` to drive. Card ops (forget, close_session) and create are exempt - they proceed
+	 * regardless. */
 	function assertDaemonDrivable(target: TmuxTarget): void {
 		const record = sessionStore?.getByTeam(composeSessionName(target.name, target.sessionName));
 		if (record?.liveTeam && record.liveTeam.team !== sessionStore!.teamOf(record)) {
@@ -674,10 +681,14 @@ export function createConsoleDispatcher({
 				assertDaemonDrivable(target);
 				const r = await relayToHost({ kind: "peek", target });
 				if (!r.ok) throw new Error(friendlyPeekError(r.error, r.errorKind));
-				const { ansi, hash } = r.result as HostPeekResult;
-				// 304-style short-circuit: an idle pane the console already has costs only the hash.
-				if (op.sinceHash && op.sinceHash === hash) return { hash, unchanged: true };
-				return { ansi, hash };
+				const peek = r.result as HostPeekResult;
+				// 304-style short-circuit: an idle frame the console already has costs only the hash.
+				if (op.sinceHash && op.sinceHash === peek.hash) return { hash: peek.hash, unchanged: true };
+				// A live pane carries ansi; the pre-pane container-logs fallback carries text. The flat
+				// result mirrors the host union's tag so the console renders the right one.
+				if (peek.kind === "container-logs")
+					return { text: peek.text, hash: peek.hash, kind: "container-logs" as const };
+				return { ansi: peek.ansi, hash: peek.hash, kind: "tmux" as const };
 			}
 
 			case "tmux_send": {
@@ -820,6 +831,37 @@ export function createConsoleDispatcher({
 				// Drop the durable resume record so the session stops listing as available.
 				dropSessionResume?.(name);
 				return { killed: true };
+			}
+
+			case "close_session": {
+				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
+				// Close kills ONE named session's tmux but KEEPS its record (a restart / mop-up); same
+				// composite-target rule as forget.
+				const t = parseTarget(op.target, localDomain, localGatewayId);
+				if (t instanceof SpawnPoint) {
+					throw new Error(`cannot close "${op.target}": name a specific project.session, not a spawn-point`);
+				}
+				const name = composeSessionName(t.spawn, t.session);
+				const target = resolveTmuxTarget(op.target);
+				// An alias-served record's live incarnation is a user-launched `claude --resume` under a
+				// different tmux name, so killing the canonical `spawn.id` pane finds nothing and the
+				// record keeps reading online off its alias - a false {closed:true}. Report honestly
+				// instead (the human ends a user-launched session from their own terminal).
+				const record = sessionStore?.getByTeam(name);
+				if (record?.liveTeam && record.liveTeam.team !== sessionStore!.teamOf(record)) {
+					throw new Error(`"${name}" is user-launched; end it from your terminal`);
+				}
+				// A kill issued while this session is mid-wake would land as a no-op (the pane is not up
+				// yet), then the in-flight wake would finish and register - resurrecting the session the
+				// human just closed. Refuse until the wake settles rather than silently no-op-succeed.
+				if (isWakeInFlight?.(name)) {
+					throw new Error(`"${name}" is waking; wait for it to finish before closing`);
+				}
+				const dedupKey = `${conversationId}:${opId}`;
+				const r = await relayToHost({ kind: "killSession", target, dedupKey });
+				if (!r.ok) throw new Error(r.error ?? "close failed");
+				// Deliberately NOT dropSessionResume: the record survives so the session stays available.
+				return { closed: true };
 			}
 
 			case "rename_session": {

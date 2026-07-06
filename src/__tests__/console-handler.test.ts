@@ -904,6 +904,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			relayFails?: boolean;
 			tryWakeTeam?: (team: string) => Promise<boolean>;
 			createSessionBoundMs?: number;
+			isWakeInFlight?: (team: string) => boolean;
 		} = {},
 	) {
 		const hostOps: Record<string, unknown>[] = [];
@@ -923,12 +924,13 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			isProjectName,
 			sessionStore: opts.sessionStore,
 			tryWakeTeam: opts.tryWakeTeam,
+			isWakeInFlight: opts.isWakeInFlight,
 			createSessionBoundMs: opts.createSessionBoundMs,
 			relayToHost: async (op) => {
 				hostOps.push(op as unknown as Record<string, unknown>);
 				if (opts.relayFails) return { ok: false, error: "launch failed" };
 				if (op.kind === "peek")
-					return relayPeek ? relayPeek() : { ok: true, result: { ansi: "SCREEN", hash: "h1" } };
+					return relayPeek ? relayPeek() : { ok: true, result: { kind: "tmux", ansi: "SCREEN", hash: "h1" } };
 				return { ok: true, result: { sent: true } };
 			},
 		});
@@ -939,7 +941,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		const h = makeTerminalHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app" }, "p1"));
 		expect(reply.ok).toBe(true);
-		expect(reply.result).toEqual({ ansi: "SCREEN", hash: "h1" });
+		expect(reply.result).toEqual({ ansi: "SCREEN", hash: "h1", kind: "tmux" });
 		expect(h.hostOps[0]).toEqual({
 			kind: "peek",
 			target: { kind: "devcontainer", name: "recipe-app", sessionName: "claude" },
@@ -959,6 +961,16 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		const h = makeTerminalHarness();
 		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app", sinceHash: "h1" }, "p3"));
 		expect(reply.result).toEqual({ hash: "h1", unchanged: true });
+	});
+
+	it("peek carries a container-logs frame through as text + kind (pre-pane fallback)", async () => {
+		const h = makeTerminalHarness(undefined, () => ({
+			ok: true,
+			result: { kind: "container-logs", text: "postCreate: installing deps", hash: "hlog" },
+		}));
+		const reply = await h.handler.handleFrame(frame({ kind: "peek", target: "recipe-app" }, "plog"));
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toEqual({ text: "postCreate: installing deps", hash: "hlog", kind: "container-logs" });
 	});
 
 	it("rejects a loose session name (only the host target + devcontainers are terminal-eligible)", async () => {
@@ -1400,6 +1412,64 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(reply.ok).toBe(false);
 		expect(reply.error).toMatch(/invalid session name/);
 		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("close_session kills the tmux but keeps the resume record (unlike forget)", async () => {
+		const store = new SessionStore();
+		store.adoptById("scratch", { spawn: "recipe-app", sessionLabel: "keep" });
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "close_session", target: "recipe-app.scratch" }, "cl1"),
+		);
+		expect(reply.result).toEqual({ closed: true });
+		expect(h.hostOps[0]).toMatchObject({
+			kind: "killSession",
+			target: { kind: "devcontainer", name: "recipe-app", sessionName: "scratch" },
+		});
+		// The record survives (the session stays listed as available for a re-wake).
+		expect(store.getByTeam("recipe-app.scratch")).toBeDefined();
+	});
+
+	it("close_session on a bare spawn-point is rejected before any host op", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "close_session", target: "recipe-app" }, "cl2"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("spawn-point");
+		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("close_session on an alias-served (user-launched) record reports honestly, not a false closed", async () => {
+		const store = new SessionStore();
+		store.adoptById("main", { spawn: "recipe-app", sessionLabel: "keep" });
+		// liveTeam under a DIFFERENT name than the record's own = a user-launched alias incarnation.
+		store.confirm("recipe-app.main", { team: "recipe-app.other", subId: "s" });
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(frame({ kind: "close_session", target: "recipe-app.main" }, "cla"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("user-launched");
+		expect(h.hostOps).toHaveLength(0);
+		// The record survives (close never dropped it).
+		expect(store.getByTeam("recipe-app.main")).toBeDefined();
+	});
+
+	it("close_session refuses while a wake is in flight (would no-op then resurrect)", async () => {
+		const h = makeTerminalHarness(undefined, undefined, {
+			isWakeInFlight: (team) => team === "recipe-app.scratch",
+		});
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "close_session", target: "recipe-app.scratch" }, "cl3"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("waking");
+		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("a retried close_session with the same opId kills once (idempotent)", async () => {
+		const h = makeTerminalHarness();
+		const f = frame({ kind: "close_session", target: "recipe-app.scratch" }, "cldup");
+		await h.handler.handleFrame(f);
+		await h.handler.handleFrame(f);
+		expect(h.hostOps.filter((o) => o.kind === "killSession")).toHaveLength(1);
 	});
 });
 
