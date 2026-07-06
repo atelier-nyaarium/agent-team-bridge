@@ -82,6 +82,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -569,9 +571,19 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onTerminalSend = { text, key, submit -> repo.tmuxSend(openTeam!!, text, key, submit) },
 			)
 		}
-		else ->
+		else -> {
+			val snackbarHostState = remember { SnackbarHostState() }
+			// One-shot: a create_session failure or abandonment surfaces here instead of the sticky
+			// connection-health state.error, so it never bleeds into an unrelated later health render.
+			LaunchedEffect(state.transientMessage) {
+				state.transientMessage?.let {
+					repo.consumeTransientMessage()
+					snackbarHostState.showSnackbar(it)
+				}
+			}
 			SessionsScreen(
 				state = state,
+				snackbarHostState = snackbarHostState,
 				onRefresh = { scope.launch { repo.refreshTeams() } },
 				onSettings = {
 					settingsRoute = SettingsRoute.HUB
@@ -587,6 +599,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onRename = { team, name -> scope.launch { repo.rename(team, name) } },
 				onForget = { team -> repo.forget(team) },
 				onSpawn = { project, label ->
+					// A placeholder row appears the instant Spawn is tapped, before the network round
+					// trip even starts, so the board never just sits there looking unchanged.
+					val pendingKey = repo.beginCreateSession(project, label)
 					// Send both forms for cross-version compatibility: a new gateway mints the id from
 					// displayLabel and returns it, an old one adopts the slugified sessionName (omitted
 					// when the label has no ASCII to slug). Refresh teams so the thread title shows the
@@ -595,10 +610,22 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 						val slug = slugifySessionName(label).ifEmpty { null }
 						runCatching { repo.createSession(project, sessionName = slug, displayLabel = label) }
 							.onSuccess { result ->
-								(result.id ?: slug)?.let { id ->
-									repo.refreshTeams()
-									openTeam = repo.openThread(composeSessionName(project, id))
+								val id = result.id ?: slug
+								if (id == null) {
+									repo.endCreateSession(pendingKey)
+									return@onSuccess
 								}
+								val localTeamName = composeSessionName(project, id)
+								val pending = result.status == "pending"
+								repo.updateCreateSession(pendingKey, localTeamName, pending)
+								repo.refreshTeams()
+								// A cold container bring-up is still in flight - stay on the board and let the
+								// placeholder's text reflect that; the real card takes over once it comes up.
+								// The fast path already has a live-enough record to open right away, as before.
+								if (!pending) openTeam = repo.openThread(localTeamName)
+							}
+							.onFailure { e ->
+								repo.endCreateSession(pendingKey, e.message ?: "Failed to create \"$label\"")
 							}
 					}
 				},
@@ -607,6 +634,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onVerifyEnroll = (if (state.provisioned) repo.pendingEnrolleeCeremony() else null)
 					?.let { c -> { enrolleeCeremonyCtx = c } },
 			)
+		}
 	}
 
 	// Composed after the screens so it overlays them and its BackHandler wins.
@@ -954,6 +982,7 @@ fun SessionsScreen(
 	onForget: (String) -> Unit,
 	onSpawn: (String, String) -> Unit,
 	onVerifyEnroll: (() -> Unit)? = null,
+	snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
 	// Long-press flow: action menu -> rename dialog or forget confirm.
 	var actionTeam by remember { mutableStateOf<Team?>(null) }
@@ -1023,6 +1052,7 @@ fun SessionsScreen(
 				},
 			)
 		},
+		snackbarHost = { SnackbarHost(snackbarHostState) },
 	) { pad ->
 		Column(Modifier.padding(pad).fillMaxSize()) {
 			val sessions = state.sessions(state.localGatewayId)
@@ -1104,6 +1134,10 @@ fun SessionsScreen(
 										onLongPress = { actionTeam = team },
 									)
 								}
+								items(
+									state.pendingCreates.filter { it.project == projectKey },
+									key = { "pending:${it.key}" },
+								) { pending -> PendingCreateCard(pending) }
 							}
 
 							for (sp in spawnPoints) {
@@ -1478,6 +1512,30 @@ fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: 
 					maxLines = 1,
 					overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
 				)
+			}
+		}
+	}
+}
+
+/** A create_session tap in flight, nested under its project header exactly where the real
+ * SessionCard will appear once the session shows up. Not clickable - there is nothing to open yet. */
+@Composable
+fun PendingCreateCard(pending: PendingCreate) {
+	val text = if (pending.status == "waking-docker") {
+		"Waking Docker... first boot can take a minute or two"
+	} else {
+		"Creating..."
+	}
+	Card(modifier = Modifier.fillMaxWidth().padding(start = 16.dp)) {
+		Row(
+			Modifier.padding(14.dp),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(10.dp),
+		) {
+			CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFFD29922))
+			Column {
+				Text(pending.label, style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace)
+				Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 			}
 		}
 	}
