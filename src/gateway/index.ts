@@ -184,6 +184,13 @@ export async function startGateway(): Promise<void> {
 	// parallel `devcontainer up` runs for the same project race each other and
 	// both error out, failing sends whose container actually comes up.
 	const inflightWakes = new Map<string, Promise<boolean>>();
+	// create_session's relayToHost branch (a host target, or any target with no tryWakeTeam wired)
+	// never touches inflightWakes above, so isWakeInFlight had no signal for that branch between
+	// "launch requested" and "MCP registered" - a slow-starting Claude CLI on an otherwise-instant
+	// host-op launch read as plain "available" the whole time instead of "verifying". Tracked
+	// separately (rather than folded into inflightWakes) so it never interferes with tryWakeTeam's
+	// own dedup-by-team join semantics.
+	const inflightCreates = new Set<string>();
 
 	function tryWakeTeam(team: string): Promise<boolean> {
 		const existing = inflightWakes.get(team);
@@ -629,7 +636,7 @@ export async function startGateway(): Promise<void> {
 			store,
 			config: { localGatewayId, localDomainId },
 			tryWakeTeam,
-			isWakeInFlight: (team) => inflightWakes.has(team),
+			isWakeInFlight: (team) => inflightWakes.has(team) || inflightCreates.has(team),
 			offlineCatalog,
 			knownTeamPaths,
 			sessionStore,
@@ -689,7 +696,11 @@ export async function startGateway(): Promise<void> {
 			domainStatus: () => domainMeta?.domainStatus,
 			relayToHost,
 			tryWakeTeam,
-			isWakeInFlight: (team) => inflightWakes.has(team),
+			isWakeInFlight: (team) => inflightWakes.has(team) || inflightCreates.has(team),
+			markCreateInFlight: (team) => {
+				inflightCreates.add(team);
+				return () => inflightCreates.delete(team);
+			},
 			crossDomain: crossDomainCoordinator
 				? {
 						listen: () => crossDomainCoordinator!.listen(),

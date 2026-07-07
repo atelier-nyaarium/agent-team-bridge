@@ -130,6 +130,13 @@ export interface ConsoleHandlerDeps {
 	 * refuse a close mid-wake (which would no-op then resurrect once the wake registers). Absent when
 	 * no wake path is wired; a close then proceeds unguarded (matching today's behavior). */
 	isWakeInFlight?: (team: string) => boolean;
+	/** Mark a team's launch in flight for `isWakeInFlight`'s duration, covering `create_session`'s
+	 * relayToHost branch (a host target, or any target with no tryWakeTeam wired), which never touches
+	 * the tryWakeTeam/inflightWakes bookkeeping. Without this, teams() has no signal between "launch
+	 * requested" and "MCP registered" for that branch, so a slow-to-register host session (tmux up,
+	 * Claude CLI still starting) reads as plain "available" instead of "verifying" for that whole gap.
+	 * Returns a release function; absent when no wake path is wired (matching today's unguarded case). */
+	markCreateInFlight?: (team: string) => () => void;
 	/** The cross-Domain listening-mode handshake coordinator. Absent when federation is not
 	 * wired (the cross_domain_* ops then error "not available"). The console drives the mutual
 	 * pairing; the gateway owns the listening window and writes the peer. */
@@ -264,6 +271,7 @@ export function createConsoleDispatcher({
 	relayToHost,
 	tryWakeTeam,
 	isWakeInFlight,
+	markCreateInFlight,
 	crossDomain,
 	crossDomainShare,
 	unlinkDomain,
@@ -754,13 +762,20 @@ export function createConsoleDispatcher({
 					// (relayToHost's createSession op assumes the container is already running). A host
 					// target has no container to bring up - the daemon is definitionally already up if
 					// relayToHost can reach it at all - so it keeps the direct host-op path.
-					const launch: Promise<HostOpResult> =
+					const launchTeam = composeSessionName(target.name, target.sessionName);
+					// Mark in flight for teams()'s "verifying" status regardless of branch: tryWakeTeam
+					// already does this itself for a devcontainer bring-up, but relayToHost's fast host-op
+					// path does not, leaving a real gap between "tmux launched" and "MCP registered" (the
+					// Claude CLI still starting up) where teams() had no signal but plain "available".
+					const releaseInFlight = markCreateInFlight?.(launchTeam);
+					const launch: Promise<HostOpResult> = (
 						target.kind === "devcontainer" && tryWakeTeam
-							? tryWakeTeam(composeSessionName(target.name, target.sessionName)).then(
+							? tryWakeTeam(launchTeam).then(
 									(ok): HostOpResult =>
 										ok ? { ok: true } : { ok: false, error: `failed to wake "${sessionId}"` },
 								)
-							: relayToHost({ kind: "createSession", target, workdirHint, dedupKey });
+							: relayToHost({ kind: "createSession", target, workdirHint, dedupKey })
+					).finally(() => releaseInFlight?.());
 
 					let boundTimer: ReturnType<typeof setTimeout> | undefined;
 					const bound = new Promise<null>((resolve) => {
