@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
@@ -85,6 +88,9 @@ private fun xterm256(n: Int): Long {
 	val v = 8 + (n - 232) * 10
 	return rgb(v, v, v)
 }
+
+private const val ESC = '\u001b'
+private const val BEL = '\u0007'
 
 /** A styled run of text. A null color means "terminal default" (unspecified). `reverse` swaps
  * fg/bg at render time (SGR 7), which tmux status lines and selected rows rely on. */
@@ -160,6 +166,19 @@ internal fun parseAnsiRuns(input: String): List<AnsiRun> {
 			i = if (j < n) j + 1 else n
 			continue
 		}
+		if (c == ESC && i + 1 < n && input[i + 1] == ']') {
+			// OSC sequence (e.g. an OSC 8 hyperlink: ESC ] 8 ; params ; URI ST/BEL), terminated by
+			// BEL (0x07) or ST (ESC \). Skip the whole sequence so its markup does not leak as text;
+			// a hyperlink's visible label sits outside the sequence and stays.
+			var j = i + 2
+			while (j < n) {
+				if (input[j] == BEL) { j++; break }
+				if (input[j] == ESC && j + 1 < n && input[j + 1] == '\\') { j += 2; break }
+				j++
+			}
+			i = j
+			continue
+		}
 		if (c == '\u001b') { i++; continue }
 		buf.append(c)
 		i++
@@ -199,18 +218,50 @@ fun ansiToAnnotated(input: String): AnnotatedString = buildAnnotatedString {
 private val TERMINAL_BG = Color(0xFF0C0C0C)
 
 @Composable
-private fun TerminalPane(ansi: String, modifier: Modifier = Modifier) {
+private fun TerminalPane(
+	ansi: String,
+	paused: Boolean,
+	onLongPress: () -> Unit,
+	onResume: () -> Unit,
+	modifier: Modifier = Modifier,
+) {
 	val annotated = remember(ansi) { ansiToAnnotated(ansi) }
-	Column(modifier.background(TERMINAL_BG).verticalScroll(rememberScrollState())) {
-		Text(
-			text = annotated,
-			modifier = Modifier.horizontalScroll(rememberScrollState()).padding(8.dp),
-			fontFamily = FontFamily.Monospace,
-			fontSize = 11.sp,
-			lineHeight = 14.sp,
-			color = Color(0xFFCCCCCC),
-			softWrap = false,
-		)
+	val body = @Composable {
+		Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+			Text(
+				text = annotated,
+				modifier = Modifier.horizontalScroll(rememberScrollState()).padding(8.dp),
+				fontFamily = FontFamily.Monospace,
+				fontSize = 11.sp,
+				lineHeight = 14.sp,
+				color = Color(0xFFCCCCCC),
+				softWrap = false,
+			)
+		}
+	}
+	Box(modifier.background(TERMINAL_BG)) {
+		if (paused) {
+			// Frozen frame, wrapped so text is selectable/copyable without the next peek wiping the
+			// selection. A tapping the banner resumes live updates.
+			SelectionContainer { body() }
+			Surface(
+				color = Color(0xCCD29922),
+				shape = RoundedCornerShape(4.dp),
+				modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).hapticClickable(onClick = onResume),
+			) {
+				Text(
+					"Paused - long-press to select, tap to resume",
+					Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+					color = Color.Black,
+					fontSize = 10.sp,
+				)
+			}
+		} else {
+			// Long-press freezes the frame and switches to the selectable view above.
+			Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onLongPress = { onLongPress() }) }) {
+				body()
+			}
+		}
 	}
 }
 
@@ -353,12 +404,19 @@ fun TerminalView(
 	// A wake has been asked for (a create/wake opened this thread, or the Wake button was tapped), so
 	// the off-session screen reads "Waking..." and offers Retry rather than a first-time "Wake".
 	var wakeRequested by remember(team) { mutableStateOf(wakePending) }
+	// A long-press freezes the frame (this halts peeking) so its text can be selected and copied
+	// without the next frame wiping the selection; the Paused banner resumes.
+	var paused by remember(team) { mutableStateOf(false) }
 	val scope = rememberCoroutineScope()
 	val lifecycleOwner = LocalLifecycleOwner.current
 
 	LaunchedEffect(team, refreshMs) {
 		lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
 			while (true) {
+				if (paused) {
+					delay(refreshMs)
+					continue
+				}
 				onPeek(lastHash)
 					.onSuccess { r ->
 						// The frame is a live pane (ansi) or a pre-pane container-logs snapshot (text),
@@ -450,7 +508,13 @@ fun TerminalView(
 						fontFamily = FontFamily.Monospace,
 						fontSize = 11.sp,
 					)
-					TerminalPane(logs, Modifier.weight(1f).fillMaxWidth())
+					TerminalPane(
+						logs,
+						paused = paused,
+						onLongPress = { paused = true },
+						onResume = { paused = false },
+						modifier = Modifier.weight(1f).fillMaxWidth(),
+					)
 				}
 			}
 			frameEmpty -> {
@@ -465,7 +529,13 @@ fun TerminalView(
 				}
 			}
 			else -> {
-				TerminalPane(ansi, Modifier.weight(1f).fillMaxWidth())
+				TerminalPane(
+					ansi,
+					paused = paused,
+					onLongPress = { paused = true },
+					onResume = { paused = false },
+					modifier = Modifier.weight(1f).fillMaxWidth(),
+				)
 				if (sendError != null) {
 					Text(
 						sendError!!,

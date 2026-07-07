@@ -121,4 +121,22 @@ class AnsiParseTest {
 		assertEquals(true, runs[0].reverse)
 		assertEquals(false, runs[1].reverse)
 	}
+
+	@Test
+	fun osc8HyperlinkMarkupIsStrippedLeavingTheLabel() {
+		// OSC 8 hyperlink: ESC ] 8 ; params ; URI ST <label> ESC ] 8 ; ; ST. The markup must not leak;
+		// only the visible label survives. ST is ESC \.
+		val input = "before${e}]8;;https://claude.com/x${e}\\shown${e}]8;;${e}\\end"
+		val runs = parseAnsiRuns(input)
+		assertEquals(1, runs.size)
+		assertEquals("beforeshownend", runs[0].text)
+	}
+
+	@Test
+	fun oscSequenceTerminatedByBelIsStripped() {
+		val bel = 7.toChar()
+		val runs = parseAnsiRuns("a${e}]0;window title${bel}b")
+		assertEquals(1, runs.size)
+		assertEquals("ab", runs[0].text)
+	}
 }
