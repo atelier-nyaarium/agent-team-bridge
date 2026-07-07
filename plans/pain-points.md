@@ -3,6 +3,115 @@
 Residual painpoints from shipped work, collected by crust scouts (record only, not fixed). Refs are
 `file : scope : name`; severity in brackets.
 
+## Pre-handshake terminal view (PR #108, 2026-07-07)
+
+Migrated from `plans/pre-handshake-terminal-view.md` (deleted, shipped) so its still-open residuals
+are not lost. Verified still-present in current code at migration time.
+
+- [high] `src/gateway/console/consoleHandler.ts : forget` - **bug-class** - `forget` has no
+  `isWakeInFlight` guard, though its sibling `close_session` added exactly that guard. A `forget`
+  fired mid-wake kills a not-yet-up pane (no-op), then the in-flight wake completes and re-mints the
+  record on confirm - resurrecting a session the human PERMANENTLY forgot (worse than close's
+  keep-record case). Give forget the same guard.
+- [high] `android/.../ChatRepository.kt : forget` - **bug-class** - `forget()` deletes local state
+  synchronously then fires `client().forget(team)` in a bare `runCatching` with no `onFailure`, so a
+  gateway-side failure is swallowed silently, leaving the UI showing the session gone while its tmux
+  + record may still be alive. `closeTab`/`wakeSession` both attach an `onFailure` transient message;
+  forget, the more destructive op, was left the odd one out.
+- [medium] `consoleHandler.ts : create_session rollback sites` - **bug-class** - both rollback paths
+  call `sessionStore.forget(...)` on `!ok` with no re-check of `confirmedAt`/live-incarnation, so a
+  launch that reports failure after the session actually confirmed could drop a live record. Same
+  class as the (now-deleted) handshake-linkage plan's documented rollback races.
+- [medium] `consoleHandler.ts : forget / close_session` - **dup-logic** - close_session
+  hand-duplicates forget's target-validate + composeSessionName + resolveTmuxTarget + dedupKey +
+  killSession tail; only the error verb and the drop-vs-keep-record delta differ. Should be one
+  parameterized helper.
+- [low] `consoleHandler.ts : close_session vs assertDaemonDrivable` - **dup-logic** - close_session
+  inlines the alias-detection condition already in `assertDaemonDrivable`, and leaves that helper's
+  docstring stale ("close_session ... exempt" - it actually enforces the check itself now).
+- [low] `android/.../ChatRepository.kt : closeTab/forget/wakeSession` - **dup-logic** - each repeats
+  the identical 2-line "is this a local addressable session" guard; extract one predicate.
+- [low] `android/.../TerminalView.kt : showOffSession user-launched branch` - **legacy-landmine** -
+  the calm-vs-wake distinction keys on `peekError?.contains("user-launched")`, a substring match on a
+  gateway message string with no machine-readable errorKind backing it; a message reword silently
+  flips the branch.
+- [low] `android/.../TerminalView.kt : showOffSession generic branch` - **cosmetic** - a genuine
+  non-absent failure (a persistent timeout) renders "This session is asleep." rather than the actual
+  error text. Tapping Wake retries, so it self-heals, but the label is imprecise for a true failure.
+- [low] `src/shared/host-op.ts : classifyPeekError` + `src/mcp/devcontainer/tmuxCore.ts : run()` -
+  **stale-name** - error-message wording still says "tmux command ..." for what is now a shared
+  tmux/docker `run()` helper; cosmetic, internal-only strings.
+
+## Handshake-established session linkage (PR #107, 2026-07-02)
+
+Migrated from `plans/handshake-session-linkage.md` (deleted, shipped) so its still-open residuals are
+not lost. The plan's own "Cosmetic DRY (declined - no correctness gain)" items are dropped here as
+closed decisions, retrievable from git history if reconsidered.
+
+- [high] `src/gateway/websocket.ts : createWebSocketHandlers : establishRecord` - **bug-class** -
+  first-binding-holds only refuses a LIVE holder, so an asleep holder lets tier-1 bindBySegment bind
+  the same claudeSessionId onto a second record, breaking one-record-per-transcript and spawning
+  duplicate `--resume` processes on wake. Needs a resumeRecord check even when the holder is asleep.
+- [medium] `src/shared/session-store.ts : SessionStore : sweep` - **bug-class** - TTL sweep can drop a
+  still-connected record because lastSeen is refreshed only by teams()->touchLive (never the
+  heartbeat), making a live session invisible in teams() and re-mintable while resolveLiveIncarnation
+  still routes to it. 30-day window; fix is to touchLive from the heartbeat or spare live records.
+- [medium] `src/gateway/websocket.ts : createWebSocketHandlers : resolveHandshake` - **bug-class** -
+  `ws.data.handshakeConfirmed` is set before establishRecord, so a first-binding-holds refusal leaves
+  a confirmed-but-recordless socket that resolveLiveIncarnation reports as canonical live, producing a
+  routable-but-invisible duplicate. Set confirmed only after establishRecord succeeds.
+- [low] `src/gateway/console/consoleHandler.ts : createConsoleDispatcher : handleFrame` -
+  **bug-class** - opCache evicts oldest past size 256 regardless of settle state; a retried opId older
+  than 256 re-runs its op, losing at-most-once for side effects with no host-side dedupKey backstop.
+- [low] `src/gateway/console/consoleHandler.ts : createConsoleDispatcher : mintedSessionId` -
+  **bug-class** - 6-hex (24-bit) sha256 truncation with no re-roll on the deterministic create path;
+  two colliding (conversationId, opId) creates in one spawn silently reattach instead of minting.
+- [low] `src/shared/session-store.ts : SessionRecord : workdirHint` - **dead-code** - written,
+  sanitized, persisted, restored but never read; the daemon infers workdir from the session id.
+- [low] `src/gateway/routes.ts : createRoutes : send (channelOnly CLI-mode guard)` - **dead-code** -
+  unreachable since ConnectionMode is single-value "channel"; names a concept retired with the host
+  split.
+- [low] `android/.../ChatRepository.kt : ChatState : label` - **stale-name** - the localGatewayId
+  parameter is unused by the body yet still threaded through all six call sites.
+- [low] `src/shared/session-id.ts : Address` - **framework-violation** - Address/SpawnPoint own
+  `.canonical` but not a locality predicate or local-team-field projection, forcing every gateway
+  caller to hand-reimplement it (feeds the dup-logic items below).
+- [low] `src/gateway/routes.ts : createRoutes : localAddress` - **dup-logic** - the
+  `parseSessionName -> Address.local(...)` builder is triplicated (routes, consoleHandler,
+  gatewayRelay), each carrying a "must match byte-for-byte" comment.
+- [low] `src/gateway/console/consoleHandler.ts : local-gateway check` - **framework-violation** - the
+  raw `t.domain !== localDomain || t.gateway !== localGatewayId` locality test is reimplemented at 5+
+  sites; belongs on an `Address.isLocalTo` predicate.
+- [low] `src/gateway/console/consoleHandler.ts : SpawnPoint->local-name collapse` - **dup-logic** -
+  the `t instanceof SpawnPoint ? t.spawn : composeSessionName(t.spawn, t.session)` collapse recurs
+  across 6 sites.
+- [low] `src/gateway/console/consoleHandler.ts : dedupKey / mintedSessionId` - **dup-logic** - the
+  `${conversationId}:${opId}` idempotency key is spelled inline in four ops and re-hashed separately.
+- [low] `src/gateway/federation/gatewayRelay.ts : createGatewayRelayHandler : localKind` -
+  **dup-logic** - "what kind is this session" materializes the whole teams() array and `.find()`s it
+  in 3 sites; should share one kind-classifier with teams().
+- [low] `src/gateway/index.ts : startGateway : doWakeTeam / relayToHost host-ws resolution` -
+  **dup-logic** - the live-host-socket lookup is copied verbatim in doWakeTeam and relayToHost.
+- [low] `src/gateway/routes.ts : createRoutes : sealTargetFor` - **dup-logic** - re-encodes the
+  sealer's local-then-cross-Domain-then-throw precedence that sealer.seal resolves again.
+- [low] `src/gateway/routes.ts : createRoutes : localDomain sentinel normalization` - **dup-logic** -
+  the LOCAL_DOMAIN_SENTINEL fallback is applied three inconsistent ways.
+- [low] `src/gateway/index.ts : startGateway : SCHEMA_VERSION one-shot wipe` - **legacy-landmine** -
+  removable once all gateways have booted past schema-2.
+- [low] `src/shared/session-store.ts : SessionStore : restore()` - **legacy-landmine** (tracked) - the
+  `!persisted` branch reads the old resume-map shape; dead once all gateways re-write
+  session-resume.json.
+- [low] `src/gateway/index.ts : startGateway : LOG_DIR legacy-dir cleanup` - **legacy-landmine** -
+  dies with the schema-wipe block above.
+- [low] `src/shared/schemas.ts : TeamInfoSchema.gatewayId / ConsoleRegisterResultSchema.gatewayId` -
+  **legacy-landmine** - comments describe the retired slash grammar; live grammar is the dot path.
+- [low] `src/shared/schemas.ts : WsRegisterSchema.claudeSessionId` - **legacy-landmine** (tracked) -
+  comment describes a `team -> claudeSessionId` map that SessionStore replaced.
+- [low] `src/shared/session-id.ts : module header` - **legacy-landmine** - narrates the unified-address
+  migration as in-progress though it is already complete.
+- [low] `src/gateway/console/consoleHandler.ts : ConsoleHandlerDeps.domainStatus` -
+  **legacy-landmine** - pre-feature-evie fallback branch, removable once all pods report domainStatus.
+
 ## Host session resume (PR #100, 2026-06-29)
 
 ### In the shipped code - worth a near-term follow-up
