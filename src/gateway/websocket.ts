@@ -56,6 +56,9 @@ export interface WsData {
 	missedPings: number;
 	isStale: boolean;
 	handshakeConfirmed: boolean;
+	// How many lead handshakes have been sent to this socket (at register, then re-sent by the
+	// heartbeat while unconfirmed). Bounds the retry so a never-answering session is not pinged forever.
+	hsAttempts?: number;
 	proxyProject?: string;
 	proxyAuth?: string;
 	// True for a console mailbox peer: a duck-typed socket whose send() appends to a
@@ -79,6 +82,12 @@ const REGISTER_WINDOW_MS = 60_000;
 // How long an unanswered handshake entry lingers before the heartbeat sweep drops it. Generous so a
 // long first LLM turn still confirms; a flag-less session never answers and is swept after this.
 const HANDSHAKE_PENDING_TTL_MS = 30 * 60_000;
+
+// Re-send the lead handshake to a connected-but-unconfirmed channel session on each heartbeat, up to
+// this many total sends. A session that could not answer at register (sitting at a first-run login
+// prompt, a slow boot) confirms once it becomes ready, instead of showing "verifying" forever. Bounds
+// the re-send so a genuinely never-answering (flag-less) socket is not pinged indefinitely.
+const HANDSHAKE_MAX_ATTEMPTS = 20;
 
 export function getAllActiveWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData>[] {
 	const result: ServerWebSocket<WsData>[] = [];
@@ -140,7 +149,7 @@ export function createWebSocketHandlers({
 }: WebSocketDeps) {
 	const { HEARTBEAT_INTERVAL_MS = 30000, MISSED_PINGS_LIMIT = 2 } = config;
 
-	const heartbeatInterval = setInterval(() => {
+	function heartbeatTick() {
 		for (const subs of registry.values()) {
 			for (const ws of subs.values()) {
 				const data = ws.data as WsData;
@@ -151,6 +160,19 @@ export function createWebSocketHandlers({
 					continue;
 				}
 				ws.ping();
+				// Re-send the handshake to a channel session that is still unconfirmed, so one that
+				// could not answer at register (a first-run login prompt, a slow boot) confirms once
+				// ready instead of sitting at "verifying" forever. Bounded by HANDSHAKE_MAX_ATTEMPTS.
+				if (
+					data.mode === "channel" &&
+					data.teamName &&
+					data.teamName !== "host" &&
+					!data.handshakeConfirmed &&
+					ws.readyState === 1 &&
+					(data.hsAttempts ?? 0) < HANDSHAKE_MAX_ATTEMPTS
+				) {
+					sendHandshake(ws, data.teamName, data.subId);
+				}
 			}
 		}
 		// A flag-less loose session keeps its socket open but never answers the handshake, so its
@@ -160,7 +182,8 @@ export function createWebSocketHandlers({
 		for (const [hsId, p] of handshakePending) {
 			if (p.createdAt < cutoff) handshakePending.delete(hsId);
 		}
-	}, HEARTBEAT_INTERVAL_MS);
+	}
+	const heartbeatInterval = setInterval(heartbeatTick, HEARTBEAT_INTERVAL_MS);
 
 	// Maps handshake session_id -> the socket that owes a lead/worker reply, so we can resolve
 	// handshake responses. createdAt bounds the map via the sweep above.
@@ -171,6 +194,24 @@ export function createWebSocketHandlers({
 		for (const [hsId, p] of handshakePending) {
 			if (p.team === team && p.subId === subId) handshakePending.delete(hsId);
 		}
+	}
+
+	/** Send a lead handshake to a channel socket, minting a session id and pending entry, and counting
+	 * the attempt. Sent once at register and re-sent by the heartbeat while the socket is unconfirmed. */
+	function sendHandshake(ws: ServerWebSocket<WsData>, team: string, subId: string): void {
+		const hsSessionId = `hs-${crypto.randomUUID().slice(0, 8)}`;
+		handshakePending.set(hsSessionId, { team, subId, createdAt: Date.now() });
+		ws.data.hsAttempts = (ws.data.hsAttempts ?? 0) + 1;
+		ws.send(
+			JSON.stringify({
+				type: "channel_push",
+				from: "gateway",
+				body: `This is the initial bridge handshake. Reply with the \`channel_reply\` tool using the session_id shown above, setting \`respondAsStructuredData\` to a JSON string.\n\nUse respondAsStructuredData: '{ "isMainOrLead": true }' if you are the primary session or team lead, or '{ "isMainOrLead": false }' if you are a worker agent spawned by another agent.\n\nDo not use \`crosstalk_send\`.`,
+				session_id: hsSessionId,
+				replyJsonSchema: "{ isMainOrLead: bool }",
+			}),
+		);
+		console.log(`[ws] handshake sent to ${team}/${subId} [${hsSessionId}] (attempt ${ws.data.hsAttempts})`);
 	}
 
 	/** Fully evict a socket the register path is replacing: mark stale, drop it from its team's subs,
@@ -300,20 +341,11 @@ export function createWebSocketHandlers({
 			wakeCoordinator.notify(team);
 			console.log(`[ws] ${team}/${subId} connected (mode: ${mode})`);
 
-			// Handshake: ask channel-mode connections if they are the main/lead agent
+			// Handshake: ask channel-mode connections if they are the main/lead agent. Re-sent by the
+			// heartbeat while unconfirmed, so a session that could not answer now (a login prompt) still
+			// confirms once ready.
 			if (mode === "channel" && team !== "host") {
-				const hsSessionId = `hs-${crypto.randomUUID().slice(0, 8)}`;
-				handshakePending.set(hsSessionId, { team, subId, createdAt: Date.now() });
-				ws.send(
-					JSON.stringify({
-						type: "channel_push",
-						from: "gateway",
-						body: `This is the initial bridge handshake. Reply with the \`channel_reply\` tool using the session_id shown above, setting \`respondAsStructuredData\` to a JSON string.\n\nUse respondAsStructuredData: '{ "isMainOrLead": true }' if you are the primary session or team lead, or '{ "isMainOrLead": false }' if you are a worker agent spawned by another agent.\n\nDo not use \`crosstalk_send\`.`,
-						session_id: hsSessionId,
-						replyJsonSchema: "{ isMainOrLead: bool }",
-					}),
-				);
-				console.log(`[ws] handshake sent to ${team}/${subId} [${hsSessionId}]`);
+				sendHandshake(ws, team, subId);
 			} else {
 				ws.data.handshakeConfirmed = true;
 			}
@@ -504,5 +536,5 @@ export function createWebSocketHandlers({
 		return true;
 	}
 
-	return { open, message, close, heartbeatInterval, resolveHandshake };
+	return { open, message, close, heartbeatInterval, heartbeatTick, resolveHandshake };
 }

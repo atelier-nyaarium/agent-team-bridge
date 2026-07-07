@@ -615,6 +615,37 @@ describe("handshake-established session records", () => {
 		expect(handlers.resolveHandshake(staleHsId, { isMainOrLead: true })).toBe(false);
 		expect(handlers.resolveHandshake(handshakeIdFrom(ws2), { isMainOrLead: true })).toBe(true);
 	});
+
+	it("re-sends the handshake to an unconfirmed channel session on a heartbeat tick", () => {
+		const { handlers } = setup();
+		const ws = createMockWs();
+		register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
+		const first = handshakeIdFrom(ws);
+		expect(ws.data.hsAttempts).toBe(1);
+		handlers.heartbeatTick();
+		expect(ws.data.hsAttempts).toBe(2);
+		// A fresh handshake id, so a session that missed the first (a login prompt) can answer the resend.
+		expect(handshakeIdFrom(ws)).not.toBe(first);
+	});
+
+	it("stops re-sending the handshake once the session confirms", () => {
+		const { handlers } = setup();
+		const ws = createMockWs();
+		register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
+		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
+		expect(ws.data.handshakeConfirmed).toBe(true);
+		handlers.heartbeatTick();
+		expect(ws.data.hsAttempts).toBe(1);
+	});
+
+	it("stops re-sending the handshake after the attempt cap", () => {
+		const { handlers } = setup();
+		const ws = createMockWs();
+		register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
+		ws.data.hsAttempts = 100; // past the cap
+		handlers.heartbeatTick();
+		expect(ws.data.hsAttempts).toBe(100);
+	});
 });
 
 // resolveLiveIncarnation is the ONE record -> live-socket resolver shared by presence listing, send
