@@ -386,6 +386,7 @@ fun TerminalView(
 	team: String,
 	refreshMs: Long,
 	wakePending: Boolean,
+	sessionStatus: String?,
 	onWake: () -> Unit,
 	onPeek: suspend (sinceHash: String?) -> Result<ConsolePeekResult>,
 	onSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
@@ -410,10 +411,13 @@ fun TerminalView(
 	val scope = rememberCoroutineScope()
 	val lifecycleOwner = LocalLifecycleOwner.current
 
-	LaunchedEffect(team, refreshMs) {
+	LaunchedEffect(team, refreshMs, sessionStatus) {
 		lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
 			while (true) {
-				if (paused) {
+				// A long-press pause freezes the frame; an asleep (available, not-yet-woken) session has
+				// nothing to peek, so it idles on the Wake screen rather than docker-exec'ing a warm
+				// container every cycle. A tap on Wake sets wakeRequested and the loop starts peeking.
+				if (paused || (sessionStatus == "available" && !wakeRequested)) {
 					delay(refreshMs)
 					continue
 				}
@@ -459,14 +463,18 @@ fun TerminalView(
 	}
 
 	val frameEmpty = ansi.isEmpty() && logs.isEmpty()
+	// An asleep session (board says available) has not been woken, so it shows the Wake button even when
+	// its container is still warm and a peek would return stale container-logs; only a session actually
+	// coming up (verifying / wake requested) shows the live logs-then-pane.
+	val asleepIdle = sessionStatus == "available" && !wakeRequested
 	// The wake/error screen shows once there is no frame to display (a failed peek, or a wake in flight
 	// before the first frame lands), or after a run of failures a prior frame has gone stale; a lone
 	// transient failure keeps the last frame so it does not flicker.
-	val showOffSession = (peekError != null && (frameEmpty || failCount >= 2)) || (wakeRequested && frameEmpty)
+	val showOffSession = asleepIdle || (peekError != null && (frameEmpty || failCount >= 2)) || (wakeRequested && frameEmpty)
 
 	Column(modifier) {
 		when {
-			showOffSession && peekError?.contains("user-launched") == true -> {
+			showOffSession && !asleepIdle && peekError?.contains("user-launched") == true -> {
 				// A user-launched session has no daemon pane to drive; that is an expected state, not a
 				// failure, so it reads calm rather than alarming-red, with no wake affordance.
 				Box(Modifier.weight(1f).fillMaxWidth().background(TERMINAL_BG), contentAlignment = Alignment.Center) {
