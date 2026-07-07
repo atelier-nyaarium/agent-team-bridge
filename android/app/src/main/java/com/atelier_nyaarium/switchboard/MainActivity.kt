@@ -1711,6 +1711,7 @@ fun ThreadScreen(
 					team = team,
 					refreshMs = terminalRefreshMs,
 					wakePending = wakePending,
+					sessionStatus = sessionStatus,
 					onWake = onWake,
 					onPeek = onTerminalPeek,
 					onSend = onTerminalSend,
