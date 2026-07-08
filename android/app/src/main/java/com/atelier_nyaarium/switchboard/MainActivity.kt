@@ -2550,6 +2550,11 @@ private fun BatteryExemptionRow() {
 	)
 }
 
+// The gateway's displayLabel/sessionLabel wire schema caps both at 64 characters; enforced
+// client-side too so pasting a long string reads as "can't type more" rather than a confusing
+// server-side rejection once submitted.
+private const val SESSION_LABEL_MAX_CHARS = 64
+
 @Composable
 fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDismiss: () -> Unit) {
 	var name by remember { mutableStateOf(if (current == team) "" else current) }
@@ -2561,7 +2566,7 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 				Text("Id: $team", style = MaterialTheme.typography.bodySmall)
 				OutlinedTextField(
 					value = name,
-					onValueChange = { name = it },
+					onValueChange = { if (it.length <= SESSION_LABEL_MAX_CHARS) name = it },
 					label = { Text("Display name") },
 					singleLine = true,
 				)
@@ -2571,16 +2576,6 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
 	)
 }
-
-// Runs of anything outside [a-z0-9] collapse to a single '-' (this is both the non-alnum replace and
-// the repeat-dash compress in one pass).
-private val SLUG_NON_ALNUM = Regex("[^a-z0-9]+")
-
-/** Lowercase, collapse non-[a-z0-9] runs to a single '-', trim '-' from both ends, cap at the
- * tmux-name length. Produces the back-compat sessionName an older gateway adopts as the session id;
- * empty when the label has no ASCII characters to slug. */
-internal fun slugifySessionName(raw: String): String =
-	raw.lowercase().replace(SLUG_NON_ALNUM, "-").trim('-').take(64).trimEnd('-')
 
 /** Name and spawn a new session in a spawn-point project. The label is free-form: the gateway mints
  * the session id, so the field accepts any text and the spawn button is enabled once it is non-blank. */
@@ -2594,7 +2589,7 @@ fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Uni
 		text = {
 			OutlinedTextField(
 				value = name,
-				onValueChange = { name = it },
+				onValueChange = { if (it.length <= SESSION_LABEL_MAX_CHARS) name = it },
 				label = { Text("Session name") },
 				singleLine = true,
 			)

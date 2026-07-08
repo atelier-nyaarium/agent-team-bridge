@@ -1134,15 +1134,40 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		const reply = await h.handler.handleFrame(
 			frame({ kind: "create_session", target: "recipe-app", displayLabel: "My Work" }, "cv2"),
 		);
-		const res = reply.result as { created: boolean; id: string; sessionLabel: string };
+		const res = reply.result as { created: boolean; id: string; sessionLabel: string; labelSanitized?: boolean };
 		expect(res.created).toBe(true);
 		expect(res.id).toMatch(/^[0-9a-f]{6}$/);
 		expect(res.sessionLabel).toBe("My Work");
+		expect(res.labelSanitized).toBeFalsy();
 		expect(h.hostOps[0]).toMatchObject({
 			kind: "createSession",
 			target: { kind: "devcontainer", name: "recipe-app", sessionName: res.id },
 		});
 		expect(store.getByTeam(`recipe-app.${res.id}`)?.sessionLabel).toBe("My Work");
+	});
+
+	it("create_session flags labelSanitized when the displayLabel is rejected outright, falling back to the id", async () => {
+		const store = new SessionStore();
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", displayLabel: "\u200b" }, "cv-unsanitary"),
+		);
+		const res = reply.result as { id: string; sessionLabel: string; labelSanitized?: boolean };
+		expect(res.labelSanitized).toBe(true);
+		expect(res.sessionLabel).toBe(res.id);
+	});
+
+	it("create_session on the sessionName path never flags labelSanitized, even though sessionLabel legitimately equals id there", async () => {
+		const store = new SessionStore();
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", sessionName: "scratch" }, "cv-name-only"),
+		);
+		const res = reply.result as { id: string; sessionLabel: string; labelSanitized?: boolean };
+		// No displayLabel was ever sent, so sessionLabel defaulting to the id is expected, unrelated
+		// behavior - never the sanitize-fallback signal.
+		expect(res.sessionLabel).toBe(res.id);
+		expect(res.labelSanitized).toBeFalsy();
 	});
 
 	it("create_session sends the un-deduped workdir hint when a display label collides", async () => {
@@ -1207,7 +1232,13 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		const reply = await h.handler.handleFrame(
 			frame({ kind: "create_session", target: "recipe-app", sessionName: "scratch" }, "c1"),
 		);
-		expect(reply.result).toEqual({ created: true, id: "scratch", sessionLabel: "scratch", status: "pending" });
+		expect(reply.result).toEqual({
+			created: true,
+			id: "scratch",
+			sessionLabel: "scratch",
+			labelSanitized: false,
+			status: "pending",
+		});
 		// The record is already adopted (visible to teams()) while the wake is still in flight.
 		expect(store.getByTeam("recipe-app.scratch")).toBeDefined();
 

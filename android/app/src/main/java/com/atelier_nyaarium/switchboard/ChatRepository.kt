@@ -25,6 +25,7 @@ import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.parseStoreKey
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.io.File
+import java.util.UUID
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -2183,21 +2184,49 @@ class ChatRepository(
 		peekTerminal(team, null)
 	}
 
+	// The opId of the most recent still-unresolved spawnSession attempt per (project, label), so a
+	// retry within the window reuses it instead of drawing a fresh one - letting the gateway's
+	// mintedFrom provenance reattach the first attempt's record (or cleanly mint a new one if that
+	// attempt genuinely failed) rather than always minting a second, redundant session. Cleared on a
+	// confirmed success; a stale entry past the window is treated as absent. In-memory only.
+	private val recentSpawnOpIds = mutableMapOf<Pair<String, String>, Pair<String, Long>>()
+
+	// Comfortably past create_session's own ~25s cold-container bound, so a reply that arrives late
+	// (rather than being lost outright) still lands under the same opId as a retry that fires after
+	// the user sees a failure.
+	private val SPAWN_RETRY_WINDOW_MS = 40_000L
+
 	/** Spawn a session in a spawn-point project with a free-form label. The gateway adopts the
 	 * session's record synchronously, so its own tile appears via the next teams() refresh - there is
 	 * no separate placeholder. A failure surfaces as a transient Snackbar message and re-syncs teams
-	 * so a rolled-back record's tile does not linger. Runs on the caller's scope (the Activity's), so
-	 * a tap always fires even before the poll loop's scope exists. */
+	 * so a rolled-back record's tile does not linger; a retry with the same project + label shortly
+	 * after reuses the prior attempt's opId (see recentSpawnOpIds) so it reattaches instead of
+	 * duplicating. A label the gateway could not use as-is (unsupported characters) still creates the
+	 * session under its minted id, surfaced with its own transient message rather than silently
+	 * losing the typed name. Runs on the caller's scope (the Activity's), so a tap always fires even
+	 * before the poll loop's scope exists. */
 	suspend fun spawnSession(project: String, label: String) = coroutineScope {
-		val slug = slugifySessionName(label).ifEmpty { null }
+		val key = project to label
+		val now = System.currentTimeMillis()
+		recentSpawnOpIds.entries.removeAll { now - it.value.second >= SPAWN_RETRY_WINDOW_MS }
+		val opId = recentSpawnOpIds[key]?.first ?: UUID.randomUUID().toString()
+		recentSpawnOpIds[key] = opId to now
 		// Nudge a refresh shortly after firing so the just-adopted record's tile shows promptly,
 		// without waiting on a cold container's (up to ~25s) create reply.
 		launch {
 			delay(400)
 			runCatching { refreshTeams() }
 		}
-		runCatching { withContext(Dispatchers.IO) { client().createSession(project, sessionName = slug, displayLabel = label) } }
-			.onSuccess { runCatching { refreshTeams() } }
+		runCatching { withContext(Dispatchers.IO) { client().createSession(project, displayLabel = label, opId = opId) } }
+			.onSuccess { result ->
+				recentSpawnOpIds.remove(key)
+				if (result.labelSanitized == true) {
+					_state.update {
+						it.copy(transientMessage = "\"$label\" has unsupported characters; the session was created using its id as the name instead")
+					}
+				}
+				runCatching { refreshTeams() }
+			}
 			.onFailure { e ->
 				_state.update { it.copy(transientMessage = e.message ?: "Failed to create \"$label\"") }
 				runCatching { refreshTeams() }

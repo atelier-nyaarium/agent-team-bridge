@@ -256,6 +256,78 @@ empirical-reproduction bar):**
   match the shipped, poll-driven `spawnSession` path (confirmed: it stays on the board, never reads
   the create result's id) - a stale-doc fix worth making while touching this area.
 
+**Red-team addendum (found and fixed post-implementation, empirically traced against the real
+code):**
+- The old slugifier had an accidental idempotency property this change silently removed: retyping the
+  identical label re-derived the identical slug/id, so `adoptOrReattach` naturally reattached to the
+  same record on a retry regardless of opId. The gateway-mint path has no such fallback - every
+  `spawnSession` call drew a fresh random opId (`ConsoleClient.createSession`'s default), so
+  Phase A's `mintedFrom`-based reattachment was structurally unreachable from Android's actual create
+  flow. Concretely: a cold-container create's reply can take up to ~25s; if it is lost after the
+  gateway genuinely minted the session (network drop, app backgrounded mid-request), the user sees a
+  failure with no retained state, and a well-intentioned retry mints a second, fully redundant
+  session. Fixed by giving `ChatRepository` a small in-memory `recentSpawnOpIds` map keyed by
+  `(project, label)`: a retry within a 40s window (past the cold-container bound) reuses the prior
+  attempt's opId, so the gateway's own already-correct logic resolves it properly - reattach if that
+  attempt is still alive, mint fresh if it genuinely failed. Cleared on a confirmed success so a later,
+  unrelated create with a coincidentally-matching label is not wrongly folded into an old one.
+- A label `sanitizeLabel` (`session-store.ts`) rejects outright (a lone zero-width space, or any
+  string containing a Unicode `Cf`/zero-width-joiner character - common in compound emoji like family
+  or profession glyphs) used to fall back to the OLD slugifier's ASCII-derived slug, still somewhat
+  recognizable; post-slugifier-removal it silently falls back to the fully opaque minted hex id with
+  no error and no trace of what was typed. Fixed (final form, see round-2 addendum below for how the
+  first cut of this fix was superseded) by a dedicated wire field, `labelSanitized`, computed once by
+  the gateway directly from the request's own `displayLabel` and surfaced to a distinct client
+  transient message rather than staying silent.
+- A label over the wire schema's 64-character cap (`displayLabel`/`sessionLabel` in `schemas.ts`) had
+  no client-side guard on either `SpawnDialog` or `RenameDialog`'s text field, so pasting a long string
+  crashed the sealed envelope's zod parse inside `consoleSealer.ts`; `relayPump.ts`'s generic
+  seal-open catch treated that parse failure exactly like a real crypto/auth error and replied
+  `unseal failed: <raw multi-line ZodError dump>`, shown to the user verbatim (the one failure site in
+  `ChatRepository.kt` that did not truncate its error message). Pre-existing (not specific to
+  id-minting), but surfaced by the same audit pass and directly reachable through the exact field this
+  phase touches. Fixed with a client-side 64-character cap on both text fields, matching the wire cap,
+  so the invalid input is never submitted rather than fixing the server's generic error framing.
+- Confirmed, not touched: the display-degradation findings this pass also surfaced (a session's
+  secondary id line, the sharing screen, board ordering, and tab-collision labels all read worse with
+  an opaque hex id than the old semi-readable slug) are exactly what Phase D already specifies fixing,
+  independently re-derived by the audit - confirms Phase D's scope, requires no plan change.
+- Logged, not fixed (pre-existing, unrelated to id-minting): `RenameDialog`'s blank-vs-prefill guard
+  has a structural shape mismatch that makes it never actually blank a truly-unlabeled session's
+  field; see `plans/pain-points.md`.
+
+**Red-team addendum, round 2 (a second pass specifically targeting the round-1 fixes above, same
+empirical-verification bar):**
+- The round-1 `sessionLabel == id` fallback-detection heuristic had a structural TOCTOU flaw: both
+  `create_session` reply sites read the record's CURRENT `sessionLabel`/`id` at reply-construction
+  time (up to `CREATE_SESSION_BOUND_MS` later for a backgrounded devcontainer wake), not at the moment
+  the record was created - and `rename_session` has no in-flight guard, so a rename landing on the
+  same record in between could flip the verdict either way: mask a genuine fallback (the user renamed
+  before the reply arrived) or fire a false positive quoting a stale label (a rename to a value that
+  happens to equal the id - plausible, since `RenameDialog` literally displays `Id: $team` inviting
+  copy-paste). Separately, the SAME heuristic is a live footgun for reuse elsewhere: on the
+  `sessionName`-provided path, `sessionLabel === id` is the deterministic DEFAULT whenever no
+  `displayLabel` is sent (nothing to do with sanitization), so applying this check to `wakeSession`'s
+  result in some later refactor - a natural-looking consistency cleanup - would misfire on essentially
+  every fresh record that path creates. Fixed both at the root: replaced the inferred heuristic with
+  an explicit `labelSanitized` boolean on `ConsoleCreateSessionResult` (`schemas.ts`), computed exactly
+  once, directly from `sanitizeLabel(op.displayLabel)`, before any launch/wait and independent of the
+  record's live state entirely - immune to a later rename, and `false` whenever no `displayLabel` was
+  sent at all, so it is safe to reuse on any path without re-deriving the same bug. This same redesign
+  also incidentally closed two round-2 low-severity siblings for free: a `dedupLabel` collision suffix
+  masking a fallback (the new flag never reads `sessionLabel`/`id` at all), and a coincidental
+  valid-label-equals-fresh-id false positive (same reason).
+- Confirmed, not fixed (pre-existing, self-correcting, non-destructive): `spawnSession`'s
+  `runCatching` catches `CancellationException` like any other failure, so an Activity recreation
+  (e.g. device rotation) while a create is in flight can show a spurious "Failed to create" Snackbar
+  even when the create actually succeeded server-side; the real session still appears via the next
+  `teams()` poll. Logged in `plans/pain-points.md`.
+- Verified, no action needed: `sanitizeLabel`'s own code-point-based 64-cap can never truncate a label
+  that already cleared the wire schema's 64-code-unit cap (a code-unit count is always >= its
+  code-point count), so the two caps never actually disagree in practice; and Kotlin's `String.length`
+  and zod's `.max()` both count UTF-16 code units identically, so the new client-side cap has no
+  residual cross-platform unit mismatch.
+
 ## Phase C - Android: server-authoritative label
 
 - `ChatState` (a plain data class) gains two fields: `labels: Map<String, String>` (existing) and a

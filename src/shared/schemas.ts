@@ -617,6 +617,13 @@ export const ConsoleCreateSessionResultSchema = z
 		// Absent from an older gateway that only reported `created`.
 		id: z.string().optional(),
 		sessionLabel: z.string().optional(),
+		// True iff a caller-supplied displayLabel could not be used as-is (sanitizeLabel rejected it -
+		// invisible/forbidden characters) and sessionLabel fell back to the id instead. Computed once,
+		// directly from the request's own displayLabel, never from comparing sessionLabel/id after the
+		// fact - a later unrelated rename must not flip this flag. Absent/false whenever no displayLabel
+		// was sent at all (the sessionName-adopted path legitimately has sessionLabel === id as its
+		// normal, unrelated default and must never be read as this signal).
+		labelSanitized: z.boolean().optional(),
 		// Present only when a cold devcontainer bring-up outran the gateway's bound and the launch is
 		// continuing in the background (id/sessionLabel are still the real, already-adopted values -
 		// only the launch itself is still in flight). Absent means the launch already completed by the

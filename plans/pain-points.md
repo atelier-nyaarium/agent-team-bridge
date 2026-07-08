@@ -203,3 +203,14 @@ value (spaces/caps) makes `localAddress(from)` throw uncaught:
 
 ### non-address fallback leaks
 - `ChatRepository.kt : canonicalTarget` - `runCatching { parseTarget(...).canonical }.getOrDefault(team)` returns the raw `team` on failure, then used as a thread-lookup key + openTabs membership; the same class fixed in `fromCanonical` (which now returns null). A malformed team silently misses rather than corrupts, so lower severity.
+
+## Session id teardown (`plans/session-id-teardown.md`, found during Phase B red-team)
+
+- [low] `android/.../MainActivity.kt : RenameDialog` - **bug-class** - the blank-vs-prefill guard
+  `if (current == team) "" else current` compares a `spawn.session`-shaped `team` against a bare-segment
+  `current` (from `sessionLeaf()`), a structural mismatch that can never actually equal for a non-empty
+  project name - so an unlabeled session's Rename field always pre-fills with the raw id instead of
+  starting blank. Rarely fires today (sessionLabel is populated from the user's typed text at creation
+  time), and pre-dates the id-minting work entirely (the guard would misfire identically for a slug or a
+  hex id). Fix: compare `current` against the session's own leaf segment, not the qualified `team`.
+- [low] `android/.../ChatRepository.kt : spawnSession` - **bug-class** - `runCatching { withContext(Dispatchers.IO) { client().createSession(...) } }` catches `CancellationException` like any other `Throwable`, so if the Activity's coroutine scope is cancelled (a config change, e.g. device rotation) while the blocking OkHttp call is still in flight, a create that actually succeeded server-side still surfaces a "Failed to create" Snackbar on the freshly recreated Activity (`_state` is a process-lifetime singleton, so the stale message reaches the new Activity's `LaunchedEffect`). Self-correcting (the real session appears via the next `teams()` poll) and non-destructive, so left unfixed; a proper fix would re-throw `CancellationException` rather than let `runCatching` swallow it.

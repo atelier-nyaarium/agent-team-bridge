@@ -38,7 +38,7 @@ import {
 	SpawnPoint,
 	storeKey,
 } from "../../shared/session-id.js";
-import type { SessionRecord } from "../../shared/session-store.js";
+import { type SessionRecord, sanitizeLabel } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
 import type { WakeResult } from "../wake.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
@@ -729,6 +729,12 @@ export function createConsoleDispatcher({
 				if (!op.sessionName && !op.displayLabel) {
 					throw new Error("create_session needs a sessionName or a displayLabel");
 				}
+				// Computed once, directly from the request's own displayLabel - never by comparing the
+				// eventual sessionLabel/id after the fact, which would race a concurrent rename landing on
+				// the same record before this op's reply is constructed. False whenever no displayLabel was
+				// sent (the sessionName-adopted path's sessionLabel legitimately defaults to the id itself,
+				// unrelated to sanitization).
+				const labelSanitized = op.displayLabel != null && sanitizeLabel(op.displayLabel) === null;
 				const spawn = parseTarget(op.target, localDomain, localGatewayId).spawn;
 				const dedupKey = `${conversationId}:${opId}`;
 				let sessionId: string;
@@ -849,6 +855,7 @@ export function createConsoleDispatcher({
 							created: true,
 							id: adopted?.record.id ?? sessionId,
 							sessionLabel: adopted?.record.sessionLabel,
+							labelSanitized,
 							status: "pending" as const,
 						};
 					}
@@ -877,6 +884,7 @@ export function createConsoleDispatcher({
 					created: true,
 					id: adopted?.record.id ?? sessionId,
 					sessionLabel: adopted?.record.sessionLabel,
+					labelSanitized,
 				};
 			}
 
