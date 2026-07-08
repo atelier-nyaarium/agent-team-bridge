@@ -157,6 +157,15 @@ class AppStateStore(context: Context) {
 
 	fun loadLabels(): String? = prefs.getString(KEY_LABELS, null)
 
+	/** How many consecutive fresh-teams observations each locally-labeled team has been missing
+	 * entirely from. Persisted alongside labels (unlike pollFailStreak, which deliberately resets on
+	 * a fresh start): it accumulates evidence against an already-durable label across restarts, and a
+	 * device that goes a long stretch unforegrounded is also the one most likely to have its process
+	 * killed between observations. */
+	fun saveAbsenceStreaks(json: String) = prefs.edit().putString(KEY_ABSENCE_STREAKS, json).apply()
+
+	fun loadAbsenceStreaks(): String? = prefs.getString(KEY_ABSENCE_STREAKS, null)
+
 	fun saveDrafts(json: String) = prefs.edit().putString(KEY_DRAFTS, json).apply()
 
 	fun loadDrafts(): String? = prefs.getString(KEY_DRAFTS, null)
@@ -285,6 +294,7 @@ class AppStateStore(context: Context) {
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"
 		const val KEY_LABELS = "labels"
+		const val KEY_ABSENCE_STREAKS = "team_absence_streak"
 		const val KEY_DRAFTS = "drafts"
 		const val KEY_GATEWAY_ID = "gateway_id"
 		const val KEY_IDENTITY = "federation_identity"
@@ -321,11 +331,11 @@ class AppStateStore(context: Context) {
 		 * taste, the biometric lock), so any new provisioning/identity/transcript key MUST be added
 		 * here or it silently survives a Clear (a privacy/correctness regression). The partition is
 		 * pinned by a unit test. */
-		/** The grammar-bearing keys the one-shot schema wipe clears (thread/label/draft store keys plus
-		 * the mailbox sync cursor). Any NEW address-keyed pref MUST be added here or it survives the
-		 * grammar migration carrying a stale-grammar key. The set is pinned by a unit test. */
+		/** The grammar-bearing keys the one-shot schema wipe clears (thread/label/draft/absence-streak
+		 * store keys plus the mailbox sync cursor). Any NEW address-keyed pref MUST be added here or it
+		 * survives the grammar migration carrying a stale-grammar key. The set is pinned by a unit test. */
 		val SCHEMA_WIPE_KEYS = listOf(
-			KEY_THREADS, KEY_LABELS, KEY_DRAFTS, KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED,
+			KEY_THREADS, KEY_LABELS, KEY_DRAFTS, KEY_ABSENCE_STREAKS, KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED,
 		)
 
 		val PROVISIONING_KEYS = listOf(

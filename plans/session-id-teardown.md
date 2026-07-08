@@ -382,6 +382,40 @@ empirical-verification bar):**
   same-device rename-race flicker (optimistic -> a stale poll reverts it for one cycle -> the rename's
   own success handler reapplies) actually self-corrects rather than sticking.
 
+**Red-team addendum (found and fixed post-implementation, empirically traced against the real
+code):**
+- A missing `SCHEMA_WIPE_KEYS` registration for the new persisted key (every other address-keyed pref
+  is listed there so the one-shot grammar migration wipes it too), a naming inconsistency
+  (`teamAbsenceStreak` renamed to `teamAbsenceStreaks` to match the `labels`/`drafts`/`threads` plural
+  convention), a TOCTOU bug in `rename()`'s revert path (an unconditional overwrite of a
+  pre-suspension snapshot, which could stomp a fresher value a concurrent self-heal or a later rename
+  already landed), and a regression where a blank-name rename on a non-local team silently did nothing
+  instead of clearing the local label (the optimistic-write gate had swallowed the unconditional
+  local-only clear along with it) - all found by one internal audit pass and fixed before the first
+  red-team round even started.
+- The dedup-reapply branch (`applied != trimmed`, a server-side "-2" suffix) had the exact same
+  staleness class as the just-fixed revert branch: an unconditional `setLabel(team, applied)` with no
+  check that nothing else had already changed the label since this call's own optimistic write. Fixed
+  with the same atomic-CAS guard, extended to still accept the confirmed server value unconditionally
+  when there was no optimistic write to protect in the first place (the `!isLocal` case).
+- `applyFreshTeams`'s two persist calls (`persistLabels`/`persistAbsenceStreaks`) had no
+  synchronization against a concurrent call to the same function - `refreshTeams()` (a manual
+  pull-to-refresh) and `startPolling()`'s own periodic teams-refresh both run on `Dispatchers.IO`, a
+  real thread pool, and `SharedPreferences.apply()` gives no ordering guarantee across genuinely
+  concurrent callers, so an older fetch's snapshot could physically win the on-disk file over a newer
+  one already reflected in memory. Fixed with a `Mutex` serializing one `applyFreshTeams` call at a
+  time, held only around its own body (state update + both persist writes), never across the
+  network fetch itself.
+- Accepted, not fixed this pass: multiple rapid renames on the same team submitted before any of them
+  resolves have no debounce, cancellation of a prior in-flight attempt, or per-team sequencing, so the
+  final label is decided by whichever network reply happens to land last rather than by click order.
+  Each individual call's own staleness guard (above) prevents any of them from corrupting a value a
+  later call already established, so the failure mode is "an earlier click's result can still win over
+  a later one" rather than data loss or corruption - annoying in the specific case of typing multiple
+  quick corrections, not destructive. A full fix needs per-team request sequencing (a generation
+  counter or a cancelling `Job` per team), a larger change than this phase's scope; logged in
+  `plans/pain-points.md`.
+
 ## Phase D - Android: remove the id from casual display
 
 - `SessionCard` - delete the `if (display != team.shortName) Text(team.shortName, ...)` secondary

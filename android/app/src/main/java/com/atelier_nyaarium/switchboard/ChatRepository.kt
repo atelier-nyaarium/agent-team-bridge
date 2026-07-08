@@ -41,6 +41,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
@@ -214,6 +216,10 @@ data class ChatState(
 	val biometricLock: Boolean = false,
 	val deviceName: String = "",
 	val labels: Map<String, String> = emptyMap(),
+	/** Consecutive fresh-teams observations a locally-labeled team has been missing entirely from
+	 * (as opposed to present with no server label yet). Feeds withFreshTeams' prune rule; a team
+	 * present in `labels` is never in this map until it first goes missing. */
+	val teamAbsenceStreaks: Map<String, Int> = emptyMap(),
 	val connected: Boolean = false,
 	val pollFailStreak: Int = 0,
 	/** Connected Gateway id, learned from the register result. Empty before the first
@@ -253,6 +259,37 @@ data class ChatState(
 		val known = teams.mapTo(HashSet()) { it.name }
 		val extra = threads.keys.filter { it !in known }.map { Team(it, "ended", "", 0) }
 		return teams + extra
+	}
+
+	/** Replace the live teams list from a fresh fetch, folding in the two rules that keep a LOCAL
+	 * label override (`labels`) from outliving its reason to exist:
+	 *  - the moment the server reports its own non-null sessionLabel for a team, the local override
+	 *    is dropped - whatever that server value is - self-healing a stale edit, including one this
+	 *    same device made once the server catches up to it.
+	 *  - a locally-labeled team missing from the fresh list ENTIRELY (forgotten or TTL-swept
+	 *    elsewhere, which the rule above can never observe since it never appears to report a label
+	 *    at all) accumulates a streak; only once it crosses ABSENCE_PRUNE_STREAK consecutive misses is
+	 *    the local override dropped too. A single miss is deliberately not enough - a momentary gap
+	 *    must never wipe a legitimate pending edit - and reappearing (labeled or not) resets it. */
+	fun withFreshTeams(freshTeams: List<Team>): ChatState {
+		val fresh = freshTeams.associateBy { it.name }
+		val nextLabels = mutableMapOf<String, String>()
+		val nextStreak = mutableMapOf<String, Int>()
+		for ((team, label) in labels) {
+			val server = fresh[team]
+			when {
+				server?.sessionLabel != null -> {}
+				server != null -> nextLabels[team] = label
+				else -> {
+					val streak = (teamAbsenceStreaks[team] ?: 0) + 1
+					if (streak < ABSENCE_PRUNE_STREAK) {
+						nextLabels[team] = label
+						nextStreak[team] = streak
+					}
+				}
+			}
+		}
+		return copy(teams = freshTeams, labels = nextLabels, teamAbsenceStreaks = nextStreak)
 	}
 
 	/** Whether the agent is actively working a turn: a tmux peek (the spinner marker) when one has
@@ -312,6 +349,11 @@ data class ChatState(
 	 * canonical key is never shown. */
 	fun label(team: String, localGatewayId: String = ""): String = labelOrNull(team) ?: sessionLeaf(team)
 }
+
+/** Consecutive fresh-teams observations a locally-labeled team may miss entirely before
+ * withFreshTeams prunes its local override. More than one so a single transient gap in a fetch
+ * (not the team itself being gone) cannot wipe a legitimate pending edit. */
+private const val ABSENCE_PRUNE_STREAK = 2
 
 /** A just-enrolled device's first ops can transiently reject while the route Gateway
  * re-syncs the new admission from evie (it only re-syncs on its next re-register). We
@@ -494,6 +536,7 @@ class ChatRepository(
 			biometricLock = store.biometricLock,
 			deviceName = currentDeviceName(),
 			labels = loadPersistedLabels(),
+			teamAbsenceStreaks = loadPersistedAbsenceStreaks(),
 			localGatewayId = localGatewayId,
 			displayName = store.displayName,
 			firstRooted = store.firstRooted,
@@ -2149,14 +2192,34 @@ class ChatRepository(
 	}.getOrDefault(false)
 
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
-		runCatching { client().teams(localGatewayId) }.onSuccess { t ->
-			_state.update { it.copy(teams = t) }
-			refreshDisplayNameFromTeams()
-		}
+		runCatching { client().teams(localGatewayId) }.onSuccess { applyFreshTeams(it) }
 		// Also refresh the cross-Domain peer roster so the Federation PEERS list shows a freshly-linked
 		// peer that has no discovery sessions yet. Best-effort + only when federation is reachable;
 		// folded into the same refresh so a board update and the peer set stay consistent.
 		refreshLinkedPeers()
+	}
+
+	/** Apply a freshly-fetched teams list: folds it through ChatState.withFreshTeams (pruning a local
+	 * label override the server has since confirmed or the team has vanished for good) and refreshes
+	 * the owner's own display name from it. The one site refreshTeams() and the passive poll loop's
+	 * own teams refresh both call, so the prune rule lives in exactly one place. */
+	// Serializes an applyFreshTeams call end to end (its state update plus both persist writes)
+	// against another one - refreshTeams() (a manual pull-to-refresh) and startPolling()'s own
+	// periodic teams-refresh both run on Dispatchers.IO, a real thread pool, so without this two
+	// genuinely concurrent calls could each persist their own snapshot with no ordering guarantee
+	// between the two: SharedPreferences.apply() only guarantees the LAST-CALLED write for a key
+	// eventually wins, not that "last called" lines up with "computed from the newer fetch" once two
+	// independent capture-then-persist sequences interleave. Held only around this function's own
+	// body, never across a suspending network call, so it is never a real contention bottleneck.
+	private val freshTeamsMutex = Mutex()
+
+	private suspend fun applyFreshTeams(t: List<Team>) {
+		freshTeamsMutex.withLock {
+			val next = _state.updateAndGet { it.withFreshTeams(t) }
+			persistLabels(next.labels)
+			persistAbsenceStreaks(next.teamAbsenceStreaks)
+		}
+		refreshDisplayNameFromTeams()
 	}
 
 	/** Capture an agent's tmux pane for the terminal view. Returns a Result so the caller can keep
@@ -2406,10 +2469,7 @@ class ChatRepository(
 					if (forceTeamsRefresh || now - lastTeamsAt >= TEAMS_REFRESH_MS) {
 						forceTeamsRefresh = false
 						lastTeamsAt = now
-						runCatching { client().teams(localGatewayId) }.onSuccess { t ->
-							_state.update { it.copy(teams = t) }
-							refreshDisplayNameFromTeams()
-						}
+						runCatching { client().teams(localGatewayId) }.onSuccess { applyFreshTeams(it) }
 					}
 					// Visible: long-poll (the hold IS the wait; re-poll immediately).
 					// AFK: plain poll, then sleep an interval; the mailbox batches.
@@ -2673,15 +2733,51 @@ class ChatRepository(
 	/** Rename a session: set it locally for immediate feedback, then push it to the gateway so the
 	 * label persists server-side, and reconcile the local label to whatever the gateway actually
 	 * applied (it sanitizes and per-spawn dedups, so "foo" may land as "foo-2"). A blank name clears
-	 * the local label only. On an unreachable/older gateway the optimistic local label stays. */
+	 * the local label only, unconditionally - like closeTab's own local-only mutation, clearing never
+	 * needs the network or an ownership check. On an unreachable/older gateway the optimistic local
+	 * label stays - the gateway is presumed to apply it eventually. The optimistic non-blank write is
+	 * withheld for a target that does not resolve to THIS Gateway's own Domain (closeTab/wakeSession's
+	 * "is this mine" check compares gateway alone; a federated peer's session can coincidentally share
+	 * this Gateway's id, so this matches the gateway's own rename_session guard, which checks both) -
+	 * a federated peer's session can otherwise pass the board's own, more permissive Rename-menu gates
+	 * and flash a label that was never actually applied anywhere; the round trip is still attempted
+	 * regardless (a second, reactive line of defense - the server's own rejection is the backstop even
+	 * if this check has a gap). An outright rejection (a successful round trip that still reports
+	 * renamed:false) reverts the optimistic write, but ONLY if the label still holds exactly what this
+	 * call wrote - a fresher server value landing via withFreshTeams, or a newer overlapping rename,
+	 * must never be clobbered by a stale rejection arriving late. */
 	suspend fun rename(team: String, name: String) {
-		setLabel(team, name)
 		val trimmed = name.trim()
-		if (trimmed.isEmpty()) return
-		val applied = withContext(Dispatchers.IO) { runCatching { client().renameSession(team, trimmed) }.getOrNull() }
-			?.takeIf { it.renamed }
-			?.sessionLabel
-		if (applied != null && applied != trimmed) setLabel(team, applied)
+		if (trimmed.isEmpty()) {
+			setLabel(team, "")
+			return
+		}
+		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
+		val isLocal = t is Address && t.domain == localDomain() && t.gateway == _state.value.localGatewayId
+		val previous = _state.value.labels[team]
+		if (isLocal) setLabel(team, trimmed)
+		val reply = withContext(Dispatchers.IO) { runCatching { client().renameSession(team, trimmed) }.getOrNull() }
+		val applied = reply?.takeIf { it.renamed }?.sessionLabel
+		if (applied != null && applied != trimmed) {
+			// A confirmed, authoritative server value always wins over "nothing was protecting the
+			// label to begin with" (isLocal false - no optimistic write was ever made to clobber).
+			// When there WAS an optimistic write, only overwrite it while it still holds exactly what
+			// this call itself set - never stomp a fresher value a concurrent self-heal or a later
+			// rename already landed in the meantime.
+			val next = _state.updateAndGet { s ->
+				if (!isLocal || s.labels[team] == trimmed) s.copy(labels = s.labels + (team to applied)) else s
+			}
+			persistLabels(next.labels)
+		} else if (isLocal && reply?.renamed == false) {
+			val next = _state.updateAndGet { s ->
+				if (s.labels[team] == trimmed) {
+					s.copy(labels = if (previous != null) s.labels + (team to previous) else s.labels - team)
+				} else {
+					s
+				}
+			}
+			persistLabels(next.labels)
+		}
 	}
 
 	/** Drop a peer from this device: its thread, unread, tab, label, and any
@@ -2924,6 +3020,25 @@ class ChatRepository(
 				for (rawKey in root.keys()) {
 					if (!isAddressKey(rawKey)) continue
 					put(rawKey, root.getString(rawKey))
+				}
+			}
+		}.getOrDefault(emptyMap())
+	}
+
+	private fun persistAbsenceStreaks(streak: Map<String, Int>) {
+		val root = JSONObject()
+		for ((team, count) in streak) root.put(team, count)
+		runCatching { store.saveAbsenceStreaks(root.toString()) }
+	}
+
+	private fun loadPersistedAbsenceStreaks(): Map<String, Int> {
+		val json = store.loadAbsenceStreaks() ?: return emptyMap()
+		return runCatching {
+			val root = JSONObject(json)
+			buildMap {
+				for (rawKey in root.keys()) {
+					if (!isAddressKey(rawKey)) continue
+					put(rawKey, root.optInt(rawKey, 0))
 				}
 			}
 		}.getOrDefault(emptyMap())

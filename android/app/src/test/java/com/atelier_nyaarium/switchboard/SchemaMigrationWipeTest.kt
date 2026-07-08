@@ -19,6 +19,7 @@ class SchemaMigrationWipeTest {
 			"threads",
 			"labels",
 			"drafts",
+			"team_absence_streak",
 			"sync_epoch",
 			"sync_acked",
 			"sync_dropped",
