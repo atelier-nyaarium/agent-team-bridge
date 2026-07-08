@@ -167,7 +167,7 @@ describe("createWebSocketHandlers", () => {
 		// that: if the host drop does not fail the waiter, this never resolves and the test times out.
 		const wake = wakeCoordinator.waitFor("proj-a.main", 10_000);
 		handlers.close(ws);
-		await expect(wake).resolves.toBe(false);
+		await expect(wake).resolves.toEqual({ ok: false, errorKind: "disconnected" });
 	}, 2000);
 
 	it("routes a host wake_result success to ackReceived and a failure to notify", () => {

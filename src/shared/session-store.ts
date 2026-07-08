@@ -22,6 +22,10 @@ export interface SessionRecord {
 	workdirHint?: string;
 	// The harness resume id, bound at handshake-confirm; the one-record-per-transcript dedup key.
 	claudeSessionId?: string;
+	// The (conversationId, opId) that minted this id, set only when the id itself was gateway-minted
+	// (never for a caller-supplied id). Lets a retry of the same request find its own prior record by
+	// provenance instead of recomputing/re-probing anything.
+	mintedFrom?: string;
 	liveTeam?: LiveRef;
 	confirmedAt?: number;
 	lastSeen: number;
@@ -43,6 +47,7 @@ interface CreateOpts {
 	sessionLabel?: string;
 	workdirHint?: string;
 	claudeSessionId?: string;
+	mintedFrom?: string;
 }
 
 ////////////////////////////////
@@ -124,8 +129,10 @@ export class SessionStore {
 
 	/** Create a record under a fresh random id. Re-rolls on any clash with an existing record in this
 	 * spawn or the injected id-space; the space is 16^6 against a handful of records, so the retry cap
-	 * is unreachable in practice and exists to make a broken idGen loud. Used by establishOnConfirm's
-	 * tier-4 fallback (a confirming session whose segment collides with a reserved/catalog name). */
+	 * is unreachable in practice and exists to make a broken idGen loud. The primary path for a
+	 * gateway-minted create_session id (paired with mintedFrom for retry safety); also used by
+	 * establishOnConfirm's tier-4 fallback (a confirming session whose segment collides with a
+	 * reserved/catalog name). */
 	mint(opts: CreateOpts): SessionRecord {
 		for (let i = 0; i < 64; i++) {
 			const id = this.idGen();
@@ -167,6 +174,20 @@ export class SessionStore {
 			if (record.claudeSessionId === claudeSessionId) return record;
 		}
 		return undefined;
+	}
+
+	/** The record a gateway-minted id's own (conversationId, opId) produced, scoped to a spawn. Two
+	 * records sharing a mintedFrom (only reachable via a corrupted or hand-edited persisted file) is
+	 * ambiguous rather than trusting either - a wrong match would silently reattach to an unrelated
+	 * stranger's session. */
+	findByMintedFrom(mintedFrom: string, spawn: string): SessionRecord | undefined {
+		let found: SessionRecord | undefined;
+		for (const record of this.records.values()) {
+			if (record.mintedFrom !== mintedFrom || record.spawn !== spawn) continue;
+			if (found) return undefined;
+			found = record;
+		}
+		return found;
 	}
 
 	/** Bind a live registrant to the record holding its Claude transcript (a manual `--resume`
@@ -314,6 +335,7 @@ export class SessionStore {
 				spawn,
 				workdirHint: persisted ? (sanitizeLabel(v.workdirHint) ?? undefined) : segment,
 				claudeSessionId: typeof v.claudeSessionId === "string" ? v.claudeSessionId : undefined,
+				mintedFrom: persisted && typeof v.mintedFrom === "string" ? v.mintedFrom : undefined,
 				confirmedAt: persisted ? (typeof v.confirmedAt === "number" ? v.confirmedAt : undefined) : lastSeen,
 				lastSeen,
 			};
@@ -336,6 +358,7 @@ export class SessionStore {
 			spawn: opts.spawn,
 			workdirHint: sanitizeLabel(opts.workdirHint) ?? undefined,
 			claudeSessionId: opts.claudeSessionId,
+			mintedFrom: opts.mintedFrom,
 			lastSeen: this.now(),
 		};
 		this.records.set(this.teamOf(record), record);

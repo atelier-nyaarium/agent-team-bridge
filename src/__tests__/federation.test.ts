@@ -79,7 +79,7 @@ function makeCtx(localGatewayId: string, over: Partial<RoutesDeps> = {}): Routes
 		conversationRegistry: new Map() as RoutesDeps["conversationRegistry"],
 		store: new PendingJobStore<ResponsePayload>(),
 		config: { localGatewayId, localDomainId: "alice" },
-		tryWakeTeam: () => Promise.resolve(false),
+		tryWakeTeam: () => Promise.resolve({ ok: false }),
 		offlineCatalog: new Map(),
 		knownTeamPaths: new Map(),
 		...over,
@@ -432,7 +432,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		const share = memShareState([["alice.hostb.lib.dev", "carol"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "hostb",
 			localDomainId: "alice",
 			shareState: share,
@@ -446,7 +446,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		const share = memShareState([["alice.hostb.lib.dev", "alice"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "hostb",
 			localDomainId: "alice",
 			shareState: share,
@@ -464,7 +464,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		const share = memShareState([["alice.hostb.scratch.dev", "alice"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "hostb",
 			localDomainId: "alice",
 			shareState: share,
@@ -480,7 +480,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		const share = memShareState([["alice.hostb.unknown-kind.dev", "alice"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "hostb",
 			localDomainId: "alice",
 			shareState: share,
@@ -496,7 +496,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		const share = memShareState([["alice.hostb.pixel.dev", "alice"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "hostb",
 			localDomainId: "alice",
 			shareState: share,
@@ -510,7 +510,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		const share = memShareState([["alice.hostb.ghost.dev", "alice"]]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "hostb",
 			localDomainId: "alice",
 			shareState: share,
@@ -526,7 +526,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		const { routes } = gateRoutes([lib()]); // lib exists (devcontainer), shared to nobody
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "hostb",
 			localDomainId: "alice",
 			shareState: memShareState(), // nothing shared to alice
@@ -548,7 +548,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 			routes: routes as never,
 			tryWakeTeam: async () => {
 				woke = true;
-				return true;
+				return { ok: true };
 			},
 			localGatewayId: "hostb",
 			localDomainId: "alice",
@@ -573,7 +573,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		const { routes, respondCalls } = gateRoutes([]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "alice-gw",
 			localDomainId: "alice",
 			shareState: memShareState(),
@@ -594,7 +594,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		const { routes, respondCalls } = gateRoutes([]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "alice-gw",
 			localDomainId: "alice",
 			shareState: memShareState(),
@@ -615,7 +615,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		const { routes, respondCalls } = gateRoutes([]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "alice-gw",
 			localDomainId: "alice",
 			shareState: memShareState(),
@@ -638,7 +638,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		const share = memShareState(); // empty - must not be consulted
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "hostb",
 			localDomainId: "alice",
 			shareState: share,
@@ -662,7 +662,7 @@ describe("list_teams share filter (cross-Domain caller)", () => {
 		]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "hostb",
 			localDomainId: "alice",
 			shareState: share,
@@ -679,7 +679,7 @@ describe("list_teams share filter (cross-Domain caller)", () => {
 		]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "hostb",
 			localDomainId: "alice",
 			shareState: share,
@@ -692,7 +692,7 @@ describe("list_teams share filter (cross-Domain caller)", () => {
 		const { routes } = gateRoutes(allKinds);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "hostb",
 			localDomainId: "alice",
 			shareState: memShareState(),
@@ -705,7 +705,7 @@ describe("list_teams share filter (cross-Domain caller)", () => {
 		const { routes } = gateRoutes(allKinds);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "hostb",
 			localDomainId: "alice",
 			shareState: memShareState(), // empty - same-Domain ignores it
@@ -731,7 +731,7 @@ describe("Fix 1: response_push reply gate binds to the job's verified target Dom
 		const { routes, respondCalls } = gateRoutes([]);
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "alice-gw",
 			localDomainId: "alice",
 			shareState: memShareState(),
@@ -891,7 +891,7 @@ describe("Fix 2: inbound cross-Domain send validates the attacker-controlled ret
 		};
 		const { handleOp } = createGatewayRelayHandler({
 			routes: routes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "alice-gw",
 			localDomainId: "alice",
 			shareState: memShareState(sharedTo.map((d) => ["alice.alice-gw.lib.dev", d] as [string, string])),
@@ -1104,7 +1104,7 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 		const bobShare = memShareState([["bob.bob-gw.lib.dev", "alice"]]);
 		const bobHandler = createGatewayRelayHandler({
 			routes: bobRoutes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "bob-gw",
 			localDomainId: "bob",
 			shareState: bobShare,
@@ -1173,7 +1173,7 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 		const bobShare = memShareState(); // lib is NOT shared to alice
 		const bobHandler = createGatewayRelayHandler({
 			routes: bobRoutes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "bob-gw",
 			localDomainId: "bob",
 			shareState: bobShare,
@@ -1238,7 +1238,7 @@ describe("cross-Domain send flow (E2E sealed v2)", () => {
 		const bobShare = memShareState([["bob.bob-gw.lib.dev", "alice"]]); // only lib shared to alice
 		const bobHandler = createGatewayRelayHandler({
 			routes: bobRoutes as never,
-			tryWakeTeam: () => Promise.resolve(false),
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
 			localGatewayId: "bob-gw",
 			localDomainId: "bob",
 			shareState: bobShare,

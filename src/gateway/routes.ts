@@ -27,6 +27,7 @@ import type {
 	ResponsePushPayload,
 	TeamInfo,
 } from "../shared/types.js";
+import type { WakeResult } from "./wake.js";
 import {
 	type ConversationRegistry,
 	getAllActiveWs,
@@ -42,7 +43,7 @@ export interface RoutesDeps {
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
 	store: PendingJobStore<ResponsePayload>;
-	tryWakeTeam: (team: string) => Promise<boolean>;
+	tryWakeTeam: (team: string) => Promise<WakeResult>;
 	/** Whether a wake is in flight for a composite team. An asleep record with a wake in flight is
 	 * reported as `verifying` (coming up) rather than `available`, so a booting session shows as such
 	 * from the moment it is spawned/woken, not only once its MCP registers. */
@@ -672,7 +673,7 @@ export function createRoutes({
 		// If offline, attempt to wake the container.
 		if (!targetWs) {
 			const woken = await tryWakeTeam(localName);
-			if (woken) {
+			if (woken.ok) {
 				// Claude Code needs time after MCP connect to initialize its channel listener.
 				// Registration happens instantly but channel notifications aren't ready yet.
 				await new Promise((r) => setTimeout(r, 3000));

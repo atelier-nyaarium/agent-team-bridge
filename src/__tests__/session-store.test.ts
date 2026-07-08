@@ -155,6 +155,29 @@ describe("SessionStore mint / adopt", () => {
 		// A reserved/clashing id with no record is refused.
 		expect(store.adoptOrReattach("host-daemon", { spawn: "host" })).toBeNull();
 	});
+
+	it("findByMintedFrom finds a gateway-minted record by its own provenance, scoped to a spawn", () => {
+		const store = new SessionStore({ idGen: scriptedIds("minted1") });
+		const rec = store.mint({ spawn: "host", sessionLabel: "Work", mintedFrom: "conv:op1" });
+		expect(store.findByMintedFrom("conv:op1", "host")).toBe(rec);
+		expect(store.findByMintedFrom("conv:op1", "other-spawn")).toBeUndefined();
+		expect(store.findByMintedFrom("conv:unrelated", "host")).toBeUndefined();
+	});
+
+	it("findByMintedFrom refuses to trust an ambiguous match rather than pick either record", () => {
+		const store = new SessionStore({ idGen: scriptedIds("dup-a", "dup-b") });
+		store.mint({ spawn: "host", sessionLabel: "A", mintedFrom: "conv:op1" });
+		store.mint({ spawn: "host", sessionLabel: "B", mintedFrom: "conv:op1" });
+		expect(store.findByMintedFrom("conv:op1", "host")).toBeUndefined();
+	});
+
+	it("findByMintedFrom still resolves a record after it has been renamed", () => {
+		const store = new SessionStore({ idGen: scriptedIds("minted1") });
+		const rec = store.mint({ spawn: "host", sessionLabel: "Work", mintedFrom: "conv:op1" });
+		store.rename("host.minted1", "Renamed");
+		expect(store.findByMintedFrom("conv:op1", "host")).toBe(rec);
+		expect(rec.sessionLabel).toBe("Renamed");
+	});
 });
 
 describe("SessionStore confirm-time binding", () => {

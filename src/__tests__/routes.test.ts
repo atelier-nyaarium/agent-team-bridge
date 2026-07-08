@@ -30,7 +30,7 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 			localGatewayId: "test-host",
 			localDomainId: "alice",
 		},
-		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve(false)),
+		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve({ ok: false })),
 		isWakeInFlight: overrides.isWakeInFlight,
 		offlineCatalog,
 		knownTeamPaths,

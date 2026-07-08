@@ -3,6 +3,7 @@ import { type FederatedOp, FederatedOpSchema, GatewayRelayFrameSchema } from "..
 import type { CrossDomainBinding } from "../../shared/pending-job-store.js";
 import { Address, parseSessionName } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
+import type { WakeResult } from "../wake.js";
 import type { Sealer } from "./sealer.js";
 
 ////////////////////////////////
@@ -27,7 +28,7 @@ export interface RelayShareState {
 
 export interface GatewayRelayHandlerDeps {
 	routes: FederationRoutes;
-	tryWakeTeam: (team: string) => Promise<boolean>;
+	tryWakeTeam: (team: string) => Promise<WakeResult>;
 	/** This Gateway's id and Domain id, used to compose a local `op.to` team field into the
 	 * canonical `domain.gateway.spawn.session` share key. Must match the canonical the share state
 	 * and the pending-job store produce, or shares silently stop matching. */
@@ -177,7 +178,7 @@ export function createGatewayRelayHandler({
 				// Waking is a side effect on a session, so a cross-Domain wake is gated the
 				// same as a send (only a shared devcontainer/loose session may be woken).
 				if (srcDomainId !== null) await gateCrossDomainTarget(op.team, srcDomainId);
-				const ok = await tryWakeTeam(op.team);
+				const { ok } = await tryWakeTeam(op.team);
 				return { ok };
 			}
 			case "response_push": {

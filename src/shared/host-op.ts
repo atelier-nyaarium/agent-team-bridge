@@ -122,13 +122,17 @@ export type HostPeekResult =
  * transient) vs a real FAILURE (timeout, offline host). */
 export type PeekErrorKind = "absent" | "failure";
 
-/** The gateway-side resolution of a host op: ok + a result, or an error string (plus an `errorKind`
- * for a failed peek, classified at the host so consumers read a kind, not stderr wording). */
+/** The gateway-side resolution of a host op: ok + a result, or an error string (plus an `errorKind` -
+ * a failed peek's is classified at the host so consumers read a kind, not stderr wording). `"timeout"`
+ * and `"disconnected"` are both synthesized by the gateway's own HostOpCoordinator with no host-side
+ * involvement at all (no reply arrived in time, or the host WS dropped mid-wait) - both are distinct
+ * from a host-reported failure since the op was already relayed and may complete independently of the
+ * gateway<->host link: the host executes an op against tmux, not against the WS that requested it. */
 export interface HostOpResult {
 	ok: boolean;
 	result?: unknown;
 	error?: string;
-	errorKind?: PeekErrorKind;
+	errorKind?: PeekErrorKind | "timeout" | "disconnected";
 }
 
 // A peek whose tmux server/pane/container is gone emits one of these stderr fragments; a timeout or

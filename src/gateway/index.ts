@@ -41,7 +41,7 @@ import { ReplayGuard } from "./federation/replayGuard.js";
 import { createSealer, type Sealer } from "./federation/sealer.js";
 import { HostOpCoordinator } from "./hostOpCoordinator.js";
 import { createRoutes } from "./routes.js";
-import { WakeCoordinator } from "./wake.js";
+import { WakeCoordinator, type WakeResult } from "./wake.js";
 import { createWebSocketHandlers, resolveLiveIncarnation, type WsData } from "./websocket.js";
 
 ////////////////////////////////
@@ -183,7 +183,7 @@ export async function startGateway(): Promise<void> {
 	// Concurrent sends to the same sleeping team must share ONE wake: two
 	// parallel `devcontainer up` runs for the same project race each other and
 	// both error out, failing sends whose container actually comes up.
-	const inflightWakes = new Map<string, Promise<boolean>>();
+	const inflightWakes = new Map<string, Promise<WakeResult>>();
 	// create_session's relayToHost branch (a host target, or any target with no tryWakeTeam wired)
 	// never touches inflightWakes above, so isWakeInFlight had no signal for that branch between
 	// "launch requested" and "MCP registered" - a slow-starting Claude CLI on an otherwise-instant
@@ -192,7 +192,7 @@ export async function startGateway(): Promise<void> {
 	// own dedup-by-team join semantics.
 	const inflightCreates = new Set<string>();
 
-	function tryWakeTeam(team: string): Promise<boolean> {
+	function tryWakeTeam(team: string): Promise<WakeResult> {
 		const existing = inflightWakes.get(team);
 		if (existing) {
 			console.log(`[wake] ${team} wake already in flight; joining it`);
@@ -206,14 +206,15 @@ export async function startGateway(): Promise<void> {
 		return wake;
 	}
 
-	async function doWakeTeam(team: string): Promise<boolean> {
+	async function doWakeTeam(team: string): Promise<WakeResult> {
 		// Clean break: a catalog project is a non-chat spawn-point, not a session. A send to it has no
 		// destination (the daemon would launch project.<default> under a name the waiter never sees),
 		// so fail fast instead of waiting out WAKE_TIMEOUT_MS. Catalog membership is the signal (a
-		// dotted dir name "my.app" is still a project); named sessions are never in the catalog.
+		// dotted dir name "my.app" is still a project); named sessions are never in the catalog. A
+		// definitive "no" - there is no ambiguity to wait out, so no errorKind.
 		if (isCatalogProject(team)) {
 			console.log(`[wake] ${team} is a spawn-point project, not a session; not waking`);
-			return false;
+			return { ok: false };
 		}
 
 		// A live incarnation already serves this record - its canonical pane, or an alias re-incarnation
@@ -221,7 +222,7 @@ export async function startGateway(): Promise<void> {
 		// relaunching would spawn a duplicate on the same transcript. Report it up rather than wake.
 		if (resolveLiveIncarnation(registry, sessionStore, team)) {
 			console.log(`[wake] ${team} already has a live incarnation; not waking`);
-			return true;
+			return { ok: true };
 		}
 
 		const hostSubs = registry.get("host");
@@ -229,7 +230,7 @@ export async function startGateway(): Promise<void> {
 
 		if (!hostWs) {
 			console.log(`[wake] cannot wake ${team} - host is not connected`);
-			return false;
+			return { ok: false, errorKind: "disconnected" };
 		}
 
 		// A composite `project.session` resolves its container/path by the PROJECT segment (composites
@@ -239,7 +240,7 @@ export async function startGateway(): Promise<void> {
 		// daemon refuses it too; this stops the wake message at the source).
 		if (project === "host" && isReservedHostSession(session)) {
 			console.log(`[wake] ${team} is a reserved host session; not waking`);
-			return false;
+			return { ok: false };
 		}
 		// A send-woken composite adopts its addressed segment as a provisional record (adopt-by-id, not
 		// mint: minting a fresh id would strand the woken session at an address the sender never used).
@@ -277,19 +278,19 @@ export async function startGateway(): Promise<void> {
 
 		console.log(`[wake] requesting ${team} startup${projectPath ? ` (${projectPath})` : " (convention)"}`);
 
-		const success = await wakeCoordinator.waitFor(team, WAKE_TIMEOUT_MS);
-		console.log(`[wake] ${team} ${success ? "is now online" : "failed to come online"}`);
+		const result = await wakeCoordinator.waitFor(team, WAKE_TIMEOUT_MS);
+		console.log(`[wake] ${team} ${result.ok ? "is now online" : "failed to come online"}`);
 		// Roll back a provisional record THIS wake created if the launch never came online (a bogus or
 		// removed project, a dead launch), so a failed send-wake leaves no persisted phantom "available"
 		// card (mirrors create_session). A record a confirm has since bound (confirmedAt set, or a live
 		// incarnation) is left intact - the wake may have timed out while a slow session was confirming.
-		if (!success && provisionalCreated) {
+		if (!result.ok && provisionalCreated) {
 			const rec = sessionStore.getByTeam(team);
 			if (rec && rec.confirmedAt === undefined && !resolveLiveIncarnation(registry, sessionStore, team)) {
 				sessionStore.forget(team);
 			}
 		}
-		return success;
+		return result;
 	}
 
 	// The host op timeout must EXCEED the host's worst-case work so a succeeding-but-slow op

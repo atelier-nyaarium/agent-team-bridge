@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import type { DomainSnapshot } from "../../shared/admission.js";
 import type {
 	ConsoleOp,
@@ -25,7 +24,6 @@ import {
 	isReservedHostSession,
 	isShellSafeName,
 	isTmuxName,
-	type PeekErrorKind,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
@@ -40,7 +38,9 @@ import {
 	SpawnPoint,
 	storeKey,
 } from "../../shared/session-id.js";
+import type { SessionRecord } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
+import type { WakeResult } from "../wake.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
 import { ConsolePeer } from "./consolePeer.js";
 
@@ -51,18 +51,16 @@ import { ConsolePeer } from "./consolePeer.js";
 // with the original cause appended so a PERMANENT absence (dead agent, removed container) stays
 // diagnosable instead of reading as "still starting" forever. The absent-vs-failure decision is
 // made at the host (classifyPeekError); a real failure (timeout, offline host) passes through.
-function friendlyPeekError(error?: string, kind?: PeekErrorKind): string {
+function friendlyPeekError(error?: string, kind?: HostOpResult["errorKind"]): string {
 	const raw = error ?? "peek failed";
 	if (kind === "absent") return `No session running - it may be starting or has stopped: ${raw}`;
 	return raw;
 }
 
-// The session id a displayLabel create mints: a 6-hex digest of (conversationId, opId), NOT a fresh
-// random, so a retried or post-restart re-dispatch of the same op derives the SAME id and reattaches
-// its record instead of minting a phantom second one. Matches the host-op dedupKey's (conv, opId).
-function mintedSessionId(conversationId: string, opId: string): string {
-	return crypto.createHash("sha256").update(`${conversationId}:${opId}`).digest("hex").slice(0, 6);
-}
+// Marks a create_session failure as an ambiguous host-op outcome (a timeout or a disconnect, never a
+// host-reported result) rather than a definitive one, so the catch-all rollback around it knows not
+// to forget a record whose launch may still be running.
+class CreateSessionAmbiguousError extends Error {}
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -125,7 +123,7 @@ export interface ConsoleHandlerDeps {
 	 * target, since only this path brings the container up first. Absent when no host daemon is
 	 * wired (create_session then falls back to relayToHost, which will fail against a cold container -
 	 * matching what happens today without this dependency). */
-	tryWakeTeam?: (team: string) => Promise<boolean>;
+	tryWakeTeam?: (team: string) => Promise<WakeResult>;
 	/** Whether a wake is currently in flight for a composite team. `close_session` consults it to
 	 * refuse a close mid-wake (which would no-op then resurrect once the wake registers). Absent when
 	 * no wake path is wired; a close then proceeds unguarded (matching today's behavior). */
@@ -733,21 +731,64 @@ export function createConsoleDispatcher({
 				}
 				const spawn = parseTarget(op.target, localDomain, localGatewayId).spawn;
 				const dedupKey = `${conversationId}:${opId}`;
-				// The id (and tmux session name) is the typed sessionName, else a deterministic digest of
-				// this op so a retry reattaches its own record rather than minting a second. The label is
-				// the displayLabel, else the id.
-				const sessionId = op.sessionName ?? mintedSessionId(conversationId, opId);
-				const label = op.displayLabel ?? sessionId;
-				const adopted = sessionStore?.adoptOrReattach(sessionId, {
-					spawn,
-					sessionLabel: label,
-					workdirHint: label,
-				});
+				let sessionId: string;
+				let label: string;
+				let adopted: { record: SessionRecord; created: boolean } | null | undefined;
+				// Whether this dispatch is even entitled to ever forget the adopted record on failure.
+				// On the sessionName-provided path, `created: false` normally means an unrelated,
+				// pre-existing session (adoptOrReattach found something already there) - never eligible -
+				// UNLESS the reattached record's own mintedFrom matches this exact dedupKey, which can only
+				// happen if THIS same (conversationId, opId) created it on an earlier attempt (mintedFrom is
+				// stamped below, on the sessionName path too, precisely so a later retry can tell "my own
+				// still-surviving attempt" apart from "a stranger's session that happens to share the name").
+				// On the mint path, findByMintedFrom can only ever match a record THIS (conversationId,
+				// opId) minted earlier - never a stranger's - so any record reached there, freshly minted
+				// or reattached by a retry, is always eligible.
+				let rollbackEligible = false;
+				if (op.sessionName) {
+					// A typed id is adopted as-is (the old-app/back-compat path).
+					sessionId = op.sessionName;
+					label = op.displayLabel ?? sessionId;
+					adopted = sessionStore?.adoptOrReattach(sessionId, {
+						spawn,
+						sessionLabel: label,
+						workdirHint: label,
+						mintedFrom: dedupKey,
+					});
+					rollbackEligible = adopted?.created === true || adopted?.record.mintedFrom === dedupKey;
+				} else {
+					// No typed id: the gateway mints an opaque one, keyed by (conversationId, opId) so a
+					// retry of the same op finds its own prior record directly instead of recomputing or
+					// re-probing anything (the guard above guarantees displayLabel is set here).
+					label = op.displayLabel as string;
+					const mintedFrom = dedupKey;
+					const existing = sessionStore?.findByMintedFrom(mintedFrom, spawn);
+					const record =
+						existing ?? sessionStore?.mint({ spawn, sessionLabel: label, workdirHint: label, mintedFrom });
+					sessionId = record?.id ?? label;
+					adopted = record ? { record, created: record !== existing } : null;
+					rollbackEligible = adopted != null;
+				}
 				// A store-backed id that could be neither created nor reattached collides with a catalog
 				// project or reserved name; refuse rather than launch a recordless (hidden) session.
 				if (sessionStore && !adopted) {
 					throw new Error(`cannot create session "${sessionId}": the name is reserved or a project`);
 				}
+				// Re-checked at call time against the store's CURRENT occupant of the key, never against
+				// the `adopted` object's own captured fields: `forget` has no in-flight guard, so between
+				// this dispatch's launch call and its own failure settling, an unrelated later op can
+				// forget-then-recreate the SAME team key out from under it. teamOf() is a pure function of
+				// the record's immutable spawn+id, so a stale record and a brand-new one born at the same
+				// key produce the identical lookup - only a fresh re-fetch, compared by IDENTITY against
+				// the exact object this dispatch adopted, can tell them apart. A launch this op no longer
+				// has a definitive answer about (an ambiguous timeout/disconnect, or a redundant retry
+				// racing a slow confirm) may also have already gone live independently by the time a
+				// rollback is considered, hence the confirmedAt check on top of the identity check.
+				const mayForget = () => {
+					if (!rollbackEligible || adopted == null) return false;
+					const current = sessionStore?.getByTeam(sessionStore.teamOf(adopted.record));
+					return current === adopted.record && current.confirmedAt === undefined;
+				};
 				try {
 					const target = resolveTmuxTarget(op.target, sessionId);
 					// The host workdir hint (the daemon opens a host session in ~/projects/<hint>, ignoring
@@ -771,8 +812,14 @@ export function createConsoleDispatcher({
 					const launch: Promise<HostOpResult> = (
 						target.kind === "devcontainer" && tryWakeTeam
 							? tryWakeTeam(launchTeam).then(
-									(ok): HostOpResult =>
-										ok ? { ok: true } : { ok: false, error: `failed to wake "${sessionId}"` },
+									(r): HostOpResult =>
+										r.ok
+											? { ok: true }
+											: {
+													ok: false,
+													error: `failed to wake "${sessionId}"`,
+													errorKind: r.errorKind,
+												},
 								)
 							: relayToHost({ kind: "createSession", target, workdirHint, dedupKey })
 					).finally(() => releaseInFlight?.());
@@ -785,17 +832,18 @@ export function createConsoleDispatcher({
 					clearTimeout(boundTimer);
 
 					if (winner === null) {
-						// Still bringing up a cold container; hand back the already-adopted deterministic id
-						// now and let the launch finish in the background. A backgrounded failure rolls the
-						// record back the same as the fast path below, silently - the session's tile then
-						// drops off the board on the next teams() refresh, no push-delivery mechanism needed.
+						// Still bringing up a cold container; hand back the already-adopted id now and let
+						// the launch finish in the background. Reached only via tryWakeTeam (a devcontainer
+						// bring-up can run well past the bound) - its own wait narrows to a registration
+						// window shorter than a slow first boot can need, so a "failed" wake here can still
+						// go on to register and confirm afterward. mayForget()'s fresh confirmedAt check
+						// catches that: a record already live by the time this settles is left alone.
 						void launch
 							.then((r) => {
-								if (!r.ok && adopted?.created)
-									sessionStore?.forget(sessionStore.teamOf(adopted.record));
+								if (!r.ok && mayForget()) sessionStore?.forget(sessionStore.teamOf(adopted!.record));
 							})
 							.catch(() => {
-								if (adopted?.created) sessionStore?.forget(sessionStore.teamOf(adopted.record));
+								if (mayForget()) sessionStore?.forget(sessionStore.teamOf(adopted!.record));
 							});
 						return {
 							created: true,
@@ -805,11 +853,24 @@ export function createConsoleDispatcher({
 						};
 					}
 
-					if (!winner.ok) throw new Error(winner.error ?? "create session failed");
+					if (!winner.ok) {
+						if (winner.errorKind === "timeout" || winner.errorKind === "disconnected") {
+							throw new CreateSessionAmbiguousError(
+								winner.error ?? "create session had no definitive answer",
+							);
+						}
+						throw new Error(winner.error ?? "create session failed");
+					}
 				} catch (e) {
-					// Roll back only a record THIS op created, so a reattach of an existing session is
-					// never destroyed by a transient launch failure.
-					if (adopted?.created) sessionStore?.forget(sessionStore.teamOf(adopted.record));
+					// Roll back only a record this dispatch owns (see rollbackEligible above) and only
+					// while it is still genuinely unconfirmed, so a reattach of an existing session is
+					// never destroyed by a transient launch failure, and a redundant retry's own failure
+					// never destroys a record that came alive through a different attempt in the meantime.
+					// Never on an ambiguous timeout/disconnect either way: the launch it describes may
+					// still be running and confirm normally afterward.
+					if (mayForget() && !(e instanceof CreateSessionAmbiguousError)) {
+						sessionStore?.forget(sessionStore.teamOf(adopted!.record));
+					}
 					throw e;
 				}
 				return {

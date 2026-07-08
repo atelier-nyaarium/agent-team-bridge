@@ -25,7 +25,7 @@ export class HostOpCoordinator {
 		return new Promise((resolve) => {
 			const timer = setTimeout(() => {
 				this.pending.delete(reqId);
-				resolve({ ok: false, error: "host op timed out" });
+				resolve({ ok: false, error: "host op timed out", errorKind: "timeout" });
 			}, timeoutMs);
 			this.pending.set(reqId, { resolve, timer });
 		});
@@ -41,11 +41,13 @@ export class HostOpCoordinator {
 
 	/** Fail every in-flight op now (the host socket dropped), so a console peek/send returns a
 	 * fast retryable error instead of waiting out its full timeout across a host restart. Mirrors
-	 * evieClient's fail-in-flight-on-close behaviour. */
+	 * evieClient's fail-in-flight-on-close behaviour. Tagged "disconnected", not a bare failure: the
+	 * op was already relayed and the host may complete (or may already have completed) it regardless
+	 * of the WS drop that triggered this. */
 	failAll(error: string): void {
 		for (const [, waiter] of this.pending) {
 			clearTimeout(waiter.timer);
-			waiter.resolve({ ok: false, error });
+			waiter.resolve({ ok: false, error, errorKind: "disconnected" });
 		}
 		this.pending.clear();
 	}

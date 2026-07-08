@@ -148,7 +148,7 @@ other stalled provisional record today.
   `SIGTERM`/`SIGINT` handlers) inside the ~3s window between persist ticks can lose any just-created
   record. This is a pre-existing property of the whole persistence model, not specific to this phase.
 
-**New tests** in `src/__tests__/console-handler.test.ts`:
+**New tests**, six in `src/__tests__/console-handler.test.ts` plus one in `src/__tests__/session-store.test.ts`:
 - (a) genuine collision - seed the store with a stranger record, dispatch a create_session for a
   different (conversationId, opId), assert the stranger is untouched and the response id differs.
 - (b) the existing restart-safe test (line 1244) still passes unmodified.
@@ -156,15 +156,92 @@ other stalled provisional record today.
   `restore()` it into a SECOND, fresh `SessionStore` instance, re-dispatch the identical op against
   store #2, assert it reattaches rather than minting a phantom.
 - (d) store churn - after a genuine collision resolves, delete the ORIGINAL WINNING record itself (not
-  just whatever it collided with), retry the same op, assert it mints a fresh id cleanly.
+  just whatever it collided with), retry the same op, assert it mints a fresh id, distinct from the
+  forgotten one, without touching the original stranger.
 - (e) ambiguity guard - hand-construct two records sharing one `mintedFrom` value (a corrupted/
-  hand-edited file), confirm `findByMintedFrom` returns `undefined`, not either record.
+  hand-edited file), confirm `findByMintedFrom` returns `undefined`, not either record. Lives in
+  `session-store.test.ts` instead, alongside the store's own other direct unit tests, since it
+  exercises `SessionStore.findByMintedFrom` directly rather than a console_handler dispatch.
 - (f) scope guard - seed a `mintedFrom`-stamped record, dispatch a create_session with an explicit
   `sessionName` reusing that SAME (conversationId, opId), assert the response honors the caller's own
   `sessionName` rather than reattaching to the unrelated mint-path record.
 - (g) concurrency pin - fire two DIFFERENT, colliding create_session dispatches via `Promise.all` (not
   pre-seed-then-await) to empirically confirm no interleaving between the provenance lookup and the
   mint, rather than leaving that property true only by code inspection.
+
+**Red-team addendum (found and fixed post-implementation, empirically reproduced against the real
+code before the fix, not just traced):**
+- The rollback guard's `adopted?.created` check conflated two different things on the mint path: a
+  retry that reattaches its own prior record via `findByMintedFrom` also reads `created: false`, the
+  same value a genuinely unrelated pre-existing record gets on the `sessionName`-provided path - so
+  once a mint-path record survived one ambiguous timeout, every later retry that reattached it became
+  permanently exempt from rollback, even on a fully definitive failure. Fixed by tracking rollback
+  eligibility separately from `created`: on the mint path ANY record reached is eligible (provenance
+  can never match a stranger), on the `sessionName` path only a fresh `created: true` is.
+- Separately, `HostOpCoordinator.failAll()` (fired on a host WS disconnect) resolved with no
+  `errorKind` at all, so it was wrongly treated as a definitive failure even though it is exactly as
+  ambiguous as a bare timeout - the op was already relayed to the host and executes independently of
+  the WS that requested it. Gave it its own `errorKind: "disconnected"`, treated identically to
+  `"timeout"` by the rollback guard. This also closes a deeper cascade a full trace surfaced: since a
+  wrongly-forgotten record used to force a retry to mint a brand-new id, and the host's own
+  dedup cache is keyed only by `dedupKey` (blind to which id/target it was for), a retry could receive
+  a stale success ack for an id that was never actually launched while the real one orphaned. Fixed as
+  a consequence of the above: a retry now reattaches to the SAME preserved record and therefore the
+  SAME target, so the host's cache and the gateway's id never diverge.
+- The rollback guard is now re-checked at forget-time (not cached from earlier in the request): a
+  devcontainer wake's own success signal can narrow to a shorter registration window than a slow first
+  boot needs, so a "failed" wake can still go on to register and confirm moments later. The guard now
+  re-reads `confirmedAt` fresh before forgetting, so a record that came alive in the meantime - through
+  any attempt, not just this dispatch's own - is never destroyed by a stale failure signal.
+- Accepted, not fixed this pass: `findByMintedFrom`'s ambiguity guard (falls through to a fresh mint
+  rather than trusting either of two colliding records) has no recovery path - every retry against an
+  already-ambiguous `mintedFrom` mints one more record instead of resolving the ambiguity, so a
+  sustained retry storm against an already-corrupted/hand-edited store grows unboundedly. Low severity
+  since reaching the initial ambiguous state already requires that disclaimed precondition; a full fix
+  (reconciling or pruning ambiguous records) is a separate feature.
+- Not touched, already tracked separately: `forget` has no `isWakeInFlight` guard (unlike its sibling
+  `close_session`), so forgetting a still-launching `create_session` does not cancel the underlying
+  devcontainer bring-up and the session can silently resurrect once it confirms. Pre-existing, logged
+  in `plans/pain-points.md`, unrelated to this phase's collision-safety work.
+
+**Red-team addendum, round 2 (a second pass specifically targeting the round-1 fix itself, same
+empirical-reproduction bar):**
+- `mayForget()`'s confirmedAt re-check read a field on the `adopted` closure's own captured record
+  object, not the store's CURRENT occupant of that team key. `forget` has no in-flight guard (see
+  above), so between this dispatch's launch call and its own failure settling, an unrelated later
+  create_session could forget-then-recreate the SAME key - `teamOf()` is a pure function of the
+  immutable spawn+id, so a stale record and a brand-new one born at that key produce an identical
+  lookup. A dispatch whose own launch later failed genuinely could then forget a completely different,
+  live, CONFIRMED session that happened to reuse its name. Fixed by re-fetching the record currently at
+  the key (`sessionStore.getByTeam`) and requiring it be the exact object (`===`) this dispatch
+  adopted, in addition to the confirmedAt check - a recycled key is no longer mistaken for survival.
+- The `sessionName`-provided path's `rollbackEligible = adopted?.created === true` meant a record that
+  survived an ambiguous timeout on attempt 1 became PERMANENTLY un-rollback-eligible on any retry
+  (attempt 2 reattaches with `created: false`), even facing a later genuinely definitive failure - the
+  record squatted the name until the 30-day TTL sweep. This class of bug was already found and fixed
+  for the mint path in round 1 (provenance via `mintedFrom`); the `sessionName` path had no equivalent
+  provenance mechanism. Fixed by stamping `mintedFrom: dedupKey` on the `sessionName` path's create too
+  (harmless on a reattach - `create()` only reads it on a fresh record), and widening
+  `rollbackEligible` to `adopted?.created === true || adopted?.record.mintedFrom === dedupKey`. An
+  unrelated stranger's record - reached via reattach but never minted by this exact
+  (conversationId, opId) - still has no matching `mintedFrom` and stays permanently protected.
+- `tryWakeTeam` (the devcontainer create path) mapped its bare boolean result into `HostOpResult` with
+  no `errorKind` at all, so a devcontainer create_session rolled back on ANY wake failure - including
+  an ambiguous one (`WakeCoordinator`'s own timeout, or the host link dropping mid-wait) that a host
+  target's equivalent `relayToHost` timeout/disconnect correctly leaves alone. `WakeCoordinator`
+  (`gateway/wake.ts`) now resolves the same `{ok, errorKind?: "timeout"|"disconnected"}` shape
+  `HostOpCoordinator` already established, threaded through `doWakeTeam`/`tryWakeTeam` and its other
+  two callers (`routes.ts`'s send-wake path, the cross-Gateway `wake` relay op), so all three concur
+  on one mechanism instead of a second parallel one.
+- Accepted, not fixed this pass: a `SessionRecord` minted by the OLD, now-deleted deterministic-hash
+  `mintedSessionId` scheme (pre-dating this diff's deploy) has no `mintedFrom` at all, so a retry of
+  that exact original (conversationId, opId) landing after this diff deploys cannot find it via
+  `findByMintedFrom` and mints a second, independent record - reopening the phantom-duplicate-mint
+  failure mode for records that predate the deploy specifically. Bounded to the transition window
+  (a retry of a specific pre-deploy op, not an ongoing exposure), non-destructive (a duplicate mint,
+  never someone else's session getting deleted), and the mint path is not yet the primary Android flow
+  (Phase B). Resurrecting the deleted deterministic-hash mechanism as a fallback-only lookup would close
+  it but adds permanent complexity for a one-deploy-cycle gap; not worth it at this severity.
 
 ## Phase B - Android: stop minting ids from the typed name
 
@@ -273,8 +350,8 @@ land (re-check `schemas.ts` and `codegen-kotlin.ts` output unchanged).
 
 ## Phase F - gates
 
-- `bun run lint && bun run test` (TypeScript side), including Phase A's seven new
-  `console-handler.test.ts` cases.
+- `bun run lint && bun run test` (TypeScript side), including Phase A's seven new test cases across
+  `console-handler.test.ts` and `session-store.test.ts`.
 - New `ChatStateLabelsTest.kt` (Phase C) passes as part of the Android unit test gate.
 - Android `:app:testDebugUnitTest` local build gate (Phase B-D), per repo convention (CI does not
   compile Kotlin pre-merge).
