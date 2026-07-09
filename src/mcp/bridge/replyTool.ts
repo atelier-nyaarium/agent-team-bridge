@@ -43,6 +43,12 @@ export async function readReplyAttachment(filePath: string): Promise<ChannelFile
 ////////////////////////////////
 //  Functions & Helpers
 
+export type ToolTextResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
+
+export function toolError(text: string): ToolTextResult {
+	return { content: [{ type: "text" as const, text }], isError: true };
+}
+
 /** POST a reply payload to the gateway, owning the try/catch and success/failure tool response
  * shape shared by every reply tool. `payload` must already carry the fields the caller wants on
  * the wire - callers build it explicitly rather than rest-spreading their args, so a renamed or
@@ -51,16 +57,13 @@ export async function readReplyAttachment(filePath: string): Promise<ChannelFile
 export async function postReply(
 	payload: Record<string, unknown>,
 	{ toolName, logPrefix }: { toolName: string; logPrefix: string },
-): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
+): Promise<ToolTextResult> {
 	try {
 		await routerPost("/respond", payload);
 		console.error(`[${logPrefix}] ${toolName} sent [${payload.session_id}]`);
 		return { content: [{ type: "text" as const, text: "Reply sent." }] };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		return {
-			content: [{ type: "text" as const, text: `Failed to send reply: ${message}` }],
-			isError: true,
-		};
+		return toolError(`Failed to send reply: ${message}`);
 	}
 }

@@ -28,11 +28,29 @@ export function detectAgentType(): string {
 	return "claude";
 }
 
+const DISABLED_TOOLS: Array<{ name: string; title: string; description: string }> = [
+	{
+		name: "crosstalk_discover",
+		title: "Crosstalk Discover",
+		description: "List all active teams on the bridge network.",
+	},
+	{ name: "crosstalk_send", title: "Crosstalk Send", description: "Send a request to another team." },
+	{ name: "crosstalk_wait", title: "Crosstalk Wait", description: "Wait N seconds before retrying." },
+	{ name: "channel_reply", title: "Channel Reply", description: "Reply to an incoming channel message." },
+	{
+		name: "channel_reply_structured",
+		title: "Channel Reply (Structured)",
+		description: "Reply to a request that carried a reply_schema.",
+	},
+];
+
 export function registerBridgeTools(mcpServer: McpServer): void {
 	const projectName = process.env.PROJECT_NAME;
 
 	if (!projectName) {
-		// Register tools that return config error so agents see the tools exist but get a clear message
+		// Register a stub under each REAL tool's own name so a misconfigured container's agent sees
+		// every tool that would exist once PROJECT_NAME is set, not just whichever ones someone
+		// remembered to hand-copy here. Keep this list 1:1 with what the branch below registers.
 		const configError = {
 			content: [
 				{
@@ -42,34 +60,13 @@ export function registerBridgeTools(mcpServer: McpServer): void {
 			],
 			isError: true,
 		};
-		mcpServer.registerTool(
-			"crosstalk_discover",
-			{
-				title: "Crosstalk Discover",
-				description: `[Disabled] List all active teams on the bridge network.`,
-				inputSchema: {},
-			},
-			async () => configError,
-		);
-		mcpServer.registerTool(
-			"crosstalk_send",
-			{ title: "Crosstalk Send", description: `[Disabled] Send a request to another team.`, inputSchema: {} },
-			async () => configError,
-		);
-		mcpServer.registerTool(
-			"crosstalk_reply",
-			{
-				title: "Crosstalk Reply",
-				description: `[Disabled] Reply to an incoming bridge request.`,
-				inputSchema: {},
-			},
-			async () => configError,
-		);
-		mcpServer.registerTool(
-			"crosstalk_wait",
-			{ title: "Crosstalk Wait", description: `[Disabled] Wait N seconds before retrying.`, inputSchema: {} },
-			async () => configError,
-		);
+		for (const tool of DISABLED_TOOLS) {
+			mcpServer.registerTool(
+				tool.name,
+				{ title: tool.title, description: `[Disabled] ${tool.description}`, inputSchema: {} },
+				async () => configError,
+			);
+		}
 		return;
 	}
 

@@ -5,7 +5,7 @@ import {
 	type ChannelReplyStructuredArgs,
 	ChannelReplyStructuredSchema,
 } from "../../shared/schemas.js";
-import { postReply, readReplyAttachment } from "../bridge/replyTool.js";
+import { postReply, readReplyAttachment, type ToolTextResult, toolError } from "../bridge/replyTool.js";
 
 ////////////////////////////////
 //  Payload builders (pure - the wire mapping, testable without a network call)
@@ -25,36 +25,23 @@ export function isEmptyResponseData(responseData: Record<string, unknown>): bool
 ////////////////////////////////
 //  Handlers (exported directly so tests can call them without an McpServer)
 
-export async function handleChannelReply(
-	args: ChannelReplyArgs,
-): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
+export async function handleChannelReply(args: ChannelReplyArgs): Promise<ToolTextResult> {
 	const payload = buildChannelReplyPayload(args);
 	if (args.attachments && args.attachments.length > 0) {
 		try {
 			payload.files = await Promise.all(args.attachments.map(readReplyAttachment));
 		} catch (err) {
-			return {
-				content: [{ type: "text" as const, text: `Attachment error: ${(err as Error).message}` }],
-				isError: true,
-			};
+			return toolError(`Attachment error: ${(err as Error).message}`);
 		}
 	}
 	return postReply(payload, { toolName: "channel_reply", logPrefix: "channel" });
 }
 
-export async function handleChannelReplyStructured(
-	args: ChannelReplyStructuredArgs,
-): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
+export async function handleChannelReplyStructured(args: ChannelReplyStructuredArgs): Promise<ToolTextResult> {
 	if (isEmptyResponseData(args.responseData)) {
-		return {
-			content: [
-				{
-					type: "text" as const,
-					text: `Empty responseData rejected - {} would render as the literal string "{}" on the console with no useful content.`,
-				},
-			],
-			isError: true,
-		};
+		return toolError(
+			`Empty responseData rejected - {} would render as the literal string "{}" on the console with no useful content.`,
+		);
 	}
 	const payload = buildStructuredReplyPayload(args);
 	return postReply(payload, { toolName: "channel_reply_structured", logPrefix: "channel" });
