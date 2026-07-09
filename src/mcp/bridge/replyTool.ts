@@ -45,6 +45,9 @@ export async function readReplyAttachment(filePath: string): Promise<ChannelFile
 
 export type ToolTextResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
+/** The error shape every reply-tool handler returns. Scoped to this file's own callers rather than
+ * the similar `textResult` in `connector/utils.ts` - that one serves the unrelated connector
+ * subsystem and always sets `isError`, where this one is dedicated to reply-tool failures. */
 export function toolError(text: string): ToolTextResult {
 	return { content: [{ type: "text" as const, text }], isError: true };
 }
