@@ -37,7 +37,11 @@ export interface MailboxSnapshotState {
 // small regardless of the cap. The cap only bounds UNACKED accumulation for a
 // dark/slow device, so it is generous, and an eviction here is logged as exceptional.
 const DEFAULT_MAX_ENTRIES = 10_000;
-const DEFAULT_MAX_BYTES = 100_000_000;
+// entryBytes() sums raw base64 STRING length (the entry's actual in-memory footprint), which
+// runs ~4/3 over MAX_RESPONSE_FILE_BYTES' decoded-byte figure - a single 500 MB payload is
+// ~667M of this budget, not 500M. Sized for a few max-size payloads to sit here unacked
+// without eviction, not just barely over one.
+const DEFAULT_MAX_BYTES = 2_000_000_000;
 const DEFAULT_TTL_MS = 3_600_000;
 const DEFAULT_SWEEP_MS = 300_000;
 const DEFAULT_MAX_DEVICES = 500;

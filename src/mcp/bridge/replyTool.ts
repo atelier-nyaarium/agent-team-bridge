@@ -3,10 +3,11 @@ import { basename, extname, isAbsolute } from "node:path";
 import type { ChannelFile } from "../../shared/types.js";
 import { routerPost } from "./helpers.js";
 
-// Advisory per-file cap on the agent side. The gateway enforces the real backstop
-// (a buggy agent on a trusted machine is not the threat model, but a clear error
-// beats a silent 10 MB push).
-const MAX_ATTACHMENT_BYTES = 10_000_000;
+// Advisory per-file cap on the agent side, matching the gateway's own per-payload bucket
+// (MAX_RESPONSE_FILE_BYTES) rather than a stricter sub-limit - a single file may use the
+// whole bucket. The gateway enforces the real backstop (a buggy agent on a trusted machine
+// is not the threat model, but a clear error beats a silent oversized push).
+const MAX_ATTACHMENT_BYTES = 500_000_000;
 
 const MIME_BY_EXT: Record<string, string> = {
 	".png": "image/png",
@@ -23,7 +24,7 @@ const MIME_BY_EXT: Record<string, string> = {
 	".csv": "text/csv",
 };
 
-/** Read and base64 an absolute-path attachment with the 10MB advisory cap.
+/** Read and base64 an absolute-path attachment with the 500MB advisory cap.
  * Shared by the reply tools and notify_human. Unlike inbound ChannelFiles
  * (which may be metadata-only), this always carries bytes. */
 export async function readReplyAttachment(filePath: string): Promise<ChannelFile & { base64: string }> {

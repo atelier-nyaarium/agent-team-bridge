@@ -298,14 +298,20 @@ describe("routes", () => {
 		it("rejects oversized attachments with 413 and missing store with 503", async () => {
 			const { ctx } = await makeStoreWithConsoles();
 			const { humanNotify } = createRoutes(ctx);
-			const huge = "A".repeat(14_000_001);
+			// A declared size alone (no base64) is enough to cross the cap, and avoids
+			// actually allocating a 500+ MB string in the test process.
 			const res = humanNotify({
 				from: "t",
 				title: "big",
 				summary: "s",
 				full: "body",
 				files: [
-					{ filename: "b.bin", mime: "application/octet-stream", size: 0, descriptiveKey: "b", base64: huge },
+					{
+						filename: "b.bin",
+						mime: "application/octet-stream",
+						size: 500_000_001,
+						descriptiveKey: "b",
+					},
 				],
 			});
 			expect(res.status).toBe(413);
@@ -360,7 +366,8 @@ describe("routes", () => {
 			store.create("sess-files", "agent", "console");
 			const ctx = makeCtx({ store });
 			const { respond } = createRoutes(ctx);
-			const huge = "A".repeat(14_000_001); // ~10.5 MB decoded, over the 10 MB cap
+			// A declared size alone (no base64) is enough to cross the cap, and avoids
+			// actually allocating a 500+ MB string in the test process.
 			const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
 				session_id: "sess-files",
 				response: "here",
@@ -368,9 +375,8 @@ describe("routes", () => {
 					{
 						filename: "big.bin",
 						mime: "application/octet-stream",
-						size: 0,
+						size: 500_000_001,
 						descriptiveKey: "big.bin",
-						base64: huge,
 					},
 				],
 			});

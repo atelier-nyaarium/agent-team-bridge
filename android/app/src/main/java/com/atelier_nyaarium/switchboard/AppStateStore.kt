@@ -107,6 +107,14 @@ class AppStateStore(context: Context) {
 			prefs.edit().putString(KEY_AUTO_PLAY, value).apply()
 		}
 
+	/** TTS playback volume as a percentage, 0-200 (100 = unchanged, above 100 needs a gain stage
+	 * on top of MediaPlayer's own 0-100 range). */
+	var sttsVolume: Int
+		get() = prefs.getInt(KEY_STTS_VOLUME, 100).coerceIn(0, 200)
+		set(value) {
+			prefs.edit().putInt(KEY_STTS_VOLUME, value.coerceIn(0, 200)).apply()
+		}
+
 	/** How often the terminal view re-captures the pane, in ms. A device setting (not the
 	 * blob), default 2s; clamped to the server's floor (the gateway re-uses a capture within
 	 * ~300ms regardless, so a smaller value only adds round-trips). */
@@ -314,6 +322,7 @@ class AppStateStore(context: Context) {
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."
 		const val KEY_AUTO_TTS = "auto_tts"
 		const val KEY_AUTO_PLAY = "auto_play_tier"
+		const val KEY_STTS_VOLUME = "stts_volume"
 		const val KEY_TERMINAL_REFRESH_MS = "terminal_refresh_ms"
 		const val TERMINAL_REFRESH_FLOOR_MS = 300L
 		const val KEY_SYNC_EPOCH = "sync_epoch"

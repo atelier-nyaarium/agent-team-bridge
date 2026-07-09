@@ -78,6 +78,7 @@ import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -2418,6 +2419,17 @@ private fun SttsVoiceSection(repo: ChatRepository) {
 				}
 			}
 		}
+	}
+
+	var volume by remember { mutableStateOf(repo.sttsVolume) }
+	Column {
+		Text("Playback volume: $volume%", style = MaterialTheme.typography.titleSmall)
+		Slider(
+			value = volume.toFloat(),
+			onValueChange = { volume = it.toInt() },
+			onValueChangeFinished = { repo.sttsVolume = volume },
+			valueRange = 0f..200f,
+		)
 	}
 
 	if (pickerOpen) {

@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard
 
 import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.media.audiofx.LoudnessEnhancer
 import android.util.Log
 import com.atelier_nyaarium.switchboard.proto.SttsProvider
 import java.io.File
@@ -29,6 +30,7 @@ class SttsPlayer(private val root: File) {
 	private val inFlight = Collections.synchronizedSet(mutableSetOf<String>())
 
 	@Volatile private var player: MediaPlayer? = null
+	@Volatile private var loudness: LoudnessEnhancer? = null
 	@Volatile private var currentKey: String? = null
 	@Volatile private var currentTeam: String? = null
 	@Volatile private var currentAt: Long = 0
@@ -58,7 +60,8 @@ class SttsPlayer(private val root: File) {
 	}
 
 	/** Play (or toggle-stop) one message tier. Synthesizes through `client` on a
-	 * cache miss, then plays the cached file. Safe to call from any thread. */
+	 * cache miss, then plays the cached file. Safe to call from any thread.
+	 * `volumePct` is 0-200 (100 = unchanged); see [applyVolume]. */
 	fun play(
 		client: SttsClient,
 		provider: SttsProvider,
@@ -67,6 +70,7 @@ class SttsPlayer(private val root: File) {
 		at: Long,
 		tier: Tier,
 		text: String,
+		volumePct: Int = 100,
 	) {
 		val k = key(team, at, tier, provider, voice)
 		if (currentKey == k) {
@@ -74,7 +78,7 @@ class SttsPlayer(private val root: File) {
 			return
 		}
 		if (text.isBlank()) return
-		synthesizeAndPlay(k, team, at, cacheFile(team, at, tier, provider, voice)) { dest ->
+		synthesizeAndPlay(k, team, at, cacheFile(team, at, tier, provider, voice), volumePct) { dest ->
 			client.stream(provider, text, voice, dest)
 		}
 	}
@@ -82,14 +86,14 @@ class SttsPlayer(private val root: File) {
 	/** Voice preview for the settings screen: synthesizes through the cheaper
 	 * sample endpoint (stream for providers without one) and plays. Cached per
 	 * provider+voice under the reserved "_sample" team, purged with clearAll. */
-	fun playSample(client: SttsClient, provider: SttsProvider, voice: String?, text: String) {
+	fun playSample(client: SttsClient, provider: SttsProvider, voice: String?, text: String, volumePct: Int = 100) {
 		val k = "_sample/${provider.path}-${safeVoice(voice)}"
 		if (currentKey == k) {
 			stop()
 			return
 		}
 		val dest = File(File(root, "stts/_sample"), "${provider.path}-${safeVoice(voice)}.audio")
-		synthesizeAndPlay(k, "_sample", 0, dest) { d -> client.sample(provider, text, voice, d) }
+		synthesizeAndPlay(k, "_sample", 0, dest, volumePct) { d -> client.sample(provider, text, voice, d) }
 	}
 
 	/** Pre-synthesize both tiers of one message into the cache without playing,
@@ -149,7 +153,7 @@ class SttsPlayer(private val root: File) {
 
 	/** Shared synthesis path: single-flight on the key, atomic cache write,
 	 * then playback. `fetch` writes the audio into the destination file. */
-	private fun synthesizeAndPlay(k: String, team: String, at: Long, dest: File, fetch: (File) -> Unit) {
+	private fun synthesizeAndPlay(k: String, team: String, at: Long, dest: File, volumePct: Int, fetch: (File) -> Unit) {
 		if (!inFlight.add(k)) return
 		exec.execute {
 			try {
@@ -162,7 +166,7 @@ class SttsPlayer(private val root: File) {
 						error("synthesis returned no audio")
 					}
 				}
-				playFile(k, team, at, dest)
+				playFile(k, team, at, dest, volumePct)
 			} catch (e: Exception) {
 				Log.w(TAG, "stts $k failed: ${e.message}")
 				dest.delete()
@@ -175,6 +179,8 @@ class SttsPlayer(private val root: File) {
 
 	@Synchronized
 	fun stop() {
+		runCatching { loudness?.release() }
+		loudness = null
 		runCatching { player?.release() }
 		player = null
 		clearNowPlaying()
@@ -208,12 +214,15 @@ class SttsPlayer(private val root: File) {
 	}
 
 	@Synchronized
-	private fun playFile(k: String, team: String, at: Long, f: File) {
+	private fun playFile(k: String, team: String, at: Long, f: File, volumePct: Int) {
+		runCatching { loudness?.release() }
+		loudness = null
 		runCatching { player?.release() }
 		if (currentKey != null) clearNowPlaying()
 		currentKey = k
 		currentTeam = team
 		currentAt = at
+		val (linear, gainMb) = volumeSteps(volumePct)
 		player = MediaPlayer().apply {
 			setAudioAttributes(
 				AudioAttributes.Builder()
@@ -222,7 +231,10 @@ class SttsPlayer(private val root: File) {
 					.build(),
 			)
 			setDataSource(f.absolutePath)
+			setVolume(linear, linear)
 			setOnCompletionListener {
+				runCatching { loudness?.release() }
+				loudness = null
 				runCatching { it.release() }
 				if (currentKey == k) {
 					player = null
@@ -231,6 +243,8 @@ class SttsPlayer(private val root: File) {
 			}
 			setOnErrorListener { mp, what, extra ->
 				Log.w(TAG, "playback $k error what=$what extra=$extra")
+				runCatching { loudness?.release() }
+				loudness = null
 				runCatching { mp.release() }
 				if (currentKey == k) {
 					player = null
@@ -239,6 +253,12 @@ class SttsPlayer(private val root: File) {
 				true
 			}
 			prepare()
+			if (gainMb > 0) {
+				loudness = LoudnessEnhancer(audioSessionId).apply {
+					setTargetGain(gainMb)
+					enabled = true
+				}
+			}
 			start()
 		}
 		onPlayingChanged?.invoke(team, at, true)
@@ -257,6 +277,18 @@ class SttsPlayer(private val root: File) {
 
 	companion object {
 		private const val TAG = "SttsPlayer"
+
+		/** Map a 0-200% volume setting to a MediaPlayer linear gain (0-100% range, free and exact)
+		 * plus a LoudnessEnhancer target gain in millibels for the 100-200% half MediaPlayer can't
+		 * reach on its own. The mB mapping is a rough linear approximation (true dB would be
+		 * 20*log10(ratio)), not exact, but good enough for a user volume knob: 0 mB at 100%, 600 mB
+		 * (~+6dB, roughly 2x) at 200%. */
+		fun volumeSteps(volumePct: Int): Pair<Float, Int> {
+			val clamped = volumePct.coerceIn(0, 200)
+			val linear = minOf(clamped, 100) / 100f
+			val gainMb = maxOf(clamped - 100, 0) * 6
+			return linear to gainMb
+		}
 
 		/** The text a tier speaks. Summary prefers the addressable tiers; full
 		 * is the sanitized body. */
