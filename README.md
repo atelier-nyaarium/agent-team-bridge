@@ -22,7 +22,7 @@ Host Machine
   start-host-daemon.sh
     Host daemon (headless) - devcontainer wake, console terminal view, session spawn
       Claude Code session (spawned on demand via create_session) - joins the gateway as a loose peer
-        MCP Plugin (main-mcp.ts): crosstalk_* / channel_reply / notify_human
+        MCP Plugin (main-mcp.ts): crosstalk_* / channel_reply* / notify_human
 
 Docker: switchboard (port 20000)
   Gateway (main-gateway.ts)
@@ -32,7 +32,7 @@ Docker: switchboard (port 20000)
 
 DevContainers (one per project)
   Claude Code
-    MCP Plugin (main-mcp.ts): crosstalk_* / channel_reply / notify_human
+    MCP Plugin (main-mcp.ts): crosstalk_* / channel_reply* / notify_human
       Game client connector (port 20002)
 ```
 
@@ -97,6 +97,7 @@ Every session registers the same core tools; the game-client connector is the on
 | `crosstalk_discover` | List all teams on the bridge |
 | `crosstalk_wait` | Wait N seconds before retrying a deferred request |
 | `channel_reply` | Reply to an incoming channel message |
+| `channel_reply_structured` | Reply with a native-object payload, only when the inbound tag carries a `reply_schema` |
 | `notify_human` | Push a notice to the owner's consoles |
 | `reload_plugins` | Run the plugin update + MCP reconnect sequence |
 | `set_effort_level` | Set the session's effort level |

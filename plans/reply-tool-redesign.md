@@ -287,6 +287,11 @@ function at lines 201-215)
 Step 5 edits `src/gateway/websocket.ts`, so **the gateway MUST be rebuilt** - this is not a
 plugin-only change. Treat the plugin + gateway as a single coordinated restart (owner-accepted
 "switching pain," 2026-07-09):
+0. **Bump the version first** (`package.json` and `.claude-plugin/plugin.json` - the MCP server's
+   own reported version reads `packageJson.version` directly, `src/mcp/index.ts:44`, so no third
+   literal to edit). Per this repo's own plugin-update deploy sequence: the marketplace decides
+   whether an update exists by diffing `plugin.json`'s version, so `reload_plugins` silently no-ops
+   fleet-wide without this - the redesign's own coordinated-restart premise depends on it.
 1. Reload all live plugins (`reload_plugins`) so agents register the new tools.
 2. Rebuild the gateway (`./down.sh && ./start-gateway.sh`) so it emits the new handshake prompt.
 Any session mid-handshake during the restart reconnects afterward via the existing heartbeat-resend

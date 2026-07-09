@@ -4,6 +4,7 @@ import { b64Field, slugField } from "./crypto.js";
 import { SignedFirstRootSchema } from "./federation-lifecycle.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
+import { NoticeFull, NoticeSummary, NoticeTitle } from "./notice.js";
 import { ADDRESS_SEP, isSlug } from "./session-id.js";
 
 ////////////////////////////////
@@ -25,39 +26,26 @@ export const ResponseStatusSchema = z
 export const DomainStatusSchema = z.enum(["unrooted", "pending", "rooted"]).meta({ id: "DomainStatus" });
 
 ////////////////////////////////
-//  Channel Reply Schema
+//  Channel Reply Schemas
 //
 //  Channel-mode conversations are streams: the conversation stays open for the
 //  life of the process and the agent can reply any number of times. There is no
-//  status because there is no end.
+//  status because there is no end. Two closed-shape tools, not one polymorphic
+//  body: channel_reply is the ~99% prose path; channel_reply_structured is only
+//  for a request that carries a reply_schema (e.g. the bridge handshake).
 
 export const ChannelReplySchema = z
 	.object({
 		session_id: z.string().describe(`The session_id for this request. Required to route the reply correctly.`),
-		respondAsMarkdownString: z
-			.string()
-			.optional()
-			.describe(
-				`Your prose reply for the HUMAN to read, as a markdown string - put your message here. It renders as fully-featured markdown (headings, lists, tables, fenced code) AND mermaid diagrams, so use them when they help. Lead with the answer itself: no lead-in labels ("Short answer:", "TLDR:") and no restating the question; replies often render on a console. Mutually exclusive with respondAsStructuredData.`,
-			),
-		respondAsStructuredData: z
-			.string()
-			.optional()
-			.describe(
-				`Your structured reply, as a JSON string (object/array). Use ONLY when the request specifies a Reply Schema; pass valid JSON matching it. For ordinary prose use respondAsMarkdownString instead. Mutually exclusive with respondAsMarkdownString.`,
-			),
-		title: z
-			.string()
-			.optional()
-			.describe(
-				`Optional one-line headline (a few words) for this reply - shown in the notification bar and read as the shortest text-to-speech tier. Add it when prettifying a substantial reply; omit for a short or plain one. respondAsMarkdownString stays the full body.`,
-			),
-		summary: z
-			.string()
-			.optional()
-			.describe(
-				`Optional short summary (a few sentences) of this reply, read as the medium text-to-speech tier. Omit for a short or plain reply.`,
-			),
+		title: NoticeTitle.describe(
+			`A very short one-line headline for this reply - the console's notification-bar line and the shortest text-to-speech tier.`,
+		),
+		summary: NoticeSummary.describe(
+			`3-4 sentences summarizing this reply, read as the medium text-to-speech tier. No 'Summary:' lead-in.`,
+		),
+		full: NoticeFull.describe(
+			`Your full prose reply for the HUMAN to read - markdown AND mermaid render on the console. Lead with the answer; no lead-in labels ('Short answer:', 'TLDR:'). Renders as the message body.`,
+		),
 		attachments: z
 			.array(z.string())
 			.optional()
@@ -65,12 +53,22 @@ export const ChannelReplySchema = z
 				`Optional absolute file paths to attach to this reply (e.g. screenshots, logs). Images render inline on the console; other files appear as download chips.`,
 			),
 	})
-	.strict()
-	.refine((data) => !(data.respondAsMarkdownString && data.respondAsStructuredData), {
-		message: "Provide respondAsMarkdownString or respondAsStructuredData, not both.",
-	});
+	.strict();
 
 export type ChannelReplyArgs = z.infer<typeof ChannelReplySchema>;
+
+export const ChannelReplyStructuredSchema = z
+	.object({
+		session_id: z.string().describe(`The session_id for this request. Required to route the reply correctly.`),
+		responseData: z
+			.record(z.string(), z.unknown())
+			.describe(
+				`Reply to a request that carried a reply_schema (e.g. the bridge handshake). A native object matching that schema.`,
+			),
+	})
+	.strict();
+
+export type ChannelReplyStructuredArgs = z.infer<typeof ChannelReplyStructuredSchema>;
 
 ////////////////////////////////
 //  Channel File Schema (inbound from evie-bot bridge)

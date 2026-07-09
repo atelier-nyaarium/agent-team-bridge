@@ -33,11 +33,11 @@
       - `bridgeDiscover.ts` - `crosstalk_discover` tool: list addressable SESSIONS on the bridge (`project.session` composites + loose/cross-gateway peers), hiding bare spawn-points and the console/host; asleep sessions show a `last seen Xm ago` recency from `TeamInfo.lastActive`
       - `bridgeSend.ts` - `crosstalk_send` tool: send a request to a session and poll for the response. A `project.session` target that is online receives it directly; an asleep one is woken; a not-yet-existing one is created on send through the `doWakeTeam` path, but only when `displayLabel` is set (it mints an opaque id there too - the send fails fast otherwise)
       - `bridgeWait.ts` - `crosstalk_wait` tool: wait N seconds before retrying
-      - `replyTool.ts` - Shared reply tool factory (used by channelReply and cliReply)
+      - `replyTool.ts` - Shared reply helpers: `readReplyAttachment` (also used by `notify_human`) and `postReply` (the POST /respond + success/failure tool-response skeleton shared by both channel reply tools)
       - `registerBridgeTools.ts` - Container-side tool registration (crosstalk + reply tools)
     - `channel/` - **Channel mode** - For Claude agents receiving push notifications
       - `channelNotify.ts` - Emit `notifications/claude/channel` to push messages into Claude sessions; materializes inbound Discord file attachments and prepends a `[FILES]` block to the body
-      - `channelReply.ts` - `channel_reply` tool: reply to an incoming channel message
+      - `channelReply.ts` - two tools: `channel_reply` (the ~99% prose path - required `{title, summary, full}` triple, optional `attachments`) and `channel_reply_structured` (a native-object `responseData`, used only when the inbound tag carries a `reply_schema`, e.g. the bridge handshake)
       - `humanTools.ts` - the `notify_human` tool: broadcasts a `{title, summary, full, attachments?}` notice (all three tiers required; the schema is strict, so an unknown field like the retired `tiny` is rejected, not silently stripped) to every registered console via the gateway's `POST /human/notify`. `attachments` are absolute file paths the agent attaches from its filesystem
       - `evieFiles.ts` - Sanitize, materialize, and render Discord-bridge file attachments under `/tmp/evie-files/<msgId>/`; lazy mtime sweep with 1h TTL
     - `connector/` - **Game client connector** - WebSocket bridge for external game clients
@@ -117,7 +117,7 @@ Channel-mode agents (Claude windows and devcontainer Claudes) have persistent co
 
 - The gateway derives a deterministic channel job key via `storeKey({kind:"conv", conversationId: senderConversationId, address})` = `conv.<conversationId>.<domain>.<gateway>.<spawn>.<session>`. Every `crosstalk_send` between the same (sender window, target session) pair lands in the same store entry; the caller does not manage session_ids.
 - Pending-job entries for channel conversations are marked `persistent: true` and are never swept by the store's TTL cleanup. Transient (non-persistent) entries still time out after the `PendingJobStore` default TTL (600s).
-- `channel_reply` may be called multiple times on the same session_id. Use `status: "running"` for interim updates (phase reports, ACKs, partial results) and `status: "completed"` for the final answer. The conversation only closes when a process exits.
+- `channel_reply` may be called multiple times on the same session_id - there is no status field and no finality; the conversation only closes when a process exits.
 - Responses push back to the specific sender sub-session via `conversationRegistry`, so parallel host windows targeting the same devcontainer do not receive each other's replies.
 - Reconnects rebind the conversation: the same `conversation_id` shows up with a new WebSocket, the gateway swaps the registry pointer, and the conversation resumes without losing state.
 

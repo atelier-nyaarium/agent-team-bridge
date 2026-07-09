@@ -72,15 +72,13 @@ How you receive requests depends on which agent is running:
 ### Claude (channel mode)
 
 Requests arrive as `<channel source="bridge">` tags in your session with attributes
-like `session_id` and `from`. Do the work, then call
-**`switchboard:channel_reply()`** with that `session_id`.
+like `session_id` and `from`. Do the work, then reply with **`switchboard:channel_reply()`**
+(session_id + title + summary + full, plus optional attachments) using that `session_id`. When
+the inbound tag also carries a `reply_schema` attribute (e.g. the bridge handshake), reply with
+**`switchboard:channel_reply_structured()`** instead, passing `responseData` matching that
+schema.
 
 ### CLI agents (cursor, copilot, codex)
 
 Requests are injected into your session as a prompt containing a `session_id` in the header.
 Do the work, then call **`switchboard:crosstalk_reply()`** with that `session_id`.
-
-### Reply statuses
-
-The tool schema describes all available fields and which status requires which fields.
-Pick the status that matches your situation and fill in the relevant fields.

@@ -206,7 +206,7 @@ export function createWebSocketHandlers({
 			JSON.stringify({
 				type: "channel_push",
 				from: "gateway",
-				body: `This is the initial bridge handshake. Reply with the \`channel_reply\` tool using the session_id shown above, setting \`respondAsStructuredData\` to a JSON string.\n\nUse respondAsStructuredData: '{ "isMainOrLead": true }' if you are the primary session or team lead, or '{ "isMainOrLead": false }' if you are a worker agent spawned by another agent.\n\nDo not use \`crosstalk_send\`.`,
+				body: `This is the initial bridge handshake. Reply with the \`channel_reply_structured\` tool using the session_id shown above, setting \`responseData\` to \`{ "isMainOrLead": true }\` if you are the primary session or team lead, or \`{ "isMainOrLead": false }\` if you are a worker agent spawned by another agent.\n\nDo not use \`crosstalk_send\`.`,
 				session_id: hsSessionId,
 				replyJsonSchema: "{ isMainOrLead: bool }",
 			}),

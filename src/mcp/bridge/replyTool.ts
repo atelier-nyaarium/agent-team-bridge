@@ -1,24 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute } from "node:path";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { z } from "zod";
 import type { ChannelFile } from "../../shared/types.js";
 import { routerPost } from "./helpers.js";
-
-////////////////////////////////
-//  Interfaces & Types
-
-interface ReplyArgsBase {
-	session_id: string;
-	status?: string;
-	respondAsMarkdownString?: string;
-	respondAsStructuredData?: string;
-	// Optional notice-style tiers; forwarded to /respond via the rest spread and read by the
-	// console for the notification bar + text-to-speech tier selection.
-	title?: string;
-	summary?: string;
-	attachments?: string[];
-}
 
 // Advisory per-file cap on the agent side. The gateway enforces the real backstop
 // (a buggy agent on a trusted machine is not the threat model, but a clear error
@@ -45,12 +28,13 @@ const MIME_BY_EXT: Record<string, string> = {
  * (which may be metadata-only), this always carries bytes. */
 export async function readReplyAttachment(filePath: string): Promise<ChannelFile & { base64: string }> {
 	if (!isAbsolute(filePath)) throw new Error(`Attachment path must be absolute: ${filePath}`);
-	const buffer = await readFile(filePath);
-	if (buffer.length > MAX_ATTACHMENT_BYTES) {
+	const { size } = await stat(filePath);
+	if (size > MAX_ATTACHMENT_BYTES) {
 		throw new Error(
-			`Attachment "${basename(filePath)}" is ${buffer.length} bytes, over the ${MAX_ATTACHMENT_BYTES}-byte limit`,
+			`Attachment "${basename(filePath)}" is ${size} bytes, over the ${MAX_ATTACHMENT_BYTES}-byte limit`,
 		);
 	}
+	const buffer = await readFile(filePath);
 	const filename = basename(filePath);
 	const mime = MIME_BY_EXT[extname(filename).toLowerCase()] ?? "application/octet-stream";
 	return { filename, mime, size: buffer.length, descriptiveKey: filename, base64: buffer.toString("base64") };
@@ -59,88 +43,24 @@ export async function readReplyAttachment(filePath: string): Promise<ChannelFile
 ////////////////////////////////
 //  Functions & Helpers
 
-export function registerReplyTool<S extends z.ZodTypeAny>(
-	mcpServer: McpServer,
-	toolName: string,
-	title: string,
-	description: string,
-	logPrefix: string,
-	schema: S,
-): void {
-	mcpServer.registerTool(
-		toolName,
-		{
-			title,
-			description,
-			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
-			inputSchema: schema as any,
-		},
-		async (args: unknown) => {
-			try {
-				const { session_id, status, respondAsMarkdownString, respondAsStructuredData, attachments, ...rest } =
-					args as ReplyArgsBase & Record<string, unknown>;
-
-				// A reply with no prose, no structured data, no attachments, and no status
-				// produces an empty entry the consumer (the console) silently skips - the exact
-				// failure that let a wrong body-field name pass unnoticed for a whole session.
-				// Reject it loudly instead of returning "Reply sent." over an empty message.
-				if (
-					!respondAsMarkdownString &&
-					!respondAsStructuredData &&
-					!(attachments && attachments.length > 0) &&
-					status === undefined
-				) {
-					return {
-						content: [
-							{
-								type: "text" as const,
-								text: `Empty reply rejected. Put your prose in "respondAsMarkdownString" (the human-facing body), or use "respondAsStructuredData"/"attachments". Unknown keys are silently dropped, so a mistyped field sends nothing.`,
-							},
-						],
-						isError: true,
-					};
-				}
-
-				const payload: Record<string, unknown> = { session_id, ...rest };
-				if (status !== undefined) payload.status = status;
-
-				if (attachments && attachments.length > 0) {
-					try {
-						payload.files = await Promise.all(attachments.map(readReplyAttachment));
-					} catch (err) {
-						return {
-							content: [{ type: "text" as const, text: `Attachment error: ${(err as Error).message}` }],
-							isError: true,
-						};
-					}
-				}
-
-				if (respondAsStructuredData) {
-					try {
-						payload.replyAsJson = JSON.parse(respondAsStructuredData);
-					} catch {
-						return {
-							content: [
-								{ type: "text" as const, text: "respondAsStructuredData must be a valid JSON string." },
-							],
-							isError: true,
-						};
-					}
-				} else if (respondAsMarkdownString !== undefined) {
-					payload.response = respondAsMarkdownString;
-				}
-
-				await routerPost("/respond", payload);
-				const suffix = status ? ` (${status})` : "";
-				console.error(`[${logPrefix}] ${toolName} sent${suffix} [${session_id}]`);
-				return { content: [{ type: "text" as const, text: `Reply sent${suffix}.` }] };
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				return {
-					content: [{ type: "text" as const, text: `Failed to send reply: ${message}` }],
-					isError: true,
-				};
-			}
-		},
-	);
+/** POST a reply payload to the gateway, owning the try/catch and success/failure tool response
+ * shape shared by every reply tool. `payload` must already carry the fields the caller wants on
+ * the wire - callers build it explicitly rather than rest-spreading their args, so a renamed or
+ * mistyped arg can never leak through unmapped (see the silent-strip footgun this guards against
+ * in `RespondBodySchema`, which is not `.strict()`). */
+export async function postReply(
+	payload: Record<string, unknown>,
+	{ toolName, logPrefix }: { toolName: string; logPrefix: string },
+): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> {
+	try {
+		await routerPost("/respond", payload);
+		console.error(`[${logPrefix}] ${toolName} sent [${payload.session_id}]`);
+		return { content: [{ type: "text" as const, text: "Reply sent." }] };
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		return {
+			content: [{ type: "text" as const, text: `Failed to send reply: ${message}` }],
+			isError: true,
+		};
+	}
 }
