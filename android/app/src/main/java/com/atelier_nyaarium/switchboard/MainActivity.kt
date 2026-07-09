@@ -927,7 +927,7 @@ private fun looksProvisionable(s: String): Boolean = runCatching {
 private data class GatewayGroupKey(val domainId: String, val gatewayId: String)
 
 /** Live first, then most recent activity, then label, within each section. */
-private fun sessionOrder(state: ChatState): Comparator<Team> =
+internal fun sessionOrder(state: ChatState): Comparator<Team> =
 	compareByDescending<Team> { it.isLive }
 		.thenByDescending { state.lastActivity(it.name) ?: 0L }
 		.thenBy { state.label(it.name, state.localGatewayId) }
@@ -1035,6 +1035,7 @@ fun SessionsScreen(
 	spawnProject?.let { project ->
 		SpawnDialog(
 			project = project,
+			pendingLabels = state.pendingSpawns.filter { it.first == project }.mapTo(HashSet()) { it.second },
 			onSpawn = { session ->
 				onSpawn(project, session)
 				spawnProject = null
@@ -2587,24 +2588,36 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 }
 
 /** Name and spawn a new session in a spawn-point project. The label is free-form: the gateway mints
- * the session id, so the field accepts any text and the spawn button is enabled once it is non-blank. */
+ * the session id, so the field accepts any text and the spawn button is enabled once it is non-blank.
+ * `pendingLabels` are labels already mid-create for this project (see ChatState.pendingSpawns); the
+ * dialog refuses to re-submit one of those rather than silently reattaching to the first attempt. */
 @Composable
-fun SpawnDialog(project: String, onSpawn: (String) -> Unit, onDismiss: () -> Unit) {
+fun SpawnDialog(project: String, pendingLabels: Set<String>, onSpawn: (String) -> Unit, onDismiss: () -> Unit) {
 	// A free-form label: the gateway mints the session id, so the label is not slug-constrained.
 	var name by remember { mutableStateOf("") }
+	val trimmed = name.trim()
+	val isPending = trimmed.isNotEmpty() && trimmed in pendingLabels
 	AlertDialog(
 		onDismissRequest = onDismiss,
 		title = { Text("New session in $project") },
 		text = {
-			OutlinedTextField(
-				value = name,
-				onValueChange = { if (it.length <= SESSION_LABEL_MAX_CHARS) name = it },
-				label = { Text("Session name") },
-				singleLine = true,
-			)
+			Column {
+				OutlinedTextField(
+					value = name,
+					onValueChange = { if (it.length <= SESSION_LABEL_MAX_CHARS) name = it },
+					label = { Text("Session name") },
+					singleLine = true,
+				)
+				if (isPending) {
+					Text(
+						"Already creating \"$trimmed\" - wait for it to finish or use a different name.",
+						style = MaterialTheme.typography.bodySmall,
+					)
+				}
+			}
 		},
 		confirmButton = {
-			TextButton(enabled = name.isNotBlank(), onClick = hapticClick { onSpawn(name.trim()) }) { Text("Spawn") }
+			TextButton(enabled = trimmed.isNotEmpty() && !isPending, onClick = hapticClick { onSpawn(trimmed) }) { Text("Spawn") }
 		},
 		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
 	)

@@ -246,6 +246,11 @@ data class ChatState(
 	 * cause - writing a one-off message there would bleed into an unrelated later health render.
 	 * Consumed via consumeTransientMessage(). */
 	val transientMessage: String? = null,
+	/** (project, label) pairs with a spawnSession() call currently in flight. Distinct from the
+	 * longer-lived opId retry window (recentSpawnOpIds): this is only "has not settled yet", so the
+	 * spawn dialog can refuse a second identical submission while the first is still resolving rather
+	 * than silently reattaching to it (see spawnSession's opId-reuse doc comment). */
+	val pendingSpawns: Set<Pair<String, String>> = emptySet(),
 ) {
 	/** Sessions shows live teams plus any team we already have a thread with
 	 * (agent-initiated). A thread-only peer is gone from the bridge and cannot be
@@ -2273,10 +2278,16 @@ class ChatRepository(
 	 * before the poll loop's scope exists. */
 	suspend fun spawnSession(project: String, label: String) = coroutineScope {
 		val key = project to label
+		// A synchronous check before any suspension point - SpawnDialog's own disabled-while-pending
+		// state is the primary guard, but it is a Composable snapshot (recomposes asynchronously), not a
+		// lock; this is the real one, closing the gap for a caller that races ahead of that recomposition
+		// or bypasses the dialog entirely.
+		if (key in _state.value.pendingSpawns) return@coroutineScope
 		val now = System.currentTimeMillis()
 		recentSpawnOpIds.entries.removeAll { now - it.value.second >= SPAWN_RETRY_WINDOW_MS }
 		val opId = recentSpawnOpIds[key]?.first ?: UUID.randomUUID().toString()
 		recentSpawnOpIds[key] = opId to now
+		_state.update { it.copy(pendingSpawns = it.pendingSpawns + key) }
 		// Nudge a refresh shortly after firing so the just-adopted record's tile shows promptly,
 		// without waiting on a cold container's (up to ~25s) create reply.
 		launch {
@@ -2286,15 +2297,18 @@ class ChatRepository(
 		runCatching { withContext(Dispatchers.IO) { client().createSession(project, displayLabel = label, opId = opId) } }
 			.onSuccess { result ->
 				recentSpawnOpIds.remove(key)
-				if (result.labelSanitized == true) {
-					_state.update {
-						it.copy(transientMessage = "\"$label\" has unsupported characters; the session was created using its id as the name instead")
-					}
+				_state.update {
+					it.copy(
+						pendingSpawns = it.pendingSpawns - key,
+						transientMessage = if (result.labelSanitized == true) {
+							"\"$label\" has unsupported characters; the session was created using its id as the name instead"
+						} else it.transientMessage,
+					)
 				}
 				runCatching { refreshTeams() }
 			}
 			.onFailure { e ->
-				_state.update { it.copy(transientMessage = e.message ?: "Failed to create \"$label\"") }
+				_state.update { it.copy(pendingSpawns = it.pendingSpawns - key, transientMessage = e.message ?: "Failed to create \"$label\"") }
 				runCatching { refreshTeams() }
 			}
 	}
@@ -2748,7 +2762,12 @@ class ChatRepository(
 	 * if this check has a gap). An outright rejection (a successful round trip that still reports
 	 * renamed:false) reverts the optimistic write, but ONLY if the label still holds exactly what this
 	 * call wrote - a fresher server value landing via withFreshTeams, or a newer overlapping rename,
-	 * must never be clobbered by a stale rejection arriving late. */
+	 * must never be clobbered by a stale rejection arriving late, and the transient message mirrors that
+	 * same guard (no revert happened -> nothing to report). A foreign target is always refused server-side
+	 * as a thrown error (not a clean renamed:false reply - there is no local record to even consider
+	 * renaming), so it is treated the same as an explicit rejection instead of the quiet
+	 * presumed-eventually-applied handling a genuinely unreachable LOCAL gateway gets - otherwise that
+	 * case is a silent no-op indistinguishable from success. */
 	suspend fun rename(team: String, name: String) {
 		val trimmed = name.trim()
 		if (trimmed.isEmpty()) {
@@ -2759,7 +2778,8 @@ class ChatRepository(
 		val isLocal = t is Address && t.domain == localDomain() && t.gateway == _state.value.localGatewayId
 		val previous = _state.value.labels[team]
 		if (isLocal) setLabel(team, trimmed)
-		val reply = withContext(Dispatchers.IO) { runCatching { client().renameSession(team, trimmed) }.getOrNull() }
+		val result = withContext(Dispatchers.IO) { runCatching { client().renameSession(team, trimmed) } }
+		val reply = result.getOrNull()
 		val applied = reply?.takeIf { it.renamed }?.sessionLabel
 		if (applied != null && applied != trimmed) {
 			// A confirmed, authoritative server value always wins over "nothing was protecting the
@@ -2771,15 +2791,24 @@ class ChatRepository(
 				if (!isLocal || s.labels[team] == trimmed) s.copy(labels = s.labels + (team to applied)) else s
 			}
 			persistLabels(next.labels)
-		} else if (isLocal && reply?.renamed == false) {
-			val next = _state.updateAndGet { s ->
-				if (s.labels[team] == trimmed) {
-					s.copy(labels = if (previous != null) s.labels + (team to previous) else s.labels - team)
-				} else {
-					s
+		} else if (reply?.renamed == false || (!isLocal && result.isFailure)) {
+			var reverted = true
+			if (isLocal) {
+				val before = _state.value.labels[team]
+				val next = _state.updateAndGet { s ->
+					if (s.labels[team] == trimmed) {
+						s.copy(labels = if (previous != null) s.labels + (team to previous) else s.labels - team)
+					} else {
+						s
+					}
 				}
+				persistLabels(next.labels)
+				reverted = next.labels[team] != before
 			}
-			persistLabels(next.labels)
+			if (reverted) {
+				val message = result.exceptionOrNull()?.message ?: "Could not rename to \"$trimmed\""
+				_state.update { it.copy(transientMessage = message) }
+			}
 		}
 	}
 

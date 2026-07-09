@@ -519,6 +519,119 @@ this phase's claims hold; no wire-schema or codegen work was needed.
   and confirm the tab titles read as a qualified label, not a bare hex id; `crosstalk_discover` from
   another session shows "name (opaque-id-address)".
 
+**Gate results:**
+- TypeScript gate: `bun run lint` clean (189 files, no fixes needed), `bun run test` 892 passing,
+  including Phase A's seven `console-handler.test.ts`/`session-store.test.ts` cases.
+- Android gate: `:app:testDebugUnitTest` 191 passing (184 plus 7 new `SessionOrderTest.kt` cases, see
+  below), `ChatStateLabelsTest.kt` confirmed 7/7.
+- Manual round-trip: no Android emulator or physical device is reachable from this environment, so the
+  five bullets were code-traced against the shipped implementation instead of executed on-device:
+  - Tile shows name + spinner, no id ghost line -> traces to `MainActivity.kt`'s `SessionCard` (the
+    secondary `shortName` line was deleted in Phase D).
+  - Rename propagates to a second device / the passive poll -> traces to `ChatState.withFreshTeams`
+    (Phase C), which self-heals from any server-supplied value and rides the existing
+    `TEAMS_REFRESH_MS` loop.
+  - Sharing rows are label-sorted from both entry points -> traces to `Sharing.kt`'s Phase D
+    `collectAsState()` reactivity and label-keyed sort.
+  - Two same-labeled tabs show qualified titles, not a bare hex id -> directly covered by
+    `TabLabelForTest.kt` (6 cases, including the collision-exhaustion regression), the strongest of the
+    five since it is an executed automated test rather than a trace.
+  - `crosstalk_discover` shows "name (opaque-id-address)" -> traces to
+    `src/mcp/bridge/bridgeDiscover.ts` (`t.sessionLabel ? \`${t.sessionLabel} (${address})\` : address`).
+    This formatting predates this plan and no phase touched the file, so it is a regression check, not
+    new behavior. It has zero automated coverage before or after this plan (`bridge-discover.test.ts`
+    only covers `relativeAge`); the file was left as-is rather than refactored into independently
+    testable pieces purely to backfill coverage, since Phase F is a verification checklist against
+    already-shipped logic, not a mandate to refactor untouched code.
+  Net: of the four items that trace through Phases A-D's own changes, two carry a dedicated executed
+  test (rename propagation via `ChatStateLabelsTest.kt`, tab qualification via `TabLabelForTest.kt`);
+  the other two (the tile/spinner line, Sharing's label sort) rest on a source read with no test of
+  their own, the same evidentiary tier as the pre-existing, untouched 5th item. None of the five could
+  be watched happen on a live device in this environment - a quick on-device spot-check is the only way
+  to close that gap fully.
+
+**Red-team findings and fixes:** a red-team pass over the gate results themselves (not just their
+wording) surfaced real gaps beyond the five checklist items. Three were in scope for this plan (each
+traces to a specific phase's own mechanism) and are fixed; the rest are real but predate this plan or
+sit in an unrelated subsystem, logged to `pain-points.md` instead of fixed here. A second red-team round
+targeted at the three fixes themselves (this project's established pattern for a fix that could plausibly
+introduce its own bug) then caught two real problems in the fixes as first written, corrected below.
+
+Fixed:
+- **Phase B's create-retry cache could silently collapse two distinct creates.** `recentSpawnOpIds`
+  keys purely on `(project, label)`, so a second create fired for the same pair while the first was
+  still resolving reused the first attempt's `opId` and reattached instead of creating a genuinely
+  separate session - indistinguishable from the user's side from an ordinary single success. Fixed by
+  tracking in-flight `(project, label)` pairs on `ChatState.pendingSpawns`: `SpawnDialog` now refuses to
+  submit a label already mid-create for that project (button disabled, inline hint), so the ambiguous
+  double-submit can no longer reach `spawnSession` at all. A genuine retry after the first attempt
+  settles (success or failure) is unaffected. *Round 2:* the dialog's guard is a Composable snapshot, not
+  a lock - two taps landing before a recomposition disables the button (or any future caller bypassing
+  the dialog) could still slip through. Added a synchronous check-and-bail at the very top of
+  `spawnSession`, before any suspension point; since a single-threaded dispatcher runs one coroutine's
+  synchronous prefix to completion before starting another queued on it, this is a real guard, not
+  another snapshot.
+- **`sessionOrder` (the board's primary, "single most-viewed" comparator per this plan's own Phase D
+  text) had zero test coverage**, unlike its sibling sort/label change `tabLabelFor` which got a
+  dedicated 6-case file in the same phase. Made `sessionOrder` `internal` (the same visibility change
+  `tabLabelFor` already got) and added `SessionOrderTest.kt`. *Round 2:* the initial 5 cases never
+  isolated the activity-vs-label clause priority (no case put them in conflict) or exercised the
+  raw-session-leaf fallback tier (every test team had a label or override). Added two more cases closing
+  both gaps (7 total).
+- **A rejected rename of a foreign-Gateway (federated peer) session was a silent no-op.** Phase C's
+  foreign-Gateway guard correctly withholds the optimistic local write for a non-local target, but the
+  function's only feedback branch (`reply?.renamed == false` reverting the optimistic write) was gated
+  on `isLocal`, so a foreign target's explicit server-side rejection produced no revert (nothing to
+  revert) AND no error message. First fix: ungated the transient-message branch from `isLocal`. *Round 2
+  found this didn't actually close the motivating case*: the gateway refuses a foreign target as a
+  **thrown error**, not a clean `renamed:false` reply (there is no local record to even consider renaming
+  on a Gateway that does not own it), so `runCatching { ... }.getOrNull()` collapsed it to `reply = null`,
+  and `null?.renamed == false` is `false` in Kotlin - neither branch ever ran for the actual foreign-target
+  case, only for a narrower client/server disagreement edge case. Fixed by keeping the full `Result` instead
+  of discarding it to `null`, and treating a foreign target's thrown failure the same as an explicit
+  rejection (matching `spawnSession`'s own pattern of surfacing the exception's message directly). Round 2
+  also found the message write sat outside the existing staleness guard (a superseded rejection could show
+  "Could not rename" for a name no longer applied anywhere, once two overlapping renames raced) - fixed by
+  only raising the message when a revert actually changed something.
+
+Logged to `pain-points.md`, not fixed here (real, but predate this plan, belong to a different subsystem
+than session id/label semantics, or are pre-existing architecture too broad for a proportionate fix in
+this pass):
+- A host-target `create_session` clears its in-flight marker as soon as the fast tmux-launch RPC
+  returns, not once the Claude CLI inside actually boots and registers - so the spinner can drop to
+  plain "available" mid-boot for a freshly spawned host session specifically (a devcontainer wake is
+  unaffected; it correctly awaits `wakeCoordinator`). Wake-coordination timing, not id/label plumbing.
+- `Sharing.kt`'s per-row share state (`shares`) and the "trust first" roster are populated once via
+  `LaunchedEffect(Unit)` and only refreshed by the screen's own mutating actions, so they can desync
+  from the live, poll-driven session/people lists while the screen stays mounted (e.g. a Domain link
+  added or removed elsewhere). Pre-existing `Sharing.kt` reactivity gap; Phase D's `collectAsState()`
+  change only touched the `sessions`/`people` derivation, not `shares`/`trustFirst`.
+- Two rapid, different share toggles on the Sharing screen can transiently revert each other's checkbox
+  state (a self-healing lost-update race in `refresh()`, no per-domain merge or debounce). Same
+  pre-existing subsystem as above, low severity, self-corrects on the next `refresh()`.
+- Phase B's "label had unsupported characters" Snackbar has gateway-side test coverage but zero
+  Android-side coverage, and Phase F's checklist never exercises a forbidden-character label. No
+  `ChatRepositoryTest.kt` or `androidTest` suite exists anywhere in the module to extend consistently
+  (this codebase only unit-tests pure `ChatState` functions, never `ChatRepository`'s suspend/network
+  functions), so building fresh test infrastructure for this one message would be disproportionate.
+- Phase C's vanish-counter is verified as a pure function (`ChatStateLabelsTest.kt`), but the actual
+  ~60s on-screen window it produces (a locally-labeled team that goes missing keeps showing its stale
+  label for `ABSENCE_PRUNE_STREAK` poll cycles before pruning) is not independently verified and is not
+  part of Phase F's checklist. Same testing-boundary reasoning as above.
+- `transientMessage` (`ChatState`) is a single nullable field written by five independent async call
+  sites (`spawnSession`, `closeTab`, `wakeSession`, and now two branches of `rename`) and drained by
+  exactly one consumer that only exists in composition while the board, not a thread, is on screen - so
+  a close-together pair of writes can conflate, and any write while a thread is open is invisible until
+  the user backs out. Pre-existing architecture; the round-2 rename fix adds a fifth writer to it rather
+  than redesigning it, since a queue or an app-scoped consumer touches all five call sites, not just the
+  one being added.
+- `pendingSpawns` has no expiry of its own (unlike `recentSpawnOpIds`'s 40s sweep) - a merely slow create
+  blocks a retry of the same `(project, label)` for as long as the call takes to settle, bounded in
+  practice by `ConsoleClient`'s own ~35-60s OkHttp timeouts, not truly unbounded but with no app-level
+  bound tied to the field itself.
+- `label()` takes a `localGatewayId` parameter its body never reads. Not a live bug, but `sessionOrder`
+  and other callers pass `state.localGatewayId` to it as if it mattered.
+
 ## Phase G - crosstalk-side creation also gets a label + minted id
 
 - `src/mcp/bridge/bridgeSend.ts : BridgeSendSchema` - add an optional `displayLabel` field (matching
