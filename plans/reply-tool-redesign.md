@@ -325,3 +325,106 @@ machinery needed since both sides restart together. No APK.
 - Whitespace-only content: `NoticeTitle/Summary/Full` use `.min(1)`, which accepts `" "`/`"\n"`.
   Pre-existing; tightening to `.trim().min(1)` touches the SYNCED `notice.ts` leaf (cp to nyaaskills +
   SYNC-HASH restamp), so it is out of scope here - record only.
+
+## Painpoints
+
+Collected 2026-07-09 by a crust-collection sweep (3 parallel scouts over the console reply path,
+the rest of `src/mcp/bridge/`+`src/mcp/channel/`, and the devcontainer wake/boot path), seeded with
+leads from this implementation's own framework-first and red-team passes. Record only, not fixed -
+out of scope for this plan. Refs are `file : scope : name`; severity in brackets.
+
+**High:**
+- [high] `src/mcp/bridge/helpers.ts : routerGet` - **bug-class** - unlike its sibling `routerPost` in
+  the same file, `routerGet` never checks `res.ok` before returning `res.json()`, so a non-2xx
+  gateway response (e.g. a 500 with an `{error}` body) resolves successfully instead of throwing.
+  Its only caller, `bridgeDiscover.ts`'s `/discover` fetch, then calls `.filter()` on that
+  error-shaped object, surfacing a confusing generic "not a function" error instead of the real
+  server error. `routerGet`'s retry loop also silently drops the `console.error` logging its sibling
+  has on each retry attempt. A copy-pasted twin where one side got an error-handling fix the other
+  never received.
+- [high] `src/mcp/devcontainer/helpers.ts : ensureContainerUpAsync / isContainerReady /
+  hasPluginSettings / provisionPluginSettings` - **architecture** - the devcontainer boot path never
+  re-checks or refreshes plugin freshness. The common case (`isContainerReady()` true - the container
+  was merely session-asleep, not actually stopped) returns immediately with zero plugin logic at
+  all; even the cold-boot branch only checks whether the plugin key EXISTS in
+  `installed_plugins.json`, never whether it's current, and skips `provisionPluginSettings` (the
+  only place `claude plugin install` runs) once it has ever run once. A devcontainer asleep during a
+  live "reload all live sessions" sweep boots on whatever plugin code its cache last had, and nothing
+  at boot catches it up - the structural reason the reply-tool-redesign rollout's own red-team pass
+  found a guaranteed stale-tool mismatch is possible. Two sub-questions can't be verified from this
+  repo alone: whether a target project's own devcontainer config persists `~/.claude` across a
+  container recreate, and whether Claude Code's own CLI self-updates a marketplace flagged
+  `autoUpdate:true` at its own launch.
+- [high] `src/mcp/devcontainer/hostDaemon.ts : handleWake` (devcontainer branch) /
+  `buildLaunchCommand` - **architecture** - confirms the above directly: after
+  `ensureContainerUpAsync` resolves, the wake handler goes straight to `buildLaunchCommand`'s single
+  `bash -c` launch - there is no boot-time equivalent of the `reload_plugins` op (no `/plugin
+  update`, no `/mcp reconnect`) anywhere between container-up and launching Claude. `reloadPlugins.ts`
+  is reachable only via a live MCP tool call or console op against an already-running session.
+
+**Medium:**
+- [medium] `skills/crosstalk/SKILL.md : Receiving a Request / CLI agents` section + `Response
+  Statuses` section - **legacy-landmine** - independently found twice this session (once via a
+  coding-guidelines audit, once via this crust sweep). Instructs an agent to reply via
+  `switchboard:crosstalk_reply()`, a tool that exists nowhere in current source (CLI dispatch mode
+  was retired per this repo's own CLAUDE.md), and documents `clarification`/`deferred`/`needs_human`
+  as reachable outcomes when neither live reply tool (`channel_reply`/`channel_reply_structured`) nor
+  the console's `respond` op can produce them anymore (see the vestigial-status-vocabulary finding
+  below). Also: `README.md`'s `crosstalk_wait` row still says "retrying a deferred request", the same
+  dead-vocabulary echo.
+- [medium] `src/gateway/routes.ts : RespondBodySchema` / `src/shared/types.ts : ResponsePayload` /
+  `src/shared/federation-protocol.ts : FederatedOpSchema` - **dead-code** - the whole
+  clarification/deferred/needs_human negotiation protocol (`question`, `reason`,
+  `estimated_minutes`, `what_to_decide`, `message`, plus those three `ResponseStatusSchema` enum
+  values) is vestigial: no code path anywhere sets status to any of the three, since neither current
+  reply front door can express them. Kept alive only by `src/mcp/bridge/bridgeSend.ts`'s
+  `formatResult()`, which still switches on them.
+- [medium] `src/mcp/channel/evieFiles.ts : materializeFiles / renderFilesBlock / safeFilename /
+  MaterializeFilesParams / RenderFilesBlockParams` - **legacy-landmine** - pervasive stale "Discord"
+  naming survives the Discord file path's retirement (CLAUDE.md: "the Discord file path was retired
+  with the human bridge"). A half-finished rename: one comment in `renderFilesBlock` already says
+  "Console files always arrive with bytes..." while sibling comments a few lines away in
+  `materializeFiles`/`safeFilename` still say "Discord-supplied", "Discord caps a message at 10
+  attachments", "real Discord snowflakes". The only real caller (`channelNotify.ts`) already calls
+  these "Console-origin files" in its own comment.
+- [medium] `src/mcp/bridge/helpers.ts : connectToRouter` (`isChannel`) + `src/mcp/bridge/
+  registerBridgeTools.ts : registerBridgeTools / detectAgentType` - **dup-logic** - three independent
+  computations of "is this a channel-capable (Claude) agent" exist (`mcp/index.ts`'s own check,
+  `helpers.ts`'s separate copy gating whether channel_push/response_push ever get delivered, and
+  `registerBridgeTools.ts` re-running `detectAgentType()` a second time). Sibling dead-branch class to
+  `routes.ts : getTeamMode`, already tracked in `plans/pain-points.md`, but that entry doesn't cite
+  this occurrence. `detectAgentType()`/`AGENT_CLI_NAMES` still fully probes for
+  cursor-agent/copilot/codex on PATH though CLI dispatch was retired; effectively unreachable today
+  (always falls back to `"claude"`) but a latent landmine if that ever changed.
+- [medium] `src/mcp/bridge/helpers.ts : setIsMainOrLeadAgent` / `isMainOrLeadAgent` - **dead-code** -
+  zero callers repo-wide, independently reconfirmed multiple times this session (see "What was
+  rejected" above) - the dead code itself is still shipped, and a reader of `connectToRouter` alone
+  would not know the auto-reply branch it gates is unreachable.
+
+**Low:**
+- [low] `src/shared/schemas.ts : MailboxEntrySchema` - **dead-code** - `question` and `reason` are
+  dead fields (also codegen'd into Android's `MailboxEntry` Kotlin data class); no producer anywhere
+  sets them, no Android code reads them. Every sibling field on this schema carries an explanatory
+  comment; these two are the only undocumented ones - an unremoved fossil of the retired CLI
+  clarification-reply flow.
+- [low] `src/mcp/bridge/helpers.ts : bridgeAgentType` - **dead-code** - exported getter with zero
+  callers anywhere, unlike its siblings `bridgeProjectName`/`bridgeConversationId` (both actively
+  consumed elsewhere) - a symmetry leftover that never got a consumer.
+- [low] `src/mcp/bridge/bridgeDiscover.ts : registerBridgeDiscover` (the `others` filter) -
+  **legacy-landmine** - excludes `kind !== "console"`/`"host"`, but the gateway's `teams()` only ever
+  emits `"loose"`/`"devcontainer"` (console/host peers are already hidden upstream by being
+  recordless, and `"host"` isn't even in the shared `TeamKindSchema` enum) - likely vestigial
+  defensive filtering from before that upstream rule existed. Also hand-types the response inline
+  instead of importing the shared `TeamInfo` type, so a future wire-shape change wouldn't be caught
+  by the compiler here.
+- [low] `src/mcp/bridge/bridgeDiscover.ts : registerBridgeDiscover` (status line, `queue_depth`) -
+  already tracked in `plans/pain-points.md` ("the one consumer that branches on it can never take its
+  busy arm") - resurfaced here since it sits squarely in this sweep's scope.
+- [low] `src/mcp/devcontainer/hostDaemon.ts : handleWake` / `wake_result.pluginsProvisioned` -
+  **dead-code** - a computed, forwarded signal with zero consumers anywhere on the gateway side (not
+  part of any wire schema either) - reinforces that there is no closed-loop plugin-freshness tracking
+  between the daemon and the gateway/console layers.
+- [low] `plans/host-daemon-cleanup.md`'s "Phase 5 - Fragile TUI automation" tracking - **verified,
+  still accurate** - `reloadPlugins.ts`'s screen-scraping `buildScript` is untouched by the one commit
+  that has touched the file since that tracking was written (which only threaded a minted-id session
+  name through, not the TUI-driving body). No drift; not a new finding.
