@@ -497,6 +497,13 @@ change only (stop sending it), not a schema change. Phase A's new `mintedFrom` f
 a wire type either - no Kotlin codegen run needed for either change. Confirm both hold once Phases A/B
 land (re-check `schemas.ts` and `codegen-kotlin.ts` output unchanged).
 
+**Verified, no code change:** `schemas.ts`'s `sessionName: z.string().min(1).max(64).optional()`
+confirmed still optional; `mintedFrom` confirmed to never appear anywhere in `schemas.ts` (it is
+read/written only by `session-store.ts` and `consoleHandler.ts`, never serialized to the console).
+Re-ran `bun scripts/codegen-kotlin.ts`; `Protocol.kt` came back byte-identical (`git status` reports
+no change) - `CreateSession.sessionName` remains `String? = null` in the generated Kotlin. Both of
+this phase's claims hold; no wire-schema or codegen work was needed.
+
 ## Phase F - gates
 
 - `bun run lint && bun run test` (TypeScript side), including Phase A's seven new test cases across
