@@ -16,10 +16,10 @@ function makeHandler(respond: FederationRoutes["respond"]) {
 }
 
 describe("gatewayRelay response_push", () => {
-	it("forwards title, summary, replyAsJson, question, and reason to routes.respond, trustedInbound", async () => {
-		let received: [Request, Record<string, unknown>, { trustedInbound?: boolean } | undefined] | undefined;
-		const { handleOp } = makeHandler((req, body, opts) => {
-			received = [req, body, opts];
+	it("forwards title, summary, replyAsJson, question, and reason to routes.respond", async () => {
+		let received: [Request, Record<string, unknown>] | undefined;
+		const { handleOp } = makeHandler((req, body) => {
+			received = [req, body];
 			return new Response(JSON.stringify({ ok: true }));
 		});
 
@@ -49,6 +49,5 @@ describe("gatewayRelay response_push", () => {
 			question: "which env?",
 			reason: "waiting on approval",
 		});
-		expect(received?.[2]).toEqual({ trustedInbound: true });
 	});
 });

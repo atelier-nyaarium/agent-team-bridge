@@ -939,11 +939,10 @@ describe("routes", () => {
 			const ctx = makeCtx({ store, mailboxStore, ownerId: () => "owner-1" });
 			const { respond } = createRoutes(ctx);
 
-			respond(
-				new Request("http://gateway/respond"),
-				{ session_id: "conv.conv-1.alice.gw2.coolib.dev", response: "on it" },
-				{ trustedInbound: true },
-			);
+			respond(new Request("http://gateway/respond"), {
+				session_id: "conv.conv-1.alice.gw2.coolib.dev",
+				response: "on it",
+			});
 
 			const entries = mailboxStore.get("owner-1")!.drain().entries;
 			expect(entries).toHaveLength(1);

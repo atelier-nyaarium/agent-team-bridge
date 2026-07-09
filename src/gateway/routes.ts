@@ -905,7 +905,10 @@ export function createRoutes({
 	function respond(
 		req: Request,
 		body: Record<string, unknown>,
-		opts: { trustedInbound?: boolean; consoleSender?: boolean } = {},
+		// Unlike send(), respond() never needs to tell "trusted federated relay" apart from a
+		// plain call: its cross-Gateway behavior is already driven by the job's own recorded
+		// returnRoute/dstDomainId and the respond session id's own address, not a live flag.
+		opts: { consoleSender?: boolean } = {},
 	): Response {
 		const parsed = RespondBodySchema.safeParse(body);
 		if (!parsed.success) {
