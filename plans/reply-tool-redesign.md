@@ -10,9 +10,10 @@ Android change" was re-confirmed directly (a live `bun scripts/codegen-kotlin.ts
 a byte-identical no-op diff on `Protocol.kt`). Line-number citations throughout this doc were corrected
 in place. One section changed in substance, not just line numbers: **step 5** now targets a shared
 `sendHandshake()` function fired from two call sites (register-time plus a 2026-07-07 heartbeat-resend
-loop, up to 20 attempts over ~10 minutes) instead of one inline send - see step 5's own note and the
-Deploy section for why this raises, not lowers, the stakes of getting the tool-agnostic wording right
-before implementation starts.
+loop, up to 20 attempts over ~10 minutes) instead of one inline send. A same-day follow-up decision
+(below, in "What was rejected") then simplified step 5 further: the owner accepts a coordinated
+plugin + gateway restart, so the handshake wording no longer needs to be transition-safe/tool-agnostic
+- it can hardcode the new tool name directly.
 
 ## Context
 
@@ -180,37 +181,24 @@ never posted by the reply tools; `files` is preserved on the prose tool.)
   only edit unit. This block is ALSO the answer to "how does the agent know to reply on the channel"
   once metaInstruction is gone - see below.)
 
-### 5. `src/gateway/websocket.ts` (handshake prompt, now the shared `sendHandshake(ws, team, subId)`
-function at lines 201-215) - make it TRANSITION-SAFE
-- **Do NOT hardcode a version-specific tool/field name.** The current body names
-  `respondAsStructuredData`; a naive rewrite would name `channel_reply_structured`. Either way a
-  deploy-skew window leaves the prompt naming a tool the other side's plugin lacks (audit: rollout,
-  major). Instead **word the body tool-agnostically**: ask the agent to indicate whether it is the
-  primary/lead session (`isMainOrLead: true`) or a worker (`false`). A new-plugin agent sees the
-  `reply_schema` attribute and uses `channel_reply_structured`; any agent can also answer in prose via
-  `channel_reply`, which `resolveHandshake` accepts through its `/true/i` fallback (`websocket.ts:524`).
-  This removes the cross-version dependency on a specific tool name.
+### 5. `src/gateway/websocket.ts` (handshake prompt, the shared `sendHandshake(ws, team, subId)`
+function at lines 201-215)
+- **Hardcode the new tool name (decided 2026-07-09 - see "What was rejected" for why this replaces
+  transition-safe wording).** The owner accepts the "switching pain" of a coordinated plugin + gateway
+  restart, so there is no deploy-skew window to design around. The body can simply name
+  `channel_reply_structured` directly instead of the tool-agnostic `isMainOrLead: true/false` phrasing
+  this step originally called for - simpler prompt, no dual-path duck-typing to maintain in
+  `resolveHandshake` for its own sake.
   NOTE: the prompt is no longer a single inline send - commit `ac156e4` (2026-07-07, "Re-send the
   lead handshake to an unconfirmed session each heartbeat") extracted it into `sendHandshake()`,
   called from the original register-time site (now line 348) AND a new heartbeat-tick resend loop
   (lines 163-175, gated by `HANDSHAKE_MAX_ATTEMPTS = 20` at line 90) that re-sends the same prompt to
   any still-unconfirmed channel socket roughly every 30s. Editing the wording once in `sendHandshake()`
-  still fixes both call sites, so this step's mechanics are unchanged in spirit - but see the
-  Deploy section note on why the skew window is now bigger, not smaller.
-- KEEP `replyJsonSchema` (now inside `sendHandshake()` at `websocket.ts:211`) - it is **DUAL
+  still fixes both call sites.
+- KEEP `replyJsonSchema` (inside `sendHandshake()` at `websocket.ts:211`) - it is **DUAL
   load-bearing** (audit: handshake nit): both the inbound `reply_schema` tag attribute
   (`channelNotify.ts:34`) AND the auto-reply fast-path gate (`src/mcp/bridge/helpers.ts:178-179`). Do
   not remove/rename it during the field cleanup.
-- **Harden the prose fallback (audit: naming - bump to MAJOR, see below):** `resolveHandshake`'s
-  `/true/i.test(response)` (`websocket.ts:524`) mis-resolves a prose reply lacking the literal "true"
-  to WORKER, and `src/mcp/bridge/helpers.ts:195-199` sets `suppressReconnect` on `handshake_reject` →
-  a PERMANENT lead disconnect. Tighten the prompt to demand an explicit `true`/`false`, and/or tighten
-  the match to a clear token. Since this plan was written, a successful resolve also calls the new
-  `establishRecord()` (`websocket.ts:527-529`, added by commit `74e8437`) which binds a durable
-  SessionStore record, and `handshakeConfirmed` now feeds the console board's online/verifying/available
-  status (wired in by commits `6b72c8e`/`7606054`/`ef389b6`/`2c4fcd7`) - so a mis-resolve today has a
-  persistent, user-visible blast radius, not just a transient in-memory flag. Severity raised from
-  "minor" accordingly; the fix itself (explicit true/false token) is unchanged.
 - **The blast radius is confirmed (audit: rollout, minor):** `setIsMainOrLeadAgent` has zero callers
   repo-wide - reconfirmed 2026-07-09, the only match anywhere in `src/` for that symbol is its own
   definition at `src/mcp/bridge/helpers.ts:58` - so `isMainOrLeadAgent` is permanently `null` and EVERY
@@ -250,6 +238,16 @@ function at lines 201-215) - make it TRANSITION-SAFE
 - **`responseData` as a JSON string**: the one genuine wart; fixed by the native object.
 - **One-tool-with-object-field**: rejected; the user wants the variants killed - two closed-shape
   tools is the cleaner realization.
+- **Transition-safe / tool-agnostic handshake wording** (rejected 2026-07-09, superseding the
+  2026-07-09 Refresh note that had bumped the associated fallback-hardening bullet to MAJOR): the
+  owner accepts the "switching pain" of a coordinated plugin + gateway restart instead of engineering
+  the handshake prompt to survive a rolling/skewed deploy. With no cross-version window to design
+  around, the prompt can hardcode `channel_reply_structured` directly (see step 5). This also drops
+  the escalation of "harden the prose fallback" (`resolveHandshake`'s `/true/i.test(response)`
+  fallback, `websocket.ts:524`) - that bullet's severity was raised specifically because a skew window
+  could recur the mismatch up to 20 times via the heartbeat-resend loop; with no skew window by
+  design, the underlying regex fragility reverts to a pre-existing, independent nit, not required by
+  this plan (`plans/pain-points.md` is the right home for it if it ever wants a dedicated fix).
 
 ## Verification
 - TS gate: `bun run lint && bun run test`.
@@ -287,16 +285,13 @@ function at lines 201-215) - make it TRANSITION-SAFE
 
 ## Deploy (gateway rebuild IS required - coordinated)
 Step 5 edits `src/gateway/websocket.ts`, so **the gateway MUST be rebuilt** - this is not a
-plugin-only change. Treat the plugin + gateway as a single coordinated deploy to minimize the
-handshake-skew window (audit: rollout, major):
+plugin-only change. Treat the plugin + gateway as a single coordinated restart (owner-accepted
+"switching pain," 2026-07-09):
 1. Reload all live plugins (`reload_plugins`) so agents register the new tools.
-2. Rebuild the gateway (`./down.sh && ./start-gateway.sh`) so it emits the transition-safe handshake.
-Because the handshake prompt is now tool-agnostic (step 5), an order-skew degrades gracefully instead
-of permanently rejecting a lead. Note: the skew window is no longer a single one-shot prompt - since
-commit `ac156e4` (2026-07-07), an unconfirmed session is re-prompted on every ~30s heartbeat for up to
-`HANDSHAKE_MAX_ATTEMPTS = 20` attempts (~10 minutes), so a wording mismatch during a slow or partial
-rollout can recur repeatedly instead of happening once. Get step 5's wording right before the
-coordinated rebuild - the stakes here are higher than "brief" implies. No APK.
+2. Rebuild the gateway (`./down.sh && ./start-gateway.sh`) so it emits the new handshake prompt.
+Any session mid-handshake during the restart reconnects afterward via the existing heartbeat-resend
+loop (`ac156e4`, up to `HANDSHAKE_MAX_ATTEMPTS = 20` attempts over ~10 minutes) - no graceful-transition
+machinery needed since both sides restart together. No APK.
 
 ## Forward-looking (out of scope, recorded)
 - **Multi-way chats rising to the Console**: the required `{title, summary, full}` triple is the
