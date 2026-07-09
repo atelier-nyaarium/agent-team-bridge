@@ -68,7 +68,7 @@ class CreateSessionAmbiguousError extends Error {}
 /** The subset of gateway HTTP routes the console handler reuses. */
 export interface ConsoleRoutes {
 	send: (req: Request, body: Record<string, unknown>, opts?: { consoleSender?: boolean }) => Promise<Response>;
-	respond: (req: Request, body: Record<string, unknown>) => Response;
+	respond: (req: Request, body: Record<string, unknown>, opts?: { consoleSender?: boolean }) => Response;
 	teams: () => Response;
 	// Mesh-wide team list (local + every online peer Gateway). A console roams all Gateways.
 	discover: () => Promise<Response>;
@@ -639,13 +639,19 @@ export function createConsoleDispatcher({
 				if (!mailboxStore.get(ownerId)?.canRespond(op.session_id)) {
 					throw new Error(`Unknown session_id; you can only respond to a thread delivered to you`);
 				}
-				const res = routes.respond(FAKE_REQ, {
-					session_id: op.session_id,
-					status: op.status,
-					response: op.response,
-					replyAsJson: op.replyAsJson,
-					files: op.files,
-				});
+				const res = routes.respond(
+					FAKE_REQ,
+					{
+						session_id: op.session_id,
+						status: op.status,
+						response: op.response,
+						replyAsJson: op.replyAsJson,
+						files: op.files,
+					},
+					// The console is a human replying via the app, never an agent; the mirror tap
+					// reads this to skip agent-to-agent peer mirroring for this reply.
+					{ consoleSender: true },
+				);
 				const json = (await res.json()) as { error?: string };
 				if (!res.ok) throw new Error(json.error ?? "respond failed");
 				return { delivered: true };

@@ -93,6 +93,10 @@ export interface RoutesDeps {
 	// un-share bites without evie. Absent when federation sharing is not wired (no recheck).
 	isSharedToForReply?: ((sessionTarget: string, domainId: string) => boolean) | null;
 	resolveHandshake?: (sessionId: string, replyAsJson?: Record<string, unknown>, response?: string) => boolean;
+	// This Gateway's own Domain owner id (a hash of the owner's signing key), used to key the
+	// mirror-tap's agent-to-agent display entries into the owner's mailbox. Null pre-enrollment
+	// (arming mode) or when federation is off, matching resolvesLocalGateway's gating.
+	ownerId?: (() => string | null) | null;
 }
 
 const SendRequestSchema = z.object({
@@ -220,6 +224,7 @@ export function createRoutes({
 	touchShares,
 	isSharedToForReply,
 	resolveHandshake,
+	ownerId,
 }: RoutesDeps) {
 	const { localGatewayId, localDomainId } = config;
 	// The local Domain segment for every address we mint. Null (arming mode, pre-enrollment)
@@ -249,6 +254,42 @@ export function createRoutes({
 			return localAddress(name);
 		} catch {
 			return null;
+		}
+	}
+
+	/** Append a "peer" display mirror into this Gateway's own Domain-owner mailbox, tagged under
+	 * `threadAddr`'s own thread. A no-op pre-enrollment (no owner id) or when the console bridge is
+	 * off (no mailboxStore) - the mirror is purely additive display, never load-bearing. */
+	function mirrorPeer(
+		threadAddr: Address,
+		from: string,
+		to: string,
+		payload: { body?: string; files?: ChannelFile[]; status?: string; title?: string; summary?: string },
+		// A stable id lets an at-least-once RELAY of this same already-composed entry (a future
+		// console_push convergence hop) dedupe against the same key on each receiving gateway.
+		// It does NOT protect against a caller-level HTTP retry of send()/respond() itself - that
+		// gap is pre-existing (the channel_push/response_push it mirrors has no such protection
+		// either) and is not solved here. Defaults to a fresh id when no caller has one to give.
+		dedupeKey: string = crypto.randomUUID(),
+	): void {
+		const owner = ownerId?.();
+		if (!owner || !mailboxStore) return;
+		// Never load-bearing: a failure here must not turn an already-delivered/already-relayed
+		// primary operation into a spurious failure for the caller.
+		try {
+			mailboxStore.ensure(owner).append(
+				{
+					kind: "peer",
+					session_id: storeKey({ kind: "conv", conversationId: owner, address: threadAddr }),
+					from,
+					to,
+					...payload,
+					dedupeKey,
+				},
+				dedupeKey,
+			);
+		} catch (err) {
+			console.warn(`[mirror] failed to append peer entry: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
@@ -433,9 +474,11 @@ export function createRoutes({
 		const targetAddr = Address.remote(resolvedDomain ?? localDomain, targetGateway, tSpawn, tSession);
 		const qualifiedTo = targetAddr.canonical;
 		const srcSession = storeKey({ kind: "conv", conversationId: fromConversationId, address: targetAddr });
+		const senderAddr = fromAddress ? null : localAddress(from);
+		const senderCanonical = fromAddress ?? senderAddr!.canonical;
 		const op: FederatedOp = {
 			kind: "send",
-			from: fromAddress ?? localAddress(from).canonical,
+			from: senderCanonical,
 			to: targetName,
 			body: body ?? "",
 			...(files && files.length > 0 ? { files } : {}),
@@ -456,6 +499,11 @@ export function createRoutes({
 			fromConversationId,
 			dstDomainId: resolvedDomain ?? undefined,
 		});
+		// Mirror the LOCAL sender's own outbound leg; the remote target's own gateway mirrors its
+		// side independently. Never for a console sender (senderAddr is only ever set for an agent).
+		if (senderAddr) {
+			mirrorPeer(senderAddr, senderCanonical, targetAddr.canonical, { body, files });
+		}
 		return jsonResponse({
 			session_id: srcSession,
 			status: "running",
@@ -814,6 +862,29 @@ export function createRoutes({
 					`[send] channel_push to ${qualifiedTo} [${channelJobId}]${messageId ? ` msg=${messageId.slice(0, 8)}` : ""} from ${from} (${activeWs.length} sub-session${activeWs.length > 1 ? "s" : ""})`,
 				);
 
+				// Mirror agent-to-agent traffic into the owner's console, tagged under each LOCAL
+				// participant's own thread. Never for a console sender (opts.consoleSender). The
+				// `!virtual` check is defense-in-depth, not independently reachable today: targetWs is
+				// always resolveLiveIncarnation's result, which already excludes virtual (console) peers
+				// on every resolution path (see websocket.ts), so a console can never be targetWs here.
+				if (targetWs && !targetWs.data.virtual) {
+					const toAddr = target.address;
+					if (inboundSessionId) {
+						// Federated inbound landing: only the local target is ours to mirror. `from` here
+						// is already the remote origin's canonical address (set verbatim by the origin
+						// gateway), not a local team field.
+						mirrorPeer(toAddr, from, toAddr.canonical, { body: msgBody, files });
+					} else if (!opts.consoleSender) {
+						// A malformed `from` (never slug-validated at the SendRequestSchema boundary) must
+						// not turn an already-delivered channel_push into a spurious 500 for the caller.
+						const fromAddr = tryLocalAddress(from);
+						if (fromAddr) {
+							mirrorPeer(fromAddr, fromAddr.canonical, toAddr.canonical, { body: msgBody, files });
+							mirrorPeer(toAddr, fromAddr.canonical, toAddr.canonical, { body: msgBody, files });
+						}
+					}
+				}
+
 				return jsonResponse({
 					session_id: channelJobId,
 					status: "running",
@@ -831,7 +902,11 @@ export function createRoutes({
 		return jsonResponse({ error: "unsupported connection mode" }, 400);
 	}
 
-	function respond(req: Request, body: Record<string, unknown>): Response {
+	function respond(
+		req: Request,
+		body: Record<string, unknown>,
+		opts: { trustedInbound?: boolean; consoleSender?: boolean } = {},
+	): Response {
 		const parsed = RespondBodySchema.safeParse(body);
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
@@ -920,11 +995,28 @@ export function createRoutes({
 					session_id: rr.srcSession,
 					...(response.status ? { status: response.status } : {}),
 					...(response.response ? { response: response.response } : {}),
+					...(response.title ? { title: response.title } : {}),
+					...(response.summary ? { summary: response.summary } : {}),
+					...(response.replyAsJson ? { replyAsJson: response.replyAsJson } : {}),
+					...(response.question ? { question: response.question } : {}),
+					...(response.reason ? { reason: response.reason } : {}),
 					...(files && files.length > 0 ? { files } : {}),
 				},
 				"cross-Gateway reply-pin",
 			);
 			console.log(`[respond] ${respondSessionId} pinned to Gateway ${rr.srcGateway} via the Router`);
+			// Mirror the LOCAL responder's own thread. Never for the console itself (opts.consoleSender) -
+			// a slug-shaped Device Name could in principle register and land a returnRoute job on itself.
+			const localAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.to);
+			if (localAddr) {
+				mirrorPeer(localAddr, localAddr.canonical, deliverResult.from, {
+					body: response.response,
+					files,
+					status: response.status,
+					title: response.title,
+					summary: response.summary,
+				});
+			}
 			return jsonResponse({ delivered: true, federated: true });
 		}
 
@@ -979,6 +1071,38 @@ export function createRoutes({
 					console.log(
 						`[respond] conversation ${deliverResult.fromConversationId.slice(0, 8)}... offline, response kept in store [${respondSessionId}]`,
 					);
+				}
+				// Mirror agent-to-agent traffic (no mailbox above means the original asker has no
+				// console inbox, so it's a real agent; never for the console itself replying, opts.
+				// consoleSender). Discriminate a genuinely local reply from this gateway completing its
+				// own cross-Gateway origin anchor: the anchor's own session key embeds the REMOTE
+				// target's address, never a local one.
+				const askerAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.from);
+				if (askerAddr) {
+					const key = parseStoreKey(respondSessionId);
+					const isRemoteAnchor =
+						key?.kind === "conv" &&
+						(key.address.gateway !== localGatewayId || key.address.domain !== localDomain);
+					const mirrorPayload = {
+						body: response.response,
+						files,
+						status: response.status,
+						title: response.title,
+						summary: response.summary,
+					};
+					// This message is the REPLY: the replier speaks, the original asker receives - the
+					// mirror's from/to must reflect that direction, not the original ask's.
+					if (isRemoteAnchor) {
+						// deliverResult.to is already the remote replier's canonical address here
+						// (sendCrossGateway's own anchor records qualifiedTo, not a bare team name).
+						mirrorPeer(askerAddr, deliverResult.to, askerAddr.canonical, mirrorPayload);
+					} else {
+						const replierAddr = tryLocalAddress(deliverResult.to);
+						if (replierAddr) {
+							mirrorPeer(askerAddr, replierAddr.canonical, askerAddr.canonical, mirrorPayload);
+							mirrorPeer(replierAddr, replierAddr.canonical, askerAddr.canonical, mirrorPayload);
+						}
+					}
 				}
 			}
 		}

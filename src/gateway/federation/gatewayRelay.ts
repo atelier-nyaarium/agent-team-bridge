@@ -13,7 +13,7 @@ import type { Sealer } from "./sealer.js";
  * runs against the same local routes a local sender would hit. */
 export interface FederationRoutes {
 	send: (req: Request, body: Record<string, unknown>, opts?: { trustedInbound?: boolean }) => Promise<Response>;
-	respond: (req: Request, body: Record<string, unknown>) => Response;
+	respond: (req: Request, body: Record<string, unknown>, opts?: { trustedInbound?: boolean }) => Response;
 	teams: () => Response;
 }
 
@@ -204,15 +204,21 @@ export function createGatewayRelayHandler({
 						throw new Error(`cross-Domain response_push to "${op.session_id}" denied`);
 					}
 				}
-				const res = routes.respond(FAKE_REQ, {
-					session_id: op.session_id,
-					status: op.status,
-					response: op.response,
-					replyAsJson: op.replyAsJson,
-					question: op.question,
-					reason: op.reason,
-					files: op.files,
-				});
+				const res = routes.respond(
+					FAKE_REQ,
+					{
+						session_id: op.session_id,
+						status: op.status,
+						response: op.response,
+						title: op.title,
+						summary: op.summary,
+						replyAsJson: op.replyAsJson,
+						question: op.question,
+						reason: op.reason,
+						files: op.files,
+					},
+					{ trustedInbound: true },
+				);
 				const json = (await res.json()) as { error?: string };
 				if (!res.ok) throw new Error(json.error ?? "response_push delivery failed");
 				return { ok: true };

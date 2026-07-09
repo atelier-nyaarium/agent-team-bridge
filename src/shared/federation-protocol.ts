@@ -59,6 +59,8 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 		session_id: z.string().min(1).max(MAX_STORE_KEY_LEN),
 		status: z.string().optional(),
 		response: z.string().optional(),
+		title: z.string().optional(),
+		summary: z.string().optional(),
 		replyAsJson: z.record(z.string(), z.unknown()).optional(),
 		question: z.string().optional(),
 		reason: z.string().optional(),
