@@ -227,3 +227,222 @@ value (spaces/caps) makes `localAddress(from)` throw uncaught:
 - [low] `src/gateway/routes.ts : send`'s `to` field - **bug-class** - `parseTarget(to, ...)` is called with no try/catch (unlike every other validated field in the same request), so a malformed `to` (an out-of-range arity, an invalid slug segment) throws a raw exception instead of the established `jsonResponse({error}, 400)` shape; `send()` is async with no wrapping try/catch anywhere in its caller chain and `Bun.serve` has no `error:` handler configured, so this surfaces as an unhandled rejection rather than a clean 4xx. Predates the session-id-teardown work (the calls themselves are untouched by it); found during Phase G's red-team pass while tracing `to`'s handling.
 - [low] `src/shared/session-store.ts : findByMintedFrom` - **note** - its own doc comment already treats a `(mintedFrom, spawn)` collision as anomalous ("only reachable via a corrupted or hand-edited persisted file") and correctly declines to guess, but logs nothing when it happens - a corrupted-file scenario the code already anticipates would compound silently (every subsequent call with that `mintedFrom` mints yet another record) with no operator-visible signal, unlike the otherwise-verbose `[wake]` logging nearby. Pre-existing Phase A code; Phase G only added a second caller.
 - [low] `src/gateway/index.ts : doWakeTeam` - **unconfirmed lead** - flagged by a red-team pass but not fully chased down (needs `src/mcp/devcontainer/hostDaemon.ts`, outside that pass's scope): after a mint, a caller that keeps re-addressing the session by its ORIGINAL typed name (instead of switching to the resolved address the reply carries) would repeatedly miss the live-incarnation short-circuit (which checks the pre-mint `team`, not the minted `wakeTeam`) and re-trigger `doWakeTeam`/a host wake dispatch on every subsequent send, reattaching via `mintedFrom` each time. Whether this resolves quickly or stalls depends on whether the host daemon's wake handler emits a `wake_result` for a target that already has a live tmux/registration - not verified.
+
+## Session id/name teardown closeout (`plans/session-id-teardown.md`, deleted, shipped - Phases A-G complete, 2026-07-09)
+
+Migrated from `plans/session-id-teardown.md` (deleted, shipped) so its still-open residuals are not
+lost. The "Session id teardown" section above this one was already migrated earlier, during the
+plan's own execution (its Phase B/D/F red-team passes pointed at it directly). This batch closes out
+the rest: Phase A/G's own logged-but-unfixed gaps, plus the Phase F crust-collection sweep in full (a
+scouting pass over the Android app, the gateway's console/routing layer, and the shared wire protocol
+- not run through a second adversarial verify pass, so treat each as a lead to re-check before acting
+on it, not a confirmed finding). Non-goals the plan explicitly declined (workdirHint re-derivation on
+rename, server-side prefix resolution for `crosstalk_send`/`wake`, gateway/host-daemon log
+readability) are dropped as closed decisions, retrievable from git history if reconsidered.
+
+### Phase A/G residuals (not part of the crust-collection sweep below)
+
+- [high] `src/gateway/routes.ts : send` / `src/gateway/wake.ts : decideWakeCreate` - **bug-class** - no
+  rate limit or size cap on session minting. A caller with ordinary `crosstalk_send` access can mint an
+  unbounded number of phantom `SessionStore` records and drive real host-daemon wake dispatches
+  (container bring-up included) with a plain loop over distinct `to`+`displayLabel` pairs -
+  `mintedFrom` retry-safety only collapses a *repeated* request, never bounds *distinct* ones, by
+  design. Compounds an already-known, already-decided-but-unshipped gap: `plans/gateway-auth-surface.md`
+  documents plain `POST /send` as unauthenticated resource amplification via self-wake; Phase G adds
+  outright record *creation* on top of that. A rate limiter is a cross-cutting concern deserving its
+  own design, not a bolt-on to this phase - tracked here until `gateway-auth-surface.md`'s origin-aware
+  gate (itself still unshipped) is built and confirmed to cover this creation path too.
+- [medium] `src/gateway/federation/gatewayRelay.ts` / `FederatedOpSchema` - **note** - a cross-Gateway
+  mint never surfaces the destination's resolved address back to the origin caller; the wire protocol's
+  reply shape has no field for it. Adding one would need to span `FederatedOpSchema`, `gatewayRelay.ts`'s
+  reply construction, and `sendCrossGateway`, mirroring the `displayLabel` threading Phase G already did
+  in the other direction. Left as a documented limitation, not a same-pass wire-protocol addition.
+- [low] `src/shared/session-store.ts : SessionStore.mintOrReattach`'s `mintedFrom` - **tradeoff** - has
+  no expiry, unlike Android's own `recentSpawnOpIds` (a 40-second retry-collapse window). A
+  `crosstalk_send`'s `fromConversationId` is process-lifetime (potentially days), so the SAME
+  conversation addressing the SAME typed target weeks apart with a genuinely new, different
+  `displayLabel` intent still silently reattaches to the old session and drops the new label -
+  indistinguishable, from the reply alone, from a fresh mint. Deliberate: the alternative (an unbounded
+  duplicate-mint risk on any delayed retry) was judged worse. Worth reconsidering with a bounded window
+  if it proves confusing in practice.
+- [low] `src/gateway/websocket.ts : establishOnConfirm` - **note** - this self-heal path remains
+  structurally unable to stamp `mintedFrom` (it has no request provenance in scope at all), so a mint-path
+  record confirmed through it can't be found by a later retry via `findByMintedFrom`. Fully closing this
+  means threading provenance through the confirm path, a materially larger change than "make the mint
+  path collision-safe."
+- [low] `src/shared/session-store.ts` (persistence model) - **note** - an abrupt, non-graceful crash
+  (SIGKILL/OOM, not a graceful restart - those already flush via the SIGTERM/SIGINT handlers) inside the
+  ~3s window between persist ticks can lose any just-created record. Pre-existing property of the whole
+  persistence model, not specific to any one phase.
+- [low] `src/shared/session-store.ts : findByMintedFrom` - **bug-class** - the ambiguity guard (falls
+  through to a fresh mint rather than trusting either of two colliding records) has no recovery path -
+  every retry against an already-ambiguous `mintedFrom` mints one more record instead of resolving the
+  ambiguity, so a sustained retry storm against an already-corrupted/hand-edited store grows unboundedly.
+  Low severity since reaching the initial ambiguous state already requires that disclaimed precondition;
+  a full fix (reconciling or pruning ambiguous records) is a separate feature.
+- [low] `src/shared/session-store.ts` (legacy mint records) - **note** - time-bound, likely already
+  expired: a `SessionRecord` minted by the OLD, now-deleted deterministic-hash `mintedSessionId` scheme
+  (pre-dating the Phase A deploy) has no `mintedFrom`, so a retry of that exact original
+  (conversationId, opId) landing after the Phase A deploy could not find it via `findByMintedFrom` and
+  would mint a second, independent record. Bounded to the transition window around that one deploy
+  (non-destructive - a duplicate mint, never someone else's session getting deleted); judged not worth
+  resurrecting the deleted deterministic-hash mechanism as a fallback-only lookup to close.
+
+### Phase F crust-collection sweep (scouting pass, not independently verified)
+
+Four parallel scouts over the Android app, the gateway's console/routing layer, and the shared wire
+protocol, seeded with leads from the plan's own red-team rounds. Record only, not fixed - out of scope
+for that plan, or too broad for a proportionate in-pass fix.
+
+**High:**
+- [high] `android/.../ChatRepository.kt : isAdmin / confirmedDomainId / refreshDisplayNameFromTeams` -
+  **dup-logic** - all three pick "my own Team" from `state.teams` using gateway-id equality alone, no
+  domain check (`(it.gatewayId.ifEmpty { gw }) == gw`) - the same class of gap `rename()`'s isLocal guard
+  was written to close, and the sibling `shareableSessions()` a few lines below already ANDs a domain
+  check in. Since a gateway id is only unique within a Domain (documented elsewhere in this same file) and
+  defaults to the sanitized hostname, a linked peer's gateway coincidentally sharing your own gateway id
+  string could make these three silently report the peer's domain id / admin flag / display name as your
+  own - most dangerous if the colliding peer happens to be the admin you're a guest of.
+- [high] `android/.../ChatRepository.kt : ChatState.gap` - **bug-class** - set to `true` on a dropped-
+  mailbox-entries pulse but never reset anywhere (no matching `false` write, unlike `transientMessage`'s
+  `consumeTransientMessage()`), even though the pulse that set it (`SyncCursor.advance`'s edge-triggered
+  `gap`) resolves itself the very next poll cycle. The sticky "Some messages were dropped" banner it drives
+  has no dismiss action, so the first mailbox-eviction event a device ever experiences leaves that banner
+  on screen for the rest of the process's life.
+- [high] `android/.../ChatRepository.kt : setDeviceName` (found independently by two scouts) - **bug-
+  class** - fired the same fire-and-forget way as rename/closeTab/wakeSession/forget
+  (`scope.launch { repo.setDeviceName(it) } }`, no CoroutineExceptionHandler anywhere in the app), but
+  unlike its neighbor `provision()` - whose own comment explains it wraps its JSON parse specifically
+  because "callers launch this from coroutines with no catch" - `setDeviceName` does not wrap its
+  `JSONObject(blob).put("device", name)` at all. A corrupted stored provisioning blob throws uncaught and
+  crashes the app on a routine device rename.
+- [high] `android/.../TrustCompareScreen.kt : DisposableEffect(Unit).onDispose` - **bug-class** - cancels
+  the rendezvous via `scope.launch { repo.trustCancel(...) }` on the plain `rememberCoroutineScope()`
+  `scope`, which Compose cancels as part of the same disposal pass - so the cancel very likely never runs.
+  Two sibling ceremonies (`LinkWizard.kt`, `EnrollCeremonyScreen.kt`) hit and fixed this exact bug by
+  moving their own onDispose cancel onto `GlobalScope.launch` with a "must outlive this composable"
+  comment; `TrustCompareScreen.kt` never got the same fix, so backing out of a trust compare leaves the
+  rendezvous open until its own TTL sweep instead of tearing down immediately.
+
+**Medium:**
+- [medium] `src/gateway/console/consoleHandler.ts : dispatch` - **framework-first** - `rename_session`'s
+  case body opens with the identical validate-target-and-resolve-name preamble already known to be
+  hand-copied between `forget`/`close_session`; a third copy, same fix (`requireNamedLocalSession`
+  helper) would close all three at once.
+- [medium] `src/gateway/wake.ts : WakeCoordinator`, `src/gateway/hostOpCoordinator.ts : HostOpCoordinator`,
+  `src/gateway/evie/evieClient.ts`'s `pendingCalls` - **framework-first** - three independent hand-rolled
+  copies of the same "keyed waiter map with a timeout and a fail-all" primitive, aware of each other only
+  through prose comments cross-referencing the siblings rather than one shared `Correlator<T>`.
+- [medium] `src/gateway/routes.ts : send`, `src/gateway/console/consoleHandler.ts` (3 sites) - **framework-
+  first** - the "is this address actually mine" `t.domain !== localDomain || t.gateway !== localGatewayId`
+  check is hand-copied 5 times across the gateway (plus a 6th, independent copy in the Android client's
+  `rename()`); `Address`/`SpawnPoint` have an `equals()` but no `isLocal(domain, gateway)` method to own
+  the comparison once.
+- [medium] `android/.../ChatRepository.kt : closeTab/wakeSession/forget` (vs `rename`) - **bug-class** -
+  all three gate on gateway-id equality alone (no domain check), the exact gap `rename()`'s own doc
+  comment names and fixes for itself; `forget` is the most consequential since it's the most destructive
+  op of the three.
+- [medium] `android/.../ChatRepository.kt : send/retrySend/deliver(fail)` vs `ChatState.transientMessage`
+  - **bug-class** - these write one-off send-failure text into the STICKY `error` field instead of
+  `transientMessage`, the exact violation `transientMessage`'s own doc comment warns against ("would bleed
+  into an unrelated later health render"); `error` is only cleared at connection-lifecycle events, so a
+  failed send's text can linger in the connection-health banner well past the failure.
+- [medium] `android/.../ChatRepository.kt : ChatState.needsGateway` and `MainActivity.kt`'s ThreadScreen -
+  **legacy-landmine** - two independent places pattern-match the free-text `error` string to recover a
+  `ConnKind` classification (a `.startsWith("Add a Gateway")` check and a separate `.endsWith("retrying")`
+  convention) instead of storing the enum itself; the two conventions are already inconsistent with each
+  other's assumptions (some TRANSIENT messages don't end in "retrying").
+- [medium] `android/.../MainActivity.kt : SessionsScreen`'s `SpawnDialog` call site - **bad-naming** -
+  the one hop where the typed-label value is destructured as `session` instead of `label`, inviting a
+  reader to treat pre-sanitization user text as a stable session id; every other hop of the same value
+  (App's `onSpawn`, `spawnSession`'s own parameter) calls it `label`.
+- [medium] `android/.../ConsoleClient.kt : listTeams` - **dead-code** - zero call sites anywhere in the
+  repo (Kotlin or TS); every real caller uses `teams()` directly. Leftover from a migrated-away call site.
+- [medium] `android/.../HostNetworks.kt`, `Management.kt`, `LinkWizard.kt` - **dup-logic** - three
+  independent clipboard-copy implementations for the same user action (two hand-rolled via the old
+  `ClipboardManager` API, one via the newer `LocalClipboard`), where a shared home for this exact
+  composable family (`Federation.kt`) already exists.
+- [medium] `android/.../Sharing.kt : SharingScreen.onToggleDomain` - **bug-class** - discards the result
+  of its everyone-clear call entirely (no `.onFailure`/`.getOrThrow()`) before unconditionally applying
+  the specific-share write, unlike the sibling `applyMode()` branch that `.getOrThrow()`s the identical
+  call so a failure aborts the whole operation; a transient failure here can leave a session shared to
+  both "everyone" and a named person at once, the exact overlap a neighboring comment says must never
+  happen.
+- [medium] `android/.../CrossDomainLink.kt : mergeLinkedDomains`'s `adminDomain` parameter - **bad-
+  naming** - actually means "my own confirmed domain id" (fed from `confirmedDomainId()`), not the
+  network's privileged admin Domain that `Team.isAdminDomain` (a different, wire-stamped field) refers to
+  elsewhere in the same federation/cross-domain code - easy to conflate given how similarly they're
+  spelled and how close together they live.
+- [medium] `android/.../AppStateStore.kt : saveGatewayId`'s doc comment - **legacy-landmine** - describes
+  the pre-migration `(gatewayId, name)` composite-key grammar this repo's own CLAUDE.md documents as
+  retired, but the field is still load-bearing today for a different, undocumented purpose (the persisted
+  fallback `ConsoleClient.kt` reads to resolve which Gateway to seal a relay op to before a fresh register
+  re-learns it) - a maintainer trusting the stale comment could conclude it's dead and remove it.
+- [medium] `android/.../Management.kt : AddGatewayScreen`'s Approve action (one instance of a ~9-site
+  pattern) - **framework-first** - every async screen action hand-rolls its own busy/status state plus a
+  bespoke `scope.launch{}` with no shared "always reset busy, always surface a message" helper; Approve
+  specifically has no try/catch around a call that documents itself as intentionally throwing on a
+  corrupt stored key, so that failure leaves the button stuck on "Enrolling..." forever with no error
+  shown.
+- [medium] `scripts/codegen-kotlin.ts : SEALED_ROOTS`'s `CrossDomainShareTargetSchema` entry - **bug-
+  class** - listed as sealed (encode-side-only, per the file's own header rule) but the same schema is
+  also embedded decode-side inside a gateway reply; today's Android callers happen to wrap the decode in
+  `runCatching` so it fails safe, but the day a new variant ships, every not-yet-updated console's share
+  checkmarks and counts will fail to decode at all - the exact forward-compat break this file's own rule
+  exists to prevent everywhere else.
+- [medium] `src/shared/schemas.ts : ResponseStatusSchema` - **dead-code** - documented as "the single
+  truth" for response-status wire enums but never actually `.parse()`d anywhere; every real status field
+  is a bare `z.string().optional()`, and at least one consumer's own comment admits the gap this schema
+  was supposedly there to close ("an absent status would otherwise fall through silently").
+
+**Low:**
+- [low] `src/gateway/index.ts : doWakeTeam/relayToHost` - **dup-logic** - both hand-roll the identical
+  "find the host daemon's live socket" two-liner that `websocket.ts`'s existing `getAllActiveWs(subs)`
+  already does (and `routes.ts` already reuses).
+- [low] `src/gateway/console/consoleHandler.ts : dispatch`'s `create_session` case - **bad-naming** - its
+  local `sessionId` holds a short leaf id, while `sessionId`/`session_id` means the fully-qualified store
+  key everywhere else in the same switch statement.
+- [low] `src/shared/session-store.ts : SessionStore.restore` - **legacy-landmine** - its one-shot legacy-
+  migration branch (marked for deletion "once every gateway has re-written session-resume.json") has no
+  version sentinel gating it, unlike the codebase's other one-shot migration (a persisted schema-version
+  file); it shape-sniffs on every boot indefinitely with nothing verifying its own removal precondition.
+- [low] `android/.../ChatRepository.kt : ChatState.label`'s `localGatewayId` parameter - **dead-code** -
+  never read in the function body; all 8 call sites thread a gateway id through for nothing.
+- [low] `android/.../MainActivity.kt : SessionCard` - **dup-logic** - hardcodes `Color(0xFFD29922)` and
+  `Color(0xFFDA3633)` for the verifying/working/check-terminal chip colors instead of calling
+  `presenceColor(...)`, the function documented as the single owner of this exact vocabulary, which
+  already yields the identical values.
+- [low] `android/.../ChatRepository.kt : firstRootIfPending` - **dup-logic** - the durable
+  `store.firstRooted` and the in-memory `ChatState.firstRooted` must be kept in sync by hand at each of
+  four call sites instead of one setter writing both; holds today only because of call-site discipline,
+  not a structural guarantee.
+- [low] `android/.../proto/SessionId.kt : ParsedSessionName.project` - **bad-naming** - names the address's
+  `spawn` segment `project`, while every sibling type in the same file spells the identical concept
+  `spawn`; the two vocabularies meet only positionally at one call site with same-typed arguments, so a
+  future field reorder could silently swap segments with no compiler error.
+- [low] `android/.../SttsPlayer.kt : currentKey/currentTeam/currentAt` - **bug-class** - "what's playing
+  now" is three separate `@Volatile var`s updated together only under `@Synchronized` writers, while the
+  Compose-thread reader path reads all three unsynchronized - a torn read mid-transition can show a
+  momentarily wrong play/stop glyph. One atomic `@Volatile var current: NowPlaying?` would close it.
+- [low] `src/shared/schemas.ts : TeamInfoSchema.queue_depth` - **dead-code** - the lone snake_case field
+  in an otherwise camelCase schema; both producers hardcode it to `0`, and the one consumer that branches
+  on it (`bridgeDiscover.ts`) can never take its "busy" arm. Decoded and stored on the Android side too,
+  but read by nothing.
+- [low] `src/shared/types.ts : RegisterMessage, CatalogMessage` - **legacy-landmine** - zero references
+  anywhere in the repo; `RegisterMessage` has also drifted from the real wire schema it once mirrored
+  (missing several fields `WsRegisterSchema` has since gained), and `CatalogMessage` describes a message
+  shape from the retired CLI-dispatch protocol.
+- [low] `src/shared/session-id.ts : isConvId/MAX_CONV_ID_LEN` vs `src/shared/host-op.ts`'s
+  `CONVERSATION_ID_RE`/`MAX_CONVERSATION_ID_LEN` - **dup-logic** - two independently-defined,
+  byte-identical-today validators for the same conversationId concept; tightening one silently stops
+  being enforced by the other.
+- [low] `src/gateway/routes.ts : send/resolveLocalTarget` - **dup-logic** - both parse the same `to`
+  string and re-run the identical SpawnPoint-reject-plus-locality check independently; a third,
+  independent copy of the same rule lives in the Android client's `rename()`.
+- [low] `src/shared/schemas.ts : MailboxEntrySchema/ChannelReplySchema`'s `session_id` field - **bad-
+  naming** - actually the fully flattened `storeKey()` output (a 5-6 segment compound job/store
+  correlation key), not the `Address.session` single-segment concept the name suggests to a reader
+  familiar with `session-id.ts`'s grammar.
+- [low] `src/shared/schemas.ts : ConsoleRegisterResultSchema.domainStatus` - **dead-code** - computed,
+  wired, and codegen'd, but zero reads anywhere in the Android app; the app's actual first-root decision
+  is driven by the provisioning blob's `pendingTenant` field instead, per this repo's own CLAUDE.md.
