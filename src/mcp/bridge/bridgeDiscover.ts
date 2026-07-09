@@ -30,7 +30,7 @@ export function relativeAge(lastActiveMs: number, nowMs: number = Date.now()): s
 	return `${Math.floor(h / 24)}d ago`;
 }
 
-const DESCRIPTION = `List the agent sessions reachable on the bridge (yours excluded). Each is an addressable session - a devcontainer session as project.session, or a loose / cross-gateway peer. Spawn-point projects and the human's console/host are hidden. You may also target a project.session that is NOT listed: crosstalk_send creates it on first send. Asleep sessions show when they were last seen.`;
+const DESCRIPTION = `List the agent sessions reachable on the bridge (yours excluded). Each is an addressable session - a devcontainer session as project.session, or a loose / cross-gateway peer. Spawn-point projects and the human's console/host are hidden. You may also target a project.session that is NOT listed: crosstalk_send creates it on first send if given a displayLabel (otherwise the send fails, asking for one). Asleep sessions show when they were last seen.`;
 
 export function registerBridgeDiscover(mcpServer: McpServer): void {
 	mcpServer.registerTool(

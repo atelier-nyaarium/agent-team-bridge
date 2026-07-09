@@ -160,6 +160,19 @@ export class SessionStore {
 		return existing ? { record: existing, created: false } : null;
 	}
 
+	/** The idempotent MINT path: when `mintedFrom` is set, reattach the record its own prior attempt
+	 * already produced (a retry finding its own earlier mint by provenance, never a stranger's), else
+	 * mint a fresh opaque id. `mintedFrom` absent skips the reattach check and mints outright - a
+	 * caller with no provenance key of its own still goes through this ONE method rather than falling
+	 * back to a second, parallel `mint()` call site. The no-caller-supplied-id counterpart to
+	 * adoptOrReattach, shared by every path that wants "give me a fresh id" retry-safety: create_session's
+	 * displayLabel-only branch and a send-triggered creation with nothing typed to adopt. */
+	mintOrReattach(opts: CreateOpts): { record: SessionRecord; created: boolean } {
+		const existing = opts.mintedFrom ? this.findByMintedFrom(opts.mintedFrom, opts.spawn) : undefined;
+		if (existing) return { record: existing, created: false };
+		return { record: this.mint(opts), created: true };
+	}
+
 	/** Bind the resume id (and optional live pointer) onto the record a team names. Confirm tier 1. */
 	bindBySegment(team: string, extra: { claudeSessionId?: string; live?: LiveRef } = {}): SessionRecord | null {
 		const record = this.getByTeam(team);

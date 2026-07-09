@@ -150,6 +150,7 @@ export function createGatewayRelayHandler({
 						sessionId: op.returnRoute.srcSession,
 						returnRoute: op.returnRoute,
 						...(srcDomainId !== null ? { dstDomainId: srcDomainId } : {}),
+						...(op.displayLabel ? { displayLabel: op.displayLabel } : {}),
 						// Trusted internal path: this op was opened from a verified seal, so the
 						// inbound-only fields (sessionId/returnRoute/dstDomainId) above are honored. An
 						// external HTTP /send never sets this flag, so it can never forge them.

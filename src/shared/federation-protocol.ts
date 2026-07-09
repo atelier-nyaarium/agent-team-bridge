@@ -43,6 +43,10 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 		to: z.string().min(1).max(MAX_ADDRESS_LEN),
 		body: z.string(),
 		files: ChannelFilesSchema.optional(),
+		// Human-readable label for a not-yet-existing target on the DESTINATION Gateway: it mints an
+		// opaque id under the addressed spawn rather than adopting the typed segment, mirroring the
+		// same-Gateway rule. Ignored when the target already exists there.
+		displayLabel: z.string().min(1).max(64).optional(),
 		returnRoute: ReturnRouteSchema,
 	}),
 	// Discovery fan-out: the asking Gateway queries each online peer for its teams.

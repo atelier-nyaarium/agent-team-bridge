@@ -134,3 +134,17 @@ plan defers the hardening decision here, and it is now made (origin-aware gate, 
   the connector-proxy upgrade is confirmed unauthenticated at the gateway layer.
 - `docker port switchboard` once it is back up, to confirm the `0.0.0.0:20000`
   host binding empirically (container was down/purged at review time).
+
+## Cross-reference: session-id-teardown Phase G (2026-07-09)
+
+`plans/session-id-teardown.md` Phase G added `displayLabel`-driven session creation
+to `POST /send`: a not-yet-existing composite target now MINTS a fresh, persistent
+`SessionStore` record (and fires a real host-daemon wake dispatch, container
+bring-up included) rather than just re-waking an existing one. This makes the
+`POST /send` row's already-documented "self-wakes offline devcontainers (resource
+amplification)" risk above strictly worse - an unauthenticated caller can now also
+create an unbounded number of new phantom records and drive real container
+bring-up cost per distinct target, not merely re-wake existing ones. No rate limit
+or per-caller cap exists on minting today (see `plans/session-id-teardown.md`'s own
+Painpoints/red-team notes for Phase G). Whoever implements the origin-aware gate
+decided above should confirm it also covers this creation path, not just re-wake.

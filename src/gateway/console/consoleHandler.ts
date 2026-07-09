@@ -767,12 +767,14 @@ export function createConsoleDispatcher({
 					// retry of the same op finds its own prior record directly instead of recomputing or
 					// re-probing anything (the guard above guarantees displayLabel is set here).
 					label = op.displayLabel as string;
-					const mintedFrom = dedupKey;
-					const existing = sessionStore?.findByMintedFrom(mintedFrom, spawn);
-					const record =
-						existing ?? sessionStore?.mint({ spawn, sessionLabel: label, workdirHint: label, mintedFrom });
-					sessionId = record?.id ?? label;
-					adopted = record ? { record, created: record !== existing } : null;
+					const minted = sessionStore?.mintOrReattach({
+						spawn,
+						sessionLabel: label,
+						workdirHint: label,
+						mintedFrom: dedupKey,
+					});
+					sessionId = minted?.record.id ?? label;
+					adopted = minted ?? null;
 					rollbackEligible = adopted != null;
 				}
 				// A store-backed id that could be neither created nor reattached collides with a catalog

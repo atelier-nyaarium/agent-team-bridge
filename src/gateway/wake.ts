@@ -1,3 +1,5 @@
+import { sanitizeLabel } from "../shared/session-store.js";
+
 ////////////////////////////////
 //  Interfaces & Types
 
@@ -8,6 +10,40 @@
 export interface WakeResult {
 	ok: boolean;
 	errorKind?: "timeout" | "disconnected";
+	// A specific reason for a definitive `ok: false` with no errorKind (e.g. a composite target with
+	// no existing record and no displayLabel to mint one from) - the caller has nothing else to build
+	// a message from, unlike a timeout/disconnected outcome which already has an established one.
+	error?: string;
+	// The record's actual composite team name, set only when it differs from the requested one - a
+	// mint (no caller-supplied id to adopt) picked a fresh id rather than the typed segment, so the
+	// caller must switch to addressing this name instead for everything downstream of the wake.
+	resolvedTeam?: string;
+}
+
+/** What a send-triggered wake of a composite target should do about creating it, given only whether a
+ * record already exists and whether a USABLE displayLabel was supplied - the pure decision `doWakeTeam`
+ * acts on, split out so it is unit-testable independent of SessionStore/the host-wake side effects. A
+ * displayLabel is IGNORED once a record already exists (the target is addressed, not (re)created),
+ * regardless of whether one was supplied. */
+export type WakeCreateDecision =
+	| { kind: "reattach" }
+	| { kind: "mint"; sessionLabel: string }
+	| { kind: "refuse"; error: string };
+
+export function decideWakeCreate(
+	team: string,
+	hasExistingRecord: boolean,
+	displayLabel: string | undefined,
+): WakeCreateDecision {
+	if (hasExistingRecord) return { kind: "reattach" };
+	// sanitizeLabel, not raw truthiness: a whitespace/punctuation/invisible-only label is not usable
+	// either, and must refuse the same as an absent one rather than silently mint a session labeled
+	// with its own opaque id (create()'s own sanitizeLabel(...) ?? id fallback would otherwise do
+	// exactly that unnoticed - the same anti-pattern this whole feature exists to close off).
+	const clean = sanitizeLabel(displayLabel);
+	if (!clean)
+		return { kind: "refuse", error: `"${team}" does not exist yet; retry with a displayLabel to create it` };
+	return { kind: "mint", sessionLabel: clean };
 }
 
 interface WakeWaiter {

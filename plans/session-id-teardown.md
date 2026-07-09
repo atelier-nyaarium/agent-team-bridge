@@ -656,6 +656,136 @@ this pass):
   after those laps closed) - give it extra scrutiny during implementation review rather than treating
   its design as settled.
 
+**Implementation notes:** the plan's 3 bullets undersold this phase's actual surface area. Tracing
+`send()`/`doWakeTeam` before writing anything surfaced two things the bullets never mention, both load-
+bearing for correctness:
+
+- **`doWakeTeam` is shared by three callers**, not just `send()`'s own local path: a federated `wake` op
+  (`gatewayRelay.ts`, waking an already-known target - unaffected, untouched), `create_session`'s own
+  devcontainer-launch wake (already record-first, unaffected), and - the one that matters here -
+  `gatewayRelay.ts`'s `send` case, which calls `routes.send()` DIRECTLY on the DESTINATION Gateway for a
+  cross-Gateway `crosstalk_send`. Without threading `displayLabel` through `FederatedOpSchema`'s `send`
+  member and `gatewayRelay.ts`'s handling of it, a cross-Gateway create would have silently regressed to
+  the old typed-text-becomes-the-id behavior on the remote end while working correctly locally - a gap
+  invisible from `bridgeSend.ts`/`routes.ts`/`index.ts` alone.
+- **Minting means the address the send actually lands on is NOT the one the caller typed.** The plan's
+  own text says this outright ("proceed with the send against the newly-minted address") but doesn't
+  address what that means structurally: `send()`'s `target`/`localName`/`qualifiedTo` (used for the
+  channel job key, the reply, the delivered payload) are computed BEFORE the wake/mint call, so all
+  three need to switch to the minted address after `doWakeTeam` reports one, or the reply and the
+  channel_push would carry the address the caller typed - one that was never actually created and has
+  no live incarnation.
+
+Design decisions the plan left unstated, resolved during implementation:
+
+- **The mint-and-provenance path is now `SessionStore.mintOrReattach`**, extracted from `create_session`'s
+  own inline 2-line pattern (findByMintedFrom, else mint) rather than duplicated a second time -
+  `create_session` was refactored onto it too, so there is exactly one implementation, per the plan's own
+  "not a second parallel one" instruction.
+- **A composite target's typed session segment is discarded on mint**, exactly like `create_session`'s
+  own displayLabel-only path discards whatever might be in `op.target` beyond the spawn: a caller typing
+  `myproject.newsession` with a `displayLabel` does NOT land at `myproject.newsession` - it lands at
+  `myproject.<minted>`, and must read the real address back from the reply's `session_id`. This mirrors
+  `create_session`'s established behavior rather than inventing a different rule for `send()`.
+- **Retry-safety uses a provenance key derived from the caller's own identity, not a caller-supplied
+  opId** (`crosstalk_send` has no opId field, unlike the console ops Phase A/B built retry-safety for):
+  `mintedFrom = inboundSessionId ?? (fromConversationId + ":" + to)` for a local send, or - on a
+  federated send's destination Gateway - the origin's own channel job key
+  (`returnRoute.srcSession`/`sessionId`, already unique per (origin conversation, origin-typed target)).
+  This means a retry of the exact same `crosstalk_send` call (same sender conversation, same typed `to`)
+  reattaches to its own prior mint rather than minting a second session, INCLUDING after the first
+  attempt has fully settled (not just while the two overlap - `tryWakeTeam`'s existing `inflightWakes`
+  join-by-team already covered the overlapping case for free, since it keys on the typed address).
+- **A bare spawn-point target is still rejected**, `displayLabel` or not - `crosstalk_send` keeps
+  addressing sessions only, matching its existing contract; a caller wanting a fresh, address-agnostic
+  session provides a composite anyway and reads the real one back from the reply - for a LOCAL mint.
+  A cross-Gateway mint's reply still correctly threads the conversation (the channel job key stays
+  pollable/respondable), but does not carry the destination's own resolved local address back to the
+  origin at all (see Red-team findings below) - the wire protocol has no field for it today.
+
+**Align-fan-out findings and fixes:** a plan-conformance pass over this implementation (6 dimensions,
+matching the "extra scrutiny" this phase was flagged for) confirmed every bullet's literal text was met,
+but found the "one implementation, not a second parallel one" claim didn't fully hold, and that the
+plan's own "ignored when the target already exists" contract had no test coverage anywhere - `doWakeTeam`
+is an unexported closure, never independently testable. Both fixed:
+- `doWakeTeam`'s mint branch bypassed `mintOrReattach` for a plain `sessionStore.mint(...)` call whenever
+  `createOpts.mintedFrom` was unset - a real second path, even though narrow (send() always computes one
+  in practice). Fixed by widening `mintOrReattach` itself to accept an optional `mintedFrom` (skip the
+  reattach lookup, not the shared method) - `doWakeTeam` now calls it unconditionally.
+- Extracted the create-vs-reattach-vs-refuse decision into a new pure function, `decideWakeCreate`
+  (`gateway/wake.ts`), taking only `(team, hasExistingRecord, displayLabel)` and returning which of the
+  three applies - independent of SessionStore or the host-wake side effects, so it is actually unit-
+  testable. Added direct tests for all three outcomes, including the specific case the plan's contract
+  names: an existing record with a displayLabel STILL reattaches, the label is dropped, not applied.
+  Moving this decision to run before the host-connectivity check (so a doomed-either-way send gets the
+  specific "needs a displayLabel" reason instead of a generic "host disconnected" one) surfaced a second
+  issue on its own: it would have minted a record before confirming the host is even reachable, leaking
+  it on a disconnected host (the existing rollback only runs after an actual wake attempt). Fixed by
+  splitting decision from action - the pure decision runs early, but the mutating `mintOrReattach` call
+  stays deferred until after the host-connectivity check passes, exactly where it ran before.
+- Two test-quality nits: the federation relay test for this phase asserted on `pushed[0]` without
+  `pushed.length`, unlike its routes.test.ts sibling (added); a test titled around inboundSessionId
+  "winning" over `(fromConversationId, to)` never actually constructed a request with both present, so it
+  could only prove the fallback-when-absent case (the real call shape) - retitled and commented to say
+  exactly that rather than the untested stronger claim.
+
+**Red-team findings and fixes:** a correctness-focused pass (6 dimensions - concurrency/TOCTOU, address-
+switch completeness, mintedFrom collision risk, rollback/reordering safety, cross-Gateway/wire edge cases,
+`decideWakeCreate` correctness - each independently verified) found two real, in-scope bugs, fixed below,
+plus several real but architectural or pre-existing concerns logged rather than bolted on hastily.
+
+Fixed:
+- **`mintedFrom` was keyed off the caller's raw, un-normalized `to` string instead of the already-
+  resolved canonical `localName`.** The same local target can be legally spelled two ways (a short
+  `spawn.session` form and a self-qualified `domain.gateway.spawn.session` form the local-collapse rule
+  folds onto the same target) - `crosstalk_discover` actively encourages the qualified form by rendering
+  it for exactly this kind of session. Two retries using different valid spellings of the identical
+  target produced different `mintedFrom` strings, defeating retry-safety and minting a genuine duplicate
+  session. Fixed by keying on `localName` (computed one line below the bug, already the normalized form)
+  instead of `to`. A regression test sends the same target via both spellings and asserts they compute
+  the identical `mintedFrom`.
+- **`decideWakeCreate` used raw JS truthiness on `displayLabel`** instead of this codebase's own
+  `sanitizeLabel` definition of "usable" - a whitespace-only, punctuation-only (`.`/`..`), or invisible-
+  character-only label passed the `!displayLabel` check, so the mint proceeded and `SessionStore.create`'s
+  own `sanitizeLabel(...) ?? id` fallback silently substituted the freshly-minted opaque hex id as the
+  visible label, with no signal to the caller - precisely the "typed-text-becomes-the-id" anti-pattern
+  this whole feature exists to close off, just reached through a garbage label instead of an absent one.
+  Fixed by calling `sanitizeLabel` inside the decision and refusing (same message as an absent label) when
+  it returns null, rather than proceeding with a doomed-to-be-silently-replaced label. `crosstalk_send`'s
+  role here is mostly message delivery with creation as a side effect, so refusing outright (matching the
+  "absent" case) was chosen over `create_session`'s own richer `labelSanitized`-signal-and-proceed
+  behavior - simpler, and consistent with treating "no usable label" as "no label."
+
+Logged, not fixed here (real, but architectural, a deliberate trade-off, or predate this phase):
+- **No rate limit or size cap on session minting.** A caller with ordinary `crosstalk_send` access can
+  mint an unbounded number of phantom `SessionStore` records and drive real host-daemon wake dispatches
+  (container bring-up included) with a plain loop over distinct `to`+`displayLabel` pairs - `mintedFrom`
+  retry-safety only collapses a *repeated* request, never bounds *distinct* ones, by design. This
+  compounds an already-known, already-decided-but-unshipped gap: `plans/gateway-auth-surface.md` documents
+  plain `POST /send` as unauthenticated resource amplification via self-wake; Phase G adds outright
+  record *creation* on top of that. Cross-referenced in that plan's own follow-ups rather than solved here
+  - a rate limiter is a cross-cutting concern deserving its own design, not a bolt-on to this phase.
+- **`mintedFrom` has no expiry**, unlike Android's own `recentSpawnOpIds` (a 40-second retry-collapse
+  window). A `crosstalk_send`'s `fromConversationId` is process-lifetime (potentially days), so the SAME
+  conversation addressing the SAME typed target weeks apart with a genuinely new, different `displayLabel`
+  intent still silently reattaches to the old session and drops the new label - indistinguishable, from
+  the reply alone, from a fresh mint. This is a direct, deliberate consequence of this phase's own design
+  decision (documented above: "reattaches ... INCLUDING after the first attempt has fully settled") -
+  the alternative (an unbounded duplicate-mint risk on any delayed retry) was judged worse. Worth
+  reconsidering with a bounded window if it proves confusing in practice; not changed in this pass.
+- **A cross-Gateway mint never surfaces the destination's resolved address back to the origin caller**
+  (see the corrected Design-decisions bullet above) - the wire protocol's reply shape has no field for it;
+  adding one would need to span `FederatedOpSchema`, `gatewayRelay.ts`'s reply construction, and
+  `sendCrossGateway`, mirroring the `displayLabel` threading this phase already did in the other direction.
+  Left as a documented limitation rather than a same-pass wire-protocol addition.
+- **`to` is parsed via unguarded `parseTarget()` calls with no try/catch** in `send()`, unlike every other
+  validation branch in the same function - a malformed `to` throws a raw exception instead of the
+  established `jsonResponse(4xx)` shape. Predates this phase (the calls themselves are untouched; Phase G
+  only added code after them) - a general `send()` robustness gap, not something this phase introduced.
+- **`findByMintedFrom`'s ambiguous-match fallback logs nothing** when it silently declines to trust a
+  (mintedFrom, spawn) collision - a pre-existing, already-documented-as-anomalous Phase A code path
+  (`findByMintedFrom` itself predates this phase); Phase G just added a second caller of it.
+
 ## Non-goals (explicitly out of scope)
 
 - `workdirHint` / a session's on-disk directory - stays frozen at creation from the label, same as

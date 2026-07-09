@@ -178,6 +178,21 @@ describe("SessionStore mint / adopt", () => {
 		expect(store.findByMintedFrom("conv:op1", "host")).toBe(rec);
 		expect(rec.sessionLabel).toBe("Renamed");
 	});
+
+	it("mintOrReattach mints fresh on a first call, then reattaches the SAME record for a retry sharing the same provenance", () => {
+		const store = new SessionStore({ idGen: scriptedIds("minted1", "minted2") });
+		const first = store.mintOrReattach({ spawn: "host", sessionLabel: "Work", mintedFrom: "conv:op1" });
+		expect(first).toMatchObject({ created: true, record: { id: "minted1", sessionLabel: "Work" } });
+		// A retry with the same provenance reattaches - a fresh mintOpts.sessionLabel is ignored, the
+		// established record's own label wins, same precedent as adoptOrReattach's reattach path.
+		const retry = store.mintOrReattach({ spawn: "host", sessionLabel: "ignored", mintedFrom: "conv:op1" });
+		expect(retry).toMatchObject({ created: false, record: { id: "minted1", sessionLabel: "Work" } });
+		expect(store.size).toBe(1);
+		// A DIFFERENT provenance under the same spawn mints its own, separate record.
+		const other = store.mintOrReattach({ spawn: "host", sessionLabel: "Other", mintedFrom: "conv:op2" });
+		expect(other).toMatchObject({ created: true, record: { id: "minted2", sessionLabel: "Other" } });
+		expect(store.size).toBe(2);
+	});
 });
 
 describe("SessionStore confirm-time binding", () => {

@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Allowlist } from "../gateway/federation/allowlist.js";
 import { type CrossDomainPeer, CrossDomainPeers } from "../gateway/federation/crossDomainPeers.js";
 import { CrossDomainShareState } from "../gateway/federation/crossDomainShareState.js";
@@ -273,6 +273,59 @@ describe("federation routing (E2E sealed)", () => {
 		)) as { ok: boolean };
 		expect(result.ok).toBe(true);
 		expect(senderPushes[0]).toMatchObject({ type: "response_push", session_id: srcSession, response: "all good" });
+	});
+
+	it("DESTINATION: a send to a not-yet-existing target relays displayLabel through to the local mint rule", async () => {
+		vi.useFakeTimers();
+		try {
+			const pushed: Record<string, unknown>[] = [];
+			const wakeCalls: Array<{ team: string; createOpts?: { displayLabel?: string; mintedFrom?: string } }> = [];
+			const tryWakeTeam = (team: string, createOpts?: { displayLabel?: string; mintedFrom?: string }) => {
+				wakeCalls.push({ team, createOpts });
+				return Promise.resolve({ ok: true, resolvedTeam: "api.minted1" });
+			};
+			const ctx = makeCtx("hostb", {
+				registry: registryWith({ "api.minted1": channelWs(pushed) }),
+				tryWakeTeam,
+			});
+			const routes = createRoutes(ctx);
+			const handler = createGatewayRelayHandler({
+				routes,
+				tryWakeTeam: ctx.tryWakeTeam,
+				localGatewayId: "hostb",
+				localDomainId: "alice",
+			});
+
+			const srcSession = "conv.conv-1.alice.hostb.api.newsession";
+			const resultPromise = handler.handleOp(
+				{
+					kind: "send",
+					from: "alice.hosta.recipe-app.dev",
+					to: "api.newsession",
+					body: "start please",
+					displayLabel: "Bug Hunt",
+					returnRoute: { srcGateway: "hosta", srcConversationId: "conv-1", srcSession },
+				},
+				"hosta",
+				null,
+			);
+			await vi.advanceTimersByTimeAsync(3000);
+			const result = (await resultPromise) as { session_id: string };
+
+			// The wake carries the relayed displayLabel, and derives its provenance from the origin's
+			// own channel job key (inboundSessionId) rather than recomposing one locally - so a retry
+			// of the same origin request reattaches instead of minting again.
+			expect(wakeCalls).toEqual([
+				{ team: "api.newsession", createOpts: { displayLabel: "Bug Hunt", mintedFrom: srcSession } },
+			]);
+			// The reply is still pinned to the ORIGIN's own session id (its return-route), regardless of
+			// which local address the destination actually minted.
+			expect(result.session_id).toBe(srcSession);
+			expect(pushed.length).toBe(1);
+			expect(pushed[0]).toMatchObject({ type: "channel_push", session_id: srcSession });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("DISCOVERY: fans out a sealed list_teams over the evie roster and merges", async () => {

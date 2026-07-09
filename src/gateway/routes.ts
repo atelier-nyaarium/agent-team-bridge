@@ -43,7 +43,7 @@ export interface RoutesDeps {
 	registry: TeamRegistry;
 	conversationRegistry: ConversationRegistry;
 	store: PendingJobStore<ResponsePayload>;
-	tryWakeTeam: (team: string) => Promise<WakeResult>;
+	tryWakeTeam: (team: string, createOpts?: { displayLabel?: string; mintedFrom?: string }) => Promise<WakeResult>;
 	/** Whether a wake is in flight for a composite team. An asleep record with a wake in flight is
 	 * reported as `verifying` (coming up) rather than `available`, so a booting session shows as such
 	 * from the moment it is spawned/woken, not only once its MCP registers. */
@@ -105,6 +105,10 @@ const SendRequestSchema = z.object({
 	// (bare gateway id) resolution. Console-supplied from the selected session's Domain.
 	targetDomainId: z.string().optional(),
 	body: z.string().optional(),
+	// Human-readable label for a not-yet-existing target: the gateway mints an opaque id under the
+	// addressed spawn and stamps this as its sessionLabel, rather than silently adopting the typed
+	// session segment as the id. Ignored when the target already exists.
+	displayLabel: z.string().min(1).max(64).optional(),
 	session_id: z.string().optional(),
 	debug: z.boolean().optional(),
 	files: ChannelFilesSchema.optional(),
@@ -398,8 +402,22 @@ export function createRoutes({
 		fromConversationId: string | undefined;
 		body?: string;
 		files?: ChannelFile[];
+		// Threaded through to the destination Gateway's own local send() so a not-yet-existing target
+		// there mints an opaque id instead of adopting the typed segment - the SAME rule a local send
+		// applies, just carried across the relay since the destination decides its own id space.
+		displayLabel?: string;
 	}): Promise<Response> {
-		const { targetGateway, targetName, targetDomain, from, fromAddress, fromConversationId, body, files } = args;
+		const {
+			targetGateway,
+			targetName,
+			targetDomain,
+			from,
+			fromAddress,
+			fromConversationId,
+			body,
+			files,
+			displayLabel,
+		} = args;
 		if (!evieClient?.isConnected()) {
 			return jsonResponse({ error: `Router unavailable; cannot reach Gateway "${targetGateway}"` }, 503);
 		}
@@ -420,6 +438,7 @@ export function createRoutes({
 			to: targetName,
 			body: body ?? "",
 			...(files && files.length > 0 ? { files } : {}),
+			...(displayLabel ? { displayLabel } : {}),
 			returnRoute: { srcGateway: localGatewayId, srcConversationId: fromConversationId, srcSession },
 		};
 		const relay = await relayToGateway(targetGateway, op, targetDomain);
@@ -588,6 +607,7 @@ export function createRoutes({
 			body: msgBody,
 			files,
 			channelOnly,
+			displayLabel,
 		} = parsed.data;
 		// The federated-inbound-only fields are honored ONLY when the call comes from the trusted
 		// internal gateway-relay path (opts.trustedInbound). An external HTTP /send caller cannot set
@@ -643,17 +663,18 @@ export function createRoutes({
 				fromConversationId,
 				body: msgBody,
 				files,
+				displayLabel,
 			});
 		}
 
 		// Resolve the target to a local registry name + its canonical Address. A local target
 		// resolves here; a remote one took the cross-Gateway branch above.
-		const target = resolveLocalTarget(to);
+		let target = resolveLocalTarget(to);
 		if (!target) {
 			return jsonResponse({ error: `Gateway for "${to}" is not reachable from this Gateway` }, 404);
 		}
-		const localName = target.name;
-		const qualifiedTo = target.address.canonical;
+		let localName = target.name;
+		let qualifiedTo = target.address.canonical;
 
 		// The headless "host" daemon is never a direct crosstalk target (it carries no agent).
 		if (localName === "host") {
@@ -670,10 +691,33 @@ export function createRoutes({
 		// `claude --resume` under a different name still receives sends addressed to the record.
 		let targetWs = resolveLiveIncarnation(registry, sessionStore, localName);
 
-		// If offline, attempt to wake the container.
+		// If offline, attempt to wake the container - or, for a target with no record yet, create it.
 		if (!targetWs) {
-			const woken = await tryWakeTeam(localName);
+			// A retry sharing the same (sender conversation, resolved target) provenance reattaches to
+			// its own prior mint instead of minting a second session. Keyed on localName (the already-
+			// resolved canonical spawn.session), never the caller's raw `to` - the same local target can
+			// be legally spelled two ways (a short local form and a self-qualified domain.gateway.spawn.session
+			// form), and keying on the raw spelling would let two retries of the identical target mint
+			// twice. A federated inbound send already has exactly this provenance in inboundSessionId (the
+			// origin's own channel job key); a local caller cannot set that field itself, so it always
+			// falls back to composing one from its own request.
+			const mintedFrom =
+				inboundSessionId ?? (fromConversationId ? `${fromConversationId}:${localName}` : undefined);
+			const woken = await tryWakeTeam(localName, { displayLabel, mintedFrom });
+			if (!woken.ok && woken.error) {
+				return jsonResponse({ error: woken.error }, 404);
+			}
 			if (woken.ok) {
+				// Minting (no existing record, a displayLabel was set) lands on a fresh id, never the
+				// one typed - switch to addressing that for everything downstream of this wake.
+				if (woken.resolvedTeam && woken.resolvedTeam !== localName) {
+					localName = woken.resolvedTeam;
+					const resolved = tryLocalAddress(localName);
+					if (resolved) {
+						target = { name: localName, address: resolved };
+						qualifiedTo = resolved.canonical;
+					}
+				}
 				// Claude Code needs time after MCP connect to initialize its channel listener.
 				// Registration happens instantly but channel notifications aren't ready yet.
 				await new Promise((r) => setTimeout(r, 3000));

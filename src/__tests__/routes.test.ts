@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
@@ -614,6 +614,173 @@ describe("routes", () => {
 			});
 			expect(res.status).toBe(503);
 			expect((await res.json()).error).toContain("Router unavailable");
+		});
+
+		it("a not-yet-existing composite with no displayLabel fails fast instead of silently adopting the typed name", async () => {
+			const wakeCalls: Array<{ team: string; createOpts?: { displayLabel?: string; mintedFrom?: string } }> = [];
+			const tryWakeTeam = (team: string, createOpts?: { displayLabel?: string; mintedFrom?: string }) => {
+				wakeCalls.push({ team, createOpts });
+				return Promise.resolve({
+					ok: false,
+					error: `"proj-a.newsession" does not exist yet; retry with a displayLabel to create it`,
+				});
+			};
+			const ctx = makeCtx({ tryWakeTeam });
+			const { send } = createRoutes(ctx);
+
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "proj-a.newsession",
+				body: "hi",
+				channelOnly: true,
+			});
+			expect(res.status).toBe(404);
+			expect((await res.json()).error).toBe(
+				`"proj-a.newsession" does not exist yet; retry with a displayLabel to create it`,
+			);
+			// The wake carries a provenance key derived from (fromConversationId, to) even though this
+			// attempt has no displayLabel, so a retry that DOES supply one still reattaches correctly.
+			expect(wakeCalls).toEqual([
+				{
+					team: "proj-a.newsession",
+					createOpts: { displayLabel: undefined, mintedFrom: "conv-1:proj-a.newsession" },
+				},
+			]);
+		});
+
+		it("a not-yet-existing composite with a displayLabel mints and switches to the resolved address for everything downstream", async () => {
+			vi.useFakeTimers();
+			try {
+				const pushed: Record<string, unknown>[] = [];
+				const mintedWs = {
+					readyState: 1,
+					data: { mode: "channel" },
+					send(data: string) {
+						pushed.push(JSON.parse(data));
+					},
+				};
+				// The minted record's live incarnation registers under the freshly-minted id, never the
+				// typed one - nothing is registered under "proj-a.newsession" at all.
+				const registry = makeRegistry({ "proj-a.minted1": mintedWs });
+				const wakeCalls: Array<{ team: string; createOpts?: { displayLabel?: string; mintedFrom?: string } }> =
+					[];
+				const tryWakeTeam = (team: string, createOpts?: { displayLabel?: string; mintedFrom?: string }) => {
+					wakeCalls.push({ team, createOpts });
+					return Promise.resolve({ ok: true, resolvedTeam: "proj-a.minted1" });
+				};
+				const ctx = makeCtx({ registry, tryWakeTeam });
+				const { send } = createRoutes(ctx);
+
+				const resPromise = send(new Request("http://localhost/send", { method: "POST" }), {
+					from: "pixel",
+					fromConversationId: "conv-1",
+					to: "proj-a.newsession",
+					body: "hi",
+					channelOnly: true,
+					displayLabel: "Bug Hunt",
+				});
+				await vi.advanceTimersByTimeAsync(3000);
+				const json = await (await resPromise).json();
+
+				// The wake is requested against the TYPED address (the minted one does not exist to wake
+				// yet), carrying the displayLabel and a provenance key derived from the RESOLVED local
+				// name (which happens to equal the typed `to` here, since it was already the short form).
+				expect(wakeCalls).toEqual([
+					{
+						team: "proj-a.newsession",
+						createOpts: { displayLabel: "Bug Hunt", mintedFrom: "conv-1:proj-a.newsession" },
+					},
+				]);
+				// Everything downstream of the wake - the reply and the channel push - addresses the
+				// MINTED session, never the address the caller originally typed.
+				expect(json.session_id).toBe("conv.conv-1.alice.test-host.proj-a.minted1");
+				expect(pushed.length).toBe(1);
+				expect((pushed[0] as { session_id: string }).session_id).toBe(
+					"conv.conv-1.alice.test-host.proj-a.minted1",
+				);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("mintedFrom is keyed on the RESOLVED local name, not the caller's raw spelling - two valid spellings of the same target agree", async () => {
+			// The same local target can be legally spelled two ways: a short local form, and a
+			// self-qualified domain.gateway.spawn.session form (the local-collapse rule folds the
+			// latter onto the former). A caller who discovers a session via crosstalk_discover (which
+			// renders the qualified form) and later retries using that exact string must still land on
+			// the SAME mintedFrom a short-form retry would have used - otherwise the two spellings mint
+			// two different sessions for what the caller believes is one retry.
+			const wakeCalls: Array<{ team: string; createOpts?: { displayLabel?: string; mintedFrom?: string } }> = [];
+			const tryWakeTeam = (team: string, createOpts?: { displayLabel?: string; mintedFrom?: string }) => {
+				wakeCalls.push({ team, createOpts });
+				return Promise.resolve({ ok: false, error: "not found" });
+			};
+			const ctx = makeCtx({ tryWakeTeam });
+			const { send } = createRoutes(ctx);
+
+			await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "proj-a.newsession",
+				body: "hi",
+				channelOnly: true,
+				displayLabel: "Bug Hunt",
+			});
+			await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				// The fully-qualified spelling of the identical local target (our own domain/gateway).
+				to: "alice.test-host.proj-a.newsession",
+				body: "hi again",
+				channelOnly: true,
+				displayLabel: "Bug Hunt",
+			});
+
+			expect(wakeCalls).toHaveLength(2);
+			expect(wakeCalls[0].createOpts?.mintedFrom).toBe(wakeCalls[1].createOpts?.mintedFrom);
+			expect(wakeCalls[0].team).toBe(wakeCalls[1].team);
+		});
+
+		it("a trusted-inbound (federated) send derives mintedFrom from its own inboundSessionId (the real call shape: no fromConversationId of its own)", async () => {
+			const wakeCalls: Array<{ team: string; createOpts?: { displayLabel?: string; mintedFrom?: string } }> = [];
+			const tryWakeTeam = (team: string, createOpts?: { displayLabel?: string; mintedFrom?: string }) => {
+				wakeCalls.push({ team, createOpts });
+				return Promise.resolve({ ok: false, error: "not found" });
+			};
+			const ctx = makeCtx({ tryWakeTeam });
+			const { send } = createRoutes(ctx);
+
+			// Mirrors gatewayRelay.ts's actual "send" case body: no fromConversationId is ever set
+			// alongside sessionId/returnRoute on a trusted-inbound call, so this does not (and cannot)
+			// prove inboundSessionId wins over a competing fromConversationId - only that it is used
+			// when fromConversationId is absent, the one shape the real caller produces.
+			await send(
+				new Request("http://localhost/send", { method: "POST" }),
+				{
+					from: "alice.friend-gw.proj-a.dev",
+					to: "proj-a.newsession",
+					body: "hi",
+					channelOnly: true,
+					displayLabel: "Bug Hunt",
+					sessionId: "conv.friend-conv.alice.test-host.proj-a.newsession",
+					returnRoute: {
+						srcGateway: "friend-gw",
+						srcConversationId: "friend-conv",
+						srcSession: "conv.friend-conv.alice.test-host.proj-a.newsession",
+					},
+				},
+				{ trustedInbound: true },
+			);
+			expect(wakeCalls).toEqual([
+				{
+					team: "proj-a.newsession",
+					createOpts: {
+						displayLabel: "Bug Hunt",
+						mintedFrom: "conv.friend-conv.alice.test-host.proj-a.newsession",
+					},
+				},
+			]);
 		});
 	});
 

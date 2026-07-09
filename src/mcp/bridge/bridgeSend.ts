@@ -12,13 +12,21 @@ const BridgeSendSchema = z
 			.string()
 			.optional()
 			.describe(
-				`Target session. A devcontainer session is project.session; use crosstalk_discover to list them. An online session receives it directly; an asleep or not-yet-existing project.session is woken / created on send.`,
+				`Target session. A devcontainer session is project.session; use crosstalk_discover to list them. An online session receives it directly; an asleep session is woken on send; a not-yet-existing session is created on send if displayLabel is set (else the send fails, asking for one).`,
 			),
 		body: z
 			.string()
 			.optional()
 			.describe(
 				`Full Markdown formatted details of the request. Provide a detailed description and any context that would be helpful to the other team.`,
+			),
+		displayLabel: z
+			.string()
+			.min(1)
+			.max(64)
+			.optional()
+			.describe(
+				`Human-readable label for the new session (a short human name like "Bug Investigation", never a slug/id/machine-generated string) - required to create a not-yet-existing target; ignored when the target already exists.`,
 			),
 		session_id: z
 			.string()
@@ -42,7 +50,7 @@ const description = `
 Send a request to another team.
 
 Two call patterns:
-1. Send: provide to + body. The conversation with that team is automatically reused across all your messages — you do not manage session_ids.
+1. Send: provide to + body. The conversation with that team is automatically reused across all your messages; you do not manage session_ids.
 2. Poll: provide session_id only (no body). Peeks at the latest stored result for an existing conversation without consuming it. Rarely needed for channel-mode teams since responses arrive via push.
 
 Channel-mode teams (Claude): responses are pushed back automatically as <channel> notifications. No polling needed. The target team can reply multiple times (progress updates, phase reports) without closing the conversation; just keep watching the channel.
@@ -96,7 +104,7 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
 			inputSchema: BridgeSendSchema as any,
 		},
-		async ({ to, body, session_id }: BridgeSendArgs) => {
+		async ({ to, body, session_id, displayLabel }: BridgeSendArgs) => {
 			try {
 				// Poll mode: session_id present, no body
 				if (session_id && !body) {
@@ -122,6 +130,7 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 					fromConversationId: bridgeConversationId(),
 					to,
 					body,
+					...(displayLabel ? { displayLabel } : {}),
 				})) as SendResult;
 
 				if (result.error) {
