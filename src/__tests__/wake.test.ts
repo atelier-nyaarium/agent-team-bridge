@@ -80,8 +80,8 @@ describe("WakeCoordinator", () => {
 
 describe("decideWakeCreate", () => {
 	it("reattaches an existing record and ignores a displayLabel entirely, even one that was supplied", () => {
-		// The plan's own contract: displayLabel is "ignored when the target already exists" - not
-		// applied as a rename, not used to pick between two candidate records, just dropped.
+		// displayLabel is ignored once a record already exists: not applied as a rename, not used to
+		// pick between two candidate records, just dropped.
 		expect(decideWakeCreate("proj.existing", true, undefined)).toEqual({ kind: "reattach" });
 		expect(decideWakeCreate("proj.existing", true, "Some Label")).toEqual({ kind: "reattach" });
 	});
