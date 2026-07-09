@@ -2274,8 +2274,9 @@ class ChatRepository(
 	 * after reuses the prior attempt's opId (see recentSpawnOpIds) so it reattaches instead of
 	 * duplicating. A label the gateway could not use as-is (unsupported characters) still creates the
 	 * session under its minted id, surfaced with its own transient message rather than silently
-	 * losing the typed name. Runs on the caller's scope (the Activity's), so a tap always fires even
-	 * before the poll loop's scope exists. */
+	 * losing the typed name. A call for a (project, label) still pending from an earlier, unresolved
+	 * call is a silent no-op (see pendingSpawns) rather than a second, ambiguous create. Runs on the
+	 * caller's scope (the Activity's), so a tap always fires even before the poll loop's scope exists. */
 	suspend fun spawnSession(project: String, label: String) = coroutineScope {
 		val key = project to label
 		// A synchronous check before any suspension point - SpawnDialog's own disabled-while-pending
