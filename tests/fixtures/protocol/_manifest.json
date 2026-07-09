@@ -16,6 +16,7 @@
 		{ "file": "mailbox-notice.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "mailbox-reply-files.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "mailbox-sent.json", "schema": "MailboxEntry", "expect": "pass" },
+		{ "file": "mailbox-peer.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "tolerance-extra-field.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "invalid-missing-required.json", "schema": "MailboxEntry", "expect": "fail" },
 		{ "file": "poll-result.json", "schema": "ConsolePollResult", "expect": "pass" },

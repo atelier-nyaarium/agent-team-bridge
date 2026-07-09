@@ -1,0 +1,276 @@
+# Team collab sessions (multi-team chat visible in the Console)
+
+Agent-to-agent crosstalk becomes visible, joinable chat. Requirements as stated by the user
+(2026-07-09):
+
+- `crosstalk_discover` should list sessions under a team as well.
+- `crosstalk_send` param description should say it can collaborate in an existing session if
+  invited; otherwise an unsolicited message routes to a NEW session. "Invite gating is not a
+  thing; they just join right on in" (etiquette in the description, no enforcement).
+- Works without the user having the session tab open: CoolApp may talk to CoolLib autonomously
+  to fix an upstream bug.
+- The user may jump in like normal: appears as any normal session would from the App. Peeking
+  from either CoolApp or CoolLib's session, you see both their messages sent/recv.
+- "When CoolApp sends a message to CoolLib, the message is stored in both stores (of each side)."
+
+## Current-state notes (research)
+
+- Agent-to-agent traffic (`crosstalk_send` -> gateway `send()`/`respond()`) never touches the
+  console mailbox today; the app never sees it. Channel job key: `conv.<senderConvId>.<targetAddr>`.
+- The console's own thread with a session is `conv.<ownerId>.<targetAddr>`; app threads are keyed
+  by the peer session's canonical Address. One mailbox entry resolves to ONE thread
+  (`ChatRepository` drain, ~line 2530).
+- Precedent for mirroring: the `sent` echo (`kind: "sent"`) already mirrors the owner's own
+  outgoing message to all their devices, reconciled by opId. `MailboxEntry` already carries `from`.
+- The gateway keeps NO chat history; the mailbox is a delivery queue (entries retained until every
+  device acks - per-consumer cursors + slowest-device watermark). App history is device-local.
+- `crosstalk_discover` today: flat session list, HIDES bare spawn-points; a send to a bare project
+  fails fast; a send to a not-yet-existing `project.session` mints it (requires displayLabel).
+- Known gap (pain-points.md "Forward-looking"): cross-Gateway `response_push` relay drops
+  `title`/`summary` tiers - needs extending if mirrored replies should keep their headline cross-mesh.
+
+## Questionaire
+
+**1. Where does the shared history live?** -> **A) Mailbox mirror.** The gateway taps every
+agent-to-agent send/reply and appends display copies into the owner mailbox, one tagged for each
+side's thread. History stays device-local like today; no gateway ledger, no backfill.
+User: "we don't care about late joiners. as you can tell with an OFF console missing history."
+Recommendation reason (chosen): rides two existing patterns (the `sent` echo and per-consumer
+mailbox retention); "stored in both stores" = two mailbox entries landing in the two thread
+stores, while each agent keeps its own side in its transcript naturally.
+
+**2. When the user jumps into a thread, who receives the message?** -> **A) Pairwise: only the
+session the user typed at.** User: "Only the owner of that store, CoolLib. To fan out, CoolLib
+will relay goal shifts to the downstream teams." No participant registry, no fan-out machinery;
+the mirror is pure display. Typing in CoolApp's thread steers CoolApp.
+
+**3. Cold-contact mechanics** -> **A) Description-only.** Rewrite `crosstalk_send` +
+`crosstalk_discover` descriptions: invited (the session messaged you, or your human named it) ->
+send into that session; unsolicited first contact -> create a fresh session under the target team
+(the existing composite mint path: `to: team.<name>` + displayLabel, gateway mints the opaque id).
+No gateway changes, no enforcement. Bare-team sends keep failing fast.
+Recommendation reason (chosen): the mint path already gives agents everything; keeping the
+spawn-point fail-fast catches typo'd targets, and discover will surface real addresses anyway.
+
+**4. Discover output shape** -> **A) Grouped under team headers, every team shown** (including
+session-less teams as bare headers; console/host stay hidden). User refinement: NO inline how-to
+notes on empty teams ("The tool description already teaches it how. don't need to flood the
+response too") - a bare `coolib:` header suffices.
+
+**5. Notification treatment for mirrored agent chatter** -> **A) Full treatment, gated on the
+tab being open.** User: "As long as the tab is not closed. As in if I open a session and leave
+the tab, I should still get it. But pressing Close Tab makes it so I only get mailbox updates and
+'(unread count)', but no TTS or notification bar pings." So: open tab -> unread + notification +
+TTS-eligible, exactly like a message aimed at the user; closed tab -> mailbox still mirrors and
+the unread count still ticks, but no pings and no TTS. (Maps onto the app's existing
+`openTabs`/followed mechanic.)
+
+**6. File attachments inside mirrored chatter** -> **A) Full bytes always.** User: "Keep it
+simple. I'll talk about this on a different day." (Threshold/metadata-only optimizations
+deliberately deferred.)
+
+**7. Multi-gateway delivery strategy** -> **A) Broadcast-converge.** A gateway appending a
+console-bound entry (mirror or notice) also relays it to every other same-Domain gateway; each
+appends into its local owner mailbox, so every gateway's mailbox converges and the phone can
+poll any one. Recommendation reason (chosen): zero discovery, zero app changes, stays inside
+switchboard's sealed federation vocabulary (evie untouched); N-1 relays per entry is negligible
+at 2-3 gateways. Addressed-to-home (B) is the revisit if gateway count or mirrored-attachment
+volume grows.
+
+## Model (decided above)
+
+Every agent-to-agent message stays strictly pairwise. Each gateway, for every leg it routes,
+appends one display copy ("mirror") into its own Domain-owner's mailbox per LOCAL session
+endpoint, tagged for that session's thread. A same-gateway pair yields two entries (both
+threads); a cross-Domain exchange yields one entry per side, each on its owner's phone - "stored
+in both stores (of each side)" by construction, and neither gateway ever writes into the other
+owner's mailbox.
+
+Multi-gateway delivery is IN SCOPE (user ruling: "make sure the plan INCLUDES the fix for that
+multi gateway"; they may add a second gateway soon). Root cause being fixed: console-bound
+deliveries are LOCAL appends by whichever gateway routes the leg, while the console polls
+exactly one gateway. This also strands `notify_human` notices from non-route gateways TODAY
+(verified: `routes.ts humanNotify()` appends to the local mailboxStore only, and
+`FederatedOpSchema` has no notice relay op) - a latent live bug, same root cause, fixed by the
+same phase (Phase 5). Delivery strategy: pending Q7.
+
+## Audit pass (plan-refinement cycle)
+
+A 12-dimension audit fan-out (78 agents, adversarially verified) checked this plan against the
+actual code. 66 concerns raised, 48 survived independent verification. All but one are folded
+into the phases below as concrete implementation detail the original bullets were missing (caller
+identity, dedupe keys, persistence, security gates); none changed what was decided in the
+questionaire. One is flagged separately below rather than silently decided.
+
+**Flagged for you, not silently decided:** Phase 2 turns agent-to-agent traffic into real
+DeviceMailbox writes for the first time (it never touched the mailbox before this plan). The
+audit found this feeds directly into an existing, separately-tracked bug: the app's sticky "gap"
+banner (`ChatState.gap`) is set on mailbox-entry eviction but never reset anywhere in the
+codebase (see `pain-points.md`'s Phase F note). Autonomous agent-to-agent chatter is
+LLM-turnaround-paced, not human-typing-paced, so it can trip the mailbox's byte/entry cap during
+ordinary use of this exact feature (a busy CoolApp/CoolLib exchange with attachments), and once
+tripped, that banner is stuck for the life of the app process with no dismiss action. I've added
+a cheap mitigation below (kind-aware eviction, so agent chatter is evicted before a device's real
+unread mail) which reduces how often the cap is hit at all, but it doesn't fix the banner's
+missing reset - that's a pre-existing bug in a different subsystem. Recommend fixing the reset
+either just before or alongside this plan; happy to scope that separately if you want it now
+instead of "a different day."
+
+## Phase 1 - wire schema
+
+- `schemas.ts` MailboxEntry: add `"peer"` to the `kind` enum, add optional `to` (recipient's
+  canonical address; lets the app label direction in the SENDER's own thread, where `from` alone
+  cannot identify the other endpoint). Kotlin decode-side enums are open Strings, so old apps
+  degrade to rendering mirrors as plain inbound messages.
+- Add a stable per-entry `dedupeKey` (optional string) to MailboxEntry/MailboxInput. Audit found
+  no stable id exists today for a plain text message (a `messageId` is only minted `if
+  (hasFiles)`), so neither a local retry nor a cross-gateway relay retry has anything to dedupe
+  on for the common fileless case. Built once here; Phase 2 (local/cross-gateway mirrors) and
+  Phase 5 (`console_push` convergence) both consume it instead of each inventing their own.
+- `bun scripts/codegen-kotlin.ts`; add a golden protocol fixture for a peer entry, with a
+  semantic assertion on `kind`/`to` (not just "decodes without throwing" - the existing
+  per-kind manifest loop only proves that much).
+
+## Phase 2 - gateway mirror taps + reply-tier relay fix
+
+- Give `respond()` an `opts` parameter mirroring `send()`'s existing `{trustedInbound?,
+  consoleSender?}` shape, threaded from all three call sites (the plain agent HTTP route, the
+  console's own "respond" op, the federated `response_push` relay). Today all three call
+  `respond(req, body)` identically, so the tap cannot tell "is the replier the console" (needed
+  for "never mirror when one side is the console") or "did this arrive via the trusted federated
+  relay" (needed to know whether to mirror one or two local entries).
+- Recognize `send()`'s "local leg" and "the gateway-relay inbound handler" are ONE code path
+  (gated by `trustedInbound`/`inboundSessionId`, not two independent tap points). Branch there: a
+  real local-to-local send writes two mirror entries; a federated inbound send landing on the
+  destination gateway writes only the local target's ONE entry, and must not call
+  `localAddress()` on `from` unconditionally - a federated inbound `from` is already a qualified
+  4-segment foreign address, not the bare team name `localAddress()` expects.
+- In `respond()`, the non-`returnRoute` branch conflates two cases that both lack a returnRoute: a
+  genuine local-to-local reply, and this gateway (as the ORIGIN of a cross-gateway send) receiving
+  the destination's `response_push` back. Discriminate via `parseStoreKey` on the respond session
+  id, comparing the embedded address's gateway/domain segments against `localGatewayId`/
+  `localDomainId`, so only the true local participant gets mirrored in case (ii).
+- Mirror entry: `kind: "peer"`, `session_id` = the console-thread store key
+  `conv.<ownerId>.<localSessionAddr>`, `from`/`to` = sender/recipient canonical addresses,
+  body/files/status/title/summary carried through whole (Q6: full bytes). Dedupe key = Phase 1's
+  new wire field, not a content hash (a hash would wrongly collide on two legitimately-identical
+  consecutive messages). `ownerId` = this gateway's Domain owner (`ownerKeyId(allowlist.
+  ownerSignPub)`) - add an owner-id accessor to `RoutesDeps`, which has no such getter today.
+- Kind-aware eviction: in `DeviceMailbox`'s OOM-backstop eviction loop, prefer evicting the oldest
+  `"peer"` entries before `"message"`/`"reply"`/`"notice"`/`"sent"` entries, falling back to
+  strict age-order only within the same tier. Targets the audit's finding that unconditional
+  FIFO-by-age means a slow device's real unread mail gets evicted before the fresh agent-chatter
+  burst that actually tipped the cap - this makes the chatter evict itself first instead (does not
+  touch Q6's full-bytes decision, purely changes eviction order).
+- Fold in the cross-Gateway `response_push` tier fix here (was a separate later phase; audit
+  found Phase 2 already edits both exact call sites, so doing it in the same pass avoids a second
+  visit): the outbound leg (`respond()`'s returnRoute branch) and the inbound reconstruction
+  (`gatewayRelay.ts`'s `response_push` case) both need `title`/`summary` added, AND
+  `replyAsJson`/`question`/`reason` - the schema already declares the latter three but the relay
+  never spreads them either, a gap adjacent to the one originally scoped.
+- Acknowledged, not fixed here: the cross-gateway `respond()` relay leg is fire-and-forget
+  (`relayWithRetry`), so a mirror written optimistically at that call site can show "delivered"
+  even if the relay silently exhausts retries. Pre-existing asymmetry in the reply-forwarding
+  mechanism; out of scope for this plan.
+- Tests: send + respond produce correctly-tagged pairs; console-endpoint traffic produces no
+  mirror; cross-gateway legs mirror only the local endpoint's thread; dedup holds under retry
+  (keyed on the new wire field); a cross-gateway reply preserves title/summary/replyAsJson/
+  question/reason end to end; kind-aware eviction prefers "peer" entries.
+
+## Phase 3 - tool surface
+
+- Fix `teams()`'s existing double-row behavior: every catalog project already emits BOTH a bare
+  `devcontainer`-kind row and its own composite session rows in the same payload (masked today
+  only because `bridgeDiscover` blanket-filters `kind !== "devcontainer"`). The new grouping must
+  bucket a project's bare catalog row together with its composite session rows under one header
+  (by parsed project name), not print both.
+- Update `crosstalk_discover`'s DESCRIPTION string and CLAUDE.md's repo-map line - both currently
+  state spawn-points are hidden, which becomes false, and Q4's "no inline how-to notes" ruling
+  explicitly depends on the description already teaching the new bare-header behavior.
+- Each nested session line prints its full resolvable address (not just a trailing segment) -
+  `bridgeSend`'s own `to` description tells agents to paste an address straight from discover.
+- Add the missing `res.ok` check to `routerGet` (its sibling `routerPost` already has one) while
+  its sole caller (`bridgeDiscover`) is being rewritten anyway - near-zero-cost in the same file,
+  and a known crust-collection gap from `pain-points.md`.
+- `crosstalk_send` description + `to` describe: collaborate in the session that invited you (it
+  messaged you, or your human named it); unsolicited first contact creates a fresh session under
+  the target team (existing mint path, displayLabel required). Note that the owner sees the
+  exchange in their console.
+- Cross-reference, not fixing here: promoting unsolicited cold-contact as normal use rides the
+  already-tracked unbounded-session-minting gap in `pain-points.md` (no rate limit/cap on
+  `send`'s mint path). This plan doesn't add a new capability, but does make the existing gap
+  more likely to matter under normal use rather than adversarial use.
+- Tests: a synthetic `teams()` array asserted into grouped/header output, including the
+  merged-catalog-row case above (Phase 3 currently has none).
+
+## Phase 4 - app (Android)
+
+- Correct premise: the actual notification-bar-ping gate is the global `isVisible` flag (whole
+  app foregrounded/backgrounded), not per-team `openTabs` - `openTabs` today is only consumed by
+  the STTS pre-warm branch, never by `notifyBurst`. Implementing Q5 needs genuinely new plumbing:
+  thread a per-team "is this team's tab currently open" check from the drain loop through
+  `onInbound` into `notifyBurst`/`SwitchboardService`.
+- Fix drain's hardcoded sender substitution: the inbound branch sets `Message.from = team` (the
+  thread's fixed peer), which is a no-op today because every existing thread's one counterparty
+  is always also the sender. A `"peer"` mirror entry breaks that: the true sender is the entry's
+  own `from` (a third agent), not the thread's peer. Needs its own branch for `kind == "peer"`,
+  not reuse of the existing substitution as-is (which would render every peer message as the
+  thread's own peer talking to itself).
+- Fix persistence: `persistThreads()`/`loadPersistedThreads()` never serialize `Message.from` at
+  all - it's unconditionally re-derived from the thread key on load (correct for today's
+  single-peer-per-thread invariant, but it would silently erase a `"peer"` row's real sender
+  attribution on every app restart). Serialize `from`/`to` for `kind == "peer"` rows; on load,
+  use the persisted value when present, falling back to the thread-key derivation otherwise.
+- Burst/notification granularity: a single poll cycle's `burst` list can mix a peer-mirror entry
+  and a to-user entry for the same team (one all-or-nothing decision per team per cycle today).
+  Adopt the explicit rule: any user-aimed entry in a burst forces full treatment for the whole
+  burst - a peer entry must never silently downgrade a real ping.
+- Note (accepted for v1): `openTabs` is unpersisted, process-lifetime-only state: an OS-initiated
+  process kill silently reclassifies every open tab as "closed" (quiet) until manually reopened.
+  Low-stakes today (only affects STTS pre-warm); worth knowing now that it also gates
+  notifications.
+- Tests: peer-entry drain routing + golden fixture decode; sender-attribution persistence
+  round-trip (save, reload, still shows the third-party sender, not the thread's own peer);
+  gating logic where testable.
+
+## Phase 5 - multi-gateway console-bound delivery (console_push)
+
+- **Mandatory security gate:** `console_push`'s `handleOp` case must reject any
+  `srcDomainId !== null` (a cross-Domain sender), matching every sibling `FederatedOp` case
+  (send/list_teams/wake/response_push all already gate this way, tested in
+  `federation.test.ts`'s "destination gate" suite). Without this, a linked cross-Domain friend's
+  gateway - today confined to specific, individually-shared sessions - could inject
+  attacker-chosen mailbox content directly into a different owner's phone. Add the matching
+  deny-test alongside the existing suite before this ships.
+- Name `humanNotify()` as an explicit edit target (the plan previously only asserted the fix,
+  never named the function): refactor its delivery off "iterate only mailboxes that already
+  exist" (`mailboxStore.forEach`) to "ensure by known owner" (`mailboxStore.ensure(ownerId)`,
+  the same deterministic id Phase 2 resolves). Today a gateway with zero currently-registered
+  consoles has an empty mailbox map, so `forEach` iterates zero times and the notice silently
+  disappears - the actual multi-gateway stranding case. Add a `dedupeKey` (Phase 1's wire field)
+  to its append call too, matching the mirror-tap's requirement.
+- Thread mailbox-append + owner-id resolution into `GatewayRelayHandlerDeps`/`FederationRoutes`
+  and the `index.ts` construction site - `gatewayRelay.ts` has no path to a mailbox at all today.
+- Do not rely on `ReplayGuard` for delivery dedup: it's scoped to `(srcGateway, nonce)` and mints
+  a fresh nonce on every relay attempt, including retries to the same peer, so it cannot prevent
+  a double-append on retry. The real guard is Phase 1's `dedupeKey` feeding
+  `DeviceMailbox.append`'s existing `seenKeys` mechanism, which already handles exactly this.
+- Enumerate the same-Domain fan-out set via evie's `list_gateways` (the same call `discover()`
+  already makes) - no new discovery machinery needed. As defense-in-depth, filter that roster
+  through the locally-mirrored Allowlist's admitted gateway ids where possible (trusting evie's
+  roster alone for a mailbox-WRITING op is a bigger trust extension than for the already
+  self-limiting `list_teams` path). Add a local `gatewayId !== localGatewayId` self-exclusion
+  guard as cheap insurance against evie ever including the caller in its own roster.
+- Relayed entries must NOT re-broadcast (origin-only fan-out, no gossip loops) - this is a
+  discipline the code must enforce structurally (confine the fan-out call to origination tap
+  points, never invoke it from within the `console_push` handler itself), not just a convention.
+- Tests: a mirrored leg routed on a non-home gateway lands in the home mailbox exactly once
+  under relay retry; a notice from a non-home gateway reaches the phone; single-gateway behavior
+  byte-identical; the mandatory cross-Domain deny-test above; a receiving gateway never itself
+  re-fans-out (no gossip loop).
+
+## Phase 6 - gates + deploy
+
+- Gates: `bun run lint && bun run test`, codegen drift check, Android `testDebugUnitTest`.
+- Deploy: push (branch + auto-merge PR), await CI + APK release, gateway rebuild, reload plugins
+  on live sessions.

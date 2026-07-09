@@ -84,6 +84,14 @@ describe("protocol fixtures", () => {
 		expect(entry.at).toBeGreaterThan(2 ** 31);
 	});
 
+	it("a peer mirror entry carries kind, to, and a dedupeKey distinct from from", () => {
+		const entry = MailboxEntrySchema.parse(fixture("mailbox-peer.json"));
+		expect(entry.kind).toBe("peer");
+		expect(entry.from).toBe("alice.sakura.coolapp.main");
+		expect(entry.to).toBe("alice.sakura.coolib.main");
+		expect(entry.dedupeKey).toBe("peer:alice.sakura.coolapp.main:9f2a1c");
+	});
+
 	it("tolerates unknown extra fields and strips them (additive rule)", () => {
 		const result = MailboxEntrySchema.safeParse(fixture("tolerance-extra-field.json"));
 		expect(result.success).toBe(true);
