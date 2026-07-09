@@ -1026,12 +1026,12 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			// The relay holds a send op server-side for up to 25s (the gateway's
 			// send bound) before answering "running", so OkHttp's 10s default read
 			// timeout would mislabel every cold-wake send as failed. Write gets
-			// headroom for 10 MB attachment uploads on slow links.
+			// headroom for a 500 MB attachment upload on slow links.
 			return OkHttpClient.Builder()
 				.sslSocketFactory(ssl.socketFactory, tm)
 				.connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
 				.readTimeout(35, java.util.concurrent.TimeUnit.SECONDS)
-				.writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+				.writeTimeout(600, java.util.concurrent.TimeUnit.SECONDS)
 				.build()
 		}
 	}

@@ -145,8 +145,9 @@ const RespondBodySchema = z.object({
 
 // Raw-bytes backstop on attachment payloads at the trust boundary. Shape
 // validation does not bound memory, so sum the decoded sizes cheaply (base64 is
-// ~4/3 of the bytes) before anything is stored or pushed.
-const MAX_RESPONSE_FILE_BYTES = 10_000_000;
+// ~4/3 of the bytes) before anything is stored or pushed. Per-payload total, not
+// per-file - a single file may use the whole bucket.
+const MAX_RESPONSE_FILE_BYTES = 500_000_000;
 
 function fileBytes(files: ChannelFile[]): number {
 	let n = 0;

@@ -728,7 +728,7 @@ class ChatRepository(
 			val provider = currentProvider() ?: return@post
 			val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return@post
 			val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-			stts.play(client, provider, voice, team, at, tier, SttsPlayer.ttsText(msg, tier))
+			stts.play(client, provider, voice, team, at, tier, SttsPlayer.ttsText(msg, tier), sttsVolume)
 		}
 	}
 
@@ -751,6 +751,13 @@ class ChatRepository(
 		get() = store.autoPlay
 		set(value) {
 			store.autoPlay = value
+		}
+
+	/** TTS playback volume, 0-200% (100 = unchanged). Persisted in prefs. */
+	var sttsVolume: Int
+		get() = store.sttsVolume
+		set(value) {
+			store.sttsVolume = value
 		}
 
 	/** Map the autoPlay pref string to its tier, or null for "off"/unknown. */
@@ -787,7 +794,7 @@ class ChatRepository(
 			val client = sttsClient() ?: return@post
 			val provider = currentProvider() ?: return@post
 			val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-			stts.playSample(client, provider, voice, "This is your switchboard voice.")
+			stts.playSample(client, provider, voice, "This is your switchboard voice.", sttsVolume)
 		}
 	}
 
@@ -3104,6 +3111,8 @@ class ChatRepository(
 		const val LONG_POLL_HOLD_MS = 40_000L
 		// Refresh the team list at most this often, regardless of poll cadence.
 		const val TEAMS_REFRESH_MS = 30_000L
-		const val MAX_OUTGOING_BYTES = 10_000_000
+		// Matches the gateway's own per-payload bucket (MAX_RESPONSE_FILE_BYTES); a single
+		// attachment may use the whole bucket, so this is a total, not a stricter per-file cap.
+		const val MAX_OUTGOING_BYTES = 500_000_000
 	}
 }
