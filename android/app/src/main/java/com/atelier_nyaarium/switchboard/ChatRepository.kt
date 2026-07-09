@@ -1562,18 +1562,21 @@ class ChatRepository(
 
 	/** A friend Domain's sessions visible to me (shared to my Domain): the peer's discovery
 	 * entries tagged with its domainId. Each is a candidate "their session my agents can reach". */
-	fun peerSessions(domainId: String): List<Team> =
-		_state.value.teams.filter { it.domainId == domainId }.sortedBy { it.shortName }
+	fun peerSessions(domainId: String): List<Team> {
+		val s = _state.value
+		return s.teams.filter { it.domainId == domainId }.sortedBy { s.label(it.name, s.localGatewayId) }
+	}
 
 	/** My LOCAL devcontainer/loose sessions, the only kinds shareable to a friend Domain (never the
 	 * host-agent, the cli host, or a console). Drives the per-session share checkmarks. */
 	fun shareableSessions(): List<Team> {
 		val adminDomain = confirmedDomainId() ?: return emptyList()
 		val gw = localGatewayId
-		return _state.value.teams
+		val s = _state.value
+		return s.teams
 			.filter { (it.domainId.isNullOrEmpty() || it.domainId == adminDomain) && (it.gatewayId.isEmpty() || it.gatewayId == gw) }
 			.filter { it.kind == "devcontainer" || it.kind == "loose" }
-			.sortedBy { it.shortName }
+			.sortedBy { s.label(it.name, gw) }
 	}
 
 	/** RECEIVER: open a listening window, returning the token to read to the friend + this

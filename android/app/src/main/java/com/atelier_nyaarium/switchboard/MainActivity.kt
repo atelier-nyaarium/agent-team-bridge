@@ -926,26 +926,46 @@ private fun looksProvisionable(s: String): Boolean = runCatching {
  * gateway must group separately rather than merge. */
 private data class GatewayGroupKey(val domainId: String, val gatewayId: String)
 
-/** Live first, then most recent activity, then name, within each section. */
+/** Live first, then most recent activity, then label, within each section. */
 private fun sessionOrder(state: ChatState): Comparator<Team> =
 	compareByDescending<Team> { it.isLive }
 		.thenByDescending { state.lastActivity(it.name) ?: 0L }
-		.thenBy { it.name }
+		.thenBy { state.label(it.name, state.localGatewayId) }
 
 /** Tab/title label for an open thread: the session's label when it is unique among the open tabs,
- * else the shortest suffix of the address path (the session segment, then `spawn.session`, then
- * `gateway.spawn.session`, ...) that disambiguates it. So a lone open session shows its label or
- * leaf, and two tabs that would collide (same label, or same leaf) escalate to the suffix that tells
- * them apart. */
-private fun tabLabelFor(state: ChatState, team: String): String {
+ * else the label qualified with the shortest suffix of the address path (the session segment, then
+ * `spawn.session`, then `gateway.spawn.session`, ...) that disambiguates it, e.g. "Scratch
+ * (api.claude)". Label uniqueness is only enforced per-spawn, so two open tabs sharing a label is an
+ * expected collision, not a corner case - the qualifier keeps the label visible rather than falling
+ * through to a bare, unlabeled address. A session with no label at all still falls through to the
+ * bare address suffix, since there is no label to qualify. */
+internal fun tabLabelFor(state: ChatState, team: String): String {
 	val label = state.labelOrNull(team)
-	if (label != null && state.openTabs.none { it != team && state.labelOrNull(it) == label }) return label
+	val otherTabs = state.openTabs.filter { it != team }
+	if (label != null && otherTabs.none { state.labelOrNull(it) == label }) return label
 	val mine = team.split(Protocol.ADDRESS_SEP)
-	val others = state.openTabs.filter { it != team }.map { it.split(Protocol.ADDRESS_SEP) }
-	for (n in 1..mine.size) {
+	val otherSegments = otherTabs.map { it.split(Protocol.ADDRESS_SEP) }
+	// A label is free-form text - a user can type literal parentheses - so a qualified candidate
+	// below must also be checked against every other open tab's own raw label, not just against
+	// other tabs' address segments; otherwise a coincidentally (or deliberately) matching label
+	// elsewhere could display identically to this tab's own disambiguated text.
+	val otherLabels = otherTabs.mapNotNull { state.labelOrNull(it) }.toSet()
+	fun candidateAt(n: Int): String? {
 		val suffix = mine.takeLast(n)
-		if (others.none { it.takeLast(n) == suffix }) return suffix.joinToString(Protocol.ADDRESS_SEP)
+		if (otherSegments.any { it.takeLast(n) == suffix }) return null
+		val qualifier = suffix.joinToString(Protocol.ADDRESS_SEP)
+		val candidate = if (label != null) "$label ($qualifier)" else qualifier
+		return candidate.takeIf { it !in otherLabels }
 	}
+	// A present label prefers at least spawn.session (n=2): a bare session id alone - especially now
+	// that ids are random hex, not a readable slug - tells a human nothing about which session,
+	// defeating the point of qualifying at all. But a literal label elsewhere can coincidentally (or
+	// deliberately) block every tier from spawn.session up through the full address at once - in that
+	// exhausted case, retry the bare session id (n=1) as a last resort before giving up and showing
+	// the tab fully unlabeled; a labeled-but-terser tab beats an unlabeled raw address every time. The
+	// label-less fallback is unchanged (there is no label for an opaque id to ride alongside anyway).
+	val tiers = if (label != null) (2..mine.size).toList() + 1 else (1..mine.size).toList()
+	for (n in tiers) candidateAt(n)?.let { return it }
 	return team
 }
 
@@ -1446,17 +1466,6 @@ fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: 
 					modifier = Modifier.weight(1f),
 				)
 				if (unread > 0) Badge { Text("$unread") }
-			}
-			// Under a custom label, surface the session's short local name so the user
-			// can still tell which session it maps to. label() falls back to the short
-			// name, so an unlabeled session adds nothing here.
-			if (display != team.shortName) {
-				Text(
-					team.shortName,
-					style = MaterialTheme.typography.labelSmall,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
-					fontFamily = FontFamily.Monospace,
-				)
 			}
 			Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
 				// A spinner while the session is coming up. The gateway reports "verifying" from the moment

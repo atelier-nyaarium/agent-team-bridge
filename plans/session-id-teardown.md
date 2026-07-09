@@ -446,6 +446,49 @@ code):**
 - `MainActivity.kt : localName` (project-header grouping/parsing) - no change; internal addressing
   use, never rendered raw.
 
+**Audit addendum (found and fixed post-implementation):**
+- Labels are free-form text (a user can type literal parentheses), so `tabLabelFor`'s new
+  `"Label (qualifier)"` format had no check against another open tab's own raw label - a
+  coincidentally (or deliberately) matching label elsewhere could render identically to a
+  disambiguated tab's own text, defeating the whole point of disambiguating in an agent-dispatch
+  tool. Fixed by also checking each candidate against every other open tab's label before accepting
+  it, escalating the qualifier further (and ultimately falling back to the bare address, same as the
+  no-label case) rather than risking a collision. `tabLabelFor` made `internal` and pinned with
+  `TabLabelForTest.kt`, including the exact collision scenario found.
+- `Sharing.kt`'s `people` list had the exact same one-shot, non-reactive `remember{}` gap `sessions`
+  was fixed for one line above, missed in the first pass - a newly-linked person could not be picked
+  in the audience list until the sheet was closed and reopened. Fixed with the same `remember(state)`
+  key.
+- `shareableSessions()` read two different values for "local gateway id" within the same function
+  (`gw`, the pre-existing local val its own filter already used, and the newly-added
+  `s.localGatewayId`, the `ChatState` snapshot's copy) - currently harmless since `label()` never
+  reads that parameter, but a latent inconsistency. Fixed to reuse the one already-bound `gw`.
+- Logged, not fixed (pre-existing, unrelated to id-minting): `shareableSessions()`'s filter itself
+  reads the `ChatRepository`-private `localGatewayId` var rather than the `ChatState` copy Compose
+  actually observes, and `shares`' (the per-session audience map) own staleness gap; see
+  `plans/pain-points.md`.
+- Found during the align pass: `tabLabelFor`'s escalation loop started at the bare session segment
+  (`n=1`) even for a labeled collision - harmless before minted ids (a `claude`-shaped session segment
+  almost always collided, forcing escalation to `spawn.session` anyway), but now that ids are random
+  hex (Phase A/B) two same-labeled tabs typically have already-distinct bare ids, so the loop would
+  stop at `n=1` and show a meaningless hex fragment - exactly the opaque-id-in-casual-display problem
+  this phase exists to remove. Fixed: a present label always qualifies with at least `spawn.session`;
+  the label-less fallback is unchanged (there is no label for an opaque id to ride alongside either
+  way). Pinned by a new `TabLabelForTest.kt` case using two already-distinct hex ids.
+- Found during red-team round 2 (empirically reproduced): that same fix over-corrected. Requiring
+  `spawn.session` as the minimum tier removed `n=1` as an escape hatch entirely, so a small number of
+  literal labels elsewhere - one planted at each of the `spawn.session`, `gateway.spawn.session`, and
+  full-address tiers - could exhaust every candidate the loop tries and fall all the way through to
+  the fully unlabeled raw address, a worse outcome than the pre-fix behavior would have produced for
+  that exact case. Fixed by trying the preferred tiers (`spawn.session` up through the full address)
+  first as before, then retrying the bare session id as a last resort before giving up - a
+  labeled-but-terser tab beats an unlabeled raw one every time. Pinned by a new test reproducing the
+  exact three-planted-labels exhaustion scenario.
+- Logged, not fixed (low severity, negligible at this app's realistic session counts): `peerSessions`,
+  `shareableSessions`, and `sessionOrder`'s sort comparators now call `label()`, which falls through to
+  an `O(n)` scan whenever a session's `labels` entry has been pruned (the common case) - degrading the
+  sort from `O(n log n)`; see `plans/pain-points.md`.
+
 ## Phase E - gateway: no wire-schema change needed
 
 `ConsoleOp.createSession`'s `sessionName` is already optional on the wire - this is a client-behavior

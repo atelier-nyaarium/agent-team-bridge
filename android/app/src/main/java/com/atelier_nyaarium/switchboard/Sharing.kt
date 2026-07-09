@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,8 +64,9 @@ private data class SessionShares(val everyone: Boolean, val domains: Set<String>
 @Composable
 fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () -> Unit) {
 	val scope = rememberCoroutineScope()
-	val sessions = remember { repo.shareableSessions().filter { gatewayId == null || it.gatewayId == gatewayId } }
-	val people = remember { repo.linkedDomains() }
+	val state by repo.state.collectAsState()
+	val sessions = remember(state) { repo.shareableSessions().filter { gatewayId == null || it.gatewayId == gatewayId } }
+	val people = remember(state) { repo.linkedDomains() }
 	// Non-throwing read: a corrupt owner key degrades to empty rather than crashing the sheet.
 	val myOwner = remember { repo.ownerKeysForDisplay()?.signPub.orEmpty() }
 	// Roster people you have NOT linked - shown disabled ("trust first") in the Specific picker, since
@@ -101,7 +103,7 @@ fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () ->
 	val focus = active
 	if (focus != null) {
 		SessionShareScreen(
-			sessionName = sessions.find { it.name == focus }?.shortName ?: focus,
+			sessionName = sessions.find { it.name == focus }?.let { state.label(it.name, state.localGatewayId) } ?: focus,
 			people = people,
 			trustFirst = trustFirst,
 			current = shares[focus] ?: SessionShares(false, emptySet()),
@@ -159,7 +161,7 @@ fun SharingScreen(repo: ChatRepository, gatewayId: String? = null, onBack: () ->
 				val st = shares[s.name] ?: SessionShares(false, emptySet())
 				Card(Modifier.fillMaxWidth().hapticClickable { active = s.name }) {
 					Column(Modifier.padding(16.dp)) {
-						Text(s.shortName, style = MaterialTheme.typography.titleMedium)
+						Text(state.label(s.name, state.localGatewayId), style = MaterialTheme.typography.titleMedium)
 						Text(
 							modeSummary(st, people),
 							style = MaterialTheme.typography.bodyMedium,
