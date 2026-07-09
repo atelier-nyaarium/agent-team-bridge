@@ -51,6 +51,10 @@ class ThreadRenderer(context: Context) {
 	 * render time (so a notice shows "My Work" rather than the opaque address). Identity when unset. */
 	var resolveFrom: ((String) -> String)? = null
 
+	/** Set by the owner; the local user's own display name, read live at render time so a
+	 * rename reflects without rebuilding the pool. Falls back to "you" when unset or blank. */
+	var selfLabel: (() -> String)? = null
+
 	/** Whether agent rows render a Play button. The owner sets it before sync
 	 * (false when STTS is unprovisioned). */
 	var playEnabled = false
@@ -176,11 +180,15 @@ class ThreadRenderer(context: Context) {
 		var h = m.text.hashCode()
 		h = 31 * h + (m.status?.hashCode() ?: 0)
 		h = 31 * h + m.files.size
-		// The rendered sender is resolveFrom(m.from), which changes on a rename; include it so a
-		// re-sync re-pushes already-rendered rows instead of leaving stale sender labels.
-		h = 31 * h + (m.from?.let { resolveFrom?.invoke(it) ?: it }?.hashCode() ?: 0)
+		// The rendered sender is resolveFrom(m.from) or selfLabel(), either of which changes on a
+		// rename; include it so a re-sync re-pushes already-rendered rows instead of leaving stale
+		// sender labels.
+		val sender: String? = if (m.fromMe) selfName() else m.from?.let { resolveFrom?.invoke(it) ?: it }
+		h = 31 * h + (sender?.hashCode() ?: 0)
 		return h
 	}
+
+	private fun selfName(): String = selfLabel?.invoke()?.takeIf { it.isNotBlank() } ?: "you"
 
 	fun setDark(dark: Boolean) {
 		eval("window.thread.setTheme($dark)")
@@ -211,7 +219,7 @@ class ThreadRenderer(context: Context) {
 			val obj = JSONObject()
 				.put("id", m.id)
 				.put("role", if (m.fromMe) "user" else "agent")
-				.put("from", if (m.fromMe) "you" else (m.from?.let { resolveFrom?.invoke(it) ?: it } ?: ""))
+				.put("from", if (m.fromMe) selfName() else (m.from?.let { resolveFrom?.invoke(it) ?: it } ?: ""))
 				.put("at", m.at)
 				.put("body", m.text)
 			if (playEnabled && !m.fromMe) obj.put("canPlay", true)

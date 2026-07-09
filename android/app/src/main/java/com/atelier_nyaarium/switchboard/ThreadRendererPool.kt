@@ -36,6 +36,10 @@ class ThreadRendererPool(private val context: Context) {
 	 * every renderer, read at render time, so setting it after renderers exist still takes effect. */
 	var resolveFrom: ((String) -> String)? = null
 
+	/** Set by the owner; the local user's own display name. Forwarded to every renderer, read at
+	 * render time, so a device rename reflects without rebuilding the pool. */
+	var selfLabel: (() -> String)? = null
+
 	fun get(team: String): ThreadRenderer =
 		renderers.getOrPut(team) {
 			ThreadRenderer(context).also {
@@ -45,6 +49,7 @@ class ThreadRendererPool(private val context: Context) {
 				it.onRetryMessage = { id -> onRetry?.invoke(team, id) }
 				it.onPlayMessage = { at -> onPlayTap?.invoke(team, at) }
 				it.resolveFrom = { addr -> resolveFrom?.invoke(addr) ?: addr }
+				it.selfLabel = { selfLabel?.invoke() ?: "" }
 			}
 		}
 

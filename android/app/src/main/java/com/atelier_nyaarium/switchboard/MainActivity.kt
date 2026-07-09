@@ -224,6 +224,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// Attribute a message's sender by its human label (a notice's `from` is a canonical address).
 	// Reads the live state at render time so a rename reflects without rebuilding the pool.
 	rendererPool.resolveFrom = { addr -> repo.state.value.label(addr, repo.state.value.localGatewayId) }
+	// Attribute the local user's own messages by this device's display name instead of "you".
+	rendererPool.selfLabel = { repo.state.value.deviceName }
 	// Attachment taps open the in-app viewer; the path is re-validated against the
 	// attachments root before any file is touched. The wire mime (what the agent
 	// declared) is preferred over extension guessing.
