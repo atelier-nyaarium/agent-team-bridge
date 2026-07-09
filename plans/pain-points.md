@@ -446,3 +446,145 @@ for that plan, or too broad for a proportionate in-pass fix.
 - [low] `src/shared/schemas.ts : ConsoleRegisterResultSchema.domainStatus` - **dead-code** - computed,
   wired, and codegen'd, but zero reads anywhere in the Android app; the app's actual first-root decision
   is driven by the provisioning blob's `pendingTenant` field instead, per this repo's own CLAUDE.md.
+
+## Reply-tool redesign (`plans/reply-tool-redesign.md`, deleted, shipped and deployed - 2026-07-09)
+
+Migrated from `plans/reply-tool-redesign.md` (deleted, shipped - `channel_reply` split into two tools,
+deployed live and verified: gateway rebuilt, all live sessions reconnected and confirmed lead with no
+evictions) so its still-open residuals are not lost. The plan's own numbered decisions, rejected
+alternatives, and implementation/verification sections describe now-shipped code and are dropped as
+closed, retrievable from git history. What follows is everything that was still open: its own
+"Forward-looking" section, one "Gotchas" item explicitly out of scope, one pre-existing regex
+fragility the plan's own "What was rejected" section earmarked for this file, a fresh operational
+finding from the live deploy itself, and the full crust-collection sweep (3 parallel scouts over the
+console reply path, the rest of `src/mcp/bridge/`+`src/mcp/channel/`, and the devcontainer wake/boot
+path) run against the shipped implementation. Refs are `file : scope : name`; severity in brackets.
+
+### Forward-looking (recorded, not yet needed)
+
+- Multi-way chats rising to the Console: the `{title, summary, full}` triple on `channel_reply` is
+  the groundwork, but the cross-Gateway `response_push` relay (`src/gateway/routes.ts`, inside
+  `relayWithRetry`) forwards only `status`/`response`/`files` and DROPS `title`/`summary` - the
+  uniform-headline premise holds only for same-Gateway replies until that relay is extended to carry
+  the tiers.
+- Real structured validation for `channel_reply_structured`'s `responseData`: only achievable if the
+  request side emits a real JSON Schema, persisted by `session_id` and validated in `/respond` at
+  runtime. The single current producer (the handshake) doesn't justify building it yet.
+
+### Crust-collection sweep (scouting pass, not independently verified except where noted)
+
+**High:**
+- [high] `src/mcp/bridge/helpers.ts : routerGet` - **bug-class** - unlike its sibling `routerPost` in
+  the same file, `routerGet` never checks `res.ok` before returning `res.json()`, so a non-2xx
+  gateway response (e.g. a 500 with an `{error}` body) resolves successfully instead of throwing.
+  Its only caller, `bridgeDiscover.ts`'s `/discover` fetch, then calls `.filter()` on that
+  error-shaped object, surfacing a confusing generic "not a function" error instead of the real
+  server error. `routerGet`'s retry loop also silently drops the `console.error` logging its sibling
+  has on each retry attempt. A copy-pasted twin where one side got an error-handling fix the other
+  never received.
+- [high] `src/mcp/devcontainer/helpers.ts : ensureContainerUpAsync / isContainerReady /
+  hasPluginSettings / provisionPluginSettings` - **architecture** - the devcontainer boot path never
+  re-checks or refreshes plugin freshness. The common case (`isContainerReady()` true - the container
+  was merely session-asleep, not actually stopped) returns immediately with zero plugin logic at
+  all; even the cold-boot branch only checks whether the plugin key EXISTS in
+  `installed_plugins.json`, never whether it's current, and skips `provisionPluginSettings` (the
+  only place `claude plugin install` runs) once it has ever run once. A devcontainer asleep during a
+  live "reload all live sessions" sweep boots on whatever plugin code its cache last had, and nothing
+  at boot catches it up - confirmed live during this plan's own deploy (see the reload_plugins finding
+  below). Two sub-questions can't be verified from this repo alone: whether a target project's own
+  devcontainer config persists `~/.claude` across a container recreate, and whether Claude Code's own
+  CLI self-updates a marketplace flagged `autoUpdate:true` at its own launch.
+- [high] `src/mcp/devcontainer/hostDaemon.ts : handleWake` (devcontainer branch) /
+  `buildLaunchCommand` - **architecture** - confirms the above directly: after
+  `ensureContainerUpAsync` resolves, the wake handler goes straight to `buildLaunchCommand`'s single
+  `bash -c` launch - there is no boot-time equivalent of the `reload_plugins` op (no `/plugin
+  update`, no `/mcp reconnect`) anywhere between container-up and launching Claude. `reloadPlugins.ts`
+  is reachable only via a live MCP tool call or console op against an already-running session.
+- [high] `src/mcp/devcontainer/reloadPlugins.ts : registerReloadPlugins` (self-targeting) -
+  **confirmed live during this plan's own deploy** - `reload_plugins` targeting "self" drives the
+  calling session's own tmux pane via keystroke automation, the same underlying mechanism
+  `compact_session`/`set_effort_level` document as requiring the session to be IDLE to register
+  (the REPL prompt must be accepting input). Calling it against an actively-busy session (mid
+  tool-call chain, never idle) does not error, reports `initiated: true`, and silently fails to take
+  effect - confirmed directly: this session's own self-targeted reload during the redesign's live
+  deploy did not update its tool schema, and the new-vs-old handshake mismatch had to be resolved by
+  falling back to the old tool's equivalent wire field rather than the new one, until the human
+  manually ran `/plugin`, `/reload-plugins`, `/mcp` themselves later at a natural idle point. Neither
+  `reload_plugins`' own tool description nor this file's existing "no closed-loop verification"
+  finding names this specific mechanism (idle-required for self-target) - worth surfacing explicitly.
+
+**Medium:**
+- [medium] `src/gateway/websocket.ts : resolveHandshake` - **bug-class** - earmarked for this file by
+  `plans/reply-tool-redesign.md`'s own "What was rejected" section: the `/true/i.test(response)`
+  prose fallback mis-resolves a reply lacking the literal substring "true" to WORKER (permanent
+  eviction, `suppressReconnect` never resets). Pre-existing, independent of any specific plan; was
+  briefly elevated to "harden this" during the redesign's rollout-skew analysis, then correctly
+  de-scoped once the owner accepted a coordinated restart instead of a rolling deploy (no skew window
+  left to harden against) - but the regex itself was never tightened, so the underlying fragility
+  remains for the next transition-affecting change.
+- [medium] `skills/crosstalk/SKILL.md : Receiving a Request / CLI agents` section + `Response
+  Statuses` section - **legacy-landmine** - independently found twice (a coding-guidelines audit and
+  a crust sweep). Instructs an agent to reply via `switchboard:crosstalk_reply()`, a tool that exists
+  nowhere in current source (CLI dispatch mode was retired per this repo's own CLAUDE.md), and
+  documents `clarification`/`deferred`/`needs_human` as reachable outcomes when neither live reply
+  tool (`channel_reply`/`channel_reply_structured`) nor the console's `respond` op can produce them
+  anymore (see the vestigial-status-vocabulary finding below). Also: `README.md`'s `crosstalk_wait`
+  row still says "retrying a deferred request", the same dead-vocabulary echo.
+- [medium] `src/gateway/routes.ts : RespondBodySchema` / `src/shared/types.ts : ResponsePayload` /
+  `src/shared/federation-protocol.ts : FederatedOpSchema` - **dead-code** - the whole
+  clarification/deferred/needs_human negotiation protocol (`question`, `reason`,
+  `estimated_minutes`, `what_to_decide`, `message`, plus those three `ResponseStatusSchema` enum
+  values) is vestigial: no code path anywhere sets status to any of the three, since neither current
+  reply front door can express them. Kept alive only by `src/mcp/bridge/bridgeSend.ts`'s
+  `formatResult()`, which still switches on them.
+- [medium] `src/mcp/channel/evieFiles.ts : materializeFiles / renderFilesBlock / safeFilename /
+  MaterializeFilesParams / RenderFilesBlockParams` - **legacy-landmine** - pervasive stale "Discord"
+  naming survives the Discord file path's retirement (CLAUDE.md: "the Discord file path was retired
+  with the human bridge"). A half-finished rename: one comment in `renderFilesBlock` already says
+  "Console files always arrive with bytes..." while sibling comments a few lines away in
+  `materializeFiles`/`safeFilename` still say "Discord-supplied", "Discord caps a message at 10
+  attachments", "real Discord snowflakes". The only real caller (`channelNotify.ts`) already calls
+  these "Console-origin files" in its own comment.
+- [medium] `src/mcp/bridge/helpers.ts : connectToRouter` (`isChannel`) + `src/mcp/bridge/
+  registerBridgeTools.ts : registerBridgeTools / detectAgentType` - **dup-logic** - three independent
+  computations of "is this a channel-capable (Claude) agent" exist (`mcp/index.ts`'s own check,
+  `helpers.ts`'s separate copy gating whether channel_push/response_push ever get delivered, and
+  `registerBridgeTools.ts` re-running `detectAgentType()` a second time). Sibling dead-branch class to
+  `routes.ts : getTeamMode`, already tracked above in this file, but that entry doesn't cite this
+  occurrence. `detectAgentType()`/`AGENT_CLI_NAMES` still fully probes for cursor-agent/copilot/codex
+  on PATH though CLI dispatch was retired; effectively unreachable today (always falls back to
+  `"claude"`) but a latent landmine if that ever changed.
+- [medium] `src/mcp/bridge/helpers.ts : setIsMainOrLeadAgent` / `isMainOrLeadAgent` - **dead-code** -
+  zero callers repo-wide, independently reconfirmed multiple times during the redesign - the dead
+  code itself is still shipped, and a reader of `connectToRouter` alone would not know the auto-reply
+  branch it gates is unreachable.
+
+**Low:**
+- [low] `src/shared/schemas.ts : NoticeTitle/NoticeSummary/NoticeFull` (`src/shared/notice.ts`) -
+  **note** - all three use `.min(1)`, which accepts whitespace-only content (`" "`/`"\n"`).
+  Pre-existing; tightening to `.trim().min(1)` touches the SYNCED `notice.ts` leaf (needs a copy into
+  nyaaskills + SYNC-HASH restamp), so it was left out of scope by the reply-tool redesign - record
+  only.
+- [low] `src/shared/schemas.ts : MailboxEntrySchema` - **dead-code** - `question` and `reason` are
+  dead fields (also codegen'd into Android's `MailboxEntry` Kotlin data class); no producer anywhere
+  sets them, no Android code reads them. Every sibling field on this schema carries an explanatory
+  comment; these two are the only undocumented ones - an unremoved fossil of the retired CLI
+  clarification-reply flow.
+- [low] `src/mcp/bridge/helpers.ts : bridgeAgentType` - **dead-code** - exported getter with zero
+  callers anywhere, unlike its siblings `bridgeProjectName`/`bridgeConversationId` (both actively
+  consumed elsewhere) - a symmetry leftover that never got a consumer.
+- [low] `src/mcp/bridge/bridgeDiscover.ts : registerBridgeDiscover` (the `others` filter) -
+  **legacy-landmine** - excludes `kind !== "console"`/`"host"`, but the gateway's `teams()` only ever
+  emits `"loose"`/`"devcontainer"` (console/host peers are already hidden upstream by being
+  recordless, and `"host"` isn't even in the shared `TeamKindSchema` enum) - likely vestigial
+  defensive filtering from before that upstream rule existed. Also hand-types the response inline
+  instead of importing the shared `TeamInfo` type, so a future wire-shape change wouldn't be caught
+  by the compiler here.
+- [low] `src/mcp/devcontainer/hostDaemon.ts : handleWake` / `wake_result.pluginsProvisioned` -
+  **dead-code** - a computed, forwarded signal with zero consumers anywhere on the gateway side (not
+  part of any wire schema either) - reinforces that there is no closed-loop plugin-freshness tracking
+  between the daemon and the gateway/console layers.
+- [low] `plans/host-daemon-cleanup.md`'s "Phase 5 - Fragile TUI automation" tracking - **verified,
+  still accurate as of 2026-07-09** - `reloadPlugins.ts`'s screen-scraping `buildScript` was untouched
+  by the one commit that had touched the file since that tracking was written (which only threaded a
+  minted-id session name through, not the TUI-driving body). No drift found at verification time.
