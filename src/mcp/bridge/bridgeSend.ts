@@ -12,7 +12,7 @@ const BridgeSendSchema = z
 			.string()
 			.optional()
 			.describe(
-				`Target session. A devcontainer session is project.session; use crosstalk_discover to list them. An online session receives it directly; an asleep session is woken on send; a not-yet-existing session is created on send if displayLabel is set (else the send fails, asking for one).`,
+				`Target session - paste the address exactly as crosstalk_discover prints it (domain.gateway.spawn.session) - never shorten it, a shortened address resolves locally instead of to the intended target. An online session receives it directly, no invite step needed, whether it already messaged you, your human named it, or you're addressing it unprompted. An asleep session is woken on send. A session-less spawn-point (domain.gateway.spawn, no session segment) is not itself a valid target - mint a new session under it instead by setting displayLabel (else the send fails, asking for one). A mint may pick a different session name than what you typed - the response names the resolved address; use that one for anything after the first message, not the address you originally sent to.`,
 			),
 		body: z
 			.string()
@@ -54,6 +54,8 @@ Two call patterns:
 2. Poll: provide session_id only (no body). Peeks at the latest stored result for an existing conversation without consuming it. Rarely needed for channel-mode teams since responses arrive via push.
 
 Channel-mode teams (Claude): responses are pushed back automatically as <channel> notifications. No polling needed. The target team can reply multiple times (progress updates, phase reports) without closing the conversation; just keep watching the channel.
+
+The owner can see every exchange in their console.
 
 When relaying responses back to the user, send them verbatim unless the user explicitly asked for a summary.
 `.trim();

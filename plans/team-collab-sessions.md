@@ -274,3 +274,62 @@ instead of "a different day."
 - Gates: `bun run lint && bun run test`, codegen drift check, Android `testDebugUnitTest`.
 - Deploy: push (branch + auto-merge PR), await CI + APK release, gateway rebuild, reload plugins
   on live sessions.
+
+## Crust collected during implementation
+
+Real, out-of-scope-for-this-plan findings surfaced by audit passes. Not fixed here; migrate to
+`pain-points.md` when this plan ships.
+
+- [medium] `src/gateway/routes.ts : teams()` - pre-existing, not introduced by this plan -
+  `commonFields`'s `domainIdField` omits `domainId` entirely in arming mode (`localDomainId` not
+  yet resolved), while every actual address-building path elsewhere in the same file (`localAddress`,
+  `send()`'s `parseTarget` call via `localDomain = localDomainId ?? LOCAL_DOMAIN_SENTINEL`) treats
+  arming mode as domain `"local"` instead. `bridgeDiscover.ts`'s `displayHeader`/`formatSessionLine`
+  fall back to a bare, unqualified team name when `domainId` is missing, so a not-yet-enrolled
+  gateway's own discover output prints an unqualified `myproj.mysession` instead of a
+  `LOCAL_DOMAIN_SENTINEL`-qualified address - inconsistent with the rest of the system's arming-mode
+  convention, though still locally resolvable (not a routing break) since `parseTarget`'s short forms
+  default to local. Untested (`bridge-discover.test.ts`'s `entry()` fixture hardcodes a non-empty
+  `domainId` in every case). Fix: stamp `domainId: localDomainId ?? LOCAL_DOMAIN_SENTINEL`
+  unconditionally in `teams()`'s `commonFields`, matching `localDomain`'s existing convention.
+- [low] `src/mcp/bridge/bridgeDiscover.ts` - pre-existing, predates federation entirely (traced via
+  `git log -p --follow` to this file's first commit) - the `others` filter's `t.team !==
+  bridgeProjectName()` self-exclusion is a bare string compare with no gatewayId/domainId scoping,
+  applied uniformly to the federated-merged list. A remote peer whose own team name happens to
+  equal my `bridgeProjectName()` gets silently dropped from my own discover output, even though it
+  lives on a different gateway/Domain - discovery completeness/availability impact only (confirmed
+  no conflation with my own entry, no misrouting via `crosstalk_send`, since that tool resolves
+  addresses independently of discover's listing). Fix: scope the comparison to
+  `t.gatewayId === localGatewayId` (or equivalent) before comparing team names.
+- [low] `src/mcp/bridge/bridgeDiscover.ts : groupDiscoverEntries` - no de-dup of identical `team`
+  values within one group. Two entries sharing the same fully-qualified address (possible if a
+  gateway is ever double-listed across `discover()`'s local/same-Domain/cross-Domain buckets)
+  render as two separate, possibly-contradictory session lines under the same header instead of
+  collapsing to one. Not confirmed reachable from this repo alone (depends on evie's roster
+  fan-out never double-listing a gateway); log rather than fix blind.
+- [low] `src/shared/session-id.ts` (`parseSessionName`/`composeSessionName`/`isComposite`) - a
+  project name containing a dot cannot be represented in a fully-qualified address at all: the
+  address grammar's slug check (`assertSlug`, no dots allowed) rejects it, so `bridgeDiscover.ts`'s
+  `displayHeader`/`displayTarget` fall back to an unqualified bare name for such a project (no
+  domain/gateway prefix) rather than throwing - Phase 3's dotted-project-name fix (trusting `kind`
+  over a naive dot-split) stops the wrong header/phantom-session symptom, but a session actually
+  living under a dotted-name project still can't be unambiguously addressed via the dot-delimited
+  grammar (first-dot-split can't tell `project.session` from `pro.ject.session`). Deeper fix would
+  need a different separator or an escaping scheme in the core address grammar - out of scope for
+  a tool-surface phase; affects every consumer of `parseSessionName`, not just this tool.
+- [low] `src/mcp/bridge/bridgeDiscover.ts : groupDiscoverEntries` - a malformed entry (no usable
+  `team`) is dropped with zero trace - no counter, no warn - unlike `evieClient.ts`'s established
+  convention for a federated-boundary anomaly of the same class (count and warn). Weighed against
+  `discover()`'s own sibling convention one layer up (a whole peer that errors or times out is
+  "simply omitted", also with no logging), so this isn't a clear-cut violation either way. Display/
+  diagnosability only, not a trust or routing issue. Fix, if picked up: have `groupDiscoverEntries`
+  return a skip count alongside its groups so the (already-impure) tool handler can log it once.
+- [low] `src/mcp/bridge/bridgeDiscover.ts : groupDiscoverEntries` - trusting the wire's `kind` field
+  (vs. the old dot-shape derivation) is pre-existing exposure, not a regression: a malicious/buggy
+  already-admitted peer could always lie in either `team` or `kind` (neither is schema-validated
+  anywhere in the relay chain - `TeamInfoSchema` exists but is never `.parse()`'d against wire
+  data). Ceiling is unchanged and low either way - cosmetic distortion of one caller's own
+  `crosstalk_discover` text, zero effect on `crosstalk_send` routing (which never reads anything
+  `groupDiscoverEntries` computes). A cleaner full-hide already existed pre-fix via `kind:
+  "console"` and is untouched by this diff. Not fixing; no test added since it pins a pre-existing,
+  low-severity, out-of-scope trust characteristic rather than this phase's own change.

@@ -110,7 +110,10 @@ crust-collection sweep.
   `mintedFrom` retry-safety only collapses a *repeated* request, never bounds *distinct* ones, by
   design. Compounds the same already-known, already-decided-but-unshipped gap as the Trust Surface
   items above (`plans/gateway-auth-surface.md`); tracked here until that plan's origin-aware gate is
-  built and confirmed to cover this creation path too.
+  built and confirmed to cover this creation path too. `plans/team-collab-sessions.md` Phase 3
+  promotes unsolicited cold-contact to normal, encouraged use (not just a tolerated edge case),
+  which makes this gap more likely to matter under ordinary use rather than only adversarial use -
+  it doesn't add a new capability, so it's noted here rather than fixed there.
 
 ### Phase F crust-collection sweep
 
@@ -169,12 +172,6 @@ confirmed live during this plan's own deploy, not just theorized.
 ### Crust-collection sweep
 
 **High:**
-- [high] `src/mcp/bridge/helpers.ts : routerGet` - **bug-class** - unlike its sibling `routerPost` in
-  the same file, `routerGet` never checks `res.ok` before returning `res.json()`, so a non-2xx
-  gateway response (e.g. a 500 with an `{error}` body) resolves successfully instead of throwing.
-  Its only caller, `bridgeDiscover.ts`'s `/discover` fetch, then calls `.filter()` on that
-  error-shaped object, surfacing a confusing generic "not a function" error instead of the real
-  server error. A copy-pasted twin where one side got an error-handling fix the other never received.
 - [high] `src/mcp/devcontainer/helpers.ts : ensureContainerUpAsync / isContainerReady /
   hasPluginSettings / provisionPluginSettings` - **architecture, confirmed live** - the devcontainer
   boot path never re-checks or refreshes plugin freshness. The common case (`isContainerReady()` true
