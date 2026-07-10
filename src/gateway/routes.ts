@@ -257,6 +257,23 @@ export function createRoutes({
 		}
 	}
 
+	/** THE single writer of a mailbox append that embeds `dedupeKey` onto the entry (the
+	 * MailboxEntrySchema field, carried verbatim through any further relay) AND passes the
+	 * identical value as `append()`'s own dedup parameter (DeviceMailbox's seenKeys map) - the
+	 * two necessarily-equal uses of one key can never independently drift by going through two
+	 * separate call sites. Never throws; swallows and logs under `label`, since every caller of
+	 * this (mirrorPeer, consolePush, humanNotify) treats console-mailbox delivery as best-effort. */
+	function landMailboxEntry(owner: string, entry: ConsolePushEntry, dedupeKey: string, label: string): boolean {
+		if (!mailboxStore) return false;
+		try {
+			mailboxStore.ensure(owner).append({ ...entry, dedupeKey }, dedupeKey);
+			return true;
+		} catch (err) {
+			console.warn(`[${label}] failed to append entry: ${err instanceof Error ? err.message : String(err)}`);
+			return false;
+		}
+	}
+
 	/** Append a "peer" display mirror into this Gateway's own Domain-owner mailbox, tagged under
 	 * `threadAddr`'s own thread, then fan the same entry out to every other same-Domain Gateway
 	 * (fanOutConsolePush) so it lands wherever the owner's console actually polls. A no-op
@@ -285,12 +302,9 @@ export function createRoutes({
 			...payload,
 		};
 		// Never load-bearing: a failure here must not turn an already-delivered/already-relayed
-		// primary operation into a spurious failure for the caller.
-		try {
-			mailboxStore.ensure(owner).append({ ...entry, dedupeKey }, dedupeKey);
-		} catch (err) {
-			console.warn(`[mirror] failed to append peer entry: ${err instanceof Error ? err.message : String(err)}`);
-		}
+		// primary operation into a spurious failure for the caller, so the local outcome is
+		// ignored and the fan-out is attempted regardless.
+		landMailboxEntry(owner, entry, dedupeKey, "mirror");
 		void fanOutConsolePush(entry, dedupeKey);
 	}
 
@@ -311,13 +325,7 @@ export function createRoutes({
 			console.warn(`[console_push] dropped an oversized entry (over ${MAX_RESPONSE_FILE_BYTES} bytes)`);
 			return { delivered: false };
 		}
-		try {
-			mailboxStore.ensure(owner).append({ ...entry, dedupeKey }, dedupeKey);
-		} catch (err) {
-			console.warn(`[console_push] failed to land entry: ${err instanceof Error ? err.message : String(err)}`);
-			return { delivered: false };
-		}
-		return { delivered: true };
+		return { delivered: landMailboxEntry(owner, entry, dedupeKey, "console_push") };
 	}
 
 	/** Fan a console-bound entry (already appended locally by the caller) out to every OTHER
@@ -1273,7 +1281,9 @@ export function createRoutes({
 			body: full,
 			...(files && files.length > 0 ? { files } : {}),
 		};
-		mailboxStore.ensure(owner).append({ ...entry, dedupeKey }, dedupeKey);
+		if (!landMailboxEntry(owner, entry, dedupeKey, "notify")) {
+			return jsonResponse({ error: "failed to store notice" }, 500);
+		}
 		void fanOutConsolePush(entry, dedupeKey);
 		console.log(`[notify] notice from ${from} delivered to owner ${owner}`);
 		return jsonResponse({ delivered: true });

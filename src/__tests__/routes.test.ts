@@ -324,6 +324,21 @@ describe("routes", () => {
 			const { humanNotify: noOwner } = createRoutes(makeCtx({ mailboxStore: new DeviceMailboxStore() }));
 			expect(noOwner({ from: "t", title: "x", summary: "s", full: "body" }).status).toBe(503);
 		});
+
+		it("returns a clean 500 instead of throwing when the underlying append fails", () => {
+			const throwingStore = {
+				ensure: () => ({
+					append: () => {
+						throw new Error("boom");
+					},
+				}),
+			};
+			const ctx = makeCtx({ mailboxStore: throwingStore as never, ownerId: () => "owner-1" });
+			const { humanNotify } = createRoutes(ctx);
+
+			expect(() => humanNotify({ from: "t", title: "x", summary: "s", full: "body" })).not.toThrow();
+			expect(humanNotify({ from: "t", title: "x", summary: "s", full: "body" }).status).toBe(500);
+		});
 	});
 
 	describe("consolePush (console_push landing side)", () => {
