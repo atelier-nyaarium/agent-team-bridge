@@ -225,13 +225,23 @@ instead of "a different day."
   and a to-user entry for the same team (one all-or-nothing decision per team per cycle today).
   Adopt the explicit rule: any user-aimed entry in a burst forces full treatment for the whole
   burst - a peer entry must never silently downgrade a real ping.
-- Note (accepted for v1): `openTabs` is unpersisted, process-lifetime-only state: an OS-initiated
-  process kill silently reclassifies every open tab as "closed" (quiet) until manually reopened.
-  Low-stakes today (only affects STTS pre-warm); worth knowing now that it also gates
-  notifications.
-- Tests: peer-entry drain routing + golden fixture decode; sender-attribution persistence
-  round-trip (save, reload, still shows the third-party sender, not the thread's own peer);
-  gating logic where testable.
+- Correction found during implementation: gating notifications directly on `team in openTabs`
+  would have been wrong - a session that was never opened is equally absent from `openTabs` as
+  one that was opened and explicitly closed, and the existing STTS pre-warm comment confirms a
+  never-opened session is expected to notify normally today. Track "explicitly closed, not yet
+  reopened" as its own `ChatState.closedTeams` set instead (added in `closeTab`, cleared in
+  `openThread`/`forget`) - a team absent from BOTH `openTabs` and `closedTeams` (never touched)
+  still gets full treatment, matching today's behavior; only a team present in `closedTeams` goes
+  quiet.
+- Note (accepted for v1): `closedTeams`, like `openTabs`, is unpersisted, process-lifetime-only
+  state - an OS-initiated process kill silently un-mutes every closed team until it is closed
+  again. Low-stakes (worst case is one unwanted notification after a restart, not a missed one).
+- Tests: peer-entry drain routing (`PeerMirrorAttributionTest`) + sender-attribution persistence
+  round-trip (save, reload, still shows the third-party sender, not the thread's own peer, same
+  test file) + notification gating (`ShouldNotifyBurstTest`). Golden fixture decode for a `"peer"`
+  `MailboxEntry` was already shipped in Phase 1 (`ProtocolFixturesTest.decodesEveryMailboxKindAndLongAt`
+  asserts `kind`/`from`/`to`/`dedupeKey`, not just a decode-without-throwing check) - nothing to
+  add here.
 
 ## Phase 5 - multi-gateway console-bound delivery (console_push)
 
@@ -374,3 +384,49 @@ Real, out-of-scope-for-this-plan findings surfaced by audit passes. Not fixed he
   Not a bypass (both still require an explicit owner `cross_domain_share` call), just an ambiguity
   in "which of two things did the owner mean to share". Fix, if picked up: a distinct sentinel or
   explicit disambiguation for a whole-spawn-point share vs. a session named `claude`.
+- [high] `android/.../ChatRepository.kt : forget` / `startPolling` - genuine data-loss race,
+  pre-existing (not introduced by this phase) and general-purpose (not peer-mirror-specific):
+  `forget()` runs synchronously on the main thread with no mutual exclusion against the poll
+  loop's `appendInbound`/`bumpUnread`/`mailboxSync.commit()` sequence running concurrently on
+  `Dispatchers.IO` for the same team. Whichever side's `_state` update lands last wins: if
+  append/bump wins, a just-forgotten thread reappears as a ghost session and re-notifies; if
+  forget wins, a freshly-arrived message is wiped from `_state` (and from disk, since forget
+  calls `persistThreads`) while the mailbox cursor has already unconditionally advanced past
+  it in the same poll cycle - a silent, permanent, unrecoverable message loss, contradicting
+  this codebase's own documented at-least-once mailbox guarantee. A real fix needs a shared
+  Mutex (there's already a precedent, `freshTeamsMutex`) serializing `forget()` against the
+  poll loop's per-team append/bump/commit sequence - a careful concurrency change, not a
+  peer-mirror rendering fix, so deliberately not done in this phase.
+- [low] `android/.../ChatRepository.kt : playMessage / preloadMessage` - TTS playback has no
+  `closedTeams` check at all (only a message-existence lookup), so closing a tab mid-flight
+  (after the poll loop already decided to pre-warm + auto-play a followed thread's burst, but
+  before the deferred coroutine actually runs) can still read a just-closed thread's message
+  aloud, even though the notification banner itself correctly suppresses. UX inconsistency,
+  not data loss; not fixed here.
+- [low] `android/.../ChatRepository.kt : forget` - never clears `teamAbsenceStreaks` for the
+  forgotten team. Normally harmless (excluded from the next `withFreshTeams` rebuild anyway),
+  but a forget-then-relabel-before-next-refresh sequence can reuse a stale streak count and
+  shorten the documented two-miss absence grace window to one. Narrow, not fixed here.
+- [low] `src/gateway/routes.ts` (`RespondBodySchema.status`) / Kotlin `MailboxEntry.status` -
+  both unconstrained strings, not an enum. A future/non-standard reply carrying the literal
+  wire value `"waking"` (today only ever a local Android sentinel, never sent by any
+  first-party tool) would be silently and permanently dropped by the load-time waking filter,
+  losing its `from`/`to` attribution along with it. Not peer-specific (every non-`"sent"` row
+  shares this exposure) and not reachable by any current caller; general schema-hardening item,
+  not fixed here.
+- [flagged for the human, not silently decided] A never-opened team can ping at full strength
+  (banner + TTS) the very first time it's merely mentioned in agent-to-agent chatter, since
+  `shouldNotifyBurst` only gates on `closedTeams` (explicitly-closed) and a never-opened team
+  is deliberately not muted (see the correction bullet above) - that ruling was reached by
+  analogy to Q5's "direct message to a fresh session" scenario, not by asking about this
+  specific one (a team you've never touched getting a full-volume ping purely for being CC'd
+  on someone else's conversation). Shipping as-is; worth a confirm-back on whether this matches
+  the intended experience.
+- [flagged for the human, not silently decided] Peer-mirror content (another local agent's own
+  words, and per the mirroring model potentially a different Domain/tenant's agent's wording)
+  now reaches the same unredacted, no-opt-out lock-screen visibility tier as a message directly
+  addressed to the console (`notifyBurst` sets no `setVisibility`/`setPublicVersion`.) This is
+  the existing default notification visibility, not something this phase changed, but it's the
+  first time third-party/cross-Domain content is eligible to reach that tier. Shipping as-is
+  (a proper fix - kind-aware visibility, or a per-conversation-kind mute - is real design work,
+  not a minimal patch); worth a confirm-back.

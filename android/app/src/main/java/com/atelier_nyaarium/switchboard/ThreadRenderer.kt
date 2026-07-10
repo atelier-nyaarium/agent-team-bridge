@@ -18,6 +18,19 @@ import java.io.ByteArrayInputStream
 
 private const val THREAD_URL = "https://appassets.androidplatform.net/assets/thread/thread.html"
 
+/** The sender label for a row: `selfName` for our own row, the resolved human label for an
+ * ordinary inbound row, or "from -> to" for a peer-mirror row. Neither peer-mirror party is this
+ * console, so a bare `from` would render identically to a message actually addressed here - the
+ * arrow is what tells the two apart. `resolve` stands in for `ThreadRenderer`'s own `resolveFrom`
+ * callback so this stays pure/testable. */
+internal fun renderedSender(m: Message, resolve: (String) -> String, selfName: String): String {
+	if (m.fromMe) return selfName
+	val fromLabel = m.from?.let(resolve) ?: ""
+	if (!m.isPeer) return fromLabel
+	val toLabel = m.to?.let(resolve) ?: return fromLabel
+	return "$fromLabel → $toLabel"
+}
+
 /**
  * One WebView running the bundled thread renderer (assets/thread/). Messages flow
  * one way via evaluateJavascript. Agent markdown is semi-trusted, so beyond the
@@ -180,15 +193,16 @@ class ThreadRenderer(context: Context) {
 		var h = m.text.hashCode()
 		h = 31 * h + (m.status?.hashCode() ?: 0)
 		h = 31 * h + m.files.size
-		// The rendered sender is resolveFrom(m.from) or selfLabel(), either of which changes on a
-		// rename; include it so a re-sync re-pushes already-rendered rows instead of leaving stale
-		// sender labels.
-		val sender: String? = if (m.fromMe) selfName() else m.from?.let { resolveFrom?.invoke(it) ?: it }
-		h = 31 * h + (sender?.hashCode() ?: 0)
+		// The rendered sender is displayFrom(m), which changes on a rename (resolveFrom) or a
+		// counterparty relabel (isPeer); include it so a re-sync re-pushes already-rendered rows
+		// instead of leaving a stale sender label.
+		h = 31 * h + displayFrom(m).hashCode()
 		return h
 	}
 
 	private fun selfName(): String = selfLabel?.invoke()?.takeIf { it.isNotBlank() } ?: "you"
+
+	private fun displayFrom(m: Message): String = renderedSender(m, { resolveFrom?.invoke(it) ?: it }, selfName())
 
 	fun setDark(dark: Boolean) {
 		eval("window.thread.setTheme($dark)")
@@ -219,7 +233,7 @@ class ThreadRenderer(context: Context) {
 			val obj = JSONObject()
 				.put("id", m.id)
 				.put("role", if (m.fromMe) "user" else "agent")
-				.put("from", if (m.fromMe) selfName() else (m.from?.let { resolveFrom?.invoke(it) ?: it } ?: ""))
+				.put("from", displayFrom(m))
 				.put("at", m.at)
 				.put("body", m.text)
 			if (playEnabled && !m.fromMe) obj.put("canPlay", true)
