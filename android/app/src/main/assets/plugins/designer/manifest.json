@@ -1,0 +1,7 @@
+{
+	"content_id": "designer",
+	"version": "0.1.0",
+	"display_name": "Designer",
+	"description": "Design canvases pushed into a conversation render in a dock under the chat.",
+	"requires": []
+}

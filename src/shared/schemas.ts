@@ -50,7 +50,7 @@ export const ChannelReplySchema = z
 			.array(z.string())
 			.optional()
 			.describe(
-				`Optional absolute file paths to attach to this reply (e.g. screenshots, logs). Images render inline on the console; other files appear as download chips.`,
+				`Optional absolute file paths to attach to this reply (e.g. screenshots, logs). Images render inline on the console; other files appear as download chips. A self-contained .html file whose FIRST line is a "<!-- @dsCard group=... -->" comment is a design canvas: the console's Designer dock (a toggleable plugin) collects such cards per conversation for full-screen review. Card identity is the filename (re-attach the same filename to update a canvas in place), so name cards distinctly, e.g. "editor-form.html".`,
 			),
 	})
 	.strict();

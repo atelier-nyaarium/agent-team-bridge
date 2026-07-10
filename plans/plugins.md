@@ -248,3 +248,66 @@ per user request - the durable copy of what Designer output looks like).
 - Index schema + lifecycle: per-conversation cap, `forget()` sweep integration, on-device file home
   (`Attachments.kt` internal storage vs a plugin-owned dir) and TTL.
 - Whether toggle state ever syncs server-side (device-local for v1).
+
+## Build log
+
+**Phase 1 (foundation) - built, red-teamed, committed (ad0d728).** The `plugins/` package:
+manifest (`manifest.json`, which nyaadot's own discovery also accepts, so repo-mimicry holds),
+`SourceContext`, `PluginRegistry` (refuse-on-collision), `PluginLifecycleBus`, `PluginRuntime`,
+`PluginEntry`/`PluginHost`, compile-time `PluginCatalog` + agreement test, `PluginManager`,
+`Plugins` process singleton, Settings > Plugins, `AppStateStore.plugin_enabled.` keys. A
+5-dimension adversarial diff review (Sonnet fleet) confirmed and led to fixing: the broken-flag
+lockout (persist only after a successful load; the OFF direction always reachable, in the manager
+AND the Switch's enabled gate), enable/disable dep-gate asymmetry on composite ids, boot made a
+fixpoint loop so catalog order never decides correctness, the enabled-but-not-running divergence
+rendered in settings, and tests pinning each. Framework boots with the app, not on first
+Settings open.
+
+**Phase 2 (Designer plugin) - built.** `plugins/designer/` (`DesignerCards` pure core,
+`DesignerDock` UI, `DesignerPlugin` entry) + `assets/plugins/designer/manifest.json` + the
+catalog entry (which made the agreement test live). Deviations from the rough plan, each chosen
+during the build:
+
+- **Transport needs NO new tool or wire shape**: a design push is ordinary `channel_reply`
+  `attachments` - a self-contained `.html` whose FIRST line is the `@dsCard` comment marker. The
+  marker IS the registration (exactly claude.ai/design's self-check model); optional marker attrs
+  `width`/`height` carry the viewport, `<title>` names the card. The `channel_reply` attachments
+  describe documents the convention (schemas.ts; plugin 7.4.0). The DesignSync-parity verb tool
+  remains later work per plans/designer.md.
+- **The card index is DERIVED, not persisted**: a pure view over the thread's messages
+  (`designerCards()`), memoized per message-list change. Update-in-place = same filename, later
+  timestamp (so agents must name cards distinctly: `editor-form.html`, not `index.html` - the
+  attachment pipeline flattens paths to basenames). A second persisted index would drift against
+  `forget()` sweeps, schema wipes, and attachment eviction; deriving makes those Just Work.
+- **One extension point, not three**: `PluginHost.threadDockSlots` (composable slots between the
+  message list and the composer). The sheet and the full-screen viewer live inside the dock
+  slot's own state, so no route registry or attachment-kind registry exists until a second
+  consumer needs one (extract-upward).
+- **Render security** per plans/designer.md: the full-screen canvas is a WebView with JS off,
+  network blocked, file/content access off, navigation swallowed; content loads as inline data
+  (`loadDataWithBaseURL(null, ...)`), so a hostile card is inert markup. Pinch-zoom on.
+- **Thumbnails deferred**: the sheet rows AND the collapsed bar's peek strip show a generic canvas
+  glyph rather than a rendered thumbnail; snapshot thumbnails are listed polish. The announce chip
+  (Q4 nice-to-have) is not in this slice - prose + the dock is the shipped fallback.
+
+**Phase 2 red-team round (Sonnet fleet, 4 dimensions over the diff) - 7 confirmed, all fixed:**
+
+- **[high, security] Peer-mirror cards cross threads.** `designerCards()` folded EVERY message's
+  attachments, so a `kind:"peer"` row (an agent-to-agent exchange mirrored into a thread, `from`/`to`
+  = other parties) sharing a filename with a real card silently overwrote it. Fix: skip `isPeer`
+  rows entirely - the dock shows only this conversation's own channel (the same distinction the
+  renderer draws with its `from -> to` label). Pinned by two new tests.
+- **[high, correctness x2] Open sheet/viewer leaked across tab switches.** The dock is one composable
+  instance reused as the `team` arg changes; `expanded`/`openIndex` were unkeyed `remember`, so an
+  open canvas from thread A showed over thread B. Fix: `remember(team)`.
+- **[high, correctness] Full-screen WebView froze one canvas behind when paging.** `produceState`
+  keeps the prior value across a key change, so the render loaded the OLD html under the NEW card's
+  tag. Fix: the produced value carries the src it was read for; the render gates on a match, so the
+  WebView remounts fresh per card (with `onRelease { destroy() }`, also closing the two refuted
+  leak findings for free).
+- **[medium, plan] Missing export/share.** Added the viewer's share action (FileProvider over the
+  already-exposed `attachments/` path -> Android share sheet), matching the mockup's top-bar glyph.
+- **[medium, plan] Oversize cards vanished silently.** Raised the read cap 512 KB -> 4 MB and log a
+  skip, so a too-big card is diagnosable instead of a mystery.
+- **[low, plan] Collapsed-bar thumbnail strip** folded into the standing thumbnail deferral (noted
+  above), not a new gap.

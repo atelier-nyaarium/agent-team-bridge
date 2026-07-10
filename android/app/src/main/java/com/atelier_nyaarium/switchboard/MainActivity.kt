@@ -1769,6 +1769,10 @@ fun ThreadScreen(
 					modifier = Modifier.weight(1f).fillMaxWidth(),
 				)
 			}
+			// Plugin dock slots (e.g. the Designer dock) sit between the messages and the
+			// composer; each slot draws nothing when it has nothing to show for this thread.
+			val dockContext = LocalContext.current
+			remember { Plugins.get(dockContext) }.host.threadDockSlots.values().forEach { slot -> slot(team) }
 			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
 			if (attachments.isNotEmpty()) {
 				Row(

@@ -28,7 +28,8 @@ data class PluginUiState(
  */
 class PluginManager(
 	private val runtime: PluginRuntime,
-	private val host: PluginHost,
+	/** Public so extension-point consumers (ThreadScreen's dock slots) reach the registries. */
+	val host: PluginHost,
 	private val enabledStore: EnabledStore,
 	readManifest: (assetDir: String) -> String,
 	catalog: List<PluginCatalog.Entry>,
