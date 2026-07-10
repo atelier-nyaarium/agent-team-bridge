@@ -536,3 +536,136 @@ Real, out-of-scope-for-this-plan findings surfaced by audit passes. Not fixed he
   merge) found zero residue anywhere in the current tree - git-archaeology-verified against the
   actual prior incidents (`arbiter`/`gatewayes`/the stale admission vector), all three confirmed
   still fixed, no recurrence. Logged for the audit trail, not an open item.
+- [high, pre-existing, NOT introduced by Phase 5] `src/shared/federation-protocol.ts :
+  FederatedOpSchema` (`send` variant) / `src/gateway/routes.ts : mirrorPeer` - `send.from` is an
+  unauthenticated free string (`z.string().min(1).max(320)`, no grammar, no binding to the
+  cryptographically-verified `srcDomainId`/`srcGateway`). A federated inbound send's `mirrorPeer`
+  call uses this wire `from` verbatim as the mirrored entry's sender - reachable not just
+  same-Domain but by an admitted CROSS-Domain friend whose target session has been explicitly
+  shared (a materially lower bar than `console_push`'s blanket same-Domain-only rule). Net effect:
+  a same-Domain or shared-cross-Domain peer can make the receiving owner's own console mailbox and
+  live agent attribute an inbound message to any arbitrary string up to 320 chars, not the verified
+  sender - misattribution within an otherwise-legitimate delivery, not a routing bypass (the
+  entry's thread/session_id is still server-derived from the real destination). Predates this
+  phase (the `send` op and its schema are Phase 2-era); surfaced by this phase's red-team sweep
+  while auditing `console_push`'s own trust boundary for comparison. Needs its own dedicated look
+  at `send`'s sender-identity model, not a Phase 5 patch.
+- [medium, Phase 5-specific] `src/gateway/routes.ts : consolePush` - `entry.session_id`/`from`/
+  `to` are free strings with zero correlation check against any real pending job, session-store
+  record, or registry entry; the landing side just appends whatever arrived. Same-Domain gateways
+  are already fully trusted (can relay real sends/replies/wakes), but this is a sharper capability
+  than "can add new content": a compromised sibling Gateway can set `entry.session_id` to collide
+  with an EXISTING, already-trusted thread and craft `from`/`to`/`body` to look like a fabricated
+  continuation of that specific conversation (impersonating a devcontainer agent or peer the owner
+  already trusts), with no UI cue distinguishing it from a genuine relay. Bounded by the
+  already-accepted same-Domain trust model (requires a sibling Gateway compromise), so not fixed
+  here; flagged since a real fix (message-level signing so a recipient can verify authorship
+  across a relay) is a materially bigger feature than this phase's scope.
+- [high, Phase 5-specific] `src/shared/device-mailbox.ts : DeviceMailbox.evictOneForCapacity` /
+  `src/shared/federation-protocol.ts` (`console_push.entry.kind`) - the OOM backstop's
+  peer-priority eviction (prefers the oldest `"peer"` entry so agent chatter evicts itself before
+  real unread mail) trusts a wire-supplied `kind` that a `console_push` sender now controls
+  (`"notice"` or `"peer"`, both legal). A same-Domain sibling Gateway (compromised or buggy) can
+  flood `console_push` entries stamped `kind: "notice"` - never a peer-priority eviction
+  candidate - cheaply enough to trip the entry-count cap alone (10,000), and once genuine `"peer"`
+  entries are exhausted the fallback evicts the oldest entry of ANY kind: a real reply the owner is
+  waiting on, or a real notice. This defeats the eviction priority's documented purpose using
+  nothing but a same-Domain flood; no cross-Domain gate applies within a Domain, and there is no
+  independent signal (provenance, rate limit, or an unforgeable "this really came from a verified
+  local mirrorPeer/humanNotify call") backing `kind` once it has crossed the wire. Not fixed here -
+  a real fix needs a provenance concept `DeviceMailbox` doesn't have today (e.g. tagging a
+  relayed-in entry as always evict-first regardless of its claimed `kind`), which is a genuine
+  design addition, not a phase-appropriate patch.
+- [medium] `src/gateway/routes.ts : fanOutConsolePush` - no caching/coalescing of the `list_gateways`
+  roster fetch and no fan-out concurrency cap: a hot loop of local `send`/`respond` traffic (each
+  triggering up to 2 `mirrorPeer` calls) or repeated `notify_human` calls (no rate limit on that
+  MCP tool at all) each independently re-fetches the roster and re-fires the full fan-out. Per-
+  destination retry/backoff is sane and bounded (5 attempts, 2s-30s), so this is a "legitimate but
+  unbounded pattern" robustness gap, not a security hole, and the realistic blast radius today is
+  modest given the architecture's assumed small/cooperative Domain sizes. Worth hardening (a
+  roster TTL-cache, or a debounce on the fan-out trigger) if Domain sizes grow; not urgent now.
+- [low-medium] `src/gateway/routes.ts : DeviceMailbox.append`'s dedupeKey/seenKeys dedup only ever
+  saw a LOCALLY-minted key before this phase; `console_push` is the first path where a same-Domain
+  PEER chooses the dedupeKey and it's trusted verbatim. If a peer Gateway ever reuses/collides a
+  dedupeKey across two logically-distinct entries (a caller bug, not a legitimate relay retry -
+  which is the intended, correct use of key reuse), the second entry is silently discarded with no
+  logging. Requires an already-highly-trusted peer to misbehave; loss is limited to one
+  non-load-bearing display entry. Separately: the pre-existing, already-documented gap where an
+  outer HTTP-level retry of `send()`/`respond()` re-runs `mirrorPeer` from scratch with a FRESH
+  dedupeKey (mirrorPeer's own doc comment already calls this out as unsolved) now has a wider
+  blast radius - previously a retry-produced duplicate could only show up twice on the ONE gateway
+  that handled the retry; now each of the two `mirrorPeer` calls independently fans out to every
+  same-Domain sibling, so the duplicate can appear mesh-wide, on any gateway the console might be
+  polling. Root cause is unchanged and out of scope; noting the amplification only.
+- [medium, narrow] `src/shared/device-mailbox.ts : DeviceMailboxStore.sweepExpired` racing an
+  in-flight `console_push` relay - `sweepExpired` is a pure time-based scan with no concept of "a
+  relay is currently targeting this key," while `relayWithRetry` can keep a delivery in flight for
+  up to ~10.5 minutes (5 attempts, exponential backoff, 120s tool-call timeout each). If a sibling
+  Gateway's copy of the owner mailbox is near its 1-hour idle TTL, an ordinary transient relay
+  retry (evie reconnect, pod rollover) can straddle a sweep tick that tears the mailbox down;
+  `mailboxStore.ensure(owner)` then lazily mints a fresh, empty box (correct behavior on its own).
+  The sharper compound case: if an EARLIER attempt actually landed but its ack back to the origin
+  was lost (an ordinary at-least-once RPC gap, exactly what dedupeKey/seenKeys exists to cover),
+  and the eviction lands between that silent success and the retry's redelivery, the retry lands
+  in a brand-new mailbox instance whose `seenKeys` never saw the key - producing a genuine
+  user-visible duplicate display entry with no coordination anywhere to prevent it. Same class of
+  issue as the already-logged Android `forget()`-vs-poll-loop race (a real, narrow, uncoordinated
+  hazard, cosmetic-only consequence per the "purely additive display, never load-bearing" design,
+  not data corruption). Not fixed here.
+- [low, extends an already-logged item] `plans/team-collab-sessions.md`'s own earlier finding on
+  `RespondBodySchema.status`/Kotlin `MailboxEntry.status` being unconstrained strings (a
+  non-standard `"waking"` value silently and permanently dropped client-side) was scoped to
+  `kind: "reply"` rows; `"peer"`-kind rows are actually exempt from that specific Android drop
+  filter (`!it.isPeer` in the check), a minor correction to that finding's own stated scope.
+  `console_push`'s wire schema now lets a same-Domain sibling combine `kind: "notice"` with a
+  `status` field for the first time (no first-party local path could produce that combination
+  before) - reaching the exact same drop mechanism through a path that didn't previously exist.
+  Same severity/scope as the original finding; not a new mechanism, just a new way to reach it.
+- [low, pre-existing, noticed in passing] `src/gateway/routes.ts : respond` - two unguarded
+  operations one function away from `mirrorPeer`'s own well-documented "must not turn an
+  already-succeeded op into a spurious failure" concern: the actual console-reply mailbox append
+  (runs AFTER `store.deliver()` has already committed - precisely the "already-delivered primary
+  operation" scenario `mirrorPeer`'s comment warns about) and a `senderWs.send()` call, both
+  unguarded, unlike the structurally-identical broadcast fallback a few lines later which DOES
+  wrap its send in try/catch. `humanNotify`'s own `localAddress(from)` call (now routed through
+  `landMailboxEntry` for the append itself, but the `storeKey`/`localAddress` composition above it
+  is unchanged) is similarly unguarded and reachable via a misconfigured non-slug `PROJECT_NAME` -
+  confirmed byte-identical to pre-Phase-5 code, just relocated. Neither introduced by this phase;
+  flagging since they surfaced while auditing the new `console_push`/`humanNotify` error paths for
+  comparison.
+- [info, cross-references an existing dedicated audit] `humanNotify`'s "agent-only tool" framing
+  has no enforcement at the HTTP boundary (`/human/notify` has no token/origin/header check, same
+  as every other plain HTTP route) - already documented, dated before this plan, in
+  `plans/gateway-auth-surface.md` (an owner-approved, unshipped origin-aware `GATEWAY_TOKEN` gate
+  already covers this). This phase's fan-out measurably widens REACH of that pre-existing gap in a
+  multi-gateway Domain (a forged notice, previously landing only wherever it was posted and maybe
+  never seen, now reaches every sibling Gateway including wherever the console actually polls) -
+  not a new capability, not a new bypass, just wider delivery of an already-tracked hole. Nothing
+  to add here beyond noting this phase doesn't change that picture either way.
+- [info] No cross-Gateway relayed op of ANY kind (`send`, `respond`/`response_push`, `wake`, or the
+  new `console_push`) has a durable, content-keyed delivery record - `relayWithRetry` logs nothing
+  on success and only a generic failure line (gateway id + error, no `dedupeKey`/`session_id`) on
+  total exhaustion. A compliance reviewer asking "show every gateway that ever held a copy of X"
+  gets no answer from any of these paths today; the only trace is an entry's live presence in a
+  bounded, evictable `DeviceMailboxStore`. System-wide and pre-existing (not introduced or
+  regressed by this phase, which just adds one more relay kind sharing the identical non-pattern).
+  If ever picked up, scope it at the federation-transport level (one ledger for all relayed op
+  kinds), not as a `console_push`-only fix.
+- [framework-first, logged as a future candidate, not done now] `src/gateway/routes.ts` is now
+  ~1290 lines, the largest file in `src/gateway/`. `mirrorPeer`/`consolePush`/`fanOutConsolePush`/
+  `humanNotify` (console mailbox delivery) pass the ownership test as a genuinely separable
+  sub-concern from core session routing (`send`/`respond`/`teams`/`discover` would exist unchanged
+  for a hypothetical console-less application; `mailboxStore`/`ownerId` are referenced nowhere else
+  in the file). Worth extracting into its own module (natural home: `src/gateway/console/`,
+  alongside `consoleHandler.ts`/`consolePeer.ts`) taking `mailboxStore`/`ownerId`/`evieClient`/
+  `localGatewayId`/`resolvesLocalGateway`/`relayWithRetry` as explicit injected deps, matching the
+  precedent `gatewayRelay.ts`'s narrow `FederationRoutes` dependency already sets. Not worth doing
+  as a rider on this phase's own commit (existing tests already cover the behavior thoroughly
+  through its real call sites; bolting a structural extraction onto a still-fresh feature diff
+  doubles the verification surface for no correctness gain). If picked up, bundle three things in
+  one dedicated pass rather than just the mailbox slice alone: (1) hoist `localAddress`/
+  `tryLocalAddress`/`consoleSelfAddress` first (pure functions of `localDomain`/`localGatewayId`
+  only, shared by the routing side too, so lifting them first makes the real extraction cleaner);
+  (2) the console-mailbox-delivery extraction itself; (3) treat `send()` (262 lines) and
+  `respond()` (233 lines) as a separate, likely higher-priority target in the same file, since they
+  are the actual majority of its bulk and the mailbox extraction alone won't move that needle.
