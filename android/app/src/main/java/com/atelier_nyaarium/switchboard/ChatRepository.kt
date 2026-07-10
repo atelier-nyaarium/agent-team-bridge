@@ -244,6 +244,15 @@ internal fun loadedAttribution(
 		else -> canonicalKey to null
 	}
 
+/** The thread map after forgetting `key`: drops its own thread, then sweeps every remaining
+ * thread for a peer-mirror row that names `key` as either real party. The gateway mirrors an
+ * agent-to-agent exchange into BOTH participants' mailboxes as separate thread keys, so dropping
+ * only `threads[key]` would leave the identical row (real address, message text, attachments)
+ * fully intact in the other participant's thread - this is what Forget's own doc contract ("drop
+ * a peer from this device") requires closing. */
+internal fun threadsAfterForget(threads: Map<String, List<Message>>, key: String): Map<String, List<Message>> =
+	(threads - key).mapValues { (_, msgs) -> msgs.filterNot { it.isPeer && (it.from == key || it.to == key) } }
+
 /** A tier's TTS text, framed as "from to to: text" for a peer-mirror row so it never plays back
  * as if addressed to this console - neither party in a peer-mirror row is this console's own
  * team, unlike every other message this reads aloud. Spoken form spells out "to" rather than an
@@ -562,14 +571,16 @@ private fun enrollFold(prevSince: Long): Pair<String?, Long> {
 }
 
 /** The leaf (session) segment of a canonical address string - the natural per-session label. A
- * spawn-point (arity 3) yields its spawn segment; an unparseable value falls back to itself. */
+ * spawn-point (arity 3) yields its spawn segment; an unparseable value degrades to "?" rather than
+ * the raw string, so a corrupted or malformed canonical key can never surface a full internal
+ * domain/gateway address into a label instead of a safe placeholder. */
 internal fun sessionLeaf(canonical: String): String =
 	runCatching {
 		when (val t = parseTarget(canonical, "", "")) {
 			is Address -> t.session
 			else -> canonical.substringAfterLast('.')
 		}
-	}.getOrDefault(canonical)
+	}.getOrDefault("?")
 
 /** Wraps a drained MailboxEntry as a SyncEntry so the SyncCursor rules can dedupe/advance
  * by seq while the poll loop keeps the full entry to render. */
@@ -2909,15 +2920,15 @@ class ChatRepository(
 		}
 	}
 
-	/** Drop a peer from this device: its thread, unread, tab, label, and any
-	 * cached TTS audio. */
+	/** Drop a peer from this device: its thread, unread, tab, label, any cached TTS audio, and any
+	 * peer-mirror row elsewhere that names it as a real party (see threadsAfterForget). */
 	fun forget(team: String) {
 		// Canonicalize once and key every field removal by it (matching openThread's own key), so
 		// a non-canonical spelling can't leave a field's entry behind while the others clear.
 		val key = canonicalTarget(team)
 		val next = _state.updateAndGet { s ->
 			s.copy(
-				threads = s.threads - key,
+				threads = threadsAfterForget(s.threads, key),
 				labels = s.labels - key,
 				unread = s.unread - key,
 				openTabs = s.openTabs - key,
@@ -3108,9 +3119,13 @@ class ChatRepository(
 				val loaded = (0 until arr.length()).map {
 					val m = arr.getJSONObject(it)
 					val isPeer = m.optBoolean("isPeer")
+					// A peer row's from/to are the same address grammar as a thread key, so validate them
+					// the same way (isAddressKey) before trusting them - a corrupted store file or a future
+					// grammar change must degrade to the existing unresolvable-from fallback, not surface
+					// a malformed value verbatim into a notification or the thread UI.
 					val (loadedFrom, loadedTo) = loadedAttribution(
-						persistedFrom = m.optString("from").takeIf { s -> s.isNotEmpty() },
-						persistedTo = m.optString("to").takeIf { s -> s.isNotEmpty() },
+						persistedFrom = m.optString("from").takeIf { s -> s.isNotEmpty() && isAddressKey(s) },
+						persistedTo = m.optString("to").takeIf { s -> s.isNotEmpty() && isAddressKey(s) },
 						isPeer = isPeer,
 						isMe = m.optBoolean("me"),
 						canonicalKey = canonicalKey,
