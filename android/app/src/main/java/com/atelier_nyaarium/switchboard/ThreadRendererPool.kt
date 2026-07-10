@@ -20,10 +20,11 @@ class ThreadRendererPool(private val context: Context) {
 	 * badge is tapped in that team's thread. */
 	var onRetry: ((String, Long) -> Unit)? = null
 
-	/** Set by the owner; receives the attachments-relative path of a tapped
-	 * attachment (the in-app viewer). When unset, taps fall back to the system
-	 * "Open with" chooser. */
-	var onAttachmentTap: ((String) -> Unit)? = null
+	/** Set by the owner; receives the (team, attachments-relative path) of a tapped attachment (the
+	 * in-app viewer). The team is bound per-renderer, so it is always the thread the tap came from,
+	 * not whatever is on-screen when the posted callback runs. When unset, taps fall back to the
+	 * system "Open with" chooser. */
+	var onAttachmentTap: ((String, String) -> Unit)? = null
 
 	/** Set by the owner; called with (team, message at) when an agent row's
 	 * Play button is tapped. */
@@ -45,7 +46,7 @@ class ThreadRendererPool(private val context: Context) {
 			ThreadRenderer(context).also {
 				it.setDark(dark)
 				it.playEnabled = playEnabled
-				it.onOpenAttachment = { rel -> onAttachmentTap?.invoke(rel) ?: openAttachment(rel) }
+				it.onOpenAttachment = { rel -> onAttachmentTap?.invoke(team, rel) ?: openAttachment(rel) }
 				it.onRetryMessage = { id -> onRetry?.invoke(team, id) }
 				it.onPlayMessage = { at -> onPlayTap?.invoke(team, at) }
 				it.resolveFrom = { addr -> resolveFrom?.invoke(addr) ?: addr }

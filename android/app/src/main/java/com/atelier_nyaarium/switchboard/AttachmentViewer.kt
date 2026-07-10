@@ -71,22 +71,25 @@ private fun decodeBounded(file: File, maxDim: Int = 4096): Bitmap? = runCatching
 	BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
 }.getOrNull()
 
-/** Copy the attachment into the public Downloads collection via MediaStore (no runtime
- * permission needed, and "Open with" remains available as well). */
-private fun saveToDownloads(context: Context, att: OpenAttachment): Boolean = runCatching {
+/** Copy a file into the public Downloads collection via MediaStore (no runtime permission
+ * needed). Shared by the attachment viewer and the Designer plugin's Download action. */
+internal fun saveFileToDownloads(context: Context, file: File, name: String, mime: String): Boolean = runCatching {
 	val resolver = context.contentResolver
 	val values = ContentValues().apply {
-		put(MediaStore.Downloads.DISPLAY_NAME, att.name)
-		put(MediaStore.Downloads.MIME_TYPE, att.mime)
+		put(MediaStore.Downloads.DISPLAY_NAME, name)
+		put(MediaStore.Downloads.MIME_TYPE, mime)
 		put(MediaStore.Downloads.IS_PENDING, 1)
 	}
 	val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
-	resolver.openOutputStream(uri)?.use { out -> att.file.inputStream().use { it.copyTo(out) } } ?: return false
+	resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } } ?: return false
 	values.clear()
 	values.put(MediaStore.Downloads.IS_PENDING, 0)
 	resolver.update(uri, values, null, null)
 	true
 }.getOrDefault(false)
+
+private fun saveToDownloads(context: Context, att: OpenAttachment): Boolean =
+	saveFileToDownloads(context, att.file, att.name, att.mime)
 
 private fun prettySize(bytes: Long): String = when {
 	bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)

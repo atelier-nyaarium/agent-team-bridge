@@ -239,13 +239,19 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// attachments root before any file is touched. The wire mime (what the agent
 	// declared) is preferred over extension guessing.
 	var viewer by remember { mutableStateOf<OpenAttachment?>(null) }
-	rendererPool.onAttachmentTap = { rel ->
+	rendererPool.onAttachmentTap = { tapTeam, rel ->
 		Attachments.resolve(context.filesDir, rel)?.let { file ->
 			val wireMime = state.threads.values.asSequence().flatten()
 				.flatMap { it.files.asSequence() }
 				.firstOrNull { it.src?.endsWith("/$rel") == true }
 				?.mime?.takeIf { it.isNotEmpty() }
-			viewer = OpenAttachment(file, file.name, wireMime ?: mimeForFile(file), rel)
+			val mime = wireMime ?: mimeForFile(file)
+			// A plugin (e.g. the Designer) may claim a tapped attachment and open it in its own
+			// viewer; only fall back to the generic attachment viewer when none does. The team is
+			// the tapped thread's own (bound per-renderer), not the ambient on-screen team.
+			val claimed = pluginManager.host.attachmentOpeners.values()
+				.any { it.tryOpen(context, tapTeam, rel, mime, file.name) }
+			if (!claimed) viewer = OpenAttachment(file, file.name, mime, rel)
 		}
 	}
 	// In-thread Play buttons render only when STTS is provisioned; taps speak the full tier, and the
@@ -1770,9 +1776,15 @@ fun ThreadScreen(
 				)
 			}
 			// Plugin dock slots (e.g. the Designer dock) sit between the messages and the
-			// composer; each slot draws nothing when it has nothing to show for this thread.
+			// composer; each slot draws nothing when it has nothing to show for this thread. The
+			// scope carries a composer-insert seam (e.g. the Designer's "Reference in chat"); it's
+			// built inline so insertDraftText always writes the live draft.
 			val dockContext = LocalContext.current
-			remember { Plugins.get(dockContext) }.host.threadDockSlots.values().forEach { slot -> slot(team) }
+			val dockScope = com.atelier_nyaarium.switchboard.plugins.ThreadDockScope(team) { insert ->
+				draft = (if (draft.isEmpty() || draft.endsWith(" ") || draft.endsWith("\n")) draft else "$draft ") + insert
+				onDraftChange(draft)
+			}
+			remember { Plugins.get(dockContext) }.host.threadDockSlots.values().forEach { slot -> slot(dockScope) }
 			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
 			if (attachments.isNotEmpty()) {
 				Row(

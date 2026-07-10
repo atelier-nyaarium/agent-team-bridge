@@ -20,8 +20,19 @@ class DesignerCardsTest {
 		<html><head><title>Editor form</title></head><body>hi</body></html>
 	""".trimIndent()
 
+	// Each message writes its attachments to its own bucket in production (<epoch>-<seq>), so the
+	// helper stamps a per-message bucket keyed by `at` - same filename in two messages then has
+	// distinct srcs, exactly as on-device, which is what lets versions accumulate.
 	private fun msg(at: Long, vararg files: MessageFile) =
-		Message(fromMe = false, text = "", at = at, files = files.toList())
+		Message(
+			fromMe = false,
+			text = "",
+			at = at,
+			// Preserve an intentionally-null src (a metadata-only attachment); only bucket real ones.
+			files = files.map {
+				if (it.src == null) it else it.copy(src = "https://appassets.androidplatform.net/attachments/$at-1/${it.name}")
+			},
+		)
 
 	private fun html(name: String, src: String = "https://appassets.androidplatform.net/attachments/1-1/$name") =
 		MessageFile(name, "text/html", src)
@@ -38,6 +49,14 @@ class DesignerCardsTest {
 	fun markerMustLeadTheFile() {
 		assertNull(parseDsCardMarker("<!DOCTYPE html>\n<!-- @dsCard group=\"x\" -->"))
 		assertNull(parseDsCardMarker("plain text, no marker"))
+	}
+
+	@Test
+	fun markerSurvivesAPrefixTruncation() {
+		// The chip opener reads only the first ~2 KB to decide (the marker leads the file), so a
+		// truncated prefix of a large card must still be detected as a card.
+		val large = cardHtml + "\n" + "<div>x</div>".repeat(5000)
+		assertEquals("Designer dock", parseDsCardMarker(large.take(2048))!!.group)
 	}
 
 	@Test
@@ -122,6 +141,48 @@ class DesignerCardsTest {
 	fun aPeerOnlyThreadHasNoCards() {
 		val peer = Message(fromMe = false, text = "", at = 1000, files = listOf(html("a.html")), isPeer = true)
 		assertTrue(designerCards(listOf(peer)) { cardHtml }.isEmpty())
+	}
+
+	@Test
+	fun sameFilenameAccumulatesVersionsNewestLast() {
+		val cards = designerCards(
+			listOf(msg(1000, html("editor-form.html")), msg(2000, html("editor-form.html")), msg(3000, html("editor-form.html"))),
+		) { cardHtml }
+		val card = cards.single()
+		assertEquals(3, card.versions.size)
+		assertEquals(listOf(1000L, 2000L, 3000L), card.versions.map { it.at })
+		assertEquals(3000L, card.latest.at)
+		assertEquals(3000L, card.updatedAt)
+	}
+
+	@Test
+	fun deleteHidesTheCardUntilAStrictlyNewerPush() {
+		val history = listOf(msg(1000, html("a.html")), msg(2000, html("a.html")))
+		// Dismissed at the newest-version marker (2000): the card is hidden.
+		val dismissed = mapOf("a.html" to 2000L)
+		assertTrue(designerCards(history, dismissed) { cardHtml }.isEmpty())
+
+		// A strictly-newer push (3000 > 2000) resurfaces it, carrying full history.
+		val withNewer = history + msg(3000, html("a.html"))
+		val card = designerCards(withNewer, dismissed) { cardHtml }.single()
+		assertEquals(3, card.versions.size)
+		assertEquals(3000L, card.updatedAt)
+	}
+
+	@Test
+	fun deleteWithNoNewerPushStaysHiddenEvenAtEqualMarker() {
+		// Guards the boundary: latest.at == tombstone must remain hidden (<= comparison).
+		val cards = designerCards(listOf(msg(5000, html("a.html"))), mapOf("a.html" to 5000L)) { cardHtml }
+		assertTrue(cards.isEmpty())
+	}
+
+	@Test
+	fun aDismissedFilenameDoesNotHideADifferentCard() {
+		val cards = designerCards(
+			listOf(msg(1000, html("a.html")), msg(1000, html("b.html"))),
+			mapOf("a.html" to 2000L),
+		) { cardHtml }
+		assertEquals(listOf("b.html"), cards.map { it.fileName })
 	}
 
 	@Test

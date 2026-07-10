@@ -10,19 +10,41 @@ data class DsCardMeta(
 	val height: Int? = null,
 )
 
-/** One design canvas in a conversation's dock, derived from an attachment. */
-data class DesignerCard(
-	/** Display name: the HTML `<title>`, else the filename stem. */
-	val name: String,
-	/** The attachment filename - the card's IDENTITY. A later push with the same filename
-	 * updates the card in place (DesignSync's register/update semantics without a wire op). */
-	val fileName: String,
-	/** The materialized attachment's renderer URL (`https://appassets...`), used to locate the
-	 * on-disk HTML for the sandboxed render. */
+/** One pushed revision of a canvas. Each same-filename push is its own chat message with its own
+ * on-disk attachment bucket, so a version is a durable pointer into existing storage - the history
+ * is derived from the message log, not a second copy of the bytes. */
+data class DesignerVersion(
+	/** The materialized attachment's renderer URL (`https://appassets...`); locates the on-disk HTML. */
 	val src: String,
-	val updatedAt: Long,
+	val at: Long,
 	val meta: DsCardMeta,
+	/** The HTML `<title>` of this specific revision, or null. */
+	val title: String?,
 )
+
+/** One design canvas in a conversation's dock: an identity (the filename) plus its full version
+ * history, newest last. */
+data class DesignerCard(
+	/** The attachment filename - the card's IDENTITY. Same filename on a later message appends a
+	 * version; a new filename is a new card. */
+	val fileName: String,
+	/** Display name: the newest version's `<title>`, else the filename stem. */
+	val name: String,
+	/** Chronological, always non-empty; `last()` is the current revision. */
+	val versions: List<DesignerVersion>,
+) {
+	val latest: DesignerVersion
+		get() = versions.last()
+
+	val src: String
+		get() = latest.src
+
+	val updatedAt: Long
+		get() = latest.at
+
+	val meta: DsCardMeta
+		get() = latest.meta
+}
 
 // The marker must LEAD the file (same contract as claude.ai/design's self-check): a first-line
 // `<!-- @dsCard ... -->` comment, nothing but whitespace before it.
@@ -50,47 +72,51 @@ fun parseDsCardMarker(html: String): DsCardMeta? {
 /** The HTML `<title>` text, or null when absent/blank. */
 fun htmlTitle(html: String): String? = TITLE.find(html)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
 
+/** Whether an attachment looks like an HTML file by mime or extension. */
+internal fun looksHtml(mime: String, name: String): Boolean =
+	mime.startsWith("text/html") || name.endsWith(".html", ignoreCase = true) || name.endsWith(".htm", ignoreCase = true)
+
 /**
- * Derive a conversation's design cards from its messages - the card index is a VIEW over thread
- * state, never a second persisted copy (so `forget()`, schema wipes, and attachment eviction can
- * not leave a stale index behind; see plans/plugins.md). An attachment is a card when it is an
- * HTML file whose content leads with the `@dsCard` marker. Cards keep first-appearance order; a
- * same-filename card from a message with an equal-or-later timestamp updates in place.
+ * Derive a conversation's design cards (with version history) from its messages - the index is a
+ * VIEW over thread state plus a small dismissed overlay, never a second persisted copy of the
+ * content (so `forget()`, schema wipes, and attachment eviction can not leave a stale index
+ * behind; see plans/plugins.md). An attachment is a card version when it is an HTML file whose
+ * content leads with the `@dsCard` marker. Same filename across messages accumulates versions in
+ * chronological order; a new filename is a new card. Cards keep first-appearance order.
  *
- * PEER-MIRROR ROWS ARE EXCLUDED. A `kind:"peer"` row is an agent-to-agent exchange mirrored into
- * this thread (`Message.isPeer`, `from`/`to` are the real two parties, neither necessarily the
- * human); its attachments belong to that OTHER exchange. Folding them in by filename would let a
- * card from an unrelated exchange seed or silently overwrite a card the human's own agent pushed
- * to THIS thread (same collision the renderer disambiguates with a "from -> to" label). The dock
- * shows only cards delivered on this conversation's own channel.
+ * PEER-MIRROR ROWS ARE EXCLUDED (`Message.isPeer`): a mirrored agent-to-agent exchange's
+ * attachments belong to that other exchange, and folding them in by filename would let an
+ * unrelated card seed or overwrite one the human's own agent pushed here.
  *
- * [readHtml] resolves an attachment src to its text (injected: the app reads the materialized
- * file, tests read fixtures); an unresolvable attachment is simply not a card.
+ * [dismissed] maps a filename to the newest-version timestamp AT THE MOMENT it was deleted. A card
+ * is hidden while its newest version is not newer than that marker; a strictly-later re-push
+ * (a deliberate new revision) clears the tombstone by exceeding it. [readHtml] resolves an
+ * attachment src to its text (injected: the app reads the materialized file, tests read fixtures);
+ * an unresolvable attachment is simply not a card version.
  */
-fun designerCards(messages: List<Message>, readHtml: (src: String) -> String?): List<DesignerCard> {
-	val byFile = LinkedHashMap<String, DesignerCard>()
+fun designerCards(
+	messages: List<Message>,
+	dismissed: Map<String, Long> = emptyMap(),
+	readHtml: (src: String) -> String?,
+): List<DesignerCard> {
+	val byFile = LinkedHashMap<String, MutableList<DesignerVersion>>()
 	for (msg in messages) {
 		if (msg.isPeer) continue
 		for (f in msg.files) {
 			val src = f.src ?: continue
-			val looksHtml = f.mime.startsWith("text/html") ||
-				f.name.endsWith(".html", ignoreCase = true) ||
-				f.name.endsWith(".htm", ignoreCase = true)
-			if (!looksHtml) continue
+			if (!looksHtml(f.mime, f.name)) continue
 			val html = readHtml(src) ?: continue
 			val meta = parseDsCardMarker(html) ?: continue
-			val existing = byFile[f.name]
-			if (existing != null && msg.at < existing.updatedAt) continue
-			val stem = f.name.substringBeforeLast('.')
-			// A LinkedHashMap put on an existing key keeps its position: update-in-place.
-			byFile[f.name] = DesignerCard(
-				name = htmlTitle(html) ?: stem,
-				fileName = f.name,
-				src = src,
-				updatedAt = msg.at,
-				meta = meta,
-			)
+			val versions = byFile.getOrPut(f.name) { mutableListOf() }
+			if (versions.any { it.src == src }) continue // idempotent re-derive
+			versions.add(DesignerVersion(src, msg.at, meta, htmlTitle(html)))
 		}
 	}
-	return byFile.values.toList()
+	return byFile.entries.mapNotNull { (fileName, versions) ->
+		versions.sortBy { it.at }
+		val latest = versions.last()
+		val tombstone = dismissed[fileName]
+		if (tombstone != null && latest.at <= tombstone) return@mapNotNull null
+		DesignerCard(fileName, latest.title ?: fileName.substringBeforeLast('.'), versions.toList())
+	}
 }

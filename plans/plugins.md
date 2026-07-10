@@ -186,6 +186,92 @@ shipped 2026-07-10.
 ability. But there may be parts you DONT want." -> the keep/toss pass near the top of this file is
 the standing ruling on which pieces survive; awaiting the user's reaction to the specific calls.
 
+## Phase 3 questionaire - presentation, referencing, management
+
+Opened after live-testing phase 1+2 in production (real `channel_reply` attachments, not mockups):
+confirmed working, THEN the user raised "how are they keyed... now we need to talk about and
+refine how it's presented, how I reference and get back to you, and manage them."
+
+**Keying, as shipped (confirmed, not a question):** a card's identity is its attachment FILENAME.
+Same filename on a later message updates in place; a new filename accumulates forever - no cap,
+no eviction (the index derives from the thread's full, unpruned message history). Re-attaching the
+3 approved mockups plus the smoke-test card left 4 permanent entries in the test thread.
+
+**6. Should a canvas be addressable by name, not just by tapping?**
+
+- A) Keep filename-as-identity, title-as-display (current model, UNCHANGED). Reference by prose
+  description; the agent picks the filename. ("For reference A.")
+
+**Volunteered alongside the answer (user):**
+
+- **Attachment-chip shortcut-open.** When a card-marked `.html` attachment's chip appears inline
+  in a message (the ordinary chip every attachment gets), tapping it should shortcut straight to
+  the Designer full-screen viewer for that card, instead of today's generic `AttachmentViewer`
+  fallback (HTML matches neither `image/`  nor `video/`, so it currently falls to
+  `FileInfoDialog` - a bare metadata dialog, not the rendered card).
+- **Management surface: a context menu on each canvas-list row, AND an action bar in the
+  full-screen viewer** (same action set, two entry points). Actions, user's exact list:
+  - **Reference in chat** - macro-insert the card's **Title**, bolded, into the chat draft/composer.
+  - **Reattach to chat** - re-send the card as a fresh attachment message ("in case you forget or I
+    like an old version better").
+  - **Download** - save to the device's Downloads (reuse the existing `saveToDownloads` MediaStore
+    helper already in `AttachmentViewer.kt`, don't reinvent it).
+  - **Delete** - removes the card from the Designer dock/list.
+
+**7. Open ambiguity flagged back to the user (not yet answered): what do Delete and Reattach
+mean against a DERIVED index?**
+
+The card index is deliberately a VIEW over chat history, not a second stored copy (Phase 2's
+build log) - and there is only ONE stored slot per filename (the latest content), no version
+stack. Two consequences worth confirming before building:
+
+- **Delete** can't remove a chat message (that would mutate the transcript / break at-least-once
+  dedup). The sound shape: a lightweight per-conversation "dismissed filenames" overlay
+  (small metadata, not a duplicate of the design content) that the dock's derivation filters
+  against - so Delete hides the card from the dock without touching the conversation history.
+  A later re-push of that same filename should probably UN-dismiss it (a deliberate new version
+  arriving is not "undelete the old one").
+  - Recommendation: build it this way unless the user wants delete to also purge the underlying
+    attachment bytes/message (a bigger, more destructive feature).
+- **Reattach**, given single-slot-per-filename storage, can only resend the CURRENT content - it
+  cannot resurrect a truly OLDER version once a same-filename update has overwritten it. The
+  phrase "or I like an old version better" implies the user may be picturing version history that
+  does not exist yet in this design. Needs a direct answer: is single-current-version (Reattach =
+  resend what's there now) sufficient, or does this phase also need a version history stack per
+  canvas (each push keeps prior versions, Reattach/rollback picks among them)? The latter is a
+  materially bigger feature (storage, a version list UI, a "pick a version" affordance).
+
+**8. User floated: "maybe designer needs it's own place on the store. And this plugin allows it
+to understand that place in the store. but now we cross into the switchboard MCP also needing
+that level of understanding too. what do you think?"**
+
+Assessment given (recommendation: yes to a store, but the DEVICE's store, not the gateway's;
+the MCP needs NO new understanding for this phase):
+
+- Every phase-3 ask (version history, real delete, reattach-old-version, chip shortcut) is
+  satisfiable by a device-local, per-conversation, VERSIONED design store owned by the plugin,
+  POPULATED by the existing attachment transport. `designerCards()` evolves from a render-time
+  view into the store's ingest scanner; each same-filename push APPENDS a version instead of
+  being lost to overwrite. Delete becomes a real store op (can even purge bytes); Reattach picks
+  any version. An evolution of the shipped code, not a rewrite.
+- A GATEWAY-side design store would cut against the architecture's grain: the gateway is
+  deliberately content-blind everywhere (sealed frames, unparsed attachments), and every other
+  presentation-state surface (threads, labels, drafts, unread) is device-local by design. Making
+  the gateway understand one attachment type would be its first content-aware feature - the
+  ownership test says designs are conversation artifacts consumed on the device.
+- The MCP/agent contract stays exactly "attach @dsCard files" (fresh filename per canvas,
+  same filename to update). Agent-side DesignSync-parity verbs (list/get/write against a real
+  store) remain the designer.md parity build, designed IF a real cross-session/cross-device need
+  arrives - and the device store's schema (stable card ids + version rows) is deliberately the
+  thing a gateway store would later sync, so the split stays additive (the same "easy to split
+  later" shape as Q1's answer C).
+- Framework dividend: this adds the plugin framework's second real extension point - per-plugin
+  device storage (e.g. a host-granted plugin-owned dir/keys), with dual-support disable semantics
+  already defined (disable keeps data).
+- Honest trade-off stated: device-local means the version history lives on ONE phone. Lose the
+  device and the history is gone (chat transcript + the agent's own file copies survive). A
+  future multi-console setup would not share the store until the gateway-sync lift happens.
+
 **Mockups approved (user):** "Looking good so far. now use that as your reference to plan the UX
 against." The three cards are the UX reference; payload snapshotted to
 `temp/switchboard-designer-dock/` + `temp/switchboard-designer-dock.zip` (gitignored local artifact,
@@ -311,3 +397,56 @@ during the build:
   skip, so a too-big card is diagnosable instead of a mystery.
 - **[low, plan] Collapsed-bar thumbnail strip** folded into the standing thumbnail deferral (noted
   above), not a new gap.
+
+## Phase 3 build - versioned store + management + chip-open
+
+Built after the phase-3 questionaire (versioned device store owned by the plugin, fed by the
+existing transport; MCP + gateway unchanged). Shipped:
+
+- **Versioned model** (`DesignerCards.kt`): `DesignerCard.versions` (chronological, newest last),
+  derived from messages - each same-filename push is its own on-disk attachment bucket, so history
+  is a VIEW over the message log, not a copied store. Dedup by src; peer rows still excluded.
+- **The only new persisted state** (`DesignStore.kt`): per-conversation DELETE tombstones in the
+  plugin's OWN SharedPreferences (`switchboard-designer`), untangled from AppStateStore's
+  provisioning/wipe partitions. A tombstone records the newest-version timestamp at delete; a card
+  hides while `latest.at <= tombstone`, and a strictly-newer re-push resurfaces it. This is the
+  plugin framework's SECOND extension use - per-plugin device storage - with disable-keeps-data
+  already the rule.
+- **Two new extension points** (`PluginEntry.kt`): `ThreadDockScope` (carries `insertDraftText`,
+  the composer seam ThreadScreen provides) and `AttachmentOpener` (a plugin claims a tapped
+  attachment). Both are typed, host-exposed, source-tagged, swept on disable - the framework grew
+  exactly as designed (one point per real consumer).
+- **Four-action surface** (`DesignerDock.kt`): a row context menu AND a viewer action bar sharing
+  one `CardAction` enum so they can't drift. Reference (macro-insert bold `**Title**` into the
+  draft), Reattach (re-send the viewed version's bytes via a FileProvider URI through the
+  composer's own `repo.send` - "I like an old version better" = view it, reattach it), Download
+  (reuse the extracted `saveFileToDownloads`), Delete (tombstone via the store). Plus a version
+  stepper in the viewer (older/newer) and the share action.
+- **Chip shortcut-open** (`DesignerOpenBus.kt` + `DesignerPlugin.kt`): tapping a card-marked
+  `.html` attachment chip in the chat body routes through the `AttachmentOpener` registry to the
+  live dock's viewer instead of the generic file dialog. `MainActivity.onAttachmentTap` consults
+  the openers and only falls back to `AttachmentViewer` when none claims.
+
+**Gates:** 293 Android unit tests (DesignerCardsTest covers version accumulation, tombstone
+hide/resurface, the `<=` boundary, cross-card dismissal isolation, prefix-truncation marker), plus
+the R8 `assembleRelease` minify gate (new WebView/FileProvider/serialization paths). All green.
+
+**Phase 3 red-team round (Sonnet fleet, 4 dimensions) - 6 confirmed, all fixed:**
+
+- **[high x3, chip-open] The chip-open mechanism was fragile by design.** A process-global
+  `MutableStateFlow` retained the last request forever (re-entering a conversation auto-opened a
+  canvas with no tap), the request was tagged with the ambient on-screen team rather than the
+  tapped thread's (a notification-driven team switch mid-post misrouted it), and the opener read
+  the WHOLE attachment synchronously on the UI thread (a big `.html` ANRs on one tap). Reworked
+  the whole path: `DesignerOpenBus` is now a replay-0 event stream (no retained value, no stale
+  replay); the team is threaded per-renderer through `onAttachmentTap(team, rel)` so it is always
+  the tapped thread's; and the opener reads only a bounded 2 KB prefix (the marker leads the file),
+  main-thread-safe. A dock-local `pendingOpenRel` resolves once `cards` contains the rel, so a tap
+  that beats the async re-derive still opens.
+- **[medium, ui] Version stepper jumped to latest** when a new version streamed in (keyed on
+  version COUNT). Re-keyed on filename only + coerce, so the user's position is preserved as
+  history grows.
+- **Reattach send** moved off the dock's composition scope onto a process-lifetime scope, so
+  closing the thread mid-send cannot cancel it (matching the composer's own App-scoped send).
+- Six findings refuted (the `<=` same-ms boundary is correct; `DesignStore.forget()` orphans are
+  benign; stale `openIndex` is range-guarded; etc.).
