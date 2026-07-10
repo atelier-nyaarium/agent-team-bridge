@@ -293,6 +293,16 @@ class AppStateStore(context: Context) {
 
 	fun loadTrustedOwners(): String? = prefs.getString(KEY_TRUSTED_OWNERS, null)
 
+	/** Per-plugin opt-in flag, keyed by the plugin's composite id (see `plugins/`). Settings-owned
+	 * taste like the voice creds: survives a re-provision by omission from PROVISIONING_KEYS, and
+	 * is not address-keyed so it never joins SCHEMA_WIPE_KEYS. Default off - a baked-in plugin is
+	 * INSTALLED and the user opts in. */
+	fun pluginEnabled(id: String): Boolean = prefs.getBoolean(KEY_PLUGIN_ENABLED_PREFIX + id, false)
+
+	fun setPluginEnabled(id: String, on: Boolean) {
+		prefs.edit().putBoolean(KEY_PLUGIN_ENABLED_PREFIX + id, on).apply()
+	}
+
 	/** A Gateway's signing + box public keys, resolved from the owner-verified keyring at
 	 * seal time (the phone-anchored model does not persist per-Gateway keys). */
 	data class GatewayKeys(val signPub: String, val boxPub: String)
@@ -320,6 +330,7 @@ class AppStateStore(context: Context) {
 		const val DEFAULT_STTS_URL = "https://vrcsttapi.azurewebsites.net"
 		const val KEY_STTS_PROVIDER = "stts_provider"
 		const val KEY_STTS_VOICE_PREFIX = "stts_voice."
+		const val KEY_PLUGIN_ENABLED_PREFIX = "plugin_enabled."
 		const val KEY_AUTO_TTS = "auto_tts"
 		const val KEY_AUTO_PLAY = "auto_play_tier"
 		const val KEY_STTS_VOLUME = "stts_volume"

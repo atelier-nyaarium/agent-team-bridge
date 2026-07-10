@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.Add
@@ -120,6 +121,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
+import com.atelier_nyaarium.switchboard.plugins.PluginManager
+import com.atelier_nyaarium.switchboard.plugins.Plugins
 import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.composeSessionName
 import com.atelier_nyaarium.switchboard.proto.isComposite
@@ -216,6 +219,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// manual dismiss (the board keeps a "Verify with the admin" entry for that).
 	var enrolleeCeremonyOffered by remember { mutableStateOf(false) }
 	var unlocked by remember { mutableStateOf(false) }
+
+	// The plugin framework boots with the app (not on first Settings open): an enabled plugin's
+	// contributions must be live for every surface that consults a registry, not only after the
+	// user happens to visit the toggle screen.
+	val pluginManager = remember { Plugins.get(context) }
 
 	// WebView pool lives at App scope (never leaves composition) so each thread's
 	// renderer survives Sessions round-trips and tab switches. Pruned to open tabs;
@@ -484,6 +492,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			SettingsScreen(
 				state = state,
 				repo = repo,
+				plugins = pluginManager,
 				route = settingsRoute,
 				onRoute = { settingsRoute = it },
 				onSetDeviceName = { scope.launch { repo.setDeviceName(it) } },
@@ -1821,7 +1830,7 @@ fun ThreadScreen(
 
 /** The settings hub's routes: the hub plus one focused sub-screen each. A plain enum
  * (Serializable), so App() holds the current route in rememberSaveable across rotation. */
-enum class SettingsRoute { HUB, PROFILE, VOICE, NETWORKS, SECURITY, SYSTEM }
+enum class SettingsRoute { HUB, PROFILE, VOICE, NETWORKS, SECURITY, PLUGINS, SYSTEM }
 
 private fun settingsTitle(route: SettingsRoute): String = when (route) {
 	SettingsRoute.HUB -> "Settings"
@@ -1829,6 +1838,7 @@ private fun settingsTitle(route: SettingsRoute): String = when (route) {
 	SettingsRoute.VOICE -> "Voice & TTS"
 	SettingsRoute.NETWORKS -> "Domain & Trust"
 	SettingsRoute.SECURITY -> "Security"
+	SettingsRoute.PLUGINS -> "Plugins"
 	SettingsRoute.SYSTEM -> "System"
 }
 
@@ -1840,6 +1850,7 @@ private fun settingsTitle(route: SettingsRoute): String = when (route) {
 fun SettingsScreen(
 	state: ChatState,
 	repo: ChatRepository,
+	plugins: PluginManager,
 	route: SettingsRoute,
 	onRoute: (SettingsRoute) -> Unit,
 	onSetDeviceName: (String) -> Unit,
@@ -1852,11 +1863,12 @@ fun SettingsScreen(
 ) {
 	// Settings opens from the pre-provision setup screen too. Before provisioning the repo is not
 	// loaded, so the provisioned-only categories (Profile, Voice, Networks, Security) would NPE or
-	// route into provisioned-only screens. Show ONLY the System section then, and treat a stale saved
-	// sub-route as the hub so it can never render a provisioned-only screen unprovisioned.
+	// route into provisioned-only screens. Show ONLY the app-local sections then (System, Plugins),
+	// and treat a stale saved sub-route as the hub so it can never render a provisioned-only screen
+	// unprovisioned.
 	val provisioned = state.provisioned
 	val effectiveRoute =
-		if (!provisioned && route != SettingsRoute.HUB && route != SettingsRoute.SYSTEM) {
+		if (!provisioned && route != SettingsRoute.HUB && route != SettingsRoute.SYSTEM && route != SettingsRoute.PLUGINS) {
 			SettingsRoute.HUB
 		} else {
 			route
@@ -1884,12 +1896,14 @@ fun SettingsScreen(
 						SettingsRow(Icons.Default.Hub, "Domain & Trust") { onRoute(SettingsRoute.NETWORKS) }
 						SettingsRow(Icons.Default.Lock, "Security") { onRoute(SettingsRoute.SECURITY) }
 					}
+					SettingsRow(Icons.Default.Extension, "Plugins") { onRoute(SettingsRoute.PLUGINS) }
 					SettingsRow(Icons.Default.Tune, "System") { onRoute(SettingsRoute.SYSTEM) }
 				}
 				SettingsRoute.PROFILE -> ProfileSettings(state, repo, onSetDeviceName)
 				SettingsRoute.VOICE -> SttsVoiceSection(repo)
 				SettingsRoute.NETWORKS -> NetworksSettings(repo, onManage, onYourDevices, onFederation)
 				SettingsRoute.SECURITY -> SecuritySettings(state, onToggleBiometric)
+				SettingsRoute.PLUGINS -> PluginsSettings(plugins)
 				SettingsRoute.SYSTEM -> SystemSettings(repo, onClear)
 			}
 		}
@@ -1912,6 +1926,54 @@ private fun SettingsRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 		)
 		Text(label, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
 		Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+	}
+}
+
+/** The baked-in plugin list, one row per catalog plugin with its opt-in toggle. A refused flip
+ * (dep gating, broken plugin) surfaces the manager's message instead of silently reverting. */
+@Composable
+private fun PluginsSettings(plugins: PluginManager) {
+	var refresh by remember { mutableStateOf(0) }
+	var status by remember { mutableStateOf("") }
+	val states = remember(refresh) { plugins.states() }
+	if (states.isEmpty()) {
+		Text(
+			"No plugins ship in this build yet.",
+			style = MaterialTheme.typography.bodyMedium,
+			color = MaterialTheme.colorScheme.onSurfaceVariant,
+		)
+	}
+	states.forEach { p ->
+		Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+			Column(Modifier.weight(1f)) {
+				Text(p.displayName, style = MaterialTheme.typography.titleMedium)
+				val detail = listOf("v${p.version}", p.description).filter { it.isNotEmpty() && it != "v" }.joinToString(" - ")
+				if (detail.isNotEmpty()) {
+					Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+				}
+				p.broken?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+				if (p.enabled && !p.active && p.broken == null) {
+					Text(
+						"On, but not running: it requires a plugin that is off.",
+						style = MaterialTheme.typography.bodySmall,
+						color = MaterialTheme.colorScheme.error,
+					)
+				}
+			}
+			Switch(
+				checked = p.enabled,
+				// A broken plugin cannot be switched ON, but switching OFF must stay reachable
+				// (a flag stranded on by a failing boot needs a live opt-out, not a dead toggle).
+				enabled = p.broken == null || p.enabled,
+				onCheckedChange = { on ->
+					status = plugins.setEnabled(p.id, on) ?: ""
+					refresh++
+				},
+			)
+		}
+	}
+	if (status.isNotEmpty()) {
+		Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
 	}
 }
 

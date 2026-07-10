@@ -84,6 +84,9 @@ android {
 		// exposing them as test resources keeps the path stable across local
 		// runs and CI working dirs.
 		getByName("test").resources.directories.add("../../tests/fixtures")
+		// Bundled assets on the test classpath so the plugin catalog agreement test can
+		// enumerate assets/plugins/ and parse each baked manifest without an AssetManager.
+		getByName("test").resources.directories.add("src/main/assets")
 	}
 
 }
