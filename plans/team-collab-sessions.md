@@ -333,3 +333,29 @@ Real, out-of-scope-for-this-plan findings surfaced by audit passes. Not fixed he
   `groupDiscoverEntries` computes). A cleaner full-hide already existed pre-fix via `kind:
   "console"` and is untouched by this diff. Not fixing; no test added since it pins a pre-existing,
   low-severity, out-of-scope trust characteristic rather than this phase's own change.
+- [medium] Framework-first finding, expanding on the two entries above - `TeamInfoSchema` (fully
+  specified in `schemas.ts`, already reused by `ConsoleListTeamsResultSchema`) has never actually
+  been runtime-parsed against wire data anywhere: every hop a `TeamInfo[]`/`list_teams` payload
+  crosses (`routes.ts:611`/`629`'s peer-relay merge into `discover()`, `bridgeDiscover.ts:131`'s
+  `/discover` fetch, `consoleHandler.ts:548`'s console-facing `list_teams`) does a bare `as` cast,
+  and `federation-protocol.ts`'s own comment ("the existing route validation handles shape, so no
+  result schema is enforced here") describes a safety net that doesn't exist. `bridgeDiscover.ts`
+  also hand-rolls a `DiscoverEntry` interface that has already drifted from `TeamInfoSchema`
+  (`gatewayId` optional vs. required; `status`/`kind` loose `string` vs. closed enums;
+  `displayName`/`isAdminDomain`/`mode`/`version` absent). **Important correction before anyone
+  acts on this:** a naive `TeamInfoSchema.safeParse()` would be wrong, not just incomplete -
+  `status`/`kind` are closed zod enums, but the generated Kotlin (`android/.../proto/Protocol.kt`)
+  deliberately decodes both as open `String`s for forward-compatibility ("the console must
+  tolerate values newer than this build" - `codegen-kotlin.ts:219` states the same rule). Reusing
+  the closed-enum schema as-is on inbound peer data would silently drop every entry from a peer
+  running a newer protocol version - regressing, one layer up, the exact cross-version tolerance
+  the Kotlin side was built to preserve. A correct fix needs a deliberately loosened variant
+  (strict on `team`/`gatewayId`/`queue_depth`, permissive on `status`/`kind`/`mode`), which is real
+  design work, not a drop-in one-liner. The highest-consequence site is actually
+  `consoleHandler.ts:548` (not `bridgeDiscover.ts`, an MCP-side nicety): its result reaches a real
+  Android device via a single atomic `kotlinx.serialization` decode of `List<TeamInfo>`, which
+  fails the *whole array* on one structurally-invalid required field - so one malformed peer entry
+  can hide every session, local included, from the phone. Not fixing here (wrong phase for a
+  trust-surface schema design, and 5 of the 7 cast sites are same-process JSON round-trips with no
+  real boundary, not worth wrapping "for uniformity"). Natural pairing: do this alongside Phase 5,
+  which already touches the federation/mailbox trust surface, with its own red-team pass.
