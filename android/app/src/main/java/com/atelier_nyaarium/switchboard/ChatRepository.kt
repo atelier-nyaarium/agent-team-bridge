@@ -244,6 +244,18 @@ internal fun loadedAttribution(
 		else -> canonicalKey to null
 	}
 
+/** A tier's TTS text, framed as "from to to: text" for a peer-mirror row so it never plays back
+ * as if addressed to this console - neither party in a peer-mirror row is this console's own
+ * team, unlike every other message this reads aloud. Spoken form spells out "to" rather than an
+ * arrow glyph, since TTS engines render symbols unpredictably. */
+internal fun ttsTextFramed(state: ChatState, msg: Message, tier: SttsPlayer.Tier): String {
+	val text = SttsPlayer.ttsText(msg, tier)
+	if (!msg.isPeer) return text
+	val fromLabel = msg.from?.let { state.label(it, state.localGatewayId) } ?: "someone"
+	val toLabel = msg.to?.let { state.label(it, state.localGatewayId) }
+	return if (toLabel != null) "$fromLabel to $toLabel: $text" else "$fromLabel: $text"
+}
+
 /** The thread index a `sent` echo should replace, or -1 to append as a new row. Folds an
  * at-least-once re-drain by (epoch, seq), then on the sending device matches this owner message's
  * row by opId whatever its current seq. Matching by opId alone (not just the seq-0 optimistic row)
@@ -794,21 +806,8 @@ class ChatRepository(
 			val provider = currentProvider() ?: return@post
 			val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return@post
 			val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-			stts.play(client, provider, voice, team, at, tier, ttsTextFramed(msg, tier), sttsVolume)
+			stts.play(client, provider, voice, team, at, tier, ttsTextFramed(_state.value, msg, tier), sttsVolume)
 		}
-	}
-
-	/** SttsPlayer.ttsText's tier text, framed as "from to to: text" for a peer-mirror row so it
-	 * never plays back as if addressed to this console - neither party in a peer-mirror row is
-	 * this console's own team, unlike every other message this reads aloud. Spoken form spells out
-	 * "to" rather than an arrow glyph, since TTS engines render symbols unpredictably. */
-	private fun ttsTextFramed(msg: Message, tier: SttsPlayer.Tier): String {
-		val text = SttsPlayer.ttsText(msg, tier)
-		if (!msg.isPeer) return text
-		val state = _state.value
-		val fromLabel = msg.from?.let { state.label(it, state.localGatewayId) } ?: "someone"
-		val toLabel = msg.to?.let { state.label(it, state.localGatewayId) }
-		return if (toLabel != null) "$fromLabel to $toLabel: $text" else "$fromLabel: $text"
 	}
 
 	fun isMessagePlaying(team: String, at: Long): Boolean = stts.isPlayingMessage(team, at)
@@ -862,8 +861,8 @@ class ChatRepository(
 			voice,
 			team,
 			at,
-			ttsTextFramed(msg, SttsPlayer.Tier.SUMMARY),
-			ttsTextFramed(msg, SttsPlayer.Tier.FULL),
+			ttsTextFramed(_state.value, msg, SttsPlayer.Tier.SUMMARY),
+			ttsTextFramed(_state.value, msg, SttsPlayer.Tier.FULL),
 		)
 	}
 

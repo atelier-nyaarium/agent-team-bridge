@@ -31,6 +31,16 @@ import kotlinx.coroutines.launch
 internal fun shouldNotifyBurst(isVisible: Boolean, canNotify: Boolean, closedTeams: Set<String>, team: String): Boolean =
 	!isVisible && canNotify && team !in closedTeams
 
+/** A peer-mirror row's notification/TTS text, framed as "from -> to: text" so it never reads as
+ * if addressed to this console - neither party in a peer-mirror row is this console's own team,
+ * unlike every other row this is applied to. */
+internal fun peerFramed(state: ChatState, m: Message, text: String): String {
+	if (!m.isPeer) return text
+	val fromLabel = m.from?.let { state.label(it, state.localGatewayId) } ?: "?"
+	val toLabel = m.to?.let { state.label(it, state.localGatewayId) }
+	return if (toLabel != null) "$fromLabel → $toLabel: $text" else "$fromLabel: $text"
+}
+
 /**
  * Foreground service owning the bridge connection and poll loop, so messages keep
  * arriving while the Activity is backgrounded or the screen is off. The Activity
@@ -204,16 +214,6 @@ class SwitchboardService : Service() {
 		// changes must not resurrect it. It returns on the next service start.
 		if (statusDismissed) return
 		NotificationManagerCompat.from(this).notify(STATUS_NOTIFICATION_ID, buildStatusNotification(line, unread))
-	}
-
-	/** A peer-mirror row's notification/TTS text, framed as "from -> to: text" so it never reads
-	 * as if addressed to this console - neither party in a peer-mirror row is this console's own
-	 * team, unlike every other row this function handles. */
-	private fun peerFramed(state: ChatState, m: Message, text: String): String {
-		if (!m.isPeer) return text
-		val fromLabel = m.from?.let { state.label(it, state.localGatewayId) } ?: "?"
-		val toLabel = m.to?.let { state.label(it, state.localGatewayId) }
-		return if (toLabel != null) "$fromLabel → $toLabel: $text" else "$fromLabel: $text"
 	}
 
 	/** One notification per team, summarizing that team's unread burst. See [shouldNotifyBurst]
