@@ -253,6 +253,19 @@ internal fun loadedAttribution(
 internal fun threadsAfterForget(threads: Map<String, List<Message>>, key: String): Map<String, List<Message>> =
 	(threads - key).mapValues { (_, msgs) -> msgs.filterNot { it.isPeer && (it.from == key || it.to == key) } }
 
+/** Whether a peer-mirrored exchange's auto-play should be suppressed because an identical
+ * `(from, to)` pair already claimed this poll pass's one auto-play slot. The gateway mirrors an
+ * agent-to-agent exchange into BOTH participants' mailboxes as separate thread keys (see
+ * `threadsAfterForget` above), so one exchange otherwise reaches the burst loop twice - once per
+ * thread - and gets spoken twice over if both threads are followed at once. `seenPairs`
+ * accumulates across one pass over `burst`, so the first thread to claim a pair wins and the
+ * second is suppressed. Always false for a non-peer message: an ordinary entry lands in exactly
+ * one thread and never duplicates. */
+internal fun isDuplicatePeerAutoPlay(lastAgent: Message?, seenPairs: MutableSet<String>): Boolean {
+	val pair = lastAgent?.takeIf { it.isPeer }?.let { "${it.from}|${it.to}" } ?: return false
+	return !seenPairs.add(pair)
+}
+
 /** A tier's TTS text, framed as "from to to: text" for a peer-mirror row so it never plays back
  * as if addressed to this console - neither party in a peer-mirror row is this console's own
  * team, unlike every other message this reads aloud. Spoken form spells out "to" rather than an
@@ -2673,8 +2686,10 @@ class ChatRepository(
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team SKIPPED (no body, no files, no status)")
 						}
 					}
+					val autoPlayedPeerPairs = mutableSetOf<String>()
 					for ((team, msgs) in burst) {
 						val lastAgent = msgs.lastOrNull { !it.fromMe }
+						val alreadyAutoPlayed = isDuplicatePeerAutoPlay(lastAgent, autoPlayedPeerPairs)
 						// Only spend synthesis on followed threads (open tabs); a
 						// never-opened or forgotten session is not in openTabs, so it
 						// notifies without preloading.
@@ -2683,7 +2698,7 @@ class ChatRepository(
 						// Pre-generate and auto-play are independent: enter the launch
 						// path when either is active for this followed thread.
 						val autoTier = autoPlayTier(sttsAutoPlay)
-						if (scope != null && lastAgent != null && sttsReady() && followed && (sttsAutoGen || autoTier != null)) {
+						if (scope != null && lastAgent != null && sttsReady() && followed && !alreadyAutoPlayed && (sttsAutoGen || autoTier != null)) {
 							val t = team
 							val ms = msgs
 							val at = lastAgent.at
