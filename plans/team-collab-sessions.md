@@ -359,3 +359,18 @@ Real, out-of-scope-for-this-plan findings surfaced by audit passes. Not fixed he
   trust-surface schema design, and 5 of the 7 cast sites are same-process JSON round-trips with no
   real boundary, not worth wrapping "for uniformity"). Natural pairing: do this alongside Phase 5,
   which already touches the federation/mailbox trust surface, with its own red-team pass.
+- [info] Compliance pass cross-reference, no new tracking needed - the broader "who can call
+  crosstalk_discover / join a team with no admission gate" question this phase's grouping change
+  surfaces more visibly is already captured, at higher fidelity, in `plans/gateway-auth-surface.md`
+  (a dedicated security audit dated 2026-06-25, before this plan existed) - an owner-approved,
+  unshipped origin-aware `GATEWAY_TOKEN` gate already covers `/teams`/`/discover`/`/pending`.
+  `pain-points.md` already cross-references it as "already-known, already-decided-but-unshipped".
+  Nothing to add here beyond noting Phase 3 doesn't change that picture either way.
+- [low] `src/gateway/federation/gatewayRelay.ts` (`localShareTarget`) / `src/shared/session-id.ts`
+  (`DEFAULT_SESSION`) - pre-existing canonicalization quirk, unrelated to and untouched by this
+  phase: sharing a whole bare project (`cross_domain_share`'s `SpawnPoint` form) and sharing a
+  session literally named `claude` (`DEFAULT_SESSION`) canonicalize to the identical share key
+  (`domain.gateway.<project>.claude`), so either action satisfies the other's share-filter check.
+  Not a bypass (both still require an explicit owner `cross_domain_share` call), just an ambiguity
+  in "which of two things did the owner mean to share". Fix, if picked up: a distinct sentinel or
+  explicit disambiguation for a whole-spawn-point share vs. a session named `claude`.
