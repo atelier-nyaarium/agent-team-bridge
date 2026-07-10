@@ -201,3 +201,111 @@ confirmed live during this plan's own deploy, not just theorized.
   eviction, `suppressReconnect` never resets). Directly relevant given a mid-transition agent can end
   up on a stale tool and fall back to this exact prose path, as happened during this plan's own
   deploy - the regex itself was never tightened.
+
+## Team collab sessions (`plans/team-collab-sessions.md`, deleted, shipped and deployed - 2026-07-10)
+
+Migrated from `plans/team-collab-sessions.md` (deleted, shipped and deployed - PR #111 merged,
+live-verified: gateway rebuilt, all sessions reconnected, multi-team crosstalk confirmed working via
+both user testing and direct log inspection). Pruned to concrete, reachable findings from the plan's
+audit passes across all 6 phases; already-fixed and purely informational items dropped.
+
+**High:**
+- [high] `android/.../ChatRepository.kt : forget / startPolling` - **bug-class** - `forget()` runs
+  synchronously on the main thread with no mutual exclusion against the poll loop's
+  `appendInbound`/`bumpUnread`/`mailboxSync.commit()` sequence on `Dispatchers.IO`. Whichever side's
+  `_state` update lands last wins: a just-forgotten thread can resurrect as a ghost session, or a
+  freshly-arrived message can be silently and permanently wiped (the mailbox cursor has already
+  advanced past it) - contradicting the app's own at-least-once mailbox guarantee. Needs a shared
+  Mutex (precedent: `freshTeamsMutex`) serializing `forget()` against the poll loop's per-team
+  sequence.
+- [high] `src/gateway/routes.ts : respond / mirrorPeer` - **bug-class** - `respond()` has no try/catch
+  around any of its 3 `mirrorPeer` calls; an uncaught throw from the cross-gateway mirror call is
+  reported to the origin as a relay failure, so `relayWithRetry` retries up to 5 times (2s-16s
+  backoff) and each retry re-runs the full `respond()` body - re-appending to the console mailbox
+  with no dedupeKey and re-pushing over the live WS, duplicating an already-delivered reply 2-5x over
+  a purely cosmetic downstream failure. Root cause: `mirrorPeer`'s own try/catch doesn't cover
+  `ownerId?.()`, which runs before the try block, contradicting its doc comment's "never surfaces to
+  the caller" guarantee. Untested.
+- [high, pre-existing, predates this plan] `src/shared/federation-protocol.ts` (`send.from`) /
+  `src/gateway/routes.ts : mirrorPeer` - **bug-class** - `send.from` is an unauthenticated free
+  string with no binding to the cryptographically-verified `srcDomainId`/`srcGateway`. A federated
+  inbound send's `mirrorPeer` call uses this wire `from` verbatim as the mirrored entry's sender -
+  reachable by any admitted same-Domain or shared-cross-Domain peer, letting it attribute an inbound
+  message to any arbitrary string up to 320 chars in the receiving owner's own console mailbox and
+  live agent. Misattribution within an otherwise-legitimate delivery, not a routing bypass. Needs a
+  dedicated look at `send`'s sender-identity model.
+- [high] `src/shared/device-mailbox.ts : DeviceMailbox.evictOneForCapacity` (vs
+  `console_push.entry.kind`) - **bug-class** - the OOM backstop's peer-priority eviction trusts a
+  wire-supplied `kind` that a `console_push` sender now controls. A same-Domain sibling Gateway
+  (compromised or buggy) can flood `console_push` entries stamped `kind: "notice"` (never a
+  peer-priority eviction candidate) to trip the 10,000-entry cap, and once genuine `"peer"` entries
+  are exhausted the fallback evicts the oldest entry of ANY kind - a real reply the owner is waiting
+  on, or a real notice. Defeats the eviction priority's documented purpose using nothing but a
+  same-Domain flood; needs a provenance concept `DeviceMailbox` doesn't have today.
+
+**Medium:**
+- [medium] `src/gateway/routes.ts : teams()` - pre-existing - `commonFields`'s `domainIdField` omits
+  `domainId` entirely in arming mode, while every actual address-building path elsewhere in the file
+  treats arming mode as domain `"local"`. `bridgeDiscover.ts` falls back to a bare unqualified team
+  name in this case - inconsistent with the rest of the system's arming-mode convention, though
+  still locally resolvable. Fix: stamp `domainId: localDomainId ?? LOCAL_DOMAIN_SENTINEL`
+  unconditionally in `commonFields`.
+- [medium] `src/shared/schemas.ts : TeamInfoSchema` - **framework-first** - fully specified but never
+  runtime-parsed against wire data anywhere; every hop a `TeamInfo[]` payload crosses does a bare
+  `as` cast, and `bridgeDiscover.ts` hand-rolls a drifted `DiscoverEntry` interface. A naive
+  `.safeParse()` would be wrong, not just incomplete: `status`/`kind` are closed zod enums but the
+  Kotlin side deliberately decodes both as open Strings for forward-compatibility, so reusing the
+  schema as-is would silently drop every entry from a peer running a newer protocol version.
+  Highest-consequence site: `consoleHandler.ts`'s `list_teams` result reaches Android via one atomic
+  `kotlinx.serialization` decode of `List<TeamInfo>`, so one malformed peer entry can hide every
+  session, local included, from the phone. Needs a deliberately loosened variant (strict on
+  `team`/`gatewayId`/`queue_depth`, permissive on `status`/`kind`/`mode`).
+- [medium] `src/gateway/routes.ts : send` - **bug-class** - the channel-mode branch's two
+  local-participant `mirrorPeer` calls are unguarded sequential statements; if the first throws, the
+  second (the recipient's own mirror copy) never runs, and the enclosing catch misreports the whole
+  request as a 500 even though the real message already delivered - a caller retrying after seeing
+  this would duplicate the actual channel_push too, not just its mirror copy. No shared dedupeKey
+  links the mirror calls of one exchange, so there's no way to reconcile a one-sided mirror after the
+  fact.
+- [medium] `android/.../ChatRepository.kt : ChatState` - **framework-first** - flag-soup trending
+  real: 4 of its 8 team-keyed collections are plain per-team scalars manually enumerated together at
+  3 separate lifecycle boundaries, and `forget`'s own comment admits it ("key every field removal
+  ... so a non-canonical spelling can't leave a field's entry behind" - a human working around a
+  missing type). The same problem has already escaped into `ChatRepository.drafts` and
+  `SttsPlayer`'s cache. Proposed fix: a `SessionUiState(closed, unread, working, needsLogin)` value
+  type collapsing the 4-map cluster into one `sessionUi: Map<String, SessionUiState>`.
+- [medium] `src/gateway/routes.ts : consolePush` - **bug-class** - `entry.session_id`/`from`/`to` are
+  free strings with zero correlation check against any real pending job, session-store record, or
+  registry entry. Same-Domain gateways are already fully trusted, but this is sharper: a compromised
+  sibling Gateway can set `entry.session_id` to collide with an EXISTING trusted thread and craft
+  `from`/`to`/`body` to look like a fabricated continuation of that conversation, with no UI cue
+  distinguishing it from a genuine relay. Bounded by the already-accepted same-Domain trust model; a
+  real fix (message-level signing so a recipient can verify authorship across a relay) is materially
+  bigger than a patch.
+- [medium] `src/gateway/routes.ts : fanOutConsolePush` - no caching/coalescing of the `list_gateways`
+  roster fetch and no fan-out concurrency cap: a hot loop of local `send`/`respond` traffic or
+  repeated `notify_human` calls each independently re-fetches the roster and re-fires the full
+  fan-out. Per-destination retry/backoff is sane and bounded; a robustness gap, not a security hole.
+  Worth a roster TTL-cache or fan-out debounce if Domain sizes grow.
+- [medium] `src/shared/device-mailbox.ts : DeviceMailboxStore.sweepExpired` - a pure time-based scan
+  with no concept of "a relay is currently targeting this key," while `relayWithRetry` can keep a
+  delivery in flight for up to ~10.5 minutes. An ordinary transient relay retry straddling a sweep
+  tick near the 1-hour idle TTL tears the mailbox down mid-flight; the compound case - an earlier
+  attempt landed but its ack was lost, and eviction lands between that silent success and the retry's
+  redelivery - produces a genuine user-visible duplicate with no coordination anywhere to prevent it.
+  Same class as the `ChatRepository.forget` race above; cosmetic-only consequence.
+- [medium] `src/shared/device-mailbox.ts : DeviceMailbox.append`'s dedupeKey/seenKeys - only ever saw
+  a locally-minted key before `console_push`; now a same-Domain peer chooses the key and it's trusted
+  verbatim (requires an already-highly-trusted peer to misbehave to matter). Separately, the
+  pre-existing gap where an outer HTTP-level retry of `send()`/`respond()` re-runs `mirrorPeer` with
+  a fresh dedupeKey now has a wider blast radius: a retry-produced duplicate previously showed up
+  twice on one gateway; now it can appear mesh-wide, on any gateway the console might be polling.
+- [medium, framework-first, logged as a future candidate] `src/gateway/routes.ts` is now ~1290 lines,
+  the largest file in `src/gateway/`. `mirrorPeer`/`consolePush`/`fanOutConsolePush`/`humanNotify`
+  (console mailbox delivery) pass the ownership test as a genuinely separable sub-concern from core
+  session routing. Worth extracting into its own module (natural home: `src/gateway/console/`),
+  taking `mailboxStore`/`ownerId`/`evieClient`/`localGatewayId`/`resolvesLocalGateway`/
+  `relayWithRetry` as explicit injected deps, matching the precedent `gatewayRelay.ts`'s narrow
+  `FederationRoutes` dependency already sets. If picked up, bundle with hoisting
+  `localAddress`/`tryLocalAddress`/`consoleSelfAddress` first, and treat `send()`/`respond()`
+  (262/233 lines) as a separate, likely higher-priority target in the same file.
