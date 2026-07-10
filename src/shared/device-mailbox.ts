@@ -444,11 +444,6 @@ export class DeviceMailboxStore {
 		return this.mailboxes.get(device);
 	}
 
-	/** Visit every live mailbox (broadcast delivery, e.g. human notices). */
-	forEach(cb: (conversationId: string, box: DeviceMailbox) => void): void {
-		for (const [conversationId, box] of this.mailboxes) cb(conversationId, box);
-	}
-
 	/** Every box's serializable state, keyed by conversation id, for durability. */
 	snapshot(): Record<string, MailboxSnapshotState> {
 		const out: Record<string, MailboxSnapshotState> = {};

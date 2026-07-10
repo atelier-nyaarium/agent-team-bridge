@@ -6,6 +6,7 @@ function makeHandler(respond: FederationRoutes["respond"]) {
 		send: async () => new Response(JSON.stringify({ session_id: "s", status: "running" })),
 		respond,
 		teams: () => new Response(JSON.stringify([])),
+		consolePush: () => ({ delivered: false }),
 	};
 	return createGatewayRelayHandler({
 		routes,

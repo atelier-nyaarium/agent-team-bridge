@@ -1,5 +1,10 @@
 import type { GatewayRelayReplyParams } from "../../shared/evie-protocol.js";
-import { type FederatedOp, FederatedOpSchema, GatewayRelayFrameSchema } from "../../shared/federation-protocol.js";
+import {
+	type ConsolePushEntry,
+	type FederatedOp,
+	FederatedOpSchema,
+	GatewayRelayFrameSchema,
+} from "../../shared/federation-protocol.js";
 import type { CrossDomainBinding } from "../../shared/pending-job-store.js";
 import { Address, parseSessionName } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
@@ -15,6 +20,9 @@ export interface FederationRoutes {
 	send: (req: Request, body: Record<string, unknown>, opts?: { trustedInbound?: boolean }) => Promise<Response>;
 	respond: (req: Request, body: Record<string, unknown>) => Response;
 	teams: () => Response;
+	/** Land a fully-composed mailbox entry on THIS Gateway's own owner mailbox - the console_push
+	 * landing side. Local-append only; never fans out further (see the FederatedOp doc comment). */
+	consolePush: (entry: ConsolePushEntry, dedupeKey: string) => { delivered: boolean };
 }
 
 /** The per-session share state the relay handler reads to enforce destination-side
@@ -218,6 +226,19 @@ export function createGatewayRelayHandler({
 				const json = (await res.json()) as { error?: string };
 				if (!res.ok) throw new Error(json.error ?? "response_push delivery failed");
 				return { ok: true };
+			}
+			case "console_push": {
+				// Mandatory security gate: console_push writes directly into this Gateway's own
+				// owner mailbox with no session-sharing check of any kind - every other cross-Domain
+				// op at least requires a shared devcontainer/loose session (send/wake) or filters to
+				// shared sessions (list_teams), or binds to a recorded, verified job (response_push).
+				// Admitting a cross-Domain sender here would let a linked friend's Gateway inject
+				// attacker-chosen content straight onto this owner's phone - same-Domain only, no
+				// exceptions.
+				if (srcDomainId !== null) {
+					throw new Error("cross-Domain console_push denied");
+				}
+				return routes.consolePush(op.entry, op.dedupeKey);
 			}
 		}
 	}

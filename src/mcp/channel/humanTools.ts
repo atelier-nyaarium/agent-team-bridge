@@ -66,13 +66,12 @@ export function registerHumanTools(mcpServer: McpServer): void {
 					summary,
 					full,
 					...(files ? { files } : {}),
-				})) as { delivered?: number };
-				const delivered = result.delivered ?? 0;
+				})) as { delivered?: boolean };
 				return {
 					content: [
 						{
 							type: "text" as const,
-							text: `Notice delivered to ${delivered} console(s).${delivered === 0 ? " No consoles are currently registered; it was not queued." : ""}`,
+							text: result.delivered ? "Notice delivered." : "Notice not delivered.",
 						},
 					],
 				};

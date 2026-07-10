@@ -237,20 +237,20 @@ describe("routes", () => {
 	});
 
 	describe("/human/notify", () => {
-		async function makeStoreWithConsoles(): Promise<{
+		function makeStoreForOwner(owner = "owner-1"): {
 			ctx: RoutesDeps;
-			mailboxStore: import("../shared/device-mailbox.js").DeviceMailboxStore;
-		}> {
-			const { DeviceMailboxStore } = await import("../shared/device-mailbox.js");
+			mailboxStore: DeviceMailboxStore;
+		} {
+			// Deliberately NOT pre-`ensure()`-ing the owner's mailbox: this is the ordinary shape
+			// for a Gateway no console has ever registered against (a multi-gateway Domain's
+			// non-home Gateway), which is exactly the case humanNotify must not silently drop.
 			const mailboxStore = new DeviceMailboxStore();
-			mailboxStore.ensure("console-a");
-			mailboxStore.ensure("console-b");
-			const ctx = { ...makeCtx(), mailboxStore };
+			const ctx = { ...makeCtx({ mailboxStore, ownerId: () => owner }) };
 			return { ctx, mailboxStore };
 		}
 
-		it("broadcasts a notice to every console mailbox, threaded under the sender", async () => {
-			const { ctx, mailboxStore } = await makeStoreWithConsoles();
+		it("delivers a notice into the owner's mailbox, threaded under the sender, even with zero pre-registered devices", async () => {
+			const { ctx, mailboxStore } = makeStoreForOwner();
 			const { humanNotify } = createRoutes(ctx);
 			const res = humanNotify({
 				from: "recipe-app",
@@ -258,46 +258,47 @@ describe("routes", () => {
 				summary: "All phases shipped. Nothing is blocked.",
 				full: "# report\n\nall good",
 			});
-			expect((await res.json()).delivered).toBe(2);
-			for (const conv of ["console-a", "console-b"]) {
-				const snap = mailboxStore.get(conv)!.drain();
-				expect(snap.entries).toHaveLength(1);
-				expect(snap.entries[0]).toMatchObject({
-					kind: "notice",
-					session_id: "notice.alice.test-host.recipe-app.claude",
-					from: "recipe-app",
-					title: "cycle done",
-					summary: "All phases shipped. Nothing is blocked.",
-					body: "# report\n\nall good",
-				});
-			}
+			expect((await res.json()).delivered).toBe(true);
+			const snap = mailboxStore.get("owner-1")!.drain();
+			expect(snap.entries).toHaveLength(1);
+			expect(snap.entries[0]).toMatchObject({
+				kind: "notice",
+				session_id: "notice.alice.test-host.recipe-app.claude",
+				from: "recipe-app",
+				title: "cycle done",
+				summary: "All phases shipped. Nothing is blocked.",
+				body: "# report\n\nall good",
+			});
+			// Embeds its own dedupeKey (matching mirrorPeer's convention) so a relayed
+			// console_push convergence copy on a sibling Gateway dedupes against the same value.
+			expect(typeof snap.entries[0].dedupeKey).toBe("string");
 		});
 
 		it("accepts the title key and rejects a notice carrying no title", async () => {
-			const { ctx, mailboxStore } = await makeStoreWithConsoles();
+			const { ctx, mailboxStore } = makeStoreForOwner();
 			const { humanNotify } = createRoutes(ctx);
 			humanNotify({ from: "recipe-app", title: "via title", summary: "s", full: "body" });
-			expect(mailboxStore.get("console-a")!.drain().entries[0]).toMatchObject({ title: "via title" });
+			expect(mailboxStore.get("owner-1")!.drain().entries[0]).toMatchObject({ title: "via title" });
 			expect(humanNotify({ from: "t", summary: "s", full: "body" }).status).toBe(400);
 		});
 
 		it("requires title, summary, and full (no ghost pings) and wakes a held poll", async () => {
-			const { ctx, mailboxStore } = await makeStoreWithConsoles();
+			const { ctx, mailboxStore } = makeStoreForOwner();
 			const { humanNotify } = createRoutes(ctx);
-			// Notices missing summary/full are rejected outright.
+			// Notices missing summary/full are rejected outright, before any mailbox is even ensured.
 			expect(humanNotify({ from: "t", title: "ping" }).status).toBe(400);
 			expect(humanNotify({ from: "t", title: "ping", summary: "s" }).status).toBe(400);
-			const box = mailboxStore.get("console-a")!;
+			expect(mailboxStore.get("owner-1")).toBeUndefined();
 			const start = Date.now();
-			const held = box.waitForAppend(10_000);
+			const held = mailboxStore.ensure("owner-1").waitForAppend(10_000);
 			humanNotify({ from: "t", title: "ping", summary: "s", full: "body" });
 			await held;
 			expect(Date.now() - start).toBeLessThan(2_000);
-			expect(box.drain().entries[0].body).toBe("body");
+			expect(mailboxStore.get("owner-1")!.drain().entries[0].body).toBe("body");
 		});
 
-		it("rejects oversized attachments with 413 and missing store with 503", async () => {
-			const { ctx } = await makeStoreWithConsoles();
+		it("rejects oversized attachments with 413, missing store with 503, and no owner (pre-enrollment) with 503", async () => {
+			const { ctx } = makeStoreForOwner();
 			const { humanNotify } = createRoutes(ctx);
 			// A declared size alone (no base64) is enough to cross the cap, and avoids
 			// actually allocating a 500+ MB string in the test process.
@@ -319,6 +320,102 @@ describe("routes", () => {
 
 			const { humanNotify: noStore } = createRoutes(makeCtx());
 			expect(noStore({ from: "t", title: "x", summary: "s", full: "body" }).status).toBe(503);
+
+			const { humanNotify: noOwner } = createRoutes(makeCtx({ mailboxStore: new DeviceMailboxStore() }));
+			expect(noOwner({ from: "t", title: "x", summary: "s", full: "body" }).status).toBe(503);
+		});
+	});
+
+	describe("consolePush (console_push landing side)", () => {
+		it("lands an entry on the owner's mailbox, embedding the dedupeKey", () => {
+			const mailboxStore = new DeviceMailboxStore();
+			const ctx = makeCtx({ mailboxStore, ownerId: () => "owner-1" });
+			const { consolePush } = createRoutes(ctx);
+
+			const entry = {
+				kind: "peer" as const,
+				session_id: "conv.owner-1.alice.test-host.coollib.dev",
+				from: "a",
+				to: "b",
+			};
+			const result = consolePush(entry, "dk-1");
+
+			expect(result).toEqual({ delivered: true });
+			const entries = mailboxStore.get("owner-1")!.drain().entries;
+			expect(entries).toHaveLength(1);
+			expect(entries[0]).toMatchObject({ ...entry, dedupeKey: "dk-1" });
+		});
+
+		it("is idempotent: the same dedupeKey re-delivered (a relay retry) lands exactly once", () => {
+			const mailboxStore = new DeviceMailboxStore();
+			const ctx = makeCtx({ mailboxStore, ownerId: () => "owner-1" });
+			const { consolePush } = createRoutes(ctx);
+			const entry = {
+				kind: "notice" as const,
+				session_id: "notice.alice.test-host.recipe-app.claude",
+				from: "recipe-app",
+			};
+
+			consolePush(entry, "dk-retry");
+			consolePush(entry, "dk-retry");
+
+			expect(mailboxStore.get("owner-1")!.drain().entries).toHaveLength(1);
+		});
+
+		it("is a no-op (not an error) with no mailboxStore or no owner id", () => {
+			const entry = {
+				kind: "notice" as const,
+				session_id: "notice.alice.test-host.recipe-app.claude",
+				from: "recipe-app",
+			};
+			expect(createRoutes(makeCtx()).consolePush(entry, "dk-1")).toEqual({ delivered: false });
+			expect(
+				createRoutes(makeCtx({ mailboxStore: new DeviceMailboxStore() })).consolePush(entry, "dk-1"),
+			).toEqual({ delivered: false });
+		});
+
+		it("drops (not appends) an entry whose files exceed the same byte cap send/respond/humanNotify enforce", () => {
+			// A relayed console_push is the only mailbox-writing path that lands content this
+			// Gateway did not itself already size-check - it must not get to skip the cap the
+			// other three paths all apply before ever reaching the mailbox.
+			const mailboxStore = new DeviceMailboxStore();
+			const ctx = makeCtx({ mailboxStore, ownerId: () => "owner-1" });
+			const { consolePush } = createRoutes(ctx);
+			const entry = {
+				kind: "notice" as const,
+				session_id: "notice.alice.test-host.recipe-app.claude",
+				from: "recipe-app",
+				// A declared size alone (no base64) is enough to cross the cap, and avoids actually
+				// allocating a 500+ MB string in the test process.
+				files: [
+					{ filename: "big.bin", mime: "application/octet-stream", size: 500_000_001, descriptiveKey: "b" },
+				],
+			};
+
+			const result = consolePush(entry, "dk-big");
+
+			expect(result).toEqual({ delivered: false });
+			expect(mailboxStore.get("owner-1")?.drain().entries ?? []).toHaveLength(0);
+		});
+
+		it("degrades to delivered:false instead of throwing when the underlying append fails", () => {
+			const throwingStore = {
+				ensure: () => ({
+					append: () => {
+						throw new Error("boom");
+					},
+				}),
+			};
+			const ctx = makeCtx({ mailboxStore: throwingStore as never, ownerId: () => "owner-1" });
+			const { consolePush } = createRoutes(ctx);
+			const entry = {
+				kind: "notice" as const,
+				session_id: "notice.alice.test-host.recipe-app.claude",
+				from: "recipe-app",
+			};
+
+			expect(() => consolePush(entry, "dk-1")).not.toThrow();
+			expect(consolePush(entry, "dk-1")).toEqual({ delivered: false });
 		});
 	});
 

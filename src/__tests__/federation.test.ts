@@ -9,6 +9,7 @@ import { createSealer, type Sealer } from "../gateway/federation/sealer.js";
 import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
 import { signAdmission } from "../shared/admission.js";
 import { generateIdentity, type Identity, type SealedEnvelope } from "../shared/crypto.js";
+import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import {
 	type FederatedOp,
 	FederatedOpSchema,
@@ -425,6 +426,7 @@ function memBinding(
 function gateRoutes(teams: TeamInfoLite[]) {
 	const sendCalls: Record<string, unknown>[] = [];
 	const respondCalls: Record<string, unknown>[] = [];
+	const consolePushCalls: Array<{ entry: unknown; dedupeKey: string }> = [];
 	const routes = {
 		teams: () => new Response(JSON.stringify(teams), { headers: { "content-type": "application/json" } }),
 		send: async (_req: Request, body: Record<string, unknown>) => {
@@ -439,8 +441,12 @@ function gateRoutes(teams: TeamInfoLite[]) {
 				headers: { "content-type": "application/json" },
 			});
 		},
+		consolePush: (entry: unknown, dedupeKey: string) => {
+			consolePushCalls.push({ entry, dedupeKey });
+			return { delivered: true };
+		},
 	};
-	return { routes, sendCalls, respondCalls };
+	return { routes, sendCalls, respondCalls, consolePushCalls };
 }
 
 type TeamInfoLite = {
@@ -700,6 +706,199 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		expect(r.status).toBe("running");
 		expect(sendCalls).toHaveLength(1);
 		expect(share.touched).toEqual([]); // never touched on a same-Domain op
+	});
+
+	const consolePushOp: FederatedOp = {
+		kind: "console_push",
+		entry: { kind: "notice", session_id: "notice.alice.hostb.recipe-app.claude", from: "recipe-app", body: "hi" },
+		dedupeKey: "dk-1",
+	};
+
+	// Mandatory security gate (per the plan): console_push writes directly into the receiving
+	// Gateway's own owner mailbox with no session-sharing check of any kind - unlike every other
+	// FederatedOp kind, which at minimum requires a shared devcontainer/loose session or a
+	// recorded, verified job binding. A cross-Domain sender must be refused outright.
+	it("MANDATORY: DENIES a cross-Domain console_push unconditionally, never reaching routes.consolePush", async () => {
+		const { routes, consolePushCalls } = gateRoutes([]);
+		const { handleOp } = createGatewayRelayHandler({
+			routes: routes as never,
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
+			localGatewayId: "hostb",
+			localDomainId: "alice",
+		});
+		await expect(handleOp(consolePushOp, "carol-gw", "carol")).rejects.toThrow(/cross-Domain console_push denied/);
+		expect(consolePushCalls).toHaveLength(0);
+	});
+
+	it("ALLOWS a SAME-DOMAIN console_push and lands it via routes.consolePush", async () => {
+		const { routes, consolePushCalls } = gateRoutes([]);
+		const { handleOp } = createGatewayRelayHandler({
+			routes: routes as never,
+			tryWakeTeam: () => Promise.resolve({ ok: false }),
+			localGatewayId: "hostb",
+			localDomainId: "alice",
+		});
+		const r = (await handleOp(consolePushOp, "hostb-peer", null)) as { delivered: boolean };
+		expect(r.delivered).toBe(true);
+		expect(consolePushCalls).toEqual([{ entry: consolePushOp.entry, dedupeKey: "dk-1" }]);
+	});
+
+	it("the wire schema rejects an entry.kind smuggled outside notice/peer, and a title over the notice-contract bound", () => {
+		for (const smuggledKind of ["message", "reply", "sent"]) {
+			expect(
+				FederatedOpSchema.safeParse({ ...consolePushOp, entry: { ...consolePushOp.entry, kind: smuggledKind } })
+					.success,
+			).toBe(false);
+		}
+		expect(
+			FederatedOpSchema.safeParse({
+				...consolePushOp,
+				entry: { ...consolePushOp.entry, title: "x".repeat(201) },
+			}).success,
+		).toBe(false);
+		// 200 chars (the notice contract's own bound) still parses.
+		expect(
+			FederatedOpSchema.safeParse({
+				...consolePushOp,
+				entry: { ...consolePushOp.entry, title: "x".repeat(200) },
+			}).success,
+		).toBe(true);
+	});
+});
+
+describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
+	it("humanNotify relays the same notice to every OTHER same-Domain Gateway via list_gateways, self-excluding and filtering through the allowlist", async () => {
+		const { routes: hostbRoutes, consolePushCalls } = gateRoutes([]);
+		let landedOnHostb: FederatedOp | undefined;
+		const evie = fakeEvie({
+			destSealer: sealerB,
+			srcGateway: "hosta",
+			handle: (op) => {
+				landedOnHostb = op;
+				const push = op as { entry: unknown; dedupeKey: string };
+				return hostbRoutes.consolePush(push.entry as never, push.dedupeKey);
+			},
+			onCall: (action) =>
+				action === "list_gateways"
+					? // Includes the caller itself (hosta) and an unadmitted gateway (eve-gw), both of
+						// which must be filtered out before any relay is even attempted.
+						{ gateways: [{ gatewayId: "hosta" }, { gatewayId: "hostb" }, { gatewayId: "eve-gw" }] }
+					: { ok: true },
+		});
+		const mailboxStore = new DeviceMailboxStore();
+		const ctx = makeCtx("hosta", {
+			evieClient: evie.client,
+			sealer: sealerA,
+			mailboxStore,
+			ownerId: () => "owner-1",
+			// hostb AND hosta (the caller's own id) are both admitted into the local allowlist - a
+			// real Allowlist self-admits its own gateway (see Allowlist.selfAdmission), so this must
+			// NOT be the thing that excludes hosta. Only the self-exclusion guard can, which is what
+			// this isolates: if that guard were ever deleted, hosta would be relayed to and the
+			// assertion below would catch it (an allowlist that only excluded eve-gw would not).
+			resolvesLocalGateway: (gatewayId) => gatewayId === "hostb" || gatewayId === "hosta",
+		});
+		const { humanNotify } = createRoutes(ctx);
+
+		const res = humanNotify({ from: "recipe-app", title: "cycle done", summary: "s", full: "body" });
+		expect((await res.json()).delivered).toBe(true);
+		// The local landing is synchronous, independent of the fan-out.
+		expect(mailboxStore.get("owner-1")?.drain().entries).toHaveLength(1);
+
+		// fanOutConsolePush is fire-and-forget; wait for the relay to actually land on hostb.
+		await vi.waitFor(() => expect(consolePushCalls).toHaveLength(1));
+
+		expect(landedOnHostb).toMatchObject({ kind: "console_push" });
+		expect(consolePushCalls[0].entry).toMatchObject({ kind: "notice", from: "recipe-app", title: "cycle done" });
+		// Only hostb was actually relayed to - hosta (self) and eve-gw (unadmitted) were filtered
+		// out before ever reaching evie's gateway_relay call.
+		const relayed = evie.calls.filter((c) => c.action === "gateway_relay").map((c) => c.params.dstGateway);
+		expect(relayed).toEqual(["hostb"]);
+	});
+
+	it("a relay retry (the same dedupeKey re-delivered) lands on the sibling Gateway exactly once", async () => {
+		const mailboxStore = new DeviceMailboxStore();
+		const bobCtx = makeCtx("hostb", { mailboxStore, ownerId: () => "owner-1" });
+		const { consolePush } = createRoutes(bobCtx);
+
+		const entry = {
+			kind: "notice" as const,
+			session_id: "notice.alice.hosta.recipe-app.claude",
+			from: "recipe-app",
+		};
+		consolePush(entry, "stable-key-1");
+		consolePush(entry, "stable-key-1"); // an at-least-once retry of the SAME relay attempt
+
+		expect(mailboxStore.get("owner-1")?.drain().entries).toHaveLength(1);
+	});
+
+	it("single-Gateway behavior is unchanged: no evieClient, humanNotify still delivers locally with no error", async () => {
+		const mailboxStore = new DeviceMailboxStore();
+		const { humanNotify } = createRoutes(makeCtx("hosta", { mailboxStore, ownerId: () => "owner-1" }));
+		const res = humanNotify({ from: "recipe-app", title: "t", summary: "s", full: "body" });
+		expect((await res.json()).delivered).toBe(true);
+		expect(mailboxStore.get("owner-1")?.drain().entries).toHaveLength(1);
+	});
+
+	it("consolePush (the landing side) never itself fans back out - no gossip loop", async () => {
+		// A connected evieClient is deliberately wired in: if consolePush ever grew a call to
+		// fanOutConsolePush (the regression this guards against), this evie mock would record it.
+		const evie = fakeEvie({});
+		const mailboxStore = new DeviceMailboxStore();
+		const ctx = makeCtx("hostb", {
+			evieClient: evie.client,
+			sealer: sealerB,
+			mailboxStore,
+			ownerId: () => "owner-1",
+		});
+		const { consolePush } = createRoutes(ctx);
+
+		consolePush({ kind: "notice", session_id: "notice.alice.hosta.recipe-app.claude", from: "recipe-app" }, "dk-1");
+		// consolePush is synchronous with no relay of its own, but give a hypothetical regression's
+		// fire-and-forget fan-out a real window to have started before asserting silence.
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect(mailboxStore.get("owner-1")?.drain().entries).toHaveLength(1);
+		expect(evie.calls).toHaveLength(0);
+	});
+
+	it("mirrorPeer's peer-kind fan-out relays to a sibling Gateway, landing exactly once per mirror copy even under a relay retry", async () => {
+		const hostbMailbox = new DeviceMailboxStore();
+		const { consolePush: hostbConsolePush } = createRoutes(
+			makeCtx("hostb", { mailboxStore: hostbMailbox, ownerId: () => "owner-1" }),
+		);
+		const evie = fakeEvie({
+			destSealer: sealerB,
+			srcGateway: "hosta",
+			handle: (op) => {
+				const push = op as { entry: unknown; dedupeKey: string };
+				// Simulate an at-least-once relay retry: the identical op lands on hostb twice.
+				hostbConsolePush(push.entry as never, push.dedupeKey);
+				return hostbConsolePush(push.entry as never, push.dedupeKey);
+			},
+			onCall: (action) => (action === "list_gateways" ? { gateways: [{ gatewayId: "hostb" }] } : { ok: true }),
+		});
+		const pushed: Record<string, unknown>[] = [];
+		const ctx = makeCtx("hosta", {
+			evieClient: evie.client,
+			sealer: sealerA,
+			mailboxStore: new DeviceMailboxStore(),
+			ownerId: () => "owner-1",
+			registry: registryWith({ "coolib.dev": channelWs(pushed) }),
+		});
+		const { send } = createRoutes(ctx);
+
+		await send(new Request("http://localhost/send", { method: "POST" }), {
+			from: "coolapp.dev",
+			fromConversationId: "conv-1",
+			to: "coolib.dev",
+			body: "can you check this?",
+			channelOnly: true,
+		});
+
+		// A local-to-local send mirrors BOTH participants (their own thread each), so two distinct
+		// peer entries fan out to hostb; each survives its own simulated retry landing exactly once.
+		await vi.waitFor(() => expect(hostbMailbox.get("owner-1")?.drain().entries).toHaveLength(2));
 	});
 });
 
