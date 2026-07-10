@@ -430,3 +430,109 @@ Real, out-of-scope-for-this-plan findings surfaced by audit passes. Not fixed he
   first time third-party/cross-Domain content is eligible to reach that tier. Shipping as-is
   (a proper fix - kind-aware visibility, or a per-conversation-kind mute - is real design work,
   not a minimal patch); worth a confirm-back.
+- [medium] `android/.../ChatRepository.kt : forget` - the compliance audit's other finding this
+  phase, now fixed: `forget()` only dropped its own team's thread, leaving an identical
+  peer-mirror row (real address, message text, attachments) intact in a sibling thread, since
+  the gateway mirrors one exchange into both participants' mailboxes as separate thread keys.
+  Fixed via `threadsAfterForget` (sweeps every remaining thread for a peer row naming the
+  forgotten address); `sessionLeaf`'s unparseable-input fallback hardened from echoing the raw
+  string to a safe placeholder, and `loadPersistedThreads` now validates a peer row's persisted
+  `from`/`to` the same way an ordinary thread key is validated. Noted here only for the audit
+  trail - already committed (`af67d13`), not a deferred item.
+- [high] `src/gateway/routes.ts : respond` / `mirrorPeer` - pre-existing (Phase 2's own code,
+  surfaced by this phase's crust sweep), genuine duplicate-delivery risk, not merely a misleading
+  log line. `respond()` has no try/catch around any of its 3 `mirrorPeer` calls. On the
+  cross-gateway reply path, an uncaught throw from the `isRemoteAnchor` mirror call propagates out
+  of `respond()`, is caught only at `gatewayRelay.ts`'s pump level, and gets reported to the
+  origin as a relay failure - which makes `relayWithRetry` retry up to 5 times (2s/4s/8s/16s
+  backoff). `PendingJobStore.deliver()`'s "stored" re-delivery branch doesn't distinguish a
+  genuine not-yet-delivered retry from this case, so each retry re-runs the full `respond()` body:
+  it re-appends to the console mailbox (`mailbox.append` called with no `dedupeKey`, so never
+  deduped) or re-pushes over the live WS, genuinely duplicating an already-successfully-delivered
+  reply to the original asker 2 to 5 times over a downstream, purely-cosmetic mirror failure.
+  Root cause (finding 4 of the sweep): `mirrorPeer`'s own try/catch doesn't cover `ownerId?.()`,
+  which runs before the try block - contradicting its doc comment's "never surfaces to the
+  caller" guarantee, and untested (`routes.test.ts`'s "mirror taps" suite never injects a
+  throwing `ownerId`/`mailboxStore`). Not fixed here - out of Phase 4's scope (Android), needs its
+  own careful pass over `routes.ts`'s error boundaries.
+- [medium] `src/gateway/routes.ts : send` - same sweep, a related but distinct gap: the
+  channel-mode branch's two local-participant `mirrorPeer` calls are unguarded sequential
+  statements inside the same try as the already-completed channel_push delivery loop. If the
+  first mirror call throws, the second (the recipient's own mirror copy) never runs (an
+  asymmetric, one-sided mirror with nothing to detect it later), and the enclosing catch
+  misreports the whole request as a 500 even though the real message already delivered. Compounds
+  the finding above: a caller retrying after seeing this spurious failure would re-fire the real
+  `ws.send` channel_push too, duplicating the actual message, not just its mirror copy. No shared
+  dedupeKey links the two (or three, cross-Domain) independent mirror calls of one exchange, so
+  there is also no way to reconcile a one-sided mirror after the fact. Not fixed here.
+- [low] Cross-runtime "twin" pair with no shared fixture: `android/.../AgentScreen.kt`
+  (`isReady`/`isWorking`/`isLoggedOut`/`strip`) and `src/mcp/devcontainer/tmuxCore.ts`
+  (`isAgentReady`/`isAgentWorking`/`isLoggedOut`/`stripAnsi`) both hand-parse the identical tmux
+  ANSI literals independently, and each side's doc comments call the other "the twin" - but unlike
+  every other hand-synced twin in this codebase (`SessionId.kt`/`session-id.ts`,
+  `SasCrypto.kt`/`cross-domain-sas.ts`, `OwnerId.kt`/`owner-id.ts`, `SyncCursor.kt`/`sync-cursor.ts`,
+  all pinned equal by a committed `tests/fixtures/*/vectors.json`), this pair has no shared
+  fixture - each side's test hand-duplicates its own example strings. A heuristic tweak on one
+  side (a Claude Code UI change to the spinner glyph or login wording) can pass its own suite
+  while silently leaving the other runtime's ready/working/logged-in decision wrong. Fix pattern
+  already established 4 times elsewhere in this repo; not applied here (out of Phase 4's scope).
+- [medium] `android/.../ChatRepository.kt : ChatState` - flag-soup trending real, not
+  hypothetical: 4 of its 8 team-keyed collections (`closedTeams`, `unread`, `sessionWorking`,
+  `sessionNeedsLogin`) are plain per-team scalars manually enumerated together at 3 separate
+  lifecycle boundaries (`openThread`, `closeTab`, `forget`), and `forget`'s own comment says so
+  outright ("key every field removal by [the canonical key] ... so a non-canonical spelling can't
+  leave a field's entry behind"; that's a human working around a missing type). The same problem
+  has already escaped `ChatState` itself into `ChatRepository.drafts` and `SttsPlayer`'s cache,
+  both requiring the identical manual-sweep discipline with no compiler enforcement tying the
+  three together. Proposed fix (not applied): a `SessionUiState(closed, unread, working,
+  needsLogin)` value type replacing the 4-map cluster, `sessionUi: Map<String, SessionUiState>` -
+  collapses `forget`'s 4 separate removals into one `sessionUi - key`. `Message.from`/`to`/`isPeer`
+  is the same pattern already half-applied this phase (`MessageAttribution` exists only as a
+  computation intermediate; `Message` itself still flattens back to 3 loose fields rather than
+  nesting the value object) - a natural next increment alongside the `ChatState` work, not on its
+  own.
+- [low] `android/.../ChatRepository.kt : Message.status` / `.opId` - a 4-state delivery machine
+  ("pending"/"waking"/"running"/"error"/null) as a raw nullable `String`, compared by literal at
+  roughly a dozen call sites. The illegal combination (`status == "pending"` with `opId == null`)
+  is real enough that load-time code already detects and repairs it as a legacy-row migration.
+  Candidate for a sealed `DeliveryState` type so the illegal state becomes unrepresentable by
+  construction; the bug it guards against is a one-time migration path, not a live defect, so
+  lower priority than the `ChatState` item above.
+- [low] `android/.../ChatRepository.kt : Message.title` / `.summary` - always constructed,
+  persisted, and loaded together; two nullable Strings standing in for one "this row is a notice"
+  sub-shape that is already a formalized wire type (`NoticeSchema {title, summary, full}` in
+  `src/shared/notice.ts`) never mirrored into Kotlin as its own type. Same family as the
+  `ChatState`/`MessageAttribution` item above; bundle together if picked up.
+- [low] Vestigial `localGatewayId` parameter, same root cause as the already-known `label()` case
+  (dead since the address-grammar migration made per-call re-canonicialization unnecessary):
+  `android/.../ChatRepository.kt : ChatState.sessions` never references its own `localGatewayId`
+  parameter either, and every call site still threads `state.localGatewayId` through for nothing.
+- [low] Four `ChatRepository` methods have zero remaining callers, each stranded by an earlier UI
+  reshuffle rather than a recent regression: `localDisplayName` (superseded by `displayName()`,
+  which adds a `confirmedDomainId()` fallback), `peerSessions` (superseded by `shareableSessions()`
+  in `Sharing.kt`), `sttsProviderMissing` (the "selected voice vanished from the catalog" warning
+  it was written for is never surfaced by `SttsVoiceSection`), and `unlinkDomain` (the per-Domain
+  "untrust" action now goes through `untrustOwner()`'s owner-keyed revocation loop instead) - the
+  latter's sole gateway-side dependent, `client().crossDomainUnlink`, is stranded with it.
+- [low] TypeScript dead code with a live consequence, not just unused weight: `src/mcp/bridge/
+  helpers.ts : setIsMainOrLeadAgent` has zero callers anywhere in `src/`, and it is the ONLY thing
+  that could ever move `isMainOrLeadAgent` off its `null` default - so the `isMainOrLeadAgent !==
+  null` branch in `connectToRouter`'s message handler (an auto-reply path for a handshake) is
+  permanently unreachable; every handshake always falls through to "let the LLM decide via channel
+  notification" instead. Ambiguous whether this is an intentionally-abandoned code path (fine, in
+  which case the dead setter and branch should just be deleted) or a silently-broken auto-reply
+  feature nobody noticed stopped firing - flagging rather than guessing which.
+- [low] `src/mcp/bridge/helpers.ts : bridgeAgentType` and `src/mcp/devcontainer/helpers.ts :
+  execInContainer` - zero-caller exports, likely leftover infra from before the host-daemon split
+  (container command execution now goes through `hostOpRunner`/`tmuxCore.ts`'s tmux-based path per
+  this repo's own CLAUDE.md).
+- [info] `skills/crosstalk/SKILL.md` still documents a "CLI agents (cursor, copilot, codex)"
+  receive path (`crosstalk_reply()`, prompt-injection dispatch) that CLAUDE.md's Architecture
+  section says was retired with the host split; the `crosstalk_reply` tool no longer exists in
+  `src/mcp/bridge/registerBridgeTools.ts`. Doc/code staleness, not a rename-residue artifact -
+  the skill doc needs the same retirement note CLAUDE.md already has.
+- [info] Dedicated sweep for the historical Team-to-Gateway rename class of mistake (the one
+  CLAUDE.md documents slipping past grep + the full TS suite twice, breaking Android only after
+  merge) found zero residue anywhere in the current tree - git-archaeology-verified against the
+  actual prior incidents (`arbiter`/`gatewayes`/the stale admission vector), all three confirmed
+  still fixed, no recurrence. Logged for the audit trail, not an open item.

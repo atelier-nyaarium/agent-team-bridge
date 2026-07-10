@@ -248,8 +248,8 @@ internal fun loadedAttribution(
  * thread for a peer-mirror row that names `key` as either real party. The gateway mirrors an
  * agent-to-agent exchange into BOTH participants' mailboxes as separate thread keys, so dropping
  * only `threads[key]` would leave the identical row (real address, message text, attachments)
- * fully intact in the other participant's thread - this is what Forget's own doc contract ("drop
- * a peer from this device") requires closing. */
+ * fully intact in the other participant's thread, defeating what "drop a peer from this device"
+ * is supposed to mean. */
 internal fun threadsAfterForget(threads: Map<String, List<Message>>, key: String): Map<String, List<Message>> =
 	(threads - key).mapValues { (_, msgs) -> msgs.filterNot { it.isPeer && (it.from == key || it.to == key) } }
 
@@ -572,8 +572,8 @@ private fun enrollFold(prevSince: Long): Pair<String?, Long> {
 
 /** The leaf (session) segment of a canonical address string - the natural per-session label. A
  * spawn-point (arity 3) yields its spawn segment; an unparseable value degrades to "?" rather than
- * the raw string, so a corrupted or malformed canonical key can never surface a full internal
- * domain/gateway address into a label instead of a safe placeholder. */
+ * echoing the raw string back, so a corrupted or malformed canonical key can never surface a full
+ * internal domain/gateway address where a safe placeholder belongs. */
 internal fun sessionLeaf(canonical: String): String =
 	runCatching {
 		when (val t = parseTarget(canonical, "", "")) {
