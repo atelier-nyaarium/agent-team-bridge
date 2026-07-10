@@ -23,6 +23,24 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
+/** Whether a team's burst should get full notification treatment (banner + TTS). The
+ * burst still bumps unread/mailbox state in the drain loop regardless of this decision - it only
+ * gates `notifyBurst`'s banner/TTS path. False while the Activity is visible (the user is already
+ * looking at the app), notifications are otherwise unavailable, or the team's tab is muted
+ * (explicitly Closed and not yet reopened; a never-opened team is not muted). */
+internal fun shouldNotifyBurst(isVisible: Boolean, canNotify: Boolean, closedTeams: Set<String>, team: String): Boolean =
+	!isVisible && canNotify && team !in closedTeams
+
+/** A peer-mirror row's notification/TTS text, framed as "from -> to: text" so it never reads as
+ * if addressed to this console - neither party in a peer-mirror row is this console's own team,
+ * unlike every other row this is applied to. */
+internal fun peerFramed(state: ChatState, m: Message, text: String): String {
+	if (!m.isPeer) return text
+	val fromLabel = m.from?.let { state.label(it, state.localGatewayId) } ?: "?"
+	val toLabel = m.to?.let { state.label(it, state.localGatewayId) }
+	return if (toLabel != null) "$fromLabel → $toLabel: $text" else "$fromLabel: $text"
+}
+
 /**
  * Foreground service owning the bridge connection and poll loop, so messages keep
  * arriving while the Activity is backgrounded or the screen is off. The Activity
@@ -198,25 +216,25 @@ class SwitchboardService : Service() {
 		NotificationManagerCompat.from(this).notify(STATUS_NOTIFICATION_ID, buildStatusNotification(line, unread))
 	}
 
-	/** One notification per team, summarizing that team's unread burst. Suppressed
-	 * while the Activity is visible (the user is already looking at the app). */
+	/** One notification per team, summarizing that team's unread burst. See [shouldNotifyBurst]
+	 * for the gating decision. */
 	private fun notifyBurst(repo: ChatRepository, team: String, messages: List<Message>) {
-		if (repo.isVisible || !canNotify()) return
 		val state = repo.state.value
+		if (!shouldNotifyBurst(repo.isVisible, canNotify(), state.closedTeams, team)) return
 		val label = state.label(team, state.localGatewayId)
 		val unread = state.unread[team] ?: messages.size
 		val style = NotificationCompat.InboxStyle()
 		for (m in messages.takeLast(5)) {
 			// A notice carries a purpose-written notification line; its body may be
 			// a long report that would truncate uselessly here.
-			val line = (m.title ?: m.text).replace(Regex("\\s+"), " ").trim()
+			val line = peerFramed(state, m, (m.title ?: m.text).replace(Regex("\\s+"), " ").trim())
 			style.addLine(if (line.isEmpty()) "(attachment)" else line.take(120))
 		}
 		val last = messages.last()
 		val builder = NotificationCompat.Builder(this, CHANNEL_MESSAGES)
 			.setSmallIcon(android.R.drawable.stat_notify_chat)
 			.setContentTitle(label)
-			.setContentText(if (unread > 1) "$unread messages" else (last.title ?: last.text).take(120))
+			.setContentText(if (unread > 1) "$unread messages" else peerFramed(state, last, (last.title ?: last.text)).take(120))
 			.setStyle(style)
 			.setAutoCancel(true)
 			.setContentIntent(contentIntent(team))

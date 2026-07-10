@@ -78,6 +78,8 @@ data class MailboxEntry(
 	val kind: String,
 	val session_id: String,
 	val from: String? = null,
+	val to: String? = null,
+	val dedupeKey: String? = null,
 	val opId: String? = null,
 	val title: String? = null,
 	val summary: String? = null,

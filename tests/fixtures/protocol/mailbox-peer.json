@@ -1,0 +1,10 @@
+{
+	"seq": 51,
+	"at": 1781301200000,
+	"kind": "peer",
+	"session_id": "conv.2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae.alice.sakura.coolib.main",
+	"from": "alice.sakura.coolapp.main",
+	"to": "alice.sakura.coolib.main",
+	"dedupeKey": "peer:alice.sakura.coolapp.main:9f2a1c",
+	"body": "can you check the auth middleware for a race on token refresh?"
+}

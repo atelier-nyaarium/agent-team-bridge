@@ -55,6 +55,33 @@ describe("DeviceMailbox", () => {
 		expect(box.drain(0).dropped).toBe(4);
 	});
 
+	it("cap eviction prefers the oldest peer entry over older entries of other kinds", () => {
+		const box = new DeviceMailbox(1, 3);
+		box.append(message("s1", "m0"));
+		box.append({ kind: "peer", session_id: "s1", from: "a", to: "b", body: "chatter" });
+		box.append(message("s1", "m1"));
+		// Appending past the cap would normally evict "m0" (oldest overall); instead the
+		// "peer" entry is evicted first even though it is newer, so real mail survives longer.
+		box.append(message("s1", "m2"));
+		const snap = box.drain(0);
+		expect(snap.entries.map((e) => e.body)).toEqual(["m0", "m1", "m2"]);
+		expect(snap.dropped).toBe(1);
+	});
+
+	it("a peer entry that itself tips the cap does not evict itself", () => {
+		const box = new DeviceMailbox(1, 3);
+		box.append(message("s1", "m0"));
+		box.append(message("s1", "m1"));
+		box.append(message("s1", "m2"));
+		// The backlog is entirely non-peer; this fresh "peer" append is the only "peer"
+		// entry in the array. It must not be its own eviction candidate - "m0" (the oldest
+		// non-peer entry) should go instead, or the mirror silently blinds itself on arrival.
+		box.append({ kind: "peer", session_id: "s1", from: "a", to: "b", body: "chatter" });
+		const snap = box.drain(0);
+		expect(snap.entries.map((e) => e.body)).toEqual(["m1", "m2", "chatter"]);
+		expect(snap.dropped).toBe(1);
+	});
+
 	it("epoch-gated drain does not ack a cursor from a different epoch", () => {
 		const box = new DeviceMailbox(2); // a recreated instance, epoch 2
 		box.append(message("s1", "new-1"));

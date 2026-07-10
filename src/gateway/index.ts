@@ -8,6 +8,7 @@ import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
+import { ownerKeyId } from "../shared/owner-id.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { isComposite, parseSessionName } from "../shared/session-id.js";
 import { SessionStore } from "../shared/session-store.js";
@@ -694,6 +695,11 @@ export async function startGateway(): Promise<void> {
 						crossDomainShareState!.isSharedTo(sessionTarget, domainId, isLinkedDomain)
 				: null,
 			resolveHandshake: wsHandlers.resolveHandshake,
+			// This Gateway's own Domain owner id, for the mirror-tap's console-bound entries.
+			// Mirrors resolvesLocalGateway's allowlist-ready gating: null pre-enrollment.
+			ownerId: allowlistForConsole
+				? () => (allowlistForConsole!.ownerSignPub ? ownerKeyId(allowlistForConsole!.ownerSignPub) : null)
+				: null,
 		});
 	}
 

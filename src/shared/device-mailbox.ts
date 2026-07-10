@@ -152,9 +152,7 @@ export class DeviceMailbox {
 		// (a single oversized file is rejected upstream; this is only a backstop).
 		let evicted = 0;
 		while (this.entries.length > this.maxEntries || (this.bytesUsed > this.maxBytes && this.entries.length > 1)) {
-			this.bytesUsed -= this.entryBytes.shift() ?? 0;
-			this.entries.shift();
-			this.dropped += 1;
+			this.evictOneForCapacity();
 			evicted++;
 		}
 		if (evicted > 0) {
@@ -167,6 +165,29 @@ export class DeviceMailbox {
 		this.lastActivity = Date.now();
 		this.releaseWaiters();
 		return entry;
+	}
+
+	/** Evict one entry to relieve the OOM backstop: the oldest "peer" entry (agent-to-agent
+	 * mirror chatter) if any exist, else the oldest entry overall. Lets a burst of agent chatter
+	 * evict itself before a slow device's real unread mail. */
+	private evictOneForCapacity(): void {
+		// Never a candidate: the entry THIS append() call just pushed (mirrors the byte-cap
+		// guard above, "always keep the just-appended entry"). Searching the full array
+		// including it would let a fresh 'peer' entry evict itself on the very call that
+		// created it, whenever the rest of the backlog is entirely non-peer.
+		const lastIdx = this.entries.length - 1;
+		let idx = -1;
+		for (let i = 0; i < lastIdx; i++) {
+			if (this.entries[i].kind === "peer") {
+				idx = i;
+				break;
+			}
+		}
+		if (idx === -1) idx = lastIdx > 0 ? 0 : lastIdx;
+		this.bytesUsed -= this.entryBytes[idx] ?? 0;
+		this.entryBytes.splice(idx, 1);
+		this.entries.splice(idx, 1);
+		this.dropped += 1;
 	}
 
 	/** Record dedupeKey -> seq, FIFO-bounded so a flood of unique keys cannot grow
@@ -421,11 +442,6 @@ export class DeviceMailboxStore {
 
 	get(device: string): DeviceMailbox | undefined {
 		return this.mailboxes.get(device);
-	}
-
-	/** Visit every live mailbox (broadcast delivery, e.g. human notices). */
-	forEach(cb: (conversationId: string, box: DeviceMailbox) => void): void {
-		for (const [conversationId, box] of this.mailboxes) cb(conversationId, box);
 	}
 
 	/** Every box's serializable state, keyed by conversation id, for durability. */

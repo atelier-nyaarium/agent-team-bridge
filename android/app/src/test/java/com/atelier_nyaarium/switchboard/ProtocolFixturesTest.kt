@@ -111,6 +111,12 @@ class ProtocolFixturesTest {
 		val notice = json.decodeFromString<MailboxEntry>(fixture("mailbox-notice.json"))
 		assertEquals("Phase 0 done: deps mature-pinned", notice.title)
 		assertTrue(notice.summary!!.isNotEmpty())
+
+		val peer = json.decodeFromString<MailboxEntry>(fixture("mailbox-peer.json"))
+		assertEquals("peer", peer.kind)
+		assertEquals("alice.sakura.coolapp.main", peer.from)
+		assertEquals("alice.sakura.coolib.main", peer.to)
+		assertEquals("peer:alice.sakura.coolapp.main:9f2a1c", peer.dedupeKey)
 	}
 
 	@Test

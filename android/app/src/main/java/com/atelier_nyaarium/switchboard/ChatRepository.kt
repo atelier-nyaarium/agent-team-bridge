@@ -178,11 +178,92 @@ data class Message(
 	val epoch: Long = 0,
 	val seq: Long = 0,
 	/** The canonical `domain.gateway.spawn.session` author header shown for an inbound (agent) row. Null
-	 * for our own rows (rendered as "you"). Not persisted: every row in a thread shares the
-	 * thread's one peer, so it is re-derived from the thread key on load. */
+	 * for our own rows (rendered as "you"). Not persisted for an ordinary row: every thread has one
+	 * fixed peer, so it is re-derived from the thread key on load. A `to`-bearing (peer-mirror) row
+	 * is the exception - its own `from`/`to` are the real two parties, independent of the thread it's
+	 * filed under, so those are persisted verbatim instead of re-derived. */
 	val from: String? = null,
+	/** The other party a peer-mirror row was addressed to, when it resolved to an address - never
+	 * set for a message addressed to this console. May be null even on a peer row (an unresolvable
+	 * wire `to`), so `isPeer`, not this field's presence, is the persistence/rendering discriminator. */
+	val to: String? = null,
+	/** Whether this row is a `"peer"` mailbox entry (an agent-to-agent exchange mirrored into this
+	 * thread) rather than a message addressed to this console. Drives persistence (keep `from`/`to`
+	 * verbatim instead of re-deriving from the thread key) and rendering (label both parties, since
+	 * neither is "you" and `from` alone can't be assumed to mean "sent to this thread's owner"). */
+	val isPeer: Boolean = false,
 )
 
+
+/** The rendered `from`/`to`/`isPeer` for a non-`"sent"` mailbox entry. */
+internal data class MessageAttribution(val from: String?, val to: String?, val isPeer: Boolean)
+
+/** The rendered attribution for a non-`"sent"` mailbox entry. An ordinary entry collapses to the
+ * thread's own fixed peer (`team`, no `to`, not a peer row) - the single-peer-per-thread invariant.
+ * A `"peer"` mirror entry's own `from`/`to` are the real two parties of an agent-to-agent exchange,
+ * independent of which participant's thread it's filed under, so those are resolved and used
+ * instead of the thread's peer - `isPeer` is set whenever `kind` says so, even if `to` itself fails
+ * to resolve, so a peer row's real `from` is never mistaken for an ordinary row downstream just
+ * because its `to` came back null. `canonicalize` stands in for address resolution (`fromCanonical`)
+ * so this stays pure/testable. */
+internal fun resolveMessageAttribution(
+	kind: String,
+	entryFrom: String?,
+	entryTo: String?,
+	team: String,
+	canonicalize: (String) -> String?,
+): MessageAttribution =
+	if (kind == "peer") {
+		MessageAttribution(entryFrom?.let(canonicalize) ?: team, entryTo?.let(canonicalize), isPeer = true)
+	} else {
+		MessageAttribution(team, null, isPeer = false)
+	}
+
+/** What a Message's `from`/`to` should be written as in persisted JSON: both null for an ordinary
+ * row (re-derived from the thread key on load instead, so persisting them there is dead weight),
+ * or the real `from`/`to` verbatim for a peer-mirror row. Keyed on `isPeer`, not `to`'s presence -
+ * a peer row's `to` can be null (an unresolvable wire address) while its `from` is still real and
+ * worth keeping. */
+internal fun persistedAttribution(m: Message): Pair<String?, String?> =
+	if (m.isPeer) m.from to m.to else null to null
+
+/** A loaded row's `from`/`to`, given what was actually persisted (both null for an ordinary row),
+ * whether the row was persisted as a peer row, and the thread's own canonical key to fall back to.
+ * A peer-mirror row's persisted `from`/`to` are kept verbatim; an ordinary row's author re-derives
+ * from the thread key instead (the single-peer-per-thread invariant). */
+internal fun loadedAttribution(
+	persistedFrom: String?,
+	persistedTo: String?,
+	isPeer: Boolean,
+	isMe: Boolean,
+	canonicalKey: String,
+): Pair<String?, String?> =
+	when {
+		isMe -> null to null
+		isPeer -> (persistedFrom ?: canonicalKey) to persistedTo
+		else -> canonicalKey to null
+	}
+
+/** The thread map after forgetting `key`: drops its own thread, then sweeps every remaining
+ * thread for a peer-mirror row that names `key` as either real party. The gateway mirrors an
+ * agent-to-agent exchange into BOTH participants' mailboxes as separate thread keys, so dropping
+ * only `threads[key]` would leave the identical row (real address, message text, attachments)
+ * fully intact in the other participant's thread, defeating what "drop a peer from this device"
+ * is supposed to mean. */
+internal fun threadsAfterForget(threads: Map<String, List<Message>>, key: String): Map<String, List<Message>> =
+	(threads - key).mapValues { (_, msgs) -> msgs.filterNot { it.isPeer && (it.from == key || it.to == key) } }
+
+/** A tier's TTS text, framed as "from to to: text" for a peer-mirror row so it never plays back
+ * as if addressed to this console - neither party in a peer-mirror row is this console's own
+ * team, unlike every other message this reads aloud. Spoken form spells out "to" rather than an
+ * arrow glyph, since TTS engines render symbols unpredictably. */
+internal fun ttsTextFramed(state: ChatState, msg: Message, tier: SttsPlayer.Tier): String {
+	val text = SttsPlayer.ttsText(msg, tier)
+	if (!msg.isPeer) return text
+	val fromLabel = msg.from?.let { state.label(it, state.localGatewayId) } ?: "someone"
+	val toLabel = msg.to?.let { state.label(it, state.localGatewayId) }
+	return if (toLabel != null) "$fromLabel to $toLabel: $text" else "$fromLabel: $text"
+}
 
 /** The thread index a `sent` echo should replace, or -1 to append as a new row. Folds an
  * at-least-once re-drain by (epoch, seq), then on the sending device matches this owner message's
@@ -204,6 +285,12 @@ data class ChatState(
 	val threads: Map<String, List<Message>> = emptyMap(),
 	val unread: Map<String, Int> = emptyMap(),
 	val openTabs: List<String> = emptyList(),
+	/** Teams explicitly closed via Close Tab, cleared again the moment that team's tab is reopened.
+	 * Gates full notification treatment (banner + TTS) down to a quiet mailbox/unread-count bump:
+	 * a team NEVER opened is not in this set either, so a brand-new session still notifies normally -
+	 * only an explicit close (not merely being absent from `openTabs`, which a never-opened session
+	 * is too) should downgrade a team's pings. */
+	val closedTeams: Set<String> = emptySet(),
 	/** Per-session working truth from a tmux peek (the spinner marker), keyed like working()'s
 	 * argument. Takes precedence over the message-status heuristic once a peek has landed. */
 	val sessionWorking: Map<String, Boolean> = emptyMap(),
@@ -484,14 +571,16 @@ private fun enrollFold(prevSince: Long): Pair<String?, Long> {
 }
 
 /** The leaf (session) segment of a canonical address string - the natural per-session label. A
- * spawn-point (arity 3) yields its spawn segment; an unparseable value falls back to itself. */
+ * spawn-point (arity 3) yields its spawn segment; an unparseable value degrades to "?" rather than
+ * echoing the raw string back, so a corrupted or malformed canonical key can never surface a full
+ * internal domain/gateway address where a safe placeholder belongs. */
 internal fun sessionLeaf(canonical: String): String =
 	runCatching {
 		when (val t = parseTarget(canonical, "", "")) {
 			is Address -> t.session
 			else -> canonical.substringAfterLast('.')
 		}
-	}.getOrDefault(canonical)
+	}.getOrDefault("?")
 
 /** Wraps a drained MailboxEntry as a SyncEntry so the SyncCursor rules can dedupe/advance
  * by seq while the poll loop keeps the full entry to render. */
@@ -728,7 +817,7 @@ class ChatRepository(
 			val provider = currentProvider() ?: return@post
 			val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return@post
 			val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-			stts.play(client, provider, voice, team, at, tier, SttsPlayer.ttsText(msg, tier), sttsVolume)
+			stts.play(client, provider, voice, team, at, tier, ttsTextFramed(_state.value, msg, tier), sttsVolume)
 		}
 	}
 
@@ -783,8 +872,8 @@ class ChatRepository(
 			voice,
 			team,
 			at,
-			SttsPlayer.ttsText(msg, SttsPlayer.Tier.SUMMARY),
-			SttsPlayer.ttsText(msg, SttsPlayer.Tier.FULL),
+			ttsTextFramed(_state.value, msg, SttsPlayer.Tier.SUMMARY),
+			ttsTextFramed(_state.value, msg, SttsPlayer.Tier.FULL),
 		)
 	}
 
@@ -2569,8 +2658,11 @@ class ChatRepository(
 						}
 						if (bodyText.isNotEmpty() || files.isNotEmpty() || e.status != null) {
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team status=${e.status} files=${files.size} \"$snippet\"")
-							val msg =
-								Message(false, bodyText, e.at, files = files, status = e.status, title = e.title, summary = e.summary, epoch = mb.epoch, seq = e.seq, from = team)
+							val attribution = resolveMessageAttribution(e.kind, e.from, e.to, team, ::fromCanonical)
+							val msg = Message(
+								false, bodyText, e.at, files = files, status = e.status, title = e.title, summary = e.summary,
+								epoch = mb.epoch, seq = e.seq, from = attribution.from, to = attribution.to, isPeer = attribution.isPeer,
+							)
 							// appendInbound folds an at-least-once re-drain in place and returns
 							// false, so a redelivered entry never re-bumps unread or re-notifies.
 							if (appendInbound(team, msg)) {
@@ -2699,6 +2791,8 @@ class ChatRepository(
 			s.copy(
 				unread = s.unread - key,
 				openTabs = if (key in s.openTabs) s.openTabs else s.openTabs + key,
+				// Reopening un-mutes: a previously-closed team goes back to full notification treatment.
+				closedTeams = s.closedTeams - key,
 			)
 		}
 		return key
@@ -2710,7 +2804,13 @@ class ChatRepository(
 	 * wake, or a user-launched session) surfaces as a transient message rather than blocking the local
 	 * tab close. */
 	fun closeTab(team: String) {
-		_state.update { it.copy(openTabs = it.openTabs - team) }
+		// Canonicalize before touching openTabs/closedTeams (matching openThread's own key), so a
+		// non-canonical spelling of an already-open team can't silently miss the removal and mute
+		// the wrong (uncanonicalized) key instead.
+		val key = canonicalTarget(team)
+		// Muted until reopened: full notification treatment (banner + TTS) downgrades to a
+		// quiet mailbox/unread-count bump for this team.
+		_state.update { it.copy(openTabs = it.openTabs - key, closedTeams = it.closedTeams + key) }
 		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
 		if (t is Address && t.gateway == _state.value.localGatewayId) {
 			pollScope?.launch(Dispatchers.IO) {
@@ -2820,24 +2920,28 @@ class ChatRepository(
 		}
 	}
 
-	/** Drop a peer from this device: its thread, unread, tab, label, and any
-	 * cached TTS audio. */
+	/** Drop a peer from this device: its thread, unread, tab, label, any cached TTS audio, and any
+	 * peer-mirror row elsewhere that names it as a real party (see threadsAfterForget). */
 	fun forget(team: String) {
+		// Canonicalize once and key every field removal by it (matching openThread's own key), so
+		// a non-canonical spelling can't leave a field's entry behind while the others clear.
+		val key = canonicalTarget(team)
 		val next = _state.updateAndGet { s ->
 			s.copy(
-				threads = s.threads - team,
-				labels = s.labels - team,
-				unread = s.unread - team,
-				openTabs = s.openTabs - team,
-				sessionWorking = s.sessionWorking - team,
-				sessionNeedsLogin = s.sessionNeedsLogin - team,
+				threads = threadsAfterForget(s.threads, key),
+				labels = s.labels - key,
+				unread = s.unread - key,
+				openTabs = s.openTabs - key,
+				closedTeams = s.closedTeams - key,
+				sessionWorking = s.sessionWorking - key,
+				sessionNeedsLogin = s.sessionNeedsLogin - key,
 			)
 		}
 		persistThreads(next.threads)
 		persistLabels(next.labels)
-		drafts.remove(team)
+		drafts.remove(key)
 		persistDrafts()
-		stts.purge(team)
+		stts.purge(key)
 		// Also tear the live session down on the gateway (kill tmux + drop the resume record) so it
 		// stops listing as available. Local addressable sessions only (a remote thread or a non-address
 		// spawn-point has no local pane to kill); best-effort, the gateway no-ops an absent session.
@@ -2918,7 +3022,10 @@ class ChatRepository(
 		var replaced = true
 		val threads = _state.updateAndGet { s ->
 			val thread = s.threads[team].orEmpty()
-			val idx = thread.indexOfLast { !it.fromMe && it.status == "waking" }
+			// A peer-mirror message is never an answer to the console's own question - it must
+			// append as its own row instead of resolving a placeholder that is waiting on a reply
+			// actually addressed to this thread.
+			val idx = if (msg.isPeer) -1 else thread.indexOfLast { !it.fromMe && it.status == "waking" }
 			if (idx >= 0) {
 				val next = thread.toMutableList().also { it[idx] = msg.copy(id = thread[idx].id) }
 				s.copy(threads = s.threads + (team to next))
@@ -2972,6 +3079,10 @@ class ChatRepository(
 				if (m.seq != 0L) obj.put("seq", m.seq)
 				obj.putOpt("title", m.title)
 				obj.putOpt("summary", m.summary)
+				val (persistFrom, persistTo) = persistedAttribution(m)
+				obj.putOpt("from", persistFrom)
+				obj.putOpt("to", persistTo)
+				if (m.isPeer) obj.put("isPeer", true)
 				// Persist local paths (the decoded files survive on disk), never base64.
 				if (m.files.isNotEmpty()) {
 					val files = JSONArray()
@@ -3007,6 +3118,18 @@ class ChatRepository(
 				val arr = root.getJSONArray(rawKey)
 				val loaded = (0 until arr.length()).map {
 					val m = arr.getJSONObject(it)
+					val isPeer = m.optBoolean("isPeer")
+					// A peer row's from/to are the same address grammar as a thread key, so validate them
+					// the same way (isAddressKey) before trusting them - a corrupted store file or a future
+					// grammar change must degrade to the existing unresolvable-from fallback, not surface
+					// a malformed value verbatim into a notification or the thread UI.
+					val (loadedFrom, loadedTo) = loadedAttribution(
+						persistedFrom = m.optString("from").takeIf { s -> s.isNotEmpty() && isAddressKey(s) },
+						persistedTo = m.optString("to").takeIf { s -> s.isNotEmpty() && isAddressKey(s) },
+						isPeer = isPeer,
+						isMe = m.optBoolean("me"),
+						canonicalKey = canonicalKey,
+					)
 					Message(
 						m.optBoolean("me"),
 						m.optString("text"),
@@ -3019,16 +3142,19 @@ class ChatRepository(
 						summary = m.optString("summary").takeIf { s -> s.isNotEmpty() },
 						epoch = m.optLong("epoch", 0L),
 						seq = m.optLong("seq", 0L),
-						// Re-derive the author from the thread key (the one peer of this thread).
-						from = if (m.optBoolean("me")) null else canonicalKey,
+						from = loadedFrom,
+						to = loadedTo,
+						isPeer = isPeer,
 					)
 				}
-					// A "waking" placeholder has no resolution coming after a process
-					// death; drop it. "pending" echoes WITH an opId are kept for the
-					// service's idempotent reconcile; legacy ones without an opId cannot
-					// be re-sent safely, so they demote to retriable here (and never
+					// A "waking" placeholder has no resolution coming after a process death; drop it.
+					// A peer-mirror row is never an answer to the console's own question (it's an
+					// agent-to-agent exchange, mirrored for visibility), so it must not resolve the
+					// spinner either, even though it also satisfies "not fromMe". "pending" echoes
+					// WITH an opId are kept for the service's idempotent reconcile; legacy ones without
+					// an opId cannot be re-sent safely, so they demote to retriable here (and never
 					// strand a forever-working chip if the service fails early).
-					.filterNot { !it.fromMe && it.status == "waking" }
+					.filterNot { !it.fromMe && !it.isPeer && it.status == "waking" }
 					.map { if (it.fromMe && it.status == "pending" && it.opId == null) it.copy(status = "error") else it }
 				merged.getOrPut(canonicalKey) { mutableListOf() }.addAll(loaded)
 			}

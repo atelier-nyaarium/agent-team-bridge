@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import type { SealedEnvelope } from "../shared/crypto.js";
-import { type FederatedOp, ReturnRouteSchema } from "../shared/federation-protocol.js";
+import { type ConsolePushEntry, type FederatedOp, ReturnRouteSchema } from "../shared/federation-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "../shared/host-op.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
 import { ChannelFilesSchema } from "../shared/schemas.js";
@@ -93,6 +93,10 @@ export interface RoutesDeps {
 	// un-share bites without evie. Absent when federation sharing is not wired (no recheck).
 	isSharedToForReply?: ((sessionTarget: string, domainId: string) => boolean) | null;
 	resolveHandshake?: (sessionId: string, replyAsJson?: Record<string, unknown>, response?: string) => boolean;
+	// This Gateway's own Domain owner id (a hash of the owner's signing key), used to key the
+	// mirror-tap's agent-to-agent display entries into the owner's mailbox. Null pre-enrollment
+	// (arming mode) or when federation is off, matching resolvesLocalGateway's gating.
+	ownerId?: (() => string | null) | null;
 }
 
 const SendRequestSchema = z.object({
@@ -220,6 +224,7 @@ export function createRoutes({
 	touchShares,
 	isSharedToForReply,
 	resolveHandshake,
+	ownerId,
 }: RoutesDeps) {
 	const { localGatewayId, localDomainId } = config;
 	// The local Domain segment for every address we mint. Null (arming mode, pre-enrollment)
@@ -249,6 +254,110 @@ export function createRoutes({
 			return localAddress(name);
 		} catch {
 			return null;
+		}
+	}
+
+	/** THE single writer of a mailbox append that embeds `dedupeKey` onto the entry (the
+	 * MailboxEntrySchema field, carried verbatim through any further relay) AND passes the
+	 * identical value as `append()`'s own dedup parameter (DeviceMailbox's seenKeys map) - the
+	 * two necessarily-equal uses of one key can never independently drift by going through two
+	 * separate call sites. Never throws; swallows and logs under `label`, since every caller of
+	 * this (mirrorPeer, consolePush, humanNotify) treats console-mailbox delivery as best-effort. */
+	function landMailboxEntry(owner: string, entry: ConsolePushEntry, dedupeKey: string, label: string): boolean {
+		if (!mailboxStore) return false;
+		try {
+			mailboxStore.ensure(owner).append({ ...entry, dedupeKey }, dedupeKey);
+			return true;
+		} catch (err) {
+			console.warn(`[${label}] failed to append entry: ${err instanceof Error ? err.message : String(err)}`);
+			return false;
+		}
+	}
+
+	/** Append a "peer" display mirror into this Gateway's own Domain-owner mailbox, tagged under
+	 * `threadAddr`'s own thread, then fan the same entry out to every other same-Domain Gateway
+	 * (fanOutConsolePush) so it lands wherever the owner's console actually polls. A no-op
+	 * pre-enrollment (no owner id) or when the console bridge is off (no mailboxStore) - the
+	 * mirror is purely additive display, never load-bearing. */
+	function mirrorPeer(
+		threadAddr: Address,
+		from: string,
+		to: string,
+		payload: { body?: string; files?: ChannelFile[]; status?: string; title?: string; summary?: string },
+		// A stable id lets an at-least-once RELAY of this same already-composed entry (the
+		// console_push convergence hop, see fanOutConsolePush) dedupe against the same key on
+		// each receiving gateway. It does NOT protect against a caller-level HTTP retry of
+		// send()/respond() itself - that gap is pre-existing (the channel_push/response_push it
+		// mirrors has no such protection either) and is not solved here. Defaults to a fresh id
+		// when no caller has one to give.
+		dedupeKey: string = crypto.randomUUID(),
+	): void {
+		const owner = ownerId?.();
+		if (!owner || !mailboxStore) return;
+		const entry: ConsolePushEntry = {
+			kind: "peer",
+			session_id: storeKey({ kind: "conv", conversationId: owner, address: threadAddr }),
+			from,
+			to,
+			...payload,
+		};
+		// Never load-bearing: a failure here must not turn an already-delivered/already-relayed
+		// primary operation into a spurious failure for the caller, so the local outcome is
+		// ignored and the fan-out is attempted regardless.
+		landMailboxEntry(owner, entry, dedupeKey, "mirror");
+		void fanOutConsolePush(entry, dedupeKey);
+	}
+
+	/** Land a fully-composed mailbox entry (a peer mirror or a notify_human notice relayed from
+	 * ANOTHER same-Domain Gateway) onto THIS Gateway's own owner mailbox - the console_push
+	 * LANDING side. Idempotent per dedupeKey. Local-append only: this function never fans out
+	 * further, so a receiving Gateway can never gossip-loop an entry back out to the mesh (only
+	 * fanOutConsolePush calls the relay, and nothing calls it from here). A no-op (not an error,
+	 * so the origin's relayWithRetry does not burn retries on it) pre-enrollment, when the console
+	 * bridge is off, when the attached files exceed the same byte cap every other mailbox-writing
+	 * path enforces (send/respond/humanNotify - this is the only path that lands relayed-in
+	 * content rather than a request this Gateway already validated itself), or if the append
+	 * itself fails - mirroring mirrorPeer's own "purely additive, never load-bearing" posture. */
+	function consolePush(entry: ConsolePushEntry, dedupeKey: string): { delivered: boolean } {
+		const owner = ownerId?.();
+		if (!owner || !mailboxStore) return { delivered: false };
+		if (entry.files && entry.files.length > 0 && fileBytes(entry.files) > MAX_RESPONSE_FILE_BYTES) {
+			console.warn(`[console_push] dropped an oversized entry (over ${MAX_RESPONSE_FILE_BYTES} bytes)`);
+			return { delivered: false };
+		}
+		return { delivered: landMailboxEntry(owner, entry, dedupeKey, "console_push") };
+	}
+
+	/** Fan a console-bound entry (already appended locally by the caller) out to every OTHER
+	 * same-Domain Gateway, so it lands wherever the owner's console actually polls - not just the
+	 * Gateway that composed it. Same-Domain peers are enumerated the same way discover() already
+	 * does (evie's list_gateways; no new discovery machinery), filtered through the
+	 * locally-mirrored Allowlist where available (a mailbox WRITE deserves the extra check
+	 * discover()'s read-only list_teams fan-out doesn't bother with) and self-excluded as cheap
+	 * insurance against evie ever including the caller in its own roster. Fire-and-forget with
+	 * retry (relayWithRetry); never throws. ORIGIN-ONLY: call this from an origination tap point
+	 * (mirrorPeer, humanNotify) alone - never from console_push's own landing case in handleOp, or
+	 * an entry would gossip-loop around the mesh forever. */
+	async function fanOutConsolePush(entry: ConsolePushEntry, dedupeKey: string): Promise<void> {
+		if (!evieClient?.isConnected()) return;
+		if (!resolvesLocalGateway) {
+			// Not just "no extra check" - trusting evie's roster alone for a mailbox WRITE is a
+			// deliberately bigger trust extension than list_teams' read-only fan-out takes, so a
+			// missing filter is worth a log, not a silent downgrade.
+			console.warn("[console_push] fan-out running with no allowlist filter (resolvesLocalGateway unset)");
+		}
+		try {
+			const rosterCall = await evieClient.callTool("list_gateways", {});
+			const roster = (rosterCall.result as { gateways?: { gatewayId: string }[] } | undefined)?.gateways ?? [];
+			for (const { gatewayId } of roster) {
+				if (gatewayId === localGatewayId) continue;
+				if (resolvesLocalGateway && !resolvesLocalGateway(gatewayId)) continue;
+				relayWithRetry(gatewayId, { kind: "console_push", entry, dedupeKey }, "console_push");
+			}
+		} catch (err) {
+			console.warn(
+				`[console_push] fan-out roster fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
 		}
 	}
 
@@ -379,7 +488,7 @@ export function createRoutes({
 			}
 			attempt += 1;
 			if (attempt >= maxAttempts) {
-				console.error(`[respond] ${label} to ${dstGateway} failed after ${maxAttempts} attempts: ${error}`);
+				console.error(`[relay] ${label} to ${dstGateway} failed after ${maxAttempts} attempts: ${error}`);
 				return;
 			}
 			setTimeout(() => void tryOnce(), Math.min(2000 * 2 ** (attempt - 1), 30_000));
@@ -433,9 +542,11 @@ export function createRoutes({
 		const targetAddr = Address.remote(resolvedDomain ?? localDomain, targetGateway, tSpawn, tSession);
 		const qualifiedTo = targetAddr.canonical;
 		const srcSession = storeKey({ kind: "conv", conversationId: fromConversationId, address: targetAddr });
+		const senderAddr = fromAddress ? null : localAddress(from);
+		const senderCanonical = fromAddress ?? senderAddr!.canonical;
 		const op: FederatedOp = {
 			kind: "send",
-			from: fromAddress ?? localAddress(from).canonical,
+			from: senderCanonical,
 			to: targetName,
 			body: body ?? "",
 			...(files && files.length > 0 ? { files } : {}),
@@ -456,6 +567,11 @@ export function createRoutes({
 			fromConversationId,
 			dstDomainId: resolvedDomain ?? undefined,
 		});
+		// Mirror the LOCAL sender's own outbound leg; the remote target's own gateway mirrors its
+		// side independently. Never for a console sender (senderAddr is only ever set for an agent).
+		if (senderAddr) {
+			mirrorPeer(senderAddr, senderCanonical, targetAddr.canonical, { body, files });
+		}
 		return jsonResponse({
 			session_id: srcSession,
 			status: "running",
@@ -814,6 +930,29 @@ export function createRoutes({
 					`[send] channel_push to ${qualifiedTo} [${channelJobId}]${messageId ? ` msg=${messageId.slice(0, 8)}` : ""} from ${from} (${activeWs.length} sub-session${activeWs.length > 1 ? "s" : ""})`,
 				);
 
+				// Mirror agent-to-agent traffic into the owner's console, tagged under each LOCAL
+				// participant's own thread. Never for a console sender (opts.consoleSender). The
+				// `!virtual` check is defense-in-depth, not independently reachable today: targetWs is
+				// always resolveLiveIncarnation's result, which already excludes virtual (console) peers
+				// on every resolution path (see websocket.ts), so a console can never be targetWs here.
+				if (targetWs && !targetWs.data.virtual) {
+					const toAddr = target.address;
+					if (inboundSessionId) {
+						// Federated inbound landing: only the local target is ours to mirror. `from` here
+						// is already the remote origin's canonical address (set verbatim by the origin
+						// gateway), not a local team field.
+						mirrorPeer(toAddr, from, toAddr.canonical, { body: msgBody, files });
+					} else if (!opts.consoleSender) {
+						// A malformed `from` (never slug-validated at the SendRequestSchema boundary) must
+						// not turn an already-delivered channel_push into a spurious 500 for the caller.
+						const fromAddr = tryLocalAddress(from);
+						if (fromAddr) {
+							mirrorPeer(fromAddr, fromAddr.canonical, toAddr.canonical, { body: msgBody, files });
+							mirrorPeer(toAddr, fromAddr.canonical, toAddr.canonical, { body: msgBody, files });
+						}
+					}
+				}
+
 				return jsonResponse({
 					session_id: channelJobId,
 					status: "running",
@@ -831,7 +970,14 @@ export function createRoutes({
 		return jsonResponse({ error: "unsupported connection mode" }, 400);
 	}
 
-	function respond(req: Request, body: Record<string, unknown>): Response {
+	function respond(
+		req: Request,
+		body: Record<string, unknown>,
+		// Unlike send(), respond() never needs to tell "trusted federated relay" apart from a
+		// plain call: its cross-Gateway behavior is already driven by the job's own recorded
+		// returnRoute/dstDomainId and the respond session id's own address, not a live flag.
+		opts: { consoleSender?: boolean } = {},
+	): Response {
 		const parsed = RespondBodySchema.safeParse(body);
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
@@ -920,11 +1066,28 @@ export function createRoutes({
 					session_id: rr.srcSession,
 					...(response.status ? { status: response.status } : {}),
 					...(response.response ? { response: response.response } : {}),
+					...(response.title ? { title: response.title } : {}),
+					...(response.summary ? { summary: response.summary } : {}),
+					...(response.replyAsJson ? { replyAsJson: response.replyAsJson } : {}),
+					...(response.question ? { question: response.question } : {}),
+					...(response.reason ? { reason: response.reason } : {}),
 					...(files && files.length > 0 ? { files } : {}),
 				},
 				"cross-Gateway reply-pin",
 			);
 			console.log(`[respond] ${respondSessionId} pinned to Gateway ${rr.srcGateway} via the Router`);
+			// Mirror the LOCAL responder's own thread. Never for the console itself (opts.consoleSender) -
+			// a slug-shaped Device Name could in principle register and land a returnRoute job on itself.
+			const localAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.to);
+			if (localAddr) {
+				mirrorPeer(localAddr, localAddr.canonical, deliverResult.from, {
+					body: response.response,
+					files,
+					status: response.status,
+					title: response.title,
+					summary: response.summary,
+				});
+			}
 			return jsonResponse({ delivered: true, federated: true });
 		}
 
@@ -979,6 +1142,38 @@ export function createRoutes({
 					console.log(
 						`[respond] conversation ${deliverResult.fromConversationId.slice(0, 8)}... offline, response kept in store [${respondSessionId}]`,
 					);
+				}
+				// Mirror agent-to-agent traffic (no mailbox above means the original asker has no
+				// console inbox, so it's a real agent; never for the console itself replying, opts.
+				// consoleSender). Discriminate a genuinely local reply from this gateway completing its
+				// own cross-Gateway origin anchor: the anchor's own session key embeds the REMOTE
+				// target's address, never a local one.
+				const askerAddr = opts.consoleSender ? null : tryLocalAddress(deliverResult.from);
+				if (askerAddr) {
+					const key = parseStoreKey(respondSessionId);
+					const isRemoteAnchor =
+						key?.kind === "conv" &&
+						(key.address.gateway !== localGatewayId || key.address.domain !== localDomain);
+					const mirrorPayload = {
+						body: response.response,
+						files,
+						status: response.status,
+						title: response.title,
+						summary: response.summary,
+					};
+					// This message is the REPLY: the replier speaks, the original asker receives - the
+					// mirror's from/to must reflect that direction, not the original ask's.
+					if (isRemoteAnchor) {
+						// deliverResult.to is already the remote replier's canonical address here
+						// (sendCrossGateway's own anchor records qualifiedTo, not a bare team name).
+						mirrorPeer(askerAddr, deliverResult.to, askerAddr.canonical, mirrorPayload);
+					} else {
+						const replierAddr = tryLocalAddress(deliverResult.to);
+						if (replierAddr) {
+							mirrorPeer(askerAddr, replierAddr.canonical, askerAddr.canonical, mirrorPayload);
+							mirrorPeer(replierAddr, replierAddr.canonical, askerAddr.canonical, mirrorPayload);
+						}
+					}
 				}
 			}
 		}
@@ -1042,9 +1237,15 @@ export function createRoutes({
 		});
 	}
 
-	/** Broadcast a notice to every registered console mailbox. Notices thread under
-	 * the sender on the console and are never respondable: they are appended
-	 * directly here (not via a peer push), so no inbound session is recorded. */
+	/** Broadcast a notice to the owner's mailbox (one shared inbox drained by every one of their
+	 * devices). Notices thread under the sender on the console and are never respondable: they
+	 * are appended directly here (not via a peer push), so no inbound session is recorded.
+	 * Ensures the mailbox by owner id rather than iterating whatever conversations already happen
+	 * to be registered ON THIS GATEWAY: a Gateway with zero consoles ever registered against it
+	 * (the ordinary shape for a multi-gateway Domain's non-home Gateway) would otherwise have an
+	 * empty mailbox map, silently dropping the notice instead of landing it somewhere the owner
+	 * will eventually poll. fanOutConsolePush then relays the same entry to every other
+	 * same-Domain Gateway too, so it reaches wherever the console actually is. */
 	function humanNotify(body: Record<string, unknown>): Response {
 		const parsed = HumanNotifySchema.safeParse(body);
 		if (!parsed.success) {
@@ -1063,24 +1264,29 @@ export function createRoutes({
 		if (!mailboxStore) {
 			return jsonResponse({ error: "console bridge is not enabled on this gateway" }, 503);
 		}
-		let delivered = 0;
-		mailboxStore.forEach((_conversationId, box) => {
-			box.append({
-				kind: "notice",
-				// `from` is agent-origin (the notifying session's PROJECT_NAME, a slug), so localAddress
-				// never throws here - unlike a console send's free-form Device Name. notify_human is an
-				// agent-only tool; a console never posts a notice, so the sender is always a slug.
-				session_id: storeKey({ kind: "notice", sender: localAddress(from) }),
-				from,
-				title,
-				summary,
-				body: full,
-				...(files && files.length > 0 ? { files } : {}),
-			});
-			delivered++;
-		});
-		console.log(`[notify] notice from ${from} delivered to ${delivered} console(s)`);
-		return jsonResponse({ delivered });
+		const owner = ownerId?.();
+		if (!owner) {
+			return jsonResponse({ error: "not yet enrolled; no owner to notify" }, 503);
+		}
+		const dedupeKey = crypto.randomUUID();
+		const entry: ConsolePushEntry = {
+			kind: "notice",
+			// `from` is agent-origin (the notifying session's PROJECT_NAME, a slug), so localAddress
+			// never throws here - unlike a console send's free-form Device Name. notify_human is an
+			// agent-only tool; a console never posts a notice, so the sender is always a slug.
+			session_id: storeKey({ kind: "notice", sender: localAddress(from) }),
+			from,
+			title,
+			summary,
+			body: full,
+			...(files && files.length > 0 ? { files } : {}),
+		};
+		if (!landMailboxEntry(owner, entry, dedupeKey, "notify")) {
+			return jsonResponse({ error: "failed to store notice" }, 500);
+		}
+		void fanOutConsolePush(entry, dedupeKey);
+		console.log(`[notify] notice from ${from} delivered to owner ${owner}`);
+		return jsonResponse({ delivered: true });
 	}
 
 	return {
@@ -1092,5 +1298,6 @@ export function createRoutes({
 		poll,
 		health,
 		humanNotify,
+		consolePush,
 	};
 }

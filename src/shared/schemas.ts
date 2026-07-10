@@ -475,9 +475,17 @@ export const MailboxEntrySchema = z
 	.object({
 		seq: z.number().int().nonnegative(),
 		at: z.number().int().nonnegative(),
-		kind: z.enum(["message", "reply", "notice", "sent"]),
+		kind: z.enum(["message", "reply", "notice", "sent", "peer"]),
 		session_id: z.string(),
 		from: z.string().optional(),
+		// The recipient's canonical address on a `peer` mirror, so the SENDER's own thread (where
+		// `from` alone cannot identify the other endpoint) can still label the exchange's direction.
+		to: z.string().optional(),
+		// Stable per-logical-message id, set by whichever gateway first composes the entry and
+		// carried verbatim through any relay this entry crosses before landing in a mailbox.
+		// Lets every appender - local or remote - dedupe an at-least-once retry against the SAME
+		// key instead of each inventing its own, without depending on `opId` (only set on `sent`).
+		dedupeKey: z.string().optional(),
 		// The originating send's opId on a `sent` echo (an owner's own outgoing message
 		// mirrored to all their devices). The sending device matches it to its optimistic
 		// row and settles it instead of double-rendering; other devices render it fresh.
