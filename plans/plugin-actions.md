@@ -267,3 +267,73 @@ phone's dock without the human touching it.
   established convention - either fold residuals into `pain-points.md`/`features-and-fixes.md` and
   delete this file, or trim it to a short "shipped" summary if it stays as a reference for the next
   plugin-action consumer.
+
+## Painpoints
+
+Collected during Phase 3's crust sweep. Not fixed here - a scouting pass only. Two already-tracked
+items (`PluginRegistry.keys`/`SourceContext.inContext` dead code, `ChatRepository.clearAll`'s
+poll-cancel-without-join race) were confirmed still accurate but are skipped below since
+`plans/plugin-pipeline-hardening.md` and phren's FINDINGS.md already own them.
+
+**Dead code:**
+
+- `src/shared/types.ts:RegisterMessage`/`CatalogMessage` - hand-written interfaces with zero
+  references anywhere; the real register/catalog wire handling validates via the zod
+  `WsRegisterSchema` instead. Look like pre-migration leftovers the file's own header comment
+  (wire shapes should derive from zod via `z.infer`) argues against keeping.
+- `src/mcp/bridge/helpers.ts:setIsMainOrLeadAgent`/`bridgeAgentType` - both unreferenced. More than
+  dead code: `setIsMainOrLeadAgent` is the only writer of `isMainOrLeadAgent`, which
+  `connectToRouter`'s auto-reply branch reads - since nothing ever calls the setter, that branch is
+  unreachable at runtime, not just an unused export.
+- `src/mcp/devcontainer/helpers.ts:execInContainer` - zero callers; the wake path only imports
+  `ensureContainerUpAsync`/`resolveProject` from this module. CLAUDE.md's Key Paths entry for this
+  file is stale (still lists `execInContainer` as used by the wake path).
+- `src/shared/federation-lifecycle.ts:verifyTrustPendingRequest` - unreferenced by both application
+  code and tests within switchboard (unlike its `verifyRosterRequest`/`verifyTransportRequest`
+  siblings, both round-trip tested). This module is a synced leaf copied to evie-bot, so it may be
+  used there - check before removing.
+- `src/mcp/bridge/registerBridgeTools.ts:registerBridgeTools` (and `registerDesignerTools`'s copy of
+  the same pattern) - the `if (!projectName)` disabled-stub branch is unreachable on the only
+  production path: `mcp/index.ts`'s `startMcp()` always runs `resolveSessionNaming` first, which
+  never returns empty (it synthesizes `host.<id>` instead). A misconfigured container never sees the
+  crafted "not configured" message; it silently registers under a random synthesized name.
+
+**Untracked technical debt:**
+
+- `src/shared/session-store.ts:SessionStore.restore` - a `TODO(post-upgrade cleanup)` one-shot
+  migration branch (the old `{claudeSessionId, lastSeen}` resume-map shape) that becomes deletable
+  once every gateway has re-persisted in the current record shape at least once.
+
+**Consistency gaps (not bugs, but drift from the pattern this session established):**
+
+- Tool-result construction is duplicated past the point this codebase's own helpers
+  (`toolError`/`postReply` in `replyTool.ts`, `textResult` in `connector/utils.ts`) exist to prevent:
+  `bridgeDiscover.ts`, `bridgeSend.ts`, `bridgeWait.ts`, `humanTools.ts`, and `designerTools.ts`'s own
+  success branch all hand-roll the `{content:[{type:"text",...}]}` literal at roughly a dozen call
+  sites total, several in files that already import one of the helpers for a different call.
+- `reloadPlugins.ts`/`setEffortLevel.ts`/`compactSession.ts`'s schemas are plain `z.object({...})`
+  with no `.strict()`, unlike every schema this session's `designerTools.ts` and the pre-existing
+  channel schemas use - the only tool-registration files left that silently strip unknown fields
+  instead of rejecting them.
+- The same three files report failures as a JSON-stringified `{errors:[...]}` blob, structurally
+  different from the flat-string `{content, isError:true}` shape every other tool in `mcp/` (now
+  including `designerTools.ts`) uses.
+- `ChatRepository.kt`'s new `kind == "plugin_action"` drain branch only logs when `pluginId`/
+  `actionType` are both non-null. Every sibling drop path (`DROPPED`, `SKIPPED`) logs unconditionally
+  with a reason; a malformed plugin-action entry (null `pluginId`/`actionType`) is silently
+  `continue`'d with no trace, the one drop path that breaks the `[Drain]` log's documented
+  "kind, resolved thread, OR the drop reason" coverage.
+
+**Plan cross-references that should be updated (not this plan's job to fix, just to flag):**
+
+- `plans/gateway-auth-surface.md`'s route table and "Gated set" enumeration predate `POST
+  /plugin-action` and don't list it, even though it has the identical unauthenticated,
+  `from`-spoofable-mutate profile as `/send`/`/human/notify` that table already tracks. This plan's
+  own text already defers the impersonation question there; that plan's table should gain the
+  reciprocal entry.
+- `plans/plugin-pipeline-hardening.md` Phase A's drain-race description (`ChatRepository.clearAll`/
+  `forget` racing the poll drain) predates the shipped `plugin_action` branch, which runs inside the
+  exact same uncoordinated drain loop and is subject to the identical hazard (a drain iteration past
+  `client().poll()` can still dispatch an action against state a concurrent wipe/forget intended to
+  have already torn down). Phase A's fix direction (a drain-generation guard) would need to cover
+  this branch too.

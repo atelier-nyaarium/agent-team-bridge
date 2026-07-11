@@ -29,11 +29,10 @@ fed by the inbound message pipeline. Architecture is in CLAUDE.md ("Android plug
 full build + red-team history is in git at ffa32c4. These were deliberately deferred during the
 build, each its own small scoping pass:
 
-- **DesignSync-parity MCP push tool** (`switchboard-design-sync`, core MCP). Today an agent pushes a
-  design as an ordinary `channel_reply` attachment whose first line is the `@dsCard` marker, which
-  works end to end. A parity tool would add explicit register / update-in-place / remove verbs
-  mirroring DesignSync's `register_assets`, target = the conversation. See `plans/designer.md` for the
-  DesignSync model.
+- ~~**DesignSync-parity MCP push tool.**~~ Shipped: `designer_push_card` (inline HTML, wraps the
+  existing `channel_reply`-attachment mechanism) and `designer_delete_card` (self-scoped, via the new
+  generic `plugin_action` mailbox kind - see CLAUDE.md "Console Bridge") both live in
+  `src/mcp/designer/designerTools.ts`. Full design + red-team history in git; see `plans/plugin-actions.md`.
 - **Rendered thumbnails** in the dock rows and the collapsed peek strip (today a generic canvas
   glyph). Open: a live scaled-down WebView vs a cached bitmap snapshot.
 - **In-chat announce chip** (the Q4 "if easy") - a tappable "here's the thingy" chip in the chat body;
