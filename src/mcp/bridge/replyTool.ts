@@ -52,14 +52,17 @@ export type ToolTextResult = { content: Array<{ type: "text"; text: string }>; i
 const ESCAPE_HAZARD_RE = /\\n(?:\\n|- |\* |\+ |#|\||>)/;
 
 /** The first spot where [text] contains a literal `\n` escape sequence used as markdown structure
- * (a snippet around the match), or null when clean. Code is exempt, judged line by line in
- * document order the way the renderer parses it, per CommonMark's fence rules: an opener at a
- * line start (backtick or tilde, info string allowed - never rendered) is closed only by a line
- * holding the MATCHING delimiter and nothing but whitespace; a delimiter line with trailing text
- * inside a fence is ordinary code content, and an unterminated fence runs to end-of-string. On
- * prose lines, inline code spans are blanked to a space, run-length aware (`` ``x`` `` closes
- * only on an equal backtick run). Blanking (not deleting) matters: deletion would glue the span's
- * neighbors together and manufacture a \n-plus-structure adjacency the author never wrote. */
+ * (a snippet around the match), or null when clean. The enforcing half of the escaped-newline
+ * guard - the always-visible half is REAL_NEWLINES_GUIDANCE on the prose-field describes in
+ * shared/schemas.ts (schemas cannot import from mcp/, so the two halves live apart). Code is
+ * exempt, judged line by line in document order the way the renderer parses it, per CommonMark's
+ * fence rules: an opener at a line start (backtick or tilde, info string allowed - never
+ * rendered) is closed only by a line holding the MATCHING delimiter and nothing but whitespace; a
+ * delimiter line with trailing text inside a fence is ordinary code content, and an unterminated
+ * fence runs to end-of-string. On prose lines, inline code spans are blanked to a space,
+ * run-length aware (`` ``x`` `` closes only on an equal backtick run). Blanking (not deleting)
+ * matters: deletion would glue the span's neighbors together and manufacture a \n-plus-structure
+ * adjacency the author never wrote. */
 export function literalEscapeHazard(text: string): string | null {
 	let openFence: string | null = null;
 	for (const line of text.split("\n")) {

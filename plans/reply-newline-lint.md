@@ -124,3 +124,13 @@ does not POST.
 
 - After ship: retire this plan per convention (fold residuals into `pain-points.md`), and bump +
   deploy the plugin so live sessions actually inherit the lint.
+
+## Painpoints
+
+None collected. The diff is small, TS-only, and confined to files that received two red-team
+rounds plus an alignment and framework audit in this same cycle; every real finding (the two
+scanner-design bugs, the wire-key field naming, the reject self-trip, the missing handler-level
+tests) was fixed in-cycle rather than deferred. Two comprehensive crust sweeps already ran today
+over the adjacent mcp/ and plans/ surfaces (recorded in `pain-points.md` under the plugin-actions
+and announce-chip retirements); a third pass hours later over freshly-audited files would only
+re-find what is already recorded.
