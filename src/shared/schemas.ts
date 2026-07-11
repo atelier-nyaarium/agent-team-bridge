@@ -475,7 +475,7 @@ export const MailboxEntrySchema = z
 	.object({
 		seq: z.number().int().nonnegative(),
 		at: z.number().int().nonnegative(),
-		kind: z.enum(["message", "reply", "notice", "sent", "peer"]),
+		kind: z.enum(["message", "reply", "notice", "sent", "peer", "plugin_action"]),
 		session_id: z.string(),
 		from: z.string().optional(),
 		// The recipient's canonical address on a `peer` mirror, so the SENDER's own thread (where
@@ -504,6 +504,11 @@ export const MailboxEntrySchema = z
 		question: z.string().optional(),
 		reason: z.string().optional(),
 		files: ChannelFilesSchema.optional(),
+		// A `plugin_action` entry only: which plugin, which action, and its opaque payload. Routed
+		// by the console to a plugin-claimed handler instead of being rendered as a chat message.
+		pluginId: z.string().optional(),
+		actionType: z.string().optional(),
+		payload: z.record(z.string(), z.unknown()).optional(),
 	})
 	.meta({ id: "MailboxEntry" });
 

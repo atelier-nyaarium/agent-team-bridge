@@ -5,7 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * The compile-time replacement for nyaadot's filesystem discovery scan (plans/plugins.md): the
+ * The compile-time replacement for nyaadot's filesystem discovery scan: the
  * "manifest marks the package" invariant is enforced HERE instead of at runtime. The catalog and
  * the `assets/plugins/<dir>/manifest.json` folders must agree exactly, and each folder is named
  * by its manifest's content_id - so a plugin folder cannot ship unregistered, a catalog entry

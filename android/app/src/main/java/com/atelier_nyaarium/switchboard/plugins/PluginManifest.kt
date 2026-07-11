@@ -5,8 +5,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * A plugin's identity manifest, the nyaadot source-package identity schema (plans/plugins.md,
- * "nyaadot keep / toss"). Each baked-in plugin folder `assets/plugins/<content_id>/` carries a
+ * A plugin's identity manifest, the nyaadot source-package identity schema. Each baked-in plugin
+ * folder `assets/plugins/<content_id>/` carries a
  * `manifest.json` shaped like what the plugin's standalone repo would hold, so a later extraction
  * to a real installable is a folder move.
  *

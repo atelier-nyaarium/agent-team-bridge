@@ -11,6 +11,7 @@ import { registerConnectorTools } from "./connector/connectorTools.js";
 import { setAuthToken, startListener, stopListener } from "./connector/listener.js";
 import { registerProjectTools } from "./connector/projectTools.js";
 import { registerStubTool } from "./connector/utils.js";
+import { registerDesignerTools } from "./designer/designerTools.js";
 import { registerCompactSession } from "./devcontainer/compactSession.js";
 import { registerReloadPlugins } from "./devcontainer/reloadPlugins.js";
 import { registerSetEffortLevel } from "./devcontainer/setEffortLevel.js";
@@ -55,6 +56,8 @@ export async function startMcp(): Promise<void> {
 	registerSetEffortLevel(mcpServer);
 	registerCompactSession(mcpServer);
 	registerHumanTools(mcpServer);
+	// After registerBridgeTools, so bridgeProjectName() already reflects whether PROJECT_NAME is set.
+	registerDesignerTools(mcpServer);
 
 	// The game-client connector serves /workspace project schemas, so it is container-only. The
 	// registered name is composite (`project.session`); the workspace dir + schema are keyed by the

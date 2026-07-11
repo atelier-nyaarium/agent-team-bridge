@@ -153,10 +153,23 @@ const RespondBodySchema = z.object({
 // per-file - a single file may use the whole bucket.
 const MAX_RESPONSE_FILE_BYTES = 500_000_000;
 
+// A plugin-action payload is meant to carry a small, action-specific value (e.g. a filename), never
+// bytes - unlike files/attachments, it has no dedicated cap upstream and device-mailbox.ts's own
+// entryBytes() does not count it, so this is the only backstop against an oversized or pathologically
+// nested payload reaching the mailbox (and the durable-store snapshot written on a timer).
+const MAX_PLUGIN_ACTION_PAYLOAD_BYTES = 32_768;
+
 function fileBytes(files: ChannelFile[]): number {
 	let n = 0;
 	for (const f of files) n += f.base64 ? Math.floor((f.base64.length * 3) / 4) : f.size;
 	return n;
+}
+
+/** The one measurement of a plugin-action payload's size, so the schema-level check and the
+ * consolePush landing-side check (the two enforcement sites) can never independently drift on HOW
+ * size is measured, mirroring fileBytes()'s role for MAX_RESPONSE_FILE_BYTES. */
+function payloadBytes(payload: Record<string, unknown>): number {
+	return JSON.stringify(payload).length;
 }
 
 /** Drop base64 so a persistent store entry never retains the bytes; the live
@@ -179,6 +192,29 @@ const HumanNotifySchema = z
 		summary: z.string().min(1),
 		full: z.string().min(1),
 		files: ChannelFilesSchema.optional(),
+	})
+	.strict();
+
+// `from` is the ONLY identity field, and it names the CALLING agent's own session (exactly what
+// every other agent-originated route already trusts at the same level - see send()'s own `from`;
+// this route adds no NEW trust boundary beyond that pre-existing, network-level one, tracked in
+// plans/gateway-auth-surface.md). Strict on purpose: there is no separate "to"/"target"/"team" field
+// a caller could add ON TOP OF its own `from` to reach a different conversation than the one `from`
+// itself already resolves to - the caller's own resolved address (via localAddress(from)) is the
+// only possible target. pluginId/actionType are slug-constrained (matching every other identifier
+// that feeds a composite key in this codebase) so a colon inside either half can never collide the
+// composite "pluginId:actionType" claim key with a different, distinct pair.
+const PluginActionRequestSchema = z
+	.object({
+		from: z.string().min(1).max(128),
+		pluginId: z.string().min(1).max(64).refine(isSlug, "pluginId must be a slug"),
+		actionType: z.string().min(1).max(64).refine(isSlug, "actionType must be a slug"),
+		payload: z
+			.record(z.string(), z.unknown())
+			.optional()
+			.refine((p) => !p || payloadBytes(p) <= MAX_PLUGIN_ACTION_PAYLOAD_BYTES, {
+				message: `payload exceeds ${MAX_PLUGIN_ACTION_PAYLOAD_BYTES} bytes`,
+			}),
 	})
 	.strict();
 
@@ -308,21 +344,28 @@ export function createRoutes({
 		void fanOutConsolePush(entry, dedupeKey);
 	}
 
-	/** Land a fully-composed mailbox entry (a peer mirror or a notify_human notice relayed from
-	 * ANOTHER same-Domain Gateway) onto THIS Gateway's own owner mailbox - the console_push
-	 * LANDING side. Idempotent per dedupeKey. Local-append only: this function never fans out
-	 * further, so a receiving Gateway can never gossip-loop an entry back out to the mesh (only
-	 * fanOutConsolePush calls the relay, and nothing calls it from here). A no-op (not an error,
-	 * so the origin's relayWithRetry does not burn retries on it) pre-enrollment, when the console
-	 * bridge is off, when the attached files exceed the same byte cap every other mailbox-writing
-	 * path enforces (send/respond/humanNotify - this is the only path that lands relayed-in
-	 * content rather than a request this Gateway already validated itself), or if the append
-	 * itself fails - mirroring mirrorPeer's own "purely additive, never load-bearing" posture. */
+	/** Land a fully-composed mailbox entry (a peer mirror, a notify_human notice, or a plugin_action
+	 * relayed from ANOTHER same-Domain Gateway) onto THIS Gateway's own owner mailbox - the
+	 * console_push LANDING side. Idempotent per dedupeKey. Local-append only: this function never
+	 * fans out further, so a receiving Gateway can never gossip-loop an entry back out to the mesh
+	 * (only fanOutConsolePush calls the relay, and nothing calls it from here). A no-op (not an
+	 * error, so the origin's relayWithRetry does not burn retries on it) pre-enrollment, when the
+	 * console bridge is off, when the attached files exceed the same byte cap every other
+	 * mailbox-writing path enforces (send/respond/humanNotify - this is the only path that lands
+	 * relayed-in content rather than a request this Gateway already validated itself), when a
+	 * plugin_action payload exceeds its own byte cap, or if the append itself fails - mirroring
+	 * mirrorPeer's own "purely additive, never load-bearing" posture. */
 	function consolePush(entry: ConsolePushEntry, dedupeKey: string): { delivered: boolean } {
 		const owner = ownerId?.();
 		if (!owner || !mailboxStore) return { delivered: false };
 		if (entry.files && entry.files.length > 0 && fileBytes(entry.files) > MAX_RESPONSE_FILE_BYTES) {
 			console.warn(`[console_push] dropped an oversized entry (over ${MAX_RESPONSE_FILE_BYTES} bytes)`);
+			return { delivered: false };
+		}
+		if (entry.payload && payloadBytes(entry.payload) > MAX_PLUGIN_ACTION_PAYLOAD_BYTES) {
+			console.warn(
+				`[console_push] dropped an oversized plugin_action payload (over ${MAX_PLUGIN_ACTION_PAYLOAD_BYTES} bytes)`,
+			);
 			return { delivered: false };
 		}
 		return { delivered: landMailboxEntry(owner, entry, dedupeKey, "console_push") };
@@ -1289,6 +1332,47 @@ export function createRoutes({
 		return jsonResponse({ delivered: true });
 	}
 
+	/** Land a generic plugin-action envelope (pluginId/actionType/payload) into the owner's mailbox
+	 * as a `plugin_action` entry, threaded under the CALLING agent's own address - never a
+	 * client-suppliable target - so a caller can only ever act on its own conversation.
+	 * Best-effort/never-load-bearing, matching every other mailbox-writing path here: the console
+	 * routes an unclaimed pluginId:actionType to nothing (silently skipped), so a dropped write here
+	 * is no worse than a dropped claim there. */
+	function pluginAction(body: Record<string, unknown>): Response {
+		const parsed = PluginActionRequestSchema.safeParse(body);
+		if (!parsed.success) {
+			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
+		}
+		const { from, pluginId, actionType, payload } = parsed.data;
+		if (!mailboxStore) {
+			return jsonResponse({ error: "console bridge is not enabled on this gateway" }, 503);
+		}
+		const owner = ownerId?.();
+		if (!owner) {
+			return jsonResponse({ error: "not yet enrolled; no owner to notify" }, 503);
+		}
+		let threadAddr: Address;
+		try {
+			threadAddr = localAddress(from);
+		} catch {
+			return jsonResponse({ error: `invalid "from" session name: ${from}` }, 400);
+		}
+		const dedupeKey = crypto.randomUUID();
+		const entry: ConsolePushEntry = {
+			kind: "plugin_action",
+			session_id: storeKey({ kind: "conv", conversationId: owner, address: threadAddr }),
+			pluginId,
+			actionType,
+			...(payload ? { payload } : {}),
+		};
+		if (!landMailboxEntry(owner, entry, dedupeKey, "plugin_action")) {
+			return jsonResponse({ error: "failed to store plugin action" }, 500);
+		}
+		void fanOutConsolePush(entry, dedupeKey);
+		console.log(`[plugin_action] ${pluginId}:${actionType} from ${from} delivered to owner ${owner}`);
+		return jsonResponse({ delivered: true });
+	}
+
 	return {
 		pending,
 		teams,
@@ -1299,5 +1383,6 @@ export function createRoutes({
 		health,
 		humanNotify,
 		consolePush,
+		pluginAction,
 	};
 }

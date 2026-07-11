@@ -26,6 +26,7 @@ import com.atelier_nyaarium.switchboard.proto.parseStoreKey
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.io.File
 import java.util.UUID
+import kotlinx.serialization.json.JsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -51,6 +52,18 @@ import org.json.JSONObject
 /** A rendered attachment on a message. `src` is what the WebView loads (a data URI
  * or an appassets-proxied local path); a null `src` renders as a download chip. */
 data class MessageFile(val name: String, val mime: String, val src: String? = null)
+
+/** A data-plane consumer of new inbound messages, invoked once per message at the drain gate. */
+fun interface InboundSubscriber {
+	fun onMessage(team: String, msg: Message)
+}
+
+/** A consumer of arrived `plugin_action` mailbox entries, invoked once per entry at the drain gate.
+ * Neutral shape (no plugin types here) - the plugin-framework bridge maps `pluginId`/`actionType`/
+ * `payload` onto its own claim-keyed dispatch. */
+fun interface PluginActionSubscriber {
+	fun onAction(team: String, pluginId: String, actionType: String, payload: JsonObject?)
+}
 
 /** A scanned admit-gateway QR: the Gateway identity the owner is about to admit, plus the
  * optional LAN target + one-time nonce for delivering the sealed bootstrap bundle. */
@@ -725,6 +738,27 @@ class ChatRepository(
 	/** Set by the service: called per poll with the new inbound messages of one
 	 * team, so a background burst can become a notification. */
 	var onInbound: ((team: String, messages: List<Message>) -> Unit)? = null
+
+	/** Data-plane subscribers, invoked once per genuinely-new inbound message at the drain gate
+	 * (see the poll loop). Delivery is synchronous and pre-commit, so a subscriber inherits the
+	 * mailbox cursor's exactly-once + crash-safety; it must be fast, non-blocking, and idempotent. */
+	private val inboundSubscribers = java.util.concurrent.CopyOnWriteArrayList<InboundSubscriber>()
+
+	/** Register a data-plane subscriber. Add-once per process (the caller is a singleton); a
+	 * duplicate add would double-deliver. */
+	fun addInboundSubscriber(subscriber: InboundSubscriber) {
+		inboundSubscribers.addIfAbsent(subscriber)
+	}
+
+	/** Plugin-action subscribers, invoked once per `plugin_action` mailbox entry at the drain gate.
+	 * Delivery is at-least-once (this entry never renders a chat message, so it has no persisted
+	 * fold to dedupe a redraw against); a subscriber must be fast, non-blocking, and idempotent. */
+	private val pluginActionSubscribers = java.util.concurrent.CopyOnWriteArrayList<PluginActionSubscriber>()
+
+	/** Register a plugin-action subscriber. Add-once per process, same as [addInboundSubscriber]. */
+	fun addPluginActionSubscriber(subscriber: PluginActionSubscriber) {
+		pluginActionSubscribers.addIfAbsent(subscriber)
+	}
 
 	/** The Activity came on screen: gateway to the fast cadence, optimistically
 	 * clear a doze-corpse failure banner (the kicked poll re-raises it within
@@ -2669,6 +2703,19 @@ class ChatRepository(
 							reconcileSent(team, echo)
 							continue
 						}
+						if (e.kind == "plugin_action") {
+							// Never rendered as a chat message, so it never depends on a nonempty body.
+							val pluginId = e.pluginId
+							val actionType = e.actionType
+							if (pluginId != null && actionType != null) {
+								DebugLog.log("Drain", "seq=${e.seq} kind=plugin_action session=${e.session_id} -> thread=$team $pluginId:$actionType")
+								pluginActionSubscribers.forEach { sub ->
+									runCatching { sub.onAction(team, pluginId, actionType, e.payload) }
+										.onFailure { DebugLog.log("Drain", "plugin action subscriber threw: $it") }
+								}
+							}
+							continue
+						}
 						if (bodyText.isNotEmpty() || files.isNotEmpty() || e.status != null) {
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team status=${e.status} files=${files.size} \"$snippet\"")
 							val attribution = resolveMessageAttribution(e.kind, e.from, e.to, team, ::fromCanonical)
@@ -2681,6 +2728,14 @@ class ChatRepository(
 							if (appendInbound(team, msg)) {
 								bumpUnread(team)
 								burst.getOrPut(team) { mutableListOf() }.add(msg)
+								// Data-plane fan-out: synchronous, pre-commit, so subscribers get the
+								// mailbox cursor's exactly-once for free. A subscriber must never throw
+								// upward (a throw here would break the drain for every team), so a throw
+								// is caught and logged rather than escaping.
+								inboundSubscribers.forEach { sub ->
+									runCatching { sub.onMessage(team, msg) }
+										.onFailure { DebugLog.log("Drain", "inbound subscriber threw: $it") }
+								}
 							}
 						} else {
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team SKIPPED (no body, no files, no status)")

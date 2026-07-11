@@ -88,6 +88,10 @@ class SwitchboardService : Service() {
 			return
 		}
 		repo.onInbound = { team, messages -> notifyBurst(repo, team, messages) }
+		// Boot the plugin framework BEFORE the poll loop starts: booting wires the data-plane bridge
+		// onto the repo (once per process), so no inbound message is drained-and-committed before a
+		// subscriber exists (the cursor never re-delivers). Idempotent - the Activity may also boot it.
+		com.atelier_nyaarium.switchboard.plugins.Plugins.get(this)
 		// Keep the CPU awake for the poll loop while the bridge runs (background delivery).
 		acquireWakeLock()
 		// connect() runs register (setting the Gateway id, cursor, epoch) and the

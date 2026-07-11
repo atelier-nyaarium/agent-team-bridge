@@ -21,7 +21,7 @@ data class PluginUiState(
  * to one persisted flag (baked = INSTALLED by shipping; enabled = loaded this process). Enabling
  * runs the plugin's [PluginEntry] inside its [SourceContext] window; disabling is one lifecycle
  * retract sweep. `requires` is enforced as a plain assert in both directions (no toposort, no
- * apt-style marks - see plans/plugins.md): enable refuses while a dep is off, disable refuses
+ * apt-style marks): enable refuses while a dep is off, disable refuses
  * while an enabled plugin still requires this one.
  *
  * All mutation is main-thread (boot + settings toggles); methods are synchronized as a backstop.

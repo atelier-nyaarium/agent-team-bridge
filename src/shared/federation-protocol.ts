@@ -3,6 +3,7 @@ import { sign, verify } from "./crypto.js";
 import { ChannelFilesSchema } from "./evie-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
 import { NoticeTitle } from "./notice.js";
+import { isSlug } from "./session-id.js";
 
 ////////////////////////////////
 //  Federation inner protocol (gateway <-> gateway, via evie)
@@ -79,7 +80,7 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	z.object({
 		kind: z.literal("console_push"),
 		entry: z.object({
-			kind: z.enum(["notice", "peer"]),
+			kind: z.enum(["notice", "peer", "plugin_action"]),
 			session_id: z.string().min(1).max(MAX_STORE_KEY_LEN),
 			from: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
 			to: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
@@ -94,6 +95,19 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 			body: z.string().optional(),
 			status: z.string().optional(),
 			files: ChannelFilesSchema.optional(),
+			// A `plugin_action` entry only - see MailboxEntrySchema (schemas.ts) for the field meaning.
+			// Slug-constrained (like every composite-key identifier elsewhere) so a relayed entry from
+			// a peer Gateway can never carry a colon-ambiguous pluginId/actionType pair, belt-and-
+			// suspenders alongside the same constraint the origin's PluginActionRequestSchema enforces.
+			pluginId: z
+				.string()
+				.optional()
+				.refine((s) => !s || isSlug(s), "pluginId must be a slug"),
+			actionType: z
+				.string()
+				.optional()
+				.refine((s) => !s || isSlug(s), "actionType must be a slug"),
+			payload: z.record(z.string(), z.unknown()).optional(),
 		}),
 		// Feeds DeviceMailbox.append's seenKeys dedup directly, so an at-least-once relay retry
 		// to the SAME destination Gateway lands exactly once there. ReplayGuard cannot serve this
@@ -145,9 +159,9 @@ export type ReturnRoute = z.infer<typeof ReturnRouteSchema>;
 export type FederatedOp = z.infer<typeof FederatedOpSchema>;
 export type FederatedOpKind = FederatedOp["kind"];
 // The console_push op's own entry shape (a deliberate SUBSET of the full MailboxInput - no
-// dedupeKey/opId/replyAsJson/question/reason, and only the two kinds this convergence hop
-// carries). The caller embeds dedupeKey into the actual MailboxInput it appends locally; this
-// type is just the wire payload.
+// dedupeKey/opId/replyAsJson/question/reason, and only the kinds this convergence hop carries).
+// The caller embeds dedupeKey into the actual MailboxInput it appends locally; this type is just
+// the wire payload.
 export type ConsolePushEntry = Extract<FederatedOp, { kind: "console_push" }>["entry"];
 export type GatewayRelayPayload = z.infer<typeof GatewayRelayPayloadSchema>;
 export type GatewayRelayFrame = z.infer<typeof GatewayRelayFrameSchema>;

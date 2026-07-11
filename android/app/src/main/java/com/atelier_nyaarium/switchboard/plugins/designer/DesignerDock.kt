@@ -36,13 +36,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,34 +58,59 @@ import java.io.File
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 ////////////////////////////////
 //  Functions & Helpers
 
-/** The attachment-relative path (`<bucket>/<name>`) inside an appassets card src. */
-internal fun relOf(src: String): String = src.substringAfter("/${Attachments.DIR}/", "")
+/** The most a card's HTML may be to render. Shared so the chip opener refuses to CLAIM anything the
+ * viewer would then refuse to render (which would swallow the tap), and so an oversize file is never
+ * ingested into the gallery. A card is small by contract (the mockup corpus is ~10 KB each). */
+internal const val CARD_RENDER_CAP_BYTES: Long = 4L * 1024 * 1024
 
-/** Resolve a card src to its on-disk HTML through the same path-safety gate the attachment viewer
- * uses. Bounded read: a card is small by contract (the mockup corpus is ~10 KB each); an oversize
- * file is logged rather than dropped in silence so a card that never appears is diagnosable. */
-internal fun readAttachmentHtml(filesDir: File, src: String, capBytes: Int = 4 * 1024 * 1024): String? {
-	val rel = relOf(src)
+/** Bytes read to detect a card: the `@dsCard` marker and `<title>` both lead the file (head), so a
+ * small prefix suffices. Bounded so ingest (poll thread) and a chip tap (UI thread) never read a
+ * whole file just to classify it. */
+private const val CARD_MARKER_PREFIX_BYTES = 8 * 1024
+
+/** A bounded prefix of a card's HTML through the attachment path-safety gate, or null when the file
+ * is gone, oversize (too big to ever render, so never gallery'd), or unreadable. Enough to parse the
+ * marker + title on both the ingest path and a chip tap without reading the whole file. */
+internal fun readCardPrefix(filesDir: File, rel: String, cap: Int = CARD_MARKER_PREFIX_BYTES): String? {
 	if (rel.isEmpty()) return null
 	val file = Attachments.resolve(filesDir, rel) ?: return null
-	if (file.length() > capBytes) {
-		com.atelier_nyaarium.switchboard.DebugLog.log("Designer", "card ${file.name} is ${file.length()}B > ${capBytes}B cap; not rendered")
+	if (file.length() > CARD_RENDER_CAP_BYTES) return null
+	return runCatching { file.inputStream().use { String(it.readNBytes(cap), Charsets.UTF_8) } }.getOrNull()
+}
+
+/** A card's full HTML for rendering (the viewer), or null when gone, oversize, or unreadable. Capped
+ * by contract: a card is small (the mockup corpus is ~10 KB each). */
+internal fun readCardHtml(filesDir: File, rel: String): String? {
+	if (rel.isEmpty()) return null
+	val file = Attachments.resolve(filesDir, rel) ?: return null
+	if (file.length() > CARD_RENDER_CAP_BYTES) {
+		com.atelier_nyaarium.switchboard.DebugLog.log("Designer", "card ${file.name} is ${file.length()}B > ${CARD_RENDER_CAP_BYTES}B cap; not rendered")
 		return null
 	}
 	return runCatching { file.readText() }.getOrNull()
 }
 
-private fun cardFile(filesDir: File, version: DesignerVersion): File? =
-	Attachments.resolve(filesDir, relOf(version.src))
+private fun cardFile(filesDir: File, rel: String): File? = Attachments.resolve(filesDir, rel)
 
-/** Re-send a version's bytes as a fresh outbound attachment, reusing the composer's own send path
- * via a FileProvider URI (attachments/ is exposed in file_paths.xml). Launched on a process-lifetime
+/** Build a standalone card for an EXACT tapped attachment (chip-open), independent of the dock
+ * gallery - so an older revision, or a canvas deleted from the dock, still opens the file tapped. */
+internal fun buildCardForRel(filesDir: File, rel: String): DesignerCard? {
+	val html = readCardHtml(filesDir, rel) ?: return null
+	val meta = parseDsCardMarker(html) ?: return null
+	val name = rel.substringAfterLast('/')
+	return DesignerCard(name, htmlTitle(html) ?: name.substringBeforeLast('.'), rel, 0L, meta)
+}
+
+/** Re-send a card's bytes as a fresh outbound attachment, reusing the composer's own send path via
+ * a FileProvider URI (attachments/ is exposed in file_paths.xml). Launched on a process-lifetime
  * scope so closing the thread mid-send cannot cancel it (matching the composer's App-scoped send). */
 private fun reattach(context: Context, team: String, file: File) {
 	runCatching {
@@ -94,7 +119,7 @@ private fun reattach(context: Context, team: String, file: File) {
 	}
 }
 
-/** Share a card version's HTML file through the FileProvider share sheet. */
+/** Share a card's HTML file through the FileProvider share sheet. */
 private fun shareCard(context: Context, file: File) {
 	runCatching {
 		val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
@@ -129,8 +154,8 @@ private fun sandboxedCardWebView(ctx: Context): WebView = WebView(ctx).apply {
 
 private fun shortTime(at: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(at))
 
-/** The set of row/viewer actions, so the sheet's context menu and the viewer's action bar stay
- * in lockstep. Each action operates on a specific (card, version). */
+/** The set of row/viewer actions, so the sheet's context menu and the viewer's action bar stay in
+ * lockstep. Each operates on the specific card being viewed. */
 private enum class CardAction(val label: String) {
 	REFERENCE("Reference in chat"),
 	REATTACH("Reattach to chat"),
@@ -138,128 +163,194 @@ private enum class CardAction(val label: String) {
 	DELETE("Delete"),
 }
 
+/** What the full-screen viewer is showing. A [Gallery] target holds only an index and renders from
+ * the LIVE `cards` list, so a re-push updating a canvas is reflected while the viewer stays open. A
+ * [Chip] target is a standalone exact file (a tapped chip), independent of the gallery. */
+private sealed interface ViewerTarget {
+	data class Gallery(val index: Int) : ViewerTarget
+
+	data class Chip(val card: DesignerCard) : ViewerTarget
+}
+
 ////////////////////////////////
 //  Composables
 
 /**
- * The Designer dock: a fixed bar above the composer, present only when the open conversation has
- * design cards, expanding into the canvas list, each canvas opening full-screen with version
- * history and a per-card action set. The UX is the approved design pass (temp/switchboard-designer-dock/).
+ * The Designer dock: a fixed bar above the composer listing the latest of each canvas, expanding
+ * into a gallery, each opening full-screen with a per-card action set. It ALSO hosts the viewer for
+ * a card-marked attachment chip tapped in the chat body (which opens that exact file), so the dock
+ * composes even when the gallery is empty. Version history is intentionally absent - an older
+ * revision is an earlier chat message, reached by tapping its chip.
  */
 @Composable
 fun DesignerDock(scope: ThreadDockScope) {
 	val team = scope.team
 	val context = LocalContext.current
 	val repo = remember { Repo.get(context) }
-	val store = remember { DesignStore(context) }
-	val state by repo.state.collectAsState()
-	val messages = state.threads[team] ?: emptyList()
 	val filesDir = context.filesDir
-	// Bumped by Delete (which changes the store, not the messages) to force a re-derive.
-	var refresh by remember(team) { mutableIntStateOf(0) }
-	val cards by produceState(initialValue = emptyList<DesignerCard>(), messages, refresh, team) {
-		value = withContext(Dispatchers.IO) {
-			designerCards(messages, store.dismissed(team)) { src -> readAttachmentHtml(filesDir, src) }
+
+	// Render straight from the additive store. The inbound pipeline ingests each NEW dsCard exactly
+	// once (DesignerPlugin's `inboundMessages` handler), so the dock never re-scans the thread. The
+	// only history the pipeline missed is what arrived before the plugin existed: a one-time per-team
+	// backfill seeds those, then the flag is set and it never scans again.
+	androidx.compose.runtime.LaunchedEffect(team) {
+		if (DesignStore.hasBackfilled(team)) return@LaunchedEffect
+		// Wait for the thread to hydrate (first non-empty snapshot) before seeding, so a compose that
+		// races thread load cannot mark an empty history backfilled and lose its old cards. A truly
+		// empty thread just suspends here harmlessly until the dock leaves composition.
+		val history = androidx.compose.runtime.snapshotFlow { repo.state.value.threads[team] ?: emptyList() }
+			.first { it.isNotEmpty() }
+		// Claim the flag BEFORE seeding, and seed uncancellably. Mark-first means a torn backfill (the
+		// dock closes, or the process dies mid-loop) can only MISS some pre-plugin cards, never leave
+		// the flag unset to re-seed a card the user has since deleted. NonCancellable lets an ordinary
+		// tab switch still finish the seed it began rather than dropping the tail. Each seed is guarded
+		// by the removal generation captured up front, so a Delete/Forget that races this loop wins:
+		// once it bumps the generation, the remaining seeds drop instead of resurrecting a removed card.
+		withContext(NonCancellable + Dispatchers.IO) {
+			val guardGen = DesignStore.removalGeneration(team)
+			DesignStore.markBackfilled(team)
+			for (msg in history) {
+				if (msg.fromMe || msg.isPeer) continue // agent-pushed content only, mirroring the ingest guard
+				cardsFrom(msg.files, msg.at) { rel -> readCardPrefix(filesDir, rel) }
+					.forEach { DesignStore.upsert(team, it, guardGen = guardGen) }
+			}
 		}
 	}
+	val stored by androidx.compose.runtime.key(team) { DesignStore.cards(team).collectAsState() }
+	val cards = remember(stored) { stored.map { it.toCard() } }
 
-	// Keyed by team: the dock is one composable instance reused across tab/session switches (the
-	// scope changes, the instance does not), so unkeyed state would carry an open sheet or canvas
-	// from one conversation into the next.
+	// State keyed by team: the dock is one composable instance reused across tab/session switches
+	// (the scope changes, the instance does not), so unkeyed state would carry an open sheet or
+	// canvas from one conversation into the next.
 	var expanded by remember(team) { mutableStateOf(false) }
-	var openIndex by remember(team) { mutableStateOf<Int?>(null) }
+	var viewer by remember(team) { mutableStateOf<ViewerTarget?>(null) }
 
-	// Chip-tap hand-off: a tap on a card-marked attachment in the chat body opens that card here.
-	// Events (replay 0) never replay on re-entry; the target rel is held until `cards` resolves it,
-	// so a tap that beats the async re-derive still opens the right card. State is remember(team),
-	// so nothing crosses into another conversation.
+	// Chip-tap hand-off: a tap on a card-marked attachment in the chat body opens THAT EXACT file
+	// here. Events (replay 0) never replay on re-entry; the exact card is built off the tapped rel,
+	// independent of the gallery, so an old revision or a dock-deleted canvas still opens.
 	var pendingOpenRel by remember(team) { mutableStateOf<String?>(null) }
 	androidx.compose.runtime.LaunchedEffect(team) {
 		DesignerOpenBus.events.collect { req -> if (req.team == team) pendingOpenRel = req.rel }
 	}
-	androidx.compose.runtime.LaunchedEffect(pendingOpenRel, cards) {
+	androidx.compose.runtime.LaunchedEffect(pendingOpenRel) {
 		val rel = pendingOpenRel ?: return@LaunchedEffect
-		val idx = cards.indexOfFirst { c -> c.versions.any { it.src.endsWith("/$rel") } }
-		if (idx >= 0) {
-			pendingOpenRel = null
+		// Read BEFORE clearing the key: nulling pendingOpenRel re-keys this effect, and doing that
+		// ahead of the suspend would let a recomposition cancel the in-flight read and silently drop
+		// the tap. If a newer tap changed pendingOpenRel while we were reading, this read is superseded:
+		// leave the key set (its own effect processes the newer tap) and DO NOT open our now-stale card,
+		// or a slower first read could clobber the newer tap's viewer. Latest tap wins.
+		val card = withContext(Dispatchers.IO) { buildCardForRel(filesDir, rel) }
+		if (pendingOpenRel != rel) return@LaunchedEffect
+		pendingOpenRel = null
+		if (card != null) {
 			expanded = false
-			openIndex = idx
+			viewer = ViewerTarget.Chip(card)
 		}
 	}
 
-	if (cards.isEmpty()) return
+	// When the gallery empties (e.g. the last card deleted), close the sheet and any open gallery
+	// viewer. Done in an effect, not during composition, to avoid a compositional state write. A
+	// Chip viewer stays open - it shows a standalone tapped file, independent of the gallery.
+	androidx.compose.runtime.LaunchedEffect(cards) {
+		if (cards.isEmpty()) {
+			expanded = false
+			if (viewer is ViewerTarget.Gallery) viewer = null
+		}
+	}
 
-	DockBar(cards) { expanded = true }
+	if (cards.isNotEmpty()) {
+		// Keeps the offscreen thumbnail WebView window-attached while any thumb slot is on screen.
+		DesignerThumbHost()
+		DockBar(cards, filesDir) { expanded = true }
+	}
 	if (expanded) {
 		CanvasSheet(
 			cards = cards,
+			filesDir = filesDir,
 			onOpen = {
-				openIndex = it
+				viewer = ViewerTarget.Gallery(it)
 				expanded = false
 			},
-			onAction = { card, action -> runAction(context, scope, store, filesDir, card, card.versions.lastIndex, action) { refresh++ } },
+			onAction = { card, action -> runAction(context, scope, filesDir, card, action) {} },
 			onDismiss = { expanded = false },
 		)
 	}
-	openIndex?.let { index ->
-		if (index in cards.indices) {
+	viewer?.let { target ->
+		// Gallery renders from LIVE cards (so a re-push reflects); chip renders its standalone card.
+		val items = when (target) {
+			is ViewerTarget.Gallery -> cards
+			is ViewerTarget.Chip -> listOf(target.card)
+		}
+		val index = when (target) {
+			is ViewerTarget.Gallery -> target.index
+			is ViewerTarget.Chip -> 0
+		}
+		if (items.isNotEmpty()) {
 			CanvasViewer(
-				cards = cards,
-				index = index,
+				items = items,
+				index = index.coerceIn(0, items.lastIndex),
 				filesDir = filesDir,
-				onIndex = { openIndex = it },
-				onAction = { card, versionIndex, action ->
-					runAction(context, scope, store, filesDir, card, versionIndex, action) {
-						refresh++
-						if (action == CardAction.DELETE) openIndex = null
+				// Delete manages the dock GALLERY (remove this canvas). A Chip viewer shows a specific
+				// historical file, not a gallery entry, so it omits Delete - deleting from there would
+				// confusingly remove the CURRENT gallery card, not the file on screen.
+				allowDelete = target is ViewerTarget.Gallery,
+				onIndex = { viewer = ViewerTarget.Gallery(it) },
+				onAction = { card, action ->
+					runAction(context, scope, filesDir, card, action) {
+						if (action == CardAction.DELETE) viewer = null
 					}
 				},
-				onClose = { openIndex = null },
+				onClose = { viewer = null },
 			)
 		}
 	}
 }
 
-/** Execute one card action against a specific version; [onChanged] fires for store-mutating
- * actions so the caller re-derives. */
+/** Execute one card action; [onChanged] fires for store-mutating actions so the caller re-derives. */
 private fun runAction(
 	context: Context,
 	scope: ThreadDockScope,
-	store: DesignStore,
 	filesDir: File,
 	card: DesignerCard,
-	versionIndex: Int,
 	action: CardAction,
 	onChanged: () -> Unit,
 ) {
-	val version = card.versions.getOrNull(versionIndex) ?: card.latest
 	when (action) {
 		CardAction.REFERENCE -> scope.insertDraftText("**${card.name}** ")
-		CardAction.REATTACH -> cardFile(filesDir, version)?.let { reattach(context, scope.team, it) }
+		CardAction.REATTACH -> cardFile(filesDir, card.rel)?.let { reattach(context, scope.team, it) }
 		CardAction.DOWNLOAD -> {
-			val ok = cardFile(filesDir, version)?.let { saveFileToDownloads(context, it, card.fileName, "text/html") } ?: false
+			val ok = cardFile(filesDir, card.rel)?.let { saveFileToDownloads(context, it, card.fileName, "text/html") } ?: false
 			Toast.makeText(context, if (ok) "Saved to Downloads" else "Couldn't save", Toast.LENGTH_SHORT).show()
 		}
 		CardAction.DELETE -> {
-			store.dismiss(scope.team, card.fileName, card.updatedAt)
+			// Remove from the additive index (the array shrinks). Deleting the pointer never touches the
+			// message attachment; the pipeline delivered this card's message once and won't re-add it, so
+			// only a strictly-newer re-push (a fresh inbound) brings the canvas back.
+			DesignStore.delete(scope.team, card.fileName)
 			onChanged()
-			return
 		}
 	}
 }
 
 @Composable
-private fun DockBar(cards: List<DesignerCard>, onExpand: () -> Unit) {
+private fun DockBar(cards: List<DesignerCard>, filesDir: File, onExpand: () -> Unit) {
 	Surface(tonalElevation = 3.dp) {
 		Row(
 			Modifier.fillMaxWidth().hapticClickable(onClick = onExpand).padding(horizontal = 12.dp, vertical = 8.dp),
 			verticalAlignment = Alignment.CenterVertically,
 		) {
-			Box(
-				Modifier.size(34.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(9.dp)),
-				contentAlignment = Alignment.Center,
+			// The peek slot previews the most recently updated canvas.
+			CardThumb(
+				filesDir = filesDir,
+				card = cards.maxBy { it.updatedAt },
+				modifier = Modifier.size(34.dp).clip(RoundedCornerShape(9.dp)),
 			) {
-				Icon(Icons.Default.GridView, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+				Box(
+					Modifier.size(34.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(9.dp)),
+					contentAlignment = Alignment.Center,
+				) {
+					Icon(Icons.Default.GridView, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+				}
 			}
 			Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
 				Text("Designer", style = MaterialTheme.typography.titleSmall)
@@ -278,6 +369,7 @@ private fun DockBar(cards: List<DesignerCard>, onExpand: () -> Unit) {
 @Composable
 private fun CanvasSheet(
 	cards: List<DesignerCard>,
+	filesDir: File,
 	onOpen: (Int) -> Unit,
 	onAction: (DesignerCard, CardAction) -> Unit,
 	onDismiss: () -> Unit,
@@ -304,48 +396,48 @@ private fun CanvasSheet(
 		}
 		LazyColumn(Modifier.padding(bottom = 24.dp)) {
 			items(cards.size, key = { cards[it].fileName }) { i ->
-				CanvasRow(cards[i], onOpen = { onOpen(i) }, onAction = { onAction(cards[i], it) })
+				CanvasRow(cards[i], filesDir, onOpen = { onOpen(i) }, onAction = { onAction(cards[i], it) })
 			}
 		}
 	}
 }
 
 @Composable
-private fun CanvasRow(card: DesignerCard, onOpen: () -> Unit, onAction: (CardAction) -> Unit) {
+private fun CanvasRow(card: DesignerCard, filesDir: File, onOpen: () -> Unit, onAction: (CardAction) -> Unit) {
 	var menuOpen by remember { mutableStateOf(false) }
 	Row(
 		Modifier.fillMaxWidth().hapticClickable(onClick = onOpen).padding(start = 16.dp, end = 4.dp).padding(vertical = 10.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
-		Box(
-			Modifier.size(width = 44.dp, height = 58.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)),
-			contentAlignment = Alignment.Center,
+		CardThumb(
+			filesDir = filesDir,
+			card = card,
+			modifier = Modifier.size(width = 44.dp, height = 58.dp).clip(RoundedCornerShape(8.dp)),
 		) {
-			Icon(Icons.Default.GridView, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+			Box(
+				Modifier.size(width = 44.dp, height = 58.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)),
+				contentAlignment = Alignment.Center,
+			) {
+				Icon(Icons.Default.GridView, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+			}
 		}
 		Column(Modifier.weight(1f).padding(horizontal = 13.dp)) {
 			Text(card.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
 			val dims = card.meta.width?.let { w -> card.meta.height?.let { h -> "$w x $h" } }
-			val versionNote = if (card.versions.size > 1) "v${card.versions.size}" else null
 			Text(
-				listOfNotNull("updated ${shortTime(card.updatedAt)}", versionNote, dims).joinToString("  "),
+				listOfNotNull("updated ${shortTime(card.updatedAt)}", dims).joinToString("  "),
 				style = MaterialTheme.typography.bodySmall,
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
 		}
 		Box {
-			IconButton(onClick = { menuOpen = true }) {
-				Icon(Icons.Default.MoreVert, contentDescription = "Canvas actions")
-			}
+			IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Canvas actions") }
 			DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
 				CardAction.entries.forEach { action ->
-					DropdownMenuItem(
-						text = { Text(action.label) },
-						onClick = {
-							menuOpen = false
-							onAction(action)
-						},
-					)
+					DropdownMenuItem(text = { Text(action.label) }, onClick = {
+						menuOpen = false
+						onAction(action)
+					})
 				}
 			}
 		}
@@ -354,25 +446,24 @@ private fun CanvasRow(card: DesignerCard, onOpen: () -> Unit, onAction: (CardAct
 
 @Composable
 private fun CanvasViewer(
-	cards: List<DesignerCard>,
+	items: List<DesignerCard>,
 	index: Int,
 	filesDir: File,
+	allowDelete: Boolean,
 	onIndex: (Int) -> Unit,
-	onAction: (DesignerCard, Int, CardAction) -> Unit,
+	onAction: (DesignerCard, CardAction) -> Unit,
 	onClose: () -> Unit,
 ) {
 	val context = LocalContext.current
-	val card = cards[index]
-	// Default to the newest version; the stepper lets an older one be viewed (and acted on). Keyed
-	// on fileName ONLY (not version count), so a new version streaming in while an older revision is
-	// open does not yank the user to latest - the coerce keeps the index valid as history grows.
-	var versionIndex by remember(card.fileName) { mutableIntStateOf(card.versions.lastIndex) }
-	val safeIndex = versionIndex.coerceIn(0, card.versions.lastIndex)
-	val version = card.versions[safeIndex]
+	val card = items[index]
 	var menuOpen by remember { mutableStateOf(false) }
-	val loaded by produceState<Pair<String, String>?>(initialValue = null, version.src) {
-		val text = withContext(Dispatchers.IO) { readAttachmentHtml(filesDir, version.src) }
-		value = text?.let { version.src to it }
+	val actions = if (allowDelete) CardAction.entries else CardAction.entries.filter { it != CardAction.DELETE }
+	// Produced value carries the rel it was read for: produceState keeps the prior value across a
+	// key change until the new read lands, so the render gates on a match and never paints the
+	// previous canvas under the new card's identity.
+	val loaded by produceState<Pair<String, String>?>(initialValue = null, card.rel) {
+		val text = withContext(Dispatchers.IO) { readCardHtml(filesDir, card.rel) }
+		value = text?.let { card.rel to it }
 	}
 	Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
 		Surface(Modifier.fillMaxSize()) {
@@ -384,47 +475,37 @@ private fun CanvasViewer(
 					IconButton(onClick = onClose) { Icon(Icons.Default.Close, contentDescription = "Close canvas") }
 					Column(Modifier.weight(1f)) {
 						Text(card.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-						val v = if (card.versions.size > 1) " - v${safeIndex + 1}/${card.versions.size}" else ""
-						Text(
-							"Canvas ${index + 1} of ${cards.size}$v",
-							style = MaterialTheme.typography.bodySmall,
-							color = MaterialTheme.colorScheme.onSurfaceVariant,
-						)
+						if (items.size > 1) {
+							Text(
+								"Canvas ${index + 1} of ${items.size}",
+								style = MaterialTheme.typography.bodySmall,
+								color = MaterialTheme.colorScheme.onSurfaceVariant,
+							)
+						}
 					}
-					IconButton(onClick = { cardFile(filesDir, version)?.let { shareCard(context, it) } }) {
+					IconButton(onClick = { cardFile(filesDir, card.rel)?.let { shareCard(context, it) } }) {
 						Icon(Icons.Default.Share, contentDescription = "Share canvas")
 					}
 					Box {
 						IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Canvas actions") }
 						DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-							CardAction.entries.forEach { action ->
-								DropdownMenuItem(
-									text = { Text(action.label) },
-									onClick = {
-										menuOpen = false
-										onAction(card, safeIndex, action)
-									},
-								)
+							actions.forEach { action ->
+								DropdownMenuItem(text = { Text(action.label) }, onClick = {
+									menuOpen = false
+									onAction(card, action)
+								})
 							}
 						}
 					}
 				}
-				if (card.versions.size > 1) {
-					VersionBar(
-						versionIndex = safeIndex,
-						count = card.versions.size,
-						at = version.at,
-						onVersion = { versionIndex = it },
-					)
-				}
 				Box(Modifier.weight(1f).fillMaxWidth()) {
-					val match = loaded?.takeIf { it.first == version.src }
+					val match = loaded?.takeIf { it.first == card.rel }
 					if (match != null) {
 						AndroidView(
 							factory = { ctx -> sandboxedCardWebView(ctx) },
 							update = { wv ->
-								if (wv.tag != version.src) {
-									wv.tag = version.src
+								if (wv.tag != card.rel) {
+									wv.tag = card.rel
 									wv.loadDataWithBaseURL(null, match.second, "text/html", "utf-8", null)
 								}
 							},
@@ -433,45 +514,24 @@ private fun CanvasViewer(
 						)
 					}
 					if (index > 0) NavArrow(Modifier.align(Alignment.CenterStart), left = true) { onIndex(index - 1) }
-					if (index < cards.size - 1) NavArrow(Modifier.align(Alignment.CenterEnd), left = false) { onIndex(index + 1) }
+					if (index < items.size - 1) NavArrow(Modifier.align(Alignment.CenterEnd), left = false) { onIndex(index + 1) }
 				}
-				Row(
-					Modifier.fillMaxWidth().padding(vertical = 10.dp),
-					horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.CenterHorizontally),
-				) {
-					cards.indices.forEach { i ->
-						Box(
-							Modifier.size(if (i == index) 10.dp else 7.dp).background(
-								if (i == index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-								CircleShape,
-							),
-						)
+				if (items.size > 1) {
+					Row(
+						Modifier.fillMaxWidth().padding(vertical = 10.dp),
+						horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.CenterHorizontally),
+					) {
+						items.indices.forEach { i ->
+							Box(
+								Modifier.size(if (i == index) 10.dp else 7.dp).background(
+									if (i == index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+									CircleShape,
+								),
+							)
+						}
 					}
 				}
 			}
-		}
-	}
-}
-
-/** Version stepper for a card with history: prev/next across revisions, newest on the right. */
-@Composable
-private fun VersionBar(versionIndex: Int, count: Int, at: Long, onVersion: (Int) -> Unit) {
-	Row(
-		Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
-		verticalAlignment = Alignment.CenterVertically,
-		horizontalArrangement = Arrangement.Center,
-	) {
-		IconButton(enabled = versionIndex > 0, onClick = { onVersion(versionIndex - 1) }) {
-			Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Older version")
-		}
-		val tag = if (versionIndex == count - 1) "latest" else "older"
-		Text(
-			"v${versionIndex + 1} of $count ($tag) - ${shortTime(at)}",
-			style = MaterialTheme.typography.bodySmall,
-			color = MaterialTheme.colorScheme.onSurfaceVariant,
-		)
-		IconButton(enabled = versionIndex < count - 1, onClick = { onVersion(versionIndex + 1) }) {
-			Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Newer version")
 		}
 	}
 }

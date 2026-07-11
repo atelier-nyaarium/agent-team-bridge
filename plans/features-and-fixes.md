@@ -21,10 +21,36 @@ removed from this file; see git history for their original scoping if needed.)
 
 ---
 
-## Moved out: Items 11-13 -> the host-split plan; Item 14 -> plans/plugins.md
+## Item 15 - Designer plugin follow-ups (framework + Designer shipped in ffa32c4)
+
+The app-side plugin framework and the Designer plugin shipped: a dock gallery, four management
+actions (reference / reattach / download / delete), chip-open, and an additive per-team card store
+fed by the inbound message pipeline. Architecture is in CLAUDE.md ("Android plugin framework"); the
+full build + red-team history is in git at ffa32c4. These were deliberately deferred during the
+build, each its own small scoping pass:
+
+- ~~**DesignSync-parity MCP push tool.**~~ Shipped: `designer_push_card` (inline HTML, wraps the
+  existing `channel_reply`-attachment mechanism) and `designer_delete_card` (self-scoped, via the new
+  generic `plugin_action` mailbox kind - see CLAUDE.md "Console Bridge") both live in
+  `src/mcp/designer/designerTools.ts`. Architecture is in CLAUDE.md ("Console Bridge (Android
+  channel)"); full design + red-team history in git (commits `dc28dbb`, `95e82c8`, `f35c008`).
+  Residuals in `plans/pain-points.md`.
+- **Rendered thumbnails** in the dock rows and the collapsed peek strip (today a generic canvas
+  glyph). Open: a live scaled-down WebView vs a cached bitmap snapshot.
+- **In-chat announce chip** (the Q4 "if easy") - a tappable "here's the thingy" chip in the chat body;
+  prose plus the dock is the shipped fallback. Needs a feasibility check in the thread renderer.
+- **Index lifecycle** questions: a per-conversation card cap, an explicit on-device file home plus TTL
+  for card bytes (`Attachments.kt` internal storage vs a plugin-owned dir), and the eventual cleanup
+  pass that walks the additive index to prune pointers whose attachment was purged.
+- **Toggle-state sync**: plugin enable/disable is device-local for v1; whether it ever syncs
+  server-side is open.
+
+---
+
+## Moved out: Items 11-13 -> the host-split plan; Item 14 -> shipped
 
 The CLI-era teardown, the create-session button, and Copilot support are now subsumed into
 `bug-class-decisions.md` Phase 6 (split the host: demote the host-agent, headless multi-session
-daemon). Item 14 (app-side plugins support) moved to `plans/plugins.md` when its scoping pass
-started - the nyaadot hard requirement was discharged there and that file is now the sole source
-of truth. They were removed here to avoid a split source of truth.
+daemon). Item 14 (app-side plugins support) was scoped in `plans/plugins.md` and SHIPPED (ffa32c4);
+that plan and its `plans/inbound-pipeline.md` foundation were deleted on ship, their deferred features
+folded into Item 15 above and their open bug-residuals into `plans/plugin-pipeline-hardening.md`.

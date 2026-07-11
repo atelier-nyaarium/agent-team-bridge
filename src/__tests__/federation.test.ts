@@ -764,6 +764,21 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 			}).success,
 		).toBe(true);
 	});
+
+	it("accepts a plugin_action entry, carrying pluginId/actionType/payload", () => {
+		expect(
+			FederatedOpSchema.safeParse({
+				...consolePushOp,
+				entry: {
+					kind: "plugin_action",
+					session_id: consolePushOp.entry.session_id,
+					pluginId: "designer",
+					actionType: "delete-card",
+					payload: { fileName: "x.html" },
+				},
+			}).success,
+		).toBe(true);
+	});
 });
 
 describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
@@ -830,6 +845,45 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		consolePush(entry, "stable-key-1"); // an at-least-once retry of the SAME relay attempt
 
 		expect(mailboxStore.get("owner-1")?.drain().entries).toHaveLength(1);
+	});
+
+	it("pluginAction relays a plugin_action entry to every OTHER same-Domain Gateway, same convergence path as a notice", async () => {
+		const { routes: hostbRoutes, consolePushCalls } = gateRoutes([]);
+		let landedOnHostb: FederatedOp | undefined;
+		const evie = fakeEvie({
+			destSealer: sealerB,
+			srcGateway: "hosta",
+			handle: (op) => {
+				landedOnHostb = op;
+				const push = op as { entry: unknown; dedupeKey: string };
+				return hostbRoutes.consolePush(push.entry as never, push.dedupeKey);
+			},
+			onCall: (action) =>
+				action === "list_gateways"
+					? { gateways: [{ gatewayId: "hosta" }, { gatewayId: "hostb" }] }
+					: { ok: true },
+		});
+		const mailboxStore = new DeviceMailboxStore();
+		const ctx = makeCtx("hosta", {
+			evieClient: evie.client,
+			sealer: sealerA,
+			mailboxStore,
+			ownerId: () => "owner-1",
+			resolvesLocalGateway: (gatewayId) => gatewayId === "hostb" || gatewayId === "hosta",
+		});
+		const { pluginAction } = createRoutes(ctx);
+
+		const res = pluginAction({ from: "recipe-app", pluginId: "designer", actionType: "delete-card" });
+		expect((await res.json()).delivered).toBe(true);
+		expect(mailboxStore.get("owner-1")?.drain().entries).toHaveLength(1);
+
+		await vi.waitFor(() => expect(consolePushCalls).toHaveLength(1));
+		expect(landedOnHostb).toMatchObject({ kind: "console_push" });
+		expect(consolePushCalls[0].entry).toMatchObject({
+			kind: "plugin_action",
+			pluginId: "designer",
+			actionType: "delete-card",
+		});
 	});
 
 	it("single-Gateway behavior is unchanged: no evieClient, humanNotify still delivers locally with no error", async () => {

@@ -34,7 +34,9 @@ class PluginManagerTest {
 		val store2 = store
 		val manager = PluginManager(
 			runtime = runtime,
-			host = PluginHost(runtime),
+			// ContextWrapper(null) is a concrete Context instance with no Robolectric; the manager
+			// tests never touch the host's context (their entries claim into `registry`, not the host).
+			host = PluginHost(runtime, android.content.ContextWrapper(null)),
 			enabledStore = store,
 			readManifest = { dir -> manifests[dir] ?: error("no manifest for $dir") },
 			catalog = catalog,

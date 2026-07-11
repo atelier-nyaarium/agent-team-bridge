@@ -943,6 +943,7 @@ export async function startGateway(): Promise<void> {
 		if (method === "POST" && url.pathname === "/poll") return routes.poll(req, body);
 		if (method === "GET" && url.pathname === "/health") return routes.health();
 		if (method === "POST" && url.pathname === "/human/notify") return routes.humanNotify(body);
+		if (method === "POST" && url.pathname === "/plugin-action") return routes.pluginAction(body);
 
 		return new Response("Not Found", { status: 404 });
 	}

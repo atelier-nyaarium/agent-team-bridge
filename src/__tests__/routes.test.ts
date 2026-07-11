@@ -341,6 +341,137 @@ describe("routes", () => {
 		});
 	});
 
+	describe("/plugin-action", () => {
+		function makeStoreForOwner(owner = "owner-1"): {
+			ctx: RoutesDeps;
+			mailboxStore: DeviceMailboxStore;
+		} {
+			const mailboxStore = new DeviceMailboxStore();
+			const ctx = { ...makeCtx({ mailboxStore, ownerId: () => owner }) };
+			return { ctx, mailboxStore };
+		}
+
+		it("delivers a plugin_action into the owner's mailbox, threaded under the caller's own address", async () => {
+			const { ctx, mailboxStore } = makeStoreForOwner();
+			const { pluginAction } = createRoutes(ctx);
+			const res = pluginAction({
+				from: "recipe-app",
+				pluginId: "designer",
+				actionType: "delete-card",
+				payload: { fileName: "editor-form.html" },
+			});
+			expect((await res.json()).delivered).toBe(true);
+			const snap = mailboxStore.get("owner-1")!.drain();
+			expect(snap.entries).toHaveLength(1);
+			expect(snap.entries[0]).toMatchObject({
+				kind: "plugin_action",
+				session_id: "conv.owner-1.alice.test-host.recipe-app.claude",
+				pluginId: "designer",
+				actionType: "delete-card",
+				payload: { fileName: "editor-form.html" },
+			});
+			expect(typeof snap.entries[0].dedupeKey).toBe("string");
+		});
+
+		it("cannot be made to target any address other than the caller's own resolved identity", async () => {
+			// The schema is strict: there is no "to"/"target"/"team" field at all, so a caller
+			// cannot smuggle a different destination through the request body - only `from` (the
+			// caller's own name) ever decides the target.
+			const { ctx, mailboxStore } = makeStoreForOwner();
+			const { pluginAction } = createRoutes(ctx);
+			const res = pluginAction({
+				from: "recipe-app",
+				pluginId: "designer",
+				actionType: "delete-card",
+				payload: { fileName: "x.html", to: "someone-elses-team", team: "someone-elses-team" },
+				to: "someone-elses-team",
+				target: "someone-elses-team",
+			} as Record<string, unknown>);
+			expect(res.status).toBe(400);
+			// Even a same-shaped call with no stray top-level fields (a lookalike key buried only
+			// inside the opaque payload, which the composer never reads for addressing) still
+			// resolves to the caller's own address, not the lookalike value.
+			pluginAction({
+				from: "recipe-app",
+				pluginId: "designer",
+				actionType: "delete-card",
+				payload: { fileName: "x.html", to: "someone-elses-team", team: "someone-elses-team" },
+			});
+			const entries = mailboxStore.get("owner-1")!.drain().entries;
+			expect(entries).toHaveLength(1);
+			expect(entries[0].session_id).toBe("conv.owner-1.alice.test-host.recipe-app.claude");
+		});
+
+		it("requires from, pluginId, and actionType", async () => {
+			const { ctx } = makeStoreForOwner();
+			const { pluginAction } = createRoutes(ctx);
+			expect(pluginAction({ pluginId: "designer", actionType: "delete-card" }).status).toBe(400);
+			expect(pluginAction({ from: "recipe-app", actionType: "delete-card" }).status).toBe(400);
+			expect(pluginAction({ from: "recipe-app", pluginId: "designer" }).status).toBe(400);
+		});
+
+		it("rejects an invalid `from` session name with 400 rather than throwing", () => {
+			const { ctx } = makeStoreForOwner();
+			const { pluginAction } = createRoutes(ctx);
+			expect(() =>
+				pluginAction({ from: "Not A Valid Slug!", pluginId: "designer", actionType: "delete-card" }),
+			).not.toThrow();
+			expect(
+				pluginAction({ from: "Not A Valid Slug!", pluginId: "designer", actionType: "delete-card" }).status,
+			).toBe(400);
+		});
+
+		it("missing store returns 503, no owner (pre-enrollment) returns 503", () => {
+			const { pluginAction: noStore } = createRoutes(makeCtx());
+			expect(noStore({ from: "recipe-app", pluginId: "designer", actionType: "delete-card" }).status).toBe(503);
+
+			const { pluginAction: noOwner } = createRoutes(makeCtx({ mailboxStore: new DeviceMailboxStore() }));
+			expect(noOwner({ from: "recipe-app", pluginId: "designer", actionType: "delete-card" }).status).toBe(503);
+		});
+
+		it("rejects a pluginId or actionType containing a colon, so two distinct pairs can never collide onto the same composite claim key", () => {
+			const { ctx } = makeStoreForOwner();
+			const { pluginAction } = createRoutes(ctx);
+			expect(pluginAction({ from: "recipe-app", pluginId: "a:b", actionType: "c" }).status).toBe(400);
+			expect(pluginAction({ from: "recipe-app", pluginId: "a", actionType: "b:c" }).status).toBe(400);
+			expect(pluginAction({ from: "recipe-app", pluginId: "Designer", actionType: "delete-card" }).status).toBe(
+				400,
+			);
+		});
+
+		it("rejects a payload over the size cap, so an oversized entry can never reach the mailbox", () => {
+			const { ctx, mailboxStore } = makeStoreForOwner();
+			const { pluginAction } = createRoutes(ctx);
+			const res = pluginAction({
+				from: "recipe-app",
+				pluginId: "designer",
+				actionType: "delete-card",
+				payload: { fileName: "x".repeat(40_000) },
+			});
+			expect(res.status).toBe(400);
+			expect(mailboxStore.get("owner-1")).toBeUndefined();
+		});
+
+		it("returns a clean 500 instead of throwing when the underlying append fails", () => {
+			const throwingStore = {
+				ensure: () => ({
+					append: () => {
+						throw new Error("boom");
+					},
+				}),
+			};
+			const ctx = makeCtx({ mailboxStore: throwingStore as never, ownerId: () => "owner-1" });
+			const { pluginAction } = createRoutes(ctx);
+
+			expect(() =>
+				pluginAction({ from: "recipe-app", pluginId: "designer", actionType: "delete-card" }),
+			).not.toThrow();
+			expect(pluginAction({ from: "recipe-app", pluginId: "designer", actionType: "delete-card" }).status).toBe(
+				500,
+			);
+		});
+	});
+
 	describe("consolePush (console_push landing side)", () => {
 		it("lands an entry on the owner's mailbox, embedding the dedupeKey", () => {
 			const mailboxStore = new DeviceMailboxStore();
@@ -359,6 +490,24 @@ describe("routes", () => {
 			const entries = mailboxStore.get("owner-1")!.drain().entries;
 			expect(entries).toHaveLength(1);
 			expect(entries[0]).toMatchObject({ ...entry, dedupeKey: "dk-1" });
+		});
+
+		it("drops an oversized plugin_action payload instead of landing it (defense-in-depth for a relayed entry)", () => {
+			const mailboxStore = new DeviceMailboxStore();
+			const ctx = makeCtx({ mailboxStore, ownerId: () => "owner-1" });
+			const { consolePush } = createRoutes(ctx);
+
+			const entry = {
+				kind: "plugin_action" as const,
+				session_id: "conv.owner-1.alice.test-host.recipe-app.claude",
+				pluginId: "designer",
+				actionType: "delete-card",
+				payload: { fileName: "x".repeat(40_000) },
+			};
+			const result = consolePush(entry, "dk-1");
+
+			expect(result).toEqual({ delivered: false });
+			expect(mailboxStore.get("owner-1")).toBeUndefined();
 		});
 
 		it("is idempotent: the same dedupeKey re-delivered (a relay retry) lands exactly once", () => {
