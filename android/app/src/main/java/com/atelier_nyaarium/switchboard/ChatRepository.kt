@@ -52,6 +52,11 @@ import org.json.JSONObject
  * or an appassets-proxied local path); a null `src` renders as a download chip. */
 data class MessageFile(val name: String, val mime: String, val src: String? = null)
 
+/** A data-plane consumer of new inbound messages, invoked once per message at the drain gate. */
+fun interface InboundSubscriber {
+	fun onMessage(team: String, msg: Message)
+}
+
 /** A scanned admit-gateway QR: the Gateway identity the owner is about to admit, plus the
  * optional LAN target + one-time nonce for delivering the sealed bootstrap bundle. */
 data class ScannedGateway(
@@ -725,6 +730,17 @@ class ChatRepository(
 	/** Set by the service: called per poll with the new inbound messages of one
 	 * team, so a background burst can become a notification. */
 	var onInbound: ((team: String, messages: List<Message>) -> Unit)? = null
+
+	/** Data-plane subscribers, invoked once per genuinely-new inbound message at the drain gate
+	 * (see the poll loop). Delivery is synchronous and pre-commit, so a subscriber inherits the
+	 * mailbox cursor's exactly-once + crash-safety; it must be fast, non-blocking, and idempotent. */
+	private val inboundSubscribers = java.util.concurrent.CopyOnWriteArrayList<InboundSubscriber>()
+
+	/** Register a data-plane subscriber. Add-once per process (the caller is a singleton); a
+	 * duplicate add would double-deliver. */
+	fun addInboundSubscriber(subscriber: InboundSubscriber) {
+		inboundSubscribers.addIfAbsent(subscriber)
+	}
 
 	/** The Activity came on screen: gateway to the fast cadence, optimistically
 	 * clear a doze-corpse failure banner (the kicked poll re-raises it within
@@ -2681,6 +2697,14 @@ class ChatRepository(
 							if (appendInbound(team, msg)) {
 								bumpUnread(team)
 								burst.getOrPut(team) { mutableListOf() }.add(msg)
+								// Data-plane fan-out: synchronous, pre-commit, so subscribers get the
+								// mailbox cursor's exactly-once for free. A subscriber must never throw
+								// upward (a throw here would break the drain for every team), so a throw
+								// is caught and logged rather than escaping.
+								inboundSubscribers.forEach { sub ->
+									runCatching { sub.onMessage(team, msg) }
+										.onFailure { DebugLog.log("Drain", "inbound subscriber threw: $it") }
+								}
 							}
 						} else {
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team SKIPPED (no body, no files, no status)")

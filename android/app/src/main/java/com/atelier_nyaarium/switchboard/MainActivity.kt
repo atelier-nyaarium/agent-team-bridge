@@ -516,8 +516,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					showUsers = true
 				},
 				onClear = {
-					// The Domain-delete transaction (repo.deleteDomain) owns the local wipe; this only
-					// navigates home once it completes.
+					// The Domain-delete transaction (repo.deleteDomain) owns the local wipe; drop
+					// plugin device state (e.g. the Designer index) alongside it, then navigate home.
+					pluginManager.host.accountWipeHandlers.values().forEach { it.onWipe(context) }
 					showSettings = false
 					settingsRoute = SettingsRoute.HUB
 					openTeam = null
@@ -577,7 +578,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onDraftChange = { repo.setDraft(openTeam!!, it) },
 				onRename = { name -> scope.launch { repo.rename(openTeam!!, name) } },
 				onForget = {
-					repo.forget(openTeam!!)
+					val forgotten = openTeam!!
+					pluginManager.host.threadForgetHandlers.values().forEach { it.onForget(context, forgotten) }
+					repo.forget(forgotten)
 					openTeam = null
 				},
 				// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off in v1,
@@ -623,7 +626,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					SwitchboardService.cancelTeamNotification(context, team)
 				},
 				onRename = { team, name -> scope.launch { repo.rename(team, name) } },
-				onForget = { team -> repo.forget(team) },
+				onForget = { team ->
+					pluginManager.host.threadForgetHandlers.values().forEach { it.onForget(context, team) }
+					repo.forget(team)
+				},
 				// Fire the create and stay on the board: the gateway adopts the session's record
 				// synchronously, so its own tile appears via the teams() refresh (spinner while it boots).
 				// Tapping the tile opens its terminal view. A failure surfaces as a Snackbar.

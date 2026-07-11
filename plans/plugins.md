@@ -398,6 +398,121 @@ during the build:
 - **[low, plan] Collapsed-bar thumbnail strip** folded into the standing thumbnail deferral (noted
   above), not a new gap.
 
+## Phase -1 - Inbound Message Pipeline (foundation; framework-first, greenlit-pending)
+
+The additive Designer store failed FIVE red-team rounds because ingest was reactive-in-the-UI
+(`DesignerDock.produceState` re-scans `state.threads[team]` and maintains a `(epoch,seq)` watermark).
+A framework-first assessment (subagent-framework-first-assessor, this session) confirmed the root
+cause and the fix.
+
+**Root cause (named):** the codebase already OWNS exactly-once, in-order, epoch-correct delivery of
+new messages at `SyncCursor.advance` / `MailboxSync.commit` (the mailbox poll drain), but there is
+NO framework way to subscribe to it. `ChatRepository.onInbound` is a SINGLE-SLOT callback (taken by
+notifications). So every per-message feature reinvents "react to a new message"; the Designer
+reinvented it as a SECOND cursor (`wmEpoch/wmSeq/gen`) with epoch semantics that CONTRADICT the one
+true cursor (epoch is a random per-instance nonce, compared for equality + reset - `mintEpoch` in
+`src/shared/device-mailbox.ts`; the watermark compared it with `>`). Two cursors over one stream
+cannot agree. Every defensive mechanism I added (LOCK, gen+CAS, fixed-vs-running watermark,
+`CardRead.Retry`) existed only to FAKE exactly-once on derived UI state the drain already provides.
+
+**The pattern: Inbound Message Pipeline.** Generalize the single-slot `onInbound` into a fan-out
+that hands each genuinely-new inbound message exactly once, in mailbox order, to registered
+subscribers (core AND plugin), as a 5th `PluginHost` registry (`inboundMessages`) - the plugin
+framework's first DATA-plane extension point (the four existing points are all UI/lifecycle).
+
+**Load-bearing constraint (the round-6 trap):** delivery MUST be a SYNCHRONOUS in-line call on the
+poll IO thread, inside the drain, BEFORE `mailboxSync.commit`. NOT a `MutableSharedFlow<Message>`.
+The cursor advances only after processing, so a synchronous pre-commit call inherits exactly-once
++ crash-safety for free; a hot observable severs that coupling (a cold/unmounted subscriber misses
+the emit and needs a durable cursor again - the exact bug). `DesignerOpenBus` (a replay-0 SharedFlow)
+is the right shape for transient UI intent and the WRONG shape for the data plane; do not copy it.
+
+**Wiring (keeps core's dependency direction):** ChatRepository gets a neutral
+`InboundSubscriber` sink (`fun interface { onMessage(ctx, team, msg) }` + a list), dispatched at the
+existing `appendInbound(...)==true` gate (`ChatRepository.kt` ~2681 - the canonical "genuinely new,
+first-seen" signal that already gates unread/burst), before `mailboxSync.commit`. The app wires the
+plugin `inboundMessages` registry into it, exactly as `SwitchboardService` wires `onInbound` today.
+Notifications become the pipeline's first subscriber. `sent` echoes `continue` before the gate, so a
+subscriber never sees the owner's own outgoing (correct for Designer).
+
+**What it DELETES (Designer collapses to trivial):**
+- `DesignerDock.produceState(messages,...)` re-scan pump -> the dock renders from a reactive store
+  read (`DesignStore` gets an in-memory `MutableStateFlow` mirror; `collectAsState`).
+- `DesignStore`: `wmEpoch/wmSeq/gen`, `ingest(scan, expectedGen)` + CAS, `mergeDesigns`, the
+  process-wide LOCK -> collapse to `upsert/delete/forget/forgetAll` (a plain `synchronized` covers
+  poll-thread upsert vs UI-thread forget).
+- `DesignerCards`: `scanForCards`, `ScannedCard`, `IngestScan`, `newerThan`, `CardRead.Retry`'s
+  watermark-hold -> deleted. Keep `CardRead.Ok/Skip`, `parseDsCardMarker`, `looksHtml`, `relOf`,
+  `htmlTitle` (still needed to decide "is this a card").
+- The Designer ingest becomes a ~10-line `inboundMessages` subscriber (guard `fromMe||isPeer`, read,
+  parse marker, `store.upsert`).
+
+**Bugs made impossible by design:** cursor re-derivation drops (no second cursor), epoch-flip silent
+drop (epoch handling lives ONLY in SyncCursor; subscribers never see an epoch), deleted-content
+resurrection (each message delivered once, never replayed), stale-scan-vs-forget race (synchronous
+single-card delivery + a plain lock), duplicate on at-least-once re-drain (handled once at the gate).
+
+**Order:** Phase -1 (this pipeline + migrate `onInbound`/notifications) -> then the Designer store
+collapse -> then the reactive dock binding. TTS burst + peer-mirror stay as-is for now (correct,
+battle-tested; migrate to subscribers later for symmetry, not for correctness).
+
+**Cycles note (user + self lesson):** this concurrency work should have gone through the cycles /
+refinement tool from the start rather than straight implementation; the five red-team rounds were
+the cost of skipping that. Phase -1 onward uses refinement cycles.
+
+## Phase 4 - version history removed; additive store
+
+**Versioning reverted (user, after live test):** "there's no version chooser. But I don't really
+need one anyway since that's bloat and I can just scroll up to a prior attachment." The version
+stepper is removed. Dock = a latest-per-filename gallery. An older revision is just an earlier chat
+message; tapping its attachment chip opens THAT EXACT file (confirmed: "that exact one yes"). This
+is the custom dsCard open handler (the `AttachmentOpener`) opening the tapped rel, decoupled from
+the gallery, so a dock-deleted or older canvas still opens.
+
+**Store flipped subtractive -> additive (user):** "I would prefer if the custom store is additive
+instead of subtractive. When a message arrives with a ds card, it updates that custom store
+pointing that file to the attachment id. When deleted, the array shrinks. This better handles an
+eventual cleanup feature. No more 'hidden' bits for ancient messages."
+
+- The store becomes a POSITIVE index: a dsCard arrival upserts `fileName -> {rel/attachment
+  pointer, at, title, group, w, h}`. Same filename updates the pointer to the newest. The dock
+  renders from the index (a pointer, never a copy of the bytes - content stays in the attachment).
+- Delete REMOVES the entry (array shrinks). No tombstone, no accumulating hidden-bits.
+- Mechanism that keeps it additive without a growing set: a single per-conversation WATERMARK (the
+  `at` of the last message ingested). Ingest only processes messages newer than it, so a deleted
+  card is not re-added by its own still-present old message; a genuine re-push is newer, crosses
+  the watermark, and re-adds. One value per conversation, not a bit per message.
+- Trade-off (stated to user): a stored pointer can dangle if the attachment is later purged - which
+  is exactly what the future cleanup pass walks the index to prune. The additive shape is what
+  makes that cleanup clean.
+- Content is STILL not duplicated (the index holds a pointer + small metadata, the bytes stay in
+  the message attachment). `forget(team)` drops the team's index slice.
+
+Shipping note: the subtractive-tombstone cut (built first this phase) is superseded by the additive
+store before release; only the additive version ships.
+
+### Phase 4 red-team (3 rounds, Sonnet fleets) - key fixes
+
+- **Watermark by `at` was unsafe (high, data loss).** `at` is stamped by two clocks (gateway for
+  inbound, device for a local echo) and the thread list is arrival-ordered not `at`-sorted, so an
+  `at`-watermark drops a card on clock skew or an equal-ms collision. Rewired the watermark to the
+  mailbox `(epoch, seq)` - the store's own monotonic, single-clock, collision-free delivery order.
+  Only INBOUND rows become cards (local/echo `seq<=0` skipped; the Reattach echo therefore never
+  perturbs the gallery); peer rows advance the watermark but never become cards. `epoch`/`seq` are
+  persisted with each message (`persistThreads`), so a card that arrived while the app was closed
+  still ingests after restart.
+- **Ingest/delete read-modify-write race (medium).** `ingest` (IO) and `delete`/`forget` (UI) now
+  serialize through a process-wide lock so they cannot interleave and resurrect a just-deleted card.
+- **`forget()` was dead code (high).** Wired a `PluginHost.threadForgetHandlers` extension point;
+  the Designer registers `designer:forget -> DesignStore.forget`, and both `MainActivity` forget
+  sites invoke the handlers, so a forgotten-then-reused address does not resurrect ghost cards.
+- **Chip-open second-tap clobber (high).** The open effect now compare-and-clears (`if
+  pendingOpenRel == rel`), so a rapid second tap survives instead of being nulled away.
+- **Viewer froze the gallery list (medium).** The full-screen viewer split into a `ViewerTarget`:
+  a `Gallery` target renders from LIVE cards (a re-push reflects while open), a `Chip` target is the
+  standalone tapped file; an emptied gallery closes via an effect. Plus the earlier chip-open
+  self-cancel race and oversize-file dead-tap fixes.
+
 ## Phase 3 build - versioned store + management + chip-open
 
 Built after the phase-3 questionaire (versioned device store owned by the plugin, fed by the
