@@ -1,4 +1,4 @@
-// SYNC-HASH: f7eda2380c551a6d50e50106b263093a
+// SYNC-HASH: 86a092a498edee784af79fd3cfddc5bb
 // SYNCED MODULE - source of truth: switchboard/src/shared/notice.ts
 // Copied verbatim into: nyaaskills/src/shared/notice.ts
 // MUST re-copy on change: cp src/shared/notice.ts ../nyaaskills/src/shared/notice.ts
@@ -30,7 +30,7 @@ export const NoticeTitle = z
 export const NoticeSummary = z
 	.string()
 	.min(1)
-	.describe(`4-6 plain sentences: what happened and what is next. Plain content, no lead-in labels ("Summary:").`);
+	.describe(`3-4 plain sentences: what happened and what is next. Plain content, no lead-in labels ("Summary:").`);
 
 export const NoticeFull = z
 	.string()

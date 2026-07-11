@@ -498,7 +498,7 @@ export const MailboxEntrySchema = z
 		opId: z.string().optional(),
 		// Notification-bar line for notices; the body carries the full report.
 		title: z.string().optional(),
-		// The Short tier of a notice (4-6 sentences), addressable on its own so
+		// The Short tier of a notice (3-4 sentences), addressable on its own so
 		// console features never parse it back out of the body. Present on notices;
 		// absent on a plain reply or a `sent` echo.
 		summary: z.string().optional(),
