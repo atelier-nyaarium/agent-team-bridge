@@ -254,6 +254,15 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			if (!claimed) viewer = OpenAttachment(file, file.name, mime, rel)
 		}
 	}
+	// A plugin may decorate its own attachment chips (e.g. the Designer's card title); the first
+	// non-null decoration wins, everything else renders the plain chip. Per-decorator runCatching
+	// (the Plugins.kt bridge pattern): this runs on every sync of every open thread, so a throwing
+	// decorator must cost only its own decoration, never the transcript render.
+	rendererPool.decorateFile = { team, file ->
+		pluginManager.host.attachmentChipDecorators.values().firstNotNullOfOrNull { decorator ->
+			runCatching { decorator.decorate(team, file) }.getOrNull()
+		}
+	}
 	// In-thread Play buttons render only when STTS is provisioned; taps speak the full tier, and the
 	// player's now-playing pushes glyph state back. Re-evaluated per recomposition so provisioning
 	// in-session lights the buttons for renderers built afterward.

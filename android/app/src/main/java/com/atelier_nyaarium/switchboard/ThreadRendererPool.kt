@@ -41,6 +41,11 @@ class ThreadRendererPool(private val context: Context) {
 	 * render time, so a device rename reflects without rebuilding the pool. */
 	var selfLabel: (() -> String)? = null
 
+	/** Set by the owner; returns decoration data for a (team, file) chip, or null for the plain
+	 * chip. The team is bound per-renderer, same as [onAttachmentTap]. Runs on the main thread
+	 * inside serialization - in-memory lookups only. */
+	var decorateFile: ((String, MessageFile) -> ChipDecoration?)? = null
+
 	fun get(team: String): ThreadRenderer =
 		renderers.getOrPut(team) {
 			ThreadRenderer(context).also {
@@ -51,6 +56,7 @@ class ThreadRendererPool(private val context: Context) {
 				it.onPlayMessage = { at -> onPlayTap?.invoke(team, at) }
 				it.resolveFrom = { addr -> resolveFrom?.invoke(addr) ?: addr }
 				it.selfLabel = { selfLabel?.invoke() ?: "" }
+				it.decorateFile = { f -> decorateFile?.invoke(team, f) }
 			}
 		}
 

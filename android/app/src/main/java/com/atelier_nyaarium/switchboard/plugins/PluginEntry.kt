@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard.plugins
 
 import android.content.Context
 import androidx.compose.runtime.Composable
+import com.atelier_nyaarium.switchboard.ChipDecoration
 import com.atelier_nyaarium.switchboard.MessageFile
 import java.io.File
 import kotlinx.serialization.json.JsonObject
@@ -76,6 +77,15 @@ class PluginAction(
 	val payload: JsonObject?,
 )
 
+/** Decorates ONE attachment chip in the thread renderer: given the thread and the file as the
+ * transcript carries it, returns display data ([ChipDecoration]) or null to leave the plain chip.
+ * Consulted at transcript-serialization time on the MAIN thread, once per file per sync pass - the
+ * contract is a fast, in-memory lookup only, never disk or network (a slow decorator janks every
+ * open thread's rendering, not just this plugin's chips). */
+fun interface AttachmentChipDecorator {
+	fun decorate(team: String, file: MessageFile): ChipDecoration?
+}
+
 /** Handles ONE claimed `pluginId:actionType` action, dispatched synchronously on the poll thread,
  * before the mailbox cursor commits - same as [InboundMessageHandler], so the CONTRACT is the same:
  * fast, bounded, non-blocking (a slow or hanging handler stalls delivery for every team's messages
@@ -127,4 +137,10 @@ class PluginHost internal constructor(
 	 * - a plugin claims the exact composite key its own actions use. A key with no claimant (an
 	 * unknown action type, or the owning plugin disabled) is silently skipped, never an error. */
 	val pluginActions: PluginRegistry<PluginActionHandler> = runtime.createRegistry("plugin-actions")
+
+	/** Attachment-chip decorators, keyed `<plugin>:<decorator>`. The thread renderer consults every
+	 * claimed decorator per attachment at serialization time; the first non-null decoration wins
+	 * (matching [attachmentOpeners]' first-claim-wins). No claimant, or all null -> the plain chip. */
+	val attachmentChipDecorators: PluginRegistry<AttachmentChipDecorator> =
+		runtime.createRegistry("attachment-chip-decorators")
 }

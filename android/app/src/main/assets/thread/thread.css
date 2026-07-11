@@ -267,3 +267,21 @@ html, body {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+
+/* A decorated chip reads as a titled artifact, not a file path: proportional
+   type, link-accent edge, and a leading dot in the same accent. */
+.files .chip.deco {
+	font-family: inherit;
+	font-weight: 600;
+	border-color: var(--link);
+	color: var(--link);
+}
+
+.files .chip.deco::before {
+	content: "";
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--link);
+	flex-shrink: 0;
+}

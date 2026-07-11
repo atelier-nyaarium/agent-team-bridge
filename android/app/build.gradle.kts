@@ -137,4 +137,7 @@ dependencies {
 	implementation(libs.zxing.core)
 
 	testImplementation(libs.junit)
+	// Real org.json shadowing the android.jar stub (which throws on every method) so JSON
+	// serialization helpers are unit-testable off-device.
+	testImplementation(libs.org.json)
 }
