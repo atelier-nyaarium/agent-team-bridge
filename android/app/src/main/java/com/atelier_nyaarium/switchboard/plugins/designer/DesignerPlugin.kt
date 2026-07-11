@@ -5,9 +5,12 @@ import com.atelier_nyaarium.switchboard.Attachments
 import com.atelier_nyaarium.switchboard.plugins.AccountWipeHandler
 import com.atelier_nyaarium.switchboard.plugins.AttachmentOpener
 import com.atelier_nyaarium.switchboard.plugins.InboundMessageHandler
+import com.atelier_nyaarium.switchboard.plugins.PluginActionHandler
 import com.atelier_nyaarium.switchboard.plugins.PluginEntry
 import com.atelier_nyaarium.switchboard.plugins.PluginHost
 import com.atelier_nyaarium.switchboard.plugins.ThreadForgetHandler
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * The Designer plugin's entry hook (manifest: `assets/plugins/designer/manifest.json`). It renders a
@@ -29,6 +32,13 @@ class DesignerPlugin : PluginEntry {
 			if (msg.fromMe || msg.isPeer) return@InboundMessageHandler
 			cardsFrom(msg.files, msg.at) { rel -> readCardPrefix(filesDir, rel) }
 				.forEach { DesignStore.upsert(msg.team, it) }
+		})
+		// Agent-initiated delete via the generic plugin-action dispatch (plans/plugin-actions.md).
+		// DesignStore.delete is already idempotent (a list-size check before any write), satisfying
+		// PluginActionHandler's mandatory idempotency contract for free.
+		host.pluginActions.claim("designer:delete-card", PluginActionHandler { action ->
+			val fileName = (action.payload?.get("fileName") as? JsonPrimitive)?.contentOrNull ?: return@PluginActionHandler
+			DesignStore.delete(action.team, fileName)
 		})
 	}
 }

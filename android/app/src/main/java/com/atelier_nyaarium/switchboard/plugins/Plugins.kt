@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard.plugins
 import android.content.Context
 import com.atelier_nyaarium.switchboard.AppStateStore
 import com.atelier_nyaarium.switchboard.InboundSubscriber
+import com.atelier_nyaarium.switchboard.PluginActionSubscriber
 import com.atelier_nyaarium.switchboard.Repo
 
 /** Process-lifetime plugin framework, mirroring [com.atelier_nyaarium.switchboard.Repo]: built
@@ -43,6 +44,17 @@ object Plugins {
 				host.inboundMessages.values().forEach { handler ->
 					runCatching { handler.onMessage(app.filesDir, inbound) }
 						.onFailure { com.atelier_nyaarium.switchboard.DebugLog.log("Plugins", "inbound handler threw: $it") }
+				}
+			},
+		)
+		// Bridge plugin-action entries the same way: dispatch to the ONE handler claimed under the
+		// exact "pluginId:actionType" key (a registry claim is unique, so at most one handler ever
+		// exists for a given key); an unclaimed key is silently skipped.
+		Repo.get(app).addPluginActionSubscriber(
+			PluginActionSubscriber { team, pluginId, actionType, payload ->
+				host.pluginActions.get("$pluginId:$actionType")?.let { handler ->
+					runCatching { handler.onAction(PluginAction(team, payload)) }
+						.onFailure { com.atelier_nyaarium.switchboard.DebugLog.log("Plugins", "plugin action handler threw: $it") }
 				}
 			},
 		)

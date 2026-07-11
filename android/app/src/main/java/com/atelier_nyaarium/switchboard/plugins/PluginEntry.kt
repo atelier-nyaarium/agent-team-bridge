@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.Composable
 import com.atelier_nyaarium.switchboard.MessageFile
 import java.io.File
+import kotlinx.serialization.json.JsonObject
 
 /**
  * A plugin's compiled entry hook - the transform of nyaadot's `entry_point` script for a runtime
@@ -67,6 +68,27 @@ fun interface InboundMessageHandler {
 	fun onMessage(filesDir: File, msg: InboundMessage)
 }
 
+/** One dispatch of a generic, agent-initiated plugin action: the target conversation, and the
+ * action's opaque payload (each `pluginId:actionType` handler parses its own known shape out of
+ * it, the same way the Designer's inbound ingest parses its own attachment shape). */
+class PluginAction(
+	val team: String,
+	val payload: JsonObject?,
+)
+
+/** Handles ONE claimed `pluginId:actionType` action, dispatched synchronously on the poll thread,
+ * before the mailbox cursor commits - same as [InboundMessageHandler], so the CONTRACT is the same:
+ * fast, bounded, non-blocking (a slow or hanging handler stalls delivery for every team's messages
+ * in the same poll batch, not just this plugin's; `runCatching` at the dispatch site only guards a
+ * thrown exception, never a hang or slow IO). MANDATORY ADDITIONAL CONTRACT: idempotent - unlike
+ * [InboundMessageHandler], a plugin action has no persisted at-most-once fold (it never renders a
+ * chat message, so it cannot ride `appendInbound`'s dedup), so the mailbox's at-least-once delivery
+ * can redispatch the SAME action; a handler must treat a duplicate dispatch of the same payload as a
+ * safe no-op. */
+fun interface PluginActionHandler {
+	fun onAction(action: PluginAction)
+}
+
 /**
  * What a plugin's entry hook is GIVEN to touch, growing one typed extension point at a time as
  * real consumers arrive. This is the sanctioned surface, not a security boundary: baked-in
@@ -100,4 +122,9 @@ class PluginHost internal constructor(
 	 * fans each new message to every claimed handler; a disabled plugin's claim is swept, so it
 	 * stops receiving. The framework's first data-plane point. */
 	val inboundMessages: PluginRegistry<InboundMessageHandler> = runtime.createRegistry("inbound-messages")
+
+	/** Plugin-action handlers (an agent-driven command, not a message), keyed `<pluginId>:<actionType>`
+	 * - a plugin claims the exact composite key its own actions use. A key with no claimant (an
+	 * unknown action type, or the owning plugin disabled) is silently skipped, never an error. */
+	val pluginActions: PluginRegistry<PluginActionHandler> = runtime.createRegistry("plugin-actions")
 }

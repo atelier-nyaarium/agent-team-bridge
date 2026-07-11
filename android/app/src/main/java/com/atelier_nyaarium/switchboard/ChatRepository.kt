@@ -26,6 +26,7 @@ import com.atelier_nyaarium.switchboard.proto.parseStoreKey
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.io.File
 import java.util.UUID
+import kotlinx.serialization.json.JsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -55,6 +56,13 @@ data class MessageFile(val name: String, val mime: String, val src: String? = nu
 /** A data-plane consumer of new inbound messages, invoked once per message at the drain gate. */
 fun interface InboundSubscriber {
 	fun onMessage(team: String, msg: Message)
+}
+
+/** A consumer of arrived `plugin_action` mailbox entries, invoked once per entry at the drain gate.
+ * Neutral shape (no plugin types here) - the plugin-framework bridge maps `pluginId`/`actionType`/
+ * `payload` onto its own claim-keyed dispatch. */
+fun interface PluginActionSubscriber {
+	fun onAction(team: String, pluginId: String, actionType: String, payload: JsonObject?)
 }
 
 /** A scanned admit-gateway QR: the Gateway identity the owner is about to admit, plus the
@@ -740,6 +748,16 @@ class ChatRepository(
 	 * duplicate add would double-deliver. */
 	fun addInboundSubscriber(subscriber: InboundSubscriber) {
 		inboundSubscribers.addIfAbsent(subscriber)
+	}
+
+	/** Plugin-action subscribers, invoked once per `plugin_action` mailbox entry at the drain gate.
+	 * Delivery is at-least-once (this entry never renders a chat message, so it has no persisted
+	 * fold to dedupe a redraw against); a subscriber must be fast, non-blocking, and idempotent. */
+	private val pluginActionSubscribers = java.util.concurrent.CopyOnWriteArrayList<PluginActionSubscriber>()
+
+	/** Register a plugin-action subscriber. Add-once per process, same as [addInboundSubscriber]. */
+	fun addPluginActionSubscriber(subscriber: PluginActionSubscriber) {
+		pluginActionSubscribers.addIfAbsent(subscriber)
 	}
 
 	/** The Activity came on screen: gateway to the fast cadence, optimistically
@@ -2683,6 +2701,19 @@ class ChatRepository(
 							DebugLog.log("Drain", "seq=${e.seq} kind=sent session=${e.session_id} -> thread=$team (own mirror) opId=${e.opId} \"$snippet\"")
 							val echo = Message(true, bodyText, e.at, files = files, status = null, opId = e.opId, epoch = mb.epoch, seq = e.seq)
 							reconcileSent(team, echo)
+							continue
+						}
+						if (e.kind == "plugin_action") {
+							// Never rendered as a chat message, so it never depends on a nonempty body.
+							val pluginId = e.pluginId
+							val actionType = e.actionType
+							if (pluginId != null && actionType != null) {
+								DebugLog.log("Drain", "seq=${e.seq} kind=plugin_action session=${e.session_id} -> thread=$team $pluginId:$actionType")
+								pluginActionSubscribers.forEach { sub ->
+									runCatching { sub.onAction(team, pluginId, actionType, e.payload) }
+										.onFailure { DebugLog.log("Drain", "plugin action subscriber threw: $it") }
+								}
+							}
 							continue
 						}
 						if (bodyText.isNotEmpty() || files.isNotEmpty() || e.status != null) {
