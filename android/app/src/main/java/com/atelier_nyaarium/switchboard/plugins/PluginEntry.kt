@@ -81,7 +81,9 @@ class PluginAction(
  * transcript carries it, returns display data ([ChipDecoration]) or null to leave the plain chip.
  * Consulted at transcript-serialization time on the MAIN thread, once per file per sync pass - the
  * contract is a fast, in-memory lookup only, never disk or network (a slow decorator janks every
- * open thread's rendering, not just this plugin's chips). */
+ * open thread's rendering, not just this plugin's chips). Consulted for every attachment
+ * regardless of mime, but only a non-image CHIP ever renders the decoration - an image attachment
+ * renders as a thumbnail and silently ignores it, so an image-targeting decorator does nothing. */
 fun interface AttachmentChipDecorator {
 	fun decorate(team: String, file: MessageFile): ChipDecoration?
 }

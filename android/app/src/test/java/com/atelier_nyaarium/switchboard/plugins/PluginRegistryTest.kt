@@ -72,4 +72,43 @@ class PluginRegistryTest {
 		runCatching { runtime.context.with("a") { error("boom") } }
 		assertEquals("", runtime.context.current())
 	}
+
+	@Test
+	fun forEachCaughtContinuesPastAThrowingClaim() {
+		val runtime = PluginRuntime()
+		val reg = runtime.createRegistry<() -> String>("handlers")
+		runtime.context.with("a") { reg.claim("a:boom") { error("boom") } }
+		runtime.context.with("b") { reg.claim("b:fine") { "ran" } }
+		val ran = mutableListOf<String>()
+		val errors = mutableListOf<String>()
+		reg.forEachCaught(onError = { msg, _ -> errors.add(msg) }) { ran.add(it()) }
+		assertEquals(listOf("ran"), ran)
+		// The report names the claim and its source, so a broken plugin is diagnosable from the log.
+		assertEquals(1, errors.size)
+		assertEquals(true, errors[0].contains("a:boom"))
+		assertEquals(true, errors[0].contains("\"a\""))
+	}
+
+	@Test
+	fun anyCaughtTreatsAThrowAsNotClaimedAndKeepsChecking() {
+		val runtime = PluginRuntime()
+		val reg = runtime.createRegistry<() -> Boolean>("openers")
+		runtime.context.with("a") { reg.claim("a:boom") { error("boom") } }
+		runtime.context.with("b") { reg.claim("b:claims") { true } }
+		assertEquals(true, reg.anyCaught { it() })
+		runtime.lifecycle.emitRetract("b")
+		assertEquals(false, reg.anyCaught { it() })
+	}
+
+	@Test
+	fun firstNotNullCaughtSkipsThrowsAndNullsUntilAValue() {
+		val runtime = PluginRuntime()
+		val reg = runtime.createRegistry<() -> String?>("decorators")
+		runtime.context.with("a") { reg.claim("a:boom") { error("boom") } }
+		runtime.context.with("b") { reg.claim("b:null") { null } }
+		runtime.context.with("c") { reg.claim("c:wins") { "deco" } }
+		assertEquals("deco", reg.firstNotNullCaught { it() })
+		runtime.lifecycle.emitRetract("c")
+		assertNull(reg.firstNotNullCaught { it() })
+	}
 }
