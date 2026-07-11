@@ -31,6 +31,51 @@ internal fun renderedSender(m: Message, resolve: (String) -> String, selfName: S
 	return "$fromLabel → $toLabel"
 }
 
+/** Pure decoration data for one attachment chip: a display title shown instead of the filename,
+ * and a short slug `kind` the web renderer maps to styling. Data only - a decorator never hands
+ * the renderer markup or script. */
+class ChipDecoration(
+	val title: String,
+	val kind: String,
+)
+
+/** The transcript payload the bundled web app receives (thread.js's setMessages/appendMessages).
+ * `displayFrom` and `decorate` stand in for `ThreadRenderer`'s own callbacks so this stays
+ * pure/testable, matching `renderedSender`. Decoration fields ride `JSONObject.put` like every
+ * other field - never hand-concatenated - so string escaping through the eval-wrapped payload is
+ * inherited automatically. */
+internal fun messagesToJson(
+	messages: List<Message>,
+	displayFrom: (Message) -> String,
+	playEnabled: Boolean,
+	decorate: (MessageFile) -> ChipDecoration?,
+): String {
+	val arr = JSONArray()
+	for (m in messages) {
+		val obj = JSONObject()
+			.put("id", m.id)
+			.put("role", if (m.fromMe) "user" else "agent")
+			.put("from", displayFrom(m))
+			.put("at", m.at)
+			.put("body", m.text)
+		if (playEnabled && !m.fromMe) obj.put("canPlay", true)
+		m.status?.let { obj.put("status", it) }
+		if (m.files.isNotEmpty()) {
+			val files = JSONArray()
+			for (f in m.files) {
+				val fileObj = JSONObject().put("name", f.name).put("mime", f.mime).put("src", f.src)
+				decorate(f)?.let { d ->
+					fileObj.put("decoration", JSONObject().put("title", d.title).put("kind", d.kind))
+				}
+				files.put(fileObj)
+			}
+			obj.put("files", files)
+		}
+		arr.put(obj)
+	}
+	return arr.toString()
+}
+
 /**
  * One WebView running the bundled thread renderer (assets/thread/). Messages flow
  * one way via evaluateJavascript. Agent markdown is semi-trusted, so beyond the
@@ -71,6 +116,11 @@ class ThreadRenderer(context: Context) {
 	/** Whether agent rows render a Play button. The owner sets it before sync
 	 * (false when STTS is unprovisioned). */
 	var playEnabled = false
+
+	/** Set by the owner; returns decoration data for a file chip, or null for the plain chip.
+	 * Consulted inside the serialization pass on the MAIN thread, once per file per sync - it must
+	 * be a fast in-memory lookup, never disk or network. */
+	var decorateFile: ((MessageFile) -> ChipDecoration?)? = null
 
 	private var ready = false
 	private val pending = mutableListOf<String>()
@@ -227,26 +277,6 @@ class ThreadRenderer(context: Context) {
 		}
 	}
 
-	private fun toJson(messages: List<Message>): String {
-		val arr = JSONArray()
-		for (m in messages) {
-			val obj = JSONObject()
-				.put("id", m.id)
-				.put("role", if (m.fromMe) "user" else "agent")
-				.put("from", displayFrom(m))
-				.put("at", m.at)
-				.put("body", m.text)
-			if (playEnabled && !m.fromMe) obj.put("canPlay", true)
-			m.status?.let { obj.put("status", it) }
-			if (m.files.isNotEmpty()) {
-				val files = JSONArray()
-				for (f in m.files) {
-					files.put(JSONObject().put("name", f.name).put("mime", f.mime).put("src", f.src))
-				}
-				obj.put("files", files)
-			}
-			arr.put(obj)
-		}
-		return arr.toString()
-	}
+	private fun toJson(messages: List<Message>): String =
+		messagesToJson(messages, ::displayFrom, playEnabled) { f -> decorateFile?.invoke(f) }
 }

@@ -39,8 +39,12 @@ build, each its own small scoping pass:
   (`plugins/designer/DesignerThumbs.kt`), rendered on demand and LRU-cached keyed by the card's
   `rel`; dock rows and the peek strip fall back to the old glyph while rendering or for a
   missing/oversize file.
-- **In-chat announce chip** (the Q4 "if easy") - a tappable "here's the thingy" chip in the chat body;
-  prose plus the dock is the shipped fallback. Needs a feasibility check in the thread renderer.
+- ~~**In-chat announce chip**~~ Shipped: a generic `attachmentChipDecorators` plugin seam (data-only,
+  `PluginEntry.kt` through `ThreadRenderer`/`thread.js`) with the Designer's rel-keyed card-title
+  decorator as first consumer - a card's chip shows its title with Designer styling, and taps stay
+  unchanged. Architecture in CLAUDE.md ("Android plugin framework"); residuals in
+  `plans/pain-points.md`. Follow-up candidate deferred with scope: async re-sync so already-rendered
+  chips update on later state changes (the same plumbing an in-chip thumbnail would need).
 - **Index lifecycle** questions: a per-conversation card cap, an explicit on-device file home plus TTL
   for card bytes (`Attachments.kt` internal storage vs a plugin-owned dir), and the eventual cleanup
   pass that walks the additive index to prune pointers whose attachment was purged.

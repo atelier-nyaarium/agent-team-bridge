@@ -2,7 +2,9 @@ package com.atelier_nyaarium.switchboard.plugins.designer
 
 import android.content.Context
 import com.atelier_nyaarium.switchboard.Attachments
+import com.atelier_nyaarium.switchboard.ChipDecoration
 import com.atelier_nyaarium.switchboard.plugins.AccountWipeHandler
+import com.atelier_nyaarium.switchboard.plugins.AttachmentChipDecorator
 import com.atelier_nyaarium.switchboard.plugins.AttachmentOpener
 import com.atelier_nyaarium.switchboard.plugins.InboundMessageHandler
 import com.atelier_nyaarium.switchboard.plugins.PluginActionHandler
@@ -39,6 +41,14 @@ class DesignerPlugin : PluginEntry {
 		host.pluginActions.claim("designer:delete-card", PluginActionHandler { action ->
 			val fileName = (action.payload?.get("fileName") as? JsonPrimitive)?.contentOrNull ?: return@PluginActionHandler
 			DesignStore.delete(action.team, fileName)
+		})
+		// The in-chat announce chip: a chip whose rel IS a card's current push shows the card's
+		// title with Designer styling. Rel-keyed on purpose - an older revision of a re-pushed
+		// file, a deleted card, or a non-card html all miss the store and keep the plain chip.
+		// In-memory lookup only (the decorator contract; this runs per file per transcript sync).
+		host.attachmentChipDecorators.claim("designer:card-title", AttachmentChipDecorator { team, file ->
+			val rel = file.src?.let(::relOf)?.takeIf { it.isNotEmpty() } ?: return@AttachmentChipDecorator null
+			DesignStore.cardForRel(team, rel)?.let { card -> ChipDecoration(card.displayName, "designer") }
 		})
 	}
 }

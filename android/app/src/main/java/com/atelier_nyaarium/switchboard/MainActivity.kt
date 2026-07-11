@@ -249,9 +249,19 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			// A plugin (e.g. the Designer) may claim a tapped attachment and open it in its own
 			// viewer; only fall back to the generic attachment viewer when none does. The team is
 			// the tapped thread's own (bound per-renderer), not the ambient on-screen team.
-			val claimed = pluginManager.host.attachmentOpeners.values()
-				.any { it.tryOpen(context, tapTeam, rel, mime, file.name) }
+			val claimed = pluginManager.host.attachmentOpeners.anyCaught(onError = ::logPluginThrow) {
+				it.tryOpen(context, tapTeam, rel, mime, file.name)
+			}
 			if (!claimed) viewer = OpenAttachment(file, file.name, mime, rel)
+		}
+	}
+	// A plugin may decorate its own attachment chips (e.g. the Designer's card title); the first
+	// non-null decoration wins, everything else renders the plain chip. Containment matters here:
+	// this runs on every sync of every open thread, so a throwing decorator must cost only its own
+	// decoration, never the transcript render.
+	rendererPool.decorateFile = { team, file ->
+		pluginManager.host.attachmentChipDecorators.firstNotNullCaught(onError = ::logPluginThrow) {
+			it.decorate(team, file)
 		}
 	}
 	// In-thread Play buttons render only when STTS is provisioned; taps speak the full tier, and the
@@ -518,7 +528,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onClear = {
 					// The Domain-delete transaction (repo.deleteDomain) owns the local wipe; drop
 					// plugin device state (e.g. the Designer index) alongside it, then navigate home.
-					pluginManager.host.accountWipeHandlers.values().forEach { it.onWipe(context) }
+					pluginManager.host.accountWipeHandlers.forEachCaught(onError = ::logPluginThrow) { it.onWipe(context) }
 					showSettings = false
 					settingsRoute = SettingsRoute.HUB
 					openTeam = null
@@ -579,7 +589,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onRename = { name -> scope.launch { repo.rename(openTeam!!, name) } },
 				onForget = {
 					val forgotten = openTeam!!
-					pluginManager.host.threadForgetHandlers.values().forEach { it.onForget(context, forgotten) }
+					pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, forgotten) }
 					repo.forget(forgotten)
 					openTeam = null
 				},
@@ -627,7 +637,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				},
 				onRename = { team, name -> scope.launch { repo.rename(team, name) } },
 				onForget = { team ->
-					pluginManager.host.threadForgetHandlers.values().forEach { it.onForget(context, team) }
+					pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, team) }
 					repo.forget(team)
 				},
 				// Fire the create and stay on the board: the gateway adopts the session's record
@@ -932,6 +942,12 @@ fun HostSetupHelpScreen(onBack: () -> Unit) {
 			)
 		}
 	}
+}
+
+/** Registry onError sink shared by every plugin-registry consultation site: a claim that threw
+ * is logged and skipped, never fatal. */
+private fun logPluginThrow(message: String, err: Throwable) {
+	DebugLog.log("Plugins", "$message: $err")
 }
 
 private fun readClipboard(context: Context): String? {
@@ -1790,6 +1806,9 @@ fun ThreadScreen(
 				draft = (if (draft.isEmpty() || draft.endsWith(" ") || draft.endsWith("\n")) draft else "$draft ") + insert
 				onDraftChange(draft)
 			}
+			// Composable slots cannot route through forEachCaught (a @Composable invocation needs the
+			// enclosing composable context, which a non-inline lambda parameter does not provide);
+			// a throwing slot is Compose's own error path, not a registry-containment case.
 			remember { Plugins.get(dockContext) }.host.threadDockSlots.values().forEach { slot -> slot(dockScope) }
 			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
 			if (attachments.isNotEmpty()) {

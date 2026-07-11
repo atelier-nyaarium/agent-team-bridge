@@ -4,7 +4,8 @@
 //   thread.setMessages(messages)     full transcript replace
 //   thread.appendMessages(messages)  append (or in-place update when an id repeats)
 //   thread.setTheme(dark)            light/dark swap, re-themes hljs + mermaid
-// Message shape: {id, role: "user"|"agent", from, at, body, files?: [{name, mime, src?}], status?}
+// Message shape: {id, role: "user"|"agent", from, at, body, status?,
+//   files?: [{name, mime, src?, decoration?: {title, kind}}]}
 // Markdown is semi-trusted: html stays off and links are protocol-allowlisted here;
 // the WebView layer additionally blocks every non-appassets resource load.
 
@@ -231,11 +232,18 @@
 				img.addEventListener("click", () => openAttachment(f.src));
 				wrap.appendChild(img);
 			} else {
+				// A decoration (host-supplied per-file data) shows its title with accent styling
+				// instead of the raw filename; anything missing or malformed falls back to the
+				// plain chip. Titles are agent-authored, so they enter the DOM via textContent only.
+				const deco = f.decoration && typeof f.decoration.title === "string" && f.decoration.title ? f.decoration : null;
 				const chip = document.createElement("span");
-				chip.className = "chip";
+				chip.className = deco ? "chip deco" : "chip";
+				if (deco && typeof deco.kind === "string" && /^[a-z0-9-]{1,32}$/.test(deco.kind)) {
+					chip.classList.add("deco-" + deco.kind);
+				}
 				const name = document.createElement("span");
 				name.className = "name";
-				name.textContent = f.name || "file";
+				name.textContent = deco ? deco.title : (f.name || "file");
 				chip.title = f.name || "";
 				chip.appendChild(name);
 				if (f.src) chip.addEventListener("click", () => openAttachment(f.src));

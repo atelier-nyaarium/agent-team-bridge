@@ -44,6 +44,47 @@ class PluginRegistry<T : Any> internal constructor(
 	@Synchronized
 	fun size(): Int = claims.size
 
+	/** Runs [action] against every claimed value, catching any exception so one broken plugin's
+	 * claim costs only itself, never the caller's loop. [onError] receives a claim-identifying
+	 * message plus the throwable; the default swallows (kept Android-free so this stays pure-JVM
+	 * testable, mirroring PluginManager's injected `log` seam) - callers with a logger should
+	 * pass one. */
+	@Synchronized
+	fun forEachCaught(onError: (String, Throwable) -> Unit = { _, _ -> }, action: (T) -> Unit) {
+		claims.forEach { (key, claim) ->
+			runCatching { action(claim.value) }
+				.onFailure { onError("registry \"$name\": claim \"$key\" (source \"${claim.source}\") threw", it) }
+		}
+	}
+
+	/** True on the first claimed value for which [predicate] returns true (first-claim-wins).
+	 * A throwing claim counts as "did not claim" (reported via [onError], never fatal) and
+	 * consultation continues to the next claimant. */
+	@Synchronized
+	fun anyCaught(onError: (String, Throwable) -> Unit = { _, _ -> }, predicate: (T) -> Boolean): Boolean {
+		for ((key, claim) in claims) {
+			val matched = runCatching { predicate(claim.value) }
+				.onFailure { onError("registry \"$name\": claim \"$key\" (source \"${claim.source}\") threw", it) }
+				.getOrDefault(false)
+			if (matched) return true
+		}
+		return false
+	}
+
+	/** The first non-null result of [transform] across claimed values (first-claim-wins), or null
+	 * when no claim produces one. A throwing claim counts as null (reported via [onError], never
+	 * fatal) and consultation continues to the next claimant. */
+	@Synchronized
+	fun <R : Any> firstNotNullCaught(onError: (String, Throwable) -> Unit = { _, _ -> }, transform: (T) -> R?): R? {
+		for ((key, claim) in claims) {
+			val result = runCatching { transform(claim.value) }
+				.onFailure { onError("registry \"$name\": claim \"$key\" (source \"${claim.source}\") threw", it) }
+				.getOrNull()
+			if (result != null) return result
+		}
+		return null
+	}
+
 	/** Drop every claim [source] made. Reached only through the lifecycle bus sweep. */
 	@Synchronized
 	internal fun retractSource(source: String) {

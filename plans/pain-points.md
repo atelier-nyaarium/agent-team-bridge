@@ -1,5 +1,41 @@
 # Pain points
 
+## Announce chip (`plans/announce-chip.md`, deleted, shipped - 2026-07-11)
+
+Migrated from `plans/announce-chip.md` (deleted, shipped - the attachment-chip decoration seam +
+the Designer's rel-keyed card-title decorator; architecture in CLAUDE.md "Android plugin
+framework"). Collected by its close-out crust sweep over the surfaces touched since the prior
+sweep, including the fast-tracked `DesignerThumbs` thumbnails work that had skipped a full cycle.
+
+- [medium] `android/.../ThreadRendererPool.kt : get : playEnabled` - **bug-class** - `playEnabled`
+  is copied BY VALUE onto a renderer at creation, unlike `resolveFrom`/`selfLabel`/`decorateFile`
+  (live-reading closures). `MainActivity` re-assigns the pool's var every recomposition, but
+  nothing re-copies it to existing renderers - STTS provisioning mid-session never lights the Play
+  buttons on any already-open thread. Functionally dead, not cosmetically stale. Fix: a live
+  closure like its siblings, plus `fingerprint()` awareness so already-rendered rows re-push.
+- [medium] `android/.../plugins/designer/DesignerThumbs.kt : renderOn` - **bug-class** - a timed-
+  out render never `stopLoading()`s and registers no `invokeOnCancellation`; a straggling
+  `onPageFinished` from the abandoned load can fire against the NEXT render's client and resolve
+  its visual-state gate early, capturing a stale/partial frame that is cached permanently under
+  the new card's rel (cache hits never retry). Narrow window (a 4s-blowing card immediately
+  followed by another render). Fix: per-render generation check in the client + `stopLoading()`
+  on cancel.
+- [medium] `android/.../plugins/designer/DesignerThumbs.kt : cache` - **bug-class,
+  privacy-relevant** - the 6MB bitmap LruCache is never evicted on thread forget or account wipe;
+  `designer:forget`/`designer:wipe` clear `DesignStore` but a forgotten conversation's decoded
+  thumbnails stay in process memory until LRU pressure or process death. Never re-surfaces in the
+  UI, but inconsistent with the lifecycle-handler contract the store honors. Fix: team-aware
+  eviction at the forget/wipe handlers.
+- [medium] `android/.../plugins/Plugins.kt : build (inboundMessages bridge)` - **dup-logic** -
+  hand-rolls the loop + `runCatching` + log idiom `PluginRegistry.forEachCaught` now owns;
+  migrating also upgrades the log to the registry's claim-identifying message. (The
+  `pluginActions` bridge stays: single-key `get()` dispatch has no matching registry primitive.)
+- [low] `android/.../plugins/designer/DesignerThumbs.kt : attach/detach` - **dormant fragility** -
+  the single-`var` WebView pool assumes exactly one `DesignerThumbHost` composed at a time (holds
+  today: one `ThreadScreen` call site, plain conditional). A future dual-pane layout or animated
+  transition silently starves the losing host's thumbnails (the `===` guard prevents corruption).
+  Worth an assertion/log on a second attach.
+
 ## Plugin actions (`plans/plugin-actions.md`, deleted, shipped - 2026-07-11)
 
 Migrated from `plans/plugin-actions.md` (deleted, shipped - the generic `plugin_action` mailbox kind,
