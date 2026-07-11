@@ -34,17 +34,23 @@ export const DomainStatusSchema = z.enum(["unrooted", "pending", "rooted"]).meta
 //  body: channel_reply is the ~99% prose path; channel_reply_structured is only
 //  for a request that carries a reply_schema (e.g. the bridge handshake).
 
+/** Appended to every prose-field describe whose content the console renders (channel_reply,
+ * notify_human) - the cheap always-visible half of the escaped-newline guard; the pre-send lint
+ * (`literalEscapeHazard` in mcp/bridge/replyTool.ts) is the enforcing half. The `\\n` spelling is
+ * deliberate: the description must show the two-character sequence. */
+export const REAL_NEWLINES_GUIDANCE = ` Use REAL newlines for line breaks, not \\n. Wrap intentional escapes in backticks or code spans.`;
+
 export const ChannelReplySchema = z
 	.object({
 		session_id: z.string().describe(`The session_id for this request. Required to route the reply correctly.`),
 		title: NoticeTitle.describe(
-			`A very short one-line headline for this reply - the console's notification-bar line and the shortest text-to-speech tier.`,
+			`A very short one-line headline for this reply - the console's notification-bar line and the shortest text-to-speech tier.${REAL_NEWLINES_GUIDANCE}`,
 		),
 		summary: NoticeSummary.describe(
-			`3-4 sentences summarizing this reply, read as the medium text-to-speech tier. No 'Summary:' lead-in.`,
+			`3-4 sentences summarizing this reply, read as the medium text-to-speech tier. No 'Summary:' lead-in.${REAL_NEWLINES_GUIDANCE}`,
 		),
 		full: NoticeFull.describe(
-			`Your full prose reply for the HUMAN to read - markdown AND mermaid render on the console. Lead with the answer; no lead-in labels ('Short answer:', 'TLDR:'). Renders as the message body.`,
+			`Your full prose reply for the HUMAN to read - markdown AND mermaid render on the console. Lead with the answer; no lead-in labels ('Short answer:', 'TLDR:'). Renders as the message body.${REAL_NEWLINES_GUIDANCE}`,
 		),
 		attachments: z
 			.array(z.string())

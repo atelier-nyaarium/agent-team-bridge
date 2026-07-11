@@ -34,7 +34,7 @@ export async function handleChannelReply(args: ChannelReplyArgs): Promise<ToolTe
 			return toolError(`Attachment error: ${(err as Error).message}`);
 		}
 	}
-	return postReply(payload, { toolName: "channel_reply", logPrefix: "channel" });
+	return postReply(payload, { toolName: "channel_reply", logPrefix: "channel", responseFieldLabel: "full" });
 }
 
 export async function handleChannelReplyStructured(args: ChannelReplyStructuredArgs): Promise<ToolTextResult> {

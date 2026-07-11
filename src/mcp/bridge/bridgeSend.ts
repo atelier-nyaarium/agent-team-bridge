@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ResponsePayload } from "../../shared/types.js";
 import { bridgeConversationId, bridgeProjectName, routerPost } from "./helpers.js";
+import { literalEscapeHazard, literalEscapeReject, toolError } from "./replyTool.js";
 
 ////////////////////////////////
 //  Schemas
@@ -125,6 +126,16 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 				// Send mode: requires to, body
 				if (!to || !body) {
 					throw new Error(`Provide to + body for sending, or just session_id for polling.`);
+				}
+
+				// displayLabel becomes a persistent human-rendered session label on the console board.
+				// body stays unlinted as a deliberate trade: its PRIMARY consumer is the receiving
+				// model (which reads escapes fine), and although a display copy does mirror to the
+				// owner's console, rejecting real inter-team work over a cosmetic mirror is worse
+				// than the blemish - especially since task bodies often carry unfenced code.
+				if (displayLabel) {
+					const hazard = literalEscapeHazard(displayLabel);
+					if (hazard) return toolError(literalEscapeReject("crosstalk_send", "displayLabel", hazard));
 				}
 
 				const result = (await routerPost("/send", {
