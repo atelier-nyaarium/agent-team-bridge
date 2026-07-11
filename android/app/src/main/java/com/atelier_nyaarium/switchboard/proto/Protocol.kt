@@ -89,6 +89,9 @@ data class MailboxEntry(
 	val question: String? = null,
 	val reason: String? = null,
 	val files: List<ChannelFile>? = null,
+	val pluginId: String? = null,
+	val actionType: String? = null,
+	val payload: JsonObject? = null,
 )
 
 @Serializable

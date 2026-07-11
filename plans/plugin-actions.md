@@ -128,6 +128,14 @@ adversarial-debate rationale). Concretely:
   safe by audit). Regenerate `proto/Protocol.kt` (`bun scripts/codegen-kotlin.ts`); `kind` stays
   open-String decode-side per the existing codegen rule, so an old console build degrades safely into
   the existing bodyless-entry skip.
+- `src/shared/federation-protocol.ts` - `FederatedOpSchema`'s `console_push.entry` is a SEPARATE,
+  narrower inline schema (the cross-Gateway relay wire shape), not `MailboxEntrySchema` itself; add
+  `"plugin_action"` to its own `kind` enum plus the same three fields, mirroring how `notice`/`peer`
+  already carry their own fields there. Without this, `fanOutConsolePush`'s entry does not even
+  type-check as a `ConsolePushEntry`, and a real receiving Gateway's `FederatedOpSchema.parse` (a
+  throwing parse) would reject the relay - this is not optional for the multi-gateway case (Phase 1
+  align-audit finding: the plan omitted naming this file, though the implementation correctly
+  included it; now documented).
 - `src/gateway/routes.ts` - a new `landMailboxEntry`-based composer (mirroring `mirrorPeer`/
   `consolePush`'s append shape), `session_id` built the same way `mirrorPeer` does
   (`storeKey({kind:"conv", conversationId: owner, address: threadAddr})`), so team resolution on the
@@ -139,16 +147,42 @@ adversarial-debate rationale). Concretely:
   the correct behavior with no code change). Revisit only if a future action type carries a
   genuinely large payload.
 
-**Target scoping - a caller can only act on ITS OWN conversation (audit finding, real gap).** The
-gateway composer must derive `threadAddr` (and therefore `session_id`) SOLELY from the calling MCP
-connection's own already-known identity (the same provenance `send()`'s `from` already uses) - the
-wire body for a plugin action carries NO client-suppliable target/team/session field that could name a
-different conversation. This is a route-level rule, not a tool-argument convention: the enforcement
-point is the gateway, not what the MCP tool happens to expose. This composer intentionally skips the
-`/respond`-style pending-job existence check its sibling mailbox-writers (`mirrorPeer`/`consolePush`)
-also skip; self-scoping to the caller's own resolved identity is the substitute, and Phase 1 gets a
-vitest test pinning that a plugin-action call cannot land under any `threadAddr` other than the
-caller's own.
+**Target scoping - no field to pick a target OTHER than your own `from` (real, but bounded, guarantee -
+corrected by a Phase 1 red-team pass).** The composer derives `threadAddr` SOLELY from the request's
+own `from` field (`localAddress(from)`) - the wire body carries no separate "to"/"target"/"team" field
+a caller could add ON TOP of `from` to reach a different conversation. `PluginActionRequestSchema` is
+`.strict()`, and Phase 1's vitest suite pins that no combination of fields lands under any address
+other than `localAddress(from)`.
+
+This is NOT a new authentication boundary, and the plan originally overstated it as one. `from` itself
+is an unauthenticated, client-supplied string - EXACTLY the same trust level as `send()`'s own `from`
+(read `send()`'s body: it is never cross-checked against the registry). The whole MCP-to-gateway HTTP
+surface is same-docker-network trust, not per-team authenticated (every project on the host shares one
+`switchboard` network and can reach the gateway directly) - a pre-existing, already-tracked gap
+(`plans/gateway-auth-surface.md`), not something this feature introduces or was ever going to close.
+So the real guarantee here is narrower than "a caller can only act on its own conversation": it is "a
+plugin action has no MORE room to pick an unrelated target than `send()`/`respond()`/`notify_human`
+already have today." Closing the underlying impersonation gap (a compromised or malicious co-tenant
+container claiming someone else's `from`) is `gateway-auth-surface.md`'s job, not this plan's - do not
+re-litigate it here, and do not build per-project auth as part of shipping delete.
+
+**Payload hardening (red-team finding, fixed).** `payload` had no size limit and `entryBytes()` never
+counts it, so an oversized or pathologically nested payload could reach the mailbox and stall the
+gateway's shared event loop on the durable-store snapshot timer (a synchronous `JSON.stringify` +
+`writeFileSync` every few seconds over the WHOLE mailbox store). Fixed with a small byte cap
+(`MAX_PLUGIN_ACTION_PAYLOAD_BYTES`, proportionate to "a plugin action payload is meant to be tiny," not
+`MAX_RESPONSE_FILE_BYTES`'s file-sized ceiling), enforced at both the origin composer and the
+`consolePush` landing side (so a relayed federated entry gets the same defense-in-depth, not just a
+locally-composed one).
+
+**Composite-key collision (red-team finding, fixed).** `pluginId`/`actionType` had no character
+constraint, unlike every other identifier that feeds a composite key in this codebase. Since the
+framework's own convention is a colon-joined `pluginId:actionType` claim key (`PluginRegistry.kt`'s
+doc), an unconstrained colon inside either half could let two DISTINCT wire payloads collapse onto the
+same composite key once Phase 2 builds dispatch. Fixed: both fields are now slug-constrained (reusing
+`isSlug`/`SLUG_RE` from `session-id.ts`, the same gate every other composite-key identifier in this
+codebase already goes through), enforced at both the origin schema and federation-protocol.ts's
+relayed-entry schema.
 
 **Known limitation - a disabled plugin silently and permanently drops the action (audit finding, not
 fixed here).** "Unclaimed = silently skipped" is the same best-effort posture the mailbox already gives
