@@ -187,7 +187,7 @@ A power-user view in the Console that drives an agent's RAW tmux pane (distinct 
 
 ### Android plugin framework
 
-The console app has an in-APK plugin framework (`android/.../plugins/`) so first-party features (the Designer, today the only one) are modular and individually toggleable in Settings, shaped for a later per-repo split. Design docs: `plans/plugins.md` (the framework) and `plans/inbound-pipeline.md` (the data-plane seam).
+The console app has an in-APK plugin framework (`android/.../plugins/`) so first-party features (the Designer, today the only one) are modular and individually toggleable in Settings, shaped for a later per-repo split. Full design + red-team history is in git (commit ffa32c4); open follow-ups are in `plans/features-and-fixes.md` (Item 15) and `plans/pain-points.md`.
 
 - **Framework core:** `Plugins` is the process singleton (mirrors `Repo`): it builds a `PluginHost`, boots a `PluginManager` over the compile-time `PluginCatalog`, and is started from `SwitchboardService.onCreate` before polling. `PluginManager` collapses install/enable/load into one persisted flag, refuses on manifest/id collision, and disables via a one-sweep retract. Each extension point is a `PluginRegistry<T>` on `PluginHost` (`runtime.createRegistry`): `threadDockSlots`, `attachmentOpeners`, `threadForgetHandlers`, `accountWipeHandlers`, and the data-plane `inboundMessages`. A registry auto-tags each claim with its source plugin, so disabling a plugin sweeps its claims and it stops receiving.
 

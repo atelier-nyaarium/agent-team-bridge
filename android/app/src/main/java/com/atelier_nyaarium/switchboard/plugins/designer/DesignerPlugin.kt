@@ -14,7 +14,7 @@ import com.atelier_nyaarium.switchboard.plugins.ThreadForgetHandler
  * conversation's design canvases in a thread dock, opens a tapped card-marked chip into that dock's
  * viewer, and ingests each new dsCard attachment into its device store (the `DesignStore` singleton,
  * inited here with the app context so the context-free ingest handler can reach it). Forget/wipe
- * drop a conversation's / all card indexes. See plans/inbound-pipeline.md.
+ * drop a conversation's / all card indexes. See CLAUDE.md "Android plugin framework".
  */
 class DesignerPlugin : PluginEntry {
 	override fun register(host: PluginHost) {

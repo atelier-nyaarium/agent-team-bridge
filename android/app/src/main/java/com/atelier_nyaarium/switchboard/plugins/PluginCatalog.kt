@@ -1,8 +1,8 @@
 package com.atelier_nyaarium.switchboard.plugins
 
 /**
- * The baked-in plugin list - the transform of nyaadot's filesystem discovery scan for an APK
- * (plans/plugins.md): every baked plugin's Kotlin is compiled in anyway, so discovery is this
+ * The baked-in plugin list - the transform of nyaadot's filesystem discovery scan for an APK:
+ * every baked plugin's Kotlin is compiled in anyway, so discovery is this
  * compile-time table, and the scan's "manifest marks the package" invariant is enforced by a unit
  * test asserting this list and the `assets/plugins/<dir>/manifest.json` folders agree (folder
  * name = the manifest's `content_id`). Real scanning returns if dynamic install ever lands.

@@ -7,7 +7,7 @@ import java.io.File
 
 /**
  * A plugin's compiled entry hook - the transform of nyaadot's `entry_point` script for a runtime
- * that must not load code (plans/plugins.md, "nyaadot keep / toss"). [PluginManager] runs it
+ * that must not load code (nyaadot's keep / toss pass). [PluginManager] runs it
  * inside the plugin's [SourceContext] window on every enable, so each claim it makes auto-tags;
  * disable sweeps those claims, and a re-enable runs it again against clean registries.
  */

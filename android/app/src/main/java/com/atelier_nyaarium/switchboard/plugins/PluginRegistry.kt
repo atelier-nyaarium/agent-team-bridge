@@ -6,8 +6,8 @@ package com.atelier_nyaarium.switchboard.plugins
  * during their registration window and the tag comes from [SourceContext] automatically.
  *
  * A key collision REFUSES loudly instead of shadowing (nyaadot's ShadowIndex was deliberately
- * tossed: last-wins silent override is a modding-ecosystem feature and a first-party-app bug -
- * see plans/plugins.md). Convention: plugins namespace their keys `<plugin>:<key>`.
+ * tossed: last-wins silent override is a modding-ecosystem feature and a first-party-app bug).
+ * Convention: plugins namespace their keys `<plugin>:<key>`.
  */
 class PluginRegistry<T : Any> internal constructor(
 	val name: String,
