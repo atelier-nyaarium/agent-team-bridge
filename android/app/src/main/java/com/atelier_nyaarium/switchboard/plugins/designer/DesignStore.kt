@@ -76,6 +76,15 @@ object DesignStore {
 	 * that team (or a full wipe) races it. */
 	fun removalGeneration(team: String): Int = synchronized(lock) { genOf(team) }
 
+	/** The card whose LATEST push is exactly [rel], or null. Rel-keyed, never fileName-keyed: the
+	 * index keeps one entry per fileName (the newest), so a fileName match with a different rel is
+	 * an older revision and must NOT borrow the current card's identity. Reads the hydrated flow
+	 * only (no disk), so it is safe from the main thread at transcript-serialization time. */
+	fun cardForRel(team: String, rel: String): StoredCard? = synchronized(lock) {
+		if (rel.isEmpty()) return@synchronized null
+		flowFor(team).value.firstOrNull { it.rel == rel }
+	}
+
 	/** Add or replace a card by filename (at-monotonic, first-appearance order preserved). A backfill
 	 * passes the [guardGen] it captured before seeding; if a removal for this team (delete/forget) or a
 	 * full wipe (forgetAll) has since bumped the team's generation the seed is dropped, so a stale
