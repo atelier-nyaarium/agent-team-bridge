@@ -20,8 +20,11 @@ data class StoredCard(
 	val w: Int? = null,
 	val h: Int? = null,
 ) {
-	fun toCard(): DesignerCard =
-		DesignerCard(fileName, title ?: fileName.substringBeforeLast('.'), rel, at, DsCardMeta(group, w, h))
+	/** The rendered display name: the parsed title, else the filename stem. Single owner of this
+	 * rule so the dock (toCard) and the chip decorator can never drift on what a card is called. */
+	val displayName: String get() = title ?: fileName.substringBeforeLast('.')
+
+	fun toCard(): DesignerCard = DesignerCard(fileName, displayName, rel, at, DsCardMeta(group, w, h))
 }
 
 /**

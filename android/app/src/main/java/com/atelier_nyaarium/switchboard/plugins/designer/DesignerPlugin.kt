@@ -48,9 +48,7 @@ class DesignerPlugin : PluginEntry {
 		// In-memory lookup only (the decorator contract; this runs per file per transcript sync).
 		host.attachmentChipDecorators.claim("designer:card-title", AttachmentChipDecorator { team, file ->
 			val rel = file.src?.let(::relOf)?.takeIf { it.isNotEmpty() } ?: return@AttachmentChipDecorator null
-			DesignStore.cardForRel(team, rel)?.let { card ->
-				ChipDecoration(card.title ?: card.fileName.substringBeforeLast('.'), "designer")
-			}
+			DesignStore.cardForRel(team, rel)?.let { card -> ChipDecoration(card.displayName, "designer") }
 		})
 	}
 }
