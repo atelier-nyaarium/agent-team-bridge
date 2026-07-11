@@ -198,19 +198,25 @@ user's standing "Plugin Update Deploy Sequence" instructions) before any Claude 
 them. "Merged to main" and "works end-to-end" are separate milestones here, same as every prior
 wire-shape change in this repo.
 
-### Phasing
+## Phase 1 - wire + gateway
 
-- **Phase 1 - wire + gateway.** The `plugin_action` mailbox kind (schema + codegen), the gateway
-  composer (self-scoped to the caller's own conversation, no client-suppliable target), and its
-  vitest coverage (including the scoping-invariant test). No `device-mailbox.ts` changes needed - the
-  hygiene fixes considered during refinement were cut as unnecessary at this payload's scale.
-  Vitest-testable independent of the Android side.
-- **Phase 2 - Android framework + Designer consumer.** `PluginHost.pluginActions` registry, the
-  `ChatRepository.kt` drain branch, `PluginEntry.kt`/`Plugins.kt` types + bridge, `DesignerPlugin`'s
-  delete handler. Android-unit-testable + the R8 minify gate, same as every prior phase this session.
-- **Phase 3 - MCP tools.** The two agent-facing tools (push wrapper, delete via the new envelope),
-  registered in `src/mcp/`. End-to-end testable once Phase 1+2 are live: an agent calls delete, the
-  card disappears from the phone's dock without the human touching it.
+The `plugin_action` mailbox kind (schema + codegen), the gateway composer (self-scoped to the
+caller's own conversation, no client-suppliable target), and its vitest coverage (including the
+scoping-invariant test). No `device-mailbox.ts` changes needed - the hygiene fixes considered during
+refinement were cut as unnecessary at this payload's scale. Vitest-testable independent of the
+Android side.
+
+## Phase 2 - Android framework + Designer consumer
+
+`PluginHost.pluginActions` registry, the `ChatRepository.kt` drain branch, `PluginEntry.kt`/
+`Plugins.kt` types + bridge, `DesignerPlugin`'s delete handler. Android-unit-testable + the R8 minify
+gate, same as every prior phase this session.
+
+## Phase 3 - MCP tools
+
+The two agent-facing tools (push wrapper, delete via the new envelope), registered in `src/mcp/`.
+End-to-end testable once Phase 1+2 are live: an agent calls delete, the card disappears from the
+phone's dock without the human touching it.
 
 ### Notes
 
