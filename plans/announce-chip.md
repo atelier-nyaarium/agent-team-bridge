@@ -116,3 +116,46 @@ deleted card, non-card HTML -> null). R8 gate as always.
 - No wire/gateway/MCP changes anywhere - this is entirely device-side presentation.
 - After ship: retire this plan per the session convention (fold residuals into
   `pain-points.md`/`features-and-fixes.md`, mark Item 15's bullet shipped).
+
+## Painpoints
+
+Collected by the close-out crust sweep, scoped to the surfaces touched since the last full sweep.
+Record only, nothing fixed here. The plans-reconciliation scout confirmed `pain-points.md` and
+`plugin-pipeline-hardening.md` need no corrections from this plan's changes.
+
+- [medium] `android/.../ChatRepository.kt`-adjacent - **bug-class** -
+  `ThreadRenderer : playEnabled` is copied BY VALUE onto a renderer at `ThreadRendererPool.get`
+  time (`it.playEnabled = playEnabled`), unlike `resolveFrom`/`selfLabel`/`decorateFile`, which are
+  live-reading closures. `MainActivity` re-assigns `rendererPool.playEnabled = repo.sttsReady()`
+  every recomposition, but nothing re-copies it onto already-created renderers - so STTS
+  provisioning mid-session never lights the Play buttons on any thread already open. Functionally
+  dead for the renderer's lifetime, not merely cosmetically stale; pre-existing, surfaced while
+  enumerating the fingerprint-staleness class. Fix direction: make it a live closure like its
+  siblings (and note `fingerprint()` would also need to reflect it for already-rendered rows).
+- [medium] `android/.../plugins/designer/DesignerThumbs.kt : renderOn` - **bug-class** - a render
+  that times out never calls `stopLoading()` and registers no `invokeOnCancellation`, so a
+  straggling `onPageFinished` from the abandoned load can fire against the NEXT render's freshly
+  assigned client and resolve its visual-state gate early - `draw()` then captures a stale/partial
+  frame and caches it permanently under the new card's rel (a cache hit never retries). Narrow
+  window (needs a 4s-blowing card immediately followed by another render), but silent and sticky.
+  Fix direction: a per-render generation check in the client callbacks, plus `stopLoading()` on
+  cancel.
+- [medium] `android/.../plugins/designer/DesignerThumbs.kt : cache` - **bug-class,
+  privacy-relevant** - the 6MB bitmap LruCache is keyed by rel and never evicted on thread forget
+  or account wipe; `designer:forget`/`designer:wipe` clear `DesignStore` but not this cache, so a
+  forgotten conversation's rendered thumbnails stay decoded in process memory until LRU pressure
+  or process death. Never re-surfaces in the UI (lookups only happen for rels still in the store),
+  but inconsistent with the lifecycle-handler contract the store itself honors. Fix direction:
+  evict by team at the forget/wipe handlers (needs a team-aware key or a per-team index over the
+  cache).
+- [medium] `android/.../plugins/Plugins.kt : build (inboundMessages bridge)` - **dup-logic** -
+  still hand-rolls the loop + `runCatching` + log idiom `PluginRegistry.forEachCaught` now owns;
+  migrating also upgrades the log line from the generic "inbound handler threw" to the registry's
+  claim-identifying message. The `pluginActions` bridge stays as-is (single-key `get()` dispatch
+  has no matching registry primitive; not worth minting one for one call site).
+- [low] `android/.../plugins/designer/DesignerThumbs.kt : attach/detach` - **dormant fragility** -
+  the single-`var` WebView pool assumes exactly one `DesignerThumbHost` is ever composed, which
+  holds today (one `ThreadScreen` call site, plain conditional, no crossfade). A future dual-pane
+  layout or animated tab transition would silently break it: the losing host's thumbnails just
+  never load (the `===` detach guard prevents corruption). Worth an assertion or log if a second
+  attach ever lands.
