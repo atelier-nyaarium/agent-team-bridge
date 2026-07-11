@@ -132,9 +132,9 @@ private fun shareCard(context: Context, file: File) {
 	}
 }
 
-/** A render surface for agent-authored card HTML, static-only per the designer security model
- * (plans/designer.md): no JS, no network, no file/content access, no navigation - a hostile
- * card renders as inert markup. Pinch-zoom stays on so a full mockup is inspectable. */
+/** A render surface for agent-authored card HTML, static-only by security design: no JS, no
+ * network, no file/content access, no navigation - a hostile card renders as inert markup.
+ * Pinch-zoom stays on so a full mockup is inspectable. */
 private fun sandboxedCardWebView(ctx: Context): WebView = WebView(ctx).apply {
 	settings.javaScriptEnabled = false
 	settings.blockNetworkLoads = true
