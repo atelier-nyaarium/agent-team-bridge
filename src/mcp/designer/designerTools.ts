@@ -91,7 +91,7 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 			};
 			return postReply(
 				{ session_id, ...(message ? { response: message } : {}), files: [file] },
-				{ toolName: "designer_push_card", logPrefix: "designer" },
+				{ toolName: "designer_push_card", logPrefix: "designer", responseFieldLabel: "message" },
 			);
 		},
 	);

@@ -1,21 +1,23 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { NoticeFull, NoticeSummary, NoticeTitle } from "../../shared/notice.js";
+import { REAL_NEWLINES_GUIDANCE } from "../../shared/schemas.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { bridgeProjectName, routerPost } from "../bridge/helpers.js";
-import { readReplyAttachment } from "../bridge/replyTool.js";
+import { literalEscapeHazard, literalEscapeReject, readReplyAttachment, toolError } from "../bridge/replyTool.js";
 
 ////////////////////////////////
 //  Schemas
 
 // title, summary, and full are all required (no ghost ping that is only a bar
 // headline). Strict: an unknown field (e.g. the retired `tiny`) is rejected, not
-// silently stripped.
+// silently stripped. The notice leaf's describes are extended in place (not edited
+// at the source) because notice.ts is a synced verbatim-copy module.
 const NotifyHumanSchema = z
 	.object({
-		title: NoticeTitle,
-		summary: NoticeSummary,
-		full: NoticeFull,
+		title: NoticeTitle.describe(`${NoticeTitle.description}${REAL_NEWLINES_GUIDANCE}`),
+		summary: NoticeSummary.describe(`${NoticeSummary.description}${REAL_NEWLINES_GUIDANCE}`),
+		full: NoticeFull.describe(`${NoticeFull.description}${REAL_NEWLINES_GUIDANCE}`),
 		attachments: z
 			.array(z.string())
 			.optional()
@@ -46,6 +48,15 @@ export function registerHumanTools(mcpServer: McpServer): void {
 		},
 		async (args: NotifyHumanArgs) => {
 			const { title, summary, full, attachments } = args;
+			// Before attachment materialization (file reads) and before the POST, so a reject costs nothing.
+			for (const [field, value] of [
+				["title", title],
+				["summary", summary],
+				["full", full],
+			] as const) {
+				const hazard = literalEscapeHazard(value);
+				if (hazard) return toolError(literalEscapeReject("notify_human", field, hazard));
+			}
 			let files: ChannelFile[] | undefined;
 			if (attachments?.length) {
 				try {
