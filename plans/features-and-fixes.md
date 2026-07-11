@@ -52,4 +52,4 @@ The CLI-era teardown, the create-session button, and Copilot support are now sub
 `bug-class-decisions.md` Phase 6 (split the host: demote the host-agent, headless multi-session
 daemon). Item 14 (app-side plugins support) was scoped in `plans/plugins.md` and SHIPPED (ffa32c4);
 that plan and its `plans/inbound-pipeline.md` foundation were deleted on ship, their deferred features
-folded into Item 15 above and their open bug-residuals into `plans/pain-points.md`.
+folded into Item 15 above and their open bug-residuals into `plans/plugin-pipeline-hardening.md`.

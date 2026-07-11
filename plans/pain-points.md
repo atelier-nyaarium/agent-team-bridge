@@ -5,43 +5,6 @@ concrete, reachable issues - dup-logic, naming nits, dead code with no consequen
 gated behind a disclaimed precondition ("only reachable via a corrupted file", "negligible at this
 app's realistic scale") were cut. Refs are `file : scope : name`; severity in brackets.
 
-## Plugin inbound pipeline + Designer additive store (ffa32c4, 2026-07-11)
-
-Migrated from `plans/inbound-pipeline.md` + `plans/plugins.md` (both deleted, shipped) so their
-still-open residuals are not lost. Full design rationale + red-team history is in git at ffa32c4;
-architecture in CLAUDE.md ("Android plugin framework").
-
-- [high] `android/.../ChatRepository.kt : clearAll` - **bug-class** - the Delete-Domain / factory-wipe
-  path calls `pollJob?.cancel()` with no join, then wipes state. A drain iteration already past
-  `client().poll()` on Dispatchers.IO can finish its synchronous append + persist tail AFTER the wipe,
-  folding a message back onto the reset state and writing it to `KEY_THREADS`. Chat can survive a
-  "Revoke and Delete Domain" wipe (in memory, and from prefs on next start). Privacy-relevant. Fix:
-  `cancelAndJoin` (or a wipe-generation guard) before clearing.
-- [high] `src/shared/device-mailbox.ts : append` - **bug-class** - `at = Date.now()` with no monotonic
-  clamp (unlike `seq`). A backward host clock or multi-Gateway skew hands a newer entry a smaller `at`,
-  and every `at`-orderer inverts: `ChatRepository.loadPersistedThreads` (`sortedBy at` on cold start
-  while the live path never sorts, so one thread reorders after a restart) and `DesignStore.upsertInto`
-  (its at-monotonic guard silently DROPS a genuinely-newer card, gallery stuck stale). Clamp `at`
-  monotonic per mailbox, or thread `seq` down for the ordering decision.
-- [medium] `android/.../ChatRepository.kt : forget` (vs `startPolling` drain, before `mailboxSync.commit`)
-  - **bug-class** - forgetting a team during an uncommitted batch lets a redelivered entry re-`append`
-  the just-forgotten thread (and any Designer card on it). Advance the cursor on forget, or serialize
-  forget against the drain.
-- [medium] `android/.../plugins/SourceContext.kt : CORE_SOURCE` - **bug-class** - `CORE_SOURCE` is the
-  literal `"core"`; a plugin whose `content_id` is `"core"` (passes the slug regex) tags its claims as
-  core, so disabling it retract-sweeps genuine core claims project-wide. Nothing rejects the id.
-- [low] `android/.../plugins/PluginRegistry.kt : keys` and `plugins/SourceContext.kt : inContext` -
-  **dead code** - no callers anywhere (not even tests), on the framework's core primitives.
-- [low] `android/.../plugins/PluginCatalog.kt : PluginCatalog (class doc)` - **stale comment** - claims
-  catalog order is boot order, but `PluginManager.boot` is an order-independent fixpoint (pinned by a
-  test). Drop the ordering claim.
-- [low] `android/.../plugins/PluginManager.kt : setEnabled` (x `DesignerPlugin threadForgetHandlers`) -
-  **bug-class** - forgetting a thread while a plugin is DISABLED never runs its forget handler (the
-  claim was retract-swept), orphaning that plugin's per-team index; a reused deterministic address
-  could later show stale cards. A full fix runs data-lifecycle handlers for disabled plugins too.
-- [low] `android/.../MainActivity.kt : App (onForget)` - **dup-logic** - the forget-handler-sweep plus
-  `repo.forget` two-liner is hand-copied at two callsites; one shared helper would stop it drifting.
-
 ## Pre-handshake terminal view (PR #108, 2026-07-07)
 
 Migrated from `plans/pre-handshake-terminal-view.md` (deleted, shipped) so its still-open residuals
