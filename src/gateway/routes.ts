@@ -165,6 +165,13 @@ function fileBytes(files: ChannelFile[]): number {
 	return n;
 }
 
+/** The one measurement of a plugin-action payload's size, so the schema-level check and the
+ * consolePush landing-side check (the two enforcement sites) can never independently drift on HOW
+ * size is measured, mirroring fileBytes()'s role for MAX_RESPONSE_FILE_BYTES. */
+function payloadBytes(payload: Record<string, unknown>): number {
+	return JSON.stringify(payload).length;
+}
+
 /** Drop base64 so a persistent store entry never retains the bytes; the live
  * push and the mailbox carry the payload, the store keeps only metadata. */
 function stripFileBytes(files: ChannelFile[]): ChannelFile[] {
@@ -205,7 +212,7 @@ const PluginActionRequestSchema = z
 		payload: z
 			.record(z.string(), z.unknown())
 			.optional()
-			.refine((p) => !p || JSON.stringify(p).length <= MAX_PLUGIN_ACTION_PAYLOAD_BYTES, {
+			.refine((p) => !p || payloadBytes(p) <= MAX_PLUGIN_ACTION_PAYLOAD_BYTES, {
 				message: `payload exceeds ${MAX_PLUGIN_ACTION_PAYLOAD_BYTES} bytes`,
 			}),
 	})
@@ -355,7 +362,7 @@ export function createRoutes({
 			console.warn(`[console_push] dropped an oversized entry (over ${MAX_RESPONSE_FILE_BYTES} bytes)`);
 			return { delivered: false };
 		}
-		if (entry.payload && JSON.stringify(entry.payload).length > MAX_PLUGIN_ACTION_PAYLOAD_BYTES) {
+		if (entry.payload && payloadBytes(entry.payload) > MAX_PLUGIN_ACTION_PAYLOAD_BYTES) {
 			console.warn(
 				`[console_push] dropped an oversized plugin_action payload (over ${MAX_PLUGIN_ACTION_PAYLOAD_BYTES} bytes)`,
 			);

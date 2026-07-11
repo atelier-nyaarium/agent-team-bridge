@@ -232,6 +232,11 @@ user's standing "Plugin Update Deploy Sequence" instructions) before any Claude 
 them. "Merged to main" and "works end-to-end" are separate milestones here, same as every prior
 wire-shape change in this repo.
 
+**Deferred, non-blocking (Phase 1 framework-first audit).** `humanNotify` and `pluginAction` share a
+byte-identical `if (!mailboxStore) {...} if (!owner) {...}` 503-guard at the top of each; a third
+console-bound HTTP route (plausible - this shape recurs) would be the point to extract it into a
+shared helper. Not worth doing for two call sites alone.
+
 ## Phase 1 - wire + gateway
 
 The `plugin_action` mailbox kind (schema + codegen), the gateway composer (self-scoped to the
