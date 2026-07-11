@@ -42,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -257,10 +258,15 @@ fun DesignerDock(scope: ThreadDockScope) {
 		}
 	}
 
-	if (cards.isNotEmpty()) DockBar(cards) { expanded = true }
+	if (cards.isNotEmpty()) {
+		// Keeps the offscreen thumbnail WebView window-attached while any thumb slot is on screen.
+		DesignerThumbHost()
+		DockBar(cards, filesDir) { expanded = true }
+	}
 	if (expanded) {
 		CanvasSheet(
 			cards = cards,
+			filesDir = filesDir,
 			onOpen = {
 				viewer = ViewerTarget.Gallery(it)
 				expanded = false
@@ -327,17 +333,24 @@ private fun runAction(
 }
 
 @Composable
-private fun DockBar(cards: List<DesignerCard>, onExpand: () -> Unit) {
+private fun DockBar(cards: List<DesignerCard>, filesDir: File, onExpand: () -> Unit) {
 	Surface(tonalElevation = 3.dp) {
 		Row(
 			Modifier.fillMaxWidth().hapticClickable(onClick = onExpand).padding(horizontal = 12.dp, vertical = 8.dp),
 			verticalAlignment = Alignment.CenterVertically,
 		) {
-			Box(
-				Modifier.size(34.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(9.dp)),
-				contentAlignment = Alignment.Center,
+			// The peek slot previews the most recently updated canvas.
+			CardThumb(
+				filesDir = filesDir,
+				card = cards.maxBy { it.updatedAt },
+				modifier = Modifier.size(34.dp).clip(RoundedCornerShape(9.dp)),
 			) {
-				Icon(Icons.Default.GridView, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+				Box(
+					Modifier.size(34.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(9.dp)),
+					contentAlignment = Alignment.Center,
+				) {
+					Icon(Icons.Default.GridView, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+				}
 			}
 			Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
 				Text("Designer", style = MaterialTheme.typography.titleSmall)
@@ -356,6 +369,7 @@ private fun DockBar(cards: List<DesignerCard>, onExpand: () -> Unit) {
 @Composable
 private fun CanvasSheet(
 	cards: List<DesignerCard>,
+	filesDir: File,
 	onOpen: (Int) -> Unit,
 	onAction: (DesignerCard, CardAction) -> Unit,
 	onDismiss: () -> Unit,
@@ -382,24 +396,30 @@ private fun CanvasSheet(
 		}
 		LazyColumn(Modifier.padding(bottom = 24.dp)) {
 			items(cards.size, key = { cards[it].fileName }) { i ->
-				CanvasRow(cards[i], onOpen = { onOpen(i) }, onAction = { onAction(cards[i], it) })
+				CanvasRow(cards[i], filesDir, onOpen = { onOpen(i) }, onAction = { onAction(cards[i], it) })
 			}
 		}
 	}
 }
 
 @Composable
-private fun CanvasRow(card: DesignerCard, onOpen: () -> Unit, onAction: (CardAction) -> Unit) {
+private fun CanvasRow(card: DesignerCard, filesDir: File, onOpen: () -> Unit, onAction: (CardAction) -> Unit) {
 	var menuOpen by remember { mutableStateOf(false) }
 	Row(
 		Modifier.fillMaxWidth().hapticClickable(onClick = onOpen).padding(start = 16.dp, end = 4.dp).padding(vertical = 10.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
-		Box(
-			Modifier.size(width = 44.dp, height = 58.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)),
-			contentAlignment = Alignment.Center,
+		CardThumb(
+			filesDir = filesDir,
+			card = card,
+			modifier = Modifier.size(width = 44.dp, height = 58.dp).clip(RoundedCornerShape(8.dp)),
 		) {
-			Icon(Icons.Default.GridView, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+			Box(
+				Modifier.size(width = 44.dp, height = 58.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)),
+				contentAlignment = Alignment.Center,
+			) {
+				Icon(Icons.Default.GridView, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+			}
 		}
 		Column(Modifier.weight(1f).padding(horizontal = 13.dp)) {
 			Text(card.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
