@@ -194,67 +194,19 @@ A feature's design pass is almost always a RESUME, not a fresh project. The path
 4. `finalize_plan` (with `deletes: []`) -> `write_files` -> `register_assets` (new cards only).
 5. Tell the human where to look; iterate; log each decision into the feature plan.
 
-## Building this FIRST-PARTY in switchboard (parity build - GREENLIT 2026-06-26)
+## First-party Designer in switchboard: SHIPPED
 
-The owner greenlit a switchboard-native Designer to PARITY with claude.ai/design ("we will build Designer UX
-to parity Claude designer"). The **Observed wire shapes** section above is the API surface to match. Mirror
-DesignSync INSIDE switchboard
-so the SAME scratch-space + the SAME `@dsCard` HTML can render as first-class cards directly in the console's
-conversation thread on mobile, instead of (or as well as) pushing to claude.ai/design. This closes the
-design-review loop entirely inside switchboard - no context switch to claude.ai, mobile-first (where the owner
-already is). Working name: `switchboard-design-sync`.
+The switchboard-native parity build greenlit here shipped across three plans (all since retired):
+the app-side plugin framework + Designer dock (`plans/plugins.md`, git ffa32c4), the inbound
+pipeline foundation (`plans/inbound-pipeline.md`), and the agent-facing tools + generic
+plugin-action dispatch (`plans/plugin-actions.md`, PR #112). The build resolved this section's
+open decisions differently than sketched: cards render in a per-conversation DOCK (not inline
+thread iframes) via a sandboxed no-JS WebView; transport reuses `channel_reply`/`ChannelFile`
+attachments with a first-line `@dsCard` marker; the tools coexist with DesignSync
+(`designer_push_card`/`designer_delete_card` in `src/mcp/designer/designerTools.ts`); and the
+per-conversation card index is `DesignStore` on device. Architecture is in CLAUDE.md ("Android
+plugin framework" and "Console Bridge"); open follow-ups are in `plans/features-and-fixes.md`
+Item 15 and residuals in `plans/pain-points.md`.
 
-### Why it is ~80-90% existing plumbing (grounded in the Android console code)
-
-The console's conversation thread is ALREADY a bundled web-app renderer in a locked-down WebView:
-- `ThreadRenderer.kt` loads a bundled web app (`assets/thread/`) and already renders **markdown + mermaid** -
-  so it has a rich-content rendering model, not just text.
-- It has an **attachment pipeline**: files are materialized to internal storage (`Attachments.kt`) and served
-  to the WebView over https by a `WebViewAssetLoader` (`InternalStoragePathHandler`), with
-  `allowFileAccess=false` + `allowContentAccess=false` and every non-asset request blocked
-  (`shouldInterceptRequest` returns empty for anything but bundled assets / materialized attachments).
-- It has a **JS bridge** (`Android.openAttachment / retryMessage / playMessage`) and a full-screen
-  `AttachmentViewer.kt`.
-
-So a design preview is just a NEW card type in that renderer, fed by the EXISTING file pipeline - not a new
-subsystem.
-
-### Architecture sketch
-
-- **Transport:** ship the mockup HTML as a `ChannelFile` attachment over the existing console relay (the same
-  `notify_human` / channel path that already carries files), tagged as a design preview. No new network surface.
-- **Render:** the bundled thread renderer (`assets/thread/`) shows it as a **sandboxed `<iframe>` card** inline
-  in the conversation; tap -> full-screen (reuse the `AttachmentViewer` pattern). The asset loader already
-  isolates loads.
-- **Tool:** a `switchboard-design-sync` MCP tool mirroring `DesignSync` - same scratch-space, same `@dsCard`
-  markers - so the same mockups go to EITHER claude.ai/design OR straight into the thread (feature parity).
-
-### Security model (the one real risk)
-
-Rendering agent-generated HTML safely: render it in a **sandboxed iframe with scripts DISABLED** (`sandbox`
-without `allow-scripts`), so CSS/SVG renders but no mockup JS runs and it cannot reach the parent WebView's
-`Android` JS bridge or the asset loader. Since these mockups are self-contained HTML+CSS+SVG with no JS,
-**static-only is v1** at no cost. Allowing interactive (JS) mockups later is a separate, bigger decision.
-
-### Open decisions (resolve in a questionaire when pursued)
-
-1. **Surface:** inline thread cards, a per-conversation "Design" tab/gallery, or both (a card-in-thread that
-   opens a gallery).
-2. **Transport:** reuse the `ChannelFile` attachment, or a new typed frame.
-3. **Tool relationship to DesignSync:** replace it, coexist, or one tool with a `target` (claude.ai vs console).
-4. **Incremental semantics:** the console needs a per-conversation CARD INDEX (the equivalent of
-   `_ds_manifest.json`) so cards update / remove in place like DesignSync's register/unregister.
-
-### Code references (where to start)
-
-- Android render: `android/.../ThreadRenderer.kt` (the WebView renderer + JS bridge + asset loader + request
-  interception), `ThreadRendererPool.kt` (pooling), `AttachmentViewer.kt` + `Attachments.kt` (the full-screen
-  view + internal-storage materialization), and the bundled `assets/thread/` web app (the front-end change
-  lands here).
-- Transport: `src/mcp/channel/humanTools.ts` (`notify_human` + `ChannelFile` attachments), the gateway console
-  mailbox path (`src/gateway/console/`), and the `ChannelFile` schema in `src/shared/schemas.ts`.
-
-### Next step
-
-Its own plan (`plans/designer-preview.md`) when pursued: run the questionaire -> rough plan -> red-team flow
-(same as `plans/peer-ux-unification.md`), starting from the four decisions above.
+The sections above remain the working reference for claude.ai/design (DesignSync) passes, and the
+`@dsCard` conventions apply to both targets.

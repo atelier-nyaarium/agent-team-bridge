@@ -35,8 +35,10 @@ build, each its own small scoping pass:
   `src/mcp/designer/designerTools.ts`. Architecture is in CLAUDE.md ("Console Bridge (Android
   channel)"); full design + red-team history in git (commits `dc28dbb`, `95e82c8`, `f35c008`).
   Residuals in `plans/pain-points.md`.
-- **Rendered thumbnails** in the dock rows and the collapsed peek strip (today a generic canvas
-  glyph). Open: a live scaled-down WebView vs a cached bitmap snapshot.
+- ~~**Rendered thumbnails**~~ Shipped (PR #112): cached bitmap snapshots via one offscreen WebView
+  (`plugins/designer/DesignerThumbs.kt`), rendered on demand and LRU-cached keyed by the card's
+  `rel`; dock rows and the peek strip fall back to the old glyph while rendering or for a
+  missing/oversize file.
 - **In-chat announce chip** (the Q4 "if easy") - a tappable "here's the thingy" chip in the chat body;
   prose plus the dock is the shipped fallback. Needs a feasibility check in the thread renderer.
 - **Index lifecycle** questions: a per-conversation card cap, an explicit on-device file home plus TTL
