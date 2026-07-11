@@ -105,7 +105,7 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 			try {
 				// postPluginAction self-scopes to this MCP process's own identity - the ONLY identity
 				// field the gateway's /plugin-action route reads to pick a target, so this can only ever
-				// act on OUR OWN conversation (plans/plugin-actions.md's target-scoping design).
+				// act on OUR OWN conversation.
 				const result = await postPluginAction("designer", "delete-card", { fileName: args.fileName });
 				return {
 					content: [

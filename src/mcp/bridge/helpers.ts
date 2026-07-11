@@ -108,9 +108,9 @@ export async function routerPost(
 /** POST a plugin-action envelope to the gateway's /plugin-action route, self-scoped to THIS
  * container's own identity. Deliberately takes no target/team/session_id parameter - `from` is
  * always this process's own PROJECT_NAME, so a plugin-action tool cannot smuggle a different
- * destination through this helper even by mistake (plans/plugin-actions.md's target-scoping
- * design). New plugin-action tools should call this rather than routerPost("/plugin-action", ...)
- * directly - hand-rolling the POST body is what would reopen the hole this closes. */
+ * destination through this helper even by mistake. New plugin-action tools should call this
+ * rather than routerPost("/plugin-action", ...) directly - hand-rolling the POST body is what
+ * would reopen the hole this closes. */
 export async function postPluginAction(
 	pluginId: string,
 	actionType: string,

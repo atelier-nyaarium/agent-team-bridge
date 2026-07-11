@@ -27,6 +27,7 @@ corrected the fix (Option 1 is not a zero-code bind), added two missed routes
   | `WS /connector/{project}/ws` | **SSRF / arbitrary egress.** Gateway-unauthenticated (`index.ts:685-707`, `Authorization` captured but never checked); `connectorProxy.ts:9` opens an outbound WS to `ws://${project}:20002/ws` where `project` is an **unvalidated attacker-chosen hostname**. Upstream (`listener.ts:230`) only enforces a token in HTTPS+token mode; default is unauth. |
   | `POST /human/notify` | push arbitrary notices to the owner's phone consoles (spam/phishing) **when the console bridge / mailboxStore is enabled**; sender `from` is attacker-spoofable |
   | `POST /send` | inject a message into any agent conversation - **prompt-injection** into devcontainer agents; **self-wakes offline devcontainers** (resource amplification); `from` is attacker-spoofable |
+  | `POST /plugin-action` | drive a device-side plugin action (e.g. the Designer's delete-card) in any conversation; same shape as `/human/notify` - self-scoped to the caller's own `from`, but `from` itself is attacker-spoofable the same way |
   | `GET /pending` | **disclosure/recon** (was wrongly "benign"): leaks every live `session_id`, which then arms `/respond` + `/poll` against existing conversations |
   | `POST /respond`, `/poll` | drive the request/response mailbox; require a known `session_id` (404 otherwise) - a real guard, but **defeated by `/pending`** above |
   | `POST /ingest` | unbounded append to the gateway log (`routes.ts:387-399`) - disk-fill DoS. **No in-repo client POSTs this gateway route** (distinct from evie's `/ingest`). |
@@ -89,8 +90,8 @@ outbound WS. (Panel: security 5/5 unanimous.)
   enroll-fixes P0/F2, `GET /admit-payload` is arming-only public data on the
   host-published path - either exempt it like `/enroll`, or have `setup.ts` send the
   token (it already reads `.env`).
-- Gated set: mutate/flood (`/send`, `/respond`, `/poll`, `/human/notify`, `/ingest`),
-  non-`host` `/bridge` registration, and `/connector/{project}/ws`. Also gate the
+- Gated set: mutate/flood (`/send`, `/respond`, `/poll`, `/human/notify`, `/ingest`,
+  `/plugin-action`), non-`host` `/bridge` registration, and `/connector/{project}/ws`. Also gate the
   recon reads `/teams`/`/discover`/`/pending` under the same `.1`-needs-token rule
   (cheap, and it closes the `/pending` session_id leak).
 
@@ -148,3 +149,14 @@ bring-up cost per distinct target, not merely re-wake existing ones. No rate lim
 or per-caller cap exists on minting today (see `plans/session-id-teardown.md`'s own
 Painpoints/red-team notes for Phase G). Whoever implements the origin-aware gate
 decided above should confirm it also covers this creation path, not just re-wake.
+
+## Cross-reference: plugin-actions (2026-07-11)
+
+`plans/plugin-actions.md` (deleted, shipped) added `POST /plugin-action`, a generic agent-initiated
+mailbox entry `{pluginId, actionType, payload}` that drives a device-side plugin (e.g. the Designer's
+delete-card) with no dedicated wire type per action. It self-scopes to the caller's own `from` -
+there is no separate target field, so a caller has no MORE room to name another conversation than
+`/send` already has - but that plan's own text is explicit this is NOT a new authentication boundary:
+`from` is exactly as attacker-spoofable here as it is on `/send`/`/human/notify` above. Whoever
+implements the origin-aware gate should include `/plugin-action` in the gated set (already added to
+the table and bullet above).

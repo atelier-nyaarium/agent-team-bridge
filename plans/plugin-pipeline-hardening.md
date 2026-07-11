@@ -23,6 +23,13 @@ AFTER the mutation, silently undoing it.
   batch was drained but not yet committed when forget ran) re-`append`s the just-forgotten thread, and
   any Designer card riding it.
 
+`plans/plugin-actions.md` (deleted, shipped) added a third branch inside this same drain loop: a
+`kind == "plugin_action"` entry (e.g. the Designer's delete-card) dispatches synchronously before the
+cursor commits, same as the body-append branch above. It is subject to the identical hazard - a drain
+iteration already past `client().poll()` can still dispatch a plugin action against state a
+concurrent `clearAll`/`forget` intended to have already torn down. The fix direction below should
+cover this branch too, not just the two named above.
+
 Fix direction: `cancelAndJoin()` before `clearAll`'s wipe (the straightforward fix, since the whole
 point is "stop everything, then reset"); `forget` needs either the same or a lighter per-team
 generation guard so a stale in-flight append is dropped instead of applied. Decide the exact mechanism

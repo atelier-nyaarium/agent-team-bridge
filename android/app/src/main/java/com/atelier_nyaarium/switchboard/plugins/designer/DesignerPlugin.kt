@@ -33,9 +33,9 @@ class DesignerPlugin : PluginEntry {
 			cardsFrom(msg.files, msg.at) { rel -> readCardPrefix(filesDir, rel) }
 				.forEach { DesignStore.upsert(msg.team, it) }
 		})
-		// Agent-initiated delete via the generic plugin-action dispatch (plans/plugin-actions.md).
-		// DesignStore.delete is already idempotent (a list-size check before any write), satisfying
-		// PluginActionHandler's mandatory idempotency contract for free.
+		// Agent-initiated delete via the generic plugin-action dispatch. DesignStore.delete is
+		// already idempotent (a list-size check before any write), satisfying PluginActionHandler's
+		// mandatory idempotency contract for free.
 		host.pluginActions.claim("designer:delete-card", PluginActionHandler { action ->
 			val fileName = (action.payload?.get("fileName") as? JsonPrimitive)?.contentOrNull ?: return@PluginActionHandler
 			DesignStore.delete(action.team, fileName)

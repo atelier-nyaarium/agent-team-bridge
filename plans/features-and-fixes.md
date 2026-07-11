@@ -32,7 +32,9 @@ build, each its own small scoping pass:
 - ~~**DesignSync-parity MCP push tool.**~~ Shipped: `designer_push_card` (inline HTML, wraps the
   existing `channel_reply`-attachment mechanism) and `designer_delete_card` (self-scoped, via the new
   generic `plugin_action` mailbox kind - see CLAUDE.md "Console Bridge") both live in
-  `src/mcp/designer/designerTools.ts`. Full design + red-team history in git; see `plans/plugin-actions.md`.
+  `src/mcp/designer/designerTools.ts`. Architecture is in CLAUDE.md ("Console Bridge (Android
+  channel)"); full design + red-team history in git (commits `dc28dbb`, `95e82c8`, `f35c008`).
+  Residuals in `plans/pain-points.md`.
 - **Rendered thumbnails** in the dock rows and the collapsed peek strip (today a generic canvas
   glyph). Open: a live scaled-down WebView vs a cached bitmap snapshot.
 - **In-chat announce chip** (the Q4 "if easy") - a tappable "here's the thingy" chip in the chat body;

@@ -1,5 +1,34 @@
 # Pain points
 
+## Plugin actions (`plans/plugin-actions.md`, deleted, shipped - 2026-07-11)
+
+Migrated from `plans/plugin-actions.md` (deleted, shipped - the generic `plugin_action` mailbox kind,
+gateway composer, Android dispatch, and the Designer's `designer_push_card`/`designer_delete_card` MCP
+tools). Full design + red-team history in git (commits `dc28dbb`, `95e82c8`, `f35c008`); architecture
+is in CLAUDE.md's "Console Bridge (Android channel)" section. Pruned to concrete, reachable findings
+from the plan's own Phase 3 crust sweep - dead code with no behavioral consequence and pure dup-logic
+were cut per this file's own convention.
+
+- [medium] `src/mcp/bridge/helpers.ts : setIsMainOrLeadAgent` - **bug-class** - unreferenced anywhere,
+  and it is the ONLY writer of the module-level `isMainOrLeadAgent` flag that `connectToRouter`'s
+  handshake handler branches on. Since nothing ever calls the setter, `isMainOrLeadAgent` is
+  permanently `null` at runtime, so the auto-reply branch (answer a lead/worker handshake
+  automatically) never fires in practice - every handshake falls through to "let the LLM decide"
+  instead. Either wire a real caller or delete the dead branch.
+- [medium] `src/mcp/devcontainer/reloadPlugins.ts`, `setEffortLevel.ts`, `compactSession.ts` -
+  **bug-class** - all three tool schemas are plain `z.object({...})` with no `.strict()`, the only
+  tool-registration files left in `src/mcp/` that silently strip an unknown/typo'd field instead of
+  rejecting it (every other tool - channel, human, designer - uses `.strict()`). Same three files also
+  report failures as a JSON-stringified `{errors:[...]}` blob, structurally different from the flat
+  `{content, isError:true}` string shape every other `mcp/` tool uses - a caller assuming tool errors
+  are a flat string gets a nested JSON blob from just these three instead.
+- [medium] `android/.../ChatRepository.kt : pollJob` (the `kind == "plugin_action"` drain branch) -
+  **bug-class** - every sibling drop/skip path in the drain loop logs a `DebugLog` line with its drop
+  reason (`DROPPED`, `SKIPPED`) unconditionally; this branch only logs inside the
+  `if (pluginId != null && actionType != null)` guard, so a malformed plugin-action entry (null
+  `pluginId`/`actionType`) is silently `continue`'d with zero trace - the one drop path that breaks
+  CLAUDE.md's documented `[Drain]` log coverage ("kind, resolved thread, OR the drop reason").
+
 Residual painpoints from shipped work, collected by crust scouts (record only, not fixed). Pruned to
 concrete, reachable issues - dup-logic, naming nits, dead code with no consequence, and anything
 gated behind a disclaimed precondition ("only reachable via a corrupted file", "negligible at this

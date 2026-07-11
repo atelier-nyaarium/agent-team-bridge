@@ -15,10 +15,10 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Pins the Designer's `designer:delete-card` plugin-action handler (plans/plugin-actions.md): it
- * claims the exact composite key the wire's `pluginId:actionType` bridges to, extracts `fileName`
- * from the opaque payload, and calls the already-idempotent `DesignStore.delete`. A malformed or
- * absent payload is a no-op, never a throw (the drain-loop bridge has no other backstop).
+ * Pins the Designer's `designer:delete-card` plugin-action handler: it claims the exact composite
+ * key the wire's `pluginId:actionType` bridges to, extracts `fileName` from the opaque payload, and
+ * calls the already-idempotent `DesignStore.delete`. A malformed or absent payload is a no-op,
+ * never a throw (the drain-loop bridge has no other backstop).
  */
 class DesignerPluginActionTest {
 
