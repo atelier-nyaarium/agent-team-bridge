@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ChannelFile } from "../../shared/types.js";
-import { bridgeProjectName, routerPost } from "../bridge/helpers.js";
+import { bridgeProjectName, postPluginAction } from "../bridge/helpers.js";
 import { postReply, toolError } from "../bridge/replyTool.js";
 
 ////////////////////////////////
@@ -103,15 +103,10 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 		{ title: "Designer Delete Card", description: DELETE_DESCRIPTION, inputSchema: deleteSchema },
 		async (args: DeleteCardArgs) => {
 			try {
-				// `from` is this MCP process's own team identity - the ONLY identity field the gateway's
-				// /plugin-action route reads to pick a target, so this can only ever act on OUR OWN
-				// conversation (plans/plugin-actions.md's target-scoping design).
-				const result = (await routerPost("/plugin-action", {
-					from: projectName,
-					pluginId: "designer",
-					actionType: "delete-card",
-					payload: { fileName: args.fileName },
-				})) as { delivered?: boolean };
+				// postPluginAction self-scopes to this MCP process's own identity - the ONLY identity
+				// field the gateway's /plugin-action route reads to pick a target, so this can only ever
+				// act on OUR OWN conversation (plans/plugin-actions.md's target-scoping design).
+				const result = await postPluginAction("designer", "delete-card", { fileName: args.fileName });
 				return {
 					content: [
 						{

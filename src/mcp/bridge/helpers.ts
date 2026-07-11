@@ -105,6 +105,25 @@ export async function routerPost(
 	throw lastErr!;
 }
 
+/** POST a plugin-action envelope to the gateway's /plugin-action route, self-scoped to THIS
+ * container's own identity. Deliberately takes no target/team/session_id parameter - `from` is
+ * always this process's own PROJECT_NAME, so a plugin-action tool cannot smuggle a different
+ * destination through this helper even by mistake (plans/plugin-actions.md's target-scoping
+ * design). New plugin-action tools should call this rather than routerPost("/plugin-action", ...)
+ * directly - hand-rolling the POST body is what would reopen the hole this closes. */
+export async function postPluginAction(
+	pluginId: string,
+	actionType: string,
+	payload?: Record<string, unknown>,
+): Promise<{ delivered?: boolean }> {
+	return (await routerPost("/plugin-action", {
+		from: PROJECT_NAME,
+		pluginId,
+		actionType,
+		...(payload ? { payload } : {}),
+	})) as { delivered?: boolean };
+}
+
 export async function routerGet(
 	path: string,
 	{ retries = 2, retryDelayMs = 1000 }: RouterPostOptions = {},
