@@ -3026,19 +3026,9 @@ class ChatRepository(
 			val candidate = resolveReportedAnchor(thread, rowId, at)
 			if (candidate != null && isAnchorAdvance(thread, s.readAnchors[team], candidate)) {
 				changed = true
-				DebugLog.log(
-					"ReadUpTo",
-					"team=$team rowId=$rowId at=$at candidate=$candidate prevAnchor=${s.readAnchors[team]} advance=true",
-				)
-				s.copy(readAnchors = s.readAnchors + (team to candidate)).recomputeUnread(team, thread).also {
-					DebugLog.log("ReadUpTo", "team=$team new unread=${it.unread[team]}")
-				}
+				s.copy(readAnchors = s.readAnchors + (team to candidate)).recomputeUnread(team, thread)
 			} else {
 				changed = false
-				DebugLog.log(
-					"ReadUpTo",
-					"team=$team rowId=$rowId at=$at candidate=$candidate prevAnchor=${s.readAnchors[team]} advance=false",
-				)
 				s
 			}
 		}

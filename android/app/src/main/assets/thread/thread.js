@@ -388,10 +388,6 @@
 		return container.querySelector('.row[data-id="' + CSS.escape(String(id)) + '"]');
 	}
 
-	function debugWalk(msg) {
-		if (window.Android && typeof window.Android.debugWalk === "function") window.Android.debugWalk(msg);
-	}
-
 	// scrollIntoView's bottom-alignment leaves a sub-pixel rounding residue (observed ~0.66px) between
 	// a row's true bottom edge and window.innerHeight, so a strict > comparison permanently blocks on
 	// the last row of the transcript - it sits fractionally "below the fold" forever, only freed once
@@ -410,14 +406,7 @@
 				pointerIdx++;
 				continue;
 			}
-			const bottom = row.getBoundingClientRect().bottom;
-			if (bottom > window.innerHeight + BOTTOM_EDGE_SLOP_PX) {
-				debugWalk(
-					"blocked id=" + region[pointerIdx] + " bottom=" + bottom.toFixed(2) +
-					" innerHeight=" + window.innerHeight + " idx=" + pointerIdx + "/" + region.length,
-				);
-				break;
-			}
+			if (row.getBoundingClientRect().bottom > window.innerHeight + BOTTOM_EDGE_SLOP_PX) break;
 			pendingReport = { id: region[pointerIdx], at: row.dataset.at };
 			pointerIdx++;
 			advanced = true;
