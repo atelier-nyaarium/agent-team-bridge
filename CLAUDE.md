@@ -200,6 +200,52 @@ The console app has an in-APK plugin framework (`android/.../plugins/`) so first
 
 - **Designer plugin** (`plugins/designer/`): renders a conversation's `@dsCard`-marked HTML attachments as a dock gallery (`DesignerDock`), opens a tapped card chip into the same viewer, and ingests each new dsCard via its `inboundMessages` handler into `DesignStore` - the Designer's own per-team device store (own SharedPreferences file, per-team `StateFlow`, additive pointer index, at-monotonic `upsert`). A one-shot per-team dock backfill seeds cards that predate the plugin; it marks its flag before seeding (so an interrupted seed never resurrects a deleted card) and guards each seed against a `removalGen` (so a Delete/Forget racing the seed wins). The backfill + removal-guard is a general inbound-consumer pattern, a candidate to lift into the framework once a second such plugin exists. Its `designer:card-title` chip decorator styles a card's in-chat attachment chip with the card's `displayName` via `DesignStore.cardForRel` - rel-keyed, never fileName-keyed, so an older revision, a deleted card, or a non-card html keeps the plain chip instead of borrowing the current card's title.
 
+### Console chat unread tracking
+
+Opening a thread snaps to its first unread message with a divider, and the unread badge plus the
+bar notification drain by SCROLL POSITION rather than by the act of opening - reaching a message's
+bottom edge is what marks it read. Full design + three audit rounds are in git (`plans/` history);
+a cross-device sync follow-on is scoped but unbuilt.
+
+- **The read anchor** (`ChatRepository.kt`): a per-team `ReadAnchor(epoch, seq, at)` - the mailbox
+  journal coordinate a device has read up to, persisted via `AppStateStore.saveReadAnchors`/
+  `loadReadAnchors`. Mailbox epochs are random per instance and never ordered (`device-mailbox.ts`),
+  so an anchor is resolved to its row by (epoch, seq) EQUALITY only (`anchorIndex`); unread is a
+  pure positional count of inbound rows after that index (`unreadCount`, `unreadRows`,
+  `firstUnreadId`). Every writer - `append`, `appendInbound`, `markRead`, `readUpTo`, `forget` -
+  converges on the same `recomputeUnread` derivation inside its own `_state` update, so the count
+  can never drift from the anchor. A missing anchor entry counts everything (a new team badges its
+  first message immediately); the one-shot `loadPersistedReadAnchors` migration seeds every
+  pre-existing thread's anchor at its tail on first run after this model shipped, so the update
+  itself never resurrects old messages as unread.
+- **The read pointer** (`thread.js`): IntersectionObserver cannot fire at "a row's bottom edge
+  enters the viewport" (it only fires at threshold crossings, and the final on-screen rows never
+  exit), so reads are driven by walking a monotonic `region`/`pointerIdx` pointer against live
+  `getBoundingClientRect()` layout on every plausible event - scroll-settle, resize, append, and
+  PIN RELEASE (the moment a programmatic scroll's 200ms settle window closes, which is also the
+  "read check once after the open snap" moment, timed so `content-visibility` relevancy has
+  updated). `region` seeds ONLY from rows at-or-after the unread boundary (never historicals - an
+  earlier bug mixed them in and inverted walk order); Kotlin's `revealFirstUnread` union-merges a
+  fresh region on every open. Suppression: no walk while a pin is settling, and the walk itself
+  (not just the bridge report) is suppressed while the app is backgrounded - `arrivedVisible`
+  (a transient, never-persisted `Message` field) tags each row at drain time, with a
+  `resumeBacklogPending` correction in `ChatRepository.onForeground()` so the away-backlog a resume
+  drains is never mistaken for something the user watched arrive.
+- **Kotlin<->JS wiring** (`ThreadRenderer.kt`, `ThreadRendererPool.kt`, `MainActivity.kt`): the
+  `Android.readUpTo(id, at)` bridge posts to main and is forwarded team-bound through the pool
+  (matching `onAttachmentTap`/`onPlayTap`'s existing pattern). Opening a thread is a separate
+  Compose effect from ongoing message sync, keyed on an `openNonce` counter bumped by every genuine
+  open gesture (notification tap, board tap, a tab switch onto a different thread) - `openNonce`,
+  not the ambient "current" team, is what a reveal computes against, since the flush-then-reveal
+  round trip is async and can resolve after the user has navigated elsewhere.
+- **Notification reconciler** (`SwitchboardService.kt`): `reconcileTeamNotifications` replaces the
+  old clear-on-open behavior. It is LEVEL-based against `NotificationManager.activeNotifications`
+  (never a remembered prior emission, so a process restart's first pass converges cleanly): a
+  team's bar entry cancels once its count reaches 0, silently refreshes while draining
+  (`setOnlyAlertOnce`), and is left alone entirely if not currently showing (a muted or
+  visible-arrival team can never gain a phantom entry). `Forget` and Close-Tab muting are both
+  honored explicitly, since forget drops a team from the map this reconciler iterates.
+
 ### Port Map
 
 | Port  | Service                              |

@@ -1,6 +1,7 @@
 # Thread open position + scroll-driven unread clearing
 
-Status: READY TO IMPLEMENT. Refined through three audit laps (6+6+4 agents, all findings
+Status: PHASES A-D SHIPPED (`ee31222`, `2925a21`). See Painpoints below for residuals; Phase E
+(cross-device sync) is the open follow-on. Refined through three audit laps (6+6+4 agents, all findings
 code-verified). Lap 1 killed the epoch-ordering and IntersectionObserver models. Lap 2 killed lap
 1's suppression predicate (visibility is the discriminator) and the pin-window receipt swallow.
 Lap 3 tightened the new mechanisms (resume-backlog tagging, level-based notification
@@ -450,3 +451,47 @@ suppresses its banner, vacuously passing notification assertions).
     with images/mermaid in the tail.
 11. Reply from a SECOND device while this device has unread (D5): this device does not jump or
     clear; reply locally with unread remaining (Q4): jumps to bottom and clears.
+
+## Painpoints
+
+Phases A-D shipped (`ee31222`, `2925a21`), verified through an align pass and a red-team pass (each
+catching real regressions in the round before it - the debugging skill's "second red-team round
+targeting a just-applied fix" pattern held true twice in this build). Residuals below are recorded,
+not fixed - none blocked shipping.
+
+- `android/.../ThreadRenderer.kt : flushThenReveal` - a renderer CRASH (not a close/forget) mid-flush
+  (`onRenderProcessGone` -> `ThreadRendererPool.recreate`) reassigns the same `remember(team)` slot
+  in place rather than destroying the closure's target, so a stale `flushThenReveal` callback can
+  redirect to the freshly recreated renderer and issue a spurious/duplicate `revealFirstUnread`
+  (a redundant re-snap, not data corruption - the destroyed-flag fix only closes the destroy()/
+  forget() path, not this one). Low severity, not reproduced by hand; worth a `destroyed`-per-
+  instance capture in `flushThenReveal`'s closure (not just the field) if it ever surfaces.
+- `android/.../MainActivity.kt : ThreadWebView` - on a genuinely fresh open, BOTH the sync effect
+  (`setMessages` -> `scrollToDivider`) and the reveal effect (`revealFirstUnread` -> `scrollToDivider`
+  again) fire, producing a harmless but redundant double snap-animation. Never causes a wrong
+  landing (both target the same row), just wasted work; could be collapsed by having the reveal
+  effect skip its own scroll when it detects the sync effect just performed an equivalent one.
+- `android/.../assets/thread/thread.js` has no JS test harness (an accepted, pre-existing project
+  constraint) - every bug the align/red-team passes found in this file (the `snapped`/`stuck` flag
+  asymmetry, the region-seeding order inversion, the stale-`arrivedVisible` re-trigger) was caught
+  by hand-tracing and adversarial code reading, not by a test suite. A future JS-side feature in
+  this file carries the same blind spot; consider a headless-JS unit harness (even a minimal one
+  covering just the pointer/region/reveal state machine) if this file keeps growing.
+- Framework-first pass (2 dimensions) found no genericization warranted YET, but flagged two
+  patterns approaching the "extract once a 4th/5th instance exists" threshold:
+  `android/.../AppStateStore.kt` now has four near-identical per-team persisted-JSON-map pairs
+  (labels, drafts, absence-streaks, read-anchors); `android/.../ThreadRenderer.kt`'s
+  `@JavascriptInterface` object now has four near-identical parse-arg/post-to-main/invoke-callback
+  methods (openAttachment, retryMessage, playMessage, readUpTo). Neither warranted extraction now
+  (too few call sites to justify the abstraction's own overhead); revisit if a fifth of either
+  pattern is added.
+- The callback-closes-over-ambient-state bug class (the `unreadBoundary` fix - a lambda reading
+  live `openTeam` instead of the composable's own stable `team` parameter) is worth naming as a
+  reviewable pattern: any FUTURE per-team callback threaded through `ThreadScreen`/`ThreadWebView`
+  should take `team` as an explicit argument (matching `onReadUpTo`'s already-correct convention),
+  never close over the top-level App composable's mutable `openTeam`/`openNonce` state - the async
+  WebView round trips in this file (`flushThenReveal`, `evaluateJavascript` callbacks) can resolve
+  well after the user has navigated elsewhere.
+- Phase E (cross-device read-index sync via a `mark_read` op + durable gateway store) remains the
+  main structural follow-on, already scoped with its own known-issues list inside its own section
+  above; it needs its own refinement laps before building, same as A-D got.
