@@ -17,6 +17,7 @@ class SchemaMigrationWipeTest {
 	fun wipesGrammarBearingKeys() {
 		val mustWipe = listOf(
 			"threads",
+			"read_anchors",
 			"labels",
 			"drafts",
 			"team_absence_streak",

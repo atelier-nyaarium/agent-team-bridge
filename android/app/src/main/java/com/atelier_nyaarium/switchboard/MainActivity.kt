@@ -187,6 +187,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	val context = LocalContext.current
 	val activity = context as? FragmentActivity
 	var openTeam by remember { mutableStateOf<String?>(null) }
+	// Bumped on every genuine "open this thread" gesture (notification tap, board tap, an
+	// already-selected tab tapped again) - never on an ordinary message arrival. Keys the reveal
+	// effect in ThreadWebView so it re-snaps to the first unread row on each such open, even when
+	// `openTeam` itself is unchanged (re-tapping a notification for the thread already on screen).
+	var openNonce by remember { mutableStateOf(0) }
 	// Settings nav survives a config change (rotate / theme flip) so the open sub-screen is not
 	// lost two levels deep; the route enum is Serializable (so rememberSaveable bundles it).
 	var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -273,6 +278,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		// chosen Title/Summary), else plays it FULL. Avoids synthesizing FULL on top of an autoplay.
 		if (repo.isMessagePlaying(team, at)) repo.stopPlayback() else repo.playMessage(team, at, SttsPlayer.Tier.FULL)
 	}
+	rendererPool.onReadUpTo = { team, id, at -> repo.readUpTo(team, id, at) }
 	DisposableEffect(Unit) {
 		// Fires on the player's daemon thread; the pool's renderer map is
 		// main-owned, so hop through the composition scope (main-dispatched).
@@ -322,9 +328,13 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			when (event) {
 				androidx.lifecycle.Lifecycle.Event.ON_START -> {
 					repo.onForeground()
+					rendererPool.setVisible(true)
 					scope.launch { repo.reconcilePending() }
 				}
-				androidx.lifecycle.Lifecycle.Event.ON_STOP -> repo.onBackground()
+				androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+					repo.onBackground()
+					rendererPool.setVisible(false)
+				}
 				else -> {}
 			}
 		}
@@ -353,13 +363,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			adminCeremonyCtx = null
 			enrolleeCeremonyCtx = null
 			openTeam = opened
+			// A genuine open gesture - re-snap to the first unread row even if this thread is
+			// already the one on screen (openTeam unchanged does not recompose ThreadWebView).
+			openNonce++
 			openTeamRequest.value = null
 		}
-	}
-	// Reading a thread clears its bar notification no matter how it was opened
-	// (session card, notification tap, or tab) - the bar mirrors unread state.
-	LaunchedEffect(openTeam) {
-		openTeam?.let { SwitchboardService.cancelTeamNotification(context, it) }
 	}
 
 	// Working-chip poll: the open chat is peeked continuously; other listed sessions get one cheap
@@ -574,7 +582,14 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				error = state.error?.takeUnless { presence == "waking..." && it.endsWith("retrying") },
 				rendererPool = rendererPool,
 				canRename = kind == "loose",
-				onGateway = { openTeam = it },
+				openNonce = openNonce,
+				unreadBoundary = repo::unreadBoundary,
+				onGateway = { t ->
+					// A tab switch onto a DIFFERENT thread is a genuine open (re-snap to its first
+					// unread); re-tapping the already-active tab is a no-op tap today, unchanged.
+					if (t != openTeam) openNonce++
+					openTeam = t
+				},
 				onCloseTab = { t ->
 					// Move off the closing tab before dropping it from openTabs, so the
 					// retain() pass that destroys its renderer never targets the one
@@ -591,6 +606,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					val forgotten = openTeam!!
 					pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, forgotten) }
 					repo.forget(forgotten)
+					SwitchboardService.cancelTeamNotification(context, forgotten)
 					openTeam = null
 				},
 				// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off in v1,
@@ -633,12 +649,13 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onHostHelp = { showHostHelp = true },
 				onOpen = { team ->
 					openTeam = repo.openThread(team)
-					SwitchboardService.cancelTeamNotification(context, team)
+					openNonce++
 				},
 				onRename = { team, name -> scope.launch { repo.rename(team, name) } },
 				onForget = { team ->
 					pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, team) }
 					repo.forget(team)
+					SwitchboardService.cancelTeamNotification(context, team)
 				},
 				// Fire the create and stay on the board: the gateway adopts the session's record
 				// synchronously, so its own tile appears via the teams() refresh (spinner while it boots).
@@ -1614,6 +1631,15 @@ fun ThreadScreen(
 	error: String?,
 	rendererPool: ThreadRendererPool,
 	canRename: Boolean,
+	// Bumped by the caller on every genuine open gesture (see MainActivity's own doc on the
+	// App-scope openNonce); keys ThreadWebView's reveal effect so it re-snaps to the first unread
+	// row even when `team` itself is unchanged (re-tapping a notification for the open thread).
+	openNonce: Int,
+	// The current (first unread row id, pointer-region ids) for the team named by the argument,
+	// re-read live at reveal time (never a stale snapshot) so a just-flushed receipt is always
+	// reflected. Takes the team explicitly rather than closing over an ambient "current" team, so a
+	// caller whose own team resolves after an async round-trip can never credit the wrong thread.
+	unreadBoundary: (String) -> Pair<Long?, List<Long>>,
 	onGateway: (String) -> Unit,
 	onCloseTab: (String) -> Unit,
 	onSessions: () -> Unit,
@@ -1794,6 +1820,8 @@ fun ThreadScreen(
 					team = team,
 					messages = messages,
 					rendererPool = rendererPool,
+					openNonce = openNonce,
+					unreadBoundary = unreadBoundary,
 					modifier = Modifier.weight(1f).fillMaxWidth(),
 				)
 			}
@@ -2747,14 +2775,37 @@ fun SpawnDialog(project: String, pendingLabels: Set<String>, onSpawn: (String) -
  * for a fresh one and re-fed.
  */
 @Composable
-fun ThreadWebView(team: String, messages: List<Message>, rendererPool: ThreadRendererPool, modifier: Modifier) {
+fun ThreadWebView(
+	team: String,
+	messages: List<Message>,
+	rendererPool: ThreadRendererPool,
+	openNonce: Int,
+	unreadBoundary: (String) -> Pair<Long?, List<Long>>,
+	modifier: Modifier,
+) {
 	var renderer by remember(team) { mutableStateOf(rendererPool.get(team)) }
 
 	DisposableEffect(renderer) {
 		renderer.onRendererGone = { renderer = rendererPool.recreate(team) }
 		onDispose { renderer.onRendererGone = null }
 	}
-	LaunchedEffect(renderer, messages) { renderer.sync(messages) }
+	// Ongoing delta-sync on every message-list change - unaffected by opens/reveals below, so an
+	// already-open thread keeps rendering new arrivals live. `team` is this composable's own stable
+	// parameter (never the ambient "currently on screen" team): the JS round-trip inside the reveal
+	// effect below can resolve after the user has navigated elsewhere, so closing over anything
+	// mutable here would credit or crash on the wrong thread.
+	LaunchedEffect(renderer, messages) { renderer.sync(messages, unreadBoundary(team).first) }
+	// A genuine open (notification tap, board tap, tab switch onto a different thread, or
+	// composition re-entry after a masked surface like terminal mode or settings) re-snaps to the
+	// first unread row. Declared AFTER the sync effect so its own (idempotent) sync() call and
+	// flush-then-reveal always run against an already-rendered transcript.
+	LaunchedEffect(team, renderer, openNonce) {
+		renderer.sync(messages, unreadBoundary(team).first)
+		renderer.flushThenReveal {
+			val (firstUnreadId, region) = unreadBoundary(team)
+			renderer.revealFirstUnread(firstUnreadId, region)
+		}
+	}
 
 	AndroidView(
 		factory = { ctx -> FrameLayout(ctx) },

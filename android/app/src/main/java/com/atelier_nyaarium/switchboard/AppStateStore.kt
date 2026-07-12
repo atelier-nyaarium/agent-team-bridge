@@ -161,6 +161,22 @@ class AppStateStore(context: Context) {
 
 	fun loadThreads(): String? = prefs.getString(KEY_THREADS, null)
 
+	/** Per-team read anchor (the mailbox journal coordinate a device has read up to), keyed by
+	 * canonical address. Never bundled into `threads` itself: it survives independently of any
+	 * single message row (a forgotten/reloaded row can still resolve against it by coordinate). */
+	fun saveReadAnchors(json: String) = prefs.edit().putString(KEY_READ_ANCHORS, json).apply()
+
+	fun loadReadAnchors(): String? = prefs.getString(KEY_READ_ANCHORS, null)
+
+	/** Write threads and read anchors in ONE SharedPreferences batch. Required whenever a single
+	 * state transition changes both (forget's cross-thread anchor sweep): two separate apply()
+	 * calls could be torn by a process kill between them, resurrecting a stale anchor against the
+	 * already-updated thread list (or vice versa). An anchor-only or threads-only change is safe
+	 * with the plain single-key setters above. */
+	fun saveThreadsAndReadAnchors(threadsJson: String, anchorsJson: String) {
+		prefs.edit().putString(KEY_THREADS, threadsJson).putString(KEY_READ_ANCHORS, anchorsJson).apply()
+	}
+
 	fun saveLabels(json: String) = prefs.edit().putString(KEY_LABELS, json).apply()
 
 	fun loadLabels(): String? = prefs.getString(KEY_LABELS, null)
@@ -311,6 +327,7 @@ class AppStateStore(context: Context) {
 		const val KEY_BLOB = "provisioning"
 		const val KEY_BIO = "biometric_lock"
 		const val KEY_THREADS = "threads"
+		const val KEY_READ_ANCHORS = "read_anchors"
 		const val KEY_LABELS = "labels"
 		const val KEY_ABSENCE_STREAKS = "team_absence_streak"
 		const val KEY_DRAFTS = "drafts"
@@ -355,14 +372,15 @@ class AppStateStore(context: Context) {
 		 * store keys plus the mailbox sync cursor). Any NEW address-keyed pref MUST be added here or it
 		 * survives the grammar migration carrying a stale-grammar key. The set is pinned by a unit test. */
 		val SCHEMA_WIPE_KEYS = listOf(
-			KEY_THREADS, KEY_LABELS, KEY_DRAFTS, KEY_ABSENCE_STREAKS, KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED,
+			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_ABSENCE_STREAKS, KEY_SYNC_EPOCH, KEY_SYNC_ACKED,
+			KEY_SYNC_DROPPED,
 		)
 
 		val PROVISIONING_KEYS = listOf(
 			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
 			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_PROFILE_NAME, KEY_HOSTED_TENANTS,
 			KEY_TRUSTED_OWNERS,
-			KEY_THREADS, KEY_LABELS, KEY_DRAFTS, KEY_GATEWAY_ID, KEY_SYNC_EPOCH, KEY_SYNC_ACKED,
+			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_GATEWAY_ID, KEY_SYNC_EPOCH, KEY_SYNC_ACKED,
 			KEY_SYNC_DROPPED,
 		)
 	}
