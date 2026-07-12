@@ -484,19 +484,23 @@
 		return el;
 	}
 
-	// Inserts (or moves) the divider above the current first-unread row. Once the pointer has
-	// nothing left to point at (fully caught up), removes any existing divider instead of leaving
-	// it stranded above now-read rows - otherwise reading to the bottom (or a later re-open with
-	// nothing unread) leaves a permanent stale "New messages" line with no removal path.
+	// Inserts (or moves) the divider directly above the current boundary row: the next still-unread
+	// row when there is one, else the LAST row ever tracked in `region` this visit, once caught up -
+	// so the divider persists as a "read up to here this visit" bookmark instead of vanishing (only
+	// a genuine reopen with nothing unread, via revealFirstUnread/setMessages, removes it). Anchoring
+	// to a real row rather than "the last DOM child" means later appends (an own-send, a further
+	// reply) never land between the divider and the row it marks, and a live-arriving batch simply
+	// moves the divider to sit above the newest tracked row instead of relocating past it.
 	function placeDividerAtPointer() {
-		if (pointerIdx >= region.length) {
+		if (region.length === 0) {
 			if (divider) {
 				divider.remove();
 				divider = null;
 			}
 			return;
 		}
-		const row = rowFor(region[pointerIdx]);
+		const anchorId = pointerIdx < region.length ? region[pointerIdx] : region[region.length - 1];
+		const row = rowFor(anchorId);
 		if (!row) return;
 		if (divider) divider.remove();
 		divider = buildDivider();
@@ -551,12 +555,15 @@
 			observeMermaid(row);
 		}
 		extendRegion(newEligibleIds);
+		// Re-anchor the divider to the new boundary whenever eligibility changed, regardless of which
+		// branch runs next - a backgrounded arrival needs it placed (nothing else will), a live arrival
+		// while scrolled up needs it too (it was otherwise never shown), and a live arrival while stuck
+		// at the bottom gets it re-confirmed a moment before scrollToBottom's own pin-release walk
+		// settles it in the same place.
+		if (newEligibleIds.length > 0) placeDividerAtPointer();
 		if (heldForVisibility && !sentByUser) {
-			// This batch arrived while backgrounded: hold position instead of auto-following, and
-			// show the divider above the boundary so the landing looks the same as any other
-			// unread-boundary open.
+			// This batch arrived while backgrounded: hold position instead of auto-following.
 			stuck = false;
-			placeDividerAtPointer();
 		} else if (stick || sentByUser) {
 			scrollToBottom();
 		}
