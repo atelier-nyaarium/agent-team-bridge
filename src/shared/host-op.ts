@@ -35,6 +35,8 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
 	"Down",
 	"Left",
 	"Right",
+	"PageUp",
+	"PageDown",
 	"Tab",
 	"BTab",
 	"BSpace",

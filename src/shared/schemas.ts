@@ -255,7 +255,7 @@ export const ConsoleOpSchema = z
 			sinceHash: z.string().max(64).optional(),
 		}),
 		// Send input to an agent's tmux pane: a literal text line OR a single named control key
-		// (Enter, Escape, C-c, C-o, C-t, Up, Down, Left, Right, Tab, BTab). Exactly one of text/key; the gateway
+		// (Enter, Escape, C-c, C-o, C-t, Up, Down, Left, Right, PageUp, PageDown, Tab, BTab). Exactly one of text/key; the gateway
 		// whitelists the key name. Idempotent per opId. `submit` (text only, default true) controls the
 		// trailing Enter: a chip/slash command fires with submit:true, while the terminal Send button
 		// taps with submit:false (type into the composer without submitting) and long-presses with true.
