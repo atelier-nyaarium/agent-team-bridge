@@ -24,6 +24,8 @@ import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -268,7 +270,6 @@ private fun TerminalPane(
 // The fixed control-key palette: a label shown on the chip and the tmux key name sent.
 private val PALETTE_KEYS = listOf(
 	"Esc" to "Escape",
-	"^C" to "C-c",
 	"Tab" to "Tab",
 	"Up" to "Up",
 	"Down" to "Down",
@@ -276,8 +277,37 @@ private val PALETTE_KEYS = listOf(
 	"Right" to "Right",
 )
 
-// One-tap slash commands (sent as literal text + Enter) for the agent's TUI.
-private val PALETTE_SLASH = listOf("/model", "/effort", "/usage", "/context", "/resume", "/workflows", "/plugin", "/mcp")
+// The modifier-combo menu the "Ctrl" chip opens, in place of a single fixed key: a label shown in
+// the dropdown and the tmux key name sent.
+private val CTRL_MENU_KEYS = listOf(
+	"Shift + Tab" to "BTab",
+	"Ctrl + O" to "C-o",
+	"Ctrl + T" to "C-t",
+	"Ctrl + C" to "C-c",
+)
+
+// One-tap slash command macros for the agent's TUI. `autoSend` types the command with a trailing
+// Enter (fires immediately); false stages it into the input box (with a trailing space) for the
+// user to append to and submit manually, the same way /compact's optional trailing message works.
+private data class SlashMacro(val cmd: String, val autoSend: Boolean)
+
+private val PALETTE_SLASH = listOf(
+	SlashMacro("/btw", autoSend = false),
+	SlashMacro("/model", autoSend = true),
+	SlashMacro("/effort", autoSend = true),
+	SlashMacro("/usage", autoSend = true),
+	SlashMacro("/context", autoSend = true),
+	SlashMacro("/resume", autoSend = true),
+	SlashMacro("/workflows", autoSend = true),
+	SlashMacro("/compact", autoSend = false),
+	SlashMacro("/mcp", autoSend = true),
+	SlashMacro("/plugin", autoSend = true),
+	SlashMacro("/reload-plugins", autoSend = true),
+)
+
+// Macro chip label color: orange fires Enter immediately, blue only stages text.
+private val MACRO_AUTO_SEND_COLOR = Color(0xFFFF9800)
+private val MACRO_STAGE_ONLY_COLOR = Color(0xFF2196F3)
 
 // Backspace press-and-hold: the delay before a hold starts repeating, then the repeat cadence.
 private const val BACKSPACE_HOLD_MS = 350L
@@ -562,24 +592,48 @@ fun TerminalView(
 					Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
 					horizontalArrangement = Arrangement.spacedBy(6.dp),
 				) {
-					PALETTE_SLASH.forEach { cmd ->
+					PALETTE_SLASH.forEach { macro ->
 						AssistChip(
-							onClick = hapticClick { fire(cmd, null) },
-							label = { Text(cmd, fontFamily = FontFamily.Monospace) },
+							onClick = hapticClick {
+								if (macro.autoSend) fire(macro.cmd, null) else input = "${macro.cmd} "
+							},
+							label = {
+								Text(
+									macro.cmd,
+									fontFamily = FontFamily.Monospace,
+									color = if (macro.autoSend) MACRO_AUTO_SEND_COLOR else MACRO_STAGE_ONLY_COLOR,
+								)
+							},
 						)
 					}
-					// /compact can take an optional trailing message, so it pre-fills the input box
-					// instead of firing; the user appends a message (or not), then long-presses Send.
-					AssistChip(
-						onClick = hapticClick { input = "/compact " },
-						label = { Text("/compact", fontFamily = FontFamily.Monospace) },
-					)
 				}
 				Row(
 					Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
 					horizontalArrangement = Arrangement.spacedBy(6.dp),
 				) {
-					PALETTE_KEYS.forEach { (label, key) ->
+					AssistChip(
+						onClick = hapticClick { fire(null, "Escape") },
+						label = { Text("Esc", fontFamily = FontFamily.Monospace) },
+					)
+					var ctrlMenuExpanded by remember { mutableStateOf(false) }
+					Box {
+						AssistChip(
+							onClick = hapticClick { ctrlMenuExpanded = true },
+							label = { Text("Ctrl", fontFamily = FontFamily.Monospace) },
+						)
+						DropdownMenu(expanded = ctrlMenuExpanded, onDismissRequest = { ctrlMenuExpanded = false }) {
+							CTRL_MENU_KEYS.forEach { (label, key) ->
+								DropdownMenuItem(
+									text = { Text(label, fontFamily = FontFamily.Monospace) },
+									onClick = {
+										ctrlMenuExpanded = false
+										fire(null, key)
+									},
+								)
+							}
+						}
+					}
+					PALETTE_KEYS.drop(1).forEach { (label, key) ->
 						AssistChip(
 							onClick = hapticClick { fire(null, key) },
 							label = { Text(label, fontFamily = FontFamily.Monospace) },
