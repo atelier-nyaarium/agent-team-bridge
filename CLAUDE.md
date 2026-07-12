@@ -230,7 +230,21 @@ a cross-device sync follow-on is scoped but unbuilt.
   (not just the bridge report) is suppressed while the app is backgrounded - `arrivedVisible`
   (a transient, never-persisted `Message` field) tags each row at drain time, with a
   `resumeBacklogPending` correction in `ChatRepository.onForeground()` so the away-backlog a resume
-  drains is never mistaken for something the user watched arrive.
+  drains is never mistaken for something the user watched arrive. The boundary check itself carries
+  a small `BOTTOM_EDGE_SLOP_PX` tolerance - `scrollIntoView`'s bottom-alignment leaves a sub-pixel
+  rounding residue (confirmed on-device: a row's bottom edge landing ~0.66px past `innerHeight`), and
+  a strict comparison let that residue permanently block the read pointer on the LAST row of a
+  transcript - it could only ever clear once later content pushed it up, never by just being viewed.
+- **The "New messages" divider** (`thread.js`): a trailing bookmark, not a one-shot reveal. It sits
+  directly above the current boundary row - the next still-unread row while one remains, else the
+  LAST row `region` ever tracked this visit once caught up - so it persists as a "read up to here
+  this visit" marker instead of vanishing the instant you finish reading; only a genuine reopen with
+  nothing unread (`revealFirstUnread`/`setMessages`, gated by the Kotlin-side anchor being fully
+  advanced) removes it. Anchoring to a real row rather than "the last DOM child" matters: an early
+  version parked it AFTER the last row, which stranded it above a same-session own-send (nothing else
+  ever re-anchors past a non-counting append) and relocated visibly on every live batch; anchoring
+  BEFORE the boundary row instead sidesteps both, since a later append can never land between the
+  divider and the row it marks.
 - **Kotlin<->JS wiring** (`ThreadRenderer.kt`, `ThreadRendererPool.kt`, `MainActivity.kt`): the
   `Android.readUpTo(id, at)` bridge posts to main and is forwarded team-bound through the pool
   (matching `onAttachmentTap`/`onPlayTap`'s existing pattern). Opening a thread is a separate
