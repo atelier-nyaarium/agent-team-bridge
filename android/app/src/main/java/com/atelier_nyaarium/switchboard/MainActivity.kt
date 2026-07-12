@@ -1195,6 +1195,20 @@ fun SessionsScreen(
 								}
 							}
 
+							// The host machine is a spawn point too, but it is not in the catalog (and the
+							// daemon's reserved "host" slot is hidden), so inject it synthetically for YOUR OWN
+							// gateway only - shown even with no host session yet, so the first one is spawnable.
+							// Rendered first, ahead of the devcontainer spawn-points.
+							val hostInjected = !isPeer && key.gatewayId == state.localGatewayId
+							if (hostInjected) {
+								renderProject("host") {
+									SpawnPointHeader(
+										project = "host",
+										online = byProject["host"].orEmpty().any { it.isLive },
+										onSpawn = { spawnProject = "host" },
+									)
+								}
+							}
 							for (sp in spawnPoints) {
 								val proj = localName(sp)
 								renderProject(proj) {
@@ -1204,19 +1218,6 @@ fun SessionsScreen(
 										// session nested under it is live.
 										online = byProject[proj].orEmpty().any { it.isLive },
 										onSpawn = { spawnProject = proj },
-									)
-								}
-							}
-							// The host machine is a spawn point too, but it is not in the catalog (and the
-							// daemon's reserved "host" slot is hidden), so inject it synthetically for YOUR OWN
-							// gateway only - shown even with no host session yet, so the first one is spawnable.
-							val hostInjected = !isPeer && key.gatewayId == state.localGatewayId
-							if (hostInjected) {
-								renderProject("host") {
-									SpawnPointHeader(
-										project = "host",
-										online = byProject["host"].orEmpty().any { it.isLive },
-										onSpawn = { spawnProject = "host" },
 									)
 								}
 							}

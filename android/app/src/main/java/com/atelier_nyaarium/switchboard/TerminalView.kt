@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.KeyboardControlKey
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -299,8 +300,8 @@ private val PALETTE_SLASH = listOf(
 	SlashMacro("/effort", autoSend = true),
 	SlashMacro("/usage", autoSend = true),
 	SlashMacro("/context", autoSend = true),
-	SlashMacro("/resume", autoSend = true),
 	SlashMacro("/workflows", autoSend = true),
+	SlashMacro("/resume", autoSend = true),
 	SlashMacro("/compact", autoSend = false),
 	SlashMacro("/mcp", autoSend = true),
 	SlashMacro("/plugin", autoSend = true),
@@ -621,7 +622,7 @@ fun TerminalView(
 					Box {
 						AssistChip(
 							onClick = hapticClick { ctrlMenuExpanded = true },
-							label = { Text("Ctrl", fontFamily = FontFamily.Monospace) },
+							label = { Icon(Icons.Filled.KeyboardControlKey, contentDescription = "Ctrl / Shift modifiers") },
 						)
 						DropdownMenu(expanded = ctrlMenuExpanded, onDismissRequest = { ctrlMenuExpanded = false }) {
 							CTRL_MENU_KEYS.forEach { (label, key) ->

@@ -193,6 +193,7 @@ class ThreadRenderer(context: Context) {
 				fun readUpTo(id: String, at: String) {
 					val rowId = id.toLongOrNull() ?: return
 					val rowAt = at.toLongOrNull() ?: return
+					DebugLog.log("ReadUpTo", "bridge fired id=$rowId at=$rowAt")
 					webView.post { onReadUpTo?.invoke(rowId, rowAt) }
 				}
 			},
