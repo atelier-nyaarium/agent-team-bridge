@@ -405,6 +405,7 @@
 			advanced = true;
 		}
 		if (advanced) {
+			placeDividerAtPointer();
 			clearTimeout(reportTimer);
 			reportTimer = setTimeout(flushReadUpTo, 250);
 		}
@@ -465,10 +466,18 @@
 		return el;
 	}
 
-	// Inserts (or moves) the divider above the current first-unread row. A no-op when nothing is
-	// left to point at (pointer exhausted or its row not yet rendered).
+	// Inserts (or moves) the divider above the current first-unread row. Once the pointer has
+	// nothing left to point at (fully caught up), removes any existing divider instead of leaving
+	// it stranded above now-read rows - otherwise reading to the bottom (or a later re-open with
+	// nothing unread) leaves a permanent stale "New messages" line with no removal path.
 	function placeDividerAtPointer() {
-		if (pointerIdx >= region.length) return;
+		if (pointerIdx >= region.length) {
+			if (divider) {
+				divider.remove();
+				divider = null;
+			}
+			return;
+		}
 		const row = rowFor(region[pointerIdx]);
 		if (!row) return;
 		if (divider) divider.remove();
@@ -567,11 +576,19 @@
 	}
 
 	// Bridge entrypoint: reveal (or re-reveal) the unread boundary. `regionIds` is union-merged
-	// (see applyRegion) so a stale local pointer can never regress. `idOrNull = null` skips only the
-	// scroll (a caught-up thread keeps its current position/bottom), never the region merge.
+	// (see applyRegion) so a stale local pointer can never regress. `idOrNull = null` means caught up
+	// (nothing left unread) - skips the scroll (a caught-up thread keeps its current position/
+	// bottom) but still clears any divider a prior open left behind, or it would strand a
+	// "New messages" line above now-read rows forever.
 	function revealFirstUnread(idOrNull, regionIds) {
 		applyRegion(regionIds || []);
-		if (idOrNull === null || idOrNull === undefined) return;
+		if (idOrNull === null || idOrNull === undefined) {
+			if (divider) {
+				divider.remove();
+				divider = null;
+			}
+			return;
+		}
 		const row = rowFor(idOrNull);
 		if (!row) return;
 		if (divider) divider.remove();
