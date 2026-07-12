@@ -196,6 +196,11 @@ class ThreadRenderer(context: Context) {
 					DebugLog.log("ReadUpTo", "bridge fired id=$rowId at=$rowAt")
 					webView.post { onReadUpTo?.invoke(rowId, rowAt) }
 				}
+
+				@JavascriptInterface
+				fun debugWalk(msg: String) {
+					DebugLog.log("WalkPointer", msg)
+				}
 			},
 			"Android",
 		)
