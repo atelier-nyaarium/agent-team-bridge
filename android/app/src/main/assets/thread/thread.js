@@ -388,6 +388,10 @@
 		return container.querySelector('.row[data-id="' + CSS.escape(String(id)) + '"]');
 	}
 
+	function debugWalk(msg) {
+		if (window.Android && typeof window.Android.debugWalk === "function") window.Android.debugWalk(msg);
+	}
+
 	function walkPointer() {
 		if (pinning || !pageVisible) return;
 		let advanced = false;
@@ -399,7 +403,14 @@
 				pointerIdx++;
 				continue;
 			}
-			if (row.getBoundingClientRect().bottom > window.innerHeight) break;
+			const bottom = row.getBoundingClientRect().bottom;
+			if (bottom > window.innerHeight) {
+				debugWalk(
+					"blocked id=" + region[pointerIdx] + " bottom=" + bottom.toFixed(2) +
+					" innerHeight=" + window.innerHeight + " idx=" + pointerIdx + "/" + region.length,
+				);
+				break;
+			}
 			pendingReport = { id: region[pointerIdx], at: row.dataset.at };
 			pointerIdx++;
 			advanced = true;
