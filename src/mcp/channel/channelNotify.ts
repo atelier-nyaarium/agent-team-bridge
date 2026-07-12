@@ -19,10 +19,17 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 	}
 
 	// content is the message prose ONLY (plus the [FILES] block, which is paths the agent must Read).
-	// Every structured field - session_id, from, reply_schema - rides in `meta`,
+	// Every structured field - session_id, from, reply_schema, instructions - rides in `meta`,
 	// which the harness renders as <channel ...> tag attributes; nothing is jammed as a prose preamble.
-	// The how-to-reply guidance lives once in the MCP `instructions`, not re-stamped on every message.
 	const content = filesBlock ? `${payload.body}\n\n${filesBlock}` : payload.body;
+
+	// Per-message reply routing, mirroring the `instructions` key the cycle tools return on every
+	// response. The full how-to-reply guidance in the MCP `instructions` sits at the top of the
+	// context and loses salience to fresher injections (skills, compaction summaries), which has
+	// produced real missed replies; this attribute keeps the reply route in the freshest content.
+	const instructions = payload.replyJsonSchema
+		? "Reply with the channel_reply_structured tool using this session_id and a responseData matching reply_schema."
+		: "Reply with the channel_reply tool using this session_id. Plain text output does not reach the sender.";
 
 	await server.notification({
 		method: "notifications/claude/channel",
@@ -32,6 +39,7 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 				session_id: payload.session_id,
 				from: payload.from,
 				...(payload.replyJsonSchema ? { reply_schema: payload.replyJsonSchema } : {}),
+				instructions,
 			},
 		},
 	});
