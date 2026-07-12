@@ -30,6 +30,7 @@ class ClearProvisioningPartitionTest {
 			"federation_hosted_tenants",
 			"federation_trusted_owners",
 			"threads",
+			"read_anchors",
 			"labels",
 			"drafts",
 			"gateway_id",

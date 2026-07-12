@@ -76,6 +76,29 @@ html, body {
 	box-shadow: inset 3px 0 0 var(--user-edge);
 }
 
+/* The unread boundary marker (thread.js's divider): a labeled rule above the first still-unread
+   row, standalone (never row markup) so a row's own replaceWith re-render can never drop it. */
+.new-messages-divider {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 14px;
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--running);
+}
+
+.new-messages-divider::before,
+.new-messages-divider::after {
+	content: "";
+	flex: 1;
+	height: 1px;
+	background: var(--running);
+	opacity: 0.4;
+}
+
 .meta {
 	display: flex;
 	align-items: baseline;

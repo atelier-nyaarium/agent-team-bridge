@@ -30,6 +30,11 @@ class ThreadRendererPool(private val context: Context) {
 	 * Play button is tapped. */
 	var onPlayTap: ((String, Long) -> Unit)? = null
 
+	/** Set by the owner; called with (team, row id, row at) when a thread's scroll-driven read
+	 * pointer reports a new highest-read row. The team is bound per-renderer, same as
+	 * [onAttachmentTap], so a late debounced report after a tab switch credits the right thread. */
+	var onReadUpTo: ((String, Long, Long) -> Unit)? = null
+
 	/** Whether agent rows render Play buttons. Set before threads first sync. */
 	var playEnabled = false
 
@@ -54,6 +59,7 @@ class ThreadRendererPool(private val context: Context) {
 				it.onOpenAttachment = { rel -> onAttachmentTap?.invoke(team, rel) ?: openAttachment(rel) }
 				it.onRetryMessage = { id -> onRetry?.invoke(team, id) }
 				it.onPlayMessage = { at -> onPlayTap?.invoke(team, at) }
+				it.onReadUpTo = { id, at -> onReadUpTo?.invoke(team, id, at) }
 				it.resolveFrom = { addr -> resolveFrom?.invoke(addr) ?: addr }
 				it.selfLabel = { selfLabel?.invoke() ?: "" }
 				it.decorateFile = { f -> decorateFile?.invoke(team, f) }
@@ -90,6 +96,11 @@ class ThreadRendererPool(private val context: Context) {
 	fun setDark(value: Boolean) {
 		dark = value
 		for (r in renderers.values) r.setDark(value)
+	}
+
+	/** Push the app foreground/background transition to every open thread's renderer. */
+	fun setVisible(visible: Boolean) {
+		for (r in renderers.values) r.setVisible(visible)
 	}
 
 	/** Destroy any renderer whose thread is no longer open. */

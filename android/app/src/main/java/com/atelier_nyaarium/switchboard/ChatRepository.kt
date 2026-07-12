@@ -207,6 +207,12 @@ data class Message(
 	 * verbatim instead of re-deriving from the thread key) and rendering (label both parties, since
 	 * neither is "you" and `from` alone can't be assumed to mean "sent to this thread's owner"). */
 	val isPeer: Boolean = false,
+	/** Whether this row arrived while the app was visible. Process-transient - NEVER persisted (a
+	 * loaded row always defaults true/don't-care, since a persisted row only ever reaches a
+	 * renderer through a setMessages snap/hold path driven by the read anchor, not this flag).
+	 * Drives the arrival-suppression rule in thread.js: a batch containing an unread-eligible row
+	 * that arrived while NOT visible holds the reader's position instead of auto-following. */
+	val arrivedVisible: Boolean = true,
 )
 
 
@@ -314,11 +320,94 @@ internal fun sentEchoMatch(thread: List<Message>, echo: Message): Int {
 	return -1
 }
 
+////////////////////////////////
+//  Read anchor (scroll-driven unread tracking)
+//
+//  A row counts toward unread when it is inbound (an agent row) with real mailbox coordinates - a
+//  `sent` echo also carries seq > 0 (it is the owner's own message mirrored to their devices), so
+//  this is never a bare seq check.
+
+internal fun Message.countsUnread(): Boolean = !fromMe && seq > 0L
+
+/** The persisted per-team read anchor: a mailbox journal coordinate. Resolved to its row by
+ * EQUALITY only - mailbox epochs are random per instance (device-mailbox.ts) and never ordered,
+ * so comparing them numerically is unsound. `at` rides along for diagnostics only. */
+data class ReadAnchor(val epoch: Long, val seq: Long, val at: Long)
+
+/** The anchor's row index in `thread` (arrival/persisted order - never re-sorted), by (epoch, seq)
+ * equality. -1 when there is no anchor, or its row is gone (a forgotten sweep, a corrupt store) -
+ * every inbound row then counts, and any receipt is treated as a genuine advance. */
+internal fun anchorIndex(thread: List<Message>, anchor: ReadAnchor?): Int {
+	if (anchor == null) return -1
+	return thread.indexOfFirst { it.epoch == anchor.epoch && it.seq == anchor.seq }
+}
+
+/** Unread count: inbound rows positioned strictly after the anchor's row. */
+internal fun unreadCount(thread: List<Message>, anchor: ReadAnchor?): Int {
+	val idx = anchorIndex(thread, anchor)
+	return thread.withIndex().count { (i, m) -> i > idx && m.countsUnread() }
+}
+
+/** The unread rows themselves, in thread order - the notification's preview lines and Play
+ * actions derive from this, never a stale burst list, so a mid-drain refresh stays accurate. */
+internal fun unreadRows(thread: List<Message>, anchor: ReadAnchor?): List<Message> {
+	val idx = anchorIndex(thread, anchor)
+	return thread.filterIndexed { i, m -> i > idx && m.countsUnread() }
+}
+
+/** The first unread row's id, or null when there is none. */
+internal fun firstUnreadId(thread: List<Message>, anchor: ReadAnchor?): Long? {
+	val idx = anchorIndex(thread, anchor)
+	return thread.withIndex().firstOrNull { (i, m) -> i > idx && m.countsUnread() }?.value?.id
+}
+
+/** Resolve a reported "read up to" row (by id, with an `at` sanity check so an id reused after a
+ * forget sweep can never wrongly credit) to the anchor it implies: the row itself if it counts,
+ * else walk BACK to the nearest earlier inbound row (a reported fromMe/seq==0 bottom row - the
+ * user's own pending send - still marks everything above it read). Null when unresolvable (absent
+ * id, mismatched `at`, or nothing above the report counts yet). */
+internal fun resolveReportedAnchor(thread: List<Message>, rowId: Long, reportedAt: Long): ReadAnchor? {
+	val idx = thread.indexOfFirst { it.id == rowId }
+	if (idx < 0 || thread[idx].at != reportedAt) return null
+	for (i in idx downTo 0) {
+		val m = thread[i]
+		if (m.countsUnread()) return ReadAnchor(m.epoch, m.seq, m.at)
+	}
+	return null
+}
+
+/** The last inbound row's coordinates, or null if the thread has none - the anchor a deliberate
+ * "mark read" (notification swipe-away) advances to. */
+internal fun lastInboundAnchor(thread: List<Message>): ReadAnchor? =
+	thread.lastOrNull { it.countsUnread() }?.let { ReadAnchor(it.epoch, it.seq, it.at) }
+
+/** Whether `candidate` is a genuine advance over `current`: its row must resolve, and sit at a
+ * later index. An unresolvable `current` is index -1, so a receipt for ANY resolvable row always
+ * advances - no deadlock. */
+internal fun isAnchorAdvance(thread: List<Message>, current: ReadAnchor?, candidate: ReadAnchor): Boolean {
+	val candidateIdx = thread.indexOfFirst { it.epoch == candidate.epoch && it.seq == candidate.seq }
+	if (candidateIdx < 0) return false
+	return candidateIdx > anchorIndex(thread, current)
+}
+
+/** After forgetting a team, re-anchor a SIBLING thread whose anchor row `threadsAfterForget` swept
+ * away (a peer-mirror row naming the forgotten team). A no-op when the anchor still resolves, or
+ * there was none. Falls back to the nearest surviving inbound row at-or-before the old anchor's
+ * timestamp - the removed row's exact position no longer exists in `newThread`, so `at` (not list
+ * position) is the only order still comparable across the sweep. */
+internal fun reanchorAfterForget(newThread: List<Message>, anchor: ReadAnchor?): ReadAnchor? {
+	if (anchor == null || anchorIndex(newThread, anchor) >= 0) return anchor
+	return newThread.lastOrNull { it.countsUnread() && it.at <= anchor.at }?.let { ReadAnchor(it.epoch, it.seq, it.at) }
+}
+
 data class ChatState(
 	val provisioned: Boolean = false,
 	val teams: List<Team> = emptyList(),
 	val threads: Map<String, List<Message>> = emptyMap(),
 	val unread: Map<String, Int> = emptyMap(),
+	/** Per-team read anchor (a mailbox journal coordinate) - the single source of truth `unread` is
+	 * derived from. Persisted; see `persistReadAnchors`/`loadPersistedReadAnchors`. */
+	val readAnchors: Map<String, ReadAnchor> = emptyMap(),
 	val openTabs: List<String> = emptyList(),
 	/** Teams explicitly closed via Close Tab, cleared again the moment that team's tab is reopened.
 	 * Gates full notification treatment (banner + TTS) down to a quiet mailbox/unread-count bump:
@@ -476,6 +565,12 @@ data class ChatState(
 	 * canonical key is never shown. */
 	fun label(team: String, localGatewayId: String = ""): String = labelOrNull(team) ?: sessionLeaf(team)
 }
+
+/** Recompute `team`'s unread count from `thread` and this state's OWN current anchor for it - the
+ * single derivation every writer (append, receipt, markRead, forget, startup) converges on, so
+ * `unread` can never drift from `threads`/`readAnchors`. */
+internal fun ChatState.recomputeUnread(team: String, thread: List<Message>): ChatState =
+	copy(unread = unread + (team to unreadCount(thread, readAnchors[team])))
 
 /** Consecutive fresh-teams observations a locally-labeled team may miss entirely before
  * withFreshTeams prunes its local override. More than one so a single transient gap in a fetch
@@ -654,14 +749,18 @@ class ChatRepository(
 		}
 	}
 
-	// Declared before _state so loadPersistedThreads/Labels read it. Kotlin initializes fields in
-	// declaration order.
+	// Declared before _state so loadPersistedThreads/Labels/ReadAnchors read them in order. Kotlin
+	// initializes fields in declaration order.
 	@Volatile private var localGatewayId: String = store.loadGatewayId()
+	private val loadedThreadsAtStartup: Map<String, List<Message>> = loadPersistedThreads()
+	private val loadedReadAnchorsAtStartup: Map<String, ReadAnchor> = loadPersistedReadAnchors(loadedThreadsAtStartup)
 
 	private val _state = MutableStateFlow(
 		ChatState(
 			provisioned = store.load() != null,
-			threads = loadPersistedThreads(),
+			threads = loadedThreadsAtStartup,
+			readAnchors = loadedReadAnchorsAtStartup,
+			unread = loadedThreadsAtStartup.mapValues { (team, msgs) -> unreadCount(msgs, loadedReadAnchorsAtStartup[team]) },
 			biometricLock = store.biometricLock,
 			deviceName = currentDeviceName(),
 			labels = loadPersistedLabels(),
@@ -738,6 +837,12 @@ class ChatRepository(
 	 * 60s AFK burst). The mailbox accumulates server-side either way. */
 	@Volatile private var visible = false
 	val isVisible: Boolean get() = visible
+	// Set alongside `visible = true`: onForeground front-runs the resume-kicked drain, so every
+	// message still sitting in the mailbox at resume would otherwise tag arrivedVisible=true (the
+	// user never actually saw it). Cleared once the first poll pass since the transition commits,
+	// so only the genuinely-backgrounded backlog is tagged not-visible; a live message the NEXT
+	// pass drains while still foregrounded tags normally.
+	@Volatile private var resumeBacklogPending = false
 	private val kick = Channel<Unit>(Channel.CONFLATED)
 	@Volatile private var forceTeamsRefresh = false
 	// Rows already given their one reconcile attempt this process. Synchronized:
@@ -774,6 +879,7 @@ class ChatRepository(
 	 * seconds if the bridge is genuinely down), and poll right now. */
 	fun onForeground() {
 		visible = true
+		resumeBacklogPending = true
 		pollFails = 0
 		_state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L) }
 		forceTeamsRefresh = true
@@ -2732,11 +2838,13 @@ class ChatRepository(
 								false, bodyText, e.at, files = files, status = e.status,
 								title = e.title.tierOrNull(), summary = e.summary.tierOrNull(), fullSpoken = e.fullSpoken.tierOrNull(),
 								epoch = mb.epoch, seq = e.seq, from = attribution.from, to = attribution.to, isPeer = attribution.isPeer,
+								arrivedVisible = visible && !resumeBacklogPending,
 							)
 							// appendInbound folds an at-least-once re-drain in place and returns
-							// false, so a redelivered entry never re-bumps unread or re-notifies.
+							// false, so a redelivered entry never re-bumps unread or re-notifies. unread
+							// itself is recomputed from the anchor inside appendInbound's own state update
+							// (the single-writer derivation), not bumped here.
 							if (appendInbound(team, msg)) {
-								bumpUnread(team)
 								burst.getOrPut(team) { mutableListOf() }.add(msg)
 								// Data-plane fan-out: synchronous, pre-commit, so subscribers get the
 								// mailbox cursor's exactly-once for free. A subscriber must never throw
@@ -2784,6 +2892,9 @@ class ChatRepository(
 						}
 					}
 					mailboxSync.commit(adv.next)
+					// This pass's own drain (just committed) is the "first completed pass" the resume
+					// flag exists to cover; the NEXT pass's rows tag by live visibility again.
+					resumeBacklogPending = false
 					pollFails = 0
 					if (_state.value.error != null || _state.value.pollFailStreak != 0) {
 						_state.update { it.copy(error = null, pollFailStreak = 0, connected = true, enrollingSince = 0L) }
@@ -2855,27 +2966,73 @@ class ChatRepository(
 		}
 	}
 
-	/** Clear a team's unread tally without touching tabs (swipe-away on its
-	 * notification reads the burst without opening the thread). */
+	/** Mark a team fully read without opening it (swipe-away on its notification reads the burst).
+	 * Advances the persisted anchor to the thread's tail - not just the volatile `unread` count -
+	 * so a deliberate dismiss survives a process restart instead of resurrecting. */
 	fun markRead(team: String) {
-		_state.update { s -> s.copy(unread = s.unread - team) }
+		var anchorChanged = false
+		val next = _state.updateAndGet { s ->
+			val thread = s.threads[team].orEmpty()
+			val candidate = lastInboundAnchor(thread)
+			val withAnchor = if (candidate != null && isAnchorAdvance(thread, s.readAnchors[team], candidate)) {
+				anchorChanged = true
+				s.copy(readAnchors = s.readAnchors + (team to candidate))
+			} else {
+				anchorChanged = false
+				s
+			}
+			withAnchor.recomputeUnread(team, thread)
+		}
+		if (anchorChanged) persistReadAnchors(next.readAnchors)
 	}
 
 	/** Open (or focus) a thread's tab, deduped by canonical key. The spawn dialog opens a local
 	 * `spawn.session` while the board and inbound replies use the full canonical address, so
 	 * canonicalize before adding or the same session lands as two tabs. Returns the canonical key so
-	 * the caller can point its active-tab pointer at the same value. */
+	 * the caller can point its active-tab pointer at the same value. Does NOT clear unread - reading
+	 * a thread is what clears it now (the scroll-driven receipt model), not the act of opening it. */
 	fun openThread(team: String): String {
 		val key = canonicalTarget(team)
 		_state.update { s ->
 			s.copy(
-				unread = s.unread - key,
 				openTabs = if (key in s.openTabs) s.openTabs else s.openTabs + key,
 				// Reopening un-mutes: a previously-closed team goes back to full notification treatment.
 				closedTeams = s.closedTeams - key,
 			)
 		}
 		return key
+	}
+
+	/** The current first-unread row id and the pointer-region ids (rows still counting toward
+	 * unread) for `team`, derived from the live anchor. Used by the reveal trigger - always AFTER
+	 * flushing any pending debounced receipt, so this reflects what was just read rather than a
+	 * stale pre-flush anchor. */
+	fun unreadBoundary(team: String): Pair<Long?, List<Long>> {
+		val s = _state.value
+		val thread = s.threads[team].orEmpty()
+		val anchor = s.readAnchors[team]
+		return firstUnreadId(thread, anchor) to unreadRows(thread, anchor).map { it.id }
+	}
+
+	/** A scroll-driven read receipt: the highest row the reader has scrolled past, reported by id
+	 * with its `at` (guards against a forget-freed id being reused by a later append before this
+	 * debounced report lands). Resolves to the nearest inbound row at-or-before the report, and
+	 * only advances the anchor when that resolves to a genuinely later position - so a stale or
+	 * duplicate report is a harmless no-op. */
+	fun readUpTo(team: String, rowId: Long, at: Long) {
+		var changed = false
+		val next = _state.updateAndGet { s ->
+			val thread = s.threads[team].orEmpty()
+			val candidate = resolveReportedAnchor(thread, rowId, at)
+			if (candidate != null && isAnchorAdvance(thread, s.readAnchors[team], candidate)) {
+				changed = true
+				s.copy(readAnchors = s.readAnchors + (team to candidate)).recomputeUnread(team, thread)
+			} else {
+				changed = false
+				s
+			}
+		}
+		if (changed) persistReadAnchors(next.readAnchors)
 	}
 
 	/** Close a tab: drop it locally AND, for a local addressable session, kill its tmux on the gateway
@@ -3001,23 +3158,33 @@ class ChatRepository(
 	}
 
 	/** Drop a peer from this device: its thread, unread, tab, label, any cached TTS audio, and any
-	 * peer-mirror row elsewhere that names it as a real party (see threadsAfterForget). */
+	 * peer-mirror row elsewhere that names it as a real party (see threadsAfterForget). Threads AND
+	 * read anchors change in this ONE transition (the peer sweep can orphan a sibling thread's
+	 * anchor row, re-anchored below), so both persist in a single batch - a process kill between
+	 * two separate writes could otherwise strand a sibling's anchor against its already-updated
+	 * (shrunk) thread. `unread` is recomputed for every team, not just the forgotten one: the sweep
+	 * can remove rows another thread was counting, so its count must be re-derived too. */
 	fun forget(team: String) {
 		// Canonicalize once and key every field removal by it (matching openThread's own key), so
 		// a non-canonical spelling can't leave a field's entry behind while the others clear.
 		val key = canonicalTarget(team)
 		val next = _state.updateAndGet { s ->
+			val newThreads = threadsAfterForget(s.threads, key)
+			val newAnchors = (s.readAnchors - key).mapValues { (t, anchor) ->
+				reanchorAfterForget(newThreads[t].orEmpty(), anchor) ?: anchor
+			}
 			s.copy(
-				threads = threadsAfterForget(s.threads, key),
+				threads = newThreads,
 				labels = s.labels - key,
-				unread = s.unread - key,
+				unread = newThreads.mapValues { (t, msgs) -> unreadCount(msgs, newAnchors[t]) },
+				readAnchors = newAnchors,
 				openTabs = s.openTabs - key,
 				closedTeams = s.closedTeams - key,
 				sessionWorking = s.sessionWorking - key,
 				sessionNeedsLogin = s.sessionNeedsLogin - key,
 			)
 		}
-		persistThreads(next.threads)
+		persistThreadsAndReadAnchors(next.threads, next.readAnchors)
 		persistLabels(next.labels)
 		drafts.remove(key)
 		persistDrafts()
@@ -3066,7 +3233,8 @@ class ChatRepository(
 		val threads = _state.updateAndGet { s ->
 			val existing = s.threads[team].orEmpty()
 			newId = (existing.maxOfOrNull { it.id } ?: -1L) + 1
-			s.copy(threads = s.threads + (team to (existing + msg.copy(id = newId))))
+			val next = existing + msg.copy(id = newId)
+			s.copy(threads = s.threads + (team to next)).recomputeUnread(team, next)
 		}.threads
 		persistThreads(threads)
 		return newId
@@ -3075,7 +3243,9 @@ class ChatRepository(
 	/** Append a message that came from the wire. If the thread holds the synthetic
 	 * waking placeholder (wherever it sits - a second send may have landed after
 	 * it), the first real word from the team resolves it in place (same row id),
-	 * so the placeholder never lingers in the transcript. */
+	 * so the placeholder never lingers in the transcript. Every branch recomputes `unread` inside
+	 * the SAME state update that touches `threads` (the single-writer derivation) rather
+	 * than a separate increment, so it can never race or drift from the anchor. */
 	private fun appendInbound(team: String, msg: Message): Boolean {
 		// At-least-once dedup: an entry with the same mailbox (epoch, seq) was already
 		// rendered, so fold it in place and report no new render (no re-notify/TTS).
@@ -3088,7 +3258,7 @@ class ChatRepository(
 				if (idx >= 0) {
 					folded = true
 					val next = thread.toMutableList().also { it[idx] = msg.copy(id = thread[idx].id) }
-					s.copy(threads = s.threads + (team to next))
+					s.copy(threads = s.threads + (team to next)).recomputeUnread(team, next)
 				} else {
 					folded = false
 					s
@@ -3108,7 +3278,7 @@ class ChatRepository(
 			val idx = if (msg.isPeer) -1 else thread.indexOfLast { !it.fromMe && it.status == "waking" }
 			if (idx >= 0) {
 				val next = thread.toMutableList().also { it[idx] = msg.copy(id = thread[idx].id) }
-				s.copy(threads = s.threads + (team to next))
+				s.copy(threads = s.threads + (team to next)).recomputeUnread(team, next)
 			} else {
 				replaced = false
 				s
@@ -3143,11 +3313,7 @@ class ChatRepository(
 		if (handled) persistThreads(threads) else append(team, echo)
 	}
 
-	private fun bumpUnread(team: String) {
-		_state.update { s -> s.copy(unread = s.unread + (team to (s.unread[team] ?: 0) + 1)) }
-	}
-
-	private fun persistThreads(threads: Map<String, List<Message>>) {
+	private fun threadsJson(threads: Map<String, List<Message>>): String {
 		val root = JSONObject()
 		for ((team, msgs) in threads) {
 			val arr = JSONArray()
@@ -3176,7 +3342,55 @@ class ChatRepository(
 			}
 			root.put(team, arr)
 		}
-		runCatching { store.saveThreads(root.toString()) }
+		return root.toString()
+	}
+
+	private fun persistThreads(threads: Map<String, List<Message>>) {
+		runCatching { store.saveThreads(threadsJson(threads)) }
+	}
+
+	private fun readAnchorsJson(anchors: Map<String, ReadAnchor>): String {
+		val root = JSONObject()
+		for ((team, a) in anchors) {
+			root.put(team, JSONObject().put("epoch", a.epoch).put("seq", a.seq).put("at", a.at))
+		}
+		return root.toString()
+	}
+
+	private fun persistReadAnchors(anchors: Map<String, ReadAnchor>) {
+		runCatching { store.saveReadAnchors(readAnchorsJson(anchors)) }
+	}
+
+	/** Write threads AND read anchors in one SharedPreferences batch (see
+	 * AppStateStore.saveThreadsAndReadAnchors) - required whenever a single state transition
+	 * changed both, so a process kill between two separate writes can never strand one against
+	 * the other's stale value. */
+	private fun persistThreadsAndReadAnchors(threads: Map<String, List<Message>>, anchors: Map<String, ReadAnchor>) {
+		runCatching { store.saveThreadsAndReadAnchors(threadsJson(threads), readAnchorsJson(anchors)) }
+	}
+
+	/** Load persisted read anchors, keyed by canonical address. On the FIRST run after this
+	 * feature ships (no anchors persisted at all yet - `store.loadReadAnchors()` returns null),
+	 * one-shot seed every EXISTING thread at its own tail, so the update does not resurrect old
+	 * messages as unread; a brand-new team created afterward gets no seed and its first message
+	 * badges immediately via the runtime "no anchor -> everything after it unread" rule. */
+	private fun loadPersistedReadAnchors(threads: Map<String, List<Message>>): Map<String, ReadAnchor> {
+		val json = store.loadReadAnchors()
+		if (json != null) {
+			return runCatching {
+				val root = JSONObject(json)
+				buildMap {
+					for (rawKey in root.keys()) {
+						if (!isAddressKey(rawKey)) continue
+						val a = root.getJSONObject(rawKey)
+						put(rawKey, ReadAnchor(a.optLong("epoch"), a.optLong("seq"), a.optLong("at")))
+					}
+				}
+			}.getOrDefault(emptyMap())
+		}
+		val seeded = threads.mapNotNull { (team, msgs) -> lastInboundAnchor(msgs)?.let { team to it } }.toMap()
+		persistReadAnchors(seeded)
+		return seeded
 	}
 
 	/** A persisted thread/label/draft key is a canonical 4-segment address (domain.gateway.spawn.session).

@@ -18,7 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -104,18 +104,23 @@ class SwitchboardService : Service() {
 			repo.startPolling(scope)
 		}
 
-		// Keep the persistent notification's state line current, and stop the
-		// service entirely if the user clears provisioning.
+		// Keep the persistent notification's state line current, reconcile every team's bar
+		// notification against the live unread map, and stop the service entirely if the user
+		// clears provisioning. `collect` (not collectLatest): a reconcile must never be cancelled
+		// mid-flight by the next emission, or a cancel/refresh it was about to issue is silently
+		// dropped. The map (not just its sum) rides the distinctUntilChanged key so a same-sum
+		// cross-team change (e.g. forget's re-anchor) still reconciles.
 		scope.launch {
 			repo.state
-				.map { Triple(it.provisioned, it.health, it.unread.values.sum()) }
+				.map { Triple(it.provisioned, it.health, it.unread) }
 				.distinctUntilChanged()
-				.collectLatest { (provisioned, health, unread) ->
+				.collect { (provisioned, health, unread) ->
 					if (!provisioned) {
 						stopSelf()
-						return@collectLatest
+						return@collect
 					}
-					updateStatusNotification(health, unread)
+					updateStatusNotification(health, unread.values.sum())
+					reconcileTeamNotifications(repo, unread)
 				}
 		}
 	}
@@ -220,25 +225,26 @@ class SwitchboardService : Service() {
 		NotificationManagerCompat.from(this).notify(STATUS_NOTIFICATION_ID, buildStatusNotification(line, unread))
 	}
 
-	/** One notification per team, summarizing that team's unread burst. See [shouldNotifyBurst]
-	 * for the gating decision. */
-	private fun notifyBurst(repo: ChatRepository, team: String, messages: List<Message>) {
-		val state = repo.state.value
-		if (!shouldNotifyBurst(repo.isVisible, canNotify(), state.closedTeams, team)) return
+	/** Build a team's message notification from its CURRENT unread rows in `state` - shared by a
+	 * fresh burst and a mid-drain count refresh, so the shade's preview lines, content text, and
+	 * Play actions always reflect the team's real trailing unread rows, never a stale burst list.
+	 * Null when the team has nothing unread (nothing to show). */
+	private fun teamNotificationBuilder(repo: ChatRepository, state: ChatState, team: String): NotificationCompat.Builder? {
+		val thread = state.threads[team].orEmpty()
+		val rows = unreadRows(thread, state.readAnchors[team])
+		val last = rows.lastOrNull() ?: return null
 		val label = state.label(team, state.localGatewayId)
-		val unread = state.unread[team] ?: messages.size
 		val style = NotificationCompat.InboxStyle()
-		for (m in messages.takeLast(5)) {
+		for (m in rows.takeLast(5)) {
 			// A notice carries a purpose-written notification line; its body may be
 			// a long report that would truncate uselessly here.
 			val line = peerFramed(state, m, (m.title ?: m.text).replace(Regex("\\s+"), " ").trim())
 			style.addLine(if (line.isEmpty()) "(attachment)" else line.take(120))
 		}
-		val last = messages.last()
 		val builder = NotificationCompat.Builder(this, CHANNEL_MESSAGES)
 			.setSmallIcon(android.R.drawable.stat_notify_chat)
 			.setContentTitle(label)
-			.setContentText(if (unread > 1) "$unread messages" else peerFramed(state, last, (last.title ?: last.text)).take(120))
+			.setContentText(if (rows.size > 1) "${rows.size} messages" else peerFramed(state, last, (last.title ?: last.text)).take(120))
 			.setStyle(style)
 			.setAutoCancel(true)
 			.setContentIntent(contentIntent(team))
@@ -250,8 +256,44 @@ class SwitchboardService : Service() {
 			builder.addAction(0, "Play Full", actionIntent(team, NotificationReceiver.ACTION_PLAY_FULL, last.at))
 			builder.addAction(0, "Play Summary", actionIntent(team, NotificationReceiver.ACTION_PLAY_SUMMARY, last.at))
 		}
-		val notification = builder.build()
-		NotificationManagerCompat.from(this).notify(teamNotificationId(team), notification)
+		return builder
+	}
+
+	/** A fresh unread burst arriving while backgrounded. See [shouldNotifyBurst] for the gating
+	 * decision - the caller has already confirmed genuinely new content, so this always alerts (no
+	 * setOnlyAlertOnce), unlike the mid-drain refresh in [reconcileTeamNotifications], which must
+	 * never re-alert. */
+	private fun notifyBurst(repo: ChatRepository, team: String, messages: List<Message>) {
+		val state = repo.state.value
+		if (!shouldNotifyBurst(repo.isVisible, canNotify(), state.closedTeams, team)) return
+		val builder = teamNotificationBuilder(repo, state, team) ?: return
+		NotificationManagerCompat.from(this).notify(teamNotificationId(team), builder.build())
+	}
+
+	/** Reconcile every team's bar notification against the live unread map, LEVEL-based (judged
+	 * fresh each emission against the actual shade contents, never against a remembered prior
+	 * emission - so a process restart's first emission converges cleanly and conflation/
+	 * cancellation of the collector can never skip a state). Only a team with a notification
+	 * CURRENTLY SHOWING is touched: cancel it once its count reaches 0 (the scroll-driven read
+	 * model's own bar-clear signal, replacing the old cancel-on-open sites), or silently refresh
+	 * its content while draining. A tap-consumed (autoCancel) or never-posted (visible-arrival,
+	 * muted) team is presence-checked out, so this can never fabricate a notification the burst
+	 * path itself would not have posted, nor re-alert one the user already dismissed by tapping. */
+	private fun reconcileTeamNotifications(repo: ChatRepository, unread: Map<String, Int>) {
+		if (!canNotify()) return
+		val active = getSystemService(NotificationManager::class.java).activeNotifications.mapTo(HashSet()) { it.id }
+		if (active.isEmpty()) return
+		val state = repo.state.value
+		val nmc = NotificationManagerCompat.from(this)
+		for (team in state.threads.keys) {
+			val id = teamNotificationId(team)
+			if (id !in active) continue
+			if ((unread[team] ?: 0) <= 0) {
+				nmc.cancel(id)
+			} else {
+				teamNotificationBuilder(repo, state, team)?.let { nmc.notify(id, it.setOnlyAlertOnce(true).build()) }
+			}
+		}
 	}
 
 	private fun canNotify(): Boolean =
@@ -275,10 +317,6 @@ class SwitchboardService : Service() {
 		/** Start (or no-op if already running) once the app is provisioned. */
 		fun start(context: Context) {
 			ContextCompat.startForegroundService(context, Intent(context, SwitchboardService::class.java))
-		}
-
-		fun cancelTeamNotification(context: Context, team: String) {
-			NotificationManagerCompat.from(context).cancel(teamNotificationId(team))
 		}
 	}
 }

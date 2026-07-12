@@ -1,11 +1,18 @@
 "use strict";
 
 // Renderer for one conversation thread. Kotlin drives it through window.thread:
-//   thread.setMessages(messages)     full transcript replace
-//   thread.appendMessages(messages)  append (or in-place update when an id repeats)
-//   thread.setTheme(dark)            light/dark swap, re-themes hljs + mermaid
-// Message shape: {id, role: "user"|"agent", from, at, body, status?,
-//   files?: [{name, mime, src?, decoration?: {title, kind}}]}
+//   thread.setMessages({messages, firstUnreadId})  full transcript replace, snap/hold at
+//                                                   firstUnreadId (null = bottom)
+//   thread.appendMessages(messages)                append (or in-place update when an id repeats)
+//   thread.setTheme(dark)                           light/dark swap, re-themes hljs + mermaid
+//   thread.setVisible(visible)                      app foreground/background transition
+//   thread.revealFirstUnread(idOrNull, regionIds)   re-snap/hold an already-rendered transcript
+//   thread.flushReadUpTo()                          flush any pending debounced read receipt now
+// Message shape: {id, role: "user"|"agent", from, at, body, status?, counts?, ownSend?,
+//   arrivedVisible?, files?: [{name, mime, src?, decoration?: {title, kind}}]}
+// `counts`: this row counts toward unread (an inbound row with real mailbox coordinates).
+// `ownSend`: this row is the local optimistic send (never a settled echo from another device).
+// `arrivedVisible`: present (false) only when the row arrived while the app was backgrounded.
 // Markdown is semi-trusted: html stays off and links are protocol-allowlisted here;
 // the WebView layer additionally blocks every non-appassets resource load.
 
@@ -271,56 +278,226 @@
 	let stuck = true;
 	let pinning = false;
 	let pinTimer = 0;
+	// Whether the view is anchored at the "New messages" divider (the reveal snap/hold), released
+	// only by genuine user INPUT - never a scroll event, since the divider's own re-pin (below) and
+	// native scroll anchoring both fire scroll events indistinguishable from a real one.
+	let snapped = false;
+	["touchstart", "pointerdown", "wheel", "keydown"].forEach((type) =>
+		window.addEventListener(type, () => { snapped = false; }, { passive: true }),
+	);
 
-	function scrollToBottom() {
+	// A programmatic scroll (bottom-follow or the divider snap) suppresses receipts/stuck-recompute
+	// for its duration, then runs one pointer walk on release - this IS the "read check once after
+	// the open snap/follow" moment: it runs a full rendering step after the jump, so
+	// content-visibility relevancy has updated and layout rects are real (a same-task read right
+	// after a jump into an unrendered region would still see placeholder geometry and could mark
+	// unseen rows read).
+	function runPin(scrollFn) {
 		pinning = true;
-		stuck = true;
-		const last = container.lastElementChild;
-		if (last) {
-			// content-visibility:auto makes scrollHeight an estimate while off-screen
-			// rows are skipped, so a raw scrollTop = scrollHeight can land short of the
-			// last message. Anchor on the actual last row instead.
-			last.scrollIntoView(false);
-		} else {
-			document.scrollingElement.scrollTop = document.scrollingElement.scrollHeight;
-		}
+		scrollFn();
 		clearTimeout(pinTimer);
-		// Release the guard once the programmatic scroll and any IME-resize reflow
-		// have settled, so genuine user scrolls resume driving `stuck`.
 		pinTimer = setTimeout(() => {
 			pinning = false;
+			walkPointer();
 		}, 200);
+	}
+
+	function scrollToBottom() {
+		stuck = true;
+		// A prior divider snap must not survive a bottom jump - otherwise the next resize/growth
+		// repin (which fires both flags' pins) would yank the reader straight back to the divider.
+		snapped = false;
+		runPin(() => {
+			const last = container.lastElementChild;
+			if (last) {
+				// content-visibility:auto makes scrollHeight an estimate while off-screen
+				// rows are skipped, so a raw scrollTop = scrollHeight can land short of the
+				// last message. Anchor on the actual last row instead.
+				last.scrollIntoView(false);
+			} else {
+				document.scrollingElement.scrollTop = document.scrollingElement.scrollHeight;
+			}
+		});
+	}
+
+	// Snap/hold at the divider (the first still-unread row): reader intent here is "reading
+	// backlog", the opposite of parked-at-bottom, so this explicitly clears `stuck` - otherwise a
+	// stale-true `stuck` would let the very next resize/growth repin fling the reader to the bottom
+	// and mass-clear the unread it was just given to read.
+	function scrollToDivider() {
+		if (!divider) return;
+		stuck = false;
+		snapped = true;
+		runPin(() => divider.scrollIntoView({ block: "start" }));
 	}
 
 	window.addEventListener(
 		"scroll",
 		() => {
-			if (!pinning) stuck = nearBottom();
+			if (pinning) return;
+			stuck = nearBottom();
+			clearTimeout(scrollSettleTimer);
+			scrollSettleTimer = setTimeout(walkPointer, 150);
 		},
 		{ passive: true },
 	);
+	let scrollSettleTimer = 0;
 
 	function repin() {
 		if (stuck) requestAnimationFrame(scrollToBottom);
+		if (snapped) requestAnimationFrame(scrollToDivider);
 	}
 	window.addEventListener("resize", repin);
 	if (window.visualViewport) window.visualViewport.addEventListener("resize", repin);
+
+	// Async row growth (image decode, mermaid render, code highlight) after the initial landing can
+	// shift positions with no scroll event at all; content-visibility:auto also makes scrollHeight
+	// an estimate. A ResizeObserver on the transcript re-runs whichever pin is active, and (in every
+	// state) re-checks the read pointer, since shrinking content can pull a row's bottom into view
+	// with nothing else to trigger a walk.
+	new ResizeObserver(() => {
+		if (stuck) requestAnimationFrame(scrollToBottom);
+		if (snapped) requestAnimationFrame(scrollToDivider);
+		walkPointer();
+	}).observe(container);
+
+	////////////////////////////////
+	//  Read pointer: scroll-driven unread tracking
+	//
+	//  IntersectionObserver cannot fire at "a row's bottom edge enters the viewport" (it only fires
+	//  at threshold crossings, and the final on-screen rows never exit), so reads are driven by
+	//  walking a monotonic next-unread pointer against live layout instead, on every event that
+	//  could plausibly bring a row's bottom into view.
+
+	// Ids of rows still counting toward unread, in thread order - a union of what Kotlin ships at
+	// reveal time and what appendMessages extends locally.
+	let region = [];
+	// Index into `region` of the next row to check; everything before it has already been read.
+	let pointerIdx = 0;
+	// The highest read row reported so far this settle window ({id, at}), surviving a setMessages
+	// rebuild so a pending report is never lost. Cleared by flushReadUpTo.
+	let pendingReport = null;
+	let reportTimer = 0;
+	// Whether the page is currently visible (set by Kotlin via setVisible). While false, the walk
+	// itself - not just the bridge report - is suppressed: a mermaid/image settle that happens to
+	// run while backgrounded must not silently consume unread rows a later report would then wrongly
+	// credit on resume.
+	let pageVisible = true;
+
+	function rowFor(id) {
+		return container.querySelector('.row[data-id="' + CSS.escape(String(id)) + '"]');
+	}
+
+	function walkPointer() {
+		if (pinning || !pageVisible) return;
+		let advanced = false;
+		while (pointerIdx < region.length) {
+			const row = rowFor(region[pointerIdx]);
+			if (!row) {
+				// The region can outlive its row (a forget sweep removed it) - skip silently
+				// rather than stalling the pointer on a row that will never exist.
+				pointerIdx++;
+				continue;
+			}
+			if (row.getBoundingClientRect().bottom > window.innerHeight) break;
+			pendingReport = { id: region[pointerIdx], at: row.dataset.at };
+			pointerIdx++;
+			advanced = true;
+		}
+		if (advanced) {
+			clearTimeout(reportTimer);
+			reportTimer = setTimeout(flushReadUpTo, 250);
+		}
+	}
+
+	function flushReadUpTo() {
+		clearTimeout(reportTimer);
+		if (!pendingReport) return;
+		const report = pendingReport;
+		pendingReport = null;
+		if (window.Android && typeof window.Android.readUpTo === "function") {
+			window.Android.readUpTo(String(report.id), String(report.at));
+		}
+	}
+
+	function setVisible(visible) {
+		const wasVisible = pageVisible;
+		pageVisible = !!visible;
+		// Resume walk: ordered after any reveal already queued by this same resume, since both ride
+		// the same WebView eval queue.
+		if (pageVisible && !wasVisible) walkPointer();
+	}
+
+	// Add eligible ids to the region, deduped - called from both appendMessages branches (a
+	// genuinely new row, and a row that transitions to eligible via an id-repeat, e.g. the
+	// waking-placeholder resolve), so an already-queued id is simply a no-op here.
+	function extendRegion(ids) {
+		for (const id of ids) if (!region.includes(id)) region.push(id);
+	}
+
+	// Union-merge a region shipped by a reveal: ids already locally queued-but-not-walked are kept
+	// (in case the shipped list is momentarily behind), new ids are appended, and the pointer resets
+	// to the front of the merged set - nothing in it has been walked, by construction (shipped ids
+	// are always "still unread" per Kotlin's just-flushed anchor; local not-yet-walked ids are by
+	// definition not walked either).
+	function applyRegion(ids) {
+		const notYetWalked = region.slice(pointerIdx);
+		const merged = [];
+		const seen = new Set();
+		for (const id of ids.concat(notYetWalked)) {
+			if (seen.has(id)) continue;
+			seen.add(id);
+			merged.push(id);
+		}
+		region = merged;
+		pointerIdx = 0;
+	}
+
+	////////////////////////////////
+	//  New-messages divider
+
+	let divider = null;
+
+	function buildDivider() {
+		const el = document.createElement("div");
+		el.className = "new-messages-divider";
+		el.textContent = "New messages";
+		return el;
+	}
+
+	// Inserts (or moves) the divider above the current first-unread row. A no-op when nothing is
+	// left to point at (pointer exhausted or its row not yet rendered).
+	function placeDividerAtPointer() {
+		if (pointerIdx >= region.length) return;
+		const row = rowFor(region[pointerIdx]);
+		if (!row) return;
+		if (divider) divider.remove();
+		divider = buildDivider();
+		row.before(divider);
+	}
 
 	////////////////////////////////
 	//  Public API
 
 	function appendMessages(messages) {
 		const stick = nearBottom();
-		// A brand-new user row means the local user just sent: always jump to the
-		// bottom for it, even if they had scrolled up. Agent rows still respect the
-		// reader's position and only follow when already near the bottom.
+		// A brand-new OWN-send row (the local optimistic append, never a settled echo from another
+		// device - see `ownSend`) always jumps to the bottom, even scrolled up. Agent rows respect
+		// the reader's position and only follow when already near the bottom or the batch arrived
+		// while visible (see heldForVisibility below).
 		let sentByUser = false;
+		let heldForVisibility = false;
+		const newEligibleIds = [];
 		for (const m of messages) {
 			const row = buildRow(m);
-			const existing =
-				m.id !== undefined && m.id !== null
-					? container.querySelector('.row[data-id="' + CSS.escape(String(m.id)) + '"]')
-					: null;
+			const existing = m.id !== undefined && m.id !== null ? rowFor(m.id) : null;
+			// A row already known to the region (already queued, or already walked past) never
+			// re-triggers eligibility side effects on a re-push - only a row seeing `counts` for
+			// the FIRST time does. Without this, a fingerprint re-push unrelated to read state (a
+			// rename changes displayFrom, re-pushing every row naming that team) would replay a
+			// long-read row's stale `arrivedVisible` and spuriously hold position on an already
+			// caught-up reader.
+			const firstTimeEligible = m.counts && !region.includes(m.id);
 			if (existing) {
 				// The observer holds strong refs; release the old row's blocks so a
 				// replaced (e.g. status-updated) message cannot leak detached nodes.
@@ -328,24 +505,79 @@
 					observer.unobserve(block);
 				}
 				existing.replaceWith(row);
+				// A row can transition to eligible via an id-repeat, not just a fresh append - the
+				// waking-placeholder resolve is exactly this (same row id, now real coordinates).
+				// Without registering it here the badge would count it but the pointer could never
+				// walk past it while the thread stays open.
+				if (firstTimeEligible) {
+					newEligibleIds.push(m.id);
+					if (m.arrivedVisible === false) heldForVisibility = true;
+				}
 			} else {
 				container.appendChild(row);
-				if (m.role === "user") sentByUser = true;
+				if (m.role === "user" && m.ownSend) sentByUser = true;
+				if (firstTimeEligible) {
+					newEligibleIds.push(m.id);
+					if (m.arrivedVisible === false) heldForVisibility = true;
+				}
 			}
 			observeMermaid(row);
 		}
-		if (stick || sentByUser) scrollToBottom();
+		extendRegion(newEligibleIds);
+		if (heldForVisibility && !sentByUser) {
+			// This batch arrived while backgrounded: hold position instead of auto-following, and
+			// show the divider above the boundary so the landing looks the same as any other
+			// unread-boundary open.
+			stuck = false;
+			placeDividerAtPointer();
+		} else if (stick || sentByUser) {
+			scrollToBottom();
+		}
 	}
 
-	function setMessages(messages) {
+	function setMessages(payload) {
+		const messages = payload.messages;
+		const firstUnreadId = payload.firstUnreadId;
 		observer.disconnect();
 		container.replaceChildren();
+		divider = null;
+		region = [];
+		// Only rows AT OR AFTER the boundary join the region - a historical (already-read) row
+		// must never enter it, or a later reveal's union-merge (applyRegion) can place it ahead of
+		// the genuinely unread ids in walk order, letting the pointer consume the historical tail
+		// and clobber the real report with a stale one.
+		let pastBoundary = firstUnreadId === null || firstUnreadId === undefined;
 		for (const m of messages) {
+			if (!pastBoundary && m.id === firstUnreadId) {
+				pastBoundary = true;
+				divider = buildDivider();
+				container.appendChild(divider);
+			}
 			const row = buildRow(m);
 			container.appendChild(row);
+			if (pastBoundary && m.counts) region.push(m.id);
 			observeMermaid(row);
 		}
-		scrollToBottom();
+		pointerIdx = 0;
+		if (divider) {
+			scrollToDivider();
+		} else {
+			scrollToBottom();
+		}
+	}
+
+	// Bridge entrypoint: reveal (or re-reveal) the unread boundary. `regionIds` is union-merged
+	// (see applyRegion) so a stale local pointer can never regress. `idOrNull = null` skips only the
+	// scroll (a caught-up thread keeps its current position/bottom), never the region merge.
+	function revealFirstUnread(idOrNull, regionIds) {
+		applyRegion(regionIds || []);
+		if (idOrNull === null || idOrNull === undefined) return;
+		const row = rowFor(idOrNull);
+		if (!row) return;
+		if (divider) divider.remove();
+		divider = buildDivider();
+		row.before(divider);
+		scrollToDivider();
 	}
 
 	function setTheme(dark) {
@@ -379,5 +611,13 @@
 		}
 	}
 
-	window.thread = { setMessages, appendMessages, setTheme, setPlaying };
+	window.thread = {
+		setMessages,
+		appendMessages,
+		setTheme,
+		setPlaying,
+		setVisible,
+		revealFirstUnread,
+		flushReadUpTo,
+	};
 })();

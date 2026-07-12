@@ -10,8 +10,9 @@ import android.content.Intent
  * Play actions speak the burst-last message through SttsPlayer. playMessage
  * hands the entire resolution (credential decrypt included) to the player's
  * daemon thread, so this receiver does zero disk or crypto work on main and
- * needs no goAsync; single-flight dedupes multi-taps. Unread is process-local
- * state, so after a process death mark-read degrades to a no-op.
+ * needs no goAsync; single-flight dedupes multi-taps. Unread is derived from a
+ * persisted read anchor, so mark-read survives a process death instead of
+ * degrading to a no-op.
  */
 class NotificationReceiver : BroadcastReceiver() {
 	override fun onReceive(context: Context, intent: Intent) {

@@ -59,6 +59,17 @@ internal fun messagesToJson(
 			.put("at", m.at)
 			.put("body", m.text)
 		if (playEnabled && !m.fromMe) obj.put("canPlay", true)
+		// Read-tracking flags (thread.js's pointer/region + arrival-suppression logic): `counts` is
+		// pure row eligibility (inbound with real mailbox coordinates - never anchor-dependent, so
+		// the client can filter a full setMessages payload locally without a shipped region list);
+		// `ownSend` marks the moment-of-send row (fromMe with no coordinates yet), the only one that
+		// should force-follow and clear-as-read on its own append (a settled echo from ANOTHER
+		// device is fromMe too, but already carries coordinates, so it never sets this); a row
+		// defaults `arrivedVisible` true (present only when explicitly false) since that is the
+		// common case and the only one thread.js's suppression rule checks for.
+		if (!m.fromMe && m.seq > 0L) obj.put("counts", true)
+		if (m.fromMe && m.seq == 0L) obj.put("ownSend", true)
+		if (!m.arrivedVisible) obj.put("arrivedVisible", false)
 		m.status?.let { obj.put("status", it) }
 		if (m.files.isNotEmpty()) {
 			val files = JSONArray()
@@ -105,6 +116,11 @@ class ThreadRenderer(context: Context) {
 	 * user taps an agent row's Play button. */
 	var onPlayMessage: ((Long) -> Unit)? = null
 
+	/** Set by the owner; called on the main thread with (row id, row `at`) when thread.js's scroll-
+	 * driven pointer reports a new highest-read row. The `at` guards against a forget-freed id
+	 * being reused by a later append before this debounced report lands. */
+	var onReadUpTo: ((Long, Long) -> Unit)? = null
+
 	/** Set by the owner; maps a message's `from` canonical address to the session's human label at
 	 * render time (so a notice shows "My Work" rather than the opaque address). Identity when unset. */
 	var resolveFrom: ((String) -> String)? = null
@@ -123,6 +139,10 @@ class ThreadRenderer(context: Context) {
 	var decorateFile: ((MessageFile) -> ChipDecoration?)? = null
 
 	private var ready = false
+	// Set once by destroy(); guards eval()/flushThenReveal against a callback (evaluateJavascript's
+	// completion, or a debounced JS bridge call) that resolves after this WebView is torn down -
+	// neither is a suspend call, so Compose leaving the composable cannot cancel them.
+	private var destroyed = false
 	private val pending = mutableListOf<String>()
 	private var renderedCount = 0
 
@@ -167,6 +187,13 @@ class ThreadRenderer(context: Context) {
 				fun playMessage(at: String) {
 					val msgAt = at.toLongOrNull() ?: return
 					webView.post { onPlayMessage?.invoke(msgAt) }
+				}
+
+				@JavascriptInterface
+				fun readUpTo(id: String, at: String) {
+					val rowId = id.toLongOrNull() ?: return
+					val rowAt = at.toLongOrNull() ?: return
+					webView.post { onReadUpTo?.invoke(rowId, rowAt) }
 				}
 			},
 			"Android",
@@ -218,12 +245,14 @@ class ThreadRenderer(context: Context) {
 	 * Feed the current transcript, sending only what changed so re-opening a thread
 	 * keeps its scroll position and rendered DOM. A grown list appends the tail,
 	 * rows whose content changed in place re-render by id, and a shrink replaces
-	 * wholesale.
+	 * wholesale. `firstUnreadId` (the row to snap/hold at, null = bottom) is consulted only by the
+	 * `setMessages` branch (a fresh render or a shrink rebuild) - `appendMessages` derives its own
+	 * follow/hold decision from each row's `counts`/`ownSend`/`arrivedVisible` flags instead.
 	 */
-	fun sync(messages: List<Message>) {
+	fun sync(messages: List<Message>, firstUnreadId: Long?) {
 		val prevRendered = renderedCount
 		if (renderedCount == 0 || messages.size < renderedCount) {
-			eval("window.thread.setMessages(${toJson(messages)})")
+			eval("window.thread.setMessages(${wrapForSetMessages(toJson(messages), firstUnreadId)})")
 			renderedCount = messages.size
 			fingerprints = messages.associate { it.id to fingerprint(it) }
 			return
@@ -237,6 +266,44 @@ class ThreadRenderer(context: Context) {
 			eval("window.thread.appendMessages(${toJson(changed)})")
 		}
 		fingerprints = messages.associate { it.id to fingerprint(it) }
+	}
+
+	private fun wrapForSetMessages(rowsJson: String, firstUnreadId: Long?): String =
+		"""{"messages":$rowsJson,"firstUnreadId":${firstUnreadId ?: "null"}}"""
+
+	/** Push the app foreground/background transition to this renderer. A background->foreground
+	 * flip schedules one pointer walk (JS-side), covering content that shifted while invisible -
+	 * ordered after any reveal already queued by the same resume, since both ride the same eval
+	 * queue. Independent of sync payloads: firing regardless of whether messages changed is the
+	 * point (a resume with no new arrivals still needs its walk re-armed). */
+	fun setVisible(visible: Boolean) {
+		eval("window.thread.setVisible($visible)")
+	}
+
+	/** Flush any pending debounced read receipt, THEN invoke `onFlushed` once its anchor update (if
+	 * any) has landed on the Kotlin side - so a caller computing a reveal from `onFlushed` never
+	 * snaps the reader above rows just reported read. Ordering rationale: `Android.readUpTo`'s
+	 * bridge call happens SYNCHRONOUSLY within the flush JS's own execution (a JS thread blocks on
+	 * a @JavascriptInterface call), so its `webView.post` is enqueued on main before this
+	 * evaluateJavascript's own completion callback is - both are main-thread posts, delivered FIFO. */
+	fun flushThenReveal(onFlushed: () -> Unit) {
+		if (destroyed) return
+		if (!ready) {
+			onFlushed()
+			return
+		}
+		webView.evaluateJavascript("window.thread.flushReadUpTo && window.thread.flushReadUpTo(); null") { _ ->
+			if (!destroyed) onFlushed()
+		}
+	}
+
+	/** Snap/hold at `firstUnreadId` (null = leave scroll position alone), shipping the current
+	 * pointer region so thread.js's union-merge can adopt any id it does not already have queued.
+	 * Called once per open, after [flushThenReveal]'s callback fires. */
+	fun revealFirstUnread(firstUnreadId: Long?, regionIds: List<Long>) {
+		val idArg = firstUnreadId?.toString() ?: "null"
+		val idsJson = JSONArray(regionIds).toString()
+		eval("window.thread.revealFirstUnread($idArg, $idsJson)")
 	}
 
 	private fun fingerprint(m: Message): Int {
@@ -266,10 +333,12 @@ class ThreadRenderer(context: Context) {
 	}
 
 	fun destroy() {
+		destroyed = true
 		webView.destroy()
 	}
 
 	private fun eval(js: String) {
+		if (destroyed) return
 		if (ready) {
 			webView.evaluateJavascript(js, null)
 		} else {
