@@ -275,6 +275,8 @@ private val PALETTE_KEYS = listOf(
 	"Down" to "Down",
 	"Left" to "Left",
 	"Right" to "Right",
+	"Pg Up" to "PageUp",
+	"Pg Down" to "PageDown",
 )
 
 // The modifier-combo menu the "Ctrl" chip opens, in place of a single fixed key: a label shown in
