@@ -282,6 +282,26 @@ describe("routes", () => {
 			expect(humanNotify({ from: "t", summary: "s", full: "body" }).status).toBe(400);
 		});
 
+		it("stamps fullSpoken onto the notice entry, and still accepts a notice WITHOUT it", async () => {
+			// Optional here despite being required on the tool schema: the strict gateway schema
+			// would otherwise 400 every notice from a not-yet-reloaded plugin in a deploy window.
+			const { ctx, mailboxStore } = makeStoreForOwner();
+			const { humanNotify } = createRoutes(ctx);
+			const withSpoken = await humanNotify({
+				from: "recipe-app",
+				title: "t",
+				summary: "s",
+				full: "# body",
+				fullSpoken: "Spoken body.",
+			}).json();
+			expect(withSpoken.delivered).toBe(true);
+			const without = await humanNotify({ from: "recipe-app", title: "t2", summary: "s2", full: "b2" }).json();
+			expect(without.delivered).toBe(true);
+			const entries = mailboxStore.get("owner-1")!.drain().entries;
+			expect(entries[0]).toMatchObject({ fullSpoken: "Spoken body." });
+			expect(entries[1].fullSpoken).toBeUndefined();
+		});
+
 		it("requires title, summary, and full (no ghost pings) and wakes a held poll", async () => {
 			const { ctx, mailboxStore } = makeStoreForOwner();
 			const { humanNotify } = createRoutes(ctx);
@@ -1203,6 +1223,9 @@ describe("routes", () => {
 			respond(new Request("http://gateway/respond"), {
 				session_id: "conv.conv-1.alice.gw2.coolib.dev",
 				response: "on it",
+				title: "t",
+				summary: "s",
+				fullSpoken: "On it, spoken.",
 			});
 
 			const entries = mailboxStore.get("owner-1")!.drain().entries;
@@ -1213,6 +1236,9 @@ describe("routes", () => {
 				from: "alice.gw2.coolib.dev",
 				to: "alice.test-host.coolapp.dev",
 				body: "on it",
+				title: "t",
+				summary: "s",
+				fullSpoken: "On it, spoken.",
 			});
 		});
 
@@ -1235,6 +1261,9 @@ describe("routes", () => {
 			respond(new Request("http://gateway/respond"), {
 				session_id: "conv.friend-conv.alice.test-host.coolib.dev",
 				response: "sure thing",
+				title: "t",
+				summary: "s",
+				fullSpoken: "Sure thing, spoken.",
 			});
 
 			const entries = mailboxStore.get("owner-1")!.drain().entries;
@@ -1245,6 +1274,9 @@ describe("routes", () => {
 				from: "alice.test-host.coolib.dev",
 				to: "alice.friend-gw.coolapp.dev",
 				body: "sure thing",
+				title: "t",
+				summary: "s",
+				fullSpoken: "Sure thing, spoken.",
 			});
 		});
 
@@ -1311,6 +1343,31 @@ describe("routes", () => {
 			const drained = mailboxStore.get("console-conv")?.drain(0);
 			expect(drained?.entries.length).toBe(1);
 			expect(drained?.entries[0]).toMatchObject({ kind: "reply", body: "the answer", status: "completed" });
+		});
+
+		it("stamps the spoken tiers onto the mailbox reply entry", () => {
+			const store = new PendingJobStore<ResponsePayload>();
+			store.create("sess-1", "team-a", "console", { persistent: true, fromConversationId: "console-conv" });
+			const mailboxStore = new DeviceMailboxStore();
+			mailboxStore.ensure("console-conv");
+			const ctx = makeCtx({ store, mailboxStore });
+			const { respond } = createRoutes(ctx);
+
+			respond(req, {
+				session_id: "sess-1",
+				status: "completed",
+				response: "# the answer",
+				title: "t",
+				summary: "s",
+				fullSpoken: "The answer, spoken.",
+			});
+			expect(mailboxStore.get("console-conv")?.drain(0)?.entries[0]).toMatchObject({
+				kind: "reply",
+				body: "# the answer",
+				title: "t",
+				summary: "s",
+				fullSpoken: "The answer, spoken.",
+			});
 		});
 
 		it("does not create a spurious mailbox for a channel agent (no mailbox = live-WS path)", () => {

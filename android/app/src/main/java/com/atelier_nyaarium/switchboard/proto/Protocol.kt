@@ -84,6 +84,7 @@ data class MailboxEntry(
 	val title: String? = null,
 	val summary: String? = null,
 	val body: String? = null,
+	val fullSpoken: String? = null,
 	val status: String? = null,
 	val replyAsJson: JsonObject? = null,
 	val question: String? = null,

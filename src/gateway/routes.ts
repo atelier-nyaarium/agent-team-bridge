@@ -134,10 +134,12 @@ const RespondBodySchema = z.object({
 	session_id: z.string(),
 	status: z.string().optional(),
 	response: z.string().optional(),
-	// Optional notice-style tiers on a reply (title = notification-bar line + shortest TTS tier,
-	// summary = medium tier). The console reads them like a notice's; absent on a plain reply.
+	// Optional notice-style tiers on a reply (title = notification-bar line + shortest spoken
+	// tier, summary = medium spoken tier, fullSpoken = what the FULL play tier speaks in the
+	// body's place). The console reads them like a notice's; absent on a plain reply.
 	title: z.string().optional(),
 	summary: z.string().optional(),
+	fullSpoken: z.string().optional(),
 	replyAsJson: z.record(z.string(), z.unknown()).optional(),
 	question: z.string().optional(),
 	reason: z.string().optional(),
@@ -184,13 +186,17 @@ const PollRequestSchema = z.object({
 
 // title, summary, and full are REQUIRED: a notice must always carry a headline,
 // an addressable short tier, and a real body (no ghost pings). Strict: an unknown
-// field (e.g. the retired `tiny`) is rejected, not silently stripped.
+// field (e.g. the retired `tiny`) is rejected, not silently stripped. fullSpoken is
+// deliberately OPTIONAL here despite being required on the tool schema - the strict
+// gateway would otherwise 400 every notice from a not-yet-reloaded plugin during a
+// deploy window, where the lenient RespondBodySchema degrades gracefully.
 const HumanNotifySchema = z
 	.object({
 		from: z.string().min(1).max(128),
 		title: z.string().min(1).max(200),
 		summary: z.string().min(1),
 		full: z.string().min(1),
+		fullSpoken: z.string().min(1).optional(),
 		files: ChannelFilesSchema.optional(),
 	})
 	.strict();
@@ -319,7 +325,14 @@ export function createRoutes({
 		threadAddr: Address,
 		from: string,
 		to: string,
-		payload: { body?: string; files?: ChannelFile[]; status?: string; title?: string; summary?: string },
+		payload: {
+			body?: string;
+			files?: ChannelFile[];
+			status?: string;
+			title?: string;
+			summary?: string;
+			fullSpoken?: string;
+		},
 		// A stable id lets an at-least-once RELAY of this same already-composed entry (the
 		// console_push convergence hop, see fanOutConsolePush) dedupe against the same key on
 		// each receiving gateway. It does NOT protect against a caller-level HTTP retry of
@@ -1051,6 +1064,7 @@ export function createRoutes({
 			response: rest.response,
 			title: rest.title,
 			summary: rest.summary,
+			fullSpoken: rest.fullSpoken,
 			question: rest.question,
 			reason: rest.reason,
 			estimated_minutes: rest.estimated_minutes,
@@ -1111,6 +1125,7 @@ export function createRoutes({
 					...(response.response ? { response: response.response } : {}),
 					...(response.title ? { title: response.title } : {}),
 					...(response.summary ? { summary: response.summary } : {}),
+					...(response.fullSpoken ? { fullSpoken: response.fullSpoken } : {}),
 					...(response.replyAsJson ? { replyAsJson: response.replyAsJson } : {}),
 					...(response.question ? { question: response.question } : {}),
 					...(response.reason ? { reason: response.reason } : {}),
@@ -1129,6 +1144,7 @@ export function createRoutes({
 					status: response.status,
 					title: response.title,
 					summary: response.summary,
+					fullSpoken: response.fullSpoken,
 				});
 			}
 			return jsonResponse({ delivered: true, federated: true });
@@ -1166,6 +1182,7 @@ export function createRoutes({
 					body: response.response,
 					title: response.title,
 					summary: response.summary,
+					fullSpoken: response.fullSpoken,
 					status: response.status,
 					files: files && files.length > 0 ? files : undefined,
 				});
@@ -1203,6 +1220,7 @@ export function createRoutes({
 						status: response.status,
 						title: response.title,
 						summary: response.summary,
+						fullSpoken: response.fullSpoken,
 					};
 					// This message is the REPLY: the replier speaks, the original asker receives - the
 					// mirror's from/to must reflect that direction, not the original ask's.
@@ -1294,7 +1312,7 @@ export function createRoutes({
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
-		const { from, title, summary, full, files } = parsed.data;
+		const { from, title, summary, full, fullSpoken, files } = parsed.data;
 		if (files && files.length > 0) {
 			const total = fileBytes(files);
 			if (total > MAX_RESPONSE_FILE_BYTES) {
@@ -1322,6 +1340,7 @@ export function createRoutes({
 			title,
 			summary,
 			body: full,
+			...(fullSpoken ? { fullSpoken } : {}),
 			...(files && files.length > 0 ? { files } : {}),
 		};
 		if (!landMailboxEntry(owner, entry, dedupeKey, "notify")) {

@@ -48,10 +48,11 @@ const DEFAULT_MAX_DEVICES = 500;
 const DEFAULT_MAX_SEEN_KEYS = 4096;
 const DEFAULT_MAX_RESPONDABLE_SESSIONS = 500;
 
-/** Cheap byte estimate for cap accounting: the body plus the base64 of every
+/** Cheap byte estimate for cap accounting: the body, its spoken copy (by contract
+ * near body-sized, unlike the small title/summary tiers), and the base64 of every
  * attachment, which dominates. Avoids re-serializing the whole entry per append. */
 function entryBytes(input: MailboxInput): number {
-	let n = input.body?.length ?? 0;
+	let n = (input.body?.length ?? 0) + (input.fullSpoken?.length ?? 0);
 	if (input.files) for (const f of input.files) n += f.base64?.length ?? 0;
 	return n;
 }

@@ -123,7 +123,7 @@ export async function postReply(
 	// replyAsJson-only payload and a title-less designer push pass with no per-tool special-casing.
 	// A reject names the TOOL-facing field the agent filled in, not the wire key it mapped to
 	// (channel_reply's `full` and designer_push_card's `message` both ride the wire as `response`).
-	for (const field of ["title", "summary", "response"]) {
+	for (const field of ["title", "summary", "response", "fullSpoken"]) {
 		const value = payload[field];
 		if (typeof value !== "string") continue;
 		const hazard = literalEscapeHazard(value);

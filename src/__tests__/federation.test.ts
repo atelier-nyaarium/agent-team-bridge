@@ -243,10 +243,22 @@ describe("federation routing (E2E sealed)", () => {
 			session_id: srcSession,
 			status: "completed",
 			response: "all good",
+			title: "t",
+			summary: "s",
+			fullSpoken: "All good, spoken.",
 		});
 		expect((await respondRes.json()).federated).toBe(true);
-		// The reply-pin was sealed back to hosta and decrypts to the response_push.
-		expect(pinned).toMatchObject({ kind: "response_push", session_id: srcSession, response: "all good" });
+		// The reply-pin was sealed back to hosta and decrypts to the response_push. The spoken
+		// tiers survive the FederatedOpSchema parse (a schema that stripped them would lose the
+		// field silently between Gateways forever).
+		expect(pinned).toMatchObject({
+			kind: "response_push",
+			session_id: srcSession,
+			response: "all good",
+			title: "t",
+			summary: "s",
+			fullSpoken: "All good, spoken.",
+		});
 	});
 
 	it("DESTINATION: a response_push pinned to the origin delivers to the origin conversation", async () => {
@@ -274,6 +286,45 @@ describe("federation routing (E2E sealed)", () => {
 		)) as { ok: boolean };
 		expect(result.ok).toBe(true);
 		expect(senderPushes[0]).toMatchObject({ type: "response_push", session_id: srcSession, response: "all good" });
+	});
+
+	it("DESTINATION: a response_push with spoken tiers lands them on a console origin's mailbox", async () => {
+		const mailboxStore = new DeviceMailboxStore();
+		mailboxStore.ensure("owner-1");
+		const ctx = makeCtx("hosta", { mailboxStore });
+		const srcSession = "conv.owner-1.alice.hostb.api.dev";
+		ctx.store.create(srcSession, "recipe-app.dev", "alice.hostb.api.dev", {
+			persistent: true,
+			fromConversationId: "owner-1",
+		});
+		const routes = createRoutes(ctx);
+		const handler = createGatewayRelayHandler({
+			routes,
+			tryWakeTeam: ctx.tryWakeTeam,
+			localGatewayId: "hosta",
+			localDomainId: "alice",
+		});
+
+		await handler.handleOp(
+			{
+				kind: "response_push",
+				session_id: srcSession,
+				status: "completed",
+				response: "# report",
+				title: "t",
+				summary: "s",
+				fullSpoken: "The report, spoken.",
+			},
+			"hostb",
+			null,
+		);
+		expect(mailboxStore.get("owner-1")?.drain().entries[0]).toMatchObject({
+			kind: "reply",
+			body: "# report",
+			title: "t",
+			summary: "s",
+			fullSpoken: "The report, spoken.",
+		});
 	});
 
 	it("DESTINATION: a send to a not-yet-existing target relays displayLabel through to the local mint rule", async () => {
@@ -815,7 +866,13 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		});
 		const { humanNotify } = createRoutes(ctx);
 
-		const res = humanNotify({ from: "recipe-app", title: "cycle done", summary: "s", full: "body" });
+		const res = humanNotify({
+			from: "recipe-app",
+			title: "cycle done",
+			summary: "s",
+			full: "body",
+			fullSpoken: "Spoken body.",
+		});
 		expect((await res.json()).delivered).toBe(true);
 		// The local landing is synchronous, independent of the fan-out.
 		expect(mailboxStore.get("owner-1")?.drain().entries).toHaveLength(1);
@@ -824,7 +881,15 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		await vi.waitFor(() => expect(consolePushCalls).toHaveLength(1));
 
 		expect(landedOnHostb).toMatchObject({ kind: "console_push" });
-		expect(consolePushCalls[0].entry).toMatchObject({ kind: "notice", from: "recipe-app", title: "cycle done" });
+		// fullSpoken must survive the console_push entry schema (a non-strict zod parse strips
+		// unknown keys, so a schema missing the field would silently drop it between Gateways).
+		expect(consolePushCalls[0].entry).toMatchObject({
+			kind: "notice",
+			from: "recipe-app",
+			title: "cycle done",
+			summary: "s",
+			fullSpoken: "Spoken body.",
+		});
 		// Only hostb was actually relayed to - hosta (self) and eve-gw (unadmitted) were filtered
 		// out before ever reaching evie's gateway_relay call.
 		const relayed = evie.calls.filter((c) => c.action === "gateway_relay").map((c) => c.params.dstGateway);

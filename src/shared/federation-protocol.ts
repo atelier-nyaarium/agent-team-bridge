@@ -63,6 +63,7 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 		response: z.string().optional(),
 		title: z.string().optional(),
 		summary: z.string().optional(),
+		fullSpoken: z.string().optional(),
 		replyAsJson: z.record(z.string(), z.unknown()).optional(),
 		question: z.string().optional(),
 		reason: z.string().optional(),
@@ -93,6 +94,7 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 			title: NoticeTitle.optional(),
 			summary: z.string().optional(),
 			body: z.string().optional(),
+			fullSpoken: z.string().optional(),
 			status: z.string().optional(),
 			files: ChannelFilesSchema.optional(),
 			// A `plugin_action` entry only - see MailboxEntrySchema (schemas.ts) for the field meaning.

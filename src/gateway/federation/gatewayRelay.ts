@@ -218,6 +218,7 @@ export function createGatewayRelayHandler({
 					response: op.response,
 					title: op.title,
 					summary: op.summary,
+					fullSpoken: op.fullSpoken,
 					replyAsJson: op.replyAsJson,
 					question: op.question,
 					reason: op.reason,

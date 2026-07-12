@@ -23,7 +23,7 @@ import { resolveSessionNaming } from "./team-name.js";
 const CHANNEL_INSTRUCTIONS = [
 	'Cross-team messages arrive as <channel source="..." ...> tags. ALL metadata rides as tag attributes (session_id, from, and reply_schema when the request specifies one); the tag body is the message itself, nothing is jammed into it.',
 	"Read the request and do the work.",
-	"Reply with the channel_reply tool: session_id (from the tag attributes), title (a one-line headline), summary (a few sentences), and full (your prose reply, renders as markdown + mermaid) are all required - the console shows the title in its notification bar and uses the tiers for text-to-speech. Attachments (absolute file paths) are optional. The conversation stays open, so you may reply multiple times (interim updates, etc.) with no finality.",
+	"Reply with the channel_reply tool: session_id (from the tag attributes), title (a one-line headline), summary (a few sentences), full (your prose reply, renders as markdown + mermaid), and fullSpoken (a spoken copy of full for text-to-speech) are all required - the console shows the title in its notification bar and speaks the spoken tiers aloud. Attachments (absolute file paths) are optional. The conversation stays open, so you may reply multiple times (interim updates, etc.) with no finality.",
 	"When the inbound tag carries a reply_schema, reply with channel_reply_structured instead: pass session_id and a responseData object matching that schema.",
 ].join(" ");
 
