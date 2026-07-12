@@ -53,6 +53,35 @@ build, each its own small scoping pass:
 
 ---
 
+## Item 16 - Host daemon parked follow-ups (from `plans/host-daemon-cleanup.md`, deleted)
+
+Migrated from `plans/host-daemon-cleanup.md` on its retirement (phases 1-4 shipped in PRs #96/#97;
+its deferred painpoints moved to `plans/pain-points.md`). Both items deploy via `reload_plugins`.
+
+- **Fragile TUI automation (parked; mostly upstream).**
+  `src/mcp/devcontainer/reloadPlugins.ts : buildScript` ACTIVELY drives the Claude Code TUI: fixed
+  sleeps, greps for the `❯` glyph + menu strings, hardcoded key nav; breaks on any UI change. The
+  real fix is a Claude Code `--update-plugins`/`--reconnect-mcp` flag; until then it is a
+  known-fragility script to hand-update on TUI changes.
+  `src/mcp/devcontainer/tmuxCore.ts : awaitReady / STARTUP_PROMPT_RE` clears startup menus by
+  matching English strings ("trust this folder", etc). The core readiness check (`isAgentReady` =
+  `COMPOSER_RE /^❯/`) is glyph-based and column-anchored, so it is STABLE; only the startup-menu
+  clearing is string-fragile. A structured readiness signal from Claude Code would help `awaitReady`
+  but not `buildScript` (which needs active control) - distinct problems.
+
+- **Dead-launch hardening (open root cause; detection ships, prevention does not).**
+  `src/mcp/devcontainer/hostDaemon.ts : buildLaunchCommand` - the in-container agent launches as a
+  single `bash -c '...source ~/.bashrc...; exec claude...'`; if any step fails instantly (bashrc
+  error, claude off PATH, bad cwd) the tmux session dies. Dead-launch DETECTION ships (`launchAlive`
+  -> `wake_result success:false`, after ~8 probes / ~8s). Hardening is tractable but partial:
+  pre-flight checks (bashrc readable, `which claude`, devcontainer cwd exists) catch the common
+  static cases early; runtime failures still need the dead-launch fallback. The single `bash -c` is
+  intentional (the env must be shared with `exec claude`; a multi-step spawn breaks env
+  inheritance), so prefer pre-flight + stderr capture over splitting it. Devcontainer launches lack
+  the host's `exec bash` fallback, so a crash leaves no diagnostic pane - consider adding one.
+
+---
+
 ## Moved out: Items 11-13 -> the host-split plan; Item 14 -> shipped
 
 The CLI-era teardown, the create-session button, and Copilot support are now subsumed into

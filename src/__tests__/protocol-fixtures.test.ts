@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
+import { SPOKEN_TIER_FIELDS } from "../shared/notice.js";
 import {
 	ConsoleCloseSessionResultSchema,
 	ConsoleCreateSessionResultSchema,
@@ -82,6 +83,37 @@ describe("protocol fixtures", () => {
 	it("keeps the at field above 2^31 (Long bait for the Kotlin side)", () => {
 		const entry = MailboxEntrySchema.parse(fixture("mailbox-message.json"));
 		expect(entry.at).toBeGreaterThan(2 ** 31);
+	});
+
+	it("a reply entry carries all three spoken tiers beside its body", () => {
+		const entry = MailboxEntrySchema.parse(fixture("mailbox-reply.json"));
+		expect(entry.title).toBe("Reply headline");
+		expect(entry.summary).toBe("One short spoken summary of the reply.");
+		expect(entry.fullSpoken).toBe("Done, spoken in the body's place.");
+	});
+
+	it("MailboxEntrySchema declares every spoken-tier field", () => {
+		// The other tier-carrying wire schemas spread NoticeTierWireFields, so they cannot drift;
+		// this one keeps flat literal fields (its field order feeds the Kotlin codegen, and a
+		// spread would reorder the generated constructor), so the trio is pinned here instead.
+		for (const tier of SPOKEN_TIER_FIELDS) {
+			expect(Object.keys(MailboxEntrySchema.shape), `MailboxEntrySchema lacks the ${tier} tier`).toContain(tier);
+		}
+	});
+
+	it("every spoken-tier field is exercised by at least one mailbox fixture (both runtimes decode them)", () => {
+		// A future tier added to the wire trio fails here until a fixture carries it, so an
+		// additive tier field can never ship with an unpinned Kotlin decode (the class that
+		// broke main twice during the Gateway rename).
+		const mailboxFixtures = manifest
+			.filter((entry) => entry.schema === "MailboxEntry" && entry.expect === "pass")
+			.map((entry) => MailboxEntrySchema.parse(fixture(entry.file)));
+		for (const tier of SPOKEN_TIER_FIELDS) {
+			expect(
+				mailboxFixtures.some((entry) => typeof entry[tier] === "string"),
+				`no mailbox fixture carries the ${tier} tier`,
+			).toBe(true);
+		}
 	});
 
 	it("a peer mirror entry carries kind, to, and a dedupeKey distinct from from", () => {

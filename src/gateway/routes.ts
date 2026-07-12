@@ -4,6 +4,15 @@ import { z } from "zod";
 import type { SealedEnvelope } from "../shared/crypto.js";
 import { type ConsolePushEntry, type FederatedOp, ReturnRouteSchema } from "../shared/federation-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "../shared/host-op.js";
+import {
+	NoticeFull,
+	NoticeFullSpoken,
+	NoticeSummary,
+	type NoticeTierWire,
+	NoticeTierWireFields,
+	NoticeTitle,
+	pickTiers,
+} from "../shared/notice.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
 import { ChannelFilesSchema } from "../shared/schemas.js";
 import {
@@ -134,10 +143,10 @@ const RespondBodySchema = z.object({
 	session_id: z.string(),
 	status: z.string().optional(),
 	response: z.string().optional(),
-	// Optional notice-style tiers on a reply (title = notification-bar line + shortest TTS tier,
-	// summary = medium tier). The console reads them like a notice's; absent on a plain reply.
-	title: z.string().optional(),
-	summary: z.string().optional(),
+	// Optional notice-style tiers on a reply (title = notification-bar line + shortest spoken
+	// tier, summary = medium spoken tier, fullSpoken = what the FULL play tier speaks in the
+	// body's place). The console reads them like a notice's; absent on a plain reply.
+	...NoticeTierWireFields,
 	replyAsJson: z.record(z.string(), z.unknown()).optional(),
 	question: z.string().optional(),
 	reason: z.string().optional(),
@@ -184,13 +193,19 @@ const PollRequestSchema = z.object({
 
 // title, summary, and full are REQUIRED: a notice must always carry a headline,
 // an addressable short tier, and a real body (no ghost pings). Strict: an unknown
-// field (e.g. the retired `tiny`) is rejected, not silently stripped.
+// field (e.g. the retired `tiny`) is rejected, not silently stripped. The tier
+// bounds come from the notice leaf (the declared single truth), so this route
+// cannot drift from the tool boundary; describes are inert server-side. fullSpoken
+// is deliberately OPTIONAL here despite being required on the tool schema - the
+// strict gateway would otherwise 400 every notice from a not-yet-reloaded plugin
+// during a deploy window, where the lenient RespondBodySchema degrades gracefully.
 const HumanNotifySchema = z
 	.object({
 		from: z.string().min(1).max(128),
-		title: z.string().min(1).max(200),
-		summary: z.string().min(1),
-		full: z.string().min(1),
+		title: NoticeTitle,
+		summary: NoticeSummary,
+		full: NoticeFull,
+		fullSpoken: NoticeFullSpoken.optional(),
 		files: ChannelFilesSchema.optional(),
 	})
 	.strict();
@@ -319,7 +334,11 @@ export function createRoutes({
 		threadAddr: Address,
 		from: string,
 		to: string,
-		payload: { body?: string; files?: ChannelFile[]; status?: string; title?: string; summary?: string },
+		payload: NoticeTierWire & {
+			body?: string;
+			files?: ChannelFile[];
+			status?: string;
+		},
 		// A stable id lets an at-least-once RELAY of this same already-composed entry (the
 		// console_push convergence hop, see fanOutConsolePush) dedupe against the same key on
 		// each receiving gateway. It does NOT protect against a caller-level HTTP retry of
@@ -1049,8 +1068,7 @@ export function createRoutes({
 			session_id: respondSessionId,
 			status: rest.status as ResponsePayload["status"] | undefined,
 			response: rest.response,
-			title: rest.title,
-			summary: rest.summary,
+			...pickTiers(rest),
 			question: rest.question,
 			reason: rest.reason,
 			estimated_minutes: rest.estimated_minutes,
@@ -1109,8 +1127,7 @@ export function createRoutes({
 					session_id: rr.srcSession,
 					...(response.status ? { status: response.status } : {}),
 					...(response.response ? { response: response.response } : {}),
-					...(response.title ? { title: response.title } : {}),
-					...(response.summary ? { summary: response.summary } : {}),
+					...pickTiers(response),
 					...(response.replyAsJson ? { replyAsJson: response.replyAsJson } : {}),
 					...(response.question ? { question: response.question } : {}),
 					...(response.reason ? { reason: response.reason } : {}),
@@ -1127,8 +1144,7 @@ export function createRoutes({
 					body: response.response,
 					files,
 					status: response.status,
-					title: response.title,
-					summary: response.summary,
+					...pickTiers(response),
 				});
 			}
 			return jsonResponse({ delivered: true, federated: true });
@@ -1164,8 +1180,7 @@ export function createRoutes({
 					kind: "reply",
 					session_id: respondSessionId,
 					body: response.response,
-					title: response.title,
-					summary: response.summary,
+					...pickTiers(response),
 					status: response.status,
 					files: files && files.length > 0 ? files : undefined,
 				});
@@ -1201,8 +1216,7 @@ export function createRoutes({
 						body: response.response,
 						files,
 						status: response.status,
-						title: response.title,
-						summary: response.summary,
+						...pickTiers(response),
 					};
 					// This message is the REPLY: the replier speaks, the original asker receives - the
 					// mirror's from/to must reflect that direction, not the original ask's.
@@ -1294,7 +1308,7 @@ export function createRoutes({
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
-		const { from, title, summary, full, files } = parsed.data;
+		const { from, title, summary, full, fullSpoken, files } = parsed.data;
 		if (files && files.length > 0) {
 			const total = fileBytes(files);
 			if (total > MAX_RESPONSE_FILE_BYTES) {
@@ -1319,9 +1333,8 @@ export function createRoutes({
 			// agent-only tool; a console never posts a notice, so the sender is always a slug.
 			session_id: storeKey({ kind: "notice", sender: localAddress(from) }),
 			from,
-			title,
-			summary,
 			body: full,
+			...pickTiers({ title, summary, fullSpoken }),
 			...(files && files.length > 0 ? { files } : {}),
 		};
 		if (!landMailboxEntry(owner, entry, dedupeKey, "notify")) {

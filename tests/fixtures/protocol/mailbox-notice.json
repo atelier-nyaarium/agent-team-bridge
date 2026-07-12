@@ -6,5 +6,6 @@
 	"from": "alice.laptop.switchboard.main",
 	"title": "Phase 0 done: deps mature-pinned",
 	"summary": "Every package now sits at the newest stable version at least seven days old.",
-	"body": "Full markdown report body."
+	"body": "Full markdown report body.",
+	"fullSpoken": "Full markdown report body, spoken."
 }

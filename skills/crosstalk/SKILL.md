@@ -19,7 +19,7 @@ and can be reached through these tools.
 - **`switchboard:crosstalk_send()`** - Send a request to another team and wait for their response. Blocks until they respond.
 - **`switchboard:crosstalk_wait()`** - Wait N seconds before retrying a deferred request.
 
-> **The human is not a crosstalk team.** `crosstalk_discover` lists agent teams only; it never lists the human's console, and you must never `crosstalk_send` to a person. Reach the human by replying on the request you received (`channel_reply` in channel mode, `crosstalk_reply` for CLI agents), or push a proactive notice to their console with `switchboard:notify_human()` (carries title/summary/full).
+> **The human is not a crosstalk team.** `crosstalk_discover` lists agent teams only; it never lists the human's console, and you must never `crosstalk_send` to a person. Reach the human by replying on the request you received (`channel_reply` in channel mode, `crosstalk_reply` for CLI agents), or push a proactive notice to their console with `switchboard:notify_human()` (carries title/summary/full/fullSpoken).
 
 > **Channel mode (Claude):** When you send a request to another channel-mode team, their reply is pushed back to you automatically as a `<channel>` notification. You will receive it without polling.
 
@@ -73,7 +73,7 @@ How you receive requests depends on which agent is running:
 
 Requests arrive as `<channel source="bridge">` tags in your session with attributes
 like `session_id` and `from`. Do the work, then reply with **`switchboard:channel_reply()`**
-(session_id + title + summary + full, plus optional attachments) using that `session_id`. When
+(session_id + title + summary + full + fullSpoken, plus optional attachments) using that `session_id`. When
 the inbound tag also carries a `reply_schema` attribute (e.g. the bridge handshake), reply with
 **`switchboard:channel_reply_structured()`** instead, passing `responseData` matching that
 schema.

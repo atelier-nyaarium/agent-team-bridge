@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { NoticeFull, NoticeSummary, NoticeTitle } from "../../shared/notice.js";
-import { REAL_NEWLINES_GUIDANCE } from "../../shared/schemas.js";
+import { SPOKEN_TIER_FIELDS } from "../../shared/notice.js";
+import { GuidedNoticeTiers } from "../../shared/schemas.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { bridgeProjectName, routerPost } from "../bridge/helpers.js";
 import { literalEscapeHazard, literalEscapeReject, readReplyAttachment, toolError } from "../bridge/replyTool.js";
@@ -9,15 +9,13 @@ import { literalEscapeHazard, literalEscapeReject, readReplyAttachment, toolErro
 ////////////////////////////////
 //  Schemas
 
-// title, summary, and full are all required (no ghost ping that is only a bar
-// headline). Strict: an unknown field (e.g. the retired `tiny`) is rejected, not
-// silently stripped. The notice leaf's describes are extended in place (not edited
-// at the source) because notice.ts is a synced verbatim-copy module.
-const NotifyHumanSchema = z
+// Every tier is required (no ghost ping that is only a bar headline, and no notice
+// the console cannot speak). Strict: an unknown field (e.g. the retired `tiny`) is
+// rejected, not silently stripped. The tier fields are the SAME GuidedNoticeTiers
+// object channel_reply spreads, so both tools' describes are identical by construction.
+export const NotifyHumanSchema = z
 	.object({
-		title: NoticeTitle.describe(`${NoticeTitle.description}${REAL_NEWLINES_GUIDANCE}`),
-		summary: NoticeSummary.describe(`${NoticeSummary.description}${REAL_NEWLINES_GUIDANCE}`),
-		full: NoticeFull.describe(`${NoticeFull.description}${REAL_NEWLINES_GUIDANCE}`),
+		...GuidedNoticeTiers,
 		attachments: z
 			.array(z.string())
 			.optional()
@@ -32,7 +30,7 @@ type NotifyHumanArgs = z.infer<typeof NotifyHumanSchema>;
 //  Functions & Helpers
 
 const NOTIFY_DESCRIPTION = `
-Push a notification to the human's console(s). Broadcasts to every registered console device: \`title\` becomes the notification-bar line, \`summary\` rides as its own short tier (console features read it directly), and \`full\` the message body, threaded under your team's name. title, summary, and full are all required - a notice must always carry a real body. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply for those).
+Push a notification to the human's console(s). Broadcasts to every registered console device: \`title\` becomes the notification-bar line, \`summary\` rides as its own short tier (console features read it directly), \`full\` the message body threaded under your team's name, and \`fullSpoken\` what the console speaks in full's place. All four are required. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply for those).
 `.trim();
 
 export function registerHumanTools(mcpServer: McpServer): void {
@@ -47,13 +45,14 @@ export function registerHumanTools(mcpServer: McpServer): void {
 			inputSchema: notifySchema,
 		},
 		async (args: NotifyHumanArgs) => {
-			const { title, summary, full, attachments } = args;
-			// Before attachment materialization (file reads) and before the POST, so a reject costs nothing.
-			for (const [field, value] of [
-				["title", title],
-				["summary", summary],
-				["full", full],
-			] as const) {
+			const { title, summary, full, fullSpoken, attachments } = args;
+			// Before attachment materialization (file reads) and before the POST, so a reject costs
+			// nothing. The spoken trio comes from the shared field list; `full` is this surface's own
+			// body field name (it renames per surface, so each lint loop appends its own). Non-string
+			// values are clean by definition, matching postReply's own loop.
+			for (const field of [...SPOKEN_TIER_FIELDS, "full"] as const) {
+				const value = args[field];
+				if (typeof value !== "string") continue;
 				const hazard = literalEscapeHazard(value);
 				if (hazard) return toolError(literalEscapeReject("notify_human", field, hazard));
 			}
@@ -76,6 +75,7 @@ export function registerHumanTools(mcpServer: McpServer): void {
 					title,
 					summary,
 					full,
+					fullSpoken,
 					...(files ? { files } : {}),
 				})) as { delivered?: boolean };
 				return {

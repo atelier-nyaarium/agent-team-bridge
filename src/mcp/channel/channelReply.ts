@@ -11,7 +11,13 @@ import { postReply, readReplyAttachment, type ToolTextResult, toolError } from "
 //  Payload builders (pure - the wire mapping, testable without a network call)
 
 export function buildChannelReplyPayload(args: ChannelReplyArgs): Record<string, unknown> {
-	return { session_id: args.session_id, title: args.title, summary: args.summary, response: args.full };
+	return {
+		session_id: args.session_id,
+		title: args.title,
+		summary: args.summary,
+		response: args.full,
+		fullSpoken: args.fullSpoken,
+	};
 }
 
 export function buildStructuredReplyPayload(args: ChannelReplyStructuredArgs): Record<string, unknown> {
@@ -55,7 +61,7 @@ export function registerChannelReply(mcpServer: McpServer): void {
 		"channel_reply",
 		{
 			title: "Channel Reply",
-			description: `Reply to an incoming channel message. Channel conversations are streams: you can call this any number of times on the same session_id. Each call is just another message in the stream; there is no finality or "done" status. session_id, title, summary, and full are all required. Send responses verbatim unless the requester explicitly asked for a summary.`,
+			description: `Reply to an incoming channel message. Channel conversations are streams: you can call this any number of times on the same session_id. Each call is just another message in the stream; there is no finality or "done" status. session_id, title, summary, full, and fullSpoken are all required. Send responses verbatim unless the requester explicitly asked for a summary.`,
 			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
 			inputSchema: ChannelReplySchema as any,
 		},

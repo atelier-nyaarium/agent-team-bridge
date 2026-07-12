@@ -2,7 +2,7 @@ import { z } from "zod";
 import { sign, verify } from "./crypto.js";
 import { ChannelFilesSchema } from "./evie-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
-import { NoticeTitle } from "./notice.js";
+import { NoticeTierWireFields, NoticeTitle } from "./notice.js";
 import { isSlug } from "./session-id.js";
 
 ////////////////////////////////
@@ -61,8 +61,7 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 		session_id: z.string().min(1).max(MAX_STORE_KEY_LEN),
 		status: z.string().optional(),
 		response: z.string().optional(),
-		title: z.string().optional(),
-		summary: z.string().optional(),
+		...NoticeTierWireFields,
 		replyAsJson: z.record(z.string(), z.unknown()).optional(),
 		question: z.string().optional(),
 		reason: z.string().optional(),
@@ -84,14 +83,14 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 			session_id: z.string().min(1).max(MAX_STORE_KEY_LEN),
 			from: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
 			to: z.string().min(1).max(MAX_ADDRESS_LEN).optional(),
-			// Same bound as the notice contract's own title field (notice.ts) and HumanNotifySchema's
-			// inline copy - the notification-bar headline, never a long-winded body. summary/body are
-			// deliberately NOT length-capped here, matching NoticeSummary/NoticeFull's own established
-			// design (the notice contract has never bounded these) and HumanNotifySchema's identical
-			// posture; this op does not introduce a new text-size policy, only relays what those
-			// already-accepted contracts allow.
+			...NoticeTierWireFields,
+			// The title override tightens the spread field to the notice contract's own bound
+			// (notice.ts) - the notification-bar headline, never a long-winded body. summary/body
+			// are deliberately NOT length-capped here, matching NoticeSummary/NoticeFull's own
+			// established design (the notice contract has never bounded these) and HumanNotifySchema's
+			// identical posture; this op does not introduce a new text-size policy, only relays what
+			// those already-accepted contracts allow.
 			title: NoticeTitle.optional(),
-			summary: z.string().optional(),
 			body: z.string().optional(),
 			status: z.string().optional(),
 			files: ChannelFilesSchema.optional(),

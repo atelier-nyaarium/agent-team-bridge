@@ -4,7 +4,7 @@ import { b64Field, slugField } from "./crypto.js";
 import { SignedFirstRootSchema } from "./federation-lifecycle.js";
 import { SignedXDomainLinkSchema } from "./federation-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
-import { NoticeFull, NoticeSummary, NoticeTitle } from "./notice.js";
+import { NoticeFull, NoticeFullSpoken, NoticeSummary, NoticeTitle } from "./notice.js";
 import { ADDRESS_SEP, isSlug } from "./session-id.js";
 
 ////////////////////////////////
@@ -40,18 +40,21 @@ export const DomainStatusSchema = z.enum(["unrooted", "pending", "rooted"]).meta
  * deliberate: the description must show the two-character sequence. */
 export const REAL_NEWLINES_GUIDANCE = ` Use REAL newlines for line breaks, not \\n. Wrap intentional escapes in backticks or code spans.`;
 
+/** The four notice tiers as the reply tools expose them: the leaf's canonical texts VERBATIM
+ * with the newline guidance appended. Both tools (channel_reply here, notify_human in
+ * mcp/channel/humanTools.ts) spread this SAME object, so their tier describes are identical
+ * by construction, not by audit. */
+export const GuidedNoticeTiers = {
+	title: NoticeTitle.describe(`${NoticeTitle.description}${REAL_NEWLINES_GUIDANCE}`),
+	summary: NoticeSummary.describe(`${NoticeSummary.description}${REAL_NEWLINES_GUIDANCE}`),
+	full: NoticeFull.describe(`${NoticeFull.description}${REAL_NEWLINES_GUIDANCE}`),
+	fullSpoken: NoticeFullSpoken.describe(`${NoticeFullSpoken.description}${REAL_NEWLINES_GUIDANCE}`),
+};
+
 export const ChannelReplySchema = z
 	.object({
 		session_id: z.string().describe(`The session_id for this request. Required to route the reply correctly.`),
-		title: NoticeTitle.describe(
-			`A very short one-line headline for this reply - the console's notification-bar line and the shortest text-to-speech tier.${REAL_NEWLINES_GUIDANCE}`,
-		),
-		summary: NoticeSummary.describe(
-			`3-4 sentences summarizing this reply, read as the medium text-to-speech tier. No 'Summary:' lead-in.${REAL_NEWLINES_GUIDANCE}`,
-		),
-		full: NoticeFull.describe(
-			`Your full prose reply for the HUMAN to read - markdown AND mermaid render on the console. Lead with the answer; no lead-in labels ('Short answer:', 'TLDR:'). Renders as the message body.${REAL_NEWLINES_GUIDANCE}`,
-		),
+		...GuidedNoticeTiers,
 		attachments: z
 			.array(z.string())
 			.optional()
@@ -503,6 +506,8 @@ export const MailboxEntrySchema = z
 		// absent on a plain reply or a `sent` echo.
 		summary: z.string().optional(),
 		body: z.string().optional(),
+		// The spoken copy of the body (the FULL play tier speaks this, never `body`).
+		fullSpoken: z.string().optional(),
 		// Reply/notice state on the wire (e.g. "running"/"error"). A `sent` echo never
 		// carries it: an owner's own outgoing message is always settled (status null).
 		status: z.string().optional(),

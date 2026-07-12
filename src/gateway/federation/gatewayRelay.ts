@@ -5,6 +5,7 @@ import {
 	FederatedOpSchema,
 	GatewayRelayFrameSchema,
 } from "../../shared/federation-protocol.js";
+import { pickTiers } from "../../shared/notice.js";
 import type { CrossDomainBinding } from "../../shared/pending-job-store.js";
 import { Address, parseSessionName } from "../../shared/session-id.js";
 import type { TeamInfo } from "../../shared/types.js";
@@ -216,8 +217,7 @@ export function createGatewayRelayHandler({
 					session_id: op.session_id,
 					status: op.status,
 					response: op.response,
-					title: op.title,
-					summary: op.summary,
+					...pickTiers(op),
 					replyAsJson: op.replyAsJson,
 					question: op.question,
 					reason: op.reason,

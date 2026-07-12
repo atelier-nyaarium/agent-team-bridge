@@ -290,24 +290,25 @@ class SttsPlayer(private val root: File) {
 			return linear to gainMb
 		}
 
-		/** The text a tier speaks. Summary prefers the addressable tiers; full
-		 * is the sanitized body. */
+		/** The text a tier speaks. Agent replies and notices carry author-written spoken tiers
+		 * (fullSpoken is the spoken copy of the body), so each tier is a plain null-coalesce -
+		 * a tier field is null or non-blank by the Message model's invariant (`tierOrNull` at
+		 * its construction boundaries). Only a TIERLESS row (a peer-mirrored ask, a user row)
+		 * falls to its raw body, through the minimal strip below - such rows can be full
+		 * markdown briefs, so fences and link targets must not be read aloud verbatim. */
 		fun ttsText(m: Message, tier: Tier): String = when (tier) {
-			Tier.SUMMARY -> m.summary ?: m.title ?: sanitize(m.text)
-			Tier.TITLE -> m.title ?: m.summary ?: sanitize(m.text)
-			Tier.FULL -> sanitize(m.text)
+			Tier.SUMMARY -> m.summary ?: m.title ?: stripUnspeakable(m.text)
+			Tier.TITLE -> m.title ?: m.summary ?: stripUnspeakable(m.text)
+			Tier.FULL -> m.fullSpoken ?: m.summary ?: m.title ?: stripUnspeakable(m.text)
 		}
 
-		/** Light TTS sanitizer: drop code/mermaid fences and FILES blocks,
-		 * reduce links to their labels, strip heading markers, collapse space. */
-		fun sanitize(s: String): String = s
+		/** The tierless-row minimal strip: drop code/mermaid fences and FILES blocks, reduce
+		 * links to their labels. Deliberately nothing more - an author-written spoken tier is
+		 * the real fix for speakability, so this only removes the structures no voice can read. */
+		fun stripUnspeakable(s: String): String = s
 			.replace(Regex("```[\\s\\S]*?(```|$)"), " Code block omitted. ")
 			.replace(Regex("\\[FILES[^\\]]*\\][\\s\\S]*?(?=\\n\\n|$)"), " Attachments omitted. ")
 			.replace(Regex("\\[([^\\]]+)\\]\\([^)]*\\)"), "$1")
-			.replace(Regex("(?m)^#{1,6}\\s*"), "")
-			.replace(Regex("(?m)^[-*+]\\s+"), "")
-			.replace(Regex("[*_`~]"), "")
-			.replace(Regex("\\s+"), " ")
 			.trim()
 	}
 }

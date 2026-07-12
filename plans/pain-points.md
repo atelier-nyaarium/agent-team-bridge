@@ -70,6 +70,85 @@ concrete, reachable issues - dup-logic, naming nits, dead code with no consequen
 gated behind a disclaimed precondition ("only reachable via a corrupted file", "negligible at this
 app's realistic scale") were cut. Refs are `file : scope : name`; severity in brackets.
 
+## Host daemon cleanup (`plans/host-daemon-cleanup.md`, deleted, shipped - 2026-07-11)
+
+Migrated from `plans/host-daemon-cleanup.md` (deleted; its phases 1-4 shipped in PRs #96/#97, its
+parked Phase 5 + dead-launch hardening moved to `features-and-fixes.md` Item 16). These are the
+deferred follow-ups its audits surfaced, verbatim at migration time.
+
+### Trusted-vs-untrusted catalog conflation
+
+`isCatalogProject` and its clone union a TRUSTED source (`offlineCatalog`, host-token-gated) with an
+UNTRUSTED, durable one (`knownTeamPaths`, written by the unauthenticated `/bridge` register). The
+connector now gates on `offlineCatalog` only; these other sites still union, so an unauthenticated
+register can influence them:
+
+- [medium] `src/gateway/routes.ts : createRoutes : isDevcontainer` - sets `TeamInfo.kind`; an
+  attacker-registered name can make a loose team show as a devcontainer spawn-point (console UI
+  confusion, failed terminal-view).
+- [low] `src/gateway/console/consoleHandler.ts : createConsoleDispatcher : isProjectName` -
+  device-name collision gate; an attacker register of a device name blocks that console from
+  registering (transient DoS).
+- [low] `src/gateway/console/consoleHandler.ts : resolveTmuxTarget` - terminal-view devcontainer
+  resolution; benign today (the `docker exec` on a bogus `<name>_devcontainer-dev-1` fails
+  gracefully) but inconsistent.
+- [low] `src/gateway/index.ts : startGateway : isCatalogProject` (+ its `doWakeTeam` use) - the
+  shared union predicate; `doWakeTeam` is currently safe (composites can never be catalog members)
+  but reads on the untrusted half.
+- Systemic fix: a named trusted predicate (`isTrustedCatalogProject` = offlineCatalog-only) or a
+  typed `Catalog` value object exposing trusted vs any membership, applied per site. The tradeoff:
+  `knownTeamPaths` is the durability fallback for a host-daemon outage (offlineCatalog clears on
+  disconnect), so flipping a site to trusted-only degrades it during an outage. Decide per site
+  whether trust or durability wins. ROOT cause (unauthenticated `/bridge` register) is
+  `gateway-auth-surface.md` (postponed).
+
+### Outbound-target validation pattern
+
+- [medium, large-defer] `src/gateway/connectorProxy.ts : setupProxy` - dials `ws://<project>:20002`
+  and trusts the caller validated `project` (documented via JSDoc, gated in index.ts). There is no
+  systematic outbound-target validator (contrast the sealed-frame pumps' schema-then-semantic
+  validation). An `outbound-validators` module with a guard per outbound class would make SSRF
+  prevention systematic rather than per-call.
+
+### Graceful-shutdown reconnector cleanup
+
+The shared `Reconnector` exposes `cancel()`; evieClient and `closeRouter` use it, but two shutdown
+paths still leak a pending reconnect timer. Cosmetic on a process that is exiting, but inconsistent.
+
+- [low] `src/mcp/devcontainer/hostDaemon.ts : reconnector` - module-scoped, never cancelled;
+  `main-host-daemon.ts` registers no SIGTERM/SIGINT handler. Needs an exported `stopHostDaemon()`
+  calling `reconnector.cancel()` + signal handlers.
+- [low] `src/gateway/index.ts : activateFederation` - the SIGTERM handler calls `evieClient.stop()`
+  but SIGINT does not, so a Ctrl-C leaks evieClient's reconnector + heartbeat timers. Consolidate
+  SIGTERM/SIGINT into one shutdown handler.
+- [low] `src/gateway/evie/evieClient.ts : connect : ws.on("close")` - pre-existing: a stale socket's
+  close handler unconditionally `ws = null` + `onDisconnect`; if it fired after a new socket
+  connected it could null the new one. Guard the handlers on socket identity. Low risk in practice
+  (the reconnect delay outlasts the close event).
+
+### Coordinator / timeout pattern consolidation (large-defer)
+
+- The four waiter/timeout coordinators (`WakeCoordinator`, `gateway/hostOpCoordinator`,
+  `evie/evieClient` pendingCalls, `shared/pending-job-store`) share a request-wait-resolve-timeout
+  shape; a `TimedWaiter` abstraction could consolidate them. Over-abstraction caveat: they differ
+  (multi-waiter vs single, the mutable re-arm in `ackReceived`, persistence + TTL in
+  PendingJobStore). Only worth it if a clean shared core emerges; otherwise tailored is clearer.
+- Wake timeouts are split: `WAKE_TIMEOUT_MS` (`gateway/index.ts`) and `REGISTER_WINDOW_MS`
+  (`gateway/websocket.ts`). A single timeout-config owner would make them discoverable. Minor.
+
+### In-process tmux driver consistency
+
+- [medium, large-defer] `src/mcp/devcontainer/reloadPlugins.ts : registerReloadPlugins` - still
+  drives its own pane by GENERATING and spawning a detached bash script (the old pattern), while
+  `set_effort_level` / `compact_session` route through `tmuxCore.sendText` + the shared
+  `selfSessionTarget()`. Migrating reloadPlugins to a structured op through tmuxCore would unify all
+  three in-process drivers and drop the shell-script generation. Intertwined with the Phase 5 TUI
+  fragility (features-and-fixes.md Item 16).
+- [low] `src/shared/host-op.ts : classifyPeekError : PEEK_ABSENT_PATTERNS` - inherent to classifying
+  tmux/docker stderr: a future tmux/docker that renames a "session absent" message would fall
+  through to `failure`. Acceptable (the list is in ONE place); validate the patterns on a major
+  tmux/docker upgrade.
+
 ## Pre-handshake terminal view (PR #108, 2026-07-07)
 
 Migrated from `plans/pre-handshake-terminal-view.md` (deleted, shipped) so its still-open residuals
@@ -143,7 +222,7 @@ concerns.
 - [medium] `index.ts : sessionResume` - no entry-count ceiling (only the 30-day TTL), so unauthenticated
   composite registers can grow the map and `session-resume.json` unboundedly.
 - [medium] `routes.ts : isDevcontainer` - unions trusted `offlineCatalog` with untrusted
-  `knownTeamPaths` (also tracked in `plans/host-daemon-cleanup.md`).
+  `knownTeamPaths` (also tracked under "Host daemon cleanup" above).
 
 ## Console device-name address (PR #99)
 
@@ -229,10 +308,11 @@ confirmed live during this plan's own deploy, not just theorized.
 ### Forward-looking
 
 - Multi-way chats rising to the Console: the `{title, summary, full}` triple on `channel_reply` is
-  the groundwork, but the cross-Gateway `response_push` relay (`src/gateway/routes.ts`, inside
-  `relayWithRetry`) forwards only `status`/`response`/`files` and DROPS `title`/`summary` - the
-  uniform-headline premise holds only for same-Gateway replies until that relay is extended to carry
-  the tiers. The user flagged multi-way chat as the actual direction they want.
+  the groundwork. CORRECTED 2026-07-11: the "relay drops title/summary" claim originally recorded
+  here was stale the day it was written - `response_push` gained the tier fields in f38b04c, and the
+  fullSpoken work (`plans/full-spoken.md`) added `fullSpoken` beside them plus regression tests
+  pinning that all tiers survive both `response_push` and `console_push`. The remaining
+  forward-looking part stands: the user flagged multi-way chat as the actual direction they want.
 
 ### Crust-collection sweep
 
@@ -365,12 +445,22 @@ audit passes across all 6 phases; already-fixed and purely informational items d
   pre-existing gap where an outer HTTP-level retry of `send()`/`respond()` re-runs `mirrorPeer` with
   a fresh dedupeKey now has a wider blast radius: a retry-produced duplicate previously showed up
   twice on one gateway; now it can appear mesh-wide, on any gateway the console might be polling.
-- [medium, framework-first, logged as a future candidate] `src/gateway/routes.ts` is now ~1290 lines,
-  the largest file in `src/gateway/`. `mirrorPeer`/`consolePush`/`fanOutConsolePush`/`humanNotify`
-  (console mailbox delivery) pass the ownership test as a genuinely separable sub-concern from core
-  session routing. Worth extracting into its own module (natural home: `src/gateway/console/`),
-  taking `mailboxStore`/`ownerId`/`evieClient`/`localGatewayId`/`resolvesLocalGateway`/
-  `relayWithRetry` as explicit injected deps, matching the precedent `gatewayRelay.ts`'s narrow
-  `FederationRoutes` dependency already sets. If picked up, bundle with hoisting
-  `localAddress`/`tryLocalAddress`/`consoleSelfAddress` first, and treat `send()`/`respond()`
-  (262/233 lines) as a separate, likely higher-priority target in the same file.
+- [medium, framework-first, logged as a future candidate] `src/gateway/routes.ts` is ~1400 lines
+  (refreshed 2026-07-11 by the fullSpoken framework audit; the original ~1290 figure went stale in
+  two days), the largest file in `src/gateway/`. The console mailbox delivery concern is now FIVE
+  functions - `mirrorPeer`/`consolePush`/`fanOutConsolePush`/`humanNotify`/`pluginAction` (plus
+  `PluginActionRequestSchema` and `HumanNotifySchema`) - and passes the ownership test as a
+  genuinely separable sub-concern from core session routing. Worth extracting into its own module
+  (natural home: `src/gateway/console/`), taking `mailboxStore`/`ownerId`/`evieClient`/
+  `localGatewayId`/`resolvesLocalGateway`/`relayWithRetry` as explicit injected deps, matching the
+  precedent `gatewayRelay.ts`'s narrow `FederationRoutes` dependency already sets. If picked up,
+  bundle with hoisting `localAddress`/`tryLocalAddress`/`consoleSelfAddress` first, and treat
+  `send()`/`respond()` (262/233 lines) as a separate, likely higher-priority target in the same
+  file. Negative result worth recording: the fullSpoken commit would NOT have been smaller or
+  safer with the extraction done - most of its routes.ts hunks landed in `respond()`, outside the
+  would-be module. The honest trigger is the next console-bound mailbox kind or the next wire tier
+  field, and the extraction should then land with a test-helper dedup (`makeCtx`/`fakeEvie`/
+  `gateRoutes` exist as divergent copies in routes.test.ts and federation.test.ts) plus a
+  table-driven tier-conservation harness over every mailbox-writing hop (deferred from the
+  fullSpoken framework audit - the spread-once `NoticeTierWireFields` + `pickTiers` shipped
+  instead and covers the declaration/compose halves of that bug class).

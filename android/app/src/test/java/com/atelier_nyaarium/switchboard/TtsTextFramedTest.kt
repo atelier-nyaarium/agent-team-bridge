@@ -61,4 +61,52 @@ class TtsTextFramedTest {
 		assertEquals("CoolApp to CoolLib: the summary", ttsTextFramed(state, m, SttsPlayer.Tier.SUMMARY))
 		assertEquals("CoolApp to CoolLib: the title", ttsTextFramed(state, m, SttsPlayer.Tier.TITLE))
 	}
+
+	@Test
+	fun fullTierSpeaksTheSpokenCopyOverTheBody() {
+		val m = Message(
+			fromMe = false,
+			text = "# Report\n\n```kotlin\nval x = 1\n```\n\nYAY!",
+			at = 1000L,
+			title = "the title",
+			summary = "the summary",
+			fullSpoken = "The report, spoken. Yay!",
+		)
+		assertEquals("The report, spoken. Yay!", ttsTextFramed(stateWith(emptyMap()), m, SttsPlayer.Tier.FULL))
+	}
+
+	@Test
+	fun fullTierFallsToSummaryThenTitleWhenNoSpokenCopy() {
+		val withSummary = Message(fromMe = false, text = "body", at = 1000L, title = "the title", summary = "the summary")
+		assertEquals("the summary", SttsPlayer.ttsText(withSummary, SttsPlayer.Tier.FULL))
+		val titleOnly = Message(fromMe = false, text = "body", at = 1000L, title = "the title")
+		assertEquals("the title", SttsPlayer.ttsText(titleOnly, SttsPlayer.Tier.FULL))
+	}
+
+	@Test
+	fun tierlessRowSpeaksItsBodyWithUnspeakableStructuresStripped() {
+		// A peer-mirrored ask carries no tiers and can be a full markdown brief: a fence is
+		// replaced by its spoken mention, a link speaks its label, prose is spoken as written.
+		val m = Message(
+			fromMe = false,
+			text = "Please review [the doc](https://example.com/doc).\n\n```js\nconsole.log(1)\n```\n\nThanks!",
+			at = 1000L,
+			from = "alice.sakura.coolapp.main",
+			to = "alice.sakura.coollib.main",
+			isPeer = true,
+		)
+		val state = stateWith(mapOf("alice.sakura.coolapp.main" to "CoolApp", "alice.sakura.coollib.main" to "CoolLib"))
+		assertEquals(
+			"CoolApp to CoolLib: Please review the doc.\n\n Code block omitted. \n\nThanks!",
+			ttsTextFramed(state, m, SttsPlayer.Tier.FULL),
+		)
+	}
+
+	@Test
+	fun tierNormalizationTreatsBlankAsAbsent() {
+		assertEquals(null, "".tierOrNull())
+		assertEquals(null, "   ".tierOrNull())
+		assertEquals(null, (null as String?).tierOrNull())
+		assertEquals("kept", "kept".tierOrNull())
+	}
 }

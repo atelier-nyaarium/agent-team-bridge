@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { NotifyHumanSchema } from "../mcp/channel/humanTools.js";
 import { ChannelReplySchema, ChannelReplyStructuredSchema } from "../shared/schemas.js";
 
 // The silent-strip class: Zod strips unknown keys by default, so a mistyped
@@ -6,7 +7,13 @@ import { ChannelReplySchema, ChannelReplyStructuredSchema } from "../shared/sche
 // schemas are `.strict()`, so a typo is rejected at the boundary (surfaced
 // to the agent as an InvalidParams tool error) instead of vanishing.
 
-const VALID_REPLY = { session_id: "s1", title: "Title", summary: "Summary sentence.", full: "The reply body." };
+const VALID_REPLY = {
+	session_id: "s1",
+	title: "Title",
+	summary: "Summary sentence.",
+	full: "The reply body.",
+	fullSpoken: "The reply body, spoken.",
+};
 
 describe("ChannelReplySchema", () => {
 	it("accepts a valid reply", () => {
@@ -43,6 +50,11 @@ describe("ChannelReplySchema", () => {
 		expect(ChannelReplySchema.safeParse(rest).success).toBe(false);
 	});
 
+	it("rejects a missing fullSpoken", () => {
+		const { fullSpoken: _fullSpoken, ...rest } = VALID_REPLY;
+		expect(ChannelReplySchema.safeParse(rest).success).toBe(false);
+	});
+
 	it("rejects an empty full (NoticeFull requires min length 1)", () => {
 		const r = ChannelReplySchema.safeParse({ ...VALID_REPLY, full: "" });
 		expect(r.success).toBe(false);
@@ -51,6 +63,30 @@ describe("ChannelReplySchema", () => {
 	it("rejects attachments with no full (attachments-only is no longer allowed)", () => {
 		const r = ChannelReplySchema.safeParse({ session_id: "s1", attachments: ["/tmp/screenshot.png"] });
 		expect(r.success).toBe(false);
+	});
+});
+
+describe("NotifyHumanSchema", () => {
+	const VALID_NOTICE = {
+		title: "Title",
+		summary: "Summary sentence.",
+		full: "The notice body.",
+		fullSpoken: "The notice body, spoken.",
+	};
+
+	it("accepts a valid notice", () => {
+		expect(NotifyHumanSchema.safeParse(VALID_NOTICE).success).toBe(true);
+	});
+
+	it("requires every tier (a notice missing any of the four is rejected)", () => {
+		for (const tier of ["title", "summary", "full", "fullSpoken"] as const) {
+			const { [tier]: _dropped, ...rest } = VALID_NOTICE;
+			expect(NotifyHumanSchema.safeParse(rest).success).toBe(false);
+		}
+	});
+
+	it("rejects an unknown field (the retired tiny) instead of silently stripping it", () => {
+		expect(NotifyHumanSchema.safeParse({ ...VALID_NOTICE, tiny: "t" }).success).toBe(false);
 	});
 });
 

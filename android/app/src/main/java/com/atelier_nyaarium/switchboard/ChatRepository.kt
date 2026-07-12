@@ -185,6 +185,8 @@ data class Message(
 	val title: String? = null,
 	/** The Short tier of a notice, persisted but not yet read by any UI. */
 	val summary: String? = null,
+	/** The spoken copy of the body: what the FULL play tier speaks in `text`'s place. */
+	val fullSpoken: String? = null,
 	/** Mailbox coordinates of the entry that produced this row, used to dedupe an
 	 * at-least-once re-drain so the same (epoch, seq) renders exactly once. 0 for
 	 * local/optimistic rows and legacy persisted rows. */
@@ -207,6 +209,13 @@ data class Message(
 	val isPeer: Boolean = false,
 )
 
+
+/** The tier-field invariant, applied at Message's two construction boundaries (the mailbox
+ * drain and the persisted-thread load): a tier is null or non-blank, never "". The wire below
+ * the tool schemas is deliberately lenient (mixed-version grace), so a blank tier from a raw
+ * caller or a legacy persisted row is normalized HERE, letting every consumer (the speech
+ * coalesce, notification lines, snippets) chain plain `?:` with no per-site blank guards. */
+internal fun String?.tierOrNull(): String? = this?.takeIf { it.isNotBlank() }
 
 /** The rendered `from`/`to`/`isPeer` for a non-`"sent"` mailbox entry. */
 internal data class MessageAttribution(val from: String?, val to: String?, val isPeer: Boolean)
@@ -2720,7 +2729,8 @@ class ChatRepository(
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team status=${e.status} files=${files.size} \"$snippet\"")
 							val attribution = resolveMessageAttribution(e.kind, e.from, e.to, team, ::fromCanonical)
 							val msg = Message(
-								false, bodyText, e.at, files = files, status = e.status, title = e.title, summary = e.summary,
+								false, bodyText, e.at, files = files, status = e.status,
+								title = e.title.tierOrNull(), summary = e.summary.tierOrNull(), fullSpoken = e.fullSpoken.tierOrNull(),
 								epoch = mb.epoch, seq = e.seq, from = attribution.from, to = attribution.to, isPeer = attribution.isPeer,
 							)
 							// appendInbound folds an at-least-once re-drain in place and returns
@@ -3149,6 +3159,7 @@ class ChatRepository(
 				if (m.seq != 0L) obj.put("seq", m.seq)
 				obj.putOpt("title", m.title)
 				obj.putOpt("summary", m.summary)
+				obj.putOpt("fullSpoken", m.fullSpoken)
 				val (persistFrom, persistTo) = persistedAttribution(m)
 				obj.putOpt("from", persistFrom)
 				obj.putOpt("to", persistTo)
@@ -3208,8 +3219,9 @@ class ChatRepository(
 						loadFiles(m),
 						m.optString("status").takeIf { s -> s.isNotEmpty() },
 						m.optString("opId").takeIf { s -> s.isNotEmpty() },
-						title = m.optString("title").takeIf { s -> s.isNotEmpty() },
-						summary = m.optString("summary").takeIf { s -> s.isNotEmpty() },
+						title = m.optString("title").tierOrNull(),
+						summary = m.optString("summary").tierOrNull(),
+						fullSpoken = m.optString("fullSpoken").tierOrNull(),
 						epoch = m.optLong("epoch", 0L),
 						seq = m.optLong("seq", 0L),
 						from = loadedFrom,
