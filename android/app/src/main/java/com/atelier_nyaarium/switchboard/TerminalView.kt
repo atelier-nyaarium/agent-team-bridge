@@ -24,6 +24,8 @@ import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -268,12 +270,20 @@ private fun TerminalPane(
 // The fixed control-key palette: a label shown on the chip and the tmux key name sent.
 private val PALETTE_KEYS = listOf(
 	"Esc" to "Escape",
-	"^C" to "C-c",
 	"Tab" to "Tab",
 	"Up" to "Up",
 	"Down" to "Down",
 	"Left" to "Left",
 	"Right" to "Right",
+)
+
+// The modifier-combo menu the "Ctrl" chip opens, in place of a single fixed key: a label shown in
+// the dropdown and the tmux key name sent.
+private val CTRL_MENU_KEYS = listOf(
+	"Shift + Tab" to "BTab",
+	"Ctrl + O" to "C-o",
+	"Ctrl + T" to "C-t",
+	"Ctrl + C" to "C-c",
 )
 
 // One-tap slash command macros for the agent's TUI. `autoSend` types the command with a trailing
@@ -601,7 +611,29 @@ fun TerminalView(
 					Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
 					horizontalArrangement = Arrangement.spacedBy(6.dp),
 				) {
-					PALETTE_KEYS.forEach { (label, key) ->
+					AssistChip(
+						onClick = hapticClick { fire(null, "Escape") },
+						label = { Text("Esc", fontFamily = FontFamily.Monospace) },
+					)
+					var ctrlMenuExpanded by remember { mutableStateOf(false) }
+					Box {
+						AssistChip(
+							onClick = hapticClick { ctrlMenuExpanded = true },
+							label = { Text("Ctrl", fontFamily = FontFamily.Monospace) },
+						)
+						DropdownMenu(expanded = ctrlMenuExpanded, onDismissRequest = { ctrlMenuExpanded = false }) {
+							CTRL_MENU_KEYS.forEach { (label, key) ->
+								DropdownMenuItem(
+									text = { Text(label, fontFamily = FontFamily.Monospace) },
+									onClick = {
+										ctrlMenuExpanded = false
+										fire(null, key)
+									},
+								)
+							}
+						}
+					}
+					PALETTE_KEYS.drop(1).forEach { (label, key) ->
 						AssistChip(
 							onClick = hapticClick { fire(null, key) },
 							label = { Text(label, fontFamily = FontFamily.Monospace) },

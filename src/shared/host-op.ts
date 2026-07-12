@@ -29,6 +29,8 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
 	"Enter",
 	"Escape",
 	"C-c",
+	"C-o",
+	"C-t",
 	"Up",
 	"Down",
 	"Left",
