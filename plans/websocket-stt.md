@@ -2,8 +2,9 @@
 
 Status: collecting knowledge. Do not implement yet. Active focus per the owner
 ("focus on STT for now and we lap back" to TTS playback). The TTS playback issue
-stays parked in `tts-playback-stream-bug.md` (TTS has no WebSocket; it is a
-server-side REST `/stream` bug).
+(TTS has no WebSocket; it is a server-side REST `/stream` bug) was never captured
+in its own tracked plan file - flag if it still needs a home before picking this
+back up.
 
 ## Goal
 

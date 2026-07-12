@@ -2,9 +2,10 @@
 
 A backlog of larger feature ideas, jotted for later. No items are currently scoped for
 implementation; each below needs its own scoping/design pass before work starts. (The CLI teardown
-+ create-session + Copilot items moved into the host-split plan, `bug-class-decisions.md` Phase 6.
-Items 5 and 10 - the TTS volume slider and the 500 MB attachment cap raise - shipped and were
-removed from this file; see git history for their original scoping if needed.)
++ create-session + Copilot items moved into the host-split plan (`bug-class-decisions.md`, since
+deleted - the host split it drove shipped; see CLAUDE.md's host-daemon architecture). Items 5 and
+10 - the TTS volume slider and the 500 MB attachment cap raise - shipped and were removed from this
+file; see git history for their original scoping if needed.)
 
 ---
 
@@ -82,10 +83,12 @@ its deferred painpoints moved to `plans/pain-points.md`). Both items deploy via 
 
 ---
 
-## Moved out: Items 11-13 -> the host-split plan; Item 14 -> shipped
+## Moved out: Items 11-13 -> the host-split plan (shipped); Item 14 -> shipped
 
-The CLI-era teardown, the create-session button, and Copilot support are now subsumed into
-`bug-class-decisions.md` Phase 6 (split the host: demote the host-agent, headless multi-session
-daemon). Item 14 (app-side plugins support) was scoped in `plans/plugins.md` and SHIPPED (ffa32c4);
-that plan and its `plans/inbound-pipeline.md` foundation were deleted on ship, their deferred features
-folded into Item 15 above and their open bug-residuals into `plans/plugin-pipeline-hardening.md`.
+The CLI-era teardown, the create-session button, and Copilot support were subsumed into the
+host-split plan's Phase 6 (split the host: demote the host-agent, headless multi-session daemon) -
+shipped; that plan is deleted, its architecture documented in CLAUDE.md's console-bridge and
+host-daemon sections. Item 14 (app-side plugins support) was scoped in `plans/plugins.md` and
+SHIPPED (ffa32c4); that plan and its `plans/inbound-pipeline.md` foundation were deleted on ship,
+their deferred features folded into Item 15 above and their open bug-residuals into
+`plans/plugin-pipeline-hardening.md`.
