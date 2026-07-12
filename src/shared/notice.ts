@@ -1,4 +1,4 @@
-// SYNC-HASH: 787f63034cd2836827e1278c18e5dca9
+// SYNC-HASH: acdb808f7ebcfadccb1f01daaa2aa572
 // SYNCED MODULE - source of truth: switchboard/src/shared/notice.ts
 // Copied verbatim into: nyaaskills/src/shared/notice.ts
 // MUST re-copy on change: cp src/shared/notice.ts ../nyaaskills/src/shared/notice.ts
@@ -62,3 +62,38 @@ export const NoticeSchema = z.object({
 });
 
 export type Notice = z.infer<typeof NoticeSchema>;
+
+////////////////////////////////
+//  Wire projection
+//
+//  The tool boundary above is strict and required; every hop BELOW it (reply wire,
+//  mailbox entry, federation relay, peer mirror) carries the spoken tiers as the
+//  SAME lenient optional trio. Declaring the trio once and spreading it means a hop
+//  cannot silently strip one tier while its siblings survive (non-strict zod drops
+//  undeclared keys), and composing through one projection means a compose site
+//  cannot drop a tier by omission. A consumer may override a spread field to
+//  tighten it (e.g. a length cap), never to rename it. The body tier is deliberately
+//  NOT part of the trio: it renames per surface (full -> response -> body), so each
+//  surface owns its own body field.
+
+export const NoticeTierWireFields = {
+	title: z.string().optional(),
+	summary: z.string().optional(),
+	fullSpoken: z.string().optional(),
+};
+
+const NoticeTierWireSchema = z.object(NoticeTierWireFields);
+export type NoticeTierWire = z.infer<typeof NoticeTierWireSchema>;
+
+/** The spoken-tier field names, for the tools' prose-lint loops (each appends its own
+ * surface's body field name). */
+export const SPOKEN_TIER_FIELDS = Object.keys(NoticeTierWireFields) as (keyof NoticeTierWire)[];
+
+/** Project the spoken tiers out of a tier-bearing payload, emitting only non-empty values:
+ * a blank tier (producible only by a raw HTTP caller - the tool schemas enforce min length)
+ * normalizes to absent at the first hop instead of riding the wire as "". */
+export function pickTiers(src: NoticeTierWire): NoticeTierWire {
+	const out: NoticeTierWire = {};
+	for (const f of SPOKEN_TIER_FIELDS) if (src[f]) out[f] = src[f];
+	return out;
+}

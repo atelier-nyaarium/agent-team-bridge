@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { NoticeTierWire } from "./notice.js";
 import type {
 	ChannelFileSchema,
 	ConnectionModeSchema,
@@ -40,16 +41,13 @@ export interface ChannelPushPayload {
 	files?: ChannelFile[];
 }
 
-export interface ResponsePayload {
+// Extends the spoken-tier trio (notice.ts NoticeTierWire): title (notification-bar line +
+// shortest spoken tier), summary (medium spoken tier), fullSpoken (what the FULL play tier
+// speaks in the body's place). Absent on a plain reply; response stays the full body.
+export interface ResponsePayload extends NoticeTierWire {
 	session_id: string;
 	status?: ResponseStatus;
 	response?: string;
-	// Optional notice-style tiers on a reply: title (notification-bar line + shortest spoken
-	// tier), summary (medium spoken tier), and fullSpoken (what the FULL play tier speaks in
-	// the body's place). Absent on a plain reply; response stays the full body.
-	title?: string;
-	summary?: string;
-	fullSpoken?: string;
 	replyAsJson?: Record<string, unknown>;
 	question?: string;
 	reason?: string;

@@ -75,10 +75,19 @@ the federated entry schemas in the same commit):
   fall to the tierless-speech rule below.
 
 **Console path (Kotlin).** Regenerated `MailboxEntry`; `Message` model + thread persistence gain
-`fullSpoken`; `SttsPlayer.ttsText(Tier.FULL)` becomes a BLANK-SAFE coalesce (red team:
-`fullSpoken?.takeIf { it.isNotBlank() } ?: ...` - Kotlin's `?:` is null-only, so a blank string
-landed by a raw HTTP caller would otherwise resolve to silence and defeat the fallback chain;
-blank summary has the same pre-existing class, so the whole chain goes blank-safe).
+`fullSpoken`; `SttsPlayer.ttsText(Tier.FULL)` becomes `fullSpoken ?: summary ?: title` as PLAIN
+null-coalescing. Blank-safety (red team: Kotlin's `?:` is null-only, so a blank tier landed by a
+raw HTTP caller would resolve to silence and defeat the fallback chain) is enforced ONCE at the
+Message model's two construction boundaries instead of takeIf arms per consumer (framework
+audit): a 1-line `String?.tierOrNull()` (`takeIf { it.isNotBlank() }`) at the drain's
+entry-to-Message mapping and at `loadPersistedThreads` establishes the invariant "a tier field
+is null or non-blank" - which also heals the identical null-only hole in
+`SwitchboardService`'s notification lines and `ChatRepository.snippet()`, and the existing
+live/persisted asymmetry (the load path already normalizes empty-to-null, the drain does not).
+No SpokenTiers value class: the spoken coalesce has one consumer and the display chains have
+deliberately different semantics. The gateway-side pickTiers projection already normalizes ""
+to absent on every LOCAL compose path, so the ingest invariant is the belt-and-suspenders for
+relayed/legacy entries.
 `sanitize()` has THREE call sites (audit): the FULL branch plus the SUMMARY and TITLE branches'
 terminal `sanitize(m.text)` fallbacks. All three retire together. TIERLESS-SPEECH RULE - OWNER
 DECISION NEEDED (red team falsified the original premise): rows with no tiers are NOT all short

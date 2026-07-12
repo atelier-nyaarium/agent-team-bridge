@@ -11,7 +11,7 @@ import {
 	handleChannelReplyStructured,
 	isEmptyResponseData,
 } from "../mcp/channel/channelReply.js";
-import { ChannelReplySchema, ChannelReplyStructuredSchema } from "../shared/schemas.js";
+import { ChannelReplySchema, ChannelReplyStructuredSchema, REAL_NEWLINES_GUIDANCE } from "../shared/schemas.js";
 
 vi.mock("../mcp/bridge/helpers.js", () => ({
 	routerPost: vi.fn(),
@@ -408,5 +408,64 @@ describe("registered-handler lint enforcement (notify_human, crosstalk_send, des
 		expect(result.content[0].text).toContain('"message"');
 		expect(result.content[0].text).not.toContain('"response"');
 		expect(mockRouterPost).not.toHaveBeenCalled();
+	});
+});
+
+describe("lint conformance (every guidance-marked schema field is lint-enforced)", () => {
+	// The guard has two halves: REAL_NEWLINES_GUIDANCE on a field's describe (the visible half)
+	// and the handlers' enforcement loops (the enforcing half). They are coupled by convention
+	// only, so this suite derives the field list from the SCHEMAS and drives the REAL handlers -
+	// a field whose describe promises the guard but whose handler loop forgot it fails here.
+	const bs = "\\";
+
+	beforeEach(() => {
+		mockRouterPost.mockReset();
+		mockRouterPost.mockResolvedValue({});
+	});
+
+	function guidedFields(shape: Record<string, { description?: string }>): string[] {
+		return Object.entries(shape)
+			.filter(([, field]) => field.description?.includes(REAL_NEWLINES_GUIDANCE))
+			.map(([name]) => name);
+	}
+
+	it("channel_reply rejects a hazard in each guidance-marked field, naming it", async () => {
+		const fields = guidedFields(ChannelReplySchema.shape);
+		expect(fields).toEqual(expect.arrayContaining(["title", "summary", "full", "fullSpoken"]));
+		for (const field of fields) {
+			mockRouterPost.mockClear();
+			const args = ChannelReplySchema.parse({
+				session_id: "s1",
+				title: "T",
+				summary: "S.",
+				full: "body.",
+				fullSpoken: "body, spoken.",
+				[field]: `x.${bs}n- y`,
+			});
+			const result = await handleChannelReply(args);
+			expect(result.isError, `guidance-marked field "${field}" is not lint-enforced`).toBe(true);
+			expect(result.content[0].text).toContain(`"${field}"`);
+			expect(mockRouterPost).not.toHaveBeenCalled();
+		}
+	});
+
+	it("notify_human rejects a hazard in each guidance-marked field, naming it", async () => {
+		const { registerHumanTools, NotifyHumanSchema } = await import("../mcp/channel/humanTools.js");
+		const tools = captureTools(registerHumanTools);
+		const fields = guidedFields(NotifyHumanSchema.shape as never);
+		expect(fields).toEqual(expect.arrayContaining(["title", "summary", "full", "fullSpoken"]));
+		for (const field of fields) {
+			mockRouterPost.mockClear();
+			const result = await tools.notify_human({
+				title: "T",
+				summary: "S.",
+				full: "body.",
+				fullSpoken: "body, spoken.",
+				[field]: `x.${bs}n- y`,
+			} as never);
+			expect(result.isError, `guidance-marked field "${field}" is not lint-enforced`).toBe(true);
+			expect(result.content[0].text).toContain(`"${field}"`);
+			expect(mockRouterPost).not.toHaveBeenCalled();
+		}
 	});
 });

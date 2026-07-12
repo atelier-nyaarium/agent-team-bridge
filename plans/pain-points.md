@@ -445,12 +445,22 @@ audit passes across all 6 phases; already-fixed and purely informational items d
   pre-existing gap where an outer HTTP-level retry of `send()`/`respond()` re-runs `mirrorPeer` with
   a fresh dedupeKey now has a wider blast radius: a retry-produced duplicate previously showed up
   twice on one gateway; now it can appear mesh-wide, on any gateway the console might be polling.
-- [medium, framework-first, logged as a future candidate] `src/gateway/routes.ts` is now ~1290 lines,
-  the largest file in `src/gateway/`. `mirrorPeer`/`consolePush`/`fanOutConsolePush`/`humanNotify`
-  (console mailbox delivery) pass the ownership test as a genuinely separable sub-concern from core
-  session routing. Worth extracting into its own module (natural home: `src/gateway/console/`),
-  taking `mailboxStore`/`ownerId`/`evieClient`/`localGatewayId`/`resolvesLocalGateway`/
-  `relayWithRetry` as explicit injected deps, matching the precedent `gatewayRelay.ts`'s narrow
-  `FederationRoutes` dependency already sets. If picked up, bundle with hoisting
-  `localAddress`/`tryLocalAddress`/`consoleSelfAddress` first, and treat `send()`/`respond()`
-  (262/233 lines) as a separate, likely higher-priority target in the same file.
+- [medium, framework-first, logged as a future candidate] `src/gateway/routes.ts` is ~1400 lines
+  (refreshed 2026-07-11 by the fullSpoken framework audit; the original ~1290 figure went stale in
+  two days), the largest file in `src/gateway/`. The console mailbox delivery concern is now FIVE
+  functions - `mirrorPeer`/`consolePush`/`fanOutConsolePush`/`humanNotify`/`pluginAction` (plus
+  `PluginActionRequestSchema` and `HumanNotifySchema`) - and passes the ownership test as a
+  genuinely separable sub-concern from core session routing. Worth extracting into its own module
+  (natural home: `src/gateway/console/`), taking `mailboxStore`/`ownerId`/`evieClient`/
+  `localGatewayId`/`resolvesLocalGateway`/`relayWithRetry` as explicit injected deps, matching the
+  precedent `gatewayRelay.ts`'s narrow `FederationRoutes` dependency already sets. If picked up,
+  bundle with hoisting `localAddress`/`tryLocalAddress`/`consoleSelfAddress` first, and treat
+  `send()`/`respond()` (262/233 lines) as a separate, likely higher-priority target in the same
+  file. Negative result worth recording: the fullSpoken commit would NOT have been smaller or
+  safer with the extraction done - most of its routes.ts hunks landed in `respond()`, outside the
+  would-be module. The honest trigger is the next console-bound mailbox kind or the next wire tier
+  field, and the extraction should then land with a test-helper dedup (`makeCtx`/`fakeEvie`/
+  `gateRoutes` exist as divergent copies in routes.test.ts and federation.test.ts) plus a
+  table-driven tier-conservation harness over every mailbox-writing hop (deferred from the
+  fullSpoken framework audit - the spread-once `NoticeTierWireFields` + `pickTiers` shipped
+  instead and covers the declaration/compose halves of that bug class).

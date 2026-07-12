@@ -107,10 +107,12 @@ class ProtocolFixturesTest {
 
 		val reply = json.decodeFromString<MailboxEntry>(fixture("mailbox-reply.json"))
 		assertEquals("completed", reply.status)
+		assertEquals("Done, spoken in the body's place.", reply.fullSpoken)
 
 		val notice = json.decodeFromString<MailboxEntry>(fixture("mailbox-notice.json"))
 		assertEquals("Phase 0 done: deps mature-pinned", notice.title)
 		assertTrue(notice.summary!!.isNotEmpty())
+		assertEquals("Full markdown report body, spoken.", notice.fullSpoken)
 
 		val peer = json.decodeFromString<MailboxEntry>(fixture("mailbox-peer.json"))
 		assertEquals("peer", peer.kind)

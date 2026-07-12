@@ -40,15 +40,21 @@ export const DomainStatusSchema = z.enum(["unrooted", "pending", "rooted"]).meta
  * deliberate: the description must show the two-character sequence. */
 export const REAL_NEWLINES_GUIDANCE = ` Use REAL newlines for line breaks, not \\n. Wrap intentional escapes in backticks or code spans.`;
 
+/** The four notice tiers as the reply tools expose them: the leaf's canonical texts VERBATIM
+ * with the newline guidance appended. Both tools (channel_reply here, notify_human in
+ * mcp/channel/humanTools.ts) spread this SAME object, so their tier describes are identical
+ * by construction, not by audit. */
+export const GuidedNoticeTiers = {
+	title: NoticeTitle.describe(`${NoticeTitle.description}${REAL_NEWLINES_GUIDANCE}`),
+	summary: NoticeSummary.describe(`${NoticeSummary.description}${REAL_NEWLINES_GUIDANCE}`),
+	full: NoticeFull.describe(`${NoticeFull.description}${REAL_NEWLINES_GUIDANCE}`),
+	fullSpoken: NoticeFullSpoken.describe(`${NoticeFullSpoken.description}${REAL_NEWLINES_GUIDANCE}`),
+};
+
 export const ChannelReplySchema = z
 	.object({
 		session_id: z.string().describe(`The session_id for this request. Required to route the reply correctly.`),
-		// Every tier inherits the notice leaf's canonical texts VERBATIM, so both reply tools
-		// describe them identically; only the newline guidance is appended.
-		title: NoticeTitle.describe(`${NoticeTitle.description}${REAL_NEWLINES_GUIDANCE}`),
-		summary: NoticeSummary.describe(`${NoticeSummary.description}${REAL_NEWLINES_GUIDANCE}`),
-		full: NoticeFull.describe(`${NoticeFull.description}${REAL_NEWLINES_GUIDANCE}`),
-		fullSpoken: NoticeFullSpoken.describe(`${NoticeFullSpoken.description}${REAL_NEWLINES_GUIDANCE}`),
+		...GuidedNoticeTiers,
 		attachments: z
 			.array(z.string())
 			.optional()

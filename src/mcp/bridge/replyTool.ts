@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute } from "node:path";
+import { SPOKEN_TIER_FIELDS } from "../../shared/notice.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { routerPost } from "./helpers.js";
 
@@ -123,7 +124,8 @@ export async function postReply(
 	// replyAsJson-only payload and a title-less designer push pass with no per-tool special-casing.
 	// A reject names the TOOL-facing field the agent filled in, not the wire key it mapped to
 	// (channel_reply's `full` and designer_push_card's `message` both ride the wire as `response`).
-	for (const field of ["title", "summary", "response", "fullSpoken"]) {
+	// The spoken trio comes from the shared field list; `response` is this wire's body field name.
+	for (const field of [...SPOKEN_TIER_FIELDS, "response"]) {
 		const value = payload[field];
 		if (typeof value !== "string") continue;
 		const hazard = literalEscapeHazard(value);
