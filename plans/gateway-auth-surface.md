@@ -119,12 +119,12 @@ compose + the enroll scripts (owner keeps `0.0.0.0`); a pure shared token forces
 per-devcontainer wiring (secret sprawl + rotation - the convenience violation); a pure
 IP allowlist is falsely-safe under userland-proxy (above).
 
-## Cross-reference: enroll-fixes P0
+## Cross-reference: enroll-fixes P0 (shipped)
 
-`gateway-enroll-fixes.md` P0/F2 adds `GET /admit-payload` to this router; it is
-handled above (arming-only, host-published path -> exempt-or-token). Reciprocal: that
-plan defers the hardening decision here, and it is now made (origin-aware gate, keep
-`0.0.0.0`).
+The enroll-fixes work (P0/F2) added `GET /admit-payload` to this router; it is
+handled above (arming-only, host-published path -> exempt-or-token). That work's own
+plan deferred the hardening decision to this doc, and it is now made (origin-aware
+gate, keep `0.0.0.0`).
 
 ## Follow-ups to verify (not yet confirmed)
 
