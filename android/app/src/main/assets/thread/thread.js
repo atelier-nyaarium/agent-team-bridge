@@ -392,6 +392,13 @@
 		if (window.Android && typeof window.Android.debugWalk === "function") window.Android.debugWalk(msg);
 	}
 
+	// scrollIntoView's bottom-alignment leaves a sub-pixel rounding residue (observed ~0.66px) between
+	// a row's true bottom edge and window.innerHeight, so a strict > comparison permanently blocks on
+	// the last row of the transcript - it sits fractionally "below the fold" forever, only freed once
+	// later content pushes it up. A small tolerance absorbs that residue without misreading a row that
+	// is genuinely still below the fold by a meaningful margin.
+	const BOTTOM_EDGE_SLOP_PX = 2;
+
 	function walkPointer() {
 		if (pinning || !pageVisible) return;
 		let advanced = false;
@@ -404,7 +411,7 @@
 				continue;
 			}
 			const bottom = row.getBoundingClientRect().bottom;
-			if (bottom > window.innerHeight) {
+			if (bottom > window.innerHeight + BOTTOM_EDGE_SLOP_PX) {
 				debugWalk(
 					"blocked id=" + region[pointerIdx] + " bottom=" + bottom.toFixed(2) +
 					" innerHeight=" + window.innerHeight + " idx=" + pointerIdx + "/" + region.length,
