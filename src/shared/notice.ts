@@ -11,7 +11,7 @@ import { z } from "zod";
 //  - title:      the notification-bar headline (one short phrase, read aloud)
 //  - summary:    a short standalone tier console features read directly (read aloud)
 //  - full:       the message body (full markdown report, rendered, never spoken)
-//  - fullSpoken: the spoken copy of full (faithful except deliberate abridgements)
+//  - fullSpoken: full transcribed into spoken form (verbatim; only what a voice cannot read changes)
 //
 //  The SINGLE TRUTH for the notify_human tool param and the /human/notify
 //  wire. zod-only LEAF (no relative imports) so the verbatim copy needs no
@@ -48,7 +48,14 @@ export const NoticeFullSpoken = z
 	.string()
 	.min(1)
 	.describe(
-		`A spoken copy of full, read aloud in its place. Faithful to the full body word for word, except deliberate abridgements (a code block becomes a short spoken mention of what it is). Spoken language only: no code, symbols, or raw identifiers. Write words as you would say them (say "hypothesis 1", not hyp-01). No lazy-join run-on sentences. Give each clause its own short sentence. Lowercase excitement (write "Yay!", never "YAY!").`,
+		`
+The verbatim text of full, in spoken form: the same words, in the same order, in the same sentences. Change nothing except what TTS cannot read aloud. Do not rephrase, reorder, split, or merge sentences, and do not summarize.
+
+The only allowed changes:
+- Unspeakable tokens (code, symbols, raw identifiers, markdown markup, URLs) become how you would say them (say "Hypothesis 1", not HYP-01).
+- A code block or long snippet becomes a short spoken mention of it.
+- All-caps excitement takes normal casing (say "Yay!", not "YAY!").
+`.trim(),
 	);
 
 ////////////////////////////////
