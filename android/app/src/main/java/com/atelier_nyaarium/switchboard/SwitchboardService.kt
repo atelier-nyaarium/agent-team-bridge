@@ -288,7 +288,10 @@ class SwitchboardService : Service() {
 		for (team in state.threads.keys) {
 			val id = teamNotificationId(team)
 			if (id !in active) continue
-			if ((unread[team] ?: 0) <= 0) {
+			// A team muted via Close Tab must not have its already-showing notification silently
+			// updated with new content - shouldNotifyBurst already refuses to POST for a muted team;
+			// this is the same gate applied to an existing entry instead of a fresh one.
+			if (team in state.closedTeams || (unread[team] ?: 0) <= 0) {
 				nmc.cancel(id)
 			} else {
 				teamNotificationBuilder(repo, state, team)?.let { nmc.notify(id, it.setOnlyAlertOnce(true).build()) }
@@ -313,6 +316,14 @@ class SwitchboardService : Service() {
 		/** Team notification ids live in their own range so a team name can never
 		 * hash onto the persistent status notification's id. */
 		private fun teamNotificationId(team: String): Int = 1000 + (team.hashCode() and 0x7FFFFFFF) % 1_000_000
+
+		/** Dismiss a team's message notification. Forgetting a team drops its thread from
+		 * `state.threads` entirely, so [reconcileTeamNotifications]'s own reconcile loop (keyed on
+		 * that map) can never visit it again to cancel a still-showing entry - the forget call site
+		 * must do it directly instead. */
+		fun cancelTeamNotification(context: Context, team: String) {
+			NotificationManagerCompat.from(context).cancel(teamNotificationId(team))
+		}
 
 		/** Start (or no-op if already running) once the app is provisioned. */
 		fun start(context: Context) {

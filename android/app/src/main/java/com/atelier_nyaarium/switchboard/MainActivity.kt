@@ -606,6 +606,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					val forgotten = openTeam!!
 					pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, forgotten) }
 					repo.forget(forgotten)
+					SwitchboardService.cancelTeamNotification(context, forgotten)
 					openTeam = null
 				},
 				// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off in v1,
@@ -654,6 +655,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onForget = { team ->
 					pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, team) }
 					repo.forget(team)
+					SwitchboardService.cancelTeamNotification(context, team)
 				},
 				// Fire the create and stay on the board: the gateway adopts the session's record
 				// synchronously, so its own tile appears via the teams() refresh (spinner while it boots).
