@@ -1,5 +1,98 @@
 # Pain points
 
+## fullSpoken (`plans/full-spoken.md`, deleted, shipped - 2026-07-11)
+
+Migrated from `plans/full-spoken.md` (deleted, shipped - the fourth notice tier `fullSpoken`, a
+spoken copy of the full body: required on both reply tools, carried through every wire hop via the
+`NoticeTierWireFields` spread + `pickTiers` projection, and spoken by the console's FULL play in
+the retired sanitizer's place; architecture in CLAUDE.md's notice.ts and channel-tools blurbs).
+Shipped as PRs #115/#116 (7.7.0). Collected by the close-out crust sweep; already-recorded items
+(the consolePeer dead branch, the routes.ts extraction + conservation-harness deferral) stayed in
+their existing entries.
+
+- [medium] `src/mcp/channel/channelReply.ts : buildChannelReplyPayload` (also
+  `src/mcp/channel/humanTools.ts : notify_human handler's POST body`) - **dormant-fragility** -
+  the tier-conservation doctrine has a hole at hop zero, the tool-to-gateway POST: both MCP
+  builders hand-list the tiers instead of spreading `pickTiers(args)`, with no compiler error
+  (Record<string, unknown>) and no SPOKEN_TIER_FIELDS-driven test pin (reply-tool.test.ts pins a
+  hand-listed toEqual). A future tier added to the shared shapes auto-propagates through every
+  gateway hop but silently drops here, and every downstream conservation test then "conserves" a
+  tier that never arrived. Cheap fix: `{session_id, ...pickTiers(args), response: args.full}`
+  style plus a field-list-driven pin on the builders.
+- [medium] `src/shared/device-mailbox.ts : entryBytes` - **bug-class** - counts body + fullSpoken +
+  attachments but skips title/summary/status on the "small tiers" premise that nothing below the
+  tool boundary enforces (NoticeSummary has no max anywhere; RespondBodySchema's trio is uncapped).
+  An arbitrarily large summary accrues zero against the 2GB OOM backstop, exactly where a dark
+  device's unacked backlog piles up, and the durable snapshot serializes it every persist tick.
+  Fix: count them (they are in memory already) or cap the trio at the wire.
+- [low] `src/shared/federation-protocol.ts : console_push entry.title override` - **bug-class** -
+  the relay hop tightens title to NoticeTitle (max 200) while the intake that feeds it
+  (RespondBodySchema -> mirrorPeer) is uncapped, so a >200-char title from a raw /respond caller
+  lands locally but the sibling gateway's FederatedOpSchema.parse rejects the whole relayed entry
+  ("unseal failed", 5 burned retries) - validation mid-mesh instead of at intake makes an accepted
+  entry permanently one-gateway. Multi-gateway Domains only. Fix: cap at intake or truncate at the
+  relay hop.
+- [low] `src/mcp/designer/designerTools.ts : PushCardSchema : message` (also
+  `src/mcp/bridge/bridgeSend.ts : displayLabel`) - **framework-first** - the escaped-newline
+  guard's halves drifted in the direction the lint-conformance suite cannot see: both fields are
+  ENFORCED but their describes carry no REAL_NEWLINES_GUIDANCE, so an agent gets a hard reject on
+  a field whose schema never warned it. The conformance test derives its list FROM
+  guidance-marked describes, so enforcement-without-guidance is invisible to it. Fix: append the
+  guidance to both describes; optionally pin the reverse direction too.
+- [medium] `android/.../ChatRepository.kt : startPolling (drain tier mapping) +
+  loadPersistedThreads` - **framework-first** - the tier-field invariant (null or non-blank) is
+  applied at the two Message construction boundaries but neither APPLICATION is test-pinned:
+  deleting `.tierOrNull()` from either site compiles and leaves the Android suite green while
+  re-opening the blank-tier-plays-silence hole (worst at load: every absent tier on every legacy
+  row becomes ""). Precedent for the fix is in the same file: extract a pure entry-to-Message
+  tier projection the way `resolveMessageAttribution` was extracted and pinned.
+- [low] `android/.../SttsPlayer.kt : stripUnspeakable` - **bug-class** - the fence rule is
+  unanchored and its `$` alternative means an odd count of inline triple-backticks eats all
+  trailing prose to end-of-message (replaced by "Code block omitted", never spoken). Byte-identical
+  to the retired sanitize()'s rule (not a regression), but tierless peer asks are multi-KB
+  markdown that participates in autoplay, so a brief quoting fence syntax inline drops its tail
+  from speech with no cue. Fix direction: anchor the opener (`(?m)^` + fence) or pair-count.
+- [low] `android/.../SttsPlayer.kt : key/cacheFile` (+ `ChatRepository : playMessage/preloadMessage`
+  lookup) - **dormant-fragility** - the audio cache keys on `at`, which is a per-append
+  `Date.now()` stamp, NOT unique: two entries landing the same millisecond in one thread share it
+  while staying distinct rows, so Play on one can speak or replay the other and both glyphs light.
+  Pre-existing; recorded because the arc re-blessed the keying on the stated-but-false uniqueness
+  premise. Fix direction: key wire rows on (epoch, seq), already on Message.
+- [medium] `nyaaskills/src/cycle/lib/notify.ts : relayInstruction + NotifyHumanSchema /
+  buildNotifyHuman` (+ `cycleCheckpoint.ts : schema`, + `cycle.test.ts` payload pins) -
+  **bug-class, rides nyaaskills' next deploy** - the checkpoint relay instruction misleads on BOTH
+  branches: it names the retired `respondAsMarkdownString` param (channel_reply's strict schema
+  rejects it AND the missing required fullSpoken), and the fallback "call notify_human with the
+  payload" carries a required `urgent` boolean switchboard's strict schema rejects as unknown
+  (nothing in switchboard ever consumed it). Its field inventory omits fullSpoken. The "skip
+  silently" escape gives a confused agent a sanctioned path to drop the report. Fix set: name all
+  four tiers, use `full`, delegate fullSpoken authoring to the relaying agent explicitly, stop
+  passing urgent, update the schema mirror-claim comment and the test pins in the same commit.
+- [low] `skills/crosstalk/SKILL.md : CLI agents section` - **dead-code** - still instructs the
+  retired `crosstalk_reply` for CLI agents in two places (the tool and the CLI dispatch mode were
+  removed with the host split); the addressed audience can no longer connect, so the only harm is
+  misleading a channel agent about the system's shape.
+- [medium] `src/mcp/devcontainer/reloadPlugins.ts : spawnReloadPlugins` (+ `routes.ts : health`) -
+  **framework-first** - the load-bearing rollout order (gateway rebuild BEFORE the version-bump
+  push) is enforced by nothing mechanical; reload_plugins has no gateway pre-flight and /health
+  carries no version signal. Half the handshake exists (plugins report packageJson.version at
+  register, surfaced in teams()), but nothing gates on it and the reverse direction (gateway
+  advertising its version) does not exist. Guard candidates: stamp the gateway version on /health
+  + a reload_plugins pre-flight, or a register-time skew warning.
+- [medium] `src/gateway/routes.ts : HumanNotifySchema` - **framework-first, recurring deploy
+  class** - with marketplace autoUpdate, the fleet-wide 400 window for ANY strict-schema field
+  addition opens at the version-bump PUSH (any session restart auto-updates), not at a deliberate
+  fleet reload. The fullSpoken arc dodged it per-field (gateway-side optional, ship order:
+  gateway rebuild, then bump push), but that is prose-only discipline the NEXT wire field must
+  remember. Framework direction: a lenient-at-the-gateway-edge convention for notice/tier fields
+  (the RespondBodySchema precedent) or the version handshake above.
+- [medium] `start-gateway.sh : git pull / docker compose up --build` - **bug-class** - both git
+  ops are `|| true`d with no dirty-tree or HEAD-vs-origin check and the health loop prints ready
+  regardless, so a silently-failed pull deploys STALE code while reporting success - and "rebuild
+  the gateway" is exactly the step the rollout order depends on. Uncommitted local edits also
+  ride into the production image (routine on this machine, the live dev tree). Minimal fix: warn
+  or require a flag when dirty / HEAD != origin/main, surface a pull failure.
+
 ## Announce chip (`plans/announce-chip.md`, deleted, shipped - 2026-07-11)
 
 Migrated from `plans/announce-chip.md` (deleted, shipped - the attachment-chip decoration seam +
