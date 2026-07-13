@@ -56,9 +56,6 @@ export interface WsData {
 	missedPings: number;
 	isStale: boolean;
 	handshakeConfirmed: boolean;
-	// How many lead handshakes have been sent to this socket (at register, then re-sent by the
-	// heartbeat while unconfirmed). Bounds the retry so a never-answering session is not pinged forever.
-	hsAttempts?: number;
 	proxyProject?: string;
 	proxyAuth?: string;
 	// True for a console mailbox peer: a duck-typed socket whose send() appends to a
@@ -78,16 +75,6 @@ export const RESERVED_TEAM_NAMES = new Set(["host"]);
 // never-registered case (a crashed or unreachable MCP). A generous 60s avoids failing a slow
 // register while still bounding the stall far below the full WAKE_TIMEOUT_MS (~10 min).
 const REGISTER_WINDOW_MS = 60_000;
-
-// How long an unanswered handshake entry lingers before the heartbeat sweep drops it. Generous so a
-// long first LLM turn still confirms; a flag-less session never answers and is swept after this.
-const HANDSHAKE_PENDING_TTL_MS = 30 * 60_000;
-
-// Re-send the lead handshake to a connected-but-unconfirmed channel session on each heartbeat, up to
-// this many total sends. A session that could not answer at register (sitting at a first-run login
-// prompt, a slow boot) confirms once it becomes ready, instead of showing "verifying" forever. Bounds
-// the re-send so a genuinely never-answering (flag-less) socket is not pinged indefinitely.
-const HANDSHAKE_MAX_ATTEMPTS = 20;
 
 export function getAllActiveWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData>[] {
 	const result: ServerWebSocket<WsData>[] = [];
@@ -160,34 +147,22 @@ export function createWebSocketHandlers({
 					continue;
 				}
 				ws.ping();
-				// Re-send the handshake to a channel session that is still unconfirmed, so one that
-				// could not answer at register (a first-run login prompt, a slow boot) confirms once
-				// ready instead of sitting at "verifying" forever. Bounded by HANDSHAKE_MAX_ATTEMPTS.
-				if (
-					data.mode === "channel" &&
-					data.teamName &&
-					data.teamName !== "host" &&
-					!data.handshakeConfirmed &&
-					ws.readyState === 1 &&
-					(data.hsAttempts ?? 0) < HANDSHAKE_MAX_ATTEMPTS
-				) {
-					sendHandshake(ws, data.teamName, data.subId);
-				}
 			}
-		}
-		// A flag-less loose session keeps its socket open but never answers the handshake, so its
-		// pending entry would sit forever. Age unanswered entries out (a genuinely slow first turn
-		// still confirms well within this window).
-		const cutoff = Date.now() - HANDSHAKE_PENDING_TTL_MS;
-		for (const [hsId, p] of handshakePending) {
-			if (p.createdAt < cutoff) handshakePending.delete(hsId);
 		}
 	}
 	const heartbeatInterval = setInterval(heartbeatTick, HEARTBEAT_INTERVAL_MS);
 
 	// Maps handshake session_id -> the socket that owes a lead/worker reply, so we can resolve
-	// handshake responses. createdAt bounds the map via the sweep above.
-	const handshakePending = new Map<string, { team: string; subId: string; createdAt: number }>();
+	// handshake responses. Cleared on close/evict (forgetPending); bounded by the count of live
+	// unconfirmed sockets, since sendHandshake fires at most once per register.
+	const handshakePending = new Map<string, { team: string; subId: string }>();
+
+	// Teams that have completed at least one REAL handshake round-trip (a genuine challenge
+	// answered via resolveHandshake, not a self-reported register field). A register's own
+	// isMainOrLead:true claim is only honored for a team already in this set - otherwise a
+	// never-before-seen team could skip the handshake challenge entirely on its first-ever
+	// connection by simply asserting the field, with no server-side signal backing it.
+	const confirmedLeadTeams = new Set<string>();
 
 	/** Drop any pending handshake owned by a (team, subId) - a socket that will never answer. */
 	function forgetPending(team: string, subId: string): void {
@@ -196,12 +171,12 @@ export function createWebSocketHandlers({
 		}
 	}
 
-	/** Send a lead handshake to a channel socket, minting a session id and pending entry, and counting
-	 * the attempt. Sent once at register and re-sent by the heartbeat while the socket is unconfirmed. */
+	/** Send a lead handshake to a channel socket, minting a session id and pending entry. Sent once at
+	 * register; a session that already reports its remembered role skips this entirely (see the
+	 * register handler's isMainOrLead branch). */
 	function sendHandshake(ws: ServerWebSocket<WsData>, team: string, subId: string): void {
 		const hsSessionId = `hs-${crypto.randomUUID().slice(0, 8)}`;
-		handshakePending.set(hsSessionId, { team, subId, createdAt: Date.now() });
-		ws.data.hsAttempts = (ws.data.hsAttempts ?? 0) + 1;
+		handshakePending.set(hsSessionId, { team, subId });
 		ws.send(
 			JSON.stringify({
 				type: "channel_push",
@@ -211,7 +186,16 @@ export function createWebSocketHandlers({
 				replyJsonSchema: "{ isMainOrLead: bool }",
 			}),
 		);
-		console.log(`[ws] handshake sent to ${team}/${subId} [${hsSessionId}] (attempt ${ws.data.hsAttempts})`);
+		console.log(`[ws] handshake sent to ${team}/${subId} [${hsSessionId}]`);
+	}
+
+	/** The pending hs-* id owed by a (team, subId), if any - so a caller with an unconfirmed socket of
+	 * its own can be told exactly which handshake to answer first. */
+	function findPendingHandshakeId(team: string, subId: string): string | undefined {
+		for (const [hsId, p] of handshakePending) {
+			if (p.team === team && p.subId === subId) return hsId;
+		}
+		return undefined;
 	}
 
 	/** Fully evict a socket the register path is replacing: mark stale, drop it from its team's subs,
@@ -341,11 +325,21 @@ export function createWebSocketHandlers({
 			wakeCoordinator.notify(team);
 			console.log(`[ws] ${team}/${subId} connected (mode: ${mode})`);
 
-			// Handshake: ask channel-mode connections if they are the main/lead agent. Re-sent by the
-			// heartbeat while unconfirmed, so a session that could not answer now (a login prompt) still
-			// confirms once ready.
+			// Handshake: ask channel-mode connections if they are the main/lead agent - UNLESS this
+			// registrant already remembers its own answer from a prior handshake (reg.data.isMainOrLead)
+			// AND this team has actually completed one (confirmedLeadTeams), in which case it confirms
+			// silently with no prompt. The confirmedLeadTeams check keeps the shortcut from ever covering
+			// a team's first-ever connection: only a team that has already answered one real challenge
+			// can skip being asked again. A remembered "false" never arrives (a worker that answered
+			// false is evicted permanently and does not reconnect), so only true is handled here.
 			if (mode === "channel" && team !== "host") {
-				sendHandshake(ws, team, subId);
+				if (reg.data.isMainOrLead === true && confirmedLeadTeams.has(team)) {
+					ws.data.handshakeConfirmed = true;
+					establishRecord(ws, { team, subId });
+					console.log(`[ws] ${team}/${subId} reconnected as remembered lead - handshake skipped`);
+				} else {
+					sendHandshake(ws, team, subId);
+				}
 			} else {
 				ws.data.handshakeConfirmed = true;
 			}
@@ -526,6 +520,7 @@ export function createWebSocketHandlers({
 
 		if (isMainOrLead) {
 			ws.data.handshakeConfirmed = true;
+			confirmedLeadTeams.add(pending.team);
 			establishRecord(ws, pending);
 			console.log(`[ws] handshake confirmed: ${pending.team}/${pending.subId} is lead`);
 		} else {
@@ -536,5 +531,5 @@ export function createWebSocketHandlers({
 		return true;
 	}
 
-	return { open, message, close, heartbeatInterval, heartbeatTick, resolveHandshake };
+	return { open, message, close, heartbeatInterval, heartbeatTick, resolveHandshake, findPendingHandshakeId };
 }

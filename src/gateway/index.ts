@@ -695,6 +695,7 @@ export async function startGateway(): Promise<void> {
 						crossDomainShareState!.isSharedTo(sessionTarget, domainId, isLinkedDomain)
 				: null,
 			resolveHandshake: wsHandlers.resolveHandshake,
+			findPendingHandshake: wsHandlers.findPendingHandshakeId,
 			// This Gateway's own Domain owner id, for the mirror-tap's console-bound entries.
 			// Mirrors resolvesLocalGateway's allowlist-ready gating: null pre-enrollment.
 			ownerId: allowlistForConsole

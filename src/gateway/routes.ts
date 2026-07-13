@@ -102,6 +102,9 @@ export interface RoutesDeps {
 	// un-share bites without evie. Absent when federation sharing is not wired (no recheck).
 	isSharedToForReply?: ((sessionTarget: string, domainId: string) => boolean) | null;
 	resolveHandshake?: (sessionId: string, replyAsJson?: Record<string, unknown>, response?: string) => boolean;
+	// The pending hs-* id owed by a (team, subId), if any - lets respond() name the exact handshake
+	// an unconfirmed caller must answer first. Absent in test harnesses that don't exercise the gate.
+	findPendingHandshake?: (team: string, subId: string) => string | undefined;
 	// This Gateway's own Domain owner id (a hash of the owner's signing key), used to key the
 	// mirror-tap's agent-to-agent display entries into the owner's mailbox. Null pre-enrollment
 	// (arming mode) or when federation is off, matching resolvesLocalGateway's gating.
@@ -143,6 +146,11 @@ const RespondBodySchema = z.object({
 	session_id: z.string(),
 	status: z.string().optional(),
 	response: z.string().optional(),
+	// The MCP process's own stable conversationId (see mcp/bridge/helpers.ts's bridgeConversationId),
+	// so respond() can tell whether the CALLER's own bridge handshake is still unconfirmed. Absent
+	// from console-originated and federated-relay-originated replies (neither is a channel-mode MCP
+	// agent), which intentionally skip the gate this enables.
+	conversationId: z.string().regex(CONVERSATION_ID_RE).max(MAX_CONVERSATION_ID_LEN).optional(),
 	// Optional notice-style tiers on a reply (title = notification-bar line + shortest spoken
 	// tier, summary = medium spoken tier, fullSpoken = what the FULL play tier speaks in the
 	// body's place). The console reads them like a notice's; absent on a plain reply.
@@ -275,6 +283,7 @@ export function createRoutes({
 	touchShares,
 	isSharedToForReply,
 	resolveHandshake,
+	findPendingHandshake,
 	ownerId,
 }: RoutesDeps) {
 	const { localGatewayId, localDomainId } = config;
@@ -1061,6 +1070,34 @@ export function createRoutes({
 		// Check if this is a handshake response (handshakes never carry files).
 		if (resolveHandshake?.(respondSessionId, replyAsJson ?? undefined, rest.response ?? undefined)) {
 			return jsonResponse({ delivered: true, handshake: true });
+		}
+
+		// This reply isn't itself resolving a handshake - but if the CALLER's own bridge handshake is
+		// still unconfirmed, bounce it rather than silently deliver: without this, a session that
+		// answers a real conversation before its own handshake sits confirmed-looking on the board
+		// (messages flowing) while actually still "verifying". Fails open whenever the caller can't be
+		// identified as a live, unconfirmed, actually-pending socket - a registry miss, a virtual/console
+		// peer, or an unconfirmed socket with no pending entry (its challenge was already consumed by a
+		// dead connection, so there is nothing to name) all deliver normally rather than block.
+		if (rest.conversationId) {
+			const callerWs = conversationRegistry.get(rest.conversationId);
+			if (callerWs && callerWs.readyState === 1 && !callerWs.data.virtual && !callerWs.data.handshakeConfirmed) {
+				const pendingHsId =
+					callerWs.data.teamName && findPendingHandshake?.(callerWs.data.teamName, callerWs.data.subId);
+				// Deliberately does not name the pending hs-* id: conversationId is not secret (it rides
+				// verbatim in every session_id this caller has ever seen), so echoing the id here would let
+				// anyone who merely knows a victim's conversationId learn its live handshake id and replay it
+				// against /respond to forge or evict that victim's session. A legitimate self-caller already
+				// has its own pending id from the original handshake push, so it needs no reminder here.
+				if (pendingHsId) {
+					return jsonResponse(
+						{
+							error: "Your bridge handshake is still pending. Reply to the handshake session first with channel_reply_structured, then resend this reply.",
+						},
+						409,
+					);
+				}
+			}
 		}
 
 		// If JSON reply provided but no explicit response string, pretty-stringify for text consumers

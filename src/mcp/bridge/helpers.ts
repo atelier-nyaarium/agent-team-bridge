@@ -45,6 +45,12 @@ let channelServer: Server | null = null;
 // true = auto-reply lead, false = auto-reply worker, null = let the LLM decide via notification.
 let isMainOrLeadAgent: boolean | null = null;
 
+// Every hs-* id this connection has actually been pushed a handshake for. Scopes
+// setIsMainOrLeadAgent's write to a handshake this process really owns: a lead delegating a
+// channel_reply_structured (carrying a relayed hs id) to a separate-harness worker teammate must
+// never be able to poison the WORKER's own cache to true via an id it never received.
+const receivedHandshakeIds = new Set<string>();
+
 export function initBridge(config: BridgeConfig): void {
 	ROUTER_URL = config.routerUrl;
 	PROJECT_NAME = config.projectName;
@@ -57,6 +63,12 @@ export function setChannelServer(server: Server): void {
 
 export function setIsMainOrLeadAgent(value: boolean): void {
 	isMainOrLeadAgent = value;
+}
+
+/** Whether `hsSessionId` is a handshake this connection actually received (not merely hs-prefixed).
+ * Callers use this to scope a cache write to a handshake this process really owns. */
+export function isReceivedHandshakeId(hsSessionId: string): boolean {
+	return receivedHandshakeIds.has(hsSessionId);
 }
 
 export function bridgeProjectName(): string {
@@ -156,8 +168,8 @@ export async function routerGet(
  * launched) session. The gateway records neither until the handshake confirms, so a channel-less
  * session that never answers never becomes a durable card. Pure given (module state, env),
  * exported for tests. */
-export function buildRegisterMsg(subId: string, mode: ConnectionMode = "channel"): Record<string, string> {
-	const registerMsg: Record<string, string> = {
+export function buildRegisterMsg(subId: string, mode: ConnectionMode = "channel"): Record<string, string | boolean> {
+	const registerMsg: Record<string, string | boolean> = {
 		type: "register",
 		team: PROJECT_NAME,
 		mode,
@@ -173,6 +185,9 @@ export function buildRegisterMsg(subId: string, mode: ConnectionMode = "channel"
 	}
 	const cwdName = basename(process.cwd());
 	if (cwdName) registerMsg.cwdName = cwdName;
+	// Carry the remembered handshake answer so a reconnect confirms silently instead of re-asking -
+	// never sent false, since a worker that answered false is evicted and never reconnects.
+	if (isMainOrLeadAgent === true) registerMsg.isMainOrLead = true;
 	return registerMsg;
 }
 
@@ -201,8 +216,9 @@ export function connectToRouter(): void {
 
 		// Handshake from gateway: auto-reply if we know the answer, otherwise let the LLM decide
 		if (msg.type === "channel_push" && msg.from === "gateway" && msg.replyJsonSchema) {
+			const hsSessionId = msg.session_id as string;
+			receivedHandshakeIds.add(hsSessionId);
 			if (isMainOrLeadAgent !== null) {
-				const hsSessionId = msg.session_id as string;
 				console.error(`[bridge] handshake auto-reply [${hsSessionId}], isMainOrLead=${isMainOrLeadAgent}`);
 				routerPost("/respond", {
 					session_id: hsSessionId,

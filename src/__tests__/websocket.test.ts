@@ -28,6 +28,12 @@ function handshakeIdFrom(ws: import("bun").ServerWebSocket<WsData>): string {
 	return hs.session_id as string;
 }
 
+/** How many handshake pushes this socket has been sent in total. */
+function handshakePushCount(ws: import("bun").ServerWebSocket<WsData>): number {
+	const calls = (ws.send as ReturnType<typeof vi.fn>).mock.calls.map((c) => JSON.parse(c[0] as string));
+	return calls.filter((m) => m.type === "channel_push" && m.from === "gateway" && m.replyJsonSchema).length;
+}
+
 describe("createWebSocketHandlers", () => {
 	let intervals: ReturnType<typeof setInterval>[] = [];
 	afterEach(() => {
@@ -616,35 +622,72 @@ describe("handshake-established session records", () => {
 		expect(handlers.resolveHandshake(handshakeIdFrom(ws2), { isMainOrLead: true })).toBe(true);
 	});
 
-	it("re-sends the handshake to an unconfirmed channel session on a heartbeat tick", () => {
+	it("sends exactly one handshake at register and never re-sends it on a heartbeat tick", () => {
 		const { handlers } = setup();
 		const ws = createMockWs();
 		register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
 		const first = handshakeIdFrom(ws);
-		expect(ws.data.hsAttempts).toBe(1);
+		expect(handshakePushCount(ws)).toBe(1);
 		handlers.heartbeatTick();
-		expect(ws.data.hsAttempts).toBe(2);
-		// A fresh handshake id, so a session that missed the first (a login prompt) can answer the resend.
-		expect(handshakeIdFrom(ws)).not.toBe(first);
+		handlers.heartbeatTick();
+		expect(handshakePushCount(ws)).toBe(1);
+		expect(handshakeIdFrom(ws)).toBe(first);
 	});
 
-	it("stops re-sending the handshake once the session confirms", () => {
+	it("stops sending handshake pushes once the session confirms", () => {
 		const { handlers } = setup();
 		const ws = createMockWs();
 		register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
 		handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
 		expect(ws.data.handshakeConfirmed).toBe(true);
 		handlers.heartbeatTick();
-		expect(ws.data.hsAttempts).toBe(1);
+		expect(handshakePushCount(ws)).toBe(1);
 	});
 
-	it("stops re-sending the handshake after the attempt cap", () => {
+	it("a pending handshake answered after many heartbeat ticks still confirms (no TTL cliff)", () => {
 		const { handlers } = setup();
 		const ws = createMockWs();
 		register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
-		ws.data.hsAttempts = 100; // past the cap
-		handlers.heartbeatTick();
-		expect(ws.data.hsAttempts).toBe(100);
+		const hsId = handshakeIdFrom(ws);
+		for (let i = 0; i < 50; i++) handlers.heartbeatTick();
+		expect(handlers.resolveHandshake(hsId, { isMainOrLead: true })).toBe(true);
+	});
+
+	it("a register carrying the remembered lead role confirms silently, with no handshake push at all, once the team has answered a real handshake before", () => {
+		const { handlers, registry, sessionStore } = setup();
+		// A genuine first connection answers the real challenge, so the team earns the shortcut.
+		const first = createMockWs();
+		register(handlers, first, { team: "recipe-app.abc123", subId: "s1", claudeSessionId: "tx-1" });
+		expect(handshakePushCount(first)).toBe(1);
+		handlers.resolveHandshake(handshakeIdFrom(first), { isMainOrLead: true });
+		handlers.close(first);
+
+		// A reconnect claiming the remembered role is now honored with no prompt.
+		const ws = createMockWs();
+		register(handlers, ws, {
+			team: "recipe-app.abc123",
+			subId: "s2",
+			claudeSessionId: "tx-1",
+			isMainOrLead: true,
+		});
+		expect(handshakePushCount(ws)).toBe(0);
+		expect(sessionStore.getByTeam("recipe-app.abc123")?.liveTeam).toEqual({
+			team: "recipe-app.abc123",
+			subId: "s2",
+		});
+		expect(resolveLiveIncarnation(registry, sessionStore, "recipe-app.abc123")).toBe(ws);
+	});
+
+	it("a register carrying isMainOrLead:true for a team never confirmed before is still challenged", () => {
+		const { sessionStore, handlers } = setup();
+		const ws = createMockWs();
+		register(handlers, ws, {
+			team: "fresh-app.xyz789",
+			subId: "s1",
+			isMainOrLead: true,
+		});
+		expect(handshakePushCount(ws)).toBe(1);
+		expect(sessionStore.getByTeam("fresh-app.xyz789")).toBeUndefined();
 	});
 });
 

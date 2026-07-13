@@ -128,6 +128,11 @@ export const WsRegisterSchema = z.object({
 	// sends it), but the host slot is fail-closed: a host register is refused unless the
 	// gateway has HOST_WS_TOKEN set AND this token matches it.
 	token: z.string().optional(),
+	// The registrant's remembered answer to a prior bridge handshake (see mcp/bridge/helpers.ts's
+	// isMainOrLeadAgent cache) - true skips the handshake prompt entirely on this register. Never
+	// sent as false (a worker that answered false is evicted and does not reconnect). A malformed
+	// value degrades to absent (the normal handshake-prompt path) rather than failing the register.
+	isMainOrLead: z.boolean().optional().catch(undefined),
 });
 
 ////////////////////////////////

@@ -40,6 +40,8 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		isAdminDomain: overrides.isAdminDomain,
 		touchShares: overrides.touchShares,
 		ownerId: overrides.ownerId,
+		resolveHandshake: overrides.resolveHandshake,
+		findPendingHandshake: overrides.findPendingHandshake,
 	};
 }
 
@@ -682,6 +684,113 @@ describe("routes", () => {
 			const body = (await polled.json()) as ResponsePayload;
 			expect(body.files?.[0]).toMatchObject({ filename: "shot.png", mime: "image/png" });
 			expect(body.files?.[0].base64).toBeUndefined();
+		});
+
+		describe("reply gate (an unconfirmed caller's own bridge handshake)", () => {
+			/** A fake registered socket, just shaped enough for the gate's own checks. */
+			function makeCallerWs(overrides: {
+				readyState?: number;
+				virtual?: boolean;
+				handshakeConfirmed?: boolean;
+				teamName?: string | null;
+				subId?: string;
+			}) {
+				return {
+					readyState: overrides.readyState ?? 1,
+					data: {
+						virtual: overrides.virtual ?? false,
+						handshakeConfirmed: overrides.handshakeConfirmed ?? false,
+						teamName: overrides.teamName ?? "recipe-app.abc123",
+						subId: overrides.subId ?? "s1",
+					},
+				} as unknown as RoutesDeps["conversationRegistry"] extends Map<string, infer V> ? V : never;
+			}
+
+			it("rejects 409, without disclosing the pending handshake id, when the caller's own socket is unconfirmed", async () => {
+				const store = new PendingJobStore<ResponsePayload>();
+				store.create("sess-gate-1", "agent", "console");
+				const conversationRegistry = new Map() as RoutesDeps["conversationRegistry"];
+				conversationRegistry.set("conv-1", makeCallerWs({ handshakeConfirmed: false }));
+				const ctx = makeCtx({
+					store,
+					conversationRegistry,
+					findPendingHandshake: (team, subId) =>
+						team === "recipe-app.abc123" && subId === "s1" ? "hs-pending123" : undefined,
+				});
+				const { respond } = createRoutes(ctx);
+				const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "sess-gate-1",
+					response: "done",
+					conversationId: "conv-1",
+				});
+				expect(res.status).toBe(409);
+				const body = (await res.json()) as { error: string };
+				expect(body.error).not.toContain("hs-pending123");
+				expect(body.error).toContain("handshake");
+			});
+
+			it("delivers once the caller's own socket is confirmed", async () => {
+				const store = new PendingJobStore<ResponsePayload>();
+				store.create("sess-gate-2", "agent", "console");
+				const conversationRegistry = new Map() as RoutesDeps["conversationRegistry"];
+				conversationRegistry.set("conv-2", makeCallerWs({ handshakeConfirmed: true }));
+				const ctx = makeCtx({
+					store,
+					conversationRegistry,
+					findPendingHandshake: () => "hs-should-not-matter",
+				});
+				const { respond } = createRoutes(ctx);
+				const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "sess-gate-2",
+					response: "done",
+					conversationId: "conv-2",
+				});
+				expect(res.status).toBe(200);
+			});
+
+			it("fails open when the reply carries no conversationId", async () => {
+				const store = new PendingJobStore<ResponsePayload>();
+				store.create("sess-gate-3", "agent", "console");
+				const ctx = makeCtx({ store, findPendingHandshake: () => "hs-irrelevant" });
+				const { respond } = createRoutes(ctx);
+				const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "sess-gate-3",
+					response: "done",
+				});
+				expect(res.status).toBe(200);
+			});
+
+			it("fails open when the conversationId is not in the registry (stale id / reconnect race)", async () => {
+				const store = new PendingJobStore<ResponsePayload>();
+				store.create("sess-gate-4", "agent", "console");
+				const ctx = makeCtx({
+					store,
+					conversationRegistry: new Map() as RoutesDeps["conversationRegistry"],
+					findPendingHandshake: () => "hs-irrelevant",
+				});
+				const { respond } = createRoutes(ctx);
+				const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "sess-gate-4",
+					response: "done",
+					conversationId: "conv-missing",
+				});
+				expect(res.status).toBe(200);
+			});
+
+			it("fails open when the unconfirmed socket has no pending handshake entry", async () => {
+				const store = new PendingJobStore<ResponsePayload>();
+				store.create("sess-gate-5", "agent", "console");
+				const conversationRegistry = new Map() as RoutesDeps["conversationRegistry"];
+				conversationRegistry.set("conv-5", makeCallerWs({ handshakeConfirmed: false }));
+				const ctx = makeCtx({ store, conversationRegistry, findPendingHandshake: () => undefined });
+				const { respond } = createRoutes(ctx);
+				const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "sess-gate-5",
+					response: "done",
+					conversationId: "conv-5",
+				});
+				expect(res.status).toBe(200);
+			});
 		});
 	});
 

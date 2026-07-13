@@ -18,6 +18,10 @@ vi.mock("../mcp/bridge/helpers.js", () => ({
 	bridgeProjectName: () => "test-team",
 	bridgeConversationId: () => "conv-1",
 	postPluginAction: vi.fn(async () => ({ delivered: true })),
+	setIsMainOrLeadAgent: vi.fn(),
+	// Default false: a handshake-cache write only matters for the tests that explicitly mock this
+	// true, so every other test's payload/posted-body assertions stay unaffected by the cache write.
+	isReceivedHandshakeId: vi.fn(() => false),
 }));
 
 const mockRouterPost = vi.mocked(routerPost);
@@ -53,6 +57,7 @@ describe("buildChannelReplyPayload", () => {
 			summary: "Summary sentence.",
 			response: "The full prose reply.",
 			fullSpoken: "The full prose reply, spoken.",
+			conversationId: "conv-1",
 		});
 		expect(payload).not.toHaveProperty("full");
 	});
@@ -62,7 +67,7 @@ describe("buildStructuredReplyPayload", () => {
 	it("maps responseData to the wire replyAsJson field, with no response key", () => {
 		const args = ChannelReplyStructuredSchema.parse({ session_id: "s1", responseData: { isMainOrLead: true } });
 		const payload = buildStructuredReplyPayload(args);
-		expect(payload).toEqual({ session_id: "s1", replyAsJson: { isMainOrLead: true } });
+		expect(payload).toEqual({ session_id: "s1", replyAsJson: { isMainOrLead: true }, conversationId: "conv-1" });
 		expect(payload).not.toHaveProperty("response");
 	});
 });
@@ -133,6 +138,7 @@ describe("handleChannelReply / handleChannelReplyStructured (the actual register
 			summary: "Summary sentence.",
 			response: "Body.",
 			fullSpoken: "Body, spoken.",
+			conversationId: "conv-1",
 		});
 		expect(result.isError).toBeUndefined();
 	});
@@ -162,6 +168,7 @@ describe("handleChannelReply / handleChannelReplyStructured (the actual register
 		expect(mockRouterPost).toHaveBeenCalledWith("/respond", {
 			session_id: "s1",
 			replyAsJson: { isMainOrLead: true },
+			conversationId: "conv-1",
 		});
 		expect(result.isError).toBeUndefined();
 	});

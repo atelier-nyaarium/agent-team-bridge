@@ -5,6 +5,7 @@ import {
 	type ChannelReplyStructuredArgs,
 	ChannelReplyStructuredSchema,
 } from "../../shared/schemas.js";
+import { bridgeConversationId, isReceivedHandshakeId, setIsMainOrLeadAgent } from "../bridge/helpers.js";
 import { postReply, readReplyAttachment, type ToolTextResult, toolError } from "../bridge/replyTool.js";
 
 ////////////////////////////////
@@ -17,11 +18,12 @@ export function buildChannelReplyPayload(args: ChannelReplyArgs): Record<string,
 		summary: args.summary,
 		response: args.full,
 		fullSpoken: args.fullSpoken,
+		conversationId: bridgeConversationId(),
 	};
 }
 
 export function buildStructuredReplyPayload(args: ChannelReplyStructuredArgs): Record<string, unknown> {
-	return { session_id: args.session_id, replyAsJson: args.responseData };
+	return { session_id: args.session_id, replyAsJson: args.responseData, conversationId: bridgeConversationId() };
 }
 
 export function isEmptyResponseData(responseData: Record<string, unknown>): boolean {
@@ -32,6 +34,13 @@ export function isEmptyResponseData(responseData: Record<string, unknown>): bool
 //  Handlers (exported directly so tests can call them without an McpServer)
 
 export async function handleChannelReply(args: ChannelReplyArgs): Promise<ToolTextResult> {
+	// Prose parity with the gateway's own /true/i handshake fallback: a handshake answered with plain
+	// channel_reply (rather than the instructed channel_reply_structured) still fills the role cache,
+	// or a prose-confirmed lead would keep re-asking on every reconnect. Scoped to a handshake this
+	// process actually received, same as the structured path below.
+	if (isReceivedHandshakeId(args.session_id)) {
+		setIsMainOrLeadAgent(/true/i.test(args.full));
+	}
 	const payload = buildChannelReplyPayload(args);
 	if (args.attachments && args.attachments.length > 0) {
 		try {
@@ -48,6 +57,12 @@ export async function handleChannelReplyStructured(args: ChannelReplyStructuredA
 		return toolError(
 			`Empty responseData rejected - {} would render as the literal string "{}" on the console with no useful content.`,
 		);
+	}
+	// Remember the answer so a later reconnect confirms silently instead of re-asking. Scoped to a
+	// handshake this process actually received: a lead relaying a worker teammate this session_id to
+	// answer must never be able to poison the WORKER's own cache via an id it never received.
+	if (isReceivedHandshakeId(args.session_id) && typeof args.responseData.isMainOrLead === "boolean") {
+		setIsMainOrLeadAgent(args.responseData.isMainOrLead);
 	}
 	const payload = buildStructuredReplyPayload(args);
 	return postReply(payload, { toolName: "channel_reply_structured", logPrefix: "channel" });
