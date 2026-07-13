@@ -544,12 +544,22 @@
 			observeMermaid(row);
 		}
 		extendRegion(newEligibleIds);
-		// Re-anchor the divider to the new boundary whenever eligibility changed, regardless of which
-		// branch runs next - a backgrounded arrival needs it placed (nothing else will), a live arrival
-		// while scrolled up needs it too (it was otherwise never shown), and a live arrival while stuck
-		// at the bottom gets it re-confirmed a moment before scrollToBottom's own pin-release walk
-		// settles it in the same place.
-		if (newEligibleIds.length > 0) placeDividerAtPointer();
+		if (sentByUser) {
+			// Sending a message is an unambiguous "I'm caught up" signal, so the trailing bookmark
+			// clears right away instead of staying parked wherever it last sat. Purely visual - the
+			// scroll-driven read pointer (and the unread count/notification it drives) is untouched.
+			if (divider) {
+				divider.remove();
+				divider = null;
+			}
+		} else if (newEligibleIds.length > 0) {
+			// Re-anchor the divider to the new boundary whenever eligibility changed, regardless of
+			// which branch runs next - a backgrounded arrival needs it placed (nothing else will), a
+			// live arrival while scrolled up needs it too (it was otherwise never shown), and a live
+			// arrival while stuck at the bottom gets it re-confirmed a moment before scrollToBottom's
+			// own pin-release walk settles it in the same place.
+			placeDividerAtPointer();
+		}
 		if (heldForVisibility && !sentByUser) {
 			// This batch arrived while backgrounded: hold position instead of auto-following.
 			stuck = false;
