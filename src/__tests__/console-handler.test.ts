@@ -914,6 +914,8 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			tryWakeTeam?: (team: string) => Promise<WakeResult>;
 			createSessionBoundMs?: number;
 			isWakeInFlight?: (team: string) => boolean;
+			markCreateInFlight?: (team: string) => () => void;
+			awaitRegister?: (team: string) => Promise<WakeResult>;
 		} = {},
 	) {
 		const hostOps: Record<string, unknown>[] = [];
@@ -934,6 +936,8 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			sessionStore: opts.sessionStore,
 			tryWakeTeam: opts.tryWakeTeam,
 			isWakeInFlight: opts.isWakeInFlight,
+			markCreateInFlight: opts.markCreateInFlight,
+			awaitRegister: opts.awaitRegister,
 			createSessionBoundMs: opts.createSessionBoundMs,
 			relayToHost: async (op) => {
 				hostOps.push(op as unknown as Record<string, unknown>);
@@ -1216,6 +1220,56 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(reply.result).toMatchObject({ created: true, id: "scratch" });
 		expect(woken).toEqual([]);
 		expect(h.hostOps).toHaveLength(1);
+	});
+
+	it("create_session on a host target keeps the launch marked in-flight until awaitRegister resolves, not just the tmux-spawn ack", async () => {
+		const releases: string[] = [];
+		let resolveRegister: ((r: WakeResult) => void) | undefined;
+		const h = makeTerminalHarness(undefined, undefined, {
+			markCreateInFlight: (team) => () => releases.push(team),
+			awaitRegister: () =>
+				new Promise<WakeResult>((resolve) => {
+					resolveRegister = resolve;
+				}),
+		});
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "host", sessionName: "scratch" }, "c1"),
+		);
+		expect(reply.result).toMatchObject({ created: true, id: "scratch" });
+		// relayToHost's own createSession op already settled (the reply came back), but the
+		// in-flight marker must still be held pending the real MCP registration.
+		expect(releases).toEqual([]);
+
+		resolveRegister?.({ ok: true });
+		await new Promise((r) => setTimeout(r, 10));
+		expect(releases).toEqual(["host.scratch"]);
+	});
+
+	it("create_session on a devcontainer target releases in-flight as soon as tryWakeTeam settles, without waiting on awaitRegister", async () => {
+		const releases: string[] = [];
+		let awaitRegisterCalled = false;
+		const h = makeTerminalHarness(undefined, undefined, {
+			tryWakeTeam: async () => ({ ok: true }),
+			markCreateInFlight: (team) => () => releases.push(team),
+			awaitRegister: () => {
+				awaitRegisterCalled = true;
+				return new Promise<WakeResult>(() => {});
+			},
+		});
+		await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "recipe-app", sessionName: "scratch" }, "c1"),
+		);
+		expect(releases).toEqual(["recipe-app.scratch"]);
+		expect(awaitRegisterCalled).toBe(false);
+	});
+
+	it("create_session on a host target releases in-flight at the tmux-spawn ack when no awaitRegister is wired", async () => {
+		const releases: string[] = [];
+		const h = makeTerminalHarness(undefined, undefined, {
+			markCreateInFlight: (team) => () => releases.push(team),
+		});
+		await h.handler.handleFrame(frame({ kind: "create_session", target: "host", sessionName: "scratch" }, "c1"));
+		expect(releases).toEqual(["host.scratch"]);
 	});
 
 	it("a devcontainer create past the bound returns a pending status and settles once the wake resolves", async () => {

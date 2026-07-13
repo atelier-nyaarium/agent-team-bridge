@@ -135,6 +135,13 @@ export interface ConsoleHandlerDeps {
 	 * Claude CLI still starting) reads as plain "available" instead of "verifying" for that whole gap.
 	 * Returns a release function; absent when no wake path is wired (matching today's unguarded case). */
 	markCreateInFlight?: (team: string) => () => void;
+	/** Wait for a team's actual MCP registration (or a bounded timeout), independent of any container
+	 * bring-up. `create_session`'s relayToHost (host) branch uses this to keep `markCreateInFlight`'s
+	 * release pending through the real "Claude CLI still starting" gap instead of releasing the moment
+	 * the tmux pane itself spawns - the devcontainer branch gets the same coverage for free, since
+	 * tryWakeTeam already awaits registration internally before its own promise settles. Absent when no
+	 * wake path is wired (create_session then falls back to releasing at tmux-spawn time, as before). */
+	awaitRegister?: (team: string) => Promise<WakeResult>;
 	/** The cross-Domain listening-mode handshake coordinator. Absent when federation is not
 	 * wired (the cross_domain_* ops then error "not available"). The console drives the mutual
 	 * pairing; the gateway owns the listening window and writes the peer. */
@@ -270,6 +277,7 @@ export function createConsoleDispatcher({
 	tryWakeTeam,
 	isWakeInFlight,
 	markCreateInFlight,
+	awaitRegister,
 	crossDomain,
 	crossDomainShare,
 	unlinkDomain,
@@ -818,13 +826,13 @@ export function createConsoleDispatcher({
 					// target has no container to bring up - the daemon is definitionally already up if
 					// relayToHost can reach it at all - so it keeps the direct host-op path.
 					const launchTeam = composeSessionName(target.name, target.sessionName);
-					// Mark in flight for teams()'s "verifying" status regardless of branch: tryWakeTeam
-					// already does this itself for a devcontainer bring-up, but relayToHost's fast host-op
-					// path does not, leaving a real gap between "tmux launched" and "MCP registered" (the
-					// Claude CLI still starting up) where teams() had no signal but plain "available".
+					const viaWake = target.kind === "devcontainer" && tryWakeTeam;
+					// Mark in flight for teams()'s "verifying" status through both "tmux launched" and "MCP
+					// registered" - the release below (not this call) is what actually times that window per
+					// branch, since a devcontainer wake and a host-op launch settle at very different points.
 					const releaseInFlight = markCreateInFlight?.(launchTeam);
 					const launch: Promise<HostOpResult> = (
-						target.kind === "devcontainer" && tryWakeTeam
+						viaWake
 							? tryWakeTeam(launchTeam).then(
 									(r): HostOpResult =>
 										r.ok
@@ -836,7 +844,20 @@ export function createConsoleDispatcher({
 												},
 								)
 							: relayToHost({ kind: "createSession", target, workdirHint, dedupKey })
-					).finally(() => releaseInFlight?.());
+					).finally(() => {
+						// tryWakeTeam's own promise already stayed pending through registration (or its
+						// timeout), so releasing here is already correctly timed for a devcontainer. The
+						// host-op path's promise settles the instant the tmux pane spawns - well before
+						// Claude CLI, the plugin, and the MCP register that actually follow - so defer the
+						// release to that registration (or a bounded timeout) instead, in the background:
+						// this op's own response timing (the race against createSessionBoundMs below) must
+						// stay tied to the tmux spawn, not to registration, so the wait is never awaited here.
+						if (viaWake || !awaitRegister) {
+							releaseInFlight?.();
+						} else {
+							void awaitRegister(launchTeam).finally(() => releaseInFlight?.());
+						}
+					});
 
 					let boundTimer: ReturnType<typeof setTimeout> | undefined;
 					const bound = new Promise<null>((resolve) => {

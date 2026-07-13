@@ -186,11 +186,11 @@ export async function startGateway(): Promise<void> {
 	// both error out, failing sends whose container actually comes up.
 	const inflightWakes = new Map<string, Promise<WakeResult>>();
 	// create_session's relayToHost branch (a host target, or any target with no tryWakeTeam wired)
-	// never touches inflightWakes above, so isWakeInFlight had no signal for that branch between
-	// "launch requested" and "MCP registered" - a slow-starting Claude CLI on an otherwise-instant
-	// host-op launch read as plain "available" the whole time instead of "verifying". Tracked
-	// separately (rather than folded into inflightWakes) so it never interferes with tryWakeTeam's
-	// own dedup-by-team join semantics.
+	// never touches inflightWakes above, so isWakeInFlight needs a separate signal for that branch
+	// covering "launch requested" through "MCP registered" (consoleHandler.ts's create_session pairs
+	// this with awaitRegister below to keep it set through the actual registration, not just the
+	// host-op's own near-instant tmux-spawn ack). Tracked separately (rather than folded into
+	// inflightWakes) so it never interferes with tryWakeTeam's own dedup-by-team join semantics.
 	const inflightCreates = new Set<string>();
 
 	function tryWakeTeam(
@@ -734,6 +734,7 @@ export async function startGateway(): Promise<void> {
 				inflightCreates.add(team);
 				return () => inflightCreates.delete(team);
 			},
+			awaitRegister: (team) => wakeCoordinator.waitFor(team, WAKE_TIMEOUT_MS),
 			crossDomain: crossDomainCoordinator
 				? {
 						listen: () => crossDomainCoordinator!.listen(),
