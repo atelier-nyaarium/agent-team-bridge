@@ -18,6 +18,7 @@ temp/
 /.claude/scheduled_tasks.lock
 debug*.log
 kubeconfig*
+.host-daemon.pid
 
 #### OS
 Thumbs.db
