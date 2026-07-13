@@ -338,7 +338,7 @@ export function buildLaunchCommand(
 		opts.resumeSessionId && /^[0-9a-fA-F-]{8,}$/.test(opts.resumeSessionId)
 			? ` --resume ${opts.resumeSessionId}`
 			: "";
-	const claude = `claude --model opus --effort xhigh ${CLAUDE_FLAGS}${resume}`;
+	const claude = `claude --model sonnet --effort xhigh ${CLAUDE_FLAGS}${resume}`;
 	if (target.kind === "host") {
 		// The workdir is double-quoted for spaces. A single quote would close the outer `bash -c '...'`
 		// and a double quote would close the cd's own quoting to run injected commands; a workdir with
