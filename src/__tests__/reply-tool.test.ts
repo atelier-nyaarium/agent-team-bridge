@@ -18,10 +18,7 @@ vi.mock("../mcp/bridge/helpers.js", () => ({
 	bridgeProjectName: () => "test-team",
 	bridgeConversationId: () => "conv-1",
 	postPluginAction: vi.fn(async () => ({ delivered: true })),
-	setIsMainOrLeadAgent: vi.fn(),
-	// Default false: a handshake-cache write only matters for the tests that explicitly mock this
-	// true, so every other test's payload/posted-body assertions stay unaffected by the cache write.
-	isReceivedHandshakeId: vi.fn(() => false),
+	confirmHandshakeRole: vi.fn(),
 }));
 
 const mockRouterPost = vi.mocked(routerPost);

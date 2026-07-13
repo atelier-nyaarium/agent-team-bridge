@@ -41,15 +41,29 @@ const reconnector = createReconnector(() => connectToRouter());
 // Server instance for channel notifications (set when Claude + channel mode)
 let channelServer: Server | null = null;
 
-// Whether this MCP instance is the main/lead agent (vs a team worker).
-// true = auto-reply lead, false = auto-reply worker, null = let the LLM decide via notification.
-let isMainOrLeadAgent: boolean | null = null;
-
-// Every hs-* id this connection has actually been pushed a handshake for. Scopes
-// setIsMainOrLeadAgent's write to a handshake this process really owns: a lead delegating a
-// channel_reply_structured (carrying a relayed hs id) to a separate-harness worker teammate must
-// never be able to poison the WORKER's own cache to true via an id it never received.
-const receivedHandshakeIds = new Set<string>();
+/** This MCP instance's remembered main/lead-vs-worker answer, and the handshake ids it may use to
+ * write it. `confirm` only takes effect for an id this connection actually received via
+ * `noteReceived` first, so a lead delegating a channel_reply_structured (carrying a relayed hs id)
+ * to a separate-harness worker teammate can never poison the WORKER's own cache to true via an id
+ * it never received - the guard lives on the write itself instead of at every call site. */
+function createHandshakeRoleCache() {
+	let role: boolean | null = null;
+	const receivedIds = new Set<string>();
+	return {
+		noteReceived(hsSessionId: string): void {
+			receivedIds.add(hsSessionId);
+		},
+		confirm(hsSessionId: string, value: boolean): boolean {
+			if (!receivedIds.has(hsSessionId)) return false;
+			role = value;
+			return true;
+		},
+		get(): boolean | null {
+			return role;
+		},
+	};
+}
+const handshakeRole = createHandshakeRoleCache();
 
 export function initBridge(config: BridgeConfig): void {
 	ROUTER_URL = config.routerUrl;
@@ -61,14 +75,11 @@ export function setChannelServer(server: Server): void {
 	channelServer = server;
 }
 
-export function setIsMainOrLeadAgent(value: boolean): void {
-	isMainOrLeadAgent = value;
-}
-
-/** Whether `hsSessionId` is a handshake this connection actually received (not merely hs-prefixed).
- * Callers use this to scope a cache write to a handshake this process really owns. */
-export function isReceivedHandshakeId(hsSessionId: string): boolean {
-	return receivedHandshakeIds.has(hsSessionId);
+/** Record this process's main/lead-vs-worker answer for a handshake it actually received. Returns
+ * false (no-op) for an id `noteReceived` never saw, so a relayed/foreign id can never write the
+ * cache. */
+export function confirmHandshakeRole(hsSessionId: string, value: boolean): boolean {
+	return handshakeRole.confirm(hsSessionId, value);
 }
 
 export function bridgeProjectName(): string {
@@ -187,7 +198,7 @@ export function buildRegisterMsg(subId: string, mode: ConnectionMode = "channel"
 	if (cwdName) registerMsg.cwdName = cwdName;
 	// Carry the remembered handshake answer so a reconnect confirms silently instead of re-asking -
 	// never sent false, since a worker that answered false is evicted and never reconnects.
-	if (isMainOrLeadAgent === true) registerMsg.isMainOrLead = true;
+	if (handshakeRole.get() === true) registerMsg.isMainOrLead = true;
 	return registerMsg;
 }
 
@@ -217,19 +228,20 @@ export function connectToRouter(): void {
 		// Handshake from gateway: auto-reply if we know the answer, otherwise let the LLM decide
 		if (msg.type === "channel_push" && msg.from === "gateway" && msg.replyJsonSchema) {
 			const hsSessionId = msg.session_id as string;
-			receivedHandshakeIds.add(hsSessionId);
-			if (isMainOrLeadAgent !== null) {
-				console.error(`[bridge] handshake auto-reply [${hsSessionId}], isMainOrLead=${isMainOrLeadAgent}`);
+			handshakeRole.noteReceived(hsSessionId);
+			const role = handshakeRole.get();
+			if (role !== null) {
+				console.error(`[bridge] handshake auto-reply [${hsSessionId}], isMainOrLead=${role}`);
 				routerPost("/respond", {
 					session_id: hsSessionId,
 					status: "completed",
-					replyAsJson: { isMainOrLead: isMainOrLeadAgent },
+					replyAsJson: { isMainOrLead: role },
 				}).catch((err: Error) => {
 					console.error(`[bridge] handshake reply failed: ${err.message}`);
 				});
 				return;
 			}
-			// isMainOrLeadAgent === null: let the LLM decide via channel notification (falls through)
+			// role === null: let the LLM decide via channel notification (falls through)
 		}
 
 		// Handshake rejected: worker agent, stop reconnecting
