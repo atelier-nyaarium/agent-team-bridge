@@ -352,30 +352,27 @@ describe("tmuxCore killSession", () => {
 });
 
 describe("tmuxCore isAgentWorking", () => {
-	it("is working when the last spinner line shows the ellipsis or Waiting for", () => {
-		expect(isAgentWorking("✻ Prestidigitating…")).toBe(true);
-		expect(isAgentWorking("✻ Waiting for 1 dynamic workflow to finish")).toBe(true);
-	});
-
-	it("a settled '✻ Brewed for Ns' line (no ellipsis) is the done summary, not working", () => {
+	it("is working when the esc-to-interrupt hint is on the last line", () => {
+		expect(isAgentWorking("✻ Prestidigitating… (12s · esc to interrupt)")).toBe(true);
 		expect(isAgentWorking("✻ Brewed for 7s")).toBe(false);
-		expect(isAgentWorking("✻ Brewed for 19s · 1 monitor still running")).toBe(false);
+		expect(isAgentWorking("")).toBe(false);
+		expect(isAgentWorking("❯ ")).toBe(false);
 	});
 
-	it("treats a pane with NO spinner line as working", () => {
-		expect(isAgentWorking("")).toBe(true);
-		expect(isAgentWorking("❯ ")).toBe(true);
+	it("can land on either of the last two lines depending on how the pane wraps", () => {
+		expect(isAgentWorking("✻ Prestidigitating…\n(12s · esc to interrupt)")).toBe(true);
+		expect(isAgentWorking("(12s · esc to interrupt)\n✻ Prestidigitating…")).toBe(true);
 	});
 
-	it("keys off the LAST spinner line, ignoring a stale done marker in scrollback", () => {
-		expect(isAgentWorking("✻ Brewed for 1h 25m\n✻ Prestidigitating…")).toBe(true);
-		// A prose ellipsis above the live settled line is ignored: only the ✻ line is read.
-		expect(isAgentWorking("● done thinking…\n✻ Brewed for 7s")).toBe(false);
+	it("ignores a hint more than two lines back", () => {
+		expect(isAgentWorking("(12s · esc to interrupt)\n✻ Prestidigitating…\n❯ ")).toBe(false);
 	});
 
-	it("strips the SGR escapes around a real -e spinner line", () => {
+	it("strips the SGR escapes around the hint", () => {
 		const esc = String.fromCharCode(27);
-		expect(isAgentWorking(`${esc}[38;5;1m✻${esc}[0m Prestidigitating${esc}[2m…${esc}[0m`)).toBe(true);
+		expect(isAgentWorking(`✻ Prestidigitating${esc}[2m… (12s ${esc}[2m·${esc}[0m esc to interrupt)${esc}[0m`)).toBe(
+			true,
+		);
 	});
 });
 
