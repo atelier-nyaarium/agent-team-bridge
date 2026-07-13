@@ -50,11 +50,8 @@ const DEAD_LAUNCH_PROBES = 8;
 // resume-picker menus show an INDENTED cursor ("  ❯ 1."), so the line-start anchor matches the real
 // composer and never a menu line.
 const COMPOSER_RE = /^❯/mu;
-// The settled spinner frame "✻". A turn is still running while its status line shows the ellipsis
-// "…" or "Waiting for"; a settled "✻ Brewed for Ns" line (neither) is the done summary.
-const SNOWFLAKE = "✻";
-const ELLIPSIS_RE = /…|\.{3}/u;
-const WAITING_RE = /Waiting for/;
+// The "esc to interrupt" hint in the bottom status line, always preceded by a middle-dot separator.
+const WORKING_HINT = "· esc";
 // The launch menus cleared by pressing "1" (which selects and confirms the highlighted option):
 // dev-channels, folder-trust, and the fullscreen-renderer offer. They can appear in any order and
 // not all on every launch, so the loop re-checks each poll rather than assuming a fixed sequence.
@@ -330,17 +327,14 @@ export function isAgentReady(screen: string): boolean {
 	return COMPOSER_RE.test(stripAnsi(screen));
 }
 
-/** Whether a captured pane shows claude actively working a turn. The last line carrying the settled
- * spinner is working while it shows the ellipsis or "Waiting for"; a settled "✻ Brewed for Ns" line is
- * the done summary. A pane with NO spinner line is treated as working: the spinner is momentarily
- * between frames or scrolled off by tool output, so a missing spinner means mid-turn, not idle. The
- * Kotlin twin lives in AgentScreen.kt. */
+/** Whether a captured pane shows claude actively working a turn: the "esc to interrupt" hint sits in
+ * the bottom status line, so it can land on either of the last two captured lines depending on how
+ * the pane wraps. The Kotlin twin lives in AgentScreen.kt. */
 export function isAgentWorking(screen: string): boolean {
-	const status = stripAnsi(screen)
+	return stripAnsi(screen)
 		.split("\n")
-		.findLast((line) => line.includes(SNOWFLAKE));
-	if (status === undefined) return true; // no spinner line: between frames or scrolled off, so mid-turn
-	return ELLIPSIS_RE.test(status) || WAITING_RE.test(status);
+		.slice(-2)
+		.some((line) => line.includes(WORKING_HINT));
 }
 
 /** Whether the captured pane shows claude logged out: its bottom toolbar prints "Not logged in" /

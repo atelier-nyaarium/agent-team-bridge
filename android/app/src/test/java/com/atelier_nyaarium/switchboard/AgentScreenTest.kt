@@ -18,14 +18,17 @@ class AgentScreenTest {
 
 	@Test
 	fun working() {
-		// An active "✻ verb…" / "Waiting for" line is working; a settled "✻ Brewed for Ns" line is done.
-		assertEquals(true, AgentScreen.isWorking("✻ Prestidigitating…"))
-		assertEquals(true, AgentScreen.isWorking("✻ Waiting for 1 dynamic workflow to finish"))
+		// The "esc to interrupt" hint in the bottom status line means working.
+		assertEquals(true, AgentScreen.isWorking("✻ Prestidigitating… (12s · esc to interrupt)"))
+		// It can land on either of the last two lines depending on how the pane wraps.
+		assertEquals(true, AgentScreen.isWorking("✻ Prestidigitating…\n(12s · esc to interrupt)"))
+		assertEquals(true, AgentScreen.isWorking("(12s · esc to interrupt)\n✻ Prestidigitating…"))
+		// A settled "✻ Brewed for Ns" line with no hint, or no hint at all, is not working.
 		assertEquals(false, AgentScreen.isWorking("✻ Brewed for 7s"))
-		assertEquals(false, AgentScreen.isWorking("✻ Brewed for 19s · 1 monitor still running"))
-		// No spinner line means mid-turn (between frames or scrolled off), so working.
-		assertEquals(true, AgentScreen.isWorking(""))
-		assertEquals(true, AgentScreen.isWorking("Claude Code v2.1.0\n❯ "))
+		assertEquals(false, AgentScreen.isWorking(""))
+		assertEquals(false, AgentScreen.isWorking("Claude Code v2.1.0\n❯ "))
+		// A line more than two back does not count.
+		assertEquals(false, AgentScreen.isWorking("(12s · esc to interrupt)\n✻ Prestidigitating…\n❯ "))
 	}
 
 	@Test
@@ -50,7 +53,10 @@ class AgentScreenTest {
 		// A real capture-pane -e screen wraps cells in SGR escapes; build ESC without a source escape.
 		val esc = 27.toChar().toString()
 		assertEquals(true, AgentScreen.isReady("${esc}[39m❯ ${esc}[2mTry${esc}[0m"))
-		assertEquals(true, AgentScreen.isWorking("${esc}[38;5;1m✻${esc}[0m Prestidigitating${esc}[2m…${esc}[0m"))
+		assertEquals(
+			true,
+			AgentScreen.isWorking("${esc}[38;5;1m✻${esc}[0m Prestidigitating${esc}[2m… (12s ${esc}[2m·${esc}[0m esc to interrupt)"),
+		)
 		val ruleAnsi = "${esc}[2m" + "─".repeat(40) + "${esc}[0m"
 		assertEquals(
 			true,
