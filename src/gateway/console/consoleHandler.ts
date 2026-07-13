@@ -936,10 +936,21 @@ export function createConsoleDispatcher({
 					throw new Error(`cannot forget "${op.target}": name a specific project.session, not a spawn-point`);
 				}
 				const name = composeSessionName(t.spawn, t.session);
-				const target = resolveTmuxTarget(op.target);
 				const dedupKey = `${conversationId}:${opId}`;
-				const r = await relayToHost({ kind: "killSession", target, dedupKey });
-				if (!r.ok) throw new Error(r.error ?? "forget failed");
+				// The tmux kill is best-effort: forget's actual contract is "stop listing this session",
+				// which the record drop below alone guarantees. resolveTmuxTarget can throw (the project
+				// left knownTeamPaths/offlineCatalog, both reset on a gateway restart until the host's next
+				// catalog scan) and the kill itself can fail (host daemon offline, a tmux/docker timeout) -
+				// none of that may block the drop, or a session the user asked to forget stays stuck on the
+				// board forever with no way to make it go away. An orphaned tmux pane is recoverable; a
+				// permanently-stuck board tile is not.
+				try {
+					const target = resolveTmuxTarget(op.target);
+					const r = await relayToHost({ kind: "killSession", target, dedupKey });
+					if (!r.ok) console.log(`[console] forget "${name}": kill failed - ${r.error ?? "unknown error"}`);
+				} catch (e) {
+					console.log(`[console] forget "${name}": kill failed - ${(e as Error).message}`);
+				}
 				// Drop the durable resume record so the session stops listing as available.
 				dropSessionResume?.(name);
 				return { killed: true };

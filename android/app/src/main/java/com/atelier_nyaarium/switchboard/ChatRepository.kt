@@ -3195,7 +3195,16 @@ class ChatRepository(
 		// spawn-point has no local pane to kill); best-effort, the gateway no-ops an absent session.
 		val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
 		if (t is Address && t.gateway == _state.value.localGatewayId) {
-			pollScope?.launch(Dispatchers.IO) { runCatching { client().forget(team) } }
+			pollScope?.launch(Dispatchers.IO) {
+				runCatching { client().forget(team) }
+					.onSuccess {
+						// The record drop already happened server-side; poll now instead of waiting out
+						// TEAMS_REFRESH_MS so the tile actually disappears from the board right away.
+						forceTeamsRefresh = true
+						kick.trySend(Unit)
+					}
+					.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "Forget failed") } }
+			}
 		}
 	}
 

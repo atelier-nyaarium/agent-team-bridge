@@ -916,6 +916,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			isWakeInFlight?: (team: string) => boolean;
 			markCreateInFlight?: (team: string) => () => void;
 			awaitRegister?: (team: string) => Promise<WakeResult>;
+			dropSessionResume?: (team: string) => void;
 		} = {},
 	) {
 		const hostOps: Record<string, unknown>[] = [];
@@ -938,6 +939,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 			isWakeInFlight: opts.isWakeInFlight,
 			markCreateInFlight: opts.markCreateInFlight,
 			awaitRegister: opts.awaitRegister,
+			dropSessionResume: opts.dropSessionResume,
 			createSessionBoundMs: opts.createSessionBoundMs,
 			relayToHost: async (op) => {
 				hostOps.push(op as unknown as Record<string, unknown>);
@@ -1794,6 +1796,54 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		await h.handler.handleFrame(f);
 		await h.handler.handleFrame(f);
 		expect(h.hostOps.filter((o) => o.kind === "killSession")).toHaveLength(1);
+	});
+
+	it("forget kills the tmux and drops the resume record", async () => {
+		const dropped: string[] = [];
+		const h = makeTerminalHarness(undefined, undefined, {
+			dropSessionResume: (team) => dropped.push(team),
+		});
+		const reply = await h.handler.handleFrame(frame({ kind: "forget", target: "recipe-app.scratch" }, "f1"));
+		expect(reply.result).toEqual({ killed: true });
+		expect(h.hostOps[0]).toMatchObject({ kind: "killSession" });
+		expect(dropped).toEqual(["recipe-app.scratch"]);
+	});
+
+	it("forget still drops the resume record when the tmux kill itself fails", async () => {
+		const dropped: string[] = [];
+		const h = makeTerminalHarness(undefined, undefined, {
+			relayFails: true,
+			dropSessionResume: (team) => dropped.push(team),
+		});
+		const reply = await h.handler.handleFrame(frame({ kind: "forget", target: "recipe-app.scratch" }, "f2"));
+		// A failed kill must never block the record drop - that's forget's actual contract.
+		expect(reply.result).toEqual({ killed: true });
+		expect(dropped).toEqual(["recipe-app.scratch"]);
+	});
+
+	it("forget still drops the resume record when the project is unknown to the catalog (resolveTmuxTarget throws)", async () => {
+		const dropped: string[] = [];
+		const h = makeTerminalHarness(
+			() => false, // isProjectName: nothing is a known catalog project (e.g. right after a gateway restart)
+			undefined,
+			{ dropSessionResume: (team) => dropped.push(team) },
+		);
+		const reply = await h.handler.handleFrame(frame({ kind: "forget", target: "recipe-app.scratch" }, "f3"));
+		expect(reply.result).toEqual({ killed: true });
+		expect(h.hostOps).toHaveLength(0);
+		expect(dropped).toEqual(["recipe-app.scratch"]);
+	});
+
+	it("forget on a bare spawn-point is rejected before any host op or record drop", async () => {
+		const dropped: string[] = [];
+		const h = makeTerminalHarness(undefined, undefined, {
+			dropSessionResume: (team) => dropped.push(team),
+		});
+		const reply = await h.handler.handleFrame(frame({ kind: "forget", target: "recipe-app" }, "f4"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("spawn-point");
+		expect(h.hostOps).toHaveLength(0);
+		expect(dropped).toEqual([]);
 	});
 });
 
