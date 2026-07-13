@@ -1544,7 +1544,7 @@ private fun rememberSessionsPulsePhase(): State<Float> {
  * repaints just this bar every frame instead of recomposing the whole card while the board scrolls. */
 @Composable
 private fun PulseBar(phase: State<Float>, modifier: Modifier = Modifier) {
-	val amber = Color(0xFFD29922)
+	val amber = presenceColor("working...")
 	Box(
 		modifier
 			.fillMaxWidth()
@@ -1619,7 +1619,7 @@ fun SessionCard(
 					overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
 					modifier = Modifier.weight(1f).clearAndSetSemantics { contentDescription = "$display, $presenceDescription" },
 				)
-				if (checkTerminal) StatusChip("check terminal", Color(0xFFDA3633))
+				if (checkTerminal) StatusChip("check terminal", presenceColor("check terminal"))
 				// Plugin-version chip: shown only when the agent's running plugin differs from
 				// this app's expected version (BuildConfig.VERSION_NAME, derived from the same
 				// package.json the build reads). Not a warning - the host auto-updates daily, so
