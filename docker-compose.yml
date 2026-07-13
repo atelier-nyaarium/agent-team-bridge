@@ -34,7 +34,6 @@ services:
       # Durable state (federation keys, jobs, mailboxes, replay-guard, session-resume) lives here,
       # separate from the log volume so clearing logs can never wipe federation identity.
       - ./volumes/gateway-data:/app/data
-      - ${HOME}/projects/evie-bot/kubeconfig.yaml:/app/kubeconfig.yaml:ro
 networks:
   switchboard-network:
     name: switchboard

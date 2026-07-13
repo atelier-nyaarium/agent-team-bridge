@@ -26,10 +26,11 @@ import { pendingAdminDomain, readAdminDomain, removeDomain, removeGatewayAdmissi
 import {
 	applySecret,
 	ask,
+	clearAdminKubeconfig,
 	confirm,
 	dc,
 	die,
-	ensureContainer,
+	ensureAdminKubernetes,
 	envGet,
 	envSet,
 	err,
@@ -706,31 +707,38 @@ async function evieDelete(mutate: (fedJson: string) => string): Promise<void> {
  * `pendingTenant` so the phone first-roots on scan; an already-rooted Domain skips staging and emits
  * the blob only. Verifies the bridge path either way. */
 async function provision(): Promise<void> {
-	await applyBridgeManifests();
-	const evieFed = await readEvieFed();
-	// The admin Domain id: a random hex id, minted on the first provision and pinned in the
-	// gateway env. A re-provision reuses it; a fresh setup mints one and writes it back so the gateway
-	// resolves the same Domain on restart.
-	const existing = await envGet("FEDERATION_DOMAIN_ID");
-	const adminDomainId = existing || sanitizeDomainId(randomBytes(8).toString("hex"));
-	const adminDomain = readAdminDomain(evieFed, adminDomainId);
+	// Admin-only: downstream Gateway enrollment never reads SWITCHBOARD_KUBECONFIG. The first
+	// administrator adds its local kubeconfig path to .env before selecting this menu option.
+	await ensureAdminKubernetes();
+	try {
+		await applyBridgeManifests();
+		const evieFed = await readEvieFed();
+		// The admin Domain id: a random hex id, minted on the first provision and pinned in the
+		// gateway env. A re-provision reuses it; a fresh setup mints one and writes it back so the gateway
+		// resolves the same Domain on restart.
+		const existing = await envGet("FEDERATION_DOMAIN_ID");
+		const adminDomainId = existing || sanitizeDomainId(randomBytes(8).toString("hex"));
+		const adminDomain = readAdminDomain(evieFed, adminDomainId);
 
-	let pendingTenant: { domainId: string; nonce: string } | undefined;
-	if (adminDomain.rooted) {
-		// Re-provision: the admin Domain is already rooted at the phone's owner key. Nothing to stage;
-		// just refresh the transport creds.
-		note("Already set up, re-provisioning.");
-	} else {
-		// Fresh setup: pre-stage the pending admin Domain and carry its invite nonce into the blob.
-		const { nonce } = await stageAdminPending(evieFed, adminDomainId);
-		pendingTenant = { domainId: adminDomainId, nonce };
-		await envSet("FEDERATION_DOMAIN_ID", adminDomainId);
+		let pendingTenant: { domainId: string; nonce: string } | undefined;
+		if (adminDomain.rooted) {
+			// Re-provision: the admin Domain is already rooted at the phone's owner key. Nothing to stage;
+			// just refresh the transport creds.
+			note("Already set up, re-provisioning.");
+		} else {
+			// Fresh setup: pre-stage the pending admin Domain and carry its invite nonce into the blob.
+			const { nonce } = await stageAdminPending(evieFed, adminDomainId);
+			pendingTenant = { domainId: adminDomainId, nonce };
+			await envSet("FEDERATION_DOMAIN_ID", adminDomainId);
+		}
+
+		await emitBlob(pendingTenant);
+		await verify();
+		console.log();
+		note(`Setup complete. Blob: ${BLOB_FILE}`);
+	} finally {
+		await clearAdminKubeconfig();
 	}
-
-	await emitBlob(pendingTenant);
-	await verify();
-	console.log();
-	note(`Setup complete. Blob: ${BLOB_FILE}`);
 }
 
 /** Clean break: delete this owner's whole Domain from evie, then erase the local state with the
@@ -769,6 +777,7 @@ async function topMenu(): Promise<void> {
 		console.log("  1) Setup Gateway        - Enroll this machine as a gateway and (re)show its QR\n");
 		console.log("Admin:");
 		console.log("  2) Evie Admin Provision - First-time setup of your Evie network\n");
+		console.log("     Before first use, add SWITCHBOARD_KUBECONFIG=/absolute/path/to/kubeconfig.yaml to .env\n");
 		console.log("Purge:");
 		console.log("  9) Purge Gateway        - Remove this gateway and erase its data");
 		console.log("  0) Purge Federation     - Delete your whole Domain and erase everything\n");
@@ -796,7 +805,6 @@ async function main(): Promise<void> {
 	const arg = process.argv[2] ?? "";
 	switch (arg) {
 		case "": {
-			await ensureContainer();
 			// write_gateway_transport is intentionally NOT in the Provision chain: it commits the
 			// local Gateway to the service-proxy WS, and if WS-over-proxy does not work on this
 			// cluster the Gateway could not connect. Validate that path first, then --gateway-transport.
@@ -814,13 +822,21 @@ async function main(): Promise<void> {
 			break;
 		}
 		case "--gateway-transport": {
-			await ensureContainer();
-			await writeGatewayTransport();
+			await ensureAdminKubernetes();
+			try {
+				await writeGatewayTransport();
+			} finally {
+				await clearAdminKubeconfig();
+			}
 			break;
 		}
 		case "--verify": {
-			await ensureContainer();
-			await verify();
+			await ensureAdminKubernetes();
+			try {
+				await verify();
+			} finally {
+				await clearAdminKubeconfig();
+			}
 			break;
 		}
 		case "--help":

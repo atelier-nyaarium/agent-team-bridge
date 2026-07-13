@@ -1,5 +1,5 @@
 // Shared host-side primitives for the bun setup orchestrators: typed wrappers over Bun.$ (docker,
-// and kubectl run through the gateway container that holds the evie kubeconfig), base64 Secret reads,
+// and admin-only kubectl run through the gateway container), base64 Secret reads,
 // Opaque-Secret apply, the interactive menu/prompt loop, .env read/write, and logging.
 
 import path from "node:path";
@@ -8,7 +8,8 @@ import { $ } from "bun";
 ////////////////////////////////
 //  Constants
 
-// The gateway container holds the evie kubeconfig, so every kubectl call runs through it.
+// Only the admin-provisioning path copies its explicitly configured kubeconfig here. Ordinary
+// gateways never receive a kubeconfig and enroll through the Console instead.
 export const CONTAINER = "switchboard";
 export const NS = "evie-bot";
 export const KUBECONFIG_IN = "/app/kubeconfig.yaml";
@@ -71,20 +72,48 @@ export async function containerUp(): Promise<boolean> {
 		.includes(CONTAINER);
 }
 
-/** Ensure the gateway container is up so kubectl can reach the cluster, starting it if down (e.g.
- * right after a purge). Builds so a pulled code change is picked up rather than an old image
- * crash-looping; the layer cache keeps an unchanged build fast. Left running. */
+/** Ensure the gateway container is up, starting it if down (e.g. right after a purge). Builds so a
+ * pulled code change is picked up rather than an old image crash-looping; the layer cache keeps an
+ * unchanged build fast. This deliberately does not require Kubernetes: a new Gateway starts in
+ * credentials-free arming mode until its Console delivers an enrollment bundle. */
 export async function ensureContainer(): Promise<void> {
 	if (await containerUp()) return;
 	note(`Starting gateway docker`);
 	const up = await dc("up", "--build", "-d").quiet().nothrow();
 	if (up.exitCode !== 0) die(`docker compose up failed (is docker running?)`);
+}
+
+/** Prepare Kubernetes access for the explicit Evie Admin Provision action. The kubeconfig location
+ * is intentionally opt-in and local to the administrator's .env; it is copied into the running
+ * container only for that admin workflow, never declared by Docker Compose. */
+export async function ensureAdminKubernetes(): Promise<void> {
+	const kubeconfig = await envGet("SWITCHBOARD_KUBECONFIG");
+	if (!kubeconfig) {
+		throw new Error(
+			"Evie Admin Provision requires SWITCHBOARD_KUBECONFIG in .env (for example: SWITCHBOARD_KUBECONFIG=/absolute/path/to/kubeconfig.yaml)",
+		);
+	}
+	const source = path.resolve(kubeconfig);
+	if (!(await Bun.file(source).exists())) {
+		throw new Error(`SWITCHBOARD_KUBECONFIG does not exist: ${source}`);
+	}
+	await ensureContainer();
+	const copy = await $`docker cp ${source} ${`${CONTAINER}:${KUBECONFIG_IN}`}`.quiet().nothrow();
+	if (copy.exitCode !== 0) throw new Error("could not copy SWITCHBOARD_KUBECONFIG into the admin container");
+	const chmod = await $`docker exec ${CONTAINER} chmod 600 ${KUBECONFIG_IN}`.quiet().nothrow();
+	if (chmod.exitCode !== 0) throw new Error("could not secure the admin kubeconfig in the gateway container");
 	for (let i = 0; i < 30; i++) {
 		const probe = await $`docker exec ${CONTAINER} kubectl --kubeconfig=${KUBECONFIG_IN} version`.quiet().nothrow();
 		if (probe.exitCode === 0) return;
 		await Bun.sleep(2000);
 	}
-	die(`kubectl not reachable through '${CONTAINER}'`);
+	throw new Error(`kubectl not reachable through '${CONTAINER}'`);
+}
+
+/** Remove the transient admin credential after an admin operation completes. Failure is harmless:
+ * the next ordinary compose recreation has no kubeconfig mount and therefore cannot depend on it. */
+export async function clearAdminKubeconfig(): Promise<void> {
+	await $`docker exec ${CONTAINER} rm -f ${KUBECONFIG_IN}`.quiet().nothrow();
 }
 
 /** A base64-decoded kubectl jsonpath read; empty string when the secret/field is absent. */
