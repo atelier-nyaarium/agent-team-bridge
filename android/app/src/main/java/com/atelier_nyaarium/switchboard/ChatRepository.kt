@@ -2507,8 +2507,9 @@ class ChatRepository(
 		}
 	}
 
-	/** A cheap one-shot peek that refreshes a session's working flag without rearming - for the
-	 * background session chips. The open chat polls peekTerminal continuously instead. */
+	/** A cheap one-shot peek that refreshes a session's working flag without rearming - for a
+	 * backgrounded board session's ambient status. The open chat polls peekTerminal continuously
+	 * instead. */
 	suspend fun pokeWorking(team: String) {
 		peekTerminal(team, null)
 	}
