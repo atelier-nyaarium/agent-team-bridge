@@ -376,11 +376,8 @@ async function presentEnrollment(
  * for the phone to deliver the connection bundle and restarts the gateway to connect. Any saved
  * artifact is wiped on success, on back-out, and on ^C. */
 async function setupGateway(): Promise<void> {
-	// The phone enrolls a gateway against a network it already owns, so the network must exist first.
-	if (!(await envGet("FEDERATION_DOMAIN_ID"))) {
-		console.log("Set up your network first - run option 2.");
-		return;
-	}
+	// A downstream Gateway starts with no Domain or Kubernetes knowledge. The Console that scans
+	// this QR already owns the network and delivers the sealed enrollment bundle after the scan.
 
 	// The gateway is named by this machine's hostname; a pre-set GATEWAY_ID overrides it for
 	// duplicate hostnames, so there is no name prompt.
