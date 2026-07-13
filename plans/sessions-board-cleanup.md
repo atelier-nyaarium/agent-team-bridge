@@ -81,3 +81,17 @@ Ran a 5-dimension parallel audit against this plan and the current codebase (cod
 - **Adopted implementation guidance:** `PulseBar` reads its animated value in the draw phase (not recomposition) and shares one animation source across cards instead of one per card; the "host" name-collision dedupe in the project list; citing the exact `0xFFD29922` token.
 - **Confirmed intentional, not re-opened:** `working` gaining continuous animation where it was previously static is the explicit result of the locked Q4 answer, not a bug.
 - **Accepted as-is:** row-1 chip crowding in the rare worst case is normal ellipsis behavior, not worth a structural change.
+
+Two pre-existing bugs (unrelated to this plan, confirmed unchanged in the diff) surfaced during red-team and are tracked separately, not fixed here: a LazyColumn duplicate item-key crash when two Gateways/peers share a project name, and `GatewayHeader.onToggle` capturing a stale `collapsed` snapshot. Both are recorded as phren findings/tasks for `switchboard`.
+
+## Painpoints
+
+Found during a crust-collection sweep of the sessions-board area and its immediate neighbors. Not fixed here - candidates for a future pass.
+
+- `MainActivity.kt : ThreadScreen : attachments` - the picked-but-unsent attachment list is `remember`-ed without keying on `team`, unlike the adjacent `draft`/`terminalMode` state which are explicitly `remember(team)`-keyed. Switching threads with unsent attachments picked may leak them into the wrong thread.
+- `MainActivity.kt : SessionsScreen : isPeer/adminDomainId` - `adminDomainId` derives from the first session matching the local gateway id, so it's empty whenever the board currently shows zero sessions on your own Gateway (e.g. right after enrollment). An empty `adminDomainId` forces `isPeer = false` for every group, including genuine peer Domains, in that window.
+- `MainActivity.kt : (top-level) : canRename` - computed two different ways: the ThreadScreen call site uses `kind == "loose"`, the SessionActionsDialog call site uses `kind != "devcontainer"`. For a team of kind `"console"` these disagree, so Rename shows on the board's long-press menu but not in the open thread's kebab menu for the same session.
+- `ConsoleClient.kt : ConsoleClient` - never implements the `reload_plugins` console op, despite CLAUDE.md documenting it as available "the same way" as peek/tmux_send/create_session, and the server side (`consoleHandler.ts`, `hostOpRunner.ts`, `hostDaemon.ts`) fully implementing and testing it. No client wrapper, no call site, no UI affordance exists in the Android app.
+- `ChatRepository.kt : ChatState : sessions` - the `localGatewayId` parameter is never referenced in the function body; every call site passes it as if it scopes the result, but it's silently discarded.
+- `ChatRepository.kt : ChatState : label` - same pattern: `localGatewayId` is accepted but never used by the delegate calls, despite 11+ call sites passing `state.localGatewayId` as if it disambiguates.
+- `MainActivity.kt : (top-level) : statusWord` - the KDoc block describing `presenceColor` ("Chip color for the board/thread presence vocabulary.") is misattached above `statusWord` instead, leaving `presenceColor` undocumented and `statusWord`'s doc nonsensical.
