@@ -381,7 +381,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	}
 
 	// Working-chip poll: the open chat is peeked continuously; other listed sessions get one cheap
-	// peek per list change (no rearm). Only local composite sessions have a daemon-drivable pane.
+	// peek per list change or new message (no rearm). Only local composite sessions have a
+	// daemon-drivable pane.
 	val boardSessions = state.sessions(state.localGatewayId)
 	LaunchedEffect(openTeam) {
 		val t = openTeam ?: return@LaunchedEffect
@@ -391,7 +392,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			delay(repo.terminalRefreshMs)
 		}
 	}
-	LaunchedEffect(boardSessions.map { it.name }.sorted(), openTeam) {
+	// Keying on each session's last-activity timestamp (not just the session list) means a turn
+	// completing while the board is on screen re-pokes that session's working flag - otherwise a
+	// flag captured mid-turn has nothing to refresh it once the turn actually ends.
+	val boardActivity = boardSessions.map { it.name to state.lastActivity(it.name) }
+	LaunchedEffect(boardActivity, openTeam) {
 		if (openTeam != null) return@LaunchedEffect
 		for (s in boardSessions) {
 			val local = s.gatewayId.isEmpty() || s.gatewayId == state.localGatewayId
