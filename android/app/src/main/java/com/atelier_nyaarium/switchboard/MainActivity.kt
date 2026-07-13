@@ -11,6 +11,11 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -98,6 +103,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -111,12 +117,16 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -1044,8 +1054,9 @@ fun SessionsScreen(
 ) {
 	// Long-press flow: action menu -> rename dialog or forget confirm.
 	var actionTeam by remember { mutableStateOf<Team?>(null) }
-	// Tapping a spawn-point header opens the session-name dialog for that project.
-	var spawnProject by remember { mutableStateOf<String?>(null) }
+	// Tapping a Gateway's Create button opens the new-session dialog with that Gateway's selectable
+	// projects (host first, then its catalog devcontainer projects).
+	var createDialogProjects by remember { mutableStateOf<List<String>?>(null) }
 	var renameTeam by remember { mutableStateOf<Team?>(null) }
 	var forgetTeam by remember { mutableStateOf<Team?>(null) }
 	// Per-Gateway accordion collapse state (default expanded).
@@ -1089,15 +1100,15 @@ fun SessionsScreen(
 			onDismiss = { forgetTeam = null },
 		)
 	}
-	spawnProject?.let { project ->
-		SpawnDialog(
-			project = project,
-			pendingLabels = state.pendingSpawns.filter { it.first == project }.mapTo(HashSet()) { it.second },
-			onSpawn = { session ->
+	createDialogProjects?.let { projects ->
+		CreateSessionDialog(
+			projects = projects,
+			pendingSpawns = state.pendingSpawns,
+			onSpawn = { project, session ->
 				onSpawn(project, session)
-				spawnProject = null
+				createDialogProjects = null
 			},
-			onDismiss = { spawnProject = null },
+			onDismiss = { createDialogProjects = null },
 		)
 	}
 
@@ -1137,6 +1148,9 @@ fun SessionsScreen(
 				// enrollee who has not finished the trust step); EmptyBoard gates the button on that state.
 				EmptyBoard(state, onManage, onAddGateway, onHostHelp, onRefresh, onVerifyEnroll = onVerifyEnroll)
 			} else {
+				// One shared sweep phase for every card's working/verifying pulse bar, instead of each
+				// card driving its own infinite animation.
+				val pulsePhase = rememberSessionsPulsePhase()
 				val order = sessionOrder(state)
 				// My own Domain id, learned from a local session (one owned by the connected
 				// Gateway): the local listing stamps it, so I can tell a peer Domain apart
@@ -1162,20 +1176,32 @@ fun SessionsScreen(
 						// gateway id reads distinctly; my own Domain shows the bare gateway id.
 						val isPeer = key.domainId.isNotEmpty() && adminDomainId.isNotEmpty() && key.domainId != adminDomainId
 						val headerName = if (isPeer) composite else key.gatewayId
+						// Only your own Gateway can ever create a session on it (host-spawn is meaningless on
+						// a peer's machine), so the header's Create button and its project list are scoped the
+						// same way. Computed unconditionally (not gated on `collapsed`) so the button and its
+						// project list are correct even while the section is collapsed.
+						val showCreate = !isPeer && key.gatewayId == state.localGatewayId
+						fun localName(t: Team) = t.shortName
+						val spawnPoints = group.filter { it.kind == "devcontainer" }.sortedWith(order)
 						item(key = "sw:$composite") {
 							GatewayHeader(
 								name = headerName,
 								online = group.any { it.isLive },
 								collapsed = collapsed,
 								onToggle = { collapsedGateways[composite] = !collapsed },
+								showCreate = showCreate,
+								onCreate = {
+									// "host" first (the synthetic spawn point below), then catalog devcontainer
+									// projects; a real project literally named "host" is deduped against it.
+									createDialogProjects =
+										listOf("host") + spawnPoints.map { localName(it) }.filterNot { it == "host" }
+								},
 							)
 						}
 						if (!collapsed) {
 							// Clean break: a devcontainer entry is a non-chat SPAWN-POINT (its bare project);
 							// each project.session is a loose chat that nests under its project's header. The
 							// remaining non-composite loose peers (host-loose, etc.) stay flat.
-							fun localName(t: Team) = t.shortName
-							val spawnPoints = group.filter { it.kind == "devcontainer" }.sortedWith(order)
 							val composites = group.filter { it.kind != "devcontainer" && isComposite(localName(it)) }
 							val flatLoose =
 								group.filter { it.kind != "devcontainer" && !isComposite(localName(it)) }.sortedWith(order)
@@ -1189,6 +1215,7 @@ fun SessionsScreen(
 										state = state,
 										team = team,
 										nested = true,
+										pulsePhase = pulsePhase,
 										onClick = hapticClick { onOpen(team.name) },
 										onLongPress = { actionTeam = team },
 									)
@@ -1196,17 +1223,12 @@ fun SessionsScreen(
 							}
 
 							// The host machine is a spawn point too, but it is not in the catalog (and the
-							// daemon's reserved "host" slot is hidden), so inject it synthetically for YOUR OWN
-							// gateway only - shown even with no host session yet, so the first one is spawnable.
-							// Rendered first, ahead of the devcontainer spawn-points.
-							val hostInjected = !isPeer && key.gatewayId == state.localGatewayId
-							if (hostInjected) {
+							// daemon's reserved "host" slot is hidden), so it's shown synthetically for YOUR OWN
+							// gateway only - even with no host session yet, so it has somewhere to nest once one
+							// exists. Rendered first, ahead of the devcontainer spawn-points.
+							if (showCreate) {
 								renderProject("host") {
-									SpawnPointHeader(
-										project = "host",
-										online = byProject["host"].orEmpty().any { it.isLive },
-										onSpawn = { spawnProject = "host" },
-									)
+									SpawnPointHeader(project = "host", online = byProject["host"].orEmpty().any { it.isLive })
 								}
 							}
 							for (sp in spawnPoints) {
@@ -1217,22 +1239,22 @@ fun SessionsScreen(
 										// A spawn-point is always available itself; its dot reflects whether any
 										// session nested under it is live.
 										online = byProject[proj].orEmpty().any { it.isLive },
-										onSpawn = { spawnProject = proj },
 									)
 								}
 							}
 							// A composite whose spawn-point is not currently in the catalog still needs a home
-							// (excluding "host" when it was injected above, to avoid a duplicate header).
-							val orphanProjects = byProject.keys - spawnKeys - (if (hostInjected) setOf("host") else emptySet())
+							// (excluding "host" when it was shown above, to avoid a duplicate header).
+							val orphanProjects = byProject.keys - spawnKeys - (if (showCreate) setOf("host") else emptySet())
 							for (proj in orphanProjects.sorted()) {
 								renderProject(proj) {
-									SpawnPointHeader(project = proj, online = false, onSpawn = { spawnProject = proj })
+									SpawnPointHeader(project = proj, online = false)
 								}
 							}
 							items(flatLoose, key = { "team:${it.name}" }) { team ->
 								SessionCard(
 									state = state,
 									team = team,
+									pulsePhase = pulsePhase,
 									onClick = hapticClick { onOpen(team.name) },
 									onLongPress = { actionTeam = team },
 								)
@@ -1431,7 +1453,14 @@ private fun StatusChip(text: String, color: Color) {
 }
 
 @Composable
-private fun GatewayHeader(name: String, online: Boolean, collapsed: Boolean, onToggle: () -> Unit) {
+private fun GatewayHeader(
+	name: String,
+	online: Boolean,
+	collapsed: Boolean,
+	onToggle: () -> Unit,
+	showCreate: Boolean = false,
+	onCreate: (() -> Unit)? = null,
+) {
 	Row(
 		Modifier
 			.fillMaxWidth()
@@ -1449,28 +1478,32 @@ private fun GatewayHeader(name: String, online: Boolean, collapsed: Boolean, onT
 		Spacer(Modifier.width(10.dp))
 		Text(name, style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace)
 		Spacer(Modifier.weight(1f))
-		Text(
-			if (online) "online" else "offline",
-			style = MaterialTheme.typography.labelSmall,
-			color = MaterialTheme.colorScheme.onSurfaceVariant,
-		)
+		if (showCreate && onCreate != null) {
+			// Your own Gateway only - a contained button (not a bare icon) reads as tappable on sight.
+			// Its own click region wins over the row's collapse-toggle for taps landing inside it.
+			Button(onClick = hapticClick(onCreate)) {
+				Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+				Spacer(Modifier.width(6.dp))
+				Text("Create")
+			}
+		} else {
+			Text(
+				if (online) "online" else "offline",
+				style = MaterialTheme.typography.labelSmall,
+				color = MaterialTheme.colorScheme.onSurfaceVariant,
+			)
+		}
 	}
 }
 
-/** A devcontainer project's spawn-point row: tapping it opens the session-name dialog to spawn a
- * new `project.session` chat. The project itself is never a chat (clean break). */
+/** A devcontainer project's spawn-point row: a purely informational display. Creating a session
+ * happens via the Gateway row's Create button. The project itself is never a chat (clean break). */
 @Composable
-private fun SpawnPointHeader(project: String, online: Boolean, onSpawn: () -> Unit) {
+private fun SpawnPointHeader(project: String, online: Boolean) {
 	Row(
-		Modifier
-			.fillMaxWidth()
-			.clip(MaterialTheme.shapes.small)
-			.hapticClickable(onClick = onSpawn)
-			.padding(horizontal = 4.dp, vertical = 6.dp),
+		Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
 		verticalAlignment = Alignment.CenterVertically,
 	) {
-		Icon(Icons.Default.Add, contentDescription = "New session", tint = MaterialTheme.colorScheme.primary)
-		Spacer(Modifier.width(10.dp))
 		Text(project, style = MaterialTheme.typography.titleSmall, fontFamily = FontFamily.Monospace)
 		Spacer(Modifier.weight(1f))
 		Text(
@@ -1492,16 +1525,75 @@ fun SectionLabel(text: String) {
 	)
 }
 
+/** One shared 0f-1f sweep phase driving every SessionCard's working/verifying pulse bar, so a board
+ * with several busy sessions runs one animation loop instead of one per card. */
+@Composable
+private fun rememberSessionsPulsePhase(): State<Float> {
+	val transition = rememberInfiniteTransition(label = "sessionsPulse")
+	return transition.animateFloat(
+		initialValue = 0f,
+		targetValue = 1f,
+		animationSpec = infiniteRepeatable(animation = tween(1600, easing = LinearEasing)),
+		label = "pulsePhase",
+	)
+}
+
+/** Slim animated accent bar - the one shared motion cue for a session that's "verifying" (booting)
+ * or "working" (mid-turn), using the same amber elsewhere used for busy/verifying states. Reads
+ * `phase` inside `drawBehind`'s draw-phase callback rather than the composable body, so the sweep
+ * repaints just this bar every frame instead of recomposing the whole card while the board scrolls. */
+@Composable
+private fun PulseBar(phase: State<Float>, modifier: Modifier = Modifier) {
+	val amber = Color(0xFFD29922)
+	Box(
+		modifier
+			.fillMaxWidth()
+			.height(3.dp)
+			.clip(MaterialTheme.shapes.extraSmall)
+			.background(amber.copy(alpha = 0.18f))
+			.drawBehind {
+				val highlightWidth = size.width * 0.4f
+				val x = -highlightWidth + phase.value * (size.width + highlightWidth * 2f)
+				drawRect(
+					brush = Brush.horizontalGradient(
+						colors = listOf(Color.Transparent, amber, Color.Transparent),
+						startX = x,
+						endX = x + highlightWidth,
+					),
+				)
+			},
+	)
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: () -> Unit, onLongPress: () -> Unit) {
+fun SessionCard(
+	state: ChatState,
+	team: Team,
+	nested: Boolean = false,
+	pulsePhase: State<Float>,
+	onClick: () -> Unit,
+	onLongPress: () -> Unit,
+) {
 	val haptics = LocalHapticFeedback.current
 	val strong = rememberStrongHaptic()
 	val display = state.label(team.name, state.localGatewayId)
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
 	val statusWord = statusWord(team.status)
-	val statusColor = presenceColor(statusWord)
+	val checkTerminal = live && state.needsLogin(team.name)
+	// "working" and "verifying" are one busy state sharing a single pulse bar.
+	val busy = statusWord == "verifying" || (live && state.working(team.name))
+	// Ambient presence: full color while connected or busy, muted once asleep or gone ("down or
+	// asleep" both read the same muted way - only a connected/busy session keeps full-color text).
+	val titleColor =
+		if (statusWord == "available" || statusWord == "ended") {
+			MaterialTheme.colorScheme.onSurfaceVariant
+		} else {
+			MaterialTheme.colorScheme.onSurface
+		}
+	// Presence is colour/motion only on the title, so a screen reader needs it spelled out here.
+	val presenceDescription = if (checkTerminal) "check terminal" else if (busy) "working" else statusWord
 	// The clip keeps the ripple inside the card's rounded corners. A nested session card indents
 	// under its spawn-point header.
 	Card(
@@ -1517,23 +1609,17 @@ fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: 
 		),
 	) {
 		Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-			Row(verticalAlignment = Alignment.CenterVertically) {
+			Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
 				Text(
 					display,
 					style = MaterialTheme.typography.titleMedium,
 					fontFamily = FontFamily.Monospace,
-					modifier = Modifier.weight(1f),
+					color = titleColor,
+					maxLines = 1,
+					overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+					modifier = Modifier.weight(1f).clearAndSetSemantics { contentDescription = "$display, $presenceDescription" },
 				)
-				if (unread > 0) Badge { Text("$unread") }
-			}
-			Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-				// A spinner while the session is coming up. The gateway reports "verifying" from the moment
-				// a wake is in flight (spawn/wake) through the MCP handshake, so this covers the whole boot;
-				// an online or plainly-asleep tile has none.
-				if (team.status == "verifying") {
-					CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Color(0xFFD29922))
-				}
-				StatusChip(statusWord, statusColor)
+				if (checkTerminal) StatusChip("check terminal", Color(0xFFDA3633))
 				// Plugin-version chip: shown only when the agent's running plugin differs from
 				// this app's expected version (BuildConfig.VERSION_NAME, derived from the same
 				// package.json the build reads). Not a warning - the host auto-updates daily, so
@@ -1541,28 +1627,33 @@ fun SessionCard(state: ChatState, team: Team, nested: Boolean = false, onClick: 
 				team.version?.let { v ->
 					if (v != BuildConfig.VERSION_NAME) StatusChip("v$v", MaterialTheme.colorScheme.outline)
 				}
-				if (live && state.needsLogin(team.name)) {
-					StatusChip("check terminal", Color(0xFFDA3633))
-				} else if (live && state.working(team.name)) {
-					StatusChip("working...", Color(0xFFD29922))
-				}
-				Spacer(Modifier.weight(1f))
-				state.lastActivity(team.name)?.let {
-					Text(
-						relativeTime(it),
-						style = MaterialTheme.typography.labelSmall,
-						color = MaterialTheme.colorScheme.onSurfaceVariant,
-					)
-				}
+				if (unread > 0) Badge { Text("$unread") }
 			}
-			state.snippet(team.name)?.let {
-				Text(
-					it,
-					style = MaterialTheme.typography.bodySmall,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
-					maxLines = 1,
-					overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-				)
+			if (busy) PulseBar(pulsePhase)
+			val snippet = state.snippet(team.name)
+			val lastActivity = state.lastActivity(team.name)
+			if (snippet != null || lastActivity != null) {
+				Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+					if (snippet != null) {
+						Text(
+							snippet,
+							style = MaterialTheme.typography.bodySmall,
+							color = MaterialTheme.colorScheme.onSurfaceVariant,
+							maxLines = 1,
+							overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+							modifier = Modifier.weight(1f),
+						)
+					} else {
+						Spacer(Modifier.weight(1f))
+					}
+					lastActivity?.let {
+						Text(
+							relativeTime(it),
+							style = MaterialTheme.typography.labelSmall,
+							color = MaterialTheme.colorScheme.onSurfaceVariant,
+						)
+					}
+				}
 			}
 		}
 	}
@@ -2733,26 +2824,64 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
 	)
 }
 
-/** Name and spawn a new session in a spawn-point project. The label is free-form: the gateway mints
- * the session id, so the field accepts any text and the spawn button is enabled once it is non-blank.
- * `pendingLabels` are labels already mid-create for this project (see ChatState.pendingSpawns); the
- * dialog refuses to re-submit one of those rather than silently reattaching to the first attempt. */
+/** Name and spawn a new session, picking the project via a dropdown defaulted to "host". The label
+ * is free-form: the gateway mints the session id, so the field accepts any text and the spawn button
+ * is enabled once it is non-blank. `pendingSpawns` is the full (project, label) set already mid-create
+ * (see ChatState.pendingSpawns); the dialog derives its own project's pending labels off
+ * `selectedProject`, so the duplicate-submit guard always matches whichever project is selected. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SpawnDialog(project: String, pendingLabels: Set<String>, onSpawn: (String) -> Unit, onDismiss: () -> Unit) {
+fun CreateSessionDialog(
+	projects: List<String>,
+	pendingSpawns: Set<Pair<String, String>>,
+	onSpawn: (String, String) -> Unit,
+	onDismiss: () -> Unit,
+) {
+	var selectedProject by remember { mutableStateOf("host") }
+	var projectMenuOpen by remember { mutableStateOf(false) }
 	// A free-form label: the gateway mints the session id, so the label is not slug-constrained.
 	var name by remember { mutableStateOf("") }
 	val trimmed = name.trim()
+	val pendingLabels = pendingSpawns.filter { it.first == selectedProject }.mapTo(HashSet()) { it.second }
 	val isPending = trimmed.isNotEmpty() && trimmed in pendingLabels
 	AlertDialog(
 		onDismissRequest = onDismiss,
-		title = { Text("New session in $project") },
+		title = { Text("New session") },
 		text = {
 			Column {
+				ExposedDropdownMenuBox(
+					expanded = projectMenuOpen,
+					onExpandedChange = { projectMenuOpen = it },
+					modifier = Modifier.fillMaxWidth(),
+				) {
+					OutlinedTextField(
+						value = selectedProject,
+						onValueChange = {},
+						readOnly = true,
+						label = { Text("Project") },
+						trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = projectMenuOpen) },
+						singleLine = true,
+						modifier = Modifier.fillMaxWidth().menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
+					)
+					ExposedDropdownMenu(expanded = projectMenuOpen, onDismissRequest = { projectMenuOpen = false }) {
+						for (p in projects) {
+							DropdownMenuItem(
+								text = { Text(p) },
+								onClick = hapticClick {
+									selectedProject = p
+									projectMenuOpen = false
+								},
+							)
+						}
+					}
+				}
+				Spacer(Modifier.height(12.dp))
 				OutlinedTextField(
 					value = name,
 					onValueChange = { if (it.length <= SESSION_LABEL_MAX_CHARS) name = it },
 					label = { Text("Session name") },
 					singleLine = true,
+					modifier = Modifier.fillMaxWidth(),
 				)
 				if (isPending) {
 					Text(
@@ -2763,7 +2892,10 @@ fun SpawnDialog(project: String, pendingLabels: Set<String>, onSpawn: (String) -
 			}
 		},
 		confirmButton = {
-			TextButton(enabled = trimmed.isNotEmpty() && !isPending, onClick = hapticClick { onSpawn(trimmed) }) { Text("Spawn") }
+			TextButton(
+				enabled = trimmed.isNotEmpty() && !isPending,
+				onClick = hapticClick { onSpawn(selectedProject, trimmed) },
+			) { Text("Spawn") }
 		},
 		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
 	)

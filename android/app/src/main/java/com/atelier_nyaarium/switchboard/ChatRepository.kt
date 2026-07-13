@@ -2537,7 +2537,7 @@ class ChatRepository(
 	 * caller's scope (the Activity's), so a tap always fires even before the poll loop's scope exists. */
 	suspend fun spawnSession(project: String, label: String) = coroutineScope {
 		val key = project to label
-		// A synchronous check before any suspension point - SpawnDialog's own disabled-while-pending
+		// A synchronous check before any suspension point - CreateSessionDialog's own disabled-while-pending
 		// state is the primary guard, but it is a Composable snapshot (recomposes asynchronously), not a
 		// lock; this is the real one, closing the gap for a caller that races ahead of that recomposition
 		// or bypasses the dialog entirely.
