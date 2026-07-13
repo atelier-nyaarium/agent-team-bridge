@@ -1208,9 +1208,14 @@ fun SessionsScreen(
 							val byProject = composites.groupBy { parseSessionName(localName(it)).project }
 							val spawnKeys = spawnPoints.map { localName(it) }.toSet()
 
+							// A spawn-point header only shows once it has a session nested under it - an empty
+							// one adds nothing to look at, and every project (host included) is always still
+							// reachable as a Create option regardless of whether it currently has any sessions.
 							fun renderProject(projectKey: String, header: @Composable () -> Unit) {
+								val sessions = byProject[projectKey].orEmpty().sortedWith(order)
+								if (sessions.isEmpty()) return
 								item(key = "spawn:$projectKey") { header() }
-								items(byProject[projectKey].orEmpty().sortedWith(order), key = { "team:${it.name}" }) { team ->
+								items(sessions, key = { "team:${it.name}" }) { team ->
 									SessionCard(
 										state = state,
 										team = team,
@@ -1224,8 +1229,7 @@ fun SessionsScreen(
 
 							// The host machine is a spawn point too, but it is not in the catalog (and the
 							// daemon's reserved "host" slot is hidden), so it's shown synthetically for YOUR OWN
-							// gateway only - even with no host session yet, so it has somewhere to nest once one
-							// exists. Rendered first, ahead of the devcontainer spawn-points.
+							// gateway only. Rendered first, ahead of the devcontainer spawn-points.
 							if (showCreate) {
 								renderProject("host") {
 									SpawnPointHeader(project = "host", online = byProject["host"].orEmpty().any { it.isLive })
