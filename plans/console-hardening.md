@@ -5,12 +5,15 @@ extracted here as a real plan. The three low/cosmetic siblings (ENROLL_POLL vs e
 SwitchboardService notification extraction, the `Repo.get` relocation) stay in pain-points.md.
 
 Phases A and B are independent. C is a prerequisite for D: consolidating the duplicated
-request shape first means the transport change in D lands in 2 chokepoints instead of 11.
+request shape first means the transport change in D lands in 2 chokepoints instead of 10
+(relay + the 9 migrated members; the 2 intentionally-left-blocking calls are never converted).
 
-Refined through a plan-refinement cycle (see `## Audit` at the bottom): round 1 found two
-blockers (Phase B's original pin guarded the wrong relationship; Phase D's original rationale
-ignored that the poll loop's catch swallows CancellationException) plus a live disk leak Phase A
-must now cover. Everything below is the post-audit state.
+Refined through a plan-refinement cycle, two audit rounds (see `## Audit` at the bottom):
+round 1 found two blockers (Phase B's original pin guarded the wrong relationship; Phase D's
+original rationale ignored that the poll loop's catch swallows CancellationException) plus a
+live disk leak Phase A must now cover; round 2 then overturned three of the round-1 rewrite's
+own designs (the reconcileSent delete rule, the sweep's race guard, and the conditional
+defense-removal framing). Everything below is the post-round-2 state.
 
 ## Phase A - `forget(team)` per-team attachment purge (privacy)
 
@@ -29,9 +32,19 @@ must now cover. Everything below is the post-audit state.
   bucket, and `reconcileSent` REPLACES the optimistic row in place (`it[idx] = echo.copy(...)`,
   ChatRepository.kt reconcileSent). After the replace nothing references `out-<ms>` - it is an
   orphan that today survives until a full `clearAll`. This is a live leak on every
-  attachment-bearing send, independent of forget. Corollary: when the mirror is byteless
-  (metadata-only), the echo's files carry null `src` and the replace makes `out-<ms>` the ONLY
-  copy of the user's own sent thumbnails - unreachable via any row.
+  attachment-bearing send, independent of forget.
+- **`sentEchoMatch` gives the replace THREE distinct old/new bucket shapes** (audit round 2,
+  verified) - any bucket-deletion rule must be correct on all three: (1) first drain: old row
+  references `out-<ms>`, echo references `<epoch>-<seq>`; (2) same-`(epoch, seq)` re-drain fold:
+  the old row was ALREADY upgraded, old and new reference the SAME `<epoch>-<seq>` bucket -
+  deleting "the old row's files" here destroys files the replaced row still needs; (3) fresh-seq
+  re-send fold (opId match across a gateway restart): old references `<epoch>-<seq1>`, echo
+  references `<epoch>-<seq2>` - the orphan is an inbound-style bucket, not an out-bucket.
+- A `sent` mirror that is byteless or partial is NOT currently producible (audit round 2 traced
+  the full path: `ConsoleClient.send` base64-encodes every file unconditionally, the gateway
+  mirrors `op.files` verbatim, and only the reply path strips bytes) - so per-file byteless
+  handling below is defensive future-proofing, not a live-bug fix. The live bug on the replace
+  path is shape (2) above.
 - `forget()` drops rows in MULTIPLE threads, not just `threads[key]`: `threadsAfterForget`
   removes the team's own thread AND sweeps every remaining thread for peer-mirror rows
   (`it.isPeer && (it.from == key || it.to == key)`). The purge set must cover all of them.
@@ -56,27 +69,46 @@ must now cover. Everything below is the post-audit state.
    through the existing rel-extraction + `resolve()` idiom. Delete per-file; remove a bucket dir
    only when it is empty afterward. NEVER `deleteRecursively()` a bucket derived from a row - a
    colliding out-bucket could hold a sibling team's file. Unconditional IO launch (see facts).
-2. **Kill the ongoing out-bucket leak at its source:** when `reconcileSent` replaces the
-   optimistic row AND the replacing echo carries its own decoded bytes (non-null srcs), delete
-   the old row's now-unreferenced out-bucket files. When the mirror is byteless, KEEP the
-   optimistic row's files on the replaced row instead (preserves the user's sent thumbnails and
-   keeps the bucket referenced) - fixing the byteless-mirror thumbnail loss in the same move.
-3. **Orphan-bucket sweep as the completeness backstop:** on cold start (an IO coroutine after
-   threads load), enumerate `attachments/*` bucket dirs, compute the referenced-bucket set from
-   ALL surviving rows across threads, delete unreferenced buckets. Skip buckets younger than a
-   generous age threshold (e.g. 10 min) so the sweep can never race a send's store-then-append
-   gap. This heals: historical reconcileSent orphans, crash-between-persist-and-delete windows
-   (the row shrink is durable via `apply()`, the file delete is a best-effort coroutine - a kill
-   in between leaks until the next sweep, an accepted-and-healed posture rather than a permanent
+2. **Kill the ongoing out-bucket leak at its source, with a SET-DIFFERENCE rule (audit round 2
+   corrected the round-1 "delete the old out-bucket" wording, which was wrong on two of the
+   three replace shapes):** extract a pure module-level function (the `threadsAfterForget`
+   pattern - Context-free, so Phase A's tests never need a ChatRepository instance):
+   `(oldFiles, echoFiles) -> (mergedFiles, deletePaths)`. Pair files BY NAME (both sides derive
+   names through the same `safeName` + `uniqueName` chain, so names are stable; index pairing
+   drifts when a `storeOutgoing` write fails and `mapNotNull` drops it). Per pair: an echo file
+   with a non-null `src` wins (its src goes into merged; the old copy becomes deletable); an
+   echo file with null `src` keeps the old row's src (stays referenced, never deleted).
+   `deletePaths` = old files' paths MINUS merged files' paths - on shape (1) that is the
+   out-bucket copies, on shape (2) it is EMPTY (old == new, nothing deleted, no data loss), on
+   shape (3) it is the orphaned `<epoch>-<seq1>` copies. `reconcileSent` then replaces with
+   `echo.copy(id = old.id, files = merged)` and deletes `deletePaths` on an IO hop.
+3. **Orphan-bucket sweep as the completeness backstop:** on cold start, run the sweep TO
+   COMPLETION strictly BEFORE `startPolling` in the same startup coroutine
+   (`connect(); reconcilePending(); sweep(); startPolling(scope)`) - the dangerous race is not
+   the send store-then-append gap (append persists synchronously) but a PRIOR session's
+   decoded-but-uncommitted inbound bucket: unreferenced and old at enumeration time, then
+   re-referenced by the two-phase re-drain before a concurrent sweep's delete lands. Sequencing
+   before the poll loop eliminates that interleave outright; if the sweep is ever made
+   concurrent instead, it must re-stat mtime AND re-check referenced-set membership immediately
+   before each delete. Mechanics: enumerate `attachments/*` bucket dirs, compute the
+   referenced-bucket set from ALL surviving rows across threads, delete unreferenced buckets.
+   Age guard: dir `File.lastModified()` (updates on child create/rename/delete, which is the
+   right signal for these append-only buckets); skip buckets younger than a generous threshold
+   (e.g. 10 min) as a backstop for any not-yet-persisted reference; treat `lastModified() == 0L`
+   (stat error) as UNKNOWN - never delete-eligible - since 0L would otherwise read as ancient.
+   This heals: historical reconcileSent orphans, crash-between-persist-and-delete windows (the
+   row shrink is durable via `apply()`, the file delete is a best-effort coroutine - a kill in
+   between leaks until the next sweep, an accepted-and-healed posture rather than a permanent
    one), and any future decode-without-row case (plugin_action).
 
-**Tests:** keep the dropped-row derivation pure (the `threadsAfterForget` test pattern);
-temp-dir JVM tests on the delete helper (dropped row's files gone, sibling bucket untouched,
-empty dir removed, occupied dir kept) and the sweep (orphan deleted, referenced kept,
-young-bucket skipped); a reconcileSent test for the byteless-mirror file-preservation rule.
-Note: target the purge/sweep helpers (pure `java.io`), not `Attachments.decode` - decode uses
-`android.util.Base64`, which under Phase C's `returnDefaultValues` test option returns null
-rather than throwing, silently weakening any test that leans on it.
+**Tests:** keep the dropped-row derivation pure (the `threadsAfterForget` test pattern); the
+merge/delete rule of piece 2 is a pure function - test all three replace shapes (out-bucket
+deleted; same-bucket fold deletes NOTHING; fresh-seq fold deletes the old inbound copies) plus
+the byteless/partial arms; temp-dir JVM tests on the delete helper (dropped row's files gone,
+sibling bucket untouched, empty dir removed, occupied dir kept) and the sweep (orphan deleted,
+referenced kept, young-bucket skipped, zero-mtime kept). All of these are pure logic +
+`java.io` (org.json is already a real test dependency if row shapes are needed) - Phase A's
+tests depend on nothing from Phase C, keeping "A and B in either order" true.
 
 ## Phase B - long-poll timeout chain: pin the BINDING same-repo relationships
 
@@ -101,21 +133,32 @@ constraint; do not "unify" them.
 **Fix direction:**
 
 - Name the margin: the bare `18_000` in `ConsoleClient.poll` becomes a named constant
-  (e.g. `HELD_READ_MARGIN_MS`).
-- Add a documented ceiling constant (e.g. `PROXY_CEILING_MS = 60_000`) whose comment states it
-  mirrors untracked infra (documentation-as-code: an infra change must update it) - then pin
+  (e.g. `HELD_READ_MARGIN_MS`). **Visibility (audit round 2): the pins below read ConsoleClient
+  companion constants from separate test classes, so `HELD_READ_MARGIN_MS`,
+  `PINNED_CONNECT_TIMEOUT_MS`, and `CALL_TIMEOUT_MARGIN_MS` must be `internal`, not `private`
+  (the ChatRepository companion already made exactly this move for the same reason - copy its
+  explanatory comment style). As `private` the prescribed tests do not compile, and that is the
+  grep-invisible Kotlin breakage CI cannot catch.**
+- Add a documented ceiling constant `PROXY_CEILING_MS = 60_000` (internal, in ConsoleClient's
+  companion beside the margin it bounds) whose comment states it mirrors untracked infra
+  (documentation-as-code: an infra change must update it) - then pin
   `LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS < PROXY_CEILING_MS` in `ChatRepositoryConstantsTest`
   (the current 58 < 60 headroom is deliberately thin; pin strict `<` and say so).
-- Unify the gateway's two independent 45_000 literals: define one exported constant in
-  `schemas.ts`, use it in the zod `.max()` AND import it as `HOLD_CAP_MS` in consoleHandler (or
-  drop the redundant `Math.min` with a comment) - derive, don't duplicate. Pin
-  `LONG_POLL_HOLD_MS <= <that constant>` from both sides (`<=`: `Math.min`/`.max` honor
+- Unify the gateway's two independent 45_000 literals: define ONE exported constant in
+  `schemas.ts`, use it in the zod `.max()`, and import it into consoleHandler as `HOLD_CAP_MS`
+  (keep the now-derived `Math.min` as a harmless belt - audit round 2 verified the schema parse
+  strictly precedes every read of `op.holdMs`, so the min never truncates a valid value; its
+  comment updates to say the schema is the real gate, and the chain-restatement rationale
+  currently on `HOLD_CAP_MS` moves with the surviving comment, not deleted). No import cycle:
+  consoleHandler already imports from schemas.ts, and schemas.ts imports nothing from gateway/.
+  Pin `LONG_POLL_HOLD_MS <= <that constant>` from both sides (`<=`: `Math.min`/`.max` honor
   equality) in the two constants-test files that already do this for other pairs.
 - Also pin the client's internal derived ordering: held callTimeout > held read timeout > hold
-  (pure arithmetic on ConsoleClient constants; a bare JUnit test).
+  (pure arithmetic on the now-internal ConsoleClient constants; a bare JUnit test).
 - Update ALL THREE in-repo prose restatements of the chain to point at the pins:
-  `ConsoleClient.poll`'s comment, `consoleHandler.ts`'s `HOLD_CAP_MS` comment, and
-  `src/gateway/index.ts`'s `HOST_OP_TIMEOUT_MS` comment ("evie ~55s, apiserver 60s").
+  `ConsoleClient.poll`'s comment, consoleHandler's hold-cap comment (wherever it lands per the
+  unification above), and `src/gateway/index.ts`'s `HOST_OP_TIMEOUT_MS` comment
+  ("evie ~55s, apiserver 60s").
 - The 55s evie layer stays comment-only; add an evie-bot-side pin whenever next in that repo.
 
 ## Phase C - consolidate the 10 duplicated evie-direct request shapes
@@ -167,7 +210,7 @@ each diffed against the ledger above.
   fallback. This is the test the build gates structurally cannot replace: a decode-order
   transposition is type-identical Kotlin that compiles clean.
 
-**Payoff:** Phase D's transport change becomes 2 edits (relay + this helper) instead of 11, and
+**Payoff:** Phase D's transport change becomes 2 edits (relay + this helper) instead of 10, and
 so does every future fix to the shape.
 
 ## Phase D - cancellable transport (the root cause behind the teardown defenses)
@@ -215,16 +258,23 @@ so does every future fix to the shape.
    become suspend; the four private ChatRepository helpers + `submitOwnerFact`'s functional
    parameter as listed above.
 3. **Cancellation-rethrow discipline (load-bearing, same commit):** the poll loop's catch gains
-   a CancellationException rethrow before any classification (`classifyConnError` must never see
-   one); sweep the 18 `runCatching { client()... }` sites and make each rethrow cancellation
+   a CancellationException rethrow as the FIRST statement of the catch (ahead of the HTTP-504
+   branch, so both branches are provably covered; `classifyConnError` must never see one); sweep
+   the 18 `runCatching { client()... }` sites and make each rethrow cancellation
    (`.onFailure { if (it is CancellationException) throw it }` or convert to try/catch). The
-   main-catch rethrow is the one that closes the wakelock-reacquisition path; the runCatching
-   sites are hygiene ensuring no swallowed cancel anywhere.
-4. **Comment sweep (same commit - these become false the moment the transport changes):**
-   SwitchboardService.kt's destroyed-flag block and onDestroy comments ("blocking, not suspend,
-   so scope.cancel() cannot interrupt"); ChatRepository.clearAll's cancelAndJoin rationale (the
-   JOIN stays - it still serializes the post-poll drain against the state reset - but the
-   stated worst case changes from "waits out the call timeout" to "returns on cancel unwind");
+   main-catch rethrow closes the cancel-surfaces-as-exception route to `decide()`; the
+   runCatching sites are hygiene ensuring no swallowed cancel anywhere. Optionally add an
+   `ensureActive()`/`isActive` break at the top of the loop tail (before `decide()`) - it
+   narrows the residual window below but can never close it.
+4. **Comment sweep (same commit) - SURGICAL, not wholesale (audit round 2):** each of these
+   comments' stated MECHANISM ("poll is blocking, scope.cancel() cannot interrupt") dies with
+   the transport change, but the destroyed-flag comments' CONCLUSION ("the loop can still run
+   one more decide() after onDestroy returns") remains true via the non-suspend tail (below) -
+   rewrite the reason, keep the conclusion and the defense justification. Sites:
+   SwitchboardService.kt's destroyed-flag block and onDestroy comments (rewrite mechanism to
+   the non-suspend-tail rationale); ChatRepository.clearAll's cancelAndJoin rationale (the JOIN
+   stays - it still serializes the post-poll drain against the state reset - but the stated
+   worst case changes from "waits out the call timeout" to "returns on cancel unwind");
    SttsClient.kt's "Blocking OkHttp like ConsoleClient" analogy (SttsClient stays blocking by
    design; the cross-reference is what dies); ConsoleClient's own class/relay/poll/send KDocs;
    CLAUDE.md's idle-pushback section if it restates blocking-ness.
@@ -233,16 +283,21 @@ so does every future fix to the shape.
    wall-clock; the wakelock must stay up for the round trip regardless of which thread waits),
    and BURST_JOIN bounds STTS work, not transport (audit-verified; do not "re-derive").
 
-**Then, separately (not in the same commit):** re-evaluate the destroyed-flag +
-scheduler-null teardown defenses, under CONCRETE removal conditions (audit round 1): they may
-go only if (a) the poll loop provably rethrows cancellation so `decide()` is unreachable after
-a cancel, and (b) a red-team pass confirms no other path from a cancelled pass reaches the
-scheduler (the burst `joinAll` is itself cancellable, so the poll coroutine unwinds even while
-stale STTS children linger on their own blocking calls - those children never touch the
-scheduler). Until both are demonstrated, the defenses stay. **The alarm-PendingIntent revival
-path (PollAlarmReceiver + companion passLock) is orthogonal to cancellability - a system kill
-skips onDestroy entirely and revives a fresh process - and is NOT part of this re-evaluation.
-Do not touch it.**
+**The teardown defenses are PERMANENT - there is no later removal commit (audit round 2
+overturned round 1's conditional-removal framing):** Kotlin cancellation is cooperative, and
+`decide()` is a non-suspend call sitting after the try with no suspension point between the
+try's close and the `decide()` call. A cancel that lands in the loop's non-suspend tail (drain
+bookkeeping, the empty-burst common case, the try-exit gap) completes the try NORMALLY - no
+exception, the catch and its rethrow never run - and `decide()` executes to completion,
+scheduler side effects included. No rethrow, and no checkpoint placed before `decide()`, can
+make "decide() unreachable after cancel" true (a cancel arriving between any check and the
+call still lets the non-suspend `decide()` finish). Cancellability therefore shrinks the
+stale-decide window from an entire blocking poll round trip to these tail instants, but the
+destroyed flag + scheduler-null write remain the mechanism that makes the residual harmless -
+they stay, with their comments rewritten per step 4. **The alarm-PendingIntent revival path
+(PollAlarmReceiver + companion passLock) is likewise untouched - a system kill skips onDestroy
+entirely and revives a fresh process; it was never defended by cancellation in the first
+place.**
 
 **Verification:** MockWebServer tests (on Phase C's infrastructure): a cancellation test
 (server holds the response; cancel the calling job; assert the OkHttp call is cancelled and the
@@ -253,9 +308,9 @@ coroutine unwinds promptly instead of waiting out the timeout) and a per-call-ti
 
 - All four phases are Android-console-side plus small same-repo TS edits in B. No user-facing
   UX decisions anywhere - straight to `audited-implementation` cycles per phase when picked up.
-- Order: A and B in either order (independent); C strictly before D; D's rethrow discipline and
-  comment sweep land in the SAME commit as the transport change, the defense re-evaluation in a
-  later one.
+- Order: A and B in either order (independent, and A's tests deliberately depend on nothing
+  from C); C strictly before D. ALL of Phase D (transport change, rethrow discipline, comment
+  sweep) is one commit; there is no later defense-removal commit - the defenses are permanent.
 - `SttsClient` keeps its blocking pattern by design ("callers own the dispatcher boundary") and
   now has a real callTimeout; out of scope here.
 
@@ -270,9 +325,28 @@ relationship while the real constraint (`hold + margin < proxy ceiling`) stayed 
 (2) the original Phase D rationale ("scope.cancel() interrupts the pass, the race closes at the
 source") was false as written - the poll loop's catch swallows CancellationException and would
 re-acquire the wakelock through decide(). Major serious findings folded in: the reconcileSent
-out-bucket orphan (a live leak today) + byteless-mirror thumbnail loss; forget's local-gated IO
-launch trap; the enqueue wrapper's error-routing/leak requirements (send()'s null callTimeout
-makes a lost resume a permanent hang); the telemetry deviation ledger for Phase C; the
-MockWebServer + returnDefaultValues + construction-seam verification upgrade; the stale-comment
-sweep list; the 4 private suspend helpers. Notes recorded: constants unchanged by D;
-alarm-PI path out of scope; membership list confirmed complete; drafts are text-only.
+out-bucket orphan (a live leak today); forget's local-gated IO launch trap; the enqueue
+wrapper's error-routing/leak requirements (send()'s null callTimeout makes a lost resume a
+permanent hang); the telemetry deviation ledger for Phase C; the MockWebServer +
+returnDefaultValues + construction-seam verification upgrade; the stale-comment sweep list; the
+4 private suspend helpers. Notes recorded: constants unchanged by D; alarm-PI path out of
+scope; membership list confirmed complete; drafts are text-only.
+
+**Round 2 (2026-07-16, targeted at the round-1 rewrite's own new claims):** 5 opus dimensions
+(byteless-mirror-rule, orphan-sweep-race, unwind-and-defense-conditions, phase-b-arithmetic,
+rewrite-completeness), 14 findings, again every adopted claim re-verified (one agent premise
+was itself corrected during triage: org.json IS a real test dependency, so the true blocker for
+a reconcileSent test was Context coupling, resolved by the pure-helper extraction). Round 2
+overturned three round-1-rewrite designs: (1) the "delete the old out-bucket" reconcileSent
+rule was wrong on two of three replace shapes (a same-(epoch,seq) re-drain fold would DELETE
+FILES THE ROW STILL REFERENCES) - replaced with the per-file set-difference merge; (2) the
+sweep's age threshold guarded the wrong race - replaced with strict sweep-before-poll
+sequencing plus the zero-mtime guard; (3) the conditional defense-removal framing was
+unsatisfiable (cooperative cancellation cannot make a non-suspend decide() unreachable) - the
+defenses are now stated permanent with surgical comment rewrites. Also caught: the byteless
+mirror is not currently producible (the arm stays as future-proofing); the pins' `internal`
+visibility requirement; "instead of 11" -> 10; the Math.min-vs-comment instruction conflict;
+Phase A's accidental test dependency on Phase C. Round 2's positive verifications: Phase B
+arithmetic (58 < 60, 83 = 58+10+15), the schemas.ts unification is cycle-free, Math.min is
+genuinely redundant (schema parse precedes every op.holdMs read), and the 504-branch cannot
+swallow a cancel regardless of rethrow placement.
