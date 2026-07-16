@@ -16,6 +16,7 @@ import android.text.format.DateFormat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -54,7 +55,15 @@ internal fun peerFramed(state: ChatState, m: Message, text: String): String {
  * exemption (Settings row); the service only guarantees process lifetime.
  */
 class SwitchboardService : Service(), DeepIdleScheduler {
-	private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+	// Without this, an uncaught throw in any coroutine launched on this scope (e.g. notifyBurst's
+	// oversized-notification RuntimeException, or the state-collect notification reconciler) has
+	// no handler in its context and crashes the whole foreground-service process. SupervisorJob
+	// already stops a sibling's failure from cancelling this scope; this stops it from taking the
+	// process down too.
+	private val exceptionHandler = CoroutineExceptionHandler { _, e ->
+		DebugLog.log("Service", "uncaught in background scope: ${e.javaClass.simpleName}: ${e.message}")
+	}
+	private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + exceptionHandler)
 
 	// Nulling pushback.scheduler in onDestroy closes the DOMINANT race (a poll pass that reaches
 	// decide() only after onDestroy has already returned - unavoidable since ConsoleClient.poll()

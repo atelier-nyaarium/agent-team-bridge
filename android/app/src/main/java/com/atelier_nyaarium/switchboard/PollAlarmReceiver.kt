@@ -10,6 +10,10 @@ import android.content.Intent
  * exist yet. */
 class PollAlarmReceiver : BroadcastReceiver() {
 	override fun onReceive(context: Context, intent: Intent) {
+		// The crash-log hook is otherwise only installed by MainActivity.onCreate; a deep-tier
+		// revival (no Activity ever launched this process lifetime) would crash with no
+		// ring/ingest trace.
+		DebugLog.init(context)
 		// AlarmManager's own implicit wakelock only spans this call; the pass runs async in the
 		// service process. Bridge with the timeout'd pass lock BEFORE returning - the SAME
 		// companion-object lock SwitchboardService.holdPass/enterDeepSleep operate on, not a
