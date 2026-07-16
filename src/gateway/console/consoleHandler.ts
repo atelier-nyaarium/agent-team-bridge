@@ -220,7 +220,10 @@ const SEND_BOUND_MS = 25_000;
 // returns the already-adopted session id with status "pending" and the launch continues in the
 // background; a backgrounded failure rolls the record back with no push, so its tile simply drops off
 // the console's board on the next teams() refresh rather than needing a push-delivery mechanism.
-const CREATE_SESSION_BOUND_MS = 25_000;
+// The Android console's own retry-reattach window (ChatRepository.kt: SPAWN_RETRY_WINDOW_MS) must
+// stay comfortably past this - pinned by consoleHandler.test.ts, update both sides together.
+// Exported only so that test can read the real value.
+export const CREATE_SESSION_BOUND_MS = 25_000;
 
 // Ceiling on a poll's long-poll hold. Must clear the relay chain with headroom: evie holds the
 // console's HTTP request 55s and the apiserver proxy allows 60s.

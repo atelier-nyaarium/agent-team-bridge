@@ -172,8 +172,10 @@ const RespondBodySchema = z.object({
 // Raw-bytes backstop on attachment payloads at the trust boundary. Shape
 // validation does not bound memory, so sum the decoded sizes cheaply (base64 is
 // ~4/3 of the bytes) before anything is stored or pushed. Per-payload total, not
-// per-file - a single file may use the whole bucket.
-const MAX_RESPONSE_FILE_BYTES = 500_000_000;
+// per-file - a single file may use the whole bucket. Matched by the Android console's own
+// send-side cap (ChatRepository.kt: MAX_OUTGOING_BYTES) - pinned by routes.test.ts, update
+// both sides together. Exported only so that test can read the real value.
+export const MAX_RESPONSE_FILE_BYTES = 500_000_000;
 
 // A plugin-action payload is meant to carry a small, action-specific value (e.g. a filename), never
 // bytes - unlike files/attachments, it has no dedicated cap upstream and device-mailbox.ts's own

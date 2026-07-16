@@ -2562,11 +2562,6 @@ class ChatRepository(
 	// confirmed success; a stale entry past the window is treated as absent. In-memory only.
 	private val recentSpawnOpIds = mutableMapOf<Pair<String, String>, Pair<String, Long>>()
 
-	// Comfortably past create_session's own ~25s cold-container bound, so a reply that arrives late
-	// (rather than being lost outright) still lands under the same opId as a retry that fires after
-	// the user sees a failure.
-	private val SPAWN_RETRY_WINDOW_MS = 40_000L
-
 	/** Spawn a session in a spawn-point project with a free-form label. The gateway adopts the
 	 * session's record synchronously, so its own tile appears via the next teams() refresh - there is
 	 * no separate placeholder. A failure surfaces as a transient Snackbar message and re-syncs teams
@@ -3595,7 +3590,9 @@ class ChatRepository(
 		}.getOrDefault(mutableMapOf())
 	}
 
-	private companion object {
+	// internal (not private): a couple of these are pinned against gateway-side TypeScript
+	// constants by ChatRepositoryConstantsTest, which needs to read the real values.
+	internal companion object {
 		const val POLL_INTERVAL_MS = 5_000L
 		// Visible cadence: server-held long-poll (under the gateway's 45s cap).
 		const val LONG_POLL_HOLD_MS = 40_000L
@@ -3611,9 +3608,17 @@ class ChatRepository(
 		// the client's real worst case again - a prior hand-picked 15s undershot the client's
 		// actual (unbounded-at-the-time) worst case entirely.
 		const val FORGET_TOMBSTONE_MS = ConsoleClient.DEFAULT_RELAY_CALL_TIMEOUT_MS + 5_000L
-		// Matches the gateway's own per-payload bucket (MAX_RESPONSE_FILE_BYTES); a single
-		// attachment may use the whole bucket, so this is a total, not a stricter per-file cap.
+		// Matches the gateway's own per-payload bucket (src/gateway/routes.ts:
+		// MAX_RESPONSE_FILE_BYTES); a single attachment may use the whole bucket, so this is
+		// a total, not a stricter per-file cap. Pinned by ChatRepositoryConstantsTest - update
+		// both sides together.
 		const val MAX_OUTGOING_BYTES = 500_000_000
+
+		// Comfortably past create_session's own ~25s cold-container bound (src/gateway/console/
+		// consoleHandler.ts: CREATE_SESSION_BOUND_MS), so a reply that arrives late (rather than
+		// being lost outright) still lands under the same opId as a retry that fires after the
+		// user sees a failure. Pinned by ChatRepositoryConstantsTest - update both sides together.
+		internal const val SPAWN_RETRY_WINDOW_MS = 40_000L
 
 		// Detects a gateway that ignores holdMs and returns empty instantly instead of honoring
 		// the hold. Must stay well below LONG_POLL_HOLD_MS so a genuine ~40s hold is never
