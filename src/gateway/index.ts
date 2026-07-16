@@ -696,6 +696,7 @@ export async function startGateway(): Promise<void> {
 				: null,
 			resolveHandshake: wsHandlers.resolveHandshake,
 			findPendingHandshake: wsHandlers.findPendingHandshakeId,
+			repushHandshake: wsHandlers.repushHandshake,
 			// This Gateway's own Domain owner id, for the mirror-tap's console-bound entries.
 			// Mirrors resolvesLocalGateway's allowlist-ready gating: null pre-enrollment.
 			ownerId: allowlistForConsole

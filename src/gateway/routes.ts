@@ -40,6 +40,7 @@ import type { WakeResult } from "./wake.js";
 import {
 	type ConversationRegistry,
 	getAllActiveWs,
+	type HandshakeRepushOutcome,
 	resolveLiveIncarnation,
 	type TeamRegistry,
 	type WsData,
@@ -105,6 +106,10 @@ export interface RoutesDeps {
 	// The pending hs-* id owed by a (team, subId), if any - lets respond() name the exact handshake
 	// an unconfirmed caller must answer first. Absent in test harnesses that don't exercise the gate.
 	findPendingHandshake?: (team: string, subId: string) => string | undefined;
+	// Re-sends a (team, subId)'s still-pending handshake so a caller that lost the original
+	// notification gets a fresh one instead of a dead-end 409. Absent in test harnesses that don't
+	// exercise the gate; the gate fails open to its unenhanced message when this is undefined.
+	repushHandshake?: (team: string, subId: string) => HandshakeRepushOutcome;
 	// This Gateway's own Domain owner id (a hash of the owner's signing key), used to key the
 	// mirror-tap's agent-to-agent display entries into the owner's mailbox. Null pre-enrollment
 	// (arming mode) or when federation is off, matching resolvesLocalGateway's gating.
@@ -284,6 +289,7 @@ export function createRoutes({
 	isSharedToForReply,
 	resolveHandshake,
 	findPendingHandshake,
+	repushHandshake,
 	ownerId,
 }: RoutesDeps) {
 	const { localGatewayId, localDomainId } = config;
@@ -1082,20 +1088,25 @@ export function createRoutes({
 		if (rest.conversationId) {
 			const callerWs = conversationRegistry.get(rest.conversationId);
 			if (callerWs && callerWs.readyState === 1 && !callerWs.data.virtual && !callerWs.data.handshakeConfirmed) {
-				const pendingHsId =
-					callerWs.data.teamName && findPendingHandshake?.(callerWs.data.teamName, callerWs.data.subId);
+				const team = callerWs.data.teamName;
+				const pendingHsId = team && findPendingHandshake?.(team, callerWs.data.subId);
 				// Deliberately does not name the pending hs-* id: conversationId is not secret (it rides
 				// verbatim in every session_id this caller has ever seen), so echoing the id here would let
 				// anyone who merely knows a victim's conversationId learn its live handshake id and replay it
 				// against /respond to forge or evict that victim's session. A legitimate self-caller already
 				// has its own pending id from the original handshake push, so it needs no reminder here.
-				if (pendingHsId) {
-					return jsonResponse(
-						{
-							error: "Your bridge handshake is still pending. Reply to the handshake session first with channel_reply_structured, then resend this reply.",
-						},
-						409,
-					);
+				if (team && pendingHsId) {
+					// Re-push the handshake before bouncing: the caller may have lost the original
+					// notification (dropped, batched behind other messages, or aged out of a compacted
+					// context) and so has no id left to answer with. A fresh push gives it another chance;
+					// "capped" means repeated pushes already went unanswered, so say so plainly instead of
+					// repeating the same instruction forever.
+					const outcome = repushHandshake?.(team, callerWs.data.subId);
+					const error =
+						outcome === "capped"
+							? "Your bridge handshake is still unconfirmed after repeated prompts. This session may be stale or lagging a version behind - consider restarting it."
+							: "Your bridge handshake is still pending. Reply to the handshake session first with channel_reply_structured, then resend this reply.";
+					return jsonResponse({ error }, 409);
 				}
 			}
 		}

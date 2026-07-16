@@ -76,6 +76,24 @@ export const RESERVED_TEAM_NAMES = new Set(["host"]);
 // register while still bounding the stall far below the full WAKE_TIMEOUT_MS (~10 min).
 const REGISTER_WINDOW_MS = 60_000;
 
+// repushHandshake's dedupe window, applied both per pending entry (collapses a same-instant
+// double-trigger, e.g. two respond() calls landing in the same batch - same-id reuse already
+// prevents a growing pileup here, so it does not need to cover a real reply-attempt's think time)
+// and per team (below - closes the round-robin gap a caller who knows several of one team's
+// sub-session conversationIds would otherwise have around the per-entry window). The team-level
+// window exempts an entry's OWN first attempt: without that, several sub-sessions of one team
+// recovering at once (the exact scenario repushHandshake exists for) could starve each other
+// indefinitely queuing behind a shared window, rather than merely being rate-limited on repeats.
+const HANDSHAKE_REPUSH_DEDUPE_MS = 3_000;
+
+// repushHandshake's total attempt cap. /respond is unauthenticated and conversationId is spoofable
+// (it rides verbatim in every session_id a caller has seen), so without a cap a peer that merely
+// knows a victim's conversationId could sustain gateway-authored handshake prompts into the victim's
+// unconfirmed socket indefinitely. Self-closes once the victim confirms (its pending entry clears).
+const HANDSHAKE_REPUSH_MAX_ATTEMPTS = 5;
+
+export type HandshakeRepushOutcome = "pushed" | "throttled" | "capped" | "no-pending" | "socket-gone";
+
 export function getAllActiveWs(subs: Map<string, ServerWebSocket<WsData>>): ServerWebSocket<WsData>[] {
 	const result: ServerWebSocket<WsData>[] = [];
 	for (const [, ws] of subs) {
@@ -137,6 +155,12 @@ export function createWebSocketHandlers({
 	const { HEARTBEAT_INTERVAL_MS = 30000, MISSED_PINGS_LIMIT = 2 } = config;
 
 	function heartbeatTick() {
+		// An entry past its dedupe window no longer throttles anything, so this is pure cleanup:
+		// bounds teamLastRepushAt against an unauthenticated register minting unbounded team names.
+		const now = Date.now();
+		for (const [team, lastAt] of teamLastRepushAt) {
+			if (now - lastAt >= HANDSHAKE_REPUSH_DEDUPE_MS) teamLastRepushAt.delete(team);
+		}
 		for (const subs of registry.values()) {
 			for (const ws of subs.values()) {
 				const data = ws.data as WsData;
@@ -153,9 +177,18 @@ export function createWebSocketHandlers({
 	const heartbeatInterval = setInterval(heartbeatTick, HEARTBEAT_INTERVAL_MS);
 
 	// Maps handshake session_id -> the socket that owes a lead/worker reply, so we can resolve
-	// handshake responses. Cleared on close/evict (forgetPending); bounded by the count of live
-	// unconfirmed sockets, since sendHandshake fires at most once per register.
-	const handshakePending = new Map<string, { team: string; subId: string }>();
+	// handshake responses. sentAt/repushCount back repushHandshake's dedupe window and attempt cap.
+	// Cleared on close/evict (forgetPending); bounded by the count of live unconfirmed sockets, since
+	// mintHandshake fires at most once per register and repushHandshake reuses the existing entry.
+	const handshakePending = new Map<string, { team: string; subId: string; sentAt: number; repushCount: number }>();
+
+	// Last repushHandshake success per TEAM (not per entry): a caller who knows several of one
+	// team's sub-session conversationIds could otherwise round-robin across them to land a fresh
+	// push every tick, sidestepping the per-entry dedupe window above. Keyed by team name - an
+	// unauthenticated /bridge register can claim any team-shaped string, so this is swept by
+	// heartbeatTick below rather than assumed bounded; an entry past HANDSHAKE_REPUSH_DEDUPE_MS has
+	// zero remaining throttling effect, so the sweep is pure cleanup with no behavior change.
+	const teamLastRepushAt = new Map<string, number>();
 
 	// Teams that have completed at least one REAL handshake round-trip (a genuine challenge
 	// answered via resolveHandshake, not a self-reported register field). A register's own
@@ -171,21 +204,35 @@ export function createWebSocketHandlers({
 		}
 	}
 
-	/** Send a lead handshake to a channel socket, minting a session id and pending entry. Sent once at
-	 * register; a session that already reports its remembered role skips this entirely (see the
-	 * register handler's isMainOrLead branch). */
-	function sendHandshake(ws: ServerWebSocket<WsData>, team: string, subId: string): void {
+	/** The exact wire push for a handshake id, byte-identical whether this is the first send or a
+	 * re-push. The MCP's confirm guard (receivedIds, keyed off from==="gateway" && replyJsonSchema)
+	 * depends on that identity, so a re-push must carry both fields unchanged. */
+	function buildHandshakePush(hsSessionId: string): string {
+		return JSON.stringify({
+			type: "channel_push",
+			from: "gateway",
+			body: `This is the initial bridge handshake. Reply with the \`channel_reply_structured\` tool using the session_id shown above, setting \`responseData\` to \`{ "isMainOrLead": true }\` if you are the primary session or team lead, or \`{ "isMainOrLead": false }\` if you are a worker agent spawned by another agent.\n\nDo not use \`crosstalk_send\`.`,
+			session_id: hsSessionId,
+			replyJsonSchema: "{ isMainOrLead: bool }",
+		});
+	}
+
+	/** Mint a fresh lead handshake for a channel socket and send it. Sent once at register; a session
+	 * that already reports its remembered role skips this entirely (see the register handler's
+	 * isMainOrLead branch). A handshake whose notification is lost recovers via repushHandshake below,
+	 * which reuses this same id rather than minting a second one. Drops any pending entry already
+	 * owned by this (team, subId) first, so a same-socket re-register can never leave two
+	 * independently-resolvable entries for the same coordinates. */
+	function mintHandshake(ws: ServerWebSocket<WsData>, team: string, subId: string): void {
+		forgetPending(team, subId);
 		const hsSessionId = `hs-${crypto.randomUUID().slice(0, 8)}`;
-		handshakePending.set(hsSessionId, { team, subId });
-		ws.send(
-			JSON.stringify({
-				type: "channel_push",
-				from: "gateway",
-				body: `This is the initial bridge handshake. Reply with the \`channel_reply_structured\` tool using the session_id shown above, setting \`responseData\` to \`{ "isMainOrLead": true }\` if you are the primary session or team lead, or \`{ "isMainOrLead": false }\` if you are a worker agent spawned by another agent.\n\nDo not use \`crosstalk_send\`.`,
-				session_id: hsSessionId,
-				replyJsonSchema: "{ isMainOrLead: bool }",
-			}),
-		);
+		handshakePending.set(hsSessionId, { team, subId, sentAt: Date.now(), repushCount: 0 });
+		try {
+			ws.send(buildHandshakePush(hsSessionId));
+		} catch (err) {
+			console.error(`[ws] handshake send failed for ${team}/${subId} [${hsSessionId}]: ${err}`);
+			return;
+		}
 		console.log(`[ws] handshake sent to ${team}/${subId} [${hsSessionId}]`);
 	}
 
@@ -196,6 +243,45 @@ export function createWebSocketHandlers({
 			if (p.team === team && p.subId === subId) return hsId;
 		}
 		return undefined;
+	}
+
+	/** Re-send a socket's own still-pending handshake, recovering a session whose original
+	 * notification was missed (dropped, batched behind other messages, or aged out of a compacted
+	 * context) and so can never answer the reply gate that calls this. Reuses the EXISTING hs-* id -
+	 * never mints a second one, which would leak a duplicate pending entry and defeat the attempt cap.
+	 * The per-entry guards live on the pending entry itself, so forgetPending's existing close/evict
+	 * cleanup drops them for free (see the constants above for what each one bounds); the team-level
+	 * guard only applies from an entry's SECOND attempt onward, so several sub-sessions of one team
+	 * recovering at once each get their one first shot instead of queuing behind a sibling. */
+	function repushHandshake(team: string, subId: string): HandshakeRepushOutcome {
+		const hsId = findPendingHandshakeId(team, subId);
+		const entry = hsId ? handshakePending.get(hsId) : undefined;
+		if (!hsId || !entry) return "no-pending";
+		if (entry.repushCount >= HANDSHAKE_REPUSH_MAX_ATTEMPTS) return "capped";
+		const now = Date.now();
+		// Always applies, even on a first attempt: collapses a same-instant double-trigger on THIS
+		// entry (e.g. an immediate repush landing right after mintHandshake's own send).
+		if (now - entry.sentAt < HANDSHAKE_REPUSH_DEDUPE_MS) return "throttled";
+		// Team-wide contention only kicks in from an entry's SECOND attempt onward, so several
+		// sub-sessions of one team each get their one first shot instead of queuing behind whichever
+		// sibling's timing wins the shared window.
+		if (entry.repushCount > 0) {
+			const teamLast = teamLastRepushAt.get(team);
+			if (teamLast !== undefined && now - teamLast < HANDSHAKE_REPUSH_DEDUPE_MS) return "throttled";
+		}
+		const ws = registry.get(team)?.get(subId);
+		if (ws?.readyState !== 1) return "socket-gone";
+		try {
+			ws.send(buildHandshakePush(hsId));
+		} catch (err) {
+			console.error(`[ws] handshake re-push send failed for ${team}/${subId} [${hsId}]: ${err}`);
+			return "socket-gone";
+		}
+		entry.sentAt = now;
+		entry.repushCount += 1;
+		teamLastRepushAt.set(team, now);
+		console.log(`[ws] handshake re-pushed to ${team}/${subId} [${hsId}] (attempt ${entry.repushCount})`);
+		return "pushed";
 	}
 
 	/** Fully evict a socket the register path is replacing: mark stale, drop it from its team's subs,
@@ -338,7 +424,7 @@ export function createWebSocketHandlers({
 					establishRecord(ws, { team, subId });
 					console.log(`[ws] ${team}/${subId} reconnected as remembered lead - handshake skipped`);
 				} else {
-					sendHandshake(ws, team, subId);
+					mintHandshake(ws, team, subId);
 				}
 			} else {
 				ws.data.handshakeConfirmed = true;
@@ -531,5 +617,14 @@ export function createWebSocketHandlers({
 		return true;
 	}
 
-	return { open, message, close, heartbeatInterval, heartbeatTick, resolveHandshake, findPendingHandshakeId };
+	return {
+		open,
+		message,
+		close,
+		heartbeatInterval,
+		heartbeatTick,
+		resolveHandshake,
+		findPendingHandshakeId,
+		repushHandshake,
+	};
 }

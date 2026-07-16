@@ -42,6 +42,7 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		ownerId: overrides.ownerId,
 		resolveHandshake: overrides.resolveHandshake,
 		findPendingHandshake: overrides.findPendingHandshake,
+		repushHandshake: overrides.repushHandshake,
 	};
 }
 
@@ -791,6 +792,88 @@ describe("routes", () => {
 				});
 				expect(res.status).toBe(200);
 			});
+
+			it("re-pushes the caller's own pending handshake before bouncing", async () => {
+				const store = new PendingJobStore<ResponsePayload>();
+				store.create("sess-gate-6", "agent", "console");
+				const conversationRegistry = new Map() as RoutesDeps["conversationRegistry"];
+				conversationRegistry.set("conv-6", makeCallerWs({ handshakeConfirmed: false }));
+				const repushHandshake = vi.fn().mockReturnValue("pushed");
+				const ctx = makeCtx({
+					store,
+					conversationRegistry,
+					findPendingHandshake: () => "hs-pending-6",
+					repushHandshake,
+				});
+				const { respond } = createRoutes(ctx);
+				const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "sess-gate-6",
+					response: "done",
+					conversationId: "conv-6",
+				});
+				expect(res.status).toBe(409);
+				expect(repushHandshake).toHaveBeenCalledWith("recipe-app.abc123", "s1");
+				const body = (await res.json()) as { error: string };
+				expect(body.error).not.toContain("hs-pending-6");
+				expect(body.error).toContain("resend this reply");
+				expect(body.error.toLowerCase()).not.toContain("stale");
+			});
+
+			it("escalates the 409 message once repushHandshake reports the attempt cap was hit", async () => {
+				const store = new PendingJobStore<ResponsePayload>();
+				store.create("sess-gate-7", "agent", "console");
+				const conversationRegistry = new Map() as RoutesDeps["conversationRegistry"];
+				conversationRegistry.set("conv-7", makeCallerWs({ handshakeConfirmed: false }));
+				const ctx = makeCtx({
+					store,
+					conversationRegistry,
+					findPendingHandshake: () => "hs-pending-7",
+					repushHandshake: () => "capped",
+				});
+				const { respond } = createRoutes(ctx);
+				const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "sess-gate-7",
+					response: "done",
+					conversationId: "conv-7",
+				});
+				expect(res.status).toBe(409);
+				const body = (await res.json()) as { error: string };
+				expect(body.error.toLowerCase()).toContain("stale");
+				expect(body.error).not.toContain("hs-pending-7");
+			});
+
+			it("end-to-end: a reply blocked by the gate lands once the caller confirms and resends", async () => {
+				const store = new PendingJobStore<ResponsePayload>();
+				store.create("sess-gate-8", "agent", "console");
+				const conversationRegistry = new Map() as RoutesDeps["conversationRegistry"];
+				const callerWs = makeCallerWs({ handshakeConfirmed: false });
+				conversationRegistry.set("conv-8", callerWs);
+				const ctx = makeCtx({
+					store,
+					conversationRegistry,
+					findPendingHandshake: () => "hs-pending-8",
+					repushHandshake: () => "pushed",
+				});
+				const { respond } = createRoutes(ctx);
+
+				const blocked = respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "sess-gate-8",
+					response: "done",
+					conversationId: "conv-8",
+				});
+				expect(blocked.status).toBe(409);
+
+				// The caller answers the re-pushed handshake (simulated: its socket flips confirmed) and
+				// resends the exact same reply - the job was never delivered by the blocked attempt, so
+				// it is still pending.
+				callerWs.data.handshakeConfirmed = true;
+				const landed = respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "sess-gate-8",
+					response: "done",
+					conversationId: "conv-8",
+				});
+				expect(landed.status).toBe(200);
+			});
 		});
 	});
 
@@ -934,6 +1017,30 @@ describe("routes", () => {
 			expect(pushed.length).toBe(1);
 			expect(pushed[0].type).toBe("channel_push");
 			expect((pushed[0] as { session_id: string }).session_id).toBe("conv.conv-1.alice.test-host.proj-a.dev");
+		});
+
+		it("delivers to a live but unconfirmed (still verifying) socket - send() carries no handshake gate", async () => {
+			const pushed: Record<string, unknown>[] = [];
+			const fakeWs = {
+				readyState: 1,
+				data: { mode: "channel", handshakeConfirmed: false },
+				send(data: string) {
+					pushed.push(JSON.parse(data));
+				},
+			};
+			const registry = makeRegistry({ "proj-a.dev": fakeWs });
+			const ctx = makeCtx({ registry });
+			const { send } = createRoutes(ctx);
+
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "proj-a.dev",
+				body: "hi",
+				channelOnly: true,
+			});
+			expect(res.status).toBe(200);
+			expect(pushed.length).toBe(1);
 		});
 
 		it("delivers to an alias re-incarnation via the record's liveTeam (no canonical pane)", async () => {

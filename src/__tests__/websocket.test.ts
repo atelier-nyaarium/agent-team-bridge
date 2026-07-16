@@ -689,6 +689,180 @@ describe("handshake-established session records", () => {
 		expect(handshakePushCount(ws)).toBe(1);
 		expect(sessionStore.getByTeam("fresh-app.xyz789")).toBeUndefined();
 	});
+
+	describe("repushHandshake (recovery from a lost hs-* notification)", () => {
+		// Fakes ONLY Date (repushHandshake's guards read Date.now()), leaving setInterval/clearInterval
+		// real so the outer describe's heartbeatInterval tracking/cleanup is unaffected.
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		/** Move the faked clock forward by ms. */
+		function advance(ms: number): void {
+			vi.setSystemTime(Date.now() + ms);
+		}
+
+		it("throttles a call within the dedupe window of the last push", () => {
+			const { handlers } = setup();
+			const ws = createMockWs();
+			register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
+			expect(handshakePushCount(ws)).toBe(1);
+
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("throttled");
+			expect(handshakePushCount(ws)).toBe(1);
+		});
+
+		it("past the dedupe window, re-sends the SAME id and answering it still confirms normally", () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			const { handlers } = setup();
+			const ws = createMockWs();
+			register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
+			const first = handshakeIdFrom(ws);
+
+			advance(3001);
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed");
+			expect(handshakePushCount(ws)).toBe(2);
+			expect(handshakeIdFrom(ws)).toBe(first);
+
+			// An immediate second attempt (e.g. a same-batch double 409) collapses into the push just sent.
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("throttled");
+			expect(handshakePushCount(ws)).toBe(2);
+
+			expect(handlers.resolveHandshake(first, { isMainOrLead: true })).toBe(true);
+			expect(ws.data.handshakeConfirmed).toBe(true);
+		});
+
+		it("repeated re-pushes never mint a second pending entry for the same id", () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			const { handlers } = setup();
+			const ws = createMockWs();
+			register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
+			const first = handshakeIdFrom(ws);
+
+			advance(3001);
+			handlers.repushHandshake("recipe-app.abc123", "s1");
+			advance(3001);
+			handlers.repushHandshake("recipe-app.abc123", "s1");
+			expect(handshakeIdFrom(ws)).toBe(first);
+
+			// Resolving the id ONCE fully clears it - an orphaned duplicate entry would leave a residual
+			// pending id behind, and repushHandshake would report "pushed"/"throttled" instead of this.
+			expect(handlers.resolveHandshake(first, { isMainOrLead: true })).toBe(true);
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("no-pending");
+		});
+
+		it("caps total attempts, then refuses further pushes while the id stays answerable", () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			const { handlers } = setup();
+			const ws = createMockWs();
+			register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
+			const first = handshakeIdFrom(ws);
+
+			for (let i = 0; i < 5; i++) {
+				advance(3001);
+				expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed");
+			}
+			expect(handshakePushCount(ws)).toBe(6); // 1 mint + 5 repushes
+
+			advance(3001);
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("capped");
+			expect(handshakePushCount(ws)).toBe(6); // no further push sent
+
+			expect(handshakeIdFrom(ws)).toBe(first);
+			expect(handlers.resolveHandshake(first, { isMainOrLead: true })).toBe(true);
+		});
+
+		it("reports no-pending once the handshake is already confirmed, and for an unregistered team", () => {
+			const { handlers } = setup();
+			const ws = createMockWs();
+			register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
+			handlers.resolveHandshake(handshakeIdFrom(ws), { isMainOrLead: true });
+
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("no-pending");
+			expect(handlers.repushHandshake("nowhere", "s1")).toBe("no-pending");
+			expect(handshakePushCount(ws)).toBe(1);
+		});
+
+		it("reports socket-gone rather than sending to a non-open socket", () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			const { handlers } = setup();
+			const ws = createMockWs();
+			register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
+			(ws as { readyState: number }).readyState = 3;
+
+			advance(3001);
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("socket-gone");
+			expect(handshakePushCount(ws)).toBe(1);
+		});
+
+		it("reports socket-gone (not a crash) when the send itself throws on an open socket", () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			const { handlers } = setup();
+			const ws = createMockWs();
+			register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
+			(ws.send as ReturnType<typeof vi.fn>).mockImplementation(() => {
+				throw new Error("boom");
+			});
+
+			advance(3001);
+			expect(() => handlers.repushHandshake("recipe-app.abc123", "s1")).not.toThrow();
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("socket-gone");
+		});
+
+		it("mintHandshake itself survives a register-time send failure, leaving the entry recoverable", () => {
+			const { handlers } = setup();
+			const ws = createMockWs();
+			(ws.send as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+				throw new Error("boom");
+			});
+
+			expect(() => register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" })).not.toThrow();
+
+			const hsId = handshakeIdFrom(ws);
+			expect(hsId).toBeDefined();
+			expect(handlers.resolveHandshake(hsId, { isMainOrLead: true })).toBe(true);
+			expect(ws.data.handshakeConfirmed).toBe(true);
+		});
+
+		it("each sibling's own first repush attempt succeeds regardless of another sibling's more recent one (no starvation)", () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			const { handlers } = setup();
+			const ws1 = createMockWs();
+			const ws2 = createMockWs();
+			const ws3 = createMockWs();
+			register(handlers, ws1, { team: "recipe-app.abc123", subId: "s1" });
+			register(handlers, ws2, { team: "recipe-app.abc123", subId: "s2" });
+			register(handlers, ws3, { team: "recipe-app.abc123", subId: "s3" });
+
+			advance(3001);
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed");
+			expect(handlers.repushHandshake("recipe-app.abc123", "s2")).toBe("pushed");
+			expect(handlers.repushHandshake("recipe-app.abc123", "s3")).toBe("pushed");
+		});
+
+		it("a repeat attempt is still throttled by a more recent team-wide push from a sibling", () => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			const { handlers } = setup();
+			const ws1 = createMockWs();
+			const ws2 = createMockWs();
+			register(handlers, ws1, { team: "recipe-app.abc123", subId: "s1" });
+			register(handlers, ws2, { team: "recipe-app.abc123", subId: "s2" });
+
+			advance(3001);
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed"); // s1 attempt 1
+
+			advance(100);
+			expect(handlers.repushHandshake("recipe-app.abc123", "s2")).toBe("pushed"); // s2 attempt 1 (exempt)
+
+			// s1's OWN per-entry window (3000ms since its last push) has cleared, but the team-wide
+			// window (3000ms since s2's more recent push) has not - only the team guard explains this.
+			advance(2901);
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("throttled");
+
+			advance(100);
+			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed"); // s1 attempt 2
+		});
+	});
 });
 
 // resolveLiveIncarnation is the ONE record -> live-socket resolver shared by presence listing, send
