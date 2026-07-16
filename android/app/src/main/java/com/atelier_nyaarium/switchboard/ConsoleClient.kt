@@ -792,11 +792,12 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			holdMs = if (holdMs > 0) holdMs else null,
 			knownDomainVersion = knownVersion,
 		)
-		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s),
-		// evie's relay hold fires at 55s if the gateway vanished, this read timeout
-		// at holdMs+18s (58s) catches a vanished evie, and the apiserver proxy's
-		// 60s outranks them all. Each failure layer returns before the next races it.
-		val heldReadTimeoutMs = if (holdMs > 0) holdMs + 18_000 else null
+		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s), evie's relay
+		// hold fires at 55s if the gateway vanished, this read timeout at holdMs+HELD_READ_MARGIN_MS
+		// (58s) catches a vanished evie, and the apiserver proxy's PROXY_CEILING_MS (60s) outranks
+		// them all - pinned as LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS < PROXY_CEILING_MS in
+		// ChatRepositoryConstantsTest. Each failure layer returns before the next races it.
+		val heldReadTimeoutMs = if (holdMs > 0) holdMs + HELD_READ_MARGIN_MS else null
 		val body = relay(
 			op,
 			readTimeoutMs = heldReadTimeoutMs,
@@ -993,13 +994,28 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	companion object {
 		private val JSON = "application/json".toMediaType()
 
-		private const val PINNED_CONNECT_TIMEOUT_MS = 15_000L
+		// internal (not private): ChatRepositoryConstantsTest pins the long-poll timeout chain
+		// against these from a separate test class, and FORGET_TOMBSTONE_MS derives from
+		// DEFAULT_RELAY_CALL_TIMEOUT_MS below for the same reason.
+		internal const val PINNED_CONNECT_TIMEOUT_MS = 15_000L
 		private const val PINNED_READ_TIMEOUT_MS = 35_000L
 		private const val PINNED_WRITE_TIMEOUT_MS = 600_000L
 
 		// Margin on top of a call's own read timeout to get its callTimeout: covers connect
 		// + request-send + response-parse overhead beyond the read wait itself.
-		private const val CALL_TIMEOUT_MARGIN_MS = 10_000L
+		internal const val CALL_TIMEOUT_MARGIN_MS = 10_000L
+
+		// The gap between a held poll's requested hold and the read timeout that bounds it -
+		// see poll()'s heldReadTimeoutMs. Named (not a bare literal) because
+		// ChatRepositoryConstantsTest pins LONG_POLL_HOLD_MS + this against PROXY_CEILING_MS.
+		internal const val HELD_READ_MARGIN_MS = 18_000L
+
+		// Mirrors the apiserver proxy's own read timeout (untracked infra config, not in this
+		// repo) - an infra change to that value must update this one too. The binding constraint
+		// on the whole long-poll chain: the client's held read timeout must return before the
+		// proxy resets the socket, pinned as LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS < this in
+		// ChatRepositoryConstantsTest.
+		internal const val PROXY_CEILING_MS = 60_000L
 
 		// Bounds the common (non-held) relay() call: base read timeout + connect + margin.
 		// poll()'s held branch derives its own larger callTimeoutMs from its own read timeout

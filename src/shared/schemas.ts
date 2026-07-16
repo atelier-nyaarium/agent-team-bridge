@@ -205,6 +205,11 @@ export const CrossDomainShareTargetSchema = z
 	])
 	.meta({ id: "CrossDomainShareTarget" });
 
+// The poll op's hold ceiling - the real hard gate on the long-poll timeout chain (this schema
+// REJECTS a larger holdMs outright, not silently truncated). Pinned against the Android client's
+// own LONG_POLL_HOLD_MS in ChatRepositoryConstantsTest and consoleHandler.test.ts.
+export const MAX_POLL_HOLD_MS = 45_000;
+
 export const ConsoleOpSchema = z
 	.discriminatedUnion("kind", [
 		z.object({
@@ -245,7 +250,7 @@ export const ConsoleOpSchema = z
 			kind: z.literal("poll"),
 			cursor: z.number().int().nonnegative().optional(),
 			epoch: z.number().int().nonnegative().optional(),
-			holdMs: z.number().int().nonnegative().max(45_000).optional(),
+			holdMs: z.number().int().nonnegative().max(MAX_POLL_HOLD_MS).optional(),
 			// The keyring version the Console last synced; the Gateway returns the snapshot in
 			// the poll reply only when it differs, so the Console stays fresh at near-zero cost.
 			knownDomainVersion: z.string().optional(),

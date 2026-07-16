@@ -27,7 +27,7 @@ import {
 	type TmuxTarget,
 } from "../../shared/host-op.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
-import { DomainStatusSchema } from "../../shared/schemas.js";
+import { DomainStatusSchema, MAX_POLL_HOLD_MS } from "../../shared/schemas.js";
 import {
 	Address,
 	composeSessionName,
@@ -225,9 +225,13 @@ const SEND_BOUND_MS = 25_000;
 // Exported only so that test can read the real value.
 export const CREATE_SESSION_BOUND_MS = 25_000;
 
-// Ceiling on a poll's long-poll hold. Must clear the relay chain with headroom: evie holds the
-// console's HTTP request 55s and the apiserver proxy allows 60s.
-const HOLD_CAP_MS = 45_000;
+// The real gate is schemas.ts's MAX_POLL_HOLD_MS (the zod .max() rejects a larger holdMs
+// outright); this Math.min is a harmless second layer, never actually truncating a schema-valid
+// value. Must clear the relay chain with headroom: evie holds the console's HTTP request 55s and
+// the apiserver proxy allows 60s (ConsoleClient.PROXY_CEILING_MS). The Android console's own
+// LONG_POLL_HOLD_MS must stay at or under MAX_POLL_HOLD_MS - pinned by consoleHandler.test.ts
+// and ChatRepositoryConstantsTest.kt, update all sides together.
+const HOLD_CAP_MS = MAX_POLL_HOLD_MS;
 
 // At-most-once side effects: the console->evie->gateway path is at-least-once (a lost reply makes
 // the console retry the same opId), so a seen opId replays its cached reply instead of re-running

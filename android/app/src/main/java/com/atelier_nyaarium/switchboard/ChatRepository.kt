@@ -3674,7 +3674,8 @@ class ChatRepository(
 	// constants by ChatRepositoryConstantsTest, which needs to read the real values.
 	internal companion object {
 		const val POLL_INTERVAL_MS = 5_000L
-		// Visible cadence: server-held long-poll (under the gateway's 45s cap).
+		// Visible cadence: server-held long-poll (under the gateway's 45s cap - pinned against
+		// schemas.ts's MAX_POLL_HOLD_MS in ChatRepositoryConstantsTest).
 		const val LONG_POLL_HOLD_MS = 40_000L
 		// Slack added to a deep-tier park so the coroutine backstop wakes slightly after, never
 		// before, the alarm it is backing up.
