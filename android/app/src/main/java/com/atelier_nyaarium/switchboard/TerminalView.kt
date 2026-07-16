@@ -286,6 +286,7 @@ private val CTRL_MENU_KEYS = listOf(
 	"Shift + Tab" to "BTab",
 	"Ctrl + O" to "C-o",
 	"Ctrl + T" to "C-t",
+	"Ctrl + S" to "C-s",
 	"Ctrl + C" to "C-c",
 )
 
