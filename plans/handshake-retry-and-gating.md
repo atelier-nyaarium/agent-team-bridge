@@ -219,6 +219,46 @@ diff entirely and sits in code this diff never touches - left alone, matching ho
 shipped handshake design's own red-team recorded rather than fixed an analogous pre-existing,
 narrow-trigger register-handler finding.
 
+## Framework-first audit (audited-implementation cycle)
+
+4-dimension parallel review (rate-guard duplication, handshake-state cohesion given the new
+`teamLastRepushAt`, the outcome-to-message ternary, and fit against the codebase's existing
+`createReconnector`/`PendingJobStore`/`ReplayGuard` abstractions), each checked against actual
+codebase precedent rather than in the abstract. All four returned **no-change-needed**:
+
+- The per-entry and team-level dedupe checks are NOT the same duplicated concept - different keys,
+  different applicability (the team check only applies from an entry's second attempt), different
+  storage/cleanup rationale. `src/mcp/devcontainer/hostOpRunner.ts` hand-rolls the identical
+  `now - t < window` shape with MORE repetitions in this same codebase without ever unifying it -
+  established, deliberate convention, not an oversight.
+- Re-examining the ORIGINAL shipped design's own rejected "HandshakeRegistry" extraction with fresh
+  eyes (state has grown since: `teamLastRepushAt` is new): still fails the ownership test.
+  `mintHandshake`/`repushHandshake`/`resolveHandshake` are defined by direct access to the exact
+  `registry`/`sessionStore` resources `createWebSocketHandlers` exists to own - there is no seam to
+  inject. Contrasted against two ACTUALLY-extracted classes in this codebase
+  (`WakeCoordinator`/`HostOpCoordinator`, pure promise-correlation with zero registry dependency) and
+  a third literally named `CrossDomainHandshakeCoordinator` (extracted specifically because its I/O
+  is seamed through an injected router interface, never touching `TeamRegistry`) - none of those
+  conditions hold here.
+- The `outcome === "capped" ? ... : ...` ternary matches this codebase's own established idiom for
+  "outcome union, one or two variants special-cased, rest fall to a generic default" (verified
+  against `HostOpResult`'s `errorKind` handling in `consoleHandler.ts`'s `friendlyPeekError()`, the
+  closest same-shaped precedent). A table was considered and rejected as it would force explicit
+  handling of a provably-unreachable variant (`"no-pending"`, ruled out by tracing `respond()`'s
+  fully-synchronous control flow) for a union with exactly one consumer.
+- `repushHandshake`'s caller-triggered, id-continuity guard is a genuinely distinct shape from all
+  three existing abstractions checked (`createReconnector` is timer-driven with no cap;
+  `PendingJobStore` is a passive correlator with no outbound side effect; `ReplayGuard` has inverted
+  polarity - reject-on-seen rather than reuse-the-same-id) - not a divergent reimplementation of any
+  of them.
+
+**One incidental pickup, applied:** the outcome-message audit independently re-confirmed round 2's
+deferred low-severity finding (a `"socket-gone"` repush outcome fell into the same generic message as
+a fresh `"pushed"`/`"throttled"` one) and, given the proportionate fix is trivial (widen the existing
+ternary by one arm, explicitly NOT a table), applied it: `"socket-gone"` now gets its own distinct
+409 message ("could not be re-delivered... try again shortly") instead of the misleading standing
+"reply to the handshake session" instruction.
+
 ## Provenance
 
 This file previously held the shipped "remember the answer, stop re-asking" design (one LLM handshake

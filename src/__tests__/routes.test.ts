@@ -842,6 +842,30 @@ describe("routes", () => {
 				expect(body.error).not.toContain("hs-pending-7");
 			});
 
+			it("gives a distinct 409 message when repushHandshake reports the re-push itself could not be delivered", async () => {
+				const store = new PendingJobStore<ResponsePayload>();
+				store.create("sess-gate-7b", "agent", "console");
+				const conversationRegistry = new Map() as RoutesDeps["conversationRegistry"];
+				conversationRegistry.set("conv-7b", makeCallerWs({ handshakeConfirmed: false }));
+				const ctx = makeCtx({
+					store,
+					conversationRegistry,
+					findPendingHandshake: () => "hs-pending-7b",
+					repushHandshake: () => "socket-gone",
+				});
+				const { respond } = createRoutes(ctx);
+				const res = respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "sess-gate-7b",
+					response: "done",
+					conversationId: "conv-7b",
+				});
+				expect(res.status).toBe(409);
+				const body = (await res.json()) as { error: string };
+				expect(body.error).toContain("could not be re-delivered");
+				expect(body.error.toLowerCase()).not.toContain("stale");
+				expect(body.error).not.toContain("resend this reply");
+			});
+
 			it("end-to-end: a reply blocked by the gate lands once the caller confirms and resends", async () => {
 				const store = new PendingJobStore<ResponsePayload>();
 				store.create("sess-gate-8", "agent", "console");

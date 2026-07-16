@@ -1100,12 +1100,15 @@ export function createRoutes({
 					// notification (dropped, batched behind other messages, or aged out of a compacted
 					// context) and so has no id left to answer with. A fresh push gives it another chance;
 					// "capped" means repeated pushes already went unanswered, so say so plainly instead of
-					// repeating the same instruction forever.
+					// repeating the same instruction forever; "socket-gone" means the re-push itself could
+					// not be delivered, so the standing instruction to answer it would be misleading.
 					const outcome = repushHandshake?.(team, callerWs.data.subId);
 					const error =
 						outcome === "capped"
 							? "Your bridge handshake is still unconfirmed after repeated prompts. This session may be stale or lagging a version behind - consider restarting it."
-							: "Your bridge handshake is still pending. Reply to the handshake session first with channel_reply_structured, then resend this reply.";
+							: outcome === "socket-gone"
+								? "Your bridge handshake could not be re-delivered. Try again shortly."
+								: "Your bridge handshake is still pending. Reply to the handshake session first with channel_reply_structured, then resend this reply.";
 					return jsonResponse({ error }, 409);
 				}
 			}
