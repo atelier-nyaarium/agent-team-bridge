@@ -173,9 +173,12 @@ class SwitchboardService : Service(), DeepIdleScheduler {
 		// gateway-id migration; start the poll loop only after it, so the loop never
 		// qualifies an inbound team under an unknown Gateway id and strands a bare-keyed
 		// thread beside its migrated twin. connect() never throws, so polling starts.
+		// sweepOrphanAttachments() must finish strictly before startPolling: concurrently with a
+		// drain it could delete a bucket a crash re-drain is about to re-reference (see its doc).
 		scope.launch(Dispatchers.IO) {
 			repo.connect()
 			repo.reconcilePending()
+			repo.sweepOrphanAttachments()
 			repo.startPolling(scope)
 		}
 

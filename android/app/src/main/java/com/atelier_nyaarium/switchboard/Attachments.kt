@@ -107,4 +107,58 @@ object Attachments {
 			null
 		}
 	}
+
+	/** A [MessageFile.src] resolved back to its on-disk File via [resolve] - the traversal-safe
+	 * idiom every src consumer shares. Null for a metadata-only file (no src) or an unresolvable
+	 * path. */
+	fun fileFor(filesDir: File, src: String?): File? {
+		val rel = src?.substringAfter("/$DIR/", "")?.takeIf { it.isNotEmpty() } ?: return null
+		return resolve(filesDir, rel)
+	}
+
+	/** The bucket-name path segment of a src (e.g. "1234-5" from ".../attachments/1234-5/x"),
+	 * or null for a metadata-only file or an unresolvable src. */
+	fun bucketOf(src: String?): String? {
+		val rel = src?.substringAfter("/$DIR/", "")?.takeIf { it.isNotEmpty() } ?: return null
+		return rel.substringBefore('/', "").takeIf { it.isNotEmpty() }
+	}
+
+	/** Delete the given files by their `src`, then remove any bucket dir left empty afterward.
+	 * Deletes per-file, never a bucket wholesale - a row's own bucket can have some files
+	 * superseded (deletable) and others retained via a merge that keeps the old src (see
+	 * ChatRepository's mergeSentEchoFiles), so even one row's own bucket needs file-granular
+	 * deletion, not a recursive wipe. Only a dir provably empty once its own files are removed
+	 * is deleted. */
+	fun deleteFiles(filesDir: File, srcs: List<String>) {
+		val touchedDirs = mutableSetOf<File>()
+		for (src in srcs) {
+			val file = fileFor(filesDir, src) ?: continue
+			file.parentFile?.let { touchedDirs += it }
+			file.delete()
+		}
+		for (dir in touchedDirs) {
+			if (dir.listFiles()?.isEmpty() == true) dir.delete()
+		}
+	}
+
+	/** Delete every attachment bucket with no reference in [referencedBuckets] (the bucket-name
+	 * component - see [bucketOf] - of every surviving row's file srcs, across every thread). The
+	 * completeness backstop for [deleteFiles]: heals a crash between a durable row-state write
+	 * and the best-effort file delete, a historical orphan predating this sweep, or a future
+	 * decode-without-row case. A bucket younger than [minAgeMs], or whose mtime cannot be read
+	 * (0L - a stat error, not "ancient"), is left alone: it may be referenced by a row not yet
+	 * durable. The caller must never run this concurrently with anything that could still decode
+	 * into a bucket (mtime updates the instant a file is written into it, so sequencing strictly
+	 * before any write is the only safe ordering - a concurrent sweep cannot be made safe by the
+	 * age guard alone). */
+	fun sweepOrphanBuckets(filesDir: File, referencedBuckets: Set<String>, minAgeMs: Long = 600_000L) {
+		val now = System.currentTimeMillis()
+		val dirs = root(filesDir).listFiles()?.filter { it.isDirectory } ?: return
+		for (dir in dirs) {
+			if (dir.name in referencedBuckets) continue
+			val mtime = dir.lastModified()
+			if (mtime == 0L || now - mtime < minAgeMs) continue
+			dir.deleteRecursively()
+		}
+	}
 }
