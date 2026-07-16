@@ -2,7 +2,7 @@
 	"mcpServers": {
 		"switchboard": {
 			"command": "bun",
-			"args": ["--install=force", "run", "${CLAUDE_PLUGIN_ROOT}/src/main-mcp.ts"]
+			"args": ["run", "${CLAUDE_PLUGIN_ROOT}/src/main-mcp.ts"]
 		}
 	}
 }
