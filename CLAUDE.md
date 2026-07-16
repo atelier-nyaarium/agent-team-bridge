@@ -260,6 +260,21 @@ a cross-device sync follow-on is scoped but unbuilt.
   visible-arrival team can never gain a phantom entry). `Forget` and Close-Tab muting are both
   honored explicitly, since forget drops a team from the map this reconciler iterates.
 
+### Idle pushback (console background poll cadence)
+
+The console's background poll cadence backs off the longer it stays silent, instead of polling at
+a flat interval forever. `IdlePushbackManager` (`android/.../IdlePushbackManager.kt`) decides the
+wait after every poll pass: FOREGROUND/MINUTE (visible, or backgrounded under 10 minutes silent)
+behave like the fast cadence with the service's wakelock held; HALF_HOUR/HOURLY/TWELVE_HOUR
+release the wakelock and schedule a wall-clock-aligned `AlarmManager` wakeup instead (`:00`/`:30`,
+the top of the hour, or 8am/8pm local), driven through `SwitchboardService`'s `DeepIdleScheduler`
+implementation and `PollAlarmReceiver` (the alarm target, including dead-process revival). Any
+genuinely-fresh mailbox entry resets the ladder back to MINUTE. The silence clock persists across
+restarts via `AppStateStore`'s `IdleSilenceStore` conformance, so a reboot resumes the tier it
+earned rather than re-climbing from scratch. Full design, the questionaire, and three audit rounds
+(plan alignment, an adversarial red team, and a framework-first pass) are in
+`plans/idle-pushback-manager.md`.
+
 ### Port Map
 
 | Port  | Service                              |

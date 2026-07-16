@@ -833,3 +833,177 @@ myself before touching anything.
   fixing that would make the whole hazard class impossible by design rather than defended against
   per-callback, but it is a real, separate investment into the network client's architecture, not
   something to fold into this feature.
+
+## Painpoints
+
+A crust sweep run at the end of this session, seeded with concrete leads from the work above plus
+a broader look at the surrounding Android code. Nothing here is fixed - collected for later.
+Locators are `file : namespace : name`, not line numbers.
+
+### The architectural root cause behind most of this session's defensive patches
+
+- **`ConsoleClient.kt : ConsoleClient : poll` / `relay`** - confirmed, and wider than this feature
+  knew: every network call in the class goes through blocking `OkHttp Call.execute()`, no
+  `suspend` anywhere in the file. `relay()` is already the shared chokepoint for ~21 of the
+  class's ~32 call sites (`poll` included), so making that one function cancellable (a
+  `suspendCancellableCoroutine` wrapper around `enqueue()` + `call.cancel()` on cancellation)
+  would fix cancellability for the majority of the surface in one change, not twenty. This is the
+  root cause this whole session's `destroyed`-flag/identity-guard defenses exist to work around
+  for `poll()` specifically - every other IO-dispatched call site downstream of it (`send`,
+  `admitGateway`, the enroll/trust handshake polls, `send`'s pinned 600s `writeTimeout` upload in
+  particular) carries the identical latent property with no equivalent defense, just a smaller or
+  rarer exposure window.
+- **`ConsoleClient.kt : ConsoleClient : enroll`** (+ 9 near-identical siblings: `postConsoleApproval`,
+  `firstRoot`, `requestGatewayTransport`, `enrollHandshake`, `roster`, `trustHandshake`,
+  `trustPending`, `provisionTenant`, the companion's `postPublicApproval`) - the same ~15-line
+  request/response/error-decode shape duplicated ten times instead of sharing one helper the way
+  `relay()` already does for the sealed-gateway path. Consolidating this first would turn any
+  future fix to the shape (including the cancellability one above) into one edit instead of ten.
+
+### Missing OkHttp `callTimeout` - a codebase-wide gap, not a single-file oversight
+
+Every `OkHttpClient` construction site in the app (5 total, 4 files) sets some combination of
+`connectTimeout`/`readTimeout`/`writeTimeout` and none set `callTimeout`. A `readTimeout` only
+bounds per-read inactivity on a streamed response, not the whole call - a peer that trickles bytes
+can hold a "bounded" call open indefinitely. This is exactly the mechanism this session found
+could have wedged the poll loop via a stalled STTS synth (fixed for that one path with
+`BURST_JOIN_TIMEOUT_MS`, which bounds the *wait*, not the underlying blocking call - the leaked IO
+thread can still run for however long the peer holds it).
+
+- **`SttsClient.kt : SttsClient : client`** - the seed that started this thread. `connectTimeout(10s)`
+  + `readTimeout(60s)`, no `callTimeout`.
+- **`ConsoleClient.kt : ConsoleClient.Companion : buildPinnedClient`** - the highest-severity
+  instance: this is the client backing `poll()`, called directly and synchronously inside the poll
+  loop's `while (isActive)` body with no join/timeout wrapper around the call itself (unlike the
+  STTS path). A stall here blocks the loop outright - `isActive` can never even be re-checked.
+- **`ConsoleClient.kt : ConsoleClient.Companion : publicClient`** - the credential-less
+  device-approval client. Same gap, narrower exposure (enrollment flow only).
+- **`AppUpdater.kt : AppUpdater : client`** - sets no timeouts at all, inherits OkHttp's bare
+  defaults. Backs the self-update APK download; a stalled download leaves the Settings "Update"
+  button's busy state stuck indefinitely (its reset only runs after the call returns).
+- **`EnrollPinning.kt : buildLeafFingerprintPinnedClient`** - same gap, lowest exposure (one-shot,
+  user-attended LAN enrollment POST).
+
+### Comment-only-enforced numeric relationships - the exact bug class just fixed, recurring at larger scale
+
+This session found and fixed one instance (three constants across three files, related only by
+cross-referencing comments, silently drifted twice). The sweep found the shape recurs, including
+one worse instance where the numbers are not even comment-linked:
+
+- **`ChatRepository.kt : LONG_POLL_HOLD_MS`** - a 4-5 layer long-poll timeout chain (40s gateway
+  hold, 45s gateway cap, 55s evie relay hold, 58s client read timeout, 60s apiserver proxy) spread
+  across two Kotlin files, two TypeScript files in two different repos, plus untracked infra
+  config, held in strict order by nothing but prose restated independently in two places.
+- **`ChatRepository.kt : FORGET_TOMBSTONE_MS`** - the worst instance found: the 15s tombstone is
+  commented as needing to "outlast a single in-flight `teams()` HTTP round trip," but the actual
+  client (`buildPinnedClient`) is deliberately built with a 35s read timeout to tolerate a slow
+  cold-wake response. The two numbers are not even mentioned near each other - a genuinely slow
+  `teams()` call can outlive the tombstone meant to cover it, reopening the exact resurrection race
+  it exists to mask.
+- **`ChatRepository.kt : MAX_OUTGOING_BYTES`** vs the gateway's independent `MAX_RESPONSE_FILE_BYTES`
+  (`src/gateway/routes.ts`) - cross-repo numeric equality asserted only by a comment claiming a
+  "match," no shared constant or test.
+- **`ChatRepository.kt : ENROLL_POLL_MS` * `ENROLL_POLL_MAX`** - the product must stay under
+  evie-bot's `EnrollHandshakeCoordinator.DEFAULT_TTL_MS` (10 min); the arithmetic and the
+  cross-repo claim both live only in one comment.
+- **`ChatRepository.kt : SPAWN_RETRY_WINDOW_MS`** - a "comfortably past" margin over the gateway's
+  `CREATE_SESSION_BOUND_MS` (`consoleHandler.ts`), tracked only as a comment's snapshot of a value
+  that lives in a different repo.
+- **`SwitchboardService.kt : STATUS_NOTIFICATION_ID` vs `teamNotificationId`'s hash range** -
+  collision avoided only by a comment; no shared range constant, no test.
+- **`ChatRepository.kt : startPolling`'s bare `3_000` in the `heldEmpty` computation** - an unnamed
+  literal whose correctness depends on staying well below `LONG_POLL_HOLD_MS`, with no comment
+  even claiming the relationship exists.
+
+### Coroutine exception-handling gap
+
+`SwitchboardService`'s background scope (`CoroutineScope(SupervisorJob() + Dispatchers.Default)`)
+has no `CoroutineExceptionHandler` anywhere in the project.
+
+- **`ChatRepository.kt : startPolling`'s per-team STTS/notify burst job** - this session's own
+  red-team already found `notifyBurst` can throw (an oversized-notification `RuntimeException`)
+  and crash the whole foreground-service process when that throw happens inside this specific
+  launched coroutine (a sibling of the poll loop, not covered by its try/catch). Reachable only
+  when a followed thread has STTS auto-behavior on.
+- **`SwitchboardService.kt : onCreate`'s `repo.state.collect` notification-reconciler launch** -
+  a second, newly-found sibling crash path through the identical notification-building code
+  (`teamNotificationBuilder`), unconditionally reachable on essentially every unread-changing poll
+  pass, not gated behind any STTS configuration. No test anywhere references `SwitchboardService`,
+  `notifyBurst`, or exception handling.
+- **`DebugLog.kt : DebugLog : init`** - the crash-log hook is wired only from `MainActivity.onCreate`,
+  never installed for the service-only revival paths (`BootReceiver`, `PollAlarmReceiver`) most
+  likely to hit the two crashes above.
+
+### Real state/lifecycle bugs found incidentally (not seeded, discovered during the sweep)
+
+- **`AppStateStore.kt : PROVISIONING_KEYS`** - `KEY_ABSENCE_STREAKS` is wiped by the one-shot
+  schema migration but NOT by `clearProvisioning()`, and neither of the two dedicated pin tests
+  covers it in either direction. A re-provision leaves this address-keyed per-team map behind with
+  entries from the abandoned Domain - exactly the class of regression the file's own doc comment
+  warns a missing key causes.
+- **`ChatRepository.kt : clearAll`** - purges the TTS cache but never the `Attachments` directory
+  (unlike the schema-migration wipe a few dozen lines above it, which explicitly treats the two as
+  a paired concern), so every downloaded chat attachment survives a "Revoke and Delete Domain" or
+  "Clear & re-provision" indefinitely. The narrower `forget()` has the identical gap.
+- **`ChatRepository.kt : clearAll`** - its lone direct `_state.value = ...` assignment (the only
+  place in the file that bypasses the atomic `_state.update{}` pattern) can race an in-flight
+  poll-loop drain pass: `pollJob?.cancel()` is cooperative, but the drain body has no suspension
+  point or `isActive` check between fetching a poll result and persisting it, so a drain already
+  in flight when `clearAll` runs can silently repopulate state that was supposed to go blank.
+- **`TrustCompareScreen.kt`** - a null `confirmedDomainId()` at confirm time permanently strands
+  the screen on a busy spinner: the `?: return@launch` early-exit skips the trailing `busy = false`
+  with no retry affordance, unlike the sibling ceremonies (`LinkWizard.kt`, `EnrollCeremonyScreen.kt`)
+  which handle the equivalent case through a normal failure path.
+- **`Users.kt : UsersScreen`** - roster data (`sharedCounts`/`outcome`/`pending`) goes stale after
+  a round trip through `SharingScreen`; no refresh hook fires when the overlay closes. Same
+  staleness class already tracked in `plans/pain-points.md` for `Sharing.kt`'s own internal state,
+  but a distinct site.
+- **`ChatRepository.kt : reconciled`** - a dedup set with no eviction for the life of the process,
+  unlike its sibling `forgottenUntil` a few lines above it, which self-expires on every fresh-teams
+  poll. Low practical impact, but the same file shows the correct pattern right next to the one
+  that doesn't use it.
+
+### Orphaned KDoc comments - a recurring authoring habit, 4 confirmed sites
+
+A mechanical scan (two adjacent KDoc blocks with no declaration between them) found the same
+misattachment pattern in four unrelated files - a new declaration + its own doc comment inserted
+directly after an existing one, without moving the existing comment down to the declaration it
+actually describes. Functionally inert, but a real, recurring documentation defect landing on two
+of the most consequential doc comments in the codebase:
+
+- **`AppStateStore.kt : PROVISIONING_KEYS`** - its own doc ("any new provisioning/identity/
+  transcript key MUST be added here or it silently survives a Clear") is stranded above
+  `SCHEMA_WIPE_KEYS` instead; `PROVISIONING_KEYS` itself has no doc comment.
+- **`FederationManager.kt : FederationManager`** - the file's class-level doc (describing the
+  Domain trust anchor) is stranded above `MemberInfo` instead; the class itself - the single most
+  security-sensitive one in the app - has no doc comment at all.
+- **`SttsClient.kt : fillTemplate`** - its doc is stranded above `containsPlaceholder` instead.
+- **`MainActivity.kt : presenceColor`** - its doc is stranded above `statusWord` instead, even
+  though `statusWord`'s own (correctly-attached) comment explicitly cross-references it.
+
+### Framework-first: what's actually worth splitting out of `SwitchboardService.kt`
+
+This session's own framework-first audit only asked whether the idle-pushback feature's own new
+machinery wanted more abstraction (it didn't). It never asked whether the *pre-existing* code now
+sharing a class with that machinery wants to move out.
+
+- **Notification building/posting** (`buildStatusNotification`, `teamNotificationBuilder`,
+  `updateStatusNotification`, `reconcileTeamNotifications`, `notifyBurst`, `createChannels`,
+  `contentIntent`, `actionIntent`, `canNotify`, plus the companion's notification helpers) is
+  ~40% of the file and reads as a genuine, clean extraction candidate: none of it touches
+  Service-instance state, and three other files (`MainActivity.kt`, `NotificationReceiver.kt`,
+  `PollAlarmReceiver.kt`) already reach into this class's companion purely for notification
+  constants unrelated to Service lifecycle - it is already halfway to being its own unit. By
+  contrast, the wakelock/alarm/`DeepIdleScheduler` slice is correctly Service-glue (the `destroyed`
+  flag's correctness specifically depends on Service-instance lifecycle) and should stay.
+- **`MainActivity.kt : Repo : get`** - the process-lifetime `ChatRepository` singleton accessor
+  lives in `MainActivity.kt`, used by a Service and three BroadcastReceivers that have nothing to
+  do with the Activity. Minor discoverability smell, not a correctness issue.
+
+### Checked and confirmed clean (so a future sweep does not re-check these)
+
+`GlobalScope.launch` (2 sites, `EnrollCeremonyScreen.kt`/`LinkWizard.kt`, deliberate and justified,
+though duplicated rather than shared); `MainActivity.kt`'s 15 `!!` uses (all Compose
+smart-cast-blocked idiom, not a crash risk); a marker grep (`TODO`/`FIXME`/`HACK`/`GlobalScope`/
+`runBlocking`/`Thread.sleep`/`printStackTrace`/swallowed catches) across `crypto/`, `plugins/`,
+`Federation.kt`, `FederationManager.kt`, `EnrollCeremony.kt`, `EnrollPinning.kt` - zero hits.

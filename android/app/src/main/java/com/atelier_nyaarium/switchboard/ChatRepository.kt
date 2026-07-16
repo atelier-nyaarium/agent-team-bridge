@@ -2790,7 +2790,8 @@ class ChatRepository(
 						runCatching { client().teams(localGatewayId) }.onSuccess { applyFreshTeams(it) }
 					}
 					// Visible: long-poll (the hold IS the wait; re-poll immediately).
-					// AFK: plain poll, then sleep an interval; the mailbox batches.
+					// Backgrounded: plain poll (hold=0); the wait after is the idle pushback
+					// ladder's decision, not a flat interval - the mailbox batches either way.
 					hold = if (visible) LONG_POLL_HOLD_MS else 0L
 					val started = System.currentTimeMillis()
 					val params = mailboxSync.pollParams()

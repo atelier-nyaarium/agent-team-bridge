@@ -46,8 +46,9 @@ internal fun peerFramed(state: ChatState, m: Message, text: String): String {
 /**
  * Foreground service owning the bridge connection and poll loop, so messages keep
  * arriving while the Activity is backgrounded or the screen is off. The Activity
- * only observes shared Repo state. The repository polls fast while the Activity is
- * visible and once a minute otherwise.
+ * only observes shared Repo state. The poll cadence is governed by [IdlePushbackManager]:
+ * fast while the Activity is visible or recently backgrounded, backing off to
+ * wall-clock-aligned wakeups the longer it stays silent.
  *
  * Deep doze still gates network unless the user grants the battery-optimization
  * exemption (Settings row); the service only guarantees process lifetime.
