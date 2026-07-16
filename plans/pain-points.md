@@ -1,5 +1,62 @@
 # Pain points
 
+## Idle pushback manager (`plans/idle-pushback-manager.md`, deleted, shipped - 2026-07-16)
+
+Tiered poll-cadence backoff ladder for the Android console's background polling (fast while
+active, 1-minute while briefly backgrounded, then wall-clock-aligned 30-min/hourly/12-hour
+wakeups the longer it stays silent) - `IdlePushbackManager.kt`, `PollAlarmReceiver.kt`, plus
+`AppStateStore`/`ChatRepository`/`SwitchboardService` changes and 17 new tests. Shipped through a
+full `audited-implementation` cycle: plan alignment, two rounds of red-team (a service-teardown
+wakelock/alarm race and an unbounded notification-wait hang, both fixed), a framework-first pass
+(a second live instance of the same timing-budget bug, fixed structurally by deriving three
+constants from one root value instead of independent literals), and documentation. A follow-up
+autonomous framework-first-design pass then worked the crust sweep's own findings: fixed the
+codebase-wide missing-`callTimeout` gap (5 OkHttp client sites, plus a per-call split in
+`ConsoleClient.relay()` so poll stays bounded without capping `send()`'s upload), derived or
+test-pinned every same-repo comment-only numeric relationship, closed a coroutine
+exception-handling gap that could crash the whole foreground service, fixed several incidental
+state bugs (a re-provision leak, an attachment-purge gap, a `clearAll`/poll-drain race, a stuck
+spinner, a stale roster screen, an unbounded dedup set), and reattached 4 orphaned KDoc comments.
+Everything verified with a real Android build (`testDebugUnitTest` + the R8 `assembleRelease` gate)
+and the TypeScript suite; committed in small, separately-verified commits. Not yet pushed to
+origin as of this entry.
+
+- [high] `ConsoleClient.kt : ConsoleClient : poll` / `relay` (Android) - **bug-class** -
+  every network call in the class is still blocking `OkHttp Call.execute()`, no `suspend` anywhere
+  in the file, so it cannot be cancelled mid-flight. This session bounded the symptom (a per-call
+  `callTimeoutMs` on `relay()`, so a stalled call can no longer wedge the poll loop forever) but not
+  the cause - it is the reason `SwitchboardService`'s `destroyed`-flag/identity-guard defenses exist
+  at all. Fix: wrap `relay()` in `suspendCancellableCoroutine` (`enqueue()` + `call.cancel()` on
+  cancellation) - fixes cancellability for ~21 of the class's ~32 call sites in one change. Worth a
+  plan, not a quick fix - a concurrency-model change to the class every network call goes through.
+- [medium] `ConsoleClient.kt : ConsoleClient : enroll` (Android, + 9 near-identical siblings) -
+  **duplication** - the same ~15-line request/response/error-decode shape duplicated ten times
+  instead of sharing one helper the way `relay()` already does. Untouched this pass: the single
+  most security-sensitive file in the app, and confirming ten call sites are actually identical
+  enough to consolidate safely is real review work.
+- [medium] `ChatRepository.kt : LONG_POLL_HOLD_MS` (Android) - **cross-repo-drift-risk** - a 4-5
+  layer long-poll timeout chain (40s gateway hold, 45s gateway cap, 55s evie relay hold, 58s client
+  read timeout, 60s apiserver proxy) spread across two Kotlin files, two TypeScript files in two
+  different repos, plus untracked infra config, held in order by nothing but prose restated
+  independently in two places. Currently in sync; nothing pins it.
+- [low] `ChatRepository.kt : ENROLL_POLL_MS` * `ENROLL_POLL_MAX` (Android) - **cross-repo-drift-risk** -
+  must stay under evie-bot's `EnrollHandshakeCoordinator.DEFAULT_TTL_MS` (10 min); the arithmetic
+  and the cross-repo claim both live only in one comment, and evie-bot is a separate repo/deploy
+  lifecycle this pass could not safely edit.
+- [medium] `ChatRepository.kt : forget` (Android) - **bug-class** - `clearAll`'s full wipe now
+  purges the `Attachments` directory (fixed this pass), but the narrower per-team `forget(team)`
+  still doesn't: attachments are indexed by epoch/seq bucket, not by team, so a real per-team purge
+  needs an actual attachment-to-team index. Left for a proper pass rather than guessing at a scheme.
+- [low] `SwitchboardService.kt` (Android) - **framework-first** - notification building/posting
+  (`buildStatusNotification`, `teamNotificationBuilder`, `updateStatusNotification`,
+  `reconcileTeamNotifications`, `notifyBurst`, `createChannels`, plus companion helpers) is ~40% of
+  the file, touches no Service-instance state, and three other files already reach into its
+  companion purely for notification constants - a clean extraction candidate. The wakelock/alarm/
+  `DeepIdleScheduler` slice is correctly Service-glue and should stay.
+- [low] `MainActivity.kt : Repo : get` (Android) - **discoverability** - the process-lifetime
+  `ChatRepository` singleton accessor lives in `MainActivity.kt`, used by a Service and three
+  BroadcastReceivers that have nothing to do with the Activity. Minor smell, not a correctness issue.
+
 ## fullSpoken (`plans/full-spoken.md`, deleted, shipped - 2026-07-11)
 
 Migrated from `plans/full-spoken.md` (deleted, shipped - the fourth notice tier `fullSpoken`, a
