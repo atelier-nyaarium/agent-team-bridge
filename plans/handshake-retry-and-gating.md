@@ -266,3 +266,109 @@ per process, silent reconnects, the reply-gate, the red-team hs-id-disclosure fi
 and its writeup lives in git history for this path. This is a fresh gap the shipped design did not
 cover: it optimized the happy path (answer once, cache it) but left no recovery for a session that
 never got to answer even once.
+
+## Painpoints
+
+Crust-collection scouting pass (5-lead parallel sweep, seeded from this session's own findings) over
+the touched files plus adjacent code read closely this session. None of these are fixed - collected
+here to seed future work. Checked against `plans/pain-points.md` first; one near-duplicate found there
+(`handshakePending`'s own unbounded growth under an unauthenticated register - same bug class as the
+already-recorded `sessionResume`/knownTeamPaths entries) is omitted below.
+
+**Register-branch asymmetry (the same bug class, three angles):**
+- [medium] `src/gateway/websocket.ts : createWebSocketHandlers : message` (the register handler's
+  "remembered lead" branch, `reg.data.isMainOrLead === true && confirmedLeadTeams.has(team)`) -
+  **bug-class** - sets `handshakeConfirmed = true` and calls `establishRecord` directly, unlike
+  `mintHandshake` (this session's own fix), which calls `forgetPending(team, subId)` first. The
+  register handler's own stale-socket eviction (`existing !== ws`) is a no-op on a same-socket double
+  register, so this is precisely the path that can reach the remembered-lead branch without ever
+  clearing a still-outstanding `hs-*` id from that socket's FIRST register. Pre-existing (predates
+  this session's diff, in code the diff never touches); narrow-trigger (no shipped client sends a
+  same-socket double register - `mcp/bridge/helpers.ts`'s `connectToRouter` always opens a fresh
+  WebSocket with a fresh `subId` on reconnect).
+- [medium] `src/gateway/websocket.ts : createWebSocketHandlers : resolveHandshake` - **bug-class** -
+  has no check that the resolved socket is still the one the pending entry was minted for, nor that
+  it is still actually unconfirmed - it acts unconditionally on whatever currently sits at the
+  entry's (team, subId), and this check runs BEFORE routes.ts's own `handshakeConfirmed` gate, so
+  that gate screens nothing here. The destructive consequence of the item above: if the remembered-
+  lead branch's leaked orphan id is ever answered `isMainOrLead:false` (a stale retried tool call, a
+  replayed context after reconnect), `resolveHandshake` calls `evictSocket()` on what is by then a
+  CURRENT, confirmed, working lead - killing a healthy connection over a question nothing is asking
+  anymore.
+- [low] `src/gateway/websocket.ts : createWebSocketHandlers : resolveHandshake` - **bug-class** -
+  separately, deletes the pending entry unconditionally before checking the socket is still live. If
+  the WS died or is mid-close (plausible: `/respond` is a separate HTTP request from the WS, racing a
+  dying connection), it returns `true` with zero mutation - `routes.ts` treats any `true` as success
+  and replies `{delivered:true, handshake:true}`, so the agent is told its confirm succeeded while it
+  was silently dropped, and since the entry is already deleted, no `repushHandshake` retry can recover
+  it - only a full reconnect re-mints from scratch.
+- [low] `src/gateway/websocket.ts : createWebSocketHandlers : mintHandshake` - **security** -
+  unconditionally resets `repushCount: 0` on every call, including a same-socket double-register
+  (`existing === ws`, so `evictSocket`/`close` never fire). The design note reasoning about the reset
+  being safe "on reconnect" only considered a genuine new incarnation replacing an old one via
+  `evictSocket`; a same-socket re-register without any real disconnect silently zeroes
+  `HANDSHAKE_REPUSH_MAX_ATTEMPTS`'s progress for a socket that was never replaced, defeating the cap's
+  own stated purpose for free if any path can trigger it. Same narrow-trigger caveat as above.
+
+**Crash-class echo:**
+- [medium] `src/gateway/websocket.ts : createWebSocketHandlers : heartbeatTick` - **bug-class** -
+  calls `ws.ping()` unguarded on every registered non-virtual socket, every tick, for every team.
+  This session's own round-1 red-team wrapped `mintHandshake`'s `ws.send()` in try/catch specifically
+  because an unguarded throw crashes the whole gateway via `uncaughtException` (flush-and-exit, no
+  per-connection recovery). `ping()` writes to the same socket `send()` does. One wedged/broken socket
+  surviving between ticks can take the entire gateway down for every connected team - the identical
+  failure class this same session's diff identified and fixed one call away, in the exact function
+  this diff also modified (the new `teamLastRepushAt` sweep sits at its top).
+  `src/gateway/evie/evieClient.ts` has the same unguarded `ws.ping()` pattern, so it wasn't
+  reconsidered as a class when this diff touched the adjacent guarding logic either.
+
+**Design notes (not bugs):**
+- [low] `src/gateway/websocket.ts : repushHandshake : HANDSHAKE_REPUSH_DEDUPE_MS` - **design-note** -
+  the same constant backs three conceptually distinct purposes: the per-entry same-instant-collapse
+  window, the team-level round-robin-close window (gated to an entry's second attempt onward), and
+  `heartbeatTick`'s `teamLastRepushAt` sweep bound. A round-2 red-team pass considered a separate,
+  smaller constant for the team-level window (its stated goal is only blocking a same-tick burst) but
+  didn't take it - the shared constant plus the first-attempt exemption was judged sufficient. If the
+  constant is ever re-tuned for one purpose, the others silently drift with it.
+- [low] `src/mcp/devcontainer/hostOpRunner.ts : createHostOpRunner : runPeek / runDeduped` -
+  **framework-first** - hand-rolls the identical `now - t < window` dedupe-window shape as this
+  session's `repushHandshake` guard, but with MORE repetitions (a peek cadence-floor check + its own
+  inline sweep, a send-dedup TTL check + its own inline sweep - four instances in one ~90-line file).
+  This session's framework-first audit correctly declined to extract a shared primitive from its own
+  smaller instance, following this file's own established precedent - if a shared rate-guard/TTL
+  primitive is ever built, `hostOpRunner.ts` is the bigger, closer duplication case to justify it.
+
+**Naming:**
+- [low] `src/gateway/routes.ts : RoutesDeps` - **naming-collision** - the new "reply gate" describe
+  title (in `src/__tests__/routes.test.ts`) and inline comments coin that phrase for the handshake
+  bounce, but `routes.ts` already uses the identical phrase for an unrelated mechanism (the
+  cross-Domain share-revocation check, `isSharedToForReply`'s own comment: "the inbound gate and this
+  reply gate"). A future grep for "reply gate" in this file surfaces two unrelated mechanisms.
+- [low] `src/gateway/routes.ts : RoutesDeps : findPendingHandshake` - **naming-drift** - wired in
+  `index.ts` as `findPendingHandshake: wsHandlers.findPendingHandshakeId`, silently dropping the "Id"
+  suffix, while its two immediate neighbors in the same wiring block (`resolveHandshake`,
+  `repushHandshake`, the latter added this session) keep identical names end to end. Pre-existing, now
+  more visible sitting between two consistently-named siblings.
+- [low] `src/gateway/websocket.ts : createWebSocketHandlers : teamLastRepushAt` - **naming-grammar** -
+  every other verb-derived `...At` field in the codebase uses the past tense (`confirmedAt`,
+  `sentAt` - including this same feature's own sibling field on the `handshakePending` entry);
+  `teamLastRepushAt` uses the bare stem "Repush" instead of "Repushed", the only one to do so.
+
+**Test coverage/structure:**
+- [low] `src/gateway/websocket.ts : createWebSocketHandlers : heartbeatTick` - **test-coverage-gap** -
+  the new `teamLastRepushAt` sweep is never exercised by any test (the `repushHandshake` describe
+  block never calls `handlers.heartbeatTick()`, unlike the earlier handshake-pileup tests in the same
+  file which do), and `handlers` exposes no seam to read the map's size even if a test were added.
+- [low] `src/__tests__/routes.test.ts : /respond` reply-gate tests - **test-coverage-gap** - the
+  3-way message ternary (`capped` / `socket-gone` / else) only gets distinct-message coverage for
+  `capped`, `socket-gone`, and the `pushed` case of the else-branch; `throttled` (a realistically
+  reachable path - a caller re-POSTing within the 3s window) is never fed through, so nothing pins it
+  to the unenhanced message rather than drifting toward a more alarming one.
+- [low] `src/__tests__/websocket.test.ts : repushHandshake (recovery from a lost hs-* notification)` -
+  **test-structural-debt** - 7 of 10 tests open with the identical `vi.useFakeTimers({toFake:["Date"]})`
+  call; a matching `beforeEach` (alongside the block's existing shared `afterEach`) would collapse the
+  duplication with no effect on the 3 tests that omit it.
+- [low] `src/__tests__/websocket.test.ts : handshake-established session records` -
+  **test-structural-debt** - this describe block now spans ~44% of the file; the bulk of that (the
+  `repushHandshake` sub-block) is generic lead/worker mechanics that barely touch `sessionStore`, and
+  could arguably sit under the outer, `sessionStore`-free `createWebSocketHandlers` describe instead.

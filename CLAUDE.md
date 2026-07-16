@@ -9,7 +9,7 @@
   - `gateway/` - **Gateway server** - A Gateway: the central HTTP + WebSocket router for one machine's teams, running in Docker
     - `index.ts` - Server setup: Bun.serve, routes, WebSocket handlers, evie client init
     - `routes.ts` - HTTP route handlers (send, respond, poll, teams, health, evie tool-call, ingest, human notify broadcast)
-    - `websocket.ts` - WebSocket connection handlers, team registry, heartbeat, wake coordination
+    - `websocket.ts` - WebSocket connection handlers, team registry, heartbeat, the lead/worker handshake (mint at register, re-push a lost one on demand, resolve the answer), wake coordination
     - `wake.ts` - `WakeCoordinator` class for container on-demand startup, plus `decideWakeCreate` - the pure create-vs-reattach-vs-refuse decision `doWakeTeam` acts on for a send-triggered composite target, split out so it is unit-testable independent of SessionStore/the host-wake side effects
     - `connectorProxy.ts` - WebSocket proxy for game client connector pass-through
     - `evie/` - **Evie bridge** - WebSocket client to evie-bot over the K8s API service-proxy
