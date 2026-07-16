@@ -380,18 +380,14 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		}
 	}
 
-	// Working-chip poll: the open chat is peeked continuously; other listed sessions get one cheap
-	// peek per list change or new message (no rearm). Only local composite sessions have a
+	// Working-chip poll for sessions NOT currently open: one cheap peek per list change or new
+	// message (no rearm). The open chat needs no poke of its own here - TerminalView's own
+	// continuous peek loop already refreshes the SAME sessionWorking flag as a side effect of
+	// every frame it renders (peekTerminal -> noteScreen), so a second continuous loop aimed at
+	// the identical pane was pure duplicate traffic: twice the peek RPCs for whatever was open,
+	// with this one always the heavier un-diffed full fetch. Only local composite sessions have a
 	// daemon-drivable pane.
 	val boardSessions = state.sessions(state.localGatewayId)
-	LaunchedEffect(openTeam) {
-		val t = openTeam ?: return@LaunchedEffect
-		if (!isComposite(localFieldOf(t))) return@LaunchedEffect
-		while (true) {
-			repo.pokeWorking(t)
-			delay(repo.terminalRefreshMs)
-		}
-	}
 	// Keying on each session's last-activity timestamp (not just the session list) means a turn
 	// completing while the board is on screen re-pokes that session's working flag - otherwise a
 	// flag captured mid-turn has nothing to refresh it once the turn actually ends.
