@@ -366,8 +366,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * the op twice. A held op (long-poll) passes a read timeout above its server-side hold. Every call
 	 * builds a fresh sealed frame so a retry produces a new ephemeral/nonce the replay guard accepts.
 	 * Cancellable (see executeCancellable): a caller cancelled while this is in flight unwinds via
-	 * CancellationException instead of blocking out the timeout - see the poll loop's cancellation-
-	 * rethrow discipline for why every caller up the chain must let that exception propagate. */
+	 * CancellationException instead of blocking out the timeout - every caller up the chain must let
+	 * that exception propagate rather than swallow it as an ordinary failure (see Cancellation.kt's
+	 * rethrowIfCancellation/runCatchingCancellable, and the poll loop's own catch in ChatRepository). */
 	private suspend fun relay(
 		op: ConsoleOp,
 		opId: String = UUID.randomUUID().toString(),
