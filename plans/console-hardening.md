@@ -353,8 +353,8 @@ swallow a cancel regardless of rethrow placement.
 
 ## Painpoints
 
-Light touch after Phases A and B (2 of 4) - not yet nearing the plan's final phase, so the full
-scouting-workflow crust sweep is deferred to Phase D's crust-collection. Concrete leads already
+Light touch after Phases A, B, and C (3 of 4) - the full scouting-workflow crust sweep is still
+deferred to Phase D's crust-collection (the plan's actual final phase). Concrete leads already
 fully characterized in-lap, recorded rather than dropped:
 
 - **`plugins/designer/DesignerCards.kt : relOf`** - a third, independently-written copy of the
@@ -376,3 +376,39 @@ fully characterized in-lap, recorded rather than dropped:
   same-value assertion would either be a tautology (both sides recompute the same arithmetic) or
   an accidental coupling (pinning two independently-justified budgets together for no functional
   reason). Noted so a future coincidental drift is not mistaken for a regression.
+- **`ConsoleClient.kt : relay()` - a latent Phase D logging footgun, not a live bug.** Phase C's
+  `postEvieDirect` redaction fix only applies to the 9 evie-direct ops, whose response bodies are
+  PLAINTEXT JSON. `relay()` (Phase D's target) is structurally different and today logs nothing at
+  all - but several of the ~21 ops it serves DO carry genuine plaintext secrets once unsealed
+  (`crossDomainRequest.sas`, `crossDomainListenState.pin`/`.sas`, `crossDomainListen
+  .listeningToken`, `poll`'s mailbox message bodies, `peek`'s raw terminal text). The raw HTTP body
+  `relay()` reads is always `SealedEnvelope` ciphertext - safe to log as-is - but `unsealReply()`
+  decrypts it LOCALLY into a plaintext `ConsoleReplyBody`. A naive Phase D trace line placed on the
+  raw response text would be safe; the identical-looking line placed on the unsealed/decoded result
+  would leak. Phase D must place any new tracing strictly on the sealed side of the unseal
+  boundary, or redact per-op on the plaintext side - not a live leak today (nothing logs there yet)
+  but the exact trap the postEvieDirect fix just closed on the evie-direct side.
+- **`ConsoleClient.kt : postPublicApproval` - one unredacted resp-body log line, low risk.** The
+  lone body-logging path Phase C's redaction rule doesn't cover (`"public resp HTTP ${resp.code}
+  ${text.take(160)}"`, unchanged by this phase). Confirmed low-risk by two independent audit
+  passes: `ConsoleApprovalResult.join` is public keys + a display name, and `.sealed` is opaque
+  ciphertext (the actual onboarding bundle plaintext never appears in this response's own body).
+  Noted for consistency with the new `logBody` discipline, not because it currently leaks anything.
+- **`proto/Protocol.kt : TrustPendingResult.rendezvousId` - a naming trap, not a bug.** Confirmed
+  SAFE to log (it is evie-served broker data, not a bearer secret - FLOW-2 defends via mutual
+  owner-key anti-substitution + human SAS compare, unlike FLOW-1's genuinely-secret out-of-band
+  pin). But `ChatRepository.kt`'s own `trustExchange` comments call it "the pin" when passing it to
+  `EnrollCeremony.sas`, which reads as alarming out of context. Worth a one-line comment on
+  `trustPending()` someday explaining why this "pin" is not secrecy-load-bearing, so a future
+  refactor doesn't infer a secrecy dependency that was never there and misclassify it.
+- **`DebugLog.kt : log()` - a real, pre-existing thread-safety bug, unrelated to this plan.**
+  `fmt.format(Date())` (the shared `SimpleDateFormat`) runs OUTSIDE the `synchronized(lock)` block
+  that guards everything else in this function - `SimpleDateFormat` is documented non-thread-safe,
+  and this codebase already calls `DebugLog.log` concurrently from independent `Dispatchers.IO`
+  coroutines (the poll loop, the trust/enroll-handshake loops, roster fetches). A race can corrupt
+  the timestamp or throw, and the throw is unguarded - it would abort whichever evie-direct op
+  triggered it. Confirmed by red-team as NOT introduced or worsened by Phase C (the same call
+  pattern already existed pre-consolidation); flagged only because Phase C's own POST-line
+  normalization means MORE call sites now share this exact log path than before. Fix is small
+  (move the format call inside the lock, or switch to a `ThreadLocal<SimpleDateFormat>` /
+  `java.time` formatter) but touches a file entirely outside this plan's scope.
