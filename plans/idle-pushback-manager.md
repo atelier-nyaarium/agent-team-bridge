@@ -103,53 +103,66 @@ at 12:13 means the first pushed poll lands at 12:30). Reaching a deeper threshol
 which mark family the NEXT schedule picks. Fresh mail found at any mark resets silence to now,
 dropping straight back to MINUTE (and notifications fire as today).
 
-### New file: `IdlePushbackManager.kt` (pseudocode)
+### `IdlePushbackManager.kt` (as shipped - this section now documents the real file, not pseudocode)
+
+The trailing `// ...` comments on the constants below are illustrative for this doc; the shipped
+source omits them (the names are self-descriptive enough on their own).
 
 ```kotlin
+private const val MINUTE_MS = 60_000L
+private const val DEEP_RETRY_MS = 60_000L
+private const val SILENCE_MINUTE_MAX_MS = 10 * 60_000L   // 10 min -> HALF_HOUR
+private const val SILENCE_HALF_HOUR_MAX_MS = 10 * 3_600_000L  // 10 h -> HOURLY
+private const val SILENCE_HOURLY_MAX_MS = 48 * 3_600_000L     // 2 d -> TWELVE_HOUR
+private const val PASS_GRACE_MS = 30_000L
+
 enum class PollTier { FOREGROUND, MINUTE, HALF_HOUR, HOURLY, TWELVE_HOUR }
 
-/** What the poll loop does after a pass. */
+/** What the poll loop should do after a pass. */
 sealed interface PollWait {
-	/** Foreground: chain long-polls (interval 0; 5s on failure/held-empty). */
 	data object Chain : PollWait
-	/** Kickable coroutine wait. MINUTE tier (60s) and the one deep retry (60s). */
 	data class Delay(val ms: Long) : PollWait
-	/** Deep idle: alarm scheduled at [atMillis], locks released, loop parks on kick. */
 	data class Alarm(val atMillis: Long) : PollWait
 }
 
 /** Service-owned side effects (alarms + wakelocks). The manager drives it from decide(). */
 interface DeepIdleScheduler {
-	/** Deep tier: schedule the aligned wakeup, release every lock. Alarm or kick wakes us. */
 	fun enterDeepSleep(wakeAtMillis: Long)
-	/** Deep-tier retry wait: keep the CPU up just long enough for the retry pass. */
 	fun holdPass(ms: Long)
-	/** Active tiers: cancel any pending alarm, hold the indefinite active-tier lock. */
 	fun exitDeepSleep()
 }
 
-// store is IdleSilenceStore, not the concrete AppStateStore - see Testability below; the
-// narrow seam is what makes the manager-state-machine tests possible as pure JUnit at all.
-class IdlePushbackManager(store: IdleSilenceStore, private val zone: () -> ZoneId) {
+/** The persistence seam - narrow so a test fake needs no Context/Robolectric. AppStateStore
+ * implements this; ChatRepository wires the real store in. */
+interface IdleSilenceStore {
+	fun loadIdleSilenceStart(): Long?
+	fun saveIdleSilenceStart(v: Long)
+}
+
+class IdlePushbackManager(
+	private val store: IdleSilenceStore,
+	hydrateNow: Long,
+	private val zone: () -> ZoneId,
+) {
 	@Volatile var scheduler: DeepIdleScheduler? = null   // wired by the service, like onInbound
 
-	// Absent key -> null -> defaults to now(): a fresh install or a post-reboot revival (nothing
-	// persisted yet) starts at MINUTE, not TWELVE_HOUR (Audit #1 - a non-nullable Long getter can
-	// only be getLong(key, 0L), and min(0L, now())=0L reads as "silent since the epoch"). A
-	// persisted FUTURE value (clock rolled backward) also clamps to now() - not to guard deep
-	// idle, but so the app is not stuck paying the expensive MINUTE tier for the whole backward
-	// jump (Audit #6). A value genuinely far in the past is preserved as-is (min is then a
-	// no-op): a long real absence must resume the deep tier it earned, per Q3.
-	@Volatile private var silenceStartAt = min(store.loadIdleSilenceStart() ?: now(), now())
+	// Absent key -> hydrateNow, not 0L: an unset store would otherwise read as "silent since the
+	// epoch" and wedge a fresh install straight into TWELVE_HOUR (Audit #1). A persisted FUTURE
+	// value also clamps to hydrateNow - not to guard deep idle, but so a backward clock jump does
+	// not strand the app in the expensive MINUTE tier (Audit #6). A value genuinely far in the
+	// past is preserved as-is (minOf is then a no-op): a long real absence resumes the deep tier
+	// it earned, per Q3.
+	@Volatile private var silenceStartAt = minOf(store.loadIdleSilenceStart() ?: hydrateNow, hydrateNow)
 	@Volatile private var deepRetryUsed = false           // one retry budget per mark (Q4)
 
 	fun onBackground(now: Long) = resetSilence(now)
-	/** Q2: called with now when a poll pass drained >=1 genuinely-fresh mailbox entry. `visible`
-	 * is the caller's own foreground flag (not mirrored onto the manager - see decide()); while
-	 * foregrounded this still no-ops the reset (and skips the disk write), since onBackground's
-	 * own unconditional reset is always the later - and therefore correct, per the tier ladder's
-	 * own "later of" definition - write regardless of what happened before it. */
-	fun onCommsActivity(now: Long, visible: Boolean) { if (!visible) resetSilence(now) }
+
+	/** Q2: called with now when a poll pass drained >=1 genuinely-fresh mailbox entry. No-ops
+	 * while `visible`: onBackground's own unconditional reset is always the later write once
+	 * backgrounding happens, so skipping the reset (and its disk write) here never loses it. */
+	fun onCommsActivity(now: Long, visible: Boolean) {
+		if (!visible) resetSilence(now)
+	}
 
 	private fun resetSilence(now: Long) {
 		silenceStartAt = now
@@ -164,86 +177,91 @@ class IdlePushbackManager(store: IdleSilenceStore, private val zone: () -> ZoneI
 	fun decide(now: Long, visible: Boolean, lastPassFailed: Boolean): PollWait {
 		// Snapshot the tier ONCE: silenceStartAt is @Volatile and can change mid-decide from the
 		// main thread (onBackground). Reading it twice risked the deep branch handing
-		// nextAlignedMark a tier its own first read never chose, including one it does not
-		// recognize (Audit #4).
+		// nextAlignedMark a tier its own first read never chose (Audit #4).
 		val tier = tierFor(visible, now - silenceStartAt)
 		val wait = when (tier) {
-			FOREGROUND -> Chain
-			MINUTE -> Delay(MINUTE_MS)
+			PollTier.FOREGROUND -> PollWait.Chain
+			PollTier.MINUTE -> PollWait.Delay(MINUTE_MS)
 			else ->
-				if (lastPassFailed && !deepRetryUsed) { deepRetryUsed = true; Delay(DEEP_RETRY_MS) }
-				else { deepRetryUsed = false; Alarm(nextAlignedMark(now, tier, zone())) }
+				if (lastPassFailed && !deepRetryUsed) {
+					deepRetryUsed = true
+					PollWait.Delay(DEEP_RETRY_MS)
+				} else {
+					deepRetryUsed = false
+					PollWait.Alarm(nextAlignedMark(now, tier, zone()))
+				}
 		}
 		when (wait) {
-			is Alarm -> scheduler?.enterDeepSleep(wait.atMillis)
-			// A Delay is either MINUTE's plain 60s wait, or a deep tier's one retry - tier (not a
-			// separate flag) tells them apart now that it is captured once above.
-			is Delay -> if (tier == MINUTE) scheduler?.exitDeepSleep() else scheduler?.holdPass(wait.ms + PASS_GRACE_MS)
-			Chain -> scheduler?.exitDeepSleep()
+			is PollWait.Alarm -> scheduler?.enterDeepSleep(wait.atMillis)
+			// A Delay is either MINUTE's plain wait or a deep tier's one retry - tier (captured
+			// once above) tells them apart rather than a second flag.
+			is PollWait.Delay -> if (tier == PollTier.MINUTE) scheduler?.exitDeepSleep() else scheduler?.holdPass(wait.ms + PASS_GRACE_MS)
+			PollWait.Chain -> scheduler?.exitDeepSleep()
 		}
 		return wait
 	}
-
-	companion object {
-		const val MINUTE_MS = 60_000L                    // replaces AFK_POLL_INTERVAL_MS
-		const val DEEP_RETRY_MS = 60_000L
-		const val SILENCE_MINUTE_MAX_MS = 10 * 60_000L   // 10 min -> HALF_HOUR
-		const val SILENCE_HALF_HOUR_MAX_MS = 10 * 3_600_000L  // 10 h -> HOURLY
-		const val SILENCE_HOURLY_MAX_MS = 48 * 3_600_000L     // 2 d -> TWELVE_HOUR
-		const val PASS_GRACE_MS = 30_000L                // retry pass runtime allowance
-	}
 }
 
-// Pure, top-level, unit-tested without Android (the filterTombstoned pattern):
+// Pure, top-level, unit-tested without Android (the filterTombstoned pattern). The tier/timing
+// constants above are file-private top-level rather than a class companion object: the earlier
+// draft put them in IdlePushbackManager's companion, which these top-level functions could not
+// have referenced unqualified - this placement is what actually compiles.
 
 internal fun tierFor(foreground: Boolean, silenceMs: Long): PollTier = when {
-	foreground -> FOREGROUND
-	silenceMs < SILENCE_MINUTE_MAX_MS -> MINUTE
-	silenceMs < SILENCE_HALF_HOUR_MAX_MS -> HALF_HOUR
-	silenceMs < SILENCE_HOURLY_MAX_MS -> HOURLY
-	else -> TWELVE_HOUR
+	foreground -> PollTier.FOREGROUND
+	silenceMs < SILENCE_MINUTE_MAX_MS -> PollTier.MINUTE
+	silenceMs < SILENCE_HALF_HOUR_MAX_MS -> PollTier.HALF_HOUR
+	silenceMs < SILENCE_HOURLY_MAX_MS -> PollTier.HOURLY
+	else -> PollTier.TWELVE_HOUR
 }
 
 /** Next strictly-future aligned mark for a deep tier, in epoch millis (RTC_WAKEUP domain).
- * The `else -> error(...)` branch is unreachable in practice: decide() snapshots the tier once
- * and only ever calls this from the branch that already excludes FOREGROUND/MINUTE (Audit #4) -
- * kept as a defensive backstop, not a live path. */
+ * `ZonedDateTime` handles DST gaps/overlaps (java.time is native at minSdk 33): a mark landing in
+ * a nonexistent local time resolves to the shifted valid instant, so this never throws or returns
+ * a past instant across a transition - only that one mark's wall-clock alignment is cosmetically
+ * off, self-correcting at the next mark. */
 internal fun nextAlignedMark(nowMillis: Long, tier: PollTier, zone: ZoneId): Long {
 	val now = Instant.ofEpochMilli(nowMillis).atZone(zone)
 	val top = now.truncatedTo(ChronoUnit.HOURS)
 	val candidates = when (tier) {
-		HALF_HOUR -> listOf(top.plusMinutes(30), top.plusHours(1))
-		HOURLY -> listOf(top.plusHours(1))
-		TWELVE_HOUR -> listOf(now.toLocalDate(), now.toLocalDate().plusDays(1)).flatMap { day ->
-			listOf(8, 20).map { h -> ZonedDateTime.of(day, LocalTime.of(h, 0), zone) }
-		}
+		PollTier.HALF_HOUR -> listOf(top.plusMinutes(30), top.plusHours(1))
+		PollTier.HOURLY -> listOf(top.plusHours(1))
+		PollTier.TWELVE_HOUR ->
+			listOf(now.toLocalDate(), now.toLocalDate().plusDays(1)).flatMap { day ->
+				listOf(8, 20).map { hour -> ZonedDateTime.of(day, LocalTime.of(hour, 0), zone) }
+			}
+		// Unreachable in practice: decide() snapshots the tier once and only ever calls this
+		// from the branch that already excludes FOREGROUND/MINUTE (Audit #4). A defensive backstop.
 		else -> error("no alignment for $tier")
 	}
 	return candidates.map { it.toInstant().toEpochMilli() }.filter { it > nowMillis }.min()
 }
 ```
 
-`ZonedDateTime` handles DST gaps/overlaps (java.time is native at minSdk 33): a mark landing in
-a nonexistent local time resolves to the shifted valid instant. Strictly-future and valid are
-guaranteed; exact wall alignment across a DST transition is best-effort (one odd interval).
-
 ### `ChatRepository.kt` changes
 
-- Own an `IdlePushbackManager` (hydrated from `AppStateStore`); expose it to the service.
+- Own an `IdlePushbackManager` (hydrated from `AppStateStore`, which implements `IdleSilenceStore`);
+  expose it to the service as a public `val`:
+  `val pushback = IdlePushbackManager(store, System.currentTimeMillis()) { ZoneId.systemDefault() }`.
 - `onBackground()` additionally calls `pushback.onBackground(now)` (it already exists).
   `onForeground()` needs NO manager call: `decide()` now reads the existing `visible` field
   directly (Audit #11), so there is nothing for the manager to separately track on the way back
   to foreground - `visible = true` already kicks the poll loop today, unchanged.
 - Drain hook (Q2): in the poll pass, after `mailboxSync.advance(...)`:
   `if (adv.fresh.isNotEmpty()) pushback.onCommsActivity(System.currentTimeMillis(), visible)`.
-- Burst-loop fix (Audit #3, required by this plan, not optional): pull `onInbound?.invoke(t, ms)`
-  out of the STTS branch's `scope.launch(Dispatchers.IO) { ... }` (currently
-  ChatRepository.kt:2907-2918) so the notification POST always runs synchronously in the burst
-  loop, matching the existing non-STTS `else` branch's behavior. Today this race is invisible
-  because the service holds its wakelock for the whole loop lifetime regardless; once a deep-tier
-  pass can release the CPU right after the drain, an un-joined async notification can be silently
-  cut off mid-synth. Leave STTS preload/play as the only work inside the async launch - synthesis
-  is already best-effort and slower by nature.
+- Burst-loop fix (Audit #3, required by this plan, not optional) - **shipped as `joinAll()`, not
+  the "move onInbound out" mechanism originally drafted here**: `onInbound?.invoke(t, ms)` stays
+  inside the STTS branch's `scope.launch(Dispatchers.IO) { ... }` exactly as before; each launched
+  `Job` is instead collected into a `burstJobs` list, and `burstJobs.joinAll()` runs after
+  `mailboxSync.commit(adv.next)` and before the tail `decide()` call. This closes the SAME race
+  (a deep-tier pass releasing its lock can no longer cut the launched work off mid-flight) while
+  ALSO protecting the STTS preload/auto-play path, not just the notification POST - the safer
+  choice once the STTS product decision below was resolved to "keep unchanged, no staleness gate"
+  rather than gate it away. Trade-off accepted deliberately: for a followed, STTS-eligible team,
+  the poll loop's tail (including the decide() that computes the next wait) now waits on that
+  team's synthesis/playback before proceeding, instead of firing it fully fire-and-forget. Most
+  passes have an empty burst and skip this entirely; the rare one with real content is exactly the
+  case worth waiting for.
 - Product decision (Audit #3's second half), resolved: keep auto-play firing unchanged at every
   tier, no staleness gate. Deliberately not adding a subjective "too old to speak" cutoff; a
   deep-tier wakeup draining a genuinely out-of-nowhere message after real hours of silence is
@@ -254,17 +272,15 @@ guaranteed; exact wall alignment across a DST transition is best-effort (one odd
 - Replace the tail interval computation:
 
 ```kotlin
-// was: interval = when { !visible -> AFK_POLL_INTERVAL_MS; failed || heldEmpty -> POLL_INTERVAL_MS; else -> 0 }
+// Superseded the old flat `interval = when { !visible -> AFK_POLL_INTERVAL_MS; ... }`.
 when (val wait = pushback.decide(System.currentTimeMillis(), visible, failed)) {
 	PollWait.Chain -> if (failed || heldEmpty) withTimeoutOrNull(POLL_INTERVAL_MS) { kick.receive() }
 	is PollWait.Delay -> withTimeoutOrNull(wait.ms) { kick.receive() }
-	// The alarm (or a foreground/forget kick) is the real wakeup; the timeout is only a
-	// backstop against a lost alarm, and without a lock it only ticks while the CPU is
-	// otherwise awake - fine for a backstop. Floored at 0: a pass that runs long near a mark
-	// must not compute a negative timeout (Audit test-adequacy note; withTimeoutOrNull(<=0)
-	// returns immediately rather than throwing, so this is a self-limiting one-iteration spin
-	// without the floor, not a crash - .coerceAtLeast(0) just makes the intent explicit).
-	is PollWait.Alarm -> withTimeoutOrNull((wait.atMillis - System.currentTimeMillis() + PARK_SLACK_MS).coerceAtLeast(0)) { kick.receive() }
+	// The alarm (or a foreground/forget kick) is the real wakeup - the timeout below
+	// is only a backstop against a lost alarm. Floored at 0 so a pass finishing near
+	// the mark never hands withTimeoutOrNull a negative duration.
+	is PollWait.Alarm ->
+		withTimeoutOrNull((wait.atMillis - System.currentTimeMillis() + PARK_SLACK_MS).coerceAtLeast(0)) { kick.receive() }
 }
 ```
 
@@ -298,7 +314,10 @@ when (val wait = pushback.decide(System.currentTimeMillis(), visible, failed)) {
   release BOTH locks (the shared pass lock null-safe/isHeld-guarded exactly like the existing
   `releaseWakeLock()` already does at `SwitchboardService.kt:72-74` - the very first
   MINUTE->deep transition reaches here with the pass lock never having been acquired at all),
-  update the status notification line ("Idle - next check HH:MM").
+  update the status notification line ("Idle - next check HH:mm" - lowercase `mm` for minutes;
+  a capital `MM` is the month token). Shipped as a small `postIdleStatus(wakeAtMillis)` helper
+  with its own `if (!canNotify() || statusDismissed) return` guard, the same combined condition
+  `updateStatusNotification`'s two sequential guards already enforce.
 - `holdPass(ms)`: the shared pass lock's `acquire(ms)` (timeout is the release; no explicit
   release path).
 - `onDestroy()`: cancel the alarm + release both locks. Deliberate stops (unprovision) kill the
@@ -307,8 +326,10 @@ when (val wait = pushback.decide(System.currentTimeMillis(), visible, failed)) {
 - Guard: `if (!alarmManager.canScheduleExactAlarms()) setAndAllowWhileIdle(...)` - defensive
   only; USE_EXACT_ALARM is auto-granted at minSdk 33.
 - `pollAlarmPi()` (Audit #7 - referenced but never given a body): mirror the existing
-  `actionIntent`/`contentIntent` construction (`SwitchboardService.kt:168-192`) -
-  `PendingIntent.getBroadcast(applicationContext, POLL_ALARM_RC, Intent(this,
+  `actionIntent`/`contentIntent` construction (`SwitchboardService.kt:168-192`), which both use
+  `this` (the Service) as the Context, not `applicationContext` - `applicationContext` is reserved
+  for the companion pass lock below, which genuinely must survive past any one Service instance -
+  `PendingIntent.getBroadcast(this, POLL_ALARM_RC, Intent(this,
   PollAlarmReceiver::class.java), PendingIntent.FLAG_UPDATE_CURRENT or
   PendingIntent.FLAG_IMMUTABLE)`. `FLAG_IMMUTABLE` is mandatory at API 31+ (minSdk is 33, so this
   is every device) and is the right choice regardless - AlarmManager never mutates the intent it
@@ -423,10 +444,13 @@ retry-storming a gate that stays shut.
   12:59 -> 13:00 AND exactly 13:00:00.000 -> 14:00 (Audit #8 - an exact-on-mark case, the state a
   deep wakeup actually re-enters `decide()` at); twelve-hour 07:00 -> 08:00, 09:00 -> 20:00,
   21:00 -> next-day 08:00, AND exactly 08:00:00.000 -> 20:00 / exactly 20:00:00.000 -> next-day
-  08:00; a DST spring-forward night AND a fall-back/overlap night in a real zone (both valid,
-  strictly-future, on-a-mark or shifted-valid); one non-integer-offset zone (e.g. Asia/Kolkata)
-  for a TWELVE_HOUR mark.
-- Manager state machine (inject `now`, fake store via the `IdleSilenceStore` seam - see
+  08:00; a DST spring-forward night (strictly-future) AND a second spring-forward case where the
+  WINNING candidate itself is the one nominally landing in the gap, asserted against its exact
+  resolved instant, not just strictly-future - the first case alone can construct a gap-adjacent
+  candidate without ever selecting it, so it never actually exercises the shift; a fall-back/
+  overlap night (strictly-future); one non-integer-offset zone (e.g. Asia/Kolkata) for a
+  TWELVE_HOUR mark.
+- Manager state machine (inject `hydrateNow`, fake store via the `IdleSilenceStore` seam - see
   Testability below, recording scheduler): foreground -> Chain + exitDeepSleep; background fresh
   -> MINUTE; 10 min silence -> Alarm at mark + enterDeepSleep; 10h/48h silence -> Alarm lands on
   a top-of-hour / 8-or-20 mark specifically (Audit #8 - proves `decide()` hands `nextAlignedMark`
@@ -434,8 +458,11 @@ retry-storming a gate that stays shut.
   holdPass then Alarm (budget resets per mark), THEN a third decide with a fresh failure ->
   another Delay(60s) (Audit #8 - proves the budget actually resets for the NEXT mark, not just
   that it was consumed once); comms at a deep mark -> reset to MINUTE; hydrate clamps a future
-  persisted timestamp; hydrate from an absent/never-persisted store -> MINUTE, not TWELVE_HOUR
-  (Audit #1/#8 - the case a fresh install and a headless post-reboot revival both hit).
+  persisted timestamp, checked well past the MINUTE boundary so the clamped and unclamped paths
+  land in different tiers (checking at `now == hydrateNow` cannot tell them apart - both round to
+  MINUTE either way, which would silently pass even with the clamp removed or reversed); hydrate
+  from an absent/never-persisted store -> MINUTE, not TWELVE_HOUR (Audit #1/#8 - the case a fresh
+  install and a headless post-reboot revival both hit).
 
 ### Testability seam (Audit #7 dimension - closes the gap the pure-function split leaves open)
 
@@ -452,10 +479,15 @@ interface IdleSilenceStore {
 ```
 
 `AppStateStore` implements it (its two new methods already match this shape); `ChatRepository`
-wires the real store in. A test fake is then a 3-line in-memory `MutableMap`-backed
-implementation - no Context, no Robolectric, no new dependency, consistent with how `wake.ts`'s
-`decideWakeCreate` and this codebase's other pure-core/injected-side-effect splits are already
-structured.
+wires the real store in. A test fake is then a few lines of in-memory storage (one nullable
+`var`, since the seam persists exactly one key) - no Context, no Robolectric, no new dependency,
+consistent with how `wake.ts`'s `decideWakeCreate` and this codebase's other pure-core/
+injected-side-effect splits are already structured.
+
+The manager's own hydrate clock is injected the same way: the constructor takes a plain
+`hydrateNow: Long` (not an ambient `now()` call) so both the fresh-install/absent-store case and
+the future-clamp case can be pinned to a deterministic value in a test - `ChatRepository` wires
+the real clock, `IdlePushbackManager(store, System.currentTimeMillis()) { ZoneId.systemDefault() }`.
 
 ## Audit
 
@@ -621,3 +653,106 @@ already solves this problem, so the two-wakelock design is new work, not reinven
    retry -> deep sequence: the active lock is held only in FOREGROUND/MINUTE, the pass lock is
    held only during an actual pass (never both released with a pass in flight, never the active
    lock silently dropped by a pass-lock release).
+
+## Red team
+
+9 independent Opus agents, adversarial (not plan-comparison - the align pass already covered
+that). Verified two of the plan's own confidence claims against real platform behavior along the
+way. Fixed below; each re-verified with a real build (`testDebugUnitTest` and `assembleRelease`,
+both green) before committing.
+
+**Fixed:**
+
+- **`onDestroy` never nulled `pushback.scheduler`.** `ConsoleClient.poll()` is a plain blocking
+  call, not `suspend` - `scope.cancel()` in `onDestroy` cannot interrupt an in-flight call, so the
+  poll loop can run one more full pass (including `decide()`) after teardown, against a
+  now-destroyed service instance. That trailing `decide()` could re-acquire the active wakelock
+  with nothing left to ever release it (a leak: `releaseWakeLock()` already ran and nulled the
+  field, so the later `isHeld` guard never fires), or re-arm the alarm `onDestroy` just cancelled.
+  Fixed by nulling `pushback.scheduler` in `onDestroy`, guarded by an identity check
+  (`if (repo.pushback.scheduler === this)`) so a fresh instance's own registration - set by its
+  own `onCreate` racing a moment earlier - can never be wiped out by an older instance's delayed
+  teardown.
+- **`burstJobs.joinAll()` had no timeout - a stalled TTS synth could wedge the poll loop
+  permanently.** The STTS OkHttp client sets a per-read timeout on the streamed response, not an
+  end-to-end call timeout, so a server that keeps trickling bytes can hold the read open
+  indefinitely; `joinAll()` with nothing bounding it meant the WHOLE poll loop - not just that
+  team's synthesis - could never reach the tail wait, and the `kick` channel is only read there,
+  so neither a foreground open nor anything else could unstick it. This escalated the fire-and-
+  forget-vs-joined tradeoff already accepted in the ChatRepository.kt changes section from
+  "waits a bit longer" to "can hang forever." Fixed with `withTimeoutOrNull(BURST_JOIN_TIMEOUT_MS)
+  { burstJobs.joinAll() }` (90s, matching the pass-lock's own budget) - a stalled synth now leaks
+  that one coroutine exactly as it did before this join existed, instead of blocking every future
+  pass.
+- **`PollAlarmReceiver.onReceive` had no guard around `SwitchboardService.start()`.** On the
+  (normally unreachable at minSdk 33, since `USE_EXACT_ALARM` is auto-granted/non-revocable)
+  inexact-alarm fallback path, a dead-process revival's `startForegroundService` loses the exact-
+  alarm FGS-start exemption and can throw `ForegroundServiceStartNotAllowedException` - uncaught,
+  that crashes the revival broadcast itself, before it could ever re-arm the next alarm, silently
+  stranding the ladder with nothing left to revive it. Wrapped in try/catch, logged via
+  `DebugLog`; a refusal now degrades to one missed wakeup (the next mark still fires) instead of a
+  permanent strand.
+
+**Confirmed correct, not a bug (verified against real platform behavior, not just the code's own
+comments):**
+
+- The wakelock re-arm/release semantics the whole two-lock design rests on - a second
+  timeout-`acquire()` under `setReferenceCounted(false)` genuinely resets the deadline rather than
+  stacking or no-op'ing, and `release()` genuinely frees the lock immediately rather than waiting
+  out the original timeout - were traced against the actual AOSP `PowerManager.WakeLock`
+  implementation and confirmed correct with high confidence. This resolves as CONFIRMED what the
+  plan's own audit trail had left as PLAUSIBLE.
+- The companion pass-lock's double-checked-locking (`@Volatile` + `synchronized(this)`) is
+  textbook JMM-correct: the volatile publish happens after full construction, `synchronized(this)`
+  locks the one stable companion singleton, and no contention path can create two lock instances.
+- `postIdleStatus` reading `state.value.unread` from the poll loop's IO coroutine has no
+  staleness or cross-thread visibility risk (same-coroutine program order covers it), and posting
+  a notification from that thread matches every other notification call site in the file.
+- A fresh-eyes sweep of `IdlePushbackManager.kt` and `PollAlarmReceiver.kt` for off-by-ones, sign
+  errors, or swapped parameters found none.
+
+**Deliberately not fixed - documented, real, but out of scope for this feature:**
+
+- **Neither the wakelock semantics above nor the `burstJobs.joinAll()` ordering have any automated
+  test coverage**, and structurally cannot with what's on this project's test classpath today (no
+  Robolectric, no `androidTest`/instrumentation runner, no coroutines-test). The wakelock claims
+  are the kind only a real `PowerManager` can prove; the join ordering is two sequential
+  statements in one coroutine body with no concurrency between them, so it is correct by
+  construction rather than by anything a unit test would meaningfully exercise. Both are now
+  bounded even if wrong in the future (a timeout backstop either way), which is why this is left
+  as a documented gap rather than a blocking one. Building the instrumented-test infrastructure
+  this would need is a real, separate investment, not a fix that belongs in this feature's diff.
+- **`SttsClient`'s OkHttp client has no `callTimeout`, only a per-read `readTimeout`** - a
+  pre-existing gap (predates this feature; the fire-and-forget STTS call already had it, just
+  with a smaller blast radius since nothing was joining on it). This feature's `joinAll()` bound
+  now caps the damage regardless, so the root cause is left as a follow-up rather than pulled into
+  this diff.
+
+### Round 2 (verifying the three fixes above closed cleanly)
+
+5 targeted Opus agents, re-verifying only the three fixes and their blast radius (round 1's other
+six dimensions - wakelock semantics, DCL correctness, manifest surface, StateFlow staleness, the
+fresh-eyes sweep - were already confirmed clean and did not need re-checking). All three verdicts:
+**closes-the-bug**. Two small residuals surfaced and were hardened rather than left open, since
+both were cheap:
+
+- **A narrow TOCTOU remained in the scheduler-null fix**: `decide()` reads the scheduler and
+  invokes a method on it as two separate steps, so a read landing a few instructions before
+  `onDestroy`'s null-write could still invoke a method after teardown had already cancelled the
+  alarm and released both locks - re-acquiring an un-timed wakelock nothing would ever release.
+  Added a `@Volatile destroyed` flag, set first in `onDestroy`, checked at the top of all three
+  `DeepIdleScheduler` methods - closes the specific bad outcome even though the underlying
+  read-then-invoke race is not fully atomic.
+- **`BURST_JOIN_TIMEOUT_MS` claimed exact parity with the pass lock's own budget, but the two
+  clocks start at different moments** (the pass lock from the alarm receiver; the join only once
+  the pass is actually running), so an equal 90s budget could let the join still be waiting after
+  the pass lock had already timed out. Lowered to 60s with margin, comment corrected to explain
+  the skew instead of asserting parity.
+
+Also fixed on the same pass: one comment anchored to the pre-fix code state ("exactly like before
+this join existed" - a Comments-Must-Be-Timeless violation caught by a dedicated code-quality
+dimension), and one comment overstating the alarm receiver's crash-guard self-healing (a refusal
+does not auto-schedule a next mark; recovery is the next app open or a reboot).
+
+Re-verified with a full real build (`testDebugUnitTest` + `assembleRelease`, both green) after
+every change in this section.

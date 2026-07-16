@@ -15,6 +15,9 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Deep-tier idle pushback wakeups (PollAlarmReceiver). Auto-granted and non-revocable for a
+         sideloaded non-Play app at minSdk 33, so no runtime permission dance is needed. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- QR enrollment scanner (CameraX + ML Kit). Camera is optional so the
          app still installs on camera-less devices; enrollment is gated at runtime. -->
@@ -54,6 +57,10 @@
 
         <receiver
             android:name=".NotificationReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".PollAlarmReceiver"
             android:exported="false" />
 
         <provider

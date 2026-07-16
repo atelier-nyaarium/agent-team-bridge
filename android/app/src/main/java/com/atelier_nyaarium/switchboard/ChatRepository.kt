@@ -25,6 +25,7 @@ import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.parseStoreKey
 import com.atelier_nyaarium.switchboard.proto.parseTarget
 import java.io.File
+import java.time.ZoneId
 import java.util.UUID
 import kotlinx.serialization.json.JsonObject
 import okhttp3.MediaType.Companion.toMediaType
@@ -36,6 +37,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -827,6 +829,10 @@ class ChatRepository(
 	// and the console resumes from its own consumption point, never re-adopting a server-
 	// dictated cursor that would ack away the offline backlog on the next poll.
 	private val mailboxSync = MailboxSync(store)
+	// The background poll cadence ladder. `store` already implements IdleSilenceStore; the
+	// service wires its own scheduler (alarm + wakelock side effects) in after construction, the
+	// same pattern as onInbound below.
+	val pushback = IdlePushbackManager(store, System.currentTimeMillis()) { ZoneId.systemDefault() }
 	// The Domain trust anchor: owner root key, console member identity, and the keyring
 	// the Console resolves every Gateway against before sealing to it.
 	private val federation = FederationManager(store)
@@ -847,8 +853,9 @@ class ChatRepository(
 
 	@Volatile private var sttsClient: SttsClient? = null
 
-	/** True while the Activity is started; drives the poll cadence (5s visible,
-	 * 60s AFK burst). The mailbox accumulates server-side either way. */
+	/** True while the Activity is started; drives the poll cadence - chained long-polls while
+	 * visible, a tiered silence ladder otherwise (see [IdlePushbackManager]). The mailbox
+	 * accumulates server-side either way. */
 	@Volatile private var visible = false
 	val isVisible: Boolean get() = visible
 	// Set alongside `visible = true`: onForeground front-runs the resume-kicked drain, so every
@@ -911,6 +918,12 @@ class ChatRepository(
 
 	fun onBackground() {
 		visible = false
+		pushback.onBackground(System.currentTimeMillis())
+	}
+
+	/** Wakes the poll loop immediately - the alarm receiver's bridge into a possibly-parked pass. */
+	fun kickPoll() {
+		kick.trySend(Unit)
 	}
 
 	private fun client(): ConsoleClient {
@@ -2804,6 +2817,9 @@ class ChatRepository(
 						DebugLog.log("Poll", "${adv.fresh.size}/${mb.entries.size} fresh epoch=${mb.epoch} cursor=${mb.cursor} dropped=${mb.dropped}")
 					}
 					if (adv.gap) _state.update { it.copy(gap = true) }
+					// Idle pushback: any genuinely-fresh entry is comms activity, resetting the silence
+					// clock back to the fast cadence (see plans/idle-pushback-manager.md Q2).
+					if (adv.fresh.isNotEmpty()) pushback.onCommsActivity(System.currentTimeMillis(), visible)
 					val burst = mutableMapOf<String, MutableList<Message>>()
 					val deviceAddr = thisDeviceAddress()
 					for (d in adv.fresh) {
@@ -2888,6 +2904,7 @@ class ChatRepository(
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team SKIPPED (no body, no files, no status)")
 						}
 					}
+					val burstJobs = mutableListOf<Job>()
 					val autoPlayedPeerPairs = mutableSetOf<String>()
 					for ((team, msgs) in burst) {
 						val lastAgent = msgs.lastOrNull { !it.fromMe }
@@ -2904,7 +2921,7 @@ class ChatRepository(
 							val t = team
 							val ms = msgs
 							val at = lastAgent.at
-							scope.launch(Dispatchers.IO) {
+							burstJobs += scope.launch(Dispatchers.IO) {
 								// When pre-generate is on, wait fully for synthesis so the
 								// cache is warm when the notification lands. preloadMessage
 								// never throws and is bounded by the STTS client's own
@@ -2921,6 +2938,13 @@ class ChatRepository(
 						}
 					}
 					mailboxSync.commit(adv.next)
+					// Idle pushback: decide() (the loop tail, below) can release the wakelock right after
+					// this pass in a deep tier. Join the launched notification/STTS work first so it can
+					// never get cut off mid-flight - most passes have an empty burst and skip this
+					// entirely; the rare pass with real content is the one worth joining on. Bounded: a
+					// stalled synth leaks that one coroutine rather than wedging every future pass - see
+					// BURST_JOIN_TIMEOUT_MS.
+					withTimeoutOrNull(BURST_JOIN_TIMEOUT_MS) { burstJobs.joinAll() }
 					// This pass's own drain (just committed) is the "first completed pass" the resume
 					// flag exists to cover; the NEXT pass's rows tag by live visibility again.
 					resumeBacklogPending = false
@@ -2962,15 +2986,18 @@ class ChatRepository(
 					}
 					DebugLog.flushToIngest()
 				}
-				// Adaptive cadence with a foreground kick: a resume interrupts the
-				// AFK wait so the user never stares at stale state. Visible long-polls
-				// chain back-to-back; failures and ignored holds back off to 5s.
-				val interval = when {
-					!visible -> AFK_POLL_INTERVAL_MS
-					failed || heldEmpty -> POLL_INTERVAL_MS
-					else -> 0L
+				// The wait tier (and its alarm/wakelock side effects) comes from the silence ladder.
+				// A foreground kick interrupts any wait so the user never stares at stale state;
+				// visible long-polls chain back-to-back, failures and ignored holds back off to 5s.
+				when (val wait = pushback.decide(System.currentTimeMillis(), visible, failed)) {
+					PollWait.Chain -> if (failed || heldEmpty) withTimeoutOrNull(POLL_INTERVAL_MS) { kick.receive() }
+					is PollWait.Delay -> withTimeoutOrNull(wait.ms) { kick.receive() }
+					// The alarm (or a foreground/forget kick) is the real wakeup - the timeout below
+					// is only a backstop against a lost alarm. Floored at 0 so a pass finishing near
+					// the mark never hands withTimeoutOrNull a negative duration.
+					is PollWait.Alarm ->
+						withTimeoutOrNull((wait.atMillis - System.currentTimeMillis() + PARK_SLACK_MS).coerceAtLeast(0)) { kick.receive() }
 				}
-				if (interval > 0) withTimeoutOrNull(interval) { kick.receive() }
 			}
 		}
 	}
@@ -3569,10 +3596,18 @@ class ChatRepository(
 
 	private companion object {
 		const val POLL_INTERVAL_MS = 5_000L
-		// AFK cadence: one plain poll a minute drains the accumulated burst.
-		const val AFK_POLL_INTERVAL_MS = 60_000L
 		// Visible cadence: server-held long-poll (under the gateway's 45s cap).
 		const val LONG_POLL_HOLD_MS = 40_000L
+		// Slack added to a deep-tier park so the coroutine backstop wakes slightly after, never
+		// before, the alarm it is backing up.
+		const val PARK_SLACK_MS = 5_000L
+		// Bounds burstJobs.joinAll() below: an STTS synth streams over a per-read (not end-to-end)
+		// timeout, so an unbounded join could wedge every future pass indefinitely on one stalled
+		// call. Kept strictly under PollAlarmReceiver's PASS_TIMEOUT_MS (90s), not equal to it: the
+		// pass lock starts counting at the alarm receiver, this join only once the pass actually
+		// begins running (after service revival + kickPoll + poll resume + drain), so an equal
+		// budget could let the join still be waiting after the pass lock itself already timed out.
+		const val BURST_JOIN_TIMEOUT_MS = 60_000L
 		// Refresh the team list at most this often, regardless of poll cadence.
 		const val TEAMS_REFRESH_MS = 30_000L
 		// forgottenUntil's tombstone lifetime: only needs to outlast a single in-flight teams()

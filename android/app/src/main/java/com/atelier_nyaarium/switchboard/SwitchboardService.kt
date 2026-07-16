@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -11,6 +12,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.os.PowerManager
+import android.text.format.DateFormat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -50,13 +52,24 @@ internal fun peerFramed(state: ChatState, m: Message, text: String): String {
  * Deep doze still gates network unless the user grants the battery-optimization
  * exemption (Settings row); the service only guarantees process lifetime.
  */
-class SwitchboardService : Service() {
+class SwitchboardService : Service(), DeepIdleScheduler {
 	private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-	// Held for the poll loop's lifetime so its wall-clock sleep resumes through Doze,
-	// which otherwise parks the CPU. Keeps the CPU partially awake while the bridge
-	// runs. Doze can still defer the NETWORK unless the battery-optimization exemption
-	// is granted (Settings -> Background delivery).
+	// Nulling pushback.scheduler in onDestroy closes the DOMINANT race (a poll pass that reaches
+	// decide() only after onDestroy has already returned - unavoidable since ConsoleClient.poll()
+	// is blocking, not suspend, so scope.cancel() cannot interrupt an in-flight pass). This flag
+	// closes the narrower residual: decide() can still latch this instance as the scheduler a few
+	// instructions before that null-write lands, then invoke a method on it after onDestroy has
+	// already cancelled the alarm and released both locks. Checked first in every DeepIdleScheduler
+	// method, so that stale call can no longer re-acquire an un-timed wakelock nothing would ever
+	// release, or re-arm an alarm this instance just cancelled.
+	@Volatile private var destroyed = false
+
+	// Held for the FOREGROUND/MINUTE tiers so the poll loop's wall-clock sleep resumes through
+	// Doze, which otherwise parks the CPU. Doze can still defer the NETWORK unless the
+	// battery-optimization exemption is granted (Settings -> Background delivery). Released in a
+	// deep tier (see DeepIdleScheduler below) - the companion `passLock` covers a deep pass
+	// instead, so the CPU can actually suspend between alarm wakeups.
 	private var wakeLock: PowerManager.WakeLock? = null
 
 	private fun acquireWakeLock() {
@@ -74,6 +87,57 @@ class SwitchboardService : Service() {
 		wakeLock = null
 	}
 
+	private fun alarmManager(): AlarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
+
+	private fun pollAlarmPi(): PendingIntent =
+		PendingIntent.getBroadcast(
+			this,
+			POLL_ALARM_RC,
+			Intent(this, PollAlarmReceiver::class.java),
+			PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+		)
+
+	/** Entering a deep tier: schedule the wall-clock-aligned wakeup and release EVERY lock - the
+	 * active one and the companion pass lock (a no-op if this is the first MINUTE->deep
+	 * transition, which reaches here with the pass lock never having been acquired). */
+	override fun enterDeepSleep(wakeAtMillis: Long) {
+		if (destroyed) return
+		val am = alarmManager()
+		// canScheduleExactAlarms() is API 31+; minSdk is 33, so this is every device, but the
+		// guard is defensive against an OEM that revokes the auto-granted USE_EXACT_ALARM.
+		if (am.canScheduleExactAlarms()) {
+			am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, wakeAtMillis, pollAlarmPi())
+		} else {
+			am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, wakeAtMillis, pollAlarmPi())
+		}
+		releaseWakeLock()
+		releasePassLock()
+		postIdleStatus(wakeAtMillis)
+	}
+
+	/** A deep tier's one retry: extend the companion pass lock so the CPU stays up just long
+	 * enough for the retry pass (a fresh acquire(ms) with reference counting off resets the
+	 * deadline rather than stacking). */
+	override fun holdPass(ms: Long) {
+		if (destroyed) return
+		acquirePassLock(this, ms)
+	}
+
+	/** Foreground or MINUTE: cancel any pending alarm and re-acquire the active lock (idempotent -
+	 * a no-op if it is already held). */
+	override fun exitDeepSleep() {
+		if (destroyed) return
+		alarmManager().cancel(pollAlarmPi())
+		acquireWakeLock()
+	}
+
+	private fun postIdleStatus(wakeAtMillis: Long) {
+		if (!canNotify() || statusDismissed) return
+		val at = DateFormat.format("HH:mm", wakeAtMillis)
+		val unread = Repo.get(this).state.value.unread.values.sum()
+		NotificationManagerCompat.from(this).notify(STATUS_NOTIFICATION_ID, buildStatusNotification("Idle - next check $at", unread))
+	}
+
 	override fun onBind(intent: Intent?): IBinder? = null
 
 	override fun onCreate() {
@@ -88,6 +152,7 @@ class SwitchboardService : Service() {
 			return
 		}
 		repo.onInbound = { team, messages -> notifyBurst(repo, team, messages) }
+		repo.pushback.scheduler = this
 		// Boot the plugin framework BEFORE the poll loop starts: booting wires the data-plane bridge
 		// onto the repo (once per process), so no inbound message is drained-and-committed before a
 		// subscriber exists (the cursor never re-delivers). Idempotent - the Activity may also boot it.
@@ -128,8 +193,24 @@ class SwitchboardService : Service() {
 	override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
 	override fun onDestroy() {
-		Repo.get(this).onInbound = null
+		destroyed = true
+		val repo = Repo.get(this)
+		repo.onInbound = null
+		// client().poll() is a plain blocking call, not suspend, so scope.cancel() below cannot
+		// interrupt an in-flight pass - the loop can still run one more decide() after this method
+		// returns. Nulling the scheduler (guarded so an already-restarted instance's own
+		// registration can never be wiped by an older instance's delayed teardown) makes that
+		// trailing call a safe no-op instead of driving wakelock/alarm state through a destroyed
+		// instance; onInbound needs no such guard since Android serializes Service lifecycle
+		// callbacks - a newer instance's onCreate can never run concurrently with this one's
+		// onDestroy, so a stale write here can never race a live registration.
+		if (repo.pushback.scheduler === this) repo.pushback.scheduler = null
+		// A deliberate stop (unprovision) kills the pending alarm; a system process kill skips
+		// onDestroy entirely, so the alarm PendingIntent survives and revives the service on its
+		// own - the split this design relies on.
+		alarmManager().cancel(pollAlarmPi())
 		releaseWakeLock()
+		releasePassLock()
 		scope.cancel()
 		super.onDestroy()
 	}
@@ -328,6 +409,40 @@ class SwitchboardService : Service() {
 		/** Start (or no-op if already running) once the app is provisioned. */
 		fun start(context: Context) {
 			ContextCompat.startForegroundService(context, Intent(context, SwitchboardService::class.java))
+		}
+
+		/** Request code for the poll alarm's PendingIntent. The target component
+		 * (PollAlarmReceiver, otherwise unused) already rules out any collision with an existing
+		 * notification PendingIntent, so a single fixed code is enough. */
+		private const val POLL_ALARM_RC = 1
+
+		// Deep-tier PASS wakelock, shared by the receiver, holdPass, and enterDeepSleep/
+		// exitDeepSleep as ONE companion-object lock, never a service-instance field:
+		// PollAlarmReceiver must be able to bridge a wakeup BEFORE a live SwitchboardService
+		// instance necessarily exists (a dead-process revival is the entire point of it acquiring
+		// this).
+		@Volatile private var passLock: PowerManager.WakeLock? = null
+
+		private fun passLock(context: Context): PowerManager.WakeLock =
+			passLock ?: synchronized(this) {
+				passLock ?: (context.applicationContext.getSystemService(POWER_SERVICE) as PowerManager)
+					// Distinct tag from the active lock's "switchboard:poll-loop", for battery attribution.
+					.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "switchboard:poll-pass")
+					// Timeout-only acquisition, matching the active lock's own setReferenceCounted(false)
+					// - the two footgun patterns (plain acquire + timeout acquire on one lock) never mix.
+					.apply { setReferenceCounted(false) }
+					.also { passLock = it }
+			}
+
+		/** Acquired by the alarm receiver BEFORE it returns, bridging AlarmManager's own
+		 * onReceive-scoped wakeup into the async pass that follows - possibly before a live
+		 * service instance exists at all. */
+		fun acquirePassLock(context: Context, timeoutMs: Long) {
+			passLock(context).acquire(timeoutMs)
+		}
+
+		private fun releasePassLock() {
+			passLock?.let { if (it.isHeld) it.release() }
 		}
 	}
 }
