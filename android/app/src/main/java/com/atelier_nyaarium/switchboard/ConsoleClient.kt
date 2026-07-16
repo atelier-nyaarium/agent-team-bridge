@@ -357,6 +357,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		opId: String = UUID.randomUUID().toString(),
 		readTimeoutMs: Long? = null,
 		targetGateway: String? = null,
+		// Bounds the whole call so a peer that trickles bytes can't wedge the caller forever -
+		// readTimeout alone only covers inactivity gaps. null opts out (send()'s upload).
+		callTimeoutMs: Long? = DEFAULT_RELAY_CALL_TIMEOUT_MS,
 	): ConsoleReplyBody {
 		val identity = requireConsoleIdentity()
 		// An op seals to the Gateway hosting its session (resolved from the keyring), naming it so
@@ -371,8 +374,11 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
 			.post(wireJson.encodeToString(ConsoleRelayFrame.serializer(), frame).toRequestBody(JSON))
 			.build()
-		val callClient = if (readTimeoutMs != null) {
-			client.newBuilder().readTimeout(readTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS).build()
+		val callClient = if (readTimeoutMs != null || callTimeoutMs != null) {
+			client.newBuilder().apply {
+				if (readTimeoutMs != null) readTimeout(readTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+				if (callTimeoutMs != null) callTimeout(callTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+			}.build()
 		} else {
 			client
 		}
@@ -764,7 +770,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		// Gateway opens the op and relays it to the friend over the mesh.
 		val local = routeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()
 		val target = if (crossDomain != null) local else gatewayOfTarget(to, local)
-		val replyBody = relay(op, opId, targetGateway = target)
+		// callTimeoutMs = null: a large attachment upload must not be capped by an overall
+		// call duration, only by writeTimeout's per-write inactivity bound (buildPinnedClient).
+		val replyBody = relay(op, opId, targetGateway = target, callTimeoutMs = null)
 		val status = replyBody.result?.let {
 			runCatching { wireJson.decodeFromJsonElement<ConsoleSendResult>(it).status }.getOrNull()
 		}
@@ -788,7 +796,14 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		// evie's relay hold fires at 55s if the gateway vanished, this read timeout
 		// at holdMs+18s (58s) catches a vanished evie, and the apiserver proxy's
 		// 60s outranks them all. Each failure layer returns before the next races it.
-		val body = relay(op, readTimeoutMs = if (holdMs > 0) holdMs + 18_000 else null)
+		val heldReadTimeoutMs = if (holdMs > 0) holdMs + 18_000 else null
+		val body = relay(
+			op,
+			readTimeoutMs = heldReadTimeoutMs,
+			// Derived from this call's own read timeout (not an independent literal) so it
+			// can never drift below what that read timeout itself needs to complete.
+			callTimeoutMs = heldReadTimeoutMs?.let { it + CALL_TIMEOUT_MARGIN_MS + PINNED_CONNECT_TIMEOUT_MS },
+		)
 		// A relay-level failure must SURFACE, not masquerade as a successful empty drain:
 		// a fabricated empty (with epoch 0) hid outages from the health signal and forced
 		// a spurious epoch flip on the next real poll. Throw so the poll loop's catch
@@ -978,6 +993,21 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	companion object {
 		private val JSON = "application/json".toMediaType()
 
+		private const val PINNED_CONNECT_TIMEOUT_MS = 15_000L
+		private const val PINNED_READ_TIMEOUT_MS = 35_000L
+		private const val PINNED_WRITE_TIMEOUT_MS = 600_000L
+
+		// Margin on top of a call's own read timeout to get its callTimeout: covers connect
+		// + request-send + response-parse overhead beyond the read wait itself.
+		private const val CALL_TIMEOUT_MARGIN_MS = 10_000L
+
+		// Bounds the common (non-held) relay() call: base read timeout + connect + margin.
+		// poll()'s held branch derives its own larger callTimeoutMs from its own read timeout
+		// instead of using this (see poll()). send() opts out entirely (callTimeoutMs = null)
+		// since its upload body write must not be capped by an overall call duration.
+		private const val DEFAULT_RELAY_CALL_TIMEOUT_MS =
+			PINNED_CONNECT_TIMEOUT_MS + PINNED_READ_TIMEOUT_MS + CALL_TIMEOUT_MARGIN_MS
+
 		/** System-trust client for the PUBLIC device-approval ingress. No CA pin (the reach URL is a real
 		 * public cert) and no creds, so it is shared and built once. Short read timeout since the fresh
 		 * device polls fetch in a loop. */
@@ -985,6 +1015,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			OkHttpClient.Builder()
 				.connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
 				.readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+				// Bounds the whole call: a fresh device polls this in a loop, so a peer
+				// that trickles bytes must not hold one call open past its own read gaps.
+				.callTimeout(40, java.util.concurrent.TimeUnit.SECONDS)
 				.build()
 		}
 
@@ -1026,12 +1059,14 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			// The relay holds a send op server-side for up to 25s (the gateway's
 			// send bound) before answering "running", so OkHttp's 10s default read
 			// timeout would mislabel every cold-wake send as failed. Write gets
-			// headroom for a 500 MB attachment upload on slow links.
+			// headroom for a 500 MB attachment upload on slow links. No callTimeout here
+			// deliberately: it varies per call (tight for poll/relay, unbounded for send's
+			// upload), so relay() sets it per-call instead - see DEFAULT_RELAY_CALL_TIMEOUT_MS.
 			return OkHttpClient.Builder()
 				.sslSocketFactory(ssl.socketFactory, tm)
-				.connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-				.readTimeout(35, java.util.concurrent.TimeUnit.SECONDS)
-				.writeTimeout(600, java.util.concurrent.TimeUnit.SECONDS)
+				.connectTimeout(PINNED_CONNECT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+				.readTimeout(PINNED_READ_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+				.writeTimeout(PINNED_WRITE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
 				.build()
 		}
 	}

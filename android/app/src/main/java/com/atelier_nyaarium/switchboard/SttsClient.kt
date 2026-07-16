@@ -51,12 +51,22 @@ internal fun normalizeSttsUrl(raw: String): String? {
  *
  * Blocking OkHttp like ConsoleClient: callers own the dispatcher boundary.
  */
+private const val STTS_CONNECT_TIMEOUT_SECONDS = 10L
+private const val STTS_READ_TIMEOUT_SECONDS = 60L
+
+// Bounds the whole call, not just inter-chunk gaps: readTimeout alone lets a peer that
+// trickles bytes hold the call open indefinitely, which is what let a stalled synth wedge
+// the poll loop (ChatRepository's BURST_JOIN_TIMEOUT_MS only bounds the caller's wait, not
+// this underlying blocking call).
+private const val STTS_CALL_TIMEOUT_SECONDS = STTS_CONNECT_TIMEOUT_SECONDS + STTS_READ_TIMEOUT_SECONDS + 10L
+
 class SttsClient(private val baseUrl: String, private val apiKey: String) {
 	private val client = OkHttpClient.Builder()
-		.connectTimeout(10, TimeUnit.SECONDS)
+		.connectTimeout(STTS_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 		// TTS synthesis of a multi-sentence summary can take a while; the body
 		// is streamed, so the read timeout covers time-to-first-byte gaps.
-		.readTimeout(60, TimeUnit.SECONDS)
+		.readTimeout(STTS_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+		.callTimeout(STTS_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 		.build()
 
 	val isConfigured: Boolean get() = baseUrl.isNotEmpty() && apiKey.isNotEmpty()
