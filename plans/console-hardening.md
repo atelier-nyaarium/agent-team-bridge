@@ -350,3 +350,19 @@ Phase A's accidental test dependency on Phase C. Round 2's positive verification
 arithmetic (58 < 60, 83 = 58+10+15), the schemas.ts unification is cycle-free, Math.min is
 genuinely redundant (schema parse precedes every op.holdMs read), and the 504-branch cannot
 swallow a cancel regardless of rethrow placement.
+
+## Painpoints
+
+Light touch after Phase A only (1 of 4) - not yet nearing the plan's final phase, so the full
+scouting-workflow crust sweep is deferred to Phase D's crust-collection. One concrete lead
+already fully characterized this lap, recorded rather than dropped:
+
+- **`plugins/designer/DesignerCards.kt : relOf`** - a third, independently-written copy of the
+  same "strip a src down to its attachments-relative path" parse Phase A just consolidated
+  inside `Attachments.kt` (`private fun relOf`, shared by `fileFor`/`bucketOf`). This copy has
+  already drifted from the shared one: it takes a non-null `String` and has no
+  `takeIf { isNotEmpty() }` guard, so a malformed src silently becomes `""` instead of failing
+  safely. DesignerCards.kt already imports `Attachments` and reaches into `Attachments.DIR`
+  directly, so delegating instead of re-deriving is a one-line change - deliberately left
+  untouched this pass (out of Phase A's actual file set, and Designer plugin behavior deserves
+  its own look before touching it, not a drive-by while focused on attachment purge).
