@@ -244,13 +244,13 @@ guaranteed; exact wall alignment across a DST transition is best-effort (one odd
   pass can release the CPU right after the drain, an un-joined async notification can be silently
   cut off mid-synth. Leave STTS preload/play as the only work inside the async launch - synthesis
   is already best-effort and slower by nature.
-- Product decision, not yet resolved (Audit #3's second half): should `sttsAutoGen`/
-  `sttsAutoPlay` auto-play fire at all after a deep-tier wakeup, given the played message may be
-  hours old and multiple followed teams can pile up between rare wakeups (SttsPlayer serializes
-  on one executor, so simultaneous teams cut each other off)? Recommendation: gate auto-play to
-  the FOREGROUND/MINUTE tiers only (`visible || silence < SILENCE_MINUTE_MAX_MS`) and let a deep
-  wakeup post the normal silent-until-tapped notification instead. Not applied to the pseudocode
-  below pending confirmation - flag before implementation.
+- Product decision (Audit #3's second half), resolved: keep auto-play firing unchanged at every
+  tier, no staleness gate. Deliberately not adding a subjective "too old to speak" cutoff; a
+  deep-tier wakeup draining a genuinely out-of-nowhere message after real hours of silence is
+  itself an unusual event, not a routine one this needs to guard against. The multi-team
+  overlap case (SttsPlayer serializes on one executor, so several teams auto-playing from the
+  same rare wakeup would cut each other off) is accepted on the same reasoning - equally rare,
+  not worth solving for v1.
 - Replace the tail interval computation:
 
 ```kotlin
