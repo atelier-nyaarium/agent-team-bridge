@@ -5,9 +5,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Pins ChatRepository constants whose correctness depends on a value that lives in the
- * gateway's TypeScript, not on anything Kotlin can check at compile time. A failure here means
- * one side changed without the other - go update both src/gateway/... and ChatRepository.kt.
+ * Pins numeric relationships that Kotlin cannot check at compile time - either because the
+ * other side lives in the gateway's TypeScript (a failure means go update both src/gateway/...
+ * and the Kotlin side), or because two independently-declared Kotlin constants (ChatRepository's
+ * and ConsoleClient's) must stay ordered relative to each other and nothing but this test
+ * enforces it.
  */
 class ChatRepositoryConstantsTest {
 
@@ -24,6 +26,20 @@ class ChatRepositoryConstantsTest {
 		assertTrue(
 			"SPAWN_RETRY_WINDOW_MS must stay comfortably past the gateway's create_session bound",
 			ChatRepository.SPAWN_RETRY_WINDOW_MS > gatewayCreateSessionBoundMs + 10_000L,
+		)
+	}
+
+	@Test
+	fun pinnedReadTimeoutOutlastsGatewaysSendBound() {
+		// src/gateway/console/consoleHandler.ts: const SEND_BOUND_MS = 25_000 - the relay holds a
+		// send op server-side up to this long before answering "running"; ConsoleClient's shared
+		// read timeout (every non-held relay() call, including send()) must outlast it or a
+		// cold-wake send gets mislabeled as failed on the client. Same ceiling and reasoning as
+		// CREATE_SESSION_BOUND_MS above - this is its sibling pin.
+		val gatewaySendBoundMs = 25_000L
+		assertTrue(
+			"PINNED_READ_TIMEOUT_MS must stay comfortably past the gateway's send bound",
+			ConsoleClient.PINNED_READ_TIMEOUT_MS > gatewaySendBoundMs + 5_000L,
 		)
 	}
 

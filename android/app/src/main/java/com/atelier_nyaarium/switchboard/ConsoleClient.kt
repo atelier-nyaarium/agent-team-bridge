@@ -996,9 +996,11 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 		// internal (not private): ChatRepositoryConstantsTest pins the long-poll timeout chain
 		// against these from a separate test class, and FORGET_TOMBSTONE_MS derives from
-		// DEFAULT_RELAY_CALL_TIMEOUT_MS below for the same reason.
+		// DEFAULT_RELAY_CALL_TIMEOUT_MS below for the same reason. PINNED_READ_TIMEOUT_MS also
+		// gets its own pin against the gateway's SEND_BOUND_MS, the relationship its own comment
+		// on buildPinnedClient already describes.
 		internal const val PINNED_CONNECT_TIMEOUT_MS = 15_000L
-		private const val PINNED_READ_TIMEOUT_MS = 35_000L
+		internal const val PINNED_READ_TIMEOUT_MS = 35_000L
 		private const val PINNED_WRITE_TIMEOUT_MS = 600_000L
 
 		// Margin on top of a call's own read timeout to get its callTimeout: covers connect

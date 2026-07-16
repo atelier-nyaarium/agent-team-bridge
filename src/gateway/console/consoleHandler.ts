@@ -212,7 +212,9 @@ const FAKE_REQ = new Request("http://gateway/console");
 // Bound on how long a console send op may block inside the relay. The gateway's wake path can
 // hold /send for up to WAKE_TIMEOUT_MS (10 min), far past evie's opId hold. Past this bound the
 // op returns the deterministic session id and the wake/send continues in the background, the
-// answer landing in the mailbox via the persistent conversation.
+// answer landing in the mailbox via the persistent conversation. The Android console's own
+// PINNED_READ_TIMEOUT_MS (ConsoleClient.kt) must outlast this - pinned by
+// ChatRepositoryConstantsTest.kt, update both sides together.
 const SEND_BOUND_MS = 25_000;
 
 // Same reasoning and ceiling as SEND_BOUND_MS, for create_session's devcontainer-wake launch (which
