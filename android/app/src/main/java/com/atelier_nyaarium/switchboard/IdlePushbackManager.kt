@@ -7,11 +7,30 @@ import java.time.ZonedDateTime
 import java.time.temporal.ChronoUnit
 
 private const val MINUTE_MS = 60_000L
-private const val DEEP_RETRY_MS = 60_000L
+internal const val DEEP_RETRY_MS = 60_000L
 private const val SILENCE_MINUTE_MAX_MS = 10 * 60_000L
 private const val SILENCE_HALF_HOUR_MAX_MS = 10 * 3_600_000L
 private const val SILENCE_HOURLY_MAX_MS = 48 * 3_600_000L
-private const val PASS_GRACE_MS = 30_000L
+
+// The deep-tier pass-lock budget, as ONE derivation instead of three independently-edited
+// literals spread across this file, ChatRepository.kt, and PollAlarmReceiver.kt - that split
+// already let the budget drift out of its own required ordering once (a pass-lock hold shorter
+// than the join it was meant to cover), caught only by tracing the actual numbers, not by the
+// comments that were supposed to keep them in sync. BURST_JOIN_TIMEOUT_MS is the one root
+// quantity every other constant here derives from.
+internal const val BURST_JOIN_TIMEOUT_MS = 60_000L // ChatRepository's burstJobs.joinAll() bound
+private const val PASS_OVERHEAD_MS = 15_000L // poll round trip + drain + decide, beyond the join
+private const val PASS_RUNTIME_MS = BURST_JOIN_TIMEOUT_MS + PASS_OVERHEAD_MS
+
+// Must be >= PASS_RUNTIME_MS: this is what decide() adds to DEEP_RETRY_MS when re-arming the
+// pass lock for a retry (see decide() below), so it has to cover the retry pass's OWN worst-case
+// join, not just a flat margin that can silently fall short of BURST_JOIN_TIMEOUT_MS again.
+internal const val PASS_GRACE_MS = PASS_RUNTIME_MS
+
+// PollAlarmReceiver's initial pass-lock acquisition at alarm-fire: revival overhead (service
+// start + kickPoll + poll-loop resume) plus one full pass's worst-case runtime.
+private const val REVIVAL_OVERHEAD_MS = 15_000L
+internal const val PASS_TIMEOUT_MS = REVIVAL_OVERHEAD_MS + PASS_RUNTIME_MS
 
 /** How the console's background poll cadence backs off the longer it stays silent. */
 enum class PollTier { FOREGROUND, MINUTE, HALF_HOUR, HOURLY, TWELVE_HOUR }

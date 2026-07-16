@@ -756,3 +756,80 @@ does not auto-schedule a next mark; recovery is the next app open or a reboot).
 
 Re-verified with a full real build (`testDebugUnitTest` + `assembleRelease`, both green) after
 every change in this section.
+
+## Framework-first
+
+5 Opus agents, applying the ownership test (would this survive as shared infrastructure if the
+app were rebuilt on the same foundation?) plus the "no magic" / "bugs impossible by design"
+lenses to what actually shipped. Independently re-verified the one high-value finding's math
+myself before touching anything.
+
+**Fixed:**
+
+- **The deep-tier pass-lock budget was three independently-edited literals across three files,
+  related only by prose comments cross-referencing each other by name - and that split already
+  let the relationship drift once (the round 2 fix above).** Tracing the actual numbers found a
+  SECOND, narrower live instance of the exact same drift, on the retry path specifically:
+  `holdPass(DEEP_RETRY_MS + PASS_GRACE_MS)` re-arms the pass lock for 90s, but the `DEEP_RETRY_MS`
+  wait itself (60s) consumes two-thirds of that before the retry pass even starts, leaving only
+  the old `PASS_GRACE_MS` (30s) to cover the retry pass's own `burstJobs.joinAll()` - which can
+  still run up to `BURST_JOIN_TIMEOUT_MS` (60s). 30 < 60: a retry pass draining a fresh followed
+  thread's STTS burst with a stalled synth could still release the CPU mid-join, the exact hazard
+  the round 2 fix exists to prevent, just recurring one level deeper. Fixed structurally, not
+  numerically: `BURST_JOIN_TIMEOUT_MS` is now the one root quantity in `IdlePushbackManager.kt`
+  that `PASS_GRACE_MS` and `PollAlarmReceiver`'s `PASS_TIMEOUT_MS` both derive from by compile-time
+  arithmetic, so a future edit to any one of them propagates automatically instead of silently
+  invalidating a comment. `ChatRepository.kt` and `PollAlarmReceiver.kt` deleted their own copies
+  and reference the shared constants directly (same package). Backed by two ordering assertions in
+  `IdlePushbackManagerTest.kt` (`PASS_GRACE_MS >= BURST_JOIN_TIMEOUT_MS`,
+  `PASS_TIMEOUT_MS >= BURST_JOIN_TIMEOUT_MS`) and the retry-hold assertion now checks the
+  derivation expression instead of a hand-computed literal, so this specific drift class fails a
+  test instead of passing silently. Honest cost: the retry-tier pass-lock hold grows from 90s to
+  135s (60s wait + 75s grace, up from 30s) - the correct price of actually covering the join the
+  old margin silently under-budgeted.
+- **`SwitchboardService.onDestroy`'s scheduler-null guard and its `onInbound`-null one line above
+  it rested on contradictory premises about Service lifecycle ordering, stated one sentence
+  apart.** The `=== this` identity guard's own comment argued a newer instance's `onCreate` could
+  already be live when an older instance's `onDestroy` runs late; the very next clause argued the
+  opposite (Android serializes Service lifecycle callbacks, so that overlap cannot happen) to
+  justify `onInbound` needing no such guard. Both premises cannot hold. Simplified to match:
+  `scheduler = null` is now unconditional, exactly like `onInbound`, with one accurate comment
+  explaining why (destroy-before-create serialization) and noting the `destroyed` flag - not the
+  identity check - is what actually defends against the real hazard (a trailing `decide()` that
+  reads the scheduler before this method nulls it, executing after teardown has already run).
+
+**Confirmed not warranted (real dimensions checked, nothing survived the ownership test):**
+
+- **A `SharedTimeoutWakeLock` extraction for the companion pass-lock.** Exactly one owner, zero
+  second consumers, and the pass-lock is deliberately the OPPOSITE of the active lock on every
+  axis (timeout vs indefinite, process-scoped singleton vs instance field, lazy DCL vs eager) -
+  a shared type would have exactly one instance. The DCL itself is already the codebase's own
+  established lazy-singleton idiom (matches `Plugins.get`, `DesignStore`), not something the code
+  is straining against. The one plausible benefit (making "never plain-acquire this lock"
+  structural) is already true today: `passLock()` is private, the sole public entry
+  (`acquirePassLock`) only offers the timeout form.
+- **A `ScheduledWake`/`AlarmScheduler` abstraction for the alarm-scheduling dance.** This feature
+  is the app's first and only `AlarmManager` use; there is nothing to unify with zero other
+  callers, and the one genuine benefit a "testable unit" framing would offer is unavailable on
+  this project's classpath regardless (no Robolectric/instrumentation, so an extracted class would
+  add an indirection layer with no new test seam). The existing `DeepIdleScheduler`/
+  `IdleSilenceStore` split already isolates the pure, tested decision core from every Android side
+  effect - the correctly-sized abstraction for a single-caller feature.
+- **Generalizing `PollTier`/`tierFor`/`nextAlignedMark` into a domain-agnostic backoff-ladder
+  utility.** No second consumer anywhere in the codebase (the only other "poll less when quiet"
+  logic, `TerminalView.kt`'s failure-count backoff, shares none of the shape: no wall-clock
+  alignment, no persistence, a continuous multiplier instead of discrete tiers). The functions are
+  already pure, top-level, and Android-free - the exact form an extraction would produce, so there
+  is no coupling to fix. Renaming to something generic would make the name less honest about what
+  the code actually does today.
+- **An `InstanceGuard`/`ServiceLifecycleToken` helper for the destroyed-flag pattern.** Exactly one
+  side-effecting registered callback (`scheduler`) exists; `onInbound` is deliberately undefended
+  because its trailing invocation is harmless (posts a notification through a still-valid
+  singleton), not because the codebase forgot to guard it. A generic wrapper would either
+  over-apply ceremony to the harmless callback or under-defend a hypothetical future harmful one -
+  designed against an audience of one. The real root cause (`ConsoleClient.poll()` being a plain
+  blocking call, not `suspend`, which is WHY `scope.cancel()` cannot stop a trailing pass) is
+  already named as a pre-existing, deliberately out-of-scope gap in this plan's Non-goals section;
+  fixing that would make the whole hazard class impossible by design rather than defended against
+  per-callback, but it is a real, separate investment into the network client's architecture, not
+  something to fold into this feature.

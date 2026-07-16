@@ -3601,13 +3601,6 @@ class ChatRepository(
 		// Slack added to a deep-tier park so the coroutine backstop wakes slightly after, never
 		// before, the alarm it is backing up.
 		const val PARK_SLACK_MS = 5_000L
-		// Bounds burstJobs.joinAll() below: an STTS synth streams over a per-read (not end-to-end)
-		// timeout, so an unbounded join could wedge every future pass indefinitely on one stalled
-		// call. Kept strictly under PollAlarmReceiver's PASS_TIMEOUT_MS (90s), not equal to it: the
-		// pass lock starts counting at the alarm receiver, this join only once the pass actually
-		// begins running (after service revival + kickPoll + poll resume + drain), so an equal
-		// budget could let the join still be waiting after the pass lock itself already timed out.
-		const val BURST_JOIN_TIMEOUT_MS = 60_000L
 		// Refresh the team list at most this often, regardless of poll cadence.
 		const val TEAMS_REFRESH_MS = 30_000L
 		// forgottenUntil's tombstone lifetime: only needs to outlast a single in-flight teams()

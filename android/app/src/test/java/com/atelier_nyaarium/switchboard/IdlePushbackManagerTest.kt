@@ -220,7 +220,14 @@ class IdlePushbackManagerTest {
 
 		val first = mgr.decide(now = 600_000L, visible = false, lastPassFailed = true)
 		assertEquals(PollWait.Delay(60_000L), first)
-		assertEquals(90_000L, scheduler.heldPassMs) // DEEP_RETRY_MS + PASS_GRACE_MS
+		// Pins the DERIVATION, not a coincidental literal: this exact relationship (DEEP_RETRY_MS's
+		// wait consuming part of the held budget, PASS_GRACE_MS covering the rest) is what silently
+		// drifted once - PASS_GRACE_MS fell below BURST_JOIN_TIMEOUT_MS, leaving too little of the
+		// held budget for a retry pass's own worst-case join. A change to any of these three
+		// constants now fails this assertion instead of passing silently.
+		assertEquals(DEEP_RETRY_MS + PASS_GRACE_MS, scheduler.heldPassMs)
+		assertTrue("the retry grace must cover the retry pass's own worst-case join", PASS_GRACE_MS >= BURST_JOIN_TIMEOUT_MS)
+		assertTrue("the initial pass-lock acquisition must itself cover at least one worst-case join", PASS_TIMEOUT_MS >= BURST_JOIN_TIMEOUT_MS)
 
 		val second = mgr.decide(now = 660_000L, visible = false, lastPassFailed = true)
 		assertTrue("the budget is consumed: a second consecutive failure schedules the alarm, not another retry", second is PollWait.Alarm)

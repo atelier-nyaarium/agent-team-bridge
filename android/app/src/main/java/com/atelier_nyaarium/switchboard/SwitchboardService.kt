@@ -198,13 +198,12 @@ class SwitchboardService : Service(), DeepIdleScheduler {
 		repo.onInbound = null
 		// client().poll() is a plain blocking call, not suspend, so scope.cancel() below cannot
 		// interrupt an in-flight pass - the loop can still run one more decide() after this method
-		// returns. Nulling the scheduler (guarded so an already-restarted instance's own
-		// registration can never be wiped by an older instance's delayed teardown) makes that
-		// trailing call a safe no-op instead of driving wakelock/alarm state through a destroyed
-		// instance; onInbound needs no such guard since Android serializes Service lifecycle
-		// callbacks - a newer instance's onCreate can never run concurrently with this one's
-		// onDestroy, so a stale write here can never race a live registration.
-		if (repo.pushback.scheduler === this) repo.pushback.scheduler = null
+		// returns. Nulling the scheduler makes that trailing call a safe no-op instead of driving
+		// wakelock/alarm state through a destroyed instance; the destroyed flag above (checked by
+		// every DeepIdleScheduler method) is the real defense, since Android serializes Service
+		// lifecycle callbacks - a newer instance's onCreate can never run concurrently with this
+		// one's onDestroy, so an unconditional null here can never race a live registration either.
+		repo.pushback.scheduler = null
 		// A deliberate stop (unprovision) kills the pending alarm; a system process kill skips
 		// onDestroy entirely, so the alarm PendingIntent survives and revives the service on its
 		// own - the split this design relies on.

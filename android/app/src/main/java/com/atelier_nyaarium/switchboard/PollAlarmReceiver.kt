@@ -14,7 +14,7 @@ class PollAlarmReceiver : BroadcastReceiver() {
 		// service process. Bridge with the timeout'd pass lock BEFORE returning - the SAME
 		// companion-object lock SwitchboardService.holdPass/enterDeepSleep operate on, not a
 		// second one (a distinct instance here would never be released by the service side).
-		SwitchboardService.acquirePassLock(context, PASS_TIMEOUT_MS)
+		SwitchboardService.acquirePassLock(context, PASS_TIMEOUT_MS) // see IdlePushbackManager.kt
 		// A dead-process revival's startForegroundService can be refused (ForegroundServiceStart-
 		// NotAllowedException, API 31+) if this alarm ever fired inexactly - only reachable on an
 		// OEM that revokes USE_EXACT_ALARM despite it being auto-granted at minSdk 33. Caught so a
@@ -26,12 +26,5 @@ class PollAlarmReceiver : BroadcastReceiver() {
 			DebugLog.log("Idle", "poll alarm revival refused: $e")
 		}
 		Repo.get(context).kickPoll()
-	}
-
-	private companion object {
-		// Pass + decide() + margin. enterDeepSleep releases the pass lock early on a successful
-		// pass; holdPass extends it for the one bounded retry. This is the wedge backstop if
-		// neither ever runs.
-		const val PASS_TIMEOUT_MS = 90_000L
 	}
 }
