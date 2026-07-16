@@ -73,15 +73,17 @@ class AttachmentsTest {
 	fun sweep_deletesAnOldUnreferencedBucket() {
 		write("5-12", "photo.jpg")
 		File(Attachments.root(filesDir), "5-12").setLastModified(1_000L)
-		Attachments.sweepOrphanBuckets(filesDir, referencedBuckets = emptySet(), minAgeMs = 600_000L)
+		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs = emptyList(), minAgeMs = Attachments.ORPHAN_SWEEP_MIN_AGE_MS)
 		assertFalse(File(Attachments.root(filesDir), "5-12").exists())
 	}
 
 	@Test
 	fun sweep_keepsAReferencedBucketEvenWhenOld() {
-		write("5-12", "photo.jpg")
+		val src = write("5-12", "photo.jpg")
 		File(Attachments.root(filesDir), "5-12").setLastModified(1_000L)
-		Attachments.sweepOrphanBuckets(filesDir, referencedBuckets = setOf("5-12"), minAgeMs = 600_000L)
+		// referencedSrcs takes real srcs (reduced to bucket names via bucketOf internally), not
+		// pre-computed bucket names - passing a bare "5-12" here would silently match nothing.
+		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs = listOf(src), minAgeMs = Attachments.ORPHAN_SWEEP_MIN_AGE_MS)
 		assertTrue(File(Attachments.root(filesDir), "5-12").exists())
 	}
 
@@ -89,7 +91,7 @@ class AttachmentsTest {
 	fun sweep_skipsABucketYoungerThanTheAgeThreshold() {
 		write("5-12", "photo.jpg")
 		File(Attachments.root(filesDir), "5-12").setLastModified(System.currentTimeMillis())
-		Attachments.sweepOrphanBuckets(filesDir, referencedBuckets = emptySet(), minAgeMs = 600_000L)
+		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs = emptyList(), minAgeMs = Attachments.ORPHAN_SWEEP_MIN_AGE_MS)
 		assertTrue(File(Attachments.root(filesDir), "5-12").exists())
 	}
 
@@ -97,13 +99,13 @@ class AttachmentsTest {
 	fun sweep_treatsAZeroMtimeAsUnknownNeverDeleteEligible() {
 		write("5-12", "photo.jpg")
 		File(Attachments.root(filesDir), "5-12").setLastModified(0L)
-		Attachments.sweepOrphanBuckets(filesDir, referencedBuckets = emptySet(), minAgeMs = 600_000L)
+		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs = emptyList(), minAgeMs = Attachments.ORPHAN_SWEEP_MIN_AGE_MS)
 		assertTrue(File(Attachments.root(filesDir), "5-12").exists())
 	}
 
 	@Test
 	fun sweep_leavesEverythingAloneWhenNoBucketsExist() {
-		Attachments.sweepOrphanBuckets(filesDir, referencedBuckets = emptySet())
+		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs = emptyList())
 		assertEquals(0, Attachments.root(filesDir).listFiles()?.size ?: 0)
 	}
 }

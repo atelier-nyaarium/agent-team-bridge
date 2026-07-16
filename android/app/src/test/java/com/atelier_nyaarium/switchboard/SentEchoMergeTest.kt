@@ -17,7 +17,7 @@ class SentEchoMergeTest {
 	fun freshMirror_usesTheEchoSrcAndOrphansTheOldOutboundBucket() {
 		val old = listOf(file("photo.jpg", "https://appassets.androidplatform.net/attachments/out-1000/photo.jpg"))
 		val echo = listOf(file("photo.jpg", "https://appassets.androidplatform.net/attachments/5-12/photo.jpg"))
-		val merge = mergeSentEchoFiles(old, echo)
+		val merge = Attachments.mergeSentEchoFiles(old, echo)
 		assertEquals(echo, merge.files)
 		assertEquals(listOf("https://appassets.androidplatform.net/attachments/out-1000/photo.jpg"), merge.deleteSrcs)
 	}
@@ -27,7 +27,7 @@ class SentEchoMergeTest {
 		val src = "https://appassets.androidplatform.net/attachments/5-12/photo.jpg"
 		val old = listOf(file("photo.jpg", src))
 		val echo = listOf(file("photo.jpg", src))
-		val merge = mergeSentEchoFiles(old, echo)
+		val merge = Attachments.mergeSentEchoFiles(old, echo)
 		assertEquals(echo, merge.files)
 		assertTrue(merge.deleteSrcs.isEmpty())
 	}
@@ -36,7 +36,7 @@ class SentEchoMergeTest {
 	fun freshSeqReSendFold_orphansTheEarlierInboundBucketNotTheNewOne() {
 		val old = listOf(file("photo.jpg", "https://appassets.androidplatform.net/attachments/5-12/photo.jpg"))
 		val echo = listOf(file("photo.jpg", "https://appassets.androidplatform.net/attachments/5-20/photo.jpg"))
-		val merge = mergeSentEchoFiles(old, echo)
+		val merge = Attachments.mergeSentEchoFiles(old, echo)
 		assertEquals(echo, merge.files)
 		assertEquals(listOf("https://appassets.androidplatform.net/attachments/5-12/photo.jpg"), merge.deleteSrcs)
 	}
@@ -48,7 +48,7 @@ class SentEchoMergeTest {
 		val oldSrc = "https://appassets.androidplatform.net/attachments/out-1000/photo.jpg"
 		val old = listOf(file("photo.jpg", oldSrc))
 		val echo = listOf(file("photo.jpg", null))
-		val merge = mergeSentEchoFiles(old, echo)
+		val merge = Attachments.mergeSentEchoFiles(old, echo)
 		assertEquals(listOf(file("photo.jpg", oldSrc)), merge.files)
 		assertTrue(merge.deleteSrcs.isEmpty())
 	}
@@ -62,7 +62,7 @@ class SentEchoMergeTest {
 			file("photo.jpg", "https://appassets.androidplatform.net/attachments/5-12/photo.jpg"),
 			file("note.txt", null),
 		)
-		val merge = mergeSentEchoFiles(old, echo)
+		val merge = Attachments.mergeSentEchoFiles(old, echo)
 		assertEquals(
 			listOf(
 				file("photo.jpg", "https://appassets.androidplatform.net/attachments/5-12/photo.jpg"),
@@ -80,14 +80,14 @@ class SentEchoMergeTest {
 		val droppedSrc = "https://appassets.androidplatform.net/attachments/out-1000/extra.jpg"
 		val old = listOf(file("extra.jpg", droppedSrc))
 		val echo = emptyList<MessageFile>()
-		val merge = mergeSentEchoFiles(old, echo)
+		val merge = Attachments.mergeSentEchoFiles(old, echo)
 		assertTrue(merge.files.isEmpty())
 		assertEquals(listOf(droppedSrc), merge.deleteSrcs)
 	}
 
 	@Test
 	fun textOnlySend_noFilesEitherSideIsANoOp() {
-		val merge = mergeSentEchoFiles(emptyList(), emptyList())
+		val merge = Attachments.mergeSentEchoFiles(emptyList(), emptyList())
 		assertTrue(merge.files.isEmpty())
 		assertTrue(merge.deleteSrcs.isEmpty())
 	}
@@ -101,7 +101,7 @@ class SentEchoMergeTest {
 		val old = listOf(file("a.jpg", aSrc), file("b.jpg", bSrc))
 		// echo lists the same two names in the OPPOSITE order, both byteless.
 		val echo = listOf(file("b.jpg", null), file("a.jpg", null))
-		val merge = mergeSentEchoFiles(old, echo)
+		val merge = Attachments.mergeSentEchoFiles(old, echo)
 		assertEquals(listOf(file("b.jpg", bSrc), file("a.jpg", aSrc)), merge.files)
 		assertTrue(merge.deleteSrcs.isEmpty())
 	}

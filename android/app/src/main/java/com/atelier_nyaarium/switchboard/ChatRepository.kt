@@ -350,30 +350,6 @@ internal fun sentEchoMatch(thread: List<Message>, echo: Message): Int {
 	return -1
 }
 
-/** [mergeSentEchoFiles]'s result: the files the replaced row should carry, and the srcs now
- * safe to delete. */
-internal data class SentEchoMerge(val files: List<MessageFile>, val deleteSrcs: List<String>)
-
-/** The attachment merge for a `sentEchoMatch` replace: files paired by name (both the optimistic
- * store and the mirror decode derive names through the same safeName/uniqueName chain, so names
- * are stable across the replace - a positional pairing would drift if an earlier storeOutgoing
- * write failed and was dropped). An echo file that itself carries bytes (non-null src) wins; one
- * that does not (a metadata-only mirror - not reachable today, kept as a defensive case) keeps
- * the OLD row's src instead of losing its reference. `deleteSrcs` is old's srcs minus the merged
- * result's srcs, which is exactly the orphaned set across every sentEchoMatch fold shape: a
- * fresh mirror orphans the old row's outbound bucket; a same-bucket re-drain fold (the old row
- * was already upgraded) cancels to nothing, since old and new already agree; a fresh-seq
- * re-send fold orphans the earlier inbound bucket instead. */
-internal fun mergeSentEchoFiles(oldFiles: List<MessageFile>, echoFiles: List<MessageFile>): SentEchoMerge {
-	val oldByName = oldFiles.associateBy { it.name }
-	val merged = echoFiles.map { echo ->
-		if (echo.src != null) echo else oldByName[echo.name]?.let { echo.copy(src = it.src) } ?: echo
-	}
-	val mergedSrcs = merged.mapNotNull { it.src }.toSet()
-	val deleteSrcs = oldFiles.mapNotNull { it.src }.filterNot { it in mergedSrcs }
-	return SentEchoMerge(merged, deleteSrcs)
-}
-
 ////////////////////////////////
 //  Read anchor (scroll-driven unread tracking)
 //
@@ -3073,12 +3049,12 @@ class ChatRepository(
 	 * re-decoded into by a crash re-drain before the delete lands, which Attachments.
 	 * sweepOrphanBuckets's own age/mtime guard alone cannot prevent. */
 	suspend fun sweepOrphanAttachments() = withContext(Dispatchers.IO) {
-		val referenced = _state.value.threads.values.asSequence()
+		val referencedSrcs = _state.value.threads.values.asSequence()
 			.flatMap { it.asSequence() }
 			.flatMap { it.files.asSequence() }
-			.mapNotNull { Attachments.bucketOf(it.src) }
-			.toSet()
-		Attachments.sweepOrphanBuckets(filesDir, referenced)
+			.map { it.src }
+			.toList()
+		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs)
 	}
 
 	/** Mark a team fully read without opening it (swipe-away on its notification reads the burst).
@@ -3272,6 +3248,15 @@ class ChatRepository(
 		}
 	}
 
+	/** Best-effort background delete of no-longer-referenced attachment srcs, off the poll
+	 * scope's own lifecycle (Dispatchers.IO). A no-op for an empty list. pollScope is null until
+	 * startPolling runs, so this is a silent skip (not a defer) in that window - either way the
+	 * next cold-start sweepOrphanAttachments heals any bucket left behind. */
+	private fun scheduleAttachmentDelete(srcs: List<String>) {
+		if (srcs.isEmpty()) return
+		pollScope?.launch(Dispatchers.IO) { Attachments.deleteFiles(filesDir, srcs) }
+	}
+
 	/** Drop a peer from this device: its thread, unread, tab, label, any cached TTS audio, and any
 	 * peer-mirror row elsewhere that names it as a real party (see threadsAfterForget). Threads AND
 	 * read anchors change in this ONE transition (the peer sweep can orphan a sibling thread's
@@ -3311,16 +3296,9 @@ class ChatRepository(
 		drafts.remove(key)
 		persistDrafts()
 		stts.purge(key)
-		// The files are local no matter where the session lives, unlike the gateway RPC below -
-		// deliberately its OWN unconditional launch, not nested in the local-gateway gate, or a
-		// remote/unparseable thread's attachments would never be deleted. pollScope is null until
-		// startPolling runs (same known window the gateway RPC below already accepts) - a forget
-		// issued in that window leaves the bucket on disk, self-healed by the next cold-start
-		// sweepOrphanAttachments rather than lost.
-		val deleteSrcs = dropped.flatMap { it.files }.mapNotNull { it.src }
-		if (deleteSrcs.isNotEmpty()) {
-			pollScope?.launch(Dispatchers.IO) { Attachments.deleteFiles(filesDir, deleteSrcs) }
-		}
+		// Deliberately its OWN unconditional call, not nested in the local-gateway gate below -
+		// the files are local no matter where the session lives, unlike the gateway RPC.
+		scheduleAttachmentDelete(dropped.flatMap { it.files }.mapNotNull { it.src })
 		// Also tear the live session down on the gateway (kill tmux + drop the resume record) so it
 		// stops listing as available. Local addressable sessions only (a remote thread or a non-address
 		// spawn-point has no local pane to kill); best-effort, the gateway no-ops an absent session.
@@ -3459,7 +3437,7 @@ class ChatRepository(
 			if (idx >= 0) {
 				handled = true
 				val old = thread[idx]
-				val merge = mergeSentEchoFiles(old.files, echo.files)
+				val merge = Attachments.mergeSentEchoFiles(old.files, echo.files)
 				deleteSrcs = merge.deleteSrcs
 				val next = thread.toMutableList().also { it[idx] = echo.copy(id = old.id, files = merge.files) }
 				s.copy(threads = s.threads + (team to next))
@@ -3471,11 +3449,10 @@ class ChatRepository(
 		}.threads
 		if (handled) {
 			persistThreads(threads)
-			// The old row's now-orphaned bucket copies (see mergeSentEchoFiles) - deleted here,
-			// not left for the cold-start sweep, so the common case never leaks even transiently.
-			if (deleteSrcs.isNotEmpty()) {
-				pollScope?.launch(Dispatchers.IO) { Attachments.deleteFiles(filesDir, deleteSrcs) }
-			}
+			// The old row's now-orphaned bucket copies (see Attachments.mergeSentEchoFiles) -
+			// deleted here, not left for the cold-start sweep, so the common case never leaks
+			// even transiently.
+			scheduleAttachmentDelete(deleteSrcs)
 		} else {
 			append(team, echo)
 		}
