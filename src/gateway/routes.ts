@@ -1000,6 +1000,14 @@ export function createRoutes({
 				}
 
 				for (const ws of activeWs) {
+					// An unconfirmed recipient gets its still-pending handshake re-pushed AHEAD of the
+					// message, so the agent answers the handshake first and its reply never burns a turn
+					// on the reply gate's 409. Delivery itself is never gated on confirmation - the nudge
+					// rides alongside. repushHandshake's own dedupe window keeps a freshly-minted
+					// handshake (a just-woken session) from being duplicated here.
+					if (!ws.data.handshakeConfirmed && ws.data.teamName) {
+						repushHandshake?.(ws.data.teamName, ws.data.subId);
+					}
 					ws.send(payload);
 				}
 

@@ -20,6 +20,14 @@ import { resolveSessionNaming } from "./team-name.js";
 ////////////////////////////////
 //  Functions & Helpers
 
+// Grace between the client's initialized signal and the FIRST router connect. The gateway pushes a
+// lead handshake within microseconds of the bridge registering, but the client wires its channel
+// notification handler tens of ms AFTER the MCP initialize completes - an instant register loses
+// that race and the push is dropped unheard (observed 6-32ms margins on a localhost gateway). Only
+// the first connect is gated; WS reconnects (helpers.ts's reconnector) stay instant, since a warm
+// client has no such race.
+const INITIAL_ROUTER_CONNECT_GRACE_MS = 200;
+
 const CHANNEL_INSTRUCTIONS = [
 	'Cross-team messages arrive as <channel source="..." ...> tags. ALL metadata rides as tag attributes (session_id, from, and reply_schema when the request specifies one); the tag body is the message itself, nothing is jammed into it.',
 	"Read the request and do the work.",
@@ -102,8 +110,13 @@ export async function startMcp(): Promise<void> {
 	}
 
 	const transport = new StdioServerTransport();
+	// See INITIAL_ROUTER_CONNECT_GRACE_MS: register on the bridge only once the client can actually
+	// hear the pushes that registration triggers. A session with no initialized client should not be
+	// present on the bridge at all - it would absorb pushes it can only drop.
+	mcpServer.server.oninitialized = () => {
+		setTimeout(connectToRouter, INITIAL_ROUTER_CONNECT_GRACE_MS);
+	};
 	await mcpServer.connect(transport);
-	connectToRouter();
 
 	const mode = inContainer ? "crosstalk + connector" : "crosstalk + channel";
 	console.error(`[mcp] started (${mode})`);

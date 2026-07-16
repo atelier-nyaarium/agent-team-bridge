@@ -1067,6 +1067,57 @@ describe("routes", () => {
 			expect(pushed.length).toBe(1);
 		});
 
+		it("re-pushes an unconfirmed recipient's handshake ahead of the message, then still delivers", async () => {
+			const events: string[] = [];
+			const fakeWs = {
+				readyState: 1,
+				data: { mode: "channel", handshakeConfirmed: false, teamName: "proj-a.dev", subId: "sub-1" },
+				send(data: string) {
+					events.push((JSON.parse(data) as { type: string }).type);
+				},
+			};
+			const registry = makeRegistry({ "proj-a.dev": fakeWs });
+			const repushHandshake = vi.fn().mockImplementation(() => {
+				events.push("handshake-repush");
+				return "pushed";
+			});
+			const ctx = makeCtx({ registry, repushHandshake });
+			const { send } = createRoutes(ctx);
+
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "proj-a.dev",
+				body: "hi",
+				channelOnly: true,
+			});
+			expect(res.status).toBe(200);
+			expect(repushHandshake).toHaveBeenCalledWith("proj-a.dev", "sub-1");
+			expect(events).toEqual(["handshake-repush", "channel_push"]);
+		});
+
+		it("never re-pushes a handshake for a confirmed recipient", async () => {
+			const fakeWs = {
+				readyState: 1,
+				data: { mode: "channel", handshakeConfirmed: true, teamName: "proj-a.dev", subId: "sub-1" },
+				send() {},
+			};
+			const registry = makeRegistry({ "proj-a.dev": fakeWs });
+			const repushHandshake = vi.fn();
+			const ctx = makeCtx({ registry, repushHandshake });
+			const { send } = createRoutes(ctx);
+
+			const res = await send(new Request("http://localhost/send", { method: "POST" }), {
+				from: "pixel",
+				fromConversationId: "conv-1",
+				to: "proj-a.dev",
+				body: "hi",
+				channelOnly: true,
+			});
+			expect(res.status).toBe(200);
+			expect(repushHandshake).not.toHaveBeenCalled();
+		});
+
 		it("delivers to an alias re-incarnation via the record's liveTeam (no canonical pane)", async () => {
 			const pushed: Record<string, unknown>[] = [];
 			const aliasWs = {

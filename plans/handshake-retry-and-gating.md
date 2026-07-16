@@ -267,6 +267,43 @@ and its writeup lives in git history for this path. This is a fresh gap the ship
 cover: it optimized the happy path (answer once, cache it) but left no recovery for a session that
 never got to answer even once.
 
+## Live validation and follow-ups (deployed night, 2026-07-16)
+
+**The recovery worked end to end in production.** A session (`host.b9123b`) stuck in `verifying`
+received a console message at `05:17:19`, its reply attempt hit the 409 gate at `05:17:31` (which
+re-pushed the same `hs-*` id, attempt 1), it answered and confirmed at `05:17:34`, and its resent
+reply landed at `05:17:37` - ~18s, fully autonomous.
+
+**Root-cause revision from live timings.** The original diagnosis blamed a compacted/aged-out
+notification. Client-log + gateway-log correlation across three MCP incarnations proved the real
+mechanism: a **startup race**. `connectToRouter()` ran at MCP process boot in parallel with the MCP
+stdio initialize; on a localhost gateway the register-to-handshake-push takes microseconds, while
+Claude Code registers its channel notification handler tens of ms AFTER "connected". The push beat
+the handler by 6-32ms in all three observed boots (the MCP's own stderr showed
+`[channel] pushed from gateway [...]` BEFORE the client's "Channel notifications registered" line) -
+the notification was written successfully and dropped client-side, never entering the LLM's context
+at all. Systematic, not jitter: the sign of the race never flips on a local gateway. It was
+historically masked by the pre-"remember the answer" 30s heartbeat resend; removing that nag made
+the drop permanent for an idle session.
+
+**Follow-up 1 - kill the race at the source (MCP-side, user's design):** `src/mcp/index.ts` now
+gates the FIRST `connectToRouter()` on the client's `oninitialized` signal plus a 200ms grace
+(`INITIAL_ROUTER_CONNECT_GRACE_MS`, 6-30x margin over every observed gap). Registration is the
+subscription point - delaying it inherently delays every push (work messages included, which raced
+and dropped the same way) until the client can hear. Reconnects stay instant: the reconnector path
+is untouched, a warm client has no race. A side effect judged correct: a session whose client never
+initializes never appears on the bridge at all.
+
+**Follow-up 2 - deliver-with-nudge (gateway-side, user's design, amends Q3):** `send()`'s channel
+delivery loop now calls `repushHandshake` for an unconfirmed recipient socket immediately BEFORE
+pushing the message to it, so the agent receives handshake-then-message together, answers the
+handshake first, and its reply never burns a turn on the 409 bounce. This is the exact
+"re-push nudge WITHOUT the bounce" variant the alignment audit itself recommended when it killed
+Q3's original bounce; the audit's wake-false-positive concern is covered by the existing per-entry
+dedupe window (a just-woken session's freshly-minted handshake is within the window, so no
+duplicate), and delivery itself remains ungated. The 409-path re-push stays as the safety net for a
+reply attempted with no preceding inbound message.
+
 ## Painpoints
 
 Crust-collection scouting pass (5-lead parallel sweep, seeded from this session's own findings) over
