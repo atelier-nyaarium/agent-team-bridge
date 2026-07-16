@@ -294,6 +294,20 @@ internal fun isDuplicatePeerAutoPlay(lastAgent: Message?, seenPairs: MutableSet<
 	return !seenPairs.add(pair)
 }
 
+/** Drops any team whose forget-tombstone (`forgottenUntil`: team name -> expiry epoch-ms) has not
+ * yet passed `now`. Masks a wholesale teams() snapshot dispatched before a forget() reaches the
+ * server from resurrecting the just-forgotten team when it resolves after the optimistic local
+ * removal - see `ChatRepository.forget`. Bounded, not confirmation-cleared: a snapshot can only
+ * confirm a team's absence, never its own forget failing or a legitimate same-address recreate, so
+ * a tombstone that only cleared on confirmation would hide either of those forever instead of just
+ * outliving the one in-flight fetch it exists to mask. Also prunes every expired entry as a side
+ * effect, the one deliberate mutation in an otherwise pure function - kept inline so every caller
+ * gets the sweep for free instead of needing a separate one. */
+internal fun filterTombstoned(teams: List<Team>, forgottenUntil: MutableMap<String, Long>, now: Long): List<Team> {
+	forgottenUntil.entries.removeIf { it.value <= now }
+	return if (forgottenUntil.isEmpty()) teams else teams.filterNot { forgottenUntil.containsKey(it.name) }
+}
+
 /** A tier's TTS text, framed as "from to to: text" for a peer-mirror row so it never plays back
  * as if addressed to this console - neither party in a peer-mirror row is this console's own
  * team, unlike every other message this reads aloud. Spoken form spells out "to" rather than an
@@ -845,6 +859,15 @@ class ChatRepository(
 	@Volatile private var resumeBacklogPending = false
 	private val kick = Channel<Unit>(Channel.CONFLATED)
 	@Volatile private var forceTeamsRefresh = false
+	// Bounds the optimistic-forget/board-resurrection race: a wholesale teams() snapshot dispatched
+	// BEFORE forget() completes server-side can still list the just-forgotten team when it resolves
+	// AFTER the optimistic local removal below. A short-lived tombstone masks that one stale
+	// snapshot without permanently hiding the team - a bounded TTL (not a confirmation-cleared one)
+	// so a failed forget or a legitimate same-address recreate both self-correct on expiry instead
+	// of staying hidden forever (neither ever produces a snapshot confirming the team's absence).
+	// Written on the main thread (forget() is a UI callback); read/pruned on Dispatchers.IO (the
+	// poll loop and connect()) - a plain HashMap would race across that split.
+	private val forgottenUntil = java.util.concurrent.ConcurrentHashMap<String, Long>()
 	// Rows already given their one reconcile attempt this process. Synchronized:
 	// the service's start and the Activity's foreground transition can race here.
 	private val reconciled = java.util.Collections.synchronizedSet(mutableSetOf<String>())
@@ -1155,7 +1178,7 @@ class ChatRepository(
 			}
 			_state.update {
 				it.copy(
-					teams = teams,
+					teams = teams.withoutTombstoned(),
 					status = "connected",
 					error = null,
 					connected = true,
@@ -2479,9 +2502,14 @@ class ChatRepository(
 	// body, never across a suspending network call, so it is never a real contention bottleneck.
 	private val freshTeamsMutex = Mutex()
 
+	// ChatState.withFreshTeams itself stays a pure function of its input list - filterTombstoned is
+	// applied to every fresh list right here, before it reaches either wholesale-apply call site
+	// (applyFreshTeams and connect()), so both are covered from this one place.
+	private fun List<Team>.withoutTombstoned(): List<Team> = filterTombstoned(this, forgottenUntil, System.currentTimeMillis())
+
 	private suspend fun applyFreshTeams(t: List<Team>) {
 		freshTeamsMutex.withLock {
-			val next = _state.updateAndGet { it.withFreshTeams(t) }
+			val next = _state.updateAndGet { it.withFreshTeams(t.withoutTombstoned()) }
 			persistLabels(next.labels)
 			persistAbsenceStreaks(next.teamAbsenceStreaks)
 		}
@@ -3164,17 +3192,21 @@ class ChatRepository(
 	 * anchor row, re-anchored below), so both persist in a single batch - a process kill between
 	 * two separate writes could otherwise strand a sibling's anchor against its already-updated
 	 * (shrunk) thread. `unread` is recomputed for every team, not just the forgotten one: the sweep
-	 * can remove rows another thread was counting, so its count must be re-derived too. */
+	 * can remove rows another thread was counting, so its count must be re-derived too. Also drops
+	 * the team from the board tile list immediately (see forgottenUntil above for why that needs a
+	 * tombstone rather than a bare filter). */
 	fun forget(team: String) {
 		// Canonicalize once and key every field removal by it (matching openThread's own key), so
 		// a non-canonical spelling can't leave a field's entry behind while the others clear.
 		val key = canonicalTarget(team)
+		forgottenUntil[key] = System.currentTimeMillis() + FORGET_TOMBSTONE_MS
 		val next = _state.updateAndGet { s ->
 			val newThreads = threadsAfterForget(s.threads, key)
 			val newAnchors = (s.readAnchors - key).mapValues { (t, anchor) ->
 				reanchorAfterForget(newThreads[t].orEmpty(), anchor) ?: anchor
 			}
 			s.copy(
+				teams = s.teams.filterNot { it.name == key },
 				threads = newThreads,
 				labels = s.labels - key,
 				unread = newThreads.mapValues { (t, msgs) -> unreadCount(msgs, newAnchors[t]) },
@@ -3543,6 +3575,11 @@ class ChatRepository(
 		const val LONG_POLL_HOLD_MS = 40_000L
 		// Refresh the team list at most this often, regardless of poll cadence.
 		const val TEAMS_REFRESH_MS = 30_000L
+		// forgottenUntil's tombstone lifetime: only needs to outlast a single in-flight teams()
+		// HTTP round trip (what the resurrection race actually races against), not the much longer
+		// TEAMS_REFRESH_MS/LONG_POLL_HOLD_MS reconciliation cadence - a wide margin over that so the
+		// masking window closes almost as soon as it opens.
+		const val FORGET_TOMBSTONE_MS = 15_000L
 		// Matches the gateway's own per-payload bucket (MAX_RESPONSE_FILE_BYTES); a single
 		// attachment may use the whole bucket, so this is a total, not a stricter per-file cap.
 		const val MAX_OUTGOING_BYTES = 500_000_000
