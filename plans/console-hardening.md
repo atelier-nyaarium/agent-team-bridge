@@ -353,9 +353,9 @@ swallow a cancel regardless of rethrow placement.
 
 ## Painpoints
 
-Light touch after Phase A only (1 of 4) - not yet nearing the plan's final phase, so the full
-scouting-workflow crust sweep is deferred to Phase D's crust-collection. One concrete lead
-already fully characterized this lap, recorded rather than dropped:
+Light touch after Phases A and B (2 of 4) - not yet nearing the plan's final phase, so the full
+scouting-workflow crust sweep is deferred to Phase D's crust-collection. Concrete leads already
+fully characterized in-lap, recorded rather than dropped:
 
 - **`plugins/designer/DesignerCards.kt : relOf`** - a third, independently-written copy of the
   same "strip a src down to its attachments-relative path" parse Phase A just consolidated
@@ -366,3 +366,13 @@ already fully characterized this lap, recorded rather than dropped:
   directly, so delegating instead of re-deriving is a one-line change - deliberately left
   untouched this pass (out of Phase A's actual file set, and Designer plugin behavior deserves
   its own look before touching it, not a drive-by while focused on attachment purge).
+- **`ConsoleClient.kt : DEFAULT_RELAY_CALL_TIMEOUT_MS` vs `PROXY_CEILING_MS`** - both evaluate to
+  exactly `60_000L` (`PINNED_CONNECT_TIMEOUT_MS + PINNED_READ_TIMEOUT_MS + CALL_TIMEOUT_MARGIN_MS`
+  = `15_000 + 35_000 + 10_000`, verified still true post-Phase-B). Phase B's own framework-fan-out
+  flagged this as a numeric coincidence, not a design relationship - the plan's Phase B facts
+  table already says as much ("do not unify them"), and no reachable op currently exercises
+  `DEFAULT_RELAY_CALL_TIMEOUT_MS` under conditions where the proxy ceiling would matter (it bounds
+  the non-held `relay()` path, which never holds the connection anywhere near 60s). Left alone: a
+  same-value assertion would either be a tautology (both sides recompute the same arithmetic) or
+  an accidental coupling (pinning two independently-justified budgets together for no functional
+  reason). Noted so a future coincidental drift is not mistaken for a regression.
