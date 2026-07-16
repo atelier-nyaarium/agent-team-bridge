@@ -377,10 +377,6 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 		const val KEY_SCHEMA_VERSION = "schema_version"
 		const val CURRENT_SCHEMA_VERSION = 3
 
-		/** The keys a re-provision wipes. Everything else is preserved by omission (voice creds +
-		 * taste, the biometric lock), so any new provisioning/identity/transcript key MUST be added
-		 * here or it silently survives a Clear (a privacy/correctness regression). The partition is
-		 * pinned by a unit test. */
 		/** The grammar-bearing keys the one-shot schema wipe clears (thread/label/draft/absence-streak
 		 * store keys plus the mailbox sync cursor). Any NEW address-keyed pref MUST be added here or it
 		 * survives the grammar migration carrying a stale-grammar key. The set is pinned by a unit test. */
@@ -389,6 +385,10 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 			KEY_SYNC_DROPPED,
 		)
 
+		/** The keys a re-provision wipes. Everything else is preserved by omission (voice creds +
+		 * taste, the biometric lock), so any new provisioning/identity/transcript key MUST be added
+		 * here or it silently survives a Clear (a privacy/correctness regression). The partition is
+		 * pinned by a unit test. */
 		val PROVISIONING_KEYS = listOf(
 			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
 			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_PROFILE_NAME, KEY_HOSTED_TENANTS,

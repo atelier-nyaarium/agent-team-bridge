@@ -1427,7 +1427,6 @@ fun HealthHeader(state: ChatState) {
 	}
 }
 
-/** Chip color for the board/thread presence vocabulary. */
 /** The base board/thread word for a wire status, before any working/waking/login refinement. The
  * single owner of the status-word vocabulary; pair with presenceColor for the chip color. */
 private fun statusWord(status: String): String = when (status) {
@@ -1437,6 +1436,7 @@ private fun statusWord(status: String): String = when (status) {
 	else -> "ended"
 }
 
+/** Chip color for the board/thread presence vocabulary. */
 @Composable
 private fun presenceColor(presence: String): Color = when (presence) {
 	"live" -> Color(0xFF2EA043)

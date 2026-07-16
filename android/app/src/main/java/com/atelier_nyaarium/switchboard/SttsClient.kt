@@ -127,12 +127,6 @@ class SttsClient(private val baseUrl: String, private val apiKey: String) {
 	companion object {
 		private val JSON = "application/json".toMediaType()
 
-		/**
-		 * Substitute placeholders in a request-body template tree. Replaces only string
-		 * values exactly equal to "$text" or "$voice" (whole-value match, never substring
-		 * splicing), so nested objects, numbers, and literal strings pass through. The
-		 * serializer JSON-encodes the substituted values, so synthesis text is never spliced.
-		 */
 		/** Whether any string VALUE in the template tree equals `placeholder`. */
 		fun containsPlaceholder(node: JsonElement, placeholder: String): Boolean = when (node) {
 			is JsonObject -> node.values.any { containsPlaceholder(it, placeholder) }
@@ -140,6 +134,12 @@ class SttsClient(private val baseUrl: String, private val apiKey: String) {
 			is JsonPrimitive -> node.isString && node.content == placeholder
 		}
 
+		/**
+		 * Substitute placeholders in a request-body template tree. Replaces only string
+		 * values exactly equal to "$text" or "$voice" (whole-value match, never substring
+		 * splicing), so nested objects, numbers, and literal strings pass through. The
+		 * serializer JSON-encodes the substituted values, so synthesis text is never spliced.
+		 */
 		fun fillTemplate(node: JsonElement, text: String, voice: String): JsonElement = when (node) {
 			is JsonObject -> JsonObject(node.mapValues { fillTemplate(it.value, text, voice) })
 			is JsonArray -> JsonArray(node.map { fillTemplate(it, text, voice) })
