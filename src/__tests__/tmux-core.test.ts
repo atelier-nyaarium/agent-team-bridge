@@ -364,8 +364,22 @@ describe("tmuxCore isAgentWorking", () => {
 		expect(isAgentWorking("(12s · esc to interrupt)\n✻ Prestidigitating…")).toBe(true);
 	});
 
-	it("ignores a hint more than two lines back", () => {
+	it("ignores a hint more than two lines back when there is no rule to bound the search by", () => {
 		expect(isAgentWorking("(12s · esc to interrupt)\n✻ Prestidigitating…\n❯ ")).toBe(false);
+	});
+
+	it("finds the hint any distance below the rule, since the footer's height is dynamic", () => {
+		const rule = "─".repeat(40);
+		// 3 lines above the very bottom - past the old fixed "last 2 lines" heuristic - but below the
+		// rule, so the properly-bounded footer search still finds it.
+		expect(
+			isAgentWorking(
+				`❯ \n${rule}\n✻ Prestidigitating… (12s · esc to interrupt)\n  ⏵⏵ bypass permissions on\n  ← for agents`,
+			),
+		).toBe(true);
+		// A hint ABOVE the rule is transcript/history, not the live footer - never counts, even when
+		// it would fall within some arbitrary distance of the bottom.
+		expect(isAgentWorking(`✻ Prestidigitating… (12s · esc to interrupt)\n${rule}\n❯ `)).toBe(false);
 	});
 
 	it("strips the SGR escapes around the hint", () => {

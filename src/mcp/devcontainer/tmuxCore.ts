@@ -328,13 +328,17 @@ export function isAgentReady(screen: string): boolean {
 }
 
 /** Whether a captured pane shows claude actively working a turn: the "esc to interrupt" hint sits in
- * the bottom status line, so it can land on either of the last two captured lines depending on how
- * the pane wraps. The Kotlin twin lives in AgentScreen.kt. */
+ * the bottom status line. The footer's height is dynamic (terminal width/wrapping), so a fixed line
+ * count is wrong in general - bound the search by the actual rule instead, same as isLoggedOut.
+ * Falls back to the last two lines only when no rule is present at all (a malformed/partial
+ * capture): with no boundary to anchor on, that stays the safer guess over treating the whole
+ * screen as fair game, which risks matching a stray "esc" sitting in scrollback/transcript text
+ * above. The Kotlin twin lives in AgentScreen.kt. */
 export function isAgentWorking(screen: string): boolean {
-	return stripAnsi(screen)
-		.split("\n")
-		.slice(-2)
-		.some((line) => line.includes(WORKING_HINT));
+	const lines = stripAnsi(screen).split("\n");
+	const lastRule = lines.findLastIndex((line) => line.includes(TOOLBAR_RULE));
+	const footer = lastRule >= 0 ? lines.slice(lastRule + 1) : lines.slice(-2);
+	return footer.some((line) => line.includes(WORKING_HINT));
 }
 
 /** Whether the captured pane shows claude logged out: its bottom toolbar prints "Not logged in" /

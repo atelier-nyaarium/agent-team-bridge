@@ -27,8 +27,29 @@ class AgentScreenTest {
 		assertEquals(false, AgentScreen.isWorking("✻ Brewed for 7s"))
 		assertEquals(false, AgentScreen.isWorking(""))
 		assertEquals(false, AgentScreen.isWorking("Claude Code v2.1.0\n❯ "))
-		// A line more than two back does not count.
+		// A line more than two back does not count - ONLY absent a rule to bound the search by; see
+		// findsTheWorkingHintAnyDistanceBelowTheRule below for the same distance with a rule present.
 		assertEquals(false, AgentScreen.isWorking("(12s · esc to interrupt)\n✻ Prestidigitating…\n❯ "))
+	}
+
+	@Test
+	fun workingHintBoundedByTheRuleRatherThanAFixedLineCount() {
+		val rule = "─".repeat(40)
+		// The footer's height is dynamic (terminal width/wrapping): the hint sits 3 lines above the
+		// very bottom here, past the old fixed "last 2 lines" heuristic, but it IS below the rule, so
+		// the properly-bounded footer search still finds it.
+		assertEquals(
+			true,
+			AgentScreen.isWorking(
+				"❯ \n$rule\n✻ Prestidigitating… (12s · esc to interrupt)\n  ⏵⏵ bypass permissions on\n  ← for agents",
+			),
+		)
+		// A hint ABOVE the rule is transcript/history, not the live footer - never counts, even when
+		// it would fall within some arbitrary distance of the bottom.
+		assertEquals(
+			false,
+			AgentScreen.isWorking("✻ Prestidigitating… (12s · esc to interrupt)\n$rule\n❯ "),
+		)
 	}
 
 	@Test
