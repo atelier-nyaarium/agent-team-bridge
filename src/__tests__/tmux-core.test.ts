@@ -388,6 +388,13 @@ describe("tmuxCore isAgentWorking", () => {
 			true,
 		);
 	});
+
+	it("also counts a task-bullet marker (◯) in the footer, same as the esc hint", () => {
+		const rule = "─".repeat(40);
+		expect(isAgentWorking(`❯ \n${rule}\n  ◯ idle-pushback`)).toBe(true);
+		// Above the rule is transcript/history (e.g. a completed todo list), not the live footer.
+		expect(isAgentWorking(`  ◯ idle-pushback\n${rule}\n❯ `)).toBe(false);
+	});
 });
 
 describe("tmuxCore isLoggedOut", () => {

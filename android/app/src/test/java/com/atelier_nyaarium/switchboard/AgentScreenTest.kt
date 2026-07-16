@@ -53,6 +53,14 @@ class AgentScreenTest {
 	}
 
 	@Test
+	fun workingCircleBulletCountsSameAsTheEscHint() {
+		val rule = "─".repeat(40)
+		assertEquals(true, AgentScreen.isWorking("❯ \n$rule\n  ◯ idle-pushback"))
+		// Above the rule is transcript/history (e.g. a completed todo list), not the live footer.
+		assertEquals(false, AgentScreen.isWorking("  ◯ idle-pushback\n$rule\n❯ "))
+	}
+
+	@Test
 	fun loggedOut() {
 		val rule = "─".repeat(40)
 		// Auth footer in the toolbar below the last rule.

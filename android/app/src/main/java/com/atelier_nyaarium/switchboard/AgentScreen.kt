@@ -5,9 +5,10 @@ package com.atelier_nyaarium.switchboard
  * Twin of the markers in src/mcp/devcontainer/tmuxCore.ts (isAgentReady / isAgentWorking / isLoggedOut).
  * isReady: the REPL composer prompt (U+276F) sits at column 0; the dev-channels / folder-trust /
  * resume-picker menus show an indented cursor, so the line-start anchor matches only the real
- * composer. isWorking: the "esc to interrupt" hint sits in the bottom status line, bounded by
- * searching everything below the last U+2500 rule line rather than a fixed line count, since the
- * footer's height is dynamic (terminal width/wrapping).
+ * composer. isWorking: either the "esc to interrupt" hint or a U+25EF task-bullet ("◯ <name>", a
+ * queued/in-progress plan or task item) sits in the bottom status line, bounded by searching
+ * everything below the last U+2500 rule line rather than a fixed line count, since the footer's
+ * height is dynamic (terminal width/wrapping).
  * isLoggedOut: the bottom toolbar (below the composer's lower
  * rule of U+2500 dashes) prints "Not
  * logged in" / "Run /login"; checked separately since a logged-out session still shows a composer,
@@ -16,6 +17,9 @@ package com.atelier_nyaarium.switchboard
 object AgentScreen {
 	private val composerRe = Regex("^\\u276F", RegexOption.MULTILINE)
 	private const val WORKING_HINT = "· esc"
+	// A queued/in-progress task or plan item also renders in the footer while a turn is in flight,
+	// e.g. "◯ idle-pushback" - same signal as the esc hint, checked in the same bounded region.
+	private const val WORKING_CIRCLE_HINT = "◯"
 	private const val TOOLBAR_RULE = "───"
 
 	// The peek runs capture-pane -e, so the screen carries SGR color escapes. Strip them before
@@ -36,7 +40,7 @@ object AgentScreen {
 		// game, which risks matching a stray "esc" sitting in scrollback/transcript text above.
 		val lastRule = lines.indexOfLast { it.contains(TOOLBAR_RULE) }
 		val footer = if (lastRule >= 0) lines.drop(lastRule + 1) else lines.takeLast(2)
-		return footer.any { it.contains(WORKING_HINT) }
+		return footer.any { it.contains(WORKING_HINT) || it.contains(WORKING_CIRCLE_HINT) }
 	}
 
 	fun isLoggedOut(screen: String): Boolean {

@@ -52,6 +52,9 @@ const DEAD_LAUNCH_PROBES = 8;
 const COMPOSER_RE = /^❯/mu;
 // The "esc to interrupt" hint in the bottom status line, always preceded by a middle-dot separator.
 const WORKING_HINT = "· esc";
+// A queued/in-progress task or plan item also renders in the footer while a turn is in flight,
+// e.g. "◯ idle-pushback" - same signal as the esc hint, checked in the same bounded region.
+const WORKING_CIRCLE_HINT = "◯";
 // The launch menus cleared by pressing "1" (which selects and confirms the highlighted option):
 // dev-channels, folder-trust, and the fullscreen-renderer offer. They can appear in any order and
 // not all on every launch, so the loop re-checks each poll rather than assuming a fixed sequence.
@@ -327,18 +330,19 @@ export function isAgentReady(screen: string): boolean {
 	return COMPOSER_RE.test(stripAnsi(screen));
 }
 
-/** Whether a captured pane shows claude actively working a turn: the "esc to interrupt" hint sits in
- * the bottom status line. The footer's height is dynamic (terminal width/wrapping), so a fixed line
- * count is wrong in general - bound the search by the actual rule instead, same as isLoggedOut.
- * Falls back to the last two lines only when no rule is present at all (a malformed/partial
- * capture): with no boundary to anchor on, that stays the safer guess over treating the whole
- * screen as fair game, which risks matching a stray "esc" sitting in scrollback/transcript text
- * above. The Kotlin twin lives in AgentScreen.kt. */
+/** Whether a captured pane shows claude actively working a turn: either the "esc to interrupt" hint
+ * or a task-bullet ("◯ <name>", a queued/in-progress plan or task item) sits in the bottom status
+ * line. The footer's height is dynamic (terminal width/wrapping), so a fixed line count is wrong in
+ * general - bound the search by the actual rule instead, same as isLoggedOut. Falls back to the last
+ * two lines only when no rule is present at all (a malformed/partial capture): with no boundary to
+ * anchor on, that stays the safer guess over treating the whole screen as fair game, which risks
+ * matching a stray "esc" sitting in scrollback/transcript text above. The Kotlin twin lives in
+ * AgentScreen.kt. */
 export function isAgentWorking(screen: string): boolean {
 	const lines = stripAnsi(screen).split("\n");
 	const lastRule = lines.findLastIndex((line) => line.includes(TOOLBAR_RULE));
 	const footer = lastRule >= 0 ? lines.slice(lastRule + 1) : lines.slice(-2);
-	return footer.some((line) => line.includes(WORKING_HINT));
+	return footer.some((line) => line.includes(WORKING_HINT) || line.includes(WORKING_CIRCLE_HINT));
 }
 
 /** Whether the captured pane shows claude logged out: its bottom toolbar prints "Not logged in" /
