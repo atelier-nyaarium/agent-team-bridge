@@ -1,131 +1,67 @@
-# Handshake: remember the answer, stop re-asking
+# Handshake gap: no recovery when the `hs-*` id is lost
 
-## Questionaire
+## Symptom (hit live, 2026-07-15)
 
-**Starting complaint:** opening any menu (or otherwise occupying the session) for a while causes bridge handshakes to pile up - multiple unanswered `hs-*` prompts stack for one logical session, each dragging the LLM in, with stale dead ones erroring "No pending request" when answered late.
+A channel session received a work message on `host.575175` and tried to answer with
+`channel_reply`. The gateway rejected it: *"Your bridge handshake is still pending. Reply to the
+handshake session first with channel_reply_structured, then resend this reply."* But the session
+had **no `hs-*` id to answer with** - the handshake notification was never in the LLM's reachable
+context (this is a long, previously-compacted session). Every subsequent `channel_reply` is then
+permanently refused: the outbound reply deadlocks with no recovery path.
 
-**Root cause found during investigation:** `mcp/bridge/helpers.ts` already has an `isMainOrLeadAgent` cache with an auto-reply branch that answers a handshake instantly (no LLM) whenever the cache is non-null - but `setIsMainOrLeadAgent()` is exported and never called anywhere. The reply tool answers the handshake and throws the answer away, so the cache is permanently null and EVERY handshake (first, every reconnect, every plugin reload) costs an LLM turn. Secondary aggravator: the gateway's heartbeat re-sends an unconfirmed handshake every ~30s (up to 20 attempts), minting a fresh `hs-*` id each time - and since the resend only fires on an open, ping-passing socket, it can never be correcting a real network loss; it only ever nags a session that already has the prompt.
+## Root cause
 
-**1. Which direction?**
+The lead/worker handshake assumes the LLM reliably sees and retains the handshake notification. It
+does not survive a missed/aged-out notification:
 
-- **A) Remember the answer, stop re-asking.** Wire the missing setter; carry the remembered role in the register message so a reconnect skips the handshake entirely; remove the heartbeat resend; let a pending handshake live as long as its socket instead of a 30-minute TTL.
-- B) Delivery-ACK layer (transport-level ack, retry only unacked sends).
-- C) Minimal: remove resend + reply-gating only.
+- `src/gateway/websocket.ts : sendHandshake` mints `hsSessionId = ` `` `hs-${crypto.randomUUID().slice(0, 8)}` `` and
+  stores it ONLY in the in-memory `handshakePending` map. It is random (not derivable) and never
+  persisted.
+- `src/mcp/bridge/helpers.ts` auto-answers a handshake only when the `handshakeRole` cache is
+  non-null. On a fresh process the cache is null, so it "falls through" and emits the handshake as
+  a channel notification, relying on the LLM to answer it with `channel_reply_structured`.
+  `noteReceived(hsSessionId)` records the id inside the cache, but there is no path to answer it
+  WITHOUT the LLM supplying the id back.
+- If that notification is missed - dropped, delivered in the same turn batch as a work message and
+  overlooked, or (as here) aged out of a compacted session's context - the LLM no longer has the id.
+- `src/gateway/routes.ts : respond()`'s reply gate then rejects every `channel_reply` to the real
+  work session, and (deliberately, per the shipped red-team fix that removed hs-id disclosure to
+  close a spoofing hole) the 409 does NOT name the pending id. So the legitimate self-caller cannot
+  learn the id it needs, and cannot answer.
 
-Answer: **A**. Net effect: exactly one LLM handshake per MCP process lifetime, zero on reconnects, pileup structurally impossible, no TTL cliff.
+Net: `hsSessionId` is random + in-memory-only + withheld from the 409 + answerable only through the
+LLM's own transient context. Lose that context once and the session can never send another reply.
+The client `handshakeRole` cache never fills (it only fills when the LLM successfully answers a
+handshake), so the auto-reply branch never kicks in either - a permanent deadlock, not a one-turn
+bounce.
 
-**2. What happens when a not-yet-confirmed session sends a normal `channel_reply`?**
+## Fix direction (not yet built)
 
-- A) Reject with an instruction naming the exact pending handshake id ("answer hs-xxx first, then resend").
-- B) Implicit confirm - treat a valid reply as proof of leadership.
-- C) Leave it alone - the reply delivers, handshake stays pending.
+The MCP process already holds the pending `hs-*` id(s) it received (`handshakeRole`'s internal
+`noteReceived` set). Recovery should be MCP-side and id-free, since the LLM losing the id is the
+whole failure mode:
 
-Clarification that settled it: the handshake exists for INBOUND routing - console messages/wakes only route to the confirmed lead's socket, never a subagent's ("so we don't blast messages to sub agents"). A subagent using `channel_reply` outbound is harmless under A and C (replying doesn't require being a delivery target); only B endangers routing (a lead can delegate a `channel_reply` to a worker teammate in this repo's team workflows, and implicit confirm would wrongly make the worker's socket the delivery target). C's residual hole: a lead that chats before answering its handshake leaves the board saying "verifying" while messages visibly flow - the exact stale-board artifact class being hunted all day.
+- **Option A (preferred): auto-resolve a held handshake on outbound reply.** When
+  `channel_reply`/`channel_reply_structured` targets a non-`hs-*` session and this process has a
+  received-but-unanswered handshake, resolve it first (default the primary session to
+  `isMainOrLead: true`) and retry the reply, instead of letting the gateway 409 bubble up as a dead
+  end. The process knows it is the registered lead socket; it does not need the LLM to re-supply the
+  id.
+- **Option B: let the LLM confirm without the id.** A small reply affordance ("confirm my pending
+  handshake as lead") that the MCP maps to whatever `hs-*` it is holding. Weaker than A - it still
+  costs an LLM turn and assumes the LLM realizes it is stuck.
+- Keep the 409's id-withholding (that spoofing fix stays); recovery must NOT come from echoing the
+  id back over the wire.
 
-Answer: **A**. One bounce in a rare race, in exchange for the board never lying.
+Cross-check when building: the delegated-worker hazard the shipped design guarded against (a lead
+delegating a structured reply to a separate-harness worker must not poison the worker's cache to
+lead). Auto-resolving in Option A must stay gated to handshakes THIS process received as its own
+registration, matching the existing `noteReceived` scoping.
 
-**Out of scope (flagged, not built):** persisting the role cache to disk (keyed by the harness session id) to silence the one handshake after a plugin reload. One prompt per reload is honest - a fresh process re-establishing identity - and disk state adds staleness risk for marginal gain. Say the word if that one prompt per reload ever grates.
+## Provenance
 
-## Plan
-
-Spans the MCP plugin side and the gateway side; both live in this repo, but deploy differently (see Deploy notes).
-
-**MCP side**
-
-1. **Wire the cache** (`src/mcp/channel/channelReply.ts` -> `src/mcp/bridge/helpers.ts`): in the `channel_reply_structured` handler, when the reply targets an `hs-*` session and `responseData.isMainOrLead` is a boolean, call `setIsMainOrLeadAgent(value)` before posting. The existing auto-reply branch in `helpers.ts` (~line 204: `if (isMainOrLeadAgent !== null)` -> auto-answer, no LLM) then handles any subsequent handshake instantly. Two hardenings from the audit:
-   - **Own-handshake scoping:** the handshake handler in `helpers.ts` (~line 203-206) observes every handshake push delivered to this connection - record the received `hs-*` ids in a small set, and gate `setIsMainOrLeadAgent` on membership. Otherwise a lead delegating a `channel_reply_structured` (with a relayed hs id) to a separate-harness worker teammate would poison the WORKER's cache to true, and its next re-register would silently confirm it as lead - the exact worker-becomes-delivery-target hazard Q2's option B was rejected over.
-   - **Prose-answer parity:** `resolveHandshake` on the gateway also accepts a plain-text confirm (`/true/i` prose fallback) via the unstructured `channel_reply`. Mirror the cache write there too: in the plain `channel_reply` handler, when the target is a received `hs-*` id, parse with the same `/true/i` rule and set the cache. Without this, a prose-confirmed lead keeps a null cache and its reconnects re-open the bounce window items 1-2 exist to eliminate.
-2. **Role in register** (`src/mcp/bridge/helpers.ts` `buildRegisterMsg`): include `isMainOrLead: true` in the register payload when the cache is `true`. Never send `false` - a worker that answered false is disconnected permanently by the existing `handshake_reject` path (~line 220) and does not re-register, so the field is a lead-only assertion. **Type note:** `buildRegisterMsg` is currently typed `Record<string, string>` - widen it (a concrete interface, or `Record<string, string | boolean>`) to carry the boolean. Do NOT stringify to `"true"` to appease the old type: the new gateway's `z.boolean()` would fail the whole register parse and drop the register silently, leaving the session dark.
-3. **Caller identity on replies** (`src/mcp/channel/channelReply.ts`): `buildChannelReplyPayload`/`buildStructuredReplyPayload` inject `conversationId: bridgeConversationId()` into the wire payload (the stable per-process id the socket registered with). This goes on the wire POST payload only, not the strict tool-input schemas. **Same-commit test fallout, confirmed by a coverage sweep:** `src/__tests__/reply-tool.test.ts` has four exact-object-equality assertions that will fail the moment this field appears (the file already mocks `bridgeConversationId: () => "conv-1"` for other purposes, so add `conversationId: "conv-1"` to each expected object) - "maps full to the wire response field" (~line 40-58, `buildChannelReplyPayload`), "maps responseData to the wire replyAsJson field" (~line 61-68, `buildStructuredReplyPayload`), and the two handler-level posted-payload checks "posts the mapped payload for a prose reply" / "...for a structured reply" (~line 121-138, ~line 159-167). The neighboring "resolves attachments into a files array" test and the lint-enforcement tests (~line 264-471) are unaffected (they don't do full-object equality on the builder output).
-
-**Gateway side**
-
-4. **Schema** (`src/shared/schemas.ts`): `WsRegisterSchema` gains `isMainOrLead: z.boolean().optional().catch(undefined)` - the `.catch` degrades a malformed value to absent (the LLM-handshake path) instead of failing the whole register parse, consistent with item 5's treat-false-as-absent stance. `RespondBodySchema` (`src/gateway/routes.ts`) gains optional `conversationId` (validated with the existing `CONVERSATION_ID_RE`, which matches the `crypto.randomUUID()` values the MCP sends).
-5. **Register handler** (`src/gateway/websocket.ts`): when `reg.data.isMainOrLead === true`, set `handshakeConfirmed = true` and run the same record-establish path `resolveHandshake`'s lead branch uses (`establishRecord`), and skip `sendHandshake` entirely - a reconnect confirms silently with no prompt. Absent field -> `sendHandshake` once (current path). (A `false` value never arrives per item 2; if one does, treat it as absent rather than adding a dead branch.)
-6. **Remove the heartbeat resend**: delete the resend block in `heartbeatTick()` (~line 163-175), the `hsAttempts` field on `WsData` (~line 61), `HANDSHAKE_MAX_ATTEMPTS` (~line 90), AND the `hsAttempts` increment + log reference inside `sendHandshake()` itself (~line 204, ~line 214) - `sendHandshake` survives (register still calls it), so leaving those lines is a compile error.
-7. **Socket-lifetime pending**: delete `HANDSHAKE_PENDING_TTL_MS` and its sweep (~line 82-84, ~line 178-184), plus the now-write-only `createdAt` field on the `handshakePending` entry type and its `Date.now()` write in `sendHandshake` (~line 190, ~line 203), and rewrite the map's doc comment (~line 188-189, "createdAt bounds the map via the sweep above" becomes false) to the new bound: cleared on close/evict, bounded by live unconfirmed sockets. Cleanup already happens on disconnect (`close()` -> `forgetPending`, verified including the heartbeat-close path for a dirty-died socket) and on eviction (`evictSocket` -> `forgetPending`), and `sendHandshake` now fires at most once per register. A handshake answered hours late still lands.
-8. **Reply gate** (`src/gateway/routes.ts` `respond()`): after the existing `resolveHandshake?.()` check returns false, if the payload carries a `conversationId`: look up `conversationRegistry.get(conversationId)`; gate ONLY when the resolved socket is live (`readyState === 1`), non-virtual, `handshakeConfirmed` is false, AND a scan of `handshakePending` for that socket's team+subId yields an `hs-*` id (expose a small lookup from the ws handlers alongside `resolveHandshake`). Reject as **HTTP 409** with the complete instruction inside the `error` string (e.g. `Answer your pending bridge handshake first: reply to session "hs-xxx" with channel_reply_structured, then resend this reply.`) - `routerPost` only surfaces `json.error` when the status is non-2xx (a 200-with-error body would print "Reply sent." while silently dropping the reply), does not retry a 4xx, and the reply tool relays exactly that error string to the LLM. 409 specifically: 400 already means schema-invalid, 404 already means "no pending job" (reusing it would teach the LLM the conversation expired). Every other case fails open: `conversationId` absent (console + federated-relay call sites, intentionally exempt - verified neither ever sends the field), registry lookup miss (stale id / post-close), or an unconfirmed socket with NO pending entry (a dying socket in the answered-after-readyState-dropped window - there is no hs id to name, so the instruction would be unfollowable). The gate sits before `store.deliver`, and channel jobs survive delivery, so the resent reply always finds its job.
-
-**Tests**
-
-`src/__tests__/websocket.test.ts`:
-- Three existing tests reference the deleted machinery and MUST change in the same commit (they typecheck via `bun run lint`, so leaving them is a red gate): "re-sends the handshake to an unconfirmed channel session on a heartbeat tick" (~line 619, reads `hsAttempts`) - invert to assert NO resend across ticks; "stops re-sending the handshake once the session confirms" (~line 631) - rework its `hsAttempts` assertion to count handshake pushes in the send mock; "stops re-sending the handshake after the attempt cap" (~line 641, writes `hsAttempts = 100`) - delete outright, the cap is gone. The adjacent "re-registering a subId prunes the evicted socket's pending handshake" (~line 605) survives unchanged. No existing test exercises the TTL sweep.
-- New: register with `isMainOrLead: true` confirms silently - no handshake push sent, record established, socket immediately resolvable as the live incarnation.
-- New: register without the field still sends exactly one handshake; no resend occurs across heartbeat ticks.
-- New: a pending handshake answered after many heartbeat ticks (formerly past-TTL) still confirms.
-- Existing lead/worker negotiation tests (reconnect eviction, sibling worker-reject) stay green.
-
-`src/__tests__/routes.test.ts` (**the reply gate's actual home - item 8 lives in `respond()` in `routes.ts`, not `websocket.ts`**, confirmed by a coverage sweep. The existing `/respond` describe block (~line 606-686) and the mirror-tap/console-durability `/respond` tests (~line 1164-1305, ~1327-1384) never send a `conversationId`, so they all stay green untouched via the fail-open path - but they exercise none of the new gate logic, so it needs its own tests here):
-- New: `respond()` with a `conversationId` whose socket is unconfirmed (live, non-virtual, with a pending hs id) rejects 409, naming the pending hs id in the `error` string; the same call after confirming succeeds.
-- New: `respond()` without `conversationId`, with a `conversationId` missing from the registry, and with an unconfirmed socket that has no pending entry, all pass through (fail-open).
-- `makeCtx`/`RoutesDeps` in this file (~line 19-44) already threads `conversationRegistry` but has no override slot for the handshake-pending-by-(team,subId) lookup item 8 needs - add one alongside the existing `resolveHandshake` dependency wiring.
-
-`src/__tests__/reply-tool.test.ts` and `src/__tests__/strict-schemas.test.ts`: see the same-commit fallout noted under Plan item 3 above; `strict-schemas.test.ts` needs no changes (confirmed unaffected - it exercises only the agent-facing tool-input schemas, which the plan doesn't touch).
-
-**Deploy notes**
-- Gateway-side changes require the gateway container rebuild + restart (`./down.sh && ./start-gateway.sh && ./start-host-daemon.sh`).
-- MCP-side changes ride the plugin: version bump (plugin.json + package.json), push, `reload_plugins`.
-- Order: push once (both sides land together on main), then restart the gateway, then reload plugins on sessions. A version skew window is tolerable in both directions: an old plugin against a new gateway just keeps LLM-answered handshakes (no register field, no conversationId - fail-open gate); a new plugin against an old gateway degrades cleanly - VERIFIED: both `WsRegisterSchema` and `RespondBodySchema` are plain (non-strict) `z.object`, which silently strips unknown keys in zod 4, so the new fields are dropped and validation passes.
-- Non-plugin registrants verified unaffected: the host daemon registers with team "host" (never handshaked, field optional) and the Android console does not register over this WS path at all (its register is the sealed ConsoleOp variant; `WsRegisterSchema` is not codegen'd into `proto/Protocol.kt`, so no Kotlin change or codegen rerun is needed).
-
-## Audit (plan-refinement cycle, lap 2 on the final design)
-
-Ran a 4-dimension parallel audit of the final design against the code (MCP cache wiring, gateway register-confirm, reply-gate correctness with an adversarial false-positive hunt, compat + tests). 12 findings, all implementation-level, all folded into the items above:
-- **Type hazard**: `buildRegisterMsg` is `Record<string, string>` - must widen for the boolean; the tempting `"true"` string workaround would make the new gateway drop the whole register. Schema hardened with `.catch(undefined)`.
-- **Gate hardening**: fail-open extended to the unconfirmed-socket-with-no-pending-entry window (a dying socket answered after readyState dropped); gate requires live + non-virtual + unconfirmed + a nameable hs id. Adversarial reconnect walk found NO false positive: role-carrying re-registers confirm synchronously in the WS handler before any queued HTTP respond is processed.
-- **Rejection shape**: must be non-2xx (409) with the full instruction in the `error` string - `routerPost` treats a 200-with-error body as success and would silently drop the reply while printing "Reply sent."
-- **Cache-poisoning hardening**: `setIsMainOrLeadAgent` gated on membership in the set of hs ids this process actually received, so a delegated structured reply with a relayed hs id can't confirm a worker as lead.
-- **Prose-answer parity**: the gateway's `/true/i` prose fallback needed a mirrored cache write in plain `channel_reply`, or prose-confirmed leads would keep re-opening the bounce window on every reconnect.
-- **Test inventory**: the three heartbeat-resend tests named explicitly (two rewritten, one deleted); `createdAt` and its stale comment added to item 7's deletion list.
-- Deploy-note zod question resolved positively (both schemas non-strict, skew degrades cleanly); console/host-daemon confirmed untouched.
-
-## Coverage sweep (plan-refinement cycle, lap 3 - "did we miss a file?")
-
-Ran a repo-wide, symbol-based sweep (grep for every handshake-related identifier across `src/`, `android/`, `scripts/`, `tests/`) plus a 3-dimension audit, specifically to catch a file the prior two laps hadn't touched. 6 findings, all folded in above:
-- **4 high-severity, same-commit test breaks in `reply-tool.test.ts`** - exact-object-equality assertions on the reply payloads that will fail the instant item 3's `conversationId` field is added. Not previously named anywhere in the plan.
-- **1 medium finding, a genuine gap**: the plan's Tests section said the reply-gate coverage lived in `websocket.test.ts`, but item 8's actual code (`respond()`) lives in `routes.ts` - the gate's tests belong in `routes.test.ts`, which already has the right harness (`makeCtx` already threads `conversationRegistry`) but needs a new override slot for the handshake-pending lookup. Moved and expanded above.
-- **1 low finding**: `strict-schemas.test.ts` also matched the grep but is confirmed genuinely unaffected (it only tests the agent-facing tool-input schemas, which the plan doesn't touch) - explicitly ruled out rather than left unmentioned.
-- Two further dimensions (gateway/console/federation cross-check; codegen and sibling-repo integration) came back clean: `cross_domain_handshake` confirmed unrelated (shares only the word "handshake"), `WsRegisterSchema` confirmed not codegen'd into Kotlin, no sibling-repo change needed.
-
-## Red-team (audited-implementation cycle, post-implementation adversarial pass)
-
-4-dimension parallel audit against the implemented diff (`crash-nullsafety`, `trust-boundary`, `concurrency-ordering`, `regression-unrelated-callsites`). `crash-nullsafety` and `regression-unrelated-callsites` came back clean. 3 findings from the other two dimensions, all triaged and two fixed:
-
-- **HIGH, fixed - hs-id disclosure via the reply gate's 409 body.** `routes.ts`'s item-8 gate echoed the victim's actual pending `hs-*` id in its rejection message. Since a caller's `conversationId` (added by item 3) is not secret - it rides verbatim in every `session_id` any correspondent has ever seen - anyone who has exchanged one message with a peer could spoof that peer's `conversationId` in an unrelated `/respond` call, read their live handshake id out of the 409 body, then replay it against `resolveHandshake` (which has no caller-ownership check) to forge that peer's lead confirmation or force a targeted eviction. Fixed by dropping the actual id from the error string entirely - a legitimate self-caller already has its own pending id from the original handshake push (and, per item 1, `receivedHandshakeIds` tracks it client-side), so the message doesn't need to name it. `resolveHandshake`'s own lack of a caller-ownership check was left alone: given the bridge's existing unauthenticated same-network trust model, a `conversationId`-based ownership check would only compare against another self-reported, equally-forgeable field, so it adds no real boundary - removing the one genuinely NEW disclosure this diff introduced is the complete, proportionate fix.
-- **HIGH, pre-existing, recorded not fixed - orphaned register slot on a same-ws double-register.** `websocket.ts`'s register handler never cleans up a re-registering socket's own prior `(team, subId)` slot (it only evicts when a *different* socket occupies the new slot), leaking a `subs` entry, a stale `handshakePending` id, and permanently blocking `onTeamDisconnect`. Confirmed pre-existing (the diff's only register-handler edit is the `isMainOrLead` branch, added strictly after this unchanged eviction logic) and reachable only via a same-ws double-register, which the real MCP client never sends. Recorded as a `phren` finding + task rather than fixed inline, matching this session's established treatment of out-of-scope pre-existing bugs found during red-team.
-- **MEDIUM, fixed - first-register `isMainOrLead:true` had zero server-side verification.** A client could claim `isMainOrLead:true` on its very first-ever register (no prior handshake round-trip) and the gateway would confirm it as lead / mint a durable session record on the strength of one self-reported boolean - silently defeating the exact "confirmed-looking but not really" protection item 8's own gate exists to provide. Fixed with a `confirmedLeadTeams` set in `websocket.ts`: a team only earns the remembered-lead register shortcut after it has completed at least one REAL handshake round-trip (a genuine `resolveHandshake` confirm adds it to the set); a register's `isMainOrLead:true` claim for a team not yet in the set is ignored and falls through to a normal challenge. A `SessionStore`-record-based gate was considered and rejected: `establishOnConfirm` only ever creates records for composite `project.session` teams, so gating on "a record already exists" would permanently disable the remembered-lead shortcut for loose (non-composite) peers - likely the most common recurring case of the original "handshakes pile up" complaint.
-
-All three findings verified fixed via `bunx tsc --noEmit` (clean), the full `bunx vitest run` suite (1011/1011 passed, +2 new tests), and `bun run lint` (clean).
-
-A second red-team round targeting the two fixes above (a fresh 4-dimension audit against `confirmedLeadTeams`'s lifecycle, the rewritten 409 message, plus another crash/regression sweep) came back clean across all dimensions - verified via the workflow's own journal, not just its summary.
-
-## Framework-first audit (audited-implementation cycle)
-
-3-dimension audit for missing/incomplete architectural patterns. Two came back "no change needed" (a `HandshakeRegistry` class for `websocket.ts`'s `handshakePending`/`confirmedLeadTeams`, and extracting `routes.ts`'s inline reply gate into a shared middleware) - both correctly judged consistent with this codebase's existing closures-over-state style, with no duplicated logic to eliminate. One real, proportionate finding, applied:
-
-- **`mcp/bridge/helpers.ts`'s handshake-role cache consolidated.** The prior `isMainOrLeadAgent` (`boolean | null`) plus `receivedHandshakeIds` (`Set<string>`) were two independently-mutable module vars with a cross-file invariant - "check `isReceivedHandshakeId` before calling `setIsMainOrLeadAgent`" - enforced only by a comment duplicated at both `channelReply.ts` call sites, with nothing stopping a future caller from writing the cache unguarded (the exact cache-poisoning hazard item 1's own hardening exists to prevent). Replaced with a `createHandshakeRoleCache()` factory (matching this file's own `createReconnector` precedent for coupled, invariant-bearing state) exposing `noteReceived`/`confirm`/`get`; the single exported `confirmHandshakeRole(hsSessionId, value)` now no-ops for an id `noteReceived` never saw, so the guard is structural rather than convention-enforced and a third future call site inherits it automatically. `setIsMainOrLeadAgent`/`isReceivedHandshakeId` are retired (confirmed via a repo-wide grep, no remaining references). Verified via `bunx tsc --noEmit` (clean), `bunx vitest run` (1011/1011, mock updated), and `bun run lint` (clean).
-
-## Painpoints
-
-Out-of-scope scouting pass (4-dimension parallel sweep) across the gateway/MCP bridge codebase for known bug classes, naming smells, dead code, and framework-first gaps. None of these are fixed - collected here to seed future work.
-
-**Register/eviction landmines in `src/gateway/websocket.ts`** (the same family as the already-recorded orphaned-register-slot bug):
-- `createWebSocketHandlers/evictSocket` - calls `victim.close()`, which the real `close()` handler short-circuits on immediately since `evictSocket` already set `isStale`. Whenever `evictSocket` runs without a replacement socket landing in the same call stack (a rejected worker evicted from `resolveHandshake`, or the register handler's cross-team `conversationId`-collision eviction), `close()`'s `hasRealSubs -> onTeamDisconnect?.(teamName)` cleanup never fires for the emptied team.
-- `message()` register handler / `sendHandshake` vs `resolveHandshake` - a second `register` on the same live connection for the same `(team, subId)` (skipping the `existing !== ws` eviction branch since `existing === ws`) unconditionally calls `sendHandshake` again if it doesn't yet qualify for the remembered-lead shortcut, minting a second `handshakePending` entry while any earlier unanswered one for that exact pair is left untouched. Both can independently resolve out of order via `resolveHandshake`, which has no guard against "this socket already resolved a handshake."
-- `message()` register handler's virtual-peer eviction loop - manually replicates only part of `evictSocket`'s cleanup (subs delete + conversationRegistry check) when evicting a squatting `ConsolePeer`, but never sets `isStale`, never calls `forgetPending`, never calls `sessionStore?.clearLive`, unlike every other eviction path in the file.
-- `message()` register handler's `wakeCoordinator.notify(team)` call - fires unconditionally as soon as a bare register is processed, before the handshake resolves, with no compensating fail/retract call if that registrant is later evicted (rejected worker, or otherwise) - a wake-waiting caller can resolve successfully purely because some socket briefly registered.
-
-**Naming / dead code:**
-- `src/mcp/bridge/helpers.ts : bridgeAgentType` - zero call sites anywhere in the repo (verified by grep); its sibling getters `bridgeProjectName`/`bridgeConversationId` both have real external callers.
-- `src/mcp/bridge/helpers.ts : RouterPostOptions` - named for `routerPost` but also used, unrenamed, as `routerGet`'s options type.
-- `src/gateway/routes.ts : send() / SendRequestSchema.channelOnly` - stale comments and a thrown error message ("CLI branch", "CLI team", "CLI-mode agent") describe the CLI dispatch path retired with the host split; `send()`'s own later comment already notes the fall-through this guards is unreachable given `ConnectionMode`'s single-value `channel` enum.
-
-**Wider bug classes (adjacent, unmodified files):**
-- `src/shared/session-store.ts : SessionStore/resumeRecord` - no guard against a falsy/undefined `claudeSessionId`; the one in-file caller (`establishOnConfirm`) checks truthiness first, but the exported method itself doesn't, so a future caller passing an empty id could bind an unrelated record.
-- `src/gateway/index.ts : startGateway/activateEvieHandlers : markCreateInFlight` - the only removal path for `inflightCreates` is the caller invoking the returned unlock closure; no TTL/sweep backstop if a caller skips it on an early-return/throw path.
-- `src/gateway/index.ts : startGateway/router` (and the pinned-TLS `/enroll` handler) - `await req.json()` is typed `Record<string, unknown>` but a literal `null`/array/number JSON body doesn't throw and is forwarded as-is, so a downstream `body.foo` access can TypeError instead of surfacing a validation error.
-- `src/gateway/index.ts : startGateway/tryWakeTeam` - returns the existing in-flight promise on a concurrent wake for the same team without inspecting the second caller's own `createOpts` (displayLabel/mintedFrom), so whichever call started first silently decides the outcome for both.
-- `src/gateway/index.ts : startGateway/activateFederation` - the `SIGTERM` handler calls `evieClient?.stop()` unawaited with no `.catch`; a rejecting stop() becomes an unhandled rejection during shutdown (only `uncaughtException` is installed, not `unhandledRejection`).
-
-**Framework-first, out of scope:**
-- `src/gateway/routes.ts : send() / respond()` - interleave pure decision logic with live side effects in one long body, unlike the pure-decision/effect split this codebase already established in `gateway/wake.ts` (`decideWakeCreate` vs `doWakeTeam`). Concrete symptom: `mirrorPeer`-style address-resolution/payload-assembly logic is hand-rolled independently at 4+ call sites across `send()`/`sendCrossGateway`/`respond()`'s branches, so a future notice/response field addition needs updating in several places instead of one isolated, testable function.
+This file previously held the shipped "remember the answer, stop re-asking" design (one LLM
+handshake per process, silent reconnects, the reply-gate, the red-team hs-id-disclosure fix). That
+work shipped and its writeup lives in git history for this path. This is a fresh gap the shipped
+design did not cover: it optimized the happy path (answer once, cache it) but left no recovery for a
+session that never got to answer even once.
