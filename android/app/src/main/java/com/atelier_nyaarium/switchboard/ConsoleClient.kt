@@ -405,13 +405,15 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * through here instead of repeating those four positional args - besides the duplication, three of
 	 * them are adjacent same-typed Strings (url, saToken, appToken) that Kotlin cannot keyword-enforce
 	 * positionally, so a hand-repeated call is one transposition away from swapping which credential
-	 * rides which header. logBody defaults to true (safe for most result shapes); pass false for a
-	 * call whose 2xx result carries secret material the debug log must never echo. */
+	 * rides which header. logBody has NO default (mirrors the companion primitive) - a call whose 2xx
+	 * result carries secret material the debug log must never echo passes false; every other site
+	 * states true explicitly, so a new site cannot compile without deciding rather than silently
+	 * inheriting a "log everything" default. */
 	private inline fun <reified R> postEvieDirect(
 		tag: String,
 		describe: String,
 		body: RequestBody,
-		logBody: Boolean = true,
+		logBody: Boolean,
 		fail: (String) -> R,
 	): R = postEvieDirect(client, "$proxyBase/relay", prov.saToken, prov.appToken, tag, describe, body, logBody, fail)
 
@@ -424,6 +426,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			tag = "Enroll",
 			describe = "op=${op::class.simpleName}",
 			body = wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON),
+			logBody = true,
 		) { EnrollResult(ok = false, error = it) }
 	}
 
@@ -436,6 +439,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			tag = "DeviceApproval",
 			describe = "step=${op::class.simpleName}",
 			body = wireJson.encodeToString(ConsoleApprovalEnvelope.serializer(), ConsoleApprovalEnvelope(op)).toRequestBody(JSON),
+			logBody = true,
 		) { ConsoleApprovalResult(ok = false, error = it) }
 
 	/** First-root a pending friend Domain at this device's silently-generated owner key. evie decides it
@@ -448,6 +452,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			tag = "FirstRoot",
 			describe = "domain=${signed.firstRoot.domainId}",
 			body = wireJson.encodeToString(FirstRootEnvelope.serializer(), envelope).toRequestBody(JSON),
+			logBody = true,
 		) { EnrollResult(ok = false, error = it) }
 	}
 
@@ -475,6 +480,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			tag = "EnrollHs",
 			describe = "step=${op::class.simpleName}",
 			body = wireJson.encodeToString(EnrollHandshakeEnvelope.serializer(), envelope).toRequestBody(JSON),
+			logBody = true,
 		) { EnrollHandshakeResult(ok = false, error = it) }
 	}
 
@@ -486,6 +492,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			tag = "Roster",
 			describe = "roster",
 			body = wireJson.encodeToString(RosterEnvelope.serializer(), RosterEnvelope(req)).toRequestBody(JSON),
+			logBody = true,
 		) { RosterResult(ok = false, error = it) }
 
 	/** Broker a FLOW-2 trust-rendezvous frame (arm/join/reveal/cancel) at evie. POST { trustHandshake }
@@ -495,6 +502,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			tag = "Trust",
 			describe = "handshake op=${op::class.simpleName}",
 			body = wireJson.encodeToString(TrustHandshakeEnvelope.serializer(), TrustHandshakeEnvelope(op)).toRequestBody(JSON),
+			logBody = true,
 		) { TrustHandshakeResult(ok = false, error = it) }
 
 	/** Query "who armed trust toward me?" at evie (the highlight). POST { trustPending } with the
@@ -504,6 +512,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			tag = "Trust",
 			describe = "pending",
 			body = wireJson.encodeToString(TrustPendingEnvelope.serializer(), TrustPendingEnvelope(req)).toRequestBody(JSON),
+			logBody = true,
 		) { TrustPendingResult(ok = false, error = it) }
 
 	/** Submit an admin-signed provision_tenant enroll op and decode the minted one-time invite nonce evie
@@ -881,10 +890,10 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		}
 
 		/** What postEvieDirect's resp log line shows for a response body: the real (truncated) text when
-		 * logBody is true, else a byte-count placeholder that can never contain the body's own content -
-		 * pulled out of postEvieDirect so this redaction rule is directly unit-testable without going
-		 * through DebugLog (which a pure-JVM test cannot observe). */
-		internal fun redactedBodyPreview(text: String, logBody: Boolean): String =
+		 * logBody is true, else a char-count placeholder that can never contain the body's own content -
+		 * pulled out of postEvieDirect so this policy is directly unit-testable without going through
+		 * DebugLog (which a pure-JVM test cannot observe). */
+		internal fun loggedBodyPreview(text: String, logBody: Boolean): String =
 			if (logBody) text.take(160) else "(redacted, ${text.length} chars)"
 
 		/** Shared evie-direct POST: every op that bypasses relay() and talks to evie's console-bridge
@@ -928,7 +937,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 				}
 			resp.use {
 				val text = resp.body?.string().orEmpty()
-				DebugLog.log(tag, "$describe resp HTTP ${resp.code} ${redactedBodyPreview(text, logBody)}")
+				DebugLog.log(tag, "$describe resp HTTP ${resp.code} ${loggedBodyPreview(text, logBody)}")
 				if (resp.isSuccessful) {
 					return runCatching { wireJson.decodeFromString<R>(text) }
 						.getOrElse { fail("unexpected response (HTTP ${resp.code})") }

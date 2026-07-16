@@ -110,18 +110,18 @@ class PostEvieDirectTest {
 		assertEquals(EnrollResult(ok = true, error = null), call(logBody = false))
 	}
 
-	// ---- redactedBodyPreview ----
+	// ---- loggedBodyPreview ----
 
 	@Test
-	fun redactedBodyPreview_showsTheTruncatedBodyWhenLogBodyIsTrue() {
+	fun loggedBodyPreview_showsTheTruncatedBodyWhenLogBodyIsTrue() {
 		val body = """{"ok":true,"saToken":"super-secret-token-value"}"""
-		assertEquals(body.take(160), ConsoleClient.redactedBodyPreview(body, logBody = true))
+		assertEquals(body.take(160), ConsoleClient.loggedBodyPreview(body, logBody = true))
 	}
 
 	@Test
-	fun redactedBodyPreview_neverContainsTheBodyWhenLogBodyIsFalse() {
+	fun loggedBodyPreview_neverContainsTheBodyWhenLogBodyIsFalse() {
 		val body = """{"ok":true,"saToken":"super-secret-token-value"}"""
-		val preview = ConsoleClient.redactedBodyPreview(body, logBody = false)
+		val preview = ConsoleClient.loggedBodyPreview(body, logBody = false)
 		assertFalse(preview.contains("super-secret-token-value"))
 		assertTrue(preview.contains("redacted"))
 	}
