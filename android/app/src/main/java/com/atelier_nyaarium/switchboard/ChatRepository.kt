@@ -3003,6 +3003,14 @@ class ChatRepository(
 	 * if the send actually landed, so this can never double-deliver. A row whose
 	 * send never landed re-fails to the tap-to-retry badge. */
 	suspend fun reconcilePending() = withContext(Dispatchers.IO) {
+		// Unlike forgottenUntil's time-based self-expiry, a reconciled key's liveness is tied to
+		// its message's own status: once a row leaves "pending" it can never be looked at again
+		// (the loop below skips non-pending rows outright), so retaining only currently-pending
+		// keys is a correct, unbounded-growth-free eviction - not just an approximation.
+		val stillPending = _state.value.threads.flatMapTo(mutableSetOf()) { (team, msgs) ->
+			msgs.filter { it.fromMe && it.status == "pending" }.map { "$team:${it.id}" }
+		}
+		reconciled.retainAll(stillPending)
 		for ((team, msgs) in _state.value.threads) {
 			for (m in msgs) {
 				if (!m.fromMe || m.status != "pending") continue
@@ -3288,6 +3296,10 @@ class ChatRepository(
 		client = null
 		sttsClient = null
 		stts.purgeAll()
+		// Paired with the TTS purge above, same as the one-shot schema-migration wipe does (see
+		// init{}): the prefs wipe never touches filesDir, so downloaded attachments would
+		// otherwise survive a Revoke-and-Delete/Clear-and-re-provision indefinitely.
+		Attachments.purgeAll(filesDir)
 		localGatewayId = ""
 		mailboxSync.clearInMemory()
 		_state.value = ChatState(provisioned = false)
