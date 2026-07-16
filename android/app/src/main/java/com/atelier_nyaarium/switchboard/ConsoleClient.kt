@@ -1005,7 +1005,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		// poll()'s held branch derives its own larger callTimeoutMs from its own read timeout
 		// instead of using this (see poll()). send() opts out entirely (callTimeoutMs = null)
 		// since its upload body write must not be capped by an overall call duration.
-		private const val DEFAULT_RELAY_CALL_TIMEOUT_MS =
+		// internal (not private): ChatRepository derives FORGET_TOMBSTONE_MS from this, since
+		// that tombstone must outlast the same teams() call this bounds.
+		internal const val DEFAULT_RELAY_CALL_TIMEOUT_MS =
 			PINNED_CONNECT_TIMEOUT_MS + PINNED_READ_TIMEOUT_MS + CALL_TIMEOUT_MARGIN_MS
 
 		/** System-trust client for the PUBLIC device-approval ingress. No CA pin (the reach URL is a real

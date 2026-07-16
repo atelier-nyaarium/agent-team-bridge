@@ -2803,7 +2803,7 @@ class ChatRepository(
 					// An old gateway ignores holdMs and returns empty instantly; floor
 					// the cadence so that degradation never becomes a tight spin.
 					heldEmpty = hold > 0 && mb.entries.isEmpty() &&
-						System.currentTimeMillis() - started < 3_000
+						System.currentTimeMillis() - started < INSTANT_EMPTY_THRESHOLD_MS
 					// Fold the result through the durable cursor: epoch flip, seq dedupe (a
 					// lost-ack re-drain), and the dropped-gap DELTA all live in advance(), which
 					// returns only genuinely-fresh entries. commit() advances the cursor LAST,
@@ -3606,11 +3606,25 @@ class ChatRepository(
 		const val TEAMS_REFRESH_MS = 30_000L
 		// forgottenUntil's tombstone lifetime: only needs to outlast a single in-flight teams()
 		// HTTP round trip (what the resurrection race actually races against), not the much longer
-		// TEAMS_REFRESH_MS/LONG_POLL_HOLD_MS reconciliation cadence - a wide margin over that so the
-		// masking window closes almost as soon as it opens.
-		const val FORGET_TOMBSTONE_MS = 15_000L
+		// TEAMS_REFRESH_MS/LONG_POLL_HOLD_MS reconciliation cadence. Derived from ConsoleClient's
+		// own bound on that call (not an independent literal) so it can never silently fall behind
+		// the client's real worst case again - a prior hand-picked 15s undershot the client's
+		// actual (unbounded-at-the-time) worst case entirely.
+		const val FORGET_TOMBSTONE_MS = ConsoleClient.DEFAULT_RELAY_CALL_TIMEOUT_MS + 5_000L
 		// Matches the gateway's own per-payload bucket (MAX_RESPONSE_FILE_BYTES); a single
 		// attachment may use the whole bucket, so this is a total, not a stricter per-file cap.
 		const val MAX_OUTGOING_BYTES = 500_000_000
+
+		// Detects a gateway that ignores holdMs and returns empty instantly instead of honoring
+		// the hold. Must stay well below LONG_POLL_HOLD_MS so a genuine ~40s hold is never
+		// mistaken for this; the init check below pins that relationship instead of leaving it
+		// as an unstated assumption on the literal.
+		const val INSTANT_EMPTY_THRESHOLD_MS = 3_000L
+
+		init {
+			require(INSTANT_EMPTY_THRESHOLD_MS < LONG_POLL_HOLD_MS / 4) {
+				"INSTANT_EMPTY_THRESHOLD_MS must stay well below LONG_POLL_HOLD_MS"
+			}
+		}
 	}
 }

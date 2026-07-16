@@ -394,9 +394,20 @@ class SwitchboardService : Service(), DeepIdleScheduler {
 		 * Reset on service start so it returns with the next boot/launch. */
 		@Volatile var statusDismissed = false
 
+		private const val TEAM_ID_RANGE_START = 1000
+		private const val TEAM_ID_RANGE_SIZE = 1_000_000
+
 		/** Team notification ids live in their own range so a team name can never
-		 * hash onto the persistent status notification's id. */
-		private fun teamNotificationId(team: String): Int = 1000 + (team.hashCode() and 0x7FFFFFFF) % 1_000_000
+		 * hash onto the persistent status notification's id - the init check below
+		 * enforces it instead of leaving it as a comment-only claim. */
+		private fun teamNotificationId(team: String): Int =
+			TEAM_ID_RANGE_START + (team.hashCode() and 0x7FFFFFFF) % TEAM_ID_RANGE_SIZE
+
+		init {
+			require(STATUS_NOTIFICATION_ID < TEAM_ID_RANGE_START) {
+				"STATUS_NOTIFICATION_ID must fall outside the team notification id range"
+			}
+		}
 
 		/** Dismiss a team's message notification. Forgetting a team drops its thread from
 		 * `state.threads` entirely, so [reconcileTeamNotifications]'s own reconcile loop (keyed on
