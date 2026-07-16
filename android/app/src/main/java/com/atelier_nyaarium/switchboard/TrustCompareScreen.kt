@@ -116,12 +116,17 @@ fun TrustCompareScreen(
 								confirmed.set(true)
 								busy = true
 								scope.launch {
-									repo.enrollConfirm(
-										repo.confirmedDomainId() ?: return@launch,
-										s.exchange.peerDomainId,
-										edgeNonce,
-										peerOwnerSignPub,
-									)
+									val domainId = repo.confirmedDomainId()
+									if (domainId == null) {
+										// Same failure path as the .onFailure below (not a bare return@launch),
+										// so this can never strand the screen on the busy spinner with no
+										// retry affordance.
+										confirmed.set(false)
+										busy = false
+										step = TrustCompareStep.Failed("Lost the confirmed session; please retry.")
+										return@launch
+									}
+									repo.enrollConfirm(domainId, s.exchange.peerDomainId, edgeNonce, peerOwnerSignPub)
 										// Both outcomes mean the friend edge is recorded (the relay edge is
 										// best-effort); the Trusted badge appears either way.
 										.onSuccess { step = TrustCompareStep.Done }
