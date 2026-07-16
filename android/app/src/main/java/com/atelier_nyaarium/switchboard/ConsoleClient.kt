@@ -598,7 +598,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	// teams() throws on a relay failure; this wrapper keeps the list-returning contract (empty on failure).
 	suspend fun listTeams(): List<String> =
-		runCatching { teams().map { it.name } }.getOrElse { if (it is CancellationException) throw it else emptyList() }
+		runCatchingCancellable { teams().map { it.name } }.getOrDefault(emptyList())
 
 	/** Send a message to a team. The reply may arrive inline within the relay hold or land in the mailbox
 	 * for a later poll; either way the conversation is keyed server-side by (this device, team). */
