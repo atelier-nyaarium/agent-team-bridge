@@ -21,32 +21,15 @@ Everything verified with a real Android build (`testDebugUnitTest` + the R8 `ass
 and the TypeScript suite; committed in small, separately-verified commits. Not yet pushed to
 origin as of this entry.
 
-- [high] `ConsoleClient.kt : ConsoleClient : poll` / `relay` (Android) - **bug-class** -
-  every network call in the class is still blocking `OkHttp Call.execute()`, no `suspend` anywhere
-  in the file, so it cannot be cancelled mid-flight. This session bounded the symptom (a per-call
-  `callTimeoutMs` on `relay()`, so a stalled call can no longer wedge the poll loop forever) but not
-  the cause - it is the reason `SwitchboardService`'s `destroyed`-flag/identity-guard defenses exist
-  at all. Fix: wrap `relay()` in `suspendCancellableCoroutine` (`enqueue()` + `call.cancel()` on
-  cancellation) - fixes cancellability for ~21 of the class's ~32 call sites in one change. Worth a
-  plan, not a quick fix - a concurrency-model change to the class every network call goes through.
-- [medium] `ConsoleClient.kt : ConsoleClient : enroll` (Android, + 9 near-identical siblings) -
-  **duplication** - the same ~15-line request/response/error-decode shape duplicated ten times
-  instead of sharing one helper the way `relay()` already does. Untouched this pass: the single
-  most security-sensitive file in the app, and confirming ten call sites are actually identical
-  enough to consolidate safely is real review work.
-- [medium] `ChatRepository.kt : LONG_POLL_HOLD_MS` (Android) - **cross-repo-drift-risk** - a 4-5
-  layer long-poll timeout chain (40s gateway hold, 45s gateway cap, 55s evie relay hold, 58s client
-  read timeout, 60s apiserver proxy) spread across two Kotlin files, two TypeScript files in two
-  different repos, plus untracked infra config, held in order by nothing but prose restated
-  independently in two places. Currently in sync; nothing pins it.
+The four above-low items originally listed here (the `ConsoleClient` cancellability rework, the
+10x duplicated evie-direct request shape, the `LONG_POLL_HOLD_MS` chain pin, and `forget()`'s
+per-team attachment purge) were extracted into `plans/console-hardening.md` (2026-07-16) as
+phases A-D with facts-from-code and fix directions. The three low/cosmetic items stay here:
+
 - [low] `ChatRepository.kt : ENROLL_POLL_MS` * `ENROLL_POLL_MAX` (Android) - **cross-repo-drift-risk** -
   must stay under evie-bot's `EnrollHandshakeCoordinator.DEFAULT_TTL_MS` (10 min); the arithmetic
   and the cross-repo claim both live only in one comment, and evie-bot is a separate repo/deploy
   lifecycle this pass could not safely edit.
-- [medium] `ChatRepository.kt : forget` (Android) - **bug-class** - `clearAll`'s full wipe now
-  purges the `Attachments` directory (fixed this pass), but the narrower per-team `forget(team)`
-  still doesn't: attachments are indexed by epoch/seq bucket, not by team, so a real per-team purge
-  needs an actual attachment-to-team index. Left for a proper pass rather than guessing at a scheme.
 - [low] `SwitchboardService.kt` (Android) - **framework-first** - notification building/posting
   (`buildStatusNotification`, `teamNotificationBuilder`, `updateStatusNotification`,
   `reconcileTeamNotifications`, `notifyBurst`, `createChannels`, plus companion helpers) is ~40% of
