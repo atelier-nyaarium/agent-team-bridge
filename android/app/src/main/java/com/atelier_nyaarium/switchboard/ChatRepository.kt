@@ -34,6 +34,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -3289,7 +3290,12 @@ class ChatRepository(
 		store.load()?.let { runCatching { Provisioning.parse(it).device }.getOrNull() } ?: ""
 
 	suspend fun clearAll() = withContext(Dispatchers.IO) {
-		pollJob?.cancel()
+		// cancelAndJoin (not cancel): ConsoleClient.poll() is a blocking call, so a pass already
+		// inside it is oblivious to cancellation until it returns - cancel() alone would let this
+		// function race ahead and reset state while a stale drain is still about to persist mail
+		// and re-touch _state. Joining means the worst case is this function waiting out that
+		// pass's own call timeout, not a silent resurrection of state this call is meant to wipe.
+		pollJob?.cancelAndJoin()
 		// Preserve the settings-owned voice creds + taste: Clear & re-provision wipes
 		// provisioning/identity/history, never voice (clear() is the full factory wipe).
 		store.clearProvisioning()
@@ -3302,7 +3308,7 @@ class ChatRepository(
 		Attachments.purgeAll(filesDir)
 		localGatewayId = ""
 		mailboxSync.clearInMemory()
-		_state.value = ChatState(provisioned = false)
+		_state.update { ChatState(provisioned = false) }
 	}
 
 	private fun append(team: String, msg: Message): Long {
