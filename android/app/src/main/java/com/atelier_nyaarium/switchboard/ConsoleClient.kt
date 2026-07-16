@@ -67,6 +67,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
@@ -196,7 +197,11 @@ private data class EnrollEnvelope(
 
 /** A retryable bounce body (offline / malformed), distinct from an EnrollResult. */
 @Serializable
-private data class BounceBody(val error: String? = null, val retryable: Boolean = false)
+// internal (not private): referenced from postEvieDirect, an internal inline fun - an inline
+// function's body cannot access a private-in-file type even from the same file (the compiler
+// treats inlining as a visibility-widening operation). Same bug class as ConsoleClient's own
+// PINNED_*/HELD_*/PROXY_CEILING_MS companion constants; see their comment for the general rule.
+internal data class BounceBody(val error: String? = null, val retryable: Boolean = false)
 
 /** First-root POST body: a top-level `firstRoot` field routes to evie's console-bridge
  * firstRoot intake, decided at evie and never relayed to a Gateway. */
@@ -395,76 +400,43 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		}
 	}
 
+	/** This instance's evie-direct POST, filling in the companion's testable postEvieDirect primitive
+	 * with this ConsoleClient's own client/url/tokens. Every production evie-direct call site goes
+	 * through here instead of repeating those four positional args - besides the duplication, three of
+	 * them are adjacent same-typed Strings (url, saToken, appToken) that Kotlin cannot keyword-enforce
+	 * positionally, so a hand-repeated call is one transposition away from swapping which credential
+	 * rides which header. logBody defaults to true (safe for most result shapes); pass false for a
+	 * call whose 2xx result carries secret material the debug log must never echo. */
+	private inline fun <reified R> postEvieDirect(
+		tag: String,
+		describe: String,
+		body: RequestBody,
+		logBody: Boolean = true,
+		fail: (String) -> R,
+	): R = postEvieDirect(client, "$proxyBase/relay", prov.saToken, prov.appToken, tag, describe, body, logBody, fail)
+
 	/** Submit an owner enroll op directly to evie (the Domain root). Enroll ops are evie-direct and never
 	 * relayed to a Gateway, so they succeed with no gateway connected; evie answers an EnrollResult, not a
 	 * console_relay_reply. A bounce (offline, 501, malformed) is surfaced as a failed EnrollResult. */
 	fun enroll(op: EnrollOp): EnrollResult {
 		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), op)
-		val req = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON))
-			.build()
-		// Trace the POST URL and outcome. A transport throw means the device cannot reach evie's
-		// console-bridge at all; an HTTP code means it reached evie, so the code is the coordinator's verdict.
-		DebugLog.log("Enroll", "POST $proxyBase/relay op=${op::class.simpleName}")
-		val resp =
-			try {
-				client.newCall(req).execute()
-			} catch (e: Exception) {
-				DebugLog.log("Enroll", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("Enroll", "resp HTTP ${resp.code} ${text.take(120)}")
-			// 2xx is a real EnrollResult. A coordinator rejection is 400 with an EnrollResult body; a
-			// transport bounce is {error, retryable}. Cross-check the status so a non-2xx body is
-			// never read as a successful enroll.
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<EnrollResult>(text) }
-					.getOrElse { EnrollResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<EnrollResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return EnrollResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
+		return postEvieDirect(
+			tag = "Enroll",
+			describe = "op=${op::class.simpleName}",
+			body = wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON),
+		) { EnrollResult(ok = false, error = it) }
 	}
 
 	/** Drive one device-approval frame (arm/poll/approve/cancel) through evie's coordinator over the
 	 * AUTHENTICATED console-bridge. Mirrors enroll()'s envelope + POST: evie answers a
 	 * ConsoleApprovalResult directly (200 ok, 400 reject), never relaying to a Gateway. The public
 	 * join/fetch steps must NOT come here - they go to postPublicApproval. */
-	fun postConsoleApproval(op: ConsoleApprovalOp): ConsoleApprovalResult {
-		val req = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(
-				wireJson.encodeToString(ConsoleApprovalEnvelope.serializer(), ConsoleApprovalEnvelope(op)).toRequestBody(JSON),
-			)
-			.build()
-		DebugLog.log("DeviceApproval", "POST $proxyBase/relay step=${op::class.simpleName}")
-		val resp =
-			try {
-				client.newCall(req).execute()
-			} catch (e: Exception) {
-				DebugLog.log("DeviceApproval", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("DeviceApproval", "resp HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<ConsoleApprovalResult>(text) }
-					.getOrElse { ConsoleApprovalResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<ConsoleApprovalResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return ConsoleApprovalResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
-	}
+	fun postConsoleApproval(op: ConsoleApprovalOp): ConsoleApprovalResult =
+		postEvieDirect(
+			tag = "DeviceApproval",
+			describe = "step=${op::class.simpleName}",
+			body = wireJson.encodeToString(ConsoleApprovalEnvelope.serializer(), ConsoleApprovalEnvelope(op)).toRequestBody(JSON),
+		) { ConsoleApprovalResult(ok = false, error = it) }
 
 	/** First-root a pending friend Domain at this device's silently-generated owner key. evie decides it
 	 * directly from the self-signed frame + one-time invite nonce, with no gateway and no admission, so it
@@ -472,31 +444,11 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * already-claimed invite). A reject is not retryable (the root was decided), so the caller surfaces it. */
 	fun firstRoot(signed: SignedFirstRoot): EnrollResult {
 		val envelope = FirstRootEnvelope(signed)
-		val req = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(FirstRootEnvelope.serializer(), envelope).toRequestBody(JSON))
-			.build()
-		DebugLog.log("FirstRoot", "POST $proxyBase/relay domain=${signed.firstRoot.domainId}")
-		val resp =
-			try {
-				client.newCall(req).execute()
-			} catch (e: Exception) {
-				DebugLog.log("FirstRoot", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("FirstRoot", "resp HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<EnrollResult>(text) }
-					.getOrElse { EnrollResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<EnrollResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return EnrollResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
+		return postEvieDirect(
+			tag = "FirstRoot",
+			describe = "domain=${signed.firstRoot.domainId}",
+			body = wireJson.encodeToString(FirstRootEnvelope.serializer(), envelope).toRequestBody(JSON),
+		) { EnrollResult(ok = false, error = it) }
 	}
 
 	/** Pull this owner's network gateway-bridge transport (the proxy SA token + CA) from evie. POST
@@ -504,32 +456,14 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * scoping by the request's signed owner proof. ok=false is an opaque reject (bad proof or not a rooted
 	 * owner); a transport bounce maps to ok=false too. The Console seals the returned creds into a bootstrap
 	 * bundle for a creds-less Gateway it is enrolling. */
-	fun requestGatewayTransport(req: TransportRequest): TransportResult {
-		val request = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(TransportEnvelope.serializer(), TransportEnvelope(req)).toRequestBody(JSON))
-			.build()
-		val resp =
-			try {
-				client.newCall(request).execute()
-			} catch (e: Exception) {
-				DebugLog.log("Transport", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("Transport", "resp HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<TransportResult>(text) }
-					.getOrElse { TransportResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<TransportResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return TransportResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
-	}
+	fun requestGatewayTransport(req: TransportRequest): TransportResult =
+		postEvieDirect(
+			tag = "Transport",
+			describe = "transport",
+			body = wireJson.encodeToString(TransportEnvelope.serializer(), TransportEnvelope(req)).toRequestBody(JSON),
+			// A 2xx body carries the minted gateway-bridge SA token - never let it reach the debug log.
+			logBody = false,
+		) { TransportResult(ok = false, error = it) }
 
 	/** Drive one enroll-handshake frame through evie's broker (POST { enrollHandshake }). evie relays the
 	 * peer's frame back, or reports pending; the phone computes the SAS locally. Pre-admission like firstRoot
@@ -537,148 +471,53 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * frame absent means keep polling (re-send the same step). */
 	fun enrollHandshake(op: EnrollHandshakeOp): EnrollHandshakeResult {
 		val envelope = EnrollHandshakeEnvelope(op)
-		val req = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(EnrollHandshakeEnvelope.serializer(), envelope).toRequestBody(JSON))
-			.build()
-		DebugLog.log("EnrollHs", "POST $proxyBase/relay step=${op::class.simpleName}")
-		val resp =
-			try {
-				client.newCall(req).execute()
-			} catch (e: Exception) {
-				DebugLog.log("EnrollHs", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("EnrollHs", "resp HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<EnrollHandshakeResult>(text) }
-					.getOrElse { EnrollHandshakeResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<EnrollHandshakeResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return EnrollHandshakeResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
+		return postEvieDirect(
+			tag = "EnrollHs",
+			describe = "step=${op::class.simpleName}",
+			body = wireJson.encodeToString(EnrollHandshakeEnvelope.serializer(), envelope).toRequestBody(JSON),
+		) { EnrollHandshakeResult(ok = false, error = it) }
 	}
 
 	/** Fetch the cross-tenant roster (the Users surface) from evie. POST { roster } evie-direct like
 	 * firstRoot: evie aggregates across Domains a gateway cannot see and answers itself. The request carries
 	 * the console's signed ROSTER proof; a non-member comes back ok=false (opaque). */
-	fun roster(req: RosterRequest): RosterResult {
-		val request = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(RosterEnvelope.serializer(), RosterEnvelope(req)).toRequestBody(JSON))
-			.build()
-		val resp =
-			try {
-				client.newCall(request).execute()
-			} catch (e: Exception) {
-				DebugLog.log("Roster", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("Roster", "resp HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<RosterResult>(text) }
-					.getOrElse { RosterResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<RosterResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return RosterResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
-	}
+	fun roster(req: RosterRequest): RosterResult =
+		postEvieDirect(
+			tag = "Roster",
+			describe = "roster",
+			body = wireJson.encodeToString(RosterEnvelope.serializer(), RosterEnvelope(req)).toRequestBody(JSON),
+		) { RosterResult(ok = false, error = it) }
 
 	/** Broker a FLOW-2 trust-rendezvous frame (arm/join/reveal/cancel) at evie. POST { trustHandshake }
 	 * evie-direct (the dumb broker; no sealing, like the enroll handshake). */
-	fun trustHandshake(op: TrustHandshakeOp): TrustHandshakeResult {
-		val request = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(
-				wireJson.encodeToString(TrustHandshakeEnvelope.serializer(), TrustHandshakeEnvelope(op)).toRequestBody(JSON),
-			)
-			.build()
-		val resp =
-			try {
-				client.newCall(request).execute()
-			} catch (e: Exception) {
-				DebugLog.log("Trust", "handshake transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("Trust", "handshake HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<TrustHandshakeResult>(text) }
-					.getOrElse { TrustHandshakeResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<TrustHandshakeResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return TrustHandshakeResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
-	}
+	fun trustHandshake(op: TrustHandshakeOp): TrustHandshakeResult =
+		postEvieDirect(
+			tag = "Trust",
+			describe = "handshake op=${op::class.simpleName}",
+			body = wireJson.encodeToString(TrustHandshakeEnvelope.serializer(), TrustHandshakeEnvelope(op)).toRequestBody(JSON),
+		) { TrustHandshakeResult(ok = false, error = it) }
 
 	/** Query "who armed trust toward me?" at evie (the highlight). POST { trustPending } with the
 	 * owner-signed proof; evie returns the armed rendezvous indexed under this owner key. */
-	fun trustPending(req: TrustPendingRequest): TrustPendingResult {
-		val request = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(
-				wireJson.encodeToString(TrustPendingEnvelope.serializer(), TrustPendingEnvelope(req)).toRequestBody(JSON),
-			)
-			.build()
-		val resp =
-			try {
-				client.newCall(request).execute()
-			} catch (e: Exception) {
-				DebugLog.log("Trust", "pending transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("Trust", "pending HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<TrustPendingResult>(text) }
-					.getOrElse { TrustPendingResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<TrustPendingResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return TrustPendingResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
-	}
+	fun trustPending(req: TrustPendingRequest): TrustPendingResult =
+		postEvieDirect(
+			tag = "Trust",
+			describe = "pending",
+			body = wireJson.encodeToString(TrustPendingEnvelope.serializer(), TrustPendingEnvelope(req)).toRequestBody(JSON),
+		) { TrustPendingResult(ok = false, error = it) }
 
 	/** Submit an admin-signed provision_tenant enroll op and decode the minted one-time invite nonce evie
 	 * returns (the admin's app builds the friend's QR from it). Same evie-direct path as enroll(); only the
 	 * richer result decode differs, since the wire EnrollResult omits the nonce. */
 	fun provisionTenant(signed: SignedProvisionTenant): ProvisionTenantResult {
 		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), EnrollOp.ProvisionTenant(signed))
-		val req = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON))
-			.build()
-		DebugLog.log("Enroll", "POST $proxyBase/relay op=ProvisionTenant")
-		client.newCall(req).execute().use { resp ->
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("Enroll", "provision resp HTTP ${resp.code} ${text.take(120)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<ProvisionTenantResult>(text) }
-					.getOrElse { ProvisionTenantResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<ProvisionTenantResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return ProvisionTenantResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
+		return postEvieDirect(
+			tag = "Enroll",
+			describe = "op=ProvisionTenant",
+			body = wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON),
+			// A 2xx body carries the minted one-time invite nonce - never let it reach the debug log.
+			logBody = false,
+		) { ProvisionTenantResult(ok = false, error = it) }
 	}
 
 	/** The reply's result payload decoded as T, or an error for a failed op. */
@@ -1041,10 +880,71 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 				.build()
 		}
 
+		/** What postEvieDirect's resp log line shows for a response body: the real (truncated) text when
+		 * logBody is true, else a byte-count placeholder that can never contain the body's own content -
+		 * pulled out of postEvieDirect so this redaction rule is directly unit-testable without going
+		 * through DebugLog (which a pure-JVM test cannot observe). */
+		internal fun redactedBodyPreview(text: String, logBody: Boolean): String =
+			if (logBody) text.take(160) else "(redacted, ${text.length} chars)"
+
+		/** Shared evie-direct POST: every op that bypasses relay() and talks to evie's console-bridge
+		 * straight (enroll, postConsoleApproval, firstRoot, requestGatewayTransport, enrollHandshake,
+		 * roster, trustHandshake, trustPending, provisionTenant) shares this exact decode contract - 2xx
+		 * decodes as R (falling back through `fail` on a malformed body); non-2xx tries R first (a
+		 * coordinator reject can carry a typed body), then a bare {error} bounce, then a plain HTTP-code
+		 * fallback via `fail`. Takes its client/url/tokens as parameters rather than reading `this` so a
+		 * MockWebServer test can drive it with no Context-backed ConsoleClient; production code never
+		 * calls this directly - it goes through the instance-level `postEvieDirect(tag, describe, body,
+		 * logBody, fail)` above `enroll()`, which fills in this ConsoleClient's own client/url/tokens.
+		 * `tag`+`describe` together must stay unique enough to disambiguate in the debug log (e.g. the
+		 * Trust pair, or provisionTenant vs enroll sharing the "Enroll" tag). `logBody` gates only the
+		 * resp line's body preview - requestGatewayTransport (a minted SA token) and provisionTenant (a
+		 * one-time invite nonce) pass false so their 2xx bodies never reach the debug log, which the
+		 * debug build ships off-device to evie /ingest as well as logcat. */
+		internal inline fun <reified R> postEvieDirect(
+			httpClient: OkHttpClient,
+			url: String,
+			saToken: String,
+			appToken: String,
+			tag: String,
+			describe: String,
+			body: RequestBody,
+			logBody: Boolean,
+			fail: (String) -> R,
+		): R {
+			val req = Request.Builder()
+				.url(url)
+				.header("Authorization", "Bearer $saToken")
+				.header("X-Console-Bridge-Token", "Bearer $appToken")
+				.post(body)
+				.build()
+			DebugLog.log(tag, "POST $url $describe")
+			val resp =
+				try {
+					httpClient.newCall(req).execute()
+				} catch (e: Exception) {
+					DebugLog.log(tag, "$describe transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+					throw e
+				}
+			resp.use {
+				val text = resp.body?.string().orEmpty()
+				DebugLog.log(tag, "$describe resp HTTP ${resp.code} ${redactedBodyPreview(text, logBody)}")
+				if (resp.isSuccessful) {
+					return runCatching { wireJson.decodeFromString<R>(text) }
+						.getOrElse { fail("unexpected response (HTTP ${resp.code})") }
+				}
+				runCatching { wireJson.decodeFromString<R>(text) }.getOrNull()?.let { return it }
+				val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
+				return fail(err ?: "HTTP ${resp.code}")
+			}
+		}
+
 		/** The fresh device N's public path: a plain HTTPS POST of the op JSON to evie's nonce-gated
 		 * ingress, carrying NO SA token and NO app token (N holds none). Only the join/fetch steps reach
 		 * here; the nonce in the op body is the gate. TLS is the public host's real cert (system trust).
-		 * Always answers a ConsoleApprovalResult (the ingress returns 200 with the ok flag in the body). */
+		 * Always answers a ConsoleApprovalResult (the ingress returns 200 with the ok flag in the body).
+		 * Deliberately NOT built on postEvieDirect: different client (publicClient, no CA pin), no auth
+		 * headers, and no isSuccessful branch on the decode (the ingress always answers 200). */
 		fun postPublicApproval(reachUrl: String, op: ConsoleApprovalOp): ConsoleApprovalResult {
 			val req = Request.Builder()
 				.url(reachUrl)

@@ -89,6 +89,16 @@ android {
 		getByName("test").resources.directories.add("src/main/assets")
 	}
 
+	testOptions {
+		unitTests {
+			// Without this, any pure-JVM test that touches a ConsoleClient path throws on the
+			// first DebugLog.log call: android.util.Log.d is an unmocked Android stub that throws
+			// RuntimeException("Stub!") by default. Existing tests never exercised that call path,
+			// so this only affects the new postEvieDirect MockWebServer tests.
+			isReturnDefaultValues = true
+		}
+	}
+
 }
 
 // Name the built APKs switchboard-<variant>.apk instead of the module-default
@@ -140,4 +150,6 @@ dependencies {
 	// Real org.json shadowing the android.jar stub (which throws on every method) so JSON
 	// serialization helpers are unit-testable off-device.
 	testImplementation(libs.org.json)
+	// A real local HTTP server for postEvieDirect's decode-contract matrix test.
+	testImplementation(libs.mockwebserver)
 }
