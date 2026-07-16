@@ -31,6 +31,7 @@ import kotlinx.serialization.json.JsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -1145,6 +1146,7 @@ class ChatRepository(
 			// bridge or enrollment, so a stale blob says "re-provision" and a missing
 			// identity says "not enrolled" - two different fixes that used to look identical.
 			runCatching { client().apiReachable() }.onFailure { e ->
+				if (e is CancellationException) throw e
 				val (cause, kind) = classifyConnError(e)
 				_state.update {
 					if (kind == ConnKind.TERMINAL) {
@@ -1172,6 +1174,7 @@ class ChatRepository(
 			// store is unavailable, so the member identity cannot be persisted) is the REAL cause;
 			// surface it instead of falling through to register()'s generic "not enrolled".
 			runCatching { submitConsoleAdmission() }.onFailure { e ->
+				if (e is CancellationException) throw e
 				val (cause, kind) = classifyConnError(e)
 				_state.update {
 					it.copy(
@@ -1199,7 +1202,7 @@ class ChatRepository(
 			// A teams refresh failure is not a connect failure: register succeeded, so we
 			// are connected. Log and proceed with the prior team list rather than masking
 			// the error as an empty board (which would blank live sessions).
-			val teams = runCatching { client().teams(localGatewayId) }.getOrElse {
+			val teams = runCatching { client().teams(localGatewayId) }.onFailure { if (it is CancellationException) throw it }.getOrElse {
 				DebugLog.log("Connect", "teams refresh failed: ${it.message?.take(120)}")
 				_state.value.teams
 			}
@@ -1217,6 +1220,11 @@ class ChatRepository(
 			refreshDisplayNameFromTeams()
 			DebugLog.log("Connect", "connected gateway=${localGatewayId.ifEmpty { "?" }}")
 		} catch (e: Exception) {
+			// MUST be the first statement: this catch spans the whole connect() attempt (register(),
+			// teams(), submitConsoleAdmission(), firstRootIfPending() all suspend into the network), and
+			// would otherwise defeat the CancellationException rethrow guards on the runCatching blocks
+			// nested inside this same try - their rethrow lands right back here and gets swallowed too.
+			if (e is CancellationException) throw e
 			val (cause, kind) = classifyConnError(e)
 			// "is not admitted" means the Gateway holds no admission for this Console. If we believed
 			// we were admitted, the flag is stale (the submit never landed in evie) - clear it so the
@@ -1252,14 +1260,14 @@ class ChatRepository(
 	 * let connect() proceed (nothing pending, already rooted, or a fresh root just succeeded), false
 	 * to abort connect after surfacing a terminal reject (an expired / already-claimed invite, which
 	 * does not self-heal). Idempotent: the firstRooted latch skips the round-trip on later connects. */
-	private fun firstRootIfPending(): Boolean {
+	private suspend fun firstRootIfPending(): Boolean {
 		val prov = runCatching { store.load()?.let { Provisioning.parse(it) } }.getOrNull() ?: return true
 		return when (val decision = FriendOnboarding.decide(prov, store.firstRooted)) {
 			is FirstRootDecision.NotPending -> true
 			is FirstRootDecision.Root -> {
 				DebugLog.log("FirstRoot", "pending domain=${decision.domainId}; rooting at silent owner key")
 				val signed = federation.signFirstRoot(decision.domainId, decision.nonce, System.currentTimeMillis())
-				val result = runCatching { client().firstRoot(signed) }.getOrElse {
+				val result = runCatching { client().firstRoot(signed) }.onFailure { if (it is CancellationException) throw it }.getOrElse {
 					// A transport failure here is NOT terminal: the root was not decided, only
 					// unreachable. Surface a transient cause and let the poll loop retry.
 					val (cause, _) = classifyConnError(it)
@@ -1323,13 +1331,18 @@ class ChatRepository(
 	 * this one place so an owner action cannot submit without the matching local merge (the
 	 * class of bug that once left a revoked member on the board). Secondary effects (the
 	 * route-gateway pin, the console-admitted gate) stay at the call site after a true return. */
-	private fun <T> submitOwnerFact(
+	private suspend fun <T> submitOwnerFact(
 		signed: T,
-		submit: (T) -> EnrollResult,
+		submit: suspend (T) -> EnrollResult,
 		merge: (T) -> Unit,
 		failLabel: String,
 	): Boolean {
 		val result = runCatching { submit(signed) }.getOrElse {
+			// MUST be the first check: submit() is the network call for all 6 owner-fact callers
+			// (submitConsoleAdmission, admitGateway, revokeMember, submitXdomainLink,
+			// revokeXdomainLink, approveDevice) - swallowing this here would convert every one of
+			// their cancellations into a normal EnrollResult(ok=false) rejection.
+			if (it is CancellationException) throw it
 			DebugLog.log("Enroll", "$failLabel: submit threw ${it.javaClass.simpleName}: ${it.message?.take(140)}")
 			EnrollResult(ok = false, error = it.message)
 		}
@@ -1346,7 +1359,7 @@ class ChatRepository(
 	 * sealed ops. The enroll op is bearer-gated (not sealed), so it lands before the
 	 * Console is admitted; gated by a flag so connect does not re-issue it every cycle.
 	 * The gateway may still be syncing the admission - the ENROLLING grace covers that. */
-	private fun submitConsoleAdmission() {
+	private suspend fun submitConsoleAdmission() {
 		if (store.consoleAdmitted) {
 			// Distinguishes "the app believes it is already admitted and never POSTs" (which would
 			// explain zero enroll ops reaching evie) from "it POSTs and the submit fails".
@@ -1445,7 +1458,7 @@ class ChatRepository(
 				.put("reach", reach)
 				.toString()
 			DeviceApprovalArmed(approvalId, nonce, qr)
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	/** HELD device: poll the window for the fresh device's join (its generated console keys). Null
@@ -1455,7 +1468,7 @@ class ChatRepository(
 			val result = client().postConsoleApproval(ConsoleApprovalOp.Poll(approvalId = approvalId))
 			if (!result.ok) error(result.error ?: "approval window closed")
 			result.join
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	/** HELD device: approve the joined device. Owner-signs a kind:console admission for its keys and
@@ -1473,13 +1486,14 @@ class ChatRepository(
 			val result = client().postConsoleApproval(ConsoleApprovalOp.Approve(approvalId = approvalId, sealed = sealed))
 			if (!result.ok) error(result.error ?: "Couldn't deliver the sealed transport.")
 			Unit
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	/** HELD device: tear down the approval window when the owner leaves the screen (best-effort). */
 	suspend fun cancelDeviceApproval(approvalId: String) {
 		withContext(Dispatchers.IO) {
 			runCatching { client().postConsoleApproval(ConsoleApprovalOp.Cancel(approvalId = approvalId)) }
+			.onFailure { if (it is CancellationException) throw it }
 		}
 	}
 
@@ -1605,7 +1619,7 @@ class ChatRepository(
 				val result = client().roster(federation.signRosterRequest(System.currentTimeMillis()))
 				if (!result.ok) error(result.error ?: "roster unavailable")
 				result.members ?: emptyList()
-			}
+			}.onFailure { if (it is CancellationException) throw it }
 		}
 
 	////////////////////////////////
@@ -1675,7 +1689,7 @@ class ChatRepository(
 			if (!result.ok) error(result.error ?: "rename rejected")
 			store.displayName = trimmed
 			_state.update { it.copy(displayName = trimmed) }
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	/** Revoke and delete this owner's OWN Domain (the app-only path; admins purge via setup.sh).
@@ -1700,6 +1714,7 @@ class ChatRepository(
 		// console bridge is unreachable. A reached-but-refused result keeps the owner key for a retry; a
 		// throw (offline) falls to the unconfirmed wipe so a hung POST never strands the user mid-delete.
 		val attempt = runCatching { client().enroll(EnrollOp.DeleteDomain(signed)) }
+			.onFailure { if (it is CancellationException) throw it }
 		val result = attempt.getOrNull()
 		when {
 			result?.ok == true -> {
@@ -1742,7 +1757,7 @@ class ChatRepository(
 			val row = HostedTenant(domainId, label, nonce, HostedTenantState.AWAITING_SETUP)
 			upsertHostedTenant(row)
 			row
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	/** Regenerate a pending tenant's one-time invite: re-submit provision_tenant for the SAME
@@ -1762,7 +1777,7 @@ class ChatRepository(
 				val row = HostedTenant(domainId, label, nonce, HostedTenantState.AWAITING_SETUP)
 				upsertHostedTenant(row)
 				row
-			}
+			}.onFailure { if (it is CancellationException) throw it }
 		}
 
 	/** Build the invite blob a hosted tenant's QR encodes: the CONSOLE-bridge transport creds the
@@ -1810,7 +1825,7 @@ class ChatRepository(
 			val result = client().enroll(EnrollOp.RemoveTenant(signed))
 			if (!result.ok) error(result.error ?: "remove rejected")
 			deleteHostedTenant(domainId)
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	private fun upsertHostedTenant(row: HostedTenant) {
@@ -1866,6 +1881,7 @@ class ChatRepository(
 	 * to their distinct Domain ids (a Domain may run more than one gateway). */
 	suspend fun refreshLinkedPeers() = withContext(Dispatchers.IO) {
 		runCatching { client().crossDomainListPeers() }
+			.onFailure { if (it is CancellationException) throw it }
 			.onSuccess { result ->
 				// domainId -> friend owner key (a Domain may run several gateways under one owner; last wins).
 				val owners = result.peers.filter { it.domainId.isNotEmpty() }.associate { it.domainId to it.ownerSignPub }
@@ -1895,7 +1911,9 @@ class ChatRepository(
 	/** RECEIVER: open a listening window, returning the token to read to the friend + this
 	 * Gateway's keys + the expiry. */
 	suspend fun crossDomainListen(): Result<com.atelier_nyaarium.switchboard.proto.CrossDomainListenResult> =
-		withContext(Dispatchers.IO) { runCatching { client().crossDomainListen() } }
+		withContext(Dispatchers.IO) {
+			runCatching { client().crossDomainListen() }.onFailure { if (it is CancellationException) throw it }
+		}
 
 	/** REQUESTER: mint a one-time rendezvous pin, pair against the friend's token, and run the
 	 * commit-reveal exchange. Returns the SAS + both sides' keys (and the pin, so confirm can pass
@@ -1913,7 +1931,7 @@ class ChatRepository(
 					requesterGatewayId = localGatewayId,
 				)
 				CrossDomainPairing(pin = pin, result = result)
-			}
+			}.onFailure { if (it is CancellationException) throw it }
 		}
 
 	/** RECEIVER: poll the listening window's pairing state. Returns null until a requester pairs;
@@ -1938,7 +1956,7 @@ class ChatRepository(
 					friendGatewaySignPub = state.friendGatewaySignPub ?: error("pairing arrived without the friend sign key"),
 					friendGatewayBoxPub = state.friendGatewayBoxPub ?: error("pairing arrived without the friend box key"),
 				).also { receiverPin[listeningToken] = state.pin ?: error("pairing arrived without the pin") }
-			}
+			}.onFailure { if (it is CancellationException) throw it }
 		}
 
 	/** REQUESTER confirm: owner-sign this owner's link over the RECEIVER's keys (from the request
@@ -2017,7 +2035,7 @@ class ChatRepository(
 		} else {
 			ConfirmOutcome.RelayEdgeRejected(peerDomainId)
 		}
-	}
+	}.onFailure { if (it is CancellationException) throw it }
 
 	/** Re-submit ONLY the relay-affinity edge for an already-linked peer (the local peer write
 	 * happened at confirm; only the Router edge failed). Idempotent at evie (it dedups by nonce), so
@@ -2030,7 +2048,7 @@ class ChatRepository(
 			} else {
 				ConfirmOutcome.RelayEdgeRejected(peerDomainId)
 			}
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	/** A fresh owner-link nonce, pinned by the wizard for one pairing so a confirm retry reuses
@@ -2040,6 +2058,7 @@ class ChatRepository(
 	/** Cancel the pairing windows when the owner leaves the link screen (no passive surface). */
 	suspend fun crossDomainCancel(listeningToken: String?, pin: String?) = withContext(Dispatchers.IO) {
 		runCatching { client().crossDomainCancel(listeningToken, pin) }
+			.onFailure { if (it is CancellationException) throw it }
 	}
 
 	////////////////////////////////
@@ -2128,7 +2147,7 @@ class ChatRepository(
 				peerDomainId = peerReveal.domainId,
 				peerParty = peerParty,
 			)
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	/** On a mutual [Yes]: owner-sign + submit this side's cross-Domain link edge (my Domain -> the
@@ -2154,7 +2173,7 @@ class ChatRepository(
 				} else {
 					ConfirmOutcome.RelayEdgeRejected(peerDomainId)
 				}
-			}
+			}.onFailure { if (it is CancellationException) throw it }
 		}
 
 	////////////////////////////////
@@ -2177,22 +2196,27 @@ class ChatRepository(
 			// several), so we can revoke each Router-side relay edge. Owner-keyed via the peer set.
 			val peerDomains = runCatching {
 				client().crossDomainListPeers().peers.filter { it.ownerSignPub == peerOwnerSignPub }.map { it.domainId }.toSet()
-			}.getOrDefault(emptySet())
+			}.onFailure { if (it is CancellationException) throw it }.getOrDefault(emptySet())
 			// Tell the gateway to forget every peer + share for this owner across all their Domains
 			// (owner-keyed local cleanup). Best-effort: the friend-graph removal already stands even if
 			// the gateway is unreachable (a gateway-less owner has no peer state to drop anyway).
 			runCatching { client().crossDomainUntrust(peerOwnerSignPub) }
+				.onFailure { if (it is CancellationException) throw it }
 			// Router-side: revoke the owner-signed link edge for each of the person's Domains, so evie
 			// drops its relay-affinity edge too (the tombstone's relay half, completing the untrust).
-			for (d in peerDomains) runCatching { revokeXdomainLink(confirmedDomainIdOrThrow(), d) }
+			for (d in peerDomains) {
+				runCatching { revokeXdomainLink(confirmedDomainIdOrThrow(), d) }
+					.onFailure { if (it is CancellationException) throw it }
+			}
 			Unit
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	/** Cancel this leg of the handshake (a [No], a timeout, or leaving the screen) so the broker tears
 	 * the window down rather than leaving a half-formed edge. Best-effort. */
 	suspend fun enrollCancel(handshakeId: String, role: String) = withContext(Dispatchers.IO) {
 		runCatching { client().enrollHandshake(EnrollHandshakeOp.Cancel(handshakeId, role)) }
+			.onFailure { if (it is CancellationException) throw it }
 	}
 
 	////////////////////////////////
@@ -2215,7 +2239,7 @@ class ChatRepository(
 				val r = client().trustPending(federation.signTrustPendingRequest(System.currentTimeMillis()))
 				if (!r.ok) error(r.error ?: "trust pending unavailable")
 				r.pending ?: emptyList()
-			}
+			}.onFailure { if (it is CancellationException) throw it }
 		}
 
 	/** Run one side of the FLOW-2 commit-reveal compare over the rendezvous. `mySide` is INITIATOR (I
@@ -2274,18 +2298,19 @@ class ChatRepository(
 					peerDomainId = peerReveal.domainId,
 					peerParty = peerParty,
 				)
-			}
+			}.onFailure { if (it is CancellationException) throw it }
 		}
 
 	/** Cancel this leg of the trust rendezvous (a [No], timeout, or leaving). Best-effort. */
 	suspend fun trustCancel(rendezvousId: String) = withContext(Dispatchers.IO) {
 		runCatching { client().trustHandshake(TrustHandshakeOp.Cancel(rendezvousId)) }
+			.onFailure { if (it is CancellationException) throw it }
 	}
 
 	/** Poll one handshake step: call [step] (re-POSTing the same frame is idempotent at the broker)
 	 * until it returns the peer's frame, with a bounded number of attempts so a vanished peer fails
 	 * rather than hangs. [step] throws on a terminal broker reject, which propagates out. */
-	private suspend fun <T> pollEnroll(label: String, step: () -> T?): T {
+	private suspend fun <T> pollEnroll(label: String, step: suspend () -> T?): T {
 		repeat(ENROLL_POLL_MAX) {
 			step()?.let { return it }
 			delay(ENROLL_POLL_MS)
@@ -2304,7 +2329,7 @@ class ChatRepository(
 					}
 				}
 				.toSet()
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	/** How many of MY sessions each TRUSTED person can reach, keyed by their owner key (the Users
@@ -2330,7 +2355,7 @@ class ChatRepository(
 			ownerDomains.mapValues { (_, domains) ->
 				(domains.flatMap { byDomain[it].orEmpty() }.toSet() + everyoneSessions).size
 			}
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	/** The sessions shared to EVERYONE the owner trusts (the Users-surface share mode). */
@@ -2340,7 +2365,7 @@ class ChatRepository(
 				.filter { it.target is com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.EveryoneTrusted }
 				.map { it.sessionTarget }
 				.toSet()
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	/** Toggle a local session's share to a specific friend Domain (the checkmark IS the consent). */
@@ -2350,7 +2375,7 @@ class ChatRepository(
 				val target = com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.Domain(domainId)
 				if (shared) client().crossDomainShare(sessionTarget, target) else client().crossDomainUnshare(sessionTarget, target)
 				Unit
-			}
+			}.onFailure { if (it is CancellationException) throw it }
 		}
 
 	/** Toggle a local session's share to EVERYONE the owner trusts (the live-trust-set audience). */
@@ -2360,7 +2385,7 @@ class ChatRepository(
 				val target = com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget.EveryoneTrusted
 				if (shared) client().crossDomainShare(sessionTarget, target) else client().crossDomainUnshare(sessionTarget, target)
 				Unit
-			}
+			}.onFailure { if (it is CancellationException) throw it }
 		}
 
 	/** Unlink a friend Domain: forget the local trust + shares for it, then owner-sign + submit
@@ -2371,7 +2396,7 @@ class ChatRepository(
 			revokeXdomainLink(confirmedDomainIdOrThrow(), domainId)
 			refreshTeams()
 			Unit
-		}
+		}.onFailure { if (it is CancellationException) throw it }
 	}
 
 	private fun newRendezvousPin(): String {
@@ -2420,6 +2445,7 @@ class ChatRepository(
 		val result = try {
 			client().requestGatewayTransport(federation.signTransportRequest(System.currentTimeMillis()))
 		} catch (e: Exception) {
+			if (e is CancellationException) throw e
 			// Surface the REAL transport-fetch cause (reached-but-rejected, an op failure) instead of
 			// asserting "couldn't reach" + a re-provision that will not fix an admission/seal mismatch.
 			return@withContext EnrollDelivery(
@@ -2508,7 +2534,9 @@ class ChatRepository(
 	}.getOrDefault(false)
 
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
-		runCatching { client().teams(localGatewayId) }.onSuccess { applyFreshTeams(it) }
+		runCatching { client().teams(localGatewayId) }
+			.onFailure { if (it is CancellationException) throw it }
+			.onSuccess { applyFreshTeams(it) }
 		// Also refresh the cross-Domain peer roster so the Federation PEERS list shows a freshly-linked
 		// peer that has no discovery sessions yet. Best-effort + only when federation is reachable;
 		// folded into the same refresh so a board update and the peer set stay consistent.
@@ -2547,7 +2575,9 @@ class ChatRepository(
 	 * the last frame on a transient failure yet surface the backend's reason (container/host offline)
 	 * when the pane never loaded. */
 	suspend fun peekTerminal(team: String, sinceHash: String?): Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult> =
-		withContext(Dispatchers.IO) { runCatching { client().peek(team, sinceHash) } }
+		withContext(Dispatchers.IO) {
+			runCatching { client().peek(team, sinceHash) }.onFailure { if (it is CancellationException) throw it }
+		}
 			.onSuccess { it.ansi?.let { a -> noteScreen(team, a) } }
 
 	/** Update a session's working + needs-login flags from a captured pane (the spinner and auth
@@ -2598,29 +2628,41 @@ class ChatRepository(
 		val opId = recentSpawnOpIds[key]?.first ?: UUID.randomUUID().toString()
 		recentSpawnOpIds[key] = opId to now
 		_state.update { it.copy(pendingSpawns = it.pendingSpawns + key) }
-		// Nudge a refresh shortly after firing so the just-adopted record's tile shows promptly,
-		// without waiting on a cold container's (up to ~25s) create reply.
-		launch {
-			delay(400)
-			runCatching { refreshTeams() }
-		}
-		runCatching { withContext(Dispatchers.IO) { client().createSession(project, displayLabel = label, opId = opId) } }
-			.onSuccess { result ->
-				recentSpawnOpIds.remove(key)
-				_state.update {
-					it.copy(
-						pendingSpawns = it.pendingSpawns - key,
-						transientMessage = if (result.labelSanitized == true) {
-							"\"$label\" has unsupported characters; the session was created using its id as the name instead"
-						} else it.transientMessage,
-					)
+		try {
+			// Nudge a refresh shortly after firing so the just-adopted record's tile shows promptly,
+			// without waiting on a cold container's (up to ~25s) create reply.
+			launch {
+				delay(400)
+				runCatching { refreshTeams() }.onFailure { if (it is CancellationException) throw it }
+			}
+			runCatching { withContext(Dispatchers.IO) { client().createSession(project, displayLabel = label, opId = opId) } }
+				.onFailure { if (it is CancellationException) throw it }
+				.onSuccess { result ->
+					recentSpawnOpIds.remove(key)
+					_state.update {
+						it.copy(
+							transientMessage = if (result.labelSanitized == true) {
+								"\"$label\" has unsupported characters; the session was created using its id as the name instead"
+							} else it.transientMessage,
+						)
+					}
+					runCatching { refreshTeams() }.onFailure { if (it is CancellationException) throw it }
 				}
-				runCatching { refreshTeams() }
-			}
-			.onFailure { e ->
-				_state.update { it.copy(pendingSpawns = it.pendingSpawns - key, transientMessage = e.message ?: "Failed to create \"$label\"") }
-				runCatching { refreshTeams() }
-			}
+				.onFailure { e ->
+					if (e is CancellationException) throw e
+					_state.update { it.copy(transientMessage = e.message ?: "Failed to create \"$label\"") }
+					runCatching { refreshTeams() }.onFailure { if (it is CancellationException) throw it }
+				}
+		} finally {
+			// The ONE removal point (deliberately not also removed inside onSuccess/onFailure above):
+			// this key must stay claimed through each branch's own trailing refreshTeams() call, not
+			// just through createSession itself - removing it earlier (before that tail suspends)
+			// would let a second same-key call slip past the guard above while this one's tail is
+			// still running, and this finally would then clobber THAT call's live claim once this
+			// one's tail finishes. One removal, after everything, closes that window; it also covers
+			// cancellation, which skips both onSuccess and onFailure entirely.
+			_state.update { it.copy(pendingSpawns = it.pendingSpawns - key) }
+		}
 	}
 
 	/** Take and clear the one-shot transient message, so a recomposition never re-shows it. */
@@ -2707,10 +2749,12 @@ class ChatRepository(
 		deliver(team, messageId, msg.text, files, msg.opId ?: java.util.UUID.randomUUID().toString(), null)
 	}
 
-	/** Run the wire send and settle the echo row's state from the outcome. On
-	 * failure the cold-wake placeholder (if this send created one) is removed:
-	 * nothing is coming to resolve it. */
-	private fun deliver(
+	/** Run the wire send and settle the echo row's state from the outcome. On success the cold-wake
+	 * placeholder (if this send created one) MUST survive: appendInbound resolves it in place when
+	 * the real reply arrives (same row id), so removing it here would both defeat that and race a
+	 * fast-arriving reply into having its already-merged row deleted out from under it. On failure or
+	 * cancellation, nothing is coming to resolve it, so it is removed. */
+	private suspend fun deliver(
 		team: String,
 		echoId: Long,
 		text: String,
@@ -2718,10 +2762,10 @@ class ChatRepository(
 		opId: String,
 		placeholderId: Long?,
 	) {
+		var succeeded = false
 		fun fail(message: String?) {
 			_state.update { it.copy(error = message ?: "send failed") }
 			setMessageStatus(team, echoId, "error")
-			if (placeholderId != null) removeMessage(team, placeholderId)
 		}
 		try {
 			// A cross-Domain target carries the friend Domain id from its discovery entry, so the
@@ -2736,14 +2780,31 @@ class ChatRepository(
 			val r = client().send(team, text, picked, opId, targetDomain)
 			when {
 				!r.ok -> fail(r.error)
-				else -> setMessageStatus(team, echoId, null)
+				else -> {
+					succeeded = true
+					setMessageStatus(team, echoId, null)
+				}
 			}
 		} catch (e: Exception) {
+			// MUST be the first check: classifyConnError must never see a CancellationException
+			// (same discipline as the poll loop's own catch), and a swallowed cancel here would
+			// mark this row "error" even though nothing actually failed - a cancelled attempt
+			// leaves the row "pending" for reconcilePending to retry, not "error".
+			if (e is CancellationException) throw e
 			// Route through the same classifier the poll loop + connect use, so a send
 			// surfaces a legible cause ("Can't reach the server", "Bridge token rejected")
 			// instead of a raw "HTTP 401: {json}" exception string.
 			val (cause, _) = classifyConnError(e)
 			fail(cause)
+		} finally {
+			// Only on a non-success exit (fail() above, or a cancellation rethrow that skips fail()):
+			// "Waking..." is a per-ATTEMPT indicator, not a per-row one, so a cancelled cold-wake send
+			// must not strand it - but a SUCCEEDED send's placeholder must be left alone (see the
+			// class doc above). On the cancellation path this runs while a CancellationException is
+			// actively propagating, so removeMessage (and persistThreads underneath it) must never
+			// throw here - if either ever did, that throw would replace the propagating cancel and
+			// silently defeat reconcilePending's rollback (see its own catch below).
+			if (!succeeded && placeholderId != null) removeMessage(team, placeholderId)
 		}
 	}
 
@@ -2798,7 +2859,9 @@ class ChatRepository(
 					if (forceTeamsRefresh || now - lastTeamsAt >= TEAMS_REFRESH_MS) {
 						forceTeamsRefresh = false
 						lastTeamsAt = now
-						runCatching { client().teams(localGatewayId) }.onSuccess { applyFreshTeams(it) }
+						runCatching { client().teams(localGatewayId) }
+							.onFailure { if (it is CancellationException) throw it }
+							.onSuccess { applyFreshTeams(it) }
 					}
 					// Visible: long-poll (the hold IS the wait; re-poll immediately).
 					// Backgrounded: plain poll (hold=0); the wait after is the idle pushback
@@ -2967,6 +3030,12 @@ class ChatRepository(
 					// Flush buffered debug lines to the ingest endpoint once per cycle.
 					DebugLog.flushToIngest()
 				} catch (e: Exception) {
+					// MUST be the first statement: cancellable transport (executeCancellable) throws
+					// CancellationException on teardown, and JVM CancellationException extends
+					// Exception - classifyConnError must never see one, and a swallowed cancel here
+					// would fall through to pushback.decide(..., lastPassFailed = true) and can
+					// re-acquire an already-released wakelock (see console-hardening.md Phase D).
+					if (e is CancellationException) throw e
 					if (hold > 0 && e.message?.startsWith("HTTP 504") == true) {
 						// A relay-timeout during a hold is an empty long-poll, not an
 						// outage: an evie still on the shorter hold (upgrade window) or
@@ -3037,7 +3106,21 @@ class ChatRepository(
 					setMessageStatus(team, m.id, "error")
 					continue
 				}
-				deliver(team, m.id, m.text, rebuildFiles(m), m.opId, null)
+				try {
+					deliver(team, m.id, m.text, rebuildFiles(m), m.opId, null)
+				} catch (e: Throwable) {
+					// Throwable, not just CancellationException: deliver()'s own catch(Exception) settles
+					// every Exception via fail() internally and rethrows only a CancellationException -
+					// but rebuildFiles() above (loading whole attachment files into memory) and the send
+					// itself can also throw an Error (e.g. OutOfMemoryError on a large re-upload), which
+					// bypasses deliver()'s catch(Exception) entirely and would otherwise sail past a
+					// CancellationException-only catch here too. Either way the row is still genuinely
+					// "pending", not attempted-and-failed - undo the reconciled mark or this delivery
+					// (e.g. the app backgrounded during a large re-upload) can never be reconciled again,
+					// stranding the row "pending" for the rest of the process's life.
+					reconciled.remove(key)
+					throw e
+				}
 			}
 		}
 	}
@@ -3143,6 +3226,7 @@ class ChatRepository(
 		if (t is Address && t.gateway == _state.value.localGatewayId) {
 			pollScope?.launch(Dispatchers.IO) {
 				runCatching { client().closeSession(team) }
+				.onFailure { if (it is CancellationException) throw it }
 					.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "close failed") } }
 			}
 		}
@@ -3157,7 +3241,10 @@ class ChatRepository(
 		if (t !is Address || t.gateway != _state.value.localGatewayId) return
 		pollScope?.launch(Dispatchers.IO) {
 			runCatching { client().createSession(target = t.spawn, sessionName = t.session) }
-				.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "wake failed") } }
+				.onFailure { e ->
+					if (e is CancellationException) throw e
+					_state.update { it.copy(transientMessage = e.message ?: "wake failed") }
+				}
 		}
 	}
 
@@ -3214,7 +3301,9 @@ class ChatRepository(
 		val isLocal = t is Address && t.domain == localDomain() && t.gateway == _state.value.localGatewayId
 		val previous = _state.value.labels[team]
 		if (isLocal) setLabel(team, trimmed)
-		val result = withContext(Dispatchers.IO) { runCatching { client().renameSession(team, trimmed) } }
+		val result = withContext(Dispatchers.IO) {
+			runCatching { client().renameSession(team, trimmed) }.onFailure { if (it is CancellationException) throw it }
+		}
 		val reply = result.getOrNull()
 		val applied = reply?.takeIf { it.renamed }?.sessionLabel
 		if (applied != null && applied != trimmed) {
@@ -3306,6 +3395,7 @@ class ChatRepository(
 		if (t is Address && t.gateway == _state.value.localGatewayId) {
 			pollScope?.launch(Dispatchers.IO) {
 				runCatching { client().forget(team) }
+					.onFailure { if (it is CancellationException) throw it }
 					.onSuccess {
 						// The record drop already happened server-side; poll now instead of waiting out
 						// TEAMS_REFRESH_MS so the tile actually disappears from the board right away.
@@ -3335,11 +3425,15 @@ class ChatRepository(
 		store.load()?.let { runCatching { Provisioning.parse(it).device }.getOrNull() } ?: ""
 
 	suspend fun clearAll() = withContext(Dispatchers.IO) {
-		// cancelAndJoin (not cancel): ConsoleClient.poll() is a blocking call, so a pass already
-		// inside it is oblivious to cancellation until it returns - cancel() alone would let this
-		// function race ahead and reset state while a stale drain is still about to persist mail
-		// and re-touch _state. Joining means the worst case is this function waiting out that
-		// pass's own call timeout, not a silent resurrection of state this call is meant to wipe.
+		// cancelAndJoin (not cancel): the poll loop's transport is cancellable, so a pass suspended
+		// in it usually unwinds promptly - but a cancel landing in the loop's non-suspend tail still
+		// completes that pass normally before the job finishes, and that tail is NOT always brief:
+		// its last statement is DebugLog.flushToIngest(), a plain blocking HttpURLConnection POST
+		// with only per-phase connect/read timeouts (no overall call bound), so a trickling ingest
+		// endpoint can hold it open well past either one. cancel() alone would let this function race
+		// ahead and reset state while that tail is still about to persist mail and re-touch _state.
+		// Joining serializes against it, so the worst case is this function waiting out that tail
+		// (bounded in practice, not in principle), not a silent resurrection of wiped state.
 		pollJob?.cancelAndJoin()
 		// Preserve the settings-owned voice creds + taste: Clear & re-provision wipes
 		// provisioning/identity/history, never voice (clear() is the full factory wipe).

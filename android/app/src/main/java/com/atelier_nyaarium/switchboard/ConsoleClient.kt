@@ -54,6 +54,7 @@ import com.atelier_nyaarium.switchboard.proto.parseTarget
 import com.atelier_nyaarium.switchboard.proto.TransportRequest
 import com.atelier_nyaarium.switchboard.proto.TransportResult
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.security.KeyStore
 import java.security.SecureRandom
 import java.security.cert.CertificateFactory
@@ -61,14 +62,21 @@ import java.util.UUID
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 
 /**
  * Credential blob the console holds. Reaches the console bridge through the k8s API
@@ -356,8 +364,11 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** Send a console op through the service-proxy to the console bridge. Mutating ops pass their own
 	 * stable opId so a retry after a lost reply replays the cached result server-side instead of running
 	 * the op twice. A held op (long-poll) passes a read timeout above its server-side hold. Every call
-	 * builds a fresh sealed frame so a retry produces a new ephemeral/nonce the replay guard accepts. */
-	private fun relay(
+	 * builds a fresh sealed frame so a retry produces a new ephemeral/nonce the replay guard accepts.
+	 * Cancellable (see executeCancellable): a caller cancelled while this is in flight unwinds via
+	 * CancellationException instead of blocking out the timeout - see the poll loop's cancellation-
+	 * rethrow discipline for why every caller up the chain must let that exception propagate. */
+	private suspend fun relay(
 		op: ConsoleOp,
 		opId: String = UUID.randomUUID().toString(),
 		readTimeoutMs: Long? = null,
@@ -387,17 +398,15 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		} else {
 			client
 		}
-		callClient.newCall(req).execute().use { resp ->
-			val text = resp.body?.string().orEmpty()
-			if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(500)}")
-			val reply = wireJson.decodeFromString<ConsoleRelayReply>(text)
-			// Cleartext error path (console not admitted or pre-seal failure): surface it so the
-			// UI can prompt enrollment rather than show a generic network error.
-			if (reply.sealed == null) {
-				error(reply.error ?: "relay error (no sealed payload)")
-			}
-			return unsealReply(reply.sealed, identity, hostKeys.signPub)
+		val resp = executeCancellable(callClient, req)
+		if (!resp.isSuccessful) error("HTTP ${resp.code}: ${resp.text.take(500)}")
+		val reply = wireJson.decodeFromString<ConsoleRelayReply>(resp.text)
+		// Cleartext error path (console not admitted or pre-seal failure): surface it so the
+		// UI can prompt enrollment rather than show a generic network error.
+		if (reply.sealed == null) {
+			error(reply.error ?: "relay error (no sealed payload)")
 		}
+		return unsealReply(reply.sealed, identity, hostKeys.signPub)
 	}
 
 	/** This instance's evie-direct POST, filling in the companion's testable postEvieDirect primitive
@@ -409,7 +418,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * result carries secret material the debug log must never echo passes false; every other site
 	 * states true explicitly, so a new site cannot compile without deciding rather than silently
 	 * inheriting a "log everything" default. */
-	private inline fun <reified R> postEvieDirect(
+	private suspend inline fun <reified R> postEvieDirect(
 		tag: String,
 		describe: String,
 		body: RequestBody,
@@ -420,7 +429,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** Submit an owner enroll op directly to evie (the Domain root). Enroll ops are evie-direct and never
 	 * relayed to a Gateway, so they succeed with no gateway connected; evie answers an EnrollResult, not a
 	 * console_relay_reply. A bounce (offline, 501, malformed) is surfaced as a failed EnrollResult. */
-	fun enroll(op: EnrollOp): EnrollResult {
+	suspend fun enroll(op: EnrollOp): EnrollResult {
 		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), op)
 		return postEvieDirect(
 			tag = "Enroll",
@@ -434,7 +443,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * AUTHENTICATED console-bridge. Mirrors enroll()'s envelope + POST: evie answers a
 	 * ConsoleApprovalResult directly (200 ok, 400 reject), never relaying to a Gateway. The public
 	 * join/fetch steps must NOT come here - they go to postPublicApproval. */
-	fun postConsoleApproval(op: ConsoleApprovalOp): ConsoleApprovalResult =
+	suspend fun postConsoleApproval(op: ConsoleApprovalOp): ConsoleApprovalResult =
 		postEvieDirect(
 			tag = "DeviceApproval",
 			describe = "step=${op::class.simpleName}",
@@ -446,7 +455,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * directly from the self-signed frame + one-time invite nonce, with no gateway and no admission, so it
 	 * works before any Gateway is admitted. It answers an EnrollResult (2xx ok, 400 reject for an expired or
 	 * already-claimed invite). A reject is not retryable (the root was decided), so the caller surfaces it. */
-	fun firstRoot(signed: SignedFirstRoot): EnrollResult {
+	suspend fun firstRoot(signed: SignedFirstRoot): EnrollResult {
 		val envelope = FirstRootEnvelope(signed)
 		return postEvieDirect(
 			tag = "FirstRoot",
@@ -461,7 +470,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * scoping by the request's signed owner proof. ok=false is an opaque reject (bad proof or not a rooted
 	 * owner); a transport bounce maps to ok=false too. The Console seals the returned creds into a bootstrap
 	 * bundle for a creds-less Gateway it is enrolling. */
-	fun requestGatewayTransport(req: TransportRequest): TransportResult =
+	suspend fun requestGatewayTransport(req: TransportRequest): TransportResult =
 		postEvieDirect(
 			tag = "Transport",
 			describe = "transport",
@@ -474,7 +483,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * peer's frame back, or reports pending; the phone computes the SAS locally. Pre-admission like firstRoot
 	 * (the fresh enrollee has no admission). A terminal failure is ok=false + error; ok=true with the peer
 	 * frame absent means keep polling (re-send the same step). */
-	fun enrollHandshake(op: EnrollHandshakeOp): EnrollHandshakeResult {
+	suspend fun enrollHandshake(op: EnrollHandshakeOp): EnrollHandshakeResult {
 		val envelope = EnrollHandshakeEnvelope(op)
 		return postEvieDirect(
 			tag = "EnrollHs",
@@ -487,7 +496,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** Fetch the cross-tenant roster (the Users surface) from evie. POST { roster } evie-direct like
 	 * firstRoot: evie aggregates across Domains a gateway cannot see and answers itself. The request carries
 	 * the console's signed ROSTER proof; a non-member comes back ok=false (opaque). */
-	fun roster(req: RosterRequest): RosterResult =
+	suspend fun roster(req: RosterRequest): RosterResult =
 		postEvieDirect(
 			tag = "Roster",
 			describe = "roster",
@@ -497,7 +506,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Broker a FLOW-2 trust-rendezvous frame (arm/join/reveal/cancel) at evie. POST { trustHandshake }
 	 * evie-direct (the dumb broker; no sealing, like the enroll handshake). */
-	fun trustHandshake(op: TrustHandshakeOp): TrustHandshakeResult =
+	suspend fun trustHandshake(op: TrustHandshakeOp): TrustHandshakeResult =
 		postEvieDirect(
 			tag = "Trust",
 			describe = "handshake op=${op::class.simpleName}",
@@ -507,7 +516,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Query "who armed trust toward me?" at evie (the highlight). POST { trustPending } with the
 	 * owner-signed proof; evie returns the armed rendezvous indexed under this owner key. */
-	fun trustPending(req: TrustPendingRequest): TrustPendingResult =
+	suspend fun trustPending(req: TrustPendingRequest): TrustPendingResult =
 		postEvieDirect(
 			tag = "Trust",
 			describe = "pending",
@@ -518,7 +527,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** Submit an admin-signed provision_tenant enroll op and decode the minted one-time invite nonce evie
 	 * returns (the admin's app builds the friend's QR from it). Same evie-direct path as enroll(); only the
 	 * richer result decode differs, since the wire EnrollResult omits the nonce. */
-	fun provisionTenant(signed: SignedProvisionTenant): ProvisionTenantResult {
+	suspend fun provisionTenant(signed: SignedProvisionTenant): ProvisionTenantResult {
 		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), EnrollOp.ProvisionTenant(signed))
 		return postEvieDirect(
 			tag = "Enroll",
@@ -538,7 +547,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Claim this device's mailbox, returning the starting cursor + epoch. Carries this build's identity
 	 * so the gateway logs which version and variant the console runs. */
-	fun register(): ConsoleRegisterResult = resultOf(
+	suspend fun register(): ConsoleRegisterResult = resultOf(
 		relay(
 			ConsoleOp.Register(
 				clientVersion = "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}",
@@ -551,7 +560,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** List the bridge's sessions, each keyed by its canonical `domain.gateway.spawn.session` address. A
 	 * session's Gateway comes from the wire (`TeamInfo.gatewayId`, always stamped); an empty value falls
 	 * back to `localGatewayId` (this connection's Gateway, learned at register). */
-	fun teams(localGatewayId: String = ""): List<Team> {
+	suspend fun teams(localGatewayId: String = ""): List<Team> {
 		val body = relay(ConsoleOp.ListTeams)
 		// Surface a relay failure instead of blanking the board; the callers (connect, refreshTeams)
 		// wrap this in runCatching and keep the prior list.
@@ -588,11 +597,12 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	}
 
 	// teams() throws on a relay failure; this wrapper keeps the list-returning contract (empty on failure).
-	fun listTeams(): List<String> = runCatching { teams().map { it.name } }.getOrDefault(emptyList())
+	suspend fun listTeams(): List<String> =
+		runCatching { teams().map { it.name } }.getOrElse { if (it is CancellationException) throw it else emptyList() }
 
 	/** Send a message to a team. The reply may arrive inline within the relay hold or land in the mailbox
 	 * for a later poll; either way the conversation is keyed server-side by (this device, team). */
-	fun send(
+	suspend fun send(
 		to: String,
 		body: String,
 		files: List<OutgoingFile> = emptyList(),
@@ -630,7 +640,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** Drain new mailbox entries since cursor (epoch-gated). With holdMs > 0 the server long-polls: an empty
 	 * mailbox holds the request open until a message arrives or the hold expires, so delivery is near-instant
 	 * at about one request per hold window instead of constant fast polling. */
-	fun poll(cursor: Long, epoch: Long, holdMs: Long = 0): ConsolePollResult {
+	suspend fun poll(cursor: Long, epoch: Long, holdMs: Long = 0): ConsolePollResult {
 		// Carry the synced keyring version so the route Gateway returns the snapshot only when it changed
 		// (a revocation made elsewhere reaches this Console within one cycle).
 		val knownVersion = store.loadDomainVersion().ifEmpty { null }
@@ -676,13 +686,13 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Capture the target's visible tmux pane for the terminal view. Pass the last hash so the
 	 * Gateway returns unchanged=true (no ansi) for an idle pane. */
-	fun peek(target: String, sinceHash: String? = null): ConsolePeekResult =
+	suspend fun peek(target: String, sinceHash: String? = null): ConsolePeekResult =
 		resultOf(relay(ConsoleOp.Peek(target = target, sinceHash = sinceHash), targetGateway = targetGatewayOf(target)), "peek")
 
 	/** Send literal text OR a named control key to the target's tmux pane. `submit` (text only, default
 	 * true) controls the trailing Enter: false types into the composer without submitting. Idempotent
 	 * per opId (the host replays a re-relayed send instead of re-injecting). */
-	fun tmuxSend(
+	suspend fun tmuxSend(
 		target: String,
 		text: String? = null,
 		key: String? = null,
@@ -696,7 +706,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Forget a session: kill its tmux and drop its resume record. Idempotent per opId; the Gateway
 	 * rejects a bare spawn-point (a composite session is required). */
-	fun forget(target: String, opId: String = UUID.randomUUID().toString()) {
+	suspend fun forget(target: String, opId: String = UUID.randomUUID().toString()) {
 		val body = relay(ConsoleOp.Forget(target = target), opId, targetGateway = targetGatewayOf(target))
 		if (!body.ok) error("forget failed: ${body.error ?: "unknown error"}")
 	}
@@ -704,7 +714,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** Close a session: kill its tmux but KEEP its resume record (a restart / mop-up), so it stays
 	 * listed as available. Idempotent per opId; the Gateway rejects a bare spawn-point, refuses while
 	 * a wake is in flight, and reports a user-launched session rather than a false success. */
-	fun closeSession(target: String, opId: String = UUID.randomUUID().toString()) {
+	suspend fun closeSession(target: String, opId: String = UUID.randomUUID().toString()) {
 		val body = relay(ConsoleOp.CloseSession(target = target), opId, targetGateway = targetGatewayOf(target))
 		if (!body.ok) error("close failed: ${body.error ?: "unknown error"}")
 	}
@@ -713,7 +723,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * (the minted id is the tmux name) and returns it; a `sessionName` is adopted as the id (the
 	 * old form, against a gateway that does not mint). Idempotent per opId (reattaches if it already
 	 * exists). Returns the gateway's reply; `id` is absent from an older gateway. */
-	fun createSession(
+	suspend fun createSession(
 		target: String,
 		sessionName: String? = null,
 		displayLabel: String? = null,
@@ -730,7 +740,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Rename a session: set the gateway-authoritative sessionLabel on its record. Idempotent per
 	 * opId. Returns the label the gateway actually applied (after its sanitize + per-spawn dedup). */
-	fun renameSession(
+	suspend fun renameSession(
 		target: String,
 		sessionLabel: String,
 		opId: String = UUID.randomUUID().toString(),
@@ -751,12 +761,12 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** RECEIVER: open a listening window. Returns the short token to read to the friend plus
 	 * this Gateway's keys (for the SAS) and the window's expiry. */
-	fun crossDomainListen(): CrossDomainListenResult =
+	suspend fun crossDomainListen(): CrossDomainListenResult =
 		resultOf(relay(ConsoleOp.CrossDomainListen), "cross_domain_listen")
 
 	/** REQUESTER: pair against the friend's listening token. The Gateway runs the full
 	 * commit-reveal exchange and returns the 6-digit SAS plus both sides' keys. */
-	fun crossDomainRequest(
+	suspend fun crossDomainRequest(
 		listeningToken: String,
 		pin: String,
 		requesterOwnerSignPub: String,
@@ -781,7 +791,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** EITHER ROLE: confirm the SAS match. Each owner confirms INDEPENDENTLY, submitting only its
 	 * OWN signed link side (binding the friend keys from the SAS-verified pairing); the Gateway
 	 * verifies it under this owner's key and writes the cross-Domain peer. No friend-link exchange. */
-	fun crossDomainConfirm(
+	suspend fun crossDomainConfirm(
 		pin: String,
 		mySignedLink: SignedXDomainLink,
 		opId: String = UUID.randomUUID().toString(),
@@ -794,16 +804,16 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** RECEIVER: poll the listening window's pairing state. Before a pairing arrives this reports
 	 * pairingArrived=false; once the requester's exchange lands, it carries the SAS + the friend's
 	 * keys the receiver phone owner-signs its link over. A fresh read each call (never cached). */
-	fun crossDomainListenState(listeningToken: String): CrossDomainListenStateResult =
+	suspend fun crossDomainListenState(listeningToken: String): CrossDomainListenStateResult =
 		resultOf(relay(ConsoleOp.CrossDomainListenState(listeningToken = listeningToken)), "cross_domain_listen_state")
 
 	/** EITHER ROLE: cancel a listening window (receiver token) and/or a pending pairing (pin)
 	 * when the owner leaves the pairing screen, so a stale request cannot complete. */
-	fun crossDomainCancel(listeningToken: String? = null, pin: String? = null): CrossDomainCancelResult =
+	suspend fun crossDomainCancel(listeningToken: String? = null, pin: String? = null): CrossDomainCancelResult =
 		resultOf(relay(ConsoleOp.CrossDomainCancel(listeningToken = listeningToken, pin = pin)), "cross_domain_cancel")
 
 	/** Mark a local session shared to an audience (a linked friend Domain, or everyone trusted). */
-	fun crossDomainShare(
+	suspend fun crossDomainShare(
 		sessionTarget: String,
 		target: CrossDomainShareTarget,
 		opId: String = UUID.randomUUID().toString(),
@@ -811,7 +821,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		resultOf(relay(ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, target = target), opId), "cross_domain_share")
 
 	/** Withdraw a local session's share from an audience. */
-	fun crossDomainUnshare(
+	suspend fun crossDomainUnshare(
 		sessionTarget: String,
 		target: CrossDomainShareTarget,
 		opId: String = UUID.randomUUID().toString(),
@@ -822,21 +832,21 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		)
 
 	/** This owner's current shares, so the UI can render the per-session checkmarks. */
-	fun crossDomainListShares(): CrossDomainListSharesResult =
+	suspend fun crossDomainListShares(): CrossDomainListSharesResult =
 		resultOf(relay(ConsoleOp.CrossDomainListShares), "cross_domain_list_shares")
 
 	/** The linked friend Domains from the route Gateway's cross-Domain peer set, so a just-linked
 	 * peer is visible (and its detail reachable) before any of its sessions surface in discovery. A
 	 * fresh read each call (never cached). */
-	fun crossDomainListPeers(): CrossDomainListPeersResult =
+	suspend fun crossDomainListPeers(): CrossDomainListPeersResult =
 		resultOf(relay(ConsoleOp.CrossDomainListPeers), "cross_domain_list_peers")
 
 	/** Unlink a friend Domain: drop the local trust + share state for it. */
-	fun crossDomainUnlink(domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
+	suspend fun crossDomainUnlink(domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
 		resultOf(relay(ConsoleOp.CrossDomainUnlink(domainId = domainId), opId), "cross_domain_unlink")
 
 	/** Untrust a PERSON by owner key: drop the local peer + share state for every Domain they own. */
-	fun crossDomainUntrust(ownerSignPub: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
+	suspend fun crossDomainUntrust(ownerSignPub: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
 		resultOf(relay(ConsoleOp.CrossDomainUntrust(ownerSignPub = ownerSignPub), opId), "cross_domain_untrust")
 
 	companion object {
@@ -896,6 +906,51 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		internal fun loggedBodyPreview(text: String, logBody: Boolean): String =
 			if (logBody) text.take(160) else "(redacted, ${text.length} chars)"
 
+		/** A response reduced to the two things every caller here needs, read out fully before this
+		 * suspend call returns. */
+		internal data class HttpTextResult(val code: Int, val text: String) {
+			val isSuccessful: Boolean get() = code in 200..299
+		}
+
+		/** Run [req] on [httpClient] cancellably: a coroutine cancellation calls Call.cancel() and this
+		 * suspend call unwinds immediately instead of waiting out a timeout. The body is read to a String
+		 * and the Response closed INSIDE the OkHttp callback, before resuming - so a cancellation racing
+		 * the callback can only ever abandon an already-closed, already-read HttpTextResult, never a
+		 * leaked Response, and every caller's own parsing/decoding runs after resume, on the CALLER's
+		 * dispatcher, not OkHttp's callback thread. Shared by relay() and postEvieDirect() so Phase D's
+		 * cancellability lands in exactly these two places (see console-hardening.md). */
+		internal suspend fun executeCancellable(httpClient: OkHttpClient, req: Request): HttpTextResult =
+			suspendCancellableCoroutine { cont ->
+				val call = httpClient.newCall(req)
+				cont.invokeOnCancellation { call.cancel() }
+				call.enqueue(
+					object : Callback {
+						override fun onResponse(call: Call, response: Response) {
+							val result =
+								try {
+									response.use { HttpTextResult(response.code, response.body?.string().orEmpty()) }
+								} catch (e: Throwable) {
+									// Throwable, not Exception: a large enough body can throw OutOfMemoryError
+									// during .string(), and OkHttp's dispatcher never calls onFailure once
+									// onResponse has already run - an Exception-only catch would let that
+									// specific Error escape uncaught, orphaning the continuation forever (the
+									// hazard this wrapper exists to close, worst for send()'s callTimeoutMs=null
+									// upload). Closes the common case (this one allocation fails, headroom
+									// remains); under true heap exhaustion the resumeWithException call below
+									// could itself throw, which is not recoverable by any wrapper.
+									cont.resumeWithException(e)
+									return
+								}
+							cont.resume(result)
+						}
+
+						override fun onFailure(call: Call, e: IOException) {
+							cont.resumeWithException(e)
+						}
+					},
+				)
+			}
+
 		/** Shared evie-direct POST: every op that bypasses relay() and talks to evie's console-bridge
 		 * straight (enroll, postConsoleApproval, firstRoot, requestGatewayTransport, enrollHandshake,
 		 * roster, trustHandshake, trustPending, provisionTenant) shares this exact decode contract - 2xx
@@ -910,7 +965,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		 * resp line's body preview - requestGatewayTransport (a minted SA token) and provisionTenant (a
 		 * one-time invite nonce) pass false so their 2xx bodies never reach the debug log, which the
 		 * debug build ships off-device to evie /ingest as well as logcat. */
-		internal inline fun <reified R> postEvieDirect(
+		internal suspend inline fun <reified R> postEvieDirect(
 			httpClient: OkHttpClient,
 			url: String,
 			saToken: String,
@@ -930,22 +985,25 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			DebugLog.log(tag, "POST $url $describe")
 			val resp =
 				try {
-					httpClient.newCall(req).execute()
+					executeCancellable(httpClient, req)
 				} catch (e: Exception) {
-					DebugLog.log(tag, "$describe transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+					// A cancellation racing this call is not a transport failure - skip the log line
+					// (which the debug build ships off-device) so a teardown cancel does not read as a
+					// spurious connection error in the ingest stream. The rethrow is unconditional either
+					// way; only the logging is skipped.
+					if (e !is CancellationException) {
+						DebugLog.log(tag, "$describe transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+					}
 					throw e
 				}
-			resp.use {
-				val text = resp.body?.string().orEmpty()
-				DebugLog.log(tag, "$describe resp HTTP ${resp.code} ${loggedBodyPreview(text, logBody)}")
-				if (resp.isSuccessful) {
-					return runCatching { wireJson.decodeFromString<R>(text) }
-						.getOrElse { fail("unexpected response (HTTP ${resp.code})") }
-				}
-				runCatching { wireJson.decodeFromString<R>(text) }.getOrNull()?.let { return it }
-				val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-				return fail(err ?: "HTTP ${resp.code}")
+			DebugLog.log(tag, "$describe resp HTTP ${resp.code} ${loggedBodyPreview(resp.text, logBody)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<R>(resp.text) }
+					.getOrElse { fail("unexpected response (HTTP ${resp.code})") }
 			}
+			runCatching { wireJson.decodeFromString<R>(resp.text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(resp.text).error }.getOrNull()
+			return fail(err ?: "HTTP ${resp.code}")
 		}
 
 		/** The fresh device N's public path: a plain HTTPS POST of the op JSON to evie's nonce-gated

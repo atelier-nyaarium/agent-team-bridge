@@ -66,13 +66,16 @@ class SwitchboardService : Service(), DeepIdleScheduler {
 	private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + exceptionHandler)
 
 	// Nulling pushback.scheduler in onDestroy closes the DOMINANT race (a poll pass that reaches
-	// decide() only after onDestroy has already returned - unavoidable since ConsoleClient.poll()
-	// is blocking, not suspend, so scope.cancel() cannot interrupt an in-flight pass). This flag
-	// closes the narrower residual: decide() can still latch this instance as the scheduler a few
-	// instructions before that null-write lands, then invoke a method on it after onDestroy has
-	// already cancelled the alarm and released both locks. Checked first in every DeepIdleScheduler
-	// method, so that stale call can no longer re-acquire an un-timed wakelock nothing would ever
-	// release, or re-arm an alarm this instance just cancelled.
+	// decide() only after onDestroy has already returned). The poll loop's transport is cancellable,
+	// but that does not close this race: Kotlin cancellation is cooperative, and a cancel arriving in
+	// the loop's non-suspend tail (drain bookkeeping, the try-exit gap, after the last suspension
+	// point) still lets that pass complete normally, decide() included - permanent, not something a
+	// rethrow discipline can fix (see console-hardening.md Phase D). This flag closes the narrower
+	// residual: decide() can still latch this instance as the scheduler a few instructions before
+	// that null-write lands, then invoke a method on it after onDestroy has already cancelled the
+	// alarm and released both locks. Checked first in every DeepIdleScheduler method, so that stale
+	// call can no longer re-acquire an un-timed wakelock nothing would ever release, or re-arm an
+	// alarm this instance just cancelled.
 	@Volatile private var destroyed = false
 
 	// Held for the FOREGROUND/MINUTE tiers so the poll loop's wall-clock sleep resumes through
@@ -209,10 +212,12 @@ class SwitchboardService : Service(), DeepIdleScheduler {
 		destroyed = true
 		val repo = Repo.get(this)
 		repo.onInbound = null
-		// client().poll() is a plain blocking call, not suspend, so scope.cancel() below cannot
-		// interrupt an in-flight pass - the loop can still run one more decide() after this method
-		// returns. Nulling the scheduler makes that trailing call a safe no-op instead of driving
-		// wakelock/alarm state through a destroyed instance; the destroyed flag above (checked by
+		// The poll loop's transport is cancellable, but Kotlin cancellation is cooperative: a cancel
+		// arriving in the loop's non-suspend tail still lets that pass finish normally - the loop can
+		// still run one more decide() after this method returns, and scope.cancel() below cannot close
+		// that window (see console-hardening.md Phase D). Nulling the scheduler makes that trailing
+		// call a safe no-op instead of driving wakelock/alarm state through a destroyed instance; the
+		// destroyed flag above (checked by
 		// every DeepIdleScheduler method) is the real defense, since Android serializes Service
 		// lifecycle callbacks - a newer instance's onCreate can never run concurrently with this
 		// one's onDestroy, so an unconditional null here can never race a live registration either.
