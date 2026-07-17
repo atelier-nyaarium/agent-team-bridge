@@ -1224,6 +1224,33 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect(h.hostOps).toHaveLength(1);
 	});
 
+	it("create_session reattaching an existing host record threads its saved claudeSessionId as resumeSessionId, so a Close Tab -> reopen resumes instead of starting fresh", async () => {
+		const store = new SessionStore();
+		store.adoptById("cef9ae", {
+			spawn: "host",
+			sessionLabel: "Palworld",
+			claudeSessionId: "12345678-1234-1234-1234-123456789abc",
+		});
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "host", sessionName: "cef9ae" }, "reopen1"),
+		);
+		expect(reply.result).toMatchObject({ id: "cef9ae", sessionLabel: "Palworld" });
+		expect(h.hostOps[0]).toMatchObject({
+			kind: "createSession",
+			target: { kind: "host", name: "host", sessionName: "cef9ae" },
+			resumeSessionId: "12345678-1234-1234-1234-123456789abc",
+		});
+	});
+
+	it("create_session minting a brand-new session carries no resumeSessionId (nothing to resume yet)", async () => {
+		const store = new SessionStore();
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		await h.handler.handleFrame(frame({ kind: "create_session", target: "host", sessionName: "fresh" }, "new1"));
+		expect(h.hostOps[0]).toMatchObject({ kind: "createSession" });
+		expect((h.hostOps[0] as { resumeSessionId?: string }).resumeSessionId).toBeUndefined();
+	});
+
 	it("create_session on a host target keeps the launch marked in-flight until awaitRegister resolves, not just the tmux-spawn ack", async () => {
 		const releases: string[] = [];
 		let resolveRegister: ((r: WakeResult) => void) | undefined;

@@ -852,7 +852,16 @@ export function createConsoleDispatcher({
 													errorKind: r.errorKind,
 												},
 								)
-							: relayToHost({ kind: "createSession", target, workdirHint, dedupKey })
+							: relayToHost({
+									kind: "createSession",
+									target,
+									workdirHint,
+									// The record being (re)opened's own saved transcript id, when it has one - a
+									// brand-new record's is naturally undefined (nothing to resume), matching the
+									// wake path's identical claudeSessionId-gated resume decision.
+									resumeSessionId: adopted?.record.claudeSessionId,
+									dedupKey,
+								})
 					).finally(() => {
 						// tryWakeTeam's own promise already stayed pending through registration (or its
 						// timeout), so releasing here is already correctly timed for a devcontainer. The
