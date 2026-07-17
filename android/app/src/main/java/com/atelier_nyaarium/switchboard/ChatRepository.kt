@@ -643,6 +643,28 @@ internal enum class ConnKind {
 }
 
 /**
+ * True when the failure's cause chain carries actual certificate-VALIDATION evidence: the
+ * trust check rejected the chain (Android wraps it SSLHandshakeException -> CertificateException
+ * -> CertPathValidatorException, with "trust anchor" / "CertPath" wording). A handshake that
+ * merely got dropped mid-flight (reset, timeout - e.g. a degraded control plane) carries none
+ * of these and must NOT be labeled a certificate change: that misdiagnosis told a user to
+ * re-run setup during a plain infra outage.
+ */
+internal fun certValidationEvidence(e: Throwable): Boolean {
+	var t: Throwable? = e
+	var hops = 0
+	while (t != null && hops < 8) {
+		if (t is java.security.cert.CertificateException) return true
+		if (t is java.security.cert.CertPathValidatorException) return true
+		val msg = t.message ?: ""
+		if (msg.contains("trust anchor", ignoreCase = true) || msg.contains("CertPath", ignoreCase = true)) return true
+		t = t.cause
+		hops++
+	}
+	return false
+}
+
+/**
  * Map a connect/poll failure to a SPECIFIC, actionable cause + its kind, instead of a
  * blanket "Connection issue". ConsoleClient preserves the real cause in the exception
  * message ("This device is not enrolled...", "HTTP 404: ...", a TLS exception), so this is
@@ -698,9 +720,12 @@ internal fun classifyConnError(e: Throwable): Pair<String, ConnKind> {
 			"Can't reach the server - retrying" to ConnKind.TRANSIENT
 		m.startsWith("HTTP 504") ->
 			"Server timed out - retrying" to ConnKind.TRANSIENT
-		e is javax.net.ssl.SSLHandshakeException || e is java.security.cert.CertificateException ||
-			m.contains("trust anchor", ignoreCase = true) || m.contains("CertPath", ignoreCase = true) ->
+		// Terminal ONLY on validation evidence (the trust check rejected the chain); a bare
+		// handshake failure with no such evidence is a dropped connection, not a changed cert.
+		certValidationEvidence(e) ->
 			"Server certificate changed - re-run setup.sh" to ConnKind.TERMINAL
+		e is javax.net.ssl.SSLHandshakeException ->
+			"Secure connection interrupted - retrying" to ConnKind.TRANSIENT
 		// Freshness/replay rejects clear on the next attempt (a retry carries a fresh
 		// timestamp + new nonce), so they are transient. Checked AFTER the TLS branch so a
 		// handshake-signature error is not mislabeled.
