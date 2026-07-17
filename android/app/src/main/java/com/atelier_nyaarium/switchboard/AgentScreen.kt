@@ -2,7 +2,8 @@ package com.atelier_nyaarium.switchboard
 
 /**
  * Whether a captured tmux pane shows the agent idle/ready, actively working a turn, or logged out.
- * Twin of the markers in src/mcp/devcontainer/tmuxCore.ts (isAgentReady / isAgentWorking / isLoggedOut).
+ * Twin of the markers in src/mcp/devcontainer/tmuxCore.ts (isAgentReady / isAgentWorking / isLoggedOut
+ * / isAtPrompt).
  * isReady: the REPL composer prompt (U+276F) sits at column 0; the dev-channels / folder-trust /
  * resume-picker menus show an indented cursor, so the line-start anchor matches only the real
  * composer. isWorking: either the "esc to interrupt" hint or a U+25EF task-bullet ("◯ <name>", a
@@ -13,6 +14,9 @@ package com.atelier_nyaarium.switchboard
  * rule of U+2500 dashes) prints "Not
  * logged in" / "Run /login"; checked separately since a logged-out session still shows a composer,
  * and detectable at any peek including a mid-session token expiry.
+ * isAtPrompt: a row that (once trimmed) is ENTIRELY U+2500 dashes - the composer's box border itself,
+ * present whether idle or mid-turn, so it distinguishes "a real composer is rendered" from a raw
+ * shell / boot screen / menu that has none, rather than working from idle.
  */
 object AgentScreen {
 	private val composerRe = Regex("^\\u276F", RegexOption.MULTILINE)
@@ -21,6 +25,9 @@ object AgentScreen {
 	// e.g. "◯ idle-pushback" - same signal as the esc hint, checked in the same bounded region.
 	private const val WORKING_CIRCLE_HINT = "◯"
 	private const val TOOLBAR_RULE = "───"
+	// A stricter test than TOOLBAR_RULE's .contains(): the whole trimmed row must be the rule
+	// character, so a stray few dashes inside transcript/tool-output text can't false-positive.
+	private val fullRuleRe = Regex("^\\u2500+$")
 
 	// The peek runs capture-pane -e, so the screen carries SGR color escapes. Strip them before
 	// matching: an escape at the start of a line defeats the composer anchor, and one splitting a
@@ -49,4 +56,7 @@ object AgentScreen {
 		val footer = lines.drop(lastRule + 1).joinToString("\n")
 		return footer.contains("Not logged in") || footer.contains("Run /login")
 	}
+
+	fun isAtPrompt(screen: String): Boolean =
+		strip(screen).split("\n").any { fullRuleRe.matches(it.trim()) }
 }
