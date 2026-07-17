@@ -95,11 +95,16 @@ export type HostOp =
 	// composer without submitting, so the console Send button can stage text before a deliberate submit.
 	| { kind: "sendText"; target: TmuxTarget; text: string; submit?: boolean; dedupKey?: string }
 	| { kind: "sendKey"; target: TmuxTarget; key: string; dedupKey?: string }
-	// Start a new tmux session on the target running a fresh agent. The daemon owns the launch
-	// command (model/effort/plugin); the op carries only the target, the session name, and an optional
-	// host-only workdirHint (resolved by the daemon's resolveHostWorkdir), so a console can never
-	// inject an arbitrary host command or path.
-	| { kind: "createSession"; target: TmuxTarget; workdirHint?: string; dedupKey?: string }
+	// Start a new tmux session on the target running a fresh agent, or reattach if one is already
+	// alive. The daemon owns the launch command (model/effort/plugin); the op carries only the
+	// target, an optional host-only workdirHint (resolved by the daemon's resolveHostWorkdir), and an
+	// optional resumeSessionId - the gateway's own SessionStore-held claudeSessionId for the record
+	// being (re)opened, so a console can never inject an arbitrary host command, path, or resume id of
+	// its own choosing. Absent for a genuinely new session (nothing to resume); present when reopening
+	// a record the gateway already has a transcript for (e.g. a Close Tab'd session), so a fresh
+	// launch resumes instead of silently starting over. Only takes effect on an actual fresh launch -
+	// a reattach to an already-alive tmux ignores it, same as the rest of the launch command.
+	| { kind: "createSession"; target: TmuxTarget; workdirHint?: string; resumeSessionId?: string; dedupKey?: string }
 	// Drive the target session's pane through the plugin update + MCP reconnect sequence.
 	| { kind: "reloadPlugins"; target: TmuxTarget; dedupKey?: string }
 	// Tear down the target tmux session (the console's Forget). Idempotent: killing an

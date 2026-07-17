@@ -359,13 +359,15 @@ const hostOpRunner = createHostOpRunner({
 	peekPane: peekWithFallback,
 	sendText,
 	sendKey,
-	createSession: async (target, workdirHint) => {
+	createSession: async (target, workdirHint, resumeSessionId) => {
 		// A create_session for an existing session reattaches instead of erroring on a duplicate
 		// new-session. For a fresh launch, clear the dev-channels + folder-trust menus in the
 		// BACKGROUND: the host op must return well under the gateway's 20s timeout, so we do not block
-		// on the REPL becoming ready (a large/slow launch would blow that budget).
+		// on the REPL becoming ready (a large/slow launch would blow that budget). resumeSessionId only
+		// takes effect on that fresh-launch branch - a reattach ignores the whole launch command,
+		// resume included, same as it always has.
 		const workdir = target.kind === "host" ? resolveHostWorkdir(workdirHint) : undefined;
-		const { created } = await ensureSession(target, buildLaunchCommand(target, { workdir }));
+		const { created } = await ensureSession(target, buildLaunchCommand(target, { workdir, resumeSessionId }));
 		if (created) {
 			void awaitReady(target).catch(() => {
 				// best-effort menu-clearing; a failure self-heals on the next launch
