@@ -83,6 +83,20 @@ its deferred painpoints moved to `plans/pain-points.md`). Both items deploy via 
 
 ---
 
+## Item 17 - Audit the remaining .ps1-launched scripts for Linux-only commands
+
+Leftover from the Windows-handoff plan (`plans/windows-handoff-and-enroll-trap.md`, deleted on
+ship - see git history; shipped as switchboard #142/#143/#144 + evie-bot #1415). `scripts/setup.ts`
+and `scripts/lib/host.ts` were made cross-platform (PR #142: `detectLanHost()`, `secureFile()`,
+`dirExists()`, and the openssl/hostname/curl/HOME/tmp/chmod swaps), but the OTHER `.ps1`-launched
+scripts (`start-gateway`, `start-host-daemon`, `down`, `run-host-daemon`) were never audited for
+the same class of Unix-only commands. Sweep them with the same swap table before the next Windows
+gateway install. One field confirmation also still pending from that plan: the friend's Setup
+Gateway retry against the fixed evie routing (her Domain verified rooted + intact server-side, so
+only the Approve round-trip remains unproven end to end).
+
+---
+
 ## Moved out: Items 11-13 -> the host-split plan (shipped); Item 14 -> shipped
 
 The CLI-era teardown, the create-session button, and Copilot support were subsumed into the

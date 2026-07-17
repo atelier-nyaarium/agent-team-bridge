@@ -402,10 +402,10 @@ When a console-side symptom is otherwise invisible (a reply that polls in but ne
 
 - The GitHub release ships **`switchboard-debug.apk`** beside `switchboard-release.apk`, signed with the SAME key, so it installs straight over the release build and back (one-tap side-step). The debug build's `DebugLog` flushes its log to evie each poll cycle; the release build never does (gated on `BuildConfig.DEBUG`). The in-app updater is variant-aware (`AppUpdater.kt`), so a debug build self-updates to the debug asset and stays on debug; to GET onto debug from a release build you must sideload `switchboard-debug.apk` once (the update button can't cross variants).
 - Transport: the debug build POSTs its log lines to evie's `POST /ingest` on the console-bridge port (same `CONSOLE_BRIDGE_TOKEN` auth + K8s API service-proxy as `/relay`, no new network surface). evie writes each line to stdout under a `[console-ingest]` marker.
-- **Fetch the console's live log** (the only path into the firewalled K8s is evie's stdout, which the gateway's kubectl already reads):
+- **Fetch the console's live log** (the only path into the firewalled K8s is evie's stdout). The gateway container no longer holds a kubeconfig (the admin kubeconfig is cleared after provisioning), so read it host-side with the evie-bot repo's kubeconfig:
 
 ```bash
-docker exec switchboard kubectl --kubeconfig=/app/kubeconfig.yaml -n evie-bot \
+KUBECONFIG=~/projects/evie-bot/kubeconfig.yaml kubectl -n evie-bot \
   logs deploy/evie-bot-deployment --tail=200 | grep '\[console-ingest\]'
 ```
 
