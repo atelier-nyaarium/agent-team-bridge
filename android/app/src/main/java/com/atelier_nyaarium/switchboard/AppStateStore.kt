@@ -38,7 +38,7 @@ sealed interface IdentityLoad {
  * tokens), the biometric-lock flag, and the serialized chat transcript. Falls back
  * to plain prefs only if the device keystore is unavailable.
  */
-class AppStateStore(context: Context) {
+class AppStateStore(context: Context) : IdleSilenceStore {
 	// True when the Keystore-backed store initialized. Federation private keys are persisted ONLY
 	// when encrypted, keeping the Domain root signing key off disk in cleartext (fail closed).
 	private var encrypted = false
@@ -123,6 +123,18 @@ class AppStateStore(context: Context) {
 		set(value) {
 			prefs.edit().putLong(KEY_TERMINAL_REFRESH_MS, value.coerceAtLeast(TERMINAL_REFRESH_FLOOR_MS)).apply()
 		}
+
+	/** The idle pushback ladder's silence clock: when the current tier's silence window started
+	 * (backgrounded or last comms, whichever is later). Null (not 0L) when absent, same as
+	 * [loadSyncCursor] - an unset key must read as "nothing persisted yet" so the manager's
+	 * hydrate clamp can default it to now(), not to the epoch. Device runtime state (not the
+	 * blob), so it stays out of both SCHEMA_WIPE_KEYS and PROVISIONING_KEYS by omission. */
+	override fun saveIdleSilenceStart(v: Long) = prefs.edit().putLong(KEY_IDLE_SILENCE_START, v).apply()
+
+	override fun loadIdleSilenceStart(): Long? {
+		if (!prefs.contains(KEY_IDLE_SILENCE_START)) return null
+		return prefs.getLong(KEY_IDLE_SILENCE_START, 0L)
+	}
 
 	/** The STTS service URL + API key, in app settings (not the provisioning blob) so a re-provision
 	 * never wipes voice. Stored via plain putString, which still gets EncryptedSharedPreferences at
@@ -353,6 +365,7 @@ class AppStateStore(context: Context) {
 		const val KEY_STTS_VOLUME = "stts_volume"
 		const val KEY_TERMINAL_REFRESH_MS = "terminal_refresh_ms"
 		const val TERMINAL_REFRESH_FLOOR_MS = 300L
+		const val KEY_IDLE_SILENCE_START = "idle_silence_start"
 		const val KEY_SYNC_EPOCH = "sync_epoch"
 		const val KEY_SYNC_ACKED = "sync_acked"
 		const val KEY_SYNC_DROPPED = "sync_dropped"
@@ -364,10 +377,6 @@ class AppStateStore(context: Context) {
 		const val KEY_SCHEMA_VERSION = "schema_version"
 		const val CURRENT_SCHEMA_VERSION = 3
 
-		/** The keys a re-provision wipes. Everything else is preserved by omission (voice creds +
-		 * taste, the biometric lock), so any new provisioning/identity/transcript key MUST be added
-		 * here or it silently survives a Clear (a privacy/correctness regression). The partition is
-		 * pinned by a unit test. */
 		/** The grammar-bearing keys the one-shot schema wipe clears (thread/label/draft/absence-streak
 		 * store keys plus the mailbox sync cursor). Any NEW address-keyed pref MUST be added here or it
 		 * survives the grammar migration carrying a stale-grammar key. The set is pinned by a unit test. */
@@ -376,12 +385,16 @@ class AppStateStore(context: Context) {
 			KEY_SYNC_DROPPED,
 		)
 
+		/** The keys a re-provision wipes. Everything else is preserved by omission (voice creds +
+		 * taste, the biometric lock), so any new provisioning/identity/transcript key MUST be added
+		 * here or it silently survives a Clear (a privacy/correctness regression). The partition is
+		 * pinned by a unit test. */
 		val PROVISIONING_KEYS = listOf(
 			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
 			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_PROFILE_NAME, KEY_HOSTED_TENANTS,
 			KEY_TRUSTED_OWNERS,
 			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_GATEWAY_ID, KEY_SYNC_EPOCH, KEY_SYNC_ACKED,
-			KEY_SYNC_DROPPED,
+			KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS,
 		)
 	}
 }

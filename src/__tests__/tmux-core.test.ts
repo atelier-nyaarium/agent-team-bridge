@@ -48,6 +48,7 @@ import {
 	hasSession,
 	isAgentReady,
 	isAgentWorking,
+	isAtPrompt,
 	isLoggedOut,
 	killSession,
 	peekPane,
@@ -364,8 +365,22 @@ describe("tmuxCore isAgentWorking", () => {
 		expect(isAgentWorking("(12s · esc to interrupt)\n✻ Prestidigitating…")).toBe(true);
 	});
 
-	it("ignores a hint more than two lines back", () => {
+	it("ignores a hint more than two lines back when there is no rule to bound the search by", () => {
 		expect(isAgentWorking("(12s · esc to interrupt)\n✻ Prestidigitating…\n❯ ")).toBe(false);
+	});
+
+	it("finds the hint any distance below the rule, since the footer's height is dynamic", () => {
+		const rule = "─".repeat(40);
+		// 3 lines above the very bottom - past the old fixed "last 2 lines" heuristic - but below the
+		// rule, so the properly-bounded footer search still finds it.
+		expect(
+			isAgentWorking(
+				`❯ \n${rule}\n✻ Prestidigitating… (12s · esc to interrupt)\n  ⏵⏵ bypass permissions on\n  ← for agents`,
+			),
+		).toBe(true);
+		// A hint ABOVE the rule is transcript/history, not the live footer - never counts, even when
+		// it would fall within some arbitrary distance of the bottom.
+		expect(isAgentWorking(`✻ Prestidigitating… (12s · esc to interrupt)\n${rule}\n❯ `)).toBe(false);
 	});
 
 	it("strips the SGR escapes around the hint", () => {
@@ -373,6 +388,13 @@ describe("tmuxCore isAgentWorking", () => {
 		expect(isAgentWorking(`✻ Prestidigitating${esc}[2m… (12s ${esc}[2m·${esc}[0m esc to interrupt)${esc}[0m`)).toBe(
 			true,
 		);
+	});
+
+	it("also counts a task-bullet marker (◯) in the footer, same as the esc hint", () => {
+		const rule = "─".repeat(40);
+		expect(isAgentWorking(`❯ \n${rule}\n  ◯ idle-pushback`)).toBe(true);
+		// Above the rule is transcript/history (e.g. a completed todo list), not the live footer.
+		expect(isAgentWorking(`  ◯ idle-pushback\n${rule}\n❯ `)).toBe(false);
 	});
 });
 
@@ -399,6 +421,34 @@ describe("tmuxCore isLoggedOut", () => {
 		const ruleAnsi = `${esc}[2m${rule}${esc}[0m`;
 		const screen = `❯ \n${ruleAnsi}\n  ⏵⏵ for agents  ${esc}[33mNot logged in${esc}[0m · ${esc}[1mRun /login${esc}[0m`;
 		expect(isLoggedOut(screen)).toBe(true);
+	});
+});
+
+describe("tmuxCore isAtPrompt", () => {
+	const rule = "─".repeat(40);
+
+	it("is true whether the composer is idle or mid-turn - the box border renders either way", () => {
+		expect(isAtPrompt(`❯ \n${rule}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents`)).toBe(true);
+		expect(isAtPrompt(`❯ \n${rule}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt`)).toBe(
+			true,
+		);
+	});
+
+	it("is false with no full-width rule row at all (raw shell, boot screen, menu)", () => {
+		expect(isAtPrompt("")).toBe(false);
+		expect(isAtPrompt("root@host ~ $ ")).toBe(false);
+		expect(isAtPrompt("Loading development channels...")).toBe(false);
+		expect(isAtPrompt("  ❯ 1. I am using this for local development\n    2. Exit")).toBe(false);
+	});
+
+	it("ignores a partial rule that merely contains dashes rather than being all dashes", () => {
+		expect(isAtPrompt("-- 3 dashes inline, not a full rule row --")).toBe(false);
+		expect(isAtPrompt(`some text ${rule} trailing text`)).toBe(false);
+	});
+
+	it("strips the SGR escapes a real -e capture wraps the rule in", () => {
+		const esc = String.fromCharCode(27);
+		expect(isAtPrompt(`❯ \n${esc}[2m${rule}${esc}[0m\n  ⏵⏵ for agents`)).toBe(true);
 	});
 });
 

@@ -7,11 +7,17 @@ import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { DurableStore } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
-import { type HostOp, type HostOpResult, isReservedHostSession } from "../shared/host-op.js";
+import {
+	type HostOp,
+	type HostOpResult,
+	type HostPeekResult,
+	isReservedHostSession,
+	type TmuxTarget,
+} from "../shared/host-op.js";
 import { ownerKeyId } from "../shared/owner-id.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { isComposite, parseSessionName } from "../shared/session-id.js";
-import { SessionStore } from "../shared/session-store.js";
+import { type SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { createConsoleDispatcher } from "./console/consoleHandler.js";
@@ -42,6 +48,7 @@ import { ReplayGuard } from "./federation/replayGuard.js";
 import { createSealer, type Sealer } from "./federation/sealer.js";
 import { HostOpCoordinator } from "./hostOpCoordinator.js";
 import { createRoutes } from "./routes.js";
+import { createVibeCheck } from "./vibeCheck.js";
 import { decideWakeCreate, WakeCoordinator, type WakeResult } from "./wake.js";
 import { createWebSocketHandlers, resolveLiveIncarnation, type WsData } from "./websocket.js";
 
@@ -322,7 +329,9 @@ export async function startGateway(): Promise<void> {
 	// The host op timeout must EXCEED the host's worst-case work so a succeeding-but-slow op
 	// never spuriously times out (a sendText runs two sequential 8s execs = up to 16s, and a
 	// timeout on a keystroke send is indeterminate - the retry would re-inject). 20s clears that
-	// with margin and still nests well under the console relay hold (evie ~55s, apiserver 60s).
+	// with margin and still nests well under the console relay hold (evie ~55s, apiserver
+	// ConsoleClient.PROXY_CEILING_MS 60s - the full chain is pinned in
+	// ChatRepositoryConstantsTest, not here; this comment is context, not a source of truth).
 	const HOST_OP_TIMEOUT_MS = 20_000;
 
 	async function relayToHost(op: HostOp): Promise<HostOpResult> {
@@ -642,6 +651,49 @@ export async function startGateway(): Promise<void> {
 		}
 	}
 
+	// The tmux target a session record's pane lives at: the host's own tmux for a host session, else
+	// a docker exec into the spawn's devcontainer. Mirrors consoleHandler's resolveTmuxTarget for the
+	// composite case, built directly from the record since spawn/id are already resolved.
+	function recordTmuxTarget(record: SessionRecord): TmuxTarget {
+		return record.spawn === "host"
+			? { kind: "host", name: "host", sessionName: record.id }
+			: { kind: "devcontainer", name: record.spawn, sessionName: record.id };
+	}
+
+	// The vibe check: AI-managed session descriptions (see gateway/vibeCheck.ts). Message counting
+	// hooks ride the routes deps; the disconnect reset rides createWebSocketHandlers below; the
+	// scheduler tick peeks due sessions and asks at the earliest idle detection.
+	const vibeCheck = createVibeCheck({
+		sessionStore,
+		resolveLead: (team) => {
+			const live = resolveLiveIncarnation(registry, sessionStore, team);
+			return live?.data.handshakeConfirmed ? live : undefined;
+		},
+		peekScreen: async (record) => {
+			const r = await relayToHost({ kind: "peek", target: recordTmuxTarget(record) });
+			if (!r.ok || !r.result) return null;
+			const peek = r.result as HostPeekResult;
+			// Only a live tmux pane can be idle-evaluated; container logs mean the pane isn't up yet.
+			return peek.kind === "tmux" ? peek.ansi : null;
+		},
+		sendRename: async (record, description, dedupKey) => {
+			const r = await relayToHost({
+				kind: "sendText",
+				target: recordTmuxTarget(record),
+				text: `/rename ${description}`,
+				dedupKey,
+			});
+			if (!r.ok) throw new Error(r.error ?? "rename keystroke failed");
+		},
+	});
+	const VIBE_TICK_MS = 15_000;
+	const vibeTimer = setInterval(() => {
+		vibeCheck
+			.tick()
+			.catch((err) => console.warn(`[vibe] tick failed: ${err instanceof Error ? err.message : err}`));
+	}, VIBE_TICK_MS);
+	void vibeTimer;
+
 	const wsHandlers = createWebSocketHandlers({
 		registry,
 		conversationRegistry,
@@ -652,6 +704,11 @@ export async function startGateway(): Promise<void> {
 		hostOpCoordinator,
 		onVirtualPeerEvicted: (conversationId) => {
 			evictConsolePeer?.(conversationId);
+		},
+		// A team's last real socket dropping restarts its vibe-check fresh phase: the next
+		// incarnation is a fresh wake or reconnect, which re-earns its first check via user messages.
+		onTeamDisconnect: (team) => {
+			vibeCheck.noteOffline(team);
 		},
 		sessionStore,
 	});
@@ -702,6 +759,7 @@ export async function startGateway(): Promise<void> {
 			ownerId: allowlistForConsole
 				? () => (allowlistForConsole!.ownerSignPub ? ownerKeyId(allowlistForConsole!.ownerSignPub) : null)
 				: null,
+			vibeCheck,
 		});
 	}
 

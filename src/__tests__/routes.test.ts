@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
+import { createRoutes, MAX_RESPONSE_FILE_BYTES, type RoutesDeps } from "../gateway/routes.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { SessionStore } from "../shared/session-store.js";
@@ -1671,6 +1671,13 @@ describe("routes", () => {
 			respond(req, { session_id: "sess-2", status: "completed", response: "reply" });
 			// A channel agent has no mailbox; respond must not mint one for it.
 			expect(mailboxStore.get("agent-conv")).toBeUndefined();
+		});
+	});
+
+	describe("constants", () => {
+		it("MAX_RESPONSE_FILE_BYTES matches the Android console's own MAX_OUTGOING_BYTES", () => {
+			// android/.../ChatRepository.kt: const val MAX_OUTGOING_BYTES = 500_000_000
+			expect(MAX_RESPONSE_FILE_BYTES).toBe(500_000_000);
 		});
 	});
 });

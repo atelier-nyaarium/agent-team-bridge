@@ -225,8 +225,17 @@ export function connectToRouter(): void {
 			return;
 		}
 
-		// Handshake from gateway: auto-reply if we know the answer, otherwise let the LLM decide
-		if (msg.type === "channel_push" && msg.from === "gateway" && msg.replyJsonSchema) {
+		// Handshake from gateway: auto-reply if we know the answer, otherwise let the LLM decide.
+		// Scoped to hs-* ids: the vibe check (from "vibe-check", vc-*) also rides a gateway-authored
+		// reply_schema push and must reach the LLM, never be swallowed by this cache - the hs- check
+		// is belt-and-suspenders for any future gateway question that forgets to change `from`.
+		if (
+			msg.type === "channel_push" &&
+			msg.from === "gateway" &&
+			msg.replyJsonSchema &&
+			typeof msg.session_id === "string" &&
+			msg.session_id.startsWith("hs-")
+		) {
 			const hsSessionId = msg.session_id as string;
 			handshakeRole.noteReceived(hsSessionId);
 			const role = handshakeRole.get();

@@ -52,10 +52,16 @@ internal fun buildLeafFingerprintPinnedClient(certFpHex: String): OkHttpClient {
 			override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
 		}
 	val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), SecureRandom()) }
+	val connectTimeoutSeconds = 5L
+	val writeTimeoutSeconds = 10L
+	val readTimeoutSeconds = 10L
 	return OkHttpClient.Builder()
 		.sslSocketFactory(ssl.socketFactory, tm)
-		.connectTimeout(5, TimeUnit.SECONDS)
-		.writeTimeout(10, TimeUnit.SECONDS)
-		.readTimeout(10, TimeUnit.SECONDS)
+		.connectTimeout(connectTimeoutSeconds, TimeUnit.SECONDS)
+		.writeTimeout(writeTimeoutSeconds, TimeUnit.SECONDS)
+		.readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
+		// One-shot LAN POST of an already-sealed bundle: bounds the whole call so a peer
+		// that stops mid-response doesn't hold the enroll flow open indefinitely.
+		.callTimeout(connectTimeoutSeconds + writeTimeoutSeconds + readTimeoutSeconds + 5L, TimeUnit.SECONDS)
 		.build()
 }

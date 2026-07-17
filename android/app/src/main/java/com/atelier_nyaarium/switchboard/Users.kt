@@ -118,7 +118,16 @@ fun UsersScreen(
 		return
 	}
 	if (showSharing) {
-		SharingScreen(repo = repo, onBack = { showSharing = false })
+		SharingScreen(
+			repo = repo,
+			onBack = {
+				showSharing = false
+				// Matches TrustCompareScreen's onClose above: sharing state can change while the
+				// overlay is open, so the roster (sharedCounts in particular) must refresh on close
+				// instead of staying stale until the next unrelated recomposition.
+				scope.launch { refresh() }
+			},
+		)
 		return
 	}
 

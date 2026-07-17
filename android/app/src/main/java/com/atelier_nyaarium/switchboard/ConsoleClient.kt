@@ -54,6 +54,7 @@ import com.atelier_nyaarium.switchboard.proto.parseTarget
 import com.atelier_nyaarium.switchboard.proto.TransportRequest
 import com.atelier_nyaarium.switchboard.proto.TransportResult
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.security.KeyStore
 import java.security.SecureRandom
 import java.security.cert.CertificateFactory
@@ -61,13 +62,21 @@ import java.util.UUID
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 
 /**
  * Credential blob the console holds. Reaches the console bridge through the k8s API
@@ -167,6 +176,10 @@ data class Team(
 	// displayName (the owning Domain's network name). Null for a spawn-point, a session with no
 	// record, or an older gateway that does not send it (the app falls back to a local label / leaf).
 	val sessionLabel: String? = null,
+	// The AI-managed vibe-check description ("what is this session about, as a short phrase"). The
+	// board card shows it as the preview line in place of the last message. Null until the session's
+	// first vibe check answers, and for gateways without the feature.
+	val description: String? = null,
 ) {
 	/** Short local field shown in the UI: `spawn` or `spawn.session` from the canonical address. */
 	val shortName: String get() = localFieldOf(name)
@@ -196,7 +209,11 @@ private data class EnrollEnvelope(
 
 /** A retryable bounce body (offline / malformed), distinct from an EnrollResult. */
 @Serializable
-private data class BounceBody(val error: String? = null, val retryable: Boolean = false)
+// internal (not private): referenced from postEvieDirect, an internal inline fun - an inline
+// function's body cannot access a private-in-file type even from the same file (the compiler
+// treats inlining as a visibility-widening operation). Same bug class as ConsoleClient's own
+// PINNED_*/HELD_*/PROXY_CEILING_MS companion constants; see their comment for the general rule.
+internal data class BounceBody(val error: String? = null, val retryable: Boolean = false)
 
 /** First-root POST body: a top-level `firstRoot` field routes to evie's console-bridge
  * firstRoot intake, decided at evie and never relayed to a Gateway. */
@@ -351,12 +368,19 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** Send a console op through the service-proxy to the console bridge. Mutating ops pass their own
 	 * stable opId so a retry after a lost reply replays the cached result server-side instead of running
 	 * the op twice. A held op (long-poll) passes a read timeout above its server-side hold. Every call
-	 * builds a fresh sealed frame so a retry produces a new ephemeral/nonce the replay guard accepts. */
-	private fun relay(
+	 * builds a fresh sealed frame so a retry produces a new ephemeral/nonce the replay guard accepts.
+	 * Cancellable (see executeCancellable): a caller cancelled while this is in flight unwinds via
+	 * CancellationException instead of blocking out the timeout - every caller up the chain must let
+	 * that exception propagate rather than swallow it as an ordinary failure (see Cancellation.kt's
+	 * rethrowIfCancellation/runCatchingCancellable, and the poll loop's own catch in ChatRepository). */
+	private suspend fun relay(
 		op: ConsoleOp,
 		opId: String = UUID.randomUUID().toString(),
 		readTimeoutMs: Long? = null,
 		targetGateway: String? = null,
+		// Bounds the whole call so a peer that trickles bytes can't wedge the caller forever -
+		// readTimeout alone only covers inactivity gaps. null opts out (send()'s upload).
+		callTimeoutMs: Long? = DEFAULT_RELAY_CALL_TIMEOUT_MS,
 	): ConsoleReplyBody {
 		val identity = requireConsoleIdentity()
 		// An op seals to the Gateway hosting its session (resolved from the keyring), naming it so
@@ -371,126 +395,79 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
 			.post(wireJson.encodeToString(ConsoleRelayFrame.serializer(), frame).toRequestBody(JSON))
 			.build()
-		val callClient = if (readTimeoutMs != null) {
-			client.newBuilder().readTimeout(readTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS).build()
+		val callClient = if (readTimeoutMs != null || callTimeoutMs != null) {
+			client.newBuilder().apply {
+				if (readTimeoutMs != null) readTimeout(readTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+				if (callTimeoutMs != null) callTimeout(callTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+			}.build()
 		} else {
 			client
 		}
-		callClient.newCall(req).execute().use { resp ->
-			val text = resp.body?.string().orEmpty()
-			if (!resp.isSuccessful) error("HTTP ${resp.code}: ${text.take(500)}")
-			val reply = wireJson.decodeFromString<ConsoleRelayReply>(text)
-			// Cleartext error path (console not admitted or pre-seal failure): surface it so the
-			// UI can prompt enrollment rather than show a generic network error.
-			if (reply.sealed == null) {
-				error(reply.error ?: "relay error (no sealed payload)")
-			}
-			return unsealReply(reply.sealed, identity, hostKeys.signPub)
+		val resp = executeCancellable(callClient, req)
+		if (!resp.isSuccessful) error("HTTP ${resp.code}: ${resp.text.take(500)}")
+		val reply = wireJson.decodeFromString<ConsoleRelayReply>(resp.text)
+		// Cleartext error path (console not admitted or pre-seal failure): surface it so the
+		// UI can prompt enrollment rather than show a generic network error.
+		if (reply.sealed == null) {
+			error(reply.error ?: "relay error (no sealed payload)")
 		}
+		return unsealReply(reply.sealed, identity, hostKeys.signPub)
 	}
+
+	/** This instance's evie-direct POST, filling in the companion's testable postEvieDirect primitive
+	 * with this ConsoleClient's own client/url/tokens. Every production evie-direct call site goes
+	 * through here instead of repeating those four positional args - besides the duplication, three of
+	 * them are adjacent same-typed Strings (url, saToken, appToken) that Kotlin cannot keyword-enforce
+	 * positionally, so a hand-repeated call is one transposition away from swapping which credential
+	 * rides which header. logBody has NO default (mirrors the companion primitive) - a call whose 2xx
+	 * result carries secret material the debug log must never echo passes false; every other site
+	 * states true explicitly, so a new site cannot compile without deciding rather than silently
+	 * inheriting a "log everything" default. */
+	private suspend inline fun <reified R> postEvieDirect(
+		tag: String,
+		describe: String,
+		body: RequestBody,
+		logBody: Boolean,
+		fail: (String) -> R,
+	): R = postEvieDirect(client, "$proxyBase/relay", prov.saToken, prov.appToken, tag, describe, body, logBody, fail)
 
 	/** Submit an owner enroll op directly to evie (the Domain root). Enroll ops are evie-direct and never
 	 * relayed to a Gateway, so they succeed with no gateway connected; evie answers an EnrollResult, not a
 	 * console_relay_reply. A bounce (offline, 501, malformed) is surfaced as a failed EnrollResult. */
-	fun enroll(op: EnrollOp): EnrollResult {
+	suspend fun enroll(op: EnrollOp): EnrollResult {
 		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), op)
-		val req = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON))
-			.build()
-		// Trace the POST URL and outcome. A transport throw means the device cannot reach evie's
-		// console-bridge at all; an HTTP code means it reached evie, so the code is the coordinator's verdict.
-		DebugLog.log("Enroll", "POST $proxyBase/relay op=${op::class.simpleName}")
-		val resp =
-			try {
-				client.newCall(req).execute()
-			} catch (e: Exception) {
-				DebugLog.log("Enroll", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("Enroll", "resp HTTP ${resp.code} ${text.take(120)}")
-			// 2xx is a real EnrollResult. A coordinator rejection is 400 with an EnrollResult body; a
-			// transport bounce is {error, retryable}. Cross-check the status so a non-2xx body is
-			// never read as a successful enroll.
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<EnrollResult>(text) }
-					.getOrElse { EnrollResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<EnrollResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return EnrollResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
+		return postEvieDirect(
+			tag = "Enroll",
+			describe = "op=${op::class.simpleName}",
+			body = wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON),
+			logBody = true,
+		) { EnrollResult(ok = false, error = it) }
 	}
 
 	/** Drive one device-approval frame (arm/poll/approve/cancel) through evie's coordinator over the
 	 * AUTHENTICATED console-bridge. Mirrors enroll()'s envelope + POST: evie answers a
 	 * ConsoleApprovalResult directly (200 ok, 400 reject), never relaying to a Gateway. The public
 	 * join/fetch steps must NOT come here - they go to postPublicApproval. */
-	fun postConsoleApproval(op: ConsoleApprovalOp): ConsoleApprovalResult {
-		val req = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(
-				wireJson.encodeToString(ConsoleApprovalEnvelope.serializer(), ConsoleApprovalEnvelope(op)).toRequestBody(JSON),
-			)
-			.build()
-		DebugLog.log("DeviceApproval", "POST $proxyBase/relay step=${op::class.simpleName}")
-		val resp =
-			try {
-				client.newCall(req).execute()
-			} catch (e: Exception) {
-				DebugLog.log("DeviceApproval", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("DeviceApproval", "resp HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<ConsoleApprovalResult>(text) }
-					.getOrElse { ConsoleApprovalResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<ConsoleApprovalResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return ConsoleApprovalResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
-	}
+	suspend fun postConsoleApproval(op: ConsoleApprovalOp): ConsoleApprovalResult =
+		postEvieDirect(
+			tag = "DeviceApproval",
+			describe = "step=${op::class.simpleName}",
+			body = wireJson.encodeToString(ConsoleApprovalEnvelope.serializer(), ConsoleApprovalEnvelope(op)).toRequestBody(JSON),
+			logBody = true,
+		) { ConsoleApprovalResult(ok = false, error = it) }
 
 	/** First-root a pending friend Domain at this device's silently-generated owner key. evie decides it
 	 * directly from the self-signed frame + one-time invite nonce, with no gateway and no admission, so it
 	 * works before any Gateway is admitted. It answers an EnrollResult (2xx ok, 400 reject for an expired or
 	 * already-claimed invite). A reject is not retryable (the root was decided), so the caller surfaces it. */
-	fun firstRoot(signed: SignedFirstRoot): EnrollResult {
+	suspend fun firstRoot(signed: SignedFirstRoot): EnrollResult {
 		val envelope = FirstRootEnvelope(signed)
-		val req = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(FirstRootEnvelope.serializer(), envelope).toRequestBody(JSON))
-			.build()
-		DebugLog.log("FirstRoot", "POST $proxyBase/relay domain=${signed.firstRoot.domainId}")
-		val resp =
-			try {
-				client.newCall(req).execute()
-			} catch (e: Exception) {
-				DebugLog.log("FirstRoot", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("FirstRoot", "resp HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<EnrollResult>(text) }
-					.getOrElse { EnrollResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<EnrollResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return EnrollResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
+		return postEvieDirect(
+			tag = "FirstRoot",
+			describe = "domain=${signed.firstRoot.domainId}",
+			body = wireJson.encodeToString(FirstRootEnvelope.serializer(), envelope).toRequestBody(JSON),
+			logBody = true,
+		) { EnrollResult(ok = false, error = it) }
 	}
 
 	/** Pull this owner's network gateway-bridge transport (the proxy SA token + CA) from evie. POST
@@ -498,181 +475,72 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * scoping by the request's signed owner proof. ok=false is an opaque reject (bad proof or not a rooted
 	 * owner); a transport bounce maps to ok=false too. The Console seals the returned creds into a bootstrap
 	 * bundle for a creds-less Gateway it is enrolling. */
-	fun requestGatewayTransport(req: TransportRequest): TransportResult {
-		val request = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(TransportEnvelope.serializer(), TransportEnvelope(req)).toRequestBody(JSON))
-			.build()
-		val resp =
-			try {
-				client.newCall(request).execute()
-			} catch (e: Exception) {
-				DebugLog.log("Transport", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("Transport", "resp HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<TransportResult>(text) }
-					.getOrElse { TransportResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<TransportResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return TransportResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
-	}
+	suspend fun requestGatewayTransport(req: TransportRequest): TransportResult =
+		postEvieDirect(
+			tag = "Transport",
+			describe = "transport",
+			body = wireJson.encodeToString(TransportEnvelope.serializer(), TransportEnvelope(req)).toRequestBody(JSON),
+			// A 2xx body carries the minted gateway-bridge SA token - never let it reach the debug log.
+			logBody = false,
+		) { TransportResult(ok = false, error = it) }
 
 	/** Drive one enroll-handshake frame through evie's broker (POST { enrollHandshake }). evie relays the
 	 * peer's frame back, or reports pending; the phone computes the SAS locally. Pre-admission like firstRoot
 	 * (the fresh enrollee has no admission). A terminal failure is ok=false + error; ok=true with the peer
 	 * frame absent means keep polling (re-send the same step). */
-	fun enrollHandshake(op: EnrollHandshakeOp): EnrollHandshakeResult {
+	suspend fun enrollHandshake(op: EnrollHandshakeOp): EnrollHandshakeResult {
 		val envelope = EnrollHandshakeEnvelope(op)
-		val req = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(EnrollHandshakeEnvelope.serializer(), envelope).toRequestBody(JSON))
-			.build()
-		DebugLog.log("EnrollHs", "POST $proxyBase/relay step=${op::class.simpleName}")
-		val resp =
-			try {
-				client.newCall(req).execute()
-			} catch (e: Exception) {
-				DebugLog.log("EnrollHs", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("EnrollHs", "resp HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<EnrollHandshakeResult>(text) }
-					.getOrElse { EnrollHandshakeResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<EnrollHandshakeResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return EnrollHandshakeResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
+		return postEvieDirect(
+			tag = "EnrollHs",
+			describe = "step=${op::class.simpleName}",
+			body = wireJson.encodeToString(EnrollHandshakeEnvelope.serializer(), envelope).toRequestBody(JSON),
+			logBody = true,
+		) { EnrollHandshakeResult(ok = false, error = it) }
 	}
 
 	/** Fetch the cross-tenant roster (the Users surface) from evie. POST { roster } evie-direct like
 	 * firstRoot: evie aggregates across Domains a gateway cannot see and answers itself. The request carries
 	 * the console's signed ROSTER proof; a non-member comes back ok=false (opaque). */
-	fun roster(req: RosterRequest): RosterResult {
-		val request = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(RosterEnvelope.serializer(), RosterEnvelope(req)).toRequestBody(JSON))
-			.build()
-		val resp =
-			try {
-				client.newCall(request).execute()
-			} catch (e: Exception) {
-				DebugLog.log("Roster", "transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("Roster", "resp HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<RosterResult>(text) }
-					.getOrElse { RosterResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<RosterResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return RosterResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
-	}
+	suspend fun roster(req: RosterRequest): RosterResult =
+		postEvieDirect(
+			tag = "Roster",
+			describe = "roster",
+			body = wireJson.encodeToString(RosterEnvelope.serializer(), RosterEnvelope(req)).toRequestBody(JSON),
+			logBody = true,
+		) { RosterResult(ok = false, error = it) }
 
 	/** Broker a FLOW-2 trust-rendezvous frame (arm/join/reveal/cancel) at evie. POST { trustHandshake }
 	 * evie-direct (the dumb broker; no sealing, like the enroll handshake). */
-	fun trustHandshake(op: TrustHandshakeOp): TrustHandshakeResult {
-		val request = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(
-				wireJson.encodeToString(TrustHandshakeEnvelope.serializer(), TrustHandshakeEnvelope(op)).toRequestBody(JSON),
-			)
-			.build()
-		val resp =
-			try {
-				client.newCall(request).execute()
-			} catch (e: Exception) {
-				DebugLog.log("Trust", "handshake transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("Trust", "handshake HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<TrustHandshakeResult>(text) }
-					.getOrElse { TrustHandshakeResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<TrustHandshakeResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return TrustHandshakeResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
-	}
+	suspend fun trustHandshake(op: TrustHandshakeOp): TrustHandshakeResult =
+		postEvieDirect(
+			tag = "Trust",
+			describe = "handshake op=${op::class.simpleName}",
+			body = wireJson.encodeToString(TrustHandshakeEnvelope.serializer(), TrustHandshakeEnvelope(op)).toRequestBody(JSON),
+			logBody = true,
+		) { TrustHandshakeResult(ok = false, error = it) }
 
 	/** Query "who armed trust toward me?" at evie (the highlight). POST { trustPending } with the
 	 * owner-signed proof; evie returns the armed rendezvous indexed under this owner key. */
-	fun trustPending(req: TrustPendingRequest): TrustPendingResult {
-		val request = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(
-				wireJson.encodeToString(TrustPendingEnvelope.serializer(), TrustPendingEnvelope(req)).toRequestBody(JSON),
-			)
-			.build()
-		val resp =
-			try {
-				client.newCall(request).execute()
-			} catch (e: Exception) {
-				DebugLog.log("Trust", "pending transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
-				throw e
-			}
-		resp.use {
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("Trust", "pending HTTP ${resp.code} ${text.take(160)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<TrustPendingResult>(text) }
-					.getOrElse { TrustPendingResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<TrustPendingResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return TrustPendingResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
-	}
+	suspend fun trustPending(req: TrustPendingRequest): TrustPendingResult =
+		postEvieDirect(
+			tag = "Trust",
+			describe = "pending",
+			body = wireJson.encodeToString(TrustPendingEnvelope.serializer(), TrustPendingEnvelope(req)).toRequestBody(JSON),
+			logBody = true,
+		) { TrustPendingResult(ok = false, error = it) }
 
 	/** Submit an admin-signed provision_tenant enroll op and decode the minted one-time invite nonce evie
 	 * returns (the admin's app builds the friend's QR from it). Same evie-direct path as enroll(); only the
 	 * richer result decode differs, since the wire EnrollResult omits the nonce. */
-	fun provisionTenant(signed: SignedProvisionTenant): ProvisionTenantResult {
+	suspend fun provisionTenant(signed: SignedProvisionTenant): ProvisionTenantResult {
 		val envelope = EnrollEnvelope(prov.device, prov.conversationId, UUID.randomUUID().toString(), EnrollOp.ProvisionTenant(signed))
-		val req = Request.Builder()
-			.url("$proxyBase/relay")
-			.header("Authorization", "Bearer ${prov.saToken}")
-			.header("X-Console-Bridge-Token", "Bearer ${prov.appToken}")
-			.post(wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON))
-			.build()
-		DebugLog.log("Enroll", "POST $proxyBase/relay op=ProvisionTenant")
-		client.newCall(req).execute().use { resp ->
-			val text = resp.body?.string().orEmpty()
-			DebugLog.log("Enroll", "provision resp HTTP ${resp.code} ${text.take(120)}")
-			if (resp.isSuccessful) {
-				return runCatching { wireJson.decodeFromString<ProvisionTenantResult>(text) }
-					.getOrElse { ProvisionTenantResult(ok = false, error = "unexpected response (HTTP ${resp.code})") }
-			}
-			runCatching { wireJson.decodeFromString<ProvisionTenantResult>(text) }.getOrNull()?.let { return it }
-			val err = runCatching { wireJson.decodeFromString<BounceBody>(text).error }.getOrNull()
-			return ProvisionTenantResult(ok = false, error = err ?: "HTTP ${resp.code}")
-		}
+		return postEvieDirect(
+			tag = "Enroll",
+			describe = "op=ProvisionTenant",
+			body = wireJson.encodeToString(EnrollEnvelope.serializer(), envelope).toRequestBody(JSON),
+			// A 2xx body carries the minted one-time invite nonce - never let it reach the debug log.
+			logBody = false,
+		) { ProvisionTenantResult(ok = false, error = it) }
 	}
 
 	/** The reply's result payload decoded as T, or an error for a failed op. */
@@ -684,7 +552,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Claim this device's mailbox, returning the starting cursor + epoch. Carries this build's identity
 	 * so the gateway logs which version and variant the console runs. */
-	fun register(): ConsoleRegisterResult = resultOf(
+	suspend fun register(): ConsoleRegisterResult = resultOf(
 		relay(
 			ConsoleOp.Register(
 				clientVersion = "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}",
@@ -697,7 +565,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** List the bridge's sessions, each keyed by its canonical `domain.gateway.spawn.session` address. A
 	 * session's Gateway comes from the wire (`TeamInfo.gatewayId`, always stamped); an empty value falls
 	 * back to `localGatewayId` (this connection's Gateway, learned at register). */
-	fun teams(localGatewayId: String = ""): List<Team> {
+	suspend fun teams(localGatewayId: String = ""): List<Team> {
 		val body = relay(ConsoleOp.ListTeams)
 		// Surface a relay failure instead of blanking the board; the callers (connect, refreshTeams)
 		// wrap this in runCatching and keep the prior list.
@@ -729,16 +597,18 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 				displayName = it.displayName,
 				isAdminDomain = it.isAdminDomain ?: false,
 				sessionLabel = it.sessionLabel,
+				description = it.description,
 			)
 		}
 	}
 
 	// teams() throws on a relay failure; this wrapper keeps the list-returning contract (empty on failure).
-	fun listTeams(): List<String> = runCatching { teams().map { it.name } }.getOrDefault(emptyList())
+	suspend fun listTeams(): List<String> =
+		runCatchingCancellable { teams().map { it.name } }.getOrDefault(emptyList())
 
 	/** Send a message to a team. The reply may arrive inline within the relay hold or land in the mailbox
 	 * for a later poll; either way the conversation is keyed server-side by (this device, team). */
-	fun send(
+	suspend fun send(
 		to: String,
 		body: String,
 		files: List<OutgoingFile> = emptyList(),
@@ -764,7 +634,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		// Gateway opens the op and relays it to the friend over the mesh.
 		val local = routeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()
 		val target = if (crossDomain != null) local else gatewayOfTarget(to, local)
-		val replyBody = relay(op, opId, targetGateway = target)
+		// callTimeoutMs = null: a large attachment upload must not be capped by an overall
+		// call duration, only by writeTimeout's per-write inactivity bound (buildPinnedClient).
+		val replyBody = relay(op, opId, targetGateway = target, callTimeoutMs = null)
 		val status = replyBody.result?.let {
 			runCatching { wireJson.decodeFromJsonElement<ConsoleSendResult>(it).status }.getOrNull()
 		}
@@ -774,7 +646,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** Drain new mailbox entries since cursor (epoch-gated). With holdMs > 0 the server long-polls: an empty
 	 * mailbox holds the request open until a message arrives or the hold expires, so delivery is near-instant
 	 * at about one request per hold window instead of constant fast polling. */
-	fun poll(cursor: Long, epoch: Long, holdMs: Long = 0): ConsolePollResult {
+	suspend fun poll(cursor: Long, epoch: Long, holdMs: Long = 0): ConsolePollResult {
 		// Carry the synced keyring version so the route Gateway returns the snapshot only when it changed
 		// (a revocation made elsewhere reaches this Console within one cycle).
 		val knownVersion = store.loadDomainVersion().ifEmpty { null }
@@ -784,11 +656,19 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			holdMs = if (holdMs > 0) holdMs else null,
 			knownDomainVersion = knownVersion,
 		)
-		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s),
-		// evie's relay hold fires at 55s if the gateway vanished, this read timeout
-		// at holdMs+18s (58s) catches a vanished evie, and the apiserver proxy's
-		// 60s outranks them all. Each failure layer returns before the next races it.
-		val body = relay(op, readTimeoutMs = if (holdMs > 0) holdMs + 18_000 else null)
+		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s), evie's relay
+		// hold fires at 55s if the gateway vanished, this read timeout at holdMs+HELD_READ_MARGIN_MS
+		// (58s) catches a vanished evie, and the apiserver proxy's PROXY_CEILING_MS (60s) outranks
+		// them all - pinned as LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS < PROXY_CEILING_MS in
+		// ChatRepositoryConstantsTest. Each failure layer returns before the next races it.
+		val heldReadTimeoutMs = if (holdMs > 0) holdMs + HELD_READ_MARGIN_MS else null
+		val body = relay(
+			op,
+			readTimeoutMs = heldReadTimeoutMs,
+			// Derived from this call's own read timeout (not an independent literal) so it
+			// can never drift below what that read timeout itself needs to complete.
+			callTimeoutMs = heldReadTimeoutMs?.let { it + CALL_TIMEOUT_MARGIN_MS + PINNED_CONNECT_TIMEOUT_MS },
+		)
 		// A relay-level failure must SURFACE, not masquerade as a successful empty drain:
 		// a fabricated empty (with epoch 0) hid outages from the health signal and forced
 		// a spurious epoch flip on the next real poll. Throw so the poll loop's catch
@@ -812,13 +692,13 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Capture the target's visible tmux pane for the terminal view. Pass the last hash so the
 	 * Gateway returns unchanged=true (no ansi) for an idle pane. */
-	fun peek(target: String, sinceHash: String? = null): ConsolePeekResult =
+	suspend fun peek(target: String, sinceHash: String? = null): ConsolePeekResult =
 		resultOf(relay(ConsoleOp.Peek(target = target, sinceHash = sinceHash), targetGateway = targetGatewayOf(target)), "peek")
 
 	/** Send literal text OR a named control key to the target's tmux pane. `submit` (text only, default
 	 * true) controls the trailing Enter: false types into the composer without submitting. Idempotent
 	 * per opId (the host replays a re-relayed send instead of re-injecting). */
-	fun tmuxSend(
+	suspend fun tmuxSend(
 		target: String,
 		text: String? = null,
 		key: String? = null,
@@ -832,7 +712,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Forget a session: kill its tmux and drop its resume record. Idempotent per opId; the Gateway
 	 * rejects a bare spawn-point (a composite session is required). */
-	fun forget(target: String, opId: String = UUID.randomUUID().toString()) {
+	suspend fun forget(target: String, opId: String = UUID.randomUUID().toString()) {
 		val body = relay(ConsoleOp.Forget(target = target), opId, targetGateway = targetGatewayOf(target))
 		if (!body.ok) error("forget failed: ${body.error ?: "unknown error"}")
 	}
@@ -840,7 +720,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** Close a session: kill its tmux but KEEP its resume record (a restart / mop-up), so it stays
 	 * listed as available. Idempotent per opId; the Gateway rejects a bare spawn-point, refuses while
 	 * a wake is in flight, and reports a user-launched session rather than a false success. */
-	fun closeSession(target: String, opId: String = UUID.randomUUID().toString()) {
+	suspend fun closeSession(target: String, opId: String = UUID.randomUUID().toString()) {
 		val body = relay(ConsoleOp.CloseSession(target = target), opId, targetGateway = targetGatewayOf(target))
 		if (!body.ok) error("close failed: ${body.error ?: "unknown error"}")
 	}
@@ -849,7 +729,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * (the minted id is the tmux name) and returns it; a `sessionName` is adopted as the id (the
 	 * old form, against a gateway that does not mint). Idempotent per opId (reattaches if it already
 	 * exists). Returns the gateway's reply; `id` is absent from an older gateway. */
-	fun createSession(
+	suspend fun createSession(
 		target: String,
 		sessionName: String? = null,
 		displayLabel: String? = null,
@@ -866,7 +746,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Rename a session: set the gateway-authoritative sessionLabel on its record. Idempotent per
 	 * opId. Returns the label the gateway actually applied (after its sanitize + per-spawn dedup). */
-	fun renameSession(
+	suspend fun renameSession(
 		target: String,
 		sessionLabel: String,
 		opId: String = UUID.randomUUID().toString(),
@@ -887,12 +767,12 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** RECEIVER: open a listening window. Returns the short token to read to the friend plus
 	 * this Gateway's keys (for the SAS) and the window's expiry. */
-	fun crossDomainListen(): CrossDomainListenResult =
+	suspend fun crossDomainListen(): CrossDomainListenResult =
 		resultOf(relay(ConsoleOp.CrossDomainListen), "cross_domain_listen")
 
 	/** REQUESTER: pair against the friend's listening token. The Gateway runs the full
 	 * commit-reveal exchange and returns the 6-digit SAS plus both sides' keys. */
-	fun crossDomainRequest(
+	suspend fun crossDomainRequest(
 		listeningToken: String,
 		pin: String,
 		requesterOwnerSignPub: String,
@@ -917,7 +797,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** EITHER ROLE: confirm the SAS match. Each owner confirms INDEPENDENTLY, submitting only its
 	 * OWN signed link side (binding the friend keys from the SAS-verified pairing); the Gateway
 	 * verifies it under this owner's key and writes the cross-Domain peer. No friend-link exchange. */
-	fun crossDomainConfirm(
+	suspend fun crossDomainConfirm(
 		pin: String,
 		mySignedLink: SignedXDomainLink,
 		opId: String = UUID.randomUUID().toString(),
@@ -930,16 +810,16 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	/** RECEIVER: poll the listening window's pairing state. Before a pairing arrives this reports
 	 * pairingArrived=false; once the requester's exchange lands, it carries the SAS + the friend's
 	 * keys the receiver phone owner-signs its link over. A fresh read each call (never cached). */
-	fun crossDomainListenState(listeningToken: String): CrossDomainListenStateResult =
+	suspend fun crossDomainListenState(listeningToken: String): CrossDomainListenStateResult =
 		resultOf(relay(ConsoleOp.CrossDomainListenState(listeningToken = listeningToken)), "cross_domain_listen_state")
 
 	/** EITHER ROLE: cancel a listening window (receiver token) and/or a pending pairing (pin)
 	 * when the owner leaves the pairing screen, so a stale request cannot complete. */
-	fun crossDomainCancel(listeningToken: String? = null, pin: String? = null): CrossDomainCancelResult =
+	suspend fun crossDomainCancel(listeningToken: String? = null, pin: String? = null): CrossDomainCancelResult =
 		resultOf(relay(ConsoleOp.CrossDomainCancel(listeningToken = listeningToken, pin = pin)), "cross_domain_cancel")
 
 	/** Mark a local session shared to an audience (a linked friend Domain, or everyone trusted). */
-	fun crossDomainShare(
+	suspend fun crossDomainShare(
 		sessionTarget: String,
 		target: CrossDomainShareTarget,
 		opId: String = UUID.randomUUID().toString(),
@@ -947,7 +827,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		resultOf(relay(ConsoleOp.CrossDomainShare(sessionTarget = sessionTarget, target = target), opId), "cross_domain_share")
 
 	/** Withdraw a local session's share from an audience. */
-	fun crossDomainUnshare(
+	suspend fun crossDomainUnshare(
 		sessionTarget: String,
 		target: CrossDomainShareTarget,
 		opId: String = UUID.randomUUID().toString(),
@@ -958,25 +838,59 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		)
 
 	/** This owner's current shares, so the UI can render the per-session checkmarks. */
-	fun crossDomainListShares(): CrossDomainListSharesResult =
+	suspend fun crossDomainListShares(): CrossDomainListSharesResult =
 		resultOf(relay(ConsoleOp.CrossDomainListShares), "cross_domain_list_shares")
 
 	/** The linked friend Domains from the route Gateway's cross-Domain peer set, so a just-linked
 	 * peer is visible (and its detail reachable) before any of its sessions surface in discovery. A
 	 * fresh read each call (never cached). */
-	fun crossDomainListPeers(): CrossDomainListPeersResult =
+	suspend fun crossDomainListPeers(): CrossDomainListPeersResult =
 		resultOf(relay(ConsoleOp.CrossDomainListPeers), "cross_domain_list_peers")
 
 	/** Unlink a friend Domain: drop the local trust + share state for it. */
-	fun crossDomainUnlink(domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
+	suspend fun crossDomainUnlink(domainId: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
 		resultOf(relay(ConsoleOp.CrossDomainUnlink(domainId = domainId), opId), "cross_domain_unlink")
 
 	/** Untrust a PERSON by owner key: drop the local peer + share state for every Domain they own. */
-	fun crossDomainUntrust(ownerSignPub: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
+	suspend fun crossDomainUntrust(ownerSignPub: String, opId: String = UUID.randomUUID().toString()): CrossDomainUnlinkResult =
 		resultOf(relay(ConsoleOp.CrossDomainUntrust(ownerSignPub = ownerSignPub), opId), "cross_domain_untrust")
 
 	companion object {
 		private val JSON = "application/json".toMediaType()
+
+		// internal (not private): ChatRepositoryConstantsTest pins the long-poll timeout chain
+		// against these from a separate test class, and FORGET_TOMBSTONE_MS derives from
+		// DEFAULT_RELAY_CALL_TIMEOUT_MS below for the same reason. PINNED_READ_TIMEOUT_MS also
+		// gets its own pin against the gateway's SEND_BOUND_MS, the relationship its own comment
+		// on buildPinnedClient already describes.
+		internal const val PINNED_CONNECT_TIMEOUT_MS = 15_000L
+		internal const val PINNED_READ_TIMEOUT_MS = 35_000L
+		private const val PINNED_WRITE_TIMEOUT_MS = 600_000L
+
+		// Margin on top of a call's own read timeout to get its callTimeout: covers connect
+		// + request-send + response-parse overhead beyond the read wait itself.
+		internal const val CALL_TIMEOUT_MARGIN_MS = 10_000L
+
+		// The gap between a held poll's requested hold and the read timeout that bounds it -
+		// see poll()'s heldReadTimeoutMs. Named (not a bare literal) because
+		// ChatRepositoryConstantsTest pins LONG_POLL_HOLD_MS + this against PROXY_CEILING_MS.
+		internal const val HELD_READ_MARGIN_MS = 18_000L
+
+		// Mirrors the apiserver proxy's own read timeout (untracked infra config, not in this
+		// repo) - an infra change to that value must update this one too. The binding constraint
+		// on the whole long-poll chain: the client's held read timeout must return before the
+		// proxy resets the socket, pinned as LONG_POLL_HOLD_MS + HELD_READ_MARGIN_MS < this in
+		// ChatRepositoryConstantsTest.
+		internal const val PROXY_CEILING_MS = 60_000L
+
+		// Bounds the common (non-held) relay() call: base read timeout + connect + margin.
+		// poll()'s held branch derives its own larger callTimeoutMs from its own read timeout
+		// instead of using this (see poll()). send() opts out entirely (callTimeoutMs = null)
+		// since its upload body write must not be capped by an overall call duration.
+		// internal (not private): ChatRepository derives FORGET_TOMBSTONE_MS from this, since
+		// that tombstone must outlast the same teams() call this bounds.
+		internal const val DEFAULT_RELAY_CALL_TIMEOUT_MS =
+			PINNED_CONNECT_TIMEOUT_MS + PINNED_READ_TIMEOUT_MS + CALL_TIMEOUT_MARGIN_MS
 
 		/** System-trust client for the PUBLIC device-approval ingress. No CA pin (the reach URL is a real
 		 * public cert) and no creds, so it is shared and built once. Short read timeout since the fresh
@@ -985,13 +899,125 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			OkHttpClient.Builder()
 				.connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
 				.readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+				// Bounds the whole call: a fresh device polls this in a loop, so a peer
+				// that trickles bytes must not hold one call open past its own read gaps.
+				.callTimeout(40, java.util.concurrent.TimeUnit.SECONDS)
 				.build()
+		}
+
+		/** What postEvieDirect's resp log line shows for a response body: the real (truncated) text when
+		 * logBody is true, else a char-count placeholder that can never contain the body's own content -
+		 * pulled out of postEvieDirect so this policy is directly unit-testable without going through
+		 * DebugLog (which a pure-JVM test cannot observe). */
+		internal fun loggedBodyPreview(text: String, logBody: Boolean): String =
+			if (logBody) text.take(160) else "(redacted, ${text.length} chars)"
+
+		/** A response reduced to the two things every caller here needs, read out fully before this
+		 * suspend call returns. */
+		internal data class HttpTextResult(val code: Int, val text: String) {
+			val isSuccessful: Boolean get() = code in 200..299
+		}
+
+		/** Run [req] on [httpClient] cancellably: a coroutine cancellation calls Call.cancel() and this
+		 * suspend call unwinds immediately instead of waiting out a timeout. The body is read to a String
+		 * and the Response closed INSIDE the OkHttp callback, before resuming - so a cancellation racing
+		 * the callback can only ever abandon an already-closed, already-read HttpTextResult, never a
+		 * leaked Response, and every caller's own parsing/decoding runs after resume, on the CALLER's
+		 * dispatcher, not OkHttp's callback thread. Shared by relay() and postEvieDirect() so Phase D's
+		 * cancellability lands in exactly these two places (see console-hardening.md). */
+		internal suspend fun executeCancellable(httpClient: OkHttpClient, req: Request): HttpTextResult =
+			suspendCancellableCoroutine { cont ->
+				val call = httpClient.newCall(req)
+				cont.invokeOnCancellation { call.cancel() }
+				call.enqueue(
+					object : Callback {
+						override fun onResponse(call: Call, response: Response) {
+							val result =
+								try {
+									response.use { HttpTextResult(response.code, response.body?.string().orEmpty()) }
+								} catch (e: Throwable) {
+									// Throwable, not Exception: a large enough body can throw OutOfMemoryError
+									// during .string(), and OkHttp's dispatcher never calls onFailure once
+									// onResponse has already run - an Exception-only catch would let that
+									// specific Error escape uncaught, orphaning the continuation forever (the
+									// hazard this wrapper exists to close, worst for send()'s callTimeoutMs=null
+									// upload). Closes the common case (this one allocation fails, headroom
+									// remains); under true heap exhaustion the resumeWithException call below
+									// could itself throw, which is not recoverable by any wrapper.
+									cont.resumeWithException(e)
+									return
+								}
+							cont.resume(result)
+						}
+
+						override fun onFailure(call: Call, e: IOException) {
+							cont.resumeWithException(e)
+						}
+					},
+				)
+			}
+
+		/** Shared evie-direct POST: every op that bypasses relay() and talks to evie's console-bridge
+		 * straight (enroll, postConsoleApproval, firstRoot, requestGatewayTransport, enrollHandshake,
+		 * roster, trustHandshake, trustPending, provisionTenant) shares this exact decode contract - 2xx
+		 * decodes as R (falling back through `fail` on a malformed body); non-2xx tries R first (a
+		 * coordinator reject can carry a typed body), then a bare {error} bounce, then a plain HTTP-code
+		 * fallback via `fail`. Takes its client/url/tokens as parameters rather than reading `this` so a
+		 * MockWebServer test can drive it with no Context-backed ConsoleClient; production code never
+		 * calls this directly - it goes through the instance-level `postEvieDirect(tag, describe, body,
+		 * logBody, fail)` above `enroll()`, which fills in this ConsoleClient's own client/url/tokens.
+		 * `tag`+`describe` together must stay unique enough to disambiguate in the debug log (e.g. the
+		 * Trust pair, or provisionTenant vs enroll sharing the "Enroll" tag). `logBody` gates only the
+		 * resp line's body preview - requestGatewayTransport (a minted SA token) and provisionTenant (a
+		 * one-time invite nonce) pass false so their 2xx bodies never reach the debug log, which the
+		 * debug build ships off-device to evie /ingest as well as logcat. */
+		internal suspend inline fun <reified R> postEvieDirect(
+			httpClient: OkHttpClient,
+			url: String,
+			saToken: String,
+			appToken: String,
+			tag: String,
+			describe: String,
+			body: RequestBody,
+			logBody: Boolean,
+			fail: (String) -> R,
+		): R {
+			val req = Request.Builder()
+				.url(url)
+				.header("Authorization", "Bearer $saToken")
+				.header("X-Console-Bridge-Token", "Bearer $appToken")
+				.post(body)
+				.build()
+			DebugLog.log(tag, "POST $url $describe")
+			val resp =
+				try {
+					executeCancellable(httpClient, req)
+				} catch (e: Exception) {
+					// A cancellation racing this call is not a transport failure - skip the log line
+					// (which the debug build ships off-device) so a teardown cancel does not read as a
+					// spurious connection error in the ingest stream. The rethrow is unconditional either
+					// way; only the logging is skipped.
+					if (e !is CancellationException) {
+						DebugLog.log(tag, "$describe transport error: ${e.javaClass.simpleName}: ${e.message?.take(140)}")
+					}
+					throw e
+				}
+			DebugLog.log(tag, "$describe resp HTTP ${resp.code} ${loggedBodyPreview(resp.text, logBody)}")
+			if (resp.isSuccessful) {
+				return runCatching { wireJson.decodeFromString<R>(resp.text) }
+					.getOrElse { fail("unexpected response (HTTP ${resp.code})") }
+			}
+			runCatching { wireJson.decodeFromString<R>(resp.text) }.getOrNull()?.let { return it }
+			val err = runCatching { wireJson.decodeFromString<BounceBody>(resp.text).error }.getOrNull()
+			return fail(err ?: "HTTP ${resp.code}")
 		}
 
 		/** The fresh device N's public path: a plain HTTPS POST of the op JSON to evie's nonce-gated
 		 * ingress, carrying NO SA token and NO app token (N holds none). Only the join/fetch steps reach
 		 * here; the nonce in the op body is the gate. TLS is the public host's real cert (system trust).
-		 * Always answers a ConsoleApprovalResult (the ingress returns 200 with the ok flag in the body). */
+		 * Always answers a ConsoleApprovalResult (the ingress returns 200 with the ok flag in the body).
+		 * Deliberately NOT built on postEvieDirect: different client (publicClient, no CA pin), no auth
+		 * headers, and no isSuccessful branch on the decode (the ingress always answers 200). */
 		fun postPublicApproval(reachUrl: String, op: ConsoleApprovalOp): ConsoleApprovalResult {
 			val req = Request.Builder()
 				.url(reachUrl)
@@ -1026,12 +1052,14 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			// The relay holds a send op server-side for up to 25s (the gateway's
 			// send bound) before answering "running", so OkHttp's 10s default read
 			// timeout would mislabel every cold-wake send as failed. Write gets
-			// headroom for a 500 MB attachment upload on slow links.
+			// headroom for a 500 MB attachment upload on slow links. No callTimeout here
+			// deliberately: it varies per call (tight for poll/relay, unbounded for send's
+			// upload), so relay() sets it per-call instead - see DEFAULT_RELAY_CALL_TIMEOUT_MS.
 			return OkHttpClient.Builder()
 				.sslSocketFactory(ssl.socketFactory, tm)
-				.connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-				.readTimeout(35, java.util.concurrent.TimeUnit.SECONDS)
-				.writeTimeout(600, java.util.concurrent.TimeUnit.SECONDS)
+				.connectTimeout(PINNED_CONNECT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+				.readTimeout(PINNED_READ_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+				.writeTimeout(PINNED_WRITE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
 				.build()
 		}
 	}

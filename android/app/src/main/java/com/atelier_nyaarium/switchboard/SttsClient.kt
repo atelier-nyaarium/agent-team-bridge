@@ -49,14 +49,25 @@ internal fun normalizeSttsUrl(raw: String): String? {
  * sniffs the container and never trusts the header. The descriptor's `container` field is
  * documentation only.
  *
- * Blocking OkHttp like ConsoleClient: callers own the dispatcher boundary.
+ * Blocking OkHttp, by design (unlike ConsoleClient's cancellable transport): callers own the
+ * dispatcher boundary.
  */
+private const val STTS_CONNECT_TIMEOUT_SECONDS = 10L
+private const val STTS_READ_TIMEOUT_SECONDS = 60L
+
+// Bounds the whole call, not just inter-chunk gaps: readTimeout alone lets a peer that
+// trickles bytes hold this blocking call open indefinitely on whichever background thread calls
+// it - ChatRepository's BURST_JOIN_TIMEOUT_MS only bounds the caller's wait on the burst-job
+// join, not this underlying blocking call, so a stalled synth still needs its own bound here.
+private const val STTS_CALL_TIMEOUT_SECONDS = STTS_CONNECT_TIMEOUT_SECONDS + STTS_READ_TIMEOUT_SECONDS + 10L
+
 class SttsClient(private val baseUrl: String, private val apiKey: String) {
 	private val client = OkHttpClient.Builder()
-		.connectTimeout(10, TimeUnit.SECONDS)
+		.connectTimeout(STTS_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 		// TTS synthesis of a multi-sentence summary can take a while; the body
 		// is streamed, so the read timeout covers time-to-first-byte gaps.
-		.readTimeout(60, TimeUnit.SECONDS)
+		.readTimeout(STTS_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+		.callTimeout(STTS_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 		.build()
 
 	val isConfigured: Boolean get() = baseUrl.isNotEmpty() && apiKey.isNotEmpty()
@@ -117,12 +128,6 @@ class SttsClient(private val baseUrl: String, private val apiKey: String) {
 	companion object {
 		private val JSON = "application/json".toMediaType()
 
-		/**
-		 * Substitute placeholders in a request-body template tree. Replaces only string
-		 * values exactly equal to "$text" or "$voice" (whole-value match, never substring
-		 * splicing), so nested objects, numbers, and literal strings pass through. The
-		 * serializer JSON-encodes the substituted values, so synthesis text is never spliced.
-		 */
 		/** Whether any string VALUE in the template tree equals `placeholder`. */
 		fun containsPlaceholder(node: JsonElement, placeholder: String): Boolean = when (node) {
 			is JsonObject -> node.values.any { containsPlaceholder(it, placeholder) }
@@ -130,6 +135,12 @@ class SttsClient(private val baseUrl: String, private val apiKey: String) {
 			is JsonPrimitive -> node.isString && node.content == placeholder
 		}
 
+		/**
+		 * Substitute placeholders in a request-body template tree. Replaces only string
+		 * values exactly equal to "$text" or "$voice" (whole-value match, never substring
+		 * splicing), so nested objects, numbers, and literal strings pass through. The
+		 * serializer JSON-encodes the substituted values, so synthesis text is never spliced.
+		 */
 		fun fillTemplate(node: JsonElement, text: String, voice: String): JsonElement = when (node) {
 			is JsonObject -> JsonObject(node.mapValues { fillTemplate(it.value, text, voice) })
 			is JsonArray -> JsonArray(node.map { fillTemplate(it, text, voice) })

@@ -27,7 +27,7 @@ import {
 	type TmuxTarget,
 } from "../../shared/host-op.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
-import { DomainStatusSchema } from "../../shared/schemas.js";
+import { DomainStatusSchema, MAX_POLL_HOLD_MS } from "../../shared/schemas.js";
 import {
 	Address,
 	composeSessionName,
@@ -212,7 +212,9 @@ const FAKE_REQ = new Request("http://gateway/console");
 // Bound on how long a console send op may block inside the relay. The gateway's wake path can
 // hold /send for up to WAKE_TIMEOUT_MS (10 min), far past evie's opId hold. Past this bound the
 // op returns the deterministic session id and the wake/send continues in the background, the
-// answer landing in the mailbox via the persistent conversation.
+// answer landing in the mailbox via the persistent conversation. The Android console's own
+// PINNED_READ_TIMEOUT_MS (ConsoleClient.kt) must outlast this - pinned by
+// ChatRepositoryConstantsTest.kt, update both sides together.
 const SEND_BOUND_MS = 25_000;
 
 // Same reasoning and ceiling as SEND_BOUND_MS, for create_session's devcontainer-wake launch (which
@@ -220,11 +222,18 @@ const SEND_BOUND_MS = 25_000;
 // returns the already-adopted session id with status "pending" and the launch continues in the
 // background; a backgrounded failure rolls the record back with no push, so its tile simply drops off
 // the console's board on the next teams() refresh rather than needing a push-delivery mechanism.
-const CREATE_SESSION_BOUND_MS = 25_000;
+// The Android console's own retry-reattach window (ChatRepository.kt: SPAWN_RETRY_WINDOW_MS) must
+// stay comfortably past this - pinned by consoleHandler.test.ts, update both sides together.
+// Exported only so that test can read the real value.
+export const CREATE_SESSION_BOUND_MS = 25_000;
 
-// Ceiling on a poll's long-poll hold. Must clear the relay chain with headroom: evie holds the
-// console's HTTP request 55s and the apiserver proxy allows 60s.
-const HOLD_CAP_MS = 45_000;
+// The real gate is schemas.ts's MAX_POLL_HOLD_MS (the zod .max() rejects a larger holdMs
+// outright); this Math.min is a harmless second layer, never actually truncating a schema-valid
+// value. Must clear the relay chain with headroom: evie holds the console's HTTP request 55s and
+// the apiserver proxy allows 60s (ConsoleClient.PROXY_CEILING_MS). The Android console's own
+// LONG_POLL_HOLD_MS must stay at or under MAX_POLL_HOLD_MS - pinned by consoleHandler.test.ts
+// and ChatRepositoryConstantsTest.kt, update all sides together.
+const HOLD_CAP_MS = MAX_POLL_HOLD_MS;
 
 // At-most-once side effects: the console->evie->gateway path is at-least-once (a lost reply makes
 // the console retry the same opId), so a seen opId replays its cached reply instead of re-running

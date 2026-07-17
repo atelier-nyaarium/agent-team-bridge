@@ -380,18 +380,14 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		}
 	}
 
-	// Working-chip poll: the open chat is peeked continuously; other listed sessions get one cheap
-	// peek per list change or new message (no rearm). Only local composite sessions have a
+	// Working-chip poll for sessions NOT currently open: one cheap peek per list change or new
+	// message (no rearm). The open chat needs no poke of its own here - TerminalView's own
+	// continuous peek loop already refreshes the SAME sessionWorking flag as a side effect of
+	// every frame it renders (peekTerminal -> noteScreen), so a second continuous loop aimed at
+	// the identical pane was pure duplicate traffic: twice the peek RPCs for whatever was open,
+	// with this one always the heavier un-diffed full fetch. Only local composite sessions have a
 	// daemon-drivable pane.
 	val boardSessions = state.sessions(state.localGatewayId)
-	LaunchedEffect(openTeam) {
-		val t = openTeam ?: return@LaunchedEffect
-		if (!isComposite(localFieldOf(t))) return@LaunchedEffect
-		while (true) {
-			repo.pokeWorking(t)
-			delay(repo.terminalRefreshMs)
-		}
-	}
 	// Keying on each session's last-activity timestamp (not just the session list) means a turn
 	// completing while the board is on screen re-pokes that session's working flag - otherwise a
 	// flag captured mid-turn has nothing to refresh it once the turn actually ends.
@@ -1431,7 +1427,6 @@ fun HealthHeader(state: ChatState) {
 	}
 }
 
-/** Chip color for the board/thread presence vocabulary. */
 /** The base board/thread word for a wire status, before any working/waking/login refinement. The
  * single owner of the status-word vocabulary; pair with presenceColor for the chip color. */
 private fun statusWord(status: String): String = when (status) {
@@ -1441,6 +1436,7 @@ private fun statusWord(status: String): String = when (status) {
 	else -> "ended"
 }
 
+/** Chip color for the board/thread presence vocabulary. */
 @Composable
 private fun presenceColor(presence: String): Color = when (presence) {
 	"live" -> Color(0xFF2EA043)
@@ -1639,7 +1635,9 @@ fun SessionCard(
 				if (unread > 0) Badge { Text("$unread") }
 			}
 			if (busy) PulseBar(pulsePhase)
-			val snippet = state.snippet(team.name)
+			// The AI-managed vibe-check description outranks the last-message snippet as the card's
+			// preview line; a session with no description yet keeps the familiar last-message fallback.
+			val snippet = team.description ?: state.snippet(team.name)
 			val lastActivity = state.lastActivity(team.name)
 			if (snippet != null || lastActivity != null) {
 				Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -9,32 +9,31 @@ framework".
 Graduated out of `plans/pain-points.md` (removed there to avoid a split source of truth) - anything
 NOT in this plan stays a pain-points record.
 
-## Phase A - destructive op vs uncommitted-drain race (privacy-relevant)
+## Phase A - `forget` vs uncommitted-drain race (privacy-relevant)
 
-Two call sites mutate top-level state (a factory wipe, a thread forget) without coordinating against
-the poll drain's in-flight, not-yet-committed batch. Both are the same race shape: a drain iteration
-already past `client().poll()` on `Dispatchers.IO` can finish its synchronous append + persist tail
-AFTER the mutation, silently undoing it.
+**Narrowed 2026-07-16: the `clearAll` half of this phase is already fixed** (out of band, not by this
+plan) - `ChatRepository.clearAll` now does `pollJob?.cancelAndJoin()` before wiping state, with a
+comment explaining the join is load-bearing (the poll loop's non-suspend tail, ending in
+`DebugLog.flushToIngest()`'s blocking POST, is not always brief). Verified directly against the
+current file; the race this phase originally flagged there no longer exists. The `forget` half below
+remains open.
 
-- **`ChatRepository.clearAll`** (Delete-Domain / factory-wipe path): `pollJob?.cancel()` has no join,
-  then wipes `_state` + persisted prefs. A concurrent drain tail folds a message back onto the reset
-  state and writes it to `KEY_THREADS` - chat can survive "Revoke and Delete Domain" (privacy bug).
-- **`ChatRepository.forget`**: no join/coordination against the drain either. A redelivered entry (the
-  batch was drained but not yet committed when forget ran) re-`append`s the just-forgotten thread, and
-  any Designer card riding it.
+`ChatRepository.forget` mutates top-level state (a thread forget) with no join/coordination against
+the poll drain's in-flight, not-yet-committed batch: a drain iteration already past `client().poll()`
+on `Dispatchers.IO` can finish its synchronous append + persist tail AFTER `forget` ran, re-`append`ing
+the just-forgotten thread (and any Designer card riding it) via a redelivered entry.
 
 `plans/plugin-actions.md` (deleted, shipped) added a third branch inside this same drain loop: a
 `kind == "plugin_action"` entry (e.g. the Designer's delete-card) dispatches synchronously before the
 cursor commits, same as the body-append branch above. It is subject to the identical hazard - a drain
-iteration already past `client().poll()` can still dispatch a plugin action against state a
-concurrent `clearAll`/`forget` intended to have already torn down. The fix direction below should
-cover this branch too, not just the two named above.
+iteration already past `client().poll()` can still dispatch a plugin action against state a concurrent
+`forget` intended to have already torn down. The fix direction below should cover this branch too.
 
-Fix direction: `cancelAndJoin()` before `clearAll`'s wipe (the straightforward fix, since the whole
-point is "stop everything, then reset"); `forget` needs either the same or a lighter per-team
-generation guard so a stale in-flight append is dropped instead of applied. Decide the exact mechanism
-during implementation (a shared "drain generation" the mutator bumps and the drain tail checks before
-its final write covers both call sites with one primitive).
+Fix direction: `forget` needs either `cancelAndJoin()` (matching `clearAll`'s now-shipped fix, if
+briefly pausing the poll loop on every forget is acceptable) or a lighter per-team generation guard so
+a stale in-flight append is dropped instead of applied. Decide the exact mechanism during
+implementation (a shared "drain generation" the mutator bumps and the drain tail checks before its
+final write covers both `forget` and the `plugin_action` branch with one primitive).
 
 ## Phase B - mailbox `at` is not monotonic
 

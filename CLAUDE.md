@@ -135,6 +135,8 @@ File attachments flow over the console channel; the Discord file path was retire
 
 **Outbound (agent -> console):** `notify_human` accepts `attachments` as absolute file paths; the MCP plugin reads each with `fs.readFile`, base64-encodes it into a `ChannelFile`, and ships it on the `/human/notify` notice. The gateway appends the notice (with files) to every registered console's mailbox.
 
+**On-device storage (Android, `Attachments.kt`):** decoded/stored bytes live under `filesDir/attachments/<bucket>/<name>`, one bucket per logical origin - inbound entries bucket by mailbox coordinates (`<epoch>-<seq>`, one bucket per drained entry, never shared across rows or teams); an outbound send buckets by its own `opId` (a fresh UUID, so two sends can never collide on one bucket). `ChatRepository` owns which srcs are still referenced (a pure walk of `_state.value.threads`); `Attachments` owns the storage primitives (`fileFor`/`bucketOf` resolve a src, `deleteFiles` removes named files and any bucket left empty, `sweepOrphanBuckets` is the cold-start backstop for anything unreferenced and old enough not to still be mid-write). Forgetting a team purges its dropped rows' files immediately (`ChatRepository.forget`); a superseded optimistic send purges its old bucket via `Attachments.mergeSentEchoFiles`'s per-file merge, which is also what protects a row that keeps some of its old files (a byteless mirror arm) from an over-eager delete.
+
 ### Gateway identity and qualified names
 
 Every gateway is a **Gateway** with an id (`GATEWAY_ID`, else the sanitized machine hostname; see `resolveLocalGatewayId`) and a Domain id. Sessions are addressed by the unified dot path `domain.gateway.spawn.session` (an `Address`); a LOCAL team field is `spawn.session` (a chat) or a bare `spawn` (a spawn-point), and the Domain id is the `local` sentinel until enrollment. The gateway stays keyed by bare local team fields internally and qualifies to the full `Address` only at the wire edge: `teams()` stamps each `TeamInfo.gatewayId` (+ `domainId`), register returns the connected `gatewayId`, and `send` resolves a target by ARITY via `parseTarget` (a spawn-point fails fast; the local-collapse rule keeps an our-(domain,gateway) arity-4 target local while a different gateway/Domain routes cross-Gateway), so the channel session id carries the full `domain.gateway.spawn.session`. The console keys every per-session surface (threads, tabs, unread, labels) by the canonical `Address` through its `SessionId.kt` twin, learns its Gateway id at register, and runs a one-shot schema-version wipe of the old-grammar keys on upgrade; its presence list compares canonical values, so a live session can never be synthesized as a phantom "ended". The gateway derives every session/team key through the `Address`/`SpawnPoint`/`SessionKey` value objects (`shared/session-id.ts`, the one canonical producer, so a store key and a lookup key are the same value by construction); the separator/tags/slug pattern are codegen'd into Kotlin and the console mirrors the grammar in its `SessionId.kt` twin. Cross-Gateway routing builds on this (see Federation routing below).
@@ -259,6 +261,21 @@ a cross-device sync follow-on is scoped but unbuilt.
   (`setOnlyAlertOnce`), and is left alone entirely if not currently showing (a muted or
   visible-arrival team can never gain a phantom entry). `Forget` and Close-Tab muting are both
   honored explicitly, since forget drops a team from the map this reconciler iterates.
+
+### Idle pushback (console background poll cadence)
+
+The console's background poll cadence backs off the longer it stays silent, instead of polling at
+a flat interval forever. `IdlePushbackManager` (`android/.../IdlePushbackManager.kt`) decides the
+wait after every poll pass: FOREGROUND/MINUTE (visible, or backgrounded under 10 minutes silent)
+behave like the fast cadence with the service's wakelock held; HALF_HOUR/HOURLY/TWELVE_HOUR
+release the wakelock and schedule a wall-clock-aligned `AlarmManager` wakeup instead (`:00`/`:30`,
+the top of the hour, or 8am/8pm local), driven through `SwitchboardService`'s `DeepIdleScheduler`
+implementation and `PollAlarmReceiver` (the alarm target, including dead-process revival). Any
+genuinely-fresh mailbox entry resets the ladder back to MINUTE. The silence clock persists across
+restarts via `AppStateStore`'s `IdleSilenceStore` conformance, so a reboot resumes the tier it
+earned rather than re-climbing from scratch. Full design, the questionaire, and three audit rounds
+(plan alignment, an adversarial red team, and a framework-first pass) are in
+`plans/idle-pushback-manager.md`.
 
 ### Port Map
 
@@ -393,6 +410,7 @@ docker exec switchboard kubectl --kubeconfig=/app/kubeconfig.yaml -n evie-bot \
 ```
 
 - `DebugLog.kt` already traces the enroll scan flow and the poll/drain flow: `[Poll]` (per cycle: entry count, epoch, cursor) and `[Drain]` (per mailbox entry: kind, session id, resolved thread, OR the drop reason - `DROPPED (unresolvable team)` / `SKIPPED (no body)` / threaded). To instrument a new area, add `DebugLog.log("<Tag>", "<msg>")`. The build writes no on-device file (debug streams to `/ingest`, release is logcat-only); startup also sweeps any `switchboard-debug.log` an older build spilled to Downloads.
+- **A `DebugLog.log` line is never private:** it ships off-device to evie stdout and stays on logcat, so a message must never embed a bearer credential, one-time invite nonce, or other minted secret - only opaque ids, HTTP codes, and non-secret op/result fields. `ConsoleClient.kt`'s `postEvieDirect` is the worked example: every evie-direct call site states a `logBody` posture explicitly (no default), and `loggedBodyPreview` is the one place a response body ever reaches a log line.
 - Smoke-test the ingest loop end to end (proves stdout fetch works) by POSTing through the service-proxy with the real bridge creds (`~/.config/switchboard/console-provisioning.json`: `apiUrl`/`saToken`/`caPem`/`appToken`): `POST ${apiUrl}/api/v1/namespaces/evie-bot/services/evie-console-bridge:20004/proxy/ingest`, headers `Authorization: Bearer <saToken>` + `X-Console-Bridge-Token: Bearer <appToken>`, body `{"conversationId":"smoketest","lines":["..."]}`; then grep evie stdout for `[console-ingest]`.
 
 ## Deploying the console bridge

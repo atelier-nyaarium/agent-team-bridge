@@ -174,6 +174,10 @@ export const TeamInfoSchema = z
 		// cwd basename, else the id). Distinct from `displayName` (the owning Domain's network name).
 		// Absent for spawn-points and sessions with no record.
 		sessionLabel: z.string().optional(),
+		// The AI-managed session description: the session's own agent's answer to the gateway's
+		// periodic vibe check ("what is this session about, as a short phrase"). The board shows it as
+		// the card's preview line in place of the last message. Absent until the first check answers.
+		description: z.string().optional(),
 		// The plugin version the agent's MCP process reported at register. Absent for
 		// consoles and offline-catalog entries (no plugin process behind them). The console
 		// shows it as a chip only when it differs from the app's own expected version.
@@ -204,6 +208,11 @@ export const CrossDomainShareTargetSchema = z
 		z.object({ kind: z.literal("everyone_trusted") }),
 	])
 	.meta({ id: "CrossDomainShareTarget" });
+
+// The poll op's hold ceiling - the real hard gate on the long-poll timeout chain (this schema
+// REJECTS a larger holdMs outright, not silently truncated). Pinned against the Android client's
+// own LONG_POLL_HOLD_MS in ChatRepositoryConstantsTest and consoleHandler.test.ts.
+export const MAX_POLL_HOLD_MS = 45_000;
 
 export const ConsoleOpSchema = z
 	.discriminatedUnion("kind", [
@@ -245,7 +254,7 @@ export const ConsoleOpSchema = z
 			kind: z.literal("poll"),
 			cursor: z.number().int().nonnegative().optional(),
 			epoch: z.number().int().nonnegative().optional(),
-			holdMs: z.number().int().nonnegative().max(45_000).optional(),
+			holdMs: z.number().int().nonnegative().max(MAX_POLL_HOLD_MS).optional(),
 			// The keyring version the Console last synced; the Gateway returns the snapshot in
 			// the poll reply only when it differs, so the Console stays fresh at near-zero cost.
 			knownDomainVersion: z.string().optional(),

@@ -36,13 +36,6 @@ import java.security.SecureRandom
 import java.util.Base64
 import kotlinx.serialization.json.Json
 
-/**
- * The Domain trust anchor: the owner root keypair (sole signer of admissions and
- * revocations), the console member identity, and the mirrored keyring the Console
- * resolves peers against. The owner key never leaves the device except as a
- * passphrase-encrypted backup. Admissions and revocations are signed here and submitted
- * to evie; the Console verifies every Gateway it seals to against this keyring.
- */
 /** One admitted member, for the management board. */
 data class MemberInfo(val kind: String, val gatewayId: String?, val signPub: String, val boxPub: String, val isSelf: Boolean)
 
@@ -53,6 +46,13 @@ enum class OwnerRestoreResult { OK, WRONG_PASSPHRASE, DIFFERENT_OWNER }
 /** Owner public material for the settings cards (no private key). */
 data class OwnerKeysView(val signPub: String, val boxPub: String, val sas: String)
 
+/**
+ * The Domain trust anchor: the owner root keypair (sole signer of admissions and
+ * revocations), the console member identity, and the mirrored keyring the Console
+ * resolves peers against. The owner key never leaves the device except as a
+ * passphrase-encrypted backup. Admissions and revocations are signed here and submitted
+ * to evie; the Console verifies every Gateway it seals to against this keyring.
+ */
 class FederationManager(private val store: AppStateStore) {
 	private val rnd = SecureRandom()
 	private val json = Json { ignoreUnknownKeys = true }

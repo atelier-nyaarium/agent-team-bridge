@@ -10,6 +10,9 @@ import android.content.Intent
  * for foreground services. */
 class BootReceiver : BroadcastReceiver() {
 	override fun onReceive(context: Context, intent: Intent) {
+		// The crash-log hook is otherwise only installed by MainActivity.onCreate; a boot-only
+		// process lifecycle (no Activity ever launched) would crash with no ring/ingest trace.
+		DebugLog.init(context)
 		if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
 		// Defensive around the encrypted store: BOOT_COMPLETED fires post-unlock on
 		// modern Android, but if the keystore is somehow unavailable we skip rather

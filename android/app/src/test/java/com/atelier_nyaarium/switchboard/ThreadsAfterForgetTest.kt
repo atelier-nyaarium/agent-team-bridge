@@ -20,7 +20,7 @@ class ThreadsAfterForgetTest {
 	fun dropsTheForgottenTeamsOwnThread() {
 		val threads = mapOf("alice.sakura.coolapp.main" to listOf(ordinary("hi")))
 		val result = threadsAfterForget(threads, "alice.sakura.coolapp.main")
-		assertFalse("alice.sakura.coolapp.main" in result)
+		assertFalse("alice.sakura.coolapp.main" in result.threads)
 	}
 
 	@Test
@@ -30,7 +30,7 @@ class ThreadsAfterForgetTest {
 			"bob.sakura.other.main" to listOf(ordinary("unrelated")),
 		)
 		val result = threadsAfterForget(threads, "alice.sakura.coolapp.main")
-		assertEquals(listOf(ordinary("unrelated")), result["bob.sakura.other.main"])
+		assertEquals(listOf(ordinary("unrelated")), result.threads["bob.sakura.other.main"])
 	}
 
 	@Test
@@ -41,7 +41,7 @@ class ThreadsAfterForgetTest {
 			"alice.sakura.coollib.main" to listOf(peer("mirrored", from = forgotten, to = "alice.sakura.coollib.main")),
 		)
 		val result = threadsAfterForget(threads, forgotten)
-		assertTrue(result.getValue("alice.sakura.coollib.main").isEmpty())
+		assertTrue(result.threads.getValue("alice.sakura.coollib.main").isEmpty())
 	}
 
 	@Test
@@ -52,7 +52,7 @@ class ThreadsAfterForgetTest {
 			"alice.sakura.coolapp.main" to listOf(peer("mirrored", from = "alice.sakura.coolapp.main", to = forgotten)),
 		)
 		val result = threadsAfterForget(threads, forgotten)
-		assertTrue(result.getValue("alice.sakura.coolapp.main").isEmpty())
+		assertTrue(result.threads.getValue("alice.sakura.coolapp.main").isEmpty())
 	}
 
 	@Test
@@ -66,7 +66,7 @@ class ThreadsAfterForgetTest {
 			),
 		)
 		val result = threadsAfterForget(threads, forgotten)
-		assertEquals(listOf(keptRow), result["alice.sakura.coollib.main"])
+		assertEquals(listOf(keptRow), result.threads["alice.sakura.coollib.main"])
 	}
 
 	@Test
@@ -77,6 +77,27 @@ class ThreadsAfterForgetTest {
 		val lookalike = ordinary("not actually a peer row", from = forgotten)
 		val threads = mapOf("bob.sakura.other.main" to listOf(lookalike))
 		val result = threadsAfterForget(threads, forgotten)
-		assertEquals(listOf(lookalike), result["bob.sakura.other.main"])
+		assertEquals(listOf(lookalike), result.threads["bob.sakura.other.main"])
+	}
+
+	@Test
+	fun droppedCollectsTheForgottenTeamsOwnRowsPlusEverySweptPeerRow() {
+		val forgotten = "alice.sakura.coolapp.main"
+		val ownRow = ordinary("own thread row")
+		val sweptRow = peer("mirrored", from = forgotten, to = "alice.sakura.coollib.main")
+		val keptRow = ordinary("stays")
+		val threads = mapOf(
+			forgotten to listOf(ownRow),
+			"alice.sakura.coollib.main" to listOf(sweptRow, keptRow),
+		)
+		val result = threadsAfterForget(threads, forgotten)
+		assertEquals(setOf(ownRow, sweptRow), result.dropped.toSet())
+	}
+
+	@Test
+	fun droppedIsEmptyWhenNothingMatchesTheForgottenKey() {
+		val threads = mapOf("bob.sakura.other.main" to listOf(ordinary("unrelated")))
+		val result = threadsAfterForget(threads, "alice.sakura.coolapp.main")
+		assertTrue(result.dropped.isEmpty())
 	}
 }

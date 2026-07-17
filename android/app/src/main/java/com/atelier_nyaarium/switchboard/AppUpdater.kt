@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageInfo
 import androidx.core.content.FileProvider
 import java.io.File
+import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -33,7 +34,16 @@ object AppUpdater {
 		data class Failed(val message: String) : Result
 	}
 
-	private val client = OkHttpClient.Builder().followRedirects(true).followSslRedirects(true).build()
+	// No callTimeout previously meant a stalled download left the Settings "Update" busy
+	// spinner stuck forever (its reset only runs after the call returns). 10 minutes is
+	// generous for a full APK even on a slow connection, but finite so the UI can recover.
+	private val client = OkHttpClient.Builder()
+		.followRedirects(true)
+		.followSslRedirects(true)
+		.connectTimeout(15, TimeUnit.SECONDS)
+		.readTimeout(30, TimeUnit.SECONDS)
+		.callTimeout(10, TimeUnit.MINUTES)
+		.build()
 
 	/** Download the chosen variant's APK, keep it only if it beats the installed build
 	 * (same-variant update) or is a deliberate cross-variant flash, and launch the system
