@@ -353,9 +353,11 @@ swallow a cancel regardless of rethrow placement.
 
 ## Painpoints
 
-Light touch after Phases A, B, and C (3 of 4) - the full scouting-workflow crust sweep is still
-deferred to Phase D's crust-collection (the plan's actual final phase). Concrete leads already
-fully characterized in-lap, recorded rather than dropped:
+Light touch after Phases A, B, and C; the six entries directly below are unchanged from that pass.
+Phase D's crust-collection then ran the full scouting-workflow sweep across the whole Android app (5
+dimensions, ~38 files) - its findings follow in their own subsection, each verified against the
+actual code before being recorded (not taken on the audit's confident tone alone). Nothing in this
+whole section is fixed by this plan; it is triage input for whatever picks it up next.
 
 - **`plugins/designer/DesignerCards.kt : relOf`** - a third, independently-written copy of the
   same "strip a src down to its attachments-relative path" parse Phase A just consolidated
@@ -412,3 +414,144 @@ fully characterized in-lap, recorded rather than dropped:
   normalization means MORE call sites now share this exact log path than before. Fix is small
   (move the format call inside the lock, or switch to a `ThreadLocal<SimpleDateFormat>` /
   `java.time` formatter) but touches a file entirely outside this plan's scope.
+
+### Phase D crust-collection findings
+
+The cancellation-rethrow bug class Phase D just fixed in ChatRepository.kt/ConsoleClient.kt turned
+out to recur at the UI layer (never touched by Phase D's own scope), and the sweep also surfaced
+independent, unrelated bug classes across the rest of the app. Verified by direct code read, not
+trusted on tone; five of fifteen (including all three marked high) were spot-checked line-for-line
+and held up exactly as described.
+
+- **`TerminalView.kt : TerminalView.fire`** - high. `fire()` wraps the suspend `onSend` callback
+  (bound to `ChatRepository.tmuxSend`, a bare throwing suspend fun) in a plain
+  `runCatching { onSend(...) }.onFailure { sendError = it.message ?: "send failed" }` with no
+  cancellation guard - the exact bug class Phase D fixed in ChatRepository.kt/ConsoleClient.kt,
+  recurring here because this UI call site was outside that phase's scope. Closing the terminal tab
+  or navigating away mid-`tmux_send` cancels the composable's `rememberCoroutineScope` job; the
+  resulting `CancellationException` gets caught and misreported as `sendError = "send failed"`
+  instead of propagating as a clean cancel, on the app's most-exercised terminal interaction path.
+- **`EnrollCeremonyScreen.kt : EnrollCeremonyScreen.ComparePanel.onDiffer`** - medium. Re-wraps
+  `repo.enrollCancel(...)` - which already applies `runCatchingCancellable` internally and
+  deliberately lets a genuine cancellation propagate - in a second bare `runCatching { }` whose
+  `Result` is discarded entirely. This re-swallows the very `CancellationException` the Phase D
+  helper exists to let through, and separately drops every genuine (non-cancellation) `enrollCancel`
+  failure with zero signal, on a mismatch/tamper-warning path where the broker window failing to
+  close actually matters.
+- **`TrustCompareScreen.kt : TrustCompareScreen`'s dispose cleanup uses the wrong coroutine scope** -
+  medium. `DisposableEffect(Unit).onDispose` fires `scope.launch { repo.trustCancel(rendezvousId) }`
+  on the composable's own `rememberCoroutineScope` - the scope being torn down by this same disposal
+  - unlike its two near-identical siblings (`LinkWizard.kt`'s `crossDomainCancel` cleanup,
+  `EnrollCeremonyScreen.kt`'s own `enrollCancel` cleanup two call sites away), both of which
+  explicitly launch on `GlobalScope` with a comment stating the call "must outlive this composable."
+  Confirmed via direct read: both siblings say so in as many words; TrustCompareScreen's copy is the
+  odd one out. The FLOW-2 rendezvous close likely never completes - the launched child job dies with
+  its cancelling parent before the network round trip finishes - leaving the broker window open
+  until the gateway's own TTL sweep instead of being actively closed like its two siblings.
+- **(cross-file) the "outlive this composable" cleanup pattern is hand-rolled three times with no
+  shared helper** - low. `LinkWizard.kt`, `EnrollCeremonyScreen.kt`, and `TrustCompareScreen.kt` each
+  independently re-derive "best-effort cancel this rendezvous on leaving, on a detached scope" - and
+  that is exactly how the TrustCompareScreen.kt copy silently picked the wrong scope (previous
+  entry). A single shared "detached best-effort cleanup on dispose" composable utility would make
+  that mistake structurally impossible instead of relying on three authors independently remembering
+  the same subtle rule - the same shape of gap `Cancellation.kt` just closed for the rethrow idiom.
+- **`SwitchboardService.kt : SwitchboardService.enterDeepSleep`** - high, verified. The
+  `AlarmManager.setExactAndAllowWhileIdle`/`setAndAllowWhileIdle` calls have no try/catch, and
+  `decide()` (which calls into this via `IdlePushbackManager`) is invoked from
+  `ChatRepository.startPolling`'s poll loop textually AFTER that loop's own per-pass `catch` block
+  closes, still inside `while (isActive)` - confirmed by reading both files. If either `AlarmManager`
+  call throws (the file's own comment already acknowledges OEM quirks that can revoke
+  `USE_EXACT_ALARM`), `releaseWakeLock()`/`releasePassLock()` right below never run (both locks leak
+  indefinitely) and the exception is uncaught by the poll loop's coroutine body. `startPolling` is
+  called exactly once, from `SwitchboardService`'s `onCreate` (confirmed - no other call site),
+  so a single such exception permanently and silently kills background polling for the life of the
+  service instance, with no restart path short of the app being killed and relaunched.
+- **`SwitchboardService.kt : SwitchboardService.wakeLock`** - medium, verified. The field is a plain
+  `private var wakeLock: PowerManager.WakeLock? = null` with no `@Volatile`, yet it is mutated from
+  the main thread (`onCreate`/`onDestroy`) and from the poll loop's `Dispatchers.IO` thread (via
+  `enterDeepSleep`/`exitDeepSleep`/`holdPass`) - unlike the companion object's `passLock` three lines
+  away, which correctly uses `@Volatile` plus synchronized double-checked locking for the identical
+  cross-thread access shape. Confirmed by reading both declarations side by side. A release racing an
+  acquire across threads can leak a freshly-created WakeLock nothing will ever release, or make the
+  poll loop believe a lock is held at the exact instant it was released.
+- **`AppUpdater.kt : AppUpdater.downloadAndStage`** - medium. Blocks on OkHttp's synchronous
+  `.execute()` with no cancellation wiring - the same blocking-call shape Phase D just removed from
+  ConsoleClient's transport. Its only caller (`MainActivity`'s `AppUpdateRow`) launches it on a
+  `rememberCoroutineScope()` job with no join/wait, so leaving the update screen mid-download does
+  not stop the network call - it runs to completion (up to its 10-minute `callTimeout`) on a stray
+  thread regardless of the coroutine's own cancellation, for a result nobody will consume.
+- **`FederationManager.kt : FederationManager.ownerIdentity`** - high, verified. Returns the raw
+  owner Ed25519/X25519 PRIVATE keypair - the sole root-of-trust key signing every admission,
+  revocation, and Domain deletion - with default (public) visibility, despite zero callers anywhere
+  outside `FederationManager` itself (confirmed by grepping the whole android tree: no external
+  `.ownerIdentity(` call exists). Every sibling accessor (`ownerSignPub`, `ownerBoxPub`, `ownerSas`,
+  `ownerKeysForDisplay`) is deliberately narrowed to public material only, showing the intent was to
+  keep the raw private key inside this one class - an intent not actually enforced, since
+  `FederationManager`/`AppStateStore` both have public constructors, so any code in the module could
+  build its own `FederationManager(AppStateStore(context))` over the same store and read the raw
+  private key straight out. Marking it `private` would compile clean today and turns this into a
+  compile-time guarantee instead of an unenforced convention.
+- **`FederationManager.kt` : the `signRosterRequest`/`signTransportRequest`/`signTrustPendingRequest`
+  family** - medium. ~16 functions hand-repeat the same "fetch an identity, mint/accept a nonce,
+  build a proto object, sign it" shape with no shared helper - the same kind of duplication
+  `Cancellation.kt` just extracted elsewhere in this effort. Concrete evidence it already risks
+  drift: two of the three near-identical possession-proof functions in this trio carry an explicit
+  "(not the console key)" warning in their own doc comment - the authors already consider the
+  console-vs-owner identity choice a mistake-in-waiting a comment has to guard against, not something
+  the type system prevents.
+- **`FederationManager.kt : consoleAdmission` vs `admitConsole` naming** - low. `admitGateway`/
+  `admitConsole` form a clear `admitX(subjectKeys...)` family for owner-attesting a THIRD party's
+  scanned/approved keys, but `consoleAdmission(nowMs)` - which instead self-admits THIS device's own
+  identity with no subject-key parameters - sits in the same section with an easily-confused name. A
+  future editor could call the zero-arg `consoleAdmission()` where `admitConsole(newSignPub,
+  newBoxPub, now)` was intended; it would compile and silently re-sign this device's own admission
+  instead of admitting the new device. All current call sites are correct today - forward risk, not
+  a live bug.
+- **`SttsPlayer.kt : SttsPlayer.playFile`'s MediaPlayer listeners** - medium. The
+  `setOnCompletionListener`/`setOnErrorListener` callbacks unconditionally do
+  `loudness?.release(); loudness = null` before checking `currentKey == k`, unlike the
+  `player = null; clearNowPlaying()` lines right next to them, which ARE gated by that check. Since
+  these callbacks land on the main Looper while a new `playFile()` call can run concurrently on the
+  dedicated "stts" executor thread, a stale completion/error callback for a just-superseded track can
+  release and null the NEW track's `LoudnessEnhancer` mid-playback, silently killing its volume boost
+  with no error surfaced. The "release loudness + release player" shape is hand-copied across four
+  sites; only these two listener copies are missing the guard the other two already have.
+- **`Attachments.kt : Attachments.storeOutgoing`** - medium. Writes each outgoing attachment straight
+  to its final path (`File(dir, name).writeBytes(...)`) with no tmp-file-plus-rename, unlike
+  `decode()`'s documented atomic write for inbound files a few lines above in the same object. A
+  process death mid-write leaves a truncated file at that exact final path; since
+  `ChatRepository.reconcilePending` -> `rebuildFiles` re-reads bytes from that same path to resend a
+  failed message, retrying after such a crash would silently transmit the truncated bytes instead of
+  failing loudly.
+- **`DebugLog.kt : DebugLog.init`** - low. Installs `Thread.setDefaultUncaughtExceptionHandler` by
+  wrapping whatever handler is currently set, with no re-installation guard, yet it is called from
+  three independent entry points (`BootReceiver.onReceive`, `PollAlarmReceiver.onReceive`,
+  `MainActivity.onCreate`) each apparently written as an either/or fallback, not "may also run
+  alongside the others." `MainActivity` declares no `android:configChanges`, so `onCreate` (and thus
+  `init()`) re-runs on every Activity recreation (e.g. rotation) within one process, chaining one
+  more handler layer each time - a single eventual crash would then log "CRASH" once per accumulated
+  layer instead of once.
+- **(framework-first) the "is this parsed Address my own (domain, gateway)" predicate is hand-copied
+  six times, and only one copy has the fix the rest lack** - medium. `ChatRepository.kt`'s
+  `closeTab`/`wakeSession`/`forget` each re-derive
+  `runCatching { parseTarget(...) }.getOrNull()` then test `t.gateway == localGatewayId` alone (no
+  Domain check). The sibling `rename()`, parsing the identical team string one screen away, tests
+  `t.domain == localDomain() && t.gateway == localGatewayId` - gateway AND domain.
+  `MainActivity.kt` echoes the gateway-only half three more times (the board's working-poke effect,
+  `ThreadScreen.terminalEligible`, and `SessionsScreen`'s `adminDomainId` derivation - the value
+  every later peer/mine grouping decision in that screen builds on). The codebase's own comment on
+  `MainActivity`'s `GatewayGroupKey` states the invariant outright: a gateway id is unique only
+  within a Domain, so two linked friend Domains running an identically-named gateway must group
+  separately. A gateway-id collision across two Domains would make `closeTab`/`wakeSession`/`forget`
+  treat a foreign-Domain session as local, and would seed `adminDomainId` from the wrong session -
+  `rename()` alone already carries the fix the other six copies lack, the same kind of drift
+  `Cancellation.kt`'s own sweep found in `spawnSession`'s dead redundant guard.
+- **(framework-first) clipboard access is hand-rolled per-file and has already drifted in UX** - low.
+  `Management.kt`'s private `copyToClipboard`, `HostNetworks.kt`'s independent `copyInvite`, and
+  `MainActivity.kt`'s `readClipboard` each redo the same `getSystemService(CLIPBOARD_SERVICE)`
+  cast-and-use dance. Because the write helper is file-private rather than shared, the three call
+  sites have already drifted in user-visible behavior: `HostNetworks.kt`'s invite-copy button sets a
+  "Copied." status after copying; neither of `Management.kt`'s two `copyToClipboard` call sites shows
+  any confirmation, even though one of those two screens already renders a `status` Text slot for
+  other messages one line above the button. A shared helper would make that feedback contract
+  structural instead of independently re-decided (or forgotten) at each call site.
