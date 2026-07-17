@@ -70,11 +70,15 @@ afterEach(() => {
 });
 
 describe("tmuxCore sendText", () => {
-	it("types text + a trailing CR atomically in one send-keys, with -- guarding a leading dash", async () => {
+	it("types text then sends Enter as its own send-keys call, with -- guarding a leading dash", async () => {
 		await sendText({ kind: "host", name: "host", sessionName: "claude" }, "-l hello");
-		// One invocation: the CR (the Enter key) rides inside the literal so text and submission
-		// cannot be torn apart by a failure between two commands.
-		expect(calls).toEqual([["tmux", "send-keys", "-t", "=claude.0", "-l", "--", "-l hello\r"]]);
+		// Two invocations: Enter rides as its own send-keys call rather than an embedded CR, since a
+		// target CLI's paste detection would otherwise swallow an embedded CR as inserted text
+		// instead of a submit keypress.
+		expect(calls).toEqual([
+			["tmux", "send-keys", "-t", "=claude.0", "-l", "--", "-l hello"],
+			["tmux", "send-keys", "-t", "=claude.0", "Enter"],
+		]);
 	});
 
 	it("omits the trailing CR when submit is false (types into the composer without submitting)", async () => {
@@ -84,19 +88,33 @@ describe("tmuxCore sendText", () => {
 
 	it("targets a devcontainer via docker exec by the compose container name", async () => {
 		await sendText({ kind: "devcontainer", name: "recipe-app", sessionName: "claude" }, "hi");
-		expect(calls[0]).toEqual([
-			"docker",
-			"exec",
-			"-u",
-			"vscode",
-			"recipe-app_devcontainer-dev-1",
-			"tmux",
-			"send-keys",
-			"-t",
-			"=claude.0",
-			"-l",
-			"--",
-			"hi\r",
+		expect(calls).toEqual([
+			[
+				"docker",
+				"exec",
+				"-u",
+				"vscode",
+				"recipe-app_devcontainer-dev-1",
+				"tmux",
+				"send-keys",
+				"-t",
+				"=claude.0",
+				"-l",
+				"--",
+				"hi",
+			],
+			[
+				"docker",
+				"exec",
+				"-u",
+				"vscode",
+				"recipe-app_devcontainer-dev-1",
+				"tmux",
+				"send-keys",
+				"-t",
+				"=claude.0",
+				"Enter",
+			],
 		]);
 	});
 

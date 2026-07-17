@@ -228,27 +228,35 @@ export async function peekWithFallback(target: TmuxTarget): Promise<HostPeekResu
 	}
 }
 
-/** Type a literal line into the pane. When `submit` (default), the trailing CR (the Enter key)
- * rides inside the SAME send-keys literal, so the text and its submission are atomic and can never be
- * torn apart by a failure between two commands. With `submit=false` the text is typed without the CR,
- * staging it in the agent's composer for a later deliberate submit. The `--` ends option parsing so
- * text starting with a dash is typed literally (it would also swallow a `;`, which is why a submit's
- * CR rides inside the literal rather than as a separate key). */
+/** Raw named-key send-keys invocation, no `-l`. Callers run this inside their own `serialized()`
+ * lock, so it does not take one itself (nesting would deadlock: the inner call would wait on the
+ * chain entry the outer call is currently occupying). */
+function sendKeyRaw(target: TmuxTarget, key: string): Promise<string> {
+	return run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), key]));
+}
+
+/** Type a literal line into the pane. When `submit` (default), a REAL Enter keypress follows as its
+ * OWN send-keys invocation (same `serialized()` lock, so nothing else can land between the two) -
+ * NOT embedded as a trailing CR inside the literal. A target CLI with paste detection (multiple
+ * characters arriving in a single write) treats an embedded CR as inserted text rather than a submit
+ * signal; only a keypress delivered alone registers as Enter. With `submit=false` the text is typed
+ * with no Enter at all, staging it in the agent's composer for a later deliberate submit. The `--`
+ * ends option parsing so text starting with a dash is typed literally. */
 export function sendText(target: TmuxTarget, text: string, submit = true): Promise<void> {
 	return serialized(targetKey(target), async () => {
 		assertNotReservedHostSink(target);
-		const literal = submit ? `${text}\r` : text;
-		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), "-l", "--", literal]));
+		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), "-l", "--", text]));
+		if (submit) await sendKeyRaw(target, "Enter");
 	});
 }
 
-/** Send a single named control key (no literal text, no trailing Enter). Rejects (does
- * not spawn) when the key is not on the whitelist. */
+/** Send a single named control key (no literal text). Rejects (does not spawn) when the key is not
+ * on the whitelist. */
 export function sendKey(target: TmuxTarget, key: string): Promise<void> {
 	return serialized(targetKey(target), async () => {
 		assertNotReservedHostSink(target);
 		if (!ALLOWED_KEYS.has(key)) throw new Error(`disallowed key "${key}"`);
-		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), key]));
+		await sendKeyRaw(target, key);
 	});
 }
 
