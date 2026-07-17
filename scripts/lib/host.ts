@@ -2,6 +2,8 @@
 // and admin-only kubectl run through the gateway container), base64 Secret reads,
 // Opaque-Secret apply, the interactive menu/prompt loop, .env read/write, and logging.
 
+import dgram from "node:dgram";
+import fs from "node:fs";
 import path from "node:path";
 import { $ } from "bun";
 
@@ -24,6 +26,57 @@ export const err = (msg: string): void => console.error(`ERROR: ${msg}`);
 export function die(msg: string): never {
 	err(msg);
 	process.exit(1);
+}
+
+////////////////////////////////
+//  OS-aware host primitives
+
+export const IS_WINDOWS = process.platform === "win32";
+
+/** The LAN-facing IPv4 of the interface that reaches the internet: the source address the OS picks
+ * when routing to a public IP, so a Docker-bridge or VPN address never wins the phone's pinned-TLS
+ * dial. Cross-platform in place of `ip route get` / `hostname -I`: a connected UDP socket binds the
+ * outbound interface, and its local address is that source IP. No packet is sent. Resolves 0.0.0.0
+ * when no route is available. */
+export function detectLanHost(): Promise<string> {
+	return new Promise((resolve) => {
+		const sock = dgram.createSocket("udp4");
+		const finish = (ip: string): void => {
+			try {
+				sock.close();
+			} catch {}
+			resolve(ip);
+		};
+		sock.once("error", () => finish("0.0.0.0"));
+		try {
+			sock.connect(80, "1.1.1.1", () => {
+				try {
+					finish(sock.address().address || "0.0.0.0");
+				} catch {
+					finish("0.0.0.0");
+				}
+			});
+		} catch {
+			finish("0.0.0.0");
+		}
+	});
+}
+
+/** Best-effort 0600 on a host-local secret file. POSIX applies the mode; on Windows fs.chmod only
+ * toggles the read-only bit, so a caller must not treat this as a hard guarantee there. Never throws. */
+export function secureFile(filePath: string): void {
+	try {
+		fs.chmodSync(filePath, 0o600);
+	} catch {}
+}
+
+/** True when the path exists and is a directory (cross-platform `test -d`). */
+export function dirExists(dirPath: string): boolean {
+	try {
+		return fs.statSync(dirPath).isDirectory();
+	} catch {
+		return false;
+	}
 }
 
 ////////////////////////////////

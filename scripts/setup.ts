@@ -19,6 +19,8 @@
 
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { $ } from "bun";
 import { sanitizeDomainId } from "../src/shared/domain-id.js";
 import { sanitizeGatewayId } from "../src/shared/gateway-id.js";
@@ -29,7 +31,9 @@ import {
 	clearAdminKubeconfig,
 	confirm,
 	dc,
+	detectLanHost,
 	die,
+	dirExists,
 	ensureAdminKubernetes,
 	envGet,
 	envSet,
@@ -41,6 +45,7 @@ import {
 	NS,
 	note,
 	readSaCreds,
+	secureFile,
 	writeGatewayFile,
 } from "./lib/host.js";
 import { fitsInQr, renderQrImageGif, renderQrTerminal } from "./render-provisioning-qr.js";
@@ -62,7 +67,7 @@ const GATEWAY_BRIDGE_YAML = "../evie-bot/deploy/gateway-bridge.yaml";
 const SERVICE = "evie-console-bridge";
 const PORT = 20004;
 const FED_DIR_IN = "/app/log/federation"; // the gateway's federation dir (allowlist + keypair)
-const SECRETS_DIR = `${process.env.HOME}/.config/switchboard`; // host-local admin secrets (0700)
+const SECRETS_DIR = path.join(os.homedir(), ".config", "switchboard"); // host-local admin secrets (0700)
 const BLOB_FILE = `${SECRETS_DIR}/console-provisioning.json`; // the artifact the app imports
 const QR_GIF = `${SECRETS_DIR}/console-enrollment-qr.gif`; // optional saved QR image (menu opt 2)
 const CONSOLE_JSON_FILE = `${SECRETS_DIR}/console-enrollment.json`; // optional saved JSON (paste fallback)
@@ -124,15 +129,19 @@ async function clusterApiUrl(): Promise<string> {
 ////////////////////////////////
 //  Gateway helpers
 
-async function gatewayHostname(): Promise<string> {
-	return (await $`hostname`.text()).trim();
+function gatewayHostname(): string {
+	return os.hostname().trim();
 }
 
 /** Poll the gateway's /health until ready (30 x 2s = 60s). */
 async function waitHealth(): Promise<boolean> {
 	console.log("Waiting for gateway");
 	for (let i = 0; i < 30; i++) {
-		if ((await $`curl -sf ${HEALTH_URL}`.quiet().nothrow()).exitCode === 0) return true;
+		try {
+			if ((await fetch(HEALTH_URL)).ok) return true;
+		} catch {
+			// Gateway not accepting connections yet - retry below.
+		}
 		await Bun.sleep(2000);
 	}
 	return false;
@@ -141,7 +150,7 @@ async function waitHealth(): Promise<boolean> {
 /** Erase volumes/gateway. The gateway writes it as the in-container user, so a host-side rm is
  * denied; a root container with the same mount clears it. */
 async function wipeState(): Promise<void> {
-	if ((await $`test -d volumes/gateway`.quiet().nothrow()).exitCode !== 0) return;
+	if (!dirExists("volumes/gateway")) return;
 	const mount = `${process.cwd()}/volumes/gateway:/w`;
 	const sh = "cd /w && rm -rf -- ..?* .[!.]* * 2>/dev/null; true";
 	if ((await $`docker run --rm -u 0 -v ${mount} busybox sh -c ${sh}`.quiet().nothrow()).exitCode !== 0) {
@@ -164,12 +173,8 @@ async function clearTransport(): Promise<void> {
  * /enroll listener and writes its admit payload. Each call arms a new nonce, so a slow scan never
  * hits the gateway's ~10 min one-shot window. */
 async function armGateway(): Promise<string> {
-	const nonce = (await $`openssl rand -hex 16`.text()).trim();
-	// Prefer the source IP on the default route (the interface that actually reaches the LAN), so a
-	// Docker-bridge or VPN address from `hostname -I` cannot win and break the phone's pinned-TLS dial.
-	const routeIp = (await $`ip route get 1.1.1.1`.quiet().nothrow()).text().match(/src\s+(\d+\.\d+\.\d+\.\d+)/)?.[1];
-	const hostLine = (await $`hostname -I`.quiet().nothrow()).text().trim();
-	const host = routeIp || hostLine.split(/\s+/)[0] || "0.0.0.0";
+	const nonce = randomBytes(16).toString("hex");
+	const host = await detectLanHost();
 	console.log(`Starting gateway, enrollment on ${host}:20000`);
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await clearTransport();
@@ -337,7 +342,7 @@ async function presentEnrollment(
 				async () => {
 					const { gif } = renderQrImageGif(qrPayload(payload));
 					await Bun.write(opts.qrGifPath, gif);
-					await $`chmod 600 ${opts.qrGifPath}`.quiet().nothrow();
+					secureFile(opts.qrGifPath);
 					trackTemp(opts.qrGifPath);
 					return opts.qrGifPath;
 				},
@@ -359,7 +364,7 @@ async function presentEnrollment(
 				},
 				async () => {
 					await Bun.write(opts.jsonFilePath, pretty);
-					await $`chmod 600 ${opts.jsonFilePath}`.quiet().nothrow();
+					secureFile(opts.jsonFilePath);
 					trackTemp(opts.jsonFilePath);
 					return opts.jsonFilePath;
 				},
@@ -381,9 +386,9 @@ async function setupGateway(): Promise<void> {
 
 	// The gateway is named by this machine's hostname; a pre-set GATEWAY_ID overrides it for
 	// duplicate hostnames, so there is no name prompt.
-	const id = (await envGet("GATEWAY_ID")) || (await gatewayHostname());
+	const id = (await envGet("GATEWAY_ID")) || gatewayHostname();
 	await envSet("GATEWAY_ID", id);
-	await $`chmod 600 .env`.quiet().nothrow();
+	secureFile(".env");
 
 	// An already-enrolled gateway has a delivered transport; re-enrolling disconnects it until a new
 	// bundle arrives, so confirm before re-arming.
@@ -427,7 +432,7 @@ async function purgeGateway(): Promise<void> {
 	// Drop this Gateway's admission from evie's Domain first (the admission stores the SANITIZED
 	// slug, so use it not the raw env), then erase the local state.
 	const domain = await envGet("FEDERATION_DOMAIN_ID");
-	const gw = sanitizeGatewayId((await envGet("GATEWAY_ID")) || (await gatewayHostname()));
+	const gw = sanitizeGatewayId((await envGet("GATEWAY_ID")) || gatewayHostname());
 	await evieDelete((fed) => removeGatewayAdmission(fed, domain, gw));
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await wipeState();
@@ -458,7 +463,7 @@ async function applyBridgeManifests(): Promise<void> {
 			"-o",
 			"jsonpath={.data.ANDROID_BRIDGE_TOKEN}",
 		);
-		if (!tok) tok = (await $`openssl rand -hex 32`.text()).trim();
+		if (!tok) tok = randomBytes(32).toString("hex");
 		// Applied as YAML on stdin so the token never hits argv; a non-zero exit (an AlreadyExists race) is harmless.
 		await applySecret("console-bridge-app-token", { CONSOLE_BRIDGE_TOKEN: tok });
 		note("Minted console bridge token");
@@ -563,7 +568,7 @@ async function emitBlob(pendingTenant?: { domainId: string; nonce: string }): Pr
 		{ apiUrl, caPem, saToken, appToken, namespace: NS, service: SERVICE, port: PORT, pendingTenant },
 		BLOB_FILE,
 	);
-	await $`chmod 600 ${BLOB_FILE}`.quiet().nothrow();
+	secureFile(BLOB_FILE);
 	note(`Blob: ${BLOB_FILE}`);
 }
 
@@ -601,14 +606,16 @@ async function verify(): Promise<void> {
 	// Unpredictable names: the cfg holds the bearer tokens, so a guessable path would let a local
 	// attacker pre-seed a symlink and capture them.
 	const rnd = crypto.randomUUID();
-	const ca = `/tmp/sb-verify-${rnd}-ca.pem`;
-	const cfg = `/tmp/sb-verify-${rnd}-cfg.conf`;
+	const ca = path.join(os.tmpdir(), `sb-verify-${rnd}-ca.pem`);
+	const cfg = path.join(os.tmpdir(), `sb-verify-${rnd}-cfg.conf`);
 	await Bun.write(ca, blob.caPem ?? "");
 	await Bun.write(
 		cfg,
 		`header = "Authorization: Bearer ${blob.saToken ?? ""}"\nheader = "X-Console-Bridge-Token: Bearer ${blob.appToken ?? ""}"\n`,
 	);
-	await $`chmod 600 ${cfg}`.quiet().nothrow();
+	secureFile(cfg);
+	// curl's null sink differs per platform (POSIX /dev/null, Windows NUL).
+	const nullDev = process.platform === "win32" ? "NUL" : "/dev/null";
 	const url = `${apiUrl}/api/v1/namespaces/${NS}/services/${SERVICE}:${PORT}/proxy/ingest`;
 	const body = '{"conversationId":"provision-verify","lines":["setup.sh --verify auth probe"]}';
 	try {
@@ -618,7 +625,7 @@ async function verify(): Promise<void> {
 		let curlErr = "";
 		for (let i = 0; i < 15; i++) {
 			const r =
-				await $`curl -s --cacert ${ca} -K ${cfg} -X POST -H ${"Content-Type: application/json"} --data ${body} -o /dev/null -w ${"%{http_code}"} ${url}`
+				await $`curl -s --cacert ${ca} -K ${cfg} -X POST -H ${"Content-Type: application/json"} --data ${body} -o ${nullDev} -w ${"%{http_code}"} ${url}`
 					.quiet()
 					.nothrow();
 			code = r.text().trim();
@@ -749,8 +756,11 @@ async function purgeFederation(): Promise<void> {
 	await dc("down", "--remove-orphans").quiet().nothrow();
 	await wipeState();
 	await $`rm -f .env ${BLOB_FILE} ${QR_GIF} ${CONSOLE_JSON_FILE} ${GW_QR_GIF} ${GW_JSON_FILE}`.quiet().nothrow();
-	// rmdir only succeeds on an empty dir, so this tidies the blob's home without touching other secrets.
-	await $`rmdir ${SECRETS_DIR}`.quiet().nothrow();
+	// A non-recursive rmdir only succeeds on an empty dir, so this tidies the blob's home without
+	// touching other secrets; a non-empty dir throws and is ignored.
+	try {
+		fs.rmdirSync(SECRETS_DIR);
+	} catch {}
 	console.log("Purged.");
 }
 
@@ -767,7 +777,7 @@ async function topMenu(): Promise<void> {
 		"9": purgeGateway,
 		"0": purgeFederation,
 	};
-	const host = await gatewayHostname();
+	const host = gatewayHostname();
 	for (;;) {
 		console.log(`\n\u{1F365} Switchboard - Setup on ${host}\n`);
 		console.log("Gateway:");
@@ -846,8 +856,9 @@ async function main(): Promise<void> {
 	}
 }
 
-// Every file this script writes carries key material or cluster creds; umask 077 makes them
-// 0600/0700 from birth (the explicit chmod 600 stay as belt-and-suspenders).
-process.umask(0o077);
+// Every file this script writes carries key material or cluster creds. On POSIX, umask 077 makes
+// them 0600/0700 from birth and secureFile() reasserts it; Windows ignores the mode and the files
+// inherit the user profile's ACL instead.
+if (process.platform !== "win32") process.umask(0o077);
 fs.mkdirSync(SECRETS_DIR, { recursive: true, mode: 0o700 });
 main().catch((e) => die(e instanceof Error ? e.message : String(e)));
