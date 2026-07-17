@@ -1635,7 +1635,9 @@ fun SessionCard(
 				if (unread > 0) Badge { Text("$unread") }
 			}
 			if (busy) PulseBar(pulsePhase)
-			val snippet = state.snippet(team.name)
+			// The AI-managed vibe-check description outranks the last-message snippet as the card's
+			// preview line; a session with no description yet keeps the familiar last-message fallback.
+			val snippet = team.description ?: state.snippet(team.name)
 			val lastActivity = state.lastActivity(team.name)
 			if (snippet != null || lastActivity != null) {
 				Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {

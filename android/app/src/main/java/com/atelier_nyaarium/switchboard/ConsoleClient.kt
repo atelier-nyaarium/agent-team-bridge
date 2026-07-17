@@ -176,6 +176,10 @@ data class Team(
 	// displayName (the owning Domain's network name). Null for a spawn-point, a session with no
 	// record, or an older gateway that does not send it (the app falls back to a local label / leaf).
 	val sessionLabel: String? = null,
+	// The AI-managed vibe-check description ("what is this session about, as a short phrase"). The
+	// board card shows it as the preview line in place of the last message. Null until the session's
+	// first vibe check answers, and for gateways without the feature.
+	val description: String? = null,
 ) {
 	/** Short local field shown in the UI: `spawn` or `spawn.session` from the canonical address. */
 	val shortName: String get() = localFieldOf(name)
@@ -593,6 +597,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 				displayName = it.displayName,
 				isAdminDomain = it.isAdminDomain ?: false,
 				sessionLabel = it.sessionLabel,
+				description = it.description,
 			)
 		}
 	}

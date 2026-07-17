@@ -174,6 +174,10 @@ export const TeamInfoSchema = z
 		// cwd basename, else the id). Distinct from `displayName` (the owning Domain's network name).
 		// Absent for spawn-points and sessions with no record.
 		sessionLabel: z.string().optional(),
+		// The AI-managed session description: the session's own agent's answer to the gateway's
+		// periodic vibe check ("what is this session about, as a short phrase"). The board shows it as
+		// the card's preview line in place of the last message. Absent until the first check answers.
+		description: z.string().optional(),
 		// The plugin version the agent's MCP process reported at register. Absent for
 		// consoles and offline-catalog entries (no plugin process behind them). The console
 		// shows it as a chip only when it differs from the app's own expected version.
