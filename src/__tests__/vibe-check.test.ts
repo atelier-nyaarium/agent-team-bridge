@@ -276,4 +276,24 @@ describe("agent-screen isPromptEmpty", () => {
 		const screen = `${esc}[2m${RULE}${esc}[0m\n${esc}[39m❯ ${esc}[0m\n${esc}[2m${RULE}${esc}[0m\n  ⏵⏵`;
 		expect(isPromptEmpty(screen)).toBe(true);
 	});
+
+	it("reads the toolbar hint when the box holds placeholder ghost text, not a bare prompt", () => {
+		// On-device capture: Claude Code fills an idle composer with a greyed-out suggested-command
+		// placeholder instead of leaving it bare, so the box content alone can't tell it apart from a
+		// real draft. The toolbar's trailing " · <hint>" only survives while the box is truly empty.
+		const ghost = `● done\n${RULE}\n❯ keep going\n${RULE}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents`;
+		expect(isPromptEmpty(ghost)).toBe(true);
+	});
+
+	it("is false once real text lands in the box, even though it looks like the ghost placeholder", () => {
+		// Live capture typing "jjjj": the toolbar's trailing hint vanished the instant real text
+		// replaced the placeholder, leaving just the bare mode phrase.
+		const staged = `● done\n${RULE}\n❯ jjjj\n${RULE}\n  ⏵⏵ bypass permissions on (shift+tab to cycle)`;
+		expect(isPromptEmpty(staged)).toBe(false);
+	});
+
+	it("does not mistake the working hint's dot for the empty-box hint", () => {
+		const screen = `✻ Envisioning…\n${RULE}\n❯ some text\n${RULE}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt`;
+		expect(isPromptEmpty(screen)).toBe(false);
+	});
 });

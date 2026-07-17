@@ -85,7 +85,19 @@ export function isAtPrompt(screen: string): boolean {
  * bare "❯" with nothing staged. The gateway's vibe-check rename injection requires this - typing
  * into a composer holding a human's staged draft would corrupt it and submit the mangled line.
  * Scoped to the box deliberately: past slash commands echo in the transcript as "❯ /model" lines
- * ABOVE the box, which must not read as staged text. Gateway-only; no Kotlin twin. */
+ * ABOVE the box, which must not read as staged text.
+ *
+ * The box content is NOT reliable on its own: Claude Code fills an idle composer with a
+ * greyed-out placeholder/suggested-command ghost text (e.g. "❯ keep going"), which renders
+ * identically to real staged input by content alone - confirmed on-device, the box is never
+ * actually bare in practice. The toolbar line directly below the box is the real tell: it carries
+ * extra " · <hint>" segments (e.g. "· ← for agents", "· ? for shortcuts") only while the box is
+ * empty; real staged text collapses it down to the bare mode phrase ("bypass permissions on
+ * (shift+tab to cycle)") with no trailing dot. Confirmed by live capture (typing "jjjj" made the
+ * hint segment vanish immediately; clearing it brought the hint back). Excludes the "esc to
+ * interrupt" working hint specifically, since that marks a busy turn rather than an empty box -
+ * moot at the one real call site (already gated on !isAgentWorking) but kept so the function is
+ * correct standing alone. Gateway-only; no Kotlin twin. */
 export function isPromptEmpty(screen: string): boolean {
 	const lines = stripAnsi(screen).split("\n");
 	const ruleIdxs: number[] = [];
@@ -95,7 +107,10 @@ export function isPromptEmpty(screen: string): boolean {
 	if (ruleIdxs.length < 2) return false;
 	const inner = lines.slice(ruleIdxs[ruleIdxs.length - 2] + 1, ruleIdxs[ruleIdxs.length - 1]);
 	// Require a rendered prompt inside the box (a rule-bounded region with no ❯ is not a composer),
-	// then require every box line to be a bare prompt or blank - any other content is a staged draft.
+	// then accept a bare prompt outright - any other content might be a real draft OR just the
+	// placeholder ghost text, so fall through to the toolbar hint to tell those apart.
 	if (!inner.some((line) => line.startsWith("❯"))) return false;
-	return inner.every((line) => /^❯?\s*$/.test(line));
+	if (inner.every((line) => /^❯?\s*$/.test(line))) return true;
+	const toolbarLine = lines[ruleIdxs[ruleIdxs.length - 1] + 1] ?? "";
+	return toolbarLine.includes("·") && !toolbarLine.includes(WORKING_HINT);
 }
