@@ -1262,7 +1262,7 @@ class ChatRepository(
 		return when (val decision = FriendOnboarding.decide(prov, store.firstRooted)) {
 			is FirstRootDecision.NotPending -> true
 			is FirstRootDecision.Root -> {
-				DebugLog.log("FirstRoot", "pending domain=${decision.domainId}; rooting at silent owner key")
+				DebugLog.log("FirstRoot", "pending domain=${decision.domainId}; rooting at owner key ${federation.ownerSas()}")
 				val signed = federation.signFirstRoot(decision.domainId, decision.nonce, System.currentTimeMillis())
 				val result = runCatchingCancellable { client().firstRoot(signed) }.getOrElse {
 					// A transport failure here is NOT terminal: the root was not decided, only
@@ -1362,8 +1362,8 @@ class ChatRepository(
 			DebugLog.log("Enroll", "submit skipped: consoleAdmitted flag already set")
 			return
 		}
-		DebugLog.log("Enroll", "submitting console admission to evie")
 		val signed = federation.consoleAdmission(System.currentTimeMillis())
+		DebugLog.log("Enroll", "submitting console admission to evie (owner ${Crypto.fingerprint(signed.ownerSignPub)})")
 		// submitOwnerFact surfaces the real cause (e.g. evie rooted at a different owner key)
 		// so it does not hide behind the generic "finishing enrollment" the register hits next.
 		if (submitOwnerFact(signed, { client().enroll(EnrollOp.SubmitAdmission(it)) }, federation::mergeAdmission, "Console admission rejected")) {
@@ -1599,6 +1599,14 @@ class ChatRepository(
 			store.saveGatewayId(it)
 			localGatewayId = it
 		}
+		// This is the ONE path besides a real first-root that sets firstRooted=true - it never
+		// calls evie's first-root intake (the held device already rooted), so trace the latch
+		// origin explicitly or a stuck-latch investigation cannot tell the two apart.
+		DebugLog.log(
+			"AddDevice",
+			"installed approved-device transport; consoleAdmitted+firstRooted set, " +
+				"keyring=${if (transport.domain != null) "adopted" else "absent"} gateway=${transport.gatewayId ?: "none"}",
+		)
 		client = null
 		sttsClient = null
 		val parsed = Provisioning.parse(blob)
