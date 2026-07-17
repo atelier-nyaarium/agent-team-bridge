@@ -80,7 +80,7 @@ export function createVibeCheck(deps: VibeCheckDeps) {
 		return JSON.stringify({
 			type: "channel_push",
 			from: "vibe-check",
-			body: `Session vibe check from the gateway. Reply with the \`channel_reply_structured\` tool using the session_id shown above, setting \`responseData\` to \`{ "description": "<short phrase>" }\` - one short phrase (under 100 characters, like a commit subject) saying what this session is currently about or working on. It labels this session on the owner's console board. Answer from what you already know - this is not a task. Do not use \`crosstalk_send\`.`,
+			body: `Session vibe check from the gateway. Reply with the \`channel_reply_structured\` tool using the session_id shown above, setting \`responseData\` to \`{ "description": "<short phrase>" }\` - one short phrase, 7 words or fewer, saying what this session is currently about or working on. It labels this session on the owner's console board, where it renders truncated on one line, so shorter reads better. Answer from what you already know - this is not a task. Do not use \`crosstalk_send\`.`,
 			session_id: id,
 			replyJsonSchema: "{ description: string }",
 		});
