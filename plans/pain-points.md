@@ -1,5 +1,131 @@
 # Pain points
 
+## Console hardening (`plans/console-hardening.md`, deleted, shipped - 2026-07-16)
+
+Migrated from `plans/console-hardening.md` (deleted, shipped - the four phases the idle-pushback
+manager's own crust sweep spun off: Phase A's per-team attachment purge on `forget()`, Phase B's
+long-poll timeout chain pin, Phase C's consolidation of the 10 duplicated evie-direct request
+shapes behind `postEvieDirect`, and Phase D's cancellable `ConsoleClient` transport). Shipped
+through a full `audited-implementation` cycle per phase: plan alignment, red-team (Phase D needed
+two rounds - the first fix pass introduced two real regressions, a `deliver()` placeholder deleted
+on success and a `spawnSession()` clobber race, both caught and corrected before commit), a
+framework-first pass (extracted the ~50-site cancellation-rethrow idiom into a new `Cancellation.kt`
+helper family after two of three independent audit dimensions converged on it, catching a dead
+redundant guard already drifted in `spawnSession` along the way), documentation, and - for Phase D,
+the plan's final phase - a full crust-collection scouting sweep across the whole Android app (~38
+files). Verified with real Android builds (`testDebugUnitTest`) throughout; committed in small,
+separately-verified commits.
+
+Pruned to concrete, reachable findings from all four phases' crust sweeps; confirmed non-issues
+(a numeric coincidence between two independently-justified timeout budgets, explicitly NOT a design
+relationship) were cut. Five of the Phase D crust-collection findings below (including all three
+marked high) were independently verified against the actual code before being recorded, not taken
+on the scouting agents' tone alone.
+
+**High:**
+- [high] `android/.../TerminalView.kt : TerminalView.fire` - **bug-class** - wraps the suspend
+  `onSend` callback (bound to `ChatRepository.tmuxSend`) in a plain `runCatching { onSend(...) }
+  .onFailure { sendError = ... }` with no cancellation guard - the same bug class Phase D fixed in
+  ChatRepository.kt/ConsoleClient.kt, recurring here because this UI call site was outside that
+  phase's scope. Closing the terminal tab mid-`tmux_send` misreports a clean cancel as
+  `sendError = "send failed"` on the app's most-exercised terminal interaction path.
+- [high] `android/.../SwitchboardService.kt : SwitchboardService.enterDeepSleep` - **bug-class,
+  verified** - the `AlarmManager.setExactAndAllowWhileIdle`/`setAndAllowWhileIdle` calls have no
+  try/catch, and `decide()` (which reaches this via `IdlePushbackManager`) runs from
+  `ChatRepository.startPolling`'s poll loop textually after that loop's own per-pass `catch` closes.
+  If either `AlarmManager` call throws (the file's own comment already acknowledges OEM quirks that
+  can revoke `USE_EXACT_ALARM`), both wakelocks leak and the exception is uncaught by the poll
+  loop's coroutine body. `startPolling` is called exactly once (confirmed - `onCreate`, no other
+  call site), so this permanently and silently kills background polling for the life of the service
+  instance, with no restart path short of the app being killed and relaunched.
+- [high] `android/.../FederationManager.kt : FederationManager.ownerIdentity` - **bug-class,
+  verified** - returns the raw owner Ed25519/X25519 PRIVATE keypair, the sole root-of-trust key,
+  with default (public) visibility despite zero callers anywhere outside the class itself (confirmed
+  by grepping the whole android tree). Every sibling accessor (`ownerSignPub`/`ownerBoxPub`/
+  `ownerSas`) is deliberately narrowed to public material only; `FederationManager`/`AppStateStore`
+  both have public constructors, so any code in the module could build its own instance over the
+  same store and read the raw private key straight out. Marking it `private` would compile clean
+  today and turns the (already-intended) restriction into a compile-time guarantee.
+
+**Medium:**
+- [medium] `android/.../EnrollCeremonyScreen.kt : EnrollCeremonyScreen.ComparePanel.onDiffer` -
+  **bug-class** - re-wraps `repo.enrollCancel(...)` (already `runCatchingCancellable`-guarded
+  internally) in a second bare `runCatching { }` whose `Result` is fully discarded, re-swallowing
+  the cancellation the Phase D helper exists to let through and separately dropping every genuine
+  `enrollCancel` failure with zero signal on a mismatch/tamper-warning path.
+- [medium] `android/.../TrustCompareScreen.kt : TrustCompareScreen`'s dispose cleanup uses the
+  wrong coroutine scope - **bug-class** - `DisposableEffect(Unit).onDispose` fires
+  `scope.launch { repo.trustCancel(rendezvousId) }` on the composable's own `rememberCoroutineScope`
+  - the scope being torn down by this same disposal - unlike its two siblings (`LinkWizard.kt`,
+  `EnrollCeremonyScreen.kt`), which explicitly launch on `GlobalScope` with a comment stating the
+  call "must outlive this composable." The FLOW-2 rendezvous close likely never completes.
+- [medium] `android/.../SwitchboardService.kt : SwitchboardService.wakeLock` - **bug-class,
+  verified** - plain `var` with no `@Volatile`, mutated from both the main thread and the poll
+  loop's `Dispatchers.IO` thread, unlike the companion object's `passLock` (which correctly uses
+  `@Volatile` + synchronized double-checked locking for the identical access pattern). A release
+  racing an acquire can leak a wakelock nothing will ever release.
+- [medium] `android/.../AppUpdater.kt : AppUpdater.downloadAndStage` - **bug-class** - blocks on
+  OkHttp's synchronous `.execute()` with no cancellation wiring, the same shape Phase D just
+  removed from ConsoleClient. Leaving the update screen mid-download does not stop the network call.
+- [medium] `android/.../FederationManager.kt` : the `signRosterRequest`/`signTransportRequest`/
+  `signTrustPendingRequest` family - **framework-first** - ~16 functions hand-repeat the same
+  fetch-identity/sign-object shape with no shared helper; two of the three carry an explicit
+  "(not the console key)" warning comment, evidence the console-vs-owner choice is already
+  considered a mistake-in-waiting.
+- [medium] `android/.../SttsPlayer.kt : SttsPlayer.playFile`'s MediaPlayer listeners - **bug-class**
+  - `setOnCompletionListener`/`setOnErrorListener` release and null `loudness` unconditionally,
+  unlike the sibling `player = null` lines gated on `currentKey == k`. A stale callback for a
+  just-superseded track can silently kill the NEW track's volume boost mid-playback.
+- [medium] `android/.../Attachments.kt : Attachments.storeOutgoing` - **bug-class** - writes each
+  outgoing attachment straight to its final path with no tmp-file-plus-rename, unlike `decode()`'s
+  documented atomic write for inbound files. A crash mid-write leaves a truncated file that
+  `reconcilePending`'s retry path would silently resend.
+- [medium] `android/.../ChatRepository.kt : closeTab`/`wakeSession`/`forget` (vs `rename`) -
+  **framework-first** - the "is this parsed Address my own (domain, gateway)" predicate is
+  hand-copied 6 times across ChatRepository.kt and MainActivity.kt, and only `rename()` tests
+  domain AND gateway; the other 5 test gateway alone, against the codebase's own documented
+  invariant that a gateway id is unique only within a Domain.
+- [medium] `android/.../ConsoleClient.kt : relay()` - **latent logging footgun for future work** -
+  Phase C's `postEvieDirect` redaction fix only covers the 9 evie-direct ops; `relay()` (Phase D's
+  target) logs nothing today, but several of the ~21 ops it serves carry genuine plaintext secrets
+  once `unsealReply()` decrypts them. A future trace line placed on the decoded result (rather than
+  the still-sealed raw response) would leak. Not a live issue - nothing logs there yet.
+- [medium] `android/.../DebugLog.kt : log()` - **bug-class, pre-existing, unrelated to this plan** -
+  `fmt.format(Date())` (the shared `SimpleDateFormat`) runs outside the `synchronized` block
+  guarding everything else in the function; `SimpleDateFormat` is documented non-thread-safe and
+  this codebase calls `DebugLog.log` concurrently from independent `Dispatchers.IO` coroutines. A
+  race can corrupt the timestamp or throw uncaught, aborting whichever op triggered it.
+- [medium] `plugins/designer/DesignerCards.kt : relOf` - **dup-logic** - a third, independently
+  written copy of the same "strip a src down to its attachments-relative path" parse `Attachments.kt`
+  owns; this copy has already drifted (no `takeIf { isNotEmpty() }` guard, so a malformed src
+  silently becomes `""` instead of failing safely). `DesignerCards.kt` already imports
+  `Attachments`, so delegating is a one-line change.
+
+**Low:**
+- [low] (cross-file) the "outlive this composable" cleanup pattern is hand-rolled 3 times
+  (`LinkWizard.kt`, `EnrollCeremonyScreen.kt`, `TrustCompareScreen.kt`) with no shared helper
+  enforcing the GlobalScope-not-rememberCoroutineScope rule the pattern depends on - exactly how
+  the TrustCompareScreen.kt copy above picked the wrong scope.
+- [low] `android/.../FederationManager.kt : consoleAdmission` vs `admitConsole` - **naming trap** -
+  `admitGateway`/`admitConsole` form a clear `admitX(subjectKeys...)` family for a third party;
+  `consoleAdmission(nowMs)` instead self-admits THIS device with no subject-key params, in the same
+  section with an easily-confused name. All current call sites are correct today - forward risk.
+- [low] `android/.../DebugLog.kt : DebugLog.init` - **bug-class** - installs a chained
+  `Thread.setDefaultUncaughtExceptionHandler` with no re-installation guard, called from 3 entry
+  points each apparently written as an either/or fallback; `MainActivity.onCreate` re-runs on every
+  Activity recreation (e.g. rotation), chaining one more layer each time.
+- [low] (framework-first) clipboard access is hand-rolled per-file and has already drifted in UX -
+  `Management.kt`/`HostNetworks.kt`/`MainActivity.kt` each redo the same `getSystemService` dance;
+  `HostNetworks.kt`'s copy shows a "Copied." status, `Management.kt`'s two copies show none, even
+  though one of those screens already renders a status slot next to the button.
+- [low] `android/.../ConsoleClient.kt : postPublicApproval` - **low risk, confirmed by two audits**
+  - the one response-body log line Phase C's redaction rule doesn't cover; `ConsoleApprovalResult`'s
+  fields are public keys/display name/opaque ciphertext, not the onboarding bundle plaintext.
+- [low] `proto/Protocol.kt : TrustPendingResult.rendezvousId` - **naming trap, not a bug** -
+  confirmed safe to log (evie-served broker data, not a bearer secret), but
+  `ChatRepository.trustExchange`'s comments call it "the pin" when passing it to
+  `EnrollCeremony.sas`, reading as alarming out of context.
+
 ## Idle pushback manager (`plans/idle-pushback-manager.md`, deleted, shipped - 2026-07-16)
 
 Tiered poll-cadence backoff ladder for the Android console's background polling (fast while
