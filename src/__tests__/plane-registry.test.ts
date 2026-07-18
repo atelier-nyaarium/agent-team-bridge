@@ -138,6 +138,52 @@ describe("PlaneRegistry", () => {
 		expect(resolved).toBe(true);
 	});
 
+	it("without scope, changedSince/waitForBump treat every OTHER registered plane's absence from the presented map as changed too", () => {
+		// Documents the behavior `scope` exists to opt out of (see the next test): a caller with no
+		// scope asking about "domain" alone (caught up on it - the exact current version is
+		// presented), on a registry that ALSO has "presence" registered, still gets "presence"
+		// reported as changed - the bulk check has no way to tell "not tracked" apart from "unknown,
+		// ship it" without a scope to say which planes it is even asking about.
+		const reg = new PlaneRegistry();
+		reg.registerPlane({ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash });
+		reg.registerPlane({ name: "domain", snapshot: () => ({ y: 1 }), identityOf: stableHash });
+		const changed = reg.changedSince(new Map([["domain", reg.version("domain")!]]));
+		expect(changed).toEqual(["presence"]);
+	});
+
+	it("scope narrows changedSince/waitForBump to exactly the planes a caller is asking about", async () => {
+		// The fix this test locks in: a caller scoped to ONLY "linked-peers" must never see "presence"
+		// (a different, ALSO-registered plane) reported as changed just because its own presented map
+		// has no key for it - the exact false-positive a naive multi-plane poll handler hits once a
+		// second plane joins a shared registry (see consoleHandler.ts's own presence+linked-peers split).
+		let linkedPeersContent = { peers: ["alice"] };
+		const reg = new PlaneRegistry();
+		reg.registerPlane({ name: "presence", snapshot: () => ({ x: 1 }), identityOf: stableHash });
+		reg.registerPlane({ name: "linked-peers", snapshot: () => linkedPeersContent, identityOf: stableHash });
+
+		const scope = new Set(["linked-peers"]);
+		// Caught up on linked-peers, and presenting NOTHING for presence - scoped out, so this must
+		// hold rather than resolve immediately on presence's absence.
+		const presented = new Map([["linked-peers", reg.version("linked-peers")!]]);
+		expect(reg.changedSince(presented, scope)).toEqual([]);
+
+		let resolved: boolean | undefined;
+		const held = reg.waitForBump(presented, 5_000, scope).then((w) => {
+			resolved = w;
+		});
+		await new Promise((r) => setTimeout(r, 10));
+		expect(resolved).toBeUndefined(); // still holding - presence bumping alone must not wake it
+
+		reg.markDirty("presence"); // out of scope: must NOT wake the linked-peers-scoped waiter
+		await new Promise((r) => setTimeout(r, 10));
+		expect(resolved).toBeUndefined();
+
+		linkedPeersContent = { peers: ["alice", "bob"] }; // in scope: must wake it
+		reg.markDirty("linked-peers");
+		await held;
+		expect(resolved).toBe(true);
+	});
+
 	it("a waiter presenting a version AHEAD of current still wakes on a bump - no special-casing", async () => {
 		// Deliberate design (see PollWaitHub in the plan): "ahead" is never distinguished from
 		// "behind" - any difference means "send current truth." A console can present a version

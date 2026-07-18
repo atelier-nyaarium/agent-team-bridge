@@ -19,6 +19,7 @@ import type {
 	CrossDomainListenStateResultSchema,
 	CrossDomainListPeersResultSchema,
 	CrossDomainListSharesResultSchema,
+	CrossDomainPeerEntrySchema,
 	CrossDomainRequestResultSchema,
 	CrossDomainShareResultSchema,
 	CrossDomainShareTargetSchema,
@@ -49,6 +50,7 @@ export const CONSOLE_PROTOCOL_VERSION = 2;
 export type ConsoleOp = z.infer<typeof ConsoleOpSchema>;
 export type ConsoleOpKind = ConsoleOp["kind"];
 export type CrossDomainShareTarget = z.infer<typeof CrossDomainShareTargetSchema>;
+export type CrossDomainPeerEntry = z.infer<typeof CrossDomainPeerEntrySchema>;
 export type ConsoleRegisterOp = Extract<ConsoleOp, { kind: "register" }>;
 export type ConsoleListTeamsOp = Extract<ConsoleOp, { kind: "list_teams" }>;
 export type ConsoleSendOp = Extract<ConsoleOp, { kind: "send" }>;

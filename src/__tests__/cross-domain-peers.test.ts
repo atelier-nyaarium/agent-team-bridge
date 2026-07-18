@@ -178,4 +178,65 @@ describe("CrossDomainPeers store", () => {
 		fs.writeFileSync(path.join(dir, "cross-domain-peers.json"), "not json");
 		expect(new CrossDomainPeers(dir).all()).toHaveLength(0);
 	});
+
+	it("constructing with no onChange callback never throws on a mutation", () => {
+		const store = new CrossDomainPeers(tmp());
+		expect(() => store.add(peer())).not.toThrow();
+		expect(() => store.remove(store.all()[0].friendGatewayId)).not.toThrow();
+	});
+});
+
+describe("CrossDomainPeers onChange hook (the linked-peers plane's single writer)", () => {
+	it("add() fires onChange exactly once per genuine mutation", () => {
+		let calls = 0;
+		const store = new CrossDomainPeers(tmp(), () => {
+			calls++;
+		});
+		store.add(peer());
+		expect(calls).toBe(1);
+		store.add(peer({ friendDomainId: "dave", friendGatewayId: "dave-laptop" }));
+		expect(calls).toBe(2);
+	});
+
+	it("add() replacing an existing (domainId, gatewayId) still fires onChange (a re-link is a real mutation)", () => {
+		let calls = 0;
+		const store = new CrossDomainPeers(tmp(), () => {
+			calls++;
+		});
+		store.add(peer({ friendDomainId: "carol", friendGatewayId: "carol-laptop" }));
+		store.add(peer({ friendDomainId: "carol", friendGatewayId: "carol-laptop" })); // re-link, new keys
+		expect(calls).toBe(2);
+	});
+
+	it("add() rejecting a malformed peer never fires onChange", () => {
+		let calls = 0;
+		const store = new CrossDomainPeers(tmp(), () => {
+			calls++;
+		});
+		const bad = { ...peer(), friendSignPub: "" };
+		expect(store.add(bad as CrossDomainPeer)).toBe(false);
+		expect(calls).toBe(0);
+	});
+
+	it("remove()/removeByDomain()/removeByOwner() fire onChange only when something was actually removed", () => {
+		let calls = 0;
+		const store = new CrossDomainPeers(tmp(), () => {
+			calls++;
+		});
+		const p = peer({ friendDomainId: "carol", friendGatewayId: "carol-laptop" });
+		store.add(p);
+		expect(calls).toBe(1);
+
+		// A no-op remove (nothing matches) must not fire.
+		store.remove("nobody-home");
+		expect(calls).toBe(1);
+		store.removeByDomain("nobody-home");
+		expect(calls).toBe(1);
+		store.removeByOwner("nobody-home");
+		expect(calls).toBe(1);
+
+		// A genuine removal fires exactly once.
+		store.remove(p.friendGatewayId);
+		expect(calls).toBe(2);
+	});
 });

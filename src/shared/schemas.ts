@@ -226,6 +226,33 @@ export const FocusIntentSchema = z
 	})
 	.meta({ id: "FocusIntent" });
 
+/** A registry plane's version, for a plane with no multi-source concept (unlike presence's
+ * per-source-gateway array - this Gateway's linked-peers roster is ALWAYS this Gateway's own
+ * single view, never relayed from a peer). Same {epoch, counter} shape PlaneRegistry.version
+ * returns internally, just named per-plane on the wire so a client presents the right one back. */
+export const LinkedPeersVersionSchema = z
+	.object({
+		epoch: z.number().int(),
+		version: z.number().int().nonnegative(),
+	})
+	.meta({ id: "LinkedPeersVersion" });
+
+// One peer row in a list_peers result: a linked friend Domain projected from the gateway's
+// cross-Domain peer set. A Domain may run more than one gateway, so the same domainId can repeat
+// once per gateway; the console groups by domainId. Named (.meta id) so the codegen emits it as a
+// Kotlin nested class instead of erroring on an inline array-of-object. Defined ahead of
+// ConsoleOpSchema/ConsolePollResultSchema (not just its own cross_domain_list_peers result) since
+// the poll response's linked-peers piggyback (below) references it too.
+export const CrossDomainPeerEntrySchema = z
+	.object({
+		domainId: z.string(),
+		gatewayId: z.string(),
+		// The friend OWNER's signing key (base64) - the owner-keyed identity the Users surface joins on
+		// (a roster row is keyed by owner, so this maps a linked Domain back to the person who owns it).
+		ownerSignPub: z.string(),
+	})
+	.meta({ id: "CrossDomainPeerEntry" });
+
 ////////////////////////////////
 //  Console Relay Frame Schema
 //
@@ -301,6 +328,13 @@ export const ConsoleOpSchema = z
 			// truth - see PollWaitHub's own "no ahead special case" design.
 			knownPresenceVersions: z.array(PresenceVersionSchema).optional(),
 			focus: FocusIntentSchema.optional(),
+			// The linked-peers plane version this Console already holds. A single scalar (not an
+			// array like knownPresenceVersions - this Gateway's own linked-peers roster has no
+			// multi-source concept to distinguish), mirroring knownDomainVersion's own shape:
+			// absent (a legacy client, or this session's cold boot - the two need no distinction
+			// here, both simply want the current snapshot) ships unconditionally; present ships
+			// only if the version actually differs.
+			knownLinkedPeersVersion: LinkedPeersVersionSchema.optional(),
 		}),
 		// Capture an agent's visible tmux pane for the console terminal view. `target` is the
 		// gateway-qualified session name; the gateway resolves it to the host-agent's own tmux
@@ -666,11 +700,16 @@ export const ConsolePollResultSchema = z
 		// remember for its next poll.
 		presence: z.array(TeamInfoSchema).optional(),
 		presenceVersions: z.array(PresenceVersionSchema).optional(),
+		// The linked-peers plane's current truth, same piggyback shape as presence above but a
+		// single scalar version (see knownLinkedPeersVersion). `linkedPeersVersion` always
+		// accompanies `linkedPeers` (never one without the other).
+		linkedPeers: z.array(CrossDomainPeerEntrySchema).optional(),
+		linkedPeersVersion: LinkedPeersVersionSchema.optional(),
 		// Why this poll settled: which plane's bump woke it (or a mailbox append, or the hold simply
 		// elapsing). The Console's instant-empty-response heuristic (its old-gateway degradation
 		// signal) reads this so a plane-only settle - empty mailbox entries, no gap - is never
 		// misread as a broken gateway and does not trip its backoff.
-		settled: z.enum(["mailbox", "presence", "domain", "timeout"]).optional(),
+		settled: z.enum(["mailbox", "presence", "linkedPeers", "domain", "timeout"]).optional(),
 	})
 	.meta({ id: "ConsolePollResult" });
 
@@ -875,20 +914,6 @@ export const CrossDomainListSharesResultSchema = z
 		shares: z.array(CrossDomainShareEntrySchema),
 	})
 	.meta({ id: "CrossDomainListSharesResult" });
-
-// One peer row in a list_peers result: a linked friend Domain projected from the gateway's
-// cross-Domain peer set. A Domain may run more than one gateway, so the same domainId can repeat
-// once per gateway; the console groups by domainId. Named (.meta id) so the codegen emits it as a
-// Kotlin nested class instead of erroring on an inline array-of-object.
-export const CrossDomainPeerEntrySchema = z
-	.object({
-		domainId: z.string(),
-		gatewayId: z.string(),
-		// The friend OWNER's signing key (base64) - the owner-keyed identity the Users surface joins on
-		// (a roster row is keyed by owner, so this maps a linked Domain back to the person who owns it).
-		ownerSignPub: z.string(),
-	})
-	.meta({ id: "CrossDomainPeerEntry" });
 
 // The linked friend Domains the gateway has a cross-Domain peer for (the link is written; presence
 // and shared-back state are NOT implied). The console unions these domainIds with the discovery-

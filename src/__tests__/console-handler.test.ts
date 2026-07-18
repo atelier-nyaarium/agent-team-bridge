@@ -9,7 +9,7 @@ import { ConsolePeer } from "../gateway/console/consolePeer.js";
 import { IntentTracker } from "../gateway/intent.js";
 import type { WakeResult } from "../gateway/wake.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../gateway/websocket.js";
-import type { ConsoleOp, OpenedConsoleFrame } from "../shared/console-protocol.js";
+import type { ConsoleOp, CrossDomainPeerEntry, OpenedConsoleFrame } from "../shared/console-protocol.js";
 import { DeviceMailbox, DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { ownerKeyId } from "../shared/owner-id.js";
 import { PlaneRegistry, stableHash } from "../shared/plane-registry.js";
@@ -1041,6 +1041,109 @@ describe("poll: focus intent + presence piggyback", () => {
 		const result = reply.result as { entries: unknown[]; settled?: string };
 		expect(result.entries).toHaveLength(1);
 		expect(result.settled).toBe("mailbox");
+	});
+});
+
+describe("poll: linked-peers piggyback", () => {
+	function peerEntry(
+		overrides: Partial<CrossDomainPeerEntry> & Pick<CrossDomainPeerEntry, "domainId">,
+	): CrossDomainPeerEntry {
+		return { gatewayId: "friend-gw", ownerSignPub: "friend-owner", ...overrides };
+	}
+
+	// A minimal REAL "linked-peers" plane (not a mock), mirroring makePresencePlane above - a
+	// mutable rows array registered under the same name consoleHandler.ts's poll case looks for.
+	function makeLinkedPeersPlane(initialPeers: CrossDomainPeerEntry[] = []) {
+		let peers = initialPeers;
+		const planeRegistry = new PlaneRegistry();
+		planeRegistry.registerPlane<CrossDomainPeerEntry[]>({
+			name: "linked-peers",
+			snapshot: () => peers,
+			identityOf: (snapshot) => stableHash(snapshot),
+		});
+		return {
+			planeRegistry,
+			setPeers: (next: CrossDomainPeerEntry[]) => {
+				peers = next;
+			},
+		};
+	}
+
+	it("an absent knownLinkedPeersVersion ships the current roster unconditionally (legacy client or this session's cold boot alike)", async () => {
+		const { planeRegistry } = makeLinkedPeersPlane([peerEntry({ domainId: "alice" })]);
+		const h = makeHarness({}, { planeRegistry });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const reply = await h.handler.handleFrame(frame({ kind: "poll" }, "p1"));
+		const result = reply.result as {
+			linkedPeers?: CrossDomainPeerEntry[];
+			linkedPeersVersion?: { epoch: number; version: number };
+			settled?: string;
+		};
+		expect(result.linkedPeers).toEqual([peerEntry({ domainId: "alice" })]);
+		expect(result.linkedPeersVersion).toBeDefined();
+		expect(result.settled).toBe("linkedPeers");
+	});
+
+	it("a matching presented version omits the linked-peers piggyback entirely", async () => {
+		const { planeRegistry } = makeLinkedPeersPlane([peerEntry({ domainId: "alice" })]);
+		const h = makeHarness({}, { planeRegistry });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		const first = (await h.handler.handleFrame(frame({ kind: "poll" }, "p1"))).result as {
+			linkedPeersVersion: { epoch: number; version: number };
+		};
+
+		const second = await h.handler.handleFrame(
+			frame({ kind: "poll", knownLinkedPeersVersion: first.linkedPeersVersion }, "p2"),
+		);
+		const result = second.result as Record<string, unknown>;
+		expect(result.linkedPeers).toBeUndefined();
+		expect(result.linkedPeersVersion).toBeUndefined();
+		expect(result.settled).toBe("timeout");
+	});
+
+	it("a real mutation (markDirty) between polls ships the fresh roster on the next poll", async () => {
+		const { planeRegistry, setPeers } = makeLinkedPeersPlane([peerEntry({ domainId: "alice" })]);
+		const h = makeHarness({}, { planeRegistry });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		const first = (await h.handler.handleFrame(frame({ kind: "poll" }, "p1"))).result as {
+			linkedPeersVersion: { epoch: number; version: number };
+		};
+
+		setPeers([peerEntry({ domainId: "alice" }), peerEntry({ domainId: "bob" })]);
+		planeRegistry.markDirty("linked-peers");
+
+		const second = await h.handler.handleFrame(
+			frame({ kind: "poll", knownLinkedPeersVersion: first.linkedPeersVersion }, "p2"),
+		);
+		const result = second.result as { linkedPeers?: CrossDomainPeerEntry[]; settled?: string };
+		expect(result.linkedPeers).toHaveLength(2);
+		expect(result.settled).toBe("linkedPeers");
+	});
+
+	it("a held poll wakes early on a linked-peers bump, not the full hold", async () => {
+		const { planeRegistry, setPeers } = makeLinkedPeersPlane([peerEntry({ domainId: "alice" })]);
+		const h = makeHarness({}, { planeRegistry });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		const first = (await h.handler.handleFrame(frame({ kind: "poll" }, "p1"))).result as {
+			linkedPeersVersion: { epoch: number; version: number };
+		};
+
+		const held = h.handler.handleFrame(
+			frame({ kind: "poll", holdMs: 5_000, knownLinkedPeersVersion: first.linkedPeersVersion }, "p2"),
+		);
+		await new Promise((r) => setTimeout(r, 20));
+		setPeers([peerEntry({ domainId: "alice" }), peerEntry({ domainId: "bob" })]);
+		planeRegistry.markDirty("linked-peers");
+
+		const start = Date.now();
+		const reply = await held;
+		expect(Date.now() - start).toBeLessThan(2_000); // woke on the bump, not the 5s hold
+		const result = reply.result as { linkedPeers?: CrossDomainPeerEntry[]; settled?: string };
+		expect(result.settled).toBe("linkedPeers");
+		expect(result.linkedPeers).toHaveLength(2);
 	});
 });
 

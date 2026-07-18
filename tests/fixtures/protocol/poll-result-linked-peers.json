@@ -1,0 +1,9 @@
+{
+	"entries": [],
+	"cursor": 42,
+	"dropped": 0,
+	"epoch": 1073741824,
+	"linkedPeers": [{ "domainId": "alice", "gatewayId": "alice-laptop", "ownerSignPub": "b3duZXItcHVi" }],
+	"linkedPeersVersion": { "epoch": 1073741824, "version": 3 },
+	"settled": "linkedPeers"
+}

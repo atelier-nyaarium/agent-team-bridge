@@ -15,6 +15,7 @@ import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
+import com.atelier_nyaarium.switchboard.proto.LinkedPeersVersion
 import com.atelier_nyaarium.switchboard.proto.PresenceVersion
 import com.atelier_nyaarium.switchboard.proto.SasCrypto
 import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
@@ -910,7 +911,6 @@ class ChatRepository(
 	// pass drains while still foregrounded tags normally.
 	@Volatile private var resumeBacklogPending = false
 	private val kick = Channel<Unit>(Channel.CONFLATED)
-	@Volatile private var forceTeamsRefresh = false
 	// Bounds the optimistic-forget/board-resurrection race: a wholesale teams() snapshot dispatched
 	// BEFORE forget() completes server-side can still list the just-forgotten team when it resolves
 	// AFTER the optimistic local removal below. A short-lived tombstone masks that one stale
@@ -924,18 +924,12 @@ class ChatRepository(
 	// the service's start and the Activity's foreground transition can race here.
 	private val reconciled = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
-	// The raw (pre-tombstone, pre-label-override) team snapshot the presence merge path last saw,
-	// from either source (the presence-plane piggyback or the legacy teams() pull) - never persisted
-	// (a fresh process starts with no cache and full-resyncs on its first poll/pull). Re-merging
-	// this same cached list against the CURRENT tombstone set is what lets a tombstone's own expiry
-	// resurrect a team locally without waiting for a fresh server push - see applyPresence.
+	// The raw (pre-tombstone, pre-label-override) team snapshot the presence merge path last saw -
+	// never persisted (a fresh process starts with no cache and full-resyncs on its first poll).
+	// Re-merging this same cached list against the CURRENT tombstone set is what lets a
+	// tombstone's own expiry resurrect a team locally without waiting for a fresh server push -
+	// see applyPresence.
 	@Volatile private var lastRawTeams: List<Team>? = null
-
-	// Sticky once true: sets on the first poll response that ever carries a presence plane (either
-	// field - an old, non-plane gateway never sends either). Gates the legacy teams() timer (item 9)
-	// off once a plane-capable gateway has proven itself, so the two mechanisms never fight over
-	// which owns the board - a capable gateway's OWN piggyback is authoritative from that point on.
-	@Volatile private var presenceCapable = false
 
 	// This device's currently-declared focus (what poll() presents as `focus`), read fresh on every
 	// poll - see declareFocus. Starts "background": a cold app has not yet observed the board or a
@@ -954,6 +948,12 @@ class ChatRepository(
 	// persisted (see lastRawTeams) - a fresh process presents an empty list, which the Gateway treats
 	// as a cold boot and ships everything once.
 	@Volatile private var knownPresenceVersions: List<PresenceVersion> = emptyList()
+
+	// The linked-peers plane version this device last applied, presented back on the NEXT poll -
+	// same role as knownPresenceVersions, a single scalar since this Gateway's own roster has no
+	// multi-source concept. Null (never persisted) means this session has not applied one yet, which
+	// the Gateway treats the same as a legacy client - ship the current roster unconditionally.
+	@Volatile private var knownLinkedPeersVersion: LinkedPeersVersion? = null
 
 	/** Set by the service: called per poll with the new inbound messages of one
 	 * team, so a background burst can become a notification. */
@@ -988,7 +988,6 @@ class ChatRepository(
 		resumeBacklogPending = true
 		pollFails = 0
 		_state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L) }
-		forceTeamsRefresh = true
 		kick.trySend(Unit)
 	}
 
@@ -1946,27 +1945,25 @@ class ChatRepository(
 	}
 
 	/** The linked friend Domains. The trust roster comes from the route Gateway's cross-Domain peer
-	 * set (fetched by refreshLinkedPeers): a peer is listed the moment it is linked, regardless of
-	 * whether its gateway is online or has shared anything back. That set is unioned with the
-	 * discovery-derived Domains so a just-linked peer is immediately visible (and its detail reachable
-	 * to start sharing) before any of its sessions surface in discovery. Discovery still supplies the
-	 * session count + presence; a peer present only in the peer set shows zero sessions / offline. */
+	 * set (pushed on the poll response's linkedPeers plane; see applyLinkedPeers): a peer is listed
+	 * the moment it is linked, regardless of whether its gateway is online or has shared anything
+	 * back. That set is unioned with the discovery-derived Domains so a just-linked peer is
+	 * immediately visible (and its detail reachable to start sharing) before any of its sessions
+	 * surface in discovery. Discovery still supplies the session count + presence; a peer present
+	 * only in the peer set shows zero sessions / offline. */
 	fun linkedDomains(): List<LinkedDomain> {
 		val adminDomain = confirmedDomainId() ?: return emptyList()
 		return CrossDomainLink.mergeLinkedDomains(_state.value.teams, _state.value.linkedPeerOwners, adminDomain)
 	}
 
-	/** Refresh the linked-peer roster from the route Gateway's cross-Domain peer set into state, so
-	 * linkedDomains() can union it with discovery. Best-effort: a relay failure keeps the prior set
-	 * (the Federation screen never blanks its PEERS list on a blip). Folds the per-gateway peer rows
-	 * to their distinct Domain ids (a Domain may run more than one gateway). */
-	suspend fun refreshLinkedPeers() = withContext(Dispatchers.IO) {
-		runCatchingCancellable { client().crossDomainListPeers() }
-			.onSuccess { result ->
-				// domainId -> friend owner key (a Domain may run several gateways under one owner; last wins).
-				val owners = result.peers.filter { it.domainId.isNotEmpty() }.associate { it.domainId to it.ownerSignPub }
-				_state.update { it.copy(linkedPeerOwners = owners) }
-			}
+	/** Apply the linked-peers plane's pushed snapshot into state, so linkedDomains() can union it
+	 * with discovery. The one writer of linkedPeerOwners - the poll loop calls this when a poll
+	 * response carries `linkedPeers` (a real change; see PlaneRegistry). Folds the per-gateway peer
+	 * rows to their distinct Domain ids (a Domain may run more than one gateway). */
+	private fun applyLinkedPeers(peers: List<com.atelier_nyaarium.switchboard.proto.CrossDomainPeerEntry>) {
+		// domainId -> friend owner key (a Domain may run several gateways under one owner; last wins).
+		val owners = peers.filter { it.domainId.isNotEmpty() }.associate { it.domainId to it.ownerSignPub }
+		_state.update { it.copy(linkedPeerOwners = owners) }
 	}
 
 	/** A friend Domain's sessions visible to me (shared to my Domain): the peer's discovery
@@ -2608,32 +2605,23 @@ class ChatRepository(
 			java.net.InetAddress.getByName(host).let { it.isLoopbackAddress || it.isSiteLocalAddress || it.isLinkLocalAddress }
 	}.getOrDefault(false)
 
-	/** Pull-to-refresh. Against a plane-capable gateway this is the corrected form (lap 2): forget
-	 * the known presence version so the NEXT poll looks like a cold boot (ships everything), and
+	/** Pull-to-refresh (lap 2's corrected form): forget the known presence AND linked-peers
+	 * versions so the NEXT poll looks like a cold boot (ships everything for both planes), and
 	 * interrupt any currently-held poll so that next poll fires now instead of inheriting up to
 	 * LONG_POLL_HOLD_MS of staleness waiting out the remainder of an already-open hold - a bare
 	 * version clear underneath a still-running held poll would otherwise wait for that poll's own
-	 * natural expiry before the cleared version even reaches the server. Against a legacy gateway
-	 * (never proven plane-capable this session) falls back to the direct teams() pull. Either way,
-	 * also refreshes the cross-Domain peer roster (see refreshLinkedPeers) so a manual refresh
-	 * always covers everything, not just the presence-teams path. */
+	 * natural expiry before the cleared version even reaches the server. */
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
-		if (presenceCapable) {
-			knownPresenceVersions = emptyList()
-			pollInterrupt?.complete(Unit)
-		} else {
-			runCatchingCancellable { client().teams(localGatewayId) }
-				.onSuccess { applyPresence(it) }
-		}
-		refreshLinkedPeers()
+		knownPresenceVersions = emptyList()
+		knownLinkedPeersVersion = null
+		pollInterrupt?.complete(Unit)
 	}
 
-	/** The one plane-merge path: every fresh team snapshot, from EITHER source (the presence-plane
-	 * piggyback on a poll, or the legacy teams() pull), lands in state through here and only here.
-	 * Caches the raw list (lastRawTeams) so a LATER tombstone EXPIRY can re-derive `teams` from it
-	 * directly (see reapplyCachedTeams) without waiting for a fresh server push - a failed or
-	 * remote forget then resurrects locally on its own tombstone's schedule, not the next
-	 * unrelated bump. */
+	/** The one plane-merge path: every fresh presence-plane snapshot lands in state through here
+	 * and only here. Caches the raw list (lastRawTeams) so a LATER tombstone EXPIRY can re-derive
+	 * `teams` from it directly (see reapplyCachedTeams) without waiting for a fresh server push -
+	 * a failed or remote forget then resurrects locally on its own tombstone's schedule, not the
+	 * next unrelated bump. */
 	private suspend fun applyPresence(fresh: List<Team>) {
 		lastRawTeams = fresh
 		reapplyCachedTeams()
@@ -2957,35 +2945,11 @@ class ChatRepository(
 		if (pollJob?.isActive == true) return
 		pollScope = scope
 		pollJob = scope.launch(Dispatchers.IO) {
-			var lastTeamsAt = 0L
-			var lastLinkedPeersAt = 0L
 			pollLoop@ while (isActive) {
 				var failed = false
 				var heldEmpty = false
 				var hold = 0L
 				try {
-					// The board's live/available states would otherwise only change on a manual
-					// Refresh; piggyback a team-list refresh on the poll loop. Legacy fallback
-					// (item 9): survives ONLY until this Gateway proves itself plane-capable (see
-					// presenceCapable, set the first time a poll response carries either presence
-					// field) - dead weight against a capable Gateway from that point on, since its
-					// own piggyback below is authoritative. Kept, not physically deleted, for an
-					// old, not-yet-upgraded Gateway.
-					val now = System.currentTimeMillis()
-					if (!presenceCapable && (forceTeamsRefresh || now - lastTeamsAt >= TEAMS_REFRESH_MS)) {
-						forceTeamsRefresh = false
-						lastTeamsAt = now
-						runCatchingCancellable { client().teams(localGatewayId) }
-							.onSuccess { applyPresence(it) }
-					}
-					// The cross-Domain peer roster: its own standalone periodic trigger (same
-					// ~30s cadence), independent of both the presence-teams path above and its
-					// capability gating - refreshLinkedPeers predates the presence plane and stays
-					// needed regardless of which of the two paths above is currently live.
-					if (now - lastLinkedPeersAt >= TEAMS_REFRESH_MS) {
-						lastLinkedPeersAt = now
-						runCatchingCancellable { refreshLinkedPeers() }
-					}
 					// Visible: long-poll (the hold IS the wait; re-poll immediately).
 					// Backgrounded: plain poll (hold=0); the wait after is the idle pushback
 					// ladder's decision, not a flat interval - the mailbox batches either way.
@@ -2994,11 +2958,14 @@ class ChatRepository(
 					val params = mailboxSync.pollParams()
 					val focus = currentFocus
 					val presented = knownPresenceVersions
+					val presentedLinkedPeers = knownLinkedPeersVersion
 					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms focus=${focus.screen}")
 					val mb = if (hold > 0) {
-						pollRacingFocusChange { client().poll(params.cursor, params.epoch, hold, presented, focus) }
+						pollRacingFocusChange {
+							client().poll(params.cursor, params.epoch, hold, presented, focus, presentedLinkedPeers)
+						}
 					} else {
-						client().poll(params.cursor, params.epoch, hold, presented, focus)
+						client().poll(params.cursor, params.epoch, hold, presented, focus, presentedLinkedPeers)
 					}
 					if (mb == null) {
 						DebugLog.log("Plane", "poll interrupted by a focus/refresh change - reissuing immediately")
@@ -3010,16 +2977,24 @@ class ChatRepository(
 					// Presence plane: the same piggyback shape as domainVersion above, generalized.
 					// Present only when at least one source's version differs from what this device
 					// presented - an empty presented list (this session's first poll) always ships
-					// everything (cold boot). A Gateway that has EVER sent either field this session
-					// proves itself plane-capable, permanently disarming the legacy timer above -
-					// a capable Gateway going quiet later is not "became incapable".
+					// everything (cold boot).
 					if (mb.presence != null || mb.presenceVersions != null) {
-						presenceCapable = true
 						if (mb.presenceVersions != null) knownPresenceVersions = mb.presenceVersions
 						mb.presence?.let { rows ->
 							val bumpAt = System.currentTimeMillis()
 							DebugLog.log("Plane", "presence settled=${mb.settled} rows=${rows.size} serverAt=${started} clientAt=${bumpAt}")
 							applyPresence(rows.map { teamInfoToTeam(it, localGatewayId) })
+						}
+					}
+					// Linked-peers plane: same generalized shape, a single scalar version (no legacy
+					// vs cold-boot distinction - see knownLinkedPeersVersion's own doc). Replaces the
+					// old ~30s refreshLinkedPeers() pull entirely - a link/unlink/untrust bumps the
+					// Gateway's own plane synchronously, so this device's next poll reflects it.
+					if (mb.linkedPeers != null || mb.linkedPeersVersion != null) {
+						if (mb.linkedPeersVersion != null) knownLinkedPeersVersion = mb.linkedPeersVersion
+						mb.linkedPeers?.let { peers ->
+							DebugLog.log("Plane", "linkedPeers settled=${mb.settled} rows=${peers.size}")
+							applyLinkedPeers(peers)
 						}
 					}
 					// Tombstone-expiry self-heal: re-derive `teams` from the cached raw snapshot
@@ -3547,9 +3522,9 @@ class ChatRepository(
 			pollScope?.launch(Dispatchers.IO) {
 				runCatchingCancellable { client().forget(team) }
 					.onSuccess {
-						// The record drop already happened server-side; poll now instead of waiting out
-						// TEAMS_REFRESH_MS so the tile actually disappears from the board right away.
-						forceTeamsRefresh = true
+						// The record drop (and its presence-plane bump) already happened server-side;
+						// poll now instead of waiting for the next natural cycle so the tile actually
+						// disappears from the board right away.
 						kick.trySend(Unit)
 					}
 					.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "Forget failed") } }
@@ -3924,14 +3899,13 @@ class ChatRepository(
 		// Slack added to a deep-tier park so the coroutine backstop wakes slightly after, never
 		// before, the alarm it is backing up.
 		const val PARK_SLACK_MS = 5_000L
-		// Refresh the team list at most this often, regardless of poll cadence.
-		const val TEAMS_REFRESH_MS = 30_000L
 		// forgottenUntil's tombstone lifetime: only needs to outlast a single in-flight teams()
 		// HTTP round trip (what the resurrection race actually races against), not the much longer
-		// TEAMS_REFRESH_MS/LONG_POLL_HOLD_MS reconciliation cadence. Derived from ConsoleClient's
-		// own bound on that call (not an independent literal) so it can never silently fall behind
-		// the client's real worst case again - a prior hand-picked 15s undershot the client's
-		// actual (unbounded-at-the-time) worst case entirely.
+		// LONG_POLL_HOLD_MS reconciliation cadence (reapplyCachedTeams runs every poll tick, so a
+		// tombstone's own expiry self-heals within about one poll regardless). Derived from
+		// ConsoleClient's own bound on that call (not an independent literal) so it can never
+		// silently fall behind the client's real worst case again - a prior hand-picked 15s
+		// undershot the client's actual (unbounded-at-the-time) worst case entirely.
 		const val FORGET_TOMBSTONE_MS = ConsoleClient.DEFAULT_RELAY_CALL_TIMEOUT_MS + 5_000L
 		// Matches the gateway's own per-payload bucket (src/gateway/routes.ts:
 		// MAX_RESPONSE_FILE_BYTES); a single attachment may use the whole bucket, so this is

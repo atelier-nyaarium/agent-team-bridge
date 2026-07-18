@@ -16,7 +16,7 @@ import {
 } from "../shared/host-op.js";
 import { ownerKeyId } from "../shared/owner-id.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
-import { type PlanePersistedState, PlaneRegistry } from "../shared/plane-registry.js";
+import { type PlanePersistedState, PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { isComposite, parseSessionName } from "../shared/session-id.js";
 import { type SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
@@ -481,8 +481,31 @@ export async function startGateway(): Promise<void> {
 		// DISJOINT store from the single-owner allowlist, written only by the handshake,
 		// so a local-Domain sync can never wipe it and it never contaminates intra-Domain
 		// resolution. The sealer resolves local peers first, then this set.
-		const crossDomainPeers = new CrossDomainPeers(federationDir);
+		const crossDomainPeers = new CrossDomainPeers(federationDir, () => planeRegistry.markDirty("linked-peers"));
 		crossDomainPeersForConsole = crossDomainPeers;
+		// The linked-peers plane: a one-call registration, same pattern as presence - the store's
+		// own onChange hook above is the single writer, so a link/unlink/untrust can never forget
+		// to announce itself. Registered here (federation activation may run well after boot, even
+		// after the OTHER planes' own reconcileOnBoot pass) rather than at top-level construction,
+		// since there is nothing to register until a Domain actually activates federation; the
+		// tripwire's own periodic sweep (already running by then) covers this plane's one-time
+		// boot-reconcile regardless of how late it joins the registry.
+		planeRegistry.registerPlane(
+			{
+				name: "linked-peers",
+				snapshot: () =>
+					crossDomainPeers
+						.all()
+						.map((p) => ({
+							domainId: p.friendDomainId,
+							gatewayId: p.friendGatewayId,
+							ownerSignPub: p.friendOwnerSignPub,
+						}))
+						.sort((a, b) => `${a.domainId}.${a.gatewayId}`.localeCompare(`${b.domainId}.${b.gatewayId}`)),
+				identityOf: (snapshot) => stableHash(snapshot),
+			},
+			restoredPlanes?.["linked-peers"],
+		);
 		// Per-session share state: which local sessions are offered to which linked friend
 		// Domains, persisted alongside the peer set. Plain gateway-local state (the device's
 		// submit op is authenticated by the existing console seal), read by discovery and the

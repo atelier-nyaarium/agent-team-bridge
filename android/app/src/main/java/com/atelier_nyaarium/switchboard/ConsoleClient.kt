@@ -39,6 +39,7 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnlinkResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnshareResult
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
+import com.atelier_nyaarium.switchboard.proto.LinkedPeersVersion
 import com.atelier_nyaarium.switchboard.proto.PendingTenantRef
 import com.atelier_nyaarium.switchboard.proto.PresenceVersion
 import com.atelier_nyaarium.switchboard.proto.TeamInfo
@@ -672,13 +673,15 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * entry per source Gateway - phase 1 sends this Gateway's own): the server returns the presence plane's
 	 * current snapshot only when it differs. `focus` declares what this device is currently looking at, so
 	 * the Gateway's intent tracker can ramp the host daemon's derivation cadence for the sessions that
-	 * matter right now. */
+	 * matter right now. `knownLinkedPeersVersion` is the same piggyback shape again for the linked-peers
+	 * plane, a single scalar (this Gateway's own roster has no multi-source concept to array over). */
 	suspend fun poll(
 		cursor: Long,
 		epoch: Long,
 		holdMs: Long = 0,
 		knownPresenceVersions: List<PresenceVersion>? = null,
 		focus: FocusIntent? = null,
+		knownLinkedPeersVersion: LinkedPeersVersion? = null,
 	): ConsolePollResult {
 		// Carry the synced keyring version so the route Gateway returns the snapshot only when it changed
 		// (a revocation made elsewhere reaches this Console within one cycle).
@@ -690,6 +693,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			knownDomainVersion = knownVersion,
 			knownPresenceVersions = knownPresenceVersions,
 			focus = focus,
+			knownLinkedPeersVersion = knownLinkedPeersVersion,
 		)
 		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s), evie's relay
 		// hold fires at 55s if the gateway vanished, this read timeout at holdMs+HELD_READ_MARGIN_MS

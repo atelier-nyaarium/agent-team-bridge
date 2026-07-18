@@ -163,6 +163,7 @@ sealed class ConsoleOp {
 		val knownDomainVersion: String? = null,
 		val knownPresenceVersions: List<PresenceVersion>? = null,
 		val focus: FocusIntent? = null,
+		val knownLinkedPeersVersion: LinkedPeersVersion? = null,
 	) : ConsoleOp()
 
 	@Serializable
@@ -353,6 +354,8 @@ data class ConsolePollResult(
 	val domain: DomainSnapshot? = null,
 	val presence: List<TeamInfo>? = null,
 	val presenceVersions: List<PresenceVersion>? = null,
+	val linkedPeers: List<CrossDomainPeerEntry>? = null,
+	val linkedPeersVersion: LinkedPeersVersion? = null,
 	val settled: String? = null,
 )
 
@@ -742,6 +745,12 @@ data class FocusIntent(
 )
 
 @Serializable
+data class LinkedPeersVersion(
+	val epoch: Long,
+	val version: Long,
+)
+
+@Serializable
 data class SignedXDomainLink(
 	val link: XDomainLink,
 	val ownerSignPub: String,
@@ -774,6 +783,13 @@ data class DomainSnapshot(
 	val admissions: List<SignedAdmission>,
 	val revocations: List<SignedRevocation>,
 	val displayName: String? = null,
+)
+
+@Serializable
+data class CrossDomainPeerEntry(
+	val domainId: String,
+	val gatewayId: String,
+	val ownerSignPub: String,
 )
 
 @Serializable
@@ -876,13 +892,6 @@ data class CrossDomainShareEntry(
 @Serializable
 data class CrossDomainListPeersResult(
 	val peers: List<CrossDomainPeerEntry>,
-)
-
-@Serializable
-data class CrossDomainPeerEntry(
-	val domainId: String,
-	val gatewayId: String,
-	val ownerSignPub: String,
 )
 
 @Serializable

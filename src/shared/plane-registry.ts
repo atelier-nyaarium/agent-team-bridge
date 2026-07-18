@@ -185,11 +185,20 @@ export class PlaneRegistry {
 		return this.planes.get(name)?.snapshot() as T | undefined;
 	}
 
-	/** Every plane whose CURRENT version differs from what the caller presented (behind, ahead, or
-	 * an unrecognized epoch alike - see PollWaitHub's own doc for why "ahead" is not special-cased). */
-	changedSince(presented: ReadonlyMap<string, PlaneVersion>): string[] {
+	/** Every plane within `scope` (default: every registered plane - the original, single-plane-
+	 * registry behavior) whose CURRENT version differs from what the caller presented (behind,
+	 * ahead, or an unrecognized epoch alike - see PollWaitHub's own doc for why "ahead" is not
+	 * special-cased). `scope` matters once more than one plane shares a registry: a caller asking
+	 * about only SOME planes (an op field it opted into - e.g. a legacy client that tracks presence
+	 * but predates a later plane) must not have every OTHER registered plane look "changed" just
+	 * because its own presented-map has no key for them - an absent key means "not tracked" only
+	 * for planes the caller is actually asking about; without a scope, "not tracked" and "unknown,
+	 * ship it" (cold boot) are indistinguishable, so a bare presented-map alone cannot express
+	 * "I am not asking about this plane at all" once a second plane exists on the same registry. */
+	changedSince(presented: ReadonlyMap<string, PlaneVersion>, scope?: ReadonlySet<string>): string[] {
 		const changed: string[] = [];
 		for (const [name, plane] of this.planes) {
+			if (scope && !scope.has(name)) continue;
 			const have = presented.get(name);
 			const cur = plane.version;
 			if (!have || have.epoch !== cur.epoch || have.counter !== cur.counter) changed.push(name);
@@ -197,17 +206,24 @@ export class PlaneRegistry {
 		return changed;
 	}
 
-	/** Resolve when ANY registered plane's version diverges from `presented`, or `timeoutMs` elapses
-	 * - whichever first. Mirrors DeviceMailbox.waitForAppend's shape exactly (a waiters array + one
-	 * timer per waiter), deliberately a SEPARATE mechanism from the mailbox's own waiters rather than
-	 * sharing that array: presence and messages are different subsystems, and racing two independent
-	 * primitives via `Promise.race` at the one call site (the poll op) is safer than coupling them.
-	 * Returns true if a real bump woke it, false on timeout - callers use this to decide whether a
-	 * response actually changed. Registration happens synchronously (no `await` between the
-	 * changed-check and pushing the waiter), so a bump landing between "the caller checked" and "the
-	 * caller starts waiting" is structurally impossible - JS's single-threaded execution IS the lock. */
-	waitForBump(presented: ReadonlyMap<string, PlaneVersion>, timeoutMs: number): Promise<boolean> {
-		if (this.changedSince(presented).length > 0) return Promise.resolve(true);
+	/** Resolve when ANY IN-SCOPE registered plane's version diverges from `presented`, or
+	 * `timeoutMs` elapses - whichever first. Mirrors DeviceMailbox.waitForAppend's shape exactly (a
+	 * waiters array + one timer per waiter), deliberately a SEPARATE mechanism from the mailbox's
+	 * own waiters rather than sharing that array: presence and messages are different subsystems,
+	 * and racing two independent primitives via `Promise.race` at the one call site (the poll op)
+	 * is safer than coupling them. Returns true if a real bump woke it, false on timeout - callers
+	 * use this to decide whether a response actually changed. Registration happens synchronously
+	 * (no `await` between the changed-check and pushing the waiter), so a bump landing between "the
+	 * caller checked" and "the caller starts waiting" is structurally impossible - JS's
+	 * single-threaded execution IS the lock. `scope` only bounds the immediate fast-path check
+	 * above; `wake()`'s own per-waiter dispatch already scopes itself correctly by construction -
+	 * see its own doc. */
+	waitForBump(
+		presented: ReadonlyMap<string, PlaneVersion>,
+		timeoutMs: number,
+		scope?: ReadonlySet<string>,
+	): Promise<boolean> {
+		if (this.changedSince(presented, scope).length > 0) return Promise.resolve(true);
 		return new Promise((resolve) => {
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			const waiter: Waiter = {
@@ -231,7 +247,12 @@ export class PlaneRegistry {
 			// A waiter that never mentioned this plane at all is not tracking it (a legacy client
 			// presenting only `domainVersion`, or one from before a phase-2 plane existed) - waking it
 			// would just be a wasted round trip, not a correctness fix. Only a STALE presented value
-			// for a plane the waiter actually asked about is grounds to wake.
+			// for a plane the waiter actually asked about is grounds to wake. Needs no separate
+			// `scope` param the way changedSince/waitForBump do: a caller only ever puts a key in its
+			// OWN presentedMap for a plane it is actually asking about (never a placeholder for an
+			// opted-out one), so this membership check is already exactly as scoped as `scope` would
+			// make it - the ambiguity `scope` resolves is specific to changedSince's bulk iteration
+			// over EVERY registered plane, which this per-plane dispatch never does.
 			if (!waiter.presentedMap.has(planeName)) continue;
 			const have = waiter.presentedMap.get(planeName);
 			if (!have || have.epoch !== cur.epoch || have.counter !== cur.counter) waiter.settle(true);

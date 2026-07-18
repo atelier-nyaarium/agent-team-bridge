@@ -8,6 +8,7 @@ import type {
 	CrossDomainListenStateResult,
 	CrossDomainListPeersResult,
 	CrossDomainListSharesResult,
+	CrossDomainPeerEntry,
 	CrossDomainRequestResult,
 	CrossDomainShareTarget,
 	CrossDomainUnlinkResult,
@@ -721,17 +722,39 @@ export function createConsoleDispatcher({
 				// map, which changedSince/waitForBump both already treat as "unknown, ship current
 				// truth" rather than a special case here. Absent knownPresenceVersions (a pre-plane
 				// console build) skips the registry entirely - unchanged behavior for that build,
-				// mirroring the domainVersion piggyback's own opt-in shape.
+				// mirroring the domainVersion piggyback's own opt-in shape. `presenceScope` is what
+				// actually enforces that opt-out now that a second plane (linked-peers) shares this
+				// same registry: without it, changedSince's bulk "every registered plane" walk would
+				// report "presence" as changed for a caller who never even mentioned it (see
+				// PlaneRegistry.changedSince's own doc on why scope exists).
 				const pr = op.knownPresenceVersions ? planeRegistry : undefined;
+				const presenceScope = pr ? new Set(["presence"]) : undefined;
 				const presentedPresence = new Map<string, PlaneVersion>();
 				if (pr) {
 					const own = op.knownPresenceVersions?.find((v) => v.gateway === localGatewayId);
 					if (own) presentedPresence.set("presence", { epoch: own.epoch, counter: own.version });
 				}
 
+				// The linked-peers plane: same registry, a single scalar presented version (no
+				// per-source array - this Gateway's own roster has no multi-source concept). Unlike
+				// presence's array, a single optional scalar cannot distinguish "a pre-Phase-2
+				// console" from "this session's cold boot" - both simply present nothing, and both
+				// want the same outcome (ship current), so this always participates whenever the
+				// registry itself is wired, never gated on the op field's own presence.
+				const lpr = planeRegistry;
+				const linkedPeersScope = lpr ? new Set(["linked-peers"]) : undefined;
+				const presentedLinkedPeers = new Map<string, PlaneVersion>();
+				if (lpr && op.knownLinkedPeersVersion) {
+					presentedLinkedPeers.set("linked-peers", {
+						epoch: op.knownLinkedPeersVersion.epoch,
+						counter: op.knownLinkedPeersVersion.version,
+					});
+				}
+
 				if (snap.entries.length === 0 && hold > 0) {
 					const waits: Promise<unknown>[] = [box.waitForAppend(hold)];
-					if (pr) waits.push(pr.waitForBump(presentedPresence, hold));
+					if (pr) waits.push(pr.waitForBump(presentedPresence, hold, presenceScope));
+					if (lpr) waits.push(lpr.waitForBump(presentedLinkedPeers, hold, linkedPeersScope));
 					await Promise.race(waits);
 					snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				}
@@ -752,21 +775,27 @@ export function createConsoleDispatcher({
 				// Same piggyback shape, generalized: the presence plane's current truth, present only
 				// when it actually moved past what the Console presented.
 				const presenceVersion = pr?.version("presence");
-				const presenceChanged = pr != null && pr.changedSince(presentedPresence).length > 0;
+				const presenceChanged = pr != null && pr.changedSince(presentedPresence, presenceScope).length > 0;
+				// Same generalization again, for the linked-peers plane.
+				const linkedPeersVersion = lpr?.version("linked-peers");
+				const linkedPeersChanged =
+					lpr != null && lpr.changedSince(presentedLinkedPeers, linkedPeersScope).length > 0;
 
 				// Why this poll settled - the Console's instant-empty-response heuristic (its
 				// old-gateway degradation signal) reads this so a plane-only settle never trips its
 				// backoff. Priority mirrors the piggyback fields below: real mailbox entries first
-				// (they are why a console polls at all), then presence, then domain, else the hold
-				// simply elapsed with nothing new.
-				const settled: "mailbox" | "presence" | "domain" | "timeout" =
+				// (they are why a console polls at all), then presence, then linked-peers, then
+				// domain, else the hold simply elapsed with nothing new.
+				const settled: "mailbox" | "presence" | "linkedPeers" | "domain" | "timeout" =
 					snap.entries.length > 0
 						? "mailbox"
 						: presenceChanged
 							? "presence"
-							: domainChanged
-								? "domain"
-								: "timeout";
+							: linkedPeersChanged
+								? "linkedPeers"
+								: domainChanged
+									? "domain"
+									: "timeout";
 
 				return {
 					...base,
@@ -781,6 +810,15 @@ export function createConsoleDispatcher({
 										version: presenceVersion.counter,
 									},
 								],
+							}
+						: {}),
+					...(linkedPeersChanged && linkedPeersVersion
+						? {
+								linkedPeers: planeRegistry?.snapshot<CrossDomainPeerEntry[]>("linked-peers") ?? [],
+								linkedPeersVersion: {
+									epoch: linkedPeersVersion.epoch,
+									version: linkedPeersVersion.counter,
+								},
 							}
 						: {}),
 					settled,

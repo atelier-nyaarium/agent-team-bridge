@@ -45,10 +45,15 @@ export const XDOMAIN_PEERS_FILE = "cross-domain-peers.json";
 export class CrossDomainPeers {
 	private file: string;
 	private state: CrossDomainPeersFile;
+	private readonly onChange?: () => void;
 
-	constructor(dataDir: string) {
+	/** `onChange` fires once per genuine mutation (persist() is the one place every mutator below
+	 * funnels through) - the single-writer hook the linked-peers plane's markDirty rides, so a
+	 * link/unlink/untrust can never forget to announce itself the way a scattered callsite could. */
+	constructor(dataDir: string, onChange?: () => void) {
 		this.file = path.join(dataDir, XDOMAIN_PEERS_FILE);
 		this.state = this.read();
+		this.onChange = onChange;
 	}
 
 	private read(): CrossDomainPeersFile {
@@ -64,6 +69,7 @@ export class CrossDomainPeers {
 	private persist(): void {
 		fs.mkdirSync(path.dirname(this.file), { recursive: true });
 		fs.writeFileSync(this.file, JSON.stringify(this.state), { mode: 0o600 });
+		this.onChange?.();
 	}
 
 	/** Add or replace a cross-Domain peer. Idempotent on `(friendDomainId,
