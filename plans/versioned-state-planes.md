@@ -853,3 +853,39 @@ work, not design work; further audit rounds on an unimplemented design face dimi
 returns against the concrete alternative of building it and letting the Verify section's own
 new assertions (which now directly encode all five criticals as test cases) catch a
 regression.
+
+## Painpoints (Phase 2's read-anchors audited-implementation cycle)
+
+Genuine friction from actually cycling this plan, not a code audit - recorded because it was felt,
+not manufactured to fill the section.
+
+- **A heavily-audited design document still drifted from what shipped, and nothing caught it until
+  an independent align pass checked.** This file went through three full audit laps before Phase 1
+  shipped - real scrutiny, not rubber-stamping. It still confidently asserted several things as
+  done that were never built (the federation exchange, `planeField()`, the property-based
+  class-kill-lock test) and one thing as "will be deleted" that turned out to be load-bearing
+  (`touchLive`). Design-time audit laps check whether the DESIGN is sound; nothing in this plan's
+  own process checked whether the SHIPPED CODE still matched the design months later. The
+  `audited-implementation` cycle's own align-fan-out step is exactly that missing check, and it
+  only ran because Phase 2 happened to route back through this same plan - a plan that shipped and
+  was never revisited would have kept lying indefinitely.
+- **I wrote the read-anchors feature AND its own 14-test suite this session, and still missed the
+  obvious abuse cases** (an unbounded `epoch`, an unbounded `team` count) until a dedicated
+  red-team pass looked at it adversarially. Feature-authoring instinct covers the happy path and
+  the cases you were already thinking about (monotonic merge correctness, in this case) - it does
+  not reliably cover "what if a hostile or buggy caller sends something absurd," even when you are
+  being careful. This is the concrete case FOR always running red-team-fan-out as a genuinely
+  separate pass, not a formality folded into the same sitting as implementation.
+- **`consoleHandler.ts`'s poll case is three near-identical plane-piggyback blocks today, and the
+  framework-first audit's own honest "not worth extracting yet" verdict is load-bearing on staying
+  at exactly three.** Its reasoning explicitly depends on no fourth static plane being currently
+  committed - if Phase 2 item 5's cross-Domain questionaire lands another named plane, or the
+  federation exchange in `plans/cross-gateway-presence-exchange.md` ships as another static block
+  rather than the dynamic per-source-gateway shape it is actually designed as, re-run that
+  assessment rather than assuming "not worth it" still holds.
+- Minor, recurring, not worth fixing anything over: biome's import-order/line-wrap formatting
+  needed a `bun run lint:fix` pass after nearly every multi-file edit round in this cycle. Never
+  once caught a real bug, pure friction. Also minor: a stray `cd android` earlier in the session
+  left the shell's working directory changed for every later Bash call in that same session,
+  which silently broke a `git add` with relative paths (a confusing "pathspec did not match"
+  rather than an obviously-wrong-directory error) until traced back to `pwd`.
