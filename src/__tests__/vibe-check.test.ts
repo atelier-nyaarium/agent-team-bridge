@@ -26,7 +26,7 @@ function makeHarness() {
 	};
 	let n = 0;
 	const vibe = createVibeCheck({
-		sessionStore: store,
+		sessionAccess: store,
 		resolveLead: () => (state.leadUp ? { send: (p: string) => state.sent.push(p) } : undefined),
 		peekScreen: async () => state.screen,
 		sendRename: async (_record, description, dedupKey) => {

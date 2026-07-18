@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildLaunchCommand, resolveHostWorkdir } from "../mcp/devcontainer/hostDaemon.js";
+import { buildLaunchCommand, resolveHostWorkdir, resolveWatchTarget } from "../mcp/devcontainer/hostDaemon.js";
 
 const dc = { kind: "devcontainer" as const, name: "recipe-app", sessionName: "scratch" };
 
@@ -84,5 +84,28 @@ describe("resolveHostWorkdir", () => {
 		expect(resolveHostWorkdir("..", [base], home)).toBe(home);
 		expect(resolveHostWorkdir("../myproj", [base], home)).toBe(home);
 		expect(resolveHostWorkdir("sub/dir", [base], home)).toBe(home);
+	});
+});
+
+describe("resolveWatchTarget", () => {
+	it("resolves a devcontainer composite to a docker-exec target", () => {
+		expect(resolveWatchTarget("recipe-app.scratch")).toEqual({
+			kind: "devcontainer",
+			name: "recipe-app",
+			sessionName: "scratch",
+		});
+	});
+
+	it("resolves a host composite to the bare-tmux target", () => {
+		expect(resolveWatchTarget("host.nyaadot")).toEqual({ kind: "host", name: "host", sessionName: "nyaadot" });
+	});
+
+	it("refuses the daemon's own reserved supervisor session", () => {
+		expect(resolveWatchTarget("host.host-daemon")).toBeUndefined();
+	});
+
+	it("refuses a malformed (non-slug) project or session segment", () => {
+		expect(resolveWatchTarget("Recipe App.scratch")).toBeUndefined();
+		expect(resolveWatchTarget("recipe-app.$(rm -rf)")).toBeUndefined();
 	});
 });

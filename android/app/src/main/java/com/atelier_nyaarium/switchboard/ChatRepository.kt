@@ -12,7 +12,10 @@ import com.atelier_nyaarium.switchboard.proto.EnrollOp
 import com.atelier_nyaarium.switchboard.proto.EnrollParty
 import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.Address
+import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
+import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
+import com.atelier_nyaarium.switchboard.proto.PresenceVersion
 import com.atelier_nyaarium.switchboard.proto.SasCrypto
 import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
@@ -31,9 +34,11 @@ import kotlinx.serialization.json.JsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -45,6 +50,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -918,6 +924,37 @@ class ChatRepository(
 	// the service's start and the Activity's foreground transition can race here.
 	private val reconciled = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
+	// The raw (pre-tombstone, pre-label-override) team snapshot the presence merge path last saw,
+	// from either source (the presence-plane piggyback or the legacy teams() pull) - never persisted
+	// (a fresh process starts with no cache and full-resyncs on its first poll/pull). Re-merging
+	// this same cached list against the CURRENT tombstone set is what lets a tombstone's own expiry
+	// resurrect a team locally without waiting for a fresh server push - see applyPresence.
+	@Volatile private var lastRawTeams: List<Team>? = null
+
+	// Sticky once true: sets on the first poll response that ever carries a presence plane (either
+	// field - an old, non-plane gateway never sends either). Gates the legacy teams() timer (item 9)
+	// off once a plane-capable gateway has proven itself, so the two mechanisms never fight over
+	// which owns the board - a capable gateway's OWN piggyback is authoritative from that point on.
+	@Volatile private var presenceCapable = false
+
+	// This device's currently-declared focus (what poll() presents as `focus`), read fresh on every
+	// poll - see declareFocus. Starts "background": a cold app has not yet observed the board or a
+	// terminal, so it should not falsely claim the board's ramped cadence before the UI ever renders.
+	@Volatile private var currentFocus: FocusIntent = FocusIntent(screen = "background")
+
+	// Non-null only while a poll is actually held open; completing it interrupts that SPECIFIC held
+	// poll so a focus transition (declareFocus) or a manual refresh (refreshTeams) reaches the
+	// Gateway within about one RTT instead of waiting out the remainder of the current hold (see
+	// pollRacingFocusChange). Never touched by anything other than the poll loop's own iteration
+	// and those two callers.
+	@Volatile private var pollInterrupt: CompletableDeferred<Unit>? = null
+
+	// The presence-plane version(s) this device last applied, presented back as knownPresenceVersions
+	// on the NEXT poll so the Gateway ships the snapshot again only once it actually changed. Never
+	// persisted (see lastRawTeams) - a fresh process presents an empty list, which the Gateway treats
+	// as a cold boot and ships everything once.
+	@Volatile private var knownPresenceVersions: List<PresenceVersion> = emptyList()
+
 	/** Set by the service: called per poll with the new inbound messages of one
 	 * team, so a background burst can become a notification. */
 	var onInbound: ((team: String, messages: List<Message>) -> Unit)? = null
@@ -958,11 +995,25 @@ class ChatRepository(
 	fun onBackground() {
 		visible = false
 		pushback.onBackground(System.currentTimeMillis())
+		declareFocus(FocusIntent(screen = "background"))
 	}
 
 	/** Wakes the poll loop immediately - the alarm receiver's bridge into a possibly-parked pass. */
 	fun kickPoll() {
 		kick.trySend(Unit)
+	}
+
+	/** Declares this device's current UI focus - what the board/thread/terminal composables are
+	 * currently showing - read fresh on the NEXT poll (op.focus). A genuine TRANSITION (a different
+	 * focus than the one already declared, not a redundant re-declare of the same value) interrupts
+	 * an in-flight held poll so the Gateway's intent tracker - and the host daemon's derivation
+	 * cadence it drives - ramps up within about one RTT instead of waiting out the remainder of the
+	 * current hold (see pollRacingFocusChange). MainActivity/TerminalView call this on every
+	 * relevant UI transition (the board shown, a terminal opened/closed); onBackground calls it too. */
+	fun declareFocus(focus: FocusIntent) {
+		val prior = currentFocus
+		currentFocus = focus
+		if (prior != focus) pollInterrupt?.complete(Unit)
 	}
 
 	private fun client(): ConsoleClient {
@@ -1228,6 +1279,9 @@ class ChatRepository(
 				DebugLog.log("Connect", "teams refresh failed: ${it.message?.take(120)}")
 				_state.value.teams
 			}
+			// Seed the merge path's raw cache so a tombstone expiring before the first poll lands
+			// still has something to self-heal from (see applyPresence/reapplyCachedTeams).
+			lastRawTeams = teams
 			_state.update {
 				it.copy(
 					teams = teams.withoutTombstoned(),
@@ -2554,42 +2608,65 @@ class ChatRepository(
 			java.net.InetAddress.getByName(host).let { it.isLoopbackAddress || it.isSiteLocalAddress || it.isLinkLocalAddress }
 	}.getOrDefault(false)
 
+	/** Pull-to-refresh. Against a plane-capable gateway this is the corrected form (lap 2): forget
+	 * the known presence version so the NEXT poll looks like a cold boot (ships everything), and
+	 * interrupt any currently-held poll so that next poll fires now instead of inheriting up to
+	 * LONG_POLL_HOLD_MS of staleness waiting out the remainder of an already-open hold - a bare
+	 * version clear underneath a still-running held poll would otherwise wait for that poll's own
+	 * natural expiry before the cleared version even reaches the server. Against a legacy gateway
+	 * (never proven plane-capable this session) falls back to the direct teams() pull. Either way,
+	 * also refreshes the cross-Domain peer roster (see refreshLinkedPeers) so a manual refresh
+	 * always covers everything, not just the presence-teams path. */
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
-		runCatchingCancellable { client().teams(localGatewayId) }
-			.onSuccess { applyFreshTeams(it) }
-		// Also refresh the cross-Domain peer roster so the Federation PEERS list shows a freshly-linked
-		// peer that has no discovery sessions yet. Best-effort + only when federation is reachable;
-		// folded into the same refresh so a board update and the peer set stay consistent.
+		if (presenceCapable) {
+			knownPresenceVersions = emptyList()
+			pollInterrupt?.complete(Unit)
+		} else {
+			runCatchingCancellable { client().teams(localGatewayId) }
+				.onSuccess { applyPresence(it) }
+		}
 		refreshLinkedPeers()
 	}
 
-	/** Apply a freshly-fetched teams list: folds it through ChatState.withFreshTeams (pruning a local
-	 * label override the server has since confirmed or the team has vanished for good) and refreshes
-	 * the owner's own display name from it. The one site refreshTeams() and the passive poll loop's
-	 * own teams refresh both call, so the prune rule lives in exactly one place. */
-	// Serializes an applyFreshTeams call end to end (its state update plus both persist writes)
-	// against another one - refreshTeams() (a manual pull-to-refresh) and startPolling()'s own
-	// periodic teams-refresh both run on Dispatchers.IO, a real thread pool, so without this two
-	// genuinely concurrent calls could each persist their own snapshot with no ordering guarantee
-	// between the two: SharedPreferences.apply() only guarantees the LAST-CALLED write for a key
-	// eventually wins, not that "last called" lines up with "computed from the newer fetch" once two
-	// independent capture-then-persist sequences interleave. Held only around this function's own
-	// body, never across a suspending network call, so it is never a real contention bottleneck.
+	/** The one plane-merge path: every fresh team snapshot, from EITHER source (the presence-plane
+	 * piggyback on a poll, or the legacy teams() pull), lands in state through here and only here.
+	 * Caches the raw list (lastRawTeams) so a LATER tombstone EXPIRY can re-derive `teams` from it
+	 * directly (see reapplyCachedTeams) without waiting for a fresh server push - a failed or
+	 * remote forget then resurrects locally on its own tombstone's schedule, not the next
+	 * unrelated bump. */
+	private suspend fun applyPresence(fresh: List<Team>) {
+		lastRawTeams = fresh
+		reapplyCachedTeams()
+	}
+
+	/** Re-derives `teams` from the cached raw snapshot (see applyPresence) against the CURRENT
+	 * tombstone set: filterTombstoned's own sweep (forgottenUntil.entries.removeIf) means a
+	 * tombstone that has since expired no longer masks its team, so calling this on every poll
+	 * loop tick - fresh presence or not - is what makes a tombstone's expiry self-heal instead of
+	 * waiting for the next unrelated bump. Folds in ChatState.withFreshTeams' label-override
+	 * pruning + absence-streak rules. A no-op before anything has ever been cached. Serialized
+	 * against a concurrent call (the poll loop's own tick and a manual refreshTeams() both run on
+	 * Dispatchers.IO) so two overlapping snapshots cannot each persist their own labels/streaks
+	 * with no ordering guarantee between them - SharedPreferences.apply() only guarantees the
+	 * LAST-CALLED write for a key eventually wins, not that "last called" lines up with "computed
+	 * from the newer fetch" once two independent capture-then-persist sequences interleave. */
 	private val freshTeamsMutex = Mutex()
 
-	// ChatState.withFreshTeams itself stays a pure function of its input list - filterTombstoned is
-	// applied to every fresh list right here, before it reaches either wholesale-apply call site
-	// (applyFreshTeams and connect()), so both are covered from this one place.
-	private fun List<Team>.withoutTombstoned(): List<Team> = filterTombstoned(this, forgottenUntil, System.currentTimeMillis())
-
-	private suspend fun applyFreshTeams(t: List<Team>) {
+	private suspend fun reapplyCachedTeams() {
+		val raw = lastRawTeams ?: return
 		freshTeamsMutex.withLock {
-			val next = _state.updateAndGet { it.withFreshTeams(t.withoutTombstoned()) }
+			val visible = filterTombstoned(raw, forgottenUntil, System.currentTimeMillis())
+			val next = _state.updateAndGet { it.withFreshTeams(visible) }
 			persistLabels(next.labels)
 			persistAbsenceStreaks(next.teamAbsenceStreaks)
 		}
 		refreshDisplayNameFromTeams()
 	}
+
+	// connect()'s own initial fetch stays a direct teams() pull (a cold-boot fetch has no presence
+	// version to present yet either way); withoutTombstoned is used only there now, since every
+	// OTHER wholesale-apply path routes through the merge path above.
+	private fun List<Team>.withoutTombstoned(): List<Team> = filterTombstoned(this, forgottenUntil, System.currentTimeMillis())
 
 	/** Capture an agent's tmux pane for the terminal view. Returns a Result so the caller can keep
 	 * the last frame on a transient failure yet surface the backend's reason (container/host offline)
@@ -2612,13 +2689,6 @@ class ChatRepository(
 		}
 	}
 
-	/** A cheap one-shot peek that refreshes a session's working flag without rearming - for a
-	 * backgrounded board session's ambient status. The open chat polls peekTerminal continuously
-	 * instead. */
-	suspend fun pokeWorking(team: String) {
-		peekTerminal(team, null)
-	}
-
 	// The opId of the most recent still-unresolved spawnSession attempt per (project, label), so a
 	// retry within the window reuses it instead of drawing a fresh one - letting the gateway's
 	// mintedFrom provenance reattach the first attempt's record (or cleanly mint a new one if that
@@ -2627,15 +2697,16 @@ class ChatRepository(
 	private val recentSpawnOpIds = mutableMapOf<Pair<String, String>, Pair<String, Long>>()
 
 	/** Spawn a session in a spawn-point project with a free-form label. The gateway adopts the
-	 * session's record synchronously, so its own tile appears via the next teams() refresh - there is
-	 * no separate placeholder. A failure surfaces as a transient Snackbar message and re-syncs teams
-	 * so a rolled-back record's tile does not linger; a retry with the same project + label shortly
-	 * after reuses the prior attempt's opId (see recentSpawnOpIds) so it reattaches instead of
-	 * duplicating. A label the gateway could not use as-is (unsupported characters) still creates the
-	 * session under its minted id, surfaced with its own transient message rather than silently
-	 * losing the typed name. A call for a (project, label) still pending from an earlier, unresolved
-	 * call is a silent no-op (see pendingSpawns) rather than a second, ambiguous create. Runs on the
-	 * caller's scope (the Activity's), so a tap always fires even before the poll loop's scope exists. */
+	 * session's record synchronously and bumps the presence plane with it, so its own tile (or its
+	 * rollback, on a failed launch) appears via this device's own next poll - there is no separate
+	 * placeholder and no manual refresh nudge. A failure also surfaces as a transient Snackbar
+	 * message; a retry with the same project + label shortly after reuses the prior attempt's opId
+	 * (see recentSpawnOpIds) so it reattaches instead of duplicating. A label the gateway could not
+	 * use as-is (unsupported characters) still creates the session under its minted id, surfaced with
+	 * its own transient message rather than silently losing the typed name. A call for a (project,
+	 * label) still pending from an earlier, unresolved call is a silent no-op (see pendingSpawns)
+	 * rather than a second, ambiguous create. Runs on the caller's scope (the Activity's), so a tap
+	 * always fires even before the poll loop's scope exists. */
 	suspend fun spawnSession(project: String, label: String) = coroutineScope {
 		val key = project to label
 		// A synchronous check before any suspension point - CreateSessionDialog's own disabled-while-pending
@@ -2649,12 +2720,9 @@ class ChatRepository(
 		recentSpawnOpIds[key] = opId to now
 		_state.update { it.copy(pendingSpawns = it.pendingSpawns + key) }
 		try {
-			// Nudge a refresh shortly after firing so the just-adopted record's tile shows promptly,
-			// without waiting on a cold container's (up to ~25s) create reply.
-			launch {
-				delay(400)
-				runCatchingCancellable { refreshTeams() }
-			}
+			// The gateway's mint/adopt bumps the presence plane synchronously with the create, so the
+			// just-adopted record's tile shows on this device's own NEXT poll with no manual nudge -
+			// unlike the pre-plane teams() pull, a fresh presence snapshot needs no explicit trigger.
 			runCatchingCancellable { withContext(Dispatchers.IO) { client().createSession(project, displayLabel = label, opId = opId) } }
 				.onSuccess { result ->
 					recentSpawnOpIds.remove(key)
@@ -2665,20 +2733,14 @@ class ChatRepository(
 							} else it.transientMessage,
 						)
 					}
-					runCatchingCancellable { refreshTeams() }
 				}
 				.onFailure { e ->
 					_state.update { it.copy(transientMessage = e.message ?: "Failed to create \"$label\"") }
-					runCatchingCancellable { refreshTeams() }
 				}
 		} finally {
-			// The ONE removal point (deliberately not also removed inside onSuccess/onFailure above):
-			// this key must stay claimed through each branch's own trailing refreshTeams() call, not
-			// just through createSession itself - removing it earlier (before that tail suspends)
-			// would let a second same-key call slip past the guard above while this one's tail is
-			// still running, and this finally would then clobber THAT call's live claim once this
-			// one's tail finishes. One removal, after everything, closes that window; it also covers
-			// cancellation, which skips both onSuccess and onFailure entirely.
+			// The removal point: cleared once createSession itself settles (success or failure), or on
+			// cancellation, so a retry within the window can reuse this opId (see recentSpawnOpIds)
+			// rather than racing a still-claimed key.
 			_state.update { it.copy(pendingSpawns = it.pendingSpawns - key) }
 		}
 	}
@@ -2861,24 +2923,68 @@ class ChatRepository(
 		}
 	}.getOrNull()
 
+	/** Runs [block] (the poll call), but abandons it early - returning null - if a focus transition
+	 * (declareFocus) or a manual refresh (refreshTeams) interrupts it mid-hold. The caller simply
+	 * loops again immediately with the fresh focus/knownPresenceVersions: an ordinary
+	 * abandoned-request disconnect from the Gateway's own side (nothing to reconcile - the
+	 * interrupted call never reached mailboxSync.advance at all). `select` races the poll against
+	 * the interrupt signal so the LOSER is cancelled by construction rather than hand-rolled
+	 * exception matching: coroutineScope waits for both children (the poll and the interrupt
+	 * watcher) to fully settle before this function returns, so a cancelled poll's underlying
+	 * OkHttp call is guaranteed torn down, never orphaned, before the loop re-issues a fresh one -
+	 * and since the CancellationException this produces never escapes past the `select` itself,
+	 * the outer poll loop's own teardown-detection (e.rethrowIfCancellation) never mistakes this
+	 * intentional, self-contained interrupt for the whole pollJob being torn down. */
+	private suspend fun pollRacingFocusChange(block: suspend () -> ConsolePollResult): ConsolePollResult? =
+		coroutineScope {
+			val signal = CompletableDeferred<Unit>()
+			pollInterrupt = signal
+			try {
+				val pollDeferred = async { block() }
+				select<ConsolePollResult?> {
+					pollDeferred.onAwait { it }
+					signal.onAwait {
+						pollDeferred.cancel()
+						null
+					}
+				}
+			} finally {
+				pollInterrupt = null
+			}
+		}
+
 	fun startPolling(scope: CoroutineScope) {
 		if (pollJob?.isActive == true) return
 		pollScope = scope
 		pollJob = scope.launch(Dispatchers.IO) {
 			var lastTeamsAt = 0L
-			while (isActive) {
+			var lastLinkedPeersAt = 0L
+			pollLoop@ while (isActive) {
 				var failed = false
 				var heldEmpty = false
 				var hold = 0L
 				try {
-					// The board's live/available states would otherwise only change on
-					// a manual Refresh; piggyback a team-list refresh on the poll loop.
+					// The board's live/available states would otherwise only change on a manual
+					// Refresh; piggyback a team-list refresh on the poll loop. Legacy fallback
+					// (item 9): survives ONLY until this Gateway proves itself plane-capable (see
+					// presenceCapable, set the first time a poll response carries either presence
+					// field) - dead weight against a capable Gateway from that point on, since its
+					// own piggyback below is authoritative. Kept, not physically deleted, for an
+					// old, not-yet-upgraded Gateway.
 					val now = System.currentTimeMillis()
-					if (forceTeamsRefresh || now - lastTeamsAt >= TEAMS_REFRESH_MS) {
+					if (!presenceCapable && (forceTeamsRefresh || now - lastTeamsAt >= TEAMS_REFRESH_MS)) {
 						forceTeamsRefresh = false
 						lastTeamsAt = now
 						runCatchingCancellable { client().teams(localGatewayId) }
-							.onSuccess { applyFreshTeams(it) }
+							.onSuccess { applyPresence(it) }
+					}
+					// The cross-Domain peer roster: its own standalone periodic trigger (same
+					// ~30s cadence), independent of both the presence-teams path above and its
+					// capability gating - refreshLinkedPeers predates the presence plane and stays
+					// needed regardless of which of the two paths above is currently live.
+					if (now - lastLinkedPeersAt >= TEAMS_REFRESH_MS) {
+						lastLinkedPeersAt = now
+						runCatchingCancellable { refreshLinkedPeers() }
 					}
 					// Visible: long-poll (the hold IS the wait; re-poll immediately).
 					// Backgrounded: plain poll (hold=0); the wait after is the idle pushback
@@ -2886,11 +2992,41 @@ class ChatRepository(
 					hold = if (visible) LONG_POLL_HOLD_MS else 0L
 					val started = System.currentTimeMillis()
 					val params = mailboxSync.pollParams()
-					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms")
-					val mb = client().poll(params.cursor, params.epoch, hold)
+					val focus = currentFocus
+					val presented = knownPresenceVersions
+					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms focus=${focus.screen}")
+					val mb = if (hold > 0) {
+						pollRacingFocusChange { client().poll(params.cursor, params.epoch, hold, presented, focus) }
+					} else {
+						client().poll(params.cursor, params.epoch, hold, presented, focus)
+					}
+					if (mb == null) {
+						DebugLog.log("Plane", "poll interrupted by a focus/refresh change - reissuing immediately")
+						continue@pollLoop
+					}
 					// Keyring sync: the route Gateway returns the snapshot only when it changed.
 					// Apply it owner-pinned so a revocation made elsewhere reaches this Console.
 					mb.domain?.let { federation.applyDomainSync(it, mb.domainVersion ?: "") }
+					// Presence plane: the same piggyback shape as domainVersion above, generalized.
+					// Present only when at least one source's version differs from what this device
+					// presented - an empty presented list (this session's first poll) always ships
+					// everything (cold boot). A Gateway that has EVER sent either field this session
+					// proves itself plane-capable, permanently disarming the legacy timer above -
+					// a capable Gateway going quiet later is not "became incapable".
+					if (mb.presence != null || mb.presenceVersions != null) {
+						presenceCapable = true
+						if (mb.presenceVersions != null) knownPresenceVersions = mb.presenceVersions
+						mb.presence?.let { rows ->
+							val bumpAt = System.currentTimeMillis()
+							DebugLog.log("Plane", "presence settled=${mb.settled} rows=${rows.size} serverAt=${started} clientAt=${bumpAt}")
+							applyPresence(rows.map { teamInfoToTeam(it, localGatewayId) })
+						}
+					}
+					// Tombstone-expiry self-heal: re-derive `teams` from the cached raw snapshot
+					// against the CURRENT tombstone set on every tick, fresh presence or not - see
+					// reapplyCachedTeams. A failed or remote forget's tombstone then resurrects the
+					// team locally on its own schedule rather than waiting for the next unrelated bump.
+					reapplyCachedTeams()
 					// An old gateway ignores holdMs and returns empty instantly; floor
 					// the cadence so that degradation never becomes a tight spin.
 					heldEmpty = hold > 0 && mb.entries.isEmpty() &&

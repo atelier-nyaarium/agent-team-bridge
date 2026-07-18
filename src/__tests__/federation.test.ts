@@ -6,6 +6,7 @@ import { type CrossDomainPeer, CrossDomainPeers } from "../gateway/federation/cr
 import { CrossDomainShareState } from "../gateway/federation/crossDomainShareState.js";
 import { createGatewayRelayHandler, type RelayShareState } from "../gateway/federation/gatewayRelay.js";
 import { createSealer, type Sealer } from "../gateway/federation/sealer.js";
+import { PresenceFacade } from "../gateway/presence.js";
 import { createRoutes, type RoutesDeps } from "../gateway/routes.js";
 import { signAdmission } from "../shared/admission.js";
 import { generateIdentity, type Identity, type SealedEnvelope } from "../shared/crypto.js";
@@ -18,6 +19,7 @@ import {
 } from "../shared/federation-protocol.js";
 import type { CrossDomainBinding } from "../shared/pending-job-store.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
+import { PlaneRegistry } from "../shared/plane-registry.js";
 import { Address, parseSessionName, storeKey } from "../shared/session-id.js";
 import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
@@ -75,14 +77,36 @@ function fakeEvie(opts: {
 }
 
 function makeCtx(localGatewayId: string, over: Partial<RoutesDeps> = {}): RoutesDeps {
+	const registry = over.registry ?? (new Map() as RoutesDeps["registry"]);
+	const offlineCatalog = over.offlineCatalog ?? new Map<string, string>();
+	const config = { localGatewayId, localDomainId: "alice", ...over.config };
 	return {
-		registry: new Map() as RoutesDeps["registry"],
+		registry,
 		conversationRegistry: new Map() as RoutesDeps["conversationRegistry"],
 		store: new PendingJobStore<ResponsePayload>(),
-		config: { localGatewayId, localDomainId: "alice" },
+		config,
 		tryWakeTeam: () => Promise.resolve({ ok: false }),
-		offlineCatalog: new Map(),
+		offlineCatalog,
 		knownTeamPaths: new Map(),
+		// teams()/discover() defer entirely to presence.snapshot() now - wire a real facade over
+		// the same registry/offlineCatalog/sessionStore this context uses so discovery tests see
+		// the local Gateway's own sessions, not an empty list.
+		presence:
+			over.presence ??
+			(() => {
+				const facade = new PresenceFacade({
+					sessionStore: over.sessionStore ?? new SessionStore(),
+					registry,
+					offlineCatalog,
+					localGatewayId,
+					localDomainId: () => config.localDomainId,
+					displayName: over.displayName ?? (() => null),
+					isAdminDomain: over.isAdminDomain ?? (() => null),
+				});
+				facade.attach(new PlaneRegistry());
+				facade.registerPlane();
+				return facade;
+			})(),
 		...over,
 	};
 }

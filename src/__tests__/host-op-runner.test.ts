@@ -197,3 +197,85 @@ describe("createHostOpRunner", () => {
 		);
 	});
 });
+
+describe("createHostOpRunner peek priority lanes", () => {
+	/** A controllable peekPane: each call hangs until its own resolver fires, so a test can fill
+	 * the concurrency cap deterministically. `admissionOrder` records when a target's peek actually
+	 * STARTS (passed the semaphore), independent of when it later resolves - the property this
+	 * lane test cares about is admission order, not completion order. */
+	function makeControllableOps(): {
+		ops: TmuxOps;
+		resolveTarget: (name: string) => void;
+		admissionOrder: string[];
+	} {
+		const resolvers = new Map<string, () => void>();
+		const admissionOrder: string[] = [];
+		const ops: TmuxOps = {
+			peekPane: (target) => {
+				admissionOrder.push(target.sessionName);
+				return new Promise((resolve) => {
+					resolvers.set(target.sessionName, () =>
+						resolve({ kind: "tmux" as const, ansi: "S", hash: target.sessionName }),
+					);
+				});
+			},
+			sendText: async () => {},
+			sendKey: async () => {},
+			createSession: async () => {},
+			reloadPlugins: async () => {},
+			killSession: async () => {},
+		};
+		return { ops, resolveTarget: (name) => resolvers.get(name)?.(), admissionOrder };
+	}
+	const targetNamed = (n: string): TmuxTarget => ({ kind: "devcontainer", name: n, sessionName: n });
+	const tick = () => new Promise((r) => setTimeout(r, 0));
+
+	it("an interactive peek is admitted before an earlier-queued derive peek once a slot frees", async () => {
+		const { ops, resolveTarget, admissionOrder } = makeControllableOps();
+		const runner = createHostOpRunner(ops, { minPeekIntervalMs: 0 });
+
+		// Fill the concurrency cap (6) with distinct in-flight interactive peeks.
+		const capFillers = Array.from({ length: 6 }, (_, i) =>
+			runner.peek(targetNamed(`fill-${i}`), { priority: "interactive" }),
+		);
+		await tick(); // let them all actually start
+		expect(admissionOrder).toHaveLength(6);
+
+		// Queue derive-1 first, interactive-1 second - both wait, since every slot is taken.
+		const derive = runner.peek(targetNamed("derive-1"), { priority: "derive" });
+		await tick();
+		const interactive = runner.peek(targetNamed("interactive-1"), { priority: "interactive" });
+		await tick();
+		expect(admissionOrder).toHaveLength(6); // neither admitted yet
+
+		// Free exactly one slot - the later-queued interactive request must be admitted next, not
+		// the earlier-queued derive one.
+		resolveTarget("fill-0");
+		await tick();
+		expect(admissionOrder.at(-1)).toBe("interactive-1");
+
+		// Free a second slot - only derive-1 is left waiting, so it is admitted now.
+		resolveTarget("fill-1");
+		await tick();
+		expect(admissionOrder.at(-1)).toBe("derive-1");
+
+		// Drain everything so the test does not leak pending promises.
+		for (let i = 2; i < 6; i++) resolveTarget(`fill-${i}`);
+		resolveTarget("interactive-1");
+		resolveTarget("derive-1");
+		await Promise.all(capFillers);
+		await interactive;
+		await derive;
+	});
+
+	it("forwards resize=false only for a derive-priority peek; a relayed op still resizes (default true)", async () => {
+		const h = makeOps();
+		const runner = createHostOpRunner(h.ops, { minPeekIntervalMs: 0 });
+
+		await runner.peek(T, { resize: false, priority: "derive" });
+		expect(h.ops.peekPane).toHaveBeenLastCalledWith(T, false);
+
+		await runner.run({ kind: "peek", target: { ...T, sessionName: "other" } });
+		expect(h.ops.peekPane).toHaveBeenLastCalledWith({ ...T, sessionName: "other" }, true);
+	});
+});

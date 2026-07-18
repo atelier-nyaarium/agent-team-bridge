@@ -133,6 +133,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.plugins.PluginManager
 import com.atelier_nyaarium.switchboard.plugins.Plugins
+import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.composeSessionName
 import com.atelier_nyaarium.switchboard.proto.isComposite
@@ -380,24 +381,15 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		}
 	}
 
-	// Working-chip poll for sessions NOT currently open: one cheap peek per list change or new
-	// message (no rearm). The open chat needs no poke of its own here - TerminalView's own
-	// continuous peek loop already refreshes the SAME sessionWorking flag as a side effect of
-	// every frame it renders (peekTerminal -> noteScreen), so a second continuous loop aimed at
-	// the identical pane was pure duplicate traffic: twice the peek RPCs for whatever was open,
-	// with this one always the heavier un-diffed full fetch. Only local composite sessions have a
-	// daemon-drivable pane.
-	val boardSessions = state.sessions(state.localGatewayId)
-	// Keying on each session's last-activity timestamp (not just the session list) means a turn
-	// completing while the board is on screen re-pokes that session's working flag - otherwise a
-	// flag captured mid-turn has nothing to refresh it once the turn actually ends.
-	val boardActivity = boardSessions.map { it.name to state.lastActivity(it.name) }
-	LaunchedEffect(boardActivity, openTeam) {
-		if (openTeam != null) return@LaunchedEffect
-		for (s in boardSessions) {
-			val local = s.gatewayId.isEmpty() || s.gatewayId == state.localGatewayId
-			if (local && isComposite(s.shortName)) repo.pokeWorking(s.name)
-		}
+	// Declares "board" focus while the board (not a thread/terminal) is what's on screen - the
+	// Gateway's intent tracker ramps every LIVE session's daemon-derivation cadence while this
+	// device is watching, so board tiles reflect a working/needsLogin flip from the presence
+	// plane (Team.working/needsLogin) with no per-session peek of this device's own. Superseded by
+	// TerminalView's own terminal-focus declaration while a specific session's terminal is open;
+	// left alone (not reset here) while a non-terminal thread is open, since nothing daemon-drivable
+	// is showing either way.
+	LaunchedEffect(openTeam) {
+		if (openTeam == null) repo.declareFocus(FocusIntent(screen = "board"))
 	}
 
 	val locked = state.provisioned && state.biometricLock && !unlocked
@@ -635,6 +627,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				terminalRefreshMs = repo.terminalRefreshMs,
 				onTerminalPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
 				onTerminalSend = { text, key, submit -> repo.tmuxSend(openTeam!!, text, key, submit) },
+				onFocusChange = repo::declareFocus,
 			)
 		}
 		else -> {
@@ -1586,9 +1579,14 @@ fun SessionCard(
 	val unread = state.unread[team.name] ?: 0
 	val live = team.status == "online"
 	val statusWord = statusWord(team.status)
-	val checkTerminal = live && state.needsLogin(team.name)
+	// The board tile reads the presence plane directly (Team.working/needsLogin, daemon-derived and
+	// pushed on the poll response) rather than this device's own peek - a board session has no peek
+	// stream of its own now that pokeWorking is gone. Null means unknown (never observed, or
+	// derivation just became impossible), never false - a tile shows no pulse rather than a stale
+	// frozen one, so both chips are gated on an explicit `== true`, not a null-as-false fallback.
+	val checkTerminal = live && team.needsLogin == true
 	// "working" and "verifying" are one busy state sharing a single pulse bar.
-	val busy = statusWord == "verifying" || (live && state.working(team.name))
+	val busy = statusWord == "verifying" || (live && team.working == true)
 	// Ambient presence: full color while connected or busy, muted once asleep or gone ("down or
 	// asleep" both read the same muted way - only a connected/busy session keeps full-color text).
 	val titleColor =
@@ -1756,6 +1754,7 @@ fun ThreadScreen(
 	terminalRefreshMs: Long,
 	onTerminalPeek: suspend (sinceHash: String?) -> Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult>,
 	onTerminalSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
+	onFocusChange: (FocusIntent) -> Unit = {},
 ) {
 	// Seeded from the per-session saved draft and re-keyed on team, so switching tabs or
 	// leaving and reopening a thread restores what you were typing. onDraftChange writes
@@ -1890,6 +1889,7 @@ fun ThreadScreen(
 					onWake = onWake,
 					onPeek = onTerminalPeek,
 					onSend = onTerminalSend,
+					onFocusChange = onFocusChange,
 					modifier = Modifier.weight(1f).fillMaxWidth(),
 				)
 			} else {

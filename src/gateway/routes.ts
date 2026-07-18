@@ -19,7 +19,6 @@ import {
 	Address,
 	composeSessionName,
 	DEFAULT_SESSION,
-	isComposite,
 	isSlug,
 	LOCAL_DOMAIN_SENTINEL,
 	parseSessionName,
@@ -64,10 +63,15 @@ export interface RoutesDeps {
 	// empties when the host daemon disconnects). Membership in either marks a team
 	// as devcontainer-backed.
 	knownTeamPaths: Map<string, string>;
-	// The durable session-record store. teams() surfaces its records as asleep "available"
-	// sessions so a session that exists but is not currently registered still lists. Optional
-	// for test harnesses with no resume tracking.
+	// The durable session-record store. Used directly by send/respond's live-incarnation
+	// resolution; teams() itself now defers entirely to `presence.snapshot()` below (the same
+	// computation, unified onto one path). Optional for test harnesses with no resume tracking.
 	sessionStore?: import("../shared/session-store.js").SessionStore;
+	// The presence facade: teams() is exactly `presence.snapshot()`, so a manual GET /teams pull-
+	// to-refresh and the poll response's presence plane can never compute two different answers.
+	// Optional so a harness testing routes with no presence wiring still gets an empty teams list
+	// rather than a throw.
+	presence?: { snapshot(): TeamInfo[] };
 	// Console mailboxes, for broadcast notices (notify_human). Optional so test
 	// harnesses without a console bridge need not supply one.
 	mailboxStore?: import("../shared/device-mailbox.js").DeviceMailboxStore;
@@ -284,6 +288,7 @@ export function createRoutes({
 	offlineCatalog,
 	knownTeamPaths,
 	sessionStore,
+	presence,
 	mailboxStore,
 	config,
 	evieClient,
@@ -674,77 +679,20 @@ export function createRoutes({
 		return jsonResponse(list);
 	}
 
+	/** The presence facade owns this computation now (`presence.snapshot()`) - GET /teams and the
+	 * poll response's presence plane can never disagree, since both read the same function. The
+	 * two side effects the facade correctly does NOT own stay here: touching a live session's
+	 * cross-Domain shares fresh (an unrelated subsystem), and touchLive's lastSeen refresh (an
+	 * ambient field deliberately excluded from the presence identity hash - see plan item 1). */
 	function teams(): Response {
-		const teamsList: TeamInfo[] = [];
-		const seen = new Set<string>();
-		// The owner's display name, stamped on every local session so a linked friend
-		// Domain sees the owner's self-set name over the discovery roster. Spread in only
-		// when set, so a Gateway with no display name emits a minimal TeamInfo (the field
-		// is nullish on the wire; the friend's gateway is the authoritative source).
-		const ownDisplayName = displayName?.();
-		const displayNameField = ownDisplayName ? { displayName: ownDisplayName } : {};
-		const isAdminDomainField = isAdminDomain?.() ? { isAdminDomain: true } : {};
-		// Omit when null so the field is absent rather than null on the wire.
-		const domainIdField = localDomainId ? { domainId: localDomainId } : {};
-		const commonFields = {
-			gatewayId: localGatewayId,
-			...domainIdField,
-			...displayNameField,
-			...isAdminDomainField,
-		};
-
-		// Visible sessions are exactly the store records. A confirmed live session always has a record;
-		// recordless live peers (flag-less loose sessions, workers, the operator's own console device)
-		// stay hidden. A record with a live incarnation is online (that socket has confirmed its lead
-		// handshake) or verifying (it has not yet, e.g. re-registered across a gateway restart); a
-		// record with no live incarnation is available (asleep, wakeable).
-		for (const record of sessionStore?.list() ?? []) {
-			const name = sessionStore!.teamOf(record);
-			// A record's spawn/id are slugs by construction, but a hand-edited store file is not; a
-			// non-composite / non-slug name is not a valid chat and must not surface as an
-			// un-wakeable phantom.
-			const parts = parseSessionName(name);
-			if (!isComposite(name) || !isSlug(parts.project) || !isSlug(parts.session)) continue;
-			seen.add(name);
-			const live = resolveLiveIncarnation(registry, sessionStore, name);
-			if (live) {
-				// A live session keeps its cross-Domain shares fresh and its record touch-refreshed, so
-				// neither the absence sweep nor the record TTL can reap a session that is connected now.
-				const selfAddr = tryLocalAddress(name);
-				if (selfAddr) touchShares?.(selfAddr.canonical);
-				sessionStore!.touchLive(name);
-			}
-			teamsList.push({
-				team: name,
-				...commonFields,
-				// online/verifying omit lastActive (active NOW); only asleep carries recency. An asleep
-				// record with a wake in flight reads verifying (coming up), so a booting session shows a
-				// spinner from spawn/wake, not only once its MCP registers.
-				status: live
-					? live.data.handshakeConfirmed
-						? "online"
-						: "verifying"
-					: isWakeInFlight?.(name)
-						? "verifying"
-						: "available",
-				...(live ? { mode: live.data.mode, version: live.data.version } : { lastActive: record.lastSeen }),
-				kind: "loose",
-				sessionLabel: record.sessionLabel,
-				// The AI-managed vibe-check description; the board shows it as the card's preview line.
-				...(record.description ? { description: record.description } : {}),
-				queue_depth: 0,
-			});
+		const rows = presence?.snapshot() ?? [];
+		for (const row of rows) {
+			if (row.status !== "online" && row.status !== "verifying") continue;
+			const selfAddr = tryLocalAddress(row.team);
+			if (selfAddr) touchShares?.(selfAddr.canonical);
+			sessionStore?.touchLive(row.team);
 		}
-
-		// Spawn-points: the devcontainer catalog. A bare project is the wakeable spawn-point; its named
-		// sessions list above as records.
-		for (const [name] of offlineCatalog) {
-			if (seen.has(name)) continue;
-			seen.add(name);
-			teamsList.push({ team: name, ...commonFields, status: "available", kind: "devcontainer", queue_depth: 0 });
-		}
-
-		return jsonResponse(teamsList);
+		return jsonResponse(rows);
 	}
 
 	/** Discovery across the mesh: local teams, a fan-out to every online SAME-Domain peer

@@ -50,6 +50,7 @@ describe("createWebSocketHandlers", () => {
 			wakeCoordinator?: WakeCoordinator;
 			hostWsToken?: string;
 			hostOpCoordinator?: { settle: ReturnType<typeof vi.fn>; failAll: ReturnType<typeof vi.fn> };
+			onPresenceDerive?: (team: string, working: boolean | undefined, needsLogin: boolean | undefined) => void;
 		} = {},
 	) {
 		const registry: TeamRegistry = overrides.registry || new Map();
@@ -77,6 +78,7 @@ describe("createWebSocketHandlers", () => {
 						failAll: (error: string) => void;
 				  }
 				| undefined,
+			onPresenceDerive: overrides.onPresenceDerive,
 		});
 		intervals.push(handlers.heartbeatInterval);
 		return {
@@ -152,6 +154,42 @@ describe("createWebSocketHandlers", () => {
 		handlers.message(ws, JSON.stringify({ type: "register", team: "alpha", subId: "s1" }));
 		handlers.message(ws, JSON.stringify({ type: "host_op_reply", reqId: "r1", ok: true }));
 		expect(hostOpCoordinator.settle).not.toHaveBeenCalled();
+	});
+
+	it("a presence_derive from the host socket reports the confirmed working/needsLogin", () => {
+		const onPresenceDerive = vi.fn();
+		const { handlers } = setup({ onPresenceDerive });
+		const ws = createMockWs();
+		handlers.open(ws);
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
+		handlers.message(
+			ws,
+			JSON.stringify({ type: "presence_derive", team: "proj-a.main", working: true, needsLogin: false }),
+		);
+		expect(onPresenceDerive).toHaveBeenCalledWith("proj-a.main", true, false);
+	});
+
+	it("a presence_derive with neither field passes both through as undefined (a derivation-impossible clear)", () => {
+		const onPresenceDerive = vi.fn();
+		const { handlers } = setup({ onPresenceDerive });
+		const ws = createMockWs();
+		handlers.open(ws);
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
+		handlers.message(ws, JSON.stringify({ type: "presence_derive", team: "proj-a.main" }));
+		expect(onPresenceDerive).toHaveBeenCalledWith("proj-a.main", undefined, undefined);
+	});
+
+	it("a presence_derive from a NON-host socket is ignored", () => {
+		const onPresenceDerive = vi.fn();
+		const { handlers } = setup({ onPresenceDerive });
+		const ws = createMockWs();
+		handlers.open(ws);
+		handlers.message(ws, JSON.stringify({ type: "register", team: "alpha", subId: "s1" }));
+		handlers.message(
+			ws,
+			JSON.stringify({ type: "presence_derive", team: "proj-a.main", working: true, needsLogin: false }),
+		);
+		expect(onPresenceDerive).not.toHaveBeenCalled();
 	});
 
 	it("fails all in-flight host ops when the host socket disconnects", () => {

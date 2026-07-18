@@ -13,6 +13,7 @@ import { createReconnector } from "../../shared/reconnect.js";
 import { composeSessionName, parseSessionName } from "../../shared/session-id.js";
 import { ensureContainerUpAsync, resolveProject } from "./helpers.js";
 import { createHostOpRunner } from "./hostOpRunner.js";
+import { PresenceScheduler, type WatchEntry } from "./presenceScheduler.js";
 import { spawnReloadPlugins } from "./reloadPlugins.js";
 import {
 	awaitReady,
@@ -85,6 +86,15 @@ function connect(): void {
 		const projects = scanDevcontainerProjects();
 		ws!.send(JSON.stringify({ type: "catalog", projects }));
 		console.error(`[host-wake] sent catalog with ${projects.length} projects`);
+
+		// A fresh connection (first boot, or a reconnect after a gap) resets every tracked team's
+		// hysteresis and reports it unknown. Without this, a flip that settled to a NEW confirmed
+		// value during a disconnect gap (the WS down, but the daemon's own timers kept ticking
+		// against a still-live tmux) would never be reported at all: observe() only fires on a
+		// TRANSITION away from the already-confirmed value, so a tracker sitting on a stale
+		// confirmation would just keep re-confirming it forever post-reconnect. Watches themselves
+		// are not dropped - no fresh presence_watch push is required for peeking to resume.
+		presenceScheduler.clearAll();
 	});
 
 	ws.on("message", (raw: WebSocket.Data) => {
@@ -109,6 +119,16 @@ function connect(): void {
 			void handleHostOp(msg.reqId as string, msg.op as HostOp).catch((e) =>
 				console.error("[host-op] dispatch error:", e),
 			);
+		}
+
+		if (msg.type === "presence_watch" && Array.isArray(msg.watch)) {
+			const entries: WatchEntry[] = [];
+			for (const raw of msg.watch) {
+				if (typeof raw?.team !== "string" || typeof raw?.cadenceMs !== "number") continue;
+				const target = resolveWatchTarget(raw.team);
+				if (target) entries.push({ team: raw.team, target, cadenceMs: raw.cadenceMs });
+			}
+			void presenceScheduler.setWatches(entries);
 		}
 
 		if (msg.type === "channel_push") {
@@ -378,6 +398,39 @@ const hostOpRunner = createHostOpRunner({
 		spawnReloadPlugins(target);
 	},
 	killSession,
+});
+
+////////////////////////////////
+//  Presence derivation (board tile working/needsLogin)
+
+// The composite-parsing mirror of handleWake's own target resolution, without any container
+// bring-up: a watched team is by construction already live (the gateway derives its watch list
+// from the presence plane's own online/verifying rows), so a peek either finds the pane or fails
+// "absent" - the scheduler's own failure-streak handling covers that, no wake needed here.
+// Returns undefined for a malformed or reserved-session team, which the caller drops rather than
+// watching.
+export function resolveWatchTarget(team: string): TmuxTarget | undefined {
+	const { project, session } = parseSessionName(team);
+	if (!isTmuxName(project) || !isTmuxName(session)) return undefined;
+	if (project === "host") {
+		if (isReservedHostSession(session)) return undefined;
+		return { kind: "host", name: "host", sessionName: session };
+	}
+	return { kind: "devcontainer", name: project, sessionName: session };
+}
+
+// Drives the intent-ramped board-tile derivation loop: peeks each watched session at its own
+// resolved cadence through hostOpRunner's own single-flight/cadence-floor/slot-priority pipeline
+// (resize=false - a background derivation peek must never resize the pane out from under an
+// actively-viewed terminal; priority="derive" - it always yields slot admission to an interactive
+// peek). A confirmed flip (or a derivation-impossible clear) is reported back to the gateway as a
+// presence_derive frame.
+const presenceScheduler = new PresenceScheduler({
+	peek: (target) => hostOpRunner.peek(target, { resize: false, priority: "derive" }),
+	report: (team, value) => {
+		if (value) safeSend({ type: "presence_derive", team, working: value.working, needsLogin: value.needsLogin });
+		else safeSend({ type: "presence_derive", team });
+	},
 });
 
 async function handleHostOp(reqId: string, op: HostOp): Promise<void> {

@@ -38,7 +38,10 @@ import type {
 //  the TS types from them and owns the protocol constants and session-id
 //  grammars. The Kotlin side consumes generated types from codegen-kotlin.ts.
 
-export const CONSOLE_PROTOCOL_VERSION = 1;
+// A diagnostic signal, not a hard compatibility gate: every wire addition here is additive and
+// optional, so an older client decoding a newer server's reply (or vice versa) already degrades
+// gracefully field-by-field without needing this to change client behavior.
+export const CONSOLE_PROTOCOL_VERSION = 2;
 
 ////////////////////////////////
 //  Ops (console -> gateway)

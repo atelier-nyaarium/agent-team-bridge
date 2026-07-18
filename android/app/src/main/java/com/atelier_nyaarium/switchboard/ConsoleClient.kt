@@ -38,7 +38,10 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainShareResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnlinkResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainUnshareResult
+import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.PendingTenantRef
+import com.atelier_nyaarium.switchboard.proto.PresenceVersion
+import com.atelier_nyaarium.switchboard.proto.TeamInfo
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
 import com.atelier_nyaarium.switchboard.proto.SignedProvisionTenant
@@ -180,6 +183,16 @@ data class Team(
 	// board card shows it as the preview line in place of the last message. Null until the session's
 	// first vibe check answers, and for gateways without the feature.
 	val description: String? = null,
+	// Daemon-derived working/needs-login, from the presence plane (2-frame-hysteresis confirmed
+	// server-side). Null means unknown (never observed, or derivation just became impossible), never
+	// false - a tile shows no pulse rather than a stale frozen one. Supersedes the old peek-only
+	// sessionWorking/sessionNeedsLogin board source; the open terminal's own rendering peek is
+	// unrelated and still drives its local frame directly.
+	val working: Boolean? = null,
+	val needsLogin: Boolean? = null,
+	// Same-Domain federation freshness for a peer-gateway-sourced row; null for a local row (not a
+	// fourth "local" value - the field simply carries no federation freshness concept for one).
+	val presenceFresh: String? = null,
 ) {
 	/** Short local field shown in the UI: `spawn` or `spawn.session` from the canonical address. */
 	val shortName: String get() = localFieldOf(name)
@@ -190,6 +203,41 @@ data class Team(
 	/** A live socket serves this session: confirmed online, or verifying its handshake (connected
 	 * but the LLM has not re-answered, e.g. across a gateway restart). Both count as awake. */
 	val isLive: Boolean get() = status == "online" || status == "verifying"
+}
+
+/** The one TeamInfo -> Team mapper, shared by the legacy `teams()` list_teams relay AND the
+ * presence-plane piggyback on a poll response - both carry the identical wire shape, so mapping
+ * it once here means the two paths can never quietly drift onto different Team shapes. */
+internal fun teamInfoToTeam(it: TeamInfo, localGatewayId: String): Team {
+	val gatewayId = it.gatewayId.ifEmpty { localGatewayId }
+	// Mirror the gateway's address minting: a spawn-point (kind devcontainer) is the
+	// non-addressable `domain.gateway.spawn` (arity 3); every chat is the full
+	// `domain.gateway.spawn.session` (arity 4), a bare team field defaulting its session to
+	// DEFAULT_SESSION exactly as the gateway's localAddress does, so a chat's Team.name is
+	// byte-equal to the address a session_id carries (no thread/team join mismatch).
+	val domain = it.domainId?.ifEmpty { null } ?: LOCAL_DOMAIN_SENTINEL
+	val parsed = parseSessionName(it.team)
+	val canonicalName = if (it.kind == "devcontainer") {
+		SpawnPoint.of(domain, gatewayId, parsed.project).canonical
+	} else {
+		Address.of(domain, gatewayId, parsed.project, parsed.session).canonical
+	}
+	return Team(
+		name = canonicalName,
+		status = it.status,
+		mode = it.mode ?: "",
+		queueDepth = it.queue_depth.toInt(),
+		kind = it.kind,
+		version = it.version,
+		domainId = it.domainId,
+		displayName = it.displayName,
+		isAdminDomain = it.isAdminDomain ?: false,
+		sessionLabel = it.sessionLabel,
+		description = it.description,
+		working = it.working,
+		needsLogin = it.needsLogin,
+		presenceFresh = it.presenceFresh,
+	)
 }
 
 data class SendResult(val ok: Boolean, val status: String, val error: String?)
@@ -572,34 +620,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		if (!body.ok || body.result == null) error("list_teams relay failed: ${body.error ?: "no result"}")
 		val result =
 			wireJson.decodeFromJsonElement<com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult>(body.result)
-		return result.teams.map {
-			val gatewayId = it.gatewayId.ifEmpty { localGatewayId }
-			// Mirror the gateway's address minting: a spawn-point (kind devcontainer) is the
-			// non-addressable `domain.gateway.spawn` (arity 3); every chat is the full
-			// `domain.gateway.spawn.session` (arity 4), a bare team field defaulting its session to
-			// DEFAULT_SESSION exactly as the gateway's localAddress does, so a chat's Team.name is
-			// byte-equal to the address a session_id carries (no thread/team join mismatch).
-			val domain = it.domainId?.ifEmpty { null } ?: LOCAL_DOMAIN_SENTINEL
-			val parsed = parseSessionName(it.team)
-			val canonicalName = if (it.kind == "devcontainer") {
-				SpawnPoint.of(domain, gatewayId, parsed.project).canonical
-			} else {
-				Address.of(domain, gatewayId, parsed.project, parsed.session).canonical
-			}
-			Team(
-				name = canonicalName,
-				status = it.status,
-				mode = it.mode ?: "",
-				queueDepth = it.queue_depth.toInt(),
-				kind = it.kind,
-				version = it.version,
-				domainId = it.domainId,
-				displayName = it.displayName,
-				isAdminDomain = it.isAdminDomain ?: false,
-				sessionLabel = it.sessionLabel,
-				description = it.description,
-			)
-		}
+		return result.teams.map { teamInfoToTeam(it, localGatewayId) }
 	}
 
 	// teams() throws on a relay failure; this wrapper keeps the list-returning contract (empty on failure).
@@ -645,8 +666,20 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Drain new mailbox entries since cursor (epoch-gated). With holdMs > 0 the server long-polls: an empty
 	 * mailbox holds the request open until a message arrives or the hold expires, so delivery is near-instant
-	 * at about one request per hold window instead of constant fast polling. */
-	suspend fun poll(cursor: Long, epoch: Long, holdMs: Long = 0): ConsolePollResult {
+	 * at about one request per hold window instead of constant fast polling.
+	 *
+	 * `knownPresenceVersions` mirrors `knownDomainVersion`'s piggyback shape, generalized to an array (one
+	 * entry per source Gateway - phase 1 sends this Gateway's own): the server returns the presence plane's
+	 * current snapshot only when it differs. `focus` declares what this device is currently looking at, so
+	 * the Gateway's intent tracker can ramp the host daemon's derivation cadence for the sessions that
+	 * matter right now. */
+	suspend fun poll(
+		cursor: Long,
+		epoch: Long,
+		holdMs: Long = 0,
+		knownPresenceVersions: List<PresenceVersion>? = null,
+		focus: FocusIntent? = null,
+	): ConsolePollResult {
 		// Carry the synced keyring version so the route Gateway returns the snapshot only when it changed
 		// (a revocation made elsewhere reaches this Console within one cycle).
 		val knownVersion = store.loadDomainVersion().ifEmpty { null }
@@ -655,6 +688,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			epoch = epoch,
 			holdMs = if (holdMs > 0) holdMs else null,
 			knownDomainVersion = knownVersion,
+			knownPresenceVersions = knownPresenceVersions,
+			focus = focus,
 		)
 		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s), evie's relay
 		// hold fires at 55s if the gateway vanished, this read timeout at holdMs+HELD_READ_MARGIN_MS

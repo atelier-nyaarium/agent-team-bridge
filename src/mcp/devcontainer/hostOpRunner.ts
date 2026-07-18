@@ -3,15 +3,25 @@ import type { HostOp, HostPeekResult, TmuxTarget } from "../../shared/host-op.js
 ////////////////////////////////
 //  Interfaces & Types
 
-/** The tmux primitives the runner orchestrates (injected so it is unit-testable). */
+/** The tmux primitives the runner orchestrates (injected so it is unit-testable). `peekPane`'s
+ * `resize` defaults true (the terminal view's existing behavior, fitting the phone's geometry); a
+ * derive-only caller passes false to skip that side effect entirely. */
 export interface TmuxOps {
-	peekPane: (target: TmuxTarget) => Promise<HostPeekResult>;
+	peekPane: (target: TmuxTarget, resize?: boolean) => Promise<HostPeekResult>;
 	sendText: (target: TmuxTarget, text: string, submit?: boolean) => Promise<void>;
 	sendKey: (target: TmuxTarget, key: string) => Promise<void>;
 	createSession: (target: TmuxTarget, workdirHint?: string, resumeSessionId?: string) => Promise<void>;
 	reloadPlugins: (target: TmuxTarget) => Promise<void>;
 	killSession: (target: TmuxTarget) => Promise<void>;
 }
+
+/** Peek slot priority: INTERACTIVE (the actively-viewed terminal's rendering stream, relayed
+ * `host_op` peeks) always preempts queued DERIVE requests (the presence scheduler's own
+ * board-cadence peeks) for slot admission - a wedged board target can never starve the terminal
+ * stream. Both still share the SAME single-flight/cadence-floor cache per target regardless of
+ * priority: two callers racing the same pane coalesce into one capture no matter which lane
+ * either came from. */
+export type PeekPriority = "interactive" | "derive";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -43,27 +53,40 @@ export function createHostOpRunner(ops: TmuxOps, opts: { minPeekIntervalMs?: num
 	const inflightSends = new Map<string, Promise<unknown>>();
 	const sentCache = new Map<string, { at: number; result: unknown }>();
 
-	// A minimal async semaphore bounding concurrent captures.
+	// A minimal async semaphore bounding concurrent captures, with two priority lanes: a freed
+	// slot always drains the interactive queue first, so a burst of board-cadence derive peeks can
+	// never make the actively-viewed terminal wait behind them. Within a lane, FIFO.
 	let activePeeks = 0;
-	const peekWaiters: Array<() => void> = [];
-	async function withPeekSlot<T>(fn: () => Promise<T>): Promise<T> {
-		if (activePeeks >= MAX_CONCURRENT_PEEKS) await new Promise<void>((r) => peekWaiters.push(r));
+	const interactiveWaiters: Array<() => void> = [];
+	const deriveWaiters: Array<() => void> = [];
+	async function withPeekSlot<T>(priority: PeekPriority, fn: () => Promise<T>): Promise<T> {
+		if (activePeeks >= MAX_CONCURRENT_PEEKS) {
+			const queue = priority === "interactive" ? interactiveWaiters : deriveWaiters;
+			await new Promise<void>((r) => queue.push(r));
+		}
 		activePeeks++;
 		try {
 			return await fn();
 		} finally {
 			activePeeks--;
-			peekWaiters.shift()?.();
+			(interactiveWaiters.shift() ?? deriveWaiters.shift())?.();
 		}
 	}
 
-	async function runPeek(target: TmuxTarget): Promise<HostPeekResult> {
+	async function runPeek(
+		target: TmuxTarget,
+		peekOpts: { resize?: boolean; priority?: PeekPriority } = {},
+	): Promise<HostPeekResult> {
+		const { resize = true, priority = "interactive" } = peekOpts;
 		const key = targetKey(target);
 		const cached = lastCapture.get(key);
 		if (cached && now() - cached.at < minPeekIntervalMs) return cached.result;
 		let capture = inflightPeeks.get(key);
 		if (!capture) {
-			capture = withPeekSlot(() => ops.peekPane(target));
+			// The initiating caller's own resize preference governs this capture; a joiner (below)
+			// gets whatever that capture already decided regardless of its own preference - the
+			// single-flight coalesces by TARGET, not by (target, resize) pair (see PeekPriority's doc).
+			capture = withPeekSlot(priority, () => ops.peekPane(target, resize));
 			inflightPeeks.set(key, capture);
 			// `.catch` before `.finally` so the cleanup-chain promise resolves: a rejecting peek is
 			// still surfaced via the `await capture` below (the caller gets the error), but this
@@ -127,5 +150,9 @@ export function createHostOpRunner(ops: TmuxOps, opts: { minPeekIntervalMs?: num
 		throw new Error("unknown host op");
 	}
 
-	return { run };
+	// `peek` is exported alongside `run` so the presence scheduler can drive derive-only peeks
+	// directly (resize=false, priority="derive") through the SAME single-flight/cadence-floor/
+	// slot-priority machinery a relayed `run({kind:"peek"})` uses - one shared peek pipeline, two
+	// entry points, exactly the coalescing the plan requires.
+	return { run, peek: runPeek };
 }

@@ -30,6 +30,14 @@ export interface WebSocketDeps {
 	config: WebSocketConfig;
 	onTeamConnect?: (team: string, ws: ServerWebSocket<WsData>) => void;
 	onTeamDisconnect?: (team: string) => void;
+	// Fired when the host daemon's catalog scan replaces offlineCatalog's contents - a presence-read
+	// input with no method boundary of its own (a plain Map, mutated in place) to wrap.
+	onCatalogChange?: () => void;
+	// Fired on a presence_derive frame from the host daemon: a genuine, hysteresis-confirmed
+	// working/needsLogin flip for one team, or both undefined for a derivation-impossible clear
+	// (the daemon lost its only frame source for that team - a peek-failure streak, or the team
+	// dropped from its watch list). Absent when presence is not wired.
+	onPresenceDerive?: (team: string, working: boolean | undefined, needsLogin: boolean | undefined) => void;
 	// Fired when a real registration evicts a virtual console peer, so the console
 	// handler can clear its binding/mailbox and let the device re-register.
 	onVirtualPeerEvicted?: (conversationId: string) => void;
@@ -37,6 +45,16 @@ export interface WebSocketDeps {
 	// here (register only stashes the reported ids on the socket); disconnect clears the live pointer.
 	// Absent in tests that do not exercise session recording.
 	sessionStore?: SessionStore;
+	// The presence facade's writer surface for the exact live-socket transition points this module
+	// owns (a confirm establishing/binding a record, a disconnect/eviction clearing the live
+	// pointer) - routed through the single-writer facade instead of `sessionStore` directly so these
+	// transitions announce themselves on the presence plane, matching `sessionStore`'s own method
+	// signatures exactly so the swap is drop-in. Falls back to `sessionStore` when absent (tests that
+	// do not exercise presence).
+	presenceWriter?: {
+		establishOnConfirm: SessionStore["establishOnConfirm"];
+		clearLive: SessionStore["clearLive"];
+	};
 }
 
 export interface WsData {
@@ -150,9 +168,15 @@ export function createWebSocketHandlers({
 	onTeamConnect,
 	onTeamDisconnect,
 	onVirtualPeerEvicted,
+	onCatalogChange,
+	onPresenceDerive,
 	sessionStore,
+	presenceWriter,
 }: WebSocketDeps) {
 	const { HEARTBEAT_INTERVAL_MS = 30000, MISSED_PINGS_LIMIT = 2 } = config;
+	// Falls back to sessionStore directly (its own methods have identical signatures) when no
+	// presence facade is wired - tests exercising only read-side behavior stay unaffected.
+	const liveWriter = presenceWriter ?? sessionStore;
 
 	function heartbeatTick() {
 		// An entry past its dedupe window no longer throttles anything, so this is pure cleanup:
@@ -295,7 +319,7 @@ export function createWebSocketHandlers({
 			const vSubs = registry.get(vTeam);
 			if (vSubs?.get(victim.data.subId) === victim) vSubs.delete(victim.data.subId);
 			forgetPending(vTeam, victim.data.subId);
-			sessionStore?.clearLive(vTeam, victim.data.subId);
+			liveWriter?.clearLive(vTeam, victim.data.subId);
 		}
 		const vConv = victim.data.conversationId;
 		if (vConv && conversationRegistry.get(vConv) === victim) conversationRegistry.delete(vConv);
@@ -471,7 +495,20 @@ export function createWebSocketHandlers({
 					}
 				}
 				console.log(`[ws] catalog received: ${offlineCatalog.size} projects`);
+				onCatalogChange?.();
 			}
+		}
+
+		// The daemon's presence-derivation report for one team. Only the authenticated host socket
+		// may report a derivation (matching wake_result/host_op_reply/catalog). Both working and
+		// needsLogin absent together means a derivation-impossible clear, not "observed false" -
+		// passed through as undefined so the presence facade can tell the two apart.
+		if (msg.type === "presence_derive" && ws.data.teamName === "host" && typeof msg.team === "string") {
+			onPresenceDerive?.(
+				msg.team,
+				typeof msg.working === "boolean" ? msg.working : undefined,
+				typeof msg.needsLogin === "boolean" ? msg.needsLogin : undefined,
+			);
 		}
 
 		// Reset missed pings on any message (acts like pong)
@@ -531,7 +568,7 @@ export function createWebSocketHandlers({
 
 		// Drop the record's live pointer if this exact incarnation was serving it, so send/wake
 		// resolution stops probing a dead incarnation.
-		sessionStore?.clearLive(teamName, subId);
+		liveWriter?.clearLive(teamName, subId);
 
 		// Clear conversation registry entry if it still points at this ws.
 		const closingConversationId = ws.data.conversationId;
@@ -571,7 +608,7 @@ export function createWebSocketHandlers({
 				}
 			}
 		}
-		const record = sessionStore.establishOnConfirm(pending.team, {
+		const record = liveWriter?.establishOnConfirm(pending.team, {
 			claudeSessionId,
 			label: ws.data.cwdName,
 			live: { team: pending.team, subId: pending.subId },

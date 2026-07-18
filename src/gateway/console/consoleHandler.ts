@@ -27,6 +27,7 @@ import {
 	type TmuxTarget,
 } from "../../shared/host-op.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
+import type { PlaneRegistry, PlaneVersion } from "../../shared/plane-registry.js";
 import { DomainStatusSchema, MAX_POLL_HOLD_MS } from "../../shared/schemas.js";
 import {
 	Address,
@@ -38,8 +39,9 @@ import {
 	SpawnPoint,
 	storeKey,
 } from "../../shared/session-id.js";
-import { type SessionRecord, sanitizeLabel } from "../../shared/session-store.js";
+import { type SessionRecord, type SessionStore, sanitizeLabel } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
+import type { IntentTracker } from "../intent.js";
 import type { WakeResult } from "../wake.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
 import { ConsolePeer } from "./consolePeer.js";
@@ -103,9 +105,14 @@ export interface ConsoleHandlerDeps {
 	/** Drop a session's durable resume record (the console's Forget), so it stops listing as
 	 * an available asleep session. */
 	dropSessionResume?: (team: string) => void;
-	/** The authoritative session store. create_session mints/adopts a record here (the minted id is
-	 * the tmux session name); rename_session relabels one. Absent in harnesses with no store. */
-	sessionStore?: import("../../shared/session-store.js").SessionStore;
+	/** Session access. create_session mints/adopts a record here (the minted id is the tmux session
+	 * name); rename_session relabels one; forget drops one. Production wires the presence facade
+	 * (so these writes announce themselves on the presence plane); a narrow Pick, not the full
+	 * SessionStore class, so either satisfies it structurally. Absent in harnesses with no store. */
+	sessionStore?: Pick<
+		SessionStore,
+		"getByTeam" | "teamOf" | "adoptOrReattach" | "mintOrReattach" | "hostWorkdirHint" | "forget" | "rename"
+	>;
 	/** The current keyring + its version hash. The poll reply carries the snapshot only when
 	 * the Console's known version differs. */
 	domain?: () => { version: string; snapshot: DomainSnapshot } | null;
@@ -115,6 +122,20 @@ export interface ConsoleHandlerDeps {
 	 * reaches the app via the provisioning blob's pendingTenant). Undefined against a pre-feature
 	 * evie, where the app treats the Domain as already rooted. */
 	domainStatus?: () => string | undefined;
+	/** The versioned-state-plane registry: the poll op races `waitForBump` alongside the mailbox's
+	 * own `waitForAppend`, and piggybacks the presence plane's snapshot onto the reply when the
+	 * Console's `knownPresenceVersions` is behind - the same shape as the `domain`/`domainStatus`
+	 * piggyback above, generalized. Absent when presence is not wired (the poll then behaves
+	 * exactly as before: no second wait primitive, no presence field ever attached). */
+	planeRegistry?: PlaneRegistry;
+	/** Read access to the presence plane's current rows, for the poll piggyback. A narrow seam
+	 * (matching routes.ts's own `presence` dep) rather than importing PresenceFacade directly. */
+	presence?: { snapshot(): TeamInfo[] };
+	/** Resolves each device's peek cadence from the union of every device's declared focus. The
+	 * poll op declares (refreshes) the calling device's intent here whenever the op carries a
+	 * `focus` field. Absent when presence/intent is not wired (a poll's `focus` is then just
+	 * ignored, matching today's behavior for a Gateway with no daemon derivation). */
+	intentTracker?: IntentTracker;
 	/** Relay a tmux op to the local host daemon and await its reply. Drives the console terminal
 	 * view; absent when no host daemon is wired (the op then errors "terminal unavailable"). */
 	relayToHost?: (op: HostOp) => Promise<HostOpResult>;
@@ -282,6 +303,9 @@ export function createConsoleDispatcher({
 	sessionStore,
 	domain,
 	domainStatus,
+	planeRegistry,
+	presence,
+	intentTracker,
 	relayToHost,
 	tryWakeTeam,
 	isWakeInFlight,
@@ -675,15 +699,40 @@ export function createConsoleDispatcher({
 			}
 
 			case "poll": {
+				// Declare (refresh) this device's focus intent so the daemon's derivation cadence can
+				// ramp to what is actually being watched. A poll with no focus (a legacy console, or
+				// one between declarations) leaves any existing declaration to expire on its own TTL
+				// rather than clearing it early - see IntentTracker's own doc.
+				if (op.focus) intentTracker?.declare(conversationId, op.focus);
+
 				// Long-poll: an empty drain holds the op open (bounded under the relay-chain
-				// timeouts) until an append wakes it, then drains again. The pump runs frames
-				// concurrently, so a held poll blocks nothing, and retried polls just become
-				// additional waiters (reads are not opId-cached; the console dedupes entries by seq).
+				// timeouts) until an append or a presence bump wakes it, then drains/rechecks again.
+				// The pump runs frames concurrently, so a held poll blocks nothing, and retried polls
+				// just become additional waiters (reads are not opId-cached; the console dedupes
+				// entries by seq).
 				const box = mailboxStore.ensure(ownerId);
 				let snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				const hold = Math.min(op.holdMs ?? 0, HOLD_CAP_MS);
+
+				// The presence plane version(s) the Console already holds, translated from the wire's
+				// per-source-gateway array to the registry's plane-name-keyed presented map. Only this
+				// Gateway's own entry maps to a locally-registered plane in phase 1 (no federation
+				// exchange live yet - item 6); a foreign/unrecognized source is simply absent from the
+				// map, which changedSince/waitForBump both already treat as "unknown, ship current
+				// truth" rather than a special case here. Absent knownPresenceVersions (a pre-plane
+				// console build) skips the registry entirely - unchanged behavior for that build,
+				// mirroring the domainVersion piggyback's own opt-in shape.
+				const pr = op.knownPresenceVersions ? planeRegistry : undefined;
+				const presentedPresence = new Map<string, PlaneVersion>();
+				if (pr) {
+					const own = op.knownPresenceVersions?.find((v) => v.gateway === localGatewayId);
+					if (own) presentedPresence.set("presence", { epoch: own.epoch, counter: own.version });
+				}
+
 				if (snap.entries.length === 0 && hold > 0) {
-					await box.waitForAppend(hold);
+					const waits: Promise<unknown>[] = [box.waitForAppend(hold)];
+					if (pr) waits.push(pr.waitForBump(presentedPresence, hold));
+					await Promise.race(waits);
 					snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				}
 				// Log only a poll that hands entries to the console or signals a dropped-entry gap,
@@ -695,13 +744,47 @@ export function createConsoleDispatcher({
 					);
 				}
 				const base = { entries: snap.entries, cursor: snap.cursor, dropped: snap.dropped, epoch: snap.epoch };
+
 				// Piggyback the keyring: hand the Console the snapshot only when its known version
 				// differs, so it stays fresh at near-zero steady cost.
 				const dom = domain?.();
-				if (dom && op.knownDomainVersion !== dom.version) {
-					return { ...base, domainVersion: dom.version, domain: dom.snapshot };
-				}
-				return base;
+				const domainChanged = dom != null && op.knownDomainVersion !== dom.version;
+				// Same piggyback shape, generalized: the presence plane's current truth, present only
+				// when it actually moved past what the Console presented.
+				const presenceVersion = pr?.version("presence");
+				const presenceChanged = pr != null && pr.changedSince(presentedPresence).length > 0;
+
+				// Why this poll settled - the Console's instant-empty-response heuristic (its
+				// old-gateway degradation signal) reads this so a plane-only settle never trips its
+				// backoff. Priority mirrors the piggyback fields below: real mailbox entries first
+				// (they are why a console polls at all), then presence, then domain, else the hold
+				// simply elapsed with nothing new.
+				const settled: "mailbox" | "presence" | "domain" | "timeout" =
+					snap.entries.length > 0
+						? "mailbox"
+						: presenceChanged
+							? "presence"
+							: domainChanged
+								? "domain"
+								: "timeout";
+
+				return {
+					...base,
+					...(domainChanged ? { domainVersion: dom.version, domain: dom.snapshot } : {}),
+					...(presenceChanged && presenceVersion
+						? {
+								presence: presence?.snapshot() ?? [],
+								presenceVersions: [
+									{
+										gateway: localGatewayId,
+										epoch: presenceVersion.epoch,
+										version: presenceVersion.counter,
+									},
+								],
+							}
+						: {}),
+					settled,
+				};
 			}
 
 			case "peek": {

@@ -1,14 +1,22 @@
 import crypto from "node:crypto";
 import { isAgentWorking, isAtPrompt, isPromptEmpty } from "../shared/agent-screen.js";
-import type { SessionRecord, SessionStore } from "../shared/session-store.js";
+import type { SessionRecord } from "../shared/session-store.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
 export type VibeInboundOrigin = "user" | "agent";
 
+/** The narrow slice of session access vibeCheck needs - satisfied structurally by both a raw
+ * SessionStore (tests) and the presence facade (production, so a description write announces
+ * itself on the presence plane instead of escaping the single-writer funnel). */
+export interface VibeCheckSessionAccess {
+	getByTeam: (team: string) => SessionRecord | undefined;
+	setDescription: (team: string, raw: string) => string | null;
+}
+
 export interface VibeCheckDeps {
-	sessionStore: SessionStore;
+	sessionAccess: VibeCheckSessionAccess;
 	/** The CONFIRMED lead socket serving a team, or undefined (asleep / unconfirmed / virtual). The
 	 * vibe check goes only to the lead - never broadcast to sub-sessions, never to a session still
 	 * verifying. */
@@ -97,7 +105,7 @@ export function createVibeCheck(deps: VibeCheckDeps) {
 	 * routed through here. Only store-recorded sessions are tracked - a recordless loose peer has no
 	 * row to describe. */
 	function noteInbound(team: string, origin: VibeInboundOrigin): void {
-		if (!deps.sessionStore.getByTeam(team)) return;
+		if (!deps.sessionAccess.getByTeam(team)) return;
 		let state = states.get(team);
 		if (!state) {
 			state = { phase: "fresh", count: 0, due: false };
@@ -141,7 +149,7 @@ export function createVibeCheck(deps: VibeCheckDeps) {
 			state.count = 0;
 		}
 		const raw = typeof replyAsJson?.description === "string" ? replyAsJson.description : (response ?? "");
-		const stored = deps.sessionStore.setDescription(team, raw);
+		const stored = deps.sessionAccess.setDescription(team, raw);
 		// Follow through with the harness-side title: arm the /rename injection for the next idle
 		// detection. Only for a storable answer - a blank one renames nothing.
 		if (stored && state) state.renamePending = { description: stored, dedupKey: sessionId };
@@ -161,7 +169,7 @@ export function createVibeCheck(deps: VibeCheckDeps) {
 		const t = now();
 		for (const [team, state] of [...states]) {
 			// A forgotten / TTL-swept record has nothing left to describe.
-			if (!deps.sessionStore.getByTeam(team)) {
+			if (!deps.sessionAccess.getByTeam(team)) {
 				clearPending(state);
 				states.delete(team);
 				continue;
@@ -175,7 +183,7 @@ export function createVibeCheck(deps: VibeCheckDeps) {
 			}
 			const hasWork = state.renamePending !== undefined || (state.due && !state.pending);
 			if (!hasWork || peekInFlight.has(team)) continue;
-			const record = deps.sessionStore.getByTeam(team);
+			const record = deps.sessionAccess.getByTeam(team);
 			if (!record) continue;
 			// Only a live, CONFIRMED lead is actionable; an asleep or verifying session keeps its work.
 			if (!deps.resolveLead(team)) continue;

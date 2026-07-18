@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { PresenceFacade } from "../gateway/presence.js";
 import { createRoutes, MAX_RESPONSE_FILE_BYTES, type RoutesDeps } from "../gateway/routes.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
+import { PlaneRegistry } from "../shared/plane-registry.js";
 import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 
@@ -16,26 +18,63 @@ function makeRegistry(entries: Record<string, unknown>): RoutesDeps["registry"] 
 	return registry;
 }
 
+/** Builds a real PresenceFacade wired to the same registry/offlineCatalog/sessionStore a test's
+ * RoutesDeps uses, so /teams exercises the actual production computation instead of a second,
+ * parallel one. Call `.wakeStart(team)` on the returned facade to simulate a wake in flight - the
+ * facade owns that state itself now (no more external isWakeInFlight predicate feeding it). */
+function makePresence(opts: {
+	registry: RoutesDeps["registry"];
+	offlineCatalog: Map<string, string>;
+	sessionStore?: SessionStore;
+	localDomainId?: () => string | null;
+	displayName?: RoutesDeps["displayName"];
+	isAdminDomain?: RoutesDeps["isAdminDomain"];
+}): PresenceFacade {
+	const facade = new PresenceFacade({
+		sessionStore: opts.sessionStore ?? new SessionStore(),
+		registry: opts.registry,
+		offlineCatalog: opts.offlineCatalog,
+		localGatewayId: "test-host",
+		localDomainId: opts.localDomainId ?? (() => "alice"),
+		displayName: opts.displayName ?? (() => null),
+		isAdminDomain: opts.isAdminDomain ?? (() => null),
+	});
+	facade.attach(new PlaneRegistry());
+	facade.registerPlane();
+	return facade;
+}
+
 function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 	const registry = overrides.registry || (new Map() as RoutesDeps["registry"]);
 	const conversationRegistry = overrides.conversationRegistry || (new Map() as RoutesDeps["conversationRegistry"]);
 	const store = overrides.store || new PendingJobStore<ResponsePayload>();
 	const offlineCatalog = overrides.offlineCatalog || new Map<string, string>();
 	const knownTeamPaths = overrides.knownTeamPaths || new Map<string, string>();
+	const config = { localGatewayId: "test-host", localDomainId: "alice" };
 	return {
 		registry,
 		conversationRegistry,
 		store,
-		config: {
-			localGatewayId: "test-host",
-			localDomainId: "alice",
-		},
+		config,
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve({ ok: false })),
 		isWakeInFlight: overrides.isWakeInFlight,
 		offlineCatalog,
 		knownTeamPaths,
 		mailboxStore: overrides.mailboxStore,
 		sessionStore: overrides.sessionStore,
+		presence:
+			overrides.presence ||
+			makePresence({
+				registry,
+				offlineCatalog,
+				sessionStore: overrides.sessionStore,
+				// Reads `config.localDomainId` LAZILY (at snapshot time, not construction time) so a
+				// test that mutates `ctx.config.localDomainId` after calling makeCtx (a pre-existing
+				// pattern in this file) is still honored.
+				localDomainId: () => config.localDomainId,
+				displayName: overrides.displayName,
+				isAdminDomain: overrides.isAdminDomain,
+			}),
 		displayName: overrides.displayName,
 		isAdminDomain: overrides.isAdminDomain,
 		touchShares: overrides.touchShares,
@@ -149,9 +188,11 @@ describe("routes", () => {
 		it("lists an asleep record with a wake in flight as verifying (coming up), not available", async () => {
 			const sessionStore = new SessionStore();
 			sessionStore.adoptById("main", { spawn: "proj-a", sessionLabel: "My Work" });
-			const json = (await createRoutes(
-				makeCtx({ sessionStore, isWakeInFlight: (team) => team === "proj-a.main" }),
-			)
+			const registry = new Map() as RoutesDeps["registry"];
+			const offlineCatalog = new Map<string, string>();
+			const presence = makePresence({ registry, offlineCatalog, sessionStore });
+			presence.wakeStart("proj-a.main");
+			const json = (await createRoutes(makeCtx({ sessionStore, registry, offlineCatalog, presence }))
 				.teams()
 				.json()) as { status: string }[];
 			expect(json[0]?.status).toBe("verifying");
@@ -204,9 +245,11 @@ describe("routes", () => {
 				status: string;
 				kind: string;
 			}[];
+			// Rows come back sorted by team (presence.snapshot()'s stable-hashing requirement), not
+			// insertion order: "proj-a" sorts before "proj-a.main" as a string prefix.
 			expect(json.map((t) => [t.team, t.status, t.kind])).toEqual([
-				["proj-a.main", "online", "loose"],
 				["proj-a", "available", "devcontainer"],
+				["proj-a.main", "online", "loose"],
 				["proj-b", "available", "devcontainer"],
 			]);
 		});

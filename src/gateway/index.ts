@@ -16,6 +16,7 @@ import {
 } from "../shared/host-op.js";
 import { ownerKeyId } from "../shared/owner-id.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
+import { type PlanePersistedState, PlaneRegistry } from "../shared/plane-registry.js";
 import { isComposite, parseSessionName } from "../shared/session-id.js";
 import { type SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
@@ -47,6 +48,8 @@ import { loadOrCreateIdentity } from "./federation/identity.js";
 import { ReplayGuard } from "./federation/replayGuard.js";
 import { createSealer, type Sealer } from "./federation/sealer.js";
 import { HostOpCoordinator } from "./hostOpCoordinator.js";
+import { IntentTracker } from "./intent.js";
+import { PresenceFacade } from "./presence.js";
 import { createRoutes } from "./routes.js";
 import { createVibeCheck } from "./vibeCheck.js";
 import { decideWakeCreate, WakeCoordinator, type WakeResult } from "./wake.js";
@@ -152,37 +155,93 @@ export async function startGateway(): Promise<void> {
 	const sessionStore = new SessionStore({
 		clash: (id) => isCatalogProject(id) || isReservedHostSession(id),
 	});
+	// Session records and the presence plane registry's own version identity (epoch/counter/hash/
+	// cleanShutdown) are ONE atomic file, written by the SAME save() call - an asymmetric loss
+	// between "presence knows its epoch" and "SessionStore knows its sessions" (the two-file idiom
+	// every OTHER durable store here uses) is structurally impossible, since they are no longer two
+	// files. `sessions` holds SessionStore's own snapshot shape; `planes` holds PlaneRegistry's.
 	const sessionResumeDurable = new DurableStore(DATA_DIR, "session-resume");
+	const loadedResumeRaw = sessionResumeDurable.load();
+	// A pre-migration file is the bare flat team->record map SessionStore.snapshot() always
+	// produced; the wrapped shape is `{sessions, planes}`. Distinguished by the wrapper key's
+	// presence, since a team key never collides with it (team names are slugs, never "sessions").
+	const isWrapped = loadedResumeRaw !== null && typeof loadedResumeRaw === "object" && "sessions" in loadedResumeRaw;
+	const restoredSessions: unknown = isWrapped
+		? (loadedResumeRaw as { sessions?: unknown }).sessions
+		: loadedResumeRaw;
+	const restoredPlanes: Record<string, PlanePersistedState> | undefined = isWrapped
+		? (loadedResumeRaw as { planes?: Record<string, PlanePersistedState> }).planes
+		: undefined;
 	try {
 		const jobs = jobsDurable.load();
 		if (Array.isArray(jobs)) store.restore(jobs as Parameters<typeof store.restore>[0]);
 		const boxes = mailboxDurable.load();
 		if (boxes && typeof boxes === "object")
 			mailboxStore.restore(boxes as Parameters<typeof mailboxStore.restore>[0]);
-		sessionStore.restore(sessionResumeDurable.load());
+		sessionStore.restore(restoredSessions);
 	} catch (err) {
 		// A corrupt or partial snapshot must not crash-loop boot; start from empty delivery state.
 		console.error("[durability] restore failed, starting fresh:", err);
 	}
 	console.log(`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size} resume=${sessionStore.size}`);
+
+	const planeRegistry = new PlaneRegistry();
+	const presence = new PresenceFacade({
+		sessionStore,
+		registry,
+		offlineCatalog,
+		localGatewayId,
+		localDomainId: () => localDomainId,
+		displayName: () => domainMeta?.displayName ?? null,
+		isAdminDomain: () => domainMeta?.isAdminDomain ?? null,
+	});
+	presence.attach(planeRegistry);
+	presence.registerPlane(restoredPlanes?.presence);
+	// Boot reconciliation: a clean-shutdown-restored plane recomputes against the live boot-time
+	// state and bumps ONCE if it differs from the persisted hash (live-derived fields cannot
+	// survive a process exit even a graceful one, so this is expected whenever a session was
+	// active at shutdown - not a bug). A fresh-epoch plane has nothing to reconcile.
+	planeRegistry.reconcileOnBoot();
+	// The tripwire: catches a mutation that changed presence's content without ever calling
+	// markDirty (an escaped write bypassing the facade) and self-heals it. Slow tick, never the
+	// per-poll hot path.
+	const tripwireTimer = setInterval(() => planeRegistry.tripwireTick(), 60_000);
+	tripwireTimer.unref?.();
+
+	// Resolves each live team's daemon-derivation cadence from every device's declared focus.
+	// Purely in-memory/TTL-based (no persistence: a restart's console re-declares on its very
+	// next poll, well inside the TTL a real client ever notices).
+	const intentTracker = new IntentTracker();
+
 	// The federation replay-guard wires its own persistence here once built (it only
 	// exists when the evie bridge is configured); null-safe until then.
 	let replayPersist: (() => void) | null = null;
-	const persistDelivery = () => {
+	// `cleanShutdown` is the ONE signal that decides whether a restart trusts the persisted plane
+	// counter lineage at all (see PlaneRegistry.persistedState): the regular 3s tick always writes
+	// false (assume dirty until a clean exit proves otherwise); only the synchronous SIGTERM/SIGINT
+	// handler passes true, as its last action before the process exits.
+	const persistDelivery = (cleanShutdown: boolean) => {
 		jobsDurable.save(store.snapshot());
 		mailboxDurable.save(mailboxStore.snapshot());
 		sessionStore.sweep(SESSION_RESUME_TTL_MS);
-		sessionResumeDurable.save(sessionStore.snapshot());
+		sessionResumeDurable.save({
+			sessions: sessionStore.snapshot(),
+			planes: planeRegistry.persistedState(cleanShutdown),
+		});
 		replayPersist?.();
 	};
-	const persistTimer = setInterval(persistDelivery, 3_000);
+	const persistTimer = setInterval(() => persistDelivery(false), 3_000);
 	persistTimer.unref?.();
-	process.on("SIGTERM", persistDelivery);
-	process.on("SIGINT", persistDelivery);
+	process.on("SIGTERM", () => persistDelivery(true));
+	process.on("SIGINT", () => persistDelivery(true));
 	// An uncaughtException can fire mid-mutation, so the in-memory store may be inconsistent right
 	// now. Do NOT flush it - that would overwrite the last good snapshot with crash-moment state.
 	// Just log and exit: the last quiescent persist-timer/SIGTERM snapshot is consistent, and the
 	// docker restart policy restores from it. Boot restore is guarded so a bad snapshot cannot loop.
+	// The persist timer's own writes always carry cleanShutdown=false, so a crash landing here -
+	// between two ticks, after mutations already fanned out live to peers - correctly mints a
+	// fresh epoch on the next boot rather than restoring a counter behind what peers already
+	// installed (see plans/versioned-state-planes.md's lap-3 audit).
 	process.on("uncaughtException", (err) => {
 		console.error("[gateway] uncaughtException:", err);
 		process.exit(1);
@@ -209,11 +268,21 @@ export async function startGateway(): Promise<void> {
 			console.log(`[wake] ${team} wake already in flight; joining it`);
 			return existing;
 		}
+		// Presence-facade wake-in-flight tracking: a SEPARATE signal from inflightWakes below (which
+		// exists purely for promise-joining) with a correlated but independently-owned lifecycle - see
+		// presence.ts's own doc comment. Started only on a genuinely NEW wake (a join must not
+		// re-announce what is already showing verifying).
+		presence.wakeStart(team);
 		const wake = doWakeTeam(team, createOpts);
 		inflightWakes.set(team, wake);
 		// `.catch` before `.finally` so this cleanup-chain promise resolves; callers still receive
 		// the original `wake` (unchanged) and see any rejection via their own await.
-		void wake.catch(() => {}).finally(() => inflightWakes.delete(team));
+		void wake
+			.catch(() => {})
+			.finally(() => {
+				inflightWakes.delete(team);
+				presence.wakeEnd(team);
+			});
 		return wake;
 	}
 
@@ -283,7 +352,7 @@ export async function startGateway(): Promise<void> {
 		let provisionalCreated = false;
 		let wakeTeam = team;
 		if (pendingMintLabel !== undefined) {
-			const minted = sessionStore.mintOrReattach({
+			const minted = presence.mintOrReattach({
 				spawn: project,
 				sessionLabel: pendingMintLabel,
 				workdirHint: pendingMintLabel,
@@ -320,7 +389,7 @@ export async function startGateway(): Promise<void> {
 		if (!result.ok && provisionalCreated) {
 			const rec = sessionStore.getByTeam(wakeTeam);
 			if (rec && rec.confirmedAt === undefined && !resolveLiveIncarnation(registry, sessionStore, wakeTeam)) {
-				sessionStore.forget(wakeTeam);
+				presence.forget(wakeTeam);
 			}
 		}
 		return wakeTeam !== team ? { ...result, resolvedTeam: wakeTeam } : result;
@@ -342,6 +411,32 @@ export async function startGateway(): Promise<void> {
 		hostWs.send(JSON.stringify({ type: "host_op", reqId, op }));
 		return hostOpCoordinator.wait(reqId, HOST_OP_TIMEOUT_MS);
 	}
+
+	// Pushes the daemon's peek/derive watch list (every live team x its resolved cadence) whenever
+	// it actually changed, diffed against the last push - so a per-poll focus declaration cannot
+	// turn into a per-poll daemon message. `force` bypasses the diff for a fresh/reconnected host
+	// socket, which starts with no watches of its own regardless of whether the computed list
+	// happens to match what was last pushed to a PRIOR connection.
+	let lastPushedWatch = "";
+	function pushPresenceWatch(force = false): void {
+		const hostSubs = registry.get("host");
+		const hostWs = hostSubs ? [...hostSubs.values()].find((ws) => ws.readyState === 1) : undefined;
+		if (!hostWs) return;
+		const liveTeams = presence
+			.snapshot()
+			.filter((row) => row.status === "online" || row.status === "verifying")
+			.map((row) => row.team);
+		const watch = intentTracker.watchList(liveTeams);
+		const serialized = JSON.stringify(watch);
+		if (!force && serialized === lastPushedWatch) return;
+		lastPushedWatch = serialized;
+		hostWs.send(JSON.stringify({ type: "presence_watch", watch }));
+	}
+	// A short, fixed tick rather than per-poll: intent is inherently slow-moving (a declaration's
+	// own TTL is 15s), so decoupling this from the console's own poll cadence means a poll storm can
+	// never turn into a daemon-watch storm. 2s matches the board's own fastest cadence tier.
+	const presenceWatchTimer = setInterval(() => pushPresenceWatch(), 2_000);
+	presenceWatchTimer.unref?.();
 
 	// Start evie-bot bridge if config is present
 	let evieClient: ReturnType<typeof startEvieClient> | null = null;
@@ -483,12 +578,14 @@ export async function startGateway(): Promise<void> {
 			},
 			onDomainMeta: (meta) => {
 				domainMeta = meta;
+				presence.markDirty();
 			},
 			onDomainUpdate: (meta) => {
 				// A live rename of the owner's display name: refresh only displayName, preserving
 				// the domainStatus from the last register, so teams()/discover reflect the new
 				// name immediately without a reconnect.
 				domainMeta = { ...(domainMeta ?? {}), displayName: meta.displayName };
+				presence.markDirty();
 			},
 			buildRegisterAuth: () => {
 				// Present this Gateway's owner-signed admission + a fresh possession proof,
@@ -664,7 +761,7 @@ export async function startGateway(): Promise<void> {
 	// hooks ride the routes deps; the disconnect reset rides createWebSocketHandlers below; the
 	// scheduler tick peeks due sessions and asks at the earliest idle detection.
 	const vibeCheck = createVibeCheck({
-		sessionStore,
+		sessionAccess: presence,
 		resolveLead: (team) => {
 			const live = resolveLiveIncarnation(registry, sessionStore, team);
 			return live?.data.handshakeConfirmed ? live : undefined;
@@ -705,12 +802,37 @@ export async function startGateway(): Promise<void> {
 		onVirtualPeerEvicted: (conversationId) => {
 			evictConsolePeer?.(conversationId);
 		},
+		// A fresh/reconnected host socket starts with no watches of its own, so it needs the current
+		// watch list regardless of whether it happens to match what was last pushed to a prior
+		// connection (a `force` push, not a diffed one).
+		onTeamConnect: (team) => {
+			if (team === "host") pushPresenceWatch(true);
+		},
 		// A team's last real socket dropping restarts its vibe-check fresh phase: the next
 		// incarnation is a fresh wake or reconnect, which re-earns its first check via user messages.
 		onTeamDisconnect: (team) => {
 			vibeCheck.noteOffline(team);
+			if (team === "host") {
+				// The daemon was the only frame source for every session's working/needsLogin; per
+				// plan item 3's derivation-death semantics, all of it clears to unknown, not a frozen
+				// last-known value. Also announces the offlineCatalog.clear() this disconnect just did.
+				presence.clearAllWorking();
+				presence.markDirty();
+			}
+		},
+		onCatalogChange: () => presence.markDirty(),
+		// A confirmed daemon derivation for one team; both undefined means derivation became
+		// impossible for it (a peek-failure streak, or it dropped off the watch list) - a clear to
+		// unknown, distinct from observing it as not-working.
+		onPresenceDerive: (team, working, needsLogin) => {
+			if (working === undefined && needsLogin === undefined) presence.clearWorkingFor(team);
+			else presence.setWorking(team, { working, needsLogin });
 		},
 		sessionStore,
+		presenceWriter: {
+			establishOnConfirm: (team, args) => presence.establishOnConfirm(team, args),
+			clearLive: (team, subId) => presence.clearLive(team, subId),
+		},
 	});
 
 	function buildRoutes() {
@@ -724,6 +846,7 @@ export async function startGateway(): Promise<void> {
 			offlineCatalog,
 			knownTeamPaths,
 			sessionStore,
+			presence,
 			mailboxStore,
 			evieClient,
 			sealer,
@@ -776,9 +899,9 @@ export async function startGateway(): Promise<void> {
 			isProjectName: isCatalogProject,
 			// Forget drops the session's durable resume record so it stops listing as available.
 			dropSessionResume: (team) => {
-				sessionStore.forget(team);
+				presence.forget(team);
 			},
-			sessionStore,
+			sessionStore: presence,
 			domain: () => {
 				const snapshot = allowlistForConsole?.getSnapshot() ?? null;
 				return snapshot ? { version: allowlistForConsole?.version() ?? "", snapshot } : null;
@@ -786,12 +909,19 @@ export async function startGateway(): Promise<void> {
 			// The console register reply carries this Gateway's Domain status (learned from
 			// evie's register reply) so the app knows to first-root vs just-provision.
 			domainStatus: () => domainMeta?.domainStatus,
+			planeRegistry,
+			presence,
+			intentTracker,
 			relayToHost,
 			tryWakeTeam,
 			isWakeInFlight: (team) => inflightWakes.has(team) || inflightCreates.has(team),
 			markCreateInFlight: (team) => {
 				inflightCreates.add(team);
-				return () => inflightCreates.delete(team);
+				presence.createStart(team);
+				return () => {
+					inflightCreates.delete(team);
+					presence.createEnd(team);
+				};
 			},
 			awaitRegister: (team) => wakeCoordinator.waitFor(team, WAKE_TIMEOUT_MS),
 			crossDomain: crossDomainCoordinator

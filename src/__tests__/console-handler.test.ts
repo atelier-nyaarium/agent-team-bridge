@@ -1,13 +1,20 @@
 import type { ServerWebSocket } from "bun";
 import { describe, expect, it } from "vitest";
-import { type ConsoleRoutes, createConsoleDispatcher } from "../gateway/console/consoleHandler.js";
+import {
+	type ConsoleHandlerDeps,
+	type ConsoleRoutes,
+	createConsoleDispatcher,
+} from "../gateway/console/consoleHandler.js";
 import { ConsolePeer } from "../gateway/console/consolePeer.js";
+import { IntentTracker } from "../gateway/intent.js";
 import type { WakeResult } from "../gateway/wake.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../gateway/websocket.js";
 import type { ConsoleOp, OpenedConsoleFrame } from "../shared/console-protocol.js";
 import { DeviceMailbox, DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { ownerKeyId } from "../shared/owner-id.js";
+import { PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { SessionStore } from "../shared/session-store.js";
+import type { TeamInfo } from "../shared/types.js";
 
 function jsonRes(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -70,7 +77,9 @@ interface Harness {
 
 function makeHarness(
 	overrides: Partial<ConsoleRoutes> = {},
-	deps: { domainStatus?: () => string | undefined } = {},
+	deps: Partial<
+		Pick<ConsoleHandlerDeps, "domainStatus" | "domain" | "planeRegistry" | "presence" | "intentTracker">
+	> = {},
 ): Harness {
 	const registry: TeamRegistry = new Map();
 	const conversationRegistry: ConversationRegistry = new Map();
@@ -111,6 +120,10 @@ function makeHarness(
 		localDomainId: "test-domain",
 		routes,
 		domainStatus: deps.domainStatus,
+		domain: deps.domain,
+		planeRegistry: deps.planeRegistry,
+		presence: deps.presence,
+		intentTracker: deps.intentTracker,
 	});
 	return { registry, conversationRegistry, mailboxStore, sendCalls, respondCalls, handler };
 }
@@ -869,6 +882,165 @@ describe("createConsoleDispatcher", () => {
 		expect(after.epoch).not.toBe(first.epoch);
 		expect(after.entries).toHaveLength(1);
 		expect(after.entries[0].body).toBe("post-reset");
+	});
+});
+
+describe("poll: focus intent + presence piggyback", () => {
+	function teamInfo(overrides: Partial<TeamInfo> & Pick<TeamInfo, "team">): TeamInfo {
+		return { gatewayId: "test-host", status: "online", kind: "loose", queue_depth: 0, ...overrides };
+	}
+
+	// A minimal REAL presence plane (not a mock): a mutable rows array registered under the same
+	// "presence" name consoleHandler.ts's poll case looks for, exercising the actual PlaneRegistry -
+	// matching this codebase's convention of testing these small pure-state classes for real (see
+	// routes.test.ts / federation.test.ts's own makePresence helpers).
+	function makePresencePlane(initialRows: TeamInfo[] = []) {
+		let rows = initialRows;
+		const planeRegistry = new PlaneRegistry();
+		planeRegistry.registerPlane<TeamInfo[]>({
+			name: "presence",
+			snapshot: () => rows,
+			identityOf: (snapshot) => stableHash(snapshot),
+		});
+		return {
+			planeRegistry,
+			presence: { snapshot: () => rows },
+			setRows: (next: TeamInfo[]) => {
+				rows = next;
+			},
+		};
+	}
+
+	it("declares the device's focus intent, ramping its team's daemon-derivation cadence", async () => {
+		const intentTracker = new IntentTracker();
+		const h = makeHarness({}, { intentTracker });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		await h.handler.handleFrame(frame({ kind: "poll", focus: { screen: "board" } }, "p1"));
+		expect(intentTracker.cadenceFor("any-team")).toBe(2_000);
+	});
+
+	it("a poll with no focus leaves an earlier declaration alone rather than clearing it", async () => {
+		const intentTracker = new IntentTracker();
+		const h = makeHarness({}, { intentTracker });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		await h.handler.handleFrame(frame({ kind: "poll", focus: { screen: "board" } }, "p1"));
+		await h.handler.handleFrame(frame({ kind: "poll" }, "p2")); // no focus this time
+		expect(intentTracker.cadenceFor("any-team")).toBe(2_000); // still ramped, not reset
+	});
+
+	it("a terminal focus ramps only its own team, at the device's configured rate", async () => {
+		const intentTracker = new IntentTracker();
+		const h = makeHarness({}, { intentTracker });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		await h.handler.handleFrame(
+			frame({ kind: "poll", focus: { screen: "terminal", terminalTeam: "proj.a", terminalRateMs: 250 } }, "p1"),
+		);
+		expect(intentTracker.cadenceFor("proj.a")).toBe(250);
+		expect(intentTracker.cadenceFor("proj.b")).toBe(60_000); // untouched
+	});
+
+	it("an absent knownPresenceVersions (legacy console) never attaches a presence plane", async () => {
+		const { planeRegistry, presence } = makePresencePlane([teamInfo({ team: "team-a" })]);
+		const h = makeHarness({}, { planeRegistry, presence });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const reply = await h.handler.handleFrame(frame({ kind: "poll" }, "p1"));
+		const result = reply.result as Record<string, unknown>;
+		expect(result.presence).toBeUndefined();
+		expect(result.presenceVersions).toBeUndefined();
+		expect(result.settled).toBe("timeout");
+	});
+
+	it("an empty knownPresenceVersions (cold boot) ships the current presence snapshot immediately", async () => {
+		const rows = [teamInfo({ team: "team-a" })];
+		const { planeRegistry, presence } = makePresencePlane(rows);
+		const h = makeHarness({}, { planeRegistry, presence });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const reply = await h.handler.handleFrame(frame({ kind: "poll", knownPresenceVersions: [] }, "p1"));
+		const result = reply.result as {
+			presence?: TeamInfo[];
+			presenceVersions?: { gateway: string; epoch: number; version: number }[];
+			settled?: string;
+		};
+		expect(result.presence).toEqual(rows);
+		expect(result.presenceVersions).toHaveLength(1);
+		expect(result.presenceVersions?.[0].gateway).toBe("test-host");
+		expect(result.settled).toBe("presence");
+	});
+
+	it("a matching presented version omits the presence piggyback entirely", async () => {
+		const rows = [teamInfo({ team: "team-a" })];
+		const { planeRegistry, presence } = makePresencePlane(rows);
+		const h = makeHarness({}, { planeRegistry, presence });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		const first = (await h.handler.handleFrame(frame({ kind: "poll", knownPresenceVersions: [] }, "p1")))
+			.result as { presenceVersions: { gateway: string; epoch: number; version: number }[] };
+
+		const second = await h.handler.handleFrame(
+			frame({ kind: "poll", knownPresenceVersions: first.presenceVersions }, "p2"),
+		);
+		const result = second.result as Record<string, unknown>;
+		expect(result.presence).toBeUndefined();
+		expect(result.presenceVersions).toBeUndefined();
+		expect(result.settled).toBe("timeout");
+	});
+
+	it("a real mutation (markDirty) between polls ships the fresh snapshot on the next poll", async () => {
+		const rows = [teamInfo({ team: "team-a" })];
+		const { planeRegistry, presence, setRows } = makePresencePlane(rows);
+		const h = makeHarness({}, { planeRegistry, presence });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		const first = (await h.handler.handleFrame(frame({ kind: "poll", knownPresenceVersions: [] }, "p1")))
+			.result as { presenceVersions: { gateway: string; epoch: number; version: number }[] };
+
+		setRows([teamInfo({ team: "team-a", status: "verifying" })]);
+		planeRegistry.markDirty("presence");
+
+		const second = await h.handler.handleFrame(
+			frame({ kind: "poll", knownPresenceVersions: first.presenceVersions }, "p2"),
+		);
+		const result = second.result as { presence?: TeamInfo[]; settled?: string };
+		expect(result.presence?.[0].status).toBe("verifying");
+		expect(result.settled).toBe("presence");
+	});
+
+	it("a held poll wakes early on a presence bump, not the full hold", async () => {
+		const rows = [teamInfo({ team: "team-a" })];
+		const { planeRegistry, presence, setRows } = makePresencePlane(rows);
+		const h = makeHarness({}, { planeRegistry, presence });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		const first = (await h.handler.handleFrame(frame({ kind: "poll", knownPresenceVersions: [] }, "p1")))
+			.result as { presenceVersions: { gateway: string; epoch: number; version: number }[] };
+
+		const held = h.handler.handleFrame(
+			frame({ kind: "poll", holdMs: 5_000, knownPresenceVersions: first.presenceVersions }, "p2"),
+		);
+		await new Promise((r) => setTimeout(r, 20));
+		setRows([teamInfo({ team: "team-a", status: "verifying" })]);
+		planeRegistry.markDirty("presence");
+
+		const start = Date.now();
+		const reply = await held;
+		expect(Date.now() - start).toBeLessThan(2_000); // woke on the bump, not the 5s hold
+		const result = reply.result as { presence?: TeamInfo[]; settled?: string };
+		expect(result.settled).toBe("presence");
+		expect(result.presence?.[0].status).toBe("verifying");
+	});
+
+	it("mailbox entries win settled priority over a simultaneously-changed presence plane", async () => {
+		const { planeRegistry, presence } = makePresencePlane([teamInfo({ team: "team-a" })]);
+		const h = makeHarness({}, { planeRegistry, presence });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const peer = h.registry.get("pixel")?.get("conv-pixel") as unknown as ServerWebSocket<WsData>;
+		peer.send(JSON.stringify({ type: "response_push", session_id: "s", response: "hi" }));
+
+		// A cold-boot empty array also makes presence "changed", racing the already-filled mailbox.
+		const reply = await h.handler.handleFrame(frame({ kind: "poll", knownPresenceVersions: [] }, "p1"));
+		const result = reply.result as { entries: unknown[]; settled?: string };
+		expect(result.entries).toHaveLength(1);
+		expect(result.settled).toBe("mailbox");
 	});
 });
 

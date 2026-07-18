@@ -24,7 +24,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
 object Protocol {
-	const val CONSOLE_PROTOCOL_VERSION: Int = 1
+	const val CONSOLE_PROTOCOL_VERSION: Int = 2
 
 	/** The one structural separator for every address / store / thread key. */
 	const val ADDRESS_SEP: String = "."
@@ -70,6 +70,9 @@ data class TeamInfo(
 	val version: String? = null,
 	val lastActive: Long? = null,
 	val queue_depth: Long,
+	val working: Boolean? = null,
+	val needsLogin: Boolean? = null,
+	val presenceFresh: String? = null,
 )
 
 @Serializable
@@ -158,6 +161,8 @@ sealed class ConsoleOp {
 		val epoch: Long? = null,
 		val holdMs: Long? = null,
 		val knownDomainVersion: String? = null,
+		val knownPresenceVersions: List<PresenceVersion>? = null,
+		val focus: FocusIntent? = null,
 	) : ConsoleOp()
 
 	@Serializable
@@ -346,6 +351,9 @@ data class ConsolePollResult(
 	val epoch: Long,
 	val domainVersion: String? = null,
 	val domain: DomainSnapshot? = null,
+	val presence: List<TeamInfo>? = null,
+	val presenceVersions: List<PresenceVersion>? = null,
+	val settled: String? = null,
 )
 
 @Serializable
@@ -717,6 +725,20 @@ data class FirstRoot(
 	val ownerBoxPub: String,
 	val nonce: String,
 	val issuedAt: Long,
+)
+
+@Serializable
+data class PresenceVersion(
+	val gateway: String,
+	val epoch: Long,
+	val version: Long,
+)
+
+@Serializable
+data class FocusIntent(
+	val screen: String,
+	val terminalTeam: String? = null,
+	val terminalRateMs: Long? = null,
 )
 
 @Serializable

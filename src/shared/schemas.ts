@@ -187,8 +187,44 @@ export const TeamInfoSchema = z
 		// show recency ("active 5m ago"). Absent for sessions with no resume record.
 		lastActive: z.number().int().optional(),
 		queue_depth: z.number().int().nonnegative(),
+		// Daemon-derived from the session's own tmux pane (2-frame-hysteresis confirmed). Absent
+		// means UNKNOWN (never observed, or derivation just became impossible - daemon disconnect,
+		// a peek-failure streak, or the session going asleep), never false: a tile shows no pulse
+		// rather than a stale frozen one. Only tmux-backed live sessions ever carry a value.
+		working: z.boolean().optional(),
+		needsLogin: z.boolean().optional(),
+		// Same-Domain federation freshness for a PEER-gateway-sourced row (this gateway's own local
+		// rows never carry it - absent, not a fourth "local" value). "unreachable" is the honest
+		// stale-mark Q4 requires; "quiet" is healthy idle, not stale.
+		presenceFresh: z.enum(["fresh", "quiet", "unreachable"]).optional(),
 	})
 	.meta({ id: "TeamInfo" });
+
+/** One source gateway's presence-plane version, as carried on the wire: an array of these (never
+ * a map - codegen has no typed map, only an untyped JsonObject fallback outside the fixture
+ * gates). `gateway` is the source gateway's id; in phase 1 (no federation exchange live yet) the
+ * array holds exactly one entry, this gateway's own. */
+export const PresenceVersionSchema = z
+	.object({
+		gateway: z.string(),
+		epoch: z.number().int(),
+		version: z.number().int().nonnegative(),
+	})
+	.meta({ id: "PresenceVersion" });
+
+/** What the phone is currently looking at, declared on every poll so it survives a reconnect with
+ * no separate op. Absent/omitted degrades to "background" once the prior declaration's TTL lapses
+ * (a killed app needs no goodbye) - see gateway/intent.ts's IntentTracker, the server-side owner of
+ * that TTL. */
+export const FocusIntentSchema = z
+	.object({
+		screen: z.enum(["board", "terminal", "background"]),
+		// Required when screen is "terminal": which session's terminal is open.
+		terminalTeam: z.string().optional(),
+		// The phone's configured terminal refresh rate; only meaningful with terminalTeam set.
+		terminalRateMs: z.number().int().positive().optional(),
+	})
+	.meta({ id: "FocusIntent" });
 
 ////////////////////////////////
 //  Console Relay Frame Schema
@@ -258,6 +294,13 @@ export const ConsoleOpSchema = z
 			// The keyring version the Console last synced; the Gateway returns the snapshot in
 			// the poll reply only when it differs, so the Console stays fresh at near-zero cost.
 			knownDomainVersion: z.string().optional(),
+			// Every source-gateway presence-plane version this Console already holds. ABSENT (an old
+			// APK) means a legacy client: the gateway sends no presence plane at all, unchanged
+			// behavior. An EMPTY array means a new client's cold boot: every plane ships. Any
+			// difference (behind, ahead, or an unrecognized source) ships that source's current
+			// truth - see PollWaitHub's own "no ahead special case" design.
+			knownPresenceVersions: z.array(PresenceVersionSchema).optional(),
+			focus: FocusIntentSchema.optional(),
 		}),
 		// Capture an agent's visible tmux pane for the console terminal view. `target` is the
 		// gateway-qualified session name; the gateway resolves it to the host-agent's own tmux
@@ -616,6 +659,18 @@ export const ConsolePollResultSchema = z
 		// re-verifies its peers, so a revocation made elsewhere reaches it within a cycle.
 		domainVersion: z.string().optional(),
 		domain: DomainSnapshotSchema.optional(),
+		// The presence plane's current truth, present only when at least one source's version
+		// differs from what the Console presented via knownPresenceVersions - generalizes the
+		// domainVersion pair above onto the same piggyback shape. `presenceVersions` always
+		// accompanies `presence` (never one without the other) so the Console has a version to
+		// remember for its next poll.
+		presence: z.array(TeamInfoSchema).optional(),
+		presenceVersions: z.array(PresenceVersionSchema).optional(),
+		// Why this poll settled: which plane's bump woke it (or a mailbox append, or the hold simply
+		// elapsing). The Console's instant-empty-response heuristic (its old-gateway degradation
+		// signal) reads this so a plane-only settle - empty mailbox entries, no gap - is never
+		// misread as a broken gateway and does not trip its backoff.
+		settled: z.enum(["mailbox", "presence", "domain", "timeout"]).optional(),
 	})
 	.meta({ id: "ConsolePollResult" });
 

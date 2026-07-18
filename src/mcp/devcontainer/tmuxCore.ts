@@ -167,23 +167,29 @@ function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /** Capture the VISIBLE pane with ANSI colors (a live snapshot, not scrollback). Returns the raw
- * tmux shape; the container-logs fallback is layered on by `peekWithFallback`. */
-export async function peekPane(target: TmuxTarget): Promise<TmuxPeek> {
+ * tmux shape; the container-logs fallback is layered on by `peekWithFallback`. `resize` defaults
+ * true (fit the phone's terminal view before capturing); the presence scheduler's derive-only
+ * peeks pass false to skip that side effect entirely - they only need the content to run the
+ * working/needsLogin regex against, and must not fight the terminal view's own geometry or double
+ * the exec cost when both peek the same pane. */
+export async function peekPane(target: TmuxTarget, resize = true): Promise<TmuxPeek> {
 	const pane = paneTarget(target);
-	// Best-effort resize before the capture so the view fits the phone. Separate run() with a
-	// swallowed failure: an old tmux without resize-window, or a transient error, must not fail the
-	// capture itself.
-	await run(
-		tmuxArgv(target, [
-			"resize-window",
-			"-t",
-			exactSession(target.sessionName),
-			"-x",
-			String(TMUX_COLS),
-			"-y",
-			String(TMUX_ROWS),
-		]),
-	).catch(() => {});
+	if (resize) {
+		// Best-effort resize before the capture so the view fits the phone. Separate run() with a
+		// swallowed failure: an old tmux without resize-window, or a transient error, must not fail
+		// the capture itself.
+		await run(
+			tmuxArgv(target, [
+				"resize-window",
+				"-t",
+				exactSession(target.sessionName),
+				"-x",
+				String(TMUX_COLS),
+				"-y",
+				String(TMUX_ROWS),
+			]),
+		).catch(() => {});
+	}
 	const ansi = await run(tmuxArgv(target, ["capture-pane", "-t", pane, "-e", "-p"]));
 	const hash = crypto.createHash("sha256").update(ansi).digest("hex").slice(0, 16);
 	return { ansi, hash };
@@ -208,10 +214,11 @@ async function captureContainerLogs(target: TmuxTarget): Promise<{ text: string;
  * container logs while it is still booting (no pane yet). Only an `absent` pane (calm, still-booting)
  * falls back; a real failure, or an also-absent container (the true Offline moment), rejects with the
  * original peek error so the gateway keeps its absent/failure classification. Callers needing the raw
- * reject-on-absent to detect a dead launch (awaitReady, handleWake) use `peekPane` directly instead. */
-export async function peekWithFallback(target: TmuxTarget): Promise<HostPeekResult> {
+ * reject-on-absent to detect a dead launch (awaitReady, handleWake) use `peekPane` directly instead.
+ * `resize` forwards to `peekPane` - see its own doc for why a derive-only caller passes false. */
+export async function peekWithFallback(target: TmuxTarget, resize = true): Promise<HostPeekResult> {
 	try {
-		const { ansi, hash } = await peekPane(target);
+		const { ansi, hash } = await peekPane(target, resize);
 		return { kind: "tmux", ansi, hash };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
