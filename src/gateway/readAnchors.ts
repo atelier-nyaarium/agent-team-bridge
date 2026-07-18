@@ -16,6 +16,13 @@ const ReadAnchorsFileSchema = z.record(z.string(), z.record(z.string(), ReadAnch
 ////////////////////////////////
 //  Functions & Helpers
 
+/** Cap on distinct team keys tracked per owner - report_read's `team` is an unauthenticated,
+ * free-form string never checked against a real session, so nothing else bounds how many an
+ * abusive or buggy device could invent. Mirrors DeviceMailboxStore's own DEFAULT_MAX_DEVICES
+ * (device-mailbox.ts) as this codebase's established order of magnitude for a per-owner cap - a
+ * real owner's distinct teams over the store's whole retention window stay far below this. */
+const MAX_TEAMS_PER_OWNER = 500;
+
 /** The plane name a given owner's read-anchor sync rides under - one plane PER OWNER, never a
  * single Gateway-wide plane, so a bug in the wire-assembly step cannot leak one owner's read
  * positions (personal data - what they have and have not read) to a different owner sharing the
@@ -104,6 +111,11 @@ export class ReadAnchors {
 		if (!this.state[ownerId]) this.state[ownerId] = {};
 		const owner = this.state[ownerId];
 		const cur = owner[team];
+		// A genuinely NEW team beyond the cap is refused outright (never stored) - an already-
+		// tracked team's own updates are unaffected regardless of how many other teams this owner
+		// has accumulated, since capping mid-conversation would be a real functional regression,
+		// not a security boundary.
+		if (!cur && Object.keys(owner).length >= MAX_TEAMS_PER_OWNER) return false;
 		const advanced = !cur || entry.epoch > cur.epoch || (entry.epoch === cur.epoch && entry.seq > cur.seq);
 		if (!advanced) return false;
 		owner[team] = entry;

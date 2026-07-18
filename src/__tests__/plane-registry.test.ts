@@ -43,8 +43,9 @@ describe("PlaneRegistry", () => {
 		const reg = new PlaneRegistry();
 		reg.registerPlane({
 			name: "presence",
-			// identityOf deliberately ignores `churny` - the ambient-field exclusion the plan
-			// requires (lastActive-class timestamps ride the payload but not the identity).
+			// identityOf deliberately ignores `churny` - the ambient-field exclusion, so ambient
+			// timestamp-like fields never trigger a version bump (lastActive-class timestamps ride
+			// the payload but not the identity).
 			snapshot: () => ({ stable: "x", churny }),
 			identityOf: (s) => stableHash({ stable: s.stable }),
 		});
@@ -96,6 +97,28 @@ describe("PlaneRegistry", () => {
 		reg.markDirty("presence");
 		await wait;
 		expect(resolved).toBe(true);
+	});
+
+	it("lock-ordering: a waiter is registered before waitForBump ever yields, so a same-tick bump can never be lost", async () => {
+		// The prior test's 10ms gap between registering and bumping would still pass even if a
+		// regression inserted a yield point (an await, a setTimeout(0), a .then()) between
+		// waitForBump's version-compare and its waiter registration - 10ms is plenty of time for a
+		// deferred push to land first. This test instead bumps with ZERO delay, in the exact same
+		// synchronous tick as the waitForBump() call itself (no await between them on the caller's
+		// side either) - relying on `new Promise(executor)` running its executor synchronously, so
+		// the waiter is already in `this.waiters` by the time waitForBump() returns control to this
+		// line, before any bump can possibly race it. If a future change made waitForBump genuinely
+		// async (or deferred the push via any microtask/macrotask), the waiter would not yet be
+		// registered when markDirty runs here, and this test would fail.
+		let content = { x: 1 };
+		const reg = new PlaneRegistry();
+		reg.registerPlane({ name: "presence", snapshot: () => content, identityOf: stableHash });
+		const presented = new Map([["presence", reg.version("presence")!]]);
+
+		const wait = reg.waitForBump(presented, 5_000); // no await here - stays synchronous
+		content = { x: 2 };
+		reg.markDirty("presence"); // fires in the SAME tick, immediately after registration
+		expect(await wait).toBe(true);
 	});
 
 	it("waitForBump resolves (false) on timeout when nothing changes", async () => {
@@ -152,7 +175,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("scope narrows changedSince/waitForBump to exactly the planes a caller is asking about", async () => {
-		// The fix this test locks in: a caller scoped to ONLY "linked-peers" must never see "presence"
+		// A caller scoped to ONLY "linked-peers" must never see "presence"
 		// (a different, ALSO-registered plane) reported as changed just because its own presented map
 		// has no key for it - the exact false-positive a naive multi-plane poll handler hits once a
 		// second plane joins a shared registry (see consoleHandler.ts's own presence+linked-peers split).
@@ -185,7 +208,7 @@ describe("PlaneRegistry", () => {
 	});
 
 	it("a waiter presenting a version AHEAD of current still wakes on a bump - no special-casing", async () => {
-		// Deliberate design (see PollWaitHub in the plan): "ahead" is never distinguished from
+		// Deliberate design (see PollWaitHub): "ahead" is never distinguished from
 		// "behind" - any difference means "send current truth." A console can present a version
 		// ahead of what its new route gateway currently holds after a federation failover.
 		let content = { x: 1 };
@@ -214,6 +237,35 @@ describe("PlaneRegistry", () => {
 		expect(reg.version("presence")?.counter).toBe(before.counter + 1);
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining("presence"));
 		warn.mockRestore();
+	});
+
+	it("tripwireTick isolates a throwing plane - it never aborts the tick or escapes to the caller", () => {
+		const reg = new PlaneRegistry();
+		// Registration itself calls snapshotFn() once (to seed the initial hash), so it must succeed
+		// there - only the LATER tripwire recompute should hit the throw, isolating this test to the
+		// tripwire's own exception handling rather than construction's.
+		let calls = 0;
+		reg.registerPlane({
+			name: "broken",
+			snapshot: () => {
+				calls += 1;
+				if (calls > 1) throw new Error("boom - a bug in this plane's own derivation logic");
+				return { x: 1 };
+			},
+			identityOf: stableHash,
+		});
+		let healthyContent = { x: 1 };
+		reg.registerPlane({ name: "healthy", snapshot: () => healthyContent, identityOf: stableHash });
+		const healthyBefore = reg.version("healthy")!;
+		healthyContent = { x: 2 }; // an escaped write on the plane registered AFTER the broken one
+
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		expect(() => reg.tripwireTick()).not.toThrow(); // must never propagate to the setInterval caller
+		expect(error).toHaveBeenCalledWith(expect.stringContaining("broken"), expect.anything());
+		// The plane registered AFTER the broken one still gets checked this same tick - one plane's
+		// bug does not blind the tripwire to every plane that happens to iterate after it.
+		expect(reg.version("healthy")?.counter).toBe(healthyBefore.counter + 1);
+		error.mockRestore();
 	});
 
 	it("persistedState + restore: a clean shutdown preserves epoch and counter", () => {

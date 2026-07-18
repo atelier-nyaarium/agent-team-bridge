@@ -354,9 +354,18 @@ describe("SessionStore TTL", () => {
 
 		clock = 100;
 		store.touchLive("host.live01");
-		store.sweep(50);
+		expect(store.sweep(50)).toBe(true); // removed the stale record
 		expect(store.getByTeam("host.live01")).toBeDefined();
 		expect(store.getByTeam("host.stale1")).toBeUndefined();
+	});
+
+	it("sweep returns false when nothing was old enough to remove", () => {
+		let clock = 0;
+		const store = new SessionStore({ now: () => clock, idGen: scriptedIds("fresh1") });
+		store.mint({ spawn: "host", sessionLabel: "fresh" });
+		clock = 10;
+		expect(store.sweep(1_000)).toBe(false);
+		expect(store.getByTeam("host.fresh1")).toBeDefined();
 	});
 
 	it("forget removes the record and returns whether it existed", () => {

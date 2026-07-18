@@ -10,7 +10,7 @@ export interface DerivedState {
 }
 
 /** One watched session: the peek target, and how often to peek it (the max over every intent
- * currently declaring interest in it - see plan item 5; this module only consumes the resolved
+ * currently declaring interest in it, computed elsewhere; this module only consumes the resolved
  * cadence, it does not compute the intent union itself). */
 export interface WatchEntry {
 	team: string;
@@ -18,7 +18,7 @@ export interface WatchEntry {
 	cadenceMs: number;
 }
 
-/** Peeks a target WITHOUT the terminal view's resize side effect (plan item 4's captureNoResize) -
+/** Peeks a target WITHOUT the terminal view's resize side effect,
  * injected so this module stays testable without a real tmux process. */
 export type NoResizePeek = (target: TmuxTarget) => Promise<HostPeekResult>;
 
@@ -113,8 +113,8 @@ export class PresenceScheduler {
 	constructor(opts: {
 		peek: NoResizePeek;
 		/** Called with the confirmed DerivedState on a genuine flip, or `undefined` when derivation
-		 * itself becomes impossible for this team (session-level clear - see plan's derivation-death
-		 * semantics). Never called for a mere unconfirmed pending observation. */
+		 * itself becomes impossible for this team (a session-level clear). Never called for a mere
+		 * unconfirmed pending observation. */
 		report: (team: string, value: DerivedState | undefined) => void;
 		now?: () => number;
 	}) {
@@ -123,8 +123,8 @@ export class PresenceScheduler {
 		this.now = opts.now ?? (() => Date.now());
 	}
 
-	/** Replace the full watch set (the plan's intent-driven scheduler: the gateway pushes the
-	 * current live-session list + each one's resolved cadence whenever either changes). A team
+	/** Replace the full watch set: the gateway pushes the
+	 * current live-session list + each one's resolved cadence whenever either changes. A team
 	 * dropped from the new set stops being peeked and clears to unknown (it can no longer be
 	 * observed - not "still whatever it last was"). A team whose cadence changed reschedules at the
 	 * new interval without losing its hysteresis history (a cadence ramp is not a derivation

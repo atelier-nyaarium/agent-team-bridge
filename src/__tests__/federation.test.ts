@@ -88,7 +88,7 @@ function makeCtx(localGatewayId: string, over: Partial<RoutesDeps> = {}): Routes
 		tryWakeTeam: () => Promise.resolve({ ok: false }),
 		offlineCatalog,
 		knownTeamPaths: new Map(),
-		// teams()/discover() defer entirely to presence.snapshot() now - wire a real facade over
+		// teams()/discover() defer entirely to presence.snapshot() - wire a real facade over
 		// the same registry/offlineCatalog/sessionStore this context uses so discovery tests see
 		// the local Gateway's own sessions, not an empty list.
 		presence:
@@ -189,7 +189,7 @@ describe("federation routing (E2E sealed)", () => {
 
 		// A console's `from` is a free-form Device Name (not a slug); fromConversationId is the 64-hex
 		// owner id. consoleSender makes the sealed sender address come from the owner id, so the send
-		// never assertSlug-throws on the device name (the bug this fix closes).
+		// never assertSlug-throws on the device name.
 		const ownerId = "a".repeat(64);
 		await send(
 			new Request("http://gateway/send", { method: "POST" }),
@@ -789,7 +789,7 @@ describe("destination gate (cross-Domain relay handleOp)", () => {
 		dedupeKey: "dk-1",
 	};
 
-	// Mandatory security gate (per the plan): console_push writes directly into the receiving
+	// Mandatory security gate: console_push writes directly into the receiving
 	// Gateway's own owner mailbox with no session-sharing check of any kind - unlike every other
 	// FederatedOp kind, which at minimum requires a shared devcontainer/loose session or a
 	// recorded, verified job binding. A cross-Domain sender must be refused outright.
@@ -1114,9 +1114,9 @@ describe("list_teams share filter (cross-Domain caller)", () => {
 //  Multi-owner cross-Domain trust regressions (the reply + return-route attacks)
 //
 //  These drive the relay handler against a REAL PendingJobStore (its crossDomainBinding is
-//  the production lookup), so the gates are exercised exactly as wired. The common root cause
-//  the fixes close: replies and return-routes were keyed on the BARE, collidable,
-//  friend-controlled gateway id instead of the cryptographically-VERIFIED sending Domain.
+//  the production lookup), so the gates are exercised exactly as wired. Replies and
+//  return-routes must key on the cryptographically-VERIFIED sending Domain, never the bare,
+//  collidable, friend-controlled gateway id.
 
 describe("Fix 1: response_push reply gate binds to the job's verified target Domain", () => {
 	// Two linked friends, bob and carol, who happen to run the SAME bare gateway id "dev"

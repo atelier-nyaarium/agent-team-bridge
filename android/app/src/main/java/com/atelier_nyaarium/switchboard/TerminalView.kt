@@ -503,10 +503,8 @@ fun TerminalView(
 
 	// Drop the waking latch only once the gateway confirms "online" (MCP registered AND the lead
 	// handshake completed) - the same signal the board tile's spinner keys off. A freshly created tmux
-	// pane can be peeked well before the Claude CLI inside it has started, so treating "a pane is
-	// capturable" as "it is up" (the prior behavior) cleared the latch seconds into a warm-container
-	// wake; the next transient peek hiccup during boot (a resize, a slow docker exec) then reopened the
-	// off-session screen mislabeled as a fresh "This session is asleep." + "Wake" instead of "Waking...".
+	// pane can be peeked well before the Claude CLI inside it has started, so a capturable pane alone
+	// is not sufficient; only the "online" signal is trusted.
 	LaunchedEffect(team, sessionStatus) {
 		if (sessionStatus == "online") wakeRequested = false
 	}

@@ -188,9 +188,9 @@ data class Team(
 	val description: String? = null,
 	// Daemon-derived working/needs-login, from the presence plane (2-frame-hysteresis confirmed
 	// server-side). Null means unknown (never observed, or derivation just became impossible), never
-	// false - a tile shows no pulse rather than a stale frozen one. Supersedes the old peek-only
-	// sessionWorking/sessionNeedsLogin board source; the open terminal's own rendering peek is
-	// unrelated and still drives its local frame directly.
+	// false - a tile shows no pulse rather than a stale frozen one. Distinct from
+	// sessionWorking/sessionNeedsLogin, which back the terminal's own peek and still drive its
+	// local frame directly.
 	val working: Boolean? = null,
 	val needsLogin: Boolean? = null,
 	// Same-Domain federation freshness for a peer-gateway-sourced row; null for a local row (not a
@@ -672,7 +672,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * at about one request per hold window instead of constant fast polling.
 	 *
 	 * `knownPresenceVersions` mirrors `knownDomainVersion`'s piggyback shape, generalized to an array (one
-	 * entry per source Gateway - phase 1 sends this Gateway's own): the server returns the presence plane's
+	 * entry per source Gateway, currently just this Gateway's own): the server returns the presence plane's
 	 * current snapshot only when it differs. `focus` declares what this device is currently looking at, so
 	 * the Gateway's intent tracker can ramp the host daemon's derivation cadence for the sessions that
 	 * matter right now. `knownLinkedPeersVersion` is the same piggyback shape again for the linked-peers
@@ -980,8 +980,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		 * and the Response closed INSIDE the OkHttp callback, before resuming - so a cancellation racing
 		 * the callback can only ever abandon an already-closed, already-read HttpTextResult, never a
 		 * leaked Response, and every caller's own parsing/decoding runs after resume, on the CALLER's
-		 * dispatcher, not OkHttp's callback thread. Shared by relay() and postEvieDirect() so Phase D's
-		 * cancellability lands in exactly these two places (see console-hardening.md). */
+		 * dispatcher, not OkHttp's callback thread. Shared by relay() and postEvieDirect() so this
+		 * cancellability lands in exactly these two places. */
 		internal suspend fun executeCancellable(httpClient: OkHttpClient, req: Request): HttpTextResult =
 			suspendCancellableCoroutine { cont ->
 				val call = httpClient.newCall(req)

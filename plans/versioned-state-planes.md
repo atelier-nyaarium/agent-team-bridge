@@ -214,13 +214,22 @@ deviation; both are corrected below.
        lie.
    - **Hash-gated bumps (nyaadot MerkleHasher shape):** mutators only MARK DIRTY; the registry
      recomputes `identityOf` and bumps IFF the identity hash changed. Ambient fields
-     (lastActive-class timestamps) ride the payload but sit outside identityOf - no churn, and
-     the read-path `touchLive` store write moves off the snapshot's identity entirely (and its
-     only current caller, the teams() read path, is deleted in this same migration against a
-     plane-capable gateway - `touchLive` itself is pruned once nothing calls it, matching its
-     share-sweep sibling's liveness-guard pattern rather than left as dead code). The tripwire
-     is then exact: hash-changed-without-bump = escaped write, log loudly + self-bump; it runs
-     on a slow tick, never on the per-poll hot path.
+     (lastActive-class timestamps) ride the payload but sit outside identityOf - no churn. The
+     tripwire is then exact: hash-changed-without-bump = escaped write, log loudly + self-bump;
+     it runs on a slow tick, never on the per-poll hot path.
+   - **`touchLive`'s read-path call site stays, corrected from an earlier claim in this same
+     item** *(caught by Phase 2's align-fan-out audit, which found the code diverging from this
+     exact commitment and traced why)*: the original text here claimed the `teams()` read-path
+     `touchLive` call would be deleted, on the theory that excluding `lastActive` from the
+     identity hash made the write itself pointless. That conflated two separate concerns -
+     `touchLive`'s actual, sole purpose (per its own doc comment in `session-store.ts`) is
+     refreshing a live record's `lastSeen` so `SessionStore.sweep()`'s TTL eviction can never
+     delete a still-live session's record out from under it; excluding `lastActive` from the
+     identity hash only solves the churn problem, and says nothing about whether the underlying
+     write should still happen. `touchLive` is `teams()`'s ONLY caller in the whole codebase, so
+     deleting it would let `sweep(SESSION_RESUME_TTL_MS)` (30 days) silently evict a
+     continuously-live session's durable record the moment it crossed that TTL - a real
+     regression, not a cleanup. The call stays.
    - **Closed world - concrete mechanism** *(pinned lap 2 - zod fields carry no plane marker,
      so "a schema-side test" was hand-wavy)*: every plane-sourced field on PollResult/TeamInfo
      is defined through one shared schema helper (`planeField(planeName, zodType)`) that tags
@@ -736,8 +745,11 @@ surviving finding folded into the Plan above; clustered:
     epoch across a graceful restart; presence now does too, keyed off SessionStore's own
     persist tick, so routine deploys produce zero bumps) (Plan 1); domainMeta and the
     catalog's two mutation sites folded into the enumerated facade input set (Plan 3);
-    `touchLive`'s only caller dies in this same migration, so it is pruned rather than left
-    dead (Plan 1); scheduler's three concurrency properties reconciled as one capture call
+    `touchLive`'s call site stays - see Plan 1's own correction above, added when Phase 2's
+    align-fan-out audit found the shipped code keeping it and traced the reason (TTL-sweep
+    survival for a live record, unrelated to the identity-hash churn concern this bullet
+    originally conflated it with); scheduler's three concurrency properties reconciled as one
+    capture call
     with a resize parameter rather than competing streams, plus named INTERACTIVE/DERIVE lanes
     (Plan 4); intent TTL pinned at 3 missed polls, zero-watcher floor pinned at the existing
     60s background cadence (Plan 5); console failover given an explicit never-regress rule

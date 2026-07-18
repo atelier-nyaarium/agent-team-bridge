@@ -42,7 +42,7 @@ function presenceIdentityOf(rows: PresenceRow[]): string {
 //  Class
 
 /**
- * The single writer over every field `GET /teams` (and now the presence plane) reads: SessionStore
+ * The single writer over every field `GET /teams` and the presence plane read: SessionStore
  * records, the live-socket registry, wake/create in-flight state, and the derived working/
  * needsLogin map. Wraps SessionStore rather than replacing it (SessionStore stays the tested,
  * unchanged data layer); this class adds the "a mutation always marks the plane dirty" contract on
@@ -197,10 +197,10 @@ export class PresenceFacade {
 	}
 
 	////////////////////////////////
-	//  Wake / create in-flight (moved off index.ts's raw Map/Set into facade-owned enter/leave
-	//  mutators, so a wake outcome - success, failure, timeout - always announces itself; the
-	//  Promise-joining `inflightWakes` map in index.ts is a SEPARATE, unrelated concurrency-dedup
-	//  mechanism with a correlated but independently-owned lifecycle, not replaced by this).
+	//  Wake / create in-flight, tracked via facade-owned enter/leave mutators, so a wake outcome -
+	//  success, failure, timeout - always announces itself. The Promise-joining `inflightWakes` map
+	//  in index.ts is a SEPARATE, unrelated concurrency-dedup mechanism with a correlated but
+	//  independently-owned lifecycle, not replaced by this.
 
 	wakeStart(team: string): void {
 		this.wakeInFlight.add(team);

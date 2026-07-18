@@ -247,7 +247,16 @@ export async function startGateway(): Promise<void> {
 	const persistDelivery = (cleanShutdown: boolean) => {
 		jobsDurable.save(store.snapshot());
 		mailboxDurable.save(mailboxStore.snapshot());
-		sessionStore.sweep(SESSION_RESUME_TTL_MS);
+		// sweep() deletes TTL-expired records outright - a genuine, hash-affecting change to
+		// presence.snapshot()'s row set (unlike touchLive's lastSeen-only refresh, ambient and
+		// excluded from the identity hash). Announce it like any other mutation rather than leaving
+		// it to the 60s tripwire - but only on the rare tick that actually removed something: a
+		// snapshot()+stableHash recompute runs unconditionally the moment markDirty is called (the
+		// registry only gates the COUNTER BUMP behind the hash compare, not the compute that
+		// produces it), so calling this every 3 seconds regardless of sweep's own result would cost a
+		// full presence rebuild forever for a cutoff (SESSION_RESUME_TTL_MS, 30 days) that removes
+		// something roughly once per record per month.
+		if (sessionStore.sweep(SESSION_RESUME_TTL_MS)) presence.markDirty();
 		sessionResumeDurable.save({
 			sessions: sessionStore.snapshot(),
 			planes: planeRegistry.persistedState(cleanShutdown),
@@ -266,7 +275,7 @@ export async function startGateway(): Promise<void> {
 	// The persist timer's own writes always carry cleanShutdown=false, so a crash landing here -
 	// between two ticks, after mutations already fanned out live to peers - correctly mints a
 	// fresh epoch on the next boot rather than restoring a counter behind what peers already
-	// installed (see plans/versioned-state-planes.md's lap-3 audit).
+	// installed.
 	process.on("uncaughtException", (err) => {
 		console.error("[gateway] uncaughtException:", err);
 		process.exit(1);
@@ -458,8 +467,9 @@ export async function startGateway(): Promise<void> {
 		hostWs.send(JSON.stringify({ type: "presence_watch", watch }));
 	}
 	// A short, fixed tick rather than per-poll: intent is inherently slow-moving (a declaration's
-	// own TTL is 15s), so decoupling this from the console's own poll cadence means a poll storm can
-	// never turn into a daemon-watch storm. 2s matches the board's own fastest cadence tier.
+	// own TTL, IntentTracker.INTENT_TTL_MS, is measured in minutes), so decoupling this from the
+	// console's own poll cadence means a poll storm can never turn into a daemon-watch storm. 2s
+	// matches the board's own fastest cadence tier.
 	const presenceWatchTimer = setInterval(() => pushPresenceWatch(), 2_000);
 	presenceWatchTimer.unref?.();
 
@@ -877,6 +887,7 @@ export async function startGateway(): Promise<void> {
 			establishOnConfirm: (team, args) => presence.establishOnConfirm(team, args),
 			clearLive: (team, subId) => presence.clearLive(team, subId),
 		},
+		announcePresenceDirty: () => presence.markDirty(),
 	});
 
 	function buildRoutes() {

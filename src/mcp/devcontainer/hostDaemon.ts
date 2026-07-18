@@ -385,7 +385,7 @@ const hostOpRunner = createHostOpRunner({
 		// BACKGROUND: the host op must return well under the gateway's 20s timeout, so we do not block
 		// on the REPL becoming ready (a large/slow launch would blow that budget). resumeSessionId only
 		// takes effect on that fresh-launch branch - a reattach ignores the whole launch command,
-		// resume included, same as it always has.
+		// resume included.
 		const workdir = target.kind === "host" ? resolveHostWorkdir(workdirHint) : undefined;
 		const { created } = await ensureSession(target, buildLaunchCommand(target, { workdir, resumeSessionId }));
 		if (created) {

@@ -64,8 +64,8 @@ export interface RoutesDeps {
 	// as devcontainer-backed.
 	knownTeamPaths: Map<string, string>;
 	// The durable session-record store. Used directly by send/respond's live-incarnation
-	// resolution; teams() itself now defers entirely to `presence.snapshot()` below (the same
-	// computation, unified onto one path). Optional for test harnesses with no resume tracking.
+	// resolution; teams() itself defers entirely to `presence.snapshot()` below. Optional for
+	// test harnesses with no resume tracking.
 	sessionStore?: import("../shared/session-store.js").SessionStore;
 	// The presence facade: teams() is exactly `presence.snapshot()`, so a manual GET /teams pull-
 	// to-refresh and the poll response's presence plane can never compute two different answers.
@@ -679,11 +679,11 @@ export function createRoutes({
 		return jsonResponse(list);
 	}
 
-	/** The presence facade owns this computation now (`presence.snapshot()`) - GET /teams and the
+	/** The presence facade owns this computation (`presence.snapshot()`) - GET /teams and the
 	 * poll response's presence plane can never disagree, since both read the same function. The
 	 * two side effects the facade correctly does NOT own stay here: touching a live session's
-	 * cross-Domain shares fresh (an unrelated subsystem), and touchLive's lastSeen refresh (an
-	 * ambient field deliberately excluded from the presence identity hash - see plan item 1). */
+	 * cross-Domain shares fresh (an unrelated subsystem), and touchLive's lastSeen refresh (a
+	 * purely ambient field, deliberately excluded from the presence identity hash). */
 	function teams(): Response {
 		const rows = presence?.snapshot() ?? [];
 		for (const row of rows) {

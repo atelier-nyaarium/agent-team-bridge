@@ -534,6 +534,30 @@ describe("handshake-established session records", () => {
 		expect(sessionStore.size).toBe(0);
 	});
 
+	it("register announces the presence plane dirty immediately, even before the handshake resolves either way", () => {
+		const registry: TeamRegistry = new Map();
+		const conversationRegistry: ConversationRegistry = new Map();
+		const announcePresenceDirty = vi.fn();
+		const handlers = createWebSocketHandlers({
+			registry,
+			conversationRegistry,
+			config: { HEARTBEAT_INTERVAL_MS: 100000, MISSED_PINGS_LIMIT: 2 },
+			knownTeamPaths: new Map(),
+			offlineCatalog: new Map(),
+			wakeCoordinator: new WakeCoordinator(),
+			sessionStore: new SessionStore(),
+			announcePresenceDirty,
+		});
+		intervals.push(handlers.heartbeatInterval);
+		const ws = createMockWs();
+		expect(announcePresenceDirty).not.toHaveBeenCalled();
+		register(handlers, ws, { team: "host.abc123", subId: "s1", claudeSessionId: "tx-1", cwdName: "switchboard" });
+		// The row is already live in the raw registry at this point (resolveLiveIncarnation reads it
+		// directly) - a caller polling right now must see the plane recompute, not wait for the
+		// eventual handshake confirm (which may be seconds away) or the periodic tripwire.
+		expect(announcePresenceDirty).toHaveBeenCalledTimes(1);
+	});
+
 	it("a lead confirm on a free segment adopts it, labels by cwd, and stamps the record live", () => {
 		const { handlers, sessionStore } = setup();
 		const ws = createMockWs();
@@ -606,6 +630,29 @@ describe("handshake-established session records", () => {
 		register(handlers, ws2, { team: "host.abc123", subId: "s2", conversationId: "conv-x" });
 		expect(ws1.close).toHaveBeenCalled();
 		expect(sessionStore.getByTeam("host.abc123")?.liveTeam).toBeUndefined();
+	});
+
+	it("a DIFFERENT team presenting a known conversationId is refused - it can neither evict nor steal that slot", () => {
+		const { handlers, sessionStore, conversationRegistry } = setup();
+		const victim = createMockWs();
+		register(handlers, victim, {
+			team: "host.victim-team",
+			subId: "s1",
+			conversationId: "conv-shared",
+			claudeSessionId: "tx-1",
+		});
+		handlers.resolveHandshake(handshakeIdFrom(victim), { isMainOrLead: true });
+		expect(sessionStore.getByTeam("host.victim-team")?.liveTeam).toEqual({ team: "host.victim-team", subId: "s1" });
+
+		// conversationId rides verbatim in every session_id a caller has seen, so it is not a secret
+		// - a connection that merely learned it, under an unrelated team, must not be able to evict
+		// the real holder's live socket or steal its conversationRegistry slot.
+		const attacker = createMockWs();
+		register(handlers, attacker, { team: "host.attacker-team", subId: "s1", conversationId: "conv-shared" });
+
+		expect(victim.close).not.toHaveBeenCalled();
+		expect(sessionStore.getByTeam("host.victim-team")?.liveTeam).toEqual({ team: "host.victim-team", subId: "s1" });
+		expect(conversationRegistry.get("conv-shared")).toBe(victim);
 	});
 
 	it("a sibling sub-session's worker-reject does not clear the confirmed lead's live pointer", () => {

@@ -55,6 +55,13 @@ export interface WebSocketDeps {
 		establishOnConfirm: SessionStore["establishOnConfirm"];
 		clearLive: SessionStore["clearLive"];
 	};
+	// The presence facade's own markDirty(), threaded in raw rather than through presenceWriter's
+	// sessionStore-mirroring interface above (SessionStore has no markDirty concept of its own). A
+	// live-socket transition with no dedicated wrapper method - a fresh register, before its
+	// handshake resolves either way - can still announce itself on the presence plane immediately
+	// through this, rather than leaving the row's already-live content unannounced until the
+	// eventual handshake confirm or the periodic tripwire notices it.
+	announcePresenceDirty?: () => void;
 }
 
 export interface WsData {
@@ -172,6 +179,7 @@ export function createWebSocketHandlers({
 	onPresenceDerive,
 	sessionStore,
 	presenceWriter,
+	announcePresenceDirty,
 }: WebSocketDeps) {
 	const { HEARTBEAT_INTERVAL_MS = 30000, MISSED_PINGS_LIMIT = 2 } = config;
 	// Falls back to sessionStore directly (its own methods have identical signatures) when no
@@ -417,13 +425,33 @@ export function createWebSocketHandlers({
 			ws.data.claudeSessionId = reg.data.claudeSessionId;
 			ws.data.cwdName = reg.data.cwdName;
 			subs.set(subId, ws);
+			// The registry a snapshot reads from already reflects this socket live at this point (see
+			// resolveLiveIncarnation), but nothing has told the plane registry to recompute yet - every
+			// branch below either announces itself independently (the remembered-lead fast path, via
+			// establishRecord) or does not (a fresh handshake mint, or the non-channel/host branch), so
+			// announce here unconditionally rather than depend on each future branch remembering to.
+			announcePresenceDirty?.();
 
 			if (conversationId) {
 				const priorConversationWs = conversationRegistry.get(conversationId);
-				if (priorConversationWs && priorConversationWs !== ws && priorConversationWs.readyState === 1) {
-					evictSocket(priorConversationWs);
+				// A conversationId belongs to ONE MCP process for its whole lifetime, reused across
+				// that process's own reconnects under its OWN unchanging team - never legitimately
+				// claimed by a different team. conversationId itself carries no secret/proof (it rides
+				// verbatim in every session_id a caller has seen, same as the handshake ids above), so
+				// without this check a connection that merely learned a victim's conversationId could
+				// evict the victim's live socket and steal its slot under an unrelated team name. A
+				// mismatch is refused outright - neither evicting the real holder nor claiming its slot
+				// - rather than assuming this connection is the legitimate reconnect.
+				if (priorConversationWs && priorConversationWs.data.teamName !== team) {
+					console.warn(
+						`[ws] refusing conversationId claim: ${team}/${subId} presented a conversationId already held by team "${priorConversationWs.data.teamName}"`,
+					);
+				} else {
+					if (priorConversationWs && priorConversationWs !== ws && priorConversationWs.readyState === 1) {
+						evictSocket(priorConversationWs);
+					}
+					conversationRegistry.set(conversationId, ws);
 				}
-				conversationRegistry.set(conversationId, ws);
 			}
 
 			// Only a bare project is a devcontainer catalog entry; a composite `project.session` is a

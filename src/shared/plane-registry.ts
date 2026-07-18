@@ -192,16 +192,16 @@ export class PlaneRegistry {
 		return this.planes.get(name)?.snapshot() as T | undefined;
 	}
 
-	/** Every plane within `scope` (default: every registered plane - the original, single-plane-
-	 * registry behavior) whose CURRENT version differs from what the caller presented (behind,
-	 * ahead, or an unrecognized epoch alike - see PollWaitHub's own doc for why "ahead" is not
-	 * special-cased). `scope` matters once more than one plane shares a registry: a caller asking
-	 * about only SOME planes (an op field it opted into - e.g. a legacy client that tracks presence
-	 * but predates a later plane) must not have every OTHER registered plane look "changed" just
-	 * because its own presented-map has no key for them - an absent key means "not tracked" only
-	 * for planes the caller is actually asking about; without a scope, "not tracked" and "unknown,
-	 * ship it" (cold boot) are indistinguishable, so a bare presented-map alone cannot express
-	 * "I am not asking about this plane at all" once a second plane exists on the same registry. */
+	/** Every plane within `scope` (default: every registered plane) whose CURRENT version differs
+	 * from what the caller presented (behind, ahead, or an unrecognized epoch alike - see
+	 * PollWaitHub's own doc for why "ahead" is not special-cased). `scope` matters once more than
+	 * one plane shares a registry: a caller asking about only SOME planes (an op field it opted
+	 * into - e.g. a legacy client that tracks presence but predates a later plane) must not have
+	 * every OTHER registered plane look "changed" just because its own presented-map has no key
+	 * for them - an absent key means "not tracked" only for planes the caller is actually asking
+	 * about; without a scope, "not tracked" and "unknown, ship it" (cold boot) are
+	 * indistinguishable, so a bare presented-map alone cannot express "I am not asking about this
+	 * plane at all" once a second plane exists on the same registry. */
 	changedSince(presented: ReadonlyMap<string, PlaneVersion>, scope?: ReadonlySet<string>): string[] {
 		const changed: string[] = [];
 		for (const [name, plane] of this.planes) {
@@ -252,14 +252,14 @@ export class PlaneRegistry {
 		if (!cur) return;
 		for (const waiter of [...this.waiters]) {
 			// A waiter that never mentioned this plane at all is not tracking it (a legacy client
-			// presenting only `domainVersion`, or one from before a phase-2 plane existed) - waking it
-			// would just be a wasted round trip, not a correctness fix. Only a STALE presented value
-			// for a plane the waiter actually asked about is grounds to wake. Needs no separate
-			// `scope` param the way changedSince/waitForBump do: a caller only ever puts a key in its
-			// OWN presentedMap for a plane it is actually asking about (never a placeholder for an
-			// opted-out one), so this membership check is already exactly as scoped as `scope` would
-			// make it - the ambiguity `scope` resolves is specific to changedSince's bulk iteration
-			// over EVERY registered plane, which this per-plane dispatch never does.
+			// presenting only `domainVersion`, or a caller that only tracks a subset of the registry's
+			// planes) - waking it would just be a wasted round trip, not a correctness fix. Only a
+			// STALE presented value for a plane the waiter actually asked about is grounds to wake.
+			// Needs no separate `scope` param the way changedSince/waitForBump do: a caller only ever
+			// puts a key in its OWN presentedMap for a plane it is actually asking about (never a
+			// placeholder for an opted-out one), so this membership check is already exactly as scoped
+			// as `scope` would make it - the ambiguity `scope` resolves is specific to changedSince's
+			// bulk iteration over EVERY registered plane, which this per-plane dispatch never does.
 			if (!waiter.presentedMap.has(planeName)) continue;
 			const have = waiter.presentedMap.get(planeName);
 			if (!have || have.epoch !== cur.epoch || have.counter !== cur.counter) waiter.settle(true);
@@ -269,12 +269,26 @@ export class PlaneRegistry {
 	/** The tripwire: recompute every plane unconditionally (not gated on markDirty) and bump+log any
 	 * whose hash moved without a prior markDirty ever having caught it - a mutation that escaped the
 	 * facade. Self-heals (the bump fires here, same as any other) rather than leaving the plane
-	 * silently stale forever. Call on a slow tick, never the per-poll hot path. */
+	 * silently stale forever. Call on a slow tick, never the per-poll hot path.
+	 *
+	 * Each plane's recompute is individually isolated: a snapshot()/identityOf() that throws (a
+	 * runtime bug in one plane's own derivation logic, not a registry concern) is caught and logged
+	 * rather than propagating - this loop runs inside a bare setInterval callback with no caller of
+	 * its own to catch it, so an uncaught throw here would reach the process-wide uncaughtException
+	 * handler and take the whole gateway down over a single plane's bug, silently dropping every
+	 * live connection. A broken plane's own tripwire coverage is lost until it is fixed, but every
+	 * OTHER plane - and the process itself - keeps running. */
 	tripwireTick(): void {
 		for (const [name, plane] of this.planes) {
-			if (plane.recompute(true)) {
-				console.warn(`[plane-registry] tripwire caught an unmarked mutation on plane "${name}" - self-healed`);
-				this.wake(name);
+			try {
+				if (plane.recompute(true)) {
+					console.warn(
+						`[plane-registry] tripwire caught an unmarked mutation on plane "${name}" - self-healed`,
+					);
+					this.wake(name);
+				}
+			} catch (err) {
+				console.error(`[plane-registry] tripwire threw recomputing plane "${name}" - skipping this tick:`, err);
 			}
 		}
 	}

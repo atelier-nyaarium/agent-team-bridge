@@ -520,9 +520,8 @@ data class ChatState(
 	 * Both sides are compared by their canonical key so a bare vs qualified form
 	 * of the same team never produces a phantom "ended" entry. */
 	fun sessions(localGatewayId: String): List<Team> {
-		// Team names and thread keys are both the canonical address string now, so the join is a
-		// direct set membership test - no per-key re-canonicalization (the grammar is already
-		// canonical, and a one-shot schema wipe cleared any old-grammar persisted keys).
+		// Team names and thread keys are both the canonical address string, so the join is a
+		// direct set membership test - no per-key re-canonicalization.
 		val known = teams.mapTo(HashSet()) { it.name }
 		val extra = threads.keys.filter { it !in known }.map { Team(it, "ended", "", 0) }
 		return teams + extra
@@ -1205,8 +1204,8 @@ class ChatRepository(
 	suspend fun provision(blob: String) = withContext(Dispatchers.IO) {
 		// Strict wire parse: reject before persisting. Surfaced as state.error
 		// rather than thrown - callers launch this from coroutines with no
-		// catch, and the strict kotlinx parse rejects blobs the old lenient
-		// org.json parser would have coerced (single quotes, stringy numbers).
+		// catch, and the strict kotlinx parse rejects malformed blobs (single
+		// quotes, stringy numbers) instead of silently coercing them.
 		val prov = try {
 			Provisioning.parse(blob)
 		} catch (e: Exception) {
@@ -1242,7 +1241,7 @@ class ChatRepository(
 		try {
 			// Preflight the cluster path (API server + SA token + TLS) before blaming the
 			// bridge or enrollment, so a stale blob says "re-provision" and a missing
-			// identity says "not enrolled" - two different fixes that used to look identical.
+			// identity says "not enrolled" - two distinguishable causes.
 			runCatchingCancellable { client().apiReachable() }.onFailure { e ->
 				val (cause, kind) = classifyConnError(e)
 				_state.update {
@@ -1427,8 +1426,8 @@ class ChatRepository(
 
 	/** Submit an owner-signed fact to evie and fold it into the local keyring ONLY if evie
 	 * accepted it, surfacing the error otherwise. The merge-iff-accepted invariant lives in
-	 * this one place so an owner action cannot submit without the matching local merge (the
-	 * class of bug that once left a revoked member on the board). Secondary effects (the
+	 * this one place so an owner action cannot submit without the matching local merge
+	 * (otherwise a revoked member could remain visible on the board). Secondary effects (the
 	 * route-gateway pin, the console-admitted gate) stay at the call site after a true return. */
 	private suspend fun <T> submitOwnerFact(
 		signed: T,
@@ -1812,9 +1811,6 @@ class ChatRepository(
 			return@withContext DeleteDomainOutcome.WipedUnconfirmed
 		}
 		val signed = federation.signDeleteDomain(domainId, System.currentTimeMillis())
-		// enroll() returns an EnrollResult when evie is reached (ok or reject) and THROWS when the
-		// console bridge is unreachable. Race it against a 30s ceiling so a hung POST never strands the
-		// user mid-delete: a null (timeout) and a failure (transport) both fall to the unconfirmed wipe.
 		// enroll() blocks on an OkHttp call (its own read timeout is the real ceiling) and THROWS when the
 		// console bridge is unreachable. A reached-but-refused result keeps the owner key for a retry; a
 		// throw (offline) falls to the unconfirmed wipe so a hung POST never strands the user mid-delete.
@@ -2683,7 +2679,7 @@ class ChatRepository(
 			java.net.InetAddress.getByName(host).let { it.isLoopbackAddress || it.isSiteLocalAddress || it.isLinkLocalAddress }
 	}.getOrDefault(false)
 
-	/** Pull-to-refresh (lap 2's corrected form): forget the known presence AND linked-peers
+	/** Pull-to-refresh: forget the known presence AND linked-peers
 	 * versions so the NEXT poll looks like a cold boot (ships everything for both planes), and
 	 * interrupt any currently-held poll so that next poll fires now instead of inheriting up to
 	 * LONG_POLL_HOLD_MS of staleness waiting out the remainder of an already-open hold - a bare
@@ -2701,12 +2697,11 @@ class ChatRepository(
 
 	/** Mesh-wide discovery: this Gateway's own live relay to every other same-Domain gateway and
 	 * linked cross-Domain peer (routes.discover(), via the list_teams op). Unlike presence and
-	 * linked-peers, this has no push mechanism yet - federation exchange (plan item 6) is deferred
-	 * past phase 1 - so it needs an explicit pull, on the poll loop's own bounded interval
-	 * (DISCOVERY_REFRESH_MS) or immediately after an action that changes what should be
-	 * discoverable (a manual refresh, an unlink). Routes through the same merge path as everything
-	 * else (applyPresence), so tombstones/label-overrides/absence-streaks apply uniformly
-	 * regardless of source. Best-effort: a relay failure keeps the prior list. */
+	 * linked-peers, this has no push mechanism yet, so it needs an explicit pull, on the poll
+	 * loop's own bounded interval (DISCOVERY_REFRESH_MS) or immediately after an action that
+	 * changes what should be discoverable (a manual refresh, an unlink). Routes through the same
+	 * merge path as everything else (applyPresence), so tombstones/label-overrides/absence-streaks
+	 * apply uniformly regardless of source. Best-effort: a relay failure keeps the prior list. */
 	private suspend fun refreshDiscovery() {
 		runCatchingCancellable { client().teams(localGatewayId) }
 			.onSuccess { applyPresence(it) }
@@ -3094,9 +3089,9 @@ class ChatRepository(
 						}
 					}
 					// Linked-peers plane: same generalized shape, a single scalar version (no legacy
-					// vs cold-boot distinction - see knownLinkedPeersVersion's own doc). Replaces the
-					// old ~30s refreshLinkedPeers() pull entirely - a link/unlink/untrust bumps the
-					// Gateway's own plane synchronously, so this device's next poll reflects it.
+					// vs cold-boot distinction - see knownLinkedPeersVersion's own doc). A link/unlink/
+					// untrust bumps the Gateway's own plane synchronously, so this device's next poll
+					// reflects it.
 					if (mb.linkedPeers != null || mb.linkedPeersVersion != null) {
 						if (mb.linkedPeersVersion != null) knownLinkedPeersVersion = mb.linkedPeersVersion
 						mb.linkedPeers?.let { peers ->
@@ -3287,7 +3282,7 @@ class ChatRepository(
 					// CancellationException on teardown, and JVM CancellationException extends
 					// Exception - classifyConnError must never see one, and a swallowed cancel here
 					// would fall through to pushback.decide(..., lastPassFailed = true) and can
-					// re-acquire an already-released wakelock (see console-hardening.md Phase D).
+					// re-acquire an already-released wakelock (see console-hardening.md).
 					e.rethrowIfCancellation()
 					if (hold > 0 && e.message?.startsWith("HTTP 504") == true) {
 						// A relay-timeout during a hold is an empty long-poll, not an
@@ -3619,6 +3614,7 @@ class ChatRepository(
 			val newAnchors = (s.readAnchors - key).mapValues { (t, anchor) ->
 				reanchorAfterForget(newThreads[t].orEmpty(), anchor) ?: anchor
 			}
+			lastReportedReadAnchors = lastReportedReadAnchors - key
 			s.copy(
 				teams = s.teams.filterNot { it.name == key },
 				threads = newThreads,
@@ -4023,18 +4019,16 @@ class ChatRepository(
 		// before, the alarm it is backing up.
 		const val PARK_SLACK_MS = 5_000L
 		// Mesh-wide discovery (other same-Domain gateways + linked cross-Domain peers) has no push
-		// mechanism yet - federation exchange (plan item 6) is deferred past phase 1, so THIS session's
-		// own gateway relays a live list_teams to every other gateway on every discovery pull, unlike
-		// the cheap local presence/linked-peers planes. Refresh it on this bounded interval rather than
-		// per poll tick - the same cost/freshness tradeoff the original design already validated.
+		// mechanism yet, so this session's own gateway relays a live list_teams to every other
+		// gateway on every discovery pull, unlike the cheap local presence/linked-peers planes.
+		// Refresh it on this bounded interval rather than per poll tick, trading freshness for cost.
 		const val DISCOVERY_REFRESH_MS = 30_000L
 		// forgottenUntil's tombstone lifetime: only needs to outlast a single in-flight teams()
 		// HTTP round trip (what the resurrection race actually races against), not the much longer
 		// LONG_POLL_HOLD_MS reconciliation cadence (reapplyCachedTeams runs every poll tick, so a
 		// tombstone's own expiry self-heals within about one poll regardless). Derived from
 		// ConsoleClient's own bound on that call (not an independent literal) so it can never
-		// silently fall behind the client's real worst case again - a prior hand-picked 15s
-		// undershot the client's actual (unbounded-at-the-time) worst case entirely.
+		// silently fall behind the client's real worst case.
 		const val FORGET_TOMBSTONE_MS = ConsoleClient.DEFAULT_RELAY_CALL_TIMEOUT_MS + 5_000L
 		// Matches the gateway's own per-payload bucket (src/gateway/routes.ts:
 		// MAX_RESPONSE_FILE_BYTES); a single attachment may use the whole bucket, so this is

@@ -1,3 +1,5 @@
+import { MAX_POLL_HOLD_MS } from "../shared/schemas.js";
+
 ////////////////////////////////
 //  Interfaces & Types
 
@@ -16,10 +18,16 @@ export interface WatchEntry {
 //  Functions & Helpers
 
 // A killed foreground app degrades to background within this window without needing a goodbye -
-// "3 missed polls at the current cadence" (plan item 5), pinned to a concrete wall-clock value: a
-// visible console re-polls near-continuously (LONG_POLL_HOLD_MS holds, then re-fires), so 15s is
-// comfortably a few missed cycles without being so short that ordinary network jitter flaps intent.
-const INTENT_TTL_MS = 15_000;
+// "3 missed polls at the current cadence". declare() is the TTL refresh, and it fires once per
+// poll REQUEST (consoleHandler.ts's poll case), at the top of that request, before any held wait
+// begins - so the gap between two refreshes from a healthy, continuously-repolling device is
+// bounded by ONE FULL held-poll cycle, up to the gateway's own MAX_POLL_HOLD_MS ceiling (the
+// client's chosen holdMs for a not-yet-arrived poll is unknown in advance; this ceiling is the
+// authoritative worst case). Deriving the TTL from that ceiling, not a guessed flat literal, is
+// what keeps "3 missed polls" true regardless of how long a single held cycle runs - a flat 15s
+// value undershoots a single normal ~40-45s hold entirely, which would flap the cadence down mid-
+// hold on every ordinary healthy poll, not just on a genuinely gone client.
+export const INTENT_TTL_MS = 3 * MAX_POLL_HOLD_MS;
 const BOARD_CADENCE_MS = 2_000;
 const DEFAULT_TERMINAL_RATE_MS = 500;
 const BACKGROUND_CADENCE_MS = 60_000;
@@ -51,8 +59,13 @@ export class IntentTracker {
 
 	/** Declare (or refresh) one device's current focus. Called on every poll that carries a
 	 * `focus` field - the declaration itself IS the TTL refresh, so a live console's repeated
-	 * polling keeps its intent alive with no separate heartbeat. */
+	 * polling keeps its intent alive with no separate heartbeat. Also sweeps expired entries on
+	 * this, its OWN write path - not relying solely on a read (cadenceFor/watchList) ever
+	 * happening, since those are reached only through the host daemon's own watch-push, which is
+	 * absent on a gateway with no host daemon connected. A poll's `focus` field arrives regardless
+	 * of host-daemon state, so this is the one call site guaranteed to fire on every topology. */
 	declare(deviceId: string, intent: FocusIntent): void {
+		this.sweep();
 		this.byDevice.set(deviceId, { intent, expiresAt: this.now() + this.ttlMs });
 	}
 
@@ -60,6 +73,12 @@ export class IntentTracker {
 	 * its intent immediately rather than waiting out the window. */
 	clear(deviceId: string): void {
 		this.byDevice.delete(deviceId);
+	}
+
+	/** The number of devices currently tracked (expired-but-not-yet-swept entries included) - for
+	 * tests asserting this stays bounded, not a production read path. */
+	get size(): number {
+		return this.byDevice.size;
 	}
 
 	private sweep(): void {

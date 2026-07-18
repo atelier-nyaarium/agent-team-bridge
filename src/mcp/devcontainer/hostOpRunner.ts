@@ -40,7 +40,7 @@ const SEND_DEDUP_TTL_MS = 60_000;
 const targetKey = (t: TmuxTarget): string => `${t.kind}:${t.name}:${t.sessionName}`;
 
 /**
- * Executes a host op against tmux with the load + idempotency controls the audit requires:
+ * Executes a host op against tmux with the load + idempotency controls this op class needs:
  *  - peek: single-flight + a short cadence-floor cache + a concurrency cap;
  *  - send: dedup by `dedupKey` so a re-relayed op replays the ack instead of re-injecting.
  * Returns the raw result object; the caller frames it onto the host_op_reply.
@@ -153,6 +153,6 @@ export function createHostOpRunner(ops: TmuxOps, opts: { minPeekIntervalMs?: num
 	// `peek` is exported alongside `run` so the presence scheduler can drive derive-only peeks
 	// directly (resize=false, priority="derive") through the SAME single-flight/cadence-floor/
 	// slot-priority machinery a relayed `run({kind:"peek"})` uses - one shared peek pipeline, two
-	// entry points, exactly the coalescing the plan requires.
+	// entry points, with identical coalescing guarantees.
 	return { run, peek: runPeek };
 }

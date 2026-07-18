@@ -150,6 +150,50 @@ or per-caller cap exists on minting today (see `plans/session-id-teardown.md`'s 
 Painpoints/red-team notes for Phase G). Whoever implements the origin-aware gate
 decided above should confirm it also covers this creation path, not just re-wake.
 
+## Cross-reference: versioned-state-planes red-team audit (2026-07-18)
+
+Phase 2's `phase2-read-anchors` audited-implementation cycle ran a 9-dimension red-team pass
+(adversarial-verified) covering `src/gateway/websocket.ts` and `src/gateway/routes.ts` as part of
+auditing Phase 1's presence work. Two findings deepen the `WS /bridge` and `/pending`+`/respond`
+rows above - not new gaps, further evidence toward the gate already decided but never built:
+
+- **`WS /bridge` register goes past the documented passive interception.** The row above says
+  joining a live team's name subscribes an attacker to its `channel_push` fan-out (passive). The
+  audit found `confirmedLeadTeams` (websocket.ts) is keyed by the team-name STRING alone, with no
+  binding to which socket actually answered the real handshake - so once any team has EVER
+  completed one real handshake (the normal case for every actively-used team), a brand-new
+  connection can register under that name claiming `isMainOrLead:true` and be instantly
+  `handshakeConfirmed` with zero challenge-response. Because `resolveLiveIncarnation` picks the
+  first confirmed socket in Map-insertion order, an attacker who registers first permanently
+  outranks the legitimate agent's own later reconnect - active impersonation (every
+  `crosstalk_send` to that team silently routes to the attacker), not just passive listening.
+  Unfixed - the real fix (binding confirmed-lead status to something more than a bare string,
+  without losing the fast-path's whole point of skipping re-confirmation for a KNOWN-good
+  reconnect) is a trust-model change, not a quick patch, and belongs in whatever implements the
+  origin-aware gate above rather than as an isolated patch.
+- **Channel job ids are deterministic and reused forever, which is worse than the `/pending`-leak
+  framing above.** The `/respond` guard ("requires a known session_id") assumes the id is a
+  leaked-but-otherwise-opaque secret. It is not: `storeKey({kind:"conv", conversationId, address})`
+  is a pure, computable function of two non-secret inputs (a conversationId, which "rides verbatim
+  in every session_id a caller has seen" per this doc's own `/pending` finding and the handshake
+  code's own comments; and a target address, public via `/teams`/`/discover`). Anyone who has ever
+  exchanged one message with a sender can compute every future job id for that sender without
+  `/pending` ever leaking anything, and `PendingJobStore.deliver()` allows unlimited re-delivery
+  on a persistent (channel) entry with no ownership check - so a forged reply can be POSTed at any
+  future time, indefinitely, attributed to any target the attacker names. Unfixed - the gate above
+  (gating `/respond`/`/poll` under `.1`-needs-token) closes the LAN-attacker case in this doc's own
+  stated scope, but does not address a same-Domain participant who legitimately holds the token
+  computing another participant's ids; worth confirming whether that residual is in scope for
+  whoever implements the gate, or is accepted under the "trusted collaborators" framing the
+  cross-Gateway trust model already uses elsewhere.
+
+Two smaller, already-fixed findings from the same pass (not part of the accepted gap above, fixed
+directly since they were simple, contained, and closed no legitimate use case): a conversationId
+collision on `WS /bridge` register no longer evicts/steals a DIFFERENT team's live socket (it only
+ever legitimately meant the same process reconnecting under its own unchanging team); and the
+plane-registry tripwire no longer crashes the whole gateway process if a single plane's own
+snapshot/identity computation throws.
+
 ## Cross-reference: plugin-actions (2026-07-11)
 
 `plans/plugin-actions.md` (deleted, shipped) added `POST /plugin-action`, a generic agent-initiated

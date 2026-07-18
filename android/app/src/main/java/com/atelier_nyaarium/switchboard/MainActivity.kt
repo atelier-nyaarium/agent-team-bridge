@@ -1019,8 +1019,8 @@ internal fun tabLabelFor(state: ChatState, team: String): String {
 		val candidate = if (label != null) "$label ($qualifier)" else qualifier
 		return candidate.takeIf { it !in otherLabels }
 	}
-	// A present label prefers at least spawn.session (n=2): a bare session id alone - especially now
-	// that ids are random hex, not a readable slug - tells a human nothing about which session,
+	// A present label prefers at least spawn.session (n=2): a bare session id alone (ids are random
+	// hex, not a readable slug) tells a human nothing about which session,
 	// defeating the point of qualifying at all. But a literal label elsewhere can coincidentally (or
 	// deliberately) block every tier from spawn.session up through the full address at once - in that
 	// exhausted case, retry the bare session id (n=1) as a last resort before giving up and showing
@@ -1582,7 +1582,7 @@ fun SessionCard(
 	val statusWord = statusWord(team.status)
 	// The board tile reads the presence plane directly (Team.working/needsLogin, daemon-derived and
 	// pushed on the poll response) rather than this device's own peek - a board session has no peek
-	// stream of its own now that pokeWorking is gone. Null means unknown (never observed, or
+	// stream of its own. Null means unknown (never observed, or
 	// derivation just became impossible), never false - a tile shows no pulse rather than a stale
 	// frozen one, so both chips are gated on an explicit `== true`, not a null-as-false fallback.
 	val checkTerminal = live && team.needsLogin == true

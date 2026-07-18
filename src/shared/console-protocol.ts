@@ -38,8 +38,9 @@ import type {
 //  console/chat semantics live in the gateway.
 //
 //  The wire shapes are zod schemas in shared/schemas.ts; this module derives
-//  the TS types from them and owns the protocol constants and session-id
-//  grammars. The Kotlin side consumes generated types from codegen-kotlin.ts.
+//  the TS types from them and owns the protocol constants. The session-id
+//  grammar lives in session-id.ts. The Kotlin side consumes generated types
+//  from codegen-kotlin.ts.
 
 // A diagnostic signal, not a hard compatibility gate: every wire addition here is additive and
 // optional, so an older client decoding a newer server's reply (or vice versa) already degrades

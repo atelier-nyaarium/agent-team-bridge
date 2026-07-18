@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ReadAnchors, readAnchorsPlaneName } from "../gateway/readAnchors.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
+import { ConsoleOpSchema } from "../shared/schemas.js";
 
 describe("ReadAnchors", () => {
 	it("the first report for a team always advances (nothing stored yet)", () => {
@@ -136,6 +137,46 @@ describe("ReadAnchors", () => {
 			// Restored epoch/counter carried through, not reset to a fresh mint.
 			expect(registry.version(name)?.epoch).toBe(777);
 			expect(registry.version(name)?.counter).toBe(3);
+		});
+	});
+
+	describe("abuse hardening", () => {
+		it("report_read's wire schema rejects an epoch outside the range a real device could ever mint", () => {
+			// mintEpoch (plane-registry.ts) caps at 0x7ffffffe - an unbounded epoch would let a single
+			// op permanently outrank every legitimate epoch this owner's real devices could ever send,
+			// with no reset path (see ReadAnchors.report's own monotonic merge).
+			const tooLarge = ConsoleOpSchema.safeParse({
+				kind: "report_read",
+				team: "team-a",
+				epoch: 0x7fffffff + 1,
+				seq: 0,
+			});
+			expect(tooLarge.success).toBe(false);
+			const negative = ConsoleOpSchema.safeParse({ kind: "report_read", team: "team-a", epoch: -1, seq: 0 });
+			expect(negative.success).toBe(false);
+			const atCeiling = ConsoleOpSchema.safeParse({
+				kind: "report_read",
+				team: "team-a",
+				epoch: 0x7fffffff,
+				seq: 0,
+			});
+			expect(atCeiling.success).toBe(true);
+		});
+
+		it("report() refuses a genuinely NEW team beyond the per-owner cap, without disturbing already-tracked teams", () => {
+			const registry = new PlaneRegistry();
+			const anchors = new ReadAnchors(registry, undefined);
+			for (let i = 0; i < 500; i++) {
+				expect(anchors.report("alice", `team-${i}`, { epoch: 1, seq: 1, at: 1000 })).toBe(true);
+			}
+			// The 501st distinct team is refused outright - never stored.
+			expect(anchors.report("alice", "team-500", { epoch: 1, seq: 1, at: 1000 })).toBe(false);
+			expect(anchors.snapshot().alice["team-500"]).toBeUndefined();
+			expect(Object.keys(anchors.snapshot().alice)).toHaveLength(500);
+			// An already-tracked team can still advance normally, unaffected by the cap.
+			expect(anchors.report("alice", "team-0", { epoch: 1, seq: 2, at: 2000 })).toBe(true);
+			// A different owner is entirely unaffected by this owner's cap.
+			expect(anchors.report("bob", "team-a", { epoch: 1, seq: 1, at: 1000 })).toBe(true);
 		});
 	});
 });

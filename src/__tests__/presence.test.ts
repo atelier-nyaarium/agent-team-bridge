@@ -201,8 +201,36 @@ describe("PresenceFacade class-kill lock: every mutator bumps the plane", () => 
 		expectBumped();
 		facade.clearAllWorking();
 		expectBumped();
+		facade.establishOnConfirm("proj.fresh", { live: { team: "proj.fresh", subId: "s1" } });
+		expectBumped();
 		facade.forget("proj.main");
 		expectBumped();
+	});
+
+	it("adoptOrReattach bumps on a genuine create but not on a reattach of the same id", () => {
+		const { facade, planeRegistry } = makeFacade();
+		const before = planeRegistry.version("presence")!.counter;
+		const created = facade.adoptOrReattach("dup", { spawn: "proj" });
+		expect(created?.created).toBe(true);
+		const afterCreate = planeRegistry.version("presence")!.counter;
+		expect(afterCreate).toBeGreaterThan(before);
+
+		const reattached = facade.adoptOrReattach("dup", { spawn: "proj" });
+		expect(reattached?.created).toBe(false);
+		expect(planeRegistry.version("presence")!.counter).toBe(afterCreate); // no bump on reattach
+	});
+
+	it("mintOrReattach bumps on a genuine mint but not on a reattach by mintedFrom", () => {
+		const { facade, planeRegistry } = makeFacade();
+		const before = planeRegistry.version("presence")!.counter;
+		const minted = facade.mintOrReattach({ spawn: "proj", mintedFrom: "retry-key-1" });
+		expect(minted.created).toBe(true);
+		const afterMint = planeRegistry.version("presence")!.counter;
+		expect(afterMint).toBeGreaterThan(before);
+
+		const reattached = facade.mintOrReattach({ spawn: "proj", mintedFrom: "retry-key-1" });
+		expect(reattached.created).toBe(false);
+		expect(planeRegistry.version("presence")!.counter).toBe(afterMint); // no bump on reattach
 	});
 
 	it("clearLive bumps when it actually drops a live pointer that was set (an alias re-incarnation ending)", () => {

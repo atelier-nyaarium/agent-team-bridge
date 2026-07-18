@@ -202,8 +202,8 @@ export const TeamInfoSchema = z
 
 /** One source gateway's presence-plane version, as carried on the wire: an array of these (never
  * a map - codegen has no typed map, only an untyped JsonObject fallback outside the fixture
- * gates). `gateway` is the source gateway's id; in phase 1 (no federation exchange live yet) the
- * array holds exactly one entry, this gateway's own. */
+ * gates). `gateway` is the source gateway's id; today the array holds exactly one entry, this
+ * gateway's own, until cross-Gateway presence exchange is implemented. */
 export const PresenceVersionSchema = z
 	.object({
 		gateway: z.string(),
@@ -375,7 +375,12 @@ export const ConsoleOpSchema = z
 		z.object({
 			kind: z.literal("report_read"),
 			team: z.string().min(1).max(128),
-			epoch: z.number().int(),
+			// Bounded to the signed-32-bit range a genuine mailbox epoch is minted within
+			// (plane-registry.ts's mintEpoch) - unbounded would let a single malformed or malicious
+			// report permanently outrank every legitimate epoch this owner's real devices could ever
+			// mint, since the merge rule (readAnchors.ts) has no ceiling of its own and no way to
+			// reset a poisoned value once stored.
+			epoch: z.number().int().nonnegative().max(0x7fffffff),
 			seq: z.number().int().nonnegative(),
 		}),
 		// Capture an agent's visible tmux pane for the console terminal view. `target` is the

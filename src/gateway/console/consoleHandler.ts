@@ -725,8 +725,8 @@ export function createConsoleDispatcher({
 
 				// The presence plane version(s) the Console already holds, translated from the wire's
 				// per-source-gateway array to the registry's plane-name-keyed presented map. Only this
-				// Gateway's own entry maps to a locally-registered plane in phase 1 (no federation
-				// exchange live yet - item 6); a foreign/unrecognized source is simply absent from the
+				// Gateway's own entry maps to a locally-registered plane, since only this Gateway's own
+				// federation exchange is registered here; a foreign/unrecognized source is simply absent from the
 				// map, which changedSince/waitForBump both already treat as "unknown, ship current
 				// truth" rather than a special case here. Absent knownPresenceVersions (a pre-plane
 				// console build) skips the registry entirely - unchanged behavior for that build,
@@ -745,8 +745,9 @@ export function createConsoleDispatcher({
 
 				// The linked-peers plane: same registry, a single scalar presented version (no
 				// per-source array - this Gateway's own roster has no multi-source concept). Unlike
-				// presence's array, a single optional scalar cannot distinguish "a pre-Phase-2
-				// console" from "this session's cold boot" - both simply present nothing, and both
+				// presence's array, a single optional scalar cannot distinguish "a console build that
+				// never sends knownLinkedPeersVersion" from "this session's cold boot" - both simply
+				// present nothing, and both
 				// want the same outcome (ship current), so this always participates whenever the
 				// registry itself is wired, never gated on the op field's own presence.
 				const lpr = planeRegistry;

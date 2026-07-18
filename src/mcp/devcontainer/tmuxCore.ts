@@ -12,8 +12,8 @@ import {
 } from "../../shared/host-op.js";
 import { parseSessionName } from "../../shared/session-id.js";
 
-// The pane-screen classifiers moved to shared/agent-screen.ts (the gateway's vibe-check idle gate
-// needs them too); re-exported here so the daemon and the existing tests keep their import path.
+// The pane-screen classifiers live in shared/agent-screen.ts (the gateway's vibe-check idle gate needs them too);
+// re-exported here so the daemon and existing tests can use this import path.
 export { isAgentReady, isAgentWorking, isAtPrompt, isLoggedOut } from "../../shared/agent-screen.js";
 
 ////////////////////////////////
