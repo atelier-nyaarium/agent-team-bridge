@@ -611,15 +611,17 @@ deviation; both are corrected below.
 
 ## Phase 2 - after phase 1 green
 
-- Physically delete the legacy fallback timer + the app's teams() writer (fleet upgraded).
-- Linked-peers roster + cross-device unread (read-anchor) planes as one-call registrations on
-  the registry (they inherit versioning, settle, tripwire, closed-world for free).
-- TerminalView wakeRequested latch rework on the now-reliable online signal.
-- Sweep-delete every remaining hand-rolled per-system sync path (refreshLinkedPeers folding,
+- ✅ Physically delete the legacy fallback timer + the app's teams() writer (fleet upgraded).
+- ✅ Linked-peers roster + cross-device unread (read-anchor) planes as one-call registrations on
+  the registry (they inherit versioning, settle, tripwire; the closed-world enforcement they
+  "inherit for free" turned out to not exist yet for ANY plane, presence included - see
+  `plans/cross-gateway-presence-exchange.md`).
+- ✅ TerminalView wakeRequested latch rework on the now-reliable online signal.
+- ✅ Sweep-delete every remaining hand-rolled per-system sync path (refreshLinkedPeers folding,
   reconcile hacks, timer-shaped residue) - "the ones I didn't complain about (yet!)".
 - Decide cross-Domain presence (linked peers' tiles) - currently discovery-refresh; phase-3
-  shaped, needs its own questionaire pass if wanted.
-- Docs: CLAUDE.md architecture section + plans/pain-points.md cross-links.
+  shaped, needs its own questionaire pass if wanted. **Not started - ask the user first.**
+- ✅ Docs: CLAUDE.md architecture section + plans/pain-points.md cross-links.
 
 ## Audit (plan-refinement lap 1)
 
