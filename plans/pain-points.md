@@ -1,5 +1,43 @@
 # Pain points
 
+## Versioned state planes (`plans/versioned-state-planes.md`, active - 2026-07-18)
+
+Phase 1 (plane registry framework, presence facade, PollWaitHub, working/needs-login derivation,
+intent tracking) shipped and deployed. Phase 2 (legacy-timer deletion, linked-peers plane,
+read-anchor sync plane, TerminalView latch rework, hand-rolled-sync-path sweep) mostly shipped;
+item 5 (cross-Domain presence - needs its own questionaire, not yet asked) remains.
+
+### Phase 1's federation exchange was silently never built
+
+Phase 1 item 6 (a gateway-owned anti-entropy timer for cross-Gateway VERSIONED presence exchange -
+`presence_push`, per-source sub-planes, a peer freshness state machine) was fully designed across
+three audit laps but never implemented - the shipped presence plane is local-Gateway-only, directly
+reversing an explicit user ruling (multi-gateway "should work in parallel, equally") with no
+recorded scope cut anywhere. Found by Phase 2's own audited-implementation cycle; the full writeup
+and the preserved original design are in `plans/cross-gateway-presence-exchange.md`. The
+`presenceFresh` wire field (declared, never assigned a value) and the `planeField()` closed-world
+schema-tagging enforcement (promised three times, never built - only the reactive tripwire exists)
+are the same gap's direct symptoms.
+
+### Real bugs the read-anchors/Phase-1 audit found and fixed
+
+An adversarial align + red-team pass over the read-anchor sync plane and Phase 1's presence surface
+found and fixed several genuine issues, none of which had any prior test coverage: a WebSocket
+register path that never announced a fresh connection to the presence plane (stale until an
+unrelated bump or the 60s tripwire); an intent-tracking TTL nine times too short relative to the
+real poll-hold cadence, falsely dropping the derived peek cadence to background mid-hold on every
+healthy session; a `report_read` op with no bound on its `epoch` field, letting a single malformed
+op permanently and irrecoverably poison an owner's cross-device read-sync state; the same op's
+`team` field having no cap, letting one device grow an owner's read-anchor map (and the gateway's
+own disk-write cost) without bound; the plane-registry tripwire having zero per-plane exception
+isolation, so any single plane's snapshot/identity computation throwing crashed the entire gateway
+process for every connected session; and a WebSocket conversationId collision evicting an unrelated
+team's live socket with no team-match check, since a conversationId is not a secret. All fixed and
+tested. The WebSocket handshake's `confirmedLeadTeams` team-impersonation gap and the
+deterministic-forever channel-job-id reply-forgery gap were NOT fixed - they deepen
+`plans/gateway-auth-surface.md`'s already-designed-but-never-built `GATEWAY_TOKEN` gate rather than
+being new, isolated bugs (see that doc's own cross-reference section for the detail).
+
 ## Console hardening (`plans/console-hardening.md`, deleted, shipped - 2026-07-16)
 
 Migrated from `plans/console-hardening.md` (deleted, shipped - the four phases the idle-pushback

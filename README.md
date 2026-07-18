@@ -57,12 +57,18 @@ The gateway listens on port 20000 and uses the external network `switchboard`.
 **1. Install the plugin.** In Claude Code:
 
 ```
-/plugin install atelier-nyaarium/switchboard
+claude plugin marketplace add atelier-nyaarium/claude-marketplace
+
+claude plugin install switchboard@atelier-nyaarium
 ```
 
-The plugin provides the MCP server and skills automatically.
+Autoupdate is a settings flag. One-line jq version:
 
-**2. Set environment variables** in your devcontainer:
+```
+tmp=$(mktemp) && jq '. * {extraKnownMarketplaces: {"atelier-nyaarium": {autoUpdate: true}}}' ~/.claude/settings.json > "$tmp" && mv "$tmp" ~/.claude/settings.json
+```
+
+**2. Set environment variables** in your devcontainer - this is what lets your team's MCP plugin find its gateway, and is required for every devcontainer regardless of whether that gateway is enrolled into federation:
 
 - `PROJECT_NAME` - Your team's name on the bridge (e.g. `my-project`)
 - `BRIDGE_ROUTER_URL` - Router URL (default: `http://switchboard:20000`)
@@ -84,6 +90,10 @@ This adds `switchboard-network` to your `.devcontainer/compose.yml`.
 ```bash
 /path/to/switchboard/uninstall.sh
 ```
+
+### Optional: Android console app and cross-machine federation
+
+The steps above are everything you need for local crosstalk between devcontainers on one machine - a gateway that is never enrolled still boots in "arming mode" and routes that traffic fine. If you also want the native Android console app, or to link multiple machines' gateways together, the gateway's owner (a one-time action per gateway, not something each devcontainer does) runs `./setup.sh` - see the "Deploying the federation" section of `CLAUDE.md` for the full enrollment flow.
 
 ## MCP Tools
 
