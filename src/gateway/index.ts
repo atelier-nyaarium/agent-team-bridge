@@ -50,6 +50,7 @@ import { createSealer, type Sealer } from "./federation/sealer.js";
 import { HostOpCoordinator } from "./hostOpCoordinator.js";
 import { IntentTracker } from "./intent.js";
 import { PresenceFacade } from "./presence.js";
+import { ReadAnchors } from "./readAnchors.js";
 import { createRoutes } from "./routes.js";
 import { createVibeCheck } from "./vibeCheck.js";
 import { decideWakeCreate, WakeCoordinator, type WakeResult } from "./wake.js";
@@ -172,6 +173,12 @@ export async function startGateway(): Promise<void> {
 	const restoredPlanes: Record<string, PlanePersistedState> | undefined = isWrapped
 		? (loadedResumeRaw as { planes?: Record<string, PlanePersistedState> }).planes
 		: undefined;
+	// Read-anchors' own raw per-owner data - a THIRD field on this same wrapped file, alongside
+	// sessions/planes, so it stays covered by the identical one-atomic-write property (see this
+	// file's own doc above) rather than becoming a fourth durable-store file.
+	const restoredReadAnchors: unknown = isWrapped
+		? (loadedResumeRaw as { readAnchors?: unknown }).readAnchors
+		: undefined;
 	try {
 		const jobs = jobsDurable.load();
 		if (Array.isArray(jobs)) store.restore(jobs as Parameters<typeof store.restore>[0]);
@@ -222,6 +229,14 @@ export async function startGateway(): Promise<void> {
 	// next poll, well inside the TTL a real client ever notices).
 	const intentTracker = new IntentTracker();
 
+	// Cross-device read-position sync: one plane PER OWNER, registered lazily on that owner's own
+	// first poll/report (see readAnchors.ts) rather than up front like presence - there is no fixed
+	// owner set known at boot. restoredPlanes is read lazily at that point (closed over here), so a
+	// clean-shutdown-restored owner still resumes its counter lineage correctly even though its
+	// plane is registered well after this constructor runs.
+	const readAnchors = new ReadAnchors(planeRegistry, restoredPlanes);
+	readAnchors.restore(restoredReadAnchors);
+
 	// The federation replay-guard wires its own persistence here once built (it only
 	// exists when the evie bridge is configured); null-safe until then.
 	let replayPersist: (() => void) | null = null;
@@ -236,6 +251,7 @@ export async function startGateway(): Promise<void> {
 		sessionResumeDurable.save({
 			sessions: sessionStore.snapshot(),
 			planes: planeRegistry.persistedState(cleanShutdown),
+			readAnchors: readAnchors.snapshot(),
 		});
 		replayPersist?.();
 	};
@@ -940,6 +956,7 @@ export async function startGateway(): Promise<void> {
 			planeRegistry,
 			presence,
 			intentTracker,
+			readAnchors,
 			relayToHost,
 			tryWakeTeam,
 			isWakeInFlight: (team) => inflightWakes.has(team) || inflightCreates.has(team),

@@ -164,6 +164,15 @@ sealed class ConsoleOp {
 		val knownPresenceVersions: List<PresenceVersion>? = null,
 		val focus: FocusIntent? = null,
 		val knownLinkedPeersVersion: LinkedPeersVersion? = null,
+		val knownReadAnchorsVersion: ReadAnchorsVersion? = null,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("report_read")
+	data class ReportRead(
+		val team: String,
+		val epoch: Long,
+		val seq: Long,
 	) : ConsoleOp()
 
 	@Serializable
@@ -356,6 +365,8 @@ data class ConsolePollResult(
 	val presenceVersions: List<PresenceVersion>? = null,
 	val linkedPeers: List<CrossDomainPeerEntry>? = null,
 	val linkedPeersVersion: LinkedPeersVersion? = null,
+	val readAnchors: List<ReadAnchorWireEntry>? = null,
+	val readAnchorsVersion: ReadAnchorsVersion? = null,
 	val settled: String? = null,
 )
 
@@ -751,6 +762,12 @@ data class LinkedPeersVersion(
 )
 
 @Serializable
+data class ReadAnchorsVersion(
+	val epoch: Long,
+	val version: Long,
+)
+
+@Serializable
 data class SignedXDomainLink(
 	val link: XDomainLink,
 	val ownerSignPub: String,
@@ -790,6 +807,19 @@ data class CrossDomainPeerEntry(
 	val domainId: String,
 	val gatewayId: String,
 	val ownerSignPub: String,
+)
+
+@Serializable
+data class ReadAnchorWireEntry(
+	val team: String,
+	val epoch: Long,
+	val seq: Long,
+	val at: Long,
+)
+
+@Serializable
+data class ConsoleReportReadResult(
+	val advanced: Boolean,
 )
 
 @Serializable

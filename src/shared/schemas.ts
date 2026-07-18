@@ -253,6 +253,31 @@ export const CrossDomainPeerEntrySchema = z
 	})
 	.meta({ id: "CrossDomainPeerEntry" });
 
+/** Same scalar shape as LinkedPeersVersion - a read-anchors plane is PER OWNER (never a single
+ * Gateway-wide plane; see readAnchors.ts's own doc on why), but each owner's own plane still has
+ * no multi-source concept of its own, so one scalar version covers it. */
+export const ReadAnchorsVersionSchema = z
+	.object({
+		epoch: z.number().int(),
+		version: z.number().int().nonnegative(),
+	})
+	.meta({ id: "ReadAnchorsVersion" });
+
+/** One team's synced read position: the furthest any of this owner's OWN devices has confirmed
+ * reading, merged monotonically server-side (see ReadAnchors.report - never regresses). `epoch`/
+ * `seq` are the SAME mailbox journal coordinate the app's own local ReadAnchor already uses
+ * (device-mailbox.ts) - meaningful across an owner's whole device fleet because the mailbox itself
+ * is already shared per owner, not per device. An array (never a map - codegen has no typed map
+ * outside the fixture gates), one entry per team that has ever been reported. */
+export const ReadAnchorWireEntrySchema = z
+	.object({
+		team: z.string(),
+		epoch: z.number().int(),
+		seq: z.number().int().nonnegative(),
+		at: z.number().int().nonnegative(),
+	})
+	.meta({ id: "ReadAnchorWireEntry" });
+
 ////////////////////////////////
 //  Console Relay Frame Schema
 //
@@ -335,6 +360,23 @@ export const ConsoleOpSchema = z
 			// here, both simply want the current snapshot) ships unconditionally; present ships
 			// only if the version actually differs.
 			knownLinkedPeersVersion: LinkedPeersVersionSchema.optional(),
+			// This owner's read-anchors plane version already held - same absent-ships-unconditionally
+			// shape as knownLinkedPeersVersion (one scalar per owner, no multi-source concept).
+			knownReadAnchorsVersion: ReadAnchorsVersionSchema.optional(),
+		}),
+		// Report this device's own read position for one team, so another of the SAME owner's
+		// devices can learn "already read up to here" - see readAnchors.ts's monotonic merge (a
+		// stale report can never regress what a different device already confirmed read). `epoch`/
+		// `seq` are the device's own local ReadAnchor coordinate (device-mailbox.ts's journal),
+		// meaningful across the owner's whole device fleet since the mailbox itself is shared per
+		// owner. Idempotent by construction (report() is monotonic, not a one-shot side effect), so
+		// this is deliberately NOT in isMutatingOp's opId-cache list - a retried report just
+		// re-applies the same (harmless, idempotent) comparison.
+		z.object({
+			kind: z.literal("report_read"),
+			team: z.string().min(1).max(128),
+			epoch: z.number().int(),
+			seq: z.number().int().nonnegative(),
 		}),
 		// Capture an agent's visible tmux pane for the console terminal view. `target` is the
 		// gateway-qualified session name; the gateway resolves it to the host-agent's own tmux
@@ -705,11 +747,15 @@ export const ConsolePollResultSchema = z
 		// accompanies `linkedPeers` (never one without the other).
 		linkedPeers: z.array(CrossDomainPeerEntrySchema).optional(),
 		linkedPeersVersion: LinkedPeersVersionSchema.optional(),
+		// This owner's read-anchors plane, same piggyback shape again - a single scalar version
+		// (see knownReadAnchorsVersion) and the full per-team snapshot on any real change.
+		readAnchors: z.array(ReadAnchorWireEntrySchema).optional(),
+		readAnchorsVersion: ReadAnchorsVersionSchema.optional(),
 		// Why this poll settled: which plane's bump woke it (or a mailbox append, or the hold simply
 		// elapsing). The Console's instant-empty-response heuristic (its old-gateway degradation
 		// signal) reads this so a plane-only settle - empty mailbox entries, no gap - is never
 		// misread as a broken gateway and does not trip its backoff.
-		settled: z.enum(["mailbox", "presence", "linkedPeers", "domain", "timeout"]).optional(),
+		settled: z.enum(["mailbox", "presence", "linkedPeers", "readAnchors", "domain", "timeout"]).optional(),
 	})
 	.meta({ id: "ConsolePollResult" });
 
@@ -736,6 +782,15 @@ export const ConsoleTmuxSendResultSchema = z
 		sent: z.boolean(),
 	})
 	.meta({ id: "ConsoleTmuxSendResult" });
+
+export const ConsoleReportReadResultSchema = z
+	.object({
+		// Whether this report actually advanced the stored anchor - false means another of this
+		// owner's devices already reported an equal-or-further position (report()'s monotonic
+		// merge), which the console can use as a hint that it is not the furthest-read device.
+		advanced: z.boolean(),
+	})
+	.meta({ id: "ConsoleReportReadResult" });
 
 export const ConsoleCreateSessionResultSchema = z
 	.object({
@@ -943,6 +998,7 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleSendResultSchema,
 	ConsoleRespondResultSchema,
 	ConsolePollResultSchema,
+	ConsoleReportReadResultSchema,
 	ConsolePeekResultSchema,
 	ConsoleTmuxSendResultSchema,
 	ConsoleCreateSessionResultSchema,

@@ -7,6 +7,7 @@ import {
 } from "../gateway/console/consoleHandler.js";
 import { ConsolePeer } from "../gateway/console/consolePeer.js";
 import { IntentTracker } from "../gateway/intent.js";
+import { ReadAnchors, readAnchorsPlaneName } from "../gateway/readAnchors.js";
 import type { WakeResult } from "../gateway/wake.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../gateway/websocket.js";
 import type { ConsoleOp, CrossDomainPeerEntry, OpenedConsoleFrame } from "../shared/console-protocol.js";
@@ -78,7 +79,10 @@ interface Harness {
 function makeHarness(
 	overrides: Partial<ConsoleRoutes> = {},
 	deps: Partial<
-		Pick<ConsoleHandlerDeps, "domainStatus" | "domain" | "planeRegistry" | "presence" | "intentTracker">
+		Pick<
+			ConsoleHandlerDeps,
+			"domainStatus" | "domain" | "planeRegistry" | "presence" | "intentTracker" | "readAnchors"
+		>
 	> = {},
 ): Harness {
 	const registry: TeamRegistry = new Map();
@@ -124,6 +128,7 @@ function makeHarness(
 		planeRegistry: deps.planeRegistry,
 		presence: deps.presence,
 		intentTracker: deps.intentTracker,
+		readAnchors: deps.readAnchors,
 	});
 	return { registry, conversationRegistry, mailboxStore, sendCalls, respondCalls, handler };
 }
@@ -1144,6 +1149,145 @@ describe("poll: linked-peers piggyback", () => {
 		const result = reply.result as { linkedPeers?: CrossDomainPeerEntry[]; settled?: string };
 		expect(result.settled).toBe("linkedPeers");
 		expect(result.linkedPeers).toHaveLength(2);
+	});
+});
+
+describe("report_read + poll: read-anchors piggyback", () => {
+	it("report_read is rejected when read-anchor sync is not wired", async () => {
+		const h = makeHarness();
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "report_read", team: "team-a", epoch: 1, seq: 10 }, "p1"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("not available");
+	});
+
+	it("report_read applies a genuine advance and echoes it back as `advanced: true`", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const readAnchors = new ReadAnchors(planeRegistry, undefined);
+		const h = makeHarness({}, { planeRegistry, readAnchors });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "report_read", team: "team-a", epoch: 1, seq: 10 }, "p1"),
+		);
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toEqual({ advanced: true });
+		expect(readAnchors.snapshot()[OWNER]?.["team-a"]).toEqual({ epoch: 1, seq: 10, at: expect.any(Number) });
+	});
+
+	it("report_read with a stale (lower-seq, same-epoch) position echoes `advanced: false` and never regresses the stored anchor", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const readAnchors = new ReadAnchors(planeRegistry, undefined);
+		const h = makeHarness({}, { planeRegistry, readAnchors });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		await h.handler.handleFrame(frame({ kind: "report_read", team: "team-a", epoch: 1, seq: 50 }, "p1"));
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "report_read", team: "team-a", epoch: 1, seq: 30 }, "p2"),
+		);
+		expect(reply.result).toEqual({ advanced: false });
+		expect(readAnchors.snapshot()[OWNER]?.["team-a"].seq).toBe(50);
+	});
+
+	it("an absent knownReadAnchorsVersion ships this owner's current anchors unconditionally", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const readAnchors = new ReadAnchors(planeRegistry, undefined);
+		readAnchors.report(OWNER, "team-a", { epoch: 1, seq: 10, at: 1000 });
+		const h = makeHarness({}, { planeRegistry, readAnchors });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const reply = await h.handler.handleFrame(frame({ kind: "poll" }, "p1"));
+		const result = reply.result as {
+			readAnchors?: { team: string; epoch: number; seq: number; at: number }[];
+			readAnchorsVersion?: { epoch: number; version: number };
+			settled?: string;
+		};
+		expect(result.readAnchors).toEqual([{ team: "team-a", epoch: 1, seq: 10, at: 1000 }]);
+		expect(result.readAnchorsVersion).toBeDefined();
+		expect(result.settled).toBe("readAnchors");
+	});
+
+	it("a matching presented version omits the read-anchors piggyback entirely", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const readAnchors = new ReadAnchors(planeRegistry, undefined);
+		readAnchors.report(OWNER, "team-a", { epoch: 1, seq: 10, at: 1000 });
+		const h = makeHarness({}, { planeRegistry, readAnchors });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		const first = (await h.handler.handleFrame(frame({ kind: "poll" }, "p1"))).result as {
+			readAnchorsVersion: { epoch: number; version: number };
+		};
+		const second = await h.handler.handleFrame(
+			frame({ kind: "poll", knownReadAnchorsVersion: first.readAnchorsVersion }, "p2"),
+		);
+		const result = second.result as Record<string, unknown>;
+		expect(result.readAnchors).toBeUndefined();
+		expect(result.readAnchorsVersion).toBeUndefined();
+		expect(result.settled).toBe("timeout");
+	});
+
+	it("a report_read between two polls from another of the SAME owner's devices ships on the next poll", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const readAnchors = new ReadAnchors(planeRegistry, undefined);
+		const h = makeHarness({}, { planeRegistry, readAnchors });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		const first = (await h.handler.handleFrame(frame({ kind: "poll" }, "p1"))).result as {
+			readAnchorsVersion?: { epoch: number; version: number };
+		};
+		// No knownReadAnchorsVersion was presented, so this plane ships unconditionally - same
+		// absent-scalar-ships-current convention as linked-peers, even though nothing was reported yet.
+		expect(first.readAnchorsVersion).toBeDefined();
+
+		// A DIFFERENT device of the same owner reports a read position (matching frame()'s default
+		// owner, just a different device/conversationId).
+		await h.handler.handleFrame(
+			frame({ kind: "report_read", team: "team-a", epoch: 1, seq: 5 }, "tablet-op1", "tablet", "conv-tablet"),
+		);
+
+		const second = await h.handler.handleFrame(frame({ kind: "poll" }, "p2"));
+		const result = second.result as { readAnchors?: { team: string }[]; settled?: string };
+		expect(result.readAnchors).toEqual([{ team: "team-a", epoch: 1, seq: 5, at: expect.any(Number) }]);
+		expect(result.settled).toBe("readAnchors");
+	});
+
+	it("a held poll wakes early on a read-anchors bump, not the full hold", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const readAnchors = new ReadAnchors(planeRegistry, undefined);
+		readAnchors.report(OWNER, "team-a", { epoch: 1, seq: 10, at: 1000 });
+		const h = makeHarness({}, { planeRegistry, readAnchors });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		const first = (await h.handler.handleFrame(frame({ kind: "poll" }, "p1"))).result as {
+			readAnchorsVersion: { epoch: number; version: number };
+		};
+
+		const held = h.handler.handleFrame(
+			frame({ kind: "poll", holdMs: 5_000, knownReadAnchorsVersion: first.readAnchorsVersion }, "p2"),
+		);
+		await new Promise((r) => setTimeout(r, 20));
+		readAnchors.report(OWNER, "team-a", { epoch: 1, seq: 20, at: 2000 });
+		planeRegistry.markDirty(readAnchorsPlaneName(OWNER));
+
+		const start = Date.now();
+		const reply = await held;
+		expect(Date.now() - start).toBeLessThan(2_000); // woke on the bump, not the 5s hold
+		const result = reply.result as { readAnchors?: { seq: number }[]; settled?: string };
+		expect(result.settled).toBe("readAnchors");
+		expect(result.readAnchors?.[0].seq).toBe(20);
+	});
+
+	it("one owner's poll never sees a DIFFERENT owner's read-anchors plane", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const readAnchors = new ReadAnchors(planeRegistry, undefined);
+		readAnchors.report("a-different-owner-id", "team-a", { epoch: 1, seq: 999, at: 1000 });
+		const h = makeHarness({}, { planeRegistry, readAnchors });
+		await h.handler.handleFrame(frame({ kind: "register" })); // registers under the default OWNER
+		const reply = await h.handler.handleFrame(frame({ kind: "poll" }, "p1"));
+		const result = reply.result as Record<string, unknown>;
+		// This owner's own (empty) plane ships - never the other owner's data, and never undefined
+		// (absent knownReadAnchorsVersion always ships current truth, per the scalar-plane convention).
+		expect(result.readAnchors).toEqual([]);
+		expect(result.settled).toBe("readAnchors");
 	});
 });
 

@@ -17,6 +17,7 @@ import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.LinkedPeersVersion
 import com.atelier_nyaarium.switchboard.proto.PresenceVersion
+import com.atelier_nyaarium.switchboard.proto.ReadAnchorsVersion
 import com.atelier_nyaarium.switchboard.proto.SasCrypto
 import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.SignedAdmission
@@ -436,6 +437,18 @@ internal fun reanchorAfterForget(newThread: List<Message>, anchor: ReadAnchor?):
 	if (anchor == null || anchorIndex(newThread, anchor) >= 0) return anchor
 	return newThread.lastOrNull { it.countsUnread() && it.at <= anchor.at }?.let { ReadAnchor(it.epoch, it.seq, it.at) }
 }
+
+/** Teams whose local read anchor has advanced past what this device last reported to the Gateway's
+ * cross-device read-anchor sync plane - the pure decision half of
+ * ChatRepository.reportLocalReadAdvances, extracted so it is directly testable without a full
+ * repository instance (mirrors isAnchorAdvance/reanchorAfterForget above). A team absent from
+ * `lastReported` (never reported this process, or just adopted a synced value - see
+ * ChatRepository.applyReadAnchors) needs reporting only if its CURRENT anchor actually differs. */
+internal fun teamsNeedingReadReport(readAnchors: Map<String, ReadAnchor>, lastReported: Map<String, ReadAnchor>): List<String> =
+	readAnchors.filter { (team, anchor) ->
+		val already = lastReported[team]
+		already == null || already.epoch != anchor.epoch || already.seq != anchor.seq
+	}.keys.toList()
 
 data class ChatState(
 	val provisioned: Boolean = false,
@@ -955,6 +968,16 @@ class ChatRepository(
 	// multi-source concept. Null (never persisted) means this session has not applied one yet, which
 	// the Gateway treats the same as a legacy client - ship the current roster unconditionally.
 	@Volatile private var knownLinkedPeersVersion: LinkedPeersVersion? = null
+
+	// This owner's read-anchors plane version last applied - same role/shape as
+	// knownLinkedPeersVersion, for the cross-device read-position sync plane (see applyReadAnchors).
+	@Volatile private var knownReadAnchorsVersion: ReadAnchorsVersion? = null
+
+	// The per-team read anchor last REPORTED to the Gateway (via report_read), so the poll loop
+	// reports a team's local anchor only once per genuine local advance instead of every cycle.
+	// Never persisted: a fresh process starts empty, so its first cycle re-reports every team's
+	// current anchor - a harmless no-op on the Gateway if nothing actually changed (monotonic merge).
+	@Volatile private var lastReportedReadAnchors: Map<String, ReadAnchor> = emptyMap()
 
 	/** Set by the service: called per poll with the new inbound messages of one
 	 * team, so a background burst can become a notification. */
@@ -1967,6 +1990,55 @@ class ChatRepository(
 		_state.update { it.copy(linkedPeerOwners = owners) }
 	}
 
+	/** Apply the read-anchors plane's pushed snapshot: another of this owner's OWN devices may have
+	 * read further than this one has locally recorded. Monotonic, mirroring the Gateway's own merge
+	 * (readAnchors.ts) but resolved by ROW POSITION rather than numeric epoch/seq (this device's
+	 * thread is its own local render order - see isAnchorAdvance's own doc on why equality/position,
+	 * not numeric comparison, is the sound check here). A synced entry whose row this device has not
+	 * drained yet simply does not resolve (isAnchorAdvance returns false) and is silently skipped -
+	 * low-stakes by design (see readAnchors.ts): it self-heals the moment this device's OWN reading
+	 * catches up and reports past it, so there is nothing to retry or queue here. Called AFTER this
+	 * poll's own fresh entries are folded into `_state.threads` (the poll loop's burst-append loop),
+	 * so a row that arrived in the SAME response as its own read-anchor bump already resolves. Marks
+	 * every applied entry as already-reported too, so the very next cycle's outbound report pass does
+	 * not immediately bounce a just-adopted synced value straight back to the Gateway. */
+	private fun applyReadAnchors(entries: List<com.atelier_nyaarium.switchboard.proto.ReadAnchorWireEntry>) {
+		var anyChanged = false
+		val next = _state.updateAndGet { s ->
+			var st = s
+			for (e in entries) {
+				val team = e.team
+				val thread = st.threads[team].orEmpty()
+				val candidate = ReadAnchor(e.epoch, e.seq, e.at)
+				if (isAnchorAdvance(thread, st.readAnchors[team], candidate)) {
+					anyChanged = true
+					lastReportedReadAnchors = lastReportedReadAnchors + (team to candidate)
+					st = st.copy(readAnchors = st.readAnchors + (team to candidate)).recomputeUnread(team, thread)
+				}
+			}
+			st
+		}
+		if (anyChanged) persistReadAnchors(next.readAnchors)
+	}
+
+	/** Report every team whose local read anchor has advanced past what this device last told the
+	 * Gateway (see lastReportedReadAnchors). Fire-and-forget per team: a failure here must never
+	 * surface as a poll failure (it would wrongly trip the offline/reconnect UI for what is, per
+	 * readAnchors.ts, low-stakes data that self-heals on the next successful report), so each report
+	 * is individually caught and logged. Marks a team reported regardless of the Gateway's own
+	 * `advanced` verdict - even a false (another device already reported further) means THIS device
+	 * has successfully told the Gateway its own position, so re-sending it every cycle would be
+	 * pure waste. */
+	private suspend fun reportLocalReadAdvances() {
+		val anchors = _state.value.readAnchors
+		for (team in teamsNeedingReadReport(anchors, lastReportedReadAnchors)) {
+			val anchor = anchors.getValue(team)
+			runCatching { client().reportRead(team, anchor.epoch, anchor.seq) }
+				.onSuccess { lastReportedReadAnchors = lastReportedReadAnchors + (team to anchor) }
+				.onFailure { DebugLog.log("Plane", "report_read failed for $team: ${it.message?.take(120)}") }
+		}
+	}
+
 	/** A friend Domain's sessions visible to me (shared to my Domain): the peer's discovery
 	 * entries tagged with its domainId. Each is a candidate "their session my agents can reach". */
 	fun peerSessions(domainId: String): List<Team> {
@@ -2622,6 +2694,7 @@ class ChatRepository(
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
 		knownPresenceVersions = emptyList()
 		knownLinkedPeersVersion = null
+		knownReadAnchorsVersion = null
 		pollInterrupt?.complete(Unit)
 		refreshDiscovery()
 	}
@@ -2992,13 +3065,14 @@ class ChatRepository(
 					val focus = currentFocus
 					val presented = knownPresenceVersions
 					val presentedLinkedPeers = knownLinkedPeersVersion
+					val presentedReadAnchors = knownReadAnchorsVersion
 					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms focus=${focus.screen}")
 					val mb = if (hold > 0) {
 						pollRacingFocusChange {
-							client().poll(params.cursor, params.epoch, hold, presented, focus, presentedLinkedPeers)
+							client().poll(params.cursor, params.epoch, hold, presented, focus, presentedLinkedPeers, presentedReadAnchors)
 						}
 					} else {
-						client().poll(params.cursor, params.epoch, hold, presented, focus, presentedLinkedPeers)
+						client().poll(params.cursor, params.epoch, hold, presented, focus, presentedLinkedPeers, presentedReadAnchors)
 					}
 					if (mb == null) {
 						DebugLog.log("Plane", "poll interrupted by a focus/refresh change - reissuing immediately")
@@ -3030,6 +3104,14 @@ class ChatRepository(
 							applyLinkedPeers(peers)
 						}
 					}
+					// Read-anchors plane: same generalized shape again, one plane per owner. The version
+					// bumps now, but applying the entries themselves waits until AFTER this poll's own
+					// fresh mailbox entries are folded into `_state.threads` below (applyReadAnchors
+					// resolves each synced position by ROW in that thread, so a message that arrived in
+					// this SAME response must already be appended before its own read-anchor bump can
+					// resolve).
+					if (mb.readAnchorsVersion != null) knownReadAnchorsVersion = mb.readAnchorsVersion
+					val pendingReadAnchors = mb.readAnchors
 					// Tombstone-expiry self-heal: re-derive `teams` from the cached raw snapshot
 					// against the CURRENT tombstone set on every tick, fresh presence or not - see
 					// reapplyCachedTeams. A failed or remote forget's tombstone then resurrects the
@@ -3140,6 +3222,16 @@ class ChatRepository(
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team SKIPPED (no body, no files, no status)")
 						}
 					}
+					// Apply the read-anchors piggyback now that this poll's own fresh entries (if any)
+					// are already folded into `_state.threads` above - see pendingReadAnchors' own doc.
+					pendingReadAnchors?.let { entries ->
+						DebugLog.log("Plane", "readAnchors settled=${mb.settled} rows=${entries.size}")
+						applyReadAnchors(entries)
+					}
+					// Report this device's own local read advances (scroll-driven reads since the last
+					// cycle) back to the Gateway - the write half of the same plane. Never allowed to
+					// fail the poll itself (see reportLocalReadAdvances' own doc).
+					reportLocalReadAdvances()
 					val burstJobs = mutableListOf<Job>()
 					val autoPlayedPeerPairs = mutableSetOf<String>()
 					for ((team, msgs) in burst) {

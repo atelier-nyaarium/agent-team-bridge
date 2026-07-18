@@ -14,6 +14,7 @@ import type {
 	CrossDomainUnlinkResult,
 	MailboxInput,
 	OpenedConsoleFrame,
+	ReadAnchorWireEntry,
 } from "../../shared/console-protocol.js";
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
@@ -43,6 +44,7 @@ import {
 import { type SessionRecord, type SessionStore, sanitizeLabel } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
 import type { IntentTracker } from "../intent.js";
+import { type ReadAnchors, readAnchorsPlaneName } from "../readAnchors.js";
 import type { WakeResult } from "../wake.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
 import { ConsolePeer } from "./consolePeer.js";
@@ -137,6 +139,11 @@ export interface ConsoleHandlerDeps {
 	 * `focus` field. Absent when presence/intent is not wired (a poll's `focus` is then just
 	 * ignored, matching today's behavior for a Gateway with no daemon derivation). */
 	intentTracker?: IntentTracker;
+	/** Per-owner cross-device read-position sync (see readAnchors.ts's own doc): `report_read`
+	 * writes through here, and the poll case reads/piggybacks this OWNER's own plane (never
+	 * another owner's). Absent when not wired (report_read then errors; the poll piggyback is
+	 * simply skipped, matching every other plane's own opt-in shape). */
+	readAnchors?: ReadAnchors;
 	/** Relay a tmux op to the local host daemon and await its reply. Drives the console terminal
 	 * view; absent when no host daemon is wired (the op then errors "terminal unavailable"). */
 	relayToHost?: (op: HostOp) => Promise<HostOpResult>;
@@ -307,6 +314,7 @@ export function createConsoleDispatcher({
 	planeRegistry,
 	presence,
 	intentTracker,
+	readAnchors,
 	relayToHost,
 	tryWakeTeam,
 	isWakeInFlight,
@@ -751,10 +759,29 @@ export function createConsoleDispatcher({
 					});
 				}
 
+				// This owner's read-anchors plane: PER OWNER (never a single Gateway-wide plane - see
+				// readAnchors.ts), registered lazily here on this owner's own first poll if it has not
+				// been touched yet (ensureRegistered is idempotent). Same single-scalar shape as
+				// linked-peers, same unconditional participation.
+				const rar = readAnchors ? planeRegistry : undefined;
+				const readAnchorsPlane = readAnchorsPlaneName(ownerId);
+				const readAnchorsScope = rar ? new Set([readAnchorsPlane]) : undefined;
+				const presentedReadAnchors = new Map<string, PlaneVersion>();
+				if (rar) {
+					readAnchors?.ensureRegistered(ownerId);
+					if (op.knownReadAnchorsVersion) {
+						presentedReadAnchors.set(readAnchorsPlane, {
+							epoch: op.knownReadAnchorsVersion.epoch,
+							counter: op.knownReadAnchorsVersion.version,
+						});
+					}
+				}
+
 				if (snap.entries.length === 0 && hold > 0) {
 					const waits: Promise<unknown>[] = [box.waitForAppend(hold)];
 					if (pr) waits.push(pr.waitForBump(presentedPresence, hold, presenceScope));
 					if (lpr) waits.push(lpr.waitForBump(presentedLinkedPeers, hold, linkedPeersScope));
+					if (rar) waits.push(rar.waitForBump(presentedReadAnchors, hold, readAnchorsScope));
 					await Promise.race(waits);
 					snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				}
@@ -780,22 +807,28 @@ export function createConsoleDispatcher({
 				const linkedPeersVersion = lpr?.version("linked-peers");
 				const linkedPeersChanged =
 					lpr != null && lpr.changedSince(presentedLinkedPeers, linkedPeersScope).length > 0;
+				// Same generalization again, for this owner's read-anchors plane.
+				const readAnchorsVersion = rar?.version(readAnchorsPlane);
+				const readAnchorsChanged =
+					rar != null && rar.changedSince(presentedReadAnchors, readAnchorsScope).length > 0;
 
 				// Why this poll settled - the Console's instant-empty-response heuristic (its
 				// old-gateway degradation signal) reads this so a plane-only settle never trips its
 				// backoff. Priority mirrors the piggyback fields below: real mailbox entries first
 				// (they are why a console polls at all), then presence, then linked-peers, then
-				// domain, else the hold simply elapsed with nothing new.
-				const settled: "mailbox" | "presence" | "linkedPeers" | "domain" | "timeout" =
+				// read-anchors, then domain, else the hold simply elapsed with nothing new.
+				const settled: "mailbox" | "presence" | "linkedPeers" | "readAnchors" | "domain" | "timeout" =
 					snap.entries.length > 0
 						? "mailbox"
 						: presenceChanged
 							? "presence"
 							: linkedPeersChanged
 								? "linkedPeers"
-								: domainChanged
-									? "domain"
-									: "timeout";
+								: readAnchorsChanged
+									? "readAnchors"
+									: domainChanged
+										? "domain"
+										: "timeout";
 
 				return {
 					...base,
@@ -821,8 +854,24 @@ export function createConsoleDispatcher({
 								},
 							}
 						: {}),
+					...(readAnchorsChanged && readAnchorsVersion
+						? {
+								readAnchors: planeRegistry?.snapshot<ReadAnchorWireEntry[]>(readAnchorsPlane) ?? [],
+								readAnchorsVersion: {
+									epoch: readAnchorsVersion.epoch,
+									version: readAnchorsVersion.counter,
+								},
+							}
+						: {}),
 					settled,
 				};
+			}
+
+			case "report_read": {
+				if (!readAnchors) throw new Error("read-anchor sync is not available on this Gateway");
+				const advanced = readAnchors.report(ownerId, op.team, { epoch: op.epoch, seq: op.seq, at: Date.now() });
+				if (advanced) planeRegistry?.markDirty(readAnchorsPlaneName(ownerId));
+				return { advanced };
 			}
 
 			case "peek": {

@@ -10,6 +10,7 @@ import type {
 	ConsoleRelayFrameSchema,
 	ConsoleRelayReplySchema,
 	ConsoleReplyBodySchema,
+	ConsoleReportReadResultSchema,
 	ConsoleRespondResultSchema,
 	ConsoleSendResultSchema,
 	ConsoleTmuxSendResultSchema,
@@ -26,6 +27,7 @@ import type {
 	CrossDomainUnlinkResultSchema,
 	CrossDomainUnshareResultSchema,
 	MailboxEntrySchema,
+	ReadAnchorWireEntrySchema,
 	SealedEnvelopeSchema,
 } from "./schemas.js";
 ////////////////////////////////
@@ -51,6 +53,8 @@ export type ConsoleOp = z.infer<typeof ConsoleOpSchema>;
 export type ConsoleOpKind = ConsoleOp["kind"];
 export type CrossDomainShareTarget = z.infer<typeof CrossDomainShareTargetSchema>;
 export type CrossDomainPeerEntry = z.infer<typeof CrossDomainPeerEntrySchema>;
+export type ReadAnchorWireEntry = z.infer<typeof ReadAnchorWireEntrySchema>;
+export type ConsoleReportReadOp = Extract<ConsoleOp, { kind: "report_read" }>;
 export type ConsoleRegisterOp = Extract<ConsoleOp, { kind: "register" }>;
 export type ConsoleListTeamsOp = Extract<ConsoleOp, { kind: "list_teams" }>;
 export type ConsoleSendOp = Extract<ConsoleOp, { kind: "send" }>;
@@ -105,6 +109,7 @@ export type ConsoleListTeamsResult = z.infer<typeof ConsoleListTeamsResultSchema
 export type ConsoleSendResult = z.infer<typeof ConsoleSendResultSchema>;
 export type ConsoleRespondResult = z.infer<typeof ConsoleRespondResultSchema>;
 export type ConsolePollResult = z.infer<typeof ConsolePollResultSchema>;
+export type ConsoleReportReadResult = z.infer<typeof ConsoleReportReadResultSchema>;
 export type ConsolePeekResult = z.infer<typeof ConsolePeekResultSchema>;
 export type ConsoleTmuxSendResult = z.infer<typeof ConsoleTmuxSendResultSchema>;
 export type CrossDomainListenResult = z.infer<typeof CrossDomainListenResultSchema>;

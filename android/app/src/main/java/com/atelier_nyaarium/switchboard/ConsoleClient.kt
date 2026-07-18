@@ -42,6 +42,8 @@ import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.LinkedPeersVersion
 import com.atelier_nyaarium.switchboard.proto.PendingTenantRef
 import com.atelier_nyaarium.switchboard.proto.PresenceVersion
+import com.atelier_nyaarium.switchboard.proto.ConsoleReportReadResult
+import com.atelier_nyaarium.switchboard.proto.ReadAnchorsVersion
 import com.atelier_nyaarium.switchboard.proto.TeamInfo
 import com.atelier_nyaarium.switchboard.proto.SealedEnvelope
 import com.atelier_nyaarium.switchboard.proto.SignedFirstRoot
@@ -674,7 +676,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * current snapshot only when it differs. `focus` declares what this device is currently looking at, so
 	 * the Gateway's intent tracker can ramp the host daemon's derivation cadence for the sessions that
 	 * matter right now. `knownLinkedPeersVersion` is the same piggyback shape again for the linked-peers
-	 * plane, a single scalar (this Gateway's own roster has no multi-source concept to array over). */
+	 * plane, a single scalar (this Gateway's own roster has no multi-source concept to array over).
+	 * `knownReadAnchorsVersion` is the same single-scalar shape once more, for this owner's own
+	 * cross-device read-position plane (see report_read below). */
 	suspend fun poll(
 		cursor: Long,
 		epoch: Long,
@@ -682,6 +686,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		knownPresenceVersions: List<PresenceVersion>? = null,
 		focus: FocusIntent? = null,
 		knownLinkedPeersVersion: LinkedPeersVersion? = null,
+		knownReadAnchorsVersion: ReadAnchorsVersion? = null,
 	): ConsolePollResult {
 		// Carry the synced keyring version so the route Gateway returns the snapshot only when it changed
 		// (a revocation made elsewhere reaches this Console within one cycle).
@@ -694,6 +699,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			knownPresenceVersions = knownPresenceVersions,
 			focus = focus,
 			knownLinkedPeersVersion = knownLinkedPeersVersion,
+			knownReadAnchorsVersion = knownReadAnchorsVersion,
 		)
 		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s), evie's relay
 		// hold fires at 55s if the gateway vanished, this read timeout at holdMs+HELD_READ_MARGIN_MS
@@ -794,6 +800,18 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			relay(ConsoleOp.RenameSession(target = target, sessionLabel = sessionLabel), opId, targetGateway = targetGatewayOf(target)),
 			"rename_session",
 		)
+
+	/** Report this device's read position for a team, for the cross-device read-anchor sync plane
+	 * (monotonic per owner - see readAnchors.ts). No targetGateway override: this is owned by the
+	 * console's own mailbox, so it defaults to the route Gateway exactly like poll()/register().
+	 * Idempotent per opId (a retry re-applies the same merge, which is a no-op if it already landed). */
+	suspend fun reportRead(
+		team: String,
+		epoch: Long,
+		seq: Long,
+		opId: String = UUID.randomUUID().toString(),
+	): ConsoleReportReadResult =
+		resultOf(relay(ConsoleOp.ReportRead(team = team, epoch = epoch, seq = seq), opId), "report_read")
 
 	////////////////////////////////
 	//  Cross-Domain trust ops

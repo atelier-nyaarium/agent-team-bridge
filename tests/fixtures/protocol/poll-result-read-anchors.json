@@ -1,0 +1,9 @@
+{
+	"entries": [],
+	"cursor": 42,
+	"dropped": 0,
+	"epoch": 1073741824,
+	"readAnchors": [{ "team": "team-a", "epoch": 1073741824, "seq": 42, "at": 1700000000000 }],
+	"readAnchorsVersion": { "epoch": 1073741824, "version": 3 },
+	"settled": "readAnchors"
+}

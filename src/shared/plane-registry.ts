@@ -166,6 +166,13 @@ export class PlaneRegistry {
 		this.planes.set(def.name, new Plane(def, restored) as Plane<unknown>);
 	}
 
+	/** Whether a plane is currently registered - the guard a caller that registers planes LAZILY
+	 * (e.g. one per owner, on that owner's first-ever touch, rather than all up front at boot)
+	 * needs before calling registerPlane a second time for the same name, which throws. */
+	hasPlane(name: string): boolean {
+		return this.planes.has(name);
+	}
+
 	/** Mark a plane dirty and immediately recompute (mutators call this; it is the ONLY path that
 	 * can advance a plane's counter, so a write that never calls it cannot announce itself outside
 	 * the tripwire's own periodic catch-up). Wakes every held poll whose presented version for this

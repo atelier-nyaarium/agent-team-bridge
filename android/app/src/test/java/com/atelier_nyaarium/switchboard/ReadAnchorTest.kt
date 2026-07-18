@@ -172,4 +172,43 @@ class ReadAnchorTest {
 		val survivingThread = listOf(inbound(epoch = 1, seq = 1, at = 10, id = 0))
 		assertNull(reanchorAfterForget(survivingThread, goneAnchor))
 	}
+
+	@Test
+	fun teamsNeedingReadReportIncludesATeamNeverReportedBefore() {
+		val anchors = mapOf("team-a" to ReadAnchor(1, 10, 1000))
+		assertEquals(listOf("team-a"), teamsNeedingReadReport(anchors, emptyMap()))
+	}
+
+	@Test
+	fun teamsNeedingReadReportExcludesATeamAlreadyReportedAtTheSamePosition() {
+		val anchor = ReadAnchor(1, 10, 1000)
+		val anchors = mapOf("team-a" to anchor)
+		assertEquals(emptyList<String>(), teamsNeedingReadReport(anchors, mapOf("team-a" to anchor)))
+	}
+
+	@Test
+	fun teamsNeedingReadReportIncludesATeamThatAdvancedSinceItsLastReport() {
+		val anchors = mapOf("team-a" to ReadAnchor(1, 20, 2000))
+		val lastReported = mapOf("team-a" to ReadAnchor(1, 10, 1000))
+		assertEquals(listOf("team-a"), teamsNeedingReadReport(anchors, lastReported))
+	}
+
+	@Test
+	fun teamsNeedingReadReportIsSelectivePerTeam() {
+		val anchors = mapOf(
+			"team-a" to ReadAnchor(1, 10, 1000), // unchanged
+			"team-b" to ReadAnchor(1, 30, 3000), // advanced
+		)
+		val lastReported = mapOf("team-a" to ReadAnchor(1, 10, 1000), "team-b" to ReadAnchor(1, 20, 2000))
+		assertEquals(listOf("team-b"), teamsNeedingReadReport(anchors, lastReported))
+	}
+
+	@Test
+	fun teamsNeedingReadReportIgnoresAtWhenComparingAlreadyReportedPositions() {
+		// `at` is diagnostic only (see ReadAnchor's own doc) - a re-derivation that lands on the same
+		// (epoch, seq) with a different `at` must not re-trigger a report.
+		val anchors = mapOf("team-a" to ReadAnchor(1, 10, 9999))
+		val lastReported = mapOf("team-a" to ReadAnchor(1, 10, 1000))
+		assertEquals(emptyList<String>(), teamsNeedingReadReport(anchors, lastReported))
+	}
 }
