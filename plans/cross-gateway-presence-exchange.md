@@ -179,24 +179,36 @@ independently if planeField() itself keeps getting deferred. Needs `persistDeliv
 extracted into an exported, directly-testable function first (it currently lives only inside
 `startGateway()`'s closure).
 
+## A second, smaller pain point worth remembering when this reopens `consoleHandler.ts`'s poll case
+
+Phase 2's crust-collection pass flagged that the poll case's three plane-piggyback blocks
+(presence, linked-peers, read-anchors) were assessed as "not worth extracting into a shared
+helper yet" - but that verdict's own reasoning explicitly depended on no fourth static plane being
+committed. If this item ships as another static named block (rather than the dynamic
+per-source-gateway shape it is actually designed as above), or if the cross-Domain presence item
+below lands its own named plane, re-run that extraction assessment rather than assuming the old
+"not worth it" still holds with a fourth or fifth block added.
+
 ## Status
 
-**Deferred.** Not started. Parked per explicit user direction until current work (the
-`phase2-read-anchors` audited-implementation cycle, and whatever remains of
-`versioned-state-planes.md`'s own Phase 2) finishes.
+**Deferred.** `plans/versioned-state-planes.md` (the plan this was found inside) shipped and was
+deleted 2026-07-18 - see `plans/pain-points.md` for its closing summary. This item was never
+folded into that closure; it stands on its own until picked up.
 
 ## When this is picked back up
 
 - Re-verify the design above against the codebase as it stands then - do not assume nothing has
   drifted.
-- Reconcile scope with Phase 2 item 5 (`plans/versioned-state-planes.md`'s "Decide cross-Domain
-  presence (linked peers' tiles)... needs its own questionaire pass if wanted") - that item is
-  cross-DOMAIN (linked friend Domains' tiles), a distinct concern from this item's same-Domain
-  multi-gateway exchange, but both land in the same `presenceFresh`/freshness-state-machine
-  neighborhood and are worth designing together rather than sequentially if both are wanted.
-  Confirm with the user whether one, both, or neither is still desired before scoping either.
-  Same-Domain (this plan) is the one with the explicit prior user ruling (Q4) behind it.
-  Cross-Domain (item 5) has never been ruled on either way.
+- Reconcile scope with cross-Domain presence (linked friend Domains' tiles - "currently
+  discovery-refresh, needs its own questionaire pass if wanted", the last surviving item of the
+  now-closed versioned-state-planes Phase 2). That item is cross-DOMAIN, a distinct concern from
+  this plan's same-Domain multi-gateway exchange, but both land in the same
+  `presenceFresh`/freshness-state-machine neighborhood and are worth designing together rather
+  than sequentially if both are wanted. Confirm with the user whether one, both, or neither is
+  still desired before scoping either. Same-Domain (this plan) is the one with the explicit prior
+  user ruling (Q4) behind it. Cross-Domain has never been ruled on either way - if its own
+  questionaire is already underway or done by the time this reopens, read its resulting plan file
+  first rather than re-deriving this reconciliation from scratch.
 - Decide whether the `planeField()` closed-world mechanism and the property-based class-kill-lock
   test (the two related, smaller gaps above) should ship as prerequisites, alongside, or
   independently of the federation exchange itself.

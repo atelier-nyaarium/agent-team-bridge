@@ -1,11 +1,13 @@
 # Pain points
 
-## Versioned state planes (`plans/versioned-state-planes.md`, active - 2026-07-18)
+## Versioned state planes (`plans/versioned-state-planes.md`, deleted, closed out - 2026-07-18)
 
 Phase 1 (plane registry framework, presence facade, PollWaitHub, working/needs-login derivation,
 intent tracking) shipped and deployed. Phase 2 (legacy-timer deletion, linked-peers plane,
-read-anchor sync plane, TerminalView latch rework, hand-rolled-sync-path sweep) mostly shipped;
-item 5 (cross-Domain presence - needs its own questionaire, not yet asked) remains.
+read-anchor sync plane, TerminalView latch rework, hand-rolled-sync-path sweep, docs) shipped.
+Item 5 (cross-Domain presence) was never started - closing out this plan is not abandoning it, it
+is spinning it off into its own fresh questionaire and plan rather than staying a trailing bullet
+on a closed file.
 
 ### Phase 1's federation exchange was silently never built
 
@@ -37,6 +39,36 @@ tested. The WebSocket handshake's `confirmedLeadTeams` team-impersonation gap an
 deterministic-forever channel-job-id reply-forgery gap were NOT fixed - they deepen
 `plans/gateway-auth-surface.md`'s already-designed-but-never-built `GATEWAY_TOKEN` gate rather than
 being new, isolated bugs (see that doc's own cross-reference section for the detail).
+
+### A heavily-audited design document still drifted from what shipped, and nothing caught it until an independent align pass checked
+
+This file went through three full audit laps before Phase 1 shipped - real scrutiny, not
+rubber-stamping. It still confidently asserted several things as done that were never built (the
+federation exchange, `planeField()`, the property-based class-kill-lock test) and one thing as
+"will be deleted" that turned out to be load-bearing (`touchLive`). Design-time audit laps check
+whether the DESIGN is sound; nothing in that process checked whether the SHIPPED CODE still
+matched the design months later. The `audited-implementation` cycle's own align-fan-out step is
+exactly that missing check, and it only ran because Phase 2 happened to route back through this
+same plan - a plan that ships and is never revisited would keep lying indefinitely. Worth building
+that revisit into the standard flow for any plan expected to survive past its own shipping lap.
+
+### Writing a feature's own test suite does not reliably catch its own abuse cases
+
+The read-anchors feature and its 14-test suite were written in the same sitting, by the same
+author, and still missed the obvious abuse cases (an unbounded `epoch`, an unbounded `team` count)
+until a dedicated red-team pass looked at it adversarially. Feature-authoring instinct covers the
+happy path and whatever you were already thinking about (monotonic merge correctness, in that
+case) - it does not reliably cover "what if a hostile or buggy caller sends something absurd,"
+even when being careful. Concrete case for always running a genuinely separate red-team pass, not
+folding it into the same sitting as implementation.
+
+### Minor recurring friction, not worth dedicated fixes
+
+Biome's import-order/line-wrap formatting needed a `bun run lint:fix` pass after nearly every
+multi-file edit round in the versioned-state-planes cycle - never once caught a real bug, pure
+friction. Also: a stray `cd android` mid-session left the shell's working directory changed for
+every later Bash call, which silently broke a `git add` with relative paths (a confusing "pathspec
+did not match" rather than an obviously-wrong-directory error) until traced back with `pwd`.
 
 ## Console hardening (`plans/console-hardening.md`, deleted, shipped - 2026-07-16)
 
