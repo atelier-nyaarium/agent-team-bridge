@@ -1,3 +1,5 @@
+import { capFifo } from "../../shared/cap-fifo.js";
+
 ////////////////////////////////
 //  Class
 
@@ -29,10 +31,7 @@ export class ReplayGuard {
 		this.seen.set(key, t + this.ttlMs);
 		// Hard cap: evict the oldest-inserted entry (expired ones cluster at the
 		// front, so this drops stale before live in the common case).
-		if (this.seen.size > this.maxEntries) {
-			const oldest = this.seen.keys().next().value;
-			if (oldest !== undefined) this.seen.delete(oldest);
-		}
+		capFifo(this.seen, this.maxEntries);
 		return true;
 	}
 
@@ -60,10 +59,7 @@ export class ReplayGuard {
 			if (typeof key !== "string" || typeof expiry !== "number") continue;
 			if (expiry <= t) continue;
 			this.seen.set(key, expiry);
-			if (this.seen.size > this.maxEntries) {
-				const oldest = this.seen.keys().next().value;
-				if (oldest !== undefined) this.seen.delete(oldest);
-			}
+			capFifo(this.seen, this.maxEntries);
 		}
 	}
 }

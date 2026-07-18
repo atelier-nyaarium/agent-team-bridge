@@ -1,4 +1,5 @@
 import type { DomainSnapshot } from "../../shared/admission.js";
+import { capFifo } from "../../shared/cap-fifo.js";
 import type {
 	ConsoleOp,
 	ConsoleOpResult,
@@ -1373,10 +1374,7 @@ export function createConsoleDispatcher({
 			opCache.set(conv, perConv);
 		}
 		perConv.set(frame.opId, promise);
-		if (perConv.size > MAX_OPS_PER_CONVERSATION) {
-			const oldest = perConv.keys().next().value;
-			if (oldest !== undefined) perConv.delete(oldest);
-		}
+		capFifo(perConv, MAX_OPS_PER_CONVERSATION);
 		// A failed op performed no side effect, so it must be retriable: drop it from the cache so a
 		// retry re-runs rather than replaying the failure.
 		void promise

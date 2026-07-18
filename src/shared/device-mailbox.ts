@@ -1,3 +1,4 @@
+import { capFifo } from "./cap-fifo.js";
 import type { MailboxEntry, MailboxInput } from "./console-protocol.js";
 
 ////////////////////////////////
@@ -196,11 +197,7 @@ export class DeviceMailbox {
 	 * insertion-ordered, so the first key is the oldest. */
 	private recordSeen(key: string, seq: number): void {
 		this.seenKeys.set(key, seq);
-		while (this.seenKeys.size > DEFAULT_MAX_SEEN_KEYS) {
-			const oldest = this.seenKeys.keys().next().value;
-			if (oldest === undefined) break;
-			this.seenKeys.delete(oldest);
-		}
+		capFifo(this.seenKeys, DEFAULT_MAX_SEEN_KEYS);
 	}
 
 	/**
@@ -325,11 +322,7 @@ export class DeviceMailbox {
 	 * respond op for it is authorized. Survives a restart via the snapshot. */
 	recordSession(sessionId: string): void {
 		this.respondableSessions.add(sessionId);
-		while (this.respondableSessions.size > DEFAULT_MAX_RESPONDABLE_SESSIONS) {
-			const oldest = this.respondableSessions.values().next().value;
-			if (oldest === undefined) break;
-			this.respondableSessions.delete(oldest);
-		}
+		capFifo(this.respondableSessions, DEFAULT_MAX_RESPONDABLE_SESSIONS);
 	}
 
 	canRespond(sessionId: string): boolean {

@@ -164,6 +164,21 @@ ready to build - what was missing was only the build. That never happened. Nothi
 design has been re-validated since; treat "ready to build" as a starting hypothesis to re-check,
 not a current fact, when this is picked back up.
 
+## A smaller, independently-schedulable relative of the planeField() gap
+
+Phase 2's framework-first-audit pass (same cycle that fixed the register/sweep facade-bypass bugs
+above) proposed a cheaper, non-production dev/test-mode "assertClean" check: a throwing variant of
+the tripwire's own per-plane recompute, wired into the WebSocket message handler and a small
+extracted persist-tick function, so a facade bypass shaped like the two this session found fails
+the test suite immediately instead of waiting up to 60 seconds in production. It is explicitly
+NOT a substitute for planeField() (it is test-coverage-gated, not compile-time-structural - an
+entirely new, untested mutation still gets no protection), but it is meaningfully cheaper to build
+and would have caught both of this session's real escapes on the very first existing test that
+exercises them. Worth building either as a lightweight prerequisite before planeField(), or
+independently if planeField() itself keeps getting deferred. Needs `persistDelivery`'s sweep logic
+extracted into an exported, directly-testable function first (it currently lives only inside
+`startGateway()`'s closure).
+
 ## Status
 
 **Deferred.** Not started. Parked per explicit user direction until current work (the
