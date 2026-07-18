@@ -477,10 +477,11 @@ data class ChatState(
 	 * is admitted but the route Gateway has not re-synced yet, so sealed ops transiently reject.
 	 * Drives the calm SYNCING header; cleared the moment an op succeeds or the grace lapses. */
 	val enrollingSince: Long = 0L,
-	/** The linked friend Domains the route Gateway reports from its cross-Domain peer set
-	 * (cross_domain_list_peers). Unioned with the discovery-derived Domains in linkedDomains() so a
-	 * freshly-linked peer is visible (and its detail reachable) even while its gateway is offline and
-	 * has shared nothing back. Refreshed alongside teams; an empty set falls back to discovery-only. */
+	/** The linked friend Domains the route Gateway reports from its cross-Domain peer set, pushed
+	 * on the poll response's linkedPeers plane (see ChatRepository.applyLinkedPeers). Unioned with
+	 * the discovery-derived Domains in linkedDomains() so a freshly-linked peer is visible (and its
+	 * detail reachable) even while its gateway is offline and has shared nothing back. An empty set
+	 * falls back to discovery-only. */
 	val linkedPeerOwners: Map<String, String> = emptyMap(),
 	/** This owner's own display name, for the profile field and the MY NETWORK card. Seeded from the
 	 * local cache and refreshed from discovery's local-session displayName; empty until set. */
@@ -2461,12 +2462,17 @@ class ChatRepository(
 		}
 
 	/** Unlink a friend Domain: forget the local trust + shares for it, then owner-sign + submit
-	 * the link-edge revocation so the Router drops its relay-affinity edge. */
+	 * the link-edge revocation so the Router drops its relay-affinity edge. crossDomainUnlink's own
+	 * server-side removal already bumps the linked-peers plane (see CrossDomainPeers' onChange
+	 * hook), which wakes this device's own currently-held poll for free - no client-side action
+	 * needed for that half. Mesh-wide discovery has no such push (see refreshDiscovery's own doc),
+	 * so an explicit pull is still what makes the unlinked peer's sessions actually disappear from
+	 * the board promptly instead of waiting out DISCOVERY_REFRESH_MS. */
 	suspend fun unlinkDomain(domainId: String): Result<Unit> = withContext(Dispatchers.IO) {
 		runCatchingCancellable {
 			client().crossDomainUnlink(domainId)
 			revokeXdomainLink(confirmedDomainIdOrThrow(), domainId)
-			refreshTeams()
+			refreshDiscovery()
 			Unit
 		}
 	}
@@ -2610,11 +2616,27 @@ class ChatRepository(
 	 * interrupt any currently-held poll so that next poll fires now instead of inheriting up to
 	 * LONG_POLL_HOLD_MS of staleness waiting out the remainder of an already-open hold - a bare
 	 * version clear underneath a still-running held poll would otherwise wait for that poll's own
-	 * natural expiry before the cleared version even reaches the server. */
+	 * natural expiry before the cleared version even reaches the server. Also pulls mesh-wide
+	 * discovery immediately (see refreshDiscovery) rather than waiting out its own bounded
+	 * interval, so a manual refresh covers everything a user would expect it to. */
 	suspend fun refreshTeams() = withContext(Dispatchers.IO) {
 		knownPresenceVersions = emptyList()
 		knownLinkedPeersVersion = null
 		pollInterrupt?.complete(Unit)
+		refreshDiscovery()
+	}
+
+	/** Mesh-wide discovery: this Gateway's own live relay to every other same-Domain gateway and
+	 * linked cross-Domain peer (routes.discover(), via the list_teams op). Unlike presence and
+	 * linked-peers, this has no push mechanism yet - federation exchange (plan item 6) is deferred
+	 * past phase 1 - so it needs an explicit pull, on the poll loop's own bounded interval
+	 * (DISCOVERY_REFRESH_MS) or immediately after an action that changes what should be
+	 * discoverable (a manual refresh, an unlink). Routes through the same merge path as everything
+	 * else (applyPresence), so tombstones/label-overrides/absence-streaks apply uniformly
+	 * regardless of source. Best-effort: a relay failure keeps the prior list. */
+	private suspend fun refreshDiscovery() {
+		runCatchingCancellable { client().teams(localGatewayId) }
+			.onSuccess { applyPresence(it) }
 	}
 
 	/** The one plane-merge path: every fresh presence-plane snapshot lands in state through here
@@ -2945,11 +2967,22 @@ class ChatRepository(
 		if (pollJob?.isActive == true) return
 		pollScope = scope
 		pollJob = scope.launch(Dispatchers.IO) {
+			var lastDiscoveryAt = 0L
 			pollLoop@ while (isActive) {
 				var failed = false
 				var heldEmpty = false
 				var hold = 0L
 				try {
+					// Mesh-wide discovery (see DISCOVERY_REFRESH_MS's own doc): the one thing left with
+					// no push mechanism, so it still needs its own bounded-interval pull, independent of
+					// the presence/linked-peers planes above and unconditional (no capability gate - a
+					// gateway that cannot push presence can still relay discovery just fine, and this
+					// covers OTHER gateways regardless of this one's own plane support).
+					val now = System.currentTimeMillis()
+					if (now - lastDiscoveryAt >= DISCOVERY_REFRESH_MS) {
+						lastDiscoveryAt = now
+						refreshDiscovery()
+					}
 					// Visible: long-poll (the hold IS the wait; re-poll immediately).
 					// Backgrounded: plain poll (hold=0); the wait after is the idle pushback
 					// ladder's decision, not a flat interval - the mailbox batches either way.
@@ -3521,12 +3554,10 @@ class ChatRepository(
 		if (t is Address && t.gateway == _state.value.localGatewayId) {
 			pollScope?.launch(Dispatchers.IO) {
 				runCatchingCancellable { client().forget(team) }
-					.onSuccess {
-						// The record drop (and its presence-plane bump) already happened server-side;
-						// poll now instead of waiting for the next natural cycle so the tile actually
-						// disappears from the board right away.
-						kick.trySend(Unit)
-					}
+					// The record drop already bumps the presence plane server-side, which wakes this
+					// device's own currently-held poll for free (same as closeTab/wakeSession/
+					// spawnSession, none of which nudge the poll loop either) - no client-side action
+					// needed on success.
 					.onFailure { e -> _state.update { it.copy(transientMessage = e.message ?: "Forget failed") } }
 			}
 		}
@@ -3899,6 +3930,12 @@ class ChatRepository(
 		// Slack added to a deep-tier park so the coroutine backstop wakes slightly after, never
 		// before, the alarm it is backing up.
 		const val PARK_SLACK_MS = 5_000L
+		// Mesh-wide discovery (other same-Domain gateways + linked cross-Domain peers) has no push
+		// mechanism yet - federation exchange (plan item 6) is deferred past phase 1, so THIS session's
+		// own gateway relays a live list_teams to every other gateway on every discovery pull, unlike
+		// the cheap local presence/linked-peers planes. Refresh it on this bounded interval rather than
+		// per poll tick - the same cost/freshness tradeoff the original design already validated.
+		const val DISCOVERY_REFRESH_MS = 30_000L
 		// forgottenUntil's tombstone lifetime: only needs to outlast a single in-flight teams()
 		// HTTP round trip (what the resurrection race actually races against), not the much longer
 		// LONG_POLL_HOLD_MS reconciliation cadence (reapplyCachedTeams runs every poll tick, so a

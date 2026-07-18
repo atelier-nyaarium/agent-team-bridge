@@ -662,8 +662,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					SwitchboardService.cancelTeamNotification(context, team)
 				},
 				// Fire the create and stay on the board: the gateway adopts the session's record
-				// synchronously, so its own tile appears via the teams() refresh (spinner while it boots).
-				// Tapping the tile opens its terminal view. A failure surfaces as a Snackbar.
+				// synchronously and bumps the presence plane with it, so its own tile appears via this
+				// device's own next poll (spinner while it boots) with no separate refresh. Tapping the
+				// tile opens its terminal view. A failure surfaces as a Snackbar.
 				onSpawn = { project, label -> scope.launch { repo.spawnSession(project, label) } },
 				// Launch the enrollee compare from the empty board when one is still owed (the device
 				// rooted an enroll invite but has not completed the in-person trust step).

@@ -46,7 +46,7 @@ sealed interface PollWait {
 	data class Delay(val ms: Long) : PollWait
 
 	/** Deep idle: an AlarmManager wakeup is scheduled at [atMillis] and every lock is released;
-	 * the loop parks until the alarm (or a foreground/forget kick) wakes it. */
+	 * the loop parks until the alarm (or a foreground kick) wakes it. */
 	data class Alarm(val atMillis: Long) : PollWait
 }
 
