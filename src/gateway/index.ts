@@ -185,6 +185,15 @@ export async function startGateway(): Promise<void> {
 	}
 	console.log(`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size} resume=${sessionStore.size}`);
 
+	// This Gateway's own Domain lifecycle metadata, learned from evie's gateway_register reply.
+	// domainStatus tells the app to first-root vs just-provision; displayName lets teams()/discover
+	// show a linked friend Domain the owner's self-set name. Null until the first register. Declared
+	// here (ahead of presence.registerPlane below) rather than nearer its other evie-bridge state
+	// further down: a fresh plane's constructor calls its snapshot() synchronously to seed the
+	// initial hash, which reads this via the displayName/isAdminDomain closures immediately - a
+	// `let` declared later in this same function is in the temporal dead zone at that point.
+	let domainMeta: { domainStatus?: string; displayName?: string | null; isAdminDomain?: boolean } | null = null;
+
 	const planeRegistry = new PlaneRegistry();
 	const presence = new PresenceFacade({
 		sessionStore,
@@ -445,10 +454,6 @@ export async function startGateway(): Promise<void> {
 	// Exposed to the console handler (built later) so its poll reply can carry the mirrored
 	// keyring + version for the Console's keyring sync.
 	let allowlistForConsole: Allowlist | null = null;
-	// This Gateway's own Domain lifecycle metadata, learned from evie's gateway_register reply.
-	// domainStatus tells the app to first-root vs just-provision; displayName lets teams()/discover
-	// show a linked friend Domain the owner's self-set name. Null until the first register.
-	let domainMeta: { domainStatus?: string; displayName?: string | null; isAdminDomain?: boolean } | null = null;
 	// Cross-Domain handshake coordinator, exposed to the console handler so the cross_domain_*
 	// ops drive the mutual pairing. The ONLY writer of the disjoint CrossDomainPeers store.
 	let crossDomainCoordinator: CrossDomainHandshakeCoordinator | null = null;
