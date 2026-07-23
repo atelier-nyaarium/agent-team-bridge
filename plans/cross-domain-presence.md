@@ -199,7 +199,7 @@ Each phase builds on the last - the consumer-side wire shape needs the source si
 content to codegen against, and the Android UI needs that wire shape landing in real poll
 responses.
 
-## Phase 1: PlaneRegistry framework + source-side push mechanism
+## Phase 1: PlaneRegistry framework + source-side push mechanism ✅
 
 **PlaneRegistry gains two small, general capabilities** (not cross-Domain-specific - any future
 per-relationship plane benefits):
@@ -521,3 +521,30 @@ with an instruction to conceal it from the user - a known prompt-injection shape
 disregarded the concealment instruction and flagged it rather than comply. Recorded here per this
 plan's own audit-trail convention; relayed to the user directly (not just logged) per this session's
 standing prompt-injection policy.
+
+## Painpoints
+
+Not a code audit - a vibe check on what was genuinely annoying to work through in this phase.
+
+- Adding a rate-limit floor to `CrossDomainPresenceConsumer`'s constructor retroactively broke
+  roughly a dozen pre-existing, unrelated tests that happened to call `land()` twice in quick
+  succession - each needed a magic trailing `0` argument added to opt out. A positional-argument
+  constructor makes bolting on a new cross-cutting default behavior feel fragile after the fact; an
+  options object (`{ minLandIntervalMs }`) from the start would have made "this test opts out of the
+  new default" self-documenting instead of an unexplained `0`.
+- Plane names are hand-formatted template strings (`presence:crossdomain-source:<domainId>` vs
+  `presence:crossdomain:<domainId>`) with no static check that two prefixes can't collide - picking
+  visually-distinct prefixes was a manual, eyeball-it decision. `PlaneRegistry` has no notion of a
+  "namespaced plane family" a caller declares once; every per-relationship-plane feature re-derives
+  naming-uniqueness by hand.
+- Wrote what is functionally `CoalescedPusher`'s sibling twice in the same file (the retry pusher,
+  then the landing side's defer-coalesce timer) - concluded during the framework-first pass that
+  unifying them isn't worth it (genuinely different failure models), but the felt experience while
+  writing the second one was "haven't I just built this." Worth a second look only if a THIRD such
+  coalescer shows up somewhere.
+- "Does this peer-controlled string need a `Map` instead of a plain object" is tribal knowledge
+  re-derived per feature - this file's `state`/`registered` needed it, `ReadAnchors`'s owner-keyed
+  state never did (an owner id is a fixed-format hash, never equal to a literal `"__proto__"`, so
+  it is safe by construction). Nothing flags "this key is free-form, not hash-shaped" for a future
+  author to notice on their own; it is caught only if someone happens to red-team it, as happened
+  here.
