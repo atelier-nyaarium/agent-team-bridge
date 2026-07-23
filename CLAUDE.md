@@ -303,6 +303,34 @@ earned rather than re-climbing from scratch. Full design, the questionaire, and 
 (plan alignment, an adversarial red team, and a framework-first pass) are in
 `plans/idle-pushback-manager.md`.
 
+### Scheduled Send (Android, client-local)
+
+Long-press the console's send button (`Schedule Send` / `Send`) to bank a message for a future
+wall-clock time instead of sending it live - purely client-local, no gateway involvement or wire
+shape. `ChatRepository.scheduleSend()`/`rescheduleSend()`/`cancelScheduledSend()` bank at most one
+`ScheduledSend` per team in `ChatState.scheduledSends` (mirrors the `drafts` storage pattern: plain
+SharedPreferences JSON, no special re-provisioning survival), eagerly copying any picked attachment
+into its own bucket at schedule time. A single shared `AlarmManager` alarm always targets the
+earliest pending record (`ScheduledSendAlarmReceiver`, armed through `SwitchboardService`'s
+`ScheduledSendAlarmScheduler` implementation); firing funnels through the mutex-guarded
+`ChatRepository.fireDueScheduledSends()`/`fireOne()` from both the cold-boot chain and the
+receiver's warm kick, so a warm kick can never double-convert the same due record. A failed fire
+gets one bounded retry (`kickScheduledSendRetry`, resolved by `opId` never by the volatile row id)
+then a dedicated, per-team-hashed failure notification (`SwitchboardService.
+notifyScheduledSendFailed`/`scheduledSendFailedNotificationId`) so an unattended failure is never
+silent. `ClockChangeReceiver` defensively re-syncs the alarm on a system clock or timezone change
+(`RTC_WAKEUP` is wall-clock based). Full design, the questionaire, and three audit rounds (plan
+alignment, an adversarial red team, and a framework-first pass) are in `plans/scheduled-send.md`,
+which also carries the durable send/respond idempotency layer this feature's own audit motivated
+(see Console Bridge above).
+
+Use the local Android toolchain (see "Verify locally before pushing" below) to actually build and
+verify changes rather than reasoning from memory alone - an emulator AVD may already be booted
+(`adb devices` to check), and `adb install -r` + a real launch is worth doing for anything
+UI-facing. A running gateway + an existing (possibly expired) provisioning blob may also be
+reachable locally; check `curl localhost:20000/health` and
+`~/.config/switchboard/console-provisioning.json` before assuming a from-scratch backend is needed.
+
 ### Port Map
 
 | Port  | Service                              |
@@ -336,6 +364,15 @@ cd android
 JAVA_HOME=/home/nyaarium/android-dev/jdk ANDROID_HOME=/home/nyaarium/android-dev/sdk \
   ./gradlew :app:testDebugUnitTest --console=plain
 ```
+
+Equivalently, `source ~/android-dev/env.sh` once to put `java`/`adb`/`emulator`/`gradlew` on `PATH`
+for the rest of the shell session, then just `./gradlew :app:testDebugUnitTest`. The same toolchain
+also has an AVD available for on-device verification beyond the unit-test gate (`adb devices` to
+check if one is already booted) - useful for anything UI-facing: `assembleDebug`, `adb install -r`,
+and a real launch/interaction catch classes of bug a compile+unit-test pass alone cannot (a Compose
+runtime crash, a manifest/receiver registration mistake, an actual clock-change or config-change
+broadcast firing correctly - all things worth simulating for real rather than reasoning about from
+the API docs alone).
 
 `testDebugUnitTest` compiles the Kotlin and runs the unit tests (the golden-fixture decoders, the SessionId and admission cross-platform vectors). Treat a green run as the Kotlin gate, the same way `bun run lint && bun run test` is the TypeScript gate. For a wire-shape change, regenerate `proto/Protocol.kt` with `bun scripts/codegen-kotlin.ts` first, then run the Android build so the new types are exercised.
 

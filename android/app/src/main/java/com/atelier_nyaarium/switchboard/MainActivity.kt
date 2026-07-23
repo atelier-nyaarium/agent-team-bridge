@@ -2115,9 +2115,8 @@ fun ThreadScreen(
 	scheduledSend: ScheduledSend?,
 	// suspend + Boolean (not fire-and-forget Unit): the repo-side time check is authoritative and can
 	// fail (the picker's own gate goes stale if the user idles past its 1-minute floor) - the caller
-	// must await the real outcome before clearing the composer, or a failure silently destroys the
-	// user's message with no recovery (the exact bug a red-team pass found in the original Unit-typed
-	// fire-and-forget version).
+	// must await the real outcome before clearing the composer, since clearing eagerly would destroy
+	// the user's message on any failure with no way to recover it.
 	onScheduleSend: suspend (String, List<Uri>, Long) -> Boolean,
 	// Dock tap-to-edit is deliberately time-only, not a full text/attachment re-edit: the banked
 	// attachments are already-copied MessageFile refs, not the live content:// Uris onScheduleSend
@@ -2236,8 +2235,8 @@ fun ThreadScreen(
 						// repo-side call below is the authoritative, freshly-evaluated check, and it can
 						// fail (a stale pick, or - unlikely but real - a device clock jump). Only clear the
 						// composer once that call reports genuine success, never optimistically on tap:
-						// clearing first and finding out later is exactly how a failure here used to
-						// destroy the user's message with no recovery path.
+						// clearing first and finding out later would destroy the user's message on any
+						// failure, with no way to recover it.
 						ok = if (editingExisting) onReschedule(at) else onScheduleSend(text, files, at)
 					} finally {
 						// try/finally, not a bare sequential call: makes the re-enable explicit rather than
