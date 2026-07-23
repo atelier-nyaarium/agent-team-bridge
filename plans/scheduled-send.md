@@ -200,7 +200,7 @@ Two phases. Each goes through the full `audited-implementation` cycle (implement
 alignment audit, red-team audit, framework-first audit, documentation, crust-collection),
 same as `cross-domain-presence.md` before it.
 
-## Phase 1: Persistent, restart-proof idempotency for `send`/`respond`
+## Phase 1: Persistent, restart-proof idempotency for `send`/`respond` ✅
 
 Closes the confirmed double-delivery gap for gateway restarts, and shrinks the hard-crash window
 to milliseconds. Deliberately NOT claimed as strict exactly-once: an irreducible window remains
@@ -307,6 +307,49 @@ ever".
   unvalidated throw in any one of them today would silently discard ALL THREE stores' restored
   state) - but again is a change to other, unrelated, already-shipped files. Both are real, worth
   doing, and explicitly NOT done in this phase.
+
+## Painpoints (Phase 1)
+
+- **The generation-token pattern already existed twice in this codebase and I didn't know it until
+  the very last audit pass.** `crossDomainPresence.ts`'s `CoalescedPusher` and
+  `CrossDomainPresenceReconciler` already solve "a stale attempt's continuation must recognize a
+  newer one has taken over" with the identical mint-a-token/check-before-acting shape
+  `DurableOpStore` needed. I re-derived the whole CAS/generation reasoning from first principles
+  across two separate audit laps (the eviction-race bug, then its own incomplete fix) instead of
+  going in already knowing the shape and copying the reasoning wholesale. A quick "does anything
+  else in this codebase already do X" sweep before designing a new concurrency primitive would have
+  saved real iteration.
+- **A Map-reinsertion "touch to move to the end for recency" fix applied at one nesting level but
+  missed at another.** The conversation-cap fix (`byConversation`) and the op-cap fix (`perConv`)
+  are the SAME idiom at two levels of one two-level store, and I only fixed the outer one on the
+  first pass - the inner one (the level `capFifo` for ops actually caps) stayed a plain,
+  non-recency-respecting insert for a full audit lap before it was caught. Whenever a fix needs
+  "the same treatment at every nesting level a structure has," that's worth explicitly checking off
+  level-by-level rather than fixing the first one that surfaces and assuming symmetry.
+- **Concurrency-guard code is disproportionately bug-prone relative to its line count.** Across six
+  audit laps, nearly every genuinely NEW bug found (not a re-flag) lived in the generation/
+  eviction/opCache-interaction logic, including bugs introduced by the PREVIOUS lap's own fix for a
+  different bug in the same area (the lap-2 `evictOpCache` fix created the lap-3 regression; the
+  lap-3 generation fix's own LRU touch was incomplete, caught by lap 4). A shallow fix that closes
+  one reported symptom in this class of code deserves an explicit "does this fix's OWN mechanism
+  have the same shape of race it was built to close" self-check before moving on, not just a test
+  for the reported scenario.
+- **`capFifo` has no eviction-visibility hook, so every call site that wants one hand-rolls a
+  before/after size-diff.** `durableOpStore.ts` needed this and ended up writing its own
+  `touchCapped` wrapper; `DeviceMailboxStore`'s and `ReplayGuard`'s own `capFifo` calls stay
+  silently unlogged today. An optional `onEvict` callback on `capFifo` itself (`shared/cap-fifo.ts`)
+  would let every caller opt into this for free instead of reinventing the size-diff dance per
+  file - a narrower, cheaper win than either of the two bigger deferred cross-store extractions
+  above, and one that could genuinely be retrofitted to the other two call sites too.
+- Not a code pain point, but a process one worth recording: this session's `Workflow()`-spawned
+  audit subagents run against the SAME on-disk checkout with no per-agent worktree isolation, and
+  more than one adversarial-verify agent independently did its own "temporarily remove the guard,
+  run the tests, observe, restore" experiment on the exact same file at the same time. It produced
+  a confusing false alarm mid-session (looked like an external actor editing the repo) before the
+  real explanation (sibling verify agents, not an intruder) became clear. Nothing in the shipped
+  code is affected, but a workflow authoring convention for "this verify step needs to mutate a
+  shared file to test something" should probably call for worktree isolation on that agent, or at
+  least a shared lock, rather than relying on nobody colliding.
 
 ## Phase 2: Scheduled Send (Android, client-local)
 

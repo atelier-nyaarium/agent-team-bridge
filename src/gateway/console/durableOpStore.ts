@@ -49,8 +49,15 @@ const DEFAULT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
  * already-in-flight record (the opCache-eviction-during-in-flight tail, accepted in Audit round 3)
  * - and `clear` only takes effect when the caller's own generation still matches the CURRENT one.
  * This is what keeps a stale, superseded attempt's eventual failure from erasing a newer, still-
- * live attempt's own in-flight marker (an already-`complete` record is separately immune to
- * `clear` regardless of generation, since the op's side effect already happened by then).
+ * live attempt's own in-flight marker. `markComplete` is write-once instead: it is never
+ * generation-gated (any attempt that genuinely succeeded should permanently win), but a SECOND
+ * genuine success for the same key can never overwrite the first result, and a `complete` record
+ * is separately immune to `clear` regardless of generation, since the op's side effect already
+ * happened by then.
+ *
+ * The key itself carries no notion of op kind - callers that share this store across more than one
+ * op kind (consoleHandler.ts, for `send`/`respond`) must namespace their own keys so a coincidental
+ * cross-kind opId collision can never replay the wrong-shaped result.
  *
  * Explicitly independent of any device/conversation teardown - the in-memory opCache's own
  * idempotency dies after ~1h of console silence via the mailbox's idle-teardown sweep, precisely
@@ -58,7 +65,11 @@ const DEFAULT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
  *
  * Persisted synchronously on every state transition (not a periodic tick, unlike DeviceMailbox/
  * ReplayGuard/SessionStore) - a hard crash must lose at most the write already in flight, not up
- * to a whole tick interval, since that window is exactly what this store exists to close.
+ * to a whole tick interval, since that window is exactly what this store exists to close. `sweep`
+ * actively drops TTL-expired entries instead of leaving them as dead weight (call it from the same
+ * external tick driving `SessionStore.sweep`); `restore` re-validates every row's shape against the
+ * real result schema and re-applies the live caps, counting and logging anything rejected instead
+ * of silently dropping it.
  */
 export class DurableOpStore {
 	private readonly byConversation = new Map<string, Map<string, Entry>>();
