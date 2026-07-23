@@ -828,3 +828,50 @@ considered-and-declined option, not silently skipped.
 
 Rebuilt and re-tested for real after every fix in this round: `./gradlew compileDebugKotlin
 testDebugUnitTest --rerun-tasks` - BUILD SUCCESSFUL, all 26 tasks freshly executed.
+
+## Painpoints (Phase 2)
+
+- **A single Edit call silently wrote a literal NUL byte into `SwitchboardService.kt`** (the
+  `scheduledSendRetryRc` fix's own `"$team $opId"` separator - I intended a plain space character
+  between the two interpolations). Nothing about the tool call looked wrong, and the file read back
+  looking normal through the Read tool. The only symptom was `grep`/`file` starting to silently treat
+  the file as binary (grep returned nothing at all instead of an error, `file` reported "data"
+  instead of a text type) - genuinely confusing for a moment before a byte-level Python dump found
+  the actual `\x00`. Worth a standing habit: if a `grep`/`file`-style tool inexplicably goes quiet on
+  a file you *just* edited, suspect a control-character injection before anything more exotic.
+- **Not knowing `~/android-dev` (a full JDK/SDK/gradle toolchain, plus an already-booted emulator)
+  existed until partway through this phase** meant a large amount of Kotlin/Compose code - the
+  fire-processor concurrency design, the `ScheduleSendDialog` date/time math, the
+  `minimumInteractiveComponentSize`/`combinedClickable` accessibility restructure - was written and
+  reasoned through entirely from memory of Kotlin/Compose semantics, with no compiler to check
+  against, for the whole first implementation pass. Once the toolchain was found, iteration got
+  dramatically faster and caught real things (the NUL byte above; several `!!`/type mismatches that
+  would otherwise have only surfaced as a genuine build failure on the user's own machine). This is
+  recorded in CLAUDE.md now specifically so a future session does not lose the same stretch of time.
+- **`Map<K, V>.get()`'s exact non-null key-type requirement, combined with a delegated
+  `var x by remember { mutableStateOf(...) }` property NEVER being smart-castable** (a
+  custom-getter property is never smart-cast in Kotlin, regardless of a surrounding null-check),
+  means `MainActivity.kt`'s pervasive `openTeam!!` convention is load-bearing, not defensive
+  redundancy - a bare `state.scheduledSends[openTeam]` inside the same null-checked `when` branch as
+  a dozen `openTeam!!` uses looks like it should compile by smart-cast and does not. This cost real
+  back-and-forth reasoning (and an adversarial-verify pass that itself came out divided on whether
+  it was a real compile error) before landing on "just add `!!` everywhere, it is free and matches
+  the file's own established convention" rather than trusting either side's reasoning about the
+  language rule in the abstract.
+- **`minimumInteractiveComponentSize()` composed with a separately-applied `combinedClickable`
+  has genuinely unclear hit-testing semantics** when you try to reason about it in the abstract
+  (does the touch-target expansion the first modifier grants actually widen what the second
+  modifier's gesture detector listens on, or does modifier-chain order make that a coincidence).
+  Sidestepped rather than resolved: restructured the send button so both modifiers apply to the
+  SAME outer `Box` (mirroring `IconButtonKt`'s own real internal structure, confirmed by
+  decompiling the project's pinned Material3 aar), rather than trying to prove the composed
+  behavior correct analytically. Worth remembering as a recipe (outer node owns both the size-floor
+  and the click modifier; inner node is purely visual) rather than re-deriving it next time a
+  custom clickable component needs a non-standard touch target.
+- Not a code pain point, but worth recording since it recurred across both phases of this session:
+  `Workflow()` script strings are plain JS, and both backticks-inside-template-literals (Phase 1) and
+  an accidental shell-quoting artifact (`'"'"'`) pasted into a plain string literal (this phase's
+  first red-team script draft) have caused a script parse error that had to be diagnosed and
+  rewritten before the workflow could even launch. Apostrophes/contractions in agent prompts are the
+  recurring trigger either way - rewriting to avoid them entirely (not just escaping) has been the
+  reliable fix both times.
