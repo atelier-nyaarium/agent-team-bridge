@@ -264,7 +264,7 @@ per-relationship plane benefits):
   gain a new step calling `unregisterPlane` on that Domain's `presence:crossdomain-source:<domainId>`
   plane, alongside the existing peer/share/job cleanup they already do.
 
-## Phase 2: Consumer-side plane, wire shape, and reconciliation
+## Phase 2: Consumer-side plane, wire shape, and reconciliation ✅
 
 **Consumer side** (this gateway, showing linked friends to its own console):
 - New plane per linked-and-sharing-back Domain: `presence:crossdomain:<friendDomainId>`, lazily
@@ -679,3 +679,32 @@ recorded rather than acted on; one recommendation for a future pass, documented 
   refactoring two already-hardened, already-extensively-tested mechanisms this late in a long
   session. Worth doing as a focused, dedicated pass before a third consumer of the pattern shows up
   and pays the same cost a third time.
+
+## Painpoints (Phase 2)
+
+- `PlaneRegistry.wake()` only notifies a waiter whose presented map already has a key for the plane
+  that just bumped - which means a LAZILY-registered, N-ary plane family (this feature's consumer
+  side) MUST be eagerly pre-registered for every currently-relevant key before racing `waitForBump`,
+  or a brand-new key's first-ever bump can never wake an already-held poll (it just times out and
+  catches up on the NEXT poll instead). This is not documented anywhere on `PlaneRegistry` itself -
+  every other plane in this codebase is either always-registered (presence, linked-peers) or
+  registered exactly once per request before racing (read-anchors' single `ensureRegistered` call),
+  so nothing about the framework's own shape hints that an N-ary lazy family needs a whole SWEEP
+  first. Found this only by tracing `wake()`'s membership check by hand; a future author building a
+  5th such plane family would likely rediscover it the same way - by shipping the bug first.
+- The freshness-bucket fix (`FRESHNESS_BUCKET_MS`) works, but it means fighting the framework's own
+  model to express something it wasn't built for: `PlaneRegistry` has exactly one signal (a version
+  bump) for "tell any waiting poller," and this feature needed a SECOND, weaker one ("periodically
+  tell them anyway, even if nothing changed") that had to be smuggled into the same hash-comparison
+  mechanism via a coarsened timestamp rather than expressed directly. It works, and is tested, but
+  the need for a periodic-refresh-without-a-real-change signal (verify a backstop cycle proves
+  continued freshness even when idle) feels like something a versioned-plane framework might want to
+  support as a first-class concept eventually, rather than every such feature reinventing its own
+  bucketing trick.
+- `pullPresenceFromDomain`'s sequential-vs-parallel gateway fan-out bug did not surface during my own
+  implementation review - a `for...await` loop reads as obviously correct in isolation, and its two
+  sibling functions in the same file already established the "should be `Promise.all`" convention,
+  yet copying that convention by eye still got missed on first write. Only red-team, specifically
+  reasoning about a hung-peer scenario with 2+ gateways, caught it. Nothing about writing THIS kind
+  of fan-out loop prompts the "wait, should this be concurrent?" question at write time; it only
+  becomes visible when you deliberately ask "what's the worst case for the slowest participant."
