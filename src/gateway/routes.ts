@@ -813,26 +813,47 @@ export function createRoutes({
 		return ok ? { ok: true } : { ok: false, error: results[0]?.error };
 	}
 
-	/** query every one of `fromDomainId`'s gateways at once and dedup by gateway id like
-	 * `discover()`'s own fan-out - a sequential await-per-gateway loop would let one hung gateway
-	 * delay even STARTING the request to that Domain's other, possibly healthy, gateways by up to
-	 * the full relay timeout, degrading this Domain's own backstop cadence far below the reconciler's
-	 * intended 10s tick. A peer's reply is UNTRUSTED content (unlike a `presence_push`, which is
-	 * zod-validated at the wire boundary before it ever reaches this process) - schema-validate it
-	 * here, in the SAME shape and size bound (`MAX_CROSSDOMAIN_PRESENCE_SESSIONS`) the push path's
-	 * own wire schema enforces, before any of it is trusted as a `TeamInfo` row. */
-	const PulledListTeamsResultSchema = z.object({
+	/** The shape every `{kind:"list_teams"}` relay reply must match before any caller trusts it as
+	 * typed content - capped at `MAX_CROSSDOMAIN_PRESENCE_SESSIONS` as a blanket sanity bound on how
+	 * much one reply can cost to process, matching the push path's own wire-level `.max()`. */
+	const ListTeamsRelayResultSchema = z.object({
 		teams: z.array(TeamInfoSchema).max(MAX_CROSSDOMAIN_PRESENCE_SESSIONS).optional(),
 	});
 
+	/** Relay a `{kind:"list_teams"}` call to `dstGateway` and validate the reply against
+	 * `ListTeamsRelayResultSchema` before any caller treats it as typed content. `relayToGateway`
+	 * itself returns `result` as `unknown` by design (the reply is a PEER's content, not this
+	 * process's own), so every caller that reads it as `TeamInfo[]` has to remember to validate it -
+	 * this is the one place that discipline lives, rather than being a convention each call site can
+	 * separately forget (as `pullPresenceFromDomain` initially did). Resolves `{ok:false}` for either
+	 * a relay failure OR a reply that fails validation - a version-skewed or buggy peer omitting a
+	 * required field must never land as if it were a legitimate empty answer. */
+	async function relayListTeams(
+		dstGateway: string,
+		dstDomain?: string,
+	): Promise<{ ok: true; teams: TeamInfo[] } | { ok: false; error: string }> {
+		const r = await relayToGateway(dstGateway, { kind: "list_teams" }, dstDomain);
+		if (!r.ok) return { ok: false, error: r.error ?? "relay failed" };
+		const parsed = ListTeamsRelayResultSchema.safeParse(r.result);
+		if (!parsed.success) {
+			const error = `malformed list_teams reply from "${dstGateway}": ${parsed.error.message}`;
+			console.warn(`[relay] ${error}`);
+			return { ok: false, error };
+		}
+		return { ok: true, teams: parsed.data.teams ?? [] };
+	}
+
 	/** The cross-Domain-presence backstop pull: query every one of `fromDomainId`'s gateways for its
-	 * OWN `list_teams`, converted through the same `toCrossDomainPresenceSession` filter the push
-	 * side uses - no `sharesFor` gate here, since the peer's own gateway already decided what to
-	 * share to this Domain before answering. Resolves `null` if every gateway for this Domain was
-	 * unreachable OR answered with something that fails validation this attempt (the caller must not
-	 * overwrite existing landed state with emptiness on a failed pull); an array (possibly empty, if
-	 * the Domain genuinely shares nothing back) once at least one gateway answered with a valid
-	 * reply. */
+	 * OWN `list_teams` at once (a sequential await-per-gateway loop would let one hung gateway delay
+	 * even STARTING the request to that Domain's other, possibly healthy, gateways by up to the full
+	 * relay timeout, degrading this Domain's own backstop cadence far below the reconciler's intended
+	 * 10s tick), deduped by gateway id like `discover()`'s own fan-out, converted through the same
+	 * `toCrossDomainPresenceSession` filter the push side uses - no `sharesFor` gate here, since the
+	 * peer's own gateway already decided what to share to this Domain before answering. Resolves
+	 * `null` if every gateway for this Domain was unreachable OR answered with something that failed
+	 * validation this attempt (the caller must not overwrite existing landed state with emptiness on
+	 * a failed pull); an array (possibly empty, if the Domain genuinely shares nothing back) once at
+	 * least one gateway answered with a valid reply. */
 	async function pullPresenceFromDomain(fromDomainId: string): Promise<CrossDomainPresenceSession[] | null> {
 		const peers = (crossDomainPeers?.all() ?? []).filter((p) => p.friendDomainId === fromDomainId);
 		if (peers.length === 0) return null;
@@ -842,24 +863,13 @@ export function createRoutes({
 			seenGateways.add(peer.friendGatewayId);
 			return true;
 		});
-		const results = await Promise.all(
-			toQuery.map((peer) =>
-				relayToGateway(peer.friendGatewayId, { kind: "list_teams" }).then((r) => ({ peer, r })),
-			),
-		);
+		const results = await Promise.all(toQuery.map((peer) => relayListTeams(peer.friendGatewayId)));
 		const rows: TeamInfo[] = [];
 		let anyOk = false;
-		for (const { peer, r } of results) {
+		for (const r of results) {
 			if (!r.ok) continue;
-			const parsed = PulledListTeamsResultSchema.safeParse(r.result);
-			if (!parsed.success) {
-				console.warn(
-					`[cross-domain-presence] malformed list_teams reply from "${peer.friendGatewayId}" (Domain "${fromDomainId}") - discarding`,
-				);
-				continue;
-			}
 			anyOk = true;
-			rows.push(...(parsed.data.teams ?? []));
+			rows.push(...r.teams);
 		}
 		if (!anyOk) return null;
 		const out: CrossDomainPresenceSession[] = [];
@@ -885,9 +895,8 @@ export function createRoutes({
 		const roster = (rosterCall.result as { gateways?: { gatewayId: string }[] } | undefined)?.gateways ?? [];
 		const sameDomain = await Promise.all(
 			roster.map(async (h) => {
-				const r = await relayToGateway(h.gatewayId, { kind: "list_teams" });
-				if (!r.ok) return [] as TeamInfo[];
-				return (r.result as { teams?: TeamInfo[] } | undefined)?.teams ?? [];
+				const r = await relayListTeams(h.gatewayId);
+				return r.ok ? r.teams : [];
 			}),
 		);
 		// Cross-Domain leg: query each linked peer for its shared sessions. The returned
@@ -903,16 +912,15 @@ export function createRoutes({
 				const key = `${peer.friendDomainId}/${peer.friendGatewayId}`;
 				if (seenPeerGateways.has(key)) return [] as TeamInfo[];
 				seenPeerGateways.add(key);
-				const r = await relayToGateway(peer.friendGatewayId, { kind: "list_teams" });
+				const r = await relayListTeams(peer.friendGatewayId);
 				if (!r.ok) return [] as TeamInfo[];
-				const peerTeams = (r.result as { teams?: TeamInfo[] } | undefined)?.teams ?? [];
 				// Tag each shared session with the peer's Domain id (authoritative HERE: this
 				// Gateway knows which Domain it linked, while a friend on an older build might
 				// stamp none). The (domainId, gatewayId) pair is what the console groups by and
 				// the send path resolves the seal target from, since a gateway id collides
 				// across Domains. The peer's own displayName rides through the spread, so Peers
 				// display the friend's name.
-				return peerTeams.map((t) => ({ ...t, domainId: peer.friendDomainId }));
+				return r.teams.map((t) => ({ ...t, domainId: peer.friendDomainId }));
 			}),
 		);
 		return jsonResponse([...local, ...sameDomain.flat(), ...crossDomain.flat()]);

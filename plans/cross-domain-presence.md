@@ -625,9 +625,57 @@ A red-team pass (1 lap, 4 confirmed findings, 1 refuted) over Phase 2's new netw
   offset), not a drop-in semaphore - out of scope for a minor, currently-unlikely-to-matter finding.
   Revisit if a deployment's linked-Domain count ever grows large enough for this to matter in
   practice.
-- **Not re-tested with a new automated test:** the malformed-peer-reply fix has no dedicated test
-  (would need a full two-gateway sealed-relay test harness, which `pushPresenceToDomain`/
-  `discover()` - the sibling functions this one already matches - also lack; consistent with, not a
-  regression from, existing precedent). Verified by construction instead: `TeamInfoSchema` already
-  requires `status`/`queueDepth` with no `.optional()`, matching `CrossDomainPresenceSessionSchema`'s
-  own requirements, and is already exercised extensively via `protocol-fixtures.test.ts`.
+- **Not re-tested with a new automated test at the time:** the malformed-peer-reply fix initially had
+  no dedicated test (`pullPresenceFromDomain` alone would need a full two-gateway sealed-relay test
+  harness `routes.test.ts` doesn't have). The follow-up framework pass below extracted the validation
+  into a shared `relayListTeams` helper also used by `discover()`, which `federation.test.ts` already
+  has that harness for - closed there instead.
+
+## Phase 2 implementation - framework-first audit
+
+A framework-first pass (3 dimension agents, analysis only) over Phase 2's new code. One real,
+actionable finding, applied; two "considered, verdict: no extraction" notes with detailed reasoning,
+recorded rather than acted on; one recommendation for a future pass, documented but not executed now.
+
+**Fixed:**
+- **A validated-relay primitive, retroactively closing the SAME gap in two more places:** the
+  red-team fix above added ad hoc validation to `pullPresenceFromDomain` alone, but `discover()`'s
+  two `list_teams` fan-out legs (pre-existing, unrelated to this plan) read a peer's reply through
+  the identical unvalidated `result as {teams?: TeamInfo[]}` cast - the SAME "lands successfully,
+  fails later client-side" hazard, just one function away and never touched by either the align or
+  red-team passes. Extracted `relayListTeams(dstGateway, dstDomain?)` (validates against
+  `TeamInfoSchema`, capped at `MAX_CROSSDOMAIN_PRESENCE_SESSIONS`) and pointed all three call sites
+  at it, so "did I remember to validate an untrusted peer's reply" is answered once instead of being
+  a convention each call site can separately forget - which one of the three already had. Caught a
+  real, previously-unnoticed gap in an EXISTING test fixture in the process (a `federation.test.ts`
+  mock `list_teams` reply missing the now-required `kind` field, silently tolerated by the old bare
+  cast) - fixed the fixture, and added a dedicated test (in `federation.test.ts`, which already has
+  the two-gateway sealed-relay harness this needs) proving a malformed row anywhere in a peer's reply
+  discards that gateway's WHOLE reply rather than landing anything unvalidated.
+
+**Considered, not built:**
+- **Poll-case's 4 plane-piggyback blocks in `consoleHandler.ts` (presence/linked-peers/read-anchors/
+  cross-Domain-presence):** superficially similar (~3-line presented-map/scope/changedSince rhythm)
+  but genuinely different on every real axis - plane-name cardinality (fixed vs. 1-per-owner vs.
+  N-per-request), participation gating, whether a pre-registration sweep runs at all, wire
+  known-version shape, whether "changed" reduces to a boolean or must stay a list, response shape,
+  and full-vs-partial-update semantics. A helper wide enough to cover all four would need 6-8 knobs
+  and would hide exactly the parts (the N-ary loop, the dual-source merge, the partial-update filter)
+  that are the actually risk-bearing parts of each block. Not built. If `presence` ever grows a
+  genuine N-ary shape (the parked `cross-gateway-presence-exchange.md` sibling would do this), THAT
+  pairing with cross-Domain-presence - not today's asymmetric four - is the natural unification
+  candidate; revisit then.
+- **A shared per-key generation-token primitive for `CoalescedPusher` and the reconciler's `inFlight`
+  guard:** Phase 1's framework audit rejected unifying `CoalescedPusher` with `pendingLand`, and that
+  verdict stands (`pendingLand` cancels via a real `setTimeout` handle, never had a stale-resolution
+  hazard to guard against, so it was never a true peer of the token pattern to begin with). But
+  `CoalescedPusher` and the reconciler's `inFlight` map ARE genuine peers of each other - both mint a
+  token, check `current-entry.token === my-token` on settle, and delete-to-cancel - and this plan's
+  own align findings above record the identical omission (a stale resolution after unlink
+  resurrecting torn-down state) being independently missed and separately red-team-caught for BOTH:
+  once for `CoalescedPusher` in Phase 1, once for the reconciler in Phase 2. That is a twice-paid
+  cost of not having this named as a reusable concept, stronger evidence than the `createBurstCache`
+  extraction had (one recurrence) - but not built in this pass, given the real regression risk of
+  refactoring two already-hardened, already-extensively-tested mechanisms this late in a long
+  session. Worth doing as a focused, dedicated pass before a third consumer of the pattern shows up
+  and pays the same cost a third time.
