@@ -708,3 +708,202 @@ recorded rather than acted on; one recommendation for a future pass, documented 
   reasoning about a hung-peer scenario with 2+ gateways, caught it. Nothing about writing THIS kind
   of fan-out loop prompts the "wait, should this be concurrent?" question at write time; it only
   becomes visible when you deliberately ask "what's the worst case for the slowest participant."
+
+## Phase 3 implementation - align findings
+
+A plan-alignment pass (1 lap, 11 candidate findings, 8 confirmed, 3 refuted) over the just-
+implemented Android UI. All 8 fixed or corrected, except one pre-existing/deferred gap noted below.
+
+- **Medium, the freshness chip could freeze on FRESH indefinitely:** `crossDomainFreshness` was
+  computed with a plain `System.currentTimeMillis()` read inside `SessionsScreen`'s body, with no
+  ticker forcing recomposition as time passes. `ChatState` is a `StateFlow` with Kotlin's normal
+  value-equality conflation, so a linked friend that goes fully quiet (its push and the gateway's
+  backstop pull both stop landing) never changes `ChatState` again for that Domain - nothing was
+  left to force a re-evaluation of "now" against the frozen `lastRefreshedAt`, so the chip could
+  keep reporting FRESH well past `CROSS_DOMAIN_STALE_THRESHOLD_MS`, the opposite of what a liveness
+  indicator exists to convey. Fixed: a 30s `LaunchedEffect` ticker (guarded on `linkedDomains`
+  being non-empty, so it costs nothing with no linked friends) now advances a `freshnessNow` state
+  the chip reads instead of a bare `System.currentTimeMillis()` call.
+- **Medium, `crossDomainPeerEntry(domainId)` was dead code:** introduced as the stated replacement
+  for the deleted `peerSessions(domainId)`, but `SessionsScreen` reads `state.crossDomainPeerSessions`
+  directly (it only receives a `ChatState` snapshot, never the `ChatRepository` instance this method
+  lives on, so it structurally could not have called it). Unlike `peerSessions`, which had a real
+  call site until an earlier, unrelated commit removed it, this one was born with none. Fixed:
+  deleted - the `ChatState` field itself is what Phase 3 item 1 actually asked for.
+- **Low, the `EmptyBoard` gate and the board's peer-exclusion filter had no direct relationship:**
+  the gate checked unfiltered `sessions.isEmpty()` while the board actually rendered from a
+  peer-excluded `localSessions`; the two conditions only ever agreed because `mergeLinkedDomains`'s
+  exclusion filter and the local filter are exact logical negations of each other given the same
+  `adminDomainId` - an invariant that was true, but unenforced and untested, so an independent future
+  edit to either filter could silently reintroduce a blank screen (neither `EmptyBoard` nor real
+  content showing). Fixed: hoisted the local/peer split to a new top-level `internal fun
+  localSessions(sessions, adminDomainId)` (mirroring `sessionOrder`'s own "Android-free, JVM-testable"
+  precedent), computed once, and the `EmptyBoard` gate now checks it directly instead of raw
+  `sessions` - removing the coincidence rather than just documenting it. Covered by the new
+  `LocalSessionsTest.kt`.
+- **Low, `mergeLinkedDomains` was called without the empty-`adminDomainId` guard its sibling
+  `ChatRepository.linkedDomains()` applies to the identical call:** an unresolved (empty)
+  `adminDomainId` makes the exclusion filter's `domainId != adminDomain` clause a no-op (no real
+  domainId ever equals `""`), which could misclassify a not-yet-domain-confirmed local session as a
+  linked friend of itself. No concretely reachable trigger under current wire semantics (a single
+  poll response appears to stamp `domainId` uniformly), but a real asymmetry against an established
+  sibling pattern in the same file. Fixed at the time: `linkedDomains` short-circuited to
+  `emptyList()` when `adminDomainId` was empty. **Superseded by lap 2 below** - this guard turned
+  out to have a high-severity side effect and was replaced with a different fix.
+- **Low, two unused imports:** `CrossDomainPresenceSession` was imported but never referenced in
+  both `ChatRepository.kt` and `CrossDomainPresenceUiTest.kt` (the type is genuinely used elsewhere -
+  `MainActivity.kt`'s `LinkedFriendSessionRow` - just not in these two files). Fixed: removed both.
+
+**Deferred, not fixed - pre-existing/out-of-Phase-3-scope:** a linked peer whose self-reported
+`domainId` collides with the admin's own Domain id is silently misattributed as a local session on
+the board (pre-existing `isPeer` behavior, unchanged by this diff) and, newly with Phase 3, any
+`crossDomainPeerSessions` entry already landed for that colliding id becomes permanently unreachable
+from the UI (`mergeLinkedDomains` excludes it from `linkedDomains`, the only roster the "Linked
+friends" section iterates). This is the Android-side face of the exact gap Phase 1's own "Deferred"
+section already tracks: the cross-Domain handshake never enforces `domainId` uniqueness against
+other already-linked peers. Only reachable by an already-admitted, SAS-verified peer misreporting
+its own domainId - not casually triggerable. A real fix belongs with that handshake/trust-model
+work, not this UI phase; noted here so the Android-side consequence isn't lost when that work is
+next picked up.
+
+## Phase 3 implementation - align lap 2 (re-auditing the align fixes themselves)
+
+A focused second align pass, targeting only the lap-1 fixes above - mirroring Phase 1's own
+red-team-lap-2 precedent, since a fix can introduce its own new bug. 7 candidate findings, 6
+confirmed (1 was a pass-confirmation, not a defect), 1 refuted. All 6 fixed.
+
+- **High, the lap-1 `linkedDomains` empty-`adminDomainId` guard made `EmptyBoard`'s peer-awareness
+  a no-op:** `local.isEmpty()` can only be true when `adminDomainId` is ALSO empty (the team that
+  would have produced a non-empty `adminDomainId` always survives `localSessions`'s own filter), so
+  the guard forced `linkedDomains` to `emptyList()` in EXACTLY the states where the `EmptyBoard`
+  gate's `&& linkedDomains.isEmpty()` conjunct needed to do real work - making it logically
+  redundant with plain `local.isEmpty()`. Worse, `linkedDomains` can be non-empty from
+  `state.linkedPeerOwners` (the trust roster) ALONE, with no session in `state.teams` at all - the
+  plan's own "Kashia" example (a freshly-linked friend with nothing shared back yet must still show,
+  Phase 3 item 4). A device that links a friend before ever creating its own first local session
+  (a very ordinary onboarding order) would see `EmptyBoard` instead of that friend's entry - the
+  guard directly defeated the requirement it was three bullets away from restating. Root-caused and
+  fixed: the real defect was `adminDomainId`'s OWN derivation, not the absence of a guard downstream
+  of it - see the next finding. `linkedDomains` is unconditional again.
+- **Medium x2 (same root cause), `HealthHeader` could render alongside `EmptyBoard`:** two audit
+  dimensions independently caught the same gap - `HealthHeader`'s gate (`sessions.isNotEmpty()`,
+  unfiltered) was never updated when `EmptyBoard`'s gate moved to the peer-excluded `local`/
+  `linkedDomains` split, so the file's own comment ("the health banner shows only ALONGSIDE a
+  session list and can never contradict the body") could break. Root-caused and fixed together with
+  the finding above: `local`'s predicate and `mergeLinkedDomains`'s team-derived exclusion predicate
+  are exact logical negations of each other FOR ANY `adminDomainId` value including `""` (a De
+  Morgan tautology, not a coincidence contingent on non-empty `adminDomainId`) - so restoring
+  `linkedDomains` to unconditional restores `sessions.isNotEmpty() <=> local.isNotEmpty() ||
+  linkedDomains.isNotEmpty()` as a real invariant again, and `HealthHeader`/`EmptyBoard` stay
+  mutually exclusive with no separate code change needed.
+- **Low, `adminDomainId`'s derivation was not actually equivalent to `ChatRepository.confirmedDomainId()`,**
+  despite the lap-1 writeup claiming the `linkedDomains` guard fix "matched" it: (1)
+  `confirmedDomainId()` requires the matched team to actually carry a domainId, so it can skip a
+  domainId-less same-gatewayId entry to find a later one that has it - the inline version stopped at
+  the first gatewayId match regardless; (2) `confirmedDomainId()` normalizes an empty gatewayId to
+  local via `.ifEmpty { gw }` - the inline version used a bare `==`. Neither divergence had a
+  concretely reachable trigger under current wire semantics, but this is what actually made the
+  narrow "my own session misclassified as a peer of itself" scenario the lap-1 guard was defending
+  against possible in the first place. Fixed: extracted a top-level `internal fun
+  adminDomainId(sessions, localGatewayId)` mirroring `confirmedDomainId()`'s predicate exactly
+  (matching `localSessions`'s own "Android-free, JVM-testable" precedent - this closes the "guard
+  has zero test coverage" finding too, since the guard itself no longer exists to test). Covered by
+  the new `AdminDomainIdTest.kt`. With the derivation itself correct, the self-misclassification
+  scenario can no longer arise, so no guard is needed downstream.
+- **Low, the freshness ticker had no foreground/visibility gating:** the 30s `LaunchedEffect` ticker
+  correctly cancels when `SessionsScreen` leaves composition, but `delay()` is wall-clock scheduled
+  (not frame-clock, unlike the adjacent `rememberSessionsPulsePhase()` animation), so it kept firing
+  on schedule while the app was merely backgrounded, not navigated away from. This file already has
+  the correct idiom for exactly this - a `LocalLifecycleOwner` + `DisposableEffect` +
+  `LifecycleEventObserver` observing `ON_START`/`ON_STOP`, used twice elsewhere - but the new ticker
+  didn't reuse it. Fixed: added the same lifecycle-observer pattern, gating the ticker on both
+  `linkedDomains` being non-empty and the app being foregrounded.
+- **Pass confirmation, no defect:** the lap-1 dead-code/import cleanup (`crossDomainPeerEntry`
+  deletion, the two `CrossDomainPresenceSession` import removals) was independently re-verified
+  clean - zero remaining references anywhere, the still-needed `CrossDomainPresenceEntry` type
+  untouched in all three relevant files, and a real (not just claimed) build/test run confirmed.
+
+## Phase 3 implementation - red-team findings
+
+An adversarial pass (different lens from the two align laps - what can go wrong, not "does it match
+the plan") over the same diff. 11 candidate findings (one real issue independently caught by 3
+different dimensions), 7 distinct confirmed issues, all fixed.
+
+- **High, a linked peer's own session list could crash the app's home screen:** three audit
+  dimensions independently found the same root cause. `CrossDomainPresenceSession` reaches Android
+  as a plain `List` with no `(gatewayId, team)` uniqueness enforced anywhere in the chain - not the
+  wire schema (`z.array(...)`, no `.refine`), not the gateway's landing sanitizer (a plain `.map()`),
+  not the Android upsert (`associateBy { e -> e.domainId }` dedupes per-Domain, never touching the
+  nested `sessions` list). The "Linked friends" section's `items(friendSessions, key = {...})` feeds
+  this list straight to a Compose `LazyColumn` with no defense - two rows sharing one
+  `(gatewayId, team)` pair throws `IllegalArgumentException: Key ... was already used`, uncaught
+  (this app installs no composition error boundary), crashing the Sessions board - the app's default
+  landing screen - for every device with that friend linked, recurring on every launch until the
+  data changes or the friend is unlinked. This plane's own established threat model already treats a
+  linked peer's Gateway as "hostile-or-buggy" (see Phase 1's rate-limiting/sanitization work) - a
+  uniqueness invariant on the session list itself was simply never added anywhere in that chain.
+  Fixed: extracted a top-level `internal fun dedupedFriendSessions(sessions)` (keep-first
+  `distinctBy { gatewayId to team }`), applied before the list ever reaches `items()`. Covered by the
+  new `DedupedFriendSessionsTest.kt`. A gateway-side fix (dedup at landing, or an array-level
+  `.refine()`) would close this more centrally but is out of this UI phase's scope; noted for a
+  future pass over `crossDomainPresence.ts`.
+- **High + Low (same fix), a linked friend's self-reported name had no length/overflow bound:**
+  `LinkedFriendHeader`'s `name` (`friend.displayName ?: friend.domainId`) is free text - up to 128
+  chars server-side for a legitimately-set displayName, but that cap lives on a DIFFERENT schema
+  (the owner-signed rename op) than the one this field actually rides (`TeamInfoSchema`/
+  `CrossDomainPeerEntrySchema`, both uncapped `z.string()`) - so a compromised or merely buggy peer
+  Gateway can put an arbitrary-length string directly into its own discovery reply, bypassing the
+  128-char cap entirely. Every other analogous label in this file (`SessionCard`'s title/snippet, the
+  thread topbar title, the attachment-chip filename) bounds identically-purposed text with
+  `maxLines = 1` + `Ellipsis`; `LinkedFriendHeader` was the one outlier, for the single least-trusted
+  string in the app. Fixed: added `maxLines = 1, overflow = Ellipsis, Modifier.weight(1f)` to that
+  Text, matching the established convention exactly (replacing the separate trailing Spacer that
+  previously carried the weight).
+- **Medium, `LinkedFriendSessionRow`'s sessionLabel/team/description had the same missing bound:**
+  smaller in impact (these fields ARE capped at 64/120/320 chars server-side and charset-sanitized on
+  landing - so worst case is a bounded few-hundred-char wrap, not unbounded growth), but the same
+  established-convention gap for the same class of untrusted content. Fixed: added
+  `maxLines = 1, overflow = Ellipsis` to both Texts, matching `SessionCard`'s identical fields.
+- **Medium, `knownCrossDomainPresenceVersions` had an unguarded read-modify-write race:** its two
+  poll-loop mutators (`applyLinkedPeers`'s prune, `applyCrossDomainPresence`'s upsert) merge against
+  the field's OWN prior value, while `refreshTeams()` (pull-to-refresh) resets it to `emptyList()`
+  from a DIFFERENT coroutine - both genuinely multi-threaded via `Dispatchers.IO`'s pool, not just
+  cooperatively interleaved. An unlucky interleaving could silently overwrite the user's manual
+  "treat as cold boot" reset with stale, pre-reset upsert/filter output - unlike the sibling
+  `knownPresenceVersions`/`knownLinkedPeersVersion` fields, whose poll-loop writes are plain
+  server-sourced replacements where a race just picks between two valid values, a lost update here
+  concretely resurrects a stale per-domain entry. The codebase already guards the identical
+  concurrent-caller pair (poll loop tick vs. manual `refreshTeams()`, both on `Dispatchers.IO`) for a
+  sibling field (`freshTeamsMutex`/`reapplyCachedTeams`) - this field got no equivalent protection.
+  Fixed: added a dedicated `crossDomainVersionsMutex`, wrapping all three mutation sites (both
+  `applyLinkedPeers`/`applyCrossDomainPresence`, now `suspend fun`, and `refreshTeams()`'s reset).
+- **Medium, `HealthHeader`'s gate missed the peerOwners-only case align lap 2's own proof didn't
+  cover:** lap 2's "De Morgan tautology" argument (restoring `sessions.isNotEmpty() <=>
+  local.isNotEmpty() || linkedDomains.isNotEmpty()`) is only valid over the TEAM-DERIVED half of
+  `linkedDomains` - it silently dropped the OTHER half, `mergeLinkedDomains`'s own union of
+  `peerOwners.keys` (a friend known purely through the trust roster, no team/session anywhere). A
+  device that links a friend before creating its own first local session (`state.teams=[]`,
+  `state.linkedPeerOwners` non-empty - the plan's own "Kashia" ordering) has `sessions.isNotEmpty()`
+  false (`HealthHeader` hidden) while `local.isEmpty() && linkedDomains.isEmpty()` is ALSO false
+  (`EmptyBoard` correctly hidden, the friend's row correctly shows) - real content on screen with no
+  status header at all, the reverse-polarity twin of the bug lap 2 believed it had fully closed.
+  Fixed: gated `HealthHeader` on the same `local.isNotEmpty() || linkedDomains.isNotEmpty()`
+  condition that negates `EmptyBoard`, instead of raw `sessions.isNotEmpty()`.
+- **Low, the freshness ticker never caught up immediately on restart:** correct on the steady-state
+  tick, but every (re)start of the `LaunchedEffect` - including the `ON_START` transition after a
+  background stint - ran `delay(30_000)` before its first write, so a resume could show a verdict
+  frozen at its pre-background value for up to 30 more seconds, exactly when a liveness indicator is
+  most likely to be checked. Fixed: moved the `freshnessNow` write to fire immediately at the top of
+  each loop iteration, before the delay, so a restart (first-start or post-background) catches up at
+  once.
+- **Low, accepted without a code change:** the ticker's `remember`/`DisposableEffect` scaffolding (as
+  opposed to its actual tick loop, which was already correctly gated) sets up unconditionally for any
+  user with at least one local session, not just users with linked friends. Cost is genuinely
+  negligible (one more lifecycle listener, identical in shape to two pre-existing ones already in
+  this file) and gating it further would mean conditionally skipping `remember`/`DisposableEffect`
+  calls themselves - more complexity than the negligible cost justifies. Left as-is.
+
+**Red-team lap 2** (re-auditing the 7 fixes above, weighted toward the new `crossDomainVersionsMutex`
+concurrency change as the one fix in this batch with genuine new-bug risk): 0 findings. All three
+review dimensions - the mutex/suspend-fn correctness, the 5 mechanical UI fixes, and a general
+completeness sweep - independently came back clean.

@@ -133,6 +133,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.plugins.PluginManager
 import com.atelier_nyaarium.switchboard.plugins.Plugins
+import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceSession
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.composeSessionName
@@ -994,6 +995,28 @@ internal fun sessionOrder(state: ChatState): Comparator<Team> =
 		.thenByDescending { state.lastActivity(it.name) ?: 0L }
 		.thenBy { state.label(it.name, state.localGatewayId) }
 
+/** This device's own Domain's sessions, excluding a linked friend's - those render in the
+ * dedicated "Linked friends" section instead (sourced from the live crossDomainPresence plane),
+ * so excluding them here is what keeps the same peer session from rendering twice. */
+internal fun localSessions(sessions: List<Team>, adminDomainId: String): List<Team> =
+	sessions.filter { it.domainId.isNullOrEmpty() || it.domainId == adminDomainId }
+
+/** A linked friend's own Gateway is only cryptographically trusted, not content-trusted - nothing
+ * upstream (wire schema or gateway-side landing) enforces (gatewayId, team) uniqueness within its
+ * reported session list, and a duplicate key crashes the "Linked friends" LazyColumn outright.
+ * Keeps the first occurrence of each pair. */
+internal fun dedupedFriendSessions(sessions: List<CrossDomainPresenceSession>): List<CrossDomainPresenceSession> =
+	sessions.distinctBy { it.gatewayId to it.team }
+
+/** My own Domain id, learned from a local session (one owned by the connected Gateway). Mirrors
+ * ChatRepository.confirmedDomainId()'s own predicate exactly - requires the matched entry to
+ * actually carry a domainId (not just a matching gatewayId), and normalizes an empty gatewayId as
+ * local - so a domainId-less entry sharing the local gatewayId can never mask a later, real one. */
+internal fun adminDomainId(sessions: List<Team>, localGatewayId: String): String =
+	sessions
+		.firstOrNull { (it.gatewayId.ifEmpty { localGatewayId }) == localGatewayId && !it.domainId.isNullOrEmpty() }
+		?.domainId.orEmpty()
+
 /** Tab/title label for an open thread: the session's label when it is unique among the open tabs,
  * else the label qualified with the shortest suffix of the address path (the session segment, then
  * `spawn.session`, then `gateway.spawn.session`, ...) that disambiguates it, e.g. "Scratch
@@ -1121,9 +1144,24 @@ fun SessionsScreen(
 	) { pad ->
 		Column(Modifier.padding(pad).fillMaxSize()) {
 			val sessions = state.sessions(state.localGatewayId)
+			// Computed here (rather than calling ChatRepository.confirmedDomainId(), which this
+			// Composable has no access to) so both linkedDomains and the local/peer session split below
+			// share one value.
+			val adminDomainId = adminDomainId(sessions, state.localGatewayId)
+			val local = localSessions(sessions, adminDomainId)
+			// Linked friend Domains, independent of whether discovery has surfaced any of their
+			// sessions yet (see LinkedDomain's own doc - a just-linked friend must still show up). Must
+			// stay unconditional: a freshly-linked friend can be known purely through state.linkedPeerOwners
+			// (the trust roster) before this device has created its own first local session at all, i.e.
+			// exactly while adminDomainId is still "" - a guard here would hide every linked friend in
+			// that state, not just a hypothetically misclassified local one.
+			val linkedDomains = CrossDomainLink.mergeLinkedDomains(state.teams, state.linkedPeerOwners, adminDomainId)
 			// One status surface: when the board is empty, EmptyBoard owns the whole message, so the
-			// health banner shows only ALONGSIDE a session list and can never contradict the body.
-			if (sessions.isNotEmpty()) HealthHeader(state)
+			// health banner shows only ALONGSIDE real content and can never contradict the body. Mirrors
+			// EmptyBoard's own negated gate rather than raw `sessions` - `linkedDomains` can be non-empty
+			// purely from state.linkedPeerOwners (a linked friend known before this device's own first
+			// local session exists), a case raw `sessions.isNotEmpty()` would miss entirely.
+			if (local.isNotEmpty() || linkedDomains.isNotEmpty()) HealthHeader(state)
 			if (state.gap) {
 				Surface(
 					color = MaterialTheme.colorScheme.errorContainer,
@@ -1138,7 +1176,7 @@ fun SessionsScreen(
 					)
 				}
 			}
-			if (sessions.isEmpty()) {
+			if (local.isEmpty() && linkedDomains.isEmpty()) {
 				// Offer the still-owed in-person compare only on the awaiting-host board (a freshly-rooted
 				// enrollee who has not finished the trust step); EmptyBoard gates the button on that state.
 				EmptyBoard(state, onManage, onAddGateway, onHostHelp, onRefresh, onVerifyEnroll = onVerifyEnroll)
@@ -1147,13 +1185,40 @@ fun SessionsScreen(
 				// card driving its own infinite animation.
 				val pulsePhase = rememberSessionsPulsePhase()
 				val order = sessionOrder(state)
-				// My own Domain id, learned from a local session (one owned by the connected
-				// Gateway): the local listing stamps it, so I can tell a peer Domain apart
-				// without threading a separate localDomainId through state. Empty until known.
-				val adminDomainId = sessions.firstOrNull { it.gatewayId == state.localGatewayId }?.domainId.orEmpty()
+				// Ticks every 30s so a linked friend's freshness chip re-evaluates from elapsed time
+				// alone - otherwise it only recomputes when some OTHER ChatState field changes, and a
+				// friend who has gone fully quiet (no more pushes or backstop pulls landing) would
+				// freeze at its last-computed verdict indefinitely. Paused while backgrounded (mirroring
+				// this file's own visibility-driven pattern elsewhere): delay() is wall-clock scheduled,
+				// not frame-clock, so it keeps firing on schedule regardless of window visibility unless
+				// explicitly paused.
+				var freshnessNow by remember { mutableStateOf(System.currentTimeMillis()) }
+				var freshnessForeground by remember { mutableStateOf(true) }
+				val freshnessLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+				DisposableEffect(freshnessLifecycleOwner) {
+					val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+						when (event) {
+							androidx.lifecycle.Lifecycle.Event.ON_START -> freshnessForeground = true
+							androidx.lifecycle.Lifecycle.Event.ON_STOP -> freshnessForeground = false
+							else -> {}
+						}
+					}
+					freshnessLifecycleOwner.lifecycle.addObserver(observer)
+					onDispose { freshnessLifecycleOwner.lifecycle.removeObserver(observer) }
+				}
+				LaunchedEffect(linkedDomains.isNotEmpty(), freshnessForeground) {
+					if (linkedDomains.isEmpty() || !freshnessForeground) return@LaunchedEffect
+					while (true) {
+						// Ticks immediately on (re)start, not just after the first 30s - otherwise a
+						// resume from background shows a verdict frozen at its pre-background value for
+						// up to 30s more, exactly when a liveness indicator is most likely checked.
+						freshnessNow = System.currentTimeMillis()
+						delay(30_000)
+					}
+				}
 				// Grouped by the owning (Domain, Gateway) pair. Within each group: devcontainer projects,
 				// then loose sessions. The local Gateway sorts first; peer Domains follow, ordered by Domain.
-				val byGateway = sessions
+				val byGateway = local
 					.groupBy { GatewayGroupKey(it.domainId.orEmpty().ifEmpty { adminDomainId }, it.gatewayId.ifEmpty { state.localGatewayId }) }
 					.toList()
 					.sortedBy { (key, _) ->
@@ -1168,7 +1233,11 @@ fun SessionsScreen(
 						val composite = "${key.domainId}/${key.gatewayId}"
 						val collapsed = collapsedGateways[composite] == true
 						// A peer Domain (a linked friend's) is labeled domain/gateway so a colliding
-						// gateway id reads distinctly; my own Domain shows the bare gateway id.
+						// gateway id reads distinctly; my own Domain shows the bare gateway id. Always
+						// false in practice now that `byGateway` groups `local` (peer rows already
+						// filtered out above) - left in place as a direct, defensive match of the same
+						// admin-domain test used to build localSessions, rather than assuming this loop
+						// can never see a non-local group.
 						val isPeer = key.domainId.isNotEmpty() && adminDomainId.isNotEmpty() && key.domainId != adminDomainId
 						val headerName = if (isPeer) composite else key.gatewayId
 						// Only your own Gateway can ever create a session on it (host-spawn is meaningless on
@@ -1257,6 +1326,43 @@ fun SessionsScreen(
 									onClick = hapticClick { onOpen(team.name) },
 									onLongPress = { actionTeam = team },
 								)
+							}
+						}
+					}
+					if (linkedDomains.isNotEmpty()) {
+						item(key = "linked-friends-label") { SectionLabel("Linked friends") }
+						for (friend in linkedDomains) {
+							val friendKey = "friend:${friend.domainId}"
+							val collapsed = collapsedGateways[friendKey] == true
+							val entry = state.crossDomainPeerSessions[friend.domainId]
+							val freshness = crossDomainFreshness(entry?.lastRefreshedAt, freshnessNow)
+							val friendSessions = dedupedFriendSessions(entry?.sessions.orEmpty())
+							item(key = "sw:$friendKey") {
+								LinkedFriendHeader(
+									name = friend.displayName ?: friend.domainId,
+									freshness = freshness,
+									collapsed = collapsed,
+									onToggle = { collapsedGateways[friendKey] = !collapsed },
+								)
+							}
+							if (!collapsed) {
+								if (friendSessions.isEmpty()) {
+									item(key = "empty:$friendKey") {
+										Text(
+											"No shared sessions",
+											style = MaterialTheme.typography.bodySmall,
+											color = MaterialTheme.colorScheme.onSurfaceVariant,
+											modifier = Modifier.padding(start = 20.dp, top = 4.dp, bottom = 8.dp),
+										)
+									}
+								} else {
+									items(
+										friendSessions,
+										key = { "friend-session:${friend.domainId}:${it.gatewayId}:${it.team}" },
+									) { session ->
+										LinkedFriendSessionRow(session)
+									}
+								}
 							}
 						}
 					}
@@ -1492,6 +1598,85 @@ private fun GatewayHeader(
 				color = MaterialTheme.colorScheme.onSurfaceVariant,
 			)
 		}
+	}
+}
+
+private fun crossDomainFreshnessColor(freshness: CrossDomainFreshness): Color =
+	when (freshness) {
+		CrossDomainFreshness.FRESH -> Color(0xFF2EA043) // green, matches presenceColor's own "live"
+		CrossDomainFreshness.STALE -> Color(0xFFD29922) // amber, matches presenceColor's own "verifying"
+		CrossDomainFreshness.UNKNOWN -> Color(0xFF8B949E) // neutral gray - not yet judgeable, not a warning
+	}
+
+private fun crossDomainFreshnessLabel(freshness: CrossDomainFreshness): String =
+	when (freshness) {
+		CrossDomainFreshness.FRESH -> "fresh"
+		CrossDomainFreshness.STALE -> "stale"
+		CrossDomainFreshness.UNKNOWN -> "unknown"
+	}
+
+/** A linked friend Domain's collapsible header row in the "Linked friends" board section - the
+ * freshness-chip analog of GatewayHeader's binary online/offline text, since a friend's sessions
+ * arrive over a live push/pull plane whose currency is a 3-state judgment (fresh/stale/unknown),
+ * not a simple up-or-down signal. */
+@Composable
+private fun LinkedFriendHeader(name: String, freshness: CrossDomainFreshness, collapsed: Boolean, onToggle: () -> Unit) {
+	Row(
+		Modifier
+			.fillMaxWidth()
+			.clip(MaterialTheme.shapes.small)
+			.hapticClickable(onClick = onToggle)
+			.padding(horizontal = 4.dp, vertical = 8.dp),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
+		Icon(
+			if (collapsed) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+			contentDescription = if (collapsed) "Expand" else "Collapse",
+			tint = MaterialTheme.colorScheme.onSurfaceVariant,
+		)
+		Spacer(Modifier.width(10.dp))
+		Text(
+			name,
+			style = MaterialTheme.typography.titleMedium,
+			fontFamily = FontFamily.Monospace,
+			maxLines = 1,
+			overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+			modifier = Modifier.weight(1f),
+		)
+		StatusChip(crossDomainFreshnessLabel(freshness), crossDomainFreshnessColor(freshness))
+	}
+}
+
+/** One of a linked friend's shared sessions - display-only (no click-through; this board section
+ * shows what a friend has shared, it does not open a chat with their session). */
+@Composable
+private fun LinkedFriendSessionRow(session: CrossDomainPresenceSession) {
+	Row(
+		Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+		verticalAlignment = Alignment.CenterVertically,
+	) {
+		Column(Modifier.weight(1f)) {
+			Text(
+				session.sessionLabel ?: session.team,
+				style = MaterialTheme.typography.bodyMedium,
+				maxLines = 1,
+				overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+			)
+			session.description?.let {
+				Text(
+					it,
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+					maxLines = 1,
+					overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+				)
+			}
+		}
+		Text(
+			statusWord(session.status),
+			style = MaterialTheme.typography.labelSmall,
+			color = MaterialTheme.colorScheme.onSurfaceVariant,
+		)
 	}
 }
 
