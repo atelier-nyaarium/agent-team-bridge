@@ -187,7 +187,7 @@ Full design history and the audit rounds that shaped this are in `plans/versione
 - Both sides share the same `MAX_LINKED_DOMAINS_FOR_PRESENCE` cap and are torn down together with `unlinkDomain`/`untrustOwner`'s existing cleanup.
 - **Android UI** (`android/.../ChatRepository.kt`, `MainActivity.kt`) - a "Linked friends" board section, one entry per Domain from the EXISTING `linkedDomains()`/`CrossDomainLink.mergeLinkedDomains` roster (never from the new field's own keys, so a freshly-linked friend with nothing shared back yet still shows up). `ChatState.crossDomainPeerSessions` lands the pushed/pulled entries as a per-domainId upsert (never a wholesale replace - the wire only ships the changed subset each poll); `knownCrossDomainPresenceVersions` (the client's own known-version tracking presented on each poll) is upserted the same way. A friend's freshness renders as a 3-state chip (`CrossDomainFreshness`: fresh/stale/unknown, `CrossDomainPresenceUi.kt`) computed against `lastRefreshedAt` and a periodic re-check tied to `ChatState.foreground` (a Compose-reactive mirror of `ChatRepository.isVisible`, updated alongside it). The friend header and the existing per-Gateway board header share one `CollapsibleSectionHeader` composable.
 
-Full design, the questionaire, and the audit rounds (plan-alignment and red-team passes per phase, plus framework-first passes) are in `plans/cross-domain-presence.md`.
+Full design history and the audit rounds that shaped this (plan-alignment and red-team passes per phase, plus framework-first passes) are in `plans/cross-domain-presence.md` (deleted once all 3 phases shipped, retrievable via git log); its pain points are folded into `plans/pain-points.md`.
 
 ### Console Bridge (Android channel)
 
