@@ -6,12 +6,14 @@ import {
 	createConsoleDispatcher,
 } from "../gateway/console/consoleHandler.js";
 import { ConsolePeer } from "../gateway/console/consolePeer.js";
+import { CrossDomainPresenceConsumer } from "../gateway/federation/crossDomainPresence.js";
 import { IntentTracker } from "../gateway/intent.js";
 import { ReadAnchors, readAnchorsPlaneName } from "../gateway/readAnchors.js";
 import type { WakeResult } from "../gateway/wake.js";
 import type { ConversationRegistry, TeamRegistry, WsData } from "../gateway/websocket.js";
 import type { ConsoleOp, CrossDomainPeerEntry, OpenedConsoleFrame } from "../shared/console-protocol.js";
 import { DeviceMailbox, DeviceMailboxStore } from "../shared/device-mailbox.js";
+import type { CrossDomainPresenceSession } from "../shared/federation-protocol.js";
 import { ownerKeyId } from "../shared/owner-id.js";
 import { PlaneRegistry, stableHash } from "../shared/plane-registry.js";
 import { SessionStore } from "../shared/session-store.js";
@@ -81,7 +83,14 @@ function makeHarness(
 	deps: Partial<
 		Pick<
 			ConsoleHandlerDeps,
-			"domainStatus" | "domain" | "planeRegistry" | "presence" | "intentTracker" | "readAnchors"
+			| "domainStatus"
+			| "domain"
+			| "planeRegistry"
+			| "presence"
+			| "intentTracker"
+			| "readAnchors"
+			| "crossDomainPresenceConsumer"
+			| "linkedDomainIds"
 		>
 	> = {},
 ): Harness {
@@ -129,6 +138,8 @@ function makeHarness(
 		presence: deps.presence,
 		intentTracker: deps.intentTracker,
 		readAnchors: deps.readAnchors,
+		crossDomainPresenceConsumer: deps.crossDomainPresenceConsumer,
+		linkedDomainIds: deps.linkedDomainIds,
 	});
 	return { registry, conversationRegistry, mailboxStore, sendCalls, respondCalls, handler };
 }
@@ -1046,6 +1057,131 @@ describe("poll: focus intent + presence piggyback", () => {
 		const result = reply.result as { entries: unknown[]; settled?: string };
 		expect(result.entries).toHaveLength(1);
 		expect(result.settled).toBe("mailbox");
+	});
+});
+
+describe("poll: cross-Domain-presence piggyback", () => {
+	function session(team: string): CrossDomainPresenceSession {
+		return { team, gatewayId: "friend-gw", status: "online", kind: "devcontainer", queueDepth: 0 };
+	}
+
+	it("an absent knownCrossDomainPresenceVersions skips the plane entirely (a console build that predates it)", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const crossDomainPresenceConsumer = new CrossDomainPresenceConsumer(planeRegistry, undefined, 0);
+		crossDomainPresenceConsumer.land("alice", [session("story")]);
+		const h = makeHarness({}, { planeRegistry, crossDomainPresenceConsumer, linkedDomainIds: () => ["alice"] });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const reply = await h.handler.handleFrame(frame({ kind: "poll" }, "p1"));
+		const result = reply.result as Record<string, unknown>;
+		expect(result.crossDomainPresence).toBeUndefined();
+		expect(result.settled).toBe("timeout");
+	});
+
+	it("an EMPTY knownCrossDomainPresenceVersions ships every linked Domain's current content (cold boot)", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const crossDomainPresenceConsumer = new CrossDomainPresenceConsumer(planeRegistry, undefined, 0);
+		crossDomainPresenceConsumer.land("alice", [session("story")]);
+		const h = makeHarness({}, { planeRegistry, crossDomainPresenceConsumer, linkedDomainIds: () => ["alice"] });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+		const reply = await h.handler.handleFrame(frame({ kind: "poll", knownCrossDomainPresenceVersions: [] }, "p1"));
+		const result = reply.result as {
+			crossDomainPresence?: Array<{ domainId: string; sessions: unknown[] }>;
+			settled?: string;
+		};
+		expect(result.crossDomainPresence).toEqual([
+			expect.objectContaining({ domainId: "alice", sessions: [session("story")] }),
+		]);
+		expect(result.settled).toBe("crossDomainPresence");
+	});
+
+	it("a matching presented version for the ONLY linked Domain omits the piggyback entirely", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const crossDomainPresenceConsumer = new CrossDomainPresenceConsumer(planeRegistry, undefined, 0);
+		crossDomainPresenceConsumer.land("alice", [session("story")]);
+		const h = makeHarness({}, { planeRegistry, crossDomainPresenceConsumer, linkedDomainIds: () => ["alice"] });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		const first = (await h.handler.handleFrame(frame({ kind: "poll", knownCrossDomainPresenceVersions: [] }, "p1")))
+			.result as {
+			crossDomainPresence: Array<{ domainId: string; version: { epoch: number; version: number } }>;
+		};
+		const known = first.crossDomainPresence.map((e) => ({
+			domainId: e.domainId,
+			epoch: e.version.epoch,
+			version: e.version.version,
+		}));
+
+		const second = await h.handler.handleFrame(
+			frame({ kind: "poll", knownCrossDomainPresenceVersions: known }, "p2"),
+		);
+		const result = second.result as Record<string, unknown>;
+		expect(result.crossDomainPresence).toBeUndefined();
+		expect(result.settled).toBe("timeout");
+	});
+
+	it("a fresh land() for one linked Domain ships only THAT Domain's updated content, not every linked Domain", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const crossDomainPresenceConsumer = new CrossDomainPresenceConsumer(planeRegistry, undefined, 0);
+		crossDomainPresenceConsumer.land("alice", [session("story")]);
+		crossDomainPresenceConsumer.land("bob", [session("app")]);
+		const h = makeHarness(
+			{},
+			{ planeRegistry, crossDomainPresenceConsumer, linkedDomainIds: () => ["alice", "bob"] },
+		);
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		const first = (await h.handler.handleFrame(frame({ kind: "poll", knownCrossDomainPresenceVersions: [] }, "p1")))
+			.result as {
+			crossDomainPresence: Array<{ domainId: string; version: { epoch: number; version: number } }>;
+		};
+		const known = first.crossDomainPresence.map((e) => ({
+			domainId: e.domainId,
+			epoch: e.version.epoch,
+			version: e.version.version,
+		}));
+
+		crossDomainPresenceConsumer.land("alice", [session("story"), session("app2")]); // only alice changes
+
+		const second = await h.handler.handleFrame(
+			frame({ kind: "poll", knownCrossDomainPresenceVersions: known }, "p2"),
+		);
+		const result = second.result as { crossDomainPresence?: Array<{ domainId: string }> };
+		expect(result.crossDomainPresence).toHaveLength(1);
+		expect(result.crossDomainPresence?.[0].domainId).toBe("alice");
+	});
+
+	it("ensures a plane for every currently-linked Domain even before its first land(), so its later first push wakes an already-held poll", async () => {
+		const planeRegistry = new PlaneRegistry();
+		const crossDomainPresenceConsumer = new CrossDomainPresenceConsumer(planeRegistry, undefined, 0);
+		// "carol" is linked but has never pushed anything yet.
+		const h = makeHarness({}, { planeRegistry, crossDomainPresenceConsumer, linkedDomainIds: () => ["carol"] });
+		await h.handler.handleFrame(frame({ kind: "register" }));
+
+		// First poll: carol's plane is ensured (empty baseline) and, since nothing was known before,
+		// ships immediately with empty content - same cold-boot semantics as any other plane.
+		const first = (await h.handler.handleFrame(frame({ kind: "poll", knownCrossDomainPresenceVersions: [] }, "p1")))
+			.result as {
+			crossDomainPresence: Array<{ domainId: string; version: { epoch: number; version: number } }>;
+		};
+		const known = first.crossDomainPresence.map((e) => ({
+			domainId: e.domainId,
+			epoch: e.version.epoch,
+			version: e.version.version,
+		}));
+
+		// Present carol's (still-empty) version and hold - only carol's first REAL push should wake it.
+		const held = h.handler.handleFrame(
+			frame({ kind: "poll", holdMs: 5_000, knownCrossDomainPresenceVersions: known }, "p2"),
+		);
+		await new Promise((r) => setTimeout(r, 20));
+		crossDomainPresenceConsumer.land("carol", [session("story")]); // carol's first-ever real push
+
+		const start = Date.now();
+		const reply = await held;
+		expect(Date.now() - start).toBeLessThan(2_000); // woke on the bump, not the 5s hold
+		const result = reply.result as { crossDomainPresence?: Array<{ domainId: string }>; settled?: string };
+		expect(result.settled).toBe("crossDomainPresence");
+		expect(result.crossDomainPresence?.[0]?.domainId).toBe("carol");
 	});
 });
 

@@ -28,6 +28,14 @@ interface PlaneDefinition<T> {
 	name: string;
 	snapshot: () => T;
 	identityOf: (snapshot: T) => string;
+	/** Invoked synchronously right after a bump (a genuine content-hash change), with the plane's
+	 * new version - regardless of which caller triggered the recompute (markDirty, the tripwire, or
+	 * boot reconciliation). The registry's only "this plane's content just changed" observation hook
+	 * outside the poll-consumption waitForBump path; a plane that needs to react to its OWN change
+	 * (push it somewhere, not just wait to be asked) registers one instead of hand-rolling external
+	 * version diffing, which would reproduce the same callsite-driven "remember to announce" bug
+	 * class markDirty()/recompute() already exist to structurally rule out for the bump decision. */
+	onBump?: (version: PlaneVersion) => void;
 }
 
 interface Waiter {
@@ -76,6 +84,7 @@ class Plane<T> {
 	readonly name: string;
 	private readonly snapshotFn: () => T;
 	private readonly identityOf: (snapshot: T) => string;
+	private readonly onBumpFn?: (version: PlaneVersion) => void;
 	private epoch: number;
 	private counter = 0;
 	private lastHash: string;
@@ -85,6 +94,7 @@ class Plane<T> {
 		this.name = def.name;
 		this.snapshotFn = def.snapshot;
 		this.identityOf = def.identityOf;
+		this.onBumpFn = def.onBump;
 		if (restored?.cleanShutdown) {
 			this.epoch = restored.epoch;
 			this.counter = restored.counter;
@@ -124,6 +134,7 @@ class Plane<T> {
 		if (hash === this.lastHash) return false;
 		this.lastHash = hash;
 		this.counter += 1;
+		this.onBumpFn?.(this.version);
 		return true;
 	}
 
@@ -171,6 +182,19 @@ export class PlaneRegistry {
 	 * needs before calling registerPlane a second time for the same name, which throws. */
 	hasPlane(name: string): boolean {
 		return this.planes.has(name);
+	}
+
+	/** Drop a plane from the registry - the inverse of registerPlane, for a plane whose lifetime is
+	 * shorter than the process's (e.g. one per revocable relationship, torn down when that
+	 * relationship ends). Settles any in-flight `waitForBump` waiter tracking this plane (as woken,
+	 * not left to time out) - a caller must not have to rely on some other plane's coincidental
+	 * co-occurring bump to notify a waiter that the plane it was tracking is gone. A no-op if the
+	 * name is not currently registered. */
+	unregisterPlane(name: string): void {
+		if (!this.planes.delete(name)) return;
+		for (const waiter of [...this.waiters]) {
+			if (waiter.presentedMap.has(name)) waiter.settle(true);
+		}
 	}
 
 	/** Mark a plane dirty and immediately recompute (mutators call this; it is the ONLY path that

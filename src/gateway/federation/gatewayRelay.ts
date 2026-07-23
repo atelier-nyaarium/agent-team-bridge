@@ -1,6 +1,7 @@
 import type { GatewayRelayReplyParams } from "../../shared/evie-protocol.js";
 import {
 	type ConsolePushEntry,
+	type CrossDomainPresenceSession,
 	type FederatedOp,
 	FederatedOpSchema,
 	GatewayRelayFrameSchema,
@@ -24,6 +25,10 @@ export interface FederationRoutes {
 	/** Land a fully-composed mailbox entry on THIS Gateway's own owner mailbox - the console_push
 	 * landing side. Local-append only; never fans out further (see the FederatedOp doc comment). */
 	consolePush: (entry: ConsolePushEntry, dedupeKey: string) => { delivered: boolean };
+	/** Land a linked friend's presence_push - the cross-Domain-presence landing side. Local-append
+	 * only; never fans out further. `srcDomainId` is the sealer-VERIFIED sender, never a
+	 * payload-supplied value. */
+	landCrossDomainPresence: (srcDomainId: string, sessions: CrossDomainPresenceSession[]) => void;
 }
 
 /** The per-session share state the relay handler reads to enforce destination-side
@@ -239,6 +244,19 @@ export function createGatewayRelayHandler({
 					throw new Error("cross-Domain console_push denied");
 				}
 				return routes.consolePush(op.entry, op.dedupeKey);
+			}
+			case "presence_push": {
+				// The inverse gate from console_push above: presence_push is CROSS-DOMAIN ONLY (a
+				// same-Domain Gateway has no reason to push itself its own presence). Identity alone
+				// (already verified by the seal before handleOp ever runs) is the correct and
+				// sufficient gate here - see the FederatedOpSchema doc comment on this op and
+				// plans/cross-domain-presence.md's "Trust boundary" section for why this op's threat
+				// model differs from console_push's.
+				if (srcDomainId === null) {
+					throw new Error("presence_push requires a cross-Domain sender");
+				}
+				routes.landCrossDomainPresence(srcDomainId, op.sessions);
+				return { ok: true };
 			}
 		}
 	}

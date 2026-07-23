@@ -33,6 +33,7 @@ import com.atelier_nyaarium.switchboard.proto.CrossDomainListPeersResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainListSharesResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainListenResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainListenStateResult
+import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceKnownVersion
 import com.atelier_nyaarium.switchboard.proto.CrossDomainRequestResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainShareResult
 import com.atelier_nyaarium.switchboard.proto.CrossDomainShareTarget
@@ -678,7 +679,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * matter right now. `knownLinkedPeersVersion` is the same piggyback shape again for the linked-peers
 	 * plane, a single scalar (this Gateway's own roster has no multi-source concept to array over).
 	 * `knownReadAnchorsVersion` is the same single-scalar shape once more, for this owner's own
-	 * cross-device read-position plane (see report_read below). */
+	 * cross-device read-position plane (see report_read below). `knownCrossDomainPresenceVersions` is
+	 * an ARRAY again like `knownPresenceVersions` - genuinely N independently-versioned planes, one
+	 * per linked Domain, not a single scalar. */
 	suspend fun poll(
 		cursor: Long,
 		epoch: Long,
@@ -687,6 +690,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		focus: FocusIntent? = null,
 		knownLinkedPeersVersion: LinkedPeersVersion? = null,
 		knownReadAnchorsVersion: ReadAnchorsVersion? = null,
+		knownCrossDomainPresenceVersions: List<CrossDomainPresenceKnownVersion>? = null,
 	): ConsolePollResult {
 		// Carry the synced keyring version so the route Gateway returns the snapshot only when it changed
 		// (a revocation made elsewhere reaches this Console within one cycle).
@@ -700,6 +704,7 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 			focus = focus,
 			knownLinkedPeersVersion = knownLinkedPeersVersion,
 			knownReadAnchorsVersion = knownReadAnchorsVersion,
+			knownCrossDomainPresenceVersions = knownCrossDomainPresenceVersions,
 		)
 		// Ordered timeout chain for a held poll: gateway replies by holdMs (40s), evie's relay
 		// hold fires at 55s if the gateway vanished, this read timeout at holdMs+HELD_READ_MARGIN_MS

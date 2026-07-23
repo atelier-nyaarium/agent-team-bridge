@@ -2,7 +2,7 @@ import { z } from "zod";
 import { DomainSnapshotSchema, SignedAdmissionSchema } from "./admission.js";
 import { b64Field, slugField } from "./crypto.js";
 import { SignedFirstRootSchema } from "./federation-lifecycle.js";
-import { SignedXDomainLinkSchema } from "./federation-protocol.js";
+import { CrossDomainPresenceSessionSchema, SignedXDomainLinkSchema } from "./federation-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
 import { NoticeFull, NoticeFullSpoken, NoticeSummary, NoticeTitle } from "./notice.js";
 import { ADDRESS_SEP, isSlug } from "./session-id.js";
@@ -263,6 +263,46 @@ export const ReadAnchorsVersionSchema = z
 	})
 	.meta({ id: "ReadAnchorsVersion" });
 
+/** A single linked Domain's cross-Domain-presence plane version - unlike linked-peers/read-anchors
+ * (one scalar for the whole plane), cross-Domain presence is genuinely N independently-versioned
+ * planes, one per linked Domain (crossDomainPresence.ts), so this is nested inside
+ * CrossDomainPresenceEntry rather than standing alone as a single top-level field. */
+export const CrossDomainPresenceVersionSchema = z
+	.object({
+		epoch: z.number().int(),
+		version: z.number().int().nonnegative(),
+	})
+	.meta({ id: "CrossDomainPresenceVersion" });
+
+/** One linked Domain's cross-Domain-presence version, as the CLIENT reports what it already holds
+ * on a poll op - flat (domainId alongside epoch/version), mirroring PresenceVersion's own per-source
+ * shape rather than CrossDomainPresenceEntry's nested one, since the client has no content to echo
+ * back here. Named (.meta id) so codegen emits a real Kotlin class instead of erroring on an inline
+ * array-of-object (see CrossDomainPeerEntry's own comment for the same reason). */
+export const CrossDomainPresenceKnownVersionSchema = z
+	.object({
+		domainId: z.string(),
+		epoch: z.number().int(),
+		version: z.number().int().nonnegative(),
+	})
+	.meta({ id: "CrossDomainPresenceKnownVersion" });
+
+/** One linked Domain's current cross-Domain-presence content, piggybacked on the poll response only
+ * for a Domain whose plane actually changed relative to what the Console presented (never a full
+ * unconditional resend of every linked Domain - each is independently versioned). `lastRefreshedAt`
+ * is refreshed by EITHER a landed push or a successful backstop pull (crossDomainPresence.ts),
+ * delivered to the Console with up to a minute of coarsening (see `FRESHNESS_BUCKET_MS`) so an
+ * unchanged-content reconfirmation does not bump the version on every single backstop tick; the
+ * Console computes staleness display against it client-side, never a gateway-side boolean. */
+export const CrossDomainPresenceEntrySchema = z
+	.object({
+		domainId: z.string(),
+		version: CrossDomainPresenceVersionSchema,
+		sessions: z.array(CrossDomainPresenceSessionSchema),
+		lastRefreshedAt: z.number().int().nonnegative(),
+	})
+	.meta({ id: "CrossDomainPresenceEntry" });
+
 /** One team's synced read position: the furthest any of this owner's OWN devices has confirmed
  * reading, merged monotonically server-side (see ReadAnchors.report - never regresses). `epoch`/
  * `seq` are the SAME mailbox journal coordinate the app's own local ReadAnchor already uses
@@ -363,6 +403,14 @@ export const ConsoleOpSchema = z
 			// This owner's read-anchors plane version already held - same absent-ships-unconditionally
 			// shape as knownLinkedPeersVersion (one scalar per owner, no multi-source concept).
 			knownReadAnchorsVersion: ReadAnchorsVersionSchema.optional(),
+			// Every linked Domain's cross-Domain-presence plane version this Console already holds -
+			// an array like knownPresenceVersions (genuinely many independently-versioned sources, one
+			// per linked Domain), never a single scalar. ABSENT means a legacy client: no cross-Domain-
+			// presence plane ships at all. An EMPTY array means a fresh Console with nothing cached yet -
+			// every linked Domain's current content ships. A domainId missing from this array (but the
+			// field itself present) is treated as unknown, same as an unrecognized presence source -
+			// its current truth ships too.
+			knownCrossDomainPresenceVersions: z.array(CrossDomainPresenceKnownVersionSchema).optional(),
 		}),
 		// Report this device's own read position for one team, so another of the SAME owner's
 		// devices can learn "already read up to here" - see readAnchors.ts's monotonic merge (a
@@ -756,11 +804,18 @@ export const ConsolePollResultSchema = z
 		// (see knownReadAnchorsVersion) and the full per-team snapshot on any real change.
 		readAnchors: z.array(ReadAnchorWireEntrySchema).optional(),
 		readAnchorsVersion: ReadAnchorsVersionSchema.optional(),
+		// Cross-Domain presence: unlike every plane above, genuinely N independently-versioned
+		// planes (one per linked Domain), so this carries only the SUBSET of linked Domains whose
+		// plane actually changed relative to knownCrossDomainPresenceVersions - never a full resend
+		// of every linked Domain the way presence's single-plane piggyback above does.
+		crossDomainPresence: z.array(CrossDomainPresenceEntrySchema).optional(),
 		// Why this poll settled: which plane's bump woke it (or a mailbox append, or the hold simply
 		// elapsing). The Console's instant-empty-response heuristic (its old-gateway degradation
 		// signal) reads this so a plane-only settle - empty mailbox entries, no gap - is never
 		// misread as a broken gateway and does not trip its backoff.
-		settled: z.enum(["mailbox", "presence", "linkedPeers", "readAnchors", "domain", "timeout"]).optional(),
+		settled: z
+			.enum(["mailbox", "presence", "crossDomainPresence", "linkedPeers", "readAnchors", "domain", "timeout"])
+			.optional(),
 	})
 	.meta({ id: "ConsolePollResult" });
 

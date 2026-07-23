@@ -347,4 +347,99 @@ describe("PlaneRegistry", () => {
 		reg.registerPlane({ name: "presence", snapshot: () => ({}), identityOf: stableHash });
 		expect(() => reg.registerPlane({ name: "presence", snapshot: () => ({}), identityOf: stableHash })).toThrow();
 	});
+
+	it("onBump fires with the new version exactly when markDirty actually bumps, never on a no-op mark", () => {
+		let content = { x: 1 };
+		const bumps: Array<{ epoch: number; counter: number }> = [];
+		const reg = new PlaneRegistry();
+		reg.registerPlane({
+			name: "presence",
+			snapshot: () => content,
+			identityOf: stableHash,
+			onBump: (v) => bumps.push({ epoch: v.epoch, counter: v.counter }),
+		});
+
+		reg.markDirty("presence"); // dirty, but content unchanged - no bump, no onBump
+		expect(bumps).toEqual([]);
+
+		content = { x: 2 };
+		reg.markDirty("presence");
+		expect(bumps).toEqual([reg.version("presence")]);
+	});
+
+	it("onBump also fires from the tripwire's self-heal, not just markDirty", () => {
+		let content = { x: 1 };
+		const bumps: unknown[] = [];
+		const reg = new PlaneRegistry();
+		reg.registerPlane({
+			name: "presence",
+			snapshot: () => content,
+			identityOf: stableHash,
+			onBump: (v) => bumps.push(v),
+		});
+		content = { x: 2 }; // escaped write: markDirty never called
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		reg.tripwireTick();
+		warn.mockRestore();
+		expect(bumps).toEqual([reg.version("presence")]);
+	});
+
+	it("unregisterPlane drops the plane so a later operation on its name is a safe no-op", () => {
+		const reg = new PlaneRegistry();
+		reg.registerPlane({ name: "friend-a", snapshot: () => ({ x: 1 }), identityOf: stableHash });
+		reg.unregisterPlane("friend-a");
+		expect(reg.version("friend-a")).toBeUndefined();
+		expect(reg.hasPlane("friend-a")).toBe(false);
+		expect(() => reg.markDirty("friend-a")).not.toThrow(); // no-op, not a throw
+		expect(() => reg.unregisterPlane("friend-a")).not.toThrow(); // unregistering twice is also safe
+	});
+
+	it("unregisterPlane lets the SAME name be registered again afterward (a re-link)", () => {
+		const reg = new PlaneRegistry();
+		reg.registerPlane({ name: "friend-a", snapshot: () => ({ gen: 1 }), identityOf: stableHash });
+		reg.unregisterPlane("friend-a");
+		expect(() =>
+			reg.registerPlane({ name: "friend-a", snapshot: () => ({ gen: 2 }), identityOf: stableHash }),
+		).not.toThrow();
+		expect(reg.version("friend-a")?.counter).toBe(0); // a genuinely fresh plane, not resurrected state
+	});
+
+	it("unregisterPlane settles an in-flight waitForBump waiter tracking the removed plane, as woken", async () => {
+		const reg = new PlaneRegistry();
+		reg.registerPlane({ name: "friend-a", snapshot: () => ({ x: 1 }), identityOf: stableHash });
+		const presented = new Map([["friend-a", reg.version("friend-a")!]]);
+
+		let resolved: boolean | undefined;
+		const held = reg.waitForBump(presented, 5_000).then((w) => {
+			resolved = w;
+		});
+		await new Promise((r) => setTimeout(r, 10));
+		expect(resolved).toBeUndefined(); // still holding before the removal
+
+		reg.unregisterPlane("friend-a");
+		await held; // settled promptly, not left to time out
+		expect(resolved).toBe(true);
+	});
+
+	it("unregisterPlane on an unrelated name never disturbs a waiter tracking a DIFFERENT, still-registered plane", async () => {
+		const reg = new PlaneRegistry();
+		reg.registerPlane({ name: "friend-a", snapshot: () => ({ x: 1 }), identityOf: stableHash });
+		reg.registerPlane({ name: "friend-b", snapshot: () => ({ y: 1 }), identityOf: stableHash });
+		const presented = new Map([["friend-b", reg.version("friend-b")!]]);
+		// Scoped to ONLY friend-b - without a scope, friend-a's mere absence from `presented` would
+		// already read as "changed" per changedSince's own documented no-scope behavior (see the
+		// "without scope..." test above), unrelated to unregisterPlane entirely.
+		const scope = new Set(["friend-b"]);
+
+		let resolved: boolean | undefined;
+		const held = reg.waitForBump(presented, 30, scope).then((w) => {
+			resolved = w;
+		});
+		reg.unregisterPlane("friend-a"); // a different Domain's plane being torn down
+		await new Promise((r) => setTimeout(r, 10));
+		expect(resolved).toBeUndefined(); // friend-b's waiter must still be holding
+
+		await held; // times out on its own, never falsely woken
+		expect(resolved).toBe(false);
+	});
 });

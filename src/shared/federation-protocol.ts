@@ -28,6 +28,38 @@ export { FEDERATION_PROTOCOL_VERSION } from "./evie-protocol.js";
 const MAX_STORE_KEY_LEN = 512;
 const MAX_ADDRESS_LEN = 320;
 
+/** Cap on the sessions array a single `presence_push` may carry, and on the same-shaped array
+ * stored/re-served per linked Domain (schemas.ts's CrossDomainPresenceEntrySchema.sessions) - a
+ * malformed or misbehaving sender must not be able to hand a receiving Gateway an unbounded
+ * payload. See plans/cross-domain-presence.md's "Trust boundary" section. */
+export const MAX_CROSSDOMAIN_PRESENCE_SESSIONS = 200;
+
+/** One session in a `presence_push` payload - a deliberately narrower, length-capped mirror of
+ * TeamInfoSchema's presence-relevant fields (schemas.ts), not a reuse of that schema directly:
+ * TeamInfo's `sessionLabel`/`description` are unbounded free text, fine for content that never
+ * leaves this Gateway's own trust boundary, but not for content pushed to a linked friend's
+ * Gateway (see the plan's "Trust boundary" section). Only `devcontainer`/`loose` kinds are ever
+ * shareable (gatewayRelay.ts's gateCrossDomainTarget), so `kind` is narrowed to just those two -
+ * a `console` row can never legitimately appear here. Domain-identifying fields (domainId,
+ * displayName, isAdminDomain) are deliberately absent: they live once per Domain on the
+ * wrapping CrossDomainPresenceEntry, not repeated per session. */
+export const CrossDomainPresenceSessionSchema = z
+	.object({
+		team: z.string().min(1).max(MAX_ADDRESS_LEN),
+		gatewayId: z.string().min(1).max(64),
+		status: z.enum(["online", "verifying", "available"]),
+		kind: z.enum(["devcontainer", "loose"]),
+		sessionLabel: z.string().max(64).optional(),
+		description: z.string().max(120).optional(),
+		lastActive: z.number().int().optional(),
+		queueDepth: z.number().int().nonnegative(),
+		working: z.boolean().optional(),
+		needsLogin: z.boolean().optional(),
+	})
+	.meta({ id: "CrossDomainPresenceSession" });
+
+export type CrossDomainPresenceSession = z.infer<typeof CrossDomainPresenceSessionSchema>;
+
 export const ReturnRouteSchema = z.object({
 	srcGateway: z.string().min(1).max(64),
 	srcConversationId: z.string().min(1).max(MAX_CONVERSATION_ID_LEN).regex(CONVERSATION_ID_RE),
@@ -113,6 +145,20 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 		// role: it mints a fresh nonce per relay attempt (including retries), so it never
 		// recognizes a retry as "the same delivery" the way this stable, caller-chosen key does.
 		dedupeKey: z.string().min(1).max(128),
+	}),
+	// Cross-Domain presence push: the SOURCE Gateway proactively sends what a linked friend
+	// Domain currently sees of its own sessions (the exact filter list_teams's cross-Domain leg
+	// already computes for pull), replacing a slow poll with a live update. UNLIKE console_push,
+	// this is CROSS-DOMAIN ONLY and carries no third-party attribution of any kind - every
+	// session it can possibly carry describes the cryptographically-verified sender's OWN
+	// sessions, the same content that Domain's list_teams answer already carries today, trusted
+	// identically. So identity verification (already automatic and universal for every
+	// gateway_relay frame via the sealer) is the correct and sufficient gate; the landing side
+	// stores this under the VERIFIED sender's Domain id, never a payload-supplied one. See
+	// plans/cross-domain-presence.md's "Trust boundary" section for the full reasoning.
+	z.object({
+		kind: z.literal("presence_push"),
+		sessions: z.array(CrossDomainPresenceSessionSchema).max(MAX_CROSSDOMAIN_PRESENCE_SESSIONS),
 	}),
 ]);
 

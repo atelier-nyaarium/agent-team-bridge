@@ -199,16 +199,20 @@ folded into that closure; it stands on its own until picked up.
 
 - Re-verify the design above against the codebase as it stands then - do not assume nothing has
   drifted.
-- Reconcile scope with cross-Domain presence (linked friend Domains' tiles - "currently
-  discovery-refresh, needs its own questionaire pass if wanted", the last surviving item of the
-  now-closed versioned-state-planes Phase 2). That item is cross-DOMAIN, a distinct concern from
-  this plan's same-Domain multi-gateway exchange, but both land in the same
-  `presenceFresh`/freshness-state-machine neighborhood and are worth designing together rather
-  than sequentially if both are wanted. Confirm with the user whether one, both, or neither is
-  still desired before scoping either. Same-Domain (this plan) is the one with the explicit prior
-  user ruling (Q4) behind it. Cross-Domain has never been ruled on either way - if its own
-  questionaire is already underway or done by the time this reopens, read its resulting plan file
-  first rather than re-deriving this reconciliation from scratch.
+- Reconcile scope with cross-Domain presence (linked friend Domains' tiles - the concern that was
+  "currently discovery-refresh, needs its own questionaire pass if wanted", the last surviving item
+  of the now-closed versioned-state-planes Phase 2). That item shipped as `plans/cross-domain-presence.md`
+  (3 phases: gateway source/consumer planes, wire shape + reconciliation, Android UI), deleted and
+  closed out 2026-07-23 - see `plans/pain-points.md`'s own "Cross-domain presence" section for its
+  closing summary. It is cross-DOMAIN, a distinct concern from this plan's same-Domain multi-gateway
+  exchange, but both land in the same `presenceFresh`/freshness-state-machine neighborhood, so
+  re-read that closure before scoping this plan's own reconciliation. Concretely reusable: a real
+  per-destination coalesced-pusher pattern and a real independent-tick reconciler now exist as
+  shipped, tested code in `src/gateway/federation/crossDomainPresence.ts` - this plan's own
+  "outbound-coalescing" and "anti-entropy timer" design above can mirror that code directly instead
+  of re-deriving the pattern from scratch. Same-Domain (this plan) is still the one with the
+  explicit prior user ruling (Q4) behind it; confirm with the user whether it's still wanted before
+  reopening.
 - Decide whether the `planeField()` closed-world mechanism and the property-based class-kill-lock
   test (the two related, smaller gaps above) should ship as prerequisites, alongside, or
   independently of the federation exchange itself.

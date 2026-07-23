@@ -416,6 +416,7 @@ describe("federation routing (E2E sealed)", () => {
 						displayName: "Carol's Lab",
 						status: "online",
 						mode: "channel",
+						kind: "devcontainer",
 						queue_depth: 0,
 					},
 				],
@@ -445,6 +446,42 @@ describe("federation routing (E2E sealed)", () => {
 		// authoritative source of its own self-set display name).
 		expect(teams.find((t) => t.team === "api.dev")?.gatewayId).toBe("hostb");
 		expect(teams.find((t) => t.team === "api.dev")?.displayName).toBe("Carol's Lab");
+	});
+
+	it("DISCOVERY: a malformed team row in a peer's reply discards that WHOLE gateway's reply, never landing unvalidated data", async () => {
+		const evie = fakeEvie({
+			destSealer: sealerB,
+			srcGateway: "hosta",
+			handle: () => ({
+				teams: [
+					{
+						team: "api.dev",
+						gatewayId: "hostb",
+						status: "online",
+						mode: "channel",
+						kind: "devcontainer",
+						queue_depth: 0,
+					},
+					// Missing `kind` - a version-skewed or buggy peer, not necessarily malicious. The
+					// whole reply fails validation (matching the push path's own whole-array schema),
+					// so even the otherwise-valid "api.dev" row above must not land either.
+					{ team: "broken.dev", gatewayId: "hostb", status: "online", mode: "channel", queue_depth: 0 },
+				],
+			}),
+			onCall: (action) =>
+				action === "list_gateways" ? { gateways: [{ gatewayId: "hostb", online: true }] } : { ok: true },
+		});
+		const ctx = makeCtx("hosta", {
+			evieClient: evie.client,
+			sealer: sealerA,
+			registry: registryWith({}),
+			knownTeamPaths: new Map(),
+			sessionStore: storeWith(),
+		});
+		const { discover } = createRoutes(ctx);
+		const teams = (await (await discover()).json()) as { team: string }[];
+		expect(teams.find((t) => t.team === "api.dev")).toBeUndefined();
+		expect(teams.find((t) => t.team === "broken.dev")).toBeUndefined();
 	});
 });
 

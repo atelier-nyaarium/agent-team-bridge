@@ -15,6 +15,8 @@ import com.atelier_nyaarium.switchboard.proto.Address
 import com.atelier_nyaarium.switchboard.proto.ConsolePollResult
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
+import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceEntry
+import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceKnownVersion
 import com.atelier_nyaarium.switchboard.proto.LinkedPeersVersion
 import com.atelier_nyaarium.switchboard.proto.PresenceVersion
 import com.atelier_nyaarium.switchboard.proto.ReadAnchorsVersion
@@ -482,6 +484,10 @@ data class ChatState(
 	 * present in `labels` is never in this map until it first goes missing. */
 	val teamAbsenceStreaks: Map<String, Int> = emptyMap(),
 	val connected: Boolean = false,
+	/** Mirrors ChatRepository.isVisible, but Compose-reactive: onForeground()/onBackground() update
+	 * this alongside `visible` so a composable can collect it (already flowing through this same
+	 * StateFlow) instead of opening its own LocalLifecycleOwner subscription to re-derive it. */
+	val foreground: Boolean = false,
 	val pollFailStreak: Int = 0,
 	/** Connected Gateway id, learned from the register result. Empty before the first
 	 * federation-aware connect; bare names resolve to the local Gateway in that case. */
@@ -496,6 +502,14 @@ data class ChatState(
 	 * detail reachable) even while its gateway is offline and has shared nothing back. An empty set
 	 * falls back to discovery-only. */
 	val linkedPeerOwners: Map<String, String> = emptyMap(),
+	/** A linked friend Domain's sessions, as pushed/pulled via the gateway's cross-Domain-presence
+	 * plane (see ChatRepository.applyCrossDomainPresence) - replaces the old discovery-refresh-only
+	 * pull for this relationship. Keyed by domainId, per-domain UPSERT (never a wholesale replace):
+	 * the wire only ships the SUBSET of linked Domains whose plane actually changed, so replacing the
+	 * whole map on one poll's response would wipe every other cached friend's last-known entry. Pruned
+	 * down to the current linkedPeerOwners keys whenever that roster changes (see applyLinkedPeers) -
+	 * an upsert has no other way to notice an unlinked friend's entry should disappear. */
+	val crossDomainPeerSessions: Map<String, CrossDomainPresenceEntry> = emptyMap(),
 	/** This owner's own display name, for the profile field and the MY NETWORK card. Seeded from the
 	 * local cache and refreshed from discovery's local-session displayName; empty until set. */
 	val displayName: String = "",
@@ -972,6 +986,14 @@ class ChatRepository(
 	// knownLinkedPeersVersion, for the cross-device read-position sync plane (see applyReadAnchors).
 	@Volatile private var knownReadAnchorsVersion: ReadAnchorsVersion? = null
 
+	// Every linked Domain's cross-Domain-presence plane version this device last applied - same
+	// ARRAY shape as knownPresenceVersions (genuinely N independently-versioned planes), not a
+	// single scalar like knownLinkedPeersVersion/knownReadAnchorsVersion. Updated by a per-domainId
+	// UPSERT (see applyCrossDomainPresence), never a wholesale replace, since the wire only ships the
+	// changed subset each poll - replacing this list outright would forget every OTHER already-known
+	// Domain's version and cause the Gateway to needlessly re-ship them as "unknown" next poll.
+	@Volatile private var knownCrossDomainPresenceVersions: List<CrossDomainPresenceKnownVersion> = emptyList()
+
 	// The per-team read anchor last REPORTED to the Gateway (via report_read), so the poll loop
 	// reports a team's local anchor only once per genuine local advance instead of every cycle.
 	// Never persisted: a fresh process starts empty, so its first cycle re-reports every team's
@@ -1010,7 +1032,7 @@ class ChatRepository(
 		visible = true
 		resumeBacklogPending = true
 		pollFails = 0
-		_state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L) }
+		_state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L, foreground = true) }
 		kick.trySend(Unit)
 	}
 
@@ -1018,6 +1040,7 @@ class ChatRepository(
 		visible = false
 		pushback.onBackground(System.currentTimeMillis())
 		declareFocus(FocusIntent(screen = "background"))
+		_state.update { it.copy(foreground = false) }
 	}
 
 	/** Wakes the poll loop immediately - the alarm receiver's bridge into a possibly-parked pass. */
@@ -1976,14 +1999,46 @@ class ChatRepository(
 		return CrossDomainLink.mergeLinkedDomains(_state.value.teams, _state.value.linkedPeerOwners, adminDomain)
 	}
 
+	/** Serializes every read-modify-write of knownCrossDomainPresenceVersions: applyLinkedPeers and
+	 * applyCrossDomainPresence both merge against its OWN prior value (a filter/upsert, not a plain
+	 * replace like the sibling knownPresenceVersions/knownLinkedPeersVersion fields), and refreshTeams()
+	 * resets it from a DIFFERENT coroutine (a manual pull-to-refresh, not the poll loop) - both run on
+	 * Dispatchers.IO's multi-threaded pool, so an unguarded compound operation could lose the reset
+	 * underneath a poll response still applying stale pre-reset data. Mirrors freshTeamsMutex's own
+	 * rationale for the identical concurrent-caller pair below. */
+	private val crossDomainVersionsMutex = Mutex()
+
 	/** Apply the linked-peers plane's pushed snapshot into state, so linkedDomains() can union it
 	 * with discovery. The one writer of linkedPeerOwners - the poll loop calls this when a poll
 	 * response carries `linkedPeers` (a real change; see PlaneRegistry). Folds the per-gateway peer
 	 * rows to their distinct Domain ids (a Domain may run more than one gateway). */
-	private fun applyLinkedPeers(peers: List<com.atelier_nyaarium.switchboard.proto.CrossDomainPeerEntry>) {
+	private suspend fun applyLinkedPeers(peers: List<com.atelier_nyaarium.switchboard.proto.CrossDomainPeerEntry>) {
 		// domainId -> friend owner key (a Domain may run several gateways under one owner; last wins).
 		val owners = peers.filter { it.domainId.isNotEmpty() }.associate { it.domainId to it.ownerSignPub }
-		_state.update { it.copy(linkedPeerOwners = owners) }
+		_state.update {
+			it.copy(
+				linkedPeerOwners = owners,
+				// crossDomainPeerSessions is a per-domainId UPSERT (applyCrossDomainPresence), which has
+				// no other way to notice an unlinked/untrusted friend's cached entry should disappear -
+				// this roster change is the authoritative signal to prune it.
+				crossDomainPeerSessions = it.crossDomainPeerSessions.filterKeys { domainId -> domainId in owners },
+			)
+		}
+		crossDomainVersionsMutex.withLock {
+			knownCrossDomainPresenceVersions = knownCrossDomainPresenceVersions.filter { it.domainId in owners }
+		}
+	}
+
+	/** Apply the cross-Domain-presence plane's pushed/pulled entries into state: a per-domainId
+	 * UPSERT (never a wholesale replace - see crossDomainPeerSessions' own doc), since the wire only
+	 * carries the SUBSET of linked Domains whose plane actually changed this poll. The one writer of
+	 * crossDomainPeerSessions - the poll loop calls this when a poll response carries
+	 * `crossDomainPresence`. */
+	private suspend fun applyCrossDomainPresence(entries: List<CrossDomainPresenceEntry>) {
+		crossDomainVersionsMutex.withLock {
+			knownCrossDomainPresenceVersions = upsertKnownCrossDomainPresenceVersions(knownCrossDomainPresenceVersions, entries)
+		}
+		_state.update { it.copy(crossDomainPeerSessions = it.crossDomainPeerSessions + entries.associateBy { e -> e.domainId }) }
 	}
 
 	/** Apply the read-anchors plane's pushed snapshot: another of this owner's OWN devices may have
@@ -2033,13 +2088,6 @@ class ChatRepository(
 				.onSuccess { lastReportedReadAnchors = lastReportedReadAnchors + (team to anchor) }
 				.onFailure { DebugLog.log("Plane", "report_read failed for $team: ${it.message?.take(120)}") }
 		}
-	}
-
-	/** A friend Domain's sessions visible to me (shared to my Domain): the peer's discovery
-	 * entries tagged with its domainId. Each is a candidate "their session my agents can reach". */
-	fun peerSessions(domainId: String): List<Team> {
-		val s = _state.value
-		return s.teams.filter { it.domainId == domainId }.sortedBy { s.label(it.name, s.localGatewayId) }
 	}
 
 	/** My LOCAL devcontainer/loose sessions, the only kinds shareable to a friend Domain (never the
@@ -2691,6 +2739,7 @@ class ChatRepository(
 		knownPresenceVersions = emptyList()
 		knownLinkedPeersVersion = null
 		knownReadAnchorsVersion = null
+		crossDomainVersionsMutex.withLock { knownCrossDomainPresenceVersions = emptyList() }
 		pollInterrupt?.complete(Unit)
 		refreshDiscovery()
 	}
@@ -3061,13 +3110,20 @@ class ChatRepository(
 					val presented = knownPresenceVersions
 					val presentedLinkedPeers = knownLinkedPeersVersion
 					val presentedReadAnchors = knownReadAnchorsVersion
+					val presentedCrossDomainPresence = knownCrossDomainPresenceVersions
 					DebugLog.log("Poll", "firing cursor=${params.cursor} epoch=${params.epoch} hold=${hold}ms focus=${focus.screen}")
 					val mb = if (hold > 0) {
 						pollRacingFocusChange {
-							client().poll(params.cursor, params.epoch, hold, presented, focus, presentedLinkedPeers, presentedReadAnchors)
+							client().poll(
+								params.cursor, params.epoch, hold, presented, focus,
+								presentedLinkedPeers, presentedReadAnchors, presentedCrossDomainPresence,
+							)
 						}
 					} else {
-						client().poll(params.cursor, params.epoch, hold, presented, focus, presentedLinkedPeers, presentedReadAnchors)
+						client().poll(
+							params.cursor, params.epoch, hold, presented, focus,
+							presentedLinkedPeers, presentedReadAnchors, presentedCrossDomainPresence,
+						)
 					}
 					if (mb == null) {
 						DebugLog.log("Plane", "poll interrupted by a focus/refresh change - reissuing immediately")
@@ -3098,6 +3154,15 @@ class ChatRepository(
 							DebugLog.log("Plane", "linkedPeers settled=${mb.settled} rows=${peers.size}")
 							applyLinkedPeers(peers)
 						}
+					}
+					// Cross-Domain-presence plane: unlike every plane above, genuinely N independently-
+					// versioned planes (one per linked Domain, see knownCrossDomainPresenceVersions' own
+					// doc) - the response carries only the SUBSET of linked Domains whose plane actually
+					// changed, applied as a per-domainId upsert (applyCrossDomainPresence), never a
+					// wholesale replace.
+					mb.crossDomainPresence?.let { entries ->
+						DebugLog.log("Plane", "crossDomainPresence settled=${mb.settled} rows=${entries.size}")
+						applyCrossDomainPresence(entries)
 					}
 					// Read-anchors plane: same generalized shape again, one plane per owner. The version
 					// bumps now, but applying the entries themselves waits until AFTER this poll's own

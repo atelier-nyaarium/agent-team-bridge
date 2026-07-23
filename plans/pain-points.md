@@ -793,3 +793,93 @@ audit passes across all 6 phases; already-fixed and purely informational items d
   table-driven tier-conservation harness over every mailbox-writing hop (deferred from the
   fullSpoken framework audit - the spread-once `NoticeTierWireFields` + `pickTiers` shipped
   instead and covers the declaration/compose halves of that bug class).
+
+## Cross-domain presence (`plans/cross-domain-presence.md`, deleted, shipped - 2026-07-23)
+
+A linked Domain's sessions now reach a Gateway's own console as a live push (with a 10s backstop
+pull), replacing the old discovery-refresh-only pull for that relationship; Android surfaces it as
+a "Linked friends" board section. Shipped across 3 phases (gateway source/consumer planes, wire
+shape + reconciliation, Android UI), each independently audited (plan-alignment, red-team,
+framework-first). Folding forward the pain points still worth remembering.
+
+### `PlaneRegistry` friction, recurring across phases
+
+- `wake()` only notifies a waiter whose presented map already has a key for the plane that just
+  bumped - a LAZILY-registered, N-ary plane family (a per-relationship plane, keyed per linked
+  Domain) MUST be eagerly pre-registered for every currently-relevant key before racing
+  `waitForBump`, or a brand-new key's first-ever bump can never wake an already-held poll. Not
+  documented anywhere on `PlaneRegistry` itself - every OTHER plane in the codebase is either
+  always-registered or registered once per request before racing, so nothing about the framework's
+  own shape hints that an N-ary lazy family needs a whole sweep first. Found only by tracing the
+  membership check by hand; a future author building a similar family would likely rediscover it
+  the same way, by shipping the bug first.
+- `PlaneRegistry` has exactly one signal (a version bump) for "tell any waiting poller" - this
+  feature needed a second, weaker one ("periodically tell them anyway, even if nothing changed", to
+  prove a backstop cycle confirmed continued freshness while idle) that had to be smuggled in via a
+  coarsened-timestamp hash rather than expressed directly. Works, and is tested, but a
+  periodic-refresh-without-a-real-change signal feels like something the framework might want as a
+  first-class concept, rather than every such feature reinventing its own bucketing trick.
+- Plane names are hand-formatted template strings (`presence:crossdomain-source:<domainId>` vs
+  `presence:crossdomain:<domainId>`) with no static check that two prefixes can't collide - picking
+  visually-distinct prefixes was a manual, eyeball-it decision. Nothing gives a caller a
+  "namespaced plane family" to declare once; every per-relationship-plane feature re-derives
+  naming-uniqueness by hand.
+
+### Missed on first write, caught only by a dedicated adversarial pass
+
+- `pullPresenceFromDomain`'s sequential-vs-parallel gateway fan-out bug (a `for...await` loop that
+  should have been `Promise.all`) did not surface during implementation review - it reads as
+  obviously correct in isolation, and its own sibling functions in the same file already
+  established the concurrent convention, yet copying that convention by eye still got missed on
+  first write. Only red-team, specifically reasoning about a hung-peer scenario with 2+ gateways,
+  caught it. Nothing about writing this kind of fan-out loop prompts the "wait, should this be
+  concurrent?" question at write time; it only becomes visible when deliberately asking "what's the
+  worst case for the slowest participant."
+- Adding a rate-limit floor to a constructor retroactively broke roughly a dozen pre-existing,
+  unrelated tests that happened to call the same landing entry point twice in quick succession -
+  each needed a magic trailing `0` argument to opt out. A positional-argument constructor makes
+  bolting on a new cross-cutting default behavior feel fragile after the fact; an options object
+  from the start would have made "this test opts out of the new default" self-documenting instead
+  of an unexplained `0`.
+- "Does this peer-controlled string need a `Map` instead of a plain object" is tribal knowledge
+  re-derived per feature - one part of this plan's own state needed it, a sibling plane's
+  owner-keyed state never did (a fixed-format hash key is safe by construction). Nothing flags
+  "this key is free-form, not hash-shaped" for a future author to notice on their own; caught only
+  because someone happened to red-team it.
+- A high-severity Android crash (a linked-but-only-cryptographically-trusted peer's Gateway could
+  send two session entries sharing one identity, crashing a Compose `LazyColumn`'s duplicate-key
+  check) existed for one full audit lap before red-team caught it - three independent review
+  dimensions found the SAME root cause independently, which is reassuring convergence, but the
+  underlying gap (no uniqueness invariant on a peer-supplied array, at any layer from wire schema to
+  landing to client) had been sitting through an entire prior implementation and align pass first.
+
+### Android/Kotlin-specific
+
+- `Team.gatewayId` (a computed property deriving from the canonical address, not a stored field)
+  THROWS on an address whose gateway segment would parse empty, rather than returning `""` - a
+  reasonable invariant for real wire data, but a genuine footgun for a test author building
+  synthetic fixtures who expects a plain property read to degrade gracefully instead of validating.
+  Cost a real debugging cycle before tracing it back to the address parser's own slug validation.
+- A Compose screen's board-rendering gates (an empty-state placeholder, a health-status header, and
+  the main list's own grouping) all derived from the same few booleans, and the logical
+  relationship between them (two of them being exact De Morgan negations of each other, so a guard
+  added to one could silently break another's agreement) lived only as prose scattered across
+  separate comments on each gate, never factored into one place a future change could reason about
+  locally. This is exactly what let a regression happen in one audit lap and very nearly happen
+  again in a different direction in the next - three separate audit passes were needed to fully
+  converge on a correct state, a lot of adversarial firepower for what is, in the end, four or five
+  lines of boolean logic. Worth a single named helper or one unified comment block encoding the
+  whole invariant, next time a screen like this gets touched.
+- Positive: an established "Android-free, JVM-testable top-level pure helper" convention (already
+  set by an older, unrelated comparator) made writing and testing three brand-new small helpers this
+  plan needed genuinely frictionless once recognized - a real case of an existing pattern paying for
+  itself on the next feature to need it.
+
+### Reused, not re-invented
+
+The same-Domain multi-Gateway presence exchange parked in `plans/cross-gateway-presence-exchange.md`
+explicitly deferred its own outbound-coalescing and anti-entropy-timer design pending this plan
+shipping first. It has: a real per-destination coalesced-pusher pattern and a real independent-tick
+reconciler now exist as shipped, tested code in `src/gateway/federation/crossDomainPresence.ts`, so
+picking that plan back up should mean sharing/mirroring this code, not re-deriving the pattern from
+scratch. See that file's own "When this is picked back up" section, which points here.

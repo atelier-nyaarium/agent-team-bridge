@@ -10,6 +10,7 @@ import type {
 	CrossDomainListPeersResult,
 	CrossDomainListSharesResult,
 	CrossDomainPeerEntry,
+	CrossDomainPresenceEntry,
 	CrossDomainRequestResult,
 	CrossDomainShareTarget,
 	CrossDomainUnlinkResult,
@@ -44,6 +45,8 @@ import {
 } from "../../shared/session-id.js";
 import { type SessionRecord, type SessionStore, sanitizeLabel } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
+import type { CrossDomainPresenceConsumer } from "../federation/crossDomainPresence.js";
+import { crossDomainPresencePlaneName } from "../federation/crossDomainPresence.js";
 import type { IntentTracker } from "../intent.js";
 import { type ReadAnchors, readAnchorsPlaneName } from "../readAnchors.js";
 import type { WakeResult } from "../wake.js";
@@ -145,6 +148,16 @@ export interface ConsoleHandlerDeps {
 	 * another owner's). Absent when not wired (report_read then errors; the poll piggyback is
 	 * simply skipped, matching every other plane's own opt-in shape). */
 	readAnchors?: ReadAnchors;
+	/** The landed side of a linked friend's `presence_push` (crossDomainPresence.ts): the poll case
+	 * eagerly ensures a plane for every currently-linked Domain (via `linkedDomainIds` below) before
+	 * racing `waitForBump` - a plane that does not exist yet cannot wake an in-flight held poll on
+	 * its own first bump (`PlaneRegistry.wake`'s membership-gated dispatch) - then piggybacks
+	 * whichever linked Domains' planes actually changed. Absent when not wired (the poll piggyback
+	 * is simply skipped, matching every other plane's own opt-in shape). */
+	crossDomainPresenceConsumer?: CrossDomainPresenceConsumer;
+	/** This Gateway's currently-linked Domain ids, enumerated fresh on every poll call (never
+	 * cached) - the roster `crossDomainPresenceConsumer` above is ensured/versioned against. */
+	linkedDomainIds?: () => string[];
 	/** Relay a tmux op to the local host daemon and await its reply. Drives the console terminal
 	 * view; absent when no host daemon is wired (the op then errors "terminal unavailable"). */
 	relayToHost?: (op: HostOp) => Promise<HostOpResult>;
@@ -316,6 +329,8 @@ export function createConsoleDispatcher({
 	presence,
 	intentTracker,
 	readAnchors,
+	crossDomainPresenceConsumer,
+	linkedDomainIds,
 	relayToHost,
 	tryWakeTeam,
 	isWakeInFlight,
@@ -779,11 +794,37 @@ export function createConsoleDispatcher({
 					}
 				}
 
+				// Cross-Domain presence: genuinely N independently-versioned planes, one per linked
+				// Domain (crossDomainPresence.ts) - unlike linked-peers/read-anchors' single scalar, so
+				// this ALSO gates on the op field's own presence (an absent knownCrossDomainPresenceVersions
+				// means a console build that predates this plane entirely), same reasoning as presence's
+				// own knownPresenceVersions gate above. Every currently-linked Domain's plane is ensured
+				// BEFORE building the presented map: a plane that does not exist yet cannot wake an
+				// in-flight held poll on its own first bump (PlaneRegistry.wake's membership-gated
+				// dispatch), so a linked Domain must have a plane in place before its first land()/pull.
+				const cdpr =
+					crossDomainPresenceConsumer && op.knownCrossDomainPresenceVersions ? planeRegistry : undefined;
+				const linkedIds = cdpr && linkedDomainIds ? linkedDomainIds() : [];
+				for (const id of linkedIds) crossDomainPresenceConsumer?.ensureRegistered(id);
+				const cdpPlaneToDomain = new Map(linkedIds.map((id) => [crossDomainPresencePlaneName(id), id]));
+				const crossDomainPresenceScope = cdpr ? new Set(cdpPlaneToDomain.keys()) : undefined;
+				const presentedCrossDomainPresence = new Map<string, PlaneVersion>();
+				if (cdpr) {
+					for (const v of op.knownCrossDomainPresenceVersions ?? []) {
+						presentedCrossDomainPresence.set(crossDomainPresencePlaneName(v.domainId), {
+							epoch: v.epoch,
+							counter: v.version,
+						});
+					}
+				}
+
 				if (snap.entries.length === 0 && hold > 0) {
 					const waits: Promise<unknown>[] = [box.waitForAppend(hold)];
 					if (pr) waits.push(pr.waitForBump(presentedPresence, hold, presenceScope));
 					if (lpr) waits.push(lpr.waitForBump(presentedLinkedPeers, hold, linkedPeersScope));
 					if (rar) waits.push(rar.waitForBump(presentedReadAnchors, hold, readAnchorsScope));
+					if (cdpr)
+						waits.push(cdpr.waitForBump(presentedCrossDomainPresence, hold, crossDomainPresenceScope));
 					await Promise.race(waits);
 					snap = box.drain(op.cursor ?? 0, op.epoch, conversationId);
 				}
@@ -813,24 +854,63 @@ export function createConsoleDispatcher({
 				const readAnchorsVersion = rar?.version(readAnchorsPlane);
 				const readAnchorsChanged =
 					rar != null && rar.changedSince(presentedReadAnchors, readAnchorsScope).length > 0;
+				// Same generalization again, for cross-Domain presence - EXCEPT this plane FAMILY has no
+				// single version of its own; changedSince returns the SUBSET of plane names that moved,
+				// each mapped back to its domainId via cdpPlaneToDomain.
+				const crossDomainPresenceChangedNames = cdpr
+					? cdpr.changedSince(presentedCrossDomainPresence, crossDomainPresenceScope)
+					: [];
+				const crossDomainPresenceChanged = crossDomainPresenceChangedNames.length > 0;
 
 				// Why this poll settled - the Console's instant-empty-response heuristic (its
 				// old-gateway degradation signal) reads this so a plane-only settle never trips its
 				// backoff. Priority mirrors the piggyback fields below: real mailbox entries first
-				// (they are why a console polls at all), then presence, then linked-peers, then
-				// read-anchors, then domain, else the hold simply elapsed with nothing new.
-				const settled: "mailbox" | "presence" | "linkedPeers" | "readAnchors" | "domain" | "timeout" =
+				// (they are why a console polls at all), then presence, then cross-Domain presence,
+				// then linked-peers, then read-anchors, then domain, else the hold simply elapsed with
+				// nothing new.
+				const settled:
+					| "mailbox"
+					| "presence"
+					| "crossDomainPresence"
+					| "linkedPeers"
+					| "readAnchors"
+					| "domain"
+					| "timeout" =
 					snap.entries.length > 0
 						? "mailbox"
 						: presenceChanged
 							? "presence"
-							: linkedPeersChanged
-								? "linkedPeers"
-								: readAnchorsChanged
-									? "readAnchors"
-									: domainChanged
-										? "domain"
-										: "timeout";
+							: crossDomainPresenceChanged
+								? "crossDomainPresence"
+								: linkedPeersChanged
+									? "linkedPeers"
+									: readAnchorsChanged
+										? "readAnchors"
+										: domainChanged
+											? "domain"
+											: "timeout";
+
+				// Builds only the linked Domains whose plane actually changed - never a full resend of
+				// every linked Domain (each is independently versioned, unlike presence's single plane
+				// above). Calls crossDomainPresenceConsumer.snapshot() at most once per poll, regardless
+				// of how many Domains changed.
+				function buildCrossDomainPresenceEntries(): CrossDomainPresenceEntry[] {
+					const landedSnapshot = crossDomainPresenceConsumer?.snapshot();
+					const out: CrossDomainPresenceEntry[] = [];
+					for (const name of crossDomainPresenceChangedNames) {
+						const domainId = cdpPlaneToDomain.get(name);
+						const version = planeRegistry?.version(name);
+						if (!domainId || !version) continue;
+						const landed = landedSnapshot?.[domainId];
+						out.push({
+							domainId,
+							version: { epoch: version.epoch, version: version.counter },
+							sessions: landed?.sessions ?? [],
+							lastRefreshedAt: landed?.lastRefreshedAt ?? 0,
+						});
+					}
+					return out;
+				}
 
 				return {
 					...base,
@@ -847,6 +927,7 @@ export function createConsoleDispatcher({
 								],
 							}
 						: {}),
+					...(crossDomainPresenceChanged ? { crossDomainPresence: buildCrossDomainPresenceEntries() } : {}),
 					...(linkedPeersChanged && linkedPeersVersion
 						? {
 								linkedPeers: planeRegistry?.snapshot<CrossDomainPeerEntry[]>("linked-peers") ?? [],

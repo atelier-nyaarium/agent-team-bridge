@@ -32,6 +32,14 @@ const CrossDomainShareFileSchema = z.object({
 });
 type CrossDomainShareFile = z.infer<typeof CrossDomainShareFileSchema>;
 
+/** Which Domain(s) a share-state mutation affected, for a caller (the cross-Domain-presence
+ * source side) that needs to recompute exactly what changed. A `kind: "domain"` share/unshare/
+ * dropDomain names a single Domain precisely; an `kind: "everyone_trusted"` share/unshare cannot
+ * name one (it can newly reach, or stop reaching, EVERY currently-linked Domain that has no more
+ * specific share of its own), so the caller falls back to a full sweep of its own linked-and-
+ * shared roster - the same fallback CrossDomainPeers' own argument-less onChange already needs. */
+export type ShareChangeReason = { kind: "domain"; domainId: string } | { kind: "sweep" };
+
 ////////////////////////////////
 //  Class
 
@@ -43,10 +51,16 @@ export const XDOMAIN_SHARE_FILE = "cross-domain-share-state.json";
 export class CrossDomainShareState {
 	private file: string;
 	private state: CrossDomainShareFile;
+	private readonly onChange?: (reason: ShareChangeReason) => void;
 
-	constructor(dataDir: string) {
+	/** `onChange` fires once per genuine mutation that actually changed what is shared (never on a
+	 * no-op unshare/dropDomain, and always on share - even an idempotent re-share is cheap to
+	 * recompute and the registry's own hash-gating absorbs a no-op trigger for free). The
+	 * cross-Domain-presence source side's single write hook into this store. */
+	constructor(dataDir: string, onChange?: (reason: ShareChangeReason) => void) {
 		this.file = path.join(dataDir, XDOMAIN_SHARE_FILE);
 		this.state = this.read();
+		this.onChange = onChange;
 	}
 
 	private read(): CrossDomainShareFile {
@@ -77,6 +91,7 @@ export class CrossDomainShareState {
 			this.state.shares.push({ sessionTarget, target, lastSeenAt: Date.now() });
 		}
 		this.persist();
+		this.onChange?.(target.kind === "domain" ? { kind: "domain", domainId: target.domainId } : { kind: "sweep" });
 	}
 
 	/** Withdraw a session's share from an audience. Returns whether a record was actually removed, so
@@ -88,7 +103,12 @@ export class CrossDomainShareState {
 			(s) => !(s.sessionTarget === sessionTarget && targetKey(s.target) === key),
 		);
 		const removed = this.state.shares.length !== before;
-		if (removed) this.persist();
+		if (removed) {
+			this.persist();
+			this.onChange?.(
+				target.kind === "domain" ? { kind: "domain", domainId: target.domainId } : { kind: "sweep" },
+			);
+		}
 		return removed;
 	}
 
@@ -142,7 +162,10 @@ export class CrossDomainShareState {
 			(s) => !(s.target.kind === "domain" && s.target.domainId === toDomainId),
 		);
 		const removed = before - this.state.shares.length;
-		if (removed > 0) this.persist();
+		if (removed > 0) {
+			this.persist();
+			this.onChange?.({ kind: "domain", domainId: toDomainId });
+		}
 		return removed;
 	}
 
@@ -158,7 +181,12 @@ export class CrossDomainShareState {
 		const before = this.state.shares.length;
 		this.state.shares = this.state.shares.filter((s) => now - s.lastSeenAt <= ttlMs || isLive(s.sessionTarget));
 		const removed = before - this.state.shares.length;
-		if (removed > 0) this.persist();
+		if (removed > 0) {
+			this.persist();
+			// A dropped share can span any number of Domains in one sweep (unlike a single share()/
+			// unshare()/dropDomain() call) - always a full-sweep reason, never a single domainId.
+			this.onChange?.({ kind: "sweep" });
+		}
 		return removed;
 	}
 }
