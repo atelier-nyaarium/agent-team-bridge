@@ -1,22 +1,23 @@
 import type { DomainSnapshot } from "../../shared/admission.js";
 import { capFifo } from "../../shared/cap-fifo.js";
-import type {
-	ConsoleOp,
-	ConsoleOpResult,
-	ConsoleReplyBody,
-	CrossDomainConfirmResult,
-	CrossDomainListenResult,
-	CrossDomainListenStateResult,
-	CrossDomainListPeersResult,
-	CrossDomainListSharesResult,
-	CrossDomainPeerEntry,
-	CrossDomainPresenceEntry,
-	CrossDomainRequestResult,
-	CrossDomainShareTarget,
-	CrossDomainUnlinkResult,
-	MailboxInput,
-	OpenedConsoleFrame,
-	ReadAnchorWireEntry,
+import {
+	type ConsoleOp,
+	type ConsoleOpResult,
+	type ConsoleReplyBody,
+	type CrossDomainConfirmResult,
+	type CrossDomainListenResult,
+	type CrossDomainListenStateResult,
+	type CrossDomainListPeersResult,
+	type CrossDomainListSharesResult,
+	type CrossDomainPeerEntry,
+	type CrossDomainPresenceEntry,
+	type CrossDomainRequestResult,
+	type CrossDomainShareTarget,
+	type CrossDomainUnlinkResult,
+	MAX_OPS_PER_CONVERSATION,
+	type MailboxInput,
+	type OpenedConsoleFrame,
+	type ReadAnchorWireEntry,
 } from "../../shared/console-protocol.js";
 import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
@@ -52,6 +53,7 @@ import { type ReadAnchors, readAnchorsPlaneName } from "../readAnchors.js";
 import type { WakeResult } from "../wake.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
 import { ConsolePeer } from "./consolePeer.js";
+import type { DurableOpStore } from "./durableOpStore.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -77,7 +79,11 @@ class CreateSessionAmbiguousError extends Error {}
 /** The subset of gateway HTTP routes the console handler reuses. */
 export interface ConsoleRoutes {
 	send: (req: Request, body: Record<string, unknown>, opts?: { consoleSender?: boolean }) => Promise<Response>;
-	respond: (req: Request, body: Record<string, unknown>, opts?: { consoleSender?: boolean }) => Response;
+	respond: (
+		req: Request,
+		body: Record<string, unknown>,
+		opts?: { consoleSender?: boolean; onFederatedSettled?: (ok: boolean) => void },
+	) => Response;
 	teams: () => Response;
 	// Mesh-wide team list (local + every online peer Gateway). A console roams all Gateways.
 	discover: () => Promise<Response>;
@@ -204,6 +210,10 @@ export interface ConsoleHandlerDeps {
 	 * in-flight jobs for those Domains, returning the summed counts. Idempotent. Absent when
 	 * federation is not wired. */
 	untrustOwner?: (ownerSignPub: string) => CrossDomainUnlinkResult;
+	/** Durable, restart-proof idempotency for `send`/`respond`, consulted only on an in-memory
+	 * opCache miss - see durableOpStore.ts. Absent disables the durable layer entirely (the
+	 * in-memory opCache alone still covers same-process retries, but not across a restart). */
+	durableOpStore?: DurableOpStore;
 }
 
 /** The subset of the cross-Domain handshake coordinator the console handler drives. A
@@ -282,8 +292,9 @@ const HOLD_CAP_MS = MAX_POLL_HOLD_MS;
 // the console retry the same opId), so a seen opId replays its cached reply instead of re-running
 // the op (which would duplicate a channel_push / response_push). Only mutating ops are cached,
 // only on success, and the cache is keyed per conversation so one install cannot evict or read
-// another's entry.
-const MAX_OPS_PER_CONVERSATION = 256;
+// another's entry. MAX_OPS_PER_CONVERSATION lives in shared/console-protocol.ts, shared with
+// durableOpStore.ts's own per-conversation cap, since a durable op can never outnumber the
+// mutating ops that pass through this cache above it.
 
 function isMutatingOp(op: ConsoleOp): boolean {
 	// Ops with a side effect are cached so a retried opId replays the cached reply rather than
@@ -340,6 +351,7 @@ export function createConsoleDispatcher({
 	crossDomainShare,
 	unlinkDomain,
 	untrustOwner,
+	durableOpStore,
 }: ConsoleHandlerDeps) {
 	// The local Domain segment for every canonical address we mint here. Null (arming mode) maps to
 	// the sentinel, so a key still forms.
@@ -577,6 +589,10 @@ export function createConsoleDispatcher({
 		ownerId: string,
 		opId: string,
 		ownerSignPub: string,
+		// The generation `durableOpStore.markInFlight` minted for THIS dispatch attempt (send/respond
+		// only; 0 and unused otherwise) - closed over by a case's deferred continuation so its own
+		// eventual `durableOpStore.clear()` can tell itself apart from a still-live newer attempt.
+		generation = 0,
 	): Promise<ConsoleOpResult> {
 		switch (op.kind) {
 			case "register": {
@@ -660,15 +676,40 @@ export function createConsoleDispatcher({
 					// session (the answer arrives later via response_push), so the continuation only
 					// has to surface a backgrounded failure as an error reply. appendIfLive drops a
 					// since-evicted conversation cleanly.
+					//
+					// The durable op record (marked in-flight before this case ran) MUST stay in-flight
+					// past this point - the "running" reply below is not the real settlement, it only
+					// means the send has not finished yet. The background continuation below is the
+					// true settle point and marks the durable record itself.
 					void sendPromise
 						.then(async (res) => {
 							if (res.ok) {
-								// Backgrounded success: mirror the sent message like the in-time path.
-								appendIfLive(
-									conversationId,
-									{ kind: "sent", session_id: expectedSession, opId, body: op.body, files: op.files },
-									`sent:${conversationId}:${opId}`,
-								);
+								// Mark durably complete BEFORE the best-effort mailbox mirror: the send itself
+								// already succeeded, so a throw from appendIfLive must not be able to erase that
+								// (clear() on an already-complete record is a no-op, see durableOpStore.ts).
+								durableOpStore?.markComplete(conversationId, durableOpKey(op.kind, opId), {
+									session_id: expectedSession,
+									status: "sent",
+								});
+								// Backgrounded success: mirror the sent message like the in-time path. Guarded
+								// like the fast path's own mirror below - a throw here must not be allowed to
+								// permanently lose the "sent:" echo with no retry able to re-trigger it (a
+								// retry of this now-complete opId would only ever replay the stored result).
+								try {
+									appendIfLive(
+										conversationId,
+										{
+											kind: "sent",
+											session_id: expectedSession,
+											opId,
+											body: op.body,
+											files: op.files,
+										},
+										`sent:${conversationId}:${opId}`,
+									);
+								} catch {
+									// Best-effort mirror only; the durable completion above is what matters.
+								}
 								return;
 							}
 							const json = (await res.json().catch(() => ({}))) as SendRouteJson;
@@ -678,8 +719,14 @@ export function createConsoleDispatcher({
 								status: "error",
 								body: json.error ?? `send to "${op.to}" failed`,
 							});
+							// The opCache still holds the optimistic "running" reply from the moment this
+							// case first returned - drop it too (iff this is still the current attempt), or
+							// a same-process retry replays that stale success forever instead of re-attempting.
+							evictOpCacheIfStillOwned(conversationId, opId, op.kind, generation);
 						})
-						.catch(() => {});
+						.catch(() => {
+							evictOpCacheIfStillOwned(conversationId, opId, op.kind, generation);
+						});
 					return { session_id: expectedSession, status: "running" };
 				}
 
@@ -689,12 +736,21 @@ export function createConsoleDispatcher({
 				// reconciles it against its optimistic row by opId; the owner's other devices render
 				// it under the same thread. The dedupeKey keeps the echo idempotent across a gateway
 				// restart (the persisted seenKeys absorbs a reconcile re-send of the same opId).
-				appendIfLive(
-					conversationId,
-					{ kind: "sent", session_id: expectedSession, opId, body: op.body, files: op.files },
-					`sent:${conversationId}:${opId}`,
-				);
-				return { session_id: json.session_id ?? "", status: json.status ?? "running" };
+				const sendResult = { session_id: json.session_id ?? "", status: json.status ?? "running" };
+				durableOpStore?.markComplete(conversationId, durableOpKey(op.kind, opId), sendResult);
+				try {
+					appendIfLive(
+						conversationId,
+						{ kind: "sent", session_id: expectedSession, opId, body: op.body, files: op.files },
+						`sent:${conversationId}:${opId}`,
+					);
+				} catch {
+					// The send already succeeded and is durably complete - unlike the backgrounded path
+					// (whose initial cached reply is already ok:true before this ever runs), a throw HERE
+					// would propagate out as {ok:false} and get permanently opCache-cached: clear() is a
+					// no-op on an already-complete record, so nothing would ever evict the false failure.
+				}
+				return sendResult;
 			}
 
 			case "respond": {
@@ -714,12 +770,48 @@ export function createConsoleDispatcher({
 						replyAsJson: op.replyAsJson,
 						files: op.files,
 					},
-					// The console is a human replying via the app, never an agent; the mirror tap
-					// reads this to skip agent-to-agent peer mirroring for this reply.
-					{ consoleSender: true },
+					{
+						// The console is a human replying via the app, never an agent; the mirror tap
+						// reads this to skip agent-to-agent peer mirroring for this reply.
+						consoleSender: true,
+						// A cross-Gateway reply-pin settles LATER than this call returns (routes.respond
+						// starts the relay and returns immediately) - only that later settlement is the
+						// durable op's true completion; see the federated check below.
+						onFederatedSettled: durableOpStore
+							? (ok) => {
+									if (ok) {
+										durableOpStore.markComplete(conversationId, durableOpKey(op.kind, opId), {
+											delivered: true,
+										});
+									} else {
+										// Same reasoning as the backgrounded send above: only evict the opCache
+										// entry (which already holds the optimistic "delivered" reply this case
+										// returned synchronously) if this is still the current attempt.
+										evictOpCacheIfStillOwned(conversationId, opId, op.kind, generation);
+									}
+								}
+							: undefined,
+					},
 				);
-				const json = (await res.json()) as { error?: string };
+				const json = (await res.json()) as { error?: string; federated?: boolean; delivered?: boolean };
 				if (!res.ok) throw new Error(json.error ?? "respond failed");
+				// federated: durably completing here would stamp "delivered" before the relay-pin
+				// above has actually landed - onFederatedSettled owns that case. A share-withdrawn
+				// "unshared" drop (delivered:false) also skips the federated flag but is NOT a success -
+				// durably completing it would stamp a false {delivered:true} that outlives the drop for
+				// up to 14 days across restarts. Every other outcome (a genuine local deliver) is
+				// already fully settled by now.
+				if (!json.federated) {
+					if (json.delivered === false) {
+						// Not just a durable clear: dispatch()'s own reply here is {delivered:true} regardless
+						// (unchanged pre-existing behavior), so the promise handleFrame already cached resolves
+						// ok:true - only evicting the durable record would leave that false-success reply
+						// permanently replayed to any same-process retry for as long as the opCache entry lives.
+						evictOpCacheIfStillOwned(conversationId, opId, op.kind, generation);
+					} else {
+						durableOpStore?.markComplete(conversationId, durableOpKey(op.kind, opId), { delivered: true });
+					}
+				}
 				return { delivered: true };
 			}
 
@@ -1411,7 +1503,7 @@ export function createConsoleDispatcher({
 		return localAddress(name).canonical;
 	}
 
-	async function runFrame(frame: OpenedConsoleFrame): Promise<ConsoleReplyBody> {
+	async function runFrame(frame: OpenedConsoleFrame, generation = 0): Promise<ConsoleReplyBody> {
 		try {
 			// Bind/refresh the peer on every frame so a send arriving before an explicit register
 			// still routes its replies back to the mailbox. Only a register op may rebind an install
@@ -1425,6 +1517,7 @@ export function createConsoleDispatcher({
 				ownerId,
 				frame.opId,
 				frame.ownerSignPub,
+				generation,
 			);
 			return { ok: true, result };
 		} catch (err) {
@@ -1434,6 +1527,45 @@ export function createConsoleDispatcher({
 			console.error(`[console] ${frame.op.kind} op failed for ${frame.device}: ${message}`);
 			return { ok: false, error: message };
 		}
+	}
+
+	/** send/respond share one opCache/durableOpStore key space keyed only by (conversationId, opId)
+	 * - namespacing the DURABLE lookup by op kind means a coincidental (client-bug) opId reuse
+	 * across the two kinds within one conversation can never replay the wrong-shaped result. Not
+	 * applied to the in-memory opCache itself: that cache's own short, teardown/eviction-tied
+	 * lifetime already bounds the pre-existing (conv, opId)-only collision window it inherits from
+	 * every other mutating op kind, so widening its key space isn't worth the churn. */
+	function durableOpKey(kind: string, opId: string): string {
+		return `${kind}:${opId}`;
+	}
+
+	/** Drop a mutating op's in-memory opCache entry. Needed alongside `durableOpStore?.clear()`
+	 * wherever a case's OWN deferred (post-return) continuation discovers a failure - the cached
+	 * promise there already resolved to an optimistic success reply (the immediate "running" /
+	 * "delivered" return) well before the real outcome was known, so unlike a same-tick failure
+	 * (which handleFrame's generic reaction below already evicts), nothing else ever clears it.
+	 *
+	 * Only actually evicts when `durableOpStore.clear()` reports it genuinely cleared THIS
+	 * attempt's own generation (never a no-op refusal) - if a newer attempt has since taken over
+	 * the durable record, it necessarily also owns the current opCache entry, so a stale attempt's
+	 * deferred failure must leave both alone. With no durable layer at all there is no generation
+	 * to arbitrate by, so this falls back to the original unconditional evict. */
+	function evictOpCacheIfStillOwned(conv: string, opId: string, kind: string, generation: number): void {
+		if (!durableOpStore || durableOpStore.clear(conv, durableOpKey(kind, opId), generation)) {
+			opCache.get(conv)?.delete(opId);
+		}
+	}
+
+	/** Caches a mutating op's reply promise in-memory (the per-process single-flight/replay layer -
+	 * see durableOpStore.ts's own doc for how the durable layer beneath it relates). */
+	function cacheInMemory(conv: string, opId: string, promise: Promise<ConsoleReplyBody>): void {
+		let perConv = opCache.get(conv);
+		if (!perConv) {
+			perConv = new Map();
+			opCache.set(conv, perConv);
+		}
+		perConv.set(opId, promise);
+		capFifo(perConv, MAX_OPS_PER_CONVERSATION);
 	}
 
 	function handleFrame(frame: OpenedConsoleFrame): Promise<ConsoleReplyBody> {
@@ -1448,21 +1580,44 @@ export function createConsoleDispatcher({
 		const cached = opCache.get(conv)?.get(frame.opId);
 		if (cached) return cached;
 
-		const promise = runFrame(frame);
-		let perConv = opCache.get(conv);
-		if (!perConv) {
-			perConv = new Map();
-			opCache.set(conv, perConv);
+		// send/respond additionally get a DURABLE idempotency layer, consulted only on this
+		// opCache miss (a fresh process, or an evicted/torn-down entry) - see durableOpStore.ts.
+		const isDurableOp = frame.op.kind === "send" || frame.op.kind === "respond";
+		let generation = 0;
+		if (isDurableOp && durableOpStore) {
+			const key = durableOpKey(frame.op.kind, frame.opId);
+			const record = durableOpStore.get(conv, key);
+			if (record?.state === "complete") {
+				const replayed = Promise.resolve<ConsoleReplyBody>({ ok: true, result: record.result });
+				cacheInMemory(conv, frame.opId, replayed);
+				return replayed;
+			}
+			// Either no record (a genuinely new op) or an existing in-flight one (the crash-mid-
+			// work/eviction-recovery case, today's own recovery, preserved) - either way THIS dispatch
+			// takes fresh ownership of the key, so mint a new generation: the case's own deferred
+			// continuation closes over it, so its eventual clear() can tell itself apart from a
+			// still-newer overlapping attempt that may take over the key later.
+			generation = durableOpStore.markInFlight(conv, key);
 		}
-		perConv.set(frame.opId, promise);
-		capFifo(perConv, MAX_OPS_PER_CONVERSATION);
-		// A failed op performed no side effect, so it must be retriable: drop it from the cache so a
-		// retry re-runs rather than replaying the failure.
+
+		const promise = runFrame(frame, generation);
+		cacheInMemory(conv, frame.opId, promise);
+		// A failed op performed no side effect, so it must be retriable: drop it from the cache(s)
+		// so a retry re-runs rather than replaying the failure. Completion (the durable `complete`
+		// write) is NOT handled here for send/respond - both have a settlement point that can land
+		// well after this promise resolves (a backgrounded send, a federated reply-pin), so each
+		// marks its own durable completion directly at its true settle point (see their dispatch
+		// cases). This handler only ever needs to react to failure.
 		void promise
 			.then((reply) => {
-				if (!reply.ok) opCache.get(conv)?.delete(frame.opId);
+				if (reply.ok) return;
+				if (isDurableOp) evictOpCacheIfStillOwned(conv, frame.opId, frame.op.kind, generation);
+				else opCache.get(conv)?.delete(frame.opId);
 			})
-			.catch(() => {});
+			.catch(() => {
+				if (isDurableOp) evictOpCacheIfStillOwned(conv, frame.opId, frame.op.kind, generation);
+				else opCache.get(conv)?.delete(frame.opId);
+			});
 		return promise;
 	}
 

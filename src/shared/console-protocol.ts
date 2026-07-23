@@ -48,6 +48,11 @@ import type {
 // gracefully field-by-field without needing this to change client behavior.
 export const CONSOLE_PROTOCOL_VERSION = 2;
 
+// Shared by consoleHandler.ts's in-memory opCache and durableOpStore.ts's durable record store -
+// a durable op can never outnumber the mutating ops that pass through the in-memory cache above
+// it, so both caps stay in lockstep off this one constant rather than two independent literals.
+export const MAX_OPS_PER_CONVERSATION = 256;
+
 ////////////////////////////////
 //  Ops (console -> gateway)
 

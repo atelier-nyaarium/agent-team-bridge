@@ -467,7 +467,7 @@ export function createRoutes({
 			for (const { gatewayId } of roster) {
 				if (gatewayId === localGatewayId) continue;
 				if (resolvesLocalGateway && !resolvesLocalGateway(gatewayId)) continue;
-				relayWithRetry(gatewayId, { kind: "console_push", entry, dedupeKey }, "console_push");
+				void relayWithRetry(gatewayId, { kind: "console_push", entry, dedupeKey }, "console_push");
 			}
 		} catch (err) {
 			console.warn(
@@ -586,29 +586,42 @@ export function createRoutes({
 	/** Relay a cross-Gateway op in the background, retrying on transient failure (evie
 	 * reconnecting, the origin Gateway restarting) with exponential backoff. The reply
 	 * it carries is already durable in the local anchor (poll-recoverable), so a
-	 * dropped first attempt does not strand the origin's request. */
-	function relayWithRetry(dstGateway: string, op: FederatedOp, label: string, dstDomain?: string): void {
+	 * dropped first attempt does not strand the origin's request. Resolves once the
+	 * relay finally succeeds OR exhausts its attempts - a caller that only wants
+	 * fire-and-forget behavior (the pre-existing convention) can still `void` it. */
+	function relayWithRetry(
+		dstGateway: string,
+		op: FederatedOp,
+		label: string,
+		dstDomain?: string,
+	): Promise<{ ok: boolean; error?: string }> {
 		const maxAttempts = 5;
 		let attempt = 0;
-		const tryOnce = async (): Promise<void> => {
-			// A relay throw (evie disconnect mid-call, call timeout) is just another transient
-			// failure: fold it into the retry path so it never escapes as an unhandled rejection.
-			let error: string | undefined;
-			try {
-				const r = await relayToGateway(dstGateway, op, dstDomain);
-				if (r.ok) return;
-				error = r.error;
-			} catch (e) {
-				error = e instanceof Error ? e.message : String(e);
-			}
-			attempt += 1;
-			if (attempt >= maxAttempts) {
-				console.error(`[relay] ${label} to ${dstGateway} failed after ${maxAttempts} attempts: ${error}`);
-				return;
-			}
-			setTimeout(() => void tryOnce(), Math.min(2000 * 2 ** (attempt - 1), 30_000));
-		};
-		void tryOnce();
+		return new Promise((resolveOutcome) => {
+			const tryOnce = async (): Promise<void> => {
+				// A relay throw (evie disconnect mid-call, call timeout) is just another transient
+				// failure: fold it into the retry path so it never escapes as an unhandled rejection.
+				let error: string | undefined;
+				try {
+					const r = await relayToGateway(dstGateway, op, dstDomain);
+					if (r.ok) {
+						resolveOutcome({ ok: true });
+						return;
+					}
+					error = r.error;
+				} catch (e) {
+					error = e instanceof Error ? e.message : String(e);
+				}
+				attempt += 1;
+				if (attempt >= maxAttempts) {
+					console.error(`[relay] ${label} to ${dstGateway} failed after ${maxAttempts} attempts: ${error}`);
+					resolveOutcome({ ok: false, error });
+					return;
+				}
+				setTimeout(() => void tryOnce(), Math.min(2000 * 2 ** (attempt - 1), 30_000));
+			};
+			void tryOnce();
+		});
 	}
 
 	/** Origin side of a cross-Gateway channel send. Keeps a local pollable anchor keyed
@@ -1208,7 +1221,11 @@ export function createRoutes({
 		// Unlike send(), respond() never needs to tell "trusted federated relay" apart from a
 		// plain call: its cross-Gateway behavior is already driven by the job's own recorded
 		// returnRoute/dstDomainId and the respond session id's own address, not a live flag.
-		opts: { consoleSender?: boolean } = {},
+		// onFederatedSettled fires once the cross-Gateway reply-pin relay actually resolves
+		// (success or exhausted retries) - respond() itself returns long before that, so a
+		// caller needing to know the TRUE outcome (durable op idempotency) cannot use the
+		// Response alone.
+		opts: { consoleSender?: boolean; onFederatedSettled?: (ok: boolean) => void } = {},
 	): Response {
 		const parsed = RespondBodySchema.safeParse(body);
 		if (!parsed.success) {
@@ -1332,7 +1349,7 @@ export function createRoutes({
 					return jsonResponse({ delivered: false, dropped: "unshared" });
 				}
 			}
-			relayWithRetry(
+			const relayOutcome = relayWithRetry(
 				rr.srcGateway,
 				{
 					kind: "response_push",
@@ -1347,6 +1364,9 @@ export function createRoutes({
 				},
 				"cross-Gateway reply-pin",
 			);
+			if (opts.onFederatedSettled) {
+				void relayOutcome.then((r) => opts.onFederatedSettled?.(r.ok));
+			}
 			console.log(`[respond] ${respondSessionId} pinned to Gateway ${rr.srcGateway} via the Router`);
 			// Mirror the LOCAL responder's own thread. Never for the console itself (opts.consoleSender) -
 			// a slug-shaped Device Name could in principle register and land a returnRoute job on itself.
