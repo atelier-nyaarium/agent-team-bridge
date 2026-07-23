@@ -1,6 +1,8 @@
 package com.atelier_nyaarium.switchboard
 
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
@@ -194,6 +196,18 @@ class ThreadRenderer(context: Context) {
 					val rowId = id.toLongOrNull() ?: return
 					val rowAt = at.toLongOrNull() ?: return
 					webView.post { onReadUpTo?.invoke(rowId, rowAt) }
+				}
+
+				// A pure OS clipboard write - unlike the callbacks above, this needs no app-level
+				// state or repo access, so it is handled entirely here rather than bubbling through
+				// ThreadRendererPool. Android 13+ (this app's minSdk) shows its own copy
+				// confirmation, so no local toast is needed.
+				@JavascriptInterface
+				fun copyToClipboard(text: String) {
+					webView.post {
+						val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+						cm.setPrimaryClip(ClipData.newPlainText("message", text))
+					}
 				}
 			},
 			"Android",

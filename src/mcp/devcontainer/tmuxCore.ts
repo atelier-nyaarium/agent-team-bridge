@@ -57,6 +57,14 @@ const DEAD_LAUNCH_PROBES = 8;
 const STARTUP_PROMPT_RE =
 	/I am using this for local development|Is this a project you created|trust this folder|Try the new fullscreen renderer/;
 
+// The large-resumed-session picker (Resume from summary / Resume full session as-is / Don't ask me
+// again), shown instead of the ordinary startup menus when `claude --resume` lands on an old,
+// token-heavy transcript. A daemon-driven wake has no human present to weigh the token-cost
+// tradeoff, and a silent summary-resume would drop context an unattended session (mid task, holding
+// state only in its own transcript) was relying on - so this one is answered "2" (full session),
+// not the highlighted "1" (summary) the other menus confirm.
+const RESUME_PROMPT_RE = /Resuming the full session will consume/;
+
 ////////////////////////////////
 //  Functions & Helpers
 
@@ -317,18 +325,20 @@ export async function hasSession(target: TmuxTarget): Promise<boolean> {
 	}
 }
 
-/** Press the literal "1" key: it selects AND confirms the highlighted option on the launch menus
- * (no trailing Enter). The daemon presses it itself to clear the dev-channels and folder-trust
- * prompts, so it does not pass through the console keystroke whitelist. */
-function pressOne(target: TmuxTarget): Promise<void> {
+/** Press a single literal digit key: it selects AND confirms the matching option on the launch/resume
+ * menus (no trailing Enter). The daemon presses it itself to clear these prompts, so it does not
+ * pass through the console keystroke whitelist. */
+function pressDigit(target: TmuxTarget, digit: string): Promise<void> {
 	return serialized(targetKey(target), async () => {
-		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), "-l", "--", "1"]));
+		await run(tmuxArgv(target, ["send-keys", "-t", paneTarget(target), "-l", "--", digit]));
 	});
 }
 
 /** Poll the pane until the REPL composer appears, pressing "1" through the dev-channels and
- * folder-trust menus as they show. Returns whether the launch is alive: a launch that exits
- * instantly takes its tmux session down with it, so a pane that never captures is a dead launch. */
+ * folder-trust menus as they show, and "2" through the large-resumed-session picker (full session,
+ * not the highlighted summary option) so an unattended resume never silently drops context. Returns
+ * whether the launch is alive: a launch that exits instantly takes its tmux session down with it, so
+ * a pane that never captures is a dead launch. */
 export async function awaitReady(
 	target: TmuxTarget,
 	opts: { timeoutMs?: number; pollMs?: number } = {},
@@ -357,7 +367,13 @@ export async function awaitReady(
 		if (isAgentReady(clean)) return { alive: true, ready: true, screen };
 		if (STARTUP_PROMPT_RE.test(clean)) {
 			try {
-				await pressOne(target);
+				await pressDigit(target, "1");
+			} catch {
+				// a transient send failure self-heals on the next poll
+			}
+		} else if (RESUME_PROMPT_RE.test(clean)) {
+			try {
+				await pressDigit(target, "2");
 			} catch {
 				// a transient send failure self-heals on the next poll
 			}

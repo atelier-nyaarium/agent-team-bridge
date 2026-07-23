@@ -71,6 +71,26 @@ html, body {
 }
 .play-btn:active { opacity: 1; }
 
+/* Top-right copy-raw button, every row; shifts left of the play button when both are present so
+   neither ever overlaps the other. */
+.copy-btn {
+	position: absolute;
+	top: 6px;
+	right: 10px;
+	min-width: 30px;
+	height: 24px;
+	padding: 0 6px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: transparent;
+	color: var(--fg-dim, inherit);
+	font-size: 12px;
+	line-height: 22px;
+	opacity: 0.75;
+}
+.copy-btn.with-play { right: 46px; }
+.copy-btn:active { opacity: 1; }
+
 .row.user {
 	background: var(--user-tint);
 	box-shadow: inset 3px 0 0 var(--user-edge);

@@ -509,6 +509,17 @@ describe("tmuxCore awaitReady", () => {
 		expect(calls).toContainEqual(["tmux", "send-keys", "-t", "=scratch.0", "-l", "--", "1"]);
 	});
 
+	it('presses "2" on the large-resumed-session picker to keep the full session, not the summary', async () => {
+		stdoutData =
+			"This session is 1d 15h old and 189.1k tokens.\n" +
+			"Resuming the full session will consume a substantial portion of your usage limits. We recommend resuming from a summary.\n" +
+			"  ❯ 1. Resume from summary (recommended)\n    2. Resume full session as-is\n    3. Don't ask me again";
+		const res = await awaitReady(target, { pollMs: 5, timeoutMs: 40 });
+		expect(res).toMatchObject({ alive: true, ready: false });
+		expect(calls).toContainEqual(["tmux", "send-keys", "-t", "=scratch.0", "-l", "--", "2"]);
+		expect(calls.some((c) => c.includes("send-keys") && c.includes("1"))).toBe(false);
+	});
+
 	it("reports a dead launch (alive:false) early when the pane never captures", async () => {
 		exitCode = 1; // capture-pane always fails: the session exited on launch
 		// Budget large enough that the dead-launch early-out (not the deadline) is what returns.

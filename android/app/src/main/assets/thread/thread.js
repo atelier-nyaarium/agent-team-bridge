@@ -160,7 +160,8 @@
 		// Agent rows get a top-right Play button when the host enables it
 		// (canPlay rides each message). Tap toggles: the host pushes the
 		// playing state back through setPlaying, which swaps the glyph.
-		if (m.canPlay && m.role === "agent" && m.at !== undefined && m.at !== null) {
+		const hasPlay = m.canPlay && m.role === "agent" && m.at !== undefined && m.at !== null;
+		if (hasPlay) {
 			const play = document.createElement("button");
 			play.className = "play-btn";
 			play.textContent = playingAt === m.at ? "\u25A0" : "\u25B6";
@@ -172,6 +173,21 @@
 			});
 			row.appendChild(play);
 		}
+
+		// Copies the raw message source (markdown and mermaid fences as typed, not the rendered
+		// HTML/diagram) via the native bridge - WebView's own clipboard API needs an https-like
+		// secure context this file:// asset origin does not reliably get. Every row gets one,
+		// positioned left of the play button on rows that also have one.
+		const copy = document.createElement("button");
+		copy.className = "copy-btn" + (hasPlay ? " with-play" : "");
+		copy.textContent = "\u{1F4CB}";
+		copy.setAttribute("aria-label", "Copy raw message");
+		copy.addEventListener("click", () => {
+			if (window.Android && typeof window.Android.copyToClipboard === "function") {
+				window.Android.copyToClipboard(m.body || "");
+			}
+		});
+		row.appendChild(copy);
 
 		const meta = document.createElement("div");
 		meta.className = "meta";
@@ -205,7 +221,10 @@
 
 		const body = document.createElement("div");
 		body.className = "body";
-		body.innerHTML = md.render(m.body || "");
+		// Break CommonMark's blockquote lazy-continuation (see markdown-lazy-blockquote.js's own
+		// header) before rendering, so a plain line right after a quoted line with no blank line
+		// between them starts its own block instead of being absorbed into the quote.
+		body.innerHTML = md.render(window.breakLazyBlockquoteContinuations(m.body || ""));
 		row.appendChild(body);
 
 		if (Array.isArray(m.files) && m.files.length > 0) {
