@@ -1,7 +1,7 @@
 # Scheduled Send
 
 Long-press the send button to schedule a message for a picked wall-clock time; the app sends it on
-its own even if backgrounded or killed in the meantime. Questionaire complete; see `## Plan` below.
+its own even if backgrounded or killed in the meantime. Both phases shipped - see `## Plan` below.
 
 ## The ask, as given
 
@@ -351,7 +351,7 @@ ever".
   shared file to test something" should probably call for worktree isolation on that agent, or at
   least a shared lock, rather than relying on nobody colliding.
 
-## Phase 2: Scheduled Send (Android, client-local)
+## Phase 2: Scheduled Send (Android, client-local) ✅
 
 - **Menu & compose:** long-press send opens `Schedule Send` / `Send`; `Schedule Send` greyed out if
   one's already active for that session. Confirming a time clears the composer immediately and
