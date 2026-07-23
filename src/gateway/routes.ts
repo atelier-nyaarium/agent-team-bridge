@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
+import { createBurstCache } from "../shared/burst-cache.js";
 import type { SealedEnvelope } from "../shared/crypto.js";
 import {
 	type ConsolePushEntry,
@@ -723,20 +724,12 @@ export function createRoutes({
 	// presence.ts), but presenceForDomain below is invoked once per linked-and-shared Domain from
 	// crossDomainPresence.ts's recomputeAll() - up to MAX_LINKED_DOMAINS_FOR_PRESENCE (500) calls
 	// in one fully-synchronous pass triggered by a single, ordinary local presence mutation (any
-	// session's working-state flip). Cache the snapshot for the remainder of the CURRENT
-	// synchronous execution only (cleared on the next microtask) so that whole burst pays for one
+	// session's working-state flip). createBurstCache makes that whole burst pay for one
 	// computation, not one per Domain, while any OTHER, later caller (a plain GET /teams) still
-	// gets a fresh one - recomputeAll's loop never awaits between iterations, so this is exactly
-	// the scope a same-tick cache needs to be safe.
-	let presenceSnapshotCache: TeamInfo[] | null = null;
+	// gets a fresh one.
+	const presenceSnapshotCache = createBurstCache<TeamInfo[]>(() => presence?.snapshot() ?? []);
 	function presenceSnapshotForThisTick(): TeamInfo[] {
-		if (presenceSnapshotCache) return presenceSnapshotCache;
-		const snap = presence?.snapshot() ?? [];
-		presenceSnapshotCache = snap;
-		queueMicrotask(() => {
-			presenceSnapshotCache = null;
-		});
-		return snap;
+		return presenceSnapshotCache.get();
 	}
 
 	/** Force the next `presenceSnapshotForThisTick()` call to recompute rather than reuse a cached
@@ -748,7 +741,7 @@ export function createRoutes({
 	 * so each TOP-LEVEL call sees fresh state while still sharing one computation across its own
 	 * per-Domain loop. */
 	function invalidatePresenceSnapshotCache(): void {
-		presenceSnapshotCache = null;
+		presenceSnapshotCache.invalidate();
 	}
 
 	/** What Domain `toDomainId` currently sees of this Gateway's own sessions - the exact

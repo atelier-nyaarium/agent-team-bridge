@@ -175,7 +175,11 @@ export interface CrossDomainPresenceSourceDeps {
 	planeRegistry: PlaneRegistry;
 	restoredPlanes: Record<string, PlanePersistedState> | undefined;
 	/** What Domain `domainId` currently sees of this Gateway's own sessions - the exact filter
-	 * `list_teams`'s cross-Domain leg already computes for pull, called fresh every time. */
+	 * `list_teams`'s cross-Domain leg already computes for pull, called fresh every time. Called up
+	 * to once per currently linked-and-shared Domain (`MAX_LINKED_DOMAINS_FOR_PRESENCE`, today 500)
+	 * within a SINGLE synchronous `recomputeAll()` pass - an implementation whose own underlying
+	 * computation is expensive MUST memoize it across that burst itself (see `invalidatePresenceCache`
+	 * below); this dependency has no way to detect or enforce that on its own. */
 	presenceForDomain: (domainId: string) => PresenceForDomain;
 	/** Every currently linked-and-shared Domain id - enumerated fresh by the caller on every
 	 * `recomputeAll()` call, never cached here. */
@@ -218,11 +222,14 @@ export interface CrossDomainPresenceSource {
  * Cold start: `Plane`'s constructor seeds its baseline hash from the snapshot computed AT
  * REGISTRATION TIME, so `recompute()` can never see a brand-new plane's very first content as
  * "changed" - nothing would ever reach the peer without an explicit bypass. A plane restored from
- * a CLEAN shutdown does NOT need this bypass: the registry's own `reconcileOnBoot()` (or, for a
- * Domain whose plane only gets touched well after boot, the periodic tripwire) already recomputes
- * against live state and fires `onBump` normally if anything actually drifted from what was last
- * persisted - firing the bypass unconditionally on every registration would spuriously re-push
- * unchanged content on every restart. A NON-clean restore (the common case: only a graceful
+ * a CLEAN shutdown does NOT need this bypass: `PlaneRegistry.reconcileOnBoot()` runs once, at boot,
+ * strictly BEFORE federation activates and any crossdomain-source plane is ever registered (this
+ * plane is always "registered late" - same situation as the pre-existing linked-peers plane - so
+ * reconcileOnBoot's one-shot pass structurally can never reach it, for any Domain). The 60-second
+ * tripwire is therefore the ONLY mechanism that recomputes against live state and fires `onBump`
+ * normally if anything actually drifted from what was last persisted - firing the bypass
+ * unconditionally on every registration would spuriously re-push unchanged content on every
+ * restart. A NON-clean restore (the common case: only a graceful
  * SIGTERM/SIGINT ever persists `cleanShutdown:true`, so a crash/OOM/`docker kill` leaves the last
  * regular tick's `false`) does NOT get this rescue: `Plane`'s constructor discards the persisted
  * hash entirely and reseeds the baseline from the CURRENT snapshot instead, exactly like a
@@ -276,11 +283,13 @@ export function createCrossDomainPresenceSource(deps: CrossDomainPresenceSourceD
 				restored,
 			);
 			// A plane restored from a CLEAN shutdown trusts its persisted hash as the comparison
-			// baseline (Plane's own constructor), so a genuine drift is caught by reconcileOnBoot/the
-			// tripwire like any other bump - no bypass needed. Anything else (nothing restored at
-			// all, or restored but NOT a clean shutdown) reseeds the baseline from the CURRENT
-			// snapshot instead (same Plane constructor), which can never see its own seed content as
-			// "changed" - so both cases need this unconditional bypass, not just the brand-new one.
+			// baseline (Plane's own constructor), so a genuine drift is caught by the 60-second
+			// tripwire like any other bump (registered strictly after reconcileOnBoot's one-shot pass
+			// already ran, so that pass never reaches this plane) - no bypass needed. Anything else
+			// (nothing restored at all, or restored but NOT a clean shutdown) reseeds the baseline
+			// from the CURRENT snapshot instead (same Plane constructor), which can never see its own
+			// seed content as "changed" - so both cases need this unconditional bypass, not just the
+			// brand-new one.
 			if (!restored?.cleanShutdown) push(domainId, sortSessions(presenceForDomain(domainId)));
 			return;
 		}
@@ -308,7 +317,12 @@ export function createCrossDomainPresenceSource(deps: CrossDomainPresenceSourceD
 		// grant, not a restart continuity - deleting the entry here stops recomputeDomain's clean-
 		// shutdown check above from mistaking stale boot-time data for it.
 		if (restoredPlanes) delete restoredPlanes[crossDomainPresenceSourcePlaneName(domainId)];
-		if (registered.delete(domainId)) planeRegistry.unregisterPlane(crossDomainPresenceSourcePlaneName(domainId));
+		// Unconditional, never gated on `registered.delete(domainId)`'s own return value (mirrors the
+		// consumer side's own teardown) - `registered` and the registry's actual plane set are meant
+		// to stay in lockstep, but this method must not silently skip cleanup if they ever don't.
+		// `unregisterPlane` is documented as a safe no-op when the name is not currently registered.
+		registered.delete(domainId);
+		planeRegistry.unregisterPlane(crossDomainPresenceSourcePlaneName(domainId));
 	}
 
 	return { recomputeDomain, recomputeAll, teardown };
@@ -322,8 +336,10 @@ export function createCrossDomainPresenceSource(deps: CrossDomainPresenceSourceD
  * to this Gateway, lazily registered on first land (mirrors `ReadAnchors`'s own lazy, per-key
  * registration pattern). Plain in-memory state persisted on the same periodic/shutdown cadence as
  * sessions/jobs/mailboxes/read-anchors (via the caller's own `snapshot()`/`restore()` into the
- * shared durable-state file) - losing a few seconds of this on an unclean crash just means a
- * transient staleness until the next push or backstop pull, never a correctness concern.
+ * shared durable-state file) - losing a few seconds of this on an unclean crash is corrected by the
+ * source Domain's NEXT push. There is no independent backstop pull yet (planned for a later phase);
+ * until one exists, a push that is dropped (rate-limited, relayed but never received) or exhausts
+ * its retry budget with no FOLLOWING source-side change has no automatic recovery path here.
  */
 export class CrossDomainPresenceConsumer {
 	// A Map, not a plain object: srcDomainId is a linked peer's OWN self-reported string, never

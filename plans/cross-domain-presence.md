@@ -450,3 +450,74 @@ introduce its own new bug. All 9 raised findings were confirmed (0 refuted); all
   read side happens to be safe today only because zod's `z.record` parser skips a literal
   `"__proto__"` key, unpinned by any test). Both closed with dedicated regression tests; no code
   change needed for either.
+
+## Phase 1 implementation - framework-first audit
+
+A framework-first pass (4 dimension agents, analysis only) over the committed Phase 1 code, per the
+`/framework-first-design` skill's ownership test. Findings split into small/safe fixes (applied),
+one small extraction (applied), and two larger extraction ideas explicitly deferred rather than
+built under this cycle's own momentum.
+
+**Fixed:**
+- **Doc accuracy:** the source-side module doc (and an inline comment restating it) credited
+  `PlaneRegistry.reconcileOnBoot()` with reconciling a cleanly-restored crossdomain-source plane.
+  Disprovable by reading `gateway/index.ts`: `reconcileOnBoot()` runs once, at boot, strictly BEFORE
+  federation activates and any such plane is ever registered - it can never reach one, for any
+  Domain, in any boot path. The 60-second tripwire alone does this (mirrors the pre-existing
+  linked-peers plane's own "registered late, tripwire is the sole backstop" situation, correctly
+  described elsewhere in the same commit). Fixed: corrected both comments.
+- **Doc accuracy:** `CrossDomainPresenceConsumer`'s class doc claimed staleness self-heals via "the
+  next push or backstop pull" - no backstop pull exists yet (that's a later phase); only "the next
+  push" is real today, and only if the source Domain's presence changes again afterward. Fixed:
+  reworded to state today's actual guarantee, not the eventual two-mechanism design.
+- **Contract completeness:** `CrossDomainPresenceSourceDeps.presenceForDomain`'s doc never mentioned
+  it can be called up to 500x in one synchronous burst and must be cheap - tribal knowledge that
+  only lived in routes.ts's private comments on the one existing implementation, not on the shared
+  interface a future implementer actually reads. Fixed: the interface doc now states the call
+  cardinality and the memoization obligation explicitly.
+- **Consistency:** the source side's `teardown()` still gated `unregisterPlane` behind
+  `if (registered.delete(domainId))`, the exact pattern red-team lap 2 hardened away from on the
+  consumer side (a redundant-tracker-vs-real-state desync risk). Harmless today only because Source
+  has no restore()-populated collateral to desync against - a property of there being exactly one
+  call site today, not a structural guarantee. Fixed: made unconditional, matching the consumer
+  side.
+- **Extraction (small, behavior-preserving):** the same-tick presence-snapshot cache in `routes.ts`
+  was a hand-rolled instance of a generic "memoize for one synchronous burst, explicit invalidate,
+  auto-clear on microtask" primitive - exactly the shape that already needed a SECOND fix layered on
+  top of the first (this same file's own red-team lap 2 finding) precisely because the mechanism was
+  private and undocumented as a pattern. Extracted to `shared/burst-cache.ts`
+  (`createBurstCache<T>`), fully generic (no presence/domain/plane awareness), with its own test
+  file; `routes.ts` now just wires `presence?.snapshot()` through it.
+
+**Considered, not built - deferred:**
+- **A shared "capped per-key plane registration" primitive.** Two dimension agents independently
+  flagged the same real duplication: `createCrossDomainPresenceSource`'s `registered` Set and
+  `CrossDomainPresenceConsumer.ensureRegistered` hand-roll the identical
+  check-cap/warn/refuse/register shape against the same `MAX_LINKED_DOMAINS_FOR_PRESENCE` constant.
+  `ReadAnchors` (the cited precedent) avoids the whole risk class by checking its cap against the
+  real state's own size rather than a mirrored Set - which is exactly what let the
+  restore()/registered desync bug (red-team lap 2) exist in the first place. A shared primitive is a
+  real, defensible idea - but `ReadAnchors`'s cap bounds nested keys inside one plane, while
+  Source/Consumer bound the COUNT of per-relationship planes themselves, so it would not cleanly
+  absorb all three, and Source has no natural backing collection to check instead of a Set (unlike
+  Consumer, which could arguably use `state.size` directly). Building this now, inside an
+  implementation-commit cycle, for exactly two real call sites, risks a speculative generalization
+  before the shape is proven. Revisit if/when `plans/cross-gateway-presence-exchange.md` (the parked
+  sibling feature, explicitly slated to reuse this feature's mechanisms) actually gets built - a
+  genuine third consumer is the right trigger to extract this, not a second one.
+- **Unifying the outbound `CoalescedPusher` and the inbound `pendingLand` rate-limit coalescer.**
+  Raised by one dimension agent as duplication, but a second agent's explicit counter-verdict is the
+  one this plan follows: the two share only a shallow ~5-line Map-and-mutate-in-place surface. Below
+  that they diverge by necessity - the pusher wraps a FALLIBLE ASYNC send with retry/backoff/a
+  generation token (needed because a scheduled retry has no live timer handle `cancel()` could
+  reach), while `pendingLand` wraps an INFALLIBLE SYNCHRONOUS write behind one fixed delay with a
+  real `setTimeout` handle `teardown()` cancels directly - no retry concept, no token needed. A
+  shared primitive would either bake unused retry/token machinery into the simple case or shrink to
+  a trivial skeleton not worth sharing. Not built.
+
+**Security note:** one of the four dimension agents reported that invoking a skill mid-task surfaced
+tool output containing fabricated `<system-reminder>`-shaped blocks claiming a date change bundled
+with an instruction to conceal it from the user - a known prompt-injection shape. The agent correctly
+disregarded the concealment instruction and flagged it rather than comply. Recorded here per this
+plan's own audit-trail convention; relayed to the user directly (not just logged) per this session's
+standing prompt-injection policy.
