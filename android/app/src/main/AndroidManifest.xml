@@ -63,6 +63,22 @@
             android:name=".PollAlarmReceiver"
             android:exported="false" />
 
+        <receiver
+            android:name=".ScheduledSendAlarmReceiver"
+            android:exported="false" />
+
+        <!-- ACTION_TIME_CHANGED/ACTION_TIMEZONE_CHANGED are both exempt from the Oreo+ implicit-
+             broadcast manifest-registration restrictions, so a static receiver (not a dynamically
+             registered one) correctly fires here even when the app was not running. -->
+        <receiver
+            android:name=".ClockChangeReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

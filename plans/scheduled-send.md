@@ -387,16 +387,25 @@ ever".
   UNCONDITIONAL step after `connect()` (`connect()` swallows failures internally and must not gate
   the fire - only an unconditional step reaches `deliver()`'s failure path so the bounded-retry
   policy triggers when firing offline). Warm path: the receiver's kick funnels into the SAME
-  single serialized fire-processor (a latch/serialization the cold chain completes and the warm
-  kick awaits), so a warm kick can never race a cold start's not-yet-connected state. Wakelock: a
-  new derived constant with its own derivation comment (the `IdlePushbackManager.kt` discipline),
-  NOT `SEND_BOUND_MS + PINNED_READ_TIMEOUT_MS` - those two overlap by design (the client read
-  ceiling is pinned to outlast the gateway bound), and the real cold path adds terms that formula
-  misses: `REVIVAL_OVERHEAD_MS` (15s) + `connect()`'s sequential round trips (each up to 15s
-  connect + 35s read) + the send's own 15s + 35s. Order-of-2-minutes total, capped: an attachment
-  UPLOAD is uncapped by design (600s per-write inactivity), so a huge upload on a slow link can
-  outlive the lock - acceptable, because an interrupted attempt is recoverable (below), and
-  holding multi-minute wakelocks is worse.
+  mutex-guarded fire-processor, so a warm kick can never DOUBLE-CONVERT the same due record
+  concurrently with a cold start. That mutex does NOT, by itself, make the warm kick wait for
+  `connect()` to have run first (round-1 audit's own wording overclaimed this - "can never race a
+  cold start's not-yet-connected state" - align-audit-round-1 below tightened it): a dead-process
+  revival's alarm receiver calls `SwitchboardService.start()` (async - `onCreate()` runs later on
+  the main thread) then immediately kicks the repo, which can reach the mutex before `onCreate()`'s
+  own synchronous wiring step has run. `awaitSchedulerWired()` closes the ONE concretely harmful
+  consequence of that gap (a retry/notification silently no-op-ing on a null scheduler callback);
+  the milder "state.teams still empty" ordering gap is left as an accepted, low-stakes corner
+  (`deliver()`'s targetDomainOverride and `ConsoleClient`'s own persisted-gatewayId fallback already
+  degrade it safely today - see the Phase 2 implementation notes). Wakelock: a new derived constant
+  with its own derivation comment (the `IdlePushbackManager.kt` discipline), NOT
+  `SEND_BOUND_MS + PINNED_READ_TIMEOUT_MS` - those two overlap by design (the client read ceiling is
+  pinned to outlast the gateway bound), and the real cold path adds terms that formula misses:
+  `REVIVAL_OVERHEAD_MS` (15s) + `connect()`'s FOUR sequential round trips (each up to 15s connect +
+  20s read, 140s total) + the send's own 15s + 35s = 205s summed, rounded up to 240s for real
+  margin. An attachment UPLOAD is uncapped by design (600s per-write inactivity), so a huge upload
+  on a slow link can outlive the lock - acceptable, because an interrupted attempt is recoverable
+  (below), and holding multi-minute wakelocks is worse.
 - **Fire-time conversion, idempotent and atomic:** the record-to-row conversion must not be able
   to double-run. Before converting, check the thread for an existing row bearing the banked opId -
   opId IS persisted per row, so this check survives restarts (a process death between appending
@@ -445,3 +454,333 @@ ever".
   transcript like any live send.
 - **Forget:** clears any scheduled send for that conversation (record, its alarm re-arm if it was
   the earliest, AND its banked attachment bucket) along with everything else Forget already drops.
+
+## Phase 2 implementation notes
+
+First implementation pass complete (data model, persistence, alarm scheduling, fire-processing,
+retry, notifications, attachment lifecycle, Forget integration, UI). Not yet through the
+align/red-team/framework audit rounds Phase 1 had - that is the immediate next step. Recorded here
+so the scope decisions below survive into that audit rather than being re-derived or second-guessed
+from scratch.
+
+- **Storage/reactivity split:** the persistence SHAPE mirrors drafts exactly (SharedPreferences JSON
+  blob, `isAddressKey`-filtered load, in both `SCHEMA_WIPE_KEYS` and `PROVISIONING_KEYS`) but the
+  LIVE state deliberately does NOT mirror drafts' bare-ChatRepository-field shape - `scheduledSends`
+  is a `ChatState` field instead (like `labels`/`unread`), since the dock and the session-tile clock
+  icon both need Compose reactivity that a bare field wouldn't give them for free.
+- **Fire-processor concurrency:** a dedicated `scheduledSendFireMutex` (Mutex) serializes
+  `fireDueScheduledSends()` so the cold-boot chain's own unconditional call and a warm alarm-kick's
+  call can never both convert the same due record - directly reapplying Phase 1's generation-token
+  lesson to this client-side concurrency point instead of re-deriving it from scratch. A dedicated
+  always-on `repoScope` (SupervisorJob + Dispatchers.IO, never cancelled - ChatRepository has no
+  teardown of its own) backs the warm kick, since `pollScope` is null until `startPolling` runs and a
+  missed scheduled send has no "next cold start heals it" backstop the way `scheduleAttachmentDelete`
+  does.
+- **Retry is deliberately NOT part of the persisted store.** A failed fire's bounded one-shot retry
+  banks `team`/`opId`/`targetDomainId` directly as PendingIntent extras (ACTION_RETRY on the same
+  `ScheduledSendAlarmReceiver`), not as a `ScheduledSend` record - it acts on an already-fired,
+  already-in-the-thread "error" row, a different shape than "not yet attempted." Consequence: a
+  retry alarm does NOT survive a reboot (BootReceiver never re-arms it, unlike the primary next-due
+  alarm, which the cold chain's own `fireDueScheduledSends()` re-arms for free on every start). This
+  is accepted, not fixed - the ultimate backstop (the error row's tap-to-retry, plus the eventual
+  failure notification) is unaffected by whether the ONE automatic retry happens to be skipped by a
+  rare reboot-during-a-5-minute-window coincidence.
+- **Two teams' retries must not collide.** The retry PendingIntent's request code is hashed per-team
+  (`SCHEDULED_SEND_RETRY_RC_START` + range, mirroring `teamNotificationId`'s own shape) rather than a
+  single fixed code - a shared code would let a second team's `scheduleRetry` silently replace the
+  first team's still-pending retry via `FLAG_UPDATE_CURRENT` (extras are not part of PendingIntent
+  identity). Realistic trigger: several scheduled sends across different chats all become overdue
+  after an extended offline stretch, fire in the same pass, and multiple fail together.
+  `PendingIntent`s otherwise disambiguate by component+action too (the primary alarm and every
+  retry share `ScheduledSendAlarmReceiver` but differ by action; POLL_ALARM_RC's own comment already
+  documents this cross-component safety) - the per-team hash is specifically for the one case that
+  doesn't disambiguate on its own (two retries, same component, same action).
+- **"Edit" is deliberately time-only, not a full text/attachment re-edit.** The dock's tap-to-edit
+  reopens the same date/time picker seeded at the record's current fire time and calls a new
+  `rescheduleSend(team, atMillis)` that changes only `fireAtMillis` via `.copy()`, leaving
+  text/fileRefs/opId/targetDomainId untouched. A fuller edit (also letting the text or attachments
+  change) was scoped out for this pass: the banked `fileRefs` are already-copied `MessageFile` refs,
+  not the live `content://` Uris `scheduleSend` takes, so folding both through one call risks
+  silently dropping attachments on a "just change the time" edit unless given its own dedicated
+  seam. Worth a follow-up if a fuller edit turns out to matter in practice; not implemented now.
+  Cancel-and-reschedule-fresh remains the way to change text or attachments.
+- **`deliver()` and `retrySend()` both gained an optional `targetDomainOverride`/`targetDomainOverride`
+  parameter** (default null, preserving every pre-existing call site's behavior unchanged) rather than
+  a parallel code path - the fire processor and the scheduled-send retry both need the banked
+  `targetDomainId` to survive a cold process where `state.teams` is still empty.
+- **`rebuildFiles` gained a `List<MessageFile>` overload** (the `Message`-taking original now
+  delegates to it) so the fire processor can convert a banked record's `fileRefs` back into
+  `OutgoingFile`s using the exact same logic `retrySend`/`reconcilePending` already trust, rather than
+  a second hand-rolled copy.
+- **Countdown/absolute-time formatting is new, small, and deliberately not shared with
+  `relativeTime`** - that helper computes a "time since" delta from a PAST instant and reads as
+  nonsense for a future one (a negative delta is still `< 60_000`, so it would print "now" for
+  something hours away). `countdownText`/`absoluteTimeText` are fresh, narrow functions for a
+  remaining-duration and an absolute clock time respectively.
+- **Exception-safety of the cold-boot chain's new `fireDueScheduledSends()` step was checked
+  against, not assumed:** in normal operation `deliver()` never throws (it internally catches every
+  `Exception` and settles the row to `"error"` instead) - the only latent escape is an `Error` (e.g.
+  OOM) or a `CancellationException`, and `reconcilePending()`, already shipped in the exact same
+  chain one line above, has the identical property (its own `catch (e: Throwable)` around `deliver()`
+  cleans up bookkeeping and re-throws, rather than swallowing). `fireDueScheduledSends()` sitting
+  beside it with the same profile is consistent with an already-accepted risk at this call site, not
+  a new regression - not additionally hardened here to avoid holding this new code to a stricter
+  standard than its immediate, already-shipped neighbor in the same chain.
+- **Update: a real toolchain and a booted emulator were found on this machine
+  (`~/android-dev/{jdk,sdk,gradle}`, AVD `phone35` already running) after this note was first
+  written.** `./gradlew compileDebugKotlin`, `testDebugUnitTest`, and `assembleDebug` all pass; a
+  fresh install launches on the emulator with no crash in logcat. Pushing an existing (differently-
+  identitied) provisioning blob in via the `provisioning_b64` intent extra got the app past Set Up
+  into a real connect attempt against a live local gateway, correctly reporting "Not enrolled" for
+  this fresh install's own identity - a genuine protocol-level response, not a crash. Completing
+  enrollment (to click through the actual schedule/dock/fire/cancel/reschedule golden path) was
+  deliberately deferred rather than attempted by touching the live gateway's admission state, since
+  it is serving real sessions, not a throwaway instance - the user confirmed doing this a different
+  day is fine. So: compiled and unit-tested for real, but the golden path itself is still only
+  manually-reasoned-through, not click-tested.
+
+## Phase 2 align audit round 1
+
+A `Workflow()` fanned out 11 audit dimensions against the real diff and the plan text, each
+followed by a 3-way adversarial refute pass. 11 candidates raised, 10 confirmed, collapsing to 6
+distinct root causes (a few dimensions independently found the same underlying gap from different
+angles) - all resolved:
+
+- **[high] The warm alarm-kick could run before `SwitchboardService.onCreate()` had wired
+  `scheduledSendScheduler`/`onScheduledSendFailed`,** so a fire (or retry) that failed in that
+  window silently skipped arming the automatic retry and silently skipped the "unattended failure
+  is never silent" notification - the two concrete promises this whole failure-policy bullet exists
+  to keep. Fixed with a bounded wait (`awaitSchedulerWired`, `SCHEDULER_WIRE_WAIT_MS` = 5s) at the
+  top of both warm-kick entry points; the cold-boot chain's own direct call never needed this (its
+  `onCreate()` already wired the scheduler synchronously, earlier in the same function, before
+  reaching the chain). Verified the fix by temporarily reverting it and confirming the reasoning
+  held (a null-scheduler window genuinely exists per the receiver/onCreate ordering - Android's
+  `startForegroundService` is asynchronous, `onCreate()` is not guaranteed to have run by the time
+  the SAME `onReceive` call's next line executes).
+- **[medium] The plan's "a warm kick can never race a cold start's not-yet-connected state" claim
+  was not actually true** - `scheduledSendFireMutex` only prevents double-converting the SAME due
+  record, it does not enforce that the cold chain's `connect()` has run first. Tightened the
+  "Firing sequence" bullet's wording to state what is actually guaranteed (no double-conversion)
+  versus what is not (connect-freshness ordering), and recorded why the residual gap is low-stakes
+  in practice (deliver()'s targetDomainOverride bypasses the empty state.teams for a cross-Domain
+  target; ConsoleClient falls back to the persisted gatewayId when routeGateway is unset) rather
+  than building further synchronization to close it outright.
+- **[medium] `SCHEDULED_SEND_PASS_TIMEOUT_MS`'s own derivation comment summed to 205s but the
+  constant was 180_000L** - 25 seconds short of what the comment itself claimed to generously round
+  up from. Recomputed honestly (15s + 4x35s + 50s = 205s) and set the constant to 240_000L, with
+  the comment's own arithmetic corrected to match.
+- **[medium] The retry PendingIntent's request code hashed on team name alone,** so two SEQUENTIAL
+  failures for the same team within the ~5 minute retry window (possible since a record is cleared
+  at fire time regardless of outcome, so a fresh schedule for the same team is immediately allowed
+  again) would silently replace each other's retry alarm via FLAG_UPDATE_CURRENT - the exact
+  failure mode the per-team hashing was introduced to prevent, just not scoped to cover this case
+  too. Fixed by folding opId (unique per schedule) into the hash alongside team.
+- **[medium] A user Cancel or Forget racing a live fire could delete the attachment bucket a
+  freshly-appended thread row had just started depending on** - `fireOne`'s append-then-clear order
+  is intentional (crash-recovery, see its own doc), so the record and the row briefly coexist, and
+  `cancelScheduledSend` (unsynchronized against `fireOne` - making it suspend to share the mutex
+  would ripple into every UI call site) could delete files a live row now needs. Fixed narrowly:
+  `cancelScheduledSend` now checks whether a thread row already carries the same opId before
+  deleting, skipping the delete if a fire has already claimed it - closing the concretely damaging
+  case without the broader (and here, disproportionate) cross-coroutine locking a fully airtight
+  fix would need.
+- **[medium] `forget()` never dismissed `SCHEDULED_SEND_FAILED_NOTIFICATION_ID`,** unlike the
+  analogous per-team message notification, which both `onForget` call sites already cancel for the
+  identical stated reason (a forgotten team drops out of every state map the level-based reconcile
+  logic could otherwise use to notice and clean it up). Fixed with a
+  `cancelScheduledSendFailedNotification(context, team)` companion method, tracking which team's
+  failure currently occupies the single shared notification slot so forgetting a DIFFERENT team
+  never wipes a still-relevant one, called from both `onForget` sites alongside the existing
+  `cancelTeamNotification`.
+- **[low, accepted, not fixed] `forget()` is not synchronized against `scheduledSendFireMutex`
+  either,** so a user Forget landing within a few CPU instructions of that same team's alarm firing
+  could theoretically have `fireOne`'s `append()` re-create a thread entry `forget()`'s own drop had
+  just emptied, delivering a message into a conversation the user believed fully forgotten seconds
+  earlier. Left as an accepted, extremely narrow residual (the window is a handful of in-memory
+  operations with no I/O in between) rather than adding the same cross-coroutine locking discussed
+  and rejected above for the attachment case - fully closing it would need the identical invasive
+  change (making `forget()` suspend and share the mutex, rippling through every UI call site for a
+  vanishingly rare interleaving).
+
+One candidate (a claimed missing `!!` on `openTeam` at the ThreadScreen call site, `state.
+scheduledSends[openTeam]`) was raised but refuted by the adversarial pass. Added the `!!` anyway for
+zero cost and consistency with every other `openTeam` use in that same call - Kotlin smart-cast
+behavior for a `by remember { mutableStateOf(...) }` delegate under nested-lambda reassignment is
+subtle enough that "the verifiers said it compiles" was not worth trusting over a free, zero-risk
+fix, especially since this could not be independently compile-checked at review time.
+
+All fixes verified against the real toolchain (see the note above this section): `./gradlew
+compileDebugKotlin` and `testDebugUnitTest` both pass after every fix in this round, not just at
+the end.
+
+### Follow-up focused re-check (not a full re-audit)
+
+A single targeted Agent re-read all six fixes above for correctness and regressions, rather than
+re-running the full 11-dimension workflow - proportionate to how surgical each fix was, and cheaper
+than a full re-audit for changes this small. Found one more real bug, one more accepted residual,
+and confirmed the rest:
+
+- **[fixed] `notifyScheduledSendFailed`'s field-write and its `notify()` call were two separate,
+  unsynchronized steps.** `kickScheduledSendRetry` runs each team's retry on its own
+  `repoScope.launch` coroutine - genuinely concurrent `Dispatchers.IO` threads, not just interleaved
+  suspension points - so two teams failing close together could post-then-write in an order where
+  `lastScheduledSendFailureTeam` ends up naming a DIFFERENT team than whichever notification's
+  content is actually showing, silently breaking the just-added forget-dismiss fix in the exact
+  scenario it exists for. Fixed with a plain JVM monitor (`scheduledSendFailureLock`, a `synchronized`
+  block around both the field-write and the notify()/cancel() calls in both directions) - a
+  suspend-based Mutex was not the right tool here since neither caller is a suspend function.
+- **[accepted, not fixed, added to the residual above] A second narrow window in the SAME
+  cancel/forget-vs-fireOne family:** `claimedByLiveRow` closes the case where cancel runs AFTER
+  `fireOne`'s `append()`, but there is a symmetric window BEFORE it - if `cancelScheduledSend` runs
+  between `fireDueScheduledSends()` reading a due record and `fireOne`'s own `append()` call,
+  `claimedByLiveRow` correctly (at that instant) sees no row yet, deletes the attachment bucket, and
+  `fireOne` - already holding the record locally - appends the row and delivers anyway;
+  `rebuildFiles()` silently drops any file whose copy is gone, so the send can go out (or the row
+  can render) missing its attachment depending on which async op lands first. Same family as the
+  already-accepted `forget()`-vs-`scheduledSendFireMutex` residual above (narrow, no-I/O, would need
+  the identical invasive suspend-ify-and-share-the-mutex change to close outright) - folded into that
+  same accepted-risk bucket rather than treated as a new, separate gap.
+- **[not adopted] `onScheduledSendFailed` could theoretically use `@Volatile`** for the same
+  JMM-piggyback-on-a-volatile-write reasoning `scheduledSendScheduler` already gets, since it is
+  written right next to it in `onCreate()`'s synchronous prefix. Declined: this field is declared to
+  mirror `onInbound`'s own exact shape, and `onInbound` is a plain (non-`@Volatile`) `var` with the
+  identical theoretical property - hardening only the newer field would be an inconsistent,
+  isolated deviation from the pattern it explicitly mirrors, not a fix to something Phase 2
+  introduced. If this is worth closing, it belongs as its own pass across both fields together, not
+  smuggled into this feature's diff.
+- Items 3 (retry request-code hashing) and 6 (the build itself, re-verified with `--rerun-tasks` to
+  force genuine recompilation rather than trust a cached UP-TO-DATE result) came back clean, no
+  further action.
+- One cosmetic-only observation (a sibling `state.threads[openTeam]` read at the same call site
+  still lacks the `!!` the round-1 fix added elsewhere) is pre-existing code Phase 2 did not touch -
+  left alone rather than editing already-shipped, unrelated code for a style-only reason.
+
+Re-verified again after this round's fixes: `./gradlew compileDebugKotlin testDebugUnitTest
+--rerun-tasks` - BUILD SUCCESSFUL, all 26 tasks freshly executed (not cached), same two
+pre-existing, unrelated warnings as before.
+
+## Phase 2 red-team round 1
+
+A separate `Workflow()` red-teamed the implementation for gaps the plan itself never thought to
+specify - security/input-handling, resource exhaustion, lifecycle edge cases (rename, unlink, config
+change, clock change) - deliberately NOT re-covering the concurrency/ordering ground the align audit
+already worked. 6 angles, 22 candidates raised, 17 confirmed. Fixed:
+
+- **[high] The composer cleared draft/attachments synchronously the instant Schedule was tapped,
+  before the async, authoritative time check was known to succeed** - and that check could fail
+  silently (the picker's own gate is evaluated once per recomposition and never re-validated against
+  a live clock while the user idles on the dialog; a stale pick, or a clock change, made it trip with
+  zero error surfaced). Fixed properly, not patched: `onScheduleSend`/`onReschedule` changed from
+  fire-and-forget `Unit` callbacks to `suspend ... -> Boolean`, `ThreadScreen` now awaits the real
+  outcome before clearing anything, and `scheduleSend`/`rescheduleSend` both gained an error message
+  on the past-time branch they previously left silent. This also closed the accompanying double-tap
+  race for free: the Schedule button disables (`submitting`) the instant it is tapped until the
+  awaited call resolves, so two overlapping taps can no longer race on the same draft/attachments.
+- **[medium] `loadPersistedScheduledSends` wrapped its whole per-team parse loop in ONE runCatching**
+  - a single malformed row threw away every OTHER team's still-good record too, and the cascade
+    reached further than just data loss: the next cold start's unconditional `fireDueScheduledSends()`
+  would find nothing due and call `rearmScheduledSendAlarm()`, which CANCELS the real, still-armed
+  AlarmManager alarm for every affected team. Fixed by parsing each row under its own runCatching.
+- **[high] `SCHEDULED_SEND_FAILED_NOTIFICATION_ID` was a single shared slot across every team** -
+  two teams failing close together (the exact scenario the retry request-code hashing fix already
+  names as realistic) silently overwrote each other's still-unread notification content, since
+  `NotificationManagerCompat.notify` replaces in place. Redesigned properly rather than patched
+  again: gave the failure notification its own per-team hashed id (its own range, disjoint from both
+  `TEAM_ID_RANGE` and the retry request-code range), which ALSO let the round-1
+  `lastScheduledSendFailureTeam`/`scheduledSendFailureLock` tracking machinery be deleted outright -
+  a per-team id makes the whole "which team is showing" consistency problem it existed to solve moot.
+- **[high] No `android:configChanges` is declared anywhere in this app, and `scheduleDialogSeed`/
+  `pickingTime`/`attachments` were all plain `remember`, not `rememberSaveable`** - a rotation, theme
+  switch, or font-scale change destroys and recreates the Activity, silently closing an in-progress
+  Schedule Send dialog (any step) and dropping picked attachments, with zero feedback. Fixed by
+  switching all three to `rememberSaveable` (dateState/timeState already saved themselves internally,
+  confirmed by decompiling the project's own Material3 aar - only the enclosing flags were the gap).
+- **[medium] The Surface+combinedClickable send-button replacement regressed accessibility versus
+  the FilledIconButton it replaced** - missing `minimumInteractiveComponentSize()` (a real 40dp vs
+  48dp touch-target shrink, confirmed by decompiling IconButtonKt) and missing `Role.Button`/
+  `onLongClickLabel` (TalkBack lost the button trait and the long-press affordance description).
+  Fixed by restructuring: `minimumInteractiveComponentSize()` + `combinedClickable` (now carrying
+  `role`/`onLongClickLabel`) on an outer Box, the 40dp Surface as a purely visual inner child.
+- **[medium] `CHANNEL_SCHEDULED_SEND_FAILED` never called `enableVibration(true)`** unlike
+  `CHANNEL_MESSAGES` - a vibrate-only ringer got zero physical cue for the one notification whose
+  whole job is "unattended failure is never silent". Fixed (this channel is new to this feature, not
+  pre-existing code, so unlike the two declined items below it is squarely in scope).
+- **[medium] No upper bound on how far in the future a send can be scheduled** - Material3's
+  DatePicker defaults to an 1900-2100 year range with nothing narrowing it, so a stray far-future tap
+  banked an attachment bucket for a multi-decade span. Added `SCHEDULED_SEND_MAX_HORIZON_MS` (30
+  days, generous for an hours-to-days-out reminder feature) as an authoritative repo-side check
+  (`scheduleSend`/`rescheduleSend`) plus a matching UI-side gate/error text in the picker.
+- **[high, mitigated not fully solved] `RTC_WAKEUP` alarms are wall-clock based and nothing
+  re-evaluates them on a system clock or timezone change** - a backward clock jump silently defers a
+  pending send far past its picked time, with no re-arm and no error. Added `ClockChangeReceiver`
+  (`ACTION_TIME_CHANGED`/`ACTION_TIMEZONE_CHANGED`, both exempt from the Oreo+ implicit-broadcast
+  manifest-registration restrictions) that re-syncs by calling the SAME `kickScheduledSendFire()` the
+  warm alarm path already uses. **Verified for real, not just reasoned through:** ran
+  `su 0 date 010112002030.30` on the live emulator to genuinely jump the system clock, confirmed via
+  logcat that Android delivered the broadcast to this static receiver and that it ran
+  (`ActivityManager: Start proc ... for broadcast {...ClockChangeReceiver}` then this feature's own
+  log line), then restored the real time immediately after. This is a defensive re-sync, not a full
+  fix for the deeper, genuinely ambiguous product question of whether a relative scheduling intent
+  ("10 minutes from when I tapped Schedule") should be preserved across a clock jump at all - that
+  would need banking a relative delta alongside the absolute epoch and deciding what "the user's
+  intent" even means once the two disagree; left as a known, harder follow-up.
+- **[low] Zero automated test coverage existed for any scheduled-send logic.** Added
+  `ScheduledSendTest.kt` covering the pure, cheaply-testable pieces: `countdownText`/
+  `absoluteTimeText`'s boundary cases, and the two notification/request-code hash functions
+  (`scheduledSendRetryRc`, `scheduledSendFailedNotificationId` - bumped from `private` to `internal`
+  for testability, mirroring `IdlePushbackManager`'s own `tierFor`/`nextAlignedMark` precedent for
+  exactly this reason) for determinism, input-distinctness, and declared-range membership. A full
+  `ChatRepository`-level integration test (scheduleSend/fireOne/the retry policy end to end) is NOT
+  included - this project has no Robolectric/mocking library on its test classpath, so exercising an
+  actual `ChatRepository` instance would need a bigger test-infrastructure investment than fits this
+  pass; noted as a real gap, not silently ignored.
+
+Declined, with reasoning (not silently dropped):
+
+- **Reading full attachment bytes into memory before the MAX_OUTGOING_BYTES check** (an OOM risk
+  distinct from the disk-side eager-copy, which IS correctly gated) - confirmed byte-for-byte
+  identical to the pre-existing live `send()` path, not something Phase 2 introduced. A fix belongs
+  to both call sites at once, as its own unrelated change.
+- **No ambient board-level signal once a fire AND its one retry both fail with notifications fully
+  off** - `Message.countsUnread()` is unconditionally `!fromMe`, so a fromMe error row never bumps
+  unread for a live send either; this is an existing, app-wide property, not unique to scheduled-send.
+- **`canNotify()`'s coarse-only permission check and no `setBypassDnd` on either channel** - applies
+  identically to the pre-existing `CHANNEL_MESSAGES`, not a Phase-2-specific gap.
+- **No cap on how many different teams can simultaneously hold a pending schedule** (unlike the
+  gateway's own Phase-1 `DurableOpStore`, deliberately capped with an active sweep). Real, but a
+  proper fix needs its own rejection UX ("too many pending schedules") - deferred as a follow-up
+  rather than designed under this round's time budget; the new 30-day horizon cap at least bounds
+  the DURATION half of the same storage-liability concern.
+
+All fixes rebuilt and re-tested for real after every change in this round (not just at the end):
+`./gradlew compileDebugKotlin testDebugUnitTest assembleDebug --rerun-tasks` - BUILD SUCCESSFUL, all
+42 tasks freshly executed. Reinstalled on the live emulator and relaunched - no crash in logcat.
+
+### Follow-up focused re-check (the two largest rewrites)
+
+Rather than a full second red-team fan-out, one Opus agent re-checked the two largest rewrites from
+this round specifically: the composer-clearing suspend/Boolean redesign, and the per-team
+notification id redesign. The notification redesign came back clean (lock/field fully removed, no
+dangling references, the new id range genuinely disjoint from both the team-message range and the
+unrelated PendingIntent request-code space, the `init` require() correctly enforces it). The
+composer fix surfaced one real, concrete gap:
+
+- **[fixed] The onConfirm continuation can outlive its own dialog.** `scheduleSubmitting`/
+  `scheduleScope` are `ThreadScreen`-scoped, not scoped to the dialog instance - if the user dismissed
+  the dialog while a schedule/reschedule call was still in flight and then reopened a NEW session
+  (fresh Schedule Send, or a dock edit) before the first call resolved, the stale continuation would
+  still run its close-dialog/clear-composer side effects once it finally settled: closing the
+  freshly-reopened SECOND dialog out from under the user, and - on a successful first attempt -
+  wiping whatever text/attachments the second attempt had already typed. Fixed the same way Phase 1's
+  DurableOpStore closes the identical "a stale attempt must recognize a newer one has taken over"
+  shape: a `scheduleDialogGeneration` counter, bumped on every NEW dialog open (menu or dock edit,
+  never on a bare dismiss), captured by the continuation at launch and checked before it commits any
+  side effect. A bare dismiss with no reopen deliberately does NOT bump the generation, so a late
+  success still clears the composer in that milder, non-destructive case (the schedule genuinely
+  went through; only the stale draft text is left sitting unclear until the user notices or types
+  over it) rather than trying to handle every conceivable dismiss/reopen/success timing perfectly.
+  Also added a `try/finally` around the re-enable so it is an explicit guarantee rather than
+  incidental on today's callees happening not to throw.
+
+Rebuilt and re-tested again after this fix: `./gradlew compileDebugKotlin testDebugUnitTest` - BUILD
+SUCCESSFUL.
