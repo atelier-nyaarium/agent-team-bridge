@@ -20,8 +20,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,7 +32,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,6 +41,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
@@ -61,6 +60,7 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.PlayArrow
@@ -99,9 +99,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -116,7 +114,6 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -131,15 +128,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerInputChange
-import androidx.compose.ui.input.pointer.PointerInputScope
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
@@ -147,12 +137,9 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.zIndex
-import kotlin.math.roundToInt
 import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.plugins.PluginManager
 import com.atelier_nyaarium.switchboard.plugins.Plugins
@@ -164,7 +151,7 @@ import com.atelier_nyaarium.switchboard.proto.isComposite
 import com.atelier_nyaarium.switchboard.proto.parseSessionName
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
+import sh.calvin.reorderable.ReorderableRow
 
 /** Process-lifetime repository so chat state survives Activity recreation. */
 object Repo {
@@ -2097,93 +2084,20 @@ fun ScheduleSendDialog(initialAtMillis: Long, submitting: Boolean, onConfirm: (L
 	}
 }
 
-/** Pure step function for the tab drag-reorder gesture: given the current order, the index being
- * dragged, the accumulated horizontal drag offset, and a width lookup, applies zero or more adjacent
- * swaps - looping (rather than one hop per call) so a fast drag that crosses several tabs between
- * gesture callbacks still lands correctly - and returns the resulting (order, draggingIndex,
- * remaining offset). A swap fires once the offset carries the dragged tab past HALF a neighbor's own
- * width, and the neighbor's width is then subtracted/added back so continued dragging stays smooth
- * across a swap rather than jumping. Pure and Compose-free: unit-testable without an emulator, unlike
- * the composable driving it (see MainActivity/tmux-adjacent conventions for this "extract the pure
- * arithmetic" pattern - ScheduledSendTest.kt does the same for countdown/notification-id logic). */
-internal fun stepTabDrag(
-	order: List<String>,
-	draggingIndex: Int,
-	dragOffsetX: Float,
-	widthOf: (String) -> Int,
-): Triple<List<String>, Int, Float> {
-	var ord = order
-	var idx = draggingIndex
-	var offset = dragOffsetX
-	while (true) {
-		val rightIdx = idx + 1
-		val rightWidth = ord.getOrNull(rightIdx)?.let(widthOf) ?: 0
-		if (rightIdx < ord.size && offset > rightWidth / 2f) {
-			ord = ord.toMutableList().apply { add(idx, removeAt(rightIdx)) }
-			idx = rightIdx
-			offset -= rightWidth
-			continue
-		}
-		val leftIdx = idx - 1
-		val leftWidth = ord.getOrNull(leftIdx)?.let(widthOf) ?: 0
-		if (leftIdx >= 0 && offset < -leftWidth / 2f) {
-			ord = ord.toMutableList().apply { add(idx, removeAt(leftIdx)) }
-			idx = leftIdx
-			offset += leftWidth
-			continue
-		}
-		break
-	}
-	return Triple(ord, idx, offset)
-}
-
-/** Hand-rolled tap-vs-hold-then-drag disambiguation on ONE gesture handler, not two competing
- * modifiers. The stock detectDragGesturesAfterLongPress backs off the moment ANY other pointer input
- * handler on the same node consumes so much as a hair of movement during its long-press wait
- * (its internal await bails on `changes.any { it.isConsumed }`) - and Material3's [Tab] carries its
- * own internal press/ripple touch tracking on the same node, which reacted to real touch hardware
- * this way and cancelled the whole gesture back to its original position instead of arming (confirmed
- * on a real device - an emulator's mouse-driven drag did not reproduce it). This version watches only
- * whether the pointer is still down during the wait, never consumption, so Tab's own reaction can no
- * longer cancel it; once the hold is confirmed it consumes every subsequent move itself so Tab cannot
- * also react to the drag portion. */
-private suspend fun PointerInputScope.detectTabHoldDrag(
-	onHoldStart: () -> Unit,
-	onHoldDrag: (change: PointerInputChange, dragAmount: Offset) -> Unit,
-	onHoldEnd: () -> Unit,
-) {
-	awaitEachGesture {
-		val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-		var liftedEarly = false
-		withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-			while (true) {
-				val event = awaitPointerEvent(PointerEventPass.Initial)
-				val change = event.changes.firstOrNull { it.id == down.id }
-				if (change == null || !change.pressed) {
-					liftedEarly = true
-					return@withTimeoutOrNull
-				}
-			}
-		}
-		if (liftedEarly) return@awaitEachGesture
-		onHoldStart()
-		while (true) {
-			val event = awaitPointerEvent(PointerEventPass.Initial)
-			val change = event.changes.firstOrNull { it.id == down.id } ?: break
-			if (!change.pressed) break
-			onHoldDrag(change, change.positionChange())
-			change.consume()
-		}
-		onHoldEnd()
-	}
-}
-
-/** Session tabs, hold-then-drag to reorder. A plain tap still selects via [Tab]'s own onClick; a
- * long-press arms a drag (mirrors [SessionCard]'s long-press-for-strong-haptic convention) that lets
- * the finger carry a tab across its neighbors, swapping the local scratch order live and committing
- * the final order to the repo only once the drag ends - a stale commit racing a tab opened or closed
- * elsewhere is caught by [ChatRepository.reorderTabs]'s own permutation check, not this composable. */
-@OptIn(ExperimentalMaterial3Api::class)
+/** Session tabs, drag the small handle to reorder; tap anywhere else in a tab to select it as
+ * before. Two EARLIER attempts put the drag detector on the whole tab, alongside its own tap
+ * handling (Compose's stock detectDragGesturesAfterLongPress, then a hand-rolled equivalent) - both
+ * failed on a real device: a stock or hand-rolled long-press-drag detector sharing a touch target
+ * with ANY click handler is not reliable in Compose today, confirmed by the fact that the
+ * sh.calvin.reorderable library's own canonical examples hit the identical constraint and always
+ * route the drag gesture to a small dedicated handle with its own separate hit-test bounds, never
+ * the same node as the tap target - see its DragGestureDetector.kt, which uses the exact same stock
+ * detectDragGesturesAfterLongPress internally, so the library's fix is architectural (separate the
+ * two targets), not a smarter gesture algorithm. ReorderableRow (a plain, non-lazy Row - this app
+ * only ever has a handful of open tabs, no need for LazyRow's virtualization) owns the whole
+ * swap/animation lifecycle, so there is no local scratch order or pixel-offset math to keep in sync
+ * here at all; onSettle only fires once a drag is actually dropped, and reorderTabs's own
+ * permutation check still catches a stale commit racing a tab opened or closed elsewhere. */
 @Composable
 private fun ReorderableTabRow(
 	tabs: List<String>,
@@ -2192,62 +2106,45 @@ private fun ReorderableTabRow(
 	onSelect: (String) -> Unit,
 	onReorder: (List<String>) -> Unit,
 ) {
-	var order by remember { mutableStateOf(tabs) }
-	var draggingIndex by remember { mutableStateOf<Int?>(null) }
-	var dragOffsetX by remember { mutableFloatStateOf(0f) }
-	// Keyed by team (not index): a swap changes which team sits at a given visual slot, and a width
-	// must stay attached to the tab it was measured for, not the slot.
-	val tabWidths = remember { mutableStateMapOf<String, Int>() }
 	val strong = rememberStrongHaptic()
-
-	// Re-sync from the source of truth only BETWEEN drags: mid-drag, `order` is this composable's
-	// own scratch copy, and a recomposition triggered by something unrelated (a message arriving, the
-	// composer redrawing) must not fight the finger's still-in-progress reordering.
-	LaunchedEffect(tabs) {
-		if (draggingIndex == null) order = tabs
-	}
-
-	val selectedIndex = order.indexOf(selected).coerceAtLeast(0)
-	PrimaryScrollableTabRow(selectedTabIndex = selectedIndex, edgePadding = 8.dp) {
-		order.forEachIndexed { i, t ->
-			val isDragging = draggingIndex == i
-			Tab(
-				selected = i == selectedIndex,
-				onClick = hapticClick { onSelect(t) },
-				text = { Text(tabLabel(t)) },
+	val scrollState = rememberScrollState()
+	ReorderableRow(
+		list = tabs,
+		onSettle = { fromIndex, toIndex ->
+			onReorder(tabs.toMutableList().apply { add(toIndex, removeAt(fromIndex)) })
+		},
+		modifier = Modifier.horizontalScroll(scrollState).padding(horizontal = 8.dp, vertical = 4.dp),
+		horizontalArrangement = Arrangement.spacedBy(4.dp),
+	) { _, t, _ ->
+		ReorderableItem {
+			val isSelected = t == selected
+			Row(
 				modifier = Modifier
-					.onSizeChanged { size -> tabWidths[t] = size.width }
-					.zIndex(if (isDragging) 1f else 0f)
-					.offset { IntOffset(if (isDragging) dragOffsetX.roundToInt() else 0, 0) }
-					.pointerInput(t) {
-						detectTabHoldDrag(
-							onHoldStart = {
-								draggingIndex = order.indexOf(t)
-								dragOffsetX = 0f
-								strong()
-							},
-							onHoldDrag = { _, dragAmount ->
-								val idx = draggingIndex ?: return@detectTabHoldDrag
-								val (newOrder, newIdx, newOffset) =
-									stepTabDrag(order, idx, dragOffsetX + dragAmount.x) { tabWidths[it] ?: 0 }
-								order = newOrder
-								draggingIndex = newIdx
-								dragOffsetX = newOffset
-							},
-							onHoldEnd = {
-								draggingIndex = null
-								dragOffsetX = 0f
-								if (order != tabs) onReorder(order)
-								// Resync to the source of truth right away rather than waiting on the
-								// next `tabs` change: LaunchedEffect(tabs) only re-fires on a NEW tabs
-								// value, so if `tabs` already changed mid-drag (a tab closed elsewhere)
-								// and reorderTabs's permutation check rejected this stale commit, `order`
-								// would otherwise keep showing the already-closed tab indefinitely.
-								order = tabs
-							},
-						)
+					.clip(RoundedCornerShape(8.dp))
+					.background(if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
+					.clickable(onClick = hapticClick { onSelect(t) })
+					.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+				verticalAlignment = Alignment.CenterVertically,
+			) {
+				Text(
+					tabLabel(t),
+					color = if (isSelected) {
+						MaterialTheme.colorScheme.onSecondaryContainer
+					} else {
+						MaterialTheme.colorScheme.onSurfaceVariant
 					},
-			)
+					style = MaterialTheme.typography.labelLarge,
+				)
+				Icon(
+					Icons.Default.DragHandle,
+					contentDescription = "Reorder ${tabLabel(t)}",
+					tint = MaterialTheme.colorScheme.onSurfaceVariant,
+					modifier = Modifier
+						.padding(start = 4.dp)
+						.size(20.dp)
+						.longPressDraggableHandle(onDragStarted = { strong() }),
+				)
+			}
 		}
 	}
 }
