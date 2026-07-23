@@ -131,8 +131,10 @@ export class DurableOpStore {
 	 * still matches the record's current generation. A mismatch means a newer attempt has since
 	 * taken over this key (the opCache-eviction-during-in-flight tail); this stale attempt's
 	 * failure must not erase that newer attempt's own still-live in-flight marker. Returns whether
-	 * it actually cleared - a caller also holding an in-memory cache keyed the same way (e.g.
-	 * consoleHandler.ts's opCache) uses this to decide whether IT is still safe to evict too. */
+	 * it is now safe for a caller also holding an in-memory cache keyed the same way (e.g.
+	 * consoleHandler.ts's opCache) to evict ITS OWN entry too - true whenever no durable obstacle
+	 * remains (a genuine removal, or the key was already absent), false only when a newer/complete
+	 * record must be left standing. */
 	public clear(conversationId: string, opId: string, generation: number): boolean {
 		const perConv = this.byConversation.get(conversationId);
 		const entry = perConv?.get(opId);
@@ -177,35 +179,31 @@ export class DurableOpStore {
 	}
 
 	private write(conversationId: string, opId: string, record: OpRecord, generation: number): void {
-		let perConv = this.byConversation.get(conversationId);
-		// Delete-then-reinsert (Map iteration is insertion-ordered) moves this conversation to the
-		// END of byConversation, so the conversation cap below evicts by LAST-WRITTEN, not first-
-		// CREATED - a long-lived, actively-used conversation must never be evicted ahead of an idle
-		// one just because it happened to be created first.
-		if (perConv) this.byConversation.delete(conversationId);
-		else perConv = new Map();
-		this.byConversation.set(conversationId, perConv);
-		const conversationsBefore = this.byConversation.size;
-		capFifo(this.byConversation, this.maxConversations);
-		if (this.byConversation.size < conversationsBefore) {
-			console.warn(
-				`[durableOpStore] conversation cap reached (${this.maxConversations}) - evicted the least-recently-written conversation`,
-			);
-		}
-		// Same reasoning one level down: an existing opId's re-write (in-flight -> complete, or a
-		// re-executed in-flight after eviction/crash recovery) must move to the END of perConv too,
-		// or the per-conversation cap below could evict an op that was JUST written ahead of a
-		// genuinely stale sibling that simply happened to be inserted later.
-		if (perConv.has(opId)) perConv.delete(opId);
-		perConv.set(opId, { record, expiresAt: this.now() + this.ttlMs, generation });
-		const opsBefore = perConv.size;
-		capFifo(perConv, this.maxOpsPerConversation);
-		if (perConv.size < opsBefore) {
-			console.warn(
-				`[durableOpStore] ${conversationId.slice(0, 12)} per-conversation op cap reached (${this.maxOpsPerConversation}) - evicted the least-recently-written op record`,
-			);
-		}
+		const perConv = this.byConversation.get(conversationId) ?? new Map<string, Entry>();
+		this.touchCapped(this.byConversation, conversationId, perConv, this.maxConversations, "conversation");
+		this.touchCapped(
+			perConv,
+			opId,
+			{ record, expiresAt: this.now() + this.ttlMs, generation },
+			this.maxOpsPerConversation,
+			`${conversationId.slice(0, 12)} op`,
+		);
 		this.persist();
+	}
+
+	/** Moves `key` to the END of `map`'s insertion order (a plain `Map.set` on an EXISTING key does
+	 * NOT move it) before writing `value` and re-applying the cap - this is what makes the cap
+	 * evict by LAST-WRITTEN recency rather than first-CREATED order, at both nesting levels this
+	 * store uses it (the conversation map, and each conversation's own op map). Warns if the cap
+	 * actually evicted something. */
+	private touchCapped<V>(map: Map<string, V>, key: string, value: V, max: number, label: string): void {
+		if (map.has(key)) map.delete(key);
+		map.set(key, value);
+		const before = map.size;
+		capFifo(map, max);
+		if (map.size < before) {
+			console.warn(`[durableOpStore] ${label} cap reached (${max}) - evicted the least-recently-written entry`);
+		}
 	}
 
 	private persist(): void {

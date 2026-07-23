@@ -286,6 +286,27 @@ ever".
   proper fix (per-conversation-sharded storage, one file per conversation) would remove the
   cross-conversation cost entirely if this becomes a real production bottleneck; out of scope for
   this phase, recorded so it isn't mistaken for an oversight.
+- **Deferred, out of scope: two cross-store extraction opportunities a framework-first pass
+  surfaced, but did not implement here since both would touch already-shipped, unrelated code.**
+  (1) `DurableOpStore`'s generation-token guard (mint a token on begin, gate the eventual "undo"
+  on that same token still being current) is now the THIRD independent hand-rolled instance of
+  this exact mechanism in the codebase - `crossDomainPresence.ts`'s `CoalescedPusher` and
+  `CrossDomainPresenceReconciler` both already do the identical thing with their own `token`/
+  `nextToken` bookkeeping, and both already say so in their own comments ("mirrors CoalescedPusher's
+  own token"). A shared `begin(key)->token` / `isCurrent(key,token)` / `end(key,token)->bool`
+  primitive would remove three parallel re-derivations of the same reasoning - worth building, but
+  as its own follow-up, since it means touching cross-Domain presence's already-shipped code for a
+  DRY win unrelated to this feature. (2) `DurableOpStore.restore()`'s validate-schema/drop-expired/
+  re-apply-live-caps convention is stricter than three siblings that predate it -
+  `DeviceMailboxStore.restore()`/`fromSnapshot()` do no shape validation at all and never re-check
+  `maxDevices`, and `readAnchors.ts`'s `restore()` has the identical gap against
+  `MAX_TEAMS_PER_OWNER`; `SessionStore`/`ReplayGuard` validate shape but never count or log a
+  rejection. Backporting this convention would improve operability (a corrupted/foreign snapshot
+  today silently drops state in three other stores with zero log signal, and since
+  `gateway/index.ts` restores `store`/`mailboxStore`/`sessionStore` inside one shared try/catch, an
+  unvalidated throw in any one of them today would silently discard ALL THREE stores' restored
+  state) - but again is a change to other, unrelated, already-shipped files. Both are real, worth
+  doing, and explicitly NOT done in this phase.
 
 ## Phase 2: Scheduled Send (Android, client-local)
 
