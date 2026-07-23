@@ -907,3 +907,66 @@ different dimensions), 7 distinct confirmed issues, all fixed.
 concurrency change as the one fix in this batch with genuine new-bug risk): 0 findings. All three
 review dimensions - the mutex/suspend-fn correctness, the 5 mechanical UI fixes, and a general
 completeness sweep - independently came back clean.
+
+## Phase 3 implementation - framework-first audit
+
+A framework-first pass (`/framework-first-design` lens - a missing/incomplete architectural pattern,
+not a bug) over the committed diff (`ed289f9`). 6 candidate findings, 4 confirmed, 2 refuted. All 4
+acted on.
+
+- **High, "collapsible section header" was a real, recurring concept built twice from copy-pasted
+  Compose code:** `GatewayHeader` and the new `LinkedFriendHeader` were the same widget wearing two
+  hats - an identical chevron/Row/padding shell, byte-identical ExpandLess/ExpandMore icon handling,
+  differing only in a trailing "how alive is this" slot (a Create button/online-offline text vs a
+  freshness `StatusChip`). The two copies had already silently diverged within this one commit:
+  `LinkedFriendHeader`'s name Text got `maxLines`/`overflow`/`weight` (needed for a friend's free-form
+  displayName) while `GatewayHeader`'s never did - a long gatewayId could still overflow/misalign
+  `GatewayHeader`'s row with no shared fix path back. Passes the ownership test cleanly (a chevron-
+  driven collapsible header with a name and a trailing slot is generic accordion UI, independent of
+  gateways or friends). Fixed: extracted `CollapsibleSectionHeader(name, collapsed, onToggle,
+  trailing)`; both `GatewayHeader` and `LinkedFriendHeader` now delegate to it, and `GatewayHeader`
+  picks up the same `maxLines`/`overflow` guard `LinkedFriendHeader` already had for free.
+- **Medium, hand-rolled lifecycle-observer boilerplate reinvented a first-party Compose API the
+  project already depends on:** this diff's freshness-ticker foreground gate was a THIRD occurrence
+  of the identical `LocalLifecycleOwner` + `DisposableEffect` + `LifecycleEventObserver` +
+  add/removeObserver shape (the other two: the root screen's foreground/background handler,
+  `BatteryExemptionRow`'s resume re-check) - all hand-writing plumbing that
+  `androidx.lifecycle:lifecycle-runtime-compose` (already pinned at 2.8.7, the same artifact
+  `LocalLifecycleOwner` itself comes from) ships purpose-built composables for. Correctly NOT unified
+  into one custom hook: `BatteryExemptionRow` deliberately listens for `ON_RESUME` rather than
+  `ON_START`/`ON_STOP` (its own comment explains why - the battery-optimization system dialog pauses
+  rather than stops the Activity beneath it), so one hook built around the wrong event pair would
+  silently fail exactly where that distinction matters. Fixed: replaced the root screen's block with
+  `LifecycleStartEffect(Unit) { ...; onStopOrDispose { ... } }`, `BatteryExemptionRow`'s with
+  `LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { ... }`, and (see the next finding) removed the
+  freshness ticker's own copy entirely rather than swapping it to a third first-party call.
+- **Medium, the new freshness-foreground flag re-derived a signal `ChatRepository` already owns:**
+  `onForeground()`/`onBackground()` already set a `@Volatile visible` var exposed as `isVisible` - but
+  as a plain getter over a volatile var, not a Compose `State`/`StateFlow`, so no composable could
+  recompose off it. This diff's `freshnessForeground` was a second, fully independent
+  `LocalLifecycleOwner` subscription to the exact same two events, purely to work around that gap.
+  Fixed: promoted foreground-ness into `ChatState` itself (a new `foreground: Boolean` field, updated
+  inside `onForeground()`/`onBackground()` alongside the existing `visible` var) - already flowing
+  through the `ChatState` `SessionsScreen` collects, so the freshness ticker now reads `state.foreground`
+  directly and needs no lifecycle subscription of its own at all (not even the first-party one the
+  sibling finding above would have suggested).
+- **Medium, the presence/freshness color palette was copy-pasted as hex literals instead of a shared
+  design token:** `presenceColor`'s green/amber (`0xFF2EA043`/`0xFFD29922`) and the new
+  `crossDomainFreshnessColor`'s own green/amber were byte-identical, each annotated with a comment
+  admitting the coupling by hand ("matches presenceColor's own...") - a comment standing in for the
+  named constant that should have made the relationship enforced rather than remembered.
+  `HealthHeader` independently duplicated the same pair a third time with no comment at all, making
+  this diff's addition the "rule of three" trigger, not a first-time nitpick. Narrowly scoped to just
+  the 2 genuinely-identical values (not the differently-shaded reds or the mapping functions
+  themselves, which take different input types and shouldn't merge). Fixed: added `STATUS_GREEN`/
+  `STATUS_AMBER` constants; `presenceColor`, `HealthHeader`, and `crossDomainFreshnessColor` all
+  reference them now instead of their own copy of the literal.
+
+**Refuted:** a proposal to extract the 3 new pure helpers (`localSessions`/`adminDomainId`/
+`dedupedFriendSessions`) out of `MainActivity.kt` into a dedicated file never actually surfaced - the
+`pure-helper-organization` dimension came back with zero findings, correctly recognizing this as
+continuing an already-established convention (the file already has several such top-level pure
+helpers, `sessionOrder` among them) rather than a new organizational problem. A second proposal (in
+the `freshness-status-model` dimension, splitting `CrossDomainFreshness`'s label/color derivation
+differently) and a third (in `general-framework-gaps`, a "hand-rolled lifecycle-aware..." proposal
+whose reasoning didn't hold up under verification) were both raised and refuted.

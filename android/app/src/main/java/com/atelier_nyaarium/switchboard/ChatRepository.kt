@@ -484,6 +484,10 @@ data class ChatState(
 	 * present in `labels` is never in this map until it first goes missing. */
 	val teamAbsenceStreaks: Map<String, Int> = emptyMap(),
 	val connected: Boolean = false,
+	/** Mirrors ChatRepository.isVisible, but Compose-reactive: onForeground()/onBackground() update
+	 * this alongside `visible` so a composable can collect it (already flowing through this same
+	 * StateFlow) instead of opening its own LocalLifecycleOwner subscription to re-derive it. */
+	val foreground: Boolean = false,
 	val pollFailStreak: Int = 0,
 	/** Connected Gateway id, learned from the register result. Empty before the first
 	 * federation-aware connect; bare names resolve to the local Gateway in that case. */
@@ -1028,7 +1032,7 @@ class ChatRepository(
 		visible = true
 		resumeBacklogPending = true
 		pollFails = 0
-		_state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L) }
+		_state.update { it.copy(error = null, pollFailStreak = 0, enrollingSince = 0L, foreground = true) }
 		kick.trySend(Unit)
 	}
 
@@ -1036,6 +1040,7 @@ class ChatRepository(
 		visible = false
 		pushback.onBackground(System.currentTimeMillis())
 		declareFocus(FocusIntent(screen = "background"))
+		_state.update { it.copy(foreground = false) }
 	}
 
 	/** Wakes the poll loop immediately - the alarm receiver's bridge into a possibly-parked pass. */

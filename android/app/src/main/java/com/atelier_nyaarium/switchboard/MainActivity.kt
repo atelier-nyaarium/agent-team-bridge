@@ -334,24 +334,14 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	}
 	// Visibility drives the poll cadence; a foreground transition also kicks an
 	// immediate poll and reconciles any sends stranded mid-flight.
-	val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-	DisposableEffect(lifecycleOwner) {
-		val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-			when (event) {
-				androidx.lifecycle.Lifecycle.Event.ON_START -> {
-					repo.onForeground()
-					rendererPool.setVisible(true)
-					scope.launch { repo.reconcilePending() }
-				}
-				androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
-					repo.onBackground()
-					rendererPool.setVisible(false)
-				}
-				else -> {}
-			}
+	androidx.lifecycle.compose.LifecycleStartEffect(Unit) {
+		repo.onForeground()
+		rendererPool.setVisible(true)
+		scope.launch { repo.reconcilePending() }
+		onStopOrDispose {
+			repo.onBackground()
+			rendererPool.setVisible(false)
 		}
-		lifecycleOwner.lifecycle.addObserver(observer)
-		onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
 	}
 	// A notification tap routes straight to its thread.
 	LaunchedEffect(openTeamRequest.value) {
@@ -1191,23 +1181,12 @@ fun SessionsScreen(
 				// freeze at its last-computed verdict indefinitely. Paused while backgrounded (mirroring
 				// this file's own visibility-driven pattern elsewhere): delay() is wall-clock scheduled,
 				// not frame-clock, so it keeps firing on schedule regardless of window visibility unless
-				// explicitly paused.
+				// explicitly paused. Reads state.foreground (kept Compose-reactive by onForeground()/
+				// onBackground() for exactly this purpose) rather than opening a second, independent
+				// LocalLifecycleOwner subscription alongside the app-wide one that already drives it.
 				var freshnessNow by remember { mutableStateOf(System.currentTimeMillis()) }
-				var freshnessForeground by remember { mutableStateOf(true) }
-				val freshnessLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-				DisposableEffect(freshnessLifecycleOwner) {
-					val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-						when (event) {
-							androidx.lifecycle.Lifecycle.Event.ON_START -> freshnessForeground = true
-							androidx.lifecycle.Lifecycle.Event.ON_STOP -> freshnessForeground = false
-							else -> {}
-						}
-					}
-					freshnessLifecycleOwner.lifecycle.addObserver(observer)
-					onDispose { freshnessLifecycleOwner.lifecycle.removeObserver(observer) }
-				}
-				LaunchedEffect(linkedDomains.isNotEmpty(), freshnessForeground) {
-					if (linkedDomains.isEmpty() || !freshnessForeground) return@LaunchedEffect
+				LaunchedEffect(linkedDomains.isNotEmpty(), state.foreground) {
+					if (linkedDomains.isEmpty() || !state.foreground) return@LaunchedEffect
 					while (true) {
 						// Ticks immediately on (re)start, not just after the first 30s - otherwise a
 						// resume from background shows a verdict frozen at its pre-background value for
@@ -1489,13 +1468,13 @@ fun HealthHeader(state: ChatState) {
 		// Enrolled but no Gateway admitted yet is an ONBOARDING state, not a red error: the board
 		// body owns the Add-a-Gateway CTA, so the header stays a calm positive status (no duplicate).
 		state.needsGateway -> Color(0xFF0969DA) to "Enrolled"
-		state.health == ChatState.Health.ONLINE -> Color(0xFF2EA043) to "Bridge online"
+		state.health == ChatState.Health.ONLINE -> STATUS_GREEN to "Bridge online"
 		// Calm blue while a fresh enrollment's allowlist is still syncing to its Gateway -
 		// a normal, self-healing window, not an error.
 		state.health == ChatState.Health.SYNCING -> Color(0xFF0969DA) to (state.error ?: "Finishing enrollment...")
 		// Show the SPECIFIC classified cause (set by classifyConnError) rather than a
 		// blanket label, so the header tells the human exactly what to fix.
-		state.health == ChatState.Health.DEGRADED -> Color(0xFFD29922) to (state.error ?: "Reconnecting...")
+		state.health == ChatState.Health.DEGRADED -> STATUS_AMBER to (state.error ?: "Reconnecting...")
 		else -> Color(0xFFCF222E) to (state.error ?: "Offline")
 	}
 	Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
@@ -1536,11 +1515,17 @@ private fun statusWord(status: String): String = when (status) {
 	else -> "ended"
 }
 
+// Shared status-color tokens: presenceColor, HealthHeader, and crossDomainFreshnessColor all
+// converge on the same live/caution semantics (green = live/fresh/online, amber = working/
+// verifying/stale) - named once here so a future rebrand can't update one copy and miss another.
+private val STATUS_GREEN = Color(0xFF2EA043)
+private val STATUS_AMBER = Color(0xFFD29922)
+
 /** Chip color for the board/thread presence vocabulary. */
 @Composable
 private fun presenceColor(presence: String): Color = when (presence) {
-	"live" -> Color(0xFF2EA043)
-	"working...", "waking...", "verifying" -> Color(0xFFD29922)
+	"live" -> STATUS_GREEN
+	"working...", "waking...", "verifying" -> STATUS_AMBER
 	"available" -> Color(0xFF0969DA)
 	"check terminal" -> Color(0xFFDA3633)
 	else -> MaterialTheme.colorScheme.outline
@@ -1557,14 +1542,16 @@ private fun StatusChip(text: String, color: Color) {
 	}
 }
 
+/** A chevron-driven, collapsible section header: an expand/collapse caret, a name, and a trailing
+ * slot for whatever indicates the section's own liveness (a Create button, an online/offline
+ * label, a freshness chip - the caller owns that content entirely). Shared by GatewayHeader and
+ * LinkedFriendHeader so a future touch-target/icon/overflow tweak lands once, not per copy. */
 @Composable
-private fun GatewayHeader(
+private fun CollapsibleSectionHeader(
 	name: String,
-	online: Boolean,
 	collapsed: Boolean,
 	onToggle: () -> Unit,
-	showCreate: Boolean = false,
-	onCreate: (() -> Unit)? = null,
+	trailing: @Composable () -> Unit,
 ) {
 	Row(
 		Modifier
@@ -1581,8 +1568,28 @@ private fun GatewayHeader(
 			tint = MaterialTheme.colorScheme.onSurfaceVariant,
 		)
 		Spacer(Modifier.width(10.dp))
-		Text(name, style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace)
-		Spacer(Modifier.weight(1f))
+		Text(
+			name,
+			style = MaterialTheme.typography.titleMedium,
+			fontFamily = FontFamily.Monospace,
+			maxLines = 1,
+			overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+			modifier = Modifier.weight(1f),
+		)
+		trailing()
+	}
+}
+
+@Composable
+private fun GatewayHeader(
+	name: String,
+	online: Boolean,
+	collapsed: Boolean,
+	onToggle: () -> Unit,
+	showCreate: Boolean = false,
+	onCreate: (() -> Unit)? = null,
+) {
+	CollapsibleSectionHeader(name, collapsed, onToggle) {
 		if (showCreate && onCreate != null) {
 			// Your own Gateway only - a contained button (not a bare icon) reads as tappable on sight.
 			// Its own click region wins over the row's collapse-toggle for taps landing inside it.
@@ -1603,8 +1610,8 @@ private fun GatewayHeader(
 
 private fun crossDomainFreshnessColor(freshness: CrossDomainFreshness): Color =
 	when (freshness) {
-		CrossDomainFreshness.FRESH -> Color(0xFF2EA043) // green, matches presenceColor's own "live"
-		CrossDomainFreshness.STALE -> Color(0xFFD29922) // amber, matches presenceColor's own "verifying"
+		CrossDomainFreshness.FRESH -> STATUS_GREEN
+		CrossDomainFreshness.STALE -> STATUS_AMBER
 		CrossDomainFreshness.UNKNOWN -> Color(0xFF8B949E) // neutral gray - not yet judgeable, not a warning
 	}
 
@@ -1621,28 +1628,7 @@ private fun crossDomainFreshnessLabel(freshness: CrossDomainFreshness): String =
  * not a simple up-or-down signal. */
 @Composable
 private fun LinkedFriendHeader(name: String, freshness: CrossDomainFreshness, collapsed: Boolean, onToggle: () -> Unit) {
-	Row(
-		Modifier
-			.fillMaxWidth()
-			.clip(MaterialTheme.shapes.small)
-			.hapticClickable(onClick = onToggle)
-			.padding(horizontal = 4.dp, vertical = 8.dp),
-		verticalAlignment = Alignment.CenterVertically,
-	) {
-		Icon(
-			if (collapsed) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-			contentDescription = if (collapsed) "Expand" else "Collapse",
-			tint = MaterialTheme.colorScheme.onSurfaceVariant,
-		)
-		Spacer(Modifier.width(10.dp))
-		Text(
-			name,
-			style = MaterialTheme.typography.titleMedium,
-			fontFamily = FontFamily.Monospace,
-			maxLines = 1,
-			overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-			modifier = Modifier.weight(1f),
-		)
+	CollapsibleSectionHeader(name, collapsed, onToggle) {
 		StatusChip(crossDomainFreshnessLabel(freshness), crossDomainFreshnessColor(freshness))
 	}
 }
@@ -2957,15 +2943,8 @@ private fun BatteryExemptionRow() {
 	val context = LocalContext.current
 	val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
 	var exempt by remember { mutableStateOf(pm.isIgnoringBatteryOptimizations(context.packageName)) }
-	val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-	DisposableEffect(lifecycleOwner) {
-		val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-			if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-				exempt = pm.isIgnoringBatteryOptimizations(context.packageName)
-			}
-		}
-		lifecycleOwner.lifecycle.addObserver(observer)
-		onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+	androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+		exempt = pm.isIgnoringBatteryOptimizations(context.packageName)
 	}
 	Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
 		Text("Background delivery", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
