@@ -3778,6 +3778,14 @@ class ChatRepository(
 		return key
 	}
 
+	/** Replace the open-tabs order wholesale (drag-to-reorder in the tab row). Only applied when
+	 * `newOrder` is still a permutation of the CURRENT tabs: a drag that resolves after a tab closed
+	 * or opened elsewhere (e.g. a notification landing mid-drag) must not resurrect a dropped tab or
+	 * silently drop the new one, so a stale commit is a no-op rather than corrupting the set. */
+	fun reorderTabs(newOrder: List<String>) {
+		_state.update { s -> if (newOrder.toSet() == s.openTabs.toSet()) s.copy(openTabs = newOrder) else s }
+	}
+
 	/** The current first-unread row id and the pointer-region ids (rows still counting toward
 	 * unread) for `team`, derived from the live anchor. Used by the reveal trigger - always AFTER
 	 * flushing any pending debounced receipt, so this reflects what was just read rather than a
