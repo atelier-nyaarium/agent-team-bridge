@@ -20,6 +20,7 @@ class SchemaMigrationWipeTest {
 			"read_anchors",
 			"labels",
 			"drafts",
+			"scheduled_sends",
 			"team_absence_streak",
 			"sync_epoch",
 			"sync_acked",

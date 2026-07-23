@@ -23,6 +23,7 @@ import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { createConsoleDispatcher } from "./console/consoleHandler.js";
 import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer.js";
+import { DurableOpStore } from "./console/durableOpStore.js";
 import { createConsoleRelayPump } from "./console/relayPump.js";
 import { startEvieClient } from "./evie/evieClient.js";
 import { type EvieTransport, evieWsConnection, loadEvieTransport } from "./evie/transport.js";
@@ -155,6 +156,24 @@ export async function startGateway(): Promise<void> {
 	// the console's durable cursor still matches) to DATA_DIR, reload on boot, re-save on a timer.
 	const jobsDurable = new DurableStore(DATA_DIR, "pending-jobs");
 	const mailboxDurable = new DurableStore(DATA_DIR, "mailboxes");
+	// Restart-proof idempotency for send/respond, consulted only on an in-memory opCache miss -
+	// see durableOpStore.ts. Persists synchronously on every state transition (not this file's
+	// usual periodic-tick pattern), so it gets its own DurableStore rather than sharing one of
+	// the tick-driven snapshots above. Constructing it runs restore() synchronously, so it needs
+	// the SAME "a corrupt snapshot must not crash-loop boot" safety net as the sibling stores
+	// below - its own try/catch, since a throw here happens too early to reach their shared one,
+	// and retrying with the same (still-corrupt) durable file would just throw again.
+	const durableOpStore = ((): DurableOpStore => {
+		const opIdempotencyDurable = new DurableStore(DATA_DIR, "op-idempotency");
+		try {
+			return new DurableOpStore(opIdempotencyDurable);
+		} catch (err) {
+			console.error("[durability] op-idempotency restore failed, starting fresh:", err);
+			// load() stubbed to null so restore() sees nothing and starts empty (avoiding the same
+			// throw again); save() still delegates to the real file, so future persists recover it.
+			return new DurableOpStore({ load: () => null, save: (s) => opIdempotencyDurable.save(s) } as DurableStore);
+		}
+	})();
 	// Session records: the durable known-session list (id-keyed, with the Claude harness resume id
 	// so a later wake can `claude --resume <id>`). Entries past this TTL are swept on the persist
 	// timer so the store cannot grow without bound. Mint/adopt ids must never land on a catalog
@@ -203,7 +222,9 @@ export async function startGateway(): Promise<void> {
 		// A corrupt or partial snapshot must not crash-loop boot; start from empty delivery state.
 		console.error("[durability] restore failed, starting fresh:", err);
 	}
-	console.log(`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size} resume=${sessionStore.size}`);
+	console.log(
+		`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size} resume=${sessionStore.size} ops=${durableOpStore.size}`,
+	);
 
 	// This Gateway's own Domain lifecycle metadata, learned from evie's gateway_register reply.
 	// domainStatus tells the app to first-root vs just-provision; displayName lets teams()/discover
@@ -278,6 +299,11 @@ export async function startGateway(): Promise<void> {
 		// full presence rebuild forever for a cutoff (SESSION_RESUME_TTL_MS, 30 days) that removes
 		// something roughly once per record per month.
 		if (sessionStore.sweep(SESSION_RESUME_TTL_MS)) presence.markDirty();
+		// Actively removes TTL-expired op records rather than leaving them as dead weight only
+		// masked at read time - see durableOpStore.ts's own sweep() doc for why this matters (every
+		// OTHER conversation's persist() call re-serializes the whole store, so idle dead weight
+		// inflates everyone else's write cost too).
+		durableOpStore.sweep();
 		sessionResumeDurable.save({
 			sessions: sessionStore.snapshot(),
 			planes: planeRegistry.persistedState(cleanShutdown),
@@ -1165,6 +1191,7 @@ export async function startGateway(): Promise<void> {
 							return { peersRemoved: removed, sharesDropped, jobsExpired };
 						}
 					: undefined,
+			durableOpStore,
 		});
 		handleConsoleRelay = createConsoleRelayPump({
 			sealer: consoleSealer!,

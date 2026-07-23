@@ -206,6 +206,12 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 
 	fun loadDrafts(): String? = prefs.getString(KEY_DRAFTS, null)
 
+	/** At most one pending scheduled send per team, same disposable storage class as drafts
+	 * (no special re-provisioning survival - see plans/scheduled-send.md). */
+	fun saveScheduledSends(json: String) = prefs.edit().putString(KEY_SCHEDULED_SENDS, json).apply()
+
+	fun loadScheduledSends(): String? = prefs.getString(KEY_SCHEDULED_SENDS, null)
+
 	/** The connected Gateway's id, learned from the register result. Anchors the
 	 * composite (gatewayId, name) key; empty until a federation-aware Gateway reports it. */
 	fun saveGatewayId(id: String) = prefs.edit().putString(KEY_GATEWAY_ID, id).apply()
@@ -343,6 +349,7 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 		const val KEY_LABELS = "labels"
 		const val KEY_ABSENCE_STREAKS = "team_absence_streak"
 		const val KEY_DRAFTS = "drafts"
+		const val KEY_SCHEDULED_SENDS = "scheduled_sends"
 		const val KEY_GATEWAY_ID = "gateway_id"
 		const val KEY_IDENTITY = "federation_identity"
 		const val KEY_OWNER_IDENTITY = "federation_owner_identity"
@@ -381,8 +388,8 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 		 * store keys plus the mailbox sync cursor). Any NEW address-keyed pref MUST be added here or it
 		 * survives the grammar migration carrying a stale-grammar key. The set is pinned by a unit test. */
 		val SCHEMA_WIPE_KEYS = listOf(
-			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_ABSENCE_STREAKS, KEY_SYNC_EPOCH, KEY_SYNC_ACKED,
-			KEY_SYNC_DROPPED,
+			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_ABSENCE_STREAKS,
+			KEY_SYNC_EPOCH, KEY_SYNC_ACKED, KEY_SYNC_DROPPED,
 		)
 
 		/** The keys a re-provision wipes. Everything else is preserved by omission (voice creds +
@@ -393,8 +400,8 @@ class AppStateStore(context: Context) : IdleSilenceStore {
 			KEY_BLOB, KEY_IDENTITY, KEY_OWNER_IDENTITY, KEY_DOMAIN, KEY_DOMAIN_VERSION,
 			KEY_CONSOLE_ADMITTED, KEY_FIRST_ROOTED, KEY_ENROLL_CEREMONY_DONE, KEY_PROFILE_NAME, KEY_HOSTED_TENANTS,
 			KEY_TRUSTED_OWNERS,
-			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_GATEWAY_ID, KEY_SYNC_EPOCH, KEY_SYNC_ACKED,
-			KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS,
+			KEY_THREADS, KEY_READ_ANCHORS, KEY_LABELS, KEY_DRAFTS, KEY_SCHEDULED_SENDS, KEY_GATEWAY_ID, KEY_SYNC_EPOCH,
+			KEY_SYNC_ACKED, KEY_SYNC_DROPPED, KEY_ABSENCE_STREAKS,
 		)
 	}
 }

@@ -33,6 +33,7 @@ class ClearProvisioningPartitionTest {
 			"read_anchors",
 			"labels",
 			"drafts",
+			"scheduled_sends",
 			"gateway_id",
 			"sync_epoch",
 			"sync_acked",

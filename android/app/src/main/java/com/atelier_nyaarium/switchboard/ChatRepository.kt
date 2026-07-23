@@ -39,9 +39,11 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
@@ -65,6 +67,38 @@ import org.json.JSONObject
 /** A rendered attachment on a message. `src` is what the WebView loads (a data URI
  * or an appassets-proxied local path); a null `src` renders as a download chip. */
 data class MessageFile(val name: String, val mime: String, val src: String? = null)
+
+/** A banked send waiting for its wall-clock time, keyed by team in ChatState.scheduledSends (at
+ * most one per team - see plans/scheduled-send.md). `opId` is minted at schedule time and carried
+ * all the way to `deliver()`, so the gateway's idempotency cache covers this fire the same as any
+ * live send. `targetDomainId` is resolved once at schedule time (from the same live `teams` entry
+ * the composer had on screen) because `deliver()`'s own internal resolution reads `state.teams`,
+ * which is empty on a cold fire until `connect()` completes - re-deriving it at fire time would
+ * silently break a cross-Domain target. `fileRefs` point at an eagerly-copied attachment bucket
+ * (`sched-$opId`, mirroring `send()`'s own `out-$opId`) so a transient `content://` grant does not
+ * need to outlive the wait. */
+data class ScheduledSend(
+	val text: String,
+	val fileRefs: List<MessageFile>,
+	val fireAtMillis: Long,
+	val opId: String,
+	val targetDomainId: String?,
+	val createdAt: Long,
+)
+
+/** The service-owned alarm side effects a scheduled send needs, mirroring [DeepIdleScheduler]'s
+ * seam so [ChatRepository] never needs a raw Context. [scheduleNext]/[cancelNext] arm the single
+ * shared "next-due" wakeup (always the earliest pending record across every team - see
+ * `rearmScheduledSendAlarm`); [scheduleRetry] arms one team's bounded one-shot retry after a failed
+ * fire, keyed independently per team (never a single shared slot) so two teams failing around the
+ * same time cannot silently clobber each other's retry. */
+interface ScheduledSendAlarmScheduler {
+	fun scheduleNext(atMillis: Long)
+
+	fun cancelNext()
+
+	fun scheduleRetry(atMillis: Long, team: String, opId: String, targetDomainId: String?)
+}
 
 /** A data-plane consumer of new inbound messages, invoked once per message at the drain gate. */
 fun interface InboundSubscriber {
@@ -522,6 +556,10 @@ data class ChatState(
 	 * cause - writing a one-off message there would bleed into an unrelated later health render.
 	 * Consumed via consumeTransientMessage(). */
 	val transientMessage: String? = null,
+	/** At most one pending scheduled send per team - see [ScheduledSend]. A ChatState field (not a
+	 * bare ChatRepository map like `drafts`) so the dock indicator and the session-tile clock icon
+	 * are Compose-reactive the same way `unread`/`labels` already are. */
+	val scheduledSends: Map<String, ScheduledSend> = emptyMap(),
 	/** (project, label) pairs with a spawnSession() call currently in flight. Distinct from the
 	 * longer-lived opId retry window (recentSpawnOpIds): this is only "has not settled yet", so the
 	 * spawn dialog can refuse a second identical submission while the first is still resolving rather
@@ -857,6 +895,7 @@ class ChatRepository(
 			localGatewayId = localGatewayId,
 			displayName = store.displayName,
 			firstRooted = store.firstRooted,
+			scheduledSends = loadPersistedScheduledSends(),
 		),
 	)
 	val state: StateFlow<ChatState> = _state
@@ -906,6 +945,30 @@ class ChatRepository(
 	// service wires its own scheduler (alarm + wakelock side effects) in after construction, the
 	// same pattern as onInbound below.
 	val pushback = IdlePushbackManager(store, System.currentTimeMillis()) { ZoneId.systemDefault() }
+	// Wired by the service, mirroring pushback's own scheduler seam.
+	@Volatile var scheduledSendScheduler: ScheduledSendAlarmScheduler? = null
+	// Serializes fireDueScheduledSends() so the cold-boot chain's own unconditional call and a
+	// warm alarm-kick's call can never both convert the same due record into two duplicate rows -
+	// the exact double-fire shape Phase 1's DurableOpStore exists to close for send/respond, applied
+	// here at the client layer instead. Ordinary schedule/cancel/edit mutations do NOT take this
+	// lock (they are plain, fast, _state.update-only ops like every other mutation in this file);
+	// only the fire path's check-then-convert sequence needs the exclusion.
+	private val scheduledSendFireMutex = Mutex()
+	// Always available from construction, independent of pollScope (null until startPolling runs)
+	// and of SwitchboardService's own lifecycle - a receiver-triggered fire kick must never be a
+	// silent no-op the way scheduleAttachmentDelete's best-effort pollScope?.launch is allowed to be
+	// (a missed scheduled send has no "next cold start heals it" backstop the way an orphan
+	// attachment delete does). Never cancelled: ChatRepository is a bare process singleton with no
+	// teardown of its own, so this lives for the process's lifetime, same as the singleton itself.
+	private val repoScope = CoroutineScope(
+		SupervisorJob() + Dispatchers.IO +
+			CoroutineExceptionHandler { _, e ->
+				DebugLog.log("ScheduledSend", "uncaught in repo scope: ${e.javaClass.simpleName}: ${e.message}")
+			},
+	)
+	/** Set by the service: called when a scheduled send's bounded one-shot retry also fails, so the
+	 * service (which owns NotificationManager) can post the failure notice. Mirrors [onInbound]. */
+	var onScheduledSendFailed: ((team: String, opId: String) -> Unit)? = null
 	// The Domain trust anchor: owner root key, console member identity, and the keyring
 	// the Console resolves every Gateway against before sealing to it.
 	private val federation = FederationManager(store)
@@ -2926,8 +2989,11 @@ class ChatRepository(
 	/** Re-send a failed message, rebuilding attachment bytes from their local
 	 * copies. The error -> pending flip is the atomic claim: a double-tap's second
 	 * coroutine finds the row already pending and backs off, so the wire send runs
-	 * once. The original opId is reused so the gateway dedupes a lost-reply retry. */
-	suspend fun retrySend(team: String, messageId: Long) = withContext(Dispatchers.IO) {
+	 * once. The original opId is reused so the gateway dedupes a lost-reply retry.
+	 * `targetDomainOverride` is passed straight through to [deliver] - used by a scheduled send's
+	 * own bounded retry, whose banked targetDomainId must survive a cold process the same way the
+	 * original fire itself does (state.teams is empty until connect() completes). */
+	suspend fun retrySend(team: String, messageId: Long, targetDomainOverride: String? = null) = withContext(Dispatchers.IO) {
 		var claimed = false
 		_state.update { s ->
 			val thread = s.threads[team] ?: return@update s.also { claimed = false }
@@ -2953,7 +3019,216 @@ class ChatRepository(
 		if (files.size < msg.files.size) {
 			_state.update { it.copy(error = "Some attachments are no longer on this device; resending the rest.") }
 		}
-		deliver(team, messageId, msg.text, files, msg.opId ?: java.util.UUID.randomUUID().toString(), null)
+		deliver(team, messageId, msg.text, files, msg.opId ?: java.util.UUID.randomUUID().toString(), null, targetDomainOverride)
+	}
+
+	/** Bank `text`/`uris` as a scheduled send for `team`, firing at `fireAtMillis` on its own even if
+	 * the app is backgrounded or killed in the meantime (plans/scheduled-send.md). Replaces any
+	 * existing scheduled send for this team - the dock is the sole edit/reschedule surface, so a
+	 * second `Schedule Send` on an already-scheduled team is a deliberate replace, not a queue. Any
+	 * `content://` uri is eagerly copied into its own bucket now (a transient grant may not outlive
+	 * the wait); `targetDomainId` is resolved now too, from the same live `teams` entry the composer
+	 * has on screen - `deliver()`'s own internal resolution reads `state.teams`, empty on a cold fire
+	 * until `connect()` completes, so re-deriving it at fire time would silently drop a cross-Domain
+	 * target. Returns false (nothing banked) for a non-future time or oversized attachments.  */
+	suspend fun scheduleSend(team: String, text: String, uris: List<Uri>, fireAtMillis: Long): Boolean =
+		withContext(Dispatchers.IO) {
+			val now = System.currentTimeMillis()
+			if (fireAtMillis <= now) {
+				// Reachable in practice, not just in theory: the dialog's own gate is evaluated once per
+				// recomposition and never re-checked against a live clock while the user idles on the
+				// picker - an error here (matching the oversized-attachment branch below) is the caller's
+				// only signal that nothing was banked, since silently returning false with no error would
+				// leave the user believing a send went out that never did.
+				_state.update { it.copy(error = "That time has already passed - try scheduling again.") }
+				return@withContext false
+			}
+			if (fireAtMillis - now > SCHEDULED_SEND_MAX_HORIZON_MS) {
+				_state.update { it.copy(error = "Can't schedule more than 30 days out.") }
+				return@withContext false
+			}
+			val picked = uris.mapNotNull { readUri(it) }
+			val total = picked.sumOf { it.bytes.size }
+			if (total > MAX_OUTGOING_BYTES) {
+				_state.update { it.copy(error = "Attachments too large (max ${MAX_OUTGOING_BYTES / 1_000_000} MB).") }
+				return@withContext false
+			}
+			val opId = java.util.UUID.randomUUID().toString()
+			val fileRefs = Attachments.storeOutgoing(filesDir, "sched-$opId", picked)
+			val adminDomain = confirmedDomainId()
+			val canonical = canonicalTarget(team)
+			val targetDomainId = _state.value.teams
+				.firstOrNull { it.name == canonical }
+				?.domainId
+				?.takeIf { it.isNotEmpty() && adminDomain != null && it != adminDomain }
+			val rec = ScheduledSend(text, fileRefs, fireAtMillis, opId, targetDomainId, System.currentTimeMillis())
+			val prior = _state.value.scheduledSends[team]
+			val next = _state.updateAndGet { s -> s.copy(scheduledSends = s.scheduledSends + (team to rec)) }.scheduledSends
+			persistScheduledSends(next)
+			rearmScheduledSendAlarm(next)
+			// A replace's old bucket is now unreferenced - clean it up the same way forget() does,
+			// never inline (best-effort, off pollScope, healed by the next sweepOrphanAttachments if
+			// this misses its narrow pollScope-null window).
+			prior?.let { scheduleAttachmentDelete(it.fileRefs.mapNotNull { f -> f.src }) }
+			true
+		}
+
+	/** Cancel team's scheduled send (if any): clears the record, re-arms the alarm to whatever is now
+	 * earliest (or cancels it if nothing remains), and deletes the now-orphaned attachment bucket -
+	 * UNLESS a fire already raced ahead of this cancel and claimed the same opId into a live thread
+	 * row first (fireOne appends that row, deliberately, BEFORE it clears the record - see fireOne's
+	 * own doc - so there is a real window where both the record and the row briefly coexist). This
+	 * function is not mutex-guarded against fireOne (making it suspend to share scheduledSendFireMutex
+	 * would ripple into every UI call site), so the two can genuinely interleave; the check below is
+	 * what keeps that interleaving safe rather than deleting files a live row now depends on. */
+	fun cancelScheduledSend(team: String) {
+		val prior = clearScheduledSendRecord(team) ?: return
+		val claimedByLiveRow = _state.value.threads[team]?.any { it.opId == prior.opId } == true
+		if (!claimedByLiveRow) scheduleAttachmentDelete(prior.fileRefs.mapNotNull { it.src })
+	}
+
+	/** Change ONLY the fire time of team's existing scheduled send - the dock's tap-to-edit action.
+	 * Deliberately narrower than a full text/attachment re-edit: the banked fileRefs are already-
+	 * copied MessageFile refs, not the live content:// uris scheduleSend takes, so folding a fuller
+	 * edit through that same call without a dedicated seam would risk silently dropping them. A
+	 * plain time change has no such mismatch - text/fileRefs/opId/targetDomainId all carry over via
+	 * copy(). Returns false (no-op) for a non-future time or if nothing is currently scheduled. */
+	fun rescheduleSend(team: String, fireAtMillis: Long): Boolean {
+		val now = System.currentTimeMillis()
+		if (fireAtMillis <= now) {
+			// Same reachable-in-practice race as scheduleSend's own past-time branch (the dialog's own
+			// gate can go stale while the user idles on the picker) - the existing record is left with
+			// its old time rather than destroyed, but the user still needs to know the pick did not
+			// take effect.
+			_state.update { it.copy(error = "That time has already passed - try scheduling again.") }
+			return false
+		}
+		if (fireAtMillis - now > SCHEDULED_SEND_MAX_HORIZON_MS) {
+			_state.update { it.copy(error = "Can't schedule more than 30 days out.") }
+			return false
+		}
+		val prior = _state.value.scheduledSends[team] ?: return false
+		val next = _state.updateAndGet { s ->
+			s.copy(scheduledSends = s.scheduledSends + (team to prior.copy(fireAtMillis = fireAtMillis)))
+		}.scheduledSends
+		persistScheduledSends(next)
+		rearmScheduledSendAlarm(next)
+		return true
+	}
+
+	/** Remove team's scheduled-send record from state + persistence and re-arm the alarm, WITHOUT
+	 * touching its attachment bucket - the fire path (below) transfers that bucket's ownership to a
+	 * live thread row instead of orphaning it, so only the user-facing cancel/replace paths delete
+	 * it. Returns the removed record (if any) so the caller decides. */
+	private fun clearScheduledSendRecord(team: String): ScheduledSend? {
+		val prior = _state.value.scheduledSends[team] ?: return null
+		val next = _state.updateAndGet { s -> s.copy(scheduledSends = s.scheduledSends - team) }.scheduledSends
+		persistScheduledSends(next)
+		rearmScheduledSendAlarm(next)
+		return prior
+	}
+
+	/** Re-arm the single shared "next-due" alarm to the earliest fireAtMillis across every team's
+	 * record, or cancel it once none remain. Called after every mutation to scheduledSends. */
+	private fun rearmScheduledSendAlarm(current: Map<String, ScheduledSend> = _state.value.scheduledSends) {
+		val next = current.values.minOfOrNull { it.fireAtMillis }
+		if (next != null) scheduledSendScheduler?.scheduleNext(next) else scheduledSendScheduler?.cancelNext()
+	}
+
+	/** Bounded wait for the service to finish wiring [scheduledSendScheduler] (and
+	 * [onScheduledSendFailed]) via SwitchboardService.onCreate's own synchronous
+	 * `repo.scheduledSendScheduler = this` line. Only the WARM kicks below need this: a dead-process
+	 * revival's alarm receiver calls SwitchboardService.start(context) - which only REQUESTS an
+	 * async service start; onCreate() itself runs later on the main thread - and then, in the same
+	 * onReceive call, kicks straight into [repoScope], which has no dependency on onCreate having
+	 * run at all. Without this wait, a fire that fails (or a retry that fails) in that narrow window
+	 * would find scheduledSendScheduler/onScheduledSendFailed still null and silently skip arming the
+	 * retry or posting the failure notification - the one thing this feature promises never to do
+	 * silently. The cold-boot chain's own direct fireDueScheduledSends() call never needs this: it
+	 * runs later in the SAME onCreate() that already set scheduledSendScheduler synchronously,
+	 * earlier in that function. Gives up after a bounded wait rather than forever - an unprovisioned
+	 * device's onCreate() calls stopSelf() immediately and never wires anything, and this must not
+	 * leak a coroutine on repoScope forever in that case; proceeding anyway after the deadline just
+	 * means scheduleRetry/onScheduledSendFailed stay no-ops for this one attempt, same as today. */
+	private suspend fun awaitSchedulerWired() {
+		val deadline = System.currentTimeMillis() + SCHEDULER_WIRE_WAIT_MS
+		while (scheduledSendScheduler == null && System.currentTimeMillis() < deadline) delay(50)
+	}
+
+	/** Entry point for a WARM alarm kick - a BroadcastReceiver cannot suspend, so this launches on
+	 * [repoScope] (always available, unlike [pollScope]) rather than awaiting inline. The cold-boot
+	 * chain instead awaits [fireDueScheduledSends] directly as its own unconditional step (see
+	 * SwitchboardService.onCreate). Both funnel through the same mutex-guarded function, so a warm
+	 * kick can never double-convert the same due record with a concurrent cold-chain call - but the
+	 * mutex alone does NOT guarantee the warm kick waits for connect() to have run first (see
+	 * awaitSchedulerWired's own doc for why, and plans/scheduled-send.md's implementation notes for
+	 * why that residual ordering gap is accepted rather than more heavily engineered around). */
+	fun kickScheduledSendFire() {
+		repoScope.launch {
+			awaitSchedulerWired()
+			fireDueScheduledSends()
+		}
+	}
+
+	/** Convert every currently-due scheduled send into a live, delivered (or delivering) row, then
+	 * re-arm the alarm to whatever is next. Safe to call with nothing due - the cold-boot chain calls
+	 * this unconditionally on every start (connect() swallows its own failures internally and must
+	 * not gate this, or an offline cold fire would never reach deliver()'s failure path and the
+	 * bounded-retry policy below would never trigger). */
+	suspend fun fireDueScheduledSends() = scheduledSendFireMutex.withLock {
+		while (true) {
+			val now = System.currentTimeMillis()
+			val due = _state.value.scheduledSends.entries.firstOrNull { it.value.fireAtMillis <= now } ?: break
+			fireOne(due.key, due.value)
+		}
+		rearmScheduledSendAlarm()
+	}
+
+	/** Convert one due record into a row and attempt delivery. Idempotent against a crash between
+	 * appending the row and clearing the record: a re-arm that finds the row already present (by
+	 * opId - persisted per row, so this check survives restarts) treats it as already-fired and only
+	 * finishes the clear, never re-appending or re-delivering. */
+	private suspend fun fireOne(team: String, rec: ScheduledSend) {
+		val alreadyFired = _state.value.threads[team]?.any { it.opId == rec.opId } == true
+		if (!alreadyFired) {
+			val echoId = append(
+				team,
+				Message(true, rec.text, System.currentTimeMillis(), files = rec.fileRefs, status = "pending", opId = rec.opId),
+			)
+			// clearScheduledSendRecord, not cancelScheduledSend: the bucket's ownership just
+			// transferred to the row above, so deleting it here would strand that row's attachments.
+			clearScheduledSendRecord(team)
+			val picked = rebuildFiles(rec.fileRefs)
+			deliver(team, echoId, rec.text, picked, rec.opId, null, rec.targetDomainId)
+			if (_state.value.threads[team]?.firstOrNull { it.opId == rec.opId }?.status == "error") {
+				val at = System.currentTimeMillis() + SCHEDULED_SEND_RETRY_DELAY_MS
+				scheduledSendScheduler?.scheduleRetry(at, team, rec.opId, rec.targetDomainId)
+			}
+		} else {
+			clearScheduledSendRecord(team)
+		}
+		// Sending is a strong signal of imminent live interaction - the same nudge onForeground()
+		// gives the idle-pushback ladder, without foreground's other side effects (this may well be
+		// firing while genuinely backgrounded).
+		pushback.onCommsActivity(System.currentTimeMillis(), visible)
+	}
+
+	/** The warm alarm kick for one team's bounded one-shot retry after a failed fire (see [fireOne]).
+	 * Resolves the row fresh by opId, never by a banked Message.id - ids are reassigned densely on
+	 * every load, so an id banked in the retry alarm's PendingIntent would go stale across a process
+	 * death between arming and firing. A row not found in "error" state (already retried by hand,
+	 * forgotten, or - defensively - still pending) is left alone; posts the failure notification only
+	 * if THIS retry also fails, never on the happy path. */
+	fun kickScheduledSendRetry(team: String, opId: String, targetDomainId: String?) {
+		repoScope.launch {
+			awaitSchedulerWired()
+			val id = _state.value.threads[team]?.firstOrNull { it.opId == opId && it.status == "error" }?.id
+				?: return@launch
+			retrySend(team, id, targetDomainId)
+			if (_state.value.threads[team]?.firstOrNull { it.opId == opId }?.status == "error") {
+				onScheduledSendFailed?.invoke(team, opId)
+			}
+		}
 	}
 
 	/** Run the wire send and settle the echo row's state from the outcome. On success the cold-wake
@@ -2968,6 +3243,7 @@ class ChatRepository(
 		picked: List<OutgoingFile>,
 		opId: String,
 		placeholderId: Long?,
+		targetDomainOverride: String? = null,
 	) {
 		var succeeded = false
 		fun fail(message: String?) {
@@ -2977,13 +3253,18 @@ class ChatRepository(
 		try {
 			// A cross-Domain target carries the friend Domain id from its discovery entry, so the
 			// gateway resolves the seal target by the full (domainId, gatewayId) pair; a local /
-			// same-Domain session resolves to null and keeps the existing routing.
-			val adminDomain = confirmedDomainId()
-			val canonical = canonicalTarget(team)
-			val targetDomain = _state.value.teams
-				.firstOrNull { it.name == canonical }
-				?.domainId
-				?.takeIf { it.isNotEmpty() && adminDomain != null && it != adminDomain }
+			// same-Domain session resolves to null and keeps the existing routing. A cold scheduled-
+			// send fire supplies targetDomainOverride instead: state.teams is empty until connect()
+			// completes, so re-deriving here would silently drop a cross-Domain target banked at
+			// schedule time (see ScheduledSend.targetDomainId).
+			val targetDomain = targetDomainOverride ?: run {
+				val adminDomain = confirmedDomainId()
+				val canonical = canonicalTarget(team)
+				_state.value.teams
+					.firstOrNull { it.name == canonical }
+					?.domainId
+					?.takeIf { it.isNotEmpty() && adminDomain != null && it != adminDomain }
+			}
 			val r = client().send(team, text, picked, opId, targetDomain)
 			when {
 				!r.ok -> fail(r.error)
@@ -3017,7 +3298,11 @@ class ChatRepository(
 
 	/** Rebuild outgoing bytes from the local attachment copies stored at first
 	 * send; files whose copies are gone are dropped (caller decides how loudly). */
-	private fun rebuildFiles(msg: Message): List<OutgoingFile> = msg.files.mapNotNull { f ->
+	private fun rebuildFiles(msg: Message): List<OutgoingFile> = rebuildFiles(msg.files)
+
+	/** Same rebuild, from a bare file-ref list - shared with a scheduled send's eagerly-copied
+	 * bucket, which has no Message row to rebuild from until the fire itself appends one. */
+	private fun rebuildFiles(files: List<MessageFile>): List<OutgoingFile> = files.mapNotNull { f ->
 		val file = Attachments.fileFor(filesDir, f.src) ?: return@mapNotNull null
 		runCatching { OutgoingFile(f.name, f.mime, file.readBytes()) }.getOrNull()
 	}
@@ -3443,13 +3728,16 @@ class ChatRepository(
 	 * run this to completion before the poll loop starts (see SwitchboardService.onCreate) -
 	 * concurrently with a drain, a bucket this sweep captures as unreferenced could be
 	 * re-decoded into by a crash re-drain before the delete lands, which Attachments.
-	 * sweepOrphanBuckets's own age/mtime guard alone cannot prevent. */
+	 * sweepOrphanBuckets's own age/mtime guard alone cannot prevent. A scheduled send's own eagerly-
+	 * copied bucket is deliberately not a thread row until it fires, so its fileRefs must join the
+	 * referenced set too - otherwise a record waiting out a long alarm (or several service restarts)
+	 * looks orphaned and gets swept out from under it, and the eventual fire sends text-only. */
 	suspend fun sweepOrphanAttachments() = withContext(Dispatchers.IO) {
 		val referencedSrcs = _state.value.threads.values.asSequence()
 			.flatMap { it.asSequence() }
 			.flatMap { it.files.asSequence() }
 			.map { it.src }
-			.toList()
+			.toList() + _state.value.scheduledSends.values.flatMap { it.fileRefs }.map { it.src }
 		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs)
 	}
 
@@ -3696,6 +3984,8 @@ class ChatRepository(
 		persistLabels(next.labels)
 		drafts.remove(key)
 		persistDrafts()
+		// Nothing left to send it into - clears the record, re-arms the alarm, and drops its bucket.
+		cancelScheduledSend(key)
 		stts.purge(key)
 		// Deliberately its OWN unconditional call, not nested in the local-gateway gate below -
 		// the files are local no matter where the session lives, unlike the gateway RPC.
@@ -3757,6 +4047,11 @@ class ChatRepository(
 		localGatewayId = ""
 		mailboxSync.clearInMemory()
 		_state.update { ChatState(provisioned = false) }
+		// The fresh ChatState() above already resets scheduledSends to empty (and its own key is
+		// wiped from disk, being in PROVISIONING_KEYS) - only the OS-level alarm resource needs an
+		// explicit cancel. A stray late fire/retry after this would be harmless regardless (both
+		// re-check live state fresh and no-op on a miss), this just avoids a pointless wakeup.
+		scheduledSendScheduler?.cancelNext()
 	}
 
 	private fun append(team: String, msg: Message): Long {
@@ -4035,6 +4330,62 @@ class ChatRepository(
 		}.getOrDefault(emptyMap())
 	}
 
+	private fun scheduledSendsJson(records: Map<String, ScheduledSend>): String {
+		val root = JSONObject()
+		for ((team, rec) in records) {
+			val files = JSONArray()
+			for (f in rec.fileRefs) files.put(JSONObject().put("name", f.name).put("mime", f.mime).putOpt("src", f.src))
+			root.put(
+				team,
+				JSONObject()
+					.put("text", rec.text)
+					.put("files", files)
+					.put("fireAt", rec.fireAtMillis)
+					.put("opId", rec.opId)
+					.putOpt("targetDomainId", rec.targetDomainId)
+					.put("createdAt", rec.createdAt),
+			)
+		}
+		return root.toString()
+	}
+
+	private fun persistScheduledSends(records: Map<String, ScheduledSend>) {
+		runCatching { store.saveScheduledSends(scheduledSendsJson(records)) }
+	}
+
+	/** Same disposable storage class as drafts/labels (no special re-provisioning survival - see
+	 * plans/scheduled-send.md); a corrupt or legacy-grammar row is dropped rather than risked as a
+	 * bogus immediate fire (a blank opId or a non-positive fireAt reads as "already due"). Each row
+	 * parses under its OWN runCatching, not one wrapping the whole loop - a single malformed team
+	 * entry (a torn/partial SharedPreferences write, a future schema mismatch) must not throw away
+	 * every OTHER team's still-good record too. That would not just lose data quietly: the next cold
+	 * start's unconditional fireDueScheduledSends() would find nothing due and call
+	 * rearmScheduledSendAlarm(), which cancels the real, still-armed AlarmManager alarm for every
+	 * affected team when the map comes back smaller than it should be. */
+	private fun loadPersistedScheduledSends(): Map<String, ScheduledSend> {
+		val json = store.loadScheduledSends() ?: return emptyMap()
+		val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyMap()
+		return buildMap {
+			for (rawKey in root.keys()) {
+				if (!isAddressKey(rawKey)) continue
+				runCatching {
+					val obj = root.getJSONObject(rawKey)
+					val opId = obj.optString("opId")
+					val fireAt = obj.optLong("fireAt")
+					if (opId.isEmpty() || fireAt <= 0L) return@runCatching null
+					ScheduledSend(
+						text = obj.optString("text"),
+						fileRefs = loadFiles(obj),
+						fireAtMillis = fireAt,
+						opId = opId,
+						targetDomainId = obj.optString("targetDomainId").takeIf { it.isNotEmpty() },
+						createdAt = obj.optLong("createdAt"),
+					)
+				}.getOrNull()?.let { put(rawKey, it) }
+			}
+		}
+	}
+
 	private fun persistAbsenceStreaks(streak: Map<String, Int>) {
 		val root = JSONObject()
 		for ((team, count) in streak) root.put(team, count)
@@ -4100,6 +4451,28 @@ class ChatRepository(
 		// a total, not a stricter per-file cap. Pinned by ChatRepositoryConstantsTest - update
 		// both sides together.
 		const val MAX_OUTGOING_BYTES = 500_000_000
+
+		// A scheduled send's own bounded failure recovery (plans/scheduled-send.md): reconcilePending
+		// only mops up an INTERRUPTED (still-"pending") attempt, never a settled "error", so a fire
+		// that fails outright gets exactly one automatic retry this far out before falling back to
+		// the tap-to-retry error row + a local notification. Long enough that a momentary blip (the
+		// phone waking from deep doze with no signal yet) has genuinely cleared by the time it fires.
+		internal const val SCHEDULED_SEND_RETRY_DELAY_MS = 5 * 60_000L
+
+		// How long a warm alarm kick waits for SwitchboardService.onCreate's synchronous scheduler
+		// wiring before giving up and proceeding anyway (see awaitSchedulerWired). Sized to comfortably
+		// outlast onCreate's own synchronous prefix (createChannels + startInForeground + the
+		// provisioned check + wiring the two callbacks) - all in-memory/local work, no network -
+		// while staying short enough that a genuinely-never-wired case (unprovisioned, stopSelf()
+		// before wiring anything) does not meaningfully delay this attempt's own failure handling.
+		internal const val SCHEDULER_WIRE_WAIT_MS = 5_000L
+
+		// The picker's own DatePicker imposes no upper bound of its own (Material3's default year
+		// range is 1900-2100), so without one here a stray far-future pick banks its attachment
+		// bucket for an effectively unbounded duration - this feature is meant for hours-to-days-out
+		// reminders, not permanent storage commitments. 30 days is generous for the stated use case
+		// while keeping the worst case bounded.
+		internal const val SCHEDULED_SEND_MAX_HORIZON_MS = 30L * 24 * 60 * 60_000L
 
 		// Comfortably past create_session's own ~25s cold-container bound (src/gateway/console/
 		// consoleHandler.ts: CREATE_SESSION_BOUND_MS), so a reply that arrives late (rather than

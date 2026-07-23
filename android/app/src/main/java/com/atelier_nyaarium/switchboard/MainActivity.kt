@@ -18,6 +18,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -71,15 +72,19 @@ import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.TimePicker
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -99,6 +104,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -126,10 +133,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.plugins.PluginManager
 import com.atelier_nyaarium.switchboard.plugins.Plugins
@@ -595,12 +604,17 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onSend = { text, uris -> scope.launch { repo.send(openTeam!!, text, uris) } },
 				initialDraft = repo.draft(openTeam!!),
 				onDraftChange = { repo.setDraft(openTeam!!, it) },
+				scheduledSend = state.scheduledSends[openTeam!!],
+				onScheduleSend = { text, uris, at -> repo.scheduleSend(openTeam!!, text, uris, at) },
+				onReschedule = { at -> repo.rescheduleSend(openTeam!!, at) },
+				onCancelScheduledSend = { repo.cancelScheduledSend(openTeam!!) },
 				onRename = { name -> scope.launch { repo.rename(openTeam!!, name) } },
 				onForget = {
 					val forgotten = openTeam!!
 					pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, forgotten) }
 					repo.forget(forgotten)
 					SwitchboardService.cancelTeamNotification(context, forgotten)
+					SwitchboardService.cancelScheduledSendFailedNotification(context, forgotten)
 					openTeam = null
 				},
 				// A LOCAL composite session has a daemon-drivable pane; remote-Gateway is gated off in v1,
@@ -651,6 +665,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, team) }
 					repo.forget(team)
 					SwitchboardService.cancelTeamNotification(context, team)
+					SwitchboardService.cancelScheduledSendFailedNotification(context, team)
 				},
 				// Fire the create and stay on the board: the gateway adopts the session's record
 				// synchronously and bumps the presence plane with it, so its own tile appears via this
@@ -1795,6 +1810,16 @@ fun SessionCard(
 					modifier = Modifier.weight(1f).clearAndSetSemantics { contentDescription = "$display, $presenceDescription" },
 				)
 				if (checkTerminal) StatusChip("check terminal", presenceColor("check terminal"))
+				// Visible from the board without opening the thread (plans/scheduled-send.md) - the
+				// dock inside the thread is still the sole edit/cancel surface, this is read-only.
+				if (state.scheduledSends.containsKey(team.name)) {
+					Icon(
+						Icons.Default.Schedule,
+						contentDescription = "Scheduled send pending",
+						tint = MaterialTheme.colorScheme.onSurfaceVariant,
+						modifier = Modifier.size(16.dp),
+					)
+				}
 				// Plugin-version chip: shown only when the agent's running plugin differs from
 				// this app's expected version (BuildConfig.VERSION_NAME, derived from the same
 				// package.json the build reads). Not a warning - the host auto-updates daily, so
@@ -1888,6 +1913,174 @@ private fun relativeTime(at: Long): String {
 	}
 }
 
+/** A scheduled send's remaining wait, coarsest-unit-first (plans/scheduled-send.md's "live-ish"
+ * countdown - recomputed roughly every minute by the caller, not truly live-ticking). Unlike
+ * [relativeTime] (a "time since" delta, which reads negative/nonsensical for a FUTURE instant),
+ * this takes an already-computed remaining duration. Internal (not private): pure and top-level,
+ * unit-tested without Android the same way IdlePushbackManager's tierFor/nextAlignedMark are. */
+internal fun countdownText(remainingMs: Long): String {
+	val totalMinutes = (remainingMs / 60_000L).coerceAtLeast(0L)
+	return when {
+		totalMinutes < 1 -> "in less than a minute"
+		totalMinutes < 60 -> "in ${totalMinutes}m"
+		totalMinutes < 1_440 -> "in ${totalMinutes / 60}h ${totalMinutes % 60}m"
+		else -> "in ${totalMinutes / 1_440}d ${(totalMinutes % 1_440) / 60}h"
+	}
+}
+
+/** A scheduled send's absolute fire time: bare "HH:mm" (matching this app's other clock displays,
+ * e.g. SwitchboardService's idle-status line) when the fire date is today in the device's own
+ * zone, else dated too - "today" alone would misread as today for a pick on a different day.
+ * Internal (not private): pure and top-level, unit-tested without Android. */
+internal fun absoluteTimeText(atMillis: Long, zone: java.time.ZoneId): String {
+	val at = java.time.Instant.ofEpochMilli(atMillis).atZone(zone)
+	val time = "%02d:%02d".format(at.hour, at.minute)
+	return if (at.toLocalDate() == java.time.LocalDate.now(zone)) time else "${at.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }} ${at.dayOfMonth}, $time"
+}
+
+/** The dock indicator for a pending scheduled send (plans/scheduled-send.md) - a plain sibling in
+ * ThreadScreen's own Column, stacking above the composer the same way the Designer dock's
+ * threadDockSlots already do. Tapping the body reopens [ScheduleSendDialog] to change the time
+ * (see onEdit's own doc at the ThreadScreen call site for why this is time-only, not a full
+ * text/attachment re-edit); the trailing icon cancels outright. */
+@Composable
+fun ScheduledSendDock(rec: ScheduledSend, onEdit: () -> Unit, onCancel: () -> Unit) {
+	// NOT remember-cached: a device timezone change while this composable stays mounted must be
+	// picked up on the next recomposition, mirroring IdlePushbackManager's own fresh-read-per-call
+	// discipline for the identical value (it takes zone as a supplier invoked fresh every decide()).
+	val zone = java.time.ZoneId.systemDefault()
+	// Recomputed roughly every minute while the thread is open - "live-ish", not truly ticking
+	// per-second, mirroring the cross-domain-presence freshness chip's own periodic-ticker pattern.
+	var now by remember { mutableStateOf(System.currentTimeMillis()) }
+	LaunchedEffect(rec.opId) {
+		while (true) {
+			delay(60_000)
+			now = System.currentTimeMillis()
+		}
+	}
+	Surface(
+		modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+		color = MaterialTheme.colorScheme.secondaryContainer,
+		shape = MaterialTheme.shapes.medium,
+	) {
+		Row(
+			Modifier.fillMaxWidth().clickable(onClick = hapticClick(onEdit)).padding(12.dp),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(10.dp),
+		) {
+			Icon(Icons.Default.Schedule, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+			Column(Modifier.weight(1f)) {
+				Text(
+					"Sending at ${absoluteTimeText(rec.fireAtMillis, zone)}",
+					style = MaterialTheme.typography.bodyMedium,
+					color = MaterialTheme.colorScheme.onSecondaryContainer,
+				)
+				Text(
+					countdownText(rec.fireAtMillis - now),
+					style = MaterialTheme.typography.labelSmall,
+					color = MaterialTheme.colorScheme.onSecondaryContainer,
+				)
+			}
+			IconButton(onClick = hapticClick(onCancel)) {
+				Icon(Icons.Default.Close, contentDescription = "Cancel scheduled send", tint = MaterialTheme.colorScheme.onSecondaryContainer)
+			}
+		}
+	}
+}
+
+/** Date-then-time picker for banking (or rescheduling) a send. Material3's DatePicker represents
+ * its selection as UTC millis at the START of the picked calendar day, independent of the device
+ * zone (documented library behavior) - converted to a LocalDate, then combined with the
+ * TimePicker's plain local hour/minute using the device's REAL zone. Same discipline as
+ * IdlePushbackManager's own ZonedDateTime math, freshly written here (that file's own
+ * nextAlignedMark computes poll-tier marks only, and its hydration clamp is for a PAST-tracking
+ * value - wrong shape for this always-future pick). `initialAtMillis` seeds both steps (5 minutes
+ * out for a fresh schedule, the current fire time for a reschedule). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ScheduleSendDialog(initialAtMillis: Long, submitting: Boolean, onConfirm: (Long) -> Unit, onDismiss: () -> Unit) {
+	val context = LocalContext.current
+	// NOT remember-cached: a device timezone change while this composable stays mounted must be
+	// picked up on the next recomposition, mirroring IdlePushbackManager's own fresh-read-per-call
+	// discipline for the identical value (it takes zone as a supplier invoked fresh every decide()).
+	val zone = java.time.ZoneId.systemDefault()
+	val seed = remember { java.time.Instant.ofEpochMilli(initialAtMillis).atZone(zone) }
+	val dateState = rememberDatePickerState(
+		initialSelectedDateMillis = seed.toLocalDate().atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli(),
+	)
+	val timeState = rememberTimePickerState(
+		initialHour = seed.hour,
+		initialMinute = seed.minute,
+		is24Hour = android.text.format.DateFormat.is24HourFormat(context),
+	)
+	// rememberSaveable: a rotation/theme/font-scale change destroys and recreates the Activity (no
+	// android:configChanges declared anywhere in this app), and dateState/timeState already survive
+	// that via their own internal Saver (confirmed - rememberDatePickerState/rememberTimePickerState
+	// use rememberSaveable internally) - but this flag deciding WHICH step shows was still plain
+	// remember, so the config change closed the dialog outright even though the underlying picker
+	// selections would have survived to show it correctly.
+	var pickingTime by rememberSaveable { mutableStateOf(false) }
+
+	val pickedMillis = dateState.selectedDateMillis?.let { dateMillis ->
+		val day = java.time.Instant.ofEpochMilli(dateMillis).atZone(java.time.ZoneOffset.UTC).toLocalDate()
+		day.atTime(timeState.hour, timeState.minute).atZone(zone).toInstant().toEpochMilli()
+	}
+	// A minute of slack, not a bare `> now` - the picker rejects a past time (plans/
+	// scheduled-send.md), and a razor-thin margin here would let a pick go stale by the time the
+	// user actually taps Schedule. The DatePicker itself has no upper bound of its own (Material3's
+	// default year range is 1900-2100), so a stray far-future pick is rejected too - this feature is
+	// for hours-to-days-out reminders, not an unbounded storage commitment (SCHEDULED_SEND_MAX_HORIZON_MS,
+	// which ChatRepository.scheduleSend/rescheduleSend also enforce as the authoritative check).
+	val tooSoon = pickedMillis == null || pickedMillis <= System.currentTimeMillis() + 60_000
+	val tooFarOut = pickedMillis != null && pickedMillis - System.currentTimeMillis() > ChatRepository.SCHEDULED_SEND_MAX_HORIZON_MS
+	val isFarEnoughOut = !tooSoon && !tooFarOut
+
+	if (!pickingTime) {
+		DatePickerDialog(
+			onDismissRequest = onDismiss,
+			confirmButton = {
+				TextButton(enabled = dateState.selectedDateMillis != null, onClick = hapticClick { pickingTime = true }) {
+					Text("Next")
+				}
+			},
+			dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
+		) {
+			DatePicker(state = dateState)
+		}
+	} else {
+		Dialog(onDismissRequest = onDismiss) {
+			Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
+				Column(
+					Modifier.padding(24.dp),
+					horizontalAlignment = Alignment.CenterHorizontally,
+					verticalArrangement = Arrangement.spacedBy(20.dp),
+				) {
+					Text("Send at", style = MaterialTheme.typography.titleMedium)
+					TimePicker(state = timeState)
+					if (!isFarEnoughOut) {
+						Text(
+							if (tooFarOut) "Pick a time no more than 30 days out." else "Pick a time at least a minute from now.",
+							style = MaterialTheme.typography.bodySmall,
+							color = MaterialTheme.colorScheme.error,
+						)
+					}
+					Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+						TextButton(onClick = hapticClick { pickingTime = false }) { Text("Back") }
+						TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") }
+						TextButton(
+							// Disabled once tapped, until the caller's async schedule/reschedule call
+							// resolves - prevents a double-tap (or a bounced/ghost touch) from launching
+							// two overlapping calls that race on the composer's draft/attachments.
+							enabled = isFarEnoughOut && !submitting,
+							onClick = hapticClick { pickedMillis?.let(onConfirm) },
+						) { Text("Schedule") }
+					}
+				}
+			}
+		}
+	}
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ThreadScreen(
@@ -1917,6 +2110,20 @@ fun ThreadScreen(
 	onDraftChange: (String) -> Unit,
 	onRename: (String) -> Unit,
 	onForget: () -> Unit,
+	// At most one pending scheduled send for this team (plans/scheduled-send.md), null otherwise -
+	// drives the dock and gates the long-press menu's Schedule Send item.
+	scheduledSend: ScheduledSend?,
+	// suspend + Boolean (not fire-and-forget Unit): the repo-side time check is authoritative and can
+	// fail (the picker's own gate goes stale if the user idles past its 1-minute floor) - the caller
+	// must await the real outcome before clearing the composer, since clearing eagerly would destroy
+	// the user's message on any failure with no way to recover it.
+	onScheduleSend: suspend (String, List<Uri>, Long) -> Boolean,
+	// Dock tap-to-edit is deliberately time-only, not a full text/attachment re-edit: the banked
+	// attachments are already-copied MessageFile refs, not the live content:// Uris onScheduleSend
+	// takes, so re-threading them through the same call without risking a silent attachment drop
+	// would need its own dedicated seam. Changing the time alone has no such mismatch.
+	onReschedule: suspend (Long) -> Boolean,
+	onCancelScheduledSend: () -> Unit,
 	// Terminal view: only the host-agent and devcontainers are eligible. The peek/send are
 	// team-bound suspend closures (the screen supplies the team).
 	terminalEligible: Boolean,
@@ -1935,7 +2142,35 @@ fun ThreadScreen(
 	var showMenu by remember { mutableStateOf(false) }
 	var showRename by remember { mutableStateOf(false) }
 	var confirmForget by remember { mutableStateOf(false) }
-	var attachments by remember { mutableStateOf<List<Uri>>(emptyList()) }
+	// rememberSaveable: no android:configChanges is declared anywhere in this app, so a rotation,
+	// theme, or font-scale change destroys and recreates the Activity - a plain remember here
+	// silently dropped picked-but-not-yet-sent files (schedule OR live send) on that recreation.
+	var attachments by rememberSaveable { mutableStateOf<List<Uri>>(emptyList()) }
+	var showSendMenu by remember { mutableStateOf(false) }
+	// Null: no dialog. Non-null: the seed instant it opens the picker at - a fresh Schedule Send
+	// seeds 5 minutes out, a dock edit seeds the record's own current fire time. Two distinct
+	// booleans would let a stray recomposition show the dialog with a stale seed from the other path.
+	// rememberSaveable: no android:configChanges is declared anywhere in this app, so a rotation,
+	// theme, or font-scale change destroys and recreates the Activity - a plain remember here
+	// silently closed an in-progress Schedule Send dialog on that recreation (the seed is just a
+	// Long, trivially saveable, and the dialog's own dateState/timeState already survive via their
+	// own internal Saver - only this flag was the gap).
+	var scheduleDialogSeed by rememberSaveable { mutableStateOf<Long?>(null) }
+	// Disables the Schedule button once tapped until the async call resolves - otherwise a double
+	// tap (or a bounced/ghost touch, a documented real touchscreen artifact) can launch two
+	// concurrent scheduleSend coroutines that race on which one's draft/attachments they see, since
+	// the FIRST tap's own cleanup already blanks them before the second tap's handler reads them.
+	var scheduleSubmitting by remember { mutableStateOf(false) }
+	val scheduleScope = rememberCoroutineScope()
+	// Bumped every time a NEW Schedule Send dialog session opens (a fresh schedule via the menu, or a
+	// dock edit) - never on a bare dismiss. scheduleSubmitting/scheduleScope are ThreadScreen-scoped,
+	// so a launched onConfirm continuation OUTLIVES the dialog: if the user dismisses while it is
+	// still in flight and then reopens a NEW session before it resolves, the stale continuation must
+	// recognize a newer session has taken over and skip its close-dialog/clear-composer side effects
+	// - otherwise it closes whatever dialog is now open and can wipe a second attempt's freshly-typed
+	// draft, exactly the generation-token shape Phase 1's DurableOpStore uses for the identical "a
+	// stale attempt must not act after a newer one has taken over" problem.
+	var scheduleDialogGeneration by remember { mutableStateOf(0) }
 	// The raw-tmux terminal view, toggled from the top bar; re-keyed when switching session. Defaults
 	// on for a not-yet-live session so its boot is watchable without a manual toggle (see the call site).
 	// Keyed off the known asleep/booting statuses so an unrecognized status opens chat, not terminal.
@@ -1978,6 +2213,58 @@ fun ThreadScreen(
 				onForget()
 			},
 			onDismiss = { confirmForget = false },
+		)
+	}
+	scheduleDialogSeed?.let { seed ->
+		ScheduleSendDialog(
+			initialAtMillis = seed,
+			submitting = scheduleSubmitting,
+			onConfirm = { at ->
+				// Snapshot now: the async call below must bank exactly what was on screen at the
+				// moment of the tap, not whatever draft/attachments happen to hold once it resolves.
+				val text = draft
+				val files = attachments
+				val editingExisting = scheduledSend != null
+				val myGeneration = scheduleDialogGeneration
+				scheduleSubmitting = true
+				scheduleScope.launch {
+					var ok = false
+					try {
+						// The picker's own isFarEnoughOut gate is evaluated once per recomposition and
+						// never re-checked against a live clock while the user idles on the dialog - the
+						// repo-side call below is the authoritative, freshly-evaluated check, and it can
+						// fail (a stale pick, or - unlikely but real - a device clock jump). Only clear the
+						// composer once that call reports genuine success, never optimistically on tap:
+						// clearing first and finding out later would destroy the user's message on any
+						// failure, with no way to recover it.
+						ok = if (editingExisting) onReschedule(at) else onScheduleSend(text, files, at)
+					} finally {
+						// try/finally, not a bare sequential call: makes the re-enable explicit rather than
+						// incidental on today's callees happening not to throw (both already runCatching
+						// their own IO internally) - a future edit that lets either genuinely throw must
+						// not leave the Schedule button stuck disabled forever.
+						//
+						// This continuation can outlive the dialog (scheduleSubmitting/scheduleScope are
+						// ThreadScreen-scoped, not dialog-scoped): if the user dismissed while this was in
+						// flight and reopened a NEW session before it resolved, scheduleDialogGeneration
+						// has since moved on - committing this stale attempt's side effects would close
+						// the freshly-reopened dialog and, on success, wipe whatever the second attempt
+						// had already typed. A bare dismiss with no reopen does not bump the generation,
+						// so a late success still clears the composer in that (milder, non-destructive)
+						// case.
+						if (scheduleDialogGeneration == myGeneration) {
+							scheduleSubmitting = false
+							scheduleDialogSeed = null
+							if (ok && !editingExisting) {
+								draft = ""
+								onDraftChange("")
+								attachments = emptyList()
+							}
+						}
+					}
+				}
+			},
+			onDismiss = { scheduleDialogSeed = null },
 		)
 	}
 
@@ -2109,6 +2396,18 @@ fun ThreadScreen(
 			// enclosing composable context, which a non-inline lambda parameter does not provide);
 			// a throwing slot is Compose's own error path, not a registry-containment case.
 			remember { Plugins.get(dockContext) }.host.threadDockSlots.values().forEach { slot -> slot(dockScope) }
+			// A plain sibling in this same Column, same reason the plugin dock slots above need no
+			// collision-avoidance logic: nothing to show contributes no space at all.
+			scheduledSend?.let { rec ->
+				ScheduledSendDock(
+					rec = rec,
+					onEdit = {
+						scheduleDialogSeed = rec.fireAtMillis
+						scheduleDialogGeneration++
+					},
+					onCancel = onCancelScheduledSend,
+				)
+			}
 			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
 			if (attachments.isNotEmpty()) {
 				Row(
@@ -2152,15 +2451,74 @@ fun ThreadScreen(
 					IconButton(onClick = hapticClick { picker.launch(arrayOf("*/*")) }) {
 							Icon(Icons.Default.AttachFile, contentDescription = "Attach file")
 						}
-					FilledIconButton(
-						enabled = draft.isNotBlank() || attachments.isNotEmpty(),
-						onClick = hapticClick {
-							onSend(draft, attachments)
-							draft = ""
-							onDraftChange("")
-							attachments = emptyList()
-						},
-					) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send") }
+					val sendEnabled = draft.isNotBlank() || attachments.isNotEmpty()
+					val sendHaptics = LocalHapticFeedback.current
+					val sendStrongHaptic = rememberStrongHaptic()
+					// A plain FilledIconButton has no onLongClick of its own (Material3's IconButton family
+					// only exposes a single onClick) - a Surface styled to match its defaults (CircleShape,
+					// primary/onPrimary, the disabled-alpha pair) with combinedClickable applied directly is
+					// the same escape hatch SessionCard's own long-press already uses, on a button-shaped
+					// Surface instead of a Card. minimumInteractiveComponentSize + combinedClickable are on
+					// the OUTER Box (not the inner 40dp Surface) so the touch target matches IconButton's
+					// own 48dp minimum and Role.Button/onLongClickLabel are announced - IconButtonKt's real
+					// clickable is set up the same way, on the node minimumInteractiveComponentSize sized,
+					// not on a smaller visual child nested inside it.
+					Box(
+						modifier = Modifier
+							.minimumInteractiveComponentSize()
+							.combinedClickable(
+								enabled = sendEnabled,
+								role = Role.Button,
+								onLongClickLabel = "Schedule send",
+								onClick = {
+									sendHaptics.performHapticFeedback(HapticFeedbackType.LongPress)
+									onSend(draft, attachments)
+									draft = ""
+									onDraftChange("")
+									attachments = emptyList()
+								},
+								onLongClick = {
+									sendStrongHaptic()
+									showSendMenu = true
+								},
+							),
+						contentAlignment = Alignment.Center,
+					) {
+						Surface(
+							modifier = Modifier.size(40.dp),
+							shape = CircleShape,
+							color = if (sendEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+							contentColor = if (sendEnabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+						) {
+							Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+								Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+							}
+						}
+					}
+					DropdownMenu(expanded = showSendMenu, onDismissRequest = { showSendMenu = false }) {
+						DropdownMenuItem(
+							text = { Text("Schedule Send") },
+							// Greyed out once one's already active for this session - the dock is the sole
+							// edit/reschedule/cancel surface (plans/scheduled-send.md).
+							enabled = sendEnabled && scheduledSend == null,
+							onClick = hapticClick {
+								showSendMenu = false
+								scheduleDialogSeed = System.currentTimeMillis() + 5 * 60_000L
+								scheduleDialogGeneration++
+							},
+						)
+						DropdownMenuItem(
+							text = { Text("Send") },
+							enabled = sendEnabled,
+							onClick = hapticClick {
+								showSendMenu = false
+								onSend(draft, attachments)
+								draft = ""
+								onDraftChange("")
+								attachments = emptyList()
+							},
+						)
+					}
 				}
 			}
 			}

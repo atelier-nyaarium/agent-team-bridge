@@ -485,6 +485,92 @@ describe("federation routing (E2E sealed)", () => {
 	});
 });
 
+describe("respond()'s onFederatedSettled (the real relayWithRetry, not a mocked ConsoleRoutes.respond)", () => {
+	it("fires true once the relay-pin actually succeeds", async () => {
+		let pinned: FederatedOp | undefined;
+		const evie = fakeEvie({
+			destSealer: sealerA,
+			srcGateway: "hostb",
+			handle: (op) => {
+				pinned = op;
+				return { ok: true };
+			},
+		});
+		const ctx = makeCtx("hostb", { evieClient: evie.client, sealer: sealerB });
+		const srcSession = "conv.conv-1.alice.hostb.api.dev";
+		ctx.store.create(srcSession, "recipe-app.dev", "api.dev", {
+			persistent: true,
+			fromConversationId: "conv-1",
+			returnRoute: { srcGateway: "hosta", srcConversationId: "conv-1", srcSession },
+		});
+		const routes = createRoutes(ctx);
+
+		let settled: boolean | undefined;
+		const respondRes = routes.respond(
+			new Request("http://gateway/respond", { method: "POST" }),
+			{
+				session_id: srcSession,
+				status: "completed",
+				response: "all good",
+				title: "t",
+				summary: "s",
+				fullSpoken: "spoken",
+			},
+			{
+				onFederatedSettled: (ok) => {
+					settled = ok;
+				},
+			},
+		);
+		expect((await respondRes.json()).federated).toBe(true);
+		for (let i = 0; i < 10 && settled === undefined; i++) await Promise.resolve();
+		expect(settled).toBe(true);
+		expect(pinned).toMatchObject({ kind: "response_push", session_id: srcSession, response: "all good" });
+		expect(evie.calls.filter((c) => c.action === "gateway_relay").length).toBe(1);
+	});
+
+	it("fires false only after relayWithRetry exhausts every attempt, driven by the real exponential backoff", async () => {
+		vi.useFakeTimers();
+		try {
+			let calls = 0;
+			const client = {
+				isConnected: () => true,
+				stop: () => {},
+				callTool: async () => {
+					calls++;
+					return { callId: "fake", error: "evie unavailable" };
+				},
+			} as unknown as NonNullable<RoutesDeps["evieClient"]>;
+			const ctx = makeCtx("hostb", { evieClient: client, sealer: sealerB });
+			const srcSession = "conv.conv-1.alice.hostb.api.dev";
+			ctx.store.create(srcSession, "recipe-app.dev", "api.dev", {
+				persistent: true,
+				fromConversationId: "conv-1",
+				returnRoute: { srcGateway: "hosta", srcConversationId: "conv-1", srcSession },
+			});
+			const routes = createRoutes(ctx);
+
+			let settled: boolean | undefined;
+			const respondRes = routes.respond(
+				new Request("http://gateway/respond", { method: "POST" }),
+				{ session_id: srcSession, status: "completed", response: "all good" },
+				{
+					onFederatedSettled: (ok) => {
+						settled = ok;
+					},
+				},
+			);
+			expect((await respondRes.json()).federated).toBe(true);
+			await vi.advanceTimersByTimeAsync(31_000);
+			expect(settled).toBe(false);
+			// 5 attempts total: the initial try plus 4 retries, backing off 2s/4s/8s/16s between them.
+			expect(calls).toBe(5);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
 ////////////////////////////////
 //  Destination-enforced scoped crosstalk
 //
