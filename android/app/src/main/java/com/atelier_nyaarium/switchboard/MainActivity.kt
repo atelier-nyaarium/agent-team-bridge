@@ -20,7 +20,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -130,9 +131,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -158,6 +164,7 @@ import com.atelier_nyaarium.switchboard.proto.isComposite
 import com.atelier_nyaarium.switchboard.proto.parseSessionName
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Process-lifetime repository so chat state survives Activity recreation. */
 object Repo {
@@ -2130,6 +2137,47 @@ internal fun stepTabDrag(
 	return Triple(ord, idx, offset)
 }
 
+/** Hand-rolled tap-vs-hold-then-drag disambiguation on ONE gesture handler, not two competing
+ * modifiers. The stock detectDragGesturesAfterLongPress backs off the moment ANY other pointer input
+ * handler on the same node consumes so much as a hair of movement during its long-press wait
+ * (its internal await bails on `changes.any { it.isConsumed }`) - and Material3's [Tab] carries its
+ * own internal press/ripple touch tracking on the same node, which reacted to real touch hardware
+ * this way and cancelled the whole gesture back to its original position instead of arming (confirmed
+ * on a real device - an emulator's mouse-driven drag did not reproduce it). This version watches only
+ * whether the pointer is still down during the wait, never consumption, so Tab's own reaction can no
+ * longer cancel it; once the hold is confirmed it consumes every subsequent move itself so Tab cannot
+ * also react to the drag portion. */
+private suspend fun PointerInputScope.detectTabHoldDrag(
+	onHoldStart: () -> Unit,
+	onHoldDrag: (change: PointerInputChange, dragAmount: Offset) -> Unit,
+	onHoldEnd: () -> Unit,
+) {
+	awaitEachGesture {
+		val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+		var liftedEarly = false
+		withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+			while (true) {
+				val event = awaitPointerEvent(PointerEventPass.Initial)
+				val change = event.changes.firstOrNull { it.id == down.id }
+				if (change == null || !change.pressed) {
+					liftedEarly = true
+					return@withTimeoutOrNull
+				}
+			}
+		}
+		if (liftedEarly) return@awaitEachGesture
+		onHoldStart()
+		while (true) {
+			val event = awaitPointerEvent(PointerEventPass.Initial)
+			val change = event.changes.firstOrNull { it.id == down.id } ?: break
+			if (!change.pressed) break
+			onHoldDrag(change, change.positionChange())
+			change.consume()
+		}
+		onHoldEnd()
+	}
+}
+
 /** Session tabs, hold-then-drag to reorder. A plain tap still selects via [Tab]'s own onClick; a
  * long-press arms a drag (mirrors [SessionCard]'s long-press-for-strong-haptic convention) that lets
  * the finger carry a tab across its neighbors, swapping the local scratch order live and committing
@@ -2172,13 +2220,21 @@ private fun ReorderableTabRow(
 					.zIndex(if (isDragging) 1f else 0f)
 					.offset { IntOffset(if (isDragging) dragOffsetX.roundToInt() else 0, 0) }
 					.pointerInput(t) {
-						detectDragGesturesAfterLongPress(
-							onDragStart = {
+						detectTabHoldDrag(
+							onHoldStart = {
 								draggingIndex = order.indexOf(t)
 								dragOffsetX = 0f
 								strong()
 							},
-							onDragEnd = {
+							onHoldDrag = { _, dragAmount ->
+								val idx = draggingIndex ?: return@detectTabHoldDrag
+								val (newOrder, newIdx, newOffset) =
+									stepTabDrag(order, idx, dragOffsetX + dragAmount.x) { tabWidths[it] ?: 0 }
+								order = newOrder
+								draggingIndex = newIdx
+								dragOffsetX = newOffset
+							},
+							onHoldEnd = {
 								draggingIndex = null
 								dragOffsetX = 0f
 								if (order != tabs) onReorder(order)
@@ -2189,20 +2245,7 @@ private fun ReorderableTabRow(
 								// would otherwise keep showing the already-closed tab indefinitely.
 								order = tabs
 							},
-							onDragCancel = {
-								draggingIndex = null
-								dragOffsetX = 0f
-								order = tabs
-							},
-						) { change, dragAmount ->
-							change.consume()
-							val idx = draggingIndex ?: return@detectDragGesturesAfterLongPress
-							val (newOrder, newIdx, newOffset) =
-								stepTabDrag(order, idx, dragOffsetX + dragAmount.x) { tabWidths[it] ?: 0 }
-							order = newOrder
-							draggingIndex = newIdx
-							dragOffsetX = newOffset
-						}
+						)
 					},
 			)
 		}
