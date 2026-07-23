@@ -157,9 +157,15 @@
 		if (m.id !== undefined && m.id !== null) row.dataset.id = String(m.id);
 		if (m.at !== undefined && m.at !== null) row.dataset.at = String(m.at);
 
-		// Agent rows get a top-right Play button when the host enables it
-		// (canPlay rides each message). Tap toggles: the host pushes the
-		// playing state back through setPlaying, which swaps the glyph.
+		// Top-right row actions: a flex group anchored to the row's right edge, so it grows LEFT as
+		// buttons are added rather than each button carrying its own hardcoded offset. DOM order is
+		// left-to-right visual order, so Play (conditional) comes before Copy (always present, so it
+		// stays the rightmost, wall-anchored button regardless of whether Play is shown).
+		const actions = document.createElement("div");
+		actions.className = "row-actions";
+
+		// Agent rows get a Play button when the host enables it (canPlay rides each message). Tap
+		// toggles: the host pushes the playing state back through setPlaying, which swaps the glyph.
 		const hasPlay = m.canPlay && m.role === "agent" && m.at !== undefined && m.at !== null;
 		if (hasPlay) {
 			const play = document.createElement("button");
@@ -171,15 +177,14 @@
 					window.Android.playMessage(String(m.at));
 				}
 			});
-			row.appendChild(play);
+			actions.appendChild(play);
 		}
 
 		// Copies the raw message source (markdown and mermaid fences as typed, not the rendered
 		// HTML/diagram) via the native bridge - WebView's own clipboard API needs an https-like
-		// secure context this file:// asset origin does not reliably get. Every row gets one,
-		// positioned left of the play button on rows that also have one.
+		// secure context this file:// asset origin does not reliably get. Every row gets one.
 		const copy = document.createElement("button");
-		copy.className = "copy-btn" + (hasPlay ? " with-play" : "");
+		copy.className = "copy-btn";
 		copy.textContent = "\u{1F4CB}";
 		copy.setAttribute("aria-label", "Copy raw message");
 		copy.addEventListener("click", () => {
@@ -187,7 +192,9 @@
 				window.Android.copyToClipboard(m.body || "");
 			}
 		});
-		row.appendChild(copy);
+		actions.appendChild(copy);
+
+		row.appendChild(actions);
 
 		const meta = document.createElement("div");
 		meta.className = "meta";
