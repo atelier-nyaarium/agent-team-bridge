@@ -1954,7 +1954,7 @@ fun ScheduledSendDock(rec: ScheduledSend, onEdit: () -> Unit, onCancel: () -> Un
 	var now by remember { mutableStateOf(System.currentTimeMillis()) }
 	LaunchedEffect(rec.opId) {
 		while (true) {
-			delay(30_000)
+			delay(60_000)
 			now = System.currentTimeMillis()
 		}
 	}

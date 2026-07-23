@@ -4,16 +4,30 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 
-// Cold-revival worst case for a scheduled-send fire: service start + repo entry (15s, matching
-// PollAlarmReceiver's own identical revival cost) + connect()'s FOUR sequential round trips
-// (apiReachable, submitConsoleAdmission, register, teams - each up to the default client's 15s
-// connect + 20s read, i.e. 35s x 4 = 140s) + the send itself (ConsoleClient.
-// PINNED_CONNECT_TIMEOUT_MS 15s + PINNED_READ_TIMEOUT_MS 35s = 50s). That sums to 15 + 140 + 50 =
-// 205s; rounded up to 240s (not tightly to 205s) for real margin rather than none. An attachment
-// upload is uncapped by design (600s per-write inactivity floor) and can outlive this lock on a
-// slow link regardless; that is an accepted, recoverable corner (the row settles error/pending and
-// the bounded retry or reconcilePending picks it up), not a case this constant tries to cover.
-internal const val SCHEDULED_SEND_PASS_TIMEOUT_MS = 240_000L
+// connect()'s FOUR sequential round trips (apiReachable, submitConsoleAdmission, register, teams),
+// each up to the default OkHttpClient's own 15s connect + 20s read (ConsoleClient.kt's plain
+// connectTimeout/readTimeout builder, not independently named - re-deriving those two literals
+// would mean adding exported constants to an unrelated file for this one caller). Named here so at
+// least the SHAPE of the term (four round trips, not a bare number) survives a future edit to that
+// client's own timeouts, even though the 35s-per-round-trip figure itself is not a live reference.
+private const val CONNECT_ROUND_TRIPS = 4
+private const val CONNECT_ROUND_TRIP_MS = 35_000L
+
+// Cold-revival worst case for a scheduled-send fire: service start + repo entry
+// (REVIVAL_OVERHEAD_MS, the SAME revival cost PollAlarmReceiver's own PASS_TIMEOUT_MS derives
+// from) + connect()'s four sequential round trips above + the send itself (ConsoleClient's own
+// PINNED_CONNECT_TIMEOUT_MS + PINNED_READ_TIMEOUT_MS, live references so a future change to either
+// cannot silently drift this constant out of date the way a flat literal already did once - see
+// plans/scheduled-send.md's "Phase 2 align audit round 1"). Rounded up for real margin rather than
+// tightly to the sum. An attachment upload is uncapped by design (600s per-write inactivity floor)
+// and can outlive this lock on a slow link regardless; that is an accepted, recoverable corner (the
+// row settles error/pending and the bounded retry or reconcilePending picks it up), not a case this
+// constant tries to cover.
+internal const val SCHEDULED_SEND_PASS_TIMEOUT_MS =
+	REVIVAL_OVERHEAD_MS +
+		CONNECT_ROUND_TRIPS * CONNECT_ROUND_TRIP_MS +
+		(ConsoleClient.PINNED_CONNECT_TIMEOUT_MS + ConsoleClient.PINNED_READ_TIMEOUT_MS) +
+		35_000L
 
 /** Fires the scheduled-send alarm - either the single shared "next-due" wakeup (ACTION_FIRE_DUE,
  * see ChatRepository.fireDueScheduledSends) or one team's bounded one-shot retry after a failed

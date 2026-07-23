@@ -28,8 +28,10 @@ private const val PASS_RUNTIME_MS = BURST_JOIN_TIMEOUT_MS + PASS_OVERHEAD_MS
 internal const val PASS_GRACE_MS = PASS_RUNTIME_MS
 
 // PollAlarmReceiver's initial pass-lock acquisition at alarm-fire: revival overhead (service
-// start + kickPoll + poll-loop resume) plus one full pass's worst-case runtime.
-private const val REVIVAL_OVERHEAD_MS = 15_000L
+// start + kickPoll + poll-loop resume) plus one full pass's worst-case runtime. Internal (not
+// private): ScheduledSendAlarmReceiver's own pass-timeout derivation reuses this same revival cost
+// rather than re-hardcoding it as an independent literal.
+internal const val REVIVAL_OVERHEAD_MS = 15_000L
 internal const val PASS_TIMEOUT_MS = REVIVAL_OVERHEAD_MS + PASS_RUNTIME_MS
 
 /** How the console's background poll cadence backs off the longer it stays silent. */

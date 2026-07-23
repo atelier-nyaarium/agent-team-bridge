@@ -73,9 +73,10 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 	// rethrow discipline can fix (see console-hardening.md Phase D). This flag closes the narrower
 	// residual: decide() can still latch this instance as the scheduler a few instructions before
 	// that null-write lands, then invoke a method on it after onDestroy has already cancelled the
-	// alarm and released both locks. Checked first in every DeepIdleScheduler method, so that stale
-	// call can no longer re-acquire an un-timed wakelock nothing would ever release, or re-arm an
-	// alarm this instance just cancelled.
+	// alarm and released both locks. Checked first in every DeepIdleScheduler AND
+	// ScheduledSendAlarmScheduler method (both interfaces this Service implements have the identical
+	// stale-scheduler exposure), so that stale call can no longer re-acquire an un-timed wakelock
+	// nothing would ever release, or re-arm an alarm this instance just cancelled.
 	@Volatile private var destroyed = false
 
 	// Held for the FOREGROUND/MINUTE tiers so the poll loop's wall-clock sleep resumes through
@@ -450,18 +451,12 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 
 	/** A scheduled send's bounded one-shot retry also failed (see ChatRepository.
 	 * kickScheduledSendRetry) - the error row is tap-to-retry forever, but unattended failure must
-	 * never be silent. Per-team id (scheduledSendFailedNotificationId, its own range outside BOTH the
-	 * per-team MESSAGE range and STATUS_NOTIFICATION_ID) rather than one shared slot: a single fixed
-	 * id was tried first, but a red-team pass found that two teams failing close together (exactly
-	 * the scenario the retry alarm's own per-team request-code hashing already exists to handle)
-	 * would have the second team's post silently overwrite the first's still-unread content under
-	 * NotificationManagerCompat's replace-in-place semantics - "unattended failure is never silent"
-	 * failing for every team but whichever failed last. Per-team ids also make
-	 * reconcileTeamNotifications's own level-based sweep (keyed on teamNotificationId, a DIFFERENT
-	 * range) unable to touch this one, same protection the single shared id had, without needing any
-	 * lock/tracking-field machinery to keep a "which team is showing" pointer in sync. Deliberately
-	 * NOT gated on state.closedTeams either: a user who closed the tab after scheduling still needs
-	 * to hear that it failed. */
+	 * never be silent. Uses its own PER-TEAM id (scheduledSendFailedNotificationId - see its own doc
+	 * for why a single shared slot is not enough) so two teams failing close together each keep their
+	 * own notification instead of the later one silently overwriting the earlier one's still-unread
+	 * content under NotificationManagerCompat's replace-in-place semantics. Deliberately NOT gated on
+	 * state.closedTeams either: a user who closed the tab after scheduling still needs to hear that
+	 * it failed. */
 	private fun notifyScheduledSendFailed(repo: ChatRepository, team: String, opId: String) {
 		if (!canNotify()) return
 		val state = repo.state.value
@@ -529,12 +524,9 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		private fun teamNotificationId(team: String): Int =
 			TEAM_ID_RANGE_START + (team.hashCode() and 0x7FFFFFFF) % TEAM_ID_RANGE_SIZE
 
-		// A scheduled send's failure notification, one PER TEAM - a single shared id was tried first
-		// but let two teams failing close together silently overwrite each other's still-unread
-		// content (NotificationManagerCompat.notify replaces in place). Its own range, disjoint from
-		// TEAM_ID_RANGE, so reconcileTeamNotifications (which only ever computes teamNotificationId)
-		// can never touch it - the same immunity the old single fixed id had, without needing a
-		// lock/tracking-field to keep "which team is showing" in sync with reality.
+		// One PER TEAM (see notifyScheduledSendFailed's own doc for why a single shared slot is not
+		// enough). Its own range, disjoint from TEAM_ID_RANGE, so reconcileTeamNotifications (which
+		// only ever computes teamNotificationId) can never touch it.
 		internal const val SCHEDULED_SEND_FAILED_ID_RANGE_START = 2_000_000
 		internal const val SCHEDULED_SEND_FAILED_ID_RANGE_SIZE = 1_000_000
 

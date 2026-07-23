@@ -784,3 +784,47 @@ composer fix surfaced one real, concrete gap:
 
 Rebuilt and re-tested again after this fix: `./gradlew compileDebugKotlin testDebugUnitTest` - BUILD
 SUCCESSFUL.
+
+## Phase 2 framework-first audit round 1
+
+A smaller, targeted `Workflow()` (4 angles, Opus, 2 verifiers per finding per the tightened cycle
+convention) looked for missing/duplicated architecture rather than bugs: hash-id duplication across
+the notification/request-code helpers, whether ScheduledSend logic belongs in its own class the way
+`IdlePushbackManager` was extracted from `ChatRepository`, naming/comment clarity, and structural
+consistency with established conventions. 12 candidates, 4 confirmed - all small, all fixed:
+
+- **Duplicated PR-narration comments** ("a single fixed id was tried first, but a red-team pass
+  found...") existed in two places explaining the same per-team-notification-id rationale - a
+  timelessness violation (comments must describe the code as it stands, not its change history) that
+  also meant an edit to one could silently leave the other stale. Consolidated into one comment on
+  `notifyScheduledSendFailed` itself; the companion-object copy now just points to it.
+- **The dock countdown ticker's own comment said "roughly every minute" but the code ticked every
+  30 seconds** (`delay(30_000)`) - matching neither the plan's own explicit "live-ish... roughly
+  every minute" design decision nor its own doc. Changed the code to `delay(60_000)` rather than the
+  comment, since the plan's original decision is the authoritative intent.
+- **`SCHEDULED_SEND_PASS_TIMEOUT_MS` was a flat literal (240_000L) with its derivation living only in
+  a comment** - the exact class of drift the align audit already caught once for this same constant
+  (a comment claiming 205s while the literal said 180s). Re-derived from real references where
+  possible: `IdlePushbackManager.REVIVAL_OVERHEAD_MS` (bumped to `internal` for this reuse) and
+  `ConsoleClient.PINNED_CONNECT_TIMEOUT_MS`/`PINNED_READ_TIMEOUT_MS`, plus an explicit margin term -
+  the "four round trips at the default client's own un-named 35s" term stays a labeled literal, since
+  naming ITS sub-parts would mean adding new exported constants to `ConsoleClient.kt` for a single
+  caller in an unrelated file. Same total (240s), now with two of its three terms genuinely wired to
+  the values they claim to track instead of hand-copied.
+- **The `destroyed` field's doc comment only mentioned `DeepIdleScheduler`**, even though
+  `ScheduledSendAlarmScheduler`'s three methods check the identical guard - updated to name both.
+
+The other two angles (hash-id duplication across `teamNotificationId`/`scheduledSendFailedNotificationId`/
+`scheduledSendRetryRc`, and whether ScheduledSend logic should be extracted into its own class like
+`IdlePushbackManager`) came back with nothing to change: the hash-id duplication was judged not worth
+a shared generic helper (three near-identical one-liners, each already reads clearly, and a shared
+helper would only add a layer of indirection between a caller and the range constants it must still
+supply correctly), and a `ScheduledSendManager`-style extraction was judged too tightly coupled to
+`ChatRepository`'s own private internals (`append`, `deliver`, `rebuildFiles`, `_state`, `filesDir`,
+`confirmedDomainId`, `canonicalTarget`) to pull out without a much larger, riskier refactor than fits
+this pass - unlike `IdlePushbackManager`, which was designed from the start against abstract
+`IdleSilenceStore`/`DeepIdleScheduler` interfaces specifically to stay decoupled. Recorded here as a
+considered-and-declined option, not silently skipped.
+
+Rebuilt and re-tested for real after every fix in this round: `./gradlew compileDebugKotlin
+testDebugUnitTest --rerun-tasks` - BUILD SUCCESSFUL, all 26 tasks freshly executed.
