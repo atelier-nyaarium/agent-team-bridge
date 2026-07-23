@@ -314,7 +314,7 @@ per-relationship plane benefits):
   work, since (unlike `report_read`'s free-form input) linking is owner-gated and not itself
   attacker-forceable.
 
-## Phase 3: Android UI
+## Phase 3: Android UI ✅
 
 Android gets three concrete new pieces, not just a wire-up of the existing dead code:
 1. `peerSessions(domainId)` gets a dedicated backing field, keyed by domain id as a genuine
@@ -970,3 +970,39 @@ helpers, `sessionOrder` among them) rather than a new organizational problem. A 
 the `freshness-status-model` dimension, splitting `CrossDomainFreshness`'s label/color derivation
 differently) and a third (in `general-framework-gaps`, a "hand-rolled lifecycle-aware..." proposal
 whose reasoning didn't hold up under verification) were both raised and refuted.
+
+## Painpoints (Phase 3)
+
+- `Team.gatewayId` (`ConsoleClient.kt`) is a computed property (`get() = gatewayOf(name)`), not a
+  stored field - and `gatewayOf`/`parseTarget`/`SpawnPoint.of` validate the gateway segment as a
+  non-empty slug, so reading `.gatewayId` on a `Team` built from an address-shaped name with an
+  empty gateway segment THROWS, rather than returning `""`. This is a reasonable invariant for the
+  app's own real data (a wire-sourced `TeamInfo` is always well-formed), but it is a genuine footgun
+  for a test author building synthetic fixtures: my first attempt at pinning `adminDomainId`'s
+  empty-gatewayId normalization used `Team("host", ...)` expecting `.gatewayId` to read `""`, and
+  the test failed with an opaque `IllegalArgumentException` from address parsing rather than an
+  assertion mismatch. Cost a real debugging cycle to trace back to `gatewayOf`'s own validation,
+  and the eventual fix was simply deleting the test case (the scenario it wanted to pin cannot
+  actually arise via a real `Team`). Nothing about `Team`'s own doc comment or `gatewayOf`'s hints
+  that a plain property READ can throw - that's the surprising part, not the validation itself.
+- `SessionsScreen`'s board-rendering gates (`EmptyBoard`, `HealthHeader`, and the main board's own
+  `byGateway` grouping) all derive from the same handful of booleans (`local.isEmpty()`,
+  `linkedDomains.isEmpty()`, `adminDomainId`), and the LOGICAL RELATIONSHIP between them - that
+  `local`/`linkedDomains`'s exclusion predicates are exact De Morgan negations of each other, that
+  `EmptyBoard`'s and `HealthHeader`'s gates must therefore agree, that a guard added to ONE of these
+  values can silently break that agreement for values it doesn't itself touch - is nowhere factored
+  into one place a future change could reason about locally. It lives only as prose scattered across
+  several separate comments on each gate. This is exactly what let the align-lap-2 regression happen
+  (a narrowly-motivated, low-severity defense-in-depth guard on `linkedDomains` silently broke
+  `EmptyBoard`'s OWN unrelated fix two bullets earlier) - and, per the finding red-team caught
+  afterward, very nearly happened AGAIN in the opposite direction with `HealthHeader`. Three
+  separate audit lenses (two align laps, one red-team lap) were needed to fully converge on a
+  correct state here, which is a lot of adversarial firepower to spend on what is, in the end, four
+  or five lines of boolean logic - a sign the underlying invariant deserved either a single named
+  helper encoding it directly (e.g. a `BoardContent` sealed result the three call sites all switch
+  on, computed once) or at minimum one comment block stating the whole invariant in one place, rather
+  than three independent partial explanations that each looked locally correct.
+- Positive note: the established "Android-free, JVM-testable top-level pure helper" convention
+  (`sessionOrder`'s own precedent) made writing and testing the three NEW helpers this phase needed
+  (`localSessions`, `adminDomainId`, `dedupedFriendSessions`) genuinely frictionless once recognized -
+  a real case of an existing pattern paying for itself on the very next feature to need it.
