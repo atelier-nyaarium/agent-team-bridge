@@ -53,30 +53,20 @@ html, body {
 	contain-intrinsic-size: auto 140px;
 }
 
-/* Top-right speak button on agent rows; absolute so long bodies never shift. */
-.play-btn {
+/* Top-right action-button group: anchored by its OWN right edge, absolute so long bodies never
+   shift. A flex row grows LEFT as buttons are added (Play, Copy) rather than each button carrying
+   its own hardcoded offset - the group's right edge (nearest Copy, always present) never moves. */
+.row-actions {
 	position: absolute;
 	top: 6px;
 	right: 10px;
-	min-width: 30px;
-	height: 24px;
-	padding: 0 6px;
-	border: 1px solid var(--border);
-	border-radius: 6px;
-	background: transparent;
-	color: var(--fg-dim, inherit);
-	font-size: 11px;
-	line-height: 22px;
-	opacity: 0.75;
+	display: flex;
+	flex-direction: row;
+	gap: 6px;
 }
-.play-btn:active { opacity: 1; }
 
-/* Top-right copy-raw button, every row; shifts left of the play button when both are present so
-   neither ever overlaps the other. */
+.play-btn,
 .copy-btn {
-	position: absolute;
-	top: 6px;
-	right: 10px;
 	min-width: 30px;
 	height: 24px;
 	padding: 0 6px;
@@ -84,12 +74,12 @@ html, body {
 	border-radius: 6px;
 	background: transparent;
 	color: var(--fg-dim, inherit);
-	font-size: 12px;
 	line-height: 22px;
 	opacity: 0.75;
 }
-.copy-btn.with-play { right: 46px; }
-.copy-btn:active { opacity: 1; }
+.play-btn { font-size: 11px; }
+.copy-btn { font-size: 12px; }
+.play-btn:active, .copy-btn:active { opacity: 1; }
 
 .row.user {
 	background: var(--user-tint);
