@@ -21,7 +21,7 @@ import {
 	pickTiers,
 } from "../shared/notice.js";
 import type { PendingJobStore } from "../shared/pending-job-store.js";
-import { ChannelFilesSchema } from "../shared/schemas.js";
+import { ChannelFilesSchema, TeamInfoSchema } from "../shared/schemas.js";
 import {
 	Address,
 	composeSessionName,
@@ -744,39 +744,48 @@ export function createRoutes({
 		presenceSnapshotCache.invalidate();
 	}
 
+	/** Kind-filter + slug-validate + field-slice one TeamInfo row down to a CrossDomainPresenceSession
+	 * - shared by `presenceForDomain` (this Gateway's own outbound rows, still needing its own
+	 * `sharesFor` gate on top) and the backstop-pull reconciler (a linked peer's OWN already-shared-
+	 * filtered `list_teams` response, needing no further gate). Only devcontainer/loose sessions are
+	 * ever shareable (matching `gateCrossDomainTarget`'s own kind check); free-text fields are
+	 * truncated - this crosses a cross-Domain trust boundary TeamInfo itself was never scoped for.
+	 * `tryLocalAddress`, not the throwing `localAddress`: a row's team name is not always
+	 * slug-validated at intake (an ordinary devcontainer directory name can be uppercase, contain an
+	 * underscore/space, or exceed 64 chars), so an invalid one is skipped here, never an uncaught
+	 * throw. Returns null for a row that fails either check. */
+	function toCrossDomainPresenceSession(t: TeamInfo): CrossDomainPresenceSession | null {
+		if (t.kind !== "devcontainer" && t.kind !== "loose") return null;
+		if (!tryLocalAddress(t.team)) return null;
+		return {
+			team: t.team,
+			gatewayId: t.gatewayId,
+			status: t.status,
+			kind: t.kind,
+			sessionLabel: t.sessionLabel?.slice(0, 64),
+			description: t.description?.slice(0, 120),
+			lastActive: t.lastActive,
+			queueDepth: t.queue_depth,
+			working: t.working,
+			needsLogin: t.needsLogin,
+		};
+	}
+
 	/** What Domain `toDomainId` currently sees of this Gateway's own sessions - the exact
 	 * `sharesFor` filter gatewayRelay.ts's list_teams case already applies for a PULL, reused
-	 * here for the cross-Domain-presence PUSH (see crossDomainPresence.ts's source side).
-	 * Narrower and length-capped compared to the raw TeamInfo rows it filters from (only
-	 * devcontainer/loose sessions are ever shareable, matching gateCrossDomainTarget's own
-	 * kind check; free-text fields are truncated) - this crosses a cross-Domain trust boundary
-	 * TeamInfo itself was never scoped for. The underlying local snapshot is cached for the
-	 * current synchronous tick only (see presenceSnapshotForThisTick) - never across ticks. */
+	 * here for the cross-Domain-presence PUSH (see crossDomainPresence.ts's source side). The
+	 * underlying local snapshot is cached for the current synchronous tick only (see
+	 * presenceSnapshotForThisTick) - never across ticks. */
 	function presenceForDomain(toDomainId: string): CrossDomainPresenceSession[] {
 		const local = presenceSnapshotForThisTick();
 		const shared = new Set(sharesFor?.(toDomainId) ?? []);
 		const out: CrossDomainPresenceSession[] = [];
 		for (const t of local) {
 			if (out.length >= MAX_CROSSDOMAIN_PRESENCE_SESSIONS) break;
-			if (t.kind !== "devcontainer" && t.kind !== "loose") continue;
-			// tryLocalAddress, not the throwing localAddress: an offlineCatalog row's team name is
-			// never slug-validated at intake (unlike sessionStore's own rows), so an ordinary
-			// devcontainer directory name (an uppercase letter, underscore, space, or >64 chars) must
-			// be skipped here, not crash the whole gateway process via an uncaught assertSlug throw.
 			const addr = tryLocalAddress(t.team);
 			if (!addr || !shared.has(addr.canonical)) continue;
-			out.push({
-				team: t.team,
-				gatewayId: t.gatewayId,
-				status: t.status,
-				kind: t.kind,
-				sessionLabel: t.sessionLabel?.slice(0, 64),
-				description: t.description?.slice(0, 120),
-				lastActive: t.lastActive,
-				queueDepth: t.queue_depth,
-				working: t.working,
-				needsLogin: t.needsLogin,
-			});
+			const session = toCrossDomainPresenceSession(t);
+			if (session) out.push(session);
 		}
 		return out;
 	}
@@ -802,6 +811,64 @@ export function createRoutes({
 		);
 		const ok = results.some((r) => r.ok);
 		return ok ? { ok: true } : { ok: false, error: results[0]?.error };
+	}
+
+	/** query every one of `fromDomainId`'s gateways at once and dedup by gateway id like
+	 * `discover()`'s own fan-out - a sequential await-per-gateway loop would let one hung gateway
+	 * delay even STARTING the request to that Domain's other, possibly healthy, gateways by up to
+	 * the full relay timeout, degrading this Domain's own backstop cadence far below the reconciler's
+	 * intended 10s tick. A peer's reply is UNTRUSTED content (unlike a `presence_push`, which is
+	 * zod-validated at the wire boundary before it ever reaches this process) - schema-validate it
+	 * here, in the SAME shape and size bound (`MAX_CROSSDOMAIN_PRESENCE_SESSIONS`) the push path's
+	 * own wire schema enforces, before any of it is trusted as a `TeamInfo` row. */
+	const PulledListTeamsResultSchema = z.object({
+		teams: z.array(TeamInfoSchema).max(MAX_CROSSDOMAIN_PRESENCE_SESSIONS).optional(),
+	});
+
+	/** The cross-Domain-presence backstop pull: query every one of `fromDomainId`'s gateways for its
+	 * OWN `list_teams`, converted through the same `toCrossDomainPresenceSession` filter the push
+	 * side uses - no `sharesFor` gate here, since the peer's own gateway already decided what to
+	 * share to this Domain before answering. Resolves `null` if every gateway for this Domain was
+	 * unreachable OR answered with something that fails validation this attempt (the caller must not
+	 * overwrite existing landed state with emptiness on a failed pull); an array (possibly empty, if
+	 * the Domain genuinely shares nothing back) once at least one gateway answered with a valid
+	 * reply. */
+	async function pullPresenceFromDomain(fromDomainId: string): Promise<CrossDomainPresenceSession[] | null> {
+		const peers = (crossDomainPeers?.all() ?? []).filter((p) => p.friendDomainId === fromDomainId);
+		if (peers.length === 0) return null;
+		const seenGateways = new Set<string>();
+		const toQuery = peers.filter((peer) => {
+			if (seenGateways.has(peer.friendGatewayId)) return false;
+			seenGateways.add(peer.friendGatewayId);
+			return true;
+		});
+		const results = await Promise.all(
+			toQuery.map((peer) =>
+				relayToGateway(peer.friendGatewayId, { kind: "list_teams" }).then((r) => ({ peer, r })),
+			),
+		);
+		const rows: TeamInfo[] = [];
+		let anyOk = false;
+		for (const { peer, r } of results) {
+			if (!r.ok) continue;
+			const parsed = PulledListTeamsResultSchema.safeParse(r.result);
+			if (!parsed.success) {
+				console.warn(
+					`[cross-domain-presence] malformed list_teams reply from "${peer.friendGatewayId}" (Domain "${fromDomainId}") - discarding`,
+				);
+				continue;
+			}
+			anyOk = true;
+			rows.push(...(parsed.data.teams ?? []));
+		}
+		if (!anyOk) return null;
+		const out: CrossDomainPresenceSession[] = [];
+		for (const t of rows) {
+			if (out.length >= MAX_CROSSDOMAIN_PRESENCE_SESSIONS) break;
+			const session = toCrossDomainPresenceSession(t);
+			if (session) out.push(session);
+		}
+		return out;
 	}
 
 	/** Discovery across the mesh: local teams, a fan-out to every online SAME-Domain peer
@@ -1543,6 +1610,7 @@ export function createRoutes({
 		presenceForDomain,
 		landCrossDomainPresence,
 		pushPresenceToDomain,
+		pullPresenceFromDomain,
 		invalidatePresenceSnapshotCache,
 	};
 }

@@ -1777,6 +1777,22 @@ describe("routes", () => {
 			presenceForDomain("carol-domain");
 			expect(snapshotCalls).toBe(2);
 		});
+
+		it("pullPresenceFromDomain resolves null for a Domain with no linked gateway at all", async () => {
+			const { pullPresenceFromDomain } = createRoutes(makeCtx({}));
+			await expect(pullPresenceFromDomain("bob-domain")).resolves.toBeNull();
+		});
+
+		it("pullPresenceFromDomain resolves null when every one of the Domain's gateways is unreachable", async () => {
+			// No evieClient wired in this ctx, so relayToGateway fails closed for every gateway -
+			// exactly the "reached none of them" case that must never be confused with "reached them
+			// and they genuinely share nothing" (which resolves an empty array, not null).
+			const crossDomainPeers = {
+				all: () => [{ friendDomainId: "bob-domain", friendGatewayId: "bob-gw", friendOwnerSignPub: "x" }],
+			} as unknown as import("../gateway/federation/crossDomainPeers.js").CrossDomainPeers;
+			const { pullPresenceFromDomain } = createRoutes(makeCtx({ crossDomainPeers }));
+			await expect(pullPresenceFromDomain("bob-domain")).resolves.toBeNull();
+		});
 	});
 
 	describe("constants", () => {

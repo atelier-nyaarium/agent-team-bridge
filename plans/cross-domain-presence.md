@@ -548,3 +548,86 @@ Not a code audit - a vibe check on what was genuinely annoying to work through i
   it is safe by construction). Nothing flags "this key is free-form, not hash-shaped" for a future
   author to notice on their own; it is caught only if someone happens to red-team it, as happened
   here.
+
+## Phase 2 implementation - align findings
+
+A plan-alignment pass (1 lap, 3 confirmed findings, 0 refuted) over the just-implemented consumer
+plane, wire shape, and reconciliation. All fixed or corrected.
+
+- **Major, backstop-refreshed timestamps never reached the console when content was unchanged:**
+  `lastRefreshedAt` was deliberately excluded from the plane's content hash (so a reconfirming
+  backstop pull would not bump - and wake every polling console over - the version), but that meant
+  the refresh could never ship either, since delivery is itself gated on a version bump. In the
+  ordinary steady-state case (an established friend link whose content is not currently changing),
+  the console's cached timestamp would freeze at the last real content change and eventually read as
+  stale despite the backstop confirming freshness every 10s - exactly what "so a friend's dropdown
+  never keeps showing stale/greyed" was meant to prevent. Fixed: the plane now hashes a coarse
+  freshness bucket (`FRESHNESS_BUCKET_MS`, 60s) alongside content, so an unchanged reconfirmation
+  still bumps (and ships) at most once per bucket - cheap, rare, but no longer never.
+- **Major, a Domain unlinked while its backstop pull was still in flight could resurrect torn-down
+  state:** `pullPresenceFromDomain` only needs ONE of a Domain's gateways to answer to resolve
+  non-null; for a Domain with 2+ gateways, an earlier gateway's reply landing before `unlinkDomain`
+  ran, with a later gateway's reply still pending when it ran, meant the pull resolved successfully
+  well after `teardown()` already ran - `land()` then re-registered the plane and rewrote `state`,
+  permanently leaking past teardown (surviving restarts too, via `restore()`'s own eager
+  re-registration). The exact bug class Phase 1's own red-team lap 1 already found and fixed once
+  for the structurally identical source-side pusher. Fixed: `createCrossDomainPresenceReconciler`
+  now carries the same generation-token pattern `CoalescedPusher` uses, exposing `cancel(domainId)`,
+  called from `unlinkDomain`/`untrustOwner` alongside the existing `teardown()` calls.
+- **Minor, doc-only:** this plan's own Phase 2 text claimed the consumer-side roster is built from
+  "the SAME freshly-enumerated live roster the source side now uses" - untrue, and correctly so: the
+  source side additionally filters to Domains this Gateway actively shares its OWN sessions to
+  (`sharesFor`), a filter the consumer side cannot apply (a Gateway cannot know whether a linked
+  friend shares back until it actually pushes or answers a pull). The implementation is correct
+  (confirmed by a dedicated test - a linked-but-never-shared Domain still gets its plane eagerly
+  ensured, so its dropdown can appear before any content arrives, per Q4); only this plan's own
+  prose overclaimed an identity between two necessarily-different rosters. No code change; noting
+  the correction here rather than editing the original design section.
+
+## Phase 2 implementation - red-team findings
+
+A red-team pass (1 lap, 4 confirmed findings, 1 refuted) over Phase 2's new network-facing surface
+(the backstop pull) and the two align-fixes above. 3 fixed, 1 deliberately deferred.
+
+- **Major, the backstop pull trusted a peer's `list_teams` reply with zero runtime validation:**
+  unlike a `presence_push` (zod-validated at the wire boundary before `land()` ever sees it),
+  `pullPresenceFromDomain` read a linked peer's reply via a bare TS cast - a compromised, buggy, or
+  version-skewed peer omitting a required field (`status`, `queueDepth`) would land successfully
+  into durable state and only fail later, client-side, decoding the ENTIRE poll response. This
+  directly undercut this plan's own earlier "Trust boundary" reasoning, which left the pull path
+  unhardened on the premise a pull result is "shown once" - Phase 2's reconciler now lands a pull
+  result through the exact same sticky, durable, poll-piggybacked path a push uses. Fixed:
+  `pullPresenceFromDomain` now validates each gateway's reply against `TeamInfoSchema` (the SAME
+  schema `list_teams`'s own console-facing result already uses), capped at
+  `MAX_CROSSDOMAIN_PRESENCE_SESSIONS`, discarding (not trusting) a reply that fails.
+- **Major, a Domain's multiple gateways were queried sequentially, not in parallel:** unlike its two
+  siblings in the same file (`discover()`, `pushPresenceToDomain`), `pullPresenceFromDomain` awaited
+  each of a Domain's gateways one at a time. Since the reconciler's in-flight guard is keyed per
+  Domain (not per gateway), a hung FIRST gateway delayed even starting the request to a healthy
+  SECOND gateway of the same Domain by up to the full ~120s relay timeout, degrading that Domain's
+  backstop cadence from 10s to potentially minutes - a narrower recurrence of the exact "a hung peer
+  stalls the recovery mechanism" failure this feature exists to fix. Fixed: fanned out with
+  `Promise.all`, matching the two sibling functions.
+- **Deferred, not fixed:** the reconciler's per-tick fan-out has no GLOBAL concurrency cap (every
+  currently-linked Domain gets dispatched every tick, bounded only by the per-Domain in-flight
+  guard) and runs unconditionally forever on a 10s timer, unlike its closest concurrency-shape
+  precedent (`discover()`, which fans out identically but only on an occasional, console-paced
+  request). On this Gateway the marginal cost is cheap (one Promise + one WS `list_teams` call per
+  linked Domain, no new socket/fd), so the real cost lands on evie's relay throughput and whichever
+  remote gateways get queried, scaling with linked-Domain count - unlikely to bite a typical
+  deployment given linking is slow, human-paced, and owner-gated. A naive fix (a shared-pool
+  concurrency limiter, mirroring `hostOpRunner.ts`'s `withPeekSlot`) would trade this hazard for a
+  worse one: since `linkedDomainIds()`'s iteration order is stable, a shared pool would let the SAME
+  domains queue behind the SAME slow peers on every tick, systematically starving specific domains
+  rather than distributing delay fairly - exactly the "a hung peer stalls something else" class of
+  bug this feature exists to avoid, just relocated onto a domain-vs-domain axis. A correct fix needs
+  an explicit fairness scheme (e.g. a per-tick cap on newly-dispatched attempts with a rotating start
+  offset), not a drop-in semaphore - out of scope for a minor, currently-unlikely-to-matter finding.
+  Revisit if a deployment's linked-Domain count ever grows large enough for this to matter in
+  practice.
+- **Not re-tested with a new automated test:** the malformed-peer-reply fix has no dedicated test
+  (would need a full two-gateway sealed-relay test harness, which `pushPresenceToDomain`/
+  `discover()` - the sibling functions this one already matches - also lack; consistent with, not a
+  regression from, existing precedent). Verified by construction instead: `TeamInfoSchema` already
+  requires `status`/`queueDepth` with no `.optional()`, matching `CrossDomainPresenceSessionSchema`'s
+  own requirements, and is already exercised extensively via `protocol-fixtures.test.ts`.

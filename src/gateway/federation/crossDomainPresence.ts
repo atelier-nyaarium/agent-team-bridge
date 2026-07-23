@@ -14,7 +14,9 @@ export type PresenceForDomain = CrossDomainPresenceSession[];
 
 const LandedEntrySchema = z.object({
 	sessions: z.array(CrossDomainPresenceSessionSchema),
-	lastPushedAt: z.number().int().nonnegative(),
+	// Refreshed on EITHER a landed push or a successful backstop pull (createCrossDomainPresenceReconciler
+	// below) - a client-side staleness display timestamp, never a gateway-side boolean.
+	lastRefreshedAt: z.number().int().nonnegative(),
 });
 type LandedEntry = z.infer<typeof LandedEntrySchema>;
 const CrossDomainPresenceLandedFileSchema = z.record(z.string(), LandedEntrySchema);
@@ -41,6 +43,12 @@ const MAX_LINKED_DOMAINS_FOR_PRESENCE = 500;
  * `land()` does not drop a call arriving inside the window, it coalesces and defers it (see
  * `land`'s own doc comment), so this floor bounds cost without ever losing the latest content. */
 const MIN_LAND_INTERVAL_MS = 1_000;
+
+/** Granularity `CrossDomainPresenceConsumer`'s per-Domain plane buckets `lastRefreshedAt` into for
+ * hashing (see `ensureRegistered`'s plane definition). A reconfirmation within the same bucket as
+ * the last one never bumps the version (no spurious wake for every 10s backstop tick); crossing
+ * into a new bucket does, carrying a fresher timestamp to any console holding a stale one. */
+const FRESHNESS_BUCKET_MS = 60_000;
 
 export function crossDomainPresenceSourcePlaneName(domainId: string): string {
 	return `presence:crossdomain-source:${domainId}`;
@@ -394,8 +402,12 @@ export class CrossDomainPresenceConsumer {
 
 	/** Whether `domainId` is safe to write into `state` - already tracked, or freshly registered
 	 * within the cap. False ONLY when a genuinely new Domain is refused at the cap - the caller
-	 * must not write orphaned state for a Domain its own plane registration refused. */
-	private ensureRegistered(domainId: string): boolean {
+	 * must not write orphaned state for a Domain its own plane registration refused. Public so the
+	 * poll path (consoleHandler.ts) can eagerly register every currently-linked Domain's plane
+	 * BEFORE racing `waitForBump` - a plane that does not exist yet cannot wake an in-flight held
+	 * poll on its first-ever bump (see `PlaneRegistry.wake`'s own membership-gated dispatch), so a
+	 * linked Domain must have a plane in place before that Domain's first land()/pull ever lands. */
+	ensureRegistered(domainId: string): boolean {
 		if (this.registered.has(domainId)) return true;
 		if (this.registered.size >= MAX_LINKED_DOMAINS_FOR_PRESENCE) {
 			console.warn(
@@ -408,12 +420,20 @@ export class CrossDomainPresenceConsumer {
 		this.planeRegistry.registerPlane(
 			{
 				name,
-				// lastPushedAt is deliberately excluded from what gets hashed: it is a freshness
-				// timestamp, not content, and a backstop-driven refresh that confirms unchanged
-				// content must not spuriously bump the version (which would wake every polling
-				// console over nothing). The stored value the poll response actually serves still
-				// carries the up-to-date timestamp regardless - see snapshot() above.
-				snapshot: () => this.state.get(domainId)?.sessions ?? [],
+				// lastRefreshedAt rides in its own COARSE bucket (see FRESHNESS_BUCKET_MS), not raw -
+				// a backstop pull that reconfirms unchanged content must not bump (and wake every
+				// polling console over) the version on every single reconfirmation, but a freshness
+				// signal that NEVER bumps would never reach any console once content stops changing,
+				// which defeats the entire point of a backstop pull (confirming continued freshness,
+				// not just correcting drift). Bucketing gives both: cheap, rare version bumps that
+				// still periodically carry a fresher timestamp to whoever is holding a stale one.
+				snapshot: () => {
+					const entry = this.state.get(domainId);
+					return {
+						sessions: entry?.sessions ?? [],
+						freshnessBucket: entry ? Math.floor(entry.lastRefreshedAt / FRESHNESS_BUCKET_MS) : 0,
+					};
+				},
 				identityOf: (snapshot) => stableHash(snapshot),
 			},
 			this.restoredPlanes?.[name],
@@ -469,7 +489,7 @@ export class CrossDomainPresenceConsumer {
 	private applyLand(srcDomainId: string, sessions: CrossDomainPresenceSession[], now: number): void {
 		if (!this.ensureRegistered(srcDomainId)) return;
 		this.lastLandedAt.set(srcDomainId, now);
-		this.state.set(srcDomainId, { sessions: sanitizeLandedSessions(sessions), lastPushedAt: now });
+		this.state.set(srcDomainId, { sessions: sanitizeLandedSessions(sessions), lastRefreshedAt: now });
 		this.planeRegistry.markDirty(crossDomainPresencePlaneName(srcDomainId));
 	}
 
@@ -494,4 +514,86 @@ export class CrossDomainPresenceConsumer {
 		this.registered.delete(domainId);
 		this.planeRegistry.unregisterPlane(crossDomainPresencePlaneName(domainId));
 	}
+}
+
+////////////////////////////////
+//  Reconciliation (backstop pull, decoupled from the console poll loop)
+
+export interface CrossDomainPresenceReconcilerDeps {
+	/** Every currently linked Domain id, enumerated fresh on every tick - never a cached roster,
+	 * same "no stale membership list" requirement the source side's own recomputeAll needs. */
+	linkedDomainIds: () => string[];
+	/** Pull `domainId`'s current shareable sessions from its gateway(s). Resolves `null` if every
+	 * gateway for that Domain was unreachable this attempt - the caller must NOT overwrite existing
+	 * landed state with emptiness on a failed pull. Resolves an array (possibly empty, if the Domain
+	 * genuinely shares nothing back) once at least one of its gateways answered. */
+	pull: (domainId: string) => Promise<CrossDomainPresenceSession[] | null>;
+	/** Land a successful pull's result - the SAME entry point a real push uses (`land`), so a pull
+	 * gets the identical rate-limit/coalesce/sanitize/cap handling with no separate code path. */
+	land: (domainId: string, sessions: CrossDomainPresenceSession[]) => void;
+}
+
+export interface CrossDomainPresenceReconciler {
+	/** Run one reconciliation pass: pull every currently-linked Domain not already mid-attempt. */
+	tick: () => void;
+	/** Cancel any in-flight pull for `domainId` so its eventual resolution cannot resurrect state a
+	 * concurrent teardown just removed - mirrors `CoalescedPusher.cancel`'s own generation-token
+	 * fix for the structurally identical hazard on the source side. Call from `unlinkDomain`/
+	 * `untrustOwner` alongside the existing `crossDomainPresenceConsumer.teardown()` call. */
+	cancel: (domainId: string) => void;
+}
+
+/**
+ * The backstop pull: `presence_push` gets no long-running retry chain of its own (a failed or
+ * retry-exhausted push is simply caught here a few seconds later, so the feature leans on ONE
+ * recovery mechanism instead of two competing ones). Runs on its OWN cadence, fully decoupled from
+ * the console's own message poll loop, so a hung/unreachable linked peer can never stall it.
+ *
+ * Each destination peer is guarded by an in-flight generation token (mirrors vibeCheck.ts's
+ * `peekInFlight` / `PresenceFacade`'s own `wakeInFlight` for the SKIP-if-already-attempting half,
+ * and `CoalescedPusher`'s own token for the CANCEL-a-stale-attempt half): a peer still mid-attempt
+ * from a prior tick is skipped, not piled onto - without this, a persistently hung peer (the
+ * scenario motivating this whole feature) would accumulate one MORE overlapping relay attempt every
+ * tick for as long as the underlying relay call takes to time out, reproducing the original stall
+ * at the mesh level instead of fixing it. A Domain can run more than one gateway, and
+ * `pull` only needs ONE to answer to resolve non-null - so an in-flight pull can still be resolving
+ * (from an earlier-answering gateway) after `cancel()` was called for a Domain unlinked mid-pull;
+ * the token is what lets that stale resolution recognize it is no longer current and skip `land()`,
+ * rather than resurrecting state `unlinkDomain`'s `teardown()` call just removed.
+ */
+export function createCrossDomainPresenceReconciler(
+	deps: CrossDomainPresenceReconcilerDeps,
+): CrossDomainPresenceReconciler {
+	const { linkedDomainIds, pull, land } = deps;
+	const inFlight = new Map<string, number>();
+	let nextToken = 0;
+
+	function tick(): void {
+		for (const domainId of linkedDomainIds()) {
+			if (inFlight.has(domainId)) continue;
+			const token = nextToken++;
+			inFlight.set(domainId, token);
+			pull(domainId)
+				.then((sessions) => {
+					// A cancel() (or, in principle, a fresh dispatch racing some other way) would have
+					// removed or replaced this domainId's token - only land if THIS attempt is still
+					// the current one for it.
+					if (sessions && inFlight.get(domainId) === token) land(domainId, sessions);
+				})
+				.catch((err) => {
+					console.warn(
+						`[cross-domain-presence] backstop pull for "${domainId}" failed: ${err instanceof Error ? err.message : String(err)}`,
+					);
+				})
+				.finally(() => {
+					if (inFlight.get(domainId) === token) inFlight.delete(domainId);
+				});
+		}
+	}
+
+	function cancel(domainId: string): void {
+		inFlight.delete(domainId);
+	}
+
+	return { tick, cancel };
 }

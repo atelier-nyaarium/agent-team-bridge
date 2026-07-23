@@ -39,6 +39,7 @@ import {
 	CrossDomainPresenceConsumer,
 	type CrossDomainPresenceSource,
 	createCoalescedPresencePusher,
+	createCrossDomainPresenceReconciler,
 	createCrossDomainPresenceSource,
 } from "./federation/crossDomainPresence.js";
 import { CrossDomainShareState } from "./federation/crossDomainShareState.js";
@@ -1028,6 +1029,24 @@ export async function startGateway(): Promise<void> {
 		// "registered late, tripwire is the backstop" reasoning a few lines above in this file.
 		crossDomainPresenceSource?.recomputeAll();
 
+		// Cross-Domain-presence CONSUMER-side backstop pull: `presence_push` gets no long-running
+		// retry chain of its own, so a failed/exhausted push is simply caught here a few seconds
+		// later - see crossDomainPresence.ts's own doc. Runs on its own 10s cadence, fully decoupled
+		// from the console's own poll loop, so a hung/unreachable linked peer can never stall it.
+		// Declared as a function-level const (not scoped inside the `if` below) so unlinkDomain/
+		// untrustOwner further down can reach its `cancel` - a Domain unlinked while its pull is
+		// still in flight (a real window: a Domain can run 2+ gateways, and only one needs to answer
+		// for the pull to resolve) must not have that resolution resurrect the state teardown() just
+		// removed.
+		const crossDomainPresenceReconciler = crossDomainPeersForConsole
+			? createCrossDomainPresenceReconciler({
+					linkedDomainIds: () => [...new Set(crossDomainPeersForConsole!.all().map((p) => p.friendDomainId))],
+					pull: (domainId) => routes.pullPresenceFromDomain(domainId),
+					land: (domainId, sessions) => crossDomainPresenceConsumer.land(domainId, sessions),
+				})
+			: undefined;
+		if (crossDomainPresenceReconciler) setInterval(() => crossDomainPresenceReconciler.tick(), 10_000);
+
 		const consoleHandler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
@@ -1052,6 +1071,8 @@ export async function startGateway(): Promise<void> {
 			presence,
 			intentTracker,
 			readAnchors,
+			crossDomainPresenceConsumer,
+			linkedDomainIds: () => [...new Set(crossDomainPeersForConsole?.all().map((p) => p.friendDomainId) ?? [])],
 			relayToHost,
 			tryWakeTeam,
 			isWakeInFlight: (team) => inflightWakes.has(team) || inflightCreates.has(team),
@@ -1121,6 +1142,7 @@ export async function startGateway(): Promise<void> {
 							};
 							crossDomainPresenceSource?.teardown(domainId);
 							crossDomainPresenceConsumer.teardown(domainId);
+							crossDomainPresenceReconciler?.cancel(domainId);
 							return result;
 						}
 					: undefined,
@@ -1138,6 +1160,7 @@ export async function startGateway(): Promise<void> {
 								jobsExpired += store.expireByDomain(domainId);
 								crossDomainPresenceSource?.teardown(domainId);
 								crossDomainPresenceConsumer.teardown(domainId);
+								crossDomainPresenceReconciler?.cancel(domainId);
 							}
 							return { peersRemoved: removed, sharesDropped, jobsExpired };
 						}

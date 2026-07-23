@@ -165,6 +165,7 @@ sealed class ConsoleOp {
 		val focus: FocusIntent? = null,
 		val knownLinkedPeersVersion: LinkedPeersVersion? = null,
 		val knownReadAnchorsVersion: ReadAnchorsVersion? = null,
+		val knownCrossDomainPresenceVersions: List<CrossDomainPresenceKnownVersion>? = null,
 	) : ConsoleOp()
 
 	@Serializable
@@ -367,6 +368,7 @@ data class ConsolePollResult(
 	val linkedPeersVersion: LinkedPeersVersion? = null,
 	val readAnchors: List<ReadAnchorWireEntry>? = null,
 	val readAnchorsVersion: ReadAnchorsVersion? = null,
+	val crossDomainPresence: List<CrossDomainPresenceEntry>? = null,
 	val settled: String? = null,
 )
 
@@ -768,6 +770,13 @@ data class ReadAnchorsVersion(
 )
 
 @Serializable
+data class CrossDomainPresenceKnownVersion(
+	val domainId: String,
+	val epoch: Long,
+	val version: Long,
+)
+
+@Serializable
 data class SignedXDomainLink(
 	val link: XDomainLink,
 	val ownerSignPub: String,
@@ -815,6 +824,34 @@ data class ReadAnchorWireEntry(
 	val epoch: Long,
 	val seq: Long,
 	val at: Long,
+)
+
+@Serializable
+data class CrossDomainPresenceEntry(
+	val domainId: String,
+	val version: CrossDomainPresenceVersion,
+	val sessions: List<CrossDomainPresenceSession>,
+	val lastRefreshedAt: Long,
+)
+
+@Serializable
+data class CrossDomainPresenceVersion(
+	val epoch: Long,
+	val version: Long,
+)
+
+@Serializable
+data class CrossDomainPresenceSession(
+	val team: String,
+	val gatewayId: String,
+	val status: String,
+	val kind: String,
+	val sessionLabel: String? = null,
+	val description: String? = null,
+	val lastActive: Long? = null,
+	val queueDepth: Long,
+	val working: Boolean? = null,
+	val needsLogin: Boolean? = null,
 )
 
 @Serializable
