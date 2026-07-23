@@ -65,6 +65,7 @@ export class PresenceFacade {
 	private readonly displayName: () => string | null | undefined;
 	private readonly isAdminDomain: () => boolean | null | undefined;
 	private planeRegistry: PlaneRegistry | undefined;
+	private onDirty?: () => void;
 
 	private readonly wakeInFlight = new Set<string>();
 	private readonly createInFlight = new Set<string>();
@@ -86,12 +87,22 @@ export class PresenceFacade {
 		this.planeRegistry = planeRegistry;
 	}
 
+	/** Wire a secondary observer of every markDirty() call, regardless of call site - late-bound
+	 * (federation activates well after this class is constructed) and optional (nothing to observe
+	 * when federation is off). The cross-Domain-presence source side's hook into "this Gateway's
+	 * own local presence just changed" (session/WS/wake/working-state mutations), so it never has
+	 * to be scattered across this class's dozen-plus individual mutators one by one. */
+	onMarkDirty(fn: () => void): void {
+		this.onDirty = fn;
+	}
+
 	/** Mark the presence plane dirty. Public so websocket.ts's own live-socket transition points
 	 * (raw WsData property writes with no method boundary of their own to wrap) can announce
 	 * themselves; every OTHER mutation in this class calls this internally instead of requiring the
 	 * caller to remember to. */
 	markDirty(): void {
 		this.planeRegistry?.markDirty("presence");
+		this.onDirty?.();
 	}
 
 	////////////////////////////////

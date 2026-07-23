@@ -35,6 +35,12 @@ import {
 	parseRevealReply,
 } from "./federation/crossDomainHandshake.js";
 import { CrossDomainPeers } from "./federation/crossDomainPeers.js";
+import {
+	CrossDomainPresenceConsumer,
+	type CrossDomainPresenceSource,
+	createCoalescedPresencePusher,
+	createCrossDomainPresenceSource,
+} from "./federation/crossDomainPresence.js";
 import { CrossDomainShareState } from "./federation/crossDomainShareState.js";
 import {
 	type AdmitGatewayPayload,
@@ -179,6 +185,12 @@ export async function startGateway(): Promise<void> {
 	const restoredReadAnchors: unknown = isWrapped
 		? (loadedResumeRaw as { readAnchors?: unknown }).readAnchors
 		: undefined;
+	// The cross-Domain-presence CONSUMER (landed) side's own raw per-Domain data - a FOURTH field
+	// on this same wrapped file, for the same one-atomic-write reason readAnchors is a third rather
+	// than its own durable-store file.
+	const restoredCrossDomainPresence: unknown = isWrapped
+		? (loadedResumeRaw as { crossDomainPresence?: unknown }).crossDomainPresence
+		: undefined;
 	try {
 		const jobs = jobsDurable.load();
 		if (Array.isArray(jobs)) store.restore(jobs as Parameters<typeof store.restore>[0]);
@@ -237,6 +249,14 @@ export async function startGateway(): Promise<void> {
 	const readAnchors = new ReadAnchors(planeRegistry, restoredPlanes);
 	readAnchors.restore(restoredReadAnchors);
 
+	// Cross-Domain-presence CONSUMER (landed) side: one plane per Domain that has ever pushed to
+	// this Gateway, lazily registered on first land (same reasoning as readAnchors above - no
+	// fixed set of linked Domains known at boot). Constructed unconditionally (mirroring
+	// readAnchors) even though it only ever receives a land() call once federation is active and a
+	// friend actually pushes; nothing calls its methods until then.
+	const crossDomainPresenceConsumer = new CrossDomainPresenceConsumer(planeRegistry, restoredPlanes);
+	crossDomainPresenceConsumer.restore(restoredCrossDomainPresence);
+
 	// The federation replay-guard wires its own persistence here once built (it only
 	// exists when the evie bridge is configured); null-safe until then.
 	let replayPersist: (() => void) | null = null;
@@ -261,6 +281,7 @@ export async function startGateway(): Promise<void> {
 			sessions: sessionStore.snapshot(),
 			planes: planeRegistry.persistedState(cleanShutdown),
 			readAnchors: readAnchors.snapshot(),
+			crossDomainPresence: crossDomainPresenceConsumer.snapshot(),
 		});
 		replayPersist?.();
 	};
@@ -492,6 +513,13 @@ export async function startGateway(): Promise<void> {
 	// per-Domain share to a real link, so an everyone-trusted share can never reach a non-peer.
 	const isLinkedDomain = (domainId: string): boolean =>
 		crossDomainPeersForConsole?.all().some((p) => p.friendDomainId === domainId) ?? false;
+	// The cross-Domain-presence source side (gateway/federation/crossDomainPresence.ts), assigned
+	// once activateEvieHandlers() builds it (it needs a federation-aware `routes`, only available
+	// after buildRoutes() reruns post-activateFederation). Declared here, ahead of
+	// activateFederation, so CrossDomainPeers' onChange hook below can close over the eventual
+	// value - onChange only ever fires on a genuine link/unlink, which cannot happen before
+	// enrollment completes, well after activateEvieHandlers has already run.
+	let crossDomainPresenceSourceRef: CrossDomainPresenceSource | undefined;
 
 	const evieTransport = loadEvieTransport(federationDir);
 
@@ -507,7 +535,15 @@ export async function startGateway(): Promise<void> {
 		// DISJOINT store from the single-owner allowlist, written only by the handshake,
 		// so a local-Domain sync can never wipe it and it never contaminates intra-Domain
 		// resolution. The sealer resolves local peers first, then this set.
-		const crossDomainPeers = new CrossDomainPeers(federationDir, () => planeRegistry.markDirty("linked-peers"));
+		const crossDomainPeers = new CrossDomainPeers(federationDir, () => {
+			planeRegistry.markDirty("linked-peers");
+			// CrossDomainPeers' onChange is argument-less by construction - it cannot identify which
+			// Domain a link/unlink affected, so it falls back to a full sweep of the current
+			// linked-and-shared roster (bounded by the same cap recomputeAll's own callers use). This
+			// is also what correctly grants a Domain its first push the instant it is linked, when an
+			// everyone-trusted share already existed before the link (the grant-on-link case).
+			crossDomainPresenceSourceRef?.recomputeAll();
+		});
 		crossDomainPeersForConsole = crossDomainPeers;
 		// The linked-peers plane: a one-call registration, same pattern as presence - the store's
 		// own onChange hook above is the single writer, so a link/unlink/untrust can never forget
@@ -536,7 +572,10 @@ export async function startGateway(): Promise<void> {
 		// Domains, persisted alongside the peer set. Plain gateway-local state (the device's
 		// submit op is authenticated by the existing console seal), read by discovery and the
 		// relay so an un-share bites without evie.
-		crossDomainShareState = new CrossDomainShareState(federationDir);
+		crossDomainShareState = new CrossDomainShareState(federationDir, (reason) => {
+			if (reason.kind === "domain") crossDomainPresenceSourceRef?.recomputeDomain(reason.domainId);
+			else crossDomainPresenceSourceRef?.recomputeAll();
+		});
 		const identity = loadOrCreateIdentity(federationDir);
 		// Durable replay-guard: persisted across restarts so an authentic sealed frame
 		// captured inside the 120s freshness window cannot replay once after a deploy.
@@ -929,6 +968,12 @@ export async function startGateway(): Promise<void> {
 				? (sessionTarget, domainId) =>
 						crossDomainShareState!.isSharedTo(sessionTarget, domainId, isLinkedDomain)
 				: null,
+			// The cross-Domain-presence source side's own filter, reusing the exact same
+			// shareState.sharesFor gatewayRelay.ts's list_teams case already applies for a pull.
+			sharesFor: crossDomainShareState
+				? (domainId) => crossDomainShareState!.sharesFor(domainId, isLinkedDomain)
+				: null,
+			crossDomainPresenceConsumer,
 			resolveHandshake: wsHandlers.resolveHandshake,
 			findPendingHandshake: wsHandlers.findPendingHandshakeId,
 			repushHandshake: wsHandlers.repushHandshake,
@@ -944,6 +989,45 @@ export async function startGateway(): Promise<void> {
 	let routes = buildRoutes();
 
 	function activateEvieHandlers(): void {
+		// Cross-Domain-presence SOURCE side: needs the federation-aware `routes` buildRoutes() just
+		// rebuilt (presenceForDomain/pushPresenceToDomain), so it is constructed here rather than
+		// inside activateFederation. Assigning the module-level ref lets CrossDomainPeers'/
+		// CrossDomainShareState's onChange hooks (wired earlier, inside activateFederation) reach it.
+		const presencePusher = createCoalescedPresencePusher((domainId, sessions) =>
+			routes.pushPresenceToDomain(domainId, sessions),
+		);
+		const crossDomainPresenceSource =
+			crossDomainShareState && crossDomainPeersForConsole
+				? createCrossDomainPresenceSource({
+						planeRegistry,
+						restoredPlanes,
+						presenceForDomain: (domainId) => routes.presenceForDomain(domainId),
+						invalidatePresenceCache: () => routes.invalidatePresenceSnapshotCache(),
+						linkedAndSharedDomainIds: () => {
+							const domainIds = [
+								...new Set(crossDomainPeersForConsole!.all().map((p) => p.friendDomainId)),
+							];
+							return domainIds.filter(
+								(id) => crossDomainShareState!.sharesFor(id, isLinkedDomain).length > 0,
+							);
+						},
+						push: presencePusher.push,
+						cancelPush: presencePusher.cancel,
+					})
+				: undefined;
+		crossDomainPresenceSourceRef = crossDomainPresenceSource;
+		// Every local presence mutation (session/WS/wake/working-state changes) also recomputes
+		// every currently linked-and-shared Domain - the trigger set's first half (see the plan's
+		// Source side section); the second half is CrossDomainPeers'/CrossDomainShareState's own
+		// onChange hooks, wired inside activateFederation above.
+		presence.onMarkDirty(() => crossDomainPresenceSource?.recomputeAll());
+		// Re-register a plane for every Domain already linked-and-shared from a prior run.
+		// reconcileOnBoot()'s own global pass already completed before federation activates (this
+		// runs well after boot), so each plane's own cold-start/restored-state handling in
+		// recomputeDomain is what actually reconciles it - mirrors the linked-peers plane's own
+		// "registered late, tripwire is the backstop" reasoning a few lines above in this file.
+		crossDomainPresenceSource?.recomputeAll();
+
 		const consoleHandler = createConsoleDispatcher({
 			registry,
 			conversationRegistry,
@@ -1029,11 +1113,16 @@ export async function startGateway(): Promise<void> {
 			// link-edge revocation so the Router drops its relay-affinity edge.
 			unlinkDomain:
 				crossDomainShareState && crossDomainPeersForConsole
-					? (domainId) => ({
-							peersRemoved: crossDomainPeersForConsole!.removeByDomain(domainId),
-							sharesDropped: crossDomainShareState!.dropDomain(domainId),
-							jobsExpired: store.expireByDomain(domainId),
-						})
+					? (domainId) => {
+							const result = {
+								peersRemoved: crossDomainPeersForConsole!.removeByDomain(domainId),
+								sharesDropped: crossDomainShareState!.dropDomain(domainId),
+								jobsExpired: store.expireByDomain(domainId),
+							};
+							crossDomainPresenceSource?.teardown(domainId);
+							crossDomainPresenceConsumer.teardown(domainId);
+							return result;
+						}
 					: undefined,
 			// Untrust a PERSON (owner-keyed): forget every peer Gateway owned by that owner across
 			// ALL their Domains, then drop the shares + settle the in-flight jobs for those Domains.
@@ -1047,6 +1136,8 @@ export async function startGateway(): Promise<void> {
 							for (const domainId of domains) {
 								sharesDropped += crossDomainShareState!.dropDomain(domainId);
 								jobsExpired += store.expireByDomain(domainId);
+								crossDomainPresenceSource?.teardown(domainId);
+								crossDomainPresenceConsumer.teardown(domainId);
 							}
 							return { peersRemoved: removed, sharesDropped, jobsExpired };
 						}

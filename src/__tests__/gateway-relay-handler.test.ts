@@ -7,6 +7,7 @@ function makeHandler(respond: FederationRoutes["respond"]) {
 		respond,
 		teams: () => new Response(JSON.stringify([])),
 		consolePush: () => ({ delivered: false }),
+		landCrossDomainPresence: () => {},
 	};
 	return createGatewayRelayHandler({
 		routes,

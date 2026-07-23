@@ -2,7 +2,13 @@ import crypto from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import type { SealedEnvelope } from "../shared/crypto.js";
-import { type ConsolePushEntry, type FederatedOp, ReturnRouteSchema } from "../shared/federation-protocol.js";
+import {
+	type ConsolePushEntry,
+	type CrossDomainPresenceSession,
+	type FederatedOp,
+	MAX_CROSSDOMAIN_PRESENCE_SESSIONS,
+	ReturnRouteSchema,
+} from "../shared/federation-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "../shared/host-op.js";
 import {
 	NoticeFull,
@@ -107,6 +113,14 @@ export interface RoutesDeps {
 	// share state is the single source both the inbound gate and this reply gate read, so an
 	// un-share bites without evie. Absent when federation sharing is not wired (no recheck).
 	isSharedToForReply?: ((sessionTarget: string, domainId: string) => boolean) | null;
+	// The session targets currently shared to a friend Domain (the same slimmed discovery filter
+	// gatewayRelay.ts's list_teams case applies) - read by presenceForDomain to compute what a
+	// linked Domain currently sees, for the cross-Domain-presence push. Absent when federation
+	// sharing is not wired.
+	sharesFor?: ((domainId: string) => string[]) | null;
+	// The cross-Domain-presence landing store (gateway/federation/crossDomainPresence.ts) -
+	// presence_push's landing side appends into it. Absent when federation is not wired.
+	crossDomainPresenceConsumer?: import("./federation/crossDomainPresence.js").CrossDomainPresenceConsumer | null;
 	resolveHandshake?: (sessionId: string, replyAsJson?: Record<string, unknown>, response?: string) => boolean;
 	// The pending hs-* id owed by a (team, subId), if any - lets respond() name the exact handshake
 	// an unconfirmed caller must answer first. Absent in test harnesses that don't exercise the gate.
@@ -299,6 +313,8 @@ export function createRoutes({
 	resolvesLocalGateway,
 	touchShares,
 	isSharedToForReply,
+	sharesFor,
+	crossDomainPresenceConsumer,
 	resolveHandshake,
 	findPendingHandshake,
 	repushHandshake,
@@ -416,6 +432,14 @@ export function createRoutes({
 			return { delivered: false };
 		}
 		return { delivered: landMailboxEntry(owner, entry, dedupeKey, "console_push") };
+	}
+
+	/** Land a linked friend's presence_push - the cross-Domain-presence landing side (mirrors
+	 * consolePush's own shape and posture above: local-append only, never fans out further).
+	 * `srcDomainId` is the sealer-VERIFIED sender (see gatewayRelay.ts's presence_push case),
+	 * never a payload-supplied value. A no-op pre-enrollment or when federation is not wired. */
+	function landCrossDomainPresence(srcDomainId: string, sessions: CrossDomainPresenceSession[]): void {
+		crossDomainPresenceConsumer?.land(srcDomainId, sessions);
 	}
 
 	/** Fan a console-bound entry (already appended locally by the caller) out to every OTHER
@@ -562,7 +586,7 @@ export function createRoutes({
 	 * reconnecting, the origin Gateway restarting) with exponential backoff. The reply
 	 * it carries is already durable in the local anchor (poll-recoverable), so a
 	 * dropped first attempt does not strand the origin's request. */
-	function relayWithRetry(dstGateway: string, op: FederatedOp, label: string): void {
+	function relayWithRetry(dstGateway: string, op: FederatedOp, label: string, dstDomain?: string): void {
 		const maxAttempts = 5;
 		let attempt = 0;
 		const tryOnce = async (): Promise<void> => {
@@ -570,7 +594,7 @@ export function createRoutes({
 			// failure: fold it into the retry path so it never escapes as an unhandled rejection.
 			let error: string | undefined;
 			try {
-				const r = await relayToGateway(dstGateway, op);
+				const r = await relayToGateway(dstGateway, op, dstDomain);
 				if (r.ok) return;
 				error = r.error;
 			} catch (e) {
@@ -693,6 +717,98 @@ export function createRoutes({
 			sessionStore?.touchLive(row.team);
 		}
 		return jsonResponse(rows);
+	}
+
+	// presence.snapshot() is domain-INDEPENDENT (an O(local sessions) walk + sort, per
+	// presence.ts), but presenceForDomain below is invoked once per linked-and-shared Domain from
+	// crossDomainPresence.ts's recomputeAll() - up to MAX_LINKED_DOMAINS_FOR_PRESENCE (500) calls
+	// in one fully-synchronous pass triggered by a single, ordinary local presence mutation (any
+	// session's working-state flip). Cache the snapshot for the remainder of the CURRENT
+	// synchronous execution only (cleared on the next microtask) so that whole burst pays for one
+	// computation, not one per Domain, while any OTHER, later caller (a plain GET /teams) still
+	// gets a fresh one - recomputeAll's loop never awaits between iterations, so this is exactly
+	// the scope a same-tick cache needs to be safe.
+	let presenceSnapshotCache: TeamInfo[] | null = null;
+	function presenceSnapshotForThisTick(): TeamInfo[] {
+		if (presenceSnapshotCache) return presenceSnapshotCache;
+		const snap = presence?.snapshot() ?? [];
+		presenceSnapshotCache = snap;
+		queueMicrotask(() => {
+			presenceSnapshotCache = null;
+		});
+		return snap;
+	}
+
+	/** Force the next `presenceSnapshotForThisTick()` call to recompute rather than reuse a cached
+	 * read. Two genuinely separate local presence mutations (e.g. a reconnect's evict-then-confirm)
+	 * can each synchronously trigger their own `recomputeAll()` pass within the SAME tick, before the
+	 * microtask that clears the cache ever runs - without this, the second pass would silently
+	 * compare against the first pass's now-stale intermediate snapshot and conclude nothing changed.
+	 * Called once at the start of every `recomputeAll`/`recomputeDomain` entry (crossDomainPresence.ts)
+	 * so each TOP-LEVEL call sees fresh state while still sharing one computation across its own
+	 * per-Domain loop. */
+	function invalidatePresenceSnapshotCache(): void {
+		presenceSnapshotCache = null;
+	}
+
+	/** What Domain `toDomainId` currently sees of this Gateway's own sessions - the exact
+	 * `sharesFor` filter gatewayRelay.ts's list_teams case already applies for a PULL, reused
+	 * here for the cross-Domain-presence PUSH (see crossDomainPresence.ts's source side).
+	 * Narrower and length-capped compared to the raw TeamInfo rows it filters from (only
+	 * devcontainer/loose sessions are ever shareable, matching gateCrossDomainTarget's own
+	 * kind check; free-text fields are truncated) - this crosses a cross-Domain trust boundary
+	 * TeamInfo itself was never scoped for. The underlying local snapshot is cached for the
+	 * current synchronous tick only (see presenceSnapshotForThisTick) - never across ticks. */
+	function presenceForDomain(toDomainId: string): CrossDomainPresenceSession[] {
+		const local = presenceSnapshotForThisTick();
+		const shared = new Set(sharesFor?.(toDomainId) ?? []);
+		const out: CrossDomainPresenceSession[] = [];
+		for (const t of local) {
+			if (out.length >= MAX_CROSSDOMAIN_PRESENCE_SESSIONS) break;
+			if (t.kind !== "devcontainer" && t.kind !== "loose") continue;
+			// tryLocalAddress, not the throwing localAddress: an offlineCatalog row's team name is
+			// never slug-validated at intake (unlike sessionStore's own rows), so an ordinary
+			// devcontainer directory name (an uppercase letter, underscore, space, or >64 chars) must
+			// be skipped here, not crash the whole gateway process via an uncaught assertSlug throw.
+			const addr = tryLocalAddress(t.team);
+			if (!addr || !shared.has(addr.canonical)) continue;
+			out.push({
+				team: t.team,
+				gatewayId: t.gatewayId,
+				status: t.status,
+				kind: t.kind,
+				sessionLabel: t.sessionLabel?.slice(0, 64),
+				description: t.description?.slice(0, 120),
+				lastActive: t.lastActive,
+				queueDepth: t.queue_depth,
+				working: t.working,
+				needsLogin: t.needsLogin,
+			});
+		}
+		return out;
+	}
+
+	/** Push this Gateway's current presenceForDomain(toDomainId) content to EVERY gateway linked
+	 * peer under that Domain (a Domain may run more than one, mirroring discover()'s own "one
+	 * gateway is queried once even if a Domain runs several" fan-out) - a single-shot attempt (no
+	 * retry of its own; the caller, crossDomainPresence.ts's coalesced pusher, owns backoff/retry
+	 * so the two retry loops never compound). Resolves ok once at least one gateway accepts it;
+	 * partial delivery to a Domain's other gateway(s) is not itself a failure. Threads the
+	 * explicit dstDomain through relayToGateway's 3-argument form so an ambiguous bare-gateway-id
+	 * collision across two different linked Domains can never misroute it. */
+	async function pushPresenceToDomain(
+		toDomainId: string,
+		sessions: CrossDomainPresenceSession[],
+	): Promise<{ ok: boolean; error?: string }> {
+		const gateways = (crossDomainPeers?.all() ?? [])
+			.filter((p) => p.friendDomainId === toDomainId)
+			.map((p) => p.friendGatewayId);
+		if (gateways.length === 0) return { ok: false, error: `no linked gateway for Domain "${toDomainId}"` };
+		const results = await Promise.all(
+			gateways.map((g) => relayToGateway(g, { kind: "presence_push", sessions }, toDomainId)),
+		);
+		const ok = results.some((r) => r.ok);
+		return ok ? { ok: true } : { ok: false, error: results[0]?.error };
 	}
 
 	/** Discovery across the mesh: local teams, a fan-out to every online SAME-Domain peer
@@ -1431,5 +1547,9 @@ export function createRoutes({
 		humanNotify,
 		consolePush,
 		pluginAction,
+		presenceForDomain,
+		landCrossDomainPresence,
+		pushPresenceToDomain,
+		invalidatePresenceSnapshotCache,
 	};
 }

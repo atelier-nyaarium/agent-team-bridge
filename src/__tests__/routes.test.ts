@@ -78,6 +78,8 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		displayName: overrides.displayName,
 		isAdminDomain: overrides.isAdminDomain,
 		touchShares: overrides.touchShares,
+		sharesFor: overrides.sharesFor,
+		crossDomainPresenceConsumer: overrides.crossDomainPresenceConsumer,
 		ownerId: overrides.ownerId,
 		resolveHandshake: overrides.resolveHandshake,
 		findPendingHandshake: overrides.findPendingHandshake,
@@ -1714,6 +1716,66 @@ describe("routes", () => {
 			respond(req, { session_id: "sess-2", status: "completed", response: "reply" });
 			// A channel agent has no mailbox; respond must not mint one for it.
 			expect(mailboxStore.get("agent-conv")).toBeUndefined();
+		});
+	});
+
+	describe("presenceForDomain (cross-Domain presence)", () => {
+		it("skips an offlineCatalog row with a non-slug team name instead of throwing", () => {
+			// A real devcontainer directory name (uppercase, underscore, space, or >64 chars) is
+			// never slug-validated at offlineCatalog intake - presenceForDomain must skip it via
+			// tryLocalAddress, never crash the whole gateway via the throwing localAddress.
+			const offlineCatalog = new Map([["MyApp", "/projects/MyApp"]]);
+			const { presenceForDomain } = createRoutes(makeCtx({ offlineCatalog }));
+			expect(() => presenceForDomain("bob-domain")).not.toThrow();
+			expect(presenceForDomain("bob-domain")).toEqual([]);
+		});
+
+		it("caches presence.snapshot() for one synchronous burst of calls, not once per Domain", () => {
+			let snapshotCalls = 0;
+			const presence = {
+				snapshot: () => {
+					snapshotCalls += 1;
+					return [];
+				},
+			};
+			const { presenceForDomain } = createRoutes(makeCtx({ presence }));
+			presenceForDomain("bob-domain");
+			presenceForDomain("carol-domain");
+			presenceForDomain("dave-domain");
+			expect(snapshotCalls).toBe(1);
+		});
+
+		it("refreshes the cached snapshot on the next tick, so a later unrelated caller is never stale", async () => {
+			let snapshotCalls = 0;
+			const presence = {
+				snapshot: () => {
+					snapshotCalls += 1;
+					return [];
+				},
+			};
+			const { presenceForDomain } = createRoutes(makeCtx({ presence }));
+			presenceForDomain("bob-domain");
+			await Promise.resolve(); // let the queued microtask clear the cache
+			presenceForDomain("bob-domain");
+			expect(snapshotCalls).toBe(2);
+		});
+
+		it("invalidatePresenceSnapshotCache forces a fresh read within the SAME tick, without waiting for a microtask", () => {
+			let snapshotCalls = 0;
+			const presence = {
+				snapshot: () => {
+					snapshotCalls += 1;
+					return [];
+				},
+			};
+			const { presenceForDomain, invalidatePresenceSnapshotCache } = createRoutes(makeCtx({ presence }));
+			presenceForDomain("bob-domain");
+			invalidatePresenceSnapshotCache();
+			// Still the same synchronous tick - no await, no microtask flush - yet this must recompute,
+			// since two genuinely separate recomputeAll() passes can each fire within one tick (e.g. a
+			// reconnect's evict-then-confirm) and must never compare against each other's stale reading.
+			presenceForDomain("carol-domain");
+			expect(snapshotCalls).toBe(2);
 		});
 	});
 
