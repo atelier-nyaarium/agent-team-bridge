@@ -1011,9 +1011,10 @@ export function createRoutes({
 			channelOnly,
 			displayLabel,
 		} = parsed.data;
-		// A federated-relay call arrives in-process with a synthetic request and legitimately speaks
-		// for a remote sender, so the ownership check applies only to real external callers.
-		if (!opts.trustedInbound) {
+		// Only a real external caller is gated. A federated relay speaks for a remote sender, and the
+		// console's `from` is its free-form Device Name rather than a session name, so neither can be
+		// resolved to a local record and both arrive already authenticated by their own sealed path.
+		if (!opts.trustedInbound && !opts.consoleSender) {
 			const refused = refuseImpersonation(req, from);
 			if (refused) return refused;
 			// fromConversationId decides where the eventual REPLY lands, so naming someone else's is
