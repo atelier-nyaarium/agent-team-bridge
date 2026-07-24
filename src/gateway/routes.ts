@@ -42,6 +42,7 @@ import type {
 	ResponsePushPayload,
 	TeamInfo,
 } from "../shared/types.js";
+import { type Presented, presentedByRequest, type SessionAuthority } from "./sessionAuthority.js";
 import type { VibeCheck } from "./vibeCheck.js";
 import type { WakeResult } from "./wake.js";
 import {
@@ -122,7 +123,12 @@ export interface RoutesDeps {
 	// The cross-Domain-presence landing store (gateway/federation/crossDomainPresence.ts) -
 	// presence_push's landing side appends into it. Absent when federation is not wired.
 	crossDomainPresenceConsumer?: import("./federation/crossDomainPresence.js").CrossDomainPresenceConsumer | null;
-	resolveHandshake?: (sessionId: string, replyAsJson?: Record<string, unknown>, response?: string) => boolean;
+	resolveHandshake?: (
+		sessionId: string,
+		replyAsJson?: Record<string, unknown>,
+		response?: string,
+		responderToken?: Presented,
+	) => boolean;
 	// The pending hs-* id owed by a (team, subId), if any - lets respond() name the exact handshake
 	// an unconfirmed caller must answer first. Absent in test harnesses that don't exercise the gate.
 	findPendingHandshake?: (team: string, subId: string) => string | undefined;
@@ -138,6 +144,9 @@ export interface RoutesDeps {
 	// message delivered INTO a session toward its next check; resolve intercepts a vc-* answer in
 	// respond() exactly the way resolveHandshake intercepts hs-*. Absent in test harnesses.
 	vibeCheck?: Pick<VibeCheck, "noteInbound" | "resolve">;
+	// The sole resolver of "what must a caller prove to act as X". Absent in test harnesses that do
+	// not exercise the identity gates, which then behave as an ungated gateway does.
+	auth?: SessionAuthority;
 }
 
 const SendRequestSchema = z.object({
@@ -252,7 +261,7 @@ const HumanNotifySchema = z
 // `from` is the ONLY identity field, and it names the CALLING agent's own session (exactly what
 // every other agent-originated route already trusts at the same level - see send()'s own `from`;
 // this route adds no NEW trust boundary beyond that pre-existing, network-level one, tracked in
-// plans/gateway-auth-surface.md). Strict on purpose: there is no separate "to"/"target"/"team" field
+// plans/pain-points.md). Strict on purpose: there is no separate "to"/"target"/"team" field
 // a caller could add ON TOP OF its own `from` to reach a different conversation than the one `from`
 // itself already resolves to - the caller's own resolved address (via localAddress(from)) is the
 // only possible target. pluginId/actionType are slug-constrained (matching every other identifier
@@ -317,6 +326,7 @@ export function createRoutes({
 	sharesFor,
 	crossDomainPresenceConsumer,
 	resolveHandshake,
+	auth,
 	findPendingHandshake,
 	repushHandshake,
 	ownerId,
@@ -939,6 +949,49 @@ export function createRoutes({
 		return jsonResponse([...local, ...sameDomain.flat(), ...crossDomain.flat()]);
 	}
 
+	/**
+	 * 403 when a caller names a sender it cannot prove it is.
+	 *
+	 * `from` is stamped verbatim onto the message the recipient reads, so a name this gate cannot
+	 * resolve is refused rather than waved through: a near-miss spelling (a trailing space, a
+	 * differing case) renders identically to the victim's name at the far end while resolving to no
+	 * record here. The only names that pass unproven are ones that resolve to a local session with
+	 * no armed binding, which is what keeps hand-launched sessions and a purged store working.
+	 */
+	function refuseImpersonation(req: Request, claimed: string): Response | null {
+		if (!auth) return null;
+		const key = auth.localTeamKey(claimed);
+		if (key === null) {
+			// Malformed rather than unauthorized: the name cannot denote any session here, so the
+			// caller gets the same 400 an unparseable field has always produced. Still a refusal, which
+			// is the security-relevant part - `from` reaches the recipient verbatim, so a name that
+			// resolves to nothing must not be waved through just because it matched no record.
+			return jsonResponse({ error: `Invalid sender: "${claimed}" does not name a local session` }, 400);
+		}
+		if (auth.satisfies(auth.toClaim(key), presentedByRequest(req))) return null;
+		console.warn(`[auth] refused a call claiming "${claimed}" without its binding`);
+		return jsonResponse({ error: "sender is not this caller's session" }, 403);
+	}
+
+	/**
+	 * 403 when someone other than the session a job is addressed to tries to answer it.
+	 *
+	 * A job addressed to a REMOTE session is refused outright: a remote team's reply only ever
+	 * arrives over the sealed response_push relay, never over local HTTP, so nothing legitimate
+	 * needs this door.
+	 */
+	function refuseForeignReply(req: Request, target: string): Response | null {
+		if (!auth) return null;
+		const key = auth.localTeamKey(target);
+		if (key === null) {
+			console.warn(`[auth] refused a local reply to "${target}", which is not a local session`);
+			return jsonResponse({ error: "reply target is not a local session" }, 403);
+		}
+		if (auth.satisfies(auth.toActFor(key), presentedByRequest(req))) return null;
+		console.warn(`[auth] refused a reply addressed to "${target}" from another session`);
+		return jsonResponse({ error: "reply is not from this conversation's session" }, 403);
+	}
+
 	async function send(
 		req: Request,
 		body: Record<string, unknown>,
@@ -958,6 +1011,22 @@ export function createRoutes({
 			channelOnly,
 			displayLabel,
 		} = parsed.data;
+		// A federated-relay call arrives in-process with a synthetic request and legitimately speaks
+		// for a remote sender, so the ownership check applies only to real external callers.
+		if (!opts.trustedInbound) {
+			const refused = refuseImpersonation(req, from);
+			if (refused) return refused;
+			// fromConversationId decides where the eventual REPLY lands, so naming someone else's is
+			// strictly stronger than mislabelling a message: it injects the answer into that session's
+			// context as though it had asked. A conversation held by a bound socket therefore belongs
+			// to that socket alone; an unheld or unbound one stays open, which is what keeps console
+			// sends (owner-keyed, no socket) and hand-launched sessions working.
+			const holder = fromConversationId ? conversationRegistry.get(fromConversationId) : undefined;
+			if (auth && !auth.satisfies(auth.toAnswerFor(holder), presentedByRequest(req))) {
+				console.warn(`[auth] refused a send claiming another session's conversation`);
+				return jsonResponse({ error: "conversation is not this caller's" }, 403);
+			}
+		}
 		// The federated-inbound-only fields are honored ONLY when the call comes from the trusted
 		// internal gateway-relay path (opts.trustedInbound). An external HTTP /send caller cannot set
 		// them - they are structurally seal-sourced - so a local caller can never forge a cross-Domain
@@ -1225,7 +1294,7 @@ export function createRoutes({
 		// (success or exhausted retries) - respond() itself returns long before that, so a
 		// caller needing to know the TRUE outcome (durable op idempotency) cannot use the
 		// Response alone.
-		opts: { consoleSender?: boolean; onFederatedSettled?: (ok: boolean) => void } = {},
+		opts: { consoleSender?: boolean; trustedInbound?: boolean; onFederatedSettled?: (ok: boolean) => void } = {},
 	): Response {
 		const parsed = RespondBodySchema.safeParse(body);
 		if (!parsed.success) {
@@ -1245,14 +1314,22 @@ export function createRoutes({
 			}
 		}
 
-		// Check if this is a handshake response (handshakes never carry files).
-		if (resolveHandshake?.(respondSessionId, replyAsJson ?? undefined, rest.response ?? undefined)) {
+		// Check if this is a handshake response (handshakes never carry files). The caller's own
+		// launcher-delivered binding rides the header, so the resolver can require that only the
+		// challenged session answers its own handshake. A console-relayed respond arrives in-process
+		// with no header and answers no handshake, so it is unaffected.
+		const responderToken = presentedByRequest(req);
+		if (
+			resolveHandshake?.(respondSessionId, replyAsJson ?? undefined, rest.response ?? undefined, responderToken)
+		) {
 			return jsonResponse({ delivered: true, handshake: true });
 		}
 
 		// A vibe-check answer (vc-*): store the description on the session record and stop - it is a
 		// gateway question, never a store delivery.
-		if (vibeCheck?.resolve(respondSessionId, replyAsJson ?? undefined, rest.response ?? undefined)) {
+		if (
+			vibeCheck?.resolve(respondSessionId, replyAsJson ?? undefined, rest.response ?? undefined, responderToken)
+		) {
 			return jsonResponse({ delivered: true, vibeCheck: true });
 		}
 
@@ -1312,6 +1389,15 @@ export function createRoutes({
 			if (!response.response) {
 				response.response = JSON.stringify(replyAsJson, null, 2);
 			}
+		}
+
+		// A reply may only come from the session the job is addressed to: the id is a pure function of
+		// two non-secret values, so anyone who has exchanged one message can compute it and would
+		// otherwise be able to answer as that session indefinitely.
+		const jobTarget = store.targetOf(respondSessionId);
+		if (jobTarget && !opts.consoleSender && !opts.trustedInbound) {
+			const refused = refuseForeignReply(req, jobTarget);
+			if (refused) return refused;
 		}
 
 		// The respond session_id is the opaque store key the agent echoes verbatim; under the
@@ -1541,12 +1627,14 @@ export function createRoutes({
 	 * empty mailbox map, silently dropping the notice instead of landing it somewhere the owner
 	 * will eventually poll. fanOutConsolePush then relays the same entry to every other
 	 * same-Domain Gateway too, so it reaches wherever the console actually is. */
-	function humanNotify(body: Record<string, unknown>): Response {
+	function humanNotify(req: Request, body: Record<string, unknown>): Response {
 		const parsed = HumanNotifySchema.safeParse(body);
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
 		const { from, title, summary, full, fullSpoken, files } = parsed.data;
+		const refused = refuseImpersonation(req, from);
+		if (refused) return refused;
 		if (files && files.length > 0) {
 			const total = fileBytes(files);
 			if (total > MAX_RESPONSE_FILE_BYTES) {
@@ -1589,12 +1677,14 @@ export function createRoutes({
 	 * Best-effort/never-load-bearing, matching every other mailbox-writing path here: the console
 	 * routes an unclaimed pluginId:actionType to nothing (silently skipped), so a dropped write here
 	 * is no worse than a dropped claim there. */
-	function pluginAction(body: Record<string, unknown>): Response {
+	function pluginAction(req: Request, body: Record<string, unknown>): Response {
 		const parsed = PluginActionRequestSchema.safeParse(body);
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
 		const { from, pluginId, actionType, payload } = parsed.data;
+		const refused = refuseImpersonation(req, from);
+		if (refused) return refused;
 		if (!mailboxStore) {
 			return jsonResponse({ error: "console bridge is not enabled on this gateway" }, 503);
 		}

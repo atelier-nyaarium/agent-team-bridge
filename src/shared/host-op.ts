@@ -104,7 +104,17 @@ export type HostOp =
 	// a record the gateway already has a transcript for (e.g. a Close Tab'd session), so a fresh
 	// launch resumes instead of silently starting over. Only takes effect on an actual fresh launch -
 	// a reattach to an already-alive tmux ignores it, same as the rest of the launch command.
-	| { kind: "createSession"; target: TmuxTarget; workdirHint?: string; resumeSessionId?: string; dedupKey?: string }
+	// sessionToken is the record's binding secret, exported into the launched pane so the session's
+	// register can prove which record it is; like resumeSessionId it comes from gateway state, never
+	// from the console, and a reattach ignores it along with the rest of the launch command.
+	| {
+			kind: "createSession";
+			target: TmuxTarget;
+			workdirHint?: string;
+			resumeSessionId?: string;
+			sessionToken?: string;
+			dedupKey?: string;
+	  }
 	// Drive the target session's pane through the plugin update + MCP reconnect sequence.
 	| { kind: "reloadPlugins"; target: TmuxTarget; dedupKey?: string }
 	// Tear down the target tmux session (the console's Forget). Idempotent: killing an

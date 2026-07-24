@@ -130,6 +130,11 @@ export class PresenceFacade {
 		return this.sessionStore.hostWorkdirHint(record);
 	}
 
+	/** Plain delegation: the binding is not presence-affecting, so minting one announces nothing. */
+	ensureBindToken(record: SessionRecord): string {
+		return this.sessionStore.ensureBindToken(record);
+	}
+
 	findByMintedFrom(mintedFrom: string, spawn: string): SessionRecord | undefined {
 		return this.sessionStore.findByMintedFrom(mintedFrom, spawn);
 	}

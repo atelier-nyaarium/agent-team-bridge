@@ -30,6 +30,17 @@ export interface SessionRecord {
 	// (never for a caller-supplied id). Lets a retry of the same request find its own prior record by
 	// provenance instead of recomputing/re-probing anything.
 	mintedFrom?: string;
+	// The session's bearer binding, minted when the gateway dispatches a launch and delivered only
+	// through that launch command. Minted once and never rotated: a reattach does not re-run the
+	// launch command, so a re-mint would orphan an already-running session.
+	bindToken?: string;
+	// When a register first proved it holds bindToken. A launch dispatch cannot know whether the
+	// daemon will really launch or just reattach to a live pane (which discards the launch command,
+	// token export included), so a minted token is NOT proof the session ever received one. The
+	// binding therefore stays inert - claimable by anyone, exactly as an unbound name - until a
+	// register actually presents it, and only then does it start excluding everyone else. Without
+	// this, any reattach would bind a name its live session could never claim again.
+	bindActiveAt?: number;
 	liveTeam?: LiveRef;
 	confirmedAt?: number;
 	lastSeen: number;
@@ -44,6 +55,8 @@ export interface SessionStoreOptions {
 	now?: () => number;
 	// Injectable id generator for deterministic tests; production uses 6-hex randomBytes.
 	idGen?: () => string;
+	// Injectable binding-token generator for deterministic tests; production uses 32-byte randomBytes.
+	tokenGen?: () => string;
 }
 
 interface CreateOpts {
@@ -95,6 +108,13 @@ function randomId(): string {
 	return crypto.randomBytes(3).toString("hex");
 }
 
+/** The session binding secret. Unlike the 6-hex id (a display/address segment that only needs to be
+ * unique within its spawn), this is guessing-resistant: it is the only thing standing between a
+ * neighbouring container and this session's name. */
+function randomBindToken(): string {
+	return crypto.randomBytes(32).toString("hex");
+}
+
 ////////////////////////////////
 //  Class
 
@@ -113,11 +133,47 @@ export class SessionStore {
 	private readonly clash: ClashPredicate;
 	private readonly now: () => number;
 	private readonly idGen: () => string;
+	private readonly tokenGen: () => string;
 
 	constructor(opts: SessionStoreOptions = {}) {
 		this.clash = opts.clash ?? (() => false);
 		this.now = opts.now ?? (() => Date.now());
 		this.idGen = opts.idGen ?? randomId;
+		this.tokenGen = opts.tokenGen ?? randomBindToken;
+	}
+
+	/** The record a session token belongs to, or undefined. A token is meaningless without a record,
+	 * so an unknown one resolves to nothing and the caller treats the registrant as unbound. */
+	recordByBindToken(token: string): SessionRecord | undefined {
+		for (const record of this.records.values()) {
+			if (record.bindToken && record.bindToken === token) return record;
+		}
+		return undefined;
+	}
+
+	/**
+	 * The record's binding, minted on first use. Called ONLY where the gateway is about to have the
+	 * daemon launch this session, because that launch is the sole delivery channel: a record whose
+	 * session appeared on its own (a hand-launched Claude that registered and confirmed) must stay
+	 * tokenless, or the gate would demand a secret nothing ever handed it. Minting here rather than
+	 * at create() also gives "mint once" for free - a relaunch reuses the existing token, which is
+	 * required since a reattach never re-runs the launch command.
+	 */
+	ensureBindToken(record: SessionRecord): string {
+		if (!record.bindToken) record.bindToken = this.tokenGen();
+		return record.bindToken;
+	}
+
+	/** Whether this record's binding is being enforced yet: true once some register proved it holds
+	 * the token. Until then the name stays open, so a token that was minted but never delivered (a
+	 * reattach) cannot lock its own session out. */
+	isBindingActive(record: SessionRecord): boolean {
+		return !!record.bindToken && record.bindActiveAt !== undefined;
+	}
+
+	/** Record that a register presented this record's token, arming the binding from here on. */
+	activateBinding(record: SessionRecord): void {
+		if (record.bindToken && record.bindActiveAt === undefined) record.bindActiveAt = this.now();
 	}
 
 	get size(): number {
@@ -389,6 +445,11 @@ export class SessionStore {
 						: undefined,
 				claudeSessionId: typeof v.claudeSessionId === "string" ? v.claudeSessionId : undefined,
 				mintedFrom: persisted && typeof v.mintedFrom === "string" ? v.mintedFrom : undefined,
+				// Never re-minted here: a record restored without one belongs to a session already
+				// running with no token (or none), and minting a fresh one would bind a name its live
+				// session could never present. It stays unbound until something relaunches it.
+				bindToken: persisted && typeof v.bindToken === "string" ? v.bindToken : undefined,
+				bindActiveAt: persisted && typeof v.bindActiveAt === "number" ? v.bindActiveAt : undefined,
 				confirmedAt: persisted ? (typeof v.confirmedAt === "number" ? v.confirmedAt : undefined) : lastSeen,
 				lastSeen,
 			};

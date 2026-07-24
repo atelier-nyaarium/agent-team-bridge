@@ -94,6 +94,15 @@ export function bridgeConversationId(): string {
 	return CONVERSATION_ID;
 }
 
+/** The launcher-delivered session binding, presented on every HTTP call so the gateway derives the
+ * sender from the binding instead of trusting a body field. Empty for a hand-launched session,
+ * which stays unbound rather than being refused. Read per call, not cached: the module can load
+ * before the env is in place. */
+function sessionTokenHeader(): Record<string, string> {
+	const token = process.env.SWITCHBOARD_SESSION_TOKEN;
+	return token ? { "x-session-token": token } : {};
+}
+
 export async function routerPost(
 	path: string,
 	body: unknown,
@@ -105,7 +114,7 @@ export async function routerPost(
 		try {
 			res = await fetch(`${ROUTER_URL}${path}`, {
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers: { "Content-Type": "application/json", ...sessionTokenHeader() },
 				body: JSON.stringify(body),
 			});
 		} catch (err) {
@@ -155,7 +164,7 @@ export async function routerGet(
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		let res: Response;
 		try {
-			res = await fetch(`${ROUTER_URL}${path}`);
+			res = await fetch(`${ROUTER_URL}${path}`, { headers: sessionTokenHeader() });
 		} catch (err) {
 			lastErr = err instanceof Error ? err : new Error(String(err));
 			if (attempt < retries) {
@@ -196,6 +205,12 @@ export function buildRegisterMsg(subId: string, mode: ConnectionMode = "channel"
 	}
 	const cwdName = basename(process.cwd());
 	if (cwdName) registerMsg.cwdName = cwdName;
+	// The launcher-delivered binding for this session's record. A session started by hand has none
+	// and registers unbound: it operates its own conversation normally, but cannot claim a name
+	// whose binding is active.
+	if (process.env.SWITCHBOARD_SESSION_TOKEN) {
+		registerMsg.sessionToken = process.env.SWITCHBOARD_SESSION_TOKEN;
+	}
 	// Carry the remembered handshake answer so a reconnect confirms silently instead of re-asking -
 	// never sent false, since a worker that answered false is evicted and never reconnects.
 	if (handshakeRole.get() === true) registerMsg.isMainOrLead = true;

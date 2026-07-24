@@ -124,7 +124,14 @@ export interface ConsoleHandlerDeps {
 	 * SessionStore class, so either satisfies it structurally. Absent in harnesses with no store. */
 	sessionStore?: Pick<
 		SessionStore,
-		"getByTeam" | "teamOf" | "adoptOrReattach" | "mintOrReattach" | "hostWorkdirHint" | "forget" | "rename"
+		| "getByTeam"
+		| "teamOf"
+		| "adoptOrReattach"
+		| "mintOrReattach"
+		| "hostWorkdirHint"
+		| "forget"
+		| "rename"
+		| "ensureBindToken"
 	>;
 	/** The current keyring + its version hash. The poll reply carries the snapshot only when
 	 * the Console's known version differs. */
@@ -1205,6 +1212,7 @@ export function createConsoleDispatcher({
 									// brand-new record's is naturally undefined (nothing to resume), matching the
 									// wake path's identical claudeSessionId-gated resume decision.
 									resumeSessionId: adopted?.record.claudeSessionId,
+									sessionToken: adopted ? sessionStore?.ensureBindToken(adopted.record) : undefined,
 									dedupKey,
 								})
 					).finally(() => {

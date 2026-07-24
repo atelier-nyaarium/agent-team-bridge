@@ -128,6 +128,13 @@ export const WsRegisterSchema = z.object({
 	// sends it), but the host slot is fail-closed: a host register is refused unless the
 	// gateway has HOST_WS_TOKEN set AND this token matches it.
 	token: z.string().optional(),
+	// The session's own binding secret, minted with its SessionRecord and delivered only through the
+	// daemon's launch command. A registrant presenting the token bound to the name it claims is
+	// BOUND (it owns that name and may take the remembered-lead fast path); one presenting nothing,
+	// or a token for a different record, is UNBOUND and demoted - it may still operate its own
+	// conversation but cannot claim a name that carries a binding. Never a rejection: a hand-launched
+	// session has no token by design, and a purged DATA_DIR leaves every live session tokenless.
+	sessionToken: z.string().max(256).optional(),
 	// The registrant's remembered answer to a prior bridge handshake (see mcp/bridge/helpers.ts's
 	// isMainOrLeadAgent cache) - true skips the handshake prompt entirely on this register. Never
 	// sent as false (a worker that answered false is evicted and does not reconnect). A malformed

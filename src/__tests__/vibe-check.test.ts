@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { createVibeCheck } from "../gateway/vibeCheck.js";
 import { isPromptEmpty } from "../shared/agent-screen.js";
 import { SessionStore } from "../shared/session-store.js";
+
+// A lead with no binding: these tests exercise the vibe-check lifecycle, not the identity gate.
+const UNBOUND_FOR_TEST = createSessionAuthority({
+	registry: new Map(),
+	resolveLive: () => undefined,
+	localDomainId: () => "alice",
+	localGatewayId: "test-host",
+}).toAnswerFor(undefined);
 
 const RULE = "─".repeat(40);
 // The real pane shapes (see AgentScreen.kt / agent-screen.ts): transcript, rule, composer, rule,
@@ -27,7 +36,8 @@ function makeHarness() {
 	let n = 0;
 	const vibe = createVibeCheck({
 		sessionAccess: store,
-		resolveLead: () => (state.leadUp ? { send: (p: string) => state.sent.push(p) } : undefined),
+		resolveLead: () =>
+			state.leadUp ? { send: (p: string) => void state.sent.push(p), binding: UNBOUND_FOR_TEST } : undefined,
 		peekScreen: async () => state.screen,
 		sendRename: async (_record, description, dedupKey) => {
 			if (state.renameFails) throw new Error("host offline");

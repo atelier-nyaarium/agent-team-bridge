@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { PresenceFacade } from "../gateway/presence.js";
 import { createRoutes, MAX_RESPONSE_FILE_BYTES, type RoutesDeps } from "../gateway/routes.js";
+import { createSessionAuthority } from "../gateway/sessionAuthority.js";
+import { resolveLiveIncarnation } from "../gateway/websocket.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
 import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
+
+const TEST_REQ = new Request("http://gateway/test");
 
 /** Wrap a fake WebSocket into the nested registry structure: team → subId → ws */
 function makeRegistry(entries: Record<string, unknown>): RoutesDeps["registry"] {
@@ -56,6 +60,13 @@ function makeCtx(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 		conversationRegistry,
 		store,
 		config,
+		auth: createSessionAuthority({
+			sessionStore: overrides.sessionStore,
+			registry,
+			resolveLive: resolveLiveIncarnation,
+			localDomainId: () => config.localDomainId,
+			localGatewayId: config.localGatewayId,
+		}),
 		tryWakeTeam: overrides.tryWakeTeam || (() => Promise.resolve({ ok: false })),
 		isWakeInFlight: overrides.isWakeInFlight,
 		offlineCatalog,
@@ -300,7 +311,7 @@ describe("routes", () => {
 		it("delivers a notice into the owner's mailbox, threaded under the sender, even with zero pre-registered devices", async () => {
 			const { ctx, mailboxStore } = makeStoreForOwner();
 			const { humanNotify } = createRoutes(ctx);
-			const res = humanNotify({
+			const res = humanNotify(TEST_REQ, {
 				from: "recipe-app",
 				title: "cycle done",
 				summary: "All phases shipped. Nothing is blocked.",
@@ -325,9 +336,9 @@ describe("routes", () => {
 		it("accepts the title key and rejects a notice carrying no title", async () => {
 			const { ctx, mailboxStore } = makeStoreForOwner();
 			const { humanNotify } = createRoutes(ctx);
-			humanNotify({ from: "recipe-app", title: "via title", summary: "s", full: "body" });
+			humanNotify(TEST_REQ, { from: "recipe-app", title: "via title", summary: "s", full: "body" });
 			expect(mailboxStore.get("owner-1")!.drain().entries[0]).toMatchObject({ title: "via title" });
-			expect(humanNotify({ from: "t", summary: "s", full: "body" }).status).toBe(400);
+			expect(humanNotify(TEST_REQ, { from: "t", summary: "s", full: "body" }).status).toBe(400);
 		});
 
 		it("stamps fullSpoken onto the notice entry, and still accepts a notice WITHOUT it", async () => {
@@ -335,7 +346,7 @@ describe("routes", () => {
 			// would otherwise 400 every notice from a not-yet-reloaded plugin in a deploy window.
 			const { ctx, mailboxStore } = makeStoreForOwner();
 			const { humanNotify } = createRoutes(ctx);
-			const withSpoken = await humanNotify({
+			const withSpoken = await humanNotify(TEST_REQ, {
 				from: "recipe-app",
 				title: "t",
 				summary: "s",
@@ -343,7 +354,12 @@ describe("routes", () => {
 				fullSpoken: "Spoken body.",
 			}).json();
 			expect(withSpoken.delivered).toBe(true);
-			const without = await humanNotify({ from: "recipe-app", title: "t2", summary: "s2", full: "b2" }).json();
+			const without = await humanNotify(TEST_REQ, {
+				from: "recipe-app",
+				title: "t2",
+				summary: "s2",
+				full: "b2",
+			}).json();
 			expect(without.delivered).toBe(true);
 			const entries = mailboxStore.get("owner-1")!.drain().entries;
 			expect(entries[0]).toMatchObject({ fullSpoken: "Spoken body." });
@@ -354,12 +370,12 @@ describe("routes", () => {
 			const { ctx, mailboxStore } = makeStoreForOwner();
 			const { humanNotify } = createRoutes(ctx);
 			// Notices missing summary/full are rejected outright, before any mailbox is even ensured.
-			expect(humanNotify({ from: "t", title: "ping" }).status).toBe(400);
-			expect(humanNotify({ from: "t", title: "ping", summary: "s" }).status).toBe(400);
+			expect(humanNotify(TEST_REQ, { from: "t", title: "ping" }).status).toBe(400);
+			expect(humanNotify(TEST_REQ, { from: "t", title: "ping", summary: "s" }).status).toBe(400);
 			expect(mailboxStore.get("owner-1")).toBeUndefined();
 			const start = Date.now();
 			const held = mailboxStore.ensure("owner-1").waitForAppend(10_000);
-			humanNotify({ from: "t", title: "ping", summary: "s", full: "body" });
+			humanNotify(TEST_REQ, { from: "t", title: "ping", summary: "s", full: "body" });
 			await held;
 			expect(Date.now() - start).toBeLessThan(2_000);
 			expect(mailboxStore.get("owner-1")!.drain().entries[0].body).toBe("body");
@@ -370,7 +386,7 @@ describe("routes", () => {
 			const { humanNotify } = createRoutes(ctx);
 			// A declared size alone (no base64) is enough to cross the cap, and avoids
 			// actually allocating a 500+ MB string in the test process.
-			const res = humanNotify({
+			const res = humanNotify(TEST_REQ, {
 				from: "t",
 				title: "big",
 				summary: "s",
@@ -387,10 +403,10 @@ describe("routes", () => {
 			expect(res.status).toBe(413);
 
 			const { humanNotify: noStore } = createRoutes(makeCtx());
-			expect(noStore({ from: "t", title: "x", summary: "s", full: "body" }).status).toBe(503);
+			expect(noStore(TEST_REQ, { from: "t", title: "x", summary: "s", full: "body" }).status).toBe(503);
 
 			const { humanNotify: noOwner } = createRoutes(makeCtx({ mailboxStore: new DeviceMailboxStore() }));
-			expect(noOwner({ from: "t", title: "x", summary: "s", full: "body" }).status).toBe(503);
+			expect(noOwner(TEST_REQ, { from: "t", title: "x", summary: "s", full: "body" }).status).toBe(503);
 		});
 
 		it("returns a clean 500 instead of throwing when the underlying append fails", () => {
@@ -404,8 +420,8 @@ describe("routes", () => {
 			const ctx = makeCtx({ mailboxStore: throwingStore as never, ownerId: () => "owner-1" });
 			const { humanNotify } = createRoutes(ctx);
 
-			expect(() => humanNotify({ from: "t", title: "x", summary: "s", full: "body" })).not.toThrow();
-			expect(humanNotify({ from: "t", title: "x", summary: "s", full: "body" }).status).toBe(500);
+			expect(() => humanNotify(TEST_REQ, { from: "t", title: "x", summary: "s", full: "body" })).not.toThrow();
+			expect(humanNotify(TEST_REQ, { from: "t", title: "x", summary: "s", full: "body" }).status).toBe(500);
 		});
 	});
 
@@ -422,7 +438,7 @@ describe("routes", () => {
 		it("delivers a plugin_action into the owner's mailbox, threaded under the caller's own address", async () => {
 			const { ctx, mailboxStore } = makeStoreForOwner();
 			const { pluginAction } = createRoutes(ctx);
-			const res = pluginAction({
+			const res = pluginAction(TEST_REQ, {
 				from: "recipe-app",
 				pluginId: "designer",
 				actionType: "delete-card",
@@ -447,7 +463,7 @@ describe("routes", () => {
 			// caller's own name) ever decides the target.
 			const { ctx, mailboxStore } = makeStoreForOwner();
 			const { pluginAction } = createRoutes(ctx);
-			const res = pluginAction({
+			const res = pluginAction(TEST_REQ, {
 				from: "recipe-app",
 				pluginId: "designer",
 				actionType: "delete-card",
@@ -459,7 +475,7 @@ describe("routes", () => {
 			// Even a same-shaped call with no stray top-level fields (a lookalike key buried only
 			// inside the opaque payload, which the composer never reads for addressing) still
 			// resolves to the caller's own address, not the lookalike value.
-			pluginAction({
+			pluginAction(TEST_REQ, {
 				from: "recipe-app",
 				pluginId: "designer",
 				actionType: "delete-card",
@@ -473,44 +489,49 @@ describe("routes", () => {
 		it("requires from, pluginId, and actionType", async () => {
 			const { ctx } = makeStoreForOwner();
 			const { pluginAction } = createRoutes(ctx);
-			expect(pluginAction({ pluginId: "designer", actionType: "delete-card" }).status).toBe(400);
-			expect(pluginAction({ from: "recipe-app", actionType: "delete-card" }).status).toBe(400);
-			expect(pluginAction({ from: "recipe-app", pluginId: "designer" }).status).toBe(400);
+			expect(pluginAction(TEST_REQ, { pluginId: "designer", actionType: "delete-card" }).status).toBe(400);
+			expect(pluginAction(TEST_REQ, { from: "recipe-app", actionType: "delete-card" }).status).toBe(400);
+			expect(pluginAction(TEST_REQ, { from: "recipe-app", pluginId: "designer" }).status).toBe(400);
 		});
 
 		it("rejects an invalid `from` session name with 400 rather than throwing", () => {
 			const { ctx } = makeStoreForOwner();
 			const { pluginAction } = createRoutes(ctx);
 			expect(() =>
-				pluginAction({ from: "Not A Valid Slug!", pluginId: "designer", actionType: "delete-card" }),
+				pluginAction(TEST_REQ, { from: "Not A Valid Slug!", pluginId: "designer", actionType: "delete-card" }),
 			).not.toThrow();
 			expect(
-				pluginAction({ from: "Not A Valid Slug!", pluginId: "designer", actionType: "delete-card" }).status,
+				pluginAction(TEST_REQ, { from: "Not A Valid Slug!", pluginId: "designer", actionType: "delete-card" })
+					.status,
 			).toBe(400);
 		});
 
 		it("missing store returns 503, no owner (pre-enrollment) returns 503", () => {
 			const { pluginAction: noStore } = createRoutes(makeCtx());
-			expect(noStore({ from: "recipe-app", pluginId: "designer", actionType: "delete-card" }).status).toBe(503);
+			expect(
+				noStore(TEST_REQ, { from: "recipe-app", pluginId: "designer", actionType: "delete-card" }).status,
+			).toBe(503);
 
 			const { pluginAction: noOwner } = createRoutes(makeCtx({ mailboxStore: new DeviceMailboxStore() }));
-			expect(noOwner({ from: "recipe-app", pluginId: "designer", actionType: "delete-card" }).status).toBe(503);
+			expect(
+				noOwner(TEST_REQ, { from: "recipe-app", pluginId: "designer", actionType: "delete-card" }).status,
+			).toBe(503);
 		});
 
 		it("rejects a pluginId or actionType containing a colon, so two distinct pairs can never collide onto the same composite claim key", () => {
 			const { ctx } = makeStoreForOwner();
 			const { pluginAction } = createRoutes(ctx);
-			expect(pluginAction({ from: "recipe-app", pluginId: "a:b", actionType: "c" }).status).toBe(400);
-			expect(pluginAction({ from: "recipe-app", pluginId: "a", actionType: "b:c" }).status).toBe(400);
-			expect(pluginAction({ from: "recipe-app", pluginId: "Designer", actionType: "delete-card" }).status).toBe(
-				400,
-			);
+			expect(pluginAction(TEST_REQ, { from: "recipe-app", pluginId: "a:b", actionType: "c" }).status).toBe(400);
+			expect(pluginAction(TEST_REQ, { from: "recipe-app", pluginId: "a", actionType: "b:c" }).status).toBe(400);
+			expect(
+				pluginAction(TEST_REQ, { from: "recipe-app", pluginId: "Designer", actionType: "delete-card" }).status,
+			).toBe(400);
 		});
 
 		it("rejects a payload over the size cap, so an oversized entry can never reach the mailbox", () => {
 			const { ctx, mailboxStore } = makeStoreForOwner();
 			const { pluginAction } = createRoutes(ctx);
-			const res = pluginAction({
+			const res = pluginAction(TEST_REQ, {
 				from: "recipe-app",
 				pluginId: "designer",
 				actionType: "delete-card",
@@ -532,11 +553,11 @@ describe("routes", () => {
 			const { pluginAction } = createRoutes(ctx);
 
 			expect(() =>
-				pluginAction({ from: "recipe-app", pluginId: "designer", actionType: "delete-card" }),
+				pluginAction(TEST_REQ, { from: "recipe-app", pluginId: "designer", actionType: "delete-card" }),
 			).not.toThrow();
-			expect(pluginAction({ from: "recipe-app", pluginId: "designer", actionType: "delete-card" }).status).toBe(
-				500,
-			);
+			expect(
+				pluginAction(TEST_REQ, { from: "recipe-app", pluginId: "designer", actionType: "delete-card" }).status,
+			).toBe(500);
 		});
 	});
 
@@ -1556,13 +1577,19 @@ describe("routes", () => {
 			const ctx = makeCtx({ store, mailboxStore, ownerId: () => "owner-1" });
 			const { respond } = createRoutes(ctx);
 
-			respond(new Request("http://gateway/respond"), {
-				session_id: "conv.conv-1.alice.gw2.coolib.dev",
-				response: "on it",
-				title: "t",
-				summary: "s",
-				fullSpoken: "On it, spoken.",
-			});
+			respond(
+				new Request("http://gateway/respond"),
+				{
+					session_id: "conv.conv-1.alice.gw2.coolib.dev",
+					response: "on it",
+					title: "t",
+					summary: "s",
+					fullSpoken: "On it, spoken.",
+				},
+				// A remote-addressed anchor is only ever completed in-process by the sealed relay, which
+				// marks itself trusted; an external HTTP caller is refused.
+				{ trustedInbound: true },
+			);
 
 			const entries = mailboxStore.get("owner-1")!.drain().entries;
 			expect(entries).toHaveLength(1);
@@ -1800,5 +1827,165 @@ describe("routes", () => {
 			// android/.../ChatRepository.kt: const val MAX_OUTGOING_BYTES = 500_000_000
 			expect(MAX_RESPONSE_FILE_BYTES).toBe(500_000_000);
 		});
+	});
+});
+
+// The HTTP routes are the other half of the identity gate: a name whose binding is active belongs to
+// one session, so naming it in `from` requires proving you are it. Absence of the header must be a
+// refusal rather than a fallback, or dropping it would be all impersonation ever took.
+describe("HTTP sender ownership", () => {
+	function boundCtx() {
+		const sessionStore = new SessionStore();
+		const record = sessionStore.mint({ spawn: "recipe-app" });
+		const token = sessionStore.ensureBindToken(record);
+		sessionStore.activateBinding(record);
+		const team = sessionStore.teamOf(record);
+		const mailboxStore = new DeviceMailboxStore();
+		mailboxStore.ensure("owner-1");
+		return { ctx: makeCtx({ sessionStore, mailboxStore, ownerId: () => "owner-1" }), team, token };
+	}
+
+	function reqWith(token?: string): Request {
+		return new Request("http://gateway/x", { headers: token ? { "x-session-token": token } : {} });
+	}
+
+	it("refuses a notice claiming a bound session when no binding is presented at all", async () => {
+		const { ctx, team } = boundCtx();
+		const { humanNotify } = createRoutes(ctx);
+
+		const res = humanNotify(reqWith(), { from: team, title: "t", summary: "s", full: "b" });
+
+		expect(res.status).toBe(403);
+	});
+
+	it("refuses a notice presenting some other session's binding", async () => {
+		const { ctx, team } = boundCtx();
+		const other = ctx.sessionStore!.mint({ spawn: "other-app" });
+		const otherToken = ctx.sessionStore!.ensureBindToken(other);
+		const { humanNotify } = createRoutes(ctx);
+
+		const res = humanNotify(reqWith(otherToken), { from: team, title: "t", summary: "s", full: "b" });
+
+		expect(res.status).toBe(403);
+	});
+
+	it("accepts the session that holds the binding", async () => {
+		const { ctx, team, token } = boundCtx();
+		const { humanNotify } = createRoutes(ctx);
+
+		const res = humanNotify(reqWith(token), { from: team, title: "t", summary: "s", full: "b" });
+
+		expect(res.status).toBe(200);
+	});
+
+	it("leaves an unbound name open, so a hand-launched session still speaks for itself", async () => {
+		const sessionStore = new SessionStore();
+		const record = sessionStore.mint({ spawn: "recipe-app" });
+		const mailboxStore = new DeviceMailboxStore();
+		mailboxStore.ensure("owner-1");
+		const { humanNotify } = createRoutes(makeCtx({ sessionStore, mailboxStore, ownerId: () => "owner-1" }));
+
+		const res = humanNotify(reqWith(), {
+			from: sessionStore.teamOf(record),
+			title: "t",
+			summary: "s",
+			full: "b",
+		});
+
+		expect(res.status).toBe(200);
+	});
+
+	it("refuses a plugin action claiming a bound session without its binding", async () => {
+		const { ctx, team } = boundCtx();
+		const { pluginAction } = createRoutes(ctx);
+
+		const res = pluginAction(reqWith(), { from: team, pluginId: "designer", actionType: "delete-card" });
+
+		expect(res.status).toBe(403);
+	});
+});
+
+// A channel job id is a pure function of two non-secret values, so anyone who has exchanged one
+// message can compute it forever after. Delivery is therefore gated on who is actually serving the
+// conversation, not on knowing its id.
+describe("reply ownership on /respond", () => {
+	function servedBy(boundToken?: string) {
+		const sessionStore = new SessionStore();
+		const record = sessionStore.mint({ spawn: "recipe-app" });
+		const team = sessionStore.teamOf(record);
+		if (boundToken) {
+			record.bindToken = boundToken;
+			sessionStore.activateBinding(record);
+		}
+		const ws = { readyState: 1, send: vi.fn(), data: { handshakeConfirmed: true, boundToken } };
+		const registry = makeRegistry({ [team]: ws });
+		sessionStore.bindBySegment(team, { live: { team, subId: "s1" } });
+		const store = new PendingJobStore<ResponsePayload>();
+		store.create("job-1", "asker", team, {});
+		return { ctx: makeCtx({ registry, sessionStore, store }), team };
+	}
+
+	function reqWith(token?: string): Request {
+		return new Request("http://gateway/respond", { headers: token ? { "x-session-token": token } : {} });
+	}
+
+	it("refuses a reply from anyone other than the session serving that conversation", () => {
+		const { ctx } = servedBy("victim-token");
+		const { respond } = createRoutes(ctx);
+
+		const res = respond(reqWith(), { session_id: "job-1", response: "forged" });
+
+		expect(res.status).toBe(403);
+	});
+
+	it("accepts the reply from the session that is serving it", async () => {
+		const { ctx } = servedBy("victim-token");
+		const { respond } = createRoutes(ctx);
+
+		const res = respond(reqWith("victim-token"), { session_id: "job-1", response: "real" });
+
+		expect(await res.json()).toMatchObject({ delivered: true });
+	});
+
+	it("accepts a reply for a conversation served by an unbound session, which has nothing to prove", async () => {
+		const { ctx } = servedBy();
+		const { respond } = createRoutes(ctx);
+
+		const res = respond(reqWith(), { session_id: "job-1", response: "real" });
+
+		expect(await res.json()).toMatchObject({ delivered: true });
+	});
+});
+
+// A session is asleep most of the time, which is exactly when forging into its conversation is
+// easiest, so ownership must survive the target having no live socket.
+describe("reply ownership for an offline target", () => {
+	function offlineBound() {
+		const sessionStore = new SessionStore();
+		const record = sessionStore.mint({ spawn: "recipe-app" });
+		record.bindToken = "victim-token";
+		sessionStore.activateBinding(record);
+		const team = sessionStore.teamOf(record);
+		const store = new PendingJobStore<ResponsePayload>();
+		store.create("job-1", "asker", team, {});
+		return makeCtx({ registry: makeRegistry({}), sessionStore, store });
+	}
+
+	function reqWith(token?: string): Request {
+		return new Request("http://gateway/respond", { headers: token ? { "x-session-token": token } : {} });
+	}
+
+	it("refuses a forged reply while the target session is asleep", () => {
+		const { respond } = createRoutes(offlineBound());
+
+		expect(respond(reqWith(), { session_id: "job-1", response: "forged" }).status).toBe(403);
+	});
+
+	it("still accepts the real session's own reply after it wakes", async () => {
+		const { respond } = createRoutes(offlineBound());
+
+		const res = respond(reqWith("victim-token"), { session_id: "job-1", response: "real" });
+
+		expect(await res.json()).toMatchObject({ delivered: true });
 	});
 });
