@@ -3087,6 +3087,21 @@ class ChatRepository(
 		if (!claimedByLiveRow) scheduleAttachmentDelete(prior.fileRefs.mapNotNull { it.src })
 	}
 
+	/** Cancel team's scheduled send and hand the banked record back instead of deleting its
+	 * attachment bucket - the dock's cancel-to-restore action, where the composer becomes the
+	 * bucket's new owner (the same ownership-transfer shape as fireOne's own clearScheduledSendRecord
+	 * call). A restored-then-abandoned bucket still self-heals: dropping the record from
+	 * scheduledSends removes it from sweepOrphanAttachments' referenced set, so the next cold-start
+	 * sweep reclaims it exactly like any other orphaned bucket. Returns null if nothing was
+	 * scheduled, or if a fire already raced ahead and claimed the same opId into a live row first
+	 * (see cancelScheduledSend's own doc on that race) - there is nothing left to restore once the
+	 * message has genuinely gone out. */
+	fun cancelScheduledSendForEdit(team: String): ScheduledSend? {
+		val prior = clearScheduledSendRecord(team) ?: return null
+		val claimedByLiveRow = _state.value.threads[team]?.any { it.opId == prior.opId } == true
+		return if (claimedByLiveRow) null else prior
+	}
+
 	/** Change ONLY the fire time of team's existing scheduled send - the dock's tap-to-edit action.
 	 * Deliberately narrower than a full text/attachment re-edit: the banked fileRefs are already-
 	 * copied MessageFile refs, not the live content:// uris scheduleSend takes, so folding a fuller

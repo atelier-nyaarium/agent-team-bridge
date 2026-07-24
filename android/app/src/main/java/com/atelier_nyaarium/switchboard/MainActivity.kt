@@ -163,6 +163,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.core.content.FileProvider
 import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.plugins.PluginManager
 import com.atelier_nyaarium.switchboard.plugins.Plugins
@@ -639,7 +640,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				scheduledSend = state.scheduledSends[openTeam!!],
 				onScheduleSend = { text, uris, at -> repo.scheduleSend(openTeam!!, text, uris, at) },
 				onReschedule = { at -> repo.rescheduleSend(openTeam!!, at) },
-				onCancelScheduledSend = { repo.cancelScheduledSend(openTeam!!) },
+				onCancelScheduledSend = { repo.cancelScheduledSendForEdit(openTeam!!) },
 				onRename = { name -> scope.launch { repo.rename(openTeam!!, name) } },
 				onForget = {
 					val forgotten = openTeam!!
@@ -2447,7 +2448,9 @@ fun ThreadScreen(
 	// takes, so re-threading them through the same call without risking a silent attachment drop
 	// would need its own dedicated seam. Changing the time alone has no such mismatch.
 	onReschedule: suspend (Long) -> Boolean,
-	onCancelScheduledSend: () -> Unit,
+	// Returns the cancelled record (null if nothing was scheduled) so the dock's X button can
+	// restore its text and attachments into the composer instead of discarding them.
+	onCancelScheduledSend: () -> ScheduledSend?,
 	// Terminal view: only the host-agent and devcontainers are eligible. The peek/send are
 	// team-bound suspend closures (the screen supplies the team).
 	terminalEligible: Boolean,
@@ -2724,10 +2727,29 @@ fun ThreadScreen(
 						scheduleDialogSeed = rec.fireAtMillis
 						scheduleDialogGeneration++
 					},
-					onCancel = onCancelScheduledSend,
+					onCancel = {
+						val restored = onCancelScheduledSend()
+						if (restored != null) {
+							draft = restored.text
+							onDraftChange(restored.text)
+							// Already-copied local files, not fresh picker grants - FileProvider mints a
+							// content:// Uri over the same filesDir/attachments/ path file_paths.xml already
+							// exposes, so the restored files flow back through the composer's existing
+							// Uri-based attachment/send path exactly like a fresh pick.
+							attachments = restored.fileRefs.mapNotNull { f ->
+								Attachments.fileFor(dockContext.filesDir, f.src)?.let { file ->
+									FileProvider.getUriForFile(dockContext, "${dockContext.packageName}.fileprovider", file)
+								}
+							}
+						}
+					},
 				)
 			}
 			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
+			// Hidden entirely while something is scheduled - the dock above is the sole surface then;
+			// letting the text field survive alongside it would let the user keep typing into a
+			// message that no longer has anywhere to go until the dock is cancelled or fires.
+			if (scheduledSend == null) {
 			if (attachments.isNotEmpty()) {
 				Row(
 					Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 4.dp),
@@ -2817,9 +2839,11 @@ fun ThreadScreen(
 					DropdownMenu(expanded = showSendMenu, onDismissRequest = { showSendMenu = false }) {
 						DropdownMenuItem(
 							text = { Text("Schedule Send") },
-							// Greyed out once one's already active for this session - the dock is the sole
-							// edit/reschedule/cancel surface (plans/scheduled-send.md).
-							enabled = sendEnabled && scheduledSend == null,
+							// No scheduledSend == null guard needed here: this whole menu is unreachable once
+							// one's already active, since the composer row it lives in is replaced by the dock
+							// entirely (plans/scheduled-send.md) - the dock is the sole edit/reschedule/cancel
+							// surface.
+							enabled = sendEnabled,
 							onClick = hapticClick {
 								showSendMenu = false
 								scheduleDialogSeed = System.currentTimeMillis() + 5 * 60_000L
@@ -2839,6 +2863,7 @@ fun ThreadScreen(
 						)
 					}
 				}
+			}
 			}
 			}
 		}
