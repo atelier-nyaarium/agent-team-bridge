@@ -5,6 +5,8 @@
 //                                                   firstUnreadId (null = bottom)
 //   thread.appendMessages(messages)                append (or in-place update when an id repeats)
 //   thread.setTheme(dark)                           light/dark swap, re-themes hljs + mermaid
+//   thread.setComposerOccupied(occupied)            greys Cancel on a failed row while the
+//                                                   composer holds text it would overwrite
 //   thread.setVisible(visible)                      app foreground/background transition
 //   thread.revealFirstUnread(idOrNull, regionIds)   re-snap/hold an already-rendered transcript
 //   thread.flushReadUpTo()                          flush any pending debounced read receipt now
@@ -156,6 +158,10 @@
 	////////////////////////////////
 	//  Rows
 
+	// Whether the composer currently holds text. Only Kotlin can see that box, so it mirrors the
+	// state here to gate the one action that would overwrite it.
+	let composerOccupied = false;
+
 	function formatTime(at) {
 		if (at === undefined || at === null || Number.isNaN(at)) return "";
 		const d = new Date(at);
@@ -223,19 +229,7 @@
 		if (m.status && m.status !== "completed") {
 			const status = document.createElement("span");
 			status.className = "status " + (m.status === "error" ? "error" : "running");
-			// A failed send is actionable: tapping the badge asks the host to retry.
-			const retriable = m.status === "error" && m.role === "user" && m.id !== undefined && m.id !== null;
-			if (retriable) {
-				status.classList.add("retry");
-				status.textContent = "failed - tap to retry";
-				status.addEventListener("click", () => {
-					if (window.Android && typeof window.Android.retryMessage === "function") {
-						window.Android.retryMessage(String(m.id));
-					}
-				});
-			} else {
-				status.textContent = m.status;
-			}
+			status.textContent = m.status === "error" ? "failed" : m.status;
 			meta.appendChild(status);
 		}
 		row.appendChild(meta);
@@ -251,7 +245,47 @@
 		if (Array.isArray(m.files) && m.files.length > 0) {
 			row.appendChild(buildFiles(m.files));
 		}
+		if (m.status === "error" && m.role === "user" && m.id !== undefined && m.id !== null) {
+			row.appendChild(buildFailedActions(String(m.id)));
+		}
 		return row;
+	}
+
+	/**
+	 * The two ways out of a failed send. Cancel is disabled while the composer holds text, since
+	 * it hands this message's content back to that same box and would otherwise have to either
+	 * overwrite what is being typed or silently merge with it.
+	 */
+	function buildFailedActions(id) {
+		const actions = document.createElement("div");
+		actions.className = "failed-actions";
+
+		const retry = document.createElement("button");
+		retry.className = "failed-action retry";
+		retry.type = "button";
+		retry.textContent = "Retry";
+		retry.addEventListener("click", () => {
+			if (window.Android && typeof window.Android.retryMessage === "function") {
+				window.Android.retryMessage(id);
+			}
+		});
+
+		const cancel = document.createElement("button");
+		cancel.className = "failed-action cancel";
+		cancel.type = "button";
+		cancel.textContent = "Cancel";
+		cancel.dataset.needsEmptyComposer = "1";
+		cancel.disabled = composerOccupied;
+		cancel.addEventListener("click", () => {
+			if (cancel.disabled) return;
+			if (window.Android && typeof window.Android.cancelMessage === "function") {
+				window.Android.cancelMessage(id);
+			}
+		});
+
+		actions.appendChild(retry);
+		actions.appendChild(cancel);
+		return actions;
 	}
 
 	// Tapping an attachment hands its path to the host, which opens it in the
@@ -661,6 +695,15 @@
 		scrollToDivider();
 	}
 
+	/** Kotlin mirrors the composer's own emptiness here, since only it can see that box. Applied to
+	 * already-rendered rows too, so a row that failed before you started typing greys immediately. */
+	function setComposerOccupied(occupied) {
+		composerOccupied = !!occupied;
+		for (const btn of document.querySelectorAll(".failed-action[data-needs-empty-composer]")) {
+			btn.disabled = composerOccupied;
+		}
+	}
+
 	function setTheme(dark) {
 		document.documentElement.classList.toggle("dark", !!dark);
 		document.getElementById("hl-light").disabled = !!dark;
@@ -694,6 +737,7 @@
 
 	window.thread = {
 		setMessages,
+		setComposerOccupied,
 		appendMessages,
 		setTheme,
 		setPlaying,

@@ -131,7 +131,39 @@ html, body {
 
 .meta .status.running { color: var(--running); }
 .meta .status.error { color: var(--error); }
-.meta .status.retry { cursor: pointer; text-decoration: underline; }
+
+/* The two ways out of a failed send, anchored to the row's bottom-right. Sized as real touch
+   targets rather than inline text: they are the only actions in the thread that resend or discard
+   something, so they should be hard to hit by accident and easy to hit on purpose. */
+.failed-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.failed-action {
+	font: inherit;
+	font-size: 14px;
+	font-weight: 600;
+	min-height: 40px;
+	padding: 0 18px;
+	border-radius: 8px;
+	border: 1px solid var(--border);
+	background: var(--chip-bg);
+	color: var(--fg);
+}
+
+.failed-action.retry {
+	border-color: var(--link);
+	color: var(--link);
+}
+
+/* Disabled only ever means "the composer holds text this would overwrite", so it reads as
+   temporarily unavailable rather than broken. */
+.failed-action:disabled {
+	opacity: 0.4;
+}
 
 /* Markdown content */
 

@@ -112,6 +112,10 @@ class ThreadRenderer(context: Context) {
 	 * send when the user taps its retry badge. */
 	var onRetryMessage: ((Long) -> Unit)? = null
 
+	/** Set by the owner; called with a failed row's id when Cancel is pressed, to lift that send
+	 * back into the composer. */
+	var onCancelMessage: ((Long) -> Unit)? = null
+
 	/** Set by the owner; called on the main thread with a message `at` when the
 	 * user taps an agent row's Play button. */
 	var onPlayMessage: ((Long) -> Unit)? = null
@@ -190,6 +194,12 @@ class ThreadRenderer(context: Context) {
 				fun retryMessage(id: String) {
 					val msgId = id.toLongOrNull() ?: return
 					webView.post { onRetryMessage?.invoke(msgId) }
+				}
+
+				@JavascriptInterface
+				fun cancelMessage(id: String) {
+					val msgId = id.toLongOrNull() ?: return
+					webView.post { onCancelMessage?.invoke(msgId) }
 				}
 
 				@JavascriptInterface
@@ -358,6 +368,12 @@ class ThreadRenderer(context: Context) {
 
 	fun setDark(dark: Boolean) {
 		eval("window.thread.setTheme($dark)")
+	}
+
+	/** Mirror whether the composer holds text, which is what gates Cancel on a failed row: only
+	 * this side can see that box, and Cancel would otherwise overwrite what is being typed. */
+	fun setComposerOccupied(occupied: Boolean) {
+		eval("window.thread.setComposerOccupied($occupied)")
 	}
 
 	/** Swap the Play glyph on the row whose message is playing (null = none).
