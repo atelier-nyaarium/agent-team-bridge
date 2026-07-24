@@ -13,8 +13,9 @@
 // `counts`: this row counts toward unread (an inbound row with real mailbox coordinates).
 // `ownSend`: this row is the local optimistic send (never a settled echo from another device).
 // `arrivedVisible`: present (false) only when the row arrived while the app was backgrounded.
-// Markdown is semi-trusted: html stays off and links are protocol-allowlisted here;
-// the WebView layer additionally blocks every non-appassets resource load.
+// Markdown is semi-trusted: html stays off and links render two-tier (standard schemes as real
+// anchors, everything else inert/red - see markdown-link-rules.js); the WebView layer
+// additionally blocks every non-appassets resource load.
 
 (function () {
 	const container = document.getElementById("messages");
@@ -40,10 +41,21 @@
 		},
 	});
 
-	// http/https per plan; mailto is fetch-free and data:image lets the demo
-	// fixture inline images without any network surface.
-	const ALLOWED_LINK = /^(https?:|mailto:|data:image\/)/i;
-	md.validateLink = (url) => ALLOWED_LINK.test(url.trim());
+	// Two-tier links: standard schemes render as ordinary anchors, everything else as an inert
+	// red "unhandled" link whose tap raises the copy-only menu (see markdown-link-rules.js).
+	window.installThreadLinkRules(md);
+
+	// Unhandled links carry no href (nothing to navigate, so no shouldOverrideUrlLoading hop);
+	// a delegated tap feeds their data-href to the native link menu instead. Standard anchors
+	// keep their href and never match here.
+	container.addEventListener("click", (e) => {
+		const a = e.target.closest("a.link-unhandled");
+		if (!a) return;
+		e.preventDefault();
+		if (window.Android && typeof window.Android.linkMenu === "function") {
+			window.Android.linkMenu(a.dataset.href || "");
+		}
+	});
 
 	// Label code fences with their language and divert ```mermaid fences to a
 	// lazily rendered placeholder that keeps the source for fallback + re-theme.

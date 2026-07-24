@@ -325,11 +325,12 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		if (repo.isMessagePlaying(team, at)) repo.stopPlayback() else repo.playMessage(team, at, SttsPlayer.Tier.FULL)
 	}
 	rendererPool.onReadUpTo = { team, id, at -> repo.readUpTo(team, id, at) }
-	// Links: a tap routes through the scheme dispatcher (openLink); a long-press raises the
-	// open/copy menu, whose Open button goes through the same dispatcher.
+	// Links: a tap on a standard anchor routes through the scheme dispatcher (openLink); the
+	// context menu (long-press on a standard anchor, or tap on an unhandled-protocol link)
+	// shows the URL with Open enabled only when the dispatcher can actually open it.
 	var linkMenu by remember { mutableStateOf<Pair<String, String>?>(null) }
 	rendererPool.onLinkTap = { team, url -> openLink(context, team, url) }
-	rendererPool.onLinkLongPress = { team, url -> linkMenu = team to url }
+	rendererPool.onLinkMenu = { team, url -> linkMenu = team to url }
 	DisposableEffect(Unit) {
 		// Fires on the player's daemon thread; the pool's renderer map is
 		// main-owned, so hop through the composition scope (main-dispatched).
@@ -729,10 +730,15 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			title = { Text("Link") },
 			text = { Text(url) },
 			confirmButton = {
-				TextButton(onClick = hapticClick {
-					openLink(context, team, url)
-					linkMenu = null
-				}) { Text("Open") }
+				// Greyed out for a scheme the dispatcher cannot open (an unhandled protocol's
+				// menu is copy-only until a handler exists).
+				TextButton(
+					enabled = linkOpenable(url),
+					onClick = hapticClick {
+						openLink(context, team, url)
+						linkMenu = null
+					},
+				) { Text("Open") }
 			},
 			dismissButton = {
 				TextButton(onClick = hapticClick {
@@ -1034,14 +1040,21 @@ private fun readClipboard(context: Context): String? {
 	return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
 }
 
-/** Every link activation (tap, or Open from the long-press menu) funnels here, keyed by scheme,
- * so a custom protocol (e.g. a host-project file reference) becomes a new branch without touching
- * the renderer or pool. `team` is the thread the link was tapped in - unused by the web schemes,
- * but a project-scoped protocol needs it to know which session's host it acts on. */
+/** The schemes [openLink] can actually open today. Also drives the link menu's Open button state
+ * and mirrors the renderer's own standard-vs-unhandled split (markdown-link-rules.js): a scheme
+ * outside this set renders as an inert red link whose menu offers Copy only. */
+private val OPENABLE_SCHEMES = setOf("http", "https", "mailto")
+
+private fun linkOpenable(url: String): Boolean = Uri.parse(url).scheme?.lowercase() in OPENABLE_SCHEMES
+
+/** Every link activation (tap, or Open from the context menu) funnels here, keyed by scheme, so a
+ * custom protocol (e.g. a host-project file reference) becomes a new branch without touching the
+ * renderer or pool. `team` is the thread the link was tapped in - unused by the web schemes, but a
+ * project-scoped protocol needs it to know which session's host it acts on. */
 @Suppress("UNUSED_PARAMETER")
 private fun openLink(context: Context, team: String, url: String) {
 	when (Uri.parse(url).scheme?.lowercase()) {
-		"http", "https" -> runCatching {
+		in OPENABLE_SCHEMES -> runCatching {
 			context.startActivity(
 				Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
 			)

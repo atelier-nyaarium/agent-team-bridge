@@ -157,6 +157,12 @@ html, body {
 	text-decoration: none;
 }
 
+/* A link whose protocol has no handler yet: rendered inert (no href, target in data-href) and
+   red; tapping raises the link menu with Open greyed out and only Copy live. */
+.body a.link-unhandled {
+	color: var(--error);
+}
+
 .body blockquote {
 	border-left: 3px solid var(--border);
 	padding: 0 10px;
