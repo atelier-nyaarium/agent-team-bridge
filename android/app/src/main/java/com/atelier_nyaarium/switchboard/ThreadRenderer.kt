@@ -4,9 +4,7 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.graphics.Color
-import android.net.Uri
 import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
@@ -123,6 +121,13 @@ class ThreadRenderer(context: Context) {
 	 * being reused by a later append before this debounced report lands. */
 	var onReadUpTo: ((Long, Long) -> Unit)? = null
 
+	/** Set by the owner; receives the href of a tapped link. Scheme dispatch (http/https vs any
+	 * custom protocol) is entirely the owner's job - this layer only reports the activation. */
+	var onLinkTap: ((String) -> Unit)? = null
+
+	/** Set by the owner; receives the href of a long-pressed link (the open/copy context menu). */
+	var onLinkLongPress: ((String) -> Unit)? = null
+
 	/** Set by the owner; maps a message's `from` canonical address to the session's human label at
 	 * render time (so a notice shows "My Work" rather than the opaque address). Identity when unset. */
 	var resolveFrom: ((String) -> String)? = null
@@ -216,6 +221,19 @@ class ThreadRenderer(context: Context) {
 		// while the dark variant loads.
 		webView.setBackgroundColor(Color.TRANSPARENT)
 
+		// Long-press on a link raises the owner's open/copy menu; anywhere else keeps the
+		// WebView default (text selection).
+		webView.setOnLongClickListener {
+			val hit = webView.hitTestResult
+			val href = hit.extra
+			if (hit.type == WebView.HitTestResult.SRC_ANCHOR_TYPE && !href.isNullOrEmpty()) {
+				onLinkLongPress?.invoke(href)
+				true
+			} else {
+				false
+			}
+		}
+
 		webView.webViewClient = object : WebViewClient() {
 			override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
 				return assetLoader.shouldInterceptRequest(request.url)
@@ -225,14 +243,7 @@ class ThreadRenderer(context: Context) {
 			override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
 				val url = request.url
 				if (url.host == "appassets.androidplatform.net") return false
-				if (url.scheme == "http" || url.scheme == "https") {
-					runCatching {
-						view.context.startActivity(
-							Intent(Intent.ACTION_VIEW, Uri.parse(url.toString()))
-								.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-						)
-					}
-				}
+				onLinkTap?.invoke(url.toString())
 				return true
 			}
 

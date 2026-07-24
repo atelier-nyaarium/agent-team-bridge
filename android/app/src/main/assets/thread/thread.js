@@ -25,7 +25,9 @@
 	const md = window.markdownit({
 		html: false,
 		breaks: true,
-		linkify: true,
+		// No auto-linkification: bare text like `readme.md` or a pasted hostname must stay text.
+		// A link renders only when written explicitly as [label](url).
+		linkify: false,
 		highlight: function (code, lang) {
 			if (lang && window.hljs.getLanguage(lang)) {
 				try {

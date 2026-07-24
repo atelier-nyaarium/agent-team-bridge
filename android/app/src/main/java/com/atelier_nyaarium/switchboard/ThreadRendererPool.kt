@@ -35,6 +35,15 @@ class ThreadRendererPool(private val context: Context) {
 	 * [onAttachmentTap], so a late debounced report after a tab switch credits the right thread. */
 	var onReadUpTo: ((String, Long, Long) -> Unit)? = null
 
+	/** Set by the owner; called with (team, href) when a link in that team's thread is tapped.
+	 * The team is bound per-renderer, same as [onAttachmentTap] - a custom protocol acting on the
+	 * thread's own host project needs to know which thread the link came from. */
+	var onLinkTap: ((String, String) -> Unit)? = null
+
+	/** Set by the owner; called with (team, href) when a link is long-pressed (the open/copy
+	 * context menu). Team-bound like [onLinkTap]. */
+	var onLinkLongPress: ((String, String) -> Unit)? = null
+
 	/** Whether agent rows render Play buttons. Set before threads first sync. */
 	var playEnabled = false
 
@@ -60,6 +69,8 @@ class ThreadRendererPool(private val context: Context) {
 				it.onRetryMessage = { id -> onRetry?.invoke(team, id) }
 				it.onPlayMessage = { at -> onPlayTap?.invoke(team, at) }
 				it.onReadUpTo = { id, at -> onReadUpTo?.invoke(team, id, at) }
+				it.onLinkTap = { url -> onLinkTap?.invoke(team, url) }
+				it.onLinkLongPress = { url -> onLinkLongPress?.invoke(team, url) }
 				it.resolveFrom = { addr -> resolveFrom?.invoke(addr) ?: addr }
 				it.selfLabel = { selfLabel?.invoke() ?: "" }
 				it.decorateFile = { f -> decorateFile?.invoke(team, f) }
