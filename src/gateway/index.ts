@@ -60,6 +60,7 @@ import { IntentTracker } from "./intent.js";
 import { PresenceFacade } from "./presence.js";
 import { ReadAnchors } from "./readAnchors.js";
 import { createRoutes } from "./routes.js";
+import { createSessionAuthority } from "./sessionAuthority.js";
 import { createVibeCheck } from "./vibeCheck.js";
 import { decideWakeCreate, WakeCoordinator, type WakeResult } from "./wake.js";
 import { createWebSocketHandlers, resolveLiveIncarnation, type WsData } from "./websocket.js";
@@ -245,6 +246,16 @@ export async function startGateway(): Promise<void> {
 		displayName: () => domainMeta?.displayName ?? null,
 		isAdminDomain: () => domainMeta?.isAdminDomain ?? null,
 	});
+	// The one place "what must a caller prove to act as X" is answered. Every gate consults it
+	// rather than reading the credential fields itself, so all of them share one rule.
+	const sessionAuthority = createSessionAuthority({
+		sessionStore,
+		registry,
+		resolveLive: resolveLiveIncarnation,
+		localDomainId: () => localDomainId ?? "",
+		localGatewayId,
+	});
+
 	presence.attach(planeRegistry);
 	presence.registerPlane(restoredPlanes?.presence);
 	// Boot reconciliation: a clean-shutdown-restored plane recomputes against the live boot-time
@@ -457,6 +468,7 @@ export async function startGateway(): Promise<void> {
 				...(projectPath ? { projectPath } : {}),
 				...(resumeSessionId ? { resumeSessionId } : {}),
 				...(workdirHint ? { workdirHint } : {}),
+				...(record ? { sessionToken: sessionStore.ensureBindToken(record) } : {}),
 			}),
 		);
 
@@ -881,10 +893,14 @@ export async function startGateway(): Promise<void> {
 	// hooks ride the routes deps; the disconnect reset rides createWebSocketHandlers below; the
 	// scheduler tick peeks due sessions and asks at the earliest idle detection.
 	const vibeCheck = createVibeCheck({
+		auth: sessionAuthority,
 		sessionAccess: presence,
 		resolveLead: (team) => {
 			const live = resolveLiveIncarnation(registry, sessionStore, team);
-			return live?.data.handshakeConfirmed ? live : undefined;
+			if (!live?.data.handshakeConfirmed) return undefined;
+			// The binding rides along so a vc- answer is checked against the socket actually serving
+			// this team, rather than against the record (which an alias incarnation cannot prove).
+			return { send: (payload: string) => live.send(payload), binding: sessionAuthority.toAnswerFor(live) };
 		},
 		peekScreen: async (record) => {
 			const r = await relayToHost({ kind: "peek", target: recordTmuxTarget(record) });
@@ -949,6 +965,7 @@ export async function startGateway(): Promise<void> {
 			else presence.setWorking(team, { working, needsLogin });
 		},
 		sessionStore,
+		auth: sessionAuthority,
 		presenceWriter: {
 			establishOnConfirm: (team, args) => presence.establishOnConfirm(team, args),
 			clearLive: (team, subId) => presence.clearLive(team, subId),
@@ -961,6 +978,7 @@ export async function startGateway(): Promise<void> {
 			registry,
 			conversationRegistry,
 			store,
+			auth: sessionAuthority,
 			config: { localGatewayId, localDomainId },
 			tryWakeTeam,
 			isWakeInFlight: (team) => inflightWakes.has(team) || inflightCreates.has(team),
@@ -1330,8 +1348,8 @@ export async function startGateway(): Promise<void> {
 		if (method === "POST" && url.pathname === "/respond") return routes.respond(req, body);
 		if (method === "POST" && url.pathname === "/poll") return routes.poll(req, body);
 		if (method === "GET" && url.pathname === "/health") return routes.health();
-		if (method === "POST" && url.pathname === "/human/notify") return routes.humanNotify(body);
-		if (method === "POST" && url.pathname === "/plugin-action") return routes.pluginAction(body);
+		if (method === "POST" && url.pathname === "/human/notify") return routes.humanNotify(req, body);
+		if (method === "POST" && url.pathname === "/plugin-action") return routes.pluginAction(req, body);
 
 		return new Response("Not Found", { status: 404 });
 	}
@@ -1354,8 +1372,8 @@ export async function startGateway(): Promise<void> {
 				// host daemon's trusted catalog (offlineCatalog, written only under the HOST_WS_TOKEN gate)
 				// may be proxied. Deliberately NOT isCatalogProject: that also trusts knownTeamPaths, which
 				// an unauthenticated /bridge register can poison with a hostile name (e.g. "localhost").
-				// Requires the host daemon connected; the broader unauth-/bridge surface is
-				// gateway-auth-surface.md's (postponed).
+				// Requires the host daemon connected; the broader unauth-/bridge surface is tracked in
+				// plans/pain-points.md (postponed).
 				if (!offlineCatalog.has(project)) {
 					return new Response("Unknown connector project", { status: 404 });
 				}

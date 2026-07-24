@@ -36,9 +36,10 @@ isolation, so any single plane's snapshot/identity computation throwing crashed 
 process for every connected session; and a WebSocket conversationId collision evicting an unrelated
 team's live socket with no team-match check, since a conversationId is not a secret. All fixed and
 tested. The WebSocket handshake's `confirmedLeadTeams` team-impersonation gap and the
-deterministic-forever channel-job-id reply-forgery gap were NOT fixed - they deepen
-`plans/gateway-auth-surface.md`'s already-designed-but-never-built `GATEWAY_TOKEN` gate rather than
-being new, isolated bugs (see that doc's own cross-reference section for the detail).
+deterministic-forever channel-job-id reply-forgery gap were NOT fixed at the time - they were
+deepenings of the same trust gap rather than new, isolated bugs. The impersonation half was later
+closed at cross-project granularity by `artifact-references.md` Phase 0; see the Gateway LAN auth
+surface section at the end of this file for what remains.
 
 ### A heavily-audited design document still drifted from what shipped, and nothing caught it until an independent align pass checked
 
@@ -428,8 +429,8 @@ register can influence them:
   typed `Catalog` value object exposing trusted vs any membership, applied per site. The tradeoff:
   `knownTeamPaths` is the durability fallback for a host-daemon outage (offlineCatalog clears on
   disconnect), so flipping a site to trusted-only degrades it during an outage. Decide per site
-  whether trust or durability wins. ROOT cause (unauthenticated `/bridge` register) is
-  `gateway-auth-surface.md` (postponed).
+  whether trust or durability wins. ROOT cause (unauthenticated `/bridge` register) is the Gateway
+  LAN auth surface section at the end of this file (postponed).
 
 ### Outbound-target validation pattern
 
@@ -538,9 +539,9 @@ not lost.
 
 ### Trust surface - all chain off the unauthenticated `/bridge` register + `/send`
 
-Owner-deferred (decision A); the root fix is `plans/gateway-auth-surface.md`, still an active,
-unshipped plan. These are concrete manifestations of that same known gap, not standalone theoretical
-concerns.
+Owner-deferred (decision A); the root fix is the Gateway LAN auth surface section at the end of this
+file, still unbuilt. These are concrete manifestations of that same known gap, not standalone
+theoretical concerns.
 
 - [high] `websocket.ts : createWebSocketHandlers : message` - the host-token gate + `RESERVED_TEAM_NAMES`
   match the bare `host` exactly, so a composite `host.foo` bypasses both.
@@ -582,8 +583,8 @@ crust-collection sweep.
   (container bring-up included) with a plain loop over distinct `to`+`displayLabel` pairs -
   `mintedFrom` retry-safety only collapses a *repeated* request, never bounds *distinct* ones, by
   design. Compounds the same already-known, already-decided-but-unshipped gap as the Trust Surface
-  items above (`plans/gateway-auth-surface.md`); tracked here until that plan's origin-aware gate is
-  built and confirmed to cover this creation path too. `plans/team-collab-sessions.md` Phase 3
+  items above (the Gateway LAN auth surface section at the end of this file); tracked until a
+  LAN-facing gate is built and confirmed to cover this creation path too. `plans/team-collab-sessions.md` Phase 3
   promotes unsolicited cold-contact to normal, encouraged use (not just a tolerated edge case),
   which makes this gap more likely to matter under ordinary use rather than only adversarial use -
   it doesn't add a new capability, so it's noted here rather than fixed there.
@@ -883,3 +884,87 @@ shipping first. It has: a real per-destination coalesced-pusher pattern and a re
 reconciler now exist as shipped, tested code in `src/gateway/federation/crossDomainPresence.ts`, so
 picking that plan back up should mean sharing/mirroring this code, not re-deriving the pattern from
 scratch. See that file's own "When this is picked back up" section, which points here.
+
+## Console poll drain vs the evie WS frame ceiling (found by the artifact-references plan audit, 2026-07-23)
+
+The console's poll reply ships the ENTIRE unacked mailbox backlog in one sealed
+`console_relay_reply`: `drain` returns every entry, the handler returns them wholesale (no
+paging), and sealing re-base64s the already-base64-bearing entry JSON (a second 4/3 inflation).
+evie's `BridgeTransport` calls `Bun.serve` with no `maxPayloadLength`; Bun's default is 16 MB and
+it CLOSES the WebSocket on a larger message. So the effective ceiling on one drain is roughly
+9 MB of decoded attachment bytes across the whole backlog. A phone parked on the 12-hour idle
+tier while attachment-bearing notices accumulate (screenshots already make this reachable today,
+no new feature needed) can cross it, and the failure mode is nasty: the gateway's entire evie WS
+drops BEFORE delivery, the console never receives so never acks, and every subsequent poll
+re-kills the WS - while the actively-polling console keeps refreshing `lastActivity`, so the 1h
+mailbox idle TTL never clears the poison.
+
+Fix directions (either suffices): page the drain (cap entries/bytes per poll response and let the
+cursor advance incrementally across polls - verify the console's ack-highest-received semantics
+make this a server-side-only change), or set an explicit `maxPayloadLength` on evie's Bun.serve
+with a graceful over-limit path. The artifact-references feature bounds its OWN replies (2 MB
+per-message aggregate artifact budget) but deliberately does not own this backlog bound, per the
+owner's scope ruling on that plan.
+
+## Gateway LAN auth surface (`plans/gateway-auth-surface.md`, DELETED as unsound - 2026-07-24)
+
+That plan was deleted rather than shipped: its central decision does not survive contact with the
+code (see "why the gate was unsound" below). Everything still true or still owed is consolidated
+here, since this file is where live gaps belong.
+
+**The finding, which stands.** The gateway's whole HTTP+WS API is published to the LAN on port
+20000 (`docker-compose.yml` maps `0.0.0.0`) with NO app-layer auth on any handler. Only two things
+are gated today: the reserved `host` WS slot (`HOST_WS_TOKEN`) and `/admit-payload` (a one-time
+enroll nonce). So any device on the wifi can, with no credential and no relationship: `POST /send`
+(prompt-inject any agent, and since session-id-teardown Phase G also MINT records and drive real
+container bring-up, an unbounded resource amplifier); `POST /human/notify` and `/plugin-action`
+(spoofable `from`, so phishing notices and device-plugin actions attributed to anyone);
+`POST /ingest` (unbounded log append, disk-fill, and NO in-repo client posts this gateway route, so
+it should simply be deleted rather than gated); `GET /pending` and `/teams` and `/discover` (recon,
+and `/pending` leaks every live session_id which then arms `/respond` and `/poll`); and
+`WS /connector/{project}/ws`, whose `project` is an unvalidated attacker-chosen hostname the proxy
+dials outbound, an SSRF/arbitrary-egress primitive.
+
+**Why the gate it decided was unsound.** The design was origin-aware: trust docker-bridge sources
+`172.18.0.N`, require a `GATEWAY_TOKEN` from `172.18.0.1` (host and LAN, indistinguishable under
+userland-proxy). Two defects, both verified against the code by the 2026-07-24 session-identity
+battle:
+
+- The `172.18.0.*` hinge is pinned to a subnet the machine RE-ROLLS. No subnet is configured
+  anywhere (`grep -rnE '172\.1[6-9]\.|ipam|subnet'` over `src/`, `docker-compose.yml`,
+  `install.sh`, `scripts/` returns zero hits), and `start-gateway.sh` runs
+  `docker compose down --remove-orphans` then `up`, destroying and recreating the network on every
+  gateway start. The empirical `172.18.0.0/16` was one boot's observation, not a stable fact.
+- Read as a denylist ("not `.1` therefore trusted") it FAILS OPEN for the exact attacker it exists
+  to stop: a LAN client at `192.168.1.x` is not `.1`, so it passes. Any future version must be
+  deny-by-default (trusted IFF inside the runtime-discovered bridge subnet and not the gateway
+  address), which also fails safely and loudly if discovery breaks.
+
+It also never solved token delivery for a HAND-LAUNCHED host Claude window (it assumed the host
+daemon, which shares `.env` for free). Gating any route such a window needs either 401s it or
+silently degrades it. A 0600 file under `~/.config/switchboard`, mirroring the provisioning blob,
+is the obvious shape but is undesigned.
+
+**What got built instead.** The 2026-07-24 battle established that network origin and session
+identity are ORTHOGONAL, and that the gate addresses only the former: a compromised devcontainer
+sits on the trusted side of it. The identity layer (launcher-injected per-session tokens, `from`
+proven against the binding, `/respond` ownership including the handshake and vibe-check branches,
+binding-keyed `confirmedLeadTeams`) shipped as `plans/artifact-references.md` Phase 0.
+Cross-project impersonation is closed there; same-project panes share one container and one uid,
+so they remain mutually impersonable by OS construction, permanently.
+
+**The `host` SPAWN is still unreserved,** and deliberately so. Both host protections match the bare
+string `host`, while every real host session is `host.<6hex>`, so a container can register a
+`host.*` name no record has armed. Reserving the prefix does not work: a hand-launched host Claude
+registers exactly that shape and would be locked out, which the owner's comfort ceiling forbids. A
+squat confers no privilege (the tmux drive path is console-side behind the sealed relay) but does
+list as a host-machine session on the board, so the owner could mistake it for their own. Closing
+it needs a way to tell a legitimate hand-launched host session from a squatter, which nothing
+today provides.
+
+**Still owed, nobody assigned:** the LAN-stranger half in any form (the whole list above is still
+reachable by a wifi neighbour); deleting the dead `/ingest` route; validating `/connector`'s
+project hostname; a body-size cap on `/human/notify`; read-side ownership on `/poll` and
+`/pending`; the ungated fan-out (delivery is never gated on handshake confirmation, so a socket
+registering a victim's name still receives its pushes); and `bindResume`'s tier-2 path, where
+`bind()` matches a record by transcript id regardless of the registering team.

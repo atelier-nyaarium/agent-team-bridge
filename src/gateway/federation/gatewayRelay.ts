@@ -20,7 +20,7 @@ import type { Sealer } from "./sealer.js";
  * runs against the same local routes a local sender would hit. */
 export interface FederationRoutes {
 	send: (req: Request, body: Record<string, unknown>, opts?: { trustedInbound?: boolean }) => Promise<Response>;
-	respond: (req: Request, body: Record<string, unknown>) => Response;
+	respond: (req: Request, body: Record<string, unknown>, opts?: { trustedInbound?: boolean }) => Response;
 	teams: () => Response;
 	/** Land a fully-composed mailbox entry on THIS Gateway's own owner mailbox - the console_push
 	 * landing side. Local-append only; never fans out further (see the FederatedOp doc comment). */
@@ -218,16 +218,22 @@ export function createGatewayRelayHandler({
 						throw new Error(`cross-Domain response_push to "${op.session_id}" denied`);
 					}
 				}
-				const res = routes.respond(FAKE_REQ, {
-					session_id: op.session_id,
-					status: op.status,
-					response: op.response,
-					...pickTiers(op),
-					replyAsJson: op.replyAsJson,
-					question: op.question,
-					reason: op.reason,
-					files: op.files,
-				});
+				const res = routes.respond(
+					FAKE_REQ,
+					{
+						session_id: op.session_id,
+						status: op.status,
+						response: op.response,
+						...pickTiers(op),
+						replyAsJson: op.replyAsJson,
+						question: op.question,
+						reason: op.reason,
+						files: op.files,
+					},
+					// Already authenticated: this arrived as a sealed, allowlist-verified relay frame,
+					// so the HTTP-side sender gates have nothing to add and no header to read.
+					{ trustedInbound: true },
+				);
 				const json = (await res.json()) as { error?: string };
 				if (!res.ok) throw new Error(json.error ?? "response_push delivery failed");
 				return { ok: true };

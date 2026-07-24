@@ -173,6 +173,12 @@ export class PendingJobStore<T> {
 		});
 	}
 
+	/** The team a job is addressed to, or undefined for an unknown id. Read-only, so a caller can
+	 * check who owns a reply before delivering it. */
+	targetOf(id: string): string | undefined {
+		return this.entries.get(id)?.to;
+	}
+
 	deliver(id: string, result: T): DeliverMeta | false {
 		const entry = this.entries.get(id);
 		if (!entry) return false;

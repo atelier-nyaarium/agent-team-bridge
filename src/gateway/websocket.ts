@@ -4,6 +4,13 @@ import { WsRegisterSchema } from "../shared/schemas.js";
 import { isComposite } from "../shared/session-id.js";
 import type { SessionStore } from "../shared/session-store.js";
 import type { ConnectionMode, WebSocketConfig } from "../shared/types.js";
+import {
+	NOTHING_PRESENTED,
+	type Presented,
+	presentedByRegister,
+	type SessionAuthority,
+	type SessionBinding,
+} from "./sessionAuthority.js";
 import type { WakeCoordinator } from "./wake.js";
 
 ////////////////////////////////
@@ -45,6 +52,9 @@ export interface WebSocketDeps {
 	// here (register only stashes the reported ids on the socket); disconnect clears the live pointer.
 	// Absent in tests that do not exercise session recording.
 	sessionStore?: SessionStore;
+	// The sole resolver of "what must a caller prove to act as X". Absent in tests that do not
+	// exercise the identity gates, which then behave as an ungated gateway does.
+	auth?: SessionAuthority;
 	// The presence facade's writer surface for the exact live-socket transition points this module
 	// owns (a confirm establishing/binding a record, a disconnect/eviction clearing the live
 	// pointer) - routed through the single-writer facade instead of `sessionStore` directly so these
@@ -78,6 +88,10 @@ export interface WsData {
 	// session label for a self-appearing session.
 	claudeSessionId?: string;
 	cwdName?: string;
+	// The launcher-delivered binding this connection proved at register: set only when the presented
+	// token resolved to a record whose team is the one being claimed. Undefined for a hand-launched
+	// session, the host daemon, and console peers, all of which operate unbound.
+	boundToken?: string;
 	missedPings: number;
 	isStale: boolean;
 	handshakeConfirmed: boolean;
@@ -178,6 +192,7 @@ export function createWebSocketHandlers({
 	onCatalogChange,
 	onPresenceDerive,
 	sessionStore,
+	auth,
 	presenceWriter,
 	announcePresenceDirty,
 }: WebSocketDeps) {
@@ -227,7 +242,12 @@ export function createWebSocketHandlers({
 	// isMainOrLead:true claim is only honored for a team already in this set - otherwise a
 	// never-before-seen team could skip the handshake challenge entirely on its first-ever
 	// connection by simply asserting the field, with no server-side signal backing it.
-	const confirmedLeadTeams = new Set<string>();
+	// Keyed by team, VALUED by the binding that confirmed it (null for an unbound confirmer), so the
+	// fast path re-checks identity rather than the bare name: a socket presenting a different
+	// binding than the one that answered the real challenge is sent through a fresh handshake
+	// instead of inheriting confirmed-lead status. An unbound team stores null, which a later
+	// unbound registrant matches, so a hand-launched session is not re-prompted every reconnect.
+	const confirmedLeadTeams = new Map<string, SessionBinding>();
 
 	/** Drop any pending handshake owned by a (team, subId) - a socket that will never answer. */
 	function forgetPending(team: string, subId: string): void {
@@ -373,6 +393,52 @@ export function createWebSocketHandlers({
 				return;
 			}
 
+			// Session binding: the token was minted with the record and reaches the session only
+			// through the daemon's launch command, so presenting the one bound to the name being
+			// claimed proves this connection IS that record's session. Anything else is unbound.
+			// Deliberately NOT a rejection on its own - a hand-launched session has no token by
+			// design, and a purged DATA_DIR leaves every running session's token unresolvable.
+			const presentedToken = reg.data.sessionToken;
+			const boundRecord = presentedToken ? sessionStore?.recordByBindToken(presentedToken) : undefined;
+			const isBound = !!boundRecord && sessionStore?.teamOf(boundRecord) === team;
+			const presentedHere = presentedByRegister(reg.data);
+
+			// A name whose binding is ACTIVE may be claimed only by the holder of that binding. This
+			// is the impersonation gate: a neighbouring container can reach the register path but
+			// cannot produce another record's token. A name with no binding, or one whose binding
+			// has never been presented, stays claimable by anyone - which is what keeps a
+			// hand-launched session, a pre-existing record, and a reattached pane that never
+			// received its token all working.
+			// The wire name IS the key at register: a bare spawn-point name legitimately has no record,
+			// unlike the sender gates, which must resolve a name the way delivery does because what a
+			// message claims to be FROM is what gets stamped on it.
+			if (auth && !auth.satisfies(auth.toClaim(team), presentedHere)) {
+				console.log(`[ws] rejected register for bound team "${team}" - binding not presented`);
+				ws.send(JSON.stringify({ type: "register_reject", team, reason: "unauthorized" }));
+				ws.data.isStale = true;
+				ws.close();
+				return;
+			}
+			if (isBound && boundRecord) {
+				ws.data.boundToken = presentedToken;
+				const wasInert = !sessionStore?.isBindingActive(boundRecord);
+				sessionStore?.activateBinding(boundRecord);
+				// Arming the binding must also expel anyone who claimed this name while it was inert,
+				// or squatting first would defeat the gate entirely: delivery fans out to every active
+				// socket under a team, not just the confirmed lead, so a pre-claimer would keep reading
+				// the victim's messages forever despite the binding now being armed.
+				if (wasInert) {
+					for (const [otherSubId, other] of registry.get(team) ?? []) {
+						if (other !== ws && other.data.boundToken !== presentedToken) {
+							console.log(
+								`[ws] evicting ${team}/${otherSubId} - claimed the name before its binding armed`,
+							);
+							evictSocket(other);
+						}
+					}
+				}
+			}
+
 			// Reserved-name protection: first live registration wins. A second process
 			// trying to claim "host" is rejected so a stray container project cannot squat
 			// on the host daemon's slot.
@@ -471,7 +537,9 @@ export function createWebSocketHandlers({
 			// can skip being asked again. A remembered "false" never arrives (a worker that answered
 			// false is evicted permanently and does not reconnect), so only true is handled here.
 			if (mode === "channel" && team !== "host") {
-				if (reg.data.isMainOrLead === true && confirmedLeadTeams.has(team)) {
+				const confirmedBy = confirmedLeadTeams.get(team);
+				const sameConfirmer = !!auth && !!confirmedBy && auth.sameAs(confirmedBy, auth.toAnswerFor(ws));
+				if (reg.data.isMainOrLead === true && sameConfirmer) {
 					ws.data.handshakeConfirmed = true;
 					establishRecord(ws, { team, subId });
 					console.log(`[ws] ${team}/${subId} reconnected as remembered lead - handshake skipped`);
@@ -649,9 +717,28 @@ export function createWebSocketHandlers({
 	}
 
 	/** Resolve a handshake response. Returns true if it was a handshake session. */
-	function resolveHandshake(sessionId: string, replyAsJson?: Record<string, unknown>, response?: string): boolean {
+	function resolveHandshake(
+		sessionId: string,
+		replyAsJson?: Record<string, unknown>,
+		response?: string,
+		responderToken?: Presented,
+	): boolean {
 		const pending = handshakePending.get(sessionId);
 		if (!pending) return false;
+
+		// Only the challenged session may answer its own handshake. Without this, anyone who learns
+		// an hs- id can answer it with isMainOrLead:false, which evicts the victim's socket while its
+		// MCP sets suppressReconnect - a permanent remote kill. Checked BEFORE the delete so a
+		// Keyed on the CHALLENGED SOCKET, which is literally the subject of the question: only the
+		// connection a challenge was issued to may answer it. Checked BEFORE the delete below, so a
+		// spoofed answer cannot consume the pending entry the real session still needs. Socket-keyed
+		// also means a token minted but never delivered cannot strand its session, since such a
+		// socket carries nothing and is therefore owed nothing.
+		const challenged = registry.get(pending.team)?.get(pending.subId);
+		if (auth && !auth.satisfies(auth.toAnswerFor(challenged), responderToken ?? NOTHING_PRESENTED)) {
+			console.log(`[ws] ignored handshake answer for ${pending.team} - not from the challenged session`);
+			return true;
+		}
 		handshakePending.delete(sessionId);
 
 		const subs = registry.get(pending.team);
@@ -671,7 +758,7 @@ export function createWebSocketHandlers({
 
 		if (isMainOrLead) {
 			ws.data.handshakeConfirmed = true;
-			confirmedLeadTeams.add(pending.team);
+			if (auth) confirmedLeadTeams.set(pending.team, auth.toAnswerFor(ws));
 			establishRecord(ws, pending);
 			console.log(`[ws] handshake confirmed: ${pending.team}/${pending.subId} is lead`);
 		} else {

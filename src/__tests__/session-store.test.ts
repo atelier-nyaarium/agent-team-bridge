@@ -376,3 +376,55 @@ describe("SessionStore TTL", () => {
 		expect(store.getByTeam("host.gone12")).toBeUndefined();
 	});
 });
+
+describe("SessionStore session binding", () => {
+	it("hands a self-appearing session no binding, so it stays claimable by the session that appeared", () => {
+		const store = new SessionStore();
+		const record = store.mint({ spawn: "recipe-app" });
+
+		expect(record.bindToken).toBeUndefined();
+	});
+
+	it("mints on the first launch and reuses it forever after, since a reattach never re-runs the launch", () => {
+		const store = new SessionStore();
+		const record = store.mint({ spawn: "recipe-app" });
+
+		const first = store.ensureBindToken(record);
+		expect(store.ensureBindToken(record)).toBe(first);
+		expect(store.recordByBindToken(first)).toBe(record);
+	});
+
+	it("resolves a token only to the record it was minted for", () => {
+		const store = new SessionStore();
+		const mine = store.mint({ spawn: "recipe-app" });
+		const sibling = store.mint({ spawn: "recipe-app" });
+		const token = store.ensureBindToken(mine);
+		store.ensureBindToken(sibling);
+
+		expect(store.recordByBindToken(token)).toBe(mine);
+		expect(store.recordByBindToken("not-a-real-token")).toBeUndefined();
+	});
+
+	it("carries the binding across a persist round trip, so a gateway restart does not orphan a live session", () => {
+		const store = new SessionStore();
+		const record = store.mint({ spawn: "recipe-app" });
+		const token = store.ensureBindToken(record);
+
+		const restored = new SessionStore();
+		restored.restore(JSON.parse(JSON.stringify(store.snapshot())));
+
+		expect(restored.recordByBindToken(token)?.id).toBe(record.id);
+	});
+
+	it("never invents a binding for a record restored without one, which would lock out its running session", () => {
+		const store = new SessionStore();
+		const record = store.mint({ spawn: "recipe-app" });
+		const raw = JSON.parse(JSON.stringify(store.snapshot())) as Record<string, Record<string, unknown>>;
+		delete raw[`recipe-app.${record.id}`].bindToken;
+
+		const restored = new SessionStore();
+		restored.restore(raw);
+
+		expect(restored.getByTeam(`recipe-app.${record.id}`)?.bindToken).toBeUndefined();
+	});
+});

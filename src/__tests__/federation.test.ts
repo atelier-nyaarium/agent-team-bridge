@@ -24,6 +24,8 @@ import { Address, parseSessionName, storeKey } from "../shared/session-id.js";
 import { SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 
+const TEST_REQ = new Request("http://gateway/test");
+
 ////////////////////////////////
 //  Harness
 
@@ -1013,7 +1015,7 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		});
 		const { humanNotify } = createRoutes(ctx);
 
-		const res = humanNotify({
+		const res = humanNotify(TEST_REQ, {
 			from: "recipe-app",
 			title: "cycle done",
 			summary: "s",
@@ -1085,7 +1087,7 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 		});
 		const { pluginAction } = createRoutes(ctx);
 
-		const res = pluginAction({ from: "recipe-app", pluginId: "designer", actionType: "delete-card" });
+		const res = pluginAction(TEST_REQ, { from: "recipe-app", pluginId: "designer", actionType: "delete-card" });
 		expect((await res.json()).delivered).toBe(true);
 		expect(mailboxStore.get("owner-1")?.drain().entries).toHaveLength(1);
 
@@ -1101,7 +1103,7 @@ describe("console_push multi-gateway fan-out (same-Domain, E2E sealed)", () => {
 	it("single-Gateway behavior is unchanged: no evieClient, humanNotify still delivers locally with no error", async () => {
 		const mailboxStore = new DeviceMailboxStore();
 		const { humanNotify } = createRoutes(makeCtx("hosta", { mailboxStore, ownerId: () => "owner-1" }));
-		const res = humanNotify({ from: "recipe-app", title: "t", summary: "s", full: "body" });
+		const res = humanNotify(TEST_REQ, { from: "recipe-app", title: "t", summary: "s", full: "body" });
 		expect((await res.json()).delivered).toBe(true);
 		expect(mailboxStore.get("owner-1")?.drain().entries).toHaveLength(1);
 	});

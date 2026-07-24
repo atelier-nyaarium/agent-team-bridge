@@ -190,6 +190,9 @@ interface WakeMessage {
 	// A host session's workdir hint (the record's label): the pane opens in ~/projects/<hint>. Absent
 	// for a devcontainer wake (its workdir is fixed at /workspace/<project>).
 	workdirHint?: string;
+	// The record's binding secret, exported into the launched session so its register can prove which
+	// record it is. Absent for a wake with no record (or a record predating the field).
+	sessionToken?: string;
 }
 
 function findProjectPath(team: string): string {
@@ -249,6 +252,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		const launch = buildLaunchCommand(target, {
 			resumeSessionId: msg.resumeSessionId,
 			workdir: resolveHostWorkdir(msg.workdirHint),
+			sessionToken: msg.sessionToken,
 		});
 		console.error(`[host-wake] starting host session ${msg.team}`);
 		try {
@@ -301,7 +305,7 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		const target: TmuxTarget = { kind: "devcontainer", name: projectName, sessionName: session };
 		const { created } = await ensureSession(
 			target,
-			buildLaunchCommand(target, { resumeSessionId: msg.resumeSessionId }),
+			buildLaunchCommand(target, { resumeSessionId: msg.resumeSessionId, sessionToken: msg.sessionToken }),
 		);
 		console.error(`[host-wake] ${msg.team} session ${created ? "started" : "already running"}`);
 
@@ -351,13 +355,21 @@ const CLAUDE_FLAGS =
 // below).
 export function buildLaunchCommand(
 	target: TmuxTarget,
-	opts: { resumeSessionId?: string; workdir?: string } = {},
+	opts: { resumeSessionId?: string; workdir?: string; sessionToken?: string } = {},
 ): string {
 	const composite = composeSessionName(target.name, target.sessionName);
 	const resume =
 		opts.resumeSessionId && /^[0-9a-fA-F-]{8,}$/.test(opts.resumeSessionId)
 			? ` --resume ${opts.resumeSessionId}`
 			: "";
+	// Hex-only by construction, and re-checked here because it lands inside the `bash -c '...'`
+	// string. A malformed one is refused rather than escaped or dropped: launching without it would
+	// start a session that can never claim its own name, which is far harder to diagnose than a
+	// failed launch.
+	if (opts.sessionToken && !/^[0-9a-f]{16,}$/.test(opts.sessionToken)) {
+		throw new Error("refusing to launch: session token is not the expected hex form");
+	}
+	const exportToken = opts.sessionToken ? `export SWITCHBOARD_SESSION_TOKEN=${opts.sessionToken}; ` : "";
 	const claude = `claude --model opus --effort xhigh ${CLAUDE_FLAGS}${resume}`;
 	if (target.kind === "host") {
 		// The workdir is double-quoted for spaces. A single quote would close the outer `bash -c '...'`
@@ -366,9 +378,9 @@ export function buildLaunchCommand(
 		// sanitizer forbids path separators but not quotes, so both are guarded here.
 		const safeWorkdir = opts.workdir && !opts.workdir.includes("'") && !opts.workdir.includes('"');
 		const cd = safeWorkdir ? `cd "${opts.workdir}"; ` : "";
-		return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${cd}${claude}; exec bash'`;
+		return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${exportToken}${cd}${claude}; exec bash'`;
 	}
-	return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; cd /workspace/${target.name}; exec ${claude}'`;
+	return `bash -c 'source ~/.bashrc; export PROJECT_NAME=${composite}; ${exportToken}cd /workspace/${target.name}; exec ${claude}'`;
 }
 
 // The executor owns single-flight + the peek cadence floor; this module only relays the
@@ -379,7 +391,7 @@ const hostOpRunner = createHostOpRunner({
 	peekPane: peekWithFallback,
 	sendText,
 	sendKey,
-	createSession: async (target, workdirHint, resumeSessionId) => {
+	createSession: async (target, workdirHint, resumeSessionId, sessionToken) => {
 		// A create_session for an existing session reattaches instead of erroring on a duplicate
 		// new-session. For a fresh launch, clear the dev-channels + folder-trust menus in the
 		// BACKGROUND: the host op must return well under the gateway's 20s timeout, so we do not block
@@ -387,7 +399,10 @@ const hostOpRunner = createHostOpRunner({
 		// takes effect on that fresh-launch branch - a reattach ignores the whole launch command,
 		// resume included.
 		const workdir = target.kind === "host" ? resolveHostWorkdir(workdirHint) : undefined;
-		const { created } = await ensureSession(target, buildLaunchCommand(target, { workdir, resumeSessionId }));
+		const { created } = await ensureSession(
+			target,
+			buildLaunchCommand(target, { workdir, resumeSessionId, sessionToken }),
+		);
 		if (created) {
 			void awaitReady(target).catch(() => {
 				// best-effort menu-clearing; a failure self-heals on the next launch

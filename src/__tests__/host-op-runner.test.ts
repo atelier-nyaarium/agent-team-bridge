@@ -98,7 +98,7 @@ describe("createHostOpRunner", () => {
 		const h = makeOps();
 		const runner = createHostOpRunner(h.ops);
 		expect(await runner.run({ kind: "createSession", target: T })).toEqual({ created: true });
-		expect(h.ops.createSession).toHaveBeenCalledWith(T, undefined, undefined);
+		expect(h.ops.createSession).toHaveBeenCalledWith(T, undefined, undefined, undefined);
 		expect(await runner.run({ kind: "reloadPlugins", target: T })).toEqual({ initiated: true });
 		expect(h.ops.reloadPlugins).toHaveBeenCalledWith(T);
 	});
@@ -107,7 +107,7 @@ describe("createHostOpRunner", () => {
 		const h = makeOps();
 		const runner = createHostOpRunner(h.ops);
 		await runner.run({ kind: "createSession", target: T, workdirHint: "myproject" });
-		expect(h.ops.createSession).toHaveBeenCalledWith(T, "myproject", undefined);
+		expect(h.ops.createSession).toHaveBeenCalledWith(T, "myproject", undefined, undefined);
 	});
 
 	it("forwards a createSession resumeSessionId to the tmux op, so a reopened session resumes", async () => {
@@ -119,7 +119,12 @@ describe("createHostOpRunner", () => {
 			workdirHint: "myproject",
 			resumeSessionId: "12345678-1234-1234-1234-123456789abc",
 		});
-		expect(h.ops.createSession).toHaveBeenCalledWith(T, "myproject", "12345678-1234-1234-1234-123456789abc");
+		expect(h.ops.createSession).toHaveBeenCalledWith(
+			T,
+			"myproject",
+			"12345678-1234-1234-1234-123456789abc",
+			undefined,
+		);
 	});
 
 	it("dedups a re-relayed createSession by dedupKey: the session is created once", async () => {

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { isAgentWorking, isAtPrompt, isPromptEmpty } from "../shared/agent-screen.js";
 import type { SessionRecord } from "../shared/session-store.js";
+import { NOTHING_PRESENTED, type Presented, type SessionAuthority, type SessionBinding } from "./sessionAuthority.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -17,10 +18,12 @@ export interface VibeCheckSessionAccess {
 
 export interface VibeCheckDeps {
 	sessionAccess: VibeCheckSessionAccess;
+	/** Resolves what a responder must prove. Absent in tests that do not exercise the gate. */
+	auth?: SessionAuthority;
 	/** The CONFIRMED lead socket serving a team, or undefined (asleep / unconfirmed / virtual). The
 	 * vibe check goes only to the lead - never broadcast to sub-sessions, never to a session still
 	 * verifying. */
-	resolveLead: (team: string) => { send: (payload: string) => void } | undefined;
+	resolveLead: (team: string) => { send: (payload: string) => void; binding: SessionBinding } | undefined;
 	/** Capture the record's pane screen (raw ANSI), or null when unpeekable right now (host daemon
 	 * offline, container booting, transient error). Null and errors both leave the check due. */
 	peekScreen: (record: SessionRecord) => Promise<string | null>;
@@ -137,9 +140,24 @@ export function createVibeCheck(deps: VibeCheckDeps) {
 	/** Intercept a vc-* answer arriving through respond(), mirroring resolveHandshake's contract.
 	 * Returns true when the session id was a pending vibe check (whether or not the answer stored
 	 * cleanly), false to let respond() continue normal delivery. */
-	function resolve(sessionId: string, replyAsJson?: Record<string, unknown>, response?: string): boolean {
+	function resolve(
+		sessionId: string,
+		replyAsJson?: Record<string, unknown>,
+		response?: string,
+		responderToken?: Presented,
+	): boolean {
 		const team = pendingById.get(sessionId);
 		if (team === undefined) return false;
+		// Only the asked session may answer: a vc- answer writes the board-visible description, so an
+		// outsider could otherwise relabel someone else's session. Checked before the delete so a
+		// spoofed answer cannot consume the pending check. Keyed on the LIVE lead, not the record, so
+		// a `claude --resume` re-incarnation serving a bound record under its own unbound name can
+		// still answer for it.
+		const lead = deps.resolveLead(team);
+		if (lead && deps.auth && !deps.auth.satisfies(lead.binding, responderToken ?? NOTHING_PRESENTED)) {
+			console.log(`[vibe] ignored answer for ${team} - not from that session`);
+			return true;
+		}
 		pendingById.delete(sessionId);
 		const state = states.get(team);
 		if (state) {
