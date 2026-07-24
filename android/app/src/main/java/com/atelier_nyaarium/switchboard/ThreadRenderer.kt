@@ -125,8 +125,10 @@ class ThreadRenderer(context: Context) {
 	 * custom protocol) is entirely the owner's job - this layer only reports the activation. */
 	var onLinkTap: ((String) -> Unit)? = null
 
-	/** Set by the owner; receives the href of a long-pressed link (the open/copy context menu). */
-	var onLinkLongPress: ((String) -> Unit)? = null
+	/** Set by the owner; receives the href for the link context menu (open/copy). Raised two ways:
+	 * a long-press on any standard anchor, or a plain tap on an inert "unhandled protocol" link
+	 * (which has no href to navigate, so it arrives via the JS bridge instead of a hit test). */
+	var onLinkMenu: ((String) -> Unit)? = null
 
 	/** Set by the owner; maps a message's `from` canonical address to the session's human label at
 	 * render time (so a notice shows "My Work" rather than the opaque address). Identity when unset. */
@@ -203,6 +205,14 @@ class ThreadRenderer(context: Context) {
 					webView.post { onReadUpTo?.invoke(rowId, rowAt) }
 				}
 
+				// A tapped "unhandled protocol" link (inert, no href) - raises the same context
+				// menu a long-press does, where Open renders greyed out.
+				@JavascriptInterface
+				fun linkMenu(url: String) {
+					if (url.isEmpty()) return
+					webView.post { onLinkMenu?.invoke(url) }
+				}
+
 				// A pure OS clipboard write - unlike the callbacks above, this needs no app-level
 				// state or repo access, so it is handled entirely here rather than bubbling through
 				// ThreadRendererPool. Android 13+ (this app's minSdk) shows its own copy
@@ -227,7 +237,7 @@ class ThreadRenderer(context: Context) {
 			val hit = webView.hitTestResult
 			val href = hit.extra
 			if (hit.type == WebView.HitTestResult.SRC_ANCHOR_TYPE && !href.isNullOrEmpty()) {
-				onLinkLongPress?.invoke(href)
+				onLinkMenu?.invoke(href)
 				true
 			} else {
 				false

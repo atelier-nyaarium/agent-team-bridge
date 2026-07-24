@@ -40,9 +40,10 @@ class ThreadRendererPool(private val context: Context) {
 	 * thread's own host project needs to know which thread the link came from. */
 	var onLinkTap: ((String, String) -> Unit)? = null
 
-	/** Set by the owner; called with (team, href) when a link is long-pressed (the open/copy
-	 * context menu). Team-bound like [onLinkTap]. */
-	var onLinkLongPress: ((String, String) -> Unit)? = null
+	/** Set by the owner; called with (team, href) when the link context menu should show - a
+	 * long-press on a standard anchor, or a tap on an inert unhandled-protocol link. Team-bound
+	 * like [onLinkTap]. */
+	var onLinkMenu: ((String, String) -> Unit)? = null
 
 	/** Whether agent rows render Play buttons. Set before threads first sync. */
 	var playEnabled = false
@@ -70,7 +71,7 @@ class ThreadRendererPool(private val context: Context) {
 				it.onPlayMessage = { at -> onPlayTap?.invoke(team, at) }
 				it.onReadUpTo = { id, at -> onReadUpTo?.invoke(team, id, at) }
 				it.onLinkTap = { url -> onLinkTap?.invoke(team, url) }
-				it.onLinkLongPress = { url -> onLinkLongPress?.invoke(team, url) }
+				it.onLinkMenu = { url -> onLinkMenu?.invoke(team, url) }
 				it.resolveFrom = { addr -> resolveFrom?.invoke(addr) ?: addr }
 				it.selfLabel = { selfLabel?.invoke() ?: "" }
 				it.decorateFile = { f -> decorateFile?.invoke(team, f) }
