@@ -408,11 +408,14 @@ private fun SendKey(inputEmpty: Boolean, onTap: () -> Unit, onLongPress: () -> U
 /**
  * The console terminal view. It always peeks; the render follows the peek result:
  *  - a live tmux pane (ANSI, auto-refreshed while RESUMED) with the control-key + slash palette and a
- *    text input that injects via tmux_send;
+ *    text input that injects via tmux_send; while the session is not online the slash-macro row (claude
+ *    TUI commands, nothing to receive them) swaps to a Wake up button firing onRelaunch;
  *  - a read-only container-logs snapshot while the session's tmux pane does not exist yet (a booting
  *    devcontainer), with no input since there is nothing to type into;
  *  - a centered Wake button when the session is off (peek finds no container/pane), or "Waking..." +
- *    Retry once a wake has been asked for.
+ *    Retry once a wake has been asked for. Never shown once this mount has already peeked a real pane
+ *    (everSawTmuxFrame) - a later status drop back to "available" (e.g. Ctrl-C killing the foreground
+ *    claude, tmux itself unaffected) keeps showing that pane instead of idling out.
  * onPeek carries the last hash so an idle frame round-trips only the hash, and returns a Result so a
  * never-loaded pane can show the backend's reason instead of staying blank. `wakePending` seeds the
  * waking state for a session opened straight off a create/wake, so it reads "Waking..." not "asleep".
@@ -424,6 +427,9 @@ fun TerminalView(
 	wakePending: Boolean,
 	sessionStatus: String?,
 	onWake: () -> Unit,
+	// Force-relaunch claude in a pane that still exists (close_session + create_session composed -
+	// see ChatRepository.relaunchSession for why a bare wake cannot). Throws on failure.
+	onRelaunch: suspend () -> Unit,
 	onPeek: suspend (sinceHash: String?) -> Result<ConsolePeekResult>,
 	onSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
 	onFocusChange: (FocusIntent) -> Unit = {},
@@ -457,16 +463,28 @@ fun TerminalView(
 	// A long-press freezes the frame (this halts peeking) so its text can be selected and copied
 	// without the next frame wiping the selection; the Paused banner resumes.
 	var paused by remember(team) { mutableStateOf(false) }
+	// Latched true the first time THIS mount peeks a real tmux pane, and never reset - a capturable
+	// pane is direct, fresher evidence than sessionStatus that there is something to look at. Without
+	// it, killing the foreground claude with Ctrl-C (which drops the gateway's confirmed incarnation
+	// back to "available" but leaves the tmux pane itself alive) would idle out to the Wake screen
+	// even though the pane is still right there and still peekable; a fresh mount (re-opening the
+	// thread later) starts over and defers to sessionStatus again until it has peeked at least once.
+	var everSawTmuxFrame by remember(team) { mutableStateOf(false) }
+	// The Wake up button's in-flight latch (the close_session + create_session round trip), so a
+	// double-tap cannot fire a second chain whose close would kill the first chain's fresh session.
+	var relaunching by remember(team) { mutableStateOf(false) }
 	val scope = rememberCoroutineScope()
 	val lifecycleOwner = LocalLifecycleOwner.current
 
 	LaunchedEffect(team, refreshMs, sessionStatus) {
 		lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
 			while (true) {
-				// A long-press pause freezes the frame; an asleep (available, not-yet-woken) session has
-				// nothing to peek, so it idles on the Wake screen rather than docker-exec'ing a warm
-				// container every cycle. A tap on Wake sets wakeRequested and the loop starts peeking.
-				if (paused || (sessionStatus == "available" && !wakeRequested)) {
+				// A long-press pause freezes the frame; an asleep (available, not-yet-woken, never-seen-
+				// alive-this-mount) session has nothing to peek, so it idles on the Wake screen rather
+				// than docker-exec'ing a warm container every cycle. A tap on Wake sets wakeRequested and
+				// the loop starts peeking; once a real pane has been seen, everSawTmuxFrame keeps this
+				// peeking regardless of a later status flip (see its own doc above).
+				if (paused || (sessionStatus == "available" && !wakeRequested && !everSawTmuxFrame)) {
 					delay(refreshMs)
 					continue
 				}
@@ -483,6 +501,7 @@ fun TerminalView(
 								else -> if (r.ansi != null) {
 									ansi = r.ansi
 									kind = "tmux"
+									everSawTmuxFrame = true
 								}
 							}
 						}
@@ -519,8 +538,11 @@ fun TerminalView(
 	val frameEmpty = ansi.isEmpty() && logs.isEmpty()
 	// An asleep session (board says available) has not been woken, so it shows the Wake button even when
 	// its container is still warm and a peek would return stale container-logs; only a session actually
-	// coming up (verifying / wake requested) shows the live logs-then-pane.
-	val asleepIdle = sessionStatus == "available" && !wakeRequested
+	// coming up (verifying / wake requested) shows the live logs-then-pane. Excludes a session that has
+	// already shown a real pane this mount (everSawTmuxFrame) - e.g. Ctrl-C killing the foreground
+	// claude drops status back to "available" without touching the tmux pane itself, and that pane
+	// should keep showing rather than snap to the Wake screen.
+	val asleepIdle = sessionStatus == "available" && !wakeRequested && !everSawTmuxFrame
 	// The wake/error screen shows once there is no frame to display (a failed peek, or a wake in flight
 	// before the first frame lands), or after a run of failures a prior frame has gone stale; a lone
 	// transient failure keeps the last frame so it does not flicker.
@@ -605,23 +627,45 @@ fun TerminalView(
 						color = MaterialTheme.colorScheme.error,
 					)
 				}
-				Row(
-					Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
-					horizontalArrangement = Arrangement.spacedBy(6.dp),
-				) {
-					PALETTE_SLASH.forEach { macro ->
-						AssistChip(
-							onClick = hapticClick {
-								if (macro.autoSend) fire(macro.cmd, null) else input = "${macro.cmd} "
-							},
-							label = {
-								Text(
-									macro.cmd,
-									fontFamily = FontFamily.Monospace,
-									color = if (macro.autoSend) MACRO_AUTO_SEND_COLOR else MACRO_STAGE_ONLY_COLOR,
-								)
-							},
-						)
+				if (sessionStatus == "online") {
+					Row(
+						Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+						horizontalArrangement = Arrangement.spacedBy(6.dp),
+					) {
+						PALETTE_SLASH.forEach { macro ->
+							AssistChip(
+								onClick = hapticClick {
+									if (macro.autoSend) fire(macro.cmd, null) else input = "${macro.cmd} "
+								},
+								label = {
+									Text(
+										macro.cmd,
+										fontFamily = FontFamily.Monospace,
+										color = if (macro.autoSend) MACRO_AUTO_SEND_COLOR else MACRO_STAGE_ONLY_COLOR,
+									)
+								},
+							)
+						}
+					}
+				} else {
+					// Claude is not running in this pane (Ctrl-C killed it, or the session is still coming
+					// up), so the slash macros - claude TUI commands - have nothing to receive them. The row
+					// becomes the relaunch affordance instead; the control keys and input stay, since the
+					// bare shell underneath is still real and typeable.
+					val waking = relaunching || sessionStatus == "verifying"
+					FilledTonalButton(
+						onClick = hapticClick {
+							relaunching = true
+							wakeRequested = true
+							scope.launch {
+								runCatching { onRelaunch() }.onFailure { sendError = it.message ?: "wake failed" }
+								relaunching = false
+							}
+						},
+						enabled = !waking,
+						modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+					) {
+						Text(if (waking) "Waking..." else "Wake up")
 					}
 				}
 				Row(

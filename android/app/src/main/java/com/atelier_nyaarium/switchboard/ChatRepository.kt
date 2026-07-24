@@ -3870,6 +3870,22 @@ class ChatRepository(
 		}
 	}
 
+	/** Relaunch claude inside team's still-existing pane (the terminal palette's Wake up button):
+	 * close_session (kill the tmux, KEEP the record) then create_session (fresh launch, resuming the
+	 * record's transcript). Composed from those two existing ops because a bare create cannot do
+	 * this - the daemon's ensureSession no-ops whenever the tmux session still exists, whether or
+	 * not claude is still running inside it (a Ctrl-C-killed pane is exactly that state). Local
+	 * addressable sessions only; throws on failure so the terminal surfaces it inline (tmuxSend's
+	 * contract). */
+	suspend fun relaunchSession(team: String) {
+		withContext(Dispatchers.IO) {
+			val t = runCatching { parseTarget(team, localDomain(), _state.value.localGatewayId) }.getOrNull()
+			if (t !is Address || t.gateway != _state.value.localGatewayId) error("not a local session")
+			client().closeSession(team)
+			client().createSession(target = t.spawn, sessionName = t.session)
+		}
+	}
+
 	// Per-session composer drafts, persisted so a power-management kill (or any process
 	// death) never loses a half-typed message. Keyed by the same canonical team id as
 	// threads; an empty draft is dropped so the map stays sparse.

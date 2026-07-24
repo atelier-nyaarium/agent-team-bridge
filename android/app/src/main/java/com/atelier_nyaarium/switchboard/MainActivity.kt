@@ -654,14 +654,19 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				// and the host machine's terminal is reached through the dedicated "host" target.
 				terminalEligible = isComposite(localFieldOf(openTeam!!)) &&
 					(session?.gatewayId.isNullOrEmpty() || session?.gatewayId == state.localGatewayId),
-				// The terminal view opens by default (docker-logs then tmux) for a session that is not
-				// yet live, so a booting or stuck session is visible without a manual toggle; the Wake
-				// button reattaches an asleep one.
+				// The terminal view (docker-logs then tmux) opens by default only for a session already
+				// known to be stuck (sessionNeedsLogin below) - a plain booting session opens to chat
+				// instead, since there is nothing to watch until it either comes up or gets stuck. The
+				// Wake button reattaches an asleep one.
 				sessionStatus = session?.status,
+				// Daemon-derived (presence plane), so it can be true even before "online" - a peeked pane
+				// stuck at a login prompt is knowable while the MCP handshake is still pending.
+				sessionNeedsLogin = session?.needsLogin == true,
 				// A "verifying" session is coming up (a wake in flight, through the MCP handshake), so the
 				// terminal seeds "Waking..." rather than "asleep"; a plain asleep session reads "asleep".
 				wakePending = session?.status == "verifying",
 				onWake = { repo.wakeSession(openTeam!!) },
+				onRelaunch = { repo.relaunchSession(openTeam!!) },
 				terminalRefreshMs = repo.terminalRefreshMs,
 				onTerminalPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
 				onTerminalSend = { text, key, submit -> repo.tmuxSend(openTeam!!, text, key, submit) },
@@ -2456,7 +2461,15 @@ fun ThreadScreen(
 	terminalEligible: Boolean,
 	sessionStatus: String?,
 	wakePending: Boolean,
+	// Daemon-derived (presence plane), true independent of sessionStatus - a peeked pane can show a
+	// login prompt while still "verifying", before the MCP handshake ever confirms it "online". The
+	// one signal available at tap time that distinguishes a stuck boot from a plain one still in
+	// progress (see the terminalMode default below).
+	sessionNeedsLogin: Boolean,
 	onWake: () -> Unit,
+	// The terminal palette's Wake up button: force-relaunch claude in a still-existing pane
+	// (close_session + create_session composed - see ChatRepository.relaunchSession).
+	onRelaunch: suspend () -> Unit,
 	terminalRefreshMs: Long,
 	onTerminalPeek: suspend (sinceHash: String?) -> Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult>,
 	onTerminalSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
@@ -2498,11 +2511,13 @@ fun ThreadScreen(
 	// draft, exactly the generation-token shape Phase 1's DurableOpStore uses for the identical "a
 	// stale attempt must not act after a newer one has taken over" problem.
 	var scheduleDialogGeneration by remember { mutableStateOf(0) }
-	// The raw-tmux terminal view, toggled from the top bar; re-keyed when switching session. Defaults
-	// on for a not-yet-live session so its boot is watchable without a manual toggle (see the call site).
-	// Keyed off the known asleep/booting statuses so an unrecognized status opens chat, not terminal.
+	// The raw-tmux terminal view, toggled from the top bar; re-keyed when switching session. A plain
+	// still-waking session (asleep, booting, or a fresh create) opens to CHAT by default - only a
+	// session already known to be stuck (sessionNeedsLogin) jumps straight to terminal, so the human
+	// sees the problem instantly instead of watching an otherwise-uneventful boot.
 	var terminalMode by remember(team) {
-		mutableStateOf(terminalEligible && sessionStatus in setOf(null, "available", "verifying"))
+		val waking = sessionStatus in setOf(null, "available", "verifying")
+		mutableStateOf(terminalEligible && waking && sessionNeedsLogin)
 	}
 	if (terminalMode) BackHandler { terminalMode = false }
 	val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -2668,6 +2683,7 @@ fun ThreadScreen(
 					wakePending = wakePending,
 					sessionStatus = sessionStatus,
 					onWake = onWake,
+					onRelaunch = onRelaunch,
 					onPeek = onTerminalPeek,
 					onSend = onTerminalSend,
 					onFocusChange = onFocusChange,
