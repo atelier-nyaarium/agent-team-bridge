@@ -282,6 +282,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// destroyed with the Activity.
 	val rendererPool = remember { ThreadRendererPool(context.applicationContext) }
 	rendererPool.onRetry = { team, id -> scope.launch { repo.retrySend(team, id) } }
+	rendererPool.onCancel = { team, id -> repo.cancelFailedSend(team, id) }
 	// Attribute a message's sender by its human label (a notice's `from` is a canonical address).
 	// Reads the live state at render time so a rename reflects without rebuilding the pool.
 	rendererPool.resolveFrom = { addr -> repo.state.value.label(addr, repo.state.value.localGatewayId) }
@@ -637,6 +638,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onSend = { text, uris -> scope.launch { repo.send(openTeam!!, text, uris) } },
 				initialDraft = repo.draft(openTeam!!),
 				onDraftChange = { repo.setDraft(openTeam!!, it) },
+				composerRestore = state.composerRestore[openTeam!!],
+				onComposerRestored = { repo.clearComposerRestore(openTeam!!) },
 				scheduledSend = state.scheduledSends[openTeam!!],
 				onScheduleSend = { text, uris, at -> repo.scheduleSend(openTeam!!, text, uris, at) },
 				onReschedule = { at -> repo.rescheduleSend(openTeam!!, at) },
@@ -2438,6 +2441,9 @@ fun ThreadScreen(
 	onSend: (String, List<Uri>) -> Unit,
 	initialDraft: String,
 	onDraftChange: (String) -> Unit,
+	// Content lifted out of a cancelled failed send, waiting to be taken back into this composer.
+	composerRestore: ComposerRestore?,
+	onComposerRestored: () -> Unit,
 	onRename: (String) -> Unit,
 	onForget: () -> Unit,
 	// At most one pending scheduled send for this team (plans/scheduled-send.md), null otherwise -
@@ -2487,6 +2493,16 @@ fun ThreadScreen(
 	// silently dropped picked-but-not-yet-sent files (schedule OR live send) on that recreation.
 	var attachments by rememberSaveable { mutableStateOf<List<Uri>>(emptyList()) }
 	var showSendMenu by remember { mutableStateOf(false) }
+
+	// A cancelled failed send hands its content back here. Only ever applied to an empty composer -
+	// Cancel is disabled otherwise - so this never overwrites something being typed.
+	LaunchedEffect(composerRestore) {
+		val restore = composerRestore ?: return@LaunchedEffect
+		draft = restore.text
+		onDraftChange(restore.text)
+		if (restore.uris.isNotEmpty()) attachments = restore.uris
+		onComposerRestored()
+	}
 	// Null: no dialog. Non-null: the seed instant it opens the picker at - a fresh Schedule Send
 	// seeds 5 minutes out, a dock edit seeds the record's own current fire time. Two distinct
 	// booleans would let a stray recomposition show the dialog with a stale seed from the other path.
@@ -2718,6 +2734,7 @@ fun ThreadScreen(
 					rendererPool = rendererPool,
 					openNonce = openNonce,
 					unreadBoundary = unreadBoundary,
+					composerOccupied = draft.trim().isNotEmpty(),
 					modifier = Modifier.weight(1f).fillMaxWidth(),
 				)
 			}
@@ -3804,9 +3821,14 @@ fun ThreadWebView(
 	rendererPool: ThreadRendererPool,
 	openNonce: Int,
 	unreadBoundary: (String) -> Pair<Long?, List<Long>>,
+	// Whether the composer holds text: mirrored into the renderer so a failed row's Cancel, which
+	// hands its content back to that box, greys out rather than overwriting what is being typed.
+	composerOccupied: Boolean,
 	modifier: Modifier,
 ) {
 	var renderer by remember(team) { mutableStateOf(rendererPool.get(team)) }
+
+	LaunchedEffect(renderer, composerOccupied) { renderer.setComposerOccupied(composerOccupied) }
 
 	DisposableEffect(renderer) {
 		renderer.onRendererGone = { renderer = rendererPool.recreate(team) }

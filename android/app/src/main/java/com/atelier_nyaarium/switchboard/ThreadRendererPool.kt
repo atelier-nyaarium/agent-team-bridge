@@ -20,6 +20,10 @@ class ThreadRendererPool(private val context: Context) {
 	 * badge is tapped in that team's thread. */
 	var onRetry: ((String, Long) -> Unit)? = null
 
+	/** Set by the owner; called with (team, row id) when a failed send's Cancel is pressed, to lift
+	 * it back into that thread's composer. Team-bound like [onAttachmentTap]. */
+	var onCancel: ((String, Long) -> Unit)? = null
+
 	/** Set by the owner; receives the (team, attachments-relative path) of a tapped attachment (the
 	 * in-app viewer). The team is bound per-renderer, so it is always the thread the tap came from,
 	 * not whatever is on-screen when the posted callback runs. When unset, taps fall back to the
@@ -68,6 +72,7 @@ class ThreadRendererPool(private val context: Context) {
 				it.playEnabled = playEnabled
 				it.onOpenAttachment = { rel -> onAttachmentTap?.invoke(team, rel) ?: openAttachment(rel) }
 				it.onRetryMessage = { id -> onRetry?.invoke(team, id) }
+				it.onCancelMessage = { id -> onCancel?.invoke(team, id) }
 				it.onPlayMessage = { at -> onPlayTap?.invoke(team, at) }
 				it.onReadUpTo = { id, at -> onReadUpTo?.invoke(team, id, at) }
 				it.onLinkTap = { url -> onLinkTap?.invoke(team, url) }

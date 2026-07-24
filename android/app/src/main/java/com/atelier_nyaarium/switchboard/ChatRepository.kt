@@ -214,6 +214,9 @@ data class CrossDomainReceiverPairing(
 /** `id` is a per-thread, local-only row key for the WebView DOM (lets the renderer
  * replace a row in place). It is NOT the mailbox seq; mailbox dedupe is owned by SyncCursor.
  * Stamped on append; reassigned from list order on load so old transcripts still work. */
+/** What a cancelled failed send hands back to the composer: its text plus its attachment copies. */
+data class ComposerRestore(val text: String, val uris: List<Uri> = emptyList())
+
 data class Message(
 	val fromMe: Boolean,
 	val text: String,
@@ -508,6 +511,9 @@ data class ChatState(
 	 * renders a composer, so this is tracked apart from working/live and drives the check-terminal chip. */
 	val sessionNeedsLogin: Map<String, Boolean> = emptyMap(),
 	val status: String = "",
+	/** Content lifted out of a cancelled failed send, waiting for that thread's composer to take it
+	 * back. Keyed by team and cleared as soon as it is applied, so it restores exactly once. */
+	val composerRestore: Map<String, ComposerRestore> = emptyMap(),
 	val error: String? = null,
 	val gap: Boolean = false,
 	val biometricLock: Boolean = false,
@@ -3003,7 +3009,11 @@ class ChatRepository(
 				s
 			} else {
 				claimed = true
-				s.copy(threads = s.threads + (team to thread.map { if (it.id == messageId) it.copy(status = "pending") else it }))
+				// A retry submits the message NOW, so it belongs at the end of the thread rather than
+				// back at its original position: anything that arrived while it sat failed genuinely
+				// came first, and leaving it above them would misreport the order of the conversation.
+				val retried = msg.copy(status = "pending", at = System.currentTimeMillis())
+				s.copy(threads = s.threads + (team to (thread.filterNot { it.id == messageId } + retried)))
 			}
 		}
 		if (!claimed) return@withContext
@@ -3320,6 +3330,27 @@ class ChatRepository(
 	private fun rebuildFiles(files: List<MessageFile>): List<OutgoingFile> = files.mapNotNull { f ->
 		val file = Attachments.fileFor(filesDir, f.src) ?: return@mapNotNull null
 		runCatching { OutgoingFile(f.name, f.mime, file.readBytes()) }.getOrNull()
+	}
+
+	/**
+	 * Take a failed send back out of the thread and hand its content to the composer, so a message
+	 * that cannot be sent as-is can be edited instead of only retried or abandoned. The row is
+	 * dropped only once its content is staged for restore, so nothing is destroyed on the way.
+	 *
+	 * Attachment copies ride along as file URIs into the same picker slot a fresh pick uses; any
+	 * whose bytes are already gone are simply absent, exactly as a retry treats them.
+	 */
+	fun cancelFailedSend(team: String, messageId: Long) {
+		val msg = _state.value.threads[team]?.firstOrNull { it.id == messageId } ?: return
+		if (!msg.fromMe || msg.status != "error") return
+		val uris = msg.files.mapNotNull { Attachments.fileFor(filesDir, it.src)?.let(Uri::fromFile) }
+		_state.update { it.copy(composerRestore = it.composerRestore + (team to ComposerRestore(msg.text, uris))) }
+		removeMessage(team, messageId)
+	}
+
+	/** Consume a staged restore once the composer has taken it, so it is applied exactly once. */
+	fun clearComposerRestore(team: String) {
+		_state.update { it.copy(composerRestore = it.composerRestore - team) }
 	}
 
 	private fun removeMessage(team: String, id: Long) {
