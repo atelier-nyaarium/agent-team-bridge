@@ -1989,3 +1989,23 @@ describe("reply ownership for an offline target", () => {
 		expect(await res.json()).toMatchObject({ delivered: true });
 	});
 });
+
+// The console's `from` is the human's free-form Device Name, not a session name, and its ops are
+// already authenticated by the sealed relay before they reach here. Gating it on a name that cannot
+// resolve to a record blocks the owner from messaging their own sessions at all.
+describe("the console sends under its own device name", () => {
+	it("accepts a send whose sender is a device name rather than a local session", async () => {
+		const sessionStore = new SessionStore();
+		const ws = { readyState: 1, send: vi.fn(), data: { mode: "channel", handshakeConfirmed: true } };
+		const registry = makeRegistry({ "recipe-app.abc123": ws });
+		const { send } = createRoutes(makeCtx({ registry, sessionStore }));
+
+		const res = await send(
+			new Request("http://gateway/send"),
+			{ from: "Pixel 10 Pro XL", fromConversationId: "owner-1", to: "recipe-app.abc123", body: "hi" },
+			{ consoleSender: true },
+		);
+
+		expect(res.status).toBe(200);
+	});
+});
