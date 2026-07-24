@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -324,6 +325,11 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		if (repo.isMessagePlaying(team, at)) repo.stopPlayback() else repo.playMessage(team, at, SttsPlayer.Tier.FULL)
 	}
 	rendererPool.onReadUpTo = { team, id, at -> repo.readUpTo(team, id, at) }
+	// Links: a tap routes through the scheme dispatcher (openLink); a long-press raises the
+	// open/copy menu, whose Open button goes through the same dispatcher.
+	var linkMenu by remember { mutableStateOf<Pair<String, String>?>(null) }
+	rendererPool.onLinkTap = { team, url -> openLink(context, team, url) }
+	rendererPool.onLinkLongPress = { team, url -> linkMenu = team to url }
 	DisposableEffect(Unit) {
 		// Fires on the player's daemon thread; the pool's renderer map is
 		// main-owned, so hop through the composition scope (main-dispatched).
@@ -716,6 +722,26 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			onDismiss = { viewer = null },
 		)
 	}
+
+	linkMenu?.let { (team, url) ->
+		AlertDialog(
+			onDismissRequest = { linkMenu = null },
+			title = { Text("Link") },
+			text = { Text(url) },
+			confirmButton = {
+				TextButton(onClick = hapticClick {
+					openLink(context, team, url)
+					linkMenu = null
+				}) { Text("Open") }
+			},
+			dismissButton = {
+				TextButton(onClick = hapticClick {
+					copyLinkToClipboard(context, url)
+					linkMenu = null
+				}) { Text("Copy URL") }
+			},
+		)
+	}
 }
 
 @Composable
@@ -1006,6 +1032,27 @@ private fun logPluginThrow(message: String, err: Throwable) {
 private fun readClipboard(context: Context): String? {
 	val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
 	return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+}
+
+/** Every link activation (tap, or Open from the long-press menu) funnels here, keyed by scheme,
+ * so a custom protocol (e.g. a host-project file reference) becomes a new branch without touching
+ * the renderer or pool. `team` is the thread the link was tapped in - unused by the web schemes,
+ * but a project-scoped protocol needs it to know which session's host it acts on. */
+@Suppress("UNUSED_PARAMETER")
+private fun openLink(context: Context, team: String, url: String) {
+	when (Uri.parse(url).scheme?.lowercase()) {
+		"http", "https" -> runCatching {
+			context.startActivity(
+				Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+			)
+		}
+		else -> {}
+	}
+}
+
+private fun copyLinkToClipboard(context: Context, url: String) {
+	val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+	cm.setPrimaryClip(ClipData.newPlainText("link", url))
 }
 
 /** True once the text is a JSON object with the fields a Provisioning needs. */
