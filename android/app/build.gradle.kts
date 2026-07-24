@@ -145,9 +145,6 @@ dependencies {
 	// QR ENCODER for the host-a-friend invite QR (the operator's phone renders a pending-tenant
 	// provisioning blob the friend scans). Pure Java, GMS-free, no Android transitives.
 	implementation(libs.zxing.core)
-	// Session tab row drag-to-reorder (see the version catalog's own comment for why a hand-rolled
-	// gesture detector was not reliable here).
-	implementation(libs.reorderable)
 
 	testImplementation(libs.junit)
 	// Real org.json shadowing the android.jar stub (which throws on every method) so JSON

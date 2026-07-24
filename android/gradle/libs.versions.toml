@@ -24,15 +24,6 @@ mlkitBarcode = "17.3.0"
 # Pure-Java QR ENCODER (GMS-free, no Android transitives) for the invite-QR the operator's
 # phone generates. ML Kit handles decode (scanning); zxing core is the matching write side.
 zxingCore = "3.5.3"
-# Drag-to-reorder for the session tab row. Compose's own foundation gesture APIs (used in an
-# earlier attempt here) do not reliably compose a drag detector alongside a click handler on the
-# SAME touch target - a stock long-press-drag helper backs off the instant any sibling gesture
-# detector reacts to movement, which Material3's own Tab does internally on real touch hardware.
-# This library's own canonical examples hit the identical constraint and solve it the same way this
-# app now does: a small dedicated drag handle with its own separate hit-test bounds, never sharing a
-# node with the tap-to-select target. On Maven Central since 2023, actively released (3.1.0 as of
-# this pin, a few months old at the time of writing).
-reorderable = "3.1.0"
 junit = "4.13.2"
 # Real org.json for JVM unit tests only - the android.jar stub throws on every method, and this
 # long-stable artifact (years past the package-maturity window) shadows it on the test classpath
@@ -68,7 +59,6 @@ androidx-camera-view = { group = "androidx.camera", name = "camera-view", versio
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
 mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning", version.ref = "mlkitBarcode" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxingCore" }
-reorderable = { group = "sh.calvin.reorderable", name = "reorderable", version.ref = "reorderable" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 

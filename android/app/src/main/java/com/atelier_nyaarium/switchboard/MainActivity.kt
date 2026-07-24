@@ -13,13 +13,19 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +38,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -60,7 +67,6 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.PlayArrow
@@ -113,31 +119,47 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.fragment.app.FragmentActivity
@@ -149,9 +171,9 @@ import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.composeSessionName
 import com.atelier_nyaarium.switchboard.proto.isComposite
 import com.atelier_nyaarium.switchboard.proto.parseSessionName
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import sh.calvin.reorderable.ReorderableRow
 
 /** Process-lifetime repository so chat state survives Activity recreation. */
 object Repo {
@@ -2084,20 +2106,21 @@ fun ScheduleSendDialog(initialAtMillis: Long, submitting: Boolean, onConfirm: (L
 	}
 }
 
-/** Session tabs, drag the small handle to reorder; tap anywhere else in a tab to select it as
- * before. Two EARLIER attempts put the drag detector on the whole tab, alongside its own tap
- * handling (Compose's stock detectDragGesturesAfterLongPress, then a hand-rolled equivalent) - both
- * failed on a real device: a stock or hand-rolled long-press-drag detector sharing a touch target
- * with ANY click handler is not reliable in Compose today, confirmed by the fact that the
- * sh.calvin.reorderable library's own canonical examples hit the identical constraint and always
- * route the drag gesture to a small dedicated handle with its own separate hit-test bounds, never
- * the same node as the tap target - see its DragGestureDetector.kt, which uses the exact same stock
- * detectDragGesturesAfterLongPress internally, so the library's fix is architectural (separate the
- * two targets), not a smarter gesture algorithm. ReorderableRow (a plain, non-lazy Row - this app
- * only ever has a handful of open tabs, no need for LazyRow's virtualization) owns the whole
- * swap/animation lifecycle, so there is no local scratch order or pixel-offset math to keep in sync
- * here at all; onSettle only fires once a drag is actually dropped, and reorderTabs's own
- * permutation check still catches a stale commit racing a tab opened or closed elsewhere. */
+/** Session tabs: tap selects, hold still past the long-press timeout to lift the tab itself into a
+ * drag - no separate handle. The whole gesture lives in ONE pointerInput detector per tab (tap,
+ * long-press latch, and drag loop are sequential phases of the same awaitEachGesture), because two
+ * detectors sharing a node - a clickable plus ANY long-press-drag detector, stock or hand-rolled -
+ * fight each other: the click handler's own press tracking reacts to movement during the long-press
+ * wait and cancels the drag arm on real touch hardware. One detector has nothing to fight.
+ * Cooperation with the row's horizontalScroll is by consumption: during the wait nothing is
+ * consumed (movement past slop or an external consume aborts the arm, so a swipe scrolls exactly as
+ * before); once latched every change is consumed, so the scrollable can never steal the drag.
+ * Visuals: the held tab lifts above the finger as a ghost (graphicsLayer translation only, never
+ * layout), the landing slot renders as a tinted rounded rect, and the other tabs animate aside to
+ * open the gap; release commits through reorderTabs, whose permutation guard still catches a stale
+ * commit racing a tab opened/closed elsewhere. The geometry is pure math in TabDragMath.kt
+ * (unit-tested); slot positions come from onGloballyPositioned, which reports untranslated layout
+ * slots, so the visual shifts never feed back into the math. */
 @Composable
 private fun ReorderableTabRow(
 	tabs: List<String>,
@@ -2107,43 +2130,213 @@ private fun ReorderableTabRow(
 	onReorder: (List<String>) -> Unit,
 ) {
 	val strong = rememberStrongHaptic()
+	val haptics = LocalHapticFeedback.current
+	val density = LocalDensity.current
 	val scrollState = rememberScrollState()
-	ReorderableRow(
-		list = tabs,
-		onSettle = { fromIndex, toIndex ->
-			onReorder(tabs.toMutableList().apply { add(toIndex, removeAt(fromIndex)) })
-		},
-		modifier = Modifier.horizontalScroll(scrollState).padding(horizontal = 8.dp, vertical = 4.dp),
-		horizontalArrangement = Arrangement.spacedBy(4.dp),
-	) { _, t, _ ->
-		ReorderableItem {
-			val isSelected = t == selected
-			Row(
-				modifier = Modifier
-					.clip(RoundedCornerShape(8.dp))
-					.background(if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-					.clickable(onClick = hapticClick { onSelect(t) })
-					.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-				verticalAlignment = Alignment.CenterVertically,
-			) {
-				Text(
-					tabLabel(t),
-					color = if (isSelected) {
-						MaterialTheme.colorScheme.onSecondaryContainer
-					} else {
-						MaterialTheme.colorScheme.onSurfaceVariant
-					},
-					style = MaterialTheme.typography.labelLarge,
+	val tabsNow = rememberUpdatedState(tabs)
+	val onSelectNow = rememberUpdatedState(onSelect)
+	val onReorderNow = rememberUpdatedState(onReorder)
+
+	var draggingTab by remember { mutableStateOf<String?>(null) }
+	var dragDeltaX by remember { mutableFloatStateOf(0f) }
+	var scrollStart by remember { mutableIntStateOf(0) }
+	var viewportW by remember { mutableIntStateOf(0) }
+	val bounds = remember { mutableStateMapOf<String, TabSlot>() }
+	val gapPx = with(density) { 4.dp.toPx() }
+
+	// Insertion index of the ghost's current position (-1 while not dragging or before layout).
+	// The scroll term keeps it correct during edge auto-scroll, when content moves under a
+	// stationary finger without any pointer event firing.
+	val targetK by remember(tabs) {
+		derivedStateOf {
+			val t = draggingTab ?: return@derivedStateOf -1
+			val from = tabs.indexOf(t)
+			if (from < 0) return@derivedStateOf -1
+			val slots = tabs.map { bounds[it] ?: return@derivedStateOf -1 }
+			val ghostCenter = slots[from].x + slots[from].width / 2f + dragDeltaX + (scrollState.value - scrollStart)
+			tabInsertionIndex(slots, from, ghostCenter)
+		}
+	}
+
+	// A light tick each time the landing slot moves to a different position mid-drag (the lift
+	// itself already fired the strong buzz).
+	LaunchedEffect(draggingTab) {
+		if (draggingTab == null) return@LaunchedEffect
+		var last = Int.MIN_VALUE
+		snapshotFlow { targetK }.collect { k ->
+			if (k >= 0) {
+				if (last != Int.MIN_VALUE && k != last) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+				last = k
+			}
+		}
+	}
+
+	// Edge auto-scroll so a drag can travel beyond the visible tabs. The finger's viewport position
+	// is scroll-invariant while held at an edge (content position and scroll delta cancel), so the
+	// loop keeps feeding scroll until the finger moves away or the scroll hits its bound.
+	LaunchedEffect(draggingTab) {
+		val t = draggingTab ?: return@LaunchedEffect
+		val edgePx = with(density) { 48.dp.toPx() }
+		val stepPx = with(density) { 8.dp.toPx() }
+		while (true) {
+			withFrameNanos {}
+			val slot = bounds[t] ?: continue
+			if (viewportW <= 0) continue
+			val screenX = slot.x + slot.width / 2f + dragDeltaX - scrollStart
+			val fromLeft = screenX
+			val fromRight = viewportW - screenX
+			when {
+				fromLeft < edgePx -> scrollState.scrollBy(-stepPx * (1f - (fromLeft / edgePx).coerceAtLeast(0f)))
+				fromRight < edgePx -> scrollState.scrollBy(stepPx * (1f - (fromRight / edgePx).coerceAtLeast(0f)))
+			}
+		}
+	}
+
+	Box(
+		Modifier
+			.onGloballyPositioned { viewportW = it.size.width }
+			.horizontalScroll(scrollState)
+			.padding(horizontal = 8.dp, vertical = 4.dp),
+	) {
+		// Landing-slot highlight, behind the tabs (Box children draw in order).
+		val dragged = draggingTab
+		if (dragged != null && targetK >= 0) {
+			val slots = tabs.mapNotNull { bounds[it] }
+			val from = tabs.indexOf(dragged)
+			if (slots.size == tabs.size && from >= 0) {
+				val slot = slots[from]
+				val gapX = tabGapLeftEdge(slots, from, targetK, gapPx)
+				Box(
+					Modifier
+						.offset { IntOffset(gapX.roundToInt(), slot.y.roundToInt()) }
+						.size(with(density) { slot.width.toDp() }, with(density) { slot.height.toDp() })
+						.clip(RoundedCornerShape(8.dp))
+						.background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f)),
 				)
-				Icon(
-					Icons.Default.DragHandle,
-					contentDescription = "Reorder ${tabLabel(t)}",
-					tint = MaterialTheme.colorScheme.onSurfaceVariant,
-					modifier = Modifier
-						.padding(start = 4.dp)
-						.size(20.dp)
-						.longPressDraggableHandle(onDragStarted = { strong() }),
-				)
+			}
+		}
+		Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+			tabs.forEach { t ->
+				key(t) {
+					val isSelected = t == selected
+					val isDragging = t == draggingTab
+					val shiftTarget =
+						if (draggingTab != null && !isDragging && targetK >= 0) {
+							val from = tabs.indexOf(draggingTab)
+							val span = (bounds[draggingTab]?.width ?: 0f) + gapPx
+							if (from >= 0) tabShift(tabs.indexOf(t), from, targetK, span) else 0f
+						} else {
+							0f
+						}
+					// Snap (not animate) back to the layout slot once the drag ends: the committed
+					// order already moved the layout, so a lingering animated shift would double it.
+					val shift by animateFloatAsState(
+						targetValue = shiftTarget,
+						animationSpec = if (draggingTab != null) spring() else snap(),
+						label = "tabShift",
+					)
+					Box(
+						modifier = Modifier
+							.onGloballyPositioned { c ->
+								val p = c.positionInParent()
+								bounds[t] = TabSlot(p.x, p.y, c.size.width.toFloat(), c.size.height.toFloat())
+							}
+							.zIndex(if (isDragging) 1f else 0f)
+							.graphicsLayer {
+								if (isDragging) {
+									translationX = dragDeltaX + (scrollState.value - scrollStart)
+									translationY = -24.dp.toPx()
+									scaleX = 1.05f
+									scaleY = 1.05f
+									shadowElevation = 6.dp.toPx()
+									shape = RoundedCornerShape(8.dp)
+									clip = true
+								} else {
+									translationX = shift
+								}
+							}
+							.clip(RoundedCornerShape(8.dp))
+							.background(
+								if (isDragging || isSelected) {
+									MaterialTheme.colorScheme.secondaryContainer
+								} else {
+									Color.Transparent
+								},
+							)
+							.pointerInput(t) {
+								awaitEachGesture {
+									val down = awaitFirstDown()
+									// true = released early without moving (a tap); false = movement
+									// past slop or an external consume (the row scroll) took the
+									// gesture; null = held still through the timeout (lift into drag).
+									val tapped =
+										withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+											var acc = Offset.Zero
+											var result: Boolean? = null
+											while (result == null) {
+												val event = awaitPointerEvent()
+												val ch = event.changes.firstOrNull { it.id == down.id } ?: continue
+												when {
+													!ch.pressed -> result = acc.getDistance() <= viewConfiguration.touchSlop
+													ch.isConsumed -> result = false
+													else -> {
+														acc += ch.positionChange()
+														if (acc.getDistance() > viewConfiguration.touchSlop) result = false
+													}
+												}
+											}
+											result
+										}
+									when (tapped) {
+										true -> {
+											haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+											onSelectNow.value(t)
+										}
+										false -> {}
+										null -> {
+											strong()
+											draggingTab = t
+											dragDeltaX = 0f
+											scrollStart = scrollState.value
+											try {
+												while (true) {
+													val event = awaitPointerEvent()
+													val ch = event.changes.firstOrNull { it.id == down.id } ?: continue
+													if (!ch.pressed) {
+														ch.consume()
+														val now = tabsNow.value
+														val k = targetK
+														val from = now.indexOf(t)
+														if (k >= 0 && from >= 0) {
+															val next = tabCommitOrder(now, from, k)
+															if (next != now) onReorderNow.value(next)
+														}
+														break
+													}
+													dragDeltaX += ch.positionChange().x
+													ch.consume()
+												}
+											} finally {
+												draggingTab = null
+												dragDeltaX = 0f
+											}
+										}
+									}
+								}
+							}
+							.padding(horizontal = 12.dp, vertical = 8.dp),
+					) {
+						Text(
+							tabLabel(t),
+							color = if (isSelected) {
+								MaterialTheme.colorScheme.onSecondaryContainer
+							} else {
+								MaterialTheme.colorScheme.onSurfaceVariant
+							},
+							style = MaterialTheme.typography.labelLarge,
+						)
+					}
+				}
 			}
 		}
 	}
