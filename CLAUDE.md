@@ -293,11 +293,15 @@ full design, the questionaire, and the audit rounds are in `plans/artifact-refer
   for text rendered as inert). Running the same bytes makes that agreement identity. Renderer options
   are mirrored exactly, `linkify: false` being load-bearing. Nothing here re-derives CommonMark, which
   is what a hand-rolled masking pass had to do and kept getting wrong.
-- **Confinement is not a nicety.** Refs are scanned out of a full message body, and a message can
-  carry relayed text, so an unconfined resolver would be a way to make an agent attach any file its
-  process can read. Absolute paths and `..` are refused before joining, and the realpath must land
-  inside the root, which is what catches a symlink.
-- **Hard failure lives only in the file and builder tiers** (missing, unreadable, binary, escaping,
+- **Paths resolve shell-style, and the project root is a base rather than a fence.** Bare is
+  project-relative, `/` is the filesystem root, `~/` is the owner's home, `..` normalizes. The root
+  cannot be a security boundary: an author who means to disclose a file can read it and paste it, and
+  a snapshot only ever rides a reply to the OWNER's own console. What remains is a **secrets
+  guardrail** (`SENSITIVE_SEGMENTS`/`SENSITIVE_FILE_RE` in `refFile.ts`: anything under
+  `.ssh`/`.gnupg`/`.aws`/`.docker`/`.kube`, a dotenv, a key file), judged AFTER realpath so a
+  symlink is caught by where it lands. It bounds the careless case - a ref arriving in relayed text,
+  or an author reaching for a config file - not a determined one, and it refuses loudly.
+- **Hard failure lives only in the file and builder tiers** (missing, unreadable, binary, sensitive,
   over-cap-with-no-range; and a single range over the per-file cap, budget exhaustion, or a reserved
   name collision). RESOLUTION always degrades: a renamed class or a moved line ships anyway with a
   banner, because refusing to send a message over a stale pointer is worse than opening the reader
@@ -318,8 +322,9 @@ full design, the questionaire, and the audit rounds are in `plans/artifact-refer
   menu with a note saying no snapshot is attached. Never a crash, a silent no-op, or a wrong-row open.
 - **Teaching lives in the plugin's own manifest.** `agent_instructions` in
   `assets/plugins/references/manifest.json` is what a session actually reads, since the capability
-  union carries it into the MCP instructions. It states the project-relative rule (an absolute path
-  hard-fails the send), the angle-bracket form for a matcher containing a space or a close paren, and
+  union carries it into the MCP instructions. It states the path rule (shell-style: bare is
+  project-relative, `/` is the filesystem root, `~/` is home, and a secret hard-fails the send),
+  the angle-bracket form for a matcher containing a space or a close paren, and
   the distinction that matters most: the file tier fails loudly while RESOLUTION never fails, so no
   error does not mean the ref landed where the author meant. `skills/crosstalk/SKILL.md` carries the
   short version.

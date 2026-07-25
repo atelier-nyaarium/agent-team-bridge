@@ -73,11 +73,13 @@ attached, so the reader taps through to the real code as it was when you wrote a
 
 - **Only the `full` field of `channel_reply` and `notify_human` is scanned.** A ref in `summary`,
   `title`, `fullSpoken`, or a `crosstalk_send` body arrives as a link that cannot open.
-- **Paths are project-relative.** An absolute path or a `..` segment is refused and fails the send.
+- **Paths resolve the way a shell reads them.** Bare is project-relative, a leading `/` is the
+  filesystem root, `~/` is the owner's home. A ref naming a secret (under `.ssh`/`.gnupg`/`.aws`/
+  `.docker`/`.kube`, a dotenv, a key file) is refused and fails the send.
 - **Wrap the destination in angle brackets** when the matcher contains a space or a close paren:
   `[label](<ref://src/cart.ts:Cart:add#items.push(item);>)`. Without that, a link destination ends at
   the first space or unbalanced `)`, and the ref is silently truncated rather than reported.
-- **A file-tier problem fails the send loudly** (missing, not text, outside the project). A
+- **A file-tier problem fails the send loudly** (missing, not text, a refused secret). A
   RESOLUTION miss does not: the ref still sends and opens on a text match or the whole file with a
   banner. No error does not mean the ref landed where you meant.
 - **Refs in code fences or inline code are never detected**, so documenting the format costs nothing.
