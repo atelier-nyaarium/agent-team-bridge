@@ -17,6 +17,7 @@
     - `console/` - **Console bridge** - gateway side of the Android channel (see Console Bridge below)
       - `consoleHandler.ts` - `createConsoleDispatcher`: validates device identity, dispatches the console ops (register/list_teams/send/respond/poll plus the terminal-view ops) by reusing the HTTP routes, owns per-conversation mailbox/binding/idempotency state
       - `consolePeer.ts` - `ConsolePeer`, a duck-typed virtual bridge socket whose `send()` appends to the device mailbox instead of a wire
+      - `capabilityStore.ts` - `CapabilityStore`: what plugins the owner's consoles have enabled, per device, durably. Two timestamps per record: `lastSeen` (any authenticated op, drives the 14-day abandonment GC only) and `reportedAt` (only a register that carried a list, the write-recency arbiter for conflicting instruction text). See Console capability union below
       - `relayPump.ts` - `createConsoleRelayPump`: zod-validates each relay frame, runs the handler, sends the reply back to evie as a `console_relay_reply` tool call
     - `federation/` - **Federation** - cross-Gateway routing + trust (see Federation routing + Federation trust below)
       - `gatewayRelay.ts` - `createGatewayRelayHandler` (runs an inbound federated op - send/list_teams/wake/response_push - against the local routes) + `createGatewayRelayPump` (zod-validates each `gateway_relay` frame, dispatches, replies as a `gateway_relay_reply` tool call). The cross-Gateway mirror of the console relay pump. Opens/seals the payload through the `sealer`
@@ -28,6 +29,7 @@
     - `discord/` - Discord utilities (validateMessageParts, used by tests)
   - `mcp/` - **MCP plugin** - Tools registered for Claude Code and other IDE agents
     - `index.ts` - MCP server initialization, mode detection (host vs container), tool registration
+    - `capabilities.ts` - `fetchCapabilities`: the bounded, single-attempt read of the gateway's capability union a session makes before its MCP server exists, plus `hasCapability`/`capabilityInstructions` and `GATED_CAPABILITY_IDS` (the one list both the tool gates and the fail-open set derive from)
     - `bridge/` - **Crosstalk tools** - Cross-team communication via the gateway
       - `helpers.ts` - Bridge state, WebSocket connection to router, routerPost/routerGet, `postPluginAction` (self-scoped POST /plugin-action wrapper - takes no target/team param, so a plugin-action tool cannot smuggle a different destination through it), and the handshake role cache (`confirmHandshakeRole`) that lets a reconnect confirm its remembered lead/worker answer silently instead of re-answering the bridge handshake every time
       - `bridgeDiscover.ts` - `crosstalk_discover` tool: list addressable teams on the bridge, grouped into one header per team (`groupDiscoverEntries`) - a session-less team still gets a bare header, only the console and reserved `"host"` name are hidden; each active session nests under its header as a `project.session` composite or a loose/cross-gateway peer; asleep sessions show a `last seen Xm ago` recency from `TeamInfo.lastActive`
@@ -60,6 +62,7 @@
   - `shared/` - Shared utilities used by both gateway and MCP
     - `types.ts` - Shared TypeScript types; wire shapes derive from schemas.ts via `z.infer` (`ChannelFile`, `TeamInfo`, the enums), local payload/config types stay hand-written
     - `schemas.ts` - THE single zod truth for every wire shape: reply schemas, `ChannelFileSchema`, `TeamInfoSchema` (with each session's owning `gatewayId`), the full console protocol (`ConsoleOpSchema`, `ConsoleRelayFrameSchema`, `ConsoleRelayReplySchema`, op results, `MailboxEntrySchema`), and `ProvisioningSchema`. Every shared schema carries `.meta({ id })` - the id is the generated Kotlin class name (see codegen below)
+    - `durable-store.ts` - `DurableStore` (atomic JSON snapshot to disk) plus the two restore boundaries every durable consumer goes through: `openDurable(dir, name, build)` for state restored at construction, and `restoreDurable(name, restore)` for state restored in place. Both contain a poisoned file to that file alone. `load()` already covers a file that will not parse; these cover one that parses and then throws inside its CONSUMER, which is not hypothetical (a `mailboxes.json` missing `entries`, a `replay-guard.json` holding bare numbers). Restoring several files under one try loses every restore after the throwing one, and the persist tick then writes those empty consumers back over good files - which is how a corrupt mailbox snapshot could take the owner's whole session list with it. `quarantine()` is what makes the retry safe: the file stops being read for the rest of the process but is still written through, so the next save heals it
     - `tmp-files.ts` - `cleanupTmpDir({dir, maxAgeMs, mode: "files" | "dirs"})` - generic lazy mtime sweep used by the connector and the Discord-bridge file materializer
     - `env.ts` - Container detection (isInsideContainer)
     - `pending-job-store.ts` - PendingJobStore for tracking in-flight requests with timeout/polling
@@ -250,6 +253,49 @@ A power-user view in the Console that drives an agent's RAW tmux pane (distinct 
 - **Host RPC:** the gateway sends a `host_op` frame (a `reqId` + a `HostOp`) and correlates the reply by `reqId` through `HostOpCoordinator` (`gateway/hostOpCoordinator.ts`, mirroring `evieClient`'s pending-calls; `failAll` on a host disconnect), via `relayToHost` in `gateway/index.ts`. The host daemon (`hostDaemon.ts`) runs it through `createHostOpRunner` (`mcp/devcontainer/hostOpRunner.ts`: peek single-flight + a cadence floor + a concurrency cap; the mutating ops - send / create_session / reload_plugins - dedup by `(conversationId, opId)` so a relay timeout or gateway restart replays the ack instead of re-running). The tmux primitives live in `mcp/devcontainer/tmuxCore.ts` (spawn argv - no shell; `--`-guarded literal text submitted atomically with a trailing CR; a slug-validated target name; an ANSI visible-pane capture with a byte cap + content hash; `hasSession`/`ensureSession` reattach-or-create so a create no longer errors on a duplicate). The wake path reports a FAILED wake when a freshly launched pane never captures (a dead launch - bad bashrc, claude off PATH), so `/send` fails fast instead of stalling. The wire vocabulary is the type-only `shared/host-op.ts` (deliberately no zod/codegen - it rides the trusted, token-authenticated host link, not the untrusted evie relay).
 - **Targets:** the `host` machine (the `"host"` target, run via bare `tmux`) and a locally-backed `kind: "devcontainer"` (`docker exec` into `<name>_devcontainer-dev-1`). A `TmuxTarget` carries a `sessionName` and the pane is always `.0`. The session rides in the address: `peek`/`tmux_send`/`reload_plugins` derive it from a composite `project.session` target (a bare name keeps the conventional `claude` session for back-compat), while `create_session` passes an explicit new session name. `resolveTmuxTarget` (`consoleHandler.ts`) does catalog-first disambiguation (a whole-name project match wins, else the last separator splits the session off) and validates the resolved name via the shared `assertTmuxName`/`isTmuxName` (`shared/host-op.ts`, slug + 64-char cap, enforced at both the gateway boundary and the host sinks). Loose and cross-Gateway targets are gated off, as is the daemon's own reserved `host-daemon` session (`isReservedHostSession`, also backstopped in `tmuxCore` create/kill).
 - **Auth:** the reserved `host` WS slot is authenticated with `HOST_WS_TOKEN` (auto-provisioned into `.env` by `start-gateway.sh`, read by `start-host-daemon.sh`) so a LAN peer cannot squat it to read/forge panes or capture keystrokes.
+
+### Console capability union (which tools a session gets)
+
+A session's tools are gated on what the owner's consoles can actually render. The console reports
+its enabled plugins at register; the gateway unions those reports across devices; a starting MCP
+session reads the union over HTTP and uses it to decide which tools to register and what guidance
+to carry. Full design and the audit rounds behind it are in `plans/artifact-references.md`.
+
+- **Reporting (Android):** `PluginManager.reportable()` returns the LOADED plugins (not merely
+  enabled - one whose entry threw renders nothing, and offering an agent a broken surface is worse
+  than not offering it), each with the `agent_instructions` line from its own `manifest.json`. The
+  text is owned by the plugin, so adding one delivers its agent guidance with no wire or gateway
+  change. `ChatRepository.enabledPlugins` is the supplier seam the app wires (the repository holds
+  no Context, and the plugin framework is Context-bound); `reportEnabledPlugins` re-reports on a
+  toggle and arms `pluginReportPending` until the report lands, which the poll loop retries. That
+  retry is not symmetric politeness: a dropped toggle-ON report leaves the gateway holding an
+  AFFIRMATIVE union, and an affirmative union is exactly what a starting session does not
+  second-guess, so the owner would silently lose a tool they just switched on.
+- **The union (gateway):** `CapabilityStore` (`gateway/console/capabilityStore.ts`), keyed by
+  conversationId, durable, 14-day TTL, 500-device cap. A capability disappears only when every
+  device that had it has either said otherwise or gone quiet for two weeks. An ABSENT
+  `enabledPlugins` means the device said nothing and its prior report stands; an EMPTY array is an
+  affirmative "nothing enabled". Zero live records serves `known: false`, never an affirmative empty
+  union. `lastSeen` advances on any sealed op but is only flushed to disk once it drifts past
+  `LAST_SEEN_FLUSH_FLOOR_MS`, keeping the poll path free of disk writes while still surviving a
+  restart - without that flush a phone that had polled daily for weeks would be swept on the first
+  tick after a restart, since the durable value only moved on a register.
+- **Serving:** `GET /capabilities` (`routes.ts`'s `capabilities`), UNGATED by the same ruling that
+  settled Phase 0 - it serves non-secret plugin ids beside an already-open `/teams` and `/pending`,
+  and the hand-launched host window it exists to serve carries no credential to present.
+- **Consuming (MCP):** `mcp/capabilities.ts`'s `fetchCapabilities`, awaited in `startMcp` after
+  `BRIDGE_ROUTER_URL` defaulting and before the McpServer is constructed, so the answer can gate
+  tool registration and feed the server instructions. Deliberately not `routerGet`: that retries
+  past any deadline, cannot see a status code, and reads a URL only set once the bridge initializes.
+  One bounded attempt, then `fallback()`. **Fail-open is the whole safety argument:** an agent
+  holding a tool the owner cannot render loses nothing, while an agent missing a tool the owner does
+  have is a silent outage with no error anywhere. So only an AFFIRMATIVE union lacking a capability
+  removes a tool, and `fallback()` lets the disk cache only ADD to the core set, never shrink below
+  it. `GATED_CAPABILITY_IDS` is the single list both the gates and that core set derive from, and a
+  fixture test holds it against the shipped `manifest.json` files so the planned rename of a plugin
+  id to `<author>.<content_id>` fails a test instead of silently un-registering its tools.
+- **Timing:** a running session never changes its tools. A plugin toggle is picked up at the next
+  session start, which is the owner's explicit decision.
 
 ### Android plugin framework
 

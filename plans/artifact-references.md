@@ -361,7 +361,13 @@ Work breakdown:
    and cannot claim a bound name. The honest cost of zero human secret handling.
 6. Read-side disclosure stays open until the `/poll` follow-on.
 
-## Phase 1: Console capability foundation
+## Phase 1: Console capability foundation ✅ SHIPPED
+
+Built as specified. Two corrections the audits forced, both now pinned by tests: the durable
+`lastSeen` never advanced without a register, so a daily-polling phone was swept on the first tick
+after a restart; and the MCP's disk cache could shrink the capability set below the fail-open core,
+which contradicts the rule that only an affirmative answer removes a tool. Deployment (gateway
+restart plus the APK) is still owed, since the three halves ship together by the clean-break ruling.
 
 Clean-break rollout (see ruling above): gateway, MCP, and APK ship together; no cross-version
 machinery. The rules below are resilience against a briefly-down gateway or a stale record, not
