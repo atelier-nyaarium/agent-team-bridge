@@ -21,7 +21,7 @@ describe("finding refs in a message", () => {
 	});
 
 	it("finds the angle-bracket destination form, which is how a path with spaces is written", () => {
-		expect(keys("See [it](<ref://src/my file.ts:Foo>).")).toEqual(["ref://src/my file.ts:Foo"]);
+		expect(keys("See [it](<ref://src/my file.ts:Foo>).")).toEqual(["ref://src/my%20file.ts:Foo"]);
 	});
 
 	it("keeps a link title out of the destination", () => {
@@ -110,5 +110,33 @@ describe("refs written inside code", () => {
 		const body = ["````", "```", "[a](ref://one.ts:A)", "````", "Real: [b](ref://two.ts:B)"].join("\n");
 
 		expect(keys(body)).toEqual(["ref://two.ts:B"]);
+	});
+});
+
+describe("stray backticks in ordinary prose", () => {
+	it("does not let two unrelated backticks pair across a blank line and swallow a real ref", () => {
+		const body = [
+			"Note: this uses `template strings for config.",
+			"",
+			"See [handler](ref://src/app.ts:handleSubmit) for details, all good` right.",
+		].join("\n");
+
+		expect(keys(body)).toEqual(["ref://src/app.ts:handleSubmit"]);
+	});
+
+	it("still masks a real code span that opens and closes inside one paragraph", () => {
+		expect(keys("Write `[x](ref://a.ts:A)` like so, then [b](ref://b.ts:B).")).toEqual(["ref://b.ts:B"]);
+	});
+});
+
+describe("destinations with parentheses", () => {
+	it("keeps a fragment naming a call, rather than truncating at the paren", () => {
+		expect(keys("[r](ref://c.js:tick#reset())")).toEqual(["ref://c.js:tick#reset()"]);
+	});
+
+	it("keeps an anchor naming a call", () => {
+		const found = scanRefs("[r](ref://c.js:tick#foo@after:reset())");
+
+		expect(found[0].ref.matcher).toEqual({ kind: "after", text: "foo", anchor: "reset()" });
 	});
 });

@@ -138,7 +138,11 @@ export function buildArtifacts(resolved: ResolvedRef[], existingNames: string[])
 		else byPath.set(ref.refPath, [ref]);
 	}
 
-	const used = new Set(existingNames.map(safeName));
+	// Replay the device's own naming over the agent's attachments IN ORDER rather than collapsing
+	// them into a set: it renames each colliding entry, so two attachments sharing a basename take
+	// two names, and a snapshot must not be told it owns the one the second attachment will get.
+	const used = new Set<string>();
+	for (const name of existingNames) uniqueName(safeName(name), used);
 	used.add(MANIFEST_FILENAME);
 
 	const entries: InternalEntry[] = [];

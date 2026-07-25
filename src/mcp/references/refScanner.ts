@@ -18,7 +18,9 @@ export interface FoundRef {
 // A markdown inline-link destination: `](dest)` or `](<dest>)`, with an optional title after it.
 // Only this form is scanned. A bare `ref://...` in prose is not a link and gets no snapshot, which
 // keeps the trigger something the agent typed on purpose.
-const LINK_DESTINATION = /\]\(\s*(?:<([^>\n]*)>|([^\s()]+))/g;
+// The plain form allows BALANCED parens, per CommonMark. Without that, a fragment naming a call
+// (`#reset()`) is truncated at the first paren, silently changing what the ref means.
+const LINK_DESTINATION = /\]\(\s*(?:<([^>\n]*)>|((?:[^\s()]|\([^\s()]*\))+))/g;
 
 const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
@@ -52,25 +54,49 @@ function maskCode(body: string): boolean[] {
 	}
 
 	// Inline spans, in whatever the fences left. A span is opened and closed by backtick runs of
-	// EQUAL length, so a run of a different length inside one is ordinary content.
-	let i = 0;
-	while (i < body.length) {
+	// EQUAL length, so a run of a different length inside one is ordinary content. Pairing is
+	// confined to one block: CommonMark parses inline content per block, so a lone backtick used as
+	// casual punctuation cannot reach across a blank line and pair with an unrelated one, masking
+	// every real ref in between.
+	for (const block of blockRanges(body)) maskInlineSpans(body, mask, block.start, block.end);
+
+	return mask;
+}
+
+/** Blank-line-separated block boundaries, the unit CommonMark parses inline content within. */
+function blockRanges(body: string): Array<{ start: number; end: number }> {
+	const ranges: Array<{ start: number; end: number }> = [];
+	let start = 0;
+	const separator = /\n[ \t]*\n/g;
+	let match = separator.exec(body);
+	while (match !== null) {
+		ranges.push({ start, end: match.index });
+		start = match.index + match[0].length;
+		match = separator.exec(body);
+	}
+	ranges.push({ start, end: body.length });
+	return ranges;
+}
+
+function maskInlineSpans(body: string, mask: boolean[], from: number, to: number): void {
+	let i = from;
+	while (i < to) {
 		if (body[i] !== "`" || mask[i]) {
 			i++;
 			continue;
 		}
 		let open = i;
-		while (body[open] === "`") open++;
+		while (open < to && body[open] === "`") open++;
 		const runLength = open - i;
 
 		let search = open;
-		while (search < body.length) {
+		while (search < to) {
 			if (body[search] !== "`" || mask[search]) {
 				search++;
 				continue;
 			}
 			let close = search;
-			while (body[close] === "`") close++;
+			while (close < to && body[close] === "`") close++;
 			if (close - search === runLength) {
 				mask.fill(true, i, close);
 				i = close;
@@ -79,10 +105,8 @@ function maskCode(body: string): boolean[] {
 			search = close;
 		}
 		// No closing run of equal length: the backticks are literal, so nothing is masked.
-		if (search >= body.length) i = open;
+		if (search >= to) i = open;
 	}
-
-	return mask;
 }
 
 /**

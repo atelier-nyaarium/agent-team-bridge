@@ -119,7 +119,11 @@ function parameterList(node: Node): Node | null {
 	const viaDeclarator = declarator?.childForFieldName("parameters");
 	if (viaDeclarator) return viaDeclarator;
 
-	return node.descendantsOfType(["formal_parameters", "parameters", "parameter_list"])[0] ?? null;
+	// Only the node's OWN parameter list. A subtree search would silently bind a class or namespace
+	// to some nested method's parameters and call it exact, which the pseudo-segment exemption
+	// exists to prevent. The value form (`const f = (url) => {}`) keeps its own lookup below.
+	const value = node.childForFieldName("value");
+	return value?.childForFieldName("parameters") ?? null;
 }
 
 interface Branch {
@@ -207,13 +211,25 @@ function matchedRun(parts: string[], remaining: string[]): number {
 	return parts.every((part, i) => part === remaining[i]) ? parts.length : 0;
 }
 
+function depthOf(node: Node): number {
+	let depth = 0;
+	for (let cursor = node.parent; cursor; cursor = cursor.parent) depth++;
+	return depth;
+}
+
+/**
+ * Shallowest first, then document order. Sorting on position alone would throw away the depth the
+ * walk worked to find, so a nested declaration could outrank the top-level one someone meant: in
+ * this repo `ref://src/shared/crypto.ts:sign` landed on an interface field rather than the exported
+ * function, and reported itself exact.
+ */
 function dedupeByPosition(nodes: Node[]): Node[] {
 	const seen = new Map<string, Node>();
 	for (const node of nodes) {
 		const key = `${node.startIndex}:${node.endIndex}`;
 		if (!seen.has(key)) seen.set(key, node);
 	}
-	return [...seen.values()].sort((a, b) => a.startIndex - b.startIndex);
+	return [...seen.values()].sort((a, b) => depthOf(a) - depthOf(b) || a.startIndex - b.startIndex);
 }
 
 ////////////////////////////////

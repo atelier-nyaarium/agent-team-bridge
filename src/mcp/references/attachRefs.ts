@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { isInsideContainer } from "../../shared/env.js";
 import { parseSessionName } from "../../shared/session-id.js";
@@ -58,6 +59,10 @@ export async function appendRefArtifacts(body: string, attachments: ReplyFile[])
 	if (found.length === 0) return { ok: true, files: attachments };
 
 	const root = referenceRoot();
+	if (!fs.existsSync(root)) {
+		return { ok: false, error: `the project root ${root} does not exist, so refs cannot be resolved` };
+	}
+
 	const resolved: ResolvedRef[] = [];
 	for (const entry of found) {
 		const load = loadRefFile(root, entry.ref.path);

@@ -20,7 +20,9 @@ export const MANIFEST_MARKER = "switchboardReferences";
  */
 export function safeName(name: string): string {
 	const base = name.split("/").pop()?.split("\\").pop()?.trim() ?? "";
-	const cleaned = base.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "");
+	// The `u` flag matters: without it the class matches per UTF-16 unit and turns one astral
+	// character into TWO underscores, where Kotlin's per-code-point matching produces one.
+	const cleaned = base.replace(/[^A-Za-z0-9._-]/gu, "_").replace(/^\.+/, "");
 	return (cleaned === "" ? "file" : cleaned).slice(0, 120);
 }
 

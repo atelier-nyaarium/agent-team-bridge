@@ -77,3 +77,44 @@ describe("canonical keys", () => {
 		expect(ref && canonicalizeUri(canonicalKey(ref))).toBe(ref && canonicalKey(ref));
 	});
 });
+
+describe("canonical keys survive re-canonicalization", () => {
+	// The failure this guards is silent and total: the MCP writes a key into the manifest, the phone
+	// recomputes it from the tapped link, and if one more pass changes the string every tap misses.
+	const ALPHABET = ["a", ":", "#", "%", ".", "@", "<", ">", " ", "/", "-", "3A", "\t", "(", ")"];
+
+	function generate(seed: number): string {
+		let out = "";
+		let n = seed;
+		while (n > 0) {
+			out += ALPHABET[n % ALPHABET.length];
+			n = Math.floor(n / ALPHABET.length);
+		}
+		return out;
+	}
+
+	it("is idempotent for every component shape, so no two refs can merge after one pass", () => {
+		const offenders: string[] = [];
+		for (let seed = 1; seed < 40_000; seed++) {
+			const piece = generate(seed);
+			for (const uri of [`ref://${piece}`, `ref://a.ts:${piece}`, `ref://a.ts#${piece}`]) {
+				const once = canonicalizeUri(uri);
+				if (once === null) continue;
+				if (canonicalizeUri(once) !== once) offenders.push(uri);
+			}
+		}
+
+		expect(offenders.slice(0, 5)).toEqual([]);
+	});
+
+	it("keeps a component's own text intact through a key round trip", () => {
+		for (let seed = 1; seed < 20_000; seed++) {
+			const piece = generate(seed);
+			const ref = parseRef(`ref://a.ts:${piece}`);
+			if (!ref) continue;
+			const reparsed = parseRef(canonicalKey(ref));
+
+			expect(reparsed, `lost ${JSON.stringify(piece)}`).toEqual(ref);
+		}
+	});
+});

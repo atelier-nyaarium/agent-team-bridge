@@ -37,7 +37,8 @@
 			"id": "space-in-path",
 			"uri": "ref://src/my%20file.ts:Foo",
 			"parsed": { "path": "src/my file.ts", "segments": ["Foo"], "matcher": null },
-			"canonical": "ref://src/my file.ts:Foo"
+			"canonical": "ref://src/my%20file.ts:Foo",
+			"why": "A space is encoded in the key. parseRef trims its input, so a raw leading or trailing space would not survive a second canonicalization pass and two distinct refs could merge."
 		},
 		{
 			"id": "literal-colon-in-filename",
@@ -106,7 +107,7 @@
 				"segments": ["tick"],
 				"matcher": { "kind": "before", "text": "foo += 1", "anchor": "foo = 0" }
 			},
-			"canonical": "ref://src/counter.ts:tick#foo += 1@before:foo = 0"
+			"canonical": "ref://src/counter.ts:tick#foo%20+=%201@before:foo%20=%200"
 		},
 		{
 			"id": "matcher-after",
@@ -160,6 +161,34 @@
 			},
 			"canonical": "ref://src/mail.ts#user%40example%2Ecom",
 			"why": "An encoded at-sign is part of the searched text, not an anchor marker."
+		},
+		{
+			"id": "generic-in-matcher",
+			"uri": "ref://src/api.ts:fetchUser#Promise<Response>",
+			"parsed": {
+				"path": "src/api.ts",
+				"segments": ["fetchUser"],
+				"matcher": { "kind": "text", "text": "Promise<Response>" }
+			},
+			"canonical": "ref://src/api.ts:fetchUser#Promise%3CResponse%3E",
+			"why": "A trailing angle bracket must survive. Stripping it as if it closed a markdown destination would silently shorten the searched text, and `>` ends a generic, a template, and a JSX tag."
+		},
+		{
+			"id": "generic-in-segment",
+			"uri": "ref://src/vec.cpp:Vec<int>",
+			"parsed": { "path": "src/vec.cpp", "segments": ["Vec<int>"], "matcher": null },
+			"canonical": "ref://src/vec.cpp:Vec%3Cint%3E"
+		},
+		{
+			"id": "angle-bracketed-generic",
+			"uri": "<ref://src/api.ts:fetchUser#Promise<Response>>",
+			"parsed": {
+				"path": "src/api.ts",
+				"segments": ["fetchUser"],
+				"matcher": { "kind": "text", "text": "Promise<Response>" }
+			},
+			"canonical": "ref://src/api.ts:fetchUser#Promise%3CResponse%3E",
+			"why": "The markdown angle-bracket wrapper comes off as a pair, leaving the generic intact."
 		},
 		{
 			"id": "scheme-case-insensitive",

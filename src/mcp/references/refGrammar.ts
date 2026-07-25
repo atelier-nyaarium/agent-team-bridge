@@ -53,7 +53,18 @@ function decodeComponent(raw: string): string {
  * the MCP writes and the phone recomputes, and the only property that matters is that the two agree.
  */
 function encodeComponent(raw: string): string {
-	return raw.replace(/%/g, "%25").replace(/:/g, "%3A").replace(/#/g, "%23");
+	return (
+		raw
+			.replace(/%/g, "%25")
+			.replace(/:/g, "%3A")
+			.replace(/#/g, "%23")
+			// parseRef strips a surrounding angle-bracket pair and trims, so a component ending in `>` or
+			// whitespace would come back shorter than it went in. Encoding both keeps the key idempotent,
+			// which matters because `>` ends a generic, a template, and a JSX tag.
+			.replace(/</g, "%3C")
+			.replace(/>/g, "%3E")
+			.replace(/\s/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`)
+	);
 }
 
 /** As above, plus the characters that carry structure inside a fragment. */
@@ -105,7 +116,10 @@ function parseMatcher(rawFragment: string): Matcher | null {
  * `:Foo` as a port, which is not what any of this means.
  */
 export function parseRef(uri: string): Ref | null {
-	const trimmed = uri.trim().replace(/^<|>$/g, "");
+	// Angle brackets come off only as a PAIR, which is the only form markdown produces. Stripping a
+	// lone trailing one would silently shorten `#Promise<Response>` to `#Promise<Response`.
+	const bare = uri.trim();
+	const trimmed = bare.startsWith("<") && bare.endsWith(">") ? bare.slice(1, -1) : bare;
 	if (!trimmed.toLowerCase().startsWith(REF_SCHEME)) return null;
 
 	const body = trimmed.slice(REF_SCHEME.length);

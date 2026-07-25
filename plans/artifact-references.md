@@ -691,3 +691,51 @@ the owner returned `full` and `fullSpoken` as `undefined` despite being present 
 reordering them ahead of `title`/`summary` made the identical content land. Not diagnosed, and it
 may be a harness-side emission issue rather than the tool's, but it cost several round trips and is
 worth knowing about since a failed reply to a human is invisible to them.
+
+## Phase 2 audit residue (open, next lap)
+
+Six audit angles ran against the shipped Phase 2. Both blockers and five significant findings are
+fixed and pinned; these survived triage as real but were left for the next lap rather than rushed.
+
+**Fixed and pinned:** two stray backticks pairing across a blank line and silently swallowing every
+ref between them (the exact never-drop-a-real-ref rule, now confined to one CommonMark block); a
+trailing `>` being stripped as if it closed a markdown destination, which shortened every generic,
+template, and JSX matcher and made the key diverge from what the phone recomputes; canonical keys
+not being idempotent for any component ending in `>` or whitespace (two 60k-shape fuzzers now pin
+idempotency and round-trip); the final match sort discarding the shallowest-first ordering the walk
+builds, which resolved this repo's own `crypto.ts:sign` to an interface field and called it exact;
+`arguments` doing an unbounded descendant search and binding a class to some nested method's
+parameters; snapshot names being deduped against a SET of attachment names rather than the ordered
+assignment the device actually performs; `safeName` splitting an astral character into two
+underscores where Kotlin produces one; a missing project root throwing ENOENT out of the result
+contract; and a destination truncating at the first paren, which silently changed `#reset()` into a
+different matcher.
+
+**Still open:**
+
+- **The reserved manifest name is claimable when the body carries no detected ref.** The refusal
+  lives in the builder, which a message with no refs never reaches, so an attachment literally named
+  `switchboard-references.json` ships. Phase 3's selection rule would then adopt it. The fix belongs
+  at the compose boundary, not the builder.
+- **A closing fence with trailing text still closes the fence.** CommonMark allows only spaces after
+  the marker, so content the spec still considers fenced gets un-masked and a documented example can
+  be detected.
+- **No cross-runtime vector pins `safeName`/`uniqueName`.** The plan asks for one and it is Phase 2's
+  to own (unlike the canonicalizer twin, which is explicitly Phase 3's). Its absence is why the
+  astral and dedupe divergences shipped green.
+- **`referenceRoot()` cannot fall back to cwd inside a container,** because `PROJECT_NAME` is always
+  set by then. Any container whose project is not literally at `/workspace/<spawn>` now fails every
+  ref-bearing send with a root-does-not-exist error.
+- **`walkSegments` branches are paths, not nodes,** with no memo on `(node, consumed)`. Measured 2.2s
+  on a 724-byte file of deeply nested same-named functions. Memoizing collapses it to linear.
+- **A C# file-scoped namespace resolves to its own one-line declaration** when it is the final
+  segment: `searchAreas` supplies the sibling run for navigation, but the RANGE is still the node's
+  own extent.
+- **`coversWholeFile` disagrees with `wholeFile()` by one line** on any file ending in a newline, so
+  a matcher-miss on an oversized file gets the wrong error message (and is wrongly marked
+  snippet-eligible). Nothing is smuggled past the cap, but the mechanism is not the one the plan
+  describes.
+- **`columnOf` returns -1** for a match at index 0 when the file begins with a newline.
+- **Aliased spellings of one file ship duplicate snapshots** (`src/x.ts`, `./src/x.ts`, and a
+  symlinked `lib/x.ts` produced three), because the builder keys on the written path rather than the
+  resolved absolute one, so a large file double-counts against the aggregate budget.
