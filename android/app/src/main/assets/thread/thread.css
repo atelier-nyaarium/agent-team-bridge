@@ -195,6 +195,17 @@ html, body {
 	color: var(--error);
 }
 
+/* A claimed scheme is live, so it reads like an ordinary link rather than a broken one. */
+.body a.link-handled {
+	color: var(--accent);
+}
+
+/* A ref whose target moved still opens, so it is flagged rather than disabled. */
+.body a.link-handled.link-fuzzy {
+	color: var(--warning, #b8860b);
+	text-decoration-style: dotted;
+}
+
 .body blockquote {
 	border-left: 3px solid var(--border);
 	padding: 0 10px;

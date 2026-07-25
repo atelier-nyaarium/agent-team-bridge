@@ -65,6 +65,26 @@ client timeout may need to be increased in `.mcp.json` or the client's settings.
 
 ---
 
+## Referencing code (ref:// links)
+
+When you are talking about a specific piece of code, link it instead of pasting it. Write a markdown
+link whose destination is `ref://src/cart.ts:Cart:add`, and the file is snapshotted at send time and
+attached, so the reader taps through to the real code as it was when you wrote about it.
+
+- **Only the `full` field of `channel_reply` and `notify_human` is scanned.** A ref in `summary`,
+  `title`, `fullSpoken`, or a `crosstalk_send` body arrives as a link that cannot open.
+- **Paths are project-relative.** An absolute path or a `..` segment is refused and fails the send.
+- **Wrap the destination in angle brackets** when the matcher contains a space or a close paren:
+  `[label](<ref://src/cart.ts:Cart:add#items.push(item);>)`. Without that, a link destination ends at
+  the first space or unbalanced `)`, and the ref is silently truncated rather than reported.
+- **A file-tier problem fails the send loudly** (missing, not text, outside the project). A
+  RESOLUTION miss does not: the ref still sends and opens on a text match or the whole file with a
+  banner. No error does not mean the ref landed where you meant.
+- **Refs in code fences or inline code are never detected**, so documenting the format costs nothing.
+
+The full format, including the `#matcher` forms, is in this plugin's own `agent_instructions`, which
+your session already carries in its instructions when the capability is on.
+
 ## Receiving a Request
 
 How you receive requests depends on which agent is running:

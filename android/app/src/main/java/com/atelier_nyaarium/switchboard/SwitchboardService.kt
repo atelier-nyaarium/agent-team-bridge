@@ -227,7 +227,10 @@ class SwitchboardService : Service(), DeepIdleScheduler, ScheduledSendAlarmSched
 		// Boot the plugin framework BEFORE the poll loop starts: booting wires the data-plane bridge
 		// onto the repo (once per process), so no inbound message is drained-and-committed before a
 		// subscriber exists (the cursor never re-delivers). Idempotent - the Activity may also boot it.
-		com.atelier_nyaarium.switchboard.plugins.Plugins.get(this)
+		val plugins = com.atelier_nyaarium.switchboard.plugins.Plugins.get(this)
+		// Wired before connect() below, so this device's very first register already states what it
+		// can render rather than leaving the gateway a register behind.
+		repo.enabledPlugins = { plugins.reportable() }
 		// Keep the CPU awake for the poll loop while the bridge runs (background delivery).
 		acquireWakeLock()
 		// connect() runs register (setting the Gateway id, cursor, epoch) and the

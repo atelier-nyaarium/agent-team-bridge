@@ -6,6 +6,7 @@ import { isInsideContainer } from "../shared/env.js";
 import { parseSessionName } from "../shared/session-id.js";
 import { closeRouter, connectToRouter } from "./bridge/helpers.js";
 import { detectAgentType, registerBridgeTools } from "./bridge/registerBridgeTools.js";
+import { capabilityInstructions, fetchCapabilities, hasCapability } from "./capabilities.js";
 import { registerHumanTools } from "./channel/humanTools.js";
 import { registerConnectorTools } from "./connector/connectorTools.js";
 import { setAuthToken, startListener, stopListener } from "./connector/listener.js";
@@ -15,6 +16,7 @@ import { registerDesignerTools } from "./designer/designerTools.js";
 import { registerCompactSession } from "./devcontainer/compactSession.js";
 import { registerReloadPlugins } from "./devcontainer/reloadPlugins.js";
 import { registerSetEffortLevel } from "./devcontainer/setEffortLevel.js";
+import { setReferencesEnabled } from "./references/attachRefs.js";
 import { resolveSessionNaming } from "./team-name.js";
 
 ////////////////////////////////
@@ -49,12 +51,17 @@ export async function startMcp(): Promise<void> {
 	const agentType = process.env.AGENT_TYPE || detectAgentType();
 	const isChannel = agentType === "claude";
 
+	// Asked before the server exists, because it decides which tools get registered and what
+	// guidance the session carries. Bounded and single-attempt: an unreachable gateway costs a beat
+	// and falls back, never the startup.
+	const capabilities = await fetchCapabilities(process.env.BRIDGE_ROUTER_URL);
+
 	const mcpServer = new McpServer(
 		{ name: "switchboard", version: packageJson.version },
 		isChannel
 			? {
 					capabilities: { experimental: { "claude/channel": {} } },
-					instructions: CHANNEL_INSTRUCTIONS,
+					instructions: `${CHANNEL_INSTRUCTIONS}${capabilityInstructions(capabilities)}`,
 				}
 			: undefined,
 	);
@@ -65,7 +72,13 @@ export async function startMcp(): Promise<void> {
 	registerCompactSession(mcpServer);
 	registerHumanTools(mcpServer);
 	// After registerBridgeTools, so bridgeProjectName() already reflects whether PROJECT_NAME is set.
-	registerDesignerTools(mcpServer);
+	// Gated on the owner having the plugin that renders these cards: a session picks up a plugin
+	// toggle on its next start, which is why the console's own board calls it a restart-to-adopt.
+	if (hasCapability(capabilities, "designer")) registerDesignerTools(mcpServer);
+	// Ref snapshotting is not a tool of its own: it rides the reply path, so it is switched on here
+	// rather than registered. A session whose owner has no console able to render a code viewer never
+	// pays to build one.
+	setReferencesEnabled(hasCapability(capabilities, "references"));
 
 	// The game-client connector serves /workspace project schemas, so it is container-only. The
 	// registered name is composite (`project.session`); the workspace dir + schema are keyed by the

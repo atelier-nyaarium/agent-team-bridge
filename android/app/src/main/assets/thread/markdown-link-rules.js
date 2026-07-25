@@ -3,8 +3,14 @@
 //   Standard schemes (http/https/mailto) render as ordinary tappable anchors - tapping navigates,
 //   the WebView layer intercepts, and the app's scheme dispatcher opens them.
 //
-//   Every other scheme (file:, a future custom protocol, a bare relative path) still RENDERS as a
-//   link, but INERT and visually distinct (class "link-unhandled", styled red in thread.css): the
+//   A scheme a plugin has claimed (class "link-handled", styled blue) renders as a link and stays
+//   INERT in exactly the same way. That is deliberate rather than an oversight: a kept href is
+//   tapped through WebView navigation, which cannot see which ROW the anchor sits in, and a claimed
+//   link needs that row because the same URL in two messages points at two different snapshots.
+//   Only the JS tap path carries row identity.
+//
+//   Every other scheme (file:, a bare relative path) still RENDERS as a link, but INERT and
+//   visually distinct (class "link-unhandled", styled red in thread.css): the
 //   href attribute is removed entirely - the WebView cannot navigate what has no href, so even a
 //   javascript: URL is dead markup - and the target rides in data-href, which the delegated tap
 //   listener in thread.js feeds to the copy-only link menu.
@@ -27,7 +33,14 @@
 	const STANDARD_LINK = /^(https?:|mailto:)/i;
 	const BLOCKED_LINK = /^(javascript:|vbscript:|data:(?!image\/))/i;
 
-	return function installThreadLinkRules(md) {
+	// A mutable holder rather than a captured array, so the app can re-push the claimed set on a
+	// plugin toggle without reinstalling the rule. Rows already rendered keep their old tier, the
+	// same accepted staleness as chip decoration.
+	return function installThreadLinkRules(md, handledSchemes) {
+		const claimed = handledSchemes || { value: [] };
+		const isClaimed = (href) =>
+			(claimed.value || []).some((scheme) => href.toLowerCase().startsWith(String(scheme).toLowerCase()));
+
 		md.validateLink = (url) => !BLOCKED_LINK.test(url.trim());
 
 		const defaultLinkOpen =
@@ -42,7 +55,7 @@
 				const i = token.attrIndex("href");
 				if (i >= 0) token.attrs.splice(i, 1);
 				token.attrSet("data-href", href);
-				token.attrJoin("class", "link-unhandled");
+				token.attrJoin("class", isClaimed(href) ? "link-handled" : "link-unhandled");
 			}
 			return defaultLinkOpen(tokens, idx, options, env, self);
 		};

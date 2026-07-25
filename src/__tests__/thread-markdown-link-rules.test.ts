@@ -69,3 +69,51 @@ describe("installThreadLinkRules", () => {
 		expect(out).toContain("link-unhandled");
 	});
 });
+
+describe("a scheme a plugin claims", () => {
+	function renderWith(schemes: string[], body: string): string {
+		const md = markdownit();
+		installThreadLinkRules(md, { value: schemes });
+		return md.render(body);
+	}
+
+	it("renders as a live link rather than a broken one", () => {
+		const html = renderWith(["ref:"], "See [add](ref://src/cart.ts:Cart:add).");
+
+		expect(html).toContain('class="link-handled"');
+		expect(html).not.toContain("link-unhandled");
+	});
+
+	it("stays inert, because only the JS tap path can see which row it sits in", () => {
+		const html = renderWith(["ref:"], "See [add](ref://src/cart.ts:Cart:add).");
+
+		// Deliberately a regex: `data-href=` contains the substring `href=`, so a plain contains
+		// check would pass on an anchor that still carried a real href.
+		expect(html).not.toMatch(/<a[^>]*\shref=/);
+		expect(html).toContain('data-href="ref://src/cart.ts:Cart:add"');
+	});
+
+	it("falls back to the unhandled tier when nothing claims the scheme", () => {
+		const html = renderWith([], "See [add](ref://src/cart.ts:Cart:add).");
+
+		expect(html).toContain('class="link-unhandled"');
+	});
+
+	it("leaves standard schemes as ordinary anchors", () => {
+		const html = renderWith(["ref:"], "See [docs](https://example.com).");
+
+		expect(html).toContain('href="https://example.com"');
+		expect(html).not.toContain("data-href");
+	});
+
+	it("matches the scheme case-insensitively, since a destination may be spelled either way", () => {
+		expect(renderWith(["ref:"], "[a](REF://src/a.ts)")).toContain('class="link-handled"');
+	});
+
+	it("works with no scheme list at all, which is the state before any plugin loads", () => {
+		const md = markdownit();
+		installThreadLinkRules(md);
+
+		expect(md.render("[a](ref://src/a.ts)")).toContain('class="link-unhandled"');
+	});
+});

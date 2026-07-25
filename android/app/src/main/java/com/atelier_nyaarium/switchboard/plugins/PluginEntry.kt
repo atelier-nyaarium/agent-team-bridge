@@ -101,6 +101,37 @@ fun interface PluginActionHandler {
 	fun onAction(action: PluginAction)
 }
 
+/** A link a plugin may claim, resolved to the row it was tapped in.
+ *
+ * The row matters and cannot be dropped: the SAME ref string in two messages points at two
+ * different snapshots, because each message carries its own. So the framework resolves
+ * `(team, rowId, rowAt)` to the live row and hands the handler that row's files, rather than a
+ * plugin reaching into the repository for a row id it cannot verify. */
+class TappedLink(
+	val team: String,
+	/** The destination exactly as the renderer holds it, before any canonicalization. */
+	val url: String,
+	/** The resolved row's attachments, which is where a manifest and its snapshots ride. */
+	val files: List<MessageFile>,
+)
+
+/** Claims a URL scheme.
+ *
+ * [scheme] is declared rather than inferred because the RENDERER needs it before any tap happens: a
+ * claimed scheme is styled as a live link instead of a broken one, so the set of claimed schemes is
+ * pushed into the thread renderer when it changes.
+ *
+ * [tryOpen] returns true once it has handled the tap; the first claimant wins, and the core schemes
+ * run only when none does. A handler that cannot serve THIS tap (the row carries no manifest, or the
+ * key is absent from it) returns false so the tap falls back to the link context menu, rather than
+ * claiming it and doing nothing. */
+interface LinkHandler {
+	/** Including the colon, e.g. `ref:`, matched case-insensitively against the destination's start. */
+	val scheme: String
+
+	fun tryOpen(context: Context, link: TappedLink): Boolean
+}
+
 /**
  * What a plugin's entry hook is GIVEN to touch, growing one typed extension point at a time as
  * real consumers arrive. This is the sanctioned surface, not a security boundary: baked-in
@@ -139,6 +170,11 @@ class PluginHost internal constructor(
 	 * - a plugin claims the exact composite key its own actions use. A key with no claimant (an
 	 * unknown action type, or the owning plugin disabled) is silently skipped, never an error. */
 	val pluginActions: PluginRegistry<PluginActionHandler> = runtime.createRegistry("plugin-actions")
+
+	/** Link-open claimants, keyed `<plugin>:<handler>`. `openLink` consults these before the core
+	 * schemes; the first to claim wins. A claim is offered only for a tap the framework could resolve
+	 * to a live row, so a handler always has that row's files. */
+	val linkHandlers: PluginRegistry<LinkHandler> = runtime.createRegistry("link-handlers")
 
 	/** Attachment-chip decorators, keyed `<plugin>:<decorator>`. The thread renderer consults every
 	 * claimed decorator per attachment at serialization time; the first non-null decoration wins

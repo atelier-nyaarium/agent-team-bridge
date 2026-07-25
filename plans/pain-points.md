@@ -968,3 +968,78 @@ project hostname; a body-size cap on `/human/notify`; read-side ownership on `/p
 `/pending`; the ungated fan-out (delivery is never gated on handshake confirmation, so a socket
 registering a victim's name still receives its pushes); and `bindResume`'s tier-2 path, where
 `bind()` matches a record by transcript id regardless of the registering team.
+
+## Console capability union (`plans/artifact-references.md` Phase 1, 2026-07-24)
+
+**A revoked device keeps voting in the capability union for 14 days.** Removing a lost phone
+through Your devices drops its admission, so the sealer rejects its frames from then on and its
+`lastSeen` freezes. Nothing purges its `CapabilityStore` record: the class has no per-device
+delete, and `teardownDevice`/`removePeer` (which do clear bindings, signers, opCache, ownerDevices
+and the mailbox consumer) are never reached on revocation. So `snapshot()` counts it as live until
+the 14-day TTL expires it.
+
+Two adversarial verifiers split on this, and the surviving harm is small. The union only ever ADDS
+ids, so a stale record can never strip a capability a live console has, and it cannot pin different
+instruction text either: the text ships in the APK's own `manifest.json`, so every device on a
+build reports the same string. The residual is that if the revoked device was the ONLY one with a
+plugin enabled, sessions started in that window register its tools and carry its guidance. That is
+the same direction the design already fails on purpose (`FAIL_OPEN` is `[{id:"designer"}]`), so it
+lands inside the sanctioned posture rather than outside it.
+
+Not built because the obvious hook is wrong. Purging on `teardownDevice` would tie capability
+lifetime to the mailbox's 1-hour idle eviction and directly break the plan's own goal that a phone
+dozing on the 12-hour tier keeps voting. The correct fix is a revocation-time hook: when
+`Allowlist.applySnapshot` drops a console admission, resolve its signing key to a conversationId
+(`consoleHandler`'s `signers` map already holds that mapping) and purge the record. That is new
+plumbing across allowlist, consoleHandler, and the store for a minor, self-healing issue.
+
+**Refuted in the same pass, recorded so they are not re-raised:** the cache file blocking
+`0) Purge Federation` (the `rmdir` is already non-recursive and swallowed, and the cache holds no
+secret); an oversized `agent_instructions` bricking register (the 2000-char cap is enforced at the
+schema boundary and the plugin is toggleable, so there is no APK-only recovery); unbounded
+aggregate instruction text (reachable only by the owner's own admitted console, which already holds
+strictly greater power); a newline in `instructions` escaping its bullet (same trust boundary, and
+every entry is prefixed under a labelled heading); and a dropped toggle re-register leaving the
+gateway stale (best-effort by contract, and it degrades into the fail-open baseline).
+
+**The MIRROR of that last one had teeth, and was fixed.** A verifier noticed that a dropped
+toggle-ON report is not symmetric with a dropped toggle-OFF: a fresh install reports `[]` (an empty
+array, not absent), so the gateway holds an AFFIRMATIVE union, and an affirmative union is exactly
+what the MCP does not second-guess. The owner would silently lose a tool they had just switched on,
+until the next process restart re-registered. `reportEnabledPlugins` now arms `pluginReportPending`
+on entry and clears it only on a landed report, and the poll loop retries a pending one beside its
+other bounded-interval maintenance.
+
+### Framework-first pass, and what it deliberately left
+
+The assessment found two REAL pre-existing durability bugs, both verified by running them, both now
+closed by `openDurable`/`restoreDurable` in `shared/durable-store.ts`:
+
+- **A corrupt `mailboxes.json` destroyed the owner's whole session list.** `mailboxStore.restore`
+  throws on a snapshot missing `entries` (a shape that passes the `typeof === "object"` guard), and
+  it shared one try with `sessionStore.restore`, which therefore never ran. The 3-second persist
+  tick then wrote `{sessions:{}}` over a perfectly good file. Silent, permanent, and from an
+  unrelated file.
+- **A corrupt `replay-guard.json` was an unrecoverable boot loop.** Its restore had no containment
+  at all, so a bare number array threw inside `startGateway`; `replayPersist` is assigned on the
+  next line, so nothing could ever heal the file.
+
+Both were reachable because "restore this file" and "contain this file's failure" were separate
+concerns that each caller improvised, and the capability work added the fifth improvisation. They
+are one call now.
+
+**Deferred, with reasons rather than as a backlog dump:**
+
+- **`CapabilityAnswer`, the no-answer as a VALUE** (the `sessionAuthority.ts` treatment). Today
+  "the device said nothing" versus "the device reports nothing enabled" is spelled four ways across
+  two languages, and every one of them is an absence a caller can fall into. A tagged union would
+  make `?? []` stop type-checking. This is the strongest remaining proposal and the one to take
+  first; it was left out only because it crosses to Kotlin and this phase had already grown.
+- **`DeviceLifecycle`,** allocating device-keyed state through one registry so a satellite store
+  cannot outlive its device. This is the by-design fix for the revoked-device staleness above. Not
+  taken: it rewrites the teardown ordering invariants in `consoleHandler.ts`, and the per-satellite
+  lifetimes are deliberately different (mailbox 1h, intent ~135s, capabilities 14d), so the registry
+  has to model tiers rather than one clock.
+- **`CapabilityStore` giving up its own file** to join the tick-driven snapshot/restore idiom, which
+  would delete the flush-floor machinery entirely. The assessor was straight that this eliminates no
+  bug class, and it is duplication removal only.

@@ -52,6 +52,7 @@ import type { IntentTracker } from "../intent.js";
 import { type ReadAnchors, readAnchorsPlaneName } from "../readAnchors.js";
 import type { WakeResult } from "../wake.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
+import type { CapabilityStore } from "./capabilityStore.js";
 import { ConsolePeer } from "./consolePeer.js";
 import type { DurableOpStore } from "./durableOpStore.js";
 
@@ -118,6 +119,8 @@ export interface ConsoleHandlerDeps {
 	/** Drop a session's durable resume record (the console's Forget), so it stops listing as
 	 * an available asleep session. */
 	dropSessionResume?: (team: string) => void;
+	/** What plugins this owner's consoles have enabled. Absent in harnesses that do not exercise it. */
+	capabilityStore?: Pick<CapabilityStore, "report" | "touch">;
 	/** Session access. create_session mints/adopts a record here (the minted id is the tmux session
 	 * name); rename_session relabels one; forget drops one. Production wires the presence facade
 	 * (so these writes announce themselves on the presence plane); a narrow Pick, not the full
@@ -341,6 +344,7 @@ export function createConsoleDispatcher({
 	isProjectName,
 	dropSessionResume,
 	sessionStore,
+	capabilityStore,
 	domain,
 	domainStatus,
 	planeRegistry,
@@ -604,6 +608,7 @@ export function createConsoleDispatcher({
 		switch (op.kind) {
 			case "register": {
 				const box = mailboxStore.ensure(ownerId);
+				capabilityStore?.report(conversationId, op.enabledPlugins);
 				console.log(
 					`[console register] conv=${conversationId.slice(0, 12)} owner=${ownerId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
 				);
@@ -1518,6 +1523,9 @@ export function createConsoleDispatcher({
 			// to a new device name / key.
 			const ownerId = ownerKeyId(frame.ownerSignPub);
 			ensurePeer(frame.device, frame.conversationId, frame.signerSignPub, ownerId, frame.op.kind === "register");
+			// Every sealed op proves this device is still here, which is what keeps a phone that only
+			// polls from ageing out of the capability union it is still entitled to vote in.
+			capabilityStore?.touch(frame.conversationId);
 			const result = await dispatch(
 				frame.op,
 				frame.device,

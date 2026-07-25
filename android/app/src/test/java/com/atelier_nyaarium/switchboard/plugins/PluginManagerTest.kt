@@ -43,10 +43,22 @@ class PluginManagerTest {
 		)
 	}
 
-	private fun manifest(id: String, requires: List<String> = emptyList(), author: String = ""): String {
+	private fun manifest(
+		id: String,
+		requires: List<String> = emptyList(),
+		author: String = "",
+		agentInstructions: String = "",
+	): String {
 		val req = requires.joinToString(",") { """{ "content_id": "$it" }""" }
-		val authorField = if (author.isEmpty()) "" else """"author": "$author","""
-		return """{ $authorField "content_id": "$id", "display_name": "${id.replaceFirstChar { it.uppercase() }}", "requires": [$req] }"""
+		val displayName = id.replaceFirstChar { it.uppercase() }
+		val fields = buildList {
+			if (author.isNotEmpty()) add(""""author": "$author"""")
+			if (agentInstructions.isNotEmpty()) add(""""agent_instructions": "$agentInstructions"""")
+			add(""""content_id": "$id"""")
+			add(""""display_name": "$displayName"""")
+			add(""""requires": [$req]""")
+		}
+		return "{ ${fields.joinToString(", ")} }"
 	}
 
 	@Test
@@ -289,6 +301,50 @@ class PluginManagerTest {
 		assertEquals("A", byId["a"]!!.displayName)
 		assertEquals(false, byId["b"]!!.enabled)
 		assertEquals(false, byId["b"]!!.active)
+	}
+
+	@Test
+	fun reportsEachRunningPluginWithTheGuidanceItsOwnManifestCarries() {
+		val fx = Fixture(
+			manifests = mapOf(
+				"a" to manifest("a", agentInstructions = "Prefer Switchboard."),
+				"b" to manifest("b"),
+			),
+			catalog = listOf(PluginCatalog.Entry("a") {}, PluginCatalog.Entry("b") {}),
+			store = FakeStore("a", "b"),
+		)
+		fx.manager.boot()
+
+		val byId = fx.manager.reportable().associateBy { it.id }
+		assertEquals(setOf("a", "b"), byId.keys)
+		assertEquals("Prefer Switchboard.", byId["a"]!!.instructions)
+		assertNull(byId["b"]!!.instructions)
+	}
+
+	@Test
+	fun stopsReportingAPluginTheOwnerTurnedOff() {
+		val fx = Fixture(
+			manifests = mapOf("a" to manifest("a")),
+			catalog = listOf(PluginCatalog.Entry("a") {}),
+			store = FakeStore("a"),
+		)
+		fx.manager.boot()
+		assertNull(fx.manager.setEnabled("a", false))
+
+		assertTrue(fx.manager.reportable().isEmpty())
+	}
+
+	@Test
+	fun doesNotPromiseAPluginThatIsSwitchedOnButFailedToLoad() {
+		val fx = Fixture(
+			manifests = mapOf("a" to manifest("a")),
+			catalog = listOf(PluginCatalog.Entry("a") { error("entry threw") }),
+			store = FakeStore("a"),
+		)
+		fx.manager.boot()
+
+		assertEquals(true, fx.manager.states().first().enabled)
+		assertTrue(fx.manager.reportable().isEmpty())
 	}
 
 	@Test

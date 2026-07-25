@@ -5,6 +5,7 @@ import { GuidedNoticeTiers } from "../../shared/schemas.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { bridgeProjectName, routerPost } from "../bridge/helpers.js";
 import { literalEscapeHazard, literalEscapeReject, readReplyAttachment, toolError } from "../bridge/replyTool.js";
+import { appendRefArtifacts } from "../references/attachRefs.js";
 
 ////////////////////////////////
 //  Schemas
@@ -57,9 +58,10 @@ export function registerHumanTools(mcpServer: McpServer): void {
 				if (hazard) return toolError(literalEscapeReject("notify_human", field, hazard));
 			}
 			let files: ChannelFile[] | undefined;
+			let attached: Array<Awaited<ReturnType<typeof readReplyAttachment>>> = [];
 			if (attachments?.length) {
 				try {
-					files = await Promise.all(attachments.map(readReplyAttachment));
+					attached = await Promise.all(attachments.map(readReplyAttachment));
 				} catch (err) {
 					return {
 						content: [{ type: "text" as const, text: `Attachment error: ${(err as Error).message}` }],
@@ -67,6 +69,12 @@ export function registerHumanTools(mcpServer: McpServer): void {
 					};
 				}
 			}
+			// A notice carries agent prose to the same console the chat does, so a ref written in one
+			// deserves the same snapshot. `full` is the only field rendered as markdown, so it is the
+			// only one scanned.
+			const withRefs = await appendRefArtifacts(full, attached);
+			if (!withRefs.ok) return toolError(withRefs.error);
+			if (withRefs.files.length > 0) files = withRefs.files;
 			try {
 				// routerPost parses the JSON and throws on any non-ok response with
 				// the server's error message (including the 413 cap and 503 no-bridge).

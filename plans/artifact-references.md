@@ -225,7 +225,7 @@ is already future-proofed" research note above was wrong for a dynamic plugin-cl
 and the handshake role cache is in-memory only (there is no existing MCP disk-cache pattern to
 reuse; the capability cache is new machinery).
 
-## Phase 0: Session identity binding (pre-phase)
+## Phase 0: Session identity binding (pre-phase) ✅ SHIPPED
 
 Added at the owner's request after the capability endpoint's gating question exposed that
 `plans/gateway-auth-surface.md` was decided but never built (that plan has since been deleted as
@@ -361,7 +361,13 @@ Work breakdown:
    and cannot claim a bound name. The honest cost of zero human secret handling.
 6. Read-side disclosure stays open until the `/poll` follow-on.
 
-## Phase 1: Console capability foundation
+## Phase 1: Console capability foundation ✅ SHIPPED
+
+Built as specified. Two corrections the audits forced, both now pinned by tests: the durable
+`lastSeen` never advanced without a register, so a daily-polling phone was swept on the first tick
+after a restart; and the MCP's disk cache could shrink the capability set below the fail-open core,
+which contradicts the rule that only an affirmative answer removes a tool. Deployment (gateway
+restart plus the APK) is still owed, since the three halves ship together by the clean-break ruling.
 
 Clean-break rollout (see ruling above): gateway, MCP, and APK ship together; no cross-version
 machinery. The rules below are resilience against a briefly-down gateway or a stale record, not
@@ -409,7 +415,14 @@ version compat.
   session on another same-Domain gateway finds `known: false` and lands on the fail-open core
   set. The future fix mirrors fanOutConsolePush; out of scope here ("Only 1 PC anyways").
 
-## Phase 2: MCP ref detection + resolution engine
+## Phase 2: MCP ref detection + resolution engine ✅ SHIPPED (residue open)
+
+Built and audited across six angles. Both blockers and five significant findings are fixed and
+pinned; nine smaller ones are listed under "Phase 2 audit residue" at the end of this file and are
+the first work of the next lap. The framework-first pass was deliberately skipped this lap, since
+the residue list already exceeds what one lap should carry. Not deployed: gateway, MCP, and APK ship
+together by the clean-break ruling, and the `references` capability stays out of the fail-open set
+until Phase 3 ships the console viewer.
 
 - **Grammar toolchain:** a checked-in build script (pinned tree-sitter-cli version MATCHED to the
   pinned web-tree-sitter release line, emsdk or the CLI's docker fallback) builds every grammar
@@ -530,7 +543,11 @@ version compat.
   definitions, overload sets, .tsx, GDScript inner classes, waypoint resolution through anonymous
   JS nesting, and the fragment forms (ranges, anchors, anchor-miss, range-end-miss).
 
-## Phase 3: Phone References plugin + linkHandlers + renderer tier
+## Phase 3: Phone References plugin + linkHandlers + renderer tier ✅ SHIPPED (residue open)
+
+Tap-to-viewer works end to end. Audited across four angles, no blockers; the significant findings are
+fixed and the rest are listed under "Phase 3 audit residue". Chat-body amber and the vendored GDScript
+hljs grammar are the two named bullets not built. Not deployed.
 
 - **linkHandlers registry:** a plugin claims a URL scheme; the handler receives
   `(team, resolvedRow, url)` - the framework resolves row identity before dispatch (next bullet).
@@ -598,7 +615,11 @@ version compat.
   hljs.
 - **Retention:** attachment lifecycle, unchanged.
 
-## Phase 4: Teaching + end-to-end verification
+## Phase 4: Teaching + end-to-end verification ✅ SHIPPED (E2E partly owed)
+
+Teaching written and audited against the code. Grammar coverage pinned by a committed end-to-end
+suite over a real fixture tree. The emulator half is partial: the app installs and launches clean,
+but a tap-through needs a provisioned device, which cannot be scripted. See the progress section.
 
 - Agent-facing docs: ref format in the reply tools' descriptions and the crosstalk skill,
   including the fragment forms (`#T`, `#T@before:X` / `#T@after:X`, `#A..B`) with their encoding
@@ -610,3 +631,460 @@ version compat.
   ambiguous, snippet-mode, range and anchored refs, and hard-fail paths, a capability-toggle
   restart cycle, and one agent-to-agent ref-bearing exchange observed from the console's peer
   thread.
+
+## Painpoints
+
+From building Phase 0. Not fixed here; recorded because each one cost real time or shipped a real
+defect.
+
+**An optional dependency makes a gate silently inert in tests.** Every gate is written
+`if (auth && ...)`, and the test harnesses construct routes/websocket without that dep. So the
+first gate tests I wrote passed while asserting nothing at all, and only started testing the gate
+once `makeCtx` and the websocket `setup` helpers were changed to build a real `SessionAuthority`.
+The same shape applies to `sessionStore` and `presenceWriter`. A harness that omits a dep should
+be the exception a test opts into, not the default every test silently inherits - otherwise a
+security test can be green and vacuous at the same time, which is worse than red.
+
+**`from` is unvalidated input that is trusted at the far end.** `SendRequestSchema` declares
+`from: z.string()` with no slug or arity validation, and `send()` stamps it verbatim into the
+`channel_push` the recipient reads. So a name that resolves to nothing locally still arrives
+looking like whoever it claims to be. I reasoned about this wrongly once: I checked that
+`Address.local` rejects odd spellings, concluded the path was safe, and deleted a test - but
+delivery never routes `from` through that validation before stamping it. Anything caller-supplied
+that reaches a human's screen verbatim deserves validation at the schema boundary, not at the one
+gate that happens to look.
+
+**`resolveLiveIncarnation` returning an ALIAS is load-bearing and under-named.** A `claude --resume`
+incarnation legitimately serves a bound record under a different registered name, holding none of
+that record's credentials. That single fact broke two separate gates in two different directions
+(one keyed on the record and silently discarded the alias's answers; one keyed only on the live
+socket and evaporated whenever the session was asleep). The concept is real and correct, but
+nothing in the name or return type says "this may be a different name than you asked for", so each
+caller rediscovers it by getting it wrong.
+
+**Two independent capability booleans on `send`/`respond`.** `opts.trustedInbound` and
+`opts.consoleSender` each mean "this caller is pre-authenticated by its own path", and every new
+gate has to remember both, separately, or it breaks exactly one caller. I broke the console this
+way: the guard checked `trustedInbound` and not `consoleSender`, which blocked the owner from
+sending to their own sessions. One `CallerOrigin` discriminant would make forgetting a branch a
+compile error rather than a production outage.
+
+**Comparing a plan against a codebase it predates.** `plans/gateway-auth-surface.md` recorded an
+owner-confirmed decision whose central mechanism (a fixed `172.18.0.*` subnet) had since become
+false: nothing configures that subnet and `start-gateway.sh` re-rolls the docker network on every
+start. A plan that states a decision but not the facts it rests on cannot be re-validated later,
+only re-argued. Worth stating load-bearing empirical assumptions next to the decision they support,
+so a stale one is visible rather than inherited.
+
+### From Phase 1
+
+**`os.homedir()` under Bun ignores a reassigned `process.env.HOME`.** An audit agent probing
+`mcp/capabilities.ts` set `process.env.HOME` to a temp dir and still wrote a cache file into the
+real `~/.config/switchboard/`. Vitest runs on node, where `os.homedir()` does follow `$HOME`, so a
+test isolating itself that way passes and looks safe; the MCP runs on Bun, where the same trick
+silently does nothing. Any future code resolving a real user path needs its directory injected
+rather than read from `os.homedir()`, or its tests are testing a different resolution than
+production uses.
+
+**A long doc comment sitting directly above its subject is easy to re-parent by accident.** Adding
+a const or a field at a natural grouping point in `gateway/index.ts` and `console/consoleHandler.ts`
+silently pushed two existing multi-line comments onto unrelated code. It happened twice in one
+change and neither compile nor lint can see it, only a reader. This comment style is worth keeping,
+but an insertion near one needs a deliberate look at what the comment above now introduces.
+
+**Nothing steers a new route to `routes.ts`.** The request handler in `gateway/index.ts` is a column
+of `routes.*` delegations, and dropping an inline `new Response(...)` among them compiles and reads
+fine. The convention is real and otherwise unbroken, so a route that breaks it is pure drift that
+only a reviewer catches.
+
+**The Kotlin half has no formatting gate.** Biome covers TypeScript on every push; nothing checks
+Kotlin line width or formatting, so a 142-character line passed `testDebugUnitTest` without
+complaint. `ktlint` or `spotless` wired into the same Gradle task would close it.
+
+**`channel_reply` failed validation when its prose fields came last.** Several attempts reporting to
+the owner returned `full` and `fullSpoken` as `undefined` despite being present in the call;
+reordering them ahead of `title`/`summary` made the identical content land. Not diagnosed, and it
+may be a harness-side emission issue rather than the tool's, but it cost several round trips and is
+worth knowing about since a failed reply to a human is invisible to them.
+
+## Detection now borrows the console's own parser
+
+`refScanner.ts` no longer decides what markdown means. `markdown.ts` loads the SAME vendored
+`markdown-it.min.js` the console renders with, enumerates its `link_open` tokens, and the scanner
+parses each destination. `maskCode` and both detection regexes are deleted.
+
+The reason is agreement, not correctness. The console decides what is a link and what is code when it
+renders; this side decides what gets a snapshot. A second implementation disagrees at the edges no
+matter how careful it is, and a disagreement is silent in both directions: a dropped snapshot, or one
+attached for something rendered as inert text. Running the same bytes makes agreement identity rather
+than hope. The renderer's options are mirrored exactly, `linkify: false` being the load-bearing one.
+
+The bundle is read and evaluated as CommonJS rather than `require`d, because this package is
+`type: module` and the bundle is UMD; copying it to a `.cjs` name would create the second set of bytes
+this change exists to avoid.
+
+**All 20 hand-written masking tests passed unchanged**, so the swap preserved every behavior that was
+already correct. It also closed, for free, three things the hand-rolled version could not do: a
+closing fence carrying trailing text no longer closes (an open residue item), an indented code block
+is masked (declined earlier as needing full block parsing), and a reference-style link is found at
+all. A raw anchor tag stays ignored, since `html: false` holds on both sides.
+
+Malformed refs now surface. `scanRefs` returns `{refs, problems}`, and `appendRefArtifacts` turns the
+first problem into a hard tool error naming the code and offset, because a malformed ref is the
+agent's own typo and the agent is right there to fix it.
+
+## Ref grammar specification v1 (implemented)
+
+Owner: `src/mcp/references/refLexer.ts` + `refGrammar.ts`. This grammar covers the ref URI ONLY.
+Finding refs in a message belongs to the renderer's own markdown parser; resolving a scope chain to
+code belongs to tree-sitter. Written down because the previous implementation had no spec: it was a
+pile of `indexOf` and `split` calls, and its answer to any case nobody had considered was whatever
+those happened to do. Seven such cases were found by probing, and one was a live bug.
+
+**Tokens.** Two lexing modes: `scope` runs to the first raw `#`, `fragment` follows it.
+
+| Token | Produced by |
+|---|---|
+| `sep` | a raw `:` |
+| `hash` | the FIRST raw `#` (a later one is text) |
+| `range` | exactly two dots as a maximal run, fragment only |
+| `at` | a raw `@`, fragment only |
+| `char` | one literal character, or one percent-escape run |
+
+A percent-escape lexes to `char` tokens carrying the DECODED value, and a run of escapes decodes as
+one unit (a non-ASCII character arrives as several escapes). So an encoded colon is structurally
+incapable of being a separator: split-before-decode is a property of the token type rather than an
+ordering rule to remember. A `range` is exactly two dots because three is a spread and a variadic,
+so `#...args` must search for that text rather than parse as a broken range.
+
+**Grammar.**
+
+```
+ref     := SCHEME path (SEP segment)* (HASH matcher)? EOF
+path    := char+                    // REQUIRED
+segment := char*                    // empty allowed; this IS the `::` merge
+matcher := text AT kind SEP text    // anchor
+         | text RANGE text          // range
+         | text                     // plain
+kind    := "before" | "after"
+```
+
+**Ambiguity, one rule:** the FIRST structural marker by position wins, and everything after it is
+ordinary text. An anchor marker is structural only as `@` + exactly `before`/`after` + `:`, so an
+at-sign in an email address needs no encoding.
+
+**Decisions.** Every case that was previously undefined, now decided:
+
+| Input | Result |
+|---|---|
+| `#x@after:y@after:z` | anchor, `anchor = "y@after:z"` (first marker wins) |
+| `#a..b..c` | range, `to = "b..c"` (same rule) |
+| `#x..y@after:z` | RANGE, because `..` comes first. Previously an anchor, decided by which `if` was written first |
+| `#@after:y` | error `empty-match-text` |
+| `#x@after:` | error `empty-anchor` |
+| `#a..` / `#..b` | error `empty-range-bound` |
+| `ref://a.ts#` | error `empty-fragment` |
+| `ref://:Foo` | error `path-required`. Was the live bug: the first segment silently became the path |
+| `ref://a.ts:` | accepted, the empty segment merges |
+| `#...args` | text |
+| `#user@example.com` | text |
+
+**Totality.** Parsing yields exactly one of: a ref, `not-a-ref` (no scheme), or an error with a code
+and an offset. There is no fourth outcome where a malformed ref silently becomes a different valid
+ref, which is the class this grammar exists to eliminate. Lexing never fails, which is what makes
+the parser's error the only way an input is rejected.
+
+**Printing.** A character is escaped if and only if the reader treats it specially in that mode:
+that mode's structural tokens, `%` because it introduces an escape, and `<`/`>`/whitespace because
+the parser strips those before lexing. The escape set is DERIVED from the token set, never
+hand-kept. A hand-kept list is what drifted twice before this existed, first missing angle brackets
+and then whitespace, each time making the canonical key non-idempotent.
+
+**Cross-runtime.** The Phase 3 Kotlin twin implements the same modes, tokens, and productions. The
+vectors pin parse results, canonical keys, AND error codes with offsets, so a divergence in
+rejection behavior fails the build too, not only a divergence in success.
+
+## Phase 3 progress
+
+**Kotlin canonicalizer twin (done).** `android/.../proto/RefGrammar.kt` mirrors the lexer and parser:
+same two modes, same token kinds, same productions, same derived escape sets.
+`RefGrammarVectorsTest` reads the shared corpus and pins parse results, canonical keys, `distinctFrom`
+non-collision, idempotency, error codes WITH offsets, and a totality sweep that never throws.
+
+Two Kotlin-specific divergences had to be written against explicitly, both of the exact class that
+already bit the filename sanitizer earlier:
+
+- **Iteration unit.** JS `for (const c of str)` walks code points; Kotlin `for (c in str)` walks
+  UTF-16 units, so an astral character would lex as two tokens and encode as two escaped halves. Both
+  the lexer and the printer walk code points deliberately.
+- **Invalid UTF-8.** `decodeURIComponent` throws and the lexer falls back to literal text, while
+  Kotlin's `String(bytes, UTF_8)` substitutes U+FFFD and succeeds. The twin uses a decoder with
+  `REPORT` so it fails the same way.
+
+**Tap chain and viewer (done).** `linkHandlers` is a new extension point: a plugin declares a
+`scheme` and gets `tryOpen(context, TappedLink)`. The scheme is declared rather than inferred because
+the RENDERER needs it before any tap, to style a claimed link as live rather than broken.
+
+The claimed tier renders BLUE but stays INERT, which is deliberate and worth not undoing: a kept
+href is tapped through WebView navigation, which cannot see which ROW the anchor sits in, and the
+same ref in two messages points at two different snapshots. Only the JS tap path carries row
+identity, so `linkTap(rowId, rowAt, href)` rides the readUpTo bridge pattern and the FRAMEWORK
+resolves `(team, rowId, rowAt)` to the live row before any plugin sees it. A plugin never looks a row
+up itself.
+
+The miss contract is every path out of `RefLinkHandler.tryOpen` that cannot show code returning
+false: no manifest on the row (a crosstalk body is never scanned, and its peer mirror carries none),
+a key absent from this message's manifest, a purged snapshot, a manifest that does not validate. All
+fall back to the link menu with the URL visible.
+
+Manifest selection is narrow: the FIRST file bearing the reserved name that parses AND carries its
+marker, and a manifest naming a snapshot absent from its own row is rejected wholesale rather than
+partly trusted. Pinned by `RefManifestTest`.
+
+**Chip hide.** `ChipDecoration` gained an explicit `hidden` verdict rather than a magic
+title/kind sentinel, honored in `buildFiles`. A reference artifact is machinery the reader never
+chose to send, and rendering it as a file invites a tap that opens raw source instead of the viewer
+the link already provides.
+
+**`references` is now in the fail-open set,** which is what switches the feature on: a console plugin
+renders it, so a session with no gateway answer may assume it. Two capability tests were loosened
+from exact membership to `arrayContaining`, since the core set legitimately grows as plugins ship and
+the manifest fixture already pins membership against the shipped plugin folders.
+
+**Still open in Phase 3:** the chat-body amber tier for a fuzzy ref. The drain-time index records
+per-ref quality already; what is missing is threading that map through the serialization payload so
+`link_open` can tag `link-fuzzy` (the CSS rule exists). Everything else in the tap-to-viewer path is
+built. The viewer itself ships a line gutter, blue range bands, amber character spans applied by a
+post-highlight text-node walk, a dismissible banner, breadcrumb, snippet elision markers with true
+line numbers, and light/dark theming; a GDScript hljs grammar is not vendored yet, so `.gd` renders
+as escaped plain text rather than highlighted.
+
+**The corpus was wrong and the twin caught it.** `ref://` was listed under `notRefs`, but both
+runtimes classify it as a malformed ref (`path-required`). The TS assertion only checked
+`parseRef(...) === null`, which is true for a malformed ref as well, so it could not see the
+difference; the Kotlin test asserts the classification itself and failed. Fixed in the corpus, and the
+TS assertion now checks `{kind: "not-a-ref"}` so that side can catch the class too. Worth noting as
+evidence for the earlier lesson: a cross-runtime corpus only earns its keep if both sides assert the
+distinction, not merely the outcome.
+
+## Phase 4: teaching and verification
+
+An audit of this phase's own claims found that several were overstated, and one hid a real bug. Both
+are corrected below; the original wording is not worth preserving, but the fact that it was wrong is.
+
+**A real bug the first pass hid.** "All seven grammars resolved exact" was true only because the C#
+fixture used `namespace Foo;` with no dot in it. A namespace written the way real C# writes it,
+`namespace Acme.Services;`, referenced as one dotted waypoint, did NOT resolve: `nameParts` split the
+node's name into parts that consume a RUN of segments, so a single segment containing a dot could
+never match, and it degraded silently to `fuzzy`. Fixed in `matchedRun`, which now accepts either
+spelling (`:Acme.Services` or `:Acme:Services`, and `A::B::method` or `A:B:method`). The unit tests
+stayed green throughout, because their fixtures are inline snippets that dodged the shape.
+
+**A false invariant.** "Two refs into one file produced ONE snapshot, which is the invariant the
+aggregate budget leans on" overstated a true observation. Two IDENTICALLY-SPELLED refs do coalesce.
+Two spellings of the same file (`src/x.ts` and `./src/x.ts`) still produce two snapshots, which is the
+open Phase 2 residue item about aliased paths, recorded a few sections down. Phase 4 asserted as
+verified an invariant this same document records as broken.
+
+**Verification now leaves an artifact.** The original 22-case pass was hand-run and committed
+nothing, which is exactly the failure the Phase 2 painpoint names ("a green suite is not evidence").
+It is now `src/__tests__/ref-grammars-e2e.test.ts` over a committed fixture tree at
+`tests/fixtures/ref-project/`: 23 cases driving the whole chain (scan, parse, resolve, build) for all
+seven grammars, the pseudo-segments, all three matcher forms, the three degradation tiers, snapshot
+coalescing, fence immunity, and every file-tier hard failure including the absolute-path case. Each
+assertion checks the SOURCE LINES the range selects, not just a line number, so a plausible-looking
+but wrong range fails.
+
+**Teaching, rewritten against what the code does.** The first version was accurate but incomplete in
+ways an agent would hit immediately:
+
+- It never said paths are PROJECT-RELATIVE. An absolute path hard-fails the whole send, and agents
+  are routinely told elsewhere to use absolute paths, so that was the likeliest first attempt.
+- Its encoding rules omitted `)`. A link destination ends at the first unbalanced one, so a matcher
+  like `#items.push(item);` silently truncated with no error. The angle-bracket form
+  (`[label](<ref://...>)`) sidesteps both that and the space rule, and is now taught first.
+- "A malformed ref fails the send" invited the contrapositive. It does not hold: a near-miss scheme
+  is skipped in silence, and a scope chain that misses degrades and ships. The text now separates the
+  file tier (fails loudly) from resolution (never fails, so no error does not mean it landed).
+- It said refs work in `channel_reply` and `notify_human` without naming the field; only `full` is
+  scanned.
+
+**Error offsets now index the ref as written.** They were offsets into the post-scheme slice while the
+message quoted the whole destination, so they pointed six characters short. Shifted on both runtimes,
+with the shared vectors updated to match.
+
+**Phone side, honestly: partial.** The debug build installs and launches clean on the emulator, and
+the manifest parses. That is weaker evidence than it first sounds and the earlier wording overclaimed
+it: `PluginManager` records a bad manifest as `broken` rather than crashing, so a clean launch alone
+would not have proven the plugin registered. The full tap-through could not be driven at all, because
+the emulator has no provisioning blob and enrollment is a QR/owner-key flow. What IS verified is the
+viewer's riskiest logic, re-run against the vendored highlighter: a line entirely inside a block
+comment is no longer coloured as live code in either TypeScript or Python, and every emitted line
+round-trips to its exact source text with balanced spans.
+
+**Owed before this is real:** a human tap-through on a provisioned device, covering the fuzzy banner,
+an ambiguous ref's count, snippet-mode elision markers, the chip hide, and the miss contract on a
+crosstalk peer row. Also note `.gd` renders as flat text in the viewer: the vendored highlighter
+ships no GDScript grammar, so that Phase 3 bullet is genuinely unbuilt rather than merely unmapped.
+
+## Phase 3 audit residue
+
+Four angles, 13 findings, no blockers. Fixed and verified:
+
+- **The viewer leaked a WebView per tap and a renderer crash killed the app.** No `onRelease`, and no
+  `onRenderProcessGone` override, whose documented default is the framework killing the process. Full
+  mode builds tens of thousands of nodes for a large snapshot, which is exactly the shape that OOMs a
+  renderer, so this was reachable rather than theoretical. Both sibling Designer WebViews already did
+  it right.
+- **hljs was called per LINE, so every multi-line construct highlighted wrong.** The second half of a
+  block comment rendered as live code; a closing docstring delimiter read as an opening one. That is
+  essentially every real source file. Highlighting is now whole-block, with any span still open at a
+  line end closed and reopened on the next so each row holds a balanced fragment.
+- **The miss contract dropped its promised note.** An unresolvable ref showed the generic link dialog,
+  visually identical to tapping a dead link. It now says so.
+- **The language map omitted grammars the bundle already ships** (go, rust, java, ruby, php, sql, css,
+  swift, and more), so those refs rendered flat for no reason.
+- **A blank viewer** when the payload could not be built, past the point where the tap was already
+  claimed and the link menu unreachable. It now renders the banner instead.
+- **A snippet entry with no segments** rendered the elided fragment as a whole file numbered from 1.
+  Now refused.
+- **`handledSchemes` re-pushed an identical eval into every renderer on every recomposition** (a
+  keystroke in the composer). Guarded.
+
+**Still open:**
+
+- **The chip-decorator seam carries no message coordinate.** `RefDisplayIndex` keys summaries by
+  `(team, at)` and exposes exactly the lookup wanted, but `AttachmentChipDecorator` is handed only
+  `(team, file)`, so the hide verdict falls back to scanning every summary the team ever recorded, on
+  the main thread, once per attachment per serialization. It also binds the verdict team-globally
+  rather than to the message whose manifest declared it. The fix is a framework change: give the
+  decorator the row's `at`, the way `TappedLink` was given row identity.
+- **Chat-body amber** is still unwired. The drain-time quality map exists and the CSS rule exists; the
+  missing piece is threading it through the serialization payload. The hard part is not plumbing but
+  KEYING: the map is keyed by canonical ref key, and the JS `link_open` rule sees the href markdown-it
+  normalized, so matching them needs either a JS canonicalizer (a third implementation of a grammar
+  that already has two) or the manifest carrying the raw destinations. That decision deserves the same
+  care the grammar got, which is why it was not guessed at.
+- **A claimed tap can still be dropped after `tryOpen` returned true**, if the request arrives after a
+  tab switch: the bus is replay-0 and the collector is scoped to the composed thread. The window is
+  narrow but the claim boundary is committed before the render.
+- **The plugin toggle does not itself re-push the claimed scheme set.** It works today only because
+  leaving Settings recomposes App. A future in-thread toggle would leave live renderers styling
+  `ref://` red.
+- **`relOf` is re-derived in three places** in the plugin, laxer than `Attachments`' own private parse
+  (which the core calls "the one parse every src consumer shares"). Making that public would collapse
+  all three.
+- **No GDScript hljs grammar is vendored**, so `.gd` renders as escaped plain text. Confirmed absent
+  from the bundle rather than merely unmapped.
+- **`ChipDecoration.hidden` is a boolean, not the sealed `Decorate`/`Hide`** the Phase 3 bullet
+  specifies. Deliberate and documented above, but it is a weaker compile-time guarantee than the plan
+  describes: nothing stops a caller supplying both a title and `hidden = true`.
+
+## Phase 2 audit residue (open, next lap)
+
+Six audit angles ran against the shipped Phase 2. Both blockers and five significant findings are
+fixed and pinned; these survived triage as real but were left for the next lap rather than rushed.
+
+**Fixed and pinned:** two stray backticks pairing across a blank line and silently swallowing every
+ref between them (the exact never-drop-a-real-ref rule, now confined to one CommonMark block); a
+trailing `>` being stripped as if it closed a markdown destination, which shortened every generic,
+template, and JSX matcher and made the key diverge from what the phone recomputes; canonical keys
+not being idempotent for any component ending in `>` or whitespace (two 60k-shape fuzzers now pin
+idempotency and round-trip); the final match sort discarding the shallowest-first ordering the walk
+builds, which resolved this repo's own `crypto.ts:sign` to an interface field and called it exact;
+`arguments` doing an unbounded descendant search and binding a class to some nested method's
+parameters; snapshot names being deduped against a SET of attachment names rather than the ordered
+assignment the device actually performs; `safeName` splitting an astral character into two
+underscores where Kotlin produces one; a missing project root throwing ENOENT out of the result
+contract; and a destination truncating at the first paren, which silently changed `#reset()` into a
+different matcher.
+
+**Still open:**
+
+- **The reserved manifest name is claimable when the body carries no detected ref.** The refusal
+  lives in the builder, which a message with no refs never reaches, so an attachment literally named
+  `switchboard-references.json` ships. Phase 3's selection rule would then adopt it. The fix belongs
+  at the compose boundary, not the builder.
+- **No cross-runtime vector pins `safeName`/`uniqueName`.** The plan asks for one and it is Phase 2's
+  to own (unlike the canonicalizer twin, which is explicitly Phase 3's). Its absence is why the
+  astral and dedupe divergences shipped green.
+- **`referenceRoot()` cannot fall back to cwd inside a container,** because `PROJECT_NAME` is always
+  set by then. Any container whose project is not literally at `/workspace/<spawn>` now fails every
+  ref-bearing send with a root-does-not-exist error.
+- **`walkSegments` branches are paths, not nodes,** with no memo on `(node, consumed)`. Measured 2.2s
+  on a 724-byte file of deeply nested same-named functions. Memoizing collapses it to linear.
+- **A C# file-scoped namespace resolves to its own one-line declaration** when it is the final
+  segment: `searchAreas` supplies the sibling run for navigation, but the RANGE is still the node's
+  own extent.
+- **`coversWholeFile` disagrees with `wholeFile()` by one line** on any file ending in a newline, so
+  a matcher-miss on an oversized file gets the wrong error message (and is wrongly marked
+  snippet-eligible). Nothing is smuggled past the cap, but the mechanism is not the one the plan
+  describes.
+- **`columnOf` returns -1** for a match at index 0 when the file begins with a newline.
+- **Aliased spellings of one file ship duplicate snapshots** (`src/x.ts`, `./src/x.ts`, and a
+  symlinked `lib/x.ts` produced three), because the builder keys on the written path rather than the
+  resolved absolute one, so a large file double-counts against the aggregate budget.
+
+### From Phase 2
+
+**A green suite is not evidence that a cross-runtime contract holds.** Both filename-sanitizer
+divergences (the astral character, the dedupe seeding) shipped with every test passing, because the
+only assertions were TS-side echoes of the same assumptions the implementation made. The plan asked
+for a cross-runtime vector and I skipped it as small; it is precisely the check that would have
+caught both. Where two runtimes must agree, the corpus is not optional polish, it is the test.
+
+**My own audit brief caught what my implementation missed.** I wrote "over-masking silently drops a
+ref the agent meant, with no error anywhere" into the scanner's doc comment, and then shipped a
+masking pass that did exactly that across blank lines. Writing the invariant down is not the same as
+checking the code against it, and the gap between those two is where both blockers lived.
+
+**An idempotency property is worth a fuzzer, not examples.** The canonical key had a hand-written
+stress case picking a matcher of every separator character, and it passed while `>` and space both
+broke round-tripping. A 60k-shape generator found the class in seconds. Any function whose contract
+is `f(f(x)) == f(x)` should get the generator, because examples test the cases you thought of.
+
+**`web-tree-sitter` node access needs a null filter at every hop.** `namedChildren` and `children`
+are typed as possibly-null per element, so every traversal in `refResolver.ts` carries a
+`.filter((c): c is Node => c !== null)`. It is noise, but the alternative is a non-null assertion in
+a tree walk over untrusted file shapes.
+
+**`tree-sitter build --wasm` needs no emsdk or docker on a recent CLI.** The plan assumed one or the
+other; 0.26 downloads its own wasi-sdk to `~/.cache/tree-sitter`. Worth knowing before anyone plumbs
+a docker path that is not needed.
+
+### From Phase 3
+
+**The framework seam decides what a plugin can do well.** `TappedLink` carries the resolved row's
+files because the tap chain was designed to, and the result is a handler that cannot look at the
+wrong row. `AttachmentChipDecorator` carries only `(team, file)`, and the result is a hide verdict
+that has to scan every message the team ever recorded. Same plugin, same session, opposite outcomes,
+decided entirely by what the seam passes. Worth remembering when adding the next extension point:
+pass the coordinate, not just the payload.
+
+**A doc comment saying "one line" is a design decision hiding as a description.** The viewer's
+highlight helper was written per line because the loop was per line, and the comment cheerfully said
+so; nothing flagged that hljs carries state across lines and every block comment would render wrong.
+The comment described the code accurately and the code was wrong.
+
+**Two WebView omissions that the repo already had the answer for.** No `onRelease` and no
+`onRenderProcessGone` override, both of which the sibling Designer WebViews and the thread renderer
+already do, with the thread renderer's carrying the comment "Returning true keeps the app alive". A
+new surface in a codebase this consistent should be diffed against its nearest sibling before it is
+called done.
+
+### From Phase 4
+
+**Auditing my own claims found more than auditing my own code did.** The Phase 4 audit was pointed at
+the verification prose rather than the implementation, and it surfaced a real resolver bug that four
+prior audit passes over the code had missed: "all seven grammars resolved exact" was true of the
+fixtures I chose, and choosing an undotted C# namespace hid that a dotted one silently degraded. The
+claim was the evidence, and the claim was load-bearing enough to be worth attacking directly.
+
+**Inline-snippet unit tests dodge real file shapes.** Every resolver test uses a hand-written snippet,
+so they encode what I imagined the language looks like. The committed fixture tree exists because a
+file written the way a person writes it is a different test.
+
+**A verification with no artifact is a claim, not a test.** The first Phase 4 pass ran 22 cases by
+hand and committed nothing, which is the exact failure the Phase 2 painpoint had already named. I
+wrote that lesson down and then repeated it two phases later, which suggests recording a lesson is
+much cheaper than applying one.

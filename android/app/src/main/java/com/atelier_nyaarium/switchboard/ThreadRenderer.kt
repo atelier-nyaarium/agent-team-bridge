@@ -37,6 +37,10 @@ internal fun renderedSender(m: Message, resolve: (String) -> String, selfName: S
 class ChipDecoration(
 	val title: String,
 	val kind: String,
+	/** Drop the chip entirely rather than restyling it. For an attachment that is machinery the
+	 * reader never chose to send, such as a reference snapshot: showing it as a file would invite a
+	 * tap that opens a copy of source rather than the viewer the link already provides. */
+	val hidden: Boolean = false,
 )
 
 /** The transcript payload the bundled web app receives (thread.js's setMessages/appendMessages).
@@ -76,7 +80,10 @@ internal fun messagesToJson(
 			for (f in m.files) {
 				val fileObj = JSONObject().put("name", f.name).put("mime", f.mime).put("src", f.src)
 				decorate(f)?.let { d ->
-					fileObj.put("decoration", JSONObject().put("title", d.title).put("kind", d.kind))
+					fileObj.put(
+						"decoration",
+						JSONObject().put("title", d.title).put("kind", d.kind).put("hidden", d.hidden),
+					)
 				}
 				files.put(fileObj)
 			}
@@ -124,6 +131,10 @@ class ThreadRenderer(context: Context) {
 	 * driven pointer reports a new highest-read row. The `at` guards against a forget-freed id
 	 * being reused by a later append before this debounced report lands. */
 	var onReadUpTo: ((Long, Long) -> Unit)? = null
+
+	/** A tapped link whose scheme a plugin claims, with the row it was tapped in. The row is not
+	 * decoration: the same URL in two messages points at two different snapshots. */
+	var onClaimedLinkTap: ((rowId: Long, rowAt: Long, url: String) -> Unit)? = null
 
 	/** Set by the owner; receives the href of a tapped link. Scheme dispatch (http/https vs any
 	 * custom protocol) is entirely the owner's job - this layer only reports the activation. */
@@ -213,6 +224,14 @@ class ThreadRenderer(context: Context) {
 					val rowId = id.toLongOrNull() ?: return
 					val rowAt = at.toLongOrNull() ?: return
 					webView.post { onReadUpTo?.invoke(rowId, rowAt) }
+				}
+
+				@JavascriptInterface
+				fun linkTap(id: String, at: String, url: String) {
+					if (url.isEmpty()) return
+					val rowId = id.toLongOrNull() ?: return
+					val rowAt = at.toLongOrNull() ?: return
+					webView.post { onClaimedLinkTap?.invoke(rowId, rowAt, url) }
 				}
 
 				// A tapped "unhandled protocol" link (inert, no href) - raises the same context
@@ -368,6 +387,14 @@ class ThreadRenderer(context: Context) {
 
 	fun setDark(dark: Boolean) {
 		eval("window.thread.setTheme($dark)")
+	}
+
+	/** Which URL schemes a plugin currently claims, so the renderer styles them as live links rather
+	 * than as broken ones. Re-pushed on a plugin toggle; rows already rendered keep their old tier,
+	 * the same accepted staleness as chip decoration. */
+	fun setHandledSchemes(schemes: List<String>) {
+		val list = schemes.joinToString(",") { JSONObject.quote(it) }
+		eval("window.setHandledSchemes && window.setHandledSchemes([$list])")
 	}
 
 	/** Mirror whether the composer holds text, which is what gates Cancel on a failed row: only

@@ -17,6 +17,7 @@
     - `console/` - **Console bridge** - gateway side of the Android channel (see Console Bridge below)
       - `consoleHandler.ts` - `createConsoleDispatcher`: validates device identity, dispatches the console ops (register/list_teams/send/respond/poll plus the terminal-view ops) by reusing the HTTP routes, owns per-conversation mailbox/binding/idempotency state
       - `consolePeer.ts` - `ConsolePeer`, a duck-typed virtual bridge socket whose `send()` appends to the device mailbox instead of a wire
+      - `capabilityStore.ts` - `CapabilityStore`: what plugins the owner's consoles have enabled, per device, durably. Two timestamps per record: `lastSeen` (any authenticated op, drives the 14-day abandonment GC only) and `reportedAt` (only a register that carried a list, the write-recency arbiter for conflicting instruction text). See Console capability union below
       - `relayPump.ts` - `createConsoleRelayPump`: zod-validates each relay frame, runs the handler, sends the reply back to evie as a `console_relay_reply` tool call
     - `federation/` - **Federation** - cross-Gateway routing + trust (see Federation routing + Federation trust below)
       - `gatewayRelay.ts` - `createGatewayRelayHandler` (runs an inbound federated op - send/list_teams/wake/response_push - against the local routes) + `createGatewayRelayPump` (zod-validates each `gateway_relay` frame, dispatches, replies as a `gateway_relay_reply` tool call). The cross-Gateway mirror of the console relay pump. Opens/seals the payload through the `sealer`
@@ -28,6 +29,17 @@
     - `discord/` - Discord utilities (validateMessageParts, used by tests)
   - `mcp/` - **MCP plugin** - Tools registered for Claude Code and other IDE agents
     - `index.ts` - MCP server initialization, mode detection (host vs container), tool registration
+    - `references/` - **Artifact references** - resolving `ref://` links an agent writes into file snapshots (see Artifact references below)
+      - `refLexer.ts` - `lex`: the ref URI token layer. A percent-escape becomes a `char` token carrying its DECODED value, so an encoded separator is structurally incapable of acting as one
+      - `refGrammar.ts` - `tryParseRef`/`canonicalKey`: recursive descent over those tokens, total (a ref, not-a-ref, or an error with a code and offset), plus the printer whose escape set is DERIVED from the token set. Spec in `plans/artifact-references.md`
+      - `markdown.ts` - `linkDestinations`: the console's own vendored markdown parser, so both sides agree by identity on what is a link
+      - `refScanner.ts` - `scanRefs`: markdown link destinations outside code, deduped by canonical key
+      - `refFile.ts` - `loadRefFile`: project-confined read plus the UTF-16/binary decision
+      - `refResolver.ts` - `resolveRef`: the tree-sitter scope walk, fragment matching, and degradation tiers
+      - `artifactBuilder.ts` / `artifactNames.ts` - the manifest, snapshot naming, and the size budgets
+      - `attachRefs.ts` - `appendRefArtifacts`: the one entry point both reply tools call
+      - `grammarSources.ts` - the pinned grammar list and the extension-to-grammar map
+    - `capabilities.ts` - `fetchCapabilities`: the bounded, single-attempt read of the gateway's capability union a session makes before its MCP server exists, plus `hasCapability`/`capabilityInstructions` and `GATED_CAPABILITY_IDS` (the one list both the tool gates and the fail-open set derive from)
     - `bridge/` - **Crosstalk tools** - Cross-team communication via the gateway
       - `helpers.ts` - Bridge state, WebSocket connection to router, routerPost/routerGet, `postPluginAction` (self-scoped POST /plugin-action wrapper - takes no target/team param, so a plugin-action tool cannot smuggle a different destination through it), and the handshake role cache (`confirmHandshakeRole`) that lets a reconnect confirm its remembered lead/worker answer silently instead of re-answering the bridge handshake every time
       - `bridgeDiscover.ts` - `crosstalk_discover` tool: list addressable teams on the bridge, grouped into one header per team (`groupDiscoverEntries`) - a session-less team still gets a bare header, only the console and reserved `"host"` name are hidden; each active session nests under its header as a `project.session` composite or a loose/cross-gateway peer; asleep sessions show a `last seen Xm ago` recency from `TeamInfo.lastActive`
@@ -60,6 +72,7 @@
   - `shared/` - Shared utilities used by both gateway and MCP
     - `types.ts` - Shared TypeScript types; wire shapes derive from schemas.ts via `z.infer` (`ChannelFile`, `TeamInfo`, the enums), local payload/config types stay hand-written
     - `schemas.ts` - THE single zod truth for every wire shape: reply schemas, `ChannelFileSchema`, `TeamInfoSchema` (with each session's owning `gatewayId`), the full console protocol (`ConsoleOpSchema`, `ConsoleRelayFrameSchema`, `ConsoleRelayReplySchema`, op results, `MailboxEntrySchema`), and `ProvisioningSchema`. Every shared schema carries `.meta({ id })` - the id is the generated Kotlin class name (see codegen below)
+    - `durable-store.ts` - `DurableStore` (atomic JSON snapshot to disk) plus the two restore boundaries every durable consumer goes through: `openDurable(dir, name, build)` for state restored at construction, and `restoreDurable(name, restore)` for state restored in place. Both contain a poisoned file to that file alone. `load()` already covers a file that will not parse; these cover one that parses and then throws inside its CONSUMER, which is not hypothetical (a `mailboxes.json` missing `entries`, a `replay-guard.json` holding bare numbers). Restoring several files under one try loses every restore after the throwing one, and the persist tick then writes those empty consumers back over good files - which is how a corrupt mailbox snapshot could take the owner's whole session list with it. `quarantine()` is what makes the retry safe: the file stops being read for the rest of the process but is still written through, so the next save heals it
     - `tmp-files.ts` - `cleanupTmpDir({dir, maxAgeMs, mode: "files" | "dirs"})` - generic lazy mtime sweep used by the connector and the Discord-bridge file materializer
     - `env.ts` - Container detection (isInsideContainer)
     - `pending-job-store.ts` - PendingJobStore for tracking in-flight requests with timeout/polling
@@ -204,6 +217,41 @@ Gateway side of a native Android chat client that reaches the bridge through evi
 - **Multi-gateway console-bound delivery:** a Domain can run more than one Gateway, but the console only polls its one route Gateway - so content composed on a *different* same-Domain Gateway (a peer-mirror row, a `notify_human` notice, or a plugin action on a Gateway with no console ever registered against it) has to be relayed there. `routes.ts`'s `fanOutConsolePush` is the origin-side fan-out: after `mirrorPeer`/`humanNotify`/`pluginAction` land their entry on the local mailbox, it enumerates every other same-Domain Gateway via evie's `list_gateways` (the same call `discover()` makes), self-excludes and filters through the locally-mirrored Allowlist, and relays a `console_push` `FederatedOp` to each over the existing sealed `gateway_relay` transport. The landing side (`routes.consolePush`, reached through `gatewayRelay.ts`'s `handleOp`) only ever appends locally and never re-fans-out - origin-only, so an entry cannot gossip-loop around the mesh. `console_push` is gated same-Domain-only at the destination with no exceptions (a cross-Domain sender is hard-denied before any mailbox write), stricter than every other `FederatedOp` kind. Delivery is idempotent per `dedupeKey` (feeding `DeviceMailbox.append`'s `seenKeys` map directly - `ReplayGuard` can't serve this role, since it mints a fresh nonce per relay attempt including retries). `mirrorPeer`/`humanNotify`/`pluginAction`/`routes.consolePush` all land their entry through one shared `landMailboxEntry` helper, so the dedupeKey-embedding convention has one writer instead of four.
 - **Trust:** frames are zod-validated at the boundary (`ConsoleRelayFrameSchema`) AND E2E sealed: the gateway opens each frame through the `consoleSealer` (verifies the console's signature against an owner-signed `kind:console` admission, decrypts with its box key, replay- and freshness-checks) before dispatch, so it trusts a frame because it is signed by an admitted console, not because it arrived on the evie WS. Each conversationId is bound to its first signing key (a console cannot operate another install's mailbox by borrowing its conversationId). The bearer token is the coexistence-window relay gate at evie, retired by W5. Adds no new HTTP surface.
 
+### Session identity binding (which session may speak as which name)
+
+A `SessionRecord` may carry a `bindToken`: a secret minted when the gateway dispatches a launch and
+delivered ONLY through the daemon's launch command (`buildLaunchCommand` exports
+`SWITCHBOARD_SESSION_TOKEN` beside `PROJECT_NAME`, over the already-`HOST_WS_TOKEN`-gated channel).
+The MCP presents it at register and as `x-session-token` on every HTTP call. This closes
+CROSS-PROJECT impersonation: a compromised devcontainer cannot register as another project's
+session, forge `from` on `/send`, `/human/notify` or `/plugin-action`, answer another session's
+handshake or vibe check, or forge a reply into a conversation it does not own. Same-project panes
+share one container and one uid, so they remain mutually impersonable by OS construction - that is
+a permanent, accepted residual, not a gap.
+
+`gateway/sessionAuthority.ts` is the SOLE owner of "what must a caller prove to act as X". Nothing
+else reads the credential fields; a residue test (`__tests__/session-authority.test.ts`) fails the
+build if any module outside it and `session-store.ts` mentions them. It answers two genuinely
+different questions plus one named composition, and collapsing them re-introduces bugs that were
+already paid for:
+
+- `toClaim(teamKey)` - NAME-keyed, and the only place inert-awareness lives. A token minted for a
+  launch that merely reattached was never delivered (a reattach discards the launch command), so a
+  binding stays INERT until a register actually presents it (`bindActiveAt`). Without this, every
+  reattach and gateway restart would strand its own session.
+- `toAnswerFor(ws)` - SOCKET-keyed, deliberately NOT record-derived: a `claude --resume` alias
+  incarnation legitimately serves a bound record under its own unbound name and holds no token.
+- `toActFor(teamKey)` - the composition, live-first with a record fallback, because asleep is a
+  session's normal state and the easiest moment to forge into.
+
+`satisfies` is the only comparator (timing-safe; a missing presentation is a refusal, never a
+fallback) and `sameAs` the only identity check. `SessionBinding` is opaque and UNBOUND is a VALUE a
+resolver returns, never an absence a caller falls into - that property is what makes a gate unable
+to manufacture an accidental permit, which was the shape of every bug this replaced.
+
+Deferred and tracked in `plans/pain-points.md`: the LAN-stranger origin gate, read-side ownership
+on `/poll` and `/pending`, the ungated fan-out, and `bindResume`'s transcript-id path.
+
 ### Console terminal view (peek + tmux_send)
 
 A power-user view in the Console that drives an agent's RAW tmux pane (distinct from the chat): the `peek` op captures the visible ANSI screen, `tmux_send` injects literal text or a whitelisted control key (Enter/Escape/C-c/arrows/Tab), `create_session` starts a new named tmux session running a fresh agent, or reattaches if that session already exists (the daemon builds the launch command, the console supplies only the target + name), and `reload_plugins` drives a session through the plugin update + MCP reconnect sequence. All are sealed `ConsoleOp` variants on the same trust path as the chat ops, and reach the host machine through a gateway<->host-daemon RPC layered on the existing host WebSocket:
@@ -215,6 +263,115 @@ A power-user view in the Console that drives an agent's RAW tmux pane (distinct 
 - **Host RPC:** the gateway sends a `host_op` frame (a `reqId` + a `HostOp`) and correlates the reply by `reqId` through `HostOpCoordinator` (`gateway/hostOpCoordinator.ts`, mirroring `evieClient`'s pending-calls; `failAll` on a host disconnect), via `relayToHost` in `gateway/index.ts`. The host daemon (`hostDaemon.ts`) runs it through `createHostOpRunner` (`mcp/devcontainer/hostOpRunner.ts`: peek single-flight + a cadence floor + a concurrency cap; the mutating ops - send / create_session / reload_plugins - dedup by `(conversationId, opId)` so a relay timeout or gateway restart replays the ack instead of re-running). The tmux primitives live in `mcp/devcontainer/tmuxCore.ts` (spawn argv - no shell; `--`-guarded literal text submitted atomically with a trailing CR; a slug-validated target name; an ANSI visible-pane capture with a byte cap + content hash; `hasSession`/`ensureSession` reattach-or-create so a create no longer errors on a duplicate). The wake path reports a FAILED wake when a freshly launched pane never captures (a dead launch - bad bashrc, claude off PATH), so `/send` fails fast instead of stalling. The wire vocabulary is the type-only `shared/host-op.ts` (deliberately no zod/codegen - it rides the trusted, token-authenticated host link, not the untrusted evie relay).
 - **Targets:** the `host` machine (the `"host"` target, run via bare `tmux`) and a locally-backed `kind: "devcontainer"` (`docker exec` into `<name>_devcontainer-dev-1`). A `TmuxTarget` carries a `sessionName` and the pane is always `.0`. The session rides in the address: `peek`/`tmux_send`/`reload_plugins` derive it from a composite `project.session` target (a bare name keeps the conventional `claude` session for back-compat), while `create_session` passes an explicit new session name. `resolveTmuxTarget` (`consoleHandler.ts`) does catalog-first disambiguation (a whole-name project match wins, else the last separator splits the session off) and validates the resolved name via the shared `assertTmuxName`/`isTmuxName` (`shared/host-op.ts`, slug + 64-char cap, enforced at both the gateway boundary and the host sinks). Loose and cross-Gateway targets are gated off, as is the daemon's own reserved `host-daemon` session (`isReservedHostSession`, also backstopped in `tmuxCore` create/kill).
 - **Auth:** the reserved `host` WS slot is authenticated with `HOST_WS_TOKEN` (auto-provisioned into `.env` by `start-gateway.sh`, read by `start-host-daemon.sh`) so a LAN peer cannot squat it to read/forge panes or capture keystrokes.
+
+### Artifact references (`ref://` links to code)
+
+An agent writes a markdown link to `ref://path:Scope:Name#matcher`. The MCP scans its outgoing
+message, resolves each ref against the real file with tree-sitter, and attaches a manifest plus file
+snapshots so a console can render a code viewer at the right place. Lives in `mcp/references/`; the
+full design, the questionaire, and the audit rounds are in `plans/artifact-references.md`.
+
+- **Grammar toolchain:** seven wasm grammars (TS, TSX, JS, C++, C#, Python, GDScript) COMMITTED under
+  `grammars/`, built by `scripts/build-grammars.ts` from pinned npm sources with a `tree-sitter-cli`
+  matched to the `web-tree-sitter` release line. Never harvest a package's own prebuilt wasm: the
+  0.26 runtime will not load one built by an older CLI, and each package's prebuilt was cut whenever
+  its author last released. `grammars/manifest.json` records the toolchain, since a wasm cannot be
+  asked. `grammars.test.ts` loads every one and parses a snippet, so a dependency bump that breaks
+  the ABI fails in the PR. Rerun the script and commit after changing any pin.
+- **The canonical key is the contract.** `canonicalKey` splits on the structural `:`/`#` separators
+  BEFORE percent-decoding, so a literal `%3A` in a filename can never be read as a scope separator.
+  The key must be IDEMPOTENT: the MCP writes it as a manifest key and the console recomputes it from
+  a tapped link, so anything `parseRef` strips (a surrounding angle-bracket PAIR, surrounding
+  whitespace) must be escaped by the encoders, or two distinct refs merge onto one key after a single
+  re-canonicalization pass. `tests/fixtures/refs/vectors.json` is the shared corpus, registered in
+  the cross-runtime manifest so the Kotlin twin is forced to read it too.
+- **Detection borrows the console's own parser.** `markdown.ts` loads the SAME vendored
+  `markdown-it.min.js` the console renders with and enumerates its `link_open` tokens; `scanRefs`
+  parses each destination. The point is agreement, not correctness: the console decides what is a link
+  and what is code when it renders, this side decides what gets a snapshot, and a second
+  implementation disagrees at the edges in both silent directions (a dropped snapshot, or one attached
+  for text rendered as inert). Running the same bytes makes that agreement identity. Renderer options
+  are mirrored exactly, `linkify: false` being load-bearing. Nothing here re-derives CommonMark, which
+  is what a hand-rolled masking pass had to do and kept getting wrong.
+- **Confinement is not a nicety.** Refs are scanned out of a full message body, and a message can
+  carry relayed text, so an unconfined resolver would be a way to make an agent attach any file its
+  process can read. Absolute paths and `..` are refused before joining, and the realpath must land
+  inside the root, which is what catches a symlink.
+- **Hard failure lives only in the file and builder tiers** (missing, unreadable, binary, escaping,
+  over-cap-with-no-range; and a single range over the per-file cap, budget exhaustion, or a reserved
+  name collision). RESOLUTION always degrades: a renamed class or a moved line ships anyway with a
+  banner, because refusing to send a message over a stale pointer is worse than opening the reader
+  in roughly the right place.
+- **The phone side** is the `references` plugin (`android/.../plugins/references/`). It claims the
+  `ref:` scheme through the `linkHandlers` extension point, whose `LinkHandler` declares its scheme so
+  the thread renderer can style claimed links as live rather than broken. A claimed link renders blue
+  but stays INERT: a kept href taps through WebView navigation, which cannot see which ROW the anchor
+  sits in, and the same ref in two messages points at two different snapshots. So the tap rides the
+  `linkTap(rowId, rowAt, href)` bridge, the app resolves `(team, rowId, rowAt)` to the live row, and
+  the handler is handed that row's files. A plugin never resolves a row itself.
+- **Tap-time resolution, no authoritative store.** The handler reads the manifest from the tapped
+  row at tap time. That is what gives snapshot semantics, and what makes a message drained before the
+  plugin existed still open. `RefDisplayIndex` is display-only (chip hide today), explicitly not the
+  authority. Manifest selection is the FIRST file bearing the reserved name that parses and carries
+  its marker, and a manifest naming a snapshot absent from its own row is rejected wholesale.
+- **Miss contract:** every path that cannot show code returns false, so the tap falls back to the link
+  menu with a note saying no snapshot is attached. Never a crash, a silent no-op, or a wrong-row open.
+- **Teaching lives in the plugin's own manifest.** `agent_instructions` in
+  `assets/plugins/references/manifest.json` is what a session actually reads, since the capability
+  union carries it into the MCP instructions. It states the project-relative rule (an absolute path
+  hard-fails the send), the angle-bracket form for a matcher containing a space or a close paren, and
+  the distinction that matters most: the file tier fails loudly while RESOLUTION never fails, so no
+  error does not mean the ref landed where the author meant. `skills/crosstalk/SKILL.md` carries the
+  short version.
+- **Grammar coverage is pinned end to end** by `ref-grammars-e2e.test.ts` over the committed fixture
+  tree at `tests/fixtures/ref-project/`. It asserts the SOURCE LINES a range selects, not just a line
+  number, because a wrong range usually looks plausible. The resolver's own unit tests use inline
+  snippets, which is how a dotted C# namespace stayed broken while everything was green.
+- **Gating:** `setReferencesEnabled` is driven by the capability union at startup. `references` is
+  deliberately NOT in the fail-open set, so this stays off until a console plugin renders it.
+
+### Console capability union (which tools a session gets)
+
+A session's tools are gated on what the owner's consoles can actually render. The console reports
+its enabled plugins at register; the gateway unions those reports across devices; a starting MCP
+session reads the union over HTTP and uses it to decide which tools to register and what guidance
+to carry. Full design and the audit rounds behind it are in `plans/artifact-references.md`.
+
+- **Reporting (Android):** `PluginManager.reportable()` returns the LOADED plugins (not merely
+  enabled - one whose entry threw renders nothing, and offering an agent a broken surface is worse
+  than not offering it), each with the `agent_instructions` line from its own `manifest.json`. The
+  text is owned by the plugin, so adding one delivers its agent guidance with no wire or gateway
+  change. `ChatRepository.enabledPlugins` is the supplier seam the app wires (the repository holds
+  no Context, and the plugin framework is Context-bound); `reportEnabledPlugins` re-reports on a
+  toggle and arms `pluginReportPending` until the report lands, which the poll loop retries. That
+  retry is not symmetric politeness: a dropped toggle-ON report leaves the gateway holding an
+  AFFIRMATIVE union, and an affirmative union is exactly what a starting session does not
+  second-guess, so the owner would silently lose a tool they just switched on.
+- **The union (gateway):** `CapabilityStore` (`gateway/console/capabilityStore.ts`), keyed by
+  conversationId, durable, 14-day TTL, 500-device cap. A capability disappears only when every
+  device that had it has either said otherwise or gone quiet for two weeks. An ABSENT
+  `enabledPlugins` means the device said nothing and its prior report stands; an EMPTY array is an
+  affirmative "nothing enabled". Zero live records serves `known: false`, never an affirmative empty
+  union. `lastSeen` advances on any sealed op but is only flushed to disk once it drifts past
+  `LAST_SEEN_FLUSH_FLOOR_MS`, keeping the poll path free of disk writes while still surviving a
+  restart - without that flush a phone that had polled daily for weeks would be swept on the first
+  tick after a restart, since the durable value only moved on a register.
+- **Serving:** `GET /capabilities` (`routes.ts`'s `capabilities`), UNGATED by the same ruling that
+  settled Phase 0 - it serves non-secret plugin ids beside an already-open `/teams` and `/pending`,
+  and the hand-launched host window it exists to serve carries no credential to present.
+- **Consuming (MCP):** `mcp/capabilities.ts`'s `fetchCapabilities`, awaited in `startMcp` after
+  `BRIDGE_ROUTER_URL` defaulting and before the McpServer is constructed, so the answer can gate
+  tool registration and feed the server instructions. Deliberately not `routerGet`: that retries
+  past any deadline, cannot see a status code, and reads a URL only set once the bridge initializes.
+  One bounded attempt, then `fallback()`. **Fail-open is the whole safety argument:** an agent
+  holding a tool the owner cannot render loses nothing, while an agent missing a tool the owner does
+  have is a silent outage with no error anywhere. So only an AFFIRMATIVE union lacking a capability
+  removes a tool, and `fallback()` lets the disk cache only ADD to the core set, never shrink below
+  it. `GATED_CAPABILITY_IDS` is the single list both the gates and that core set derive from, and a
+  fixture test holds it against the shipped `manifest.json` files so the planned rename of a plugin
+  id to `<author>.<content_id>` fails a test instead of silently un-registering its tools.
+- **Timing:** a running session never changes its tools. A plugin toggle is picked up at the next
+  session start, which is the owner's explicit decision.
 
 ### Android plugin framework
 
@@ -303,14 +460,33 @@ earned rather than re-climbing from scratch. Full design, the questionaire, and 
 (plan alignment, an adversarial red team, and a framework-first pass) are in
 `plans/idle-pushback-manager.md`.
 
+### Composer drafts (Android)
+
+The pending outgoing message for a thread is ONE stored value: `Draft(text, files)` in
+`ChatState.drafts`, keyed by team. Files are already-copied `MessageFile` refs, not live picker
+grants, so a draft outlives both the grant and the process - attachments now survive a restart the
+way text always did, and `sweepOrphanAttachments` counts an open draft's files as referenced.
+Commands (`setDraftText`, `addDraftFiles`, `removeDraftFile`, `appendDraftText`, `clearDraft`) live
+on `ChatRepository`; the composer renders from the store rather than holding its own state, which is
+what keeps picked files from following a tab switch into the wrong session.
+
+`takeBackIntoDraft` is the single write path for handing a not-yet-sent message back to the
+composer, used by both the failed-row Cancel and the scheduled-send dock's cancel-for-edit. Files
+always UNION and text lands only on a blank draft: a file list has a meaningful merge so no caller
+can drop a pick, while text has none so anything already typed wins. Destroying composer contents is
+therefore not expressible at a call site, and `Draft.isOccupied` is the one definition of "the
+composer holds something" behind the Send button, the failed row's Cancel (mirrored into the
+WebView via `ThreadRenderer.setComposerOccupied`), and the dock's X.
+
 ### Scheduled Send (Android, client-local)
 
 Long-press the console's send button (`Schedule Send` / `Send`) to bank a message for a future
 wall-clock time instead of sending it live - purely client-local, no gateway involvement or wire
 shape. `ChatRepository.scheduleSend()`/`rescheduleSend()`/`cancelScheduledSend()` bank at most one
-`ScheduledSend` per team in `ChatState.scheduledSends` (mirrors the `drafts` storage pattern: plain
+`ScheduledSend` per team in `ChatState.scheduledSends` (mirrors the `Draft` storage pattern: plain
 SharedPreferences JSON, no special re-provisioning survival), eagerly copying any picked attachment
-into its own bucket at schedule time. A single shared `AlarmManager` alarm always targets the
+into its own bucket at schedule time. Cancelling for edit hands the record back through
+`takeBackIntoDraft` (see Composer drafts below) rather than restoring it itself. A single shared `AlarmManager` alarm always targets the
 earliest pending record (`ScheduledSendAlarmReceiver`, armed through `SwitchboardService`'s
 `ScheduledSendAlarmScheduler` implementation); firing funnels through the mutex-guarded
 `ChatRepository.fireDueScheduledSends()`/`fireOne()` from both the cold-boot chain and the

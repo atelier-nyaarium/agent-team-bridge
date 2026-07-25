@@ -1159,6 +1159,34 @@ class ChatRepository(
 		return ConsoleClient(Provisioning.parse(blob), store).also { client = it }
 	}
 
+	/**
+	 * What this device can render, asked at every register. Supplied by the app because the plugin
+	 * framework is Context-bound and this class deliberately holds none. Null (unset, or a register
+	 * that beats the framework's boot) states nothing rather than asserting emptiness, so a race can
+	 * never read as "the owner turned everything off".
+	 */
+	@Volatile var enabledPlugins: (() -> List<com.atelier_nyaarium.switchboard.proto.EnabledPlugin>)? = null
+
+	// Armed whenever a toggle's report has not reached the gateway. A dropped report is not
+	// self-correcting the way most staleness here is: the gateway keeps serving an AFFIRMATIVE
+	// union, and an affirmative union is precisely what a starting session does not second-guess,
+	// so the owner would silently lose a tool they had just switched on. Retried from the poll loop.
+	@Volatile private var pluginReportPending = false
+
+	/**
+	 * Re-report after the owner toggles a plugin, so the change reaches the gateway now instead of
+	 * waiting for the next reconnect. A session already running keeps the tools it started with,
+	 * since an agent's tool list is fixed at startup.
+	 */
+	suspend fun reportEnabledPlugins() = withContext(Dispatchers.IO) {
+		pluginReportPending = true
+		if (!_state.value.connected) return@withContext
+		runCatchingCancellable { client().register(enabledPlugins?.invoke()) }
+			.onSuccess { pluginReportPending = false }
+			.onFailure { DebugLog.log("Plugins", "re-register after toggle failed, retrying: ${it.message?.take(120)}") }
+		Unit
+	}
+
 	/** STTS client from the settings-backed creds (NOT the blob), or null when not
 	 * configured. The cache is invalidated by setSttsCreds() on an in-app edit, the
 	 * one mutation point - so an edited key takes effect without an app restart. */
@@ -1399,7 +1427,8 @@ class ChatRepository(
 			// MailboxSync owns the durable cursor, so register's cursor/epoch are not adopted. We
 			// still register to learn gatewayId, claim the mailbox, and get the epoch the box is on;
 			// the poll loop's advance() reconciles any epoch change.
-			val reg = client().register()
+			val reg = client().register(enabledPlugins?.invoke())
+			pluginReportPending = false
 			DebugLog.log("Connect", "register ok gateway=${reg.gatewayId}")
 			val id = reg.gatewayId
 			if (id.isNotEmpty() && id != localGatewayId) {
@@ -3449,6 +3478,7 @@ class ChatRepository(
 						lastDiscoveryAt = now
 						refreshDiscovery()
 					}
+					if (pluginReportPending) reportEnabledPlugins()
 					// Visible: long-poll (the hold IS the wait; re-poll immediately).
 					// Backgrounded: plain poll (hold=0); the wait after is the idle pushback
 					// ladder's decision, not a flat interval - the mailbox batches either way.

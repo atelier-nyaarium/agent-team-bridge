@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
+import com.atelier_nyaarium.switchboard.proto.EnabledPlugin
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
 import com.atelier_nyaarium.switchboard.proto.RosterRequest
 import com.atelier_nyaarium.switchboard.proto.RosterResult
@@ -603,12 +604,15 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	}
 
 	/** Claim this device's mailbox, returning the starting cursor + epoch. Carries this build's identity
-	 * so the gateway logs which version and variant the console runs. */
-	suspend fun register(): ConsoleRegisterResult = resultOf(
+	 * so the gateway logs which version and variant the console runs, plus what this device can render.
+	 * A null [enabledPlugins] states nothing about plugins and leaves any prior report standing, which
+	 * is what a register issued before the plugin framework has booted should say. */
+	suspend fun register(enabledPlugins: List<EnabledPlugin>? = null): ConsoleRegisterResult = resultOf(
 		relay(
 			ConsoleOp.Register(
 				clientVersion = "${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}",
 				clientVariant = if (BuildConfig.DEBUG) "debug" else "release",
+				enabledPlugins = enabledPlugins,
 			),
 		),
 		"register",
