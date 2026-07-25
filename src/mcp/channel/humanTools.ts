@@ -5,6 +5,7 @@ import { GuidedNoticeTiers } from "../../shared/schemas.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { bridgeProjectName, routerPost } from "../bridge/helpers.js";
 import { literalEscapeHazard, literalEscapeReject, readReplyAttachment, toolError } from "../bridge/replyTool.js";
+import { type Capability, capabilityInstructions } from "../capabilities.js";
 import { appendRefArtifacts } from "../references/attachRefs.js";
 
 ////////////////////////////////
@@ -34,7 +35,13 @@ const NOTIFY_DESCRIPTION = `
 Push a notification to the human's console(s). Broadcasts to every registered console device: \`title\` becomes the notification-bar line, \`summary\` rides as its own short tier (console features read it directly), \`full\` the message body threaded under your team's name, and \`fullSpoken\` what the console speaks in full's place. All four are required. Use for milestone reports (cycle ends, long-job completion, critical blockers) - not for conversational replies (use channel_reply for those).
 `.trim();
 
-export function registerHumanTools(mcpServer: McpServer): void {
+/**
+ * `capabilities` carries a plugin's own guidance into the description, matching `registerChannelReply`.
+ * These are the ONLY two tools whose body is scanned for refs, so they are the only two whose
+ * descriptions need to say how to write one. A tool that scans but does not teach is how an agent ends
+ * up writing a ref that silently lands somewhere it did not mean.
+ */
+export function registerHumanTools(mcpServer: McpServer, capabilities: Capability[] = []): void {
 	// biome-ignore lint/suspicious/noExplicitAny: MCP SDK type compat
 	const notifySchema: any = NotifyHumanSchema;
 
@@ -42,7 +49,7 @@ export function registerHumanTools(mcpServer: McpServer): void {
 		"notify_human",
 		{
 			title: "Notify Human",
-			description: NOTIFY_DESCRIPTION,
+			description: `${NOTIFY_DESCRIPTION}${capabilityInstructions(capabilities)}`,
 			inputSchema: notifySchema,
 		},
 		async (args: NotifyHumanArgs) => {
