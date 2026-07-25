@@ -17,7 +17,7 @@ beforeEach(() => {
 	fs.mkdirSync(path.join(root, "src"), { recursive: true });
 	fs.mkdirSync(outside, { recursive: true });
 	fs.writeFileSync(path.join(root, "src", "app.ts"), "export const x = 1;\n");
-	fs.writeFileSync(path.join(outside, "secrets.env"), "TOKEN=hunter2\n");
+	fs.writeFileSync(path.join(outside, "notes.txt"), "outside the project\n");
 });
 
 afterEach(() => {
@@ -50,37 +50,80 @@ describe("reading a referenced file", () => {
 	});
 });
 
-describe("staying inside the project", () => {
-	it("refuses a path that walks out with ..", () => {
-		expect(load("../elsewhere/secrets.env")).toMatchObject({ ok: false, failure: "escapes-project" });
+describe("resolving a path the way a shell would", () => {
+	it("reads an absolute path", () => {
+		expect(load(path.join(outside, "notes.txt")).ok).toBe(true);
 	});
 
-	it("refuses a .. buried mid-path, not just a leading one", () => {
-		expect(load("src/../../elsewhere/secrets.env")).toMatchObject({ ok: false, failure: "escapes-project" });
+	it("reads a path that walks out with ..", () => {
+		expect(load("../elsewhere/notes.txt").ok).toBe(true);
 	});
 
-	it("refuses an absolute path", () => {
-		expect(load(path.join(outside, "secrets.env"))).toMatchObject({ ok: false, failure: "escapes-project" });
+	it("reads a .. buried mid-path, not just a leading one", () => {
+		expect(load("src/../../elsewhere/notes.txt").ok).toBe(true);
 	});
 
-	it("refuses a symlink that lands outside, which the written path cannot reveal", () => {
-		fs.symlinkSync(path.join(outside, "secrets.env"), path.join(root, "src", "innocent.ts"));
-
-		expect(load("src/innocent.ts")).toMatchObject({ ok: false, failure: "escapes-project" });
+	it("reads ~/ from the owner's home", () => {
+		const name = `ref-home-${process.pid}.txt`;
+		fs.writeFileSync(path.join(os.homedir(), name), "home file\n");
+		try {
+			expect(load(`~/${name}`).ok && load(`~/${name}`).ok).toBe(true);
+		} finally {
+			fs.rmSync(path.join(os.homedir(), name), { force: true });
+		}
 	});
 
-	it("allows a symlink that stays inside", () => {
-		fs.symlinkSync(path.join(root, "src", "app.ts"), path.join(root, "src", "alias.ts"));
-
-		expect(load("src/alias.ts").ok).toBe(true);
+	it("treats ~user as a literal directory name rather than half-expanding it", () => {
+		// It resolves under the project like any other name, so it simply does not exist here. Guessing
+		// at another account's home would be a different file than either reading says.
+		expect(load("~someone/notes.txt")).toMatchObject({ ok: false, failure: "missing" });
 	});
 
-	it("refuses a sibling directory whose name merely starts with the project's", () => {
-		const sibling = `${root}-backup`;
-		fs.mkdirSync(sibling, { recursive: true });
-		fs.writeFileSync(path.join(sibling, "notes.txt"), "hi\n");
+	it("follows a symlink that lands outside the project", () => {
+		fs.symlinkSync(path.join(outside, "notes.txt"), path.join(root, "src", "alias.txt"));
 
-		expect(load("../project-backup/notes.txt")).toMatchObject({ ok: false, failure: "escapes-project" });
+		expect(load("src/alias.txt").ok).toBe(true);
+	});
+});
+
+describe("refusing what is a secret rather than code", () => {
+	it("refuses a dotenv file, in the project like anywhere else", () => {
+		fs.writeFileSync(path.join(root, ".env"), "TOKEN=hunter2\n");
+
+		expect(load(".env")).toMatchObject({ ok: false, failure: "sensitive" });
+	});
+
+	it("refuses a suffixed dotenv (.env.production) too", () => {
+		fs.writeFileSync(path.join(root, ".env.production"), "TOKEN=hunter2\n");
+
+		expect(load(".env.production")).toMatchObject({ ok: false, failure: "sensitive" });
+	});
+
+	it("refuses anything under an .ssh directory", () => {
+		fs.mkdirSync(path.join(outside, ".ssh"), { recursive: true });
+		fs.writeFileSync(path.join(outside, ".ssh", "id_ed25519"), "PRIVATE KEY\n");
+
+		expect(load(path.join(outside, ".ssh", "id_ed25519"))).toMatchObject({ ok: false, failure: "sensitive" });
+	});
+
+	it("refuses a key file by extension", () => {
+		fs.writeFileSync(path.join(root, "src", "server.pem"), "CERT\n");
+
+		expect(load("src/server.pem")).toMatchObject({ ok: false, failure: "sensitive" });
+	});
+
+	it("judges the symlink's TARGET, so an innocent name cannot smuggle a key out", () => {
+		fs.mkdirSync(path.join(outside, ".ssh"), { recursive: true });
+		fs.writeFileSync(path.join(outside, ".ssh", "id_rsa"), "PRIVATE KEY\n");
+		fs.symlinkSync(path.join(outside, ".ssh", "id_rsa"), path.join(root, "src", "notes.ts"));
+
+		expect(load("src/notes.ts")).toMatchObject({ ok: false, failure: "sensitive" });
+	});
+
+	it("does not refuse an ordinary file whose name merely contains env", () => {
+		fs.writeFileSync(path.join(root, "src", "environment.ts"), "export const env = 1;\n");
+
+		expect(load("src/environment.ts").ok).toBe(true);
 	});
 });
 

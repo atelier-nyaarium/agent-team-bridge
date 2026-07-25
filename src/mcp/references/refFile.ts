@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 ////////////////////////////////
@@ -6,7 +7,7 @@ import path from "node:path";
 
 /** Why a file cannot be referenced at all. Every one of these is a hard tool error: the resolution
  * tier degrades, the file tier does not. */
-export type FileFailure = "missing" | "unreadable" | "binary" | "escapes-project";
+export type FileFailure = "missing" | "unreadable" | "binary" | "sensitive";
 
 export interface LoadedFile {
 	/** Path as written in the ref, kept for messages and manifest keys. */
@@ -24,15 +25,31 @@ export type LoadResult = { ok: true; file: LoadedFile } | { ok: false; failure: 
 //  Functions & Helpers
 
 /**
- * Whether a ref path may be joined to the project root at all, judged BEFORE touching the disk.
+ * Where a ref path points, read the way a shell reads a path: `/x` from the filesystem root, `~/x`
+ * from the owner's home, anything else from the project root. `..` is ordinary and normalizes.
  *
- * Absolute paths and `..` are rejected outright rather than normalized, because normalizing accepts
- * a path whose written form already said it wanted out. The realpath check below is the second
- * layer, for the escape a path alone cannot show (a symlink).
+ * `~user/x` is deliberately NOT expanded. Half-supporting a shell-ism that resolves to a different
+ * account's home is worse than treating it as the literal directory name it also legally is.
  */
-function isJoinable(refPath: string): boolean {
-	if (refPath === "" || path.isAbsolute(refPath) || /^[a-zA-Z]:/.test(refPath)) return false;
-	return !refPath.split(/[/\\]/).includes("..");
+function resolveRefPath(projectRoot: string, refPath: string): string {
+	if (refPath === "~" || refPath.startsWith("~/")) return path.join(os.homedir(), refPath.slice(1));
+	return path.resolve(projectRoot, refPath);
+}
+
+/** Paths whose contents are secrets rather than code. A guardrail, not a security boundary: an agent
+ * that means to disclose one of these can simply read it and paste it, and the snapshot only ever
+ * goes to the owner's own console anyway. What this stops is the careless case - a ref written into
+ * a message body by relayed text, or by an author reaching for a config file without thinking - from
+ * silently parking a private key in a chat thread. Refusal is loud, so the author can decide. */
+const SENSITIVE_SEGMENTS = new Set([".ssh", ".gnupg", ".aws", ".docker", ".kube"]);
+const SENSITIVE_FILE_RE = /^\.env(\..+)?$|\.(pem|p12|pfx|jks|keystore)$|^shadow$/;
+
+function sensitiveReason(absolute: string): string | null {
+	const segments = absolute.split(path.sep);
+	const dir = segments.find((s) => SENSITIVE_SEGMENTS.has(s));
+	if (dir) return `lives under ${dir}/`;
+	const name = segments[segments.length - 1] ?? "";
+	return SENSITIVE_FILE_RE.test(name) ? `is named ${name}` : null;
 }
 
 /**
@@ -58,33 +75,31 @@ function decodeText(buffer: Buffer): string | null {
 }
 
 /**
- * Read a referenced file, confined to the project root.
+ * Read a referenced file, resolving its path the way a shell would.
  *
- * Confinement is not a nicety here. Refs are scanned out of a full message body, and a message can
- * carry text relayed from somewhere else, so an unconfined resolver would be a way to make an agent
- * attach any file its process can read. An escape is therefore a hard error, never a silent skip:
- * a skip would leave the agent believing the snapshot went out.
+ * The project root is the base for a bare path, not a fence: a ref may name anything the session can
+ * read, because a snapshot only ever rides a reply to the OWNER's own console, and an author who
+ * means to disclose a file can read it and paste it regardless. The one refusal that remains is the
+ * secrets guardrail above, and it is loud rather than silent - a skipped ref would leave the author
+ * believing the snapshot went out.
  */
 export function loadRefFile(projectRoot: string, refPath: string): LoadResult {
-	if (!isJoinable(refPath)) {
-		return { ok: false, failure: "escapes-project", detail: `${refPath} is not a project-relative path` };
-	}
+	if (refPath === "") return { ok: false, failure: "missing", detail: "a ref needs a path" };
 
 	const root = fs.realpathSync(projectRoot);
-	const joined = path.resolve(root, refPath);
 
 	let absolute: string;
 	try {
-		absolute = fs.realpathSync(joined);
+		absolute = fs.realpathSync(resolveRefPath(root, refPath));
 	} catch {
 		return { ok: false, failure: "missing", detail: `${refPath} does not exist` };
 	}
 
-	// After realpath, so a symlink pointing out of the project is caught by where it LANDS rather
-	// than by how it was spelled. The separator guard stops a sibling directory sharing the root's
-	// name prefix from passing.
-	if (absolute !== root && !absolute.startsWith(root + path.sep)) {
-		return { ok: false, failure: "escapes-project", detail: `${refPath} resolves outside the project` };
+	// Judged after realpath, so a symlink is caught by where it LANDS rather than by how it was
+	// spelled - `notes.md` pointing at `~/.ssh/id_ed25519` is the same disclosure either way.
+	const reason = sensitiveReason(absolute);
+	if (reason) {
+		return { ok: false, failure: "sensitive", detail: `${refPath} ${reason}, so it is not snapshotted` };
 	}
 
 	let buffer: Buffer;

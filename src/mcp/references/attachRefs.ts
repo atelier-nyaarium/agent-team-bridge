@@ -29,11 +29,14 @@ export function setReferencesEnabled(on: boolean): void {
 }
 
 /**
- * The directory refs resolve against, and the boundary they may not escape.
+ * The directory a bare (project-relative) ref path resolves against. Not a boundary: an absolute or
+ * `~/` path is read as written (see refFile.ts).
  *
- * A container serves one project under /workspace; elsewhere the session's own working directory is
- * the project. `REFERENCE_ROOT` overrides both, which is also what lets the tests point it at a
- * fixture tree.
+ * A container serves one project under /workspace; elsewhere the session's own working directory
+ * stands in for the project. That last one is a GUESS, and a wrong one whenever a session was
+ * launched outside the repo it works in - the process cwd is the launch directory, and nothing tells
+ * this process where the author actually is. `REFERENCE_ROOT` overrides both, which is both the fix
+ * for that case and what lets the tests point at a fixture tree.
  */
 export function referenceRoot(): string {
 	if (process.env.REFERENCE_ROOT) return process.env.REFERENCE_ROOT;

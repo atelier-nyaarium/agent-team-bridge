@@ -237,12 +237,20 @@ describe("the file tier, which is what actually stops a send", () => {
 		expect(await hardError("ref://src/logo.png")).toContain("is not text");
 	});
 
-	it("refuses a path reaching outside the project", async () => {
-		expect(await hardError("ref://../../etc/passwd")).toContain("project-relative");
+	it("reads an absolute path, resolved the way a shell would", async () => {
+		const result = await appendRefArtifacts(`See [it](ref://${path.join(ROOT, "src", "cart.ts")}) here.`, []);
+
+		expect(result.ok).toBe(true);
 	});
 
-	it("refuses an absolute path, which is the likeliest first attempt", async () => {
-		expect(await hardError(`ref://${path.join(ROOT, "src", "cart.ts")}`)).toContain("project-relative");
+	it("refuses a secret even when the path to it is perfectly valid", async () => {
+		const secret = path.join(ROOT, ".env");
+		fs.writeFileSync(secret, "TOKEN=hunter2\n");
+		try {
+			expect(await hardError(`ref://${secret}`)).toContain("not snapshotted");
+		} finally {
+			fs.rmSync(secret, { force: true });
+		}
 	});
 
 	it("names the position of a malformed ref, indexed into the ref as written", async () => {

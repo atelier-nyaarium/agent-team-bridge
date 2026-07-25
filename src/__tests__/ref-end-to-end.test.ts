@@ -122,11 +122,14 @@ describe("what stops a send and what does not", () => {
 		expect(!result.ok && result.error).toContain("does not exist");
 	});
 
-	it("stops the send for a ref reaching outside the project", async () => {
-		const result = await appendRefArtifacts("[x](ref://../../etc/passwd)", []);
+	it("stops the send for a ref naming a secret, which a valid path is no excuse for", async () => {
+		fs.mkdirSync(path.join(root, ".ssh"), { recursive: true });
+		fs.writeFileSync(path.join(root, ".ssh", "id_ed25519"), "PRIVATE KEY\n");
+
+		const result = await appendRefArtifacts("[x](ref://.ssh/id_ed25519)", []);
 
 		expect(result).toMatchObject({ ok: false });
-		expect(!result.ok && result.error).toContain("project-relative");
+		expect(!result.ok && result.error).toContain("not snapshotted");
 	});
 
 	it("ignores a ref written inside a fenced example, so documenting the feature is safe", async () => {
