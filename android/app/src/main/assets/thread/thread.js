@@ -558,8 +558,8 @@
 	}
 
 	// Add eligible ids to the region, deduped - called from both appendMessages branches (a
-	// genuinely new row, and a row that transitions to eligible via an id-repeat, e.g. the
-	// waking-placeholder resolve), so an already-queued id is simply a no-op here.
+	// genuinely new row, and a row that transitions to eligible via an id-repeat), so an
+	// already-queued id is simply a no-op here.
 	function extendRegion(ids) {
 		for (const id of ids) if (!region.includes(id)) region.push(id);
 	}
@@ -646,10 +646,10 @@
 					observer.unobserve(block);
 				}
 				existing.replaceWith(row);
-				// A row can transition to eligible via an id-repeat, not just a fresh append - the
-				// waking-placeholder resolve is exactly this (same row id, now real coordinates).
-				// Without registering it here the badge would count it but the pointer could never
-				// walk past it while the thread stays open.
+				// A row can transition to eligible via an id-repeat (a re-render of the same row id
+				// carrying coordinates it did not have before), not just a fresh append. Without
+				// registering it here the badge would count it but the pointer could never walk past
+				// it while the thread stays open.
 				if (firstTimeEligible) {
 					newEligibleIds.push(m.id);
 					if (m.arrivedVisible === false) heldForVisibility = true;

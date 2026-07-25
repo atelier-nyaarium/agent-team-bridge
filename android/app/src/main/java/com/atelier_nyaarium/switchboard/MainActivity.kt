@@ -638,9 +638,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				tabLabel = { tabLabelFor(state, it) },
 				onReorderTabs = repo::reorderTabs,
 				messages = state.threads[openTeam].orEmpty(),
-				// During a wake the "Waking..." placeholder already explains the wait, so suppress the
-				// auto-retry connection banner (the transient "... - retrying" causes). A real error
-				// (terminal causes never end in "retrying") still surfaces.
+				// During a wake the notice card already explains the wait, so suppress the auto-retry
+				// connection banner (the transient "... - retrying" causes). A real error (terminal
+				// causes never end in "retrying") still surfaces.
 				error = state.error?.takeUnless { presence == "waking..." && it.endsWith("retrying") },
 				rendererPool = rendererPool,
 				canRename = kind == "loose",
@@ -668,6 +668,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onAppendDraftText = { insert -> repo.appendDraftText(openTeam!!, insert) },
 				onClearDraft = { repo.clearDraft(openTeam!!) },
 				scheduledSend = state.scheduledSends[openTeam!!],
+				waking = openTeam!! in state.wakingTeams,
 				onScheduleSend = { text, uris, at -> repo.scheduleSend(openTeam!!, text, uris, at) },
 				onReschedule = { at -> repo.rescheduleSend(openTeam!!, at) },
 				onCancelScheduledSend = { repo.cancelScheduledSendForEdit(openTeam!!) },
@@ -2126,6 +2127,36 @@ fun ScheduledSendDock(rec: ScheduledSend, onEdit: () -> Unit, onCancel: () -> Un
 	}
 }
 
+/** The cold-wake notice: a wake takes minutes with no wire traffic, and this says so without posting
+ * anything into the transcript. Read-only by design - a wake cannot be called off, so there is
+ * nothing to tap and no dismiss; it clears itself when the send fails or the team answers
+ * (ChatState.wakingTeams). */
+@Composable
+fun WakingNotice(label: String) {
+	Surface(
+		modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+		color = MaterialTheme.colorScheme.surfaceVariant,
+		shape = MaterialTheme.shapes.medium,
+	) {
+		Row(
+			Modifier.fillMaxWidth().padding(12.dp),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(10.dp),
+		) {
+			CircularProgressIndicator(
+				modifier = Modifier.size(16.dp),
+				strokeWidth = 2.dp,
+				color = MaterialTheme.colorScheme.onSurfaceVariant,
+			)
+			Text(
+				"Waking $label - first boot can take a minute or two.",
+				style = MaterialTheme.typography.bodyMedium,
+				color = MaterialTheme.colorScheme.onSurfaceVariant,
+			)
+		}
+	}
+}
+
 /** Date-then-time picker for banking (or rescheduling) a send. Material3's DatePicker represents
  * its selection as UTC millis at the START of the picked calendar day, independent of the device
  * zone (documented library behavior) - converted to a LocalDate, then combined with the
@@ -2511,6 +2542,9 @@ fun ThreadScreen(
 	// At most one pending scheduled send for this team (plans/scheduled-send.md), null otherwise -
 	// drives the dock and gates the long-press menu's Schedule Send item.
 	scheduledSend: ScheduledSend?,
+	// True while a send is waiting on this team's cold boot, drawing the notice card above the
+	// composer (ChatState.wakingTeams).
+	waking: Boolean,
 	// suspend + Boolean (not fire-and-forget Unit): the repo-side time check is authoritative and can
 	// fail (the picker's own gate goes stale if the user idles past its 1-minute floor) - the caller
 	// must await the real outcome before clearing the composer, since clearing eagerly would destroy
@@ -2813,6 +2847,7 @@ fun ThreadScreen(
 					}
 				}
 			}
+			if (waking) WakingNotice(label)
 			// A plain sibling in this same Column, same reason the plugin dock slots above need no
 			// collision-avoidance logic: nothing to show contributes no space at all.
 			scheduledSend?.let { rec ->

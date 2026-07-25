@@ -62,12 +62,12 @@ class ReadAnchorTest {
 	}
 
 	@Test
-	fun placeholderFoldInversionStillResolvesToZeroAtTheBottomRegionRow() {
-		// The waking placeholder folds IN PLACE (keeps an old row position) for a message whose seq
-		// is HIGHER than a peer row appended after it - row order and seq order invert. Reading the
-		// bottom REGION row must still resolve to fully-read.
+	fun foldInversionStillResolvesToZeroAtTheBottomRegionRow() {
+		// An in-place fold (reconcileSent settling an echo, a re-drain folding by mailbox) keeps a row
+		// at its OLD position while adopting a seq higher than a peer row appended after it - row order
+		// and seq order invert. Reading the bottom REGION row must still resolve to fully-read.
 		val thread = listOf(
-			inbound(epoch = 1, seq = 20, at = 20, id = 5), // was the placeholder; folded to seq 20
+			inbound(epoch = 1, seq = 20, at = 20, id = 5), // folded in place; now carries seq 20
 			inbound(epoch = 1, seq = 10, at = 10, id = 6), // a peer row appended meanwhile, seq 10 < 20
 		)
 		// Reading the bottom region row (id=6, the peer row) by report.

@@ -227,8 +227,8 @@ data class Message(
 	val at: Long,
 	val id: Long = 0,
 	val files: List<MessageFile> = emptyList(),
-	/** Reply/send state: wire "running"/"error", local "pending" (echo in flight)
-	 * and "waking" (the cold-wake placeholder), or null for a settled message. */
+	/** Reply/send state: wire "running"/"error", local "pending" (echo in flight),
+	 * or null for a settled message. */
 	val status: String? = null,
 	/** The relay opId this send was first delivered under. A retry reuses it so
 	 * the gateway's idempotency cache replays a lost reply instead of double-
@@ -578,6 +578,12 @@ data class ChatState(
 	 * spawn dialog can refuse a second identical submission while the first is still resolving rather
 	 * than silently reattaching to it (see spawnSession's opId-reuse doc comment). */
 	val pendingSpawns: Set<Pair<String, String>> = emptySet(),
+	/** Teams whose cold wake is being waited on, as a notice card above the composer rather than a row
+	 * in the transcript - a wake is this device's own local state, not something anybody said, and a
+	 * row for it reads as a posted message. Raised by the send that wakes the team, dropped when that
+	 * send fails or when the team's first real reply arrives. Deliberately not persisted: nothing is
+	 * coming to clear it after a process death, so a cold start starts empty. */
+	val wakingTeams: Set<String> = emptySet(),
 ) {
 	/** Sessions shows live teams plus any team we already have a thread with
 	 * (agent-initiated). A thread-only peer is gone from the bridge and cannot be
@@ -624,12 +630,13 @@ data class ChatState(
 	}
 
 	/** Whether the agent is actively working a turn: a tmux peek (the spinner marker) when one has
-	 * landed, else a message-status heuristic (a pending/sent tail, or a waking/running placeholder). */
+	 * landed, else a pending cold wake or a message-status heuristic (a pending/sent tail, or a
+	 * running placeholder). */
 	fun working(team: String): Boolean {
 		sessionWorking[team]?.let { return it }
+		if (team in wakingTeams) return true
 		val last = threads[team]?.lastOrNull() ?: return false
-		return (last.fromMe && (last.status == null || last.status == "pending")) ||
-			last.status == "running" || last.status == "waking"
+		return (last.fromMe && (last.status == null || last.status == "pending")) || last.status == "running"
 	}
 
 	/** Whether the agent's session is logged out (its tmux auth footer shows "Not logged in"), from a
@@ -3030,18 +3037,12 @@ class ChatRepository(
 			Message(true, text, System.currentTimeMillis(), files = localFiles, status = "pending", opId = opId),
 		)
 		val wasAvailable = _state.value.teams.firstOrNull { it.name == team }?.status == "available"
-		val hasPlaceholder = _state.value.threads[team]?.any { !it.fromMe && it.status == "waking" } == true
-		var placeholderId: Long? = null
-		if (wasAvailable && !hasPlaceholder) {
-			// Cold wake takes minutes with no wire traffic; show one placeholder row that the first
-			// real reply resolves in place (appendInbound). "waking" is a local-only status, so a
-			// wire "running" can never be mistaken for it.
-			placeholderId = append(
-				team,
-				Message(false, "Waking $team... first boot can take a minute or two.", System.currentTimeMillis(), status = "waking"),
-			)
-		}
-		deliver(team, echoId, text, picked, opId, placeholderId)
+		// Cold wake takes minutes with no wire traffic, so say so - as a notice card (ChatState.
+		// wakingTeams), not a transcript row. Only the send that RAISES the notice may clear it on
+		// failure, so a second send failing while the first is still in flight leaves the wait intact.
+		val raisedWakeNotice = wasAvailable && team !in _state.value.wakingTeams
+		if (raisedWakeNotice) _state.update { it.copy(wakingTeams = it.wakingTeams + team) }
+		deliver(team, echoId, text, picked, opId, raisedWakeNotice)
 	}
 
 	/** Re-send a failed message, rebuilding attachment bytes from their local
@@ -3081,7 +3082,7 @@ class ChatRepository(
 		if (files.size < msg.files.size) {
 			_state.update { it.copy(error = "Some attachments are no longer on this device; resending the rest.") }
 		}
-		deliver(team, messageId, msg.text, files, msg.opId ?: java.util.UUID.randomUUID().toString(), null, targetDomainOverride)
+		deliver(team, messageId, msg.text, files, msg.opId ?: java.util.UUID.randomUUID().toString(), false, targetDomainOverride)
 	}
 
 	/** Bank `text`/`uris` as a scheduled send for `team`, firing at `fireAtMillis` on its own even if
@@ -3276,7 +3277,7 @@ class ChatRepository(
 			// transferred to the row above, so deleting it here would strand that row's attachments.
 			clearScheduledSendRecord(team)
 			val picked = rebuildFiles(rec.fileRefs)
-			deliver(team, echoId, rec.text, picked, rec.opId, null, rec.targetDomainId)
+			deliver(team, echoId, rec.text, picked, rec.opId, false, rec.targetDomainId)
 			if (_state.value.threads[team]?.firstOrNull { it.opId == rec.opId }?.status == "error") {
 				val at = System.currentTimeMillis() + SCHEDULED_SEND_RETRY_DELAY_MS
 				scheduledSendScheduler?.scheduleRetry(at, team, rec.opId, rec.targetDomainId)
@@ -3309,17 +3310,16 @@ class ChatRepository(
 	}
 
 	/** Run the wire send and settle the echo row's state from the outcome. On success the cold-wake
-	 * placeholder (if this send created one) MUST survive: appendInbound resolves it in place when
-	 * the real reply arrives (same row id), so removing it here would both defeat that and race a
-	 * fast-arriving reply into having its already-merged row deleted out from under it. On failure or
-	 * cancellation, nothing is coming to resolve it, so it is removed. */
+	 * notice (if this send raised one) MUST survive: the wake itself is what takes minutes, and
+	 * appendInbound drops the notice when the real reply arrives. On failure or cancellation, nothing
+	 * is coming to clear it, so it is dropped here. */
 	private suspend fun deliver(
 		team: String,
 		echoId: Long,
 		text: String,
 		picked: List<OutgoingFile>,
 		opId: String,
-		placeholderId: Long?,
+		raisedWakeNotice: Boolean,
 		targetDomainOverride: String? = null,
 	) {
 		var succeeded = false
@@ -3363,13 +3363,12 @@ class ChatRepository(
 			fail(cause)
 		} finally {
 			// Only on a non-success exit (fail() above, or a cancellation rethrow that skips fail()):
-			// "Waking..." is a per-ATTEMPT indicator, not a per-row one, so a cancelled cold-wake send
-			// must not strand it - but a SUCCEEDED send's placeholder must be left alone (see the
-			// class doc above). On the cancellation path this runs while a CancellationException is
-			// actively propagating, so removeMessage (and persistThreads underneath it) must never
-			// throw here - if either ever did, that throw would replace the propagating cancel and
-			// silently defeat reconcilePending's rollback (see its own catch below).
-			if (!succeeded && placeholderId != null) removeMessage(team, placeholderId)
+			// "Waking..." is a per-ATTEMPT indicator, so a cancelled cold-wake send must not strand it,
+			// while a SUCCEEDED send's notice must be left alone (see the doc above). On the
+			// cancellation path this runs while a CancellationException is actively propagating, so
+			// nothing here may throw - a throw would replace the propagating cancel and silently defeat
+			// reconcilePending's rollback (see its own catch below).
+			if (!succeeded && raisedWakeNotice) _state.update { it.copy(wakingTeams = it.wakingTeams - team) }
 		}
 	}
 
@@ -3799,7 +3798,7 @@ class ChatRepository(
 					continue
 				}
 				try {
-					deliver(team, m.id, m.text, rebuildFiles(m), m.opId, null)
+					deliver(team, m.id, m.text, rebuildFiles(m), m.opId, false)
 				} catch (e: Throwable) {
 					// Throwable, not just CancellationException: deliver()'s own catch(Exception) settles
 					// every Exception via fail() internally and rethrows only a CancellationException -
@@ -4291,13 +4290,14 @@ class ChatRepository(
 		return newId
 	}
 
-	/** Append a message that came from the wire. If the thread holds the synthetic
-	 * waking placeholder (wherever it sits - a second send may have landed after
-	 * it), the first real word from the team resolves it in place (same row id),
-	 * so the placeholder never lingers in the transcript. Every branch recomputes `unread` inside
+	/** Append a message that came from the wire. The first real word from the team also clears its
+	 * cold-wake notice: the team has demonstrably woken. A peer-mirror row is an agent-to-agent
+	 * exchange shown for visibility, never an answer to the console's own question, so it proves
+	 * nothing about the wake and leaves the notice up. Every branch recomputes `unread` inside
 	 * the SAME state update that touches `threads` (the single-writer derivation) rather
 	 * than a separate increment, so it can never race or drift from the anchor. */
 	private fun appendInbound(team: String, msg: Message): Boolean {
+		if (!msg.isPeer) _state.update { it.copy(wakingTeams = it.wakingTeams - team) }
 		// At-least-once dedup: an entry with the same mailbox (epoch, seq) was already
 		// rendered, so fold it in place and report no new render (no re-notify/TTS).
 		// seq 0 is a local or legacy row that never re-drains, so it is exempt.
@@ -4320,26 +4320,7 @@ class ChatRepository(
 				return false
 			}
 		}
-		var replaced = true
-		val threads = _state.updateAndGet { s ->
-			val thread = s.threads[team].orEmpty()
-			// A peer-mirror message is never an answer to the console's own question - it must
-			// append as its own row instead of resolving a placeholder that is waiting on a reply
-			// actually addressed to this thread.
-			val idx = if (msg.isPeer) -1 else thread.indexOfLast { !it.fromMe && it.status == "waking" }
-			if (idx >= 0) {
-				val next = thread.toMutableList().also { it[idx] = msg.copy(id = thread[idx].id) }
-				s.copy(threads = s.threads + (team to next)).recomputeUnread(team, next)
-			} else {
-				replaced = false
-				s
-			}
-		}.threads
-		if (replaced) {
-			persistThreads(threads)
-		} else {
-			append(team, msg)
-		}
+		append(team, msg)
 		return true
 	}
 
@@ -4511,14 +4492,12 @@ class ChatRepository(
 						isPeer = isPeer,
 					)
 				}
-					// A "waking" placeholder has no resolution coming after a process death; drop it.
-					// A peer-mirror row is never an answer to the console's own question (it's an
-					// agent-to-agent exchange, mirrored for visibility), so it must not resolve the
-					// spinner either, even though it also satisfies "not fromMe". "pending" echoes
-					// WITH an opId are kept for the service's idempotent reconcile; legacy ones without
-					// an opId cannot be re-sent safely, so they demote to retriable here (and never
-					// strand a forever-working chip if the service fails early).
-					.filterNot { !it.fromMe && !it.isPeer && it.status == "waking" }
+					// Stored threads can hold a "waking" row, from when the cold-wake wait was a transcript
+					// row rather than a notice card (ChatState.wakingTeams). Nothing resolves such a row,
+					// so drop it. "pending" echoes WITH an opId are kept for the service's idempotent
+					// reconcile; legacy ones without an opId cannot be re-sent safely, so they demote to
+					// retriable here (and never strand a forever-working chip if the service fails early).
+					.filterNot { !it.fromMe && it.status == "waking" }
 					.map { if (it.fromMe && it.status == "pending" && it.opId == null) it.copy(status = "error") else it }
 				merged.getOrPut(canonicalKey) { mutableListOf() }.addAll(loaded)
 			}
