@@ -29,41 +29,43 @@ export type NoResizePeek = (target: TmuxTarget) => Promise<HostPeekResult>;
 //  Class
 
 /**
- * Per-team 2-distinct-frame hysteresis: a derived value only lands after being observed on two
- * CONSECUTIVE DISTINCT frames (by hash) - a hash-unchanged repeat peek carries no new evidence and
- * neither extends nor resets the window. One transient footer state (a flicker mid-render) cannot
- * become a confirmed flip. Pure state machine, no I/O - the scheduler feeds it frames and asks
- * whether the confirmed value changed.
+ * Per-team 2-peek hysteresis: a derived value only lands after two CONSECUTIVE peeks agree on it,
+ * so one transient footer state (a flicker mid-render) cannot become a confirmed flip.
+ *
+ * Agreement is on the derived VALUE, never on frame identity. An unchanged pane is the single most
+ * important thing this tracker has to be able to confirm: an idle claude pane is byte-identical
+ * capture after capture (measured - eight consecutive idle captures of a live session all hashed
+ * the same, while every working capture differed), so requiring two DISTINCT frames made the flip
+ * back to not-working unreachable. The pane would sit still, the pending window would never close,
+ * and the board tile would pulse until something unrelated perturbed the pane - opening the
+ * terminal view, whose peek resizes and reflows it. A value that survives two consecutive peeks has
+ * persisted for a full cadence interval, which is exactly the evidence hysteresis is asking for,
+ * whether or not the pixels moved.
+ *
+ * Pure state machine, no I/O - the scheduler feeds it observations and asks whether the confirmed
+ * value changed.
  */
 class HysteresisTracker {
-	private lastFrameHash: string | undefined;
-	private pendingHash: string | undefined;
-	private pendingValue: DerivedState | undefined;
+	private pending: DerivedState | undefined;
 	private confirmed: DerivedState | undefined;
 
 	/** Feed one derived observation from a freshly-captured frame. Returns the confirmed value if
 	 * this observation just caused a confirmation (a genuine change to report), else undefined. */
-	observe(frameHash: string, value: DerivedState): DerivedState | undefined {
-		if (frameHash === this.lastFrameHash) return undefined; // repeat frame: no new evidence
-		this.lastFrameHash = frameHash;
-
+	observe(value: DerivedState): DerivedState | undefined {
 		if (sameValue(value, this.confirmed)) {
 			// Already the confirmed state - a fresh frame reaffirming it resets any pending flip
 			// attempt (the transient blip settled back before hysteresis could confirm it).
-			this.pendingHash = undefined;
-			this.pendingValue = undefined;
+			this.pending = undefined;
 			return undefined;
 		}
-		if (this.pendingHash !== undefined && sameValue(value, this.pendingValue)) {
-			// Second distinct frame agreeing with the pending value: confirmed.
+		if (this.pending !== undefined && sameValue(value, this.pending)) {
+			// Second consecutive peek agreeing with the pending value: confirmed.
 			this.confirmed = value;
-			this.pendingHash = undefined;
-			this.pendingValue = undefined;
+			this.pending = undefined;
 			return value;
 		}
-		// First frame observing this (different-from-confirmed) value: start the pending window.
-		this.pendingHash = frameHash;
-		this.pendingValue = value;
+		// First peek observing this (different-from-confirmed) value: start the pending window.
+		this.pending = value;
 		return undefined;
 	}
 
@@ -71,9 +73,7 @@ class HysteresisTracker {
 	 * failure streak) - clears to unknown and resets hysteresis, so reconnection re-derives from
 	 * scratch rather than resuming a stale pending window. */
 	clear(): void {
-		this.lastFrameHash = undefined;
-		this.pendingHash = undefined;
-		this.pendingValue = undefined;
+		this.pending = undefined;
 		this.confirmed = undefined;
 	}
 }
@@ -84,14 +84,11 @@ function sameValue(a: DerivedState, b: DerivedState | undefined): boolean {
 
 /** Derive {working, needsLogin} from a peek result. Regex runs ONLY on kind=tmux frames -
  * container-logs boot text must never false-positive (a stray "esc" or "Not logged in" string in
- * build output is not the agent's own footer). Returns undefined for a non-tmux frame (nothing to
- * derive yet) or a hash-unchanged frame (no new evidence - the caller should not re-feed it). */
-export function deriveFromPeek(peek: HostPeekResult): { hash: string; value: DerivedState } | undefined {
+ * build output is not the agent's own footer). Returns undefined for a non-tmux frame, which
+ * carries nothing to derive yet. */
+export function deriveFromPeek(peek: HostPeekResult): DerivedState | undefined {
 	if (peek.kind !== "tmux") return undefined;
-	return {
-		hash: peek.hash,
-		value: { working: isAgentWorking(peek.ansi), needsLogin: isLoggedOut(peek.ansi) },
-	};
+	return { working: isAgentWorking(peek.ansi), needsLogin: isLoggedOut(peek.ansi) };
 }
 
 /**
@@ -175,11 +172,16 @@ export class PresenceScheduler {
 	private rescheduleTimer(entry: WatchEntry): Promise<void> {
 		const existingTimer = this.timers.get(entry.team);
 		if (existingTimer) clearInterval(existingTimer);
-		if (!this.trackers.has(entry.team)) this.trackers.set(entry.team, new HysteresisTracker());
+		const fresh = !this.trackers.has(entry.team);
+		if (fresh) this.trackers.set(entry.team, new HysteresisTracker());
 		const timer = setInterval(() => void this.tick(entry.team), entry.cadenceMs);
 		timer.unref?.();
 		this.timers.set(entry.team, timer);
-		return this.tick(entry.team); // an immediate first peek, not a wait-out-the-cadence start
+		// A newly-watched team peeks immediately rather than waiting out its first cadence. A team
+		// already being watched does NOT: its cadence just changed, and an extra peek right now would
+		// land inside hostOpRunner's cadence floor, which would hand back the very capture the
+		// previous tick already consumed - one capture counted as two agreeing peeks.
+		return fresh ? this.tick(entry.team) : Promise.resolve();
 	}
 
 	/** Fire one peek-and-derive cycle for a watched team immediately, independent of its timer -
@@ -207,7 +209,7 @@ export class PresenceScheduler {
 		this.consecutiveFailures.set(team, 0);
 		const derived = deriveFromPeek(peek);
 		if (!derived) return; // container-logs (pre-pane) frame: nothing to derive yet
-		const confirmed = tracker.observe(derived.hash, derived.value);
+		const confirmed = tracker.observe(derived);
 		if (confirmed) this.report(team, confirmed);
 	}
 }
