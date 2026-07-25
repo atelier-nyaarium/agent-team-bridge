@@ -68,17 +68,22 @@ client timeout may need to be increased in `.mcp.json` or the client's settings.
 ## Referencing code (ref:// links)
 
 When you are talking about a specific piece of code, link it instead of pasting it. Write a markdown
-link whose destination is `ref://path/to/file.ts:Scope:Name`, and the file is snapshotted at send
-time and attached, so the reader taps through to the real code as it was when you wrote about it.
+link whose destination is `ref://src/cart.ts:Cart:add`, and the file is snapshotted at send time and
+attached, so the reader taps through to the real code as it was when you wrote about it.
 
-- **Only `channel_reply` and `notify_human` are scanned.** A ref in a `crosstalk_send` body is not,
-  so it arrives as a link that cannot open. Put refs in your reply, not in the request you send.
+- **Only the `full` field of `channel_reply` and `notify_human` is scanned.** A ref in `summary`,
+  `title`, `fullSpoken`, or a `crosstalk_send` body arrives as a link that cannot open.
+- **Paths are project-relative.** An absolute path or a `..` segment is refused and fails the send.
+- **Wrap the destination in angle brackets** when the matcher contains a space or a close paren:
+  `[label](<ref://src/cart.ts:Cart:add#items.push(item);>)`. Without that, a link destination ends at
+  the first space or unbalanced `)`, and the ref is silently truncated rather than reported.
+- **A file-tier problem fails the send loudly** (missing, not text, outside the project). A
+  RESOLUTION miss does not: the ref still sends and opens on a text match or the whole file with a
+  banner. No error does not mean the ref landed where you meant.
 - **Refs in code fences or inline code are never detected**, so documenting the format costs nothing.
-- **Percent-encode a space as `%20`.** A raw space ends the link destination and the ref silently
-  becomes plain text.
-- A malformed ref fails the send and names the position, so correct it and resend.
 
-Full format, including the `#matcher` forms, is in `plans/artifact-references.md`.
+The full format, including the `#matcher` forms, is in this plugin's own `agent_instructions`, which
+your session already carries in its instructions when the capability is on.
 
 ## Receiving a Request
 

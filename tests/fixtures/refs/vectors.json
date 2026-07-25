@@ -312,37 +312,37 @@
 			"id": "empty-fragment",
 			"uri": "ref://a.ts#",
 			"code": "empty-fragment",
-			"offset": 4
+			"offset": 10
 		},
 		{
 			"id": "empty-match-text",
 			"uri": "ref://a.ts#@after:y",
 			"code": "empty-match-text",
-			"offset": 5
+			"offset": 11
 		},
 		{
 			"id": "empty-anchor-after",
 			"uri": "ref://a.ts#x@after:",
 			"code": "empty-anchor",
-			"offset": 6
+			"offset": 12
 		},
 		{
 			"id": "empty-anchor-before",
 			"uri": "ref://a.ts#x@before:",
 			"code": "empty-anchor",
-			"offset": 6
+			"offset": 12
 		},
 		{
 			"id": "empty-range-start",
 			"uri": "ref://a.ts#..b",
 			"code": "empty-range-bound",
-			"offset": 5
+			"offset": 11
 		},
 		{
 			"id": "empty-range-end",
 			"uri": "ref://a.ts#a..",
 			"code": "empty-range-bound",
-			"offset": 6
+			"offset": 12
 		},
 		{
 			"id": "scheme-with-no-body",

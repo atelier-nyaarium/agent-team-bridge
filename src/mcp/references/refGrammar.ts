@@ -152,7 +152,9 @@ export function tryParseRef(uri: string): ParseResult {
 	const unwrapped = wrapped ? bare.slice(1, -1) : bare;
 	if (!unwrapped.toLowerCase().startsWith(REF_SCHEME)) return { kind: "not-a-ref" };
 
-	const tokens = lex(unwrapped.slice(REF_SCHEME.length));
+	// Offsets are shifted past the scheme so they index the ref as WRITTEN, which is the string an
+	// error message quotes back. A raw lexer offset would point six characters short of the problem.
+	const tokens = lex(unwrapped.slice(REF_SCHEME.length)).map((t) => ({ ...t, offset: t.offset + REF_SCHEME.length }));
 	const hashAt = tokens.findIndex((t) => t.kind === "hash");
 	const scope = hashAt === -1 ? tokens : tokens.slice(0, hashAt);
 

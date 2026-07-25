@@ -9,6 +9,7 @@
 			"!**/coverage",
 			"!**/data/stts-voices",
 			"!**/plans",
+			"!**/tests/fixtures/ref-project",
 			"!**/node_modules",
 			"!**/temp",
 			"!**/volumes",

@@ -865,34 +865,63 @@ distinction, not merely the outcome.
 
 ## Phase 4: teaching and verification
 
-**Agent-facing docs.** The full ref format lives in the References plugin's own
-`manifest.json` `agent_instructions`, which is the right home: the capability union carries it into
-every session's MCP instructions, so adding a plugin ships its guidance with no MCP change. It covers
-the waypoint form, `arguments`, all three matcher forms, the encoding rules (a raw space ends a link
-destination and silently degrades the ref to text; a literal `..` or `@` inside matched code must be
-encoded), that a fenced ref is never detected, and that `crosstalk_send` bodies are unscanned.
-`skills/crosstalk/SKILL.md` carries the short version beside the tools it applies to.
+An audit of this phase's own claims found that several were overstated, and one hid a real bug. Both
+are corrected below; the original wording is not worth preserving, but the fact that it was wrong is.
 
-**End-to-end, MCP side: 22 cases against a real project tree,** all correct. All seven grammars
-resolved exact (TS namespace chain, C++ out-of-line, C# file-scoped namespace, Python, GDScript, TSX,
-and JS through anonymous nesting). `arguments` and a named parameter resolved. Matcher, `@after`
-anchor, and range produced the right spans. The three degradation tiers each landed where they
-should. Two refs into one file produced ONE snapshot, which is the invariant the aggregate budget
-leans on. A fenced ref was ignored. All four hard-failure paths (missing, binary, escaping the
-project, malformed) failed with actionable messages naming the ref.
+**A real bug the first pass hid.** "All seven grammars resolved exact" was true only because the C#
+fixture used `namespace Foo;` with no dot in it. A namespace written the way real C# writes it,
+`namespace Acme.Services;`, referenced as one dotted waypoint, did NOT resolve: `nameParts` split the
+node's name into parts that consume a RUN of segments, so a single segment containing a dot could
+never match, and it degraded silently to `fuzzy`. Fixed in `matchedRun`, which now accepts either
+spelling (`:Acme.Services` or `:Acme:Services`, and `A::B::method` or `A:B:method`). The unit tests
+stayed green throughout, because their fixtures are inline snippets that dodged the shape.
 
-**End-to-end, phone side: partial.** The debug build installs and launches clean on the emulator with
-the References plugin registered, so the catalog entry, the display index init, and the scheme claim
-all boot without error. The full tap-through could NOT be driven: the emulator has no provisioning
-blob, and enrollment is a QR/owner-key flow that cannot be scripted headlessly. What was verified
-instead is the viewer's riskiest logic, directly against the vendored highlighter: a line entirely
-inside a block comment is no longer coloured as live code, in both TypeScript and Python, and every
-emitted line still round-trips to its exact source text with balanced spans (which is what keeps the
-character-span walk aligned).
+**A false invariant.** "Two refs into one file produced ONE snapshot, which is the invariant the
+aggregate budget leans on" overstated a true observation. Two IDENTICALLY-SPELLED refs do coalesce.
+Two spellings of the same file (`src/x.ts` and `./src/x.ts`) still produce two snapshots, which is the
+open Phase 2 residue item about aliased paths, recorded a few sections down. Phase 4 asserted as
+verified an invariant this same document records as broken.
 
-**Owed before this is real:** a human tap-through on a provisioned device, covering a fuzzy ref's
-banner, an ambiguous ref's count, a snippet-mode file's elision markers, the chip-hide, and the miss
-contract on a crosstalk peer row.
+**Verification now leaves an artifact.** The original 22-case pass was hand-run and committed
+nothing, which is exactly the failure the Phase 2 painpoint names ("a green suite is not evidence").
+It is now `src/__tests__/ref-grammars-e2e.test.ts` over a committed fixture tree at
+`tests/fixtures/ref-project/`: 23 cases driving the whole chain (scan, parse, resolve, build) for all
+seven grammars, the pseudo-segments, all three matcher forms, the three degradation tiers, snapshot
+coalescing, fence immunity, and every file-tier hard failure including the absolute-path case. Each
+assertion checks the SOURCE LINES the range selects, not just a line number, so a plausible-looking
+but wrong range fails.
+
+**Teaching, rewritten against what the code does.** The first version was accurate but incomplete in
+ways an agent would hit immediately:
+
+- It never said paths are PROJECT-RELATIVE. An absolute path hard-fails the whole send, and agents
+  are routinely told elsewhere to use absolute paths, so that was the likeliest first attempt.
+- Its encoding rules omitted `)`. A link destination ends at the first unbalanced one, so a matcher
+  like `#items.push(item);` silently truncated with no error. The angle-bracket form
+  (`[label](<ref://...>)`) sidesteps both that and the space rule, and is now taught first.
+- "A malformed ref fails the send" invited the contrapositive. It does not hold: a near-miss scheme
+  is skipped in silence, and a scope chain that misses degrades and ships. The text now separates the
+  file tier (fails loudly) from resolution (never fails, so no error does not mean it landed).
+- It said refs work in `channel_reply` and `notify_human` without naming the field; only `full` is
+  scanned.
+
+**Error offsets now index the ref as written.** They were offsets into the post-scheme slice while the
+message quoted the whole destination, so they pointed six characters short. Shifted on both runtimes,
+with the shared vectors updated to match.
+
+**Phone side, honestly: partial.** The debug build installs and launches clean on the emulator, and
+the manifest parses. That is weaker evidence than it first sounds and the earlier wording overclaimed
+it: `PluginManager` records a bad manifest as `broken` rather than crashing, so a clean launch alone
+would not have proven the plugin registered. The full tap-through could not be driven at all, because
+the emulator has no provisioning blob and enrollment is a QR/owner-key flow. What IS verified is the
+viewer's riskiest logic, re-run against the vendored highlighter: a line entirely inside a block
+comment is no longer coloured as live code in either TypeScript or Python, and every emitted line
+round-trips to its exact source text with balanced spans.
+
+**Owed before this is real:** a human tap-through on a provisioned device, covering the fuzzy banner,
+an ambiguous ref's count, snippet-mode elision markers, the chip hide, and the miss contract on a
+crosstalk peer row. Also note `.gd` renders as flat text in the viewer: the vendored highlighter
+ships no GDScript grammar, so that Phase 3 bullet is genuinely unbuilt rather than merely unmapped.
 
 ## Phase 3 audit residue
 

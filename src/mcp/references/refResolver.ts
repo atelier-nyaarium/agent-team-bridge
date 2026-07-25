@@ -205,10 +205,18 @@ function leavesNamed(root: Node, name: string): Node[] {
 	return out;
 }
 
-/** How many leading segments this node's name consumes, or 0 if it does not match. */
+/**
+ * How many leading segments this node's name consumes, or 0 if it does not match.
+ *
+ * A qualified name matches either spelling: `namespace Acme.Services` answers both
+ * `:Acme:Services` (a run, one segment per part) and `:Acme.Services` (one segment, written the way
+ * the source writes it). Accepting only the split form silently failed the C# ref an author would
+ * naturally write, and failed it to `fuzzy` rather than to an error.
+ */
 function matchedRun(parts: string[], remaining: string[]): number {
-	if (parts.length === 0 || parts.length > remaining.length) return 0;
-	return parts.every((part, i) => part === remaining[i]) ? parts.length : 0;
+	if (parts.length === 0 || remaining.length === 0) return 0;
+	if (parts.length <= remaining.length && parts.every((part, i) => part === remaining[i])) return parts.length;
+	return parts.join(".") === remaining[0] || parts.join("::") === remaining[0] ? 1 : 0;
 }
 
 function depthOf(node: Node): number {

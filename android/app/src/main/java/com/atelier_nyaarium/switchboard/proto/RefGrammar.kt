@@ -222,7 +222,9 @@ fun tryParseRef(uri: String): RefParseResult {
 	val unwrapped = if (wrapped) bare.substring(1, bare.length - 1) else bare
 	if (!unwrapped.lowercase().startsWith(REF_SCHEME)) return RefParseResult.NotARef
 
-	val tokens = lex(unwrapped.substring(REF_SCHEME.length))
+	// Offsets are shifted past the scheme so they index the ref as WRITTEN, matching the TS side and
+	// the shared vectors: an error message quotes the whole ref, so a raw lexer offset points short.
+	val tokens = lex(unwrapped.substring(REF_SCHEME.length)).map { it.copy(offset = it.offset + REF_SCHEME.length) }
 	val hashAt = tokens.indexOfFirst { it.kind == Kind.HASH }
 	val scope = if (hashAt == -1) tokens else tokens.subList(0, hashAt)
 
