@@ -302,6 +302,20 @@ full design, the questionaire, and the audit rounds are in `plans/artifact-refer
   name collision). RESOLUTION always degrades: a renamed class or a moved line ships anyway with a
   banner, because refusing to send a message over a stale pointer is worse than opening the reader
   in roughly the right place.
+- **The phone side** is the `references` plugin (`android/.../plugins/references/`). It claims the
+  `ref:` scheme through the `linkHandlers` extension point, whose `LinkHandler` declares its scheme so
+  the thread renderer can style claimed links as live rather than broken. A claimed link renders blue
+  but stays INERT: a kept href taps through WebView navigation, which cannot see which ROW the anchor
+  sits in, and the same ref in two messages points at two different snapshots. So the tap rides the
+  `linkTap(rowId, rowAt, href)` bridge, the app resolves `(team, rowId, rowAt)` to the live row, and
+  the handler is handed that row's files. A plugin never resolves a row itself.
+- **Tap-time resolution, no authoritative store.** The handler reads the manifest from the tapped
+  row at tap time. That is what gives snapshot semantics, and what makes a message drained before the
+  plugin existed still open. `RefDisplayIndex` is display-only (chip hide today), explicitly not the
+  authority. Manifest selection is the FIRST file bearing the reserved name that parses and carries
+  its marker, and a manifest naming a snapshot absent from its own row is rejected wholesale.
+- **Miss contract:** every path that cannot show code returns false, so the tap falls back to the link
+  menu with a note saying no snapshot is attached. Never a crash, a silent no-op, or a wrong-row open.
 - **Gating:** `setReferencesEnabled` is driven by the capability union at startup. `references` is
   deliberately NOT in the fail-open set, so this stays off until a console plugin renders it.
 

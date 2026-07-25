@@ -983,3 +983,23 @@ a tree walk over untrusted file shapes.
 **`tree-sitter build --wasm` needs no emsdk or docker on a recent CLI.** The plan assumed one or the
 other; 0.26 downloads its own wasi-sdk to `~/.cache/tree-sitter`. Worth knowing before anyone plumbs
 a docker path that is not needed.
+
+### From Phase 3
+
+**The framework seam decides what a plugin can do well.** `TappedLink` carries the resolved row's
+files because the tap chain was designed to, and the result is a handler that cannot look at the
+wrong row. `AttachmentChipDecorator` carries only `(team, file)`, and the result is a hide verdict
+that has to scan every message the team ever recorded. Same plugin, same session, opposite outcomes,
+decided entirely by what the seam passes. Worth remembering when adding the next extension point:
+pass the coordinate, not just the payload.
+
+**A doc comment saying "one line" is a design decision hiding as a description.** The viewer's
+highlight helper was written per line because the loop was per line, and the comment cheerfully said
+so; nothing flagged that hljs carries state across lines and every block comment would render wrong.
+The comment described the code accurately and the code was wrong.
+
+**Two WebView omissions that the repo already had the answer for.** No `onRelease` and no
+`onRenderProcessGone` override, both of which the sibling Designer WebViews and the thread renderer
+already do, with the thread renderer's carrying the comment "Returning true keeps the app alive". A
+new surface in a codebase this consistent should be diffed against its nearest sibling before it is
+called done.
