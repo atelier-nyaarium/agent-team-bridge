@@ -4080,11 +4080,21 @@ class ChatRepository(
 	 * runs (see MainActivity's Send handler). Best-effort, same as every other ownership-transfer
 	 * delete in this file (forget, cancelScheduledSend, scheduleSend's own replace): a narrow miss
 	 * here is healed by the next cold-start sweepOrphanAttachments. */
+	/**
+	 * Drop a team's draft. Every caller reaches here right after handing the draft's contents to a
+	 * send or a schedule.
+	 *
+	 * The picked copies are deliberately NOT deleted. A send reads them on its own coroutine, so
+	 * deleting at the moment of the tap is a race the send loses: it opened a file that had existed a
+	 * millisecond earlier, got ENOENT, and dropped the attachment with no error anywhere, which is
+	 * how every attachment sent from this composer was silently lost. Once the send has stored its
+	 * own copy the draft's bucket is unreferenced, and `sweepOrphanAttachments` reclaims it.
+	 * Discarding a single pick before sending stays immediate, through [removeDraftFile].
+	 */
 	fun clearDraft(team: String) {
-		val prior = _state.value.drafts[team] ?: return
+		if (_state.value.drafts[team] == null) return
 		val next = _state.updateAndGet { s -> s.copy(drafts = s.drafts - team) }.drafts
 		persistDrafts(next)
-		scheduleAttachmentDelete(prior.files.mapNotNull { it.src })
 	}
 
 	/** Give a team a local display label (or clear it with a blank name). Local-only: the optimistic
