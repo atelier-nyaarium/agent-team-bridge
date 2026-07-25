@@ -18,18 +18,9 @@ function logsFrame(hash: string): HostPeekResult {
 
 describe("deriveFromPeek", () => {
 	it("derives working/needsLogin from a tmux frame", () => {
-		expect(deriveFromPeek(tmuxFrame(WORKING, "h1"))).toEqual({
-			hash: "h1",
-			value: { working: true, needsLogin: false },
-		});
-		expect(deriveFromPeek(tmuxFrame(IDLE, "h2"))).toEqual({
-			hash: "h2",
-			value: { working: false, needsLogin: false },
-		});
-		expect(deriveFromPeek(tmuxFrame(LOGGED_OUT, "h3"))).toEqual({
-			hash: "h3",
-			value: { working: false, needsLogin: true },
-		});
+		expect(deriveFromPeek(tmuxFrame(WORKING, "h1"))).toEqual({ working: true, needsLogin: false });
+		expect(deriveFromPeek(tmuxFrame(IDLE, "h2"))).toEqual({ working: false, needsLogin: false });
+		expect(deriveFromPeek(tmuxFrame(LOGGED_OUT, "h3"))).toEqual({ working: false, needsLogin: true });
 	});
 
 	it("never derives from a container-logs frame, even if the text contains lookalike substrings", () => {
@@ -55,7 +46,7 @@ function makeScheduler(peekSequence: HostPeekResult[]) {
 }
 
 describe("PresenceScheduler hysteresis", () => {
-	it("does not report on the first frame observing a new value - only on the second DISTINCT confirming frame", async () => {
+	it("does not report on the first frame observing a new value - only on the second confirming peek", async () => {
 		const { scheduler, reports } = makeScheduler([tmuxFrame(IDLE, "h1")]);
 		await scheduler.setWatches([{ team: "proj.main", target: T, cadenceMs: 60_000 }]);
 		expect(reports).toEqual([]); // idle is the initial "no confirmed value yet" baseline, not a flip
@@ -73,11 +64,11 @@ describe("PresenceScheduler hysteresis", () => {
 		expect(reports).toEqual([]); // never confirmed working; still never confirmed idle-as-a-flip either
 	});
 
-	it("confirms working after two consecutive distinct working frames, then confirms idle the same way", async () => {
+	it("confirms working after two consecutive working frames, then confirms idle the same way", async () => {
 		const { scheduler, reports } = makeScheduler([
 			tmuxFrame(IDLE, "h1"),
 			tmuxFrame(WORKING, "h2"),
-			tmuxFrame(WORKING, "h3"), // distinct hash (re-render), same derived value -> confirms
+			tmuxFrame(WORKING, "h3"), // second peek agreeing -> confirms
 			tmuxFrame(IDLE, "h4"),
 			tmuxFrame(IDLE, "h5"), // confirms the revert back to idle
 		]);
@@ -93,16 +84,27 @@ describe("PresenceScheduler hysteresis", () => {
 		]);
 	});
 
-	it("a hash-unchanged repeat peek carries no new evidence - does not extend or satisfy the pending window", async () => {
+	it("confirms the flip back to idle off an unchanged pane, which is what an idle pane looks like", async () => {
+		// Measured on a live session: eight consecutive idle captures hashed IDENTICALLY, while every
+		// working capture differed. Confirming on two distinct FRAMES therefore made this flip
+		// unreachable - the pane sits still once the turn ends, so the pending window never closed and
+		// the board tile pulsed until something unrelated perturbed the pane (opening the terminal
+		// view, whose peek resizes and reflows it). Agreement is on the derived value, not the pixels.
 		const { scheduler, reports } = makeScheduler([
-			tmuxFrame(IDLE, "h1"),
-			tmuxFrame(WORKING, "h2"), // pending working
-			tmuxFrame(WORKING, "h2"), // SAME hash - a stuck/unchanged pane, not a second confirmation
+			tmuxFrame(WORKING, "h1"),
+			tmuxFrame(WORKING, "h2"), // confirms working
+			tmuxFrame(IDLE, "h3"), // the turn ends: pending idle
+			tmuxFrame(IDLE, "h3"), // pane now static - same hash, and it must still confirm
 		]);
 		await scheduler.setWatches([{ team: "proj.main", target: T, cadenceMs: 60_000 }]);
 		await scheduler.tick("proj.main");
 		await scheduler.tick("proj.main");
-		expect(reports).toEqual([]); // a stuck pane can never satisfy hysteresis by repeating itself
+		await scheduler.tick("proj.main");
+
+		expect(reports).toEqual([
+			{ team: "proj.main", value: { working: true, needsLogin: false } },
+			{ team: "proj.main", value: { working: false, needsLogin: false } },
+		]);
 	});
 
 	it("container-logs frames never participate in hysteresis (no confirmation, no reset)", async () => {
@@ -153,15 +155,17 @@ describe("PresenceScheduler watch lifecycle", () => {
 		expect(reports).toEqual([{ team: "proj.main", value: undefined }]); // 3rd: clears
 	});
 
-	it("a cadence change reschedules without discarding hysteresis history (not a derivation discontinuity)", async () => {
-		const { scheduler, reports } = makeScheduler([
+	it("a cadence change reschedules without re-peeking or discarding hysteresis history", async () => {
+		const { scheduler, reports, peek } = makeScheduler([
 			tmuxFrame(WORKING, "h1"), // pending working
 		]);
 		await scheduler.setWatches([{ team: "proj.main", target: T, cadenceMs: 60_000 }]);
 		await scheduler.setWatches([{ team: "proj.main", target: T, cadenceMs: 5_000 }]); // cadence ramp
-		// The re-schedule's own immediate tick re-peeks the SAME queued frame (h1 again, since the
-		// fake peek sequence caps at its last entry) - same hash, so it is a repeat, not a second
-		// confirming frame; hysteresis is untouched either way, proving the ramp itself reset nothing.
+
+		// Only the FIRST setWatches peeks: a ramp on an already-watched team just retimes the loop. An
+		// extra peek here would land inside hostOpRunner's cadence floor and hand back the capture the
+		// first tick already consumed, confirming `working` off one capture counted twice.
+		expect(peek).toHaveBeenCalledTimes(1);
 		expect(reports).toEqual([]);
 	});
 
