@@ -2865,6 +2865,7 @@ fun ThreadScreen(
 					value = draft.text,
 					onValueChange = onDraftTextChange,
 					label = { Text("Message") },
+					minLines = 2,
 					modifier = Modifier.weight(1f),
 				)
 				// Attach stacks above Send in a narrow right column, so the text field
