@@ -615,7 +615,11 @@ hljs grammar are the two named bullets not built. Not deployed.
   hljs.
 - **Retention:** attachment lifecycle, unchanged.
 
-## Phase 4: Teaching + end-to-end verification
+## Phase 4: Teaching + end-to-end verification ✅ SHIPPED (E2E partly owed)
+
+Teaching written and audited against the code. Grammar coverage pinned by a committed end-to-end
+suite over a real fixture tree. The emulator half is partial: the app installs and launches clean,
+but a tap-through needs a provisioned device, which cannot be scripted. See the progress section.
 
 - Agent-facing docs: ref format in the reply tools' descriptions and the crosstalk skill,
   including the fragment forms (`#T`, `#T@before:X` / `#T@after:X`, `#A..B`) with their encoding
