@@ -1,0 +1,135 @@
+:root {
+	--bg: #ffffff;
+	--fg: #1f2328;
+	--muted: #6e7781;
+	--border: #d0d7de;
+	--gutter: #f6f8fa;
+	--band: rgba(31, 111, 235, 0.12);
+	--span: rgba(191, 135, 0, 0.32);
+	--banner-bg: #fff8c5;
+	--banner-fg: #4d2d00;
+}
+
+body.dark {
+	--bg: #0d1117;
+	--fg: #e6edf3;
+	--muted: #8b949e;
+	--border: #30363d;
+	--gutter: #161b22;
+	--band: rgba(56, 139, 253, 0.20);
+	--span: rgba(210, 153, 34, 0.38);
+	--banner-bg: #341a00;
+	--banner-fg: #f0d8a8;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--fg);
+	font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	font-size: 13px;
+}
+
+#crumb {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	padding: 10px 12px;
+	background: var(--bg);
+	border-bottom: 1px solid var(--border);
+	font-size: 12px;
+	color: var(--muted);
+	word-break: break-all;
+}
+
+#crumb strong {
+	color: var(--fg);
+	font-weight: 600;
+}
+
+#banner {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 8px 12px;
+	background: var(--banner-bg);
+	color: var(--banner-fg);
+	font-family: system-ui, sans-serif;
+	font-size: 12px;
+	line-height: 1.4;
+}
+
+#banner-text {
+	flex: 1;
+}
+
+#banner-dismiss {
+	flex: none;
+	width: 28px;
+	height: 28px;
+	margin: -4px -4px 0 0;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: inherit;
+	font-size: 18px;
+	line-height: 1;
+}
+
+#code {
+	display: table;
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.line {
+	display: table-row;
+}
+
+.line.in-range {
+	background: var(--band);
+}
+
+.ln,
+.src {
+	display: table-cell;
+	padding: 0 8px;
+	white-space: pre;
+	vertical-align: top;
+}
+
+.ln {
+	width: 1%;
+	background: var(--gutter);
+	border-right: 1px solid var(--border);
+	color: var(--muted);
+	text-align: right;
+	user-select: none;
+}
+
+.src {
+	width: 100%;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+/* An elision between two snippet segments, so a gap never reads as adjacent code. */
+.gap .ln,
+.gap .src {
+	background: var(--gutter);
+	color: var(--muted);
+	font-style: italic;
+	text-align: center;
+	padding: 4px 8px;
+}
+
+mark.span {
+	background: var(--span);
+	color: inherit;
+	border-radius: 2px;
+	padding: 0;
+}

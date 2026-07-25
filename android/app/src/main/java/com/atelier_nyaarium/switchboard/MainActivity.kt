@@ -163,9 +163,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.fragment.app.FragmentActivity
 import com.atelier_nyaarium.switchboard.plugins.PluginManager
+import com.atelier_nyaarium.switchboard.plugins.TappedLink
 import com.atelier_nyaarium.switchboard.plugins.Plugins
 import com.atelier_nyaarium.switchboard.proto.CrossDomainPresenceSession
 import com.atelier_nyaarium.switchboard.proto.FocusIntent
@@ -333,6 +335,21 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	var linkMenu by remember { mutableStateOf<Pair<String, String>?>(null) }
 	rendererPool.onLinkTap = { team, url -> openLink(context, team, url) }
 	rendererPool.onLinkMenu = { team, url -> linkMenu = team to url }
+	// A tapped link whose scheme a plugin claims. The framework resolves the ROW first, so a handler
+	// receives that row's own files rather than a row id it would have to trust and resolve itself.
+	// The same ref in two messages points at two different snapshots, which is why the row's `at`
+	// rides along. Unresolvable, unclaimed, or declined all fall through to the link menu: never a
+	// crash, never a silent no-op, never a wrong-row open.
+	rendererPool.onClaimedLinkTap = { team, rowId, rowAt, url ->
+		val row = repo.state.value.threads[team]?.firstOrNull { it.id == rowId && it.at == rowAt }
+		val claimed = row != null &&
+			pluginManager.host.linkHandlers.anyCaught(onError = ::logPluginThrow) {
+				it.tryOpen(context, TappedLink(team, url, row.files))
+			}
+		if (!claimed) linkMenu = team to url
+	}
+	// Claimed schemes decide which links render as live rather than broken; re-pushed on a toggle.
+	rendererPool.handledSchemes = pluginManager.host.linkHandlers.values().map { it.scheme }
 	DisposableEffect(Unit) {
 		// Fires on the player's daemon thread; the pool's renderer map is
 		// main-owned, so hop through the composition scope (main-dispatched).
@@ -1062,7 +1079,6 @@ private fun linkOpenable(url: String): Boolean = Uri.parse(url).scheme?.lowercas
  * custom protocol (e.g. a host-project file reference) becomes a new branch without touching the
  * renderer or pool. `team` is the thread the link was tapped in - unused by the web schemes, but a
  * project-scoped protocol needs it to know which session's host it acts on. */
-@Suppress("UNUSED_PARAMETER")
 private fun openLink(context: Context, team: String, url: String) {
 	when (Uri.parse(url).scheme?.lowercase()) {
 		in OPENABLE_SCHEMES -> runCatching {
@@ -2759,6 +2775,26 @@ fun ThreadScreen(
 			// enclosing composable context, which a non-inline lambda parameter does not provide);
 			// a throwing slot is Compose's own error path, not a registry-containment case.
 			remember { Plugins.get(composerContext) }.host.threadDockSlots.values().forEach { slot -> slot(dockScope) }
+			// A tapped ref opens full-screen over this thread. The request carries its own team, so a
+			// tap that lands after a tab switch never opens in the wrong conversation.
+			var openReference by remember(team) {
+				mutableStateOf<com.atelier_nyaarium.switchboard.plugins.references.ReferenceOpenRequest?>(null)
+			}
+			LaunchedEffect(team) {
+				com.atelier_nyaarium.switchboard.plugins.references.ReferenceOpenBus.events.collect { request ->
+					if (request.team == team) openReference = request
+				}
+			}
+			openReference?.let { request ->
+				Dialog(
+					onDismissRequest = { openReference = null },
+					properties = DialogProperties(usePlatformDefaultWidth = false),
+				) {
+					Surface(modifier = Modifier.fillMaxSize()) {
+						com.atelier_nyaarium.switchboard.plugins.references.ReferenceViewer(request)
+					}
+				}
+			}
 			// A plain sibling in this same Column, same reason the plugin dock slots above need no
 			// collision-avoidance logic: nothing to show contributes no space at all.
 			scheduledSend?.let { rec ->

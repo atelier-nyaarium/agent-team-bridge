@@ -1,0 +1,8 @@
+{
+	"content_id": "references",
+	"version": "0.1.0",
+	"display_name": "Code references",
+	"description": "A ref:// link in a message opens the code it points at, snapshotted when the message was sent.",
+	"agent_instructions": "Switchboard renders ref:// links as a code viewer. When pointing at code, write a markdown link to ref://path/to/file.ts:Class:method with an optional #matcher, and the file is snapshotted and attached automatically.",
+	"requires": []
+}

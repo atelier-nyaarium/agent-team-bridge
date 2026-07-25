@@ -39,6 +39,19 @@ class ThreadRendererPool(private val context: Context) {
 	 * [onAttachmentTap], so a late debounced report after a tab switch credits the right thread. */
 	var onReadUpTo: ((String, Long, Long) -> Unit)? = null
 
+	/** A tapped link a plugin's scheme claims, with the thread and the row it was tapped in. Team is
+	 * bound per-renderer, same as [onAttachmentTap], so a tap after a tab switch credits the right
+	 * thread. */
+	var onClaimedLinkTap: ((String, Long, Long, String) -> Unit)? = null
+
+	/** URL schemes a plugin claims, pushed into every renderer as it is created and re-pushed to the
+	 * live ones when the claimed set changes. */
+	var handledSchemes: List<String> = emptyList()
+		set(value) {
+			field = value
+			renderers.values.forEach { it.setHandledSchemes(value) }
+		}
+
 	/** Set by the owner; called with (team, href) when a link in that team's thread is tapped.
 	 * The team is bound per-renderer, same as [onAttachmentTap] - a custom protocol acting on the
 	 * thread's own host project needs to know which thread the link came from. */
@@ -75,6 +88,8 @@ class ThreadRendererPool(private val context: Context) {
 				it.onCancelMessage = { id -> onCancel?.invoke(team, id) }
 				it.onPlayMessage = { at -> onPlayTap?.invoke(team, at) }
 				it.onReadUpTo = { id, at -> onReadUpTo?.invoke(team, id, at) }
+				it.onClaimedLinkTap = { id, at, url -> onClaimedLinkTap?.invoke(team, id, at, url) }
+				it.setHandledSchemes(handledSchemes)
 				it.onLinkTap = { url -> onLinkTap?.invoke(team, url) }
 				it.onLinkMenu = { url -> onLinkMenu?.invoke(team, url) }
 				it.resolveFrom = { addr -> resolveFrom?.invoke(addr) ?: addr }

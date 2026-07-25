@@ -18,5 +18,6 @@ object PluginCatalog {
 
 	val all: List<Entry> = listOf(
 		Entry("designer", com.atelier_nyaarium.switchboard.plugins.designer.DesignerPlugin()),
+		Entry("references", com.atelier_nyaarium.switchboard.plugins.references.ReferencesPlugin()),
 	)
 }

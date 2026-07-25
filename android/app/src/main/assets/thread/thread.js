@@ -45,17 +45,32 @@
 
 	// Two-tier links: standard schemes render as ordinary anchors, everything else as an inert
 	// red "unhandled" link whose tap raises the copy-only menu (see markdown-link-rules.js).
-	window.installThreadLinkRules(md);
+	// Re-pushed by the app whenever the claimed set changes (a plugin toggle), setTheme-style.
+	const handledSchemes = { value: [] };
+	window.setHandledSchemes = (list) => {
+		handledSchemes.value = Array.isArray(list) ? list : [];
+	};
+	window.installThreadLinkRules(md, handledSchemes);
 
 	// Unhandled links carry no href (nothing to navigate, so no shouldOverrideUrlLoading hop);
 	// a delegated tap feeds their data-href to the native link menu instead. Standard anchors
 	// keep their href and never match here.
 	container.addEventListener("click", (e) => {
-		const a = e.target.closest("a.link-unhandled");
+		const a = e.target.closest("a.link-unhandled, a.link-handled");
 		if (!a) return;
 		e.preventDefault();
+		const href = a.dataset.href || "";
+
+		// A claimed link is dispatched WITH the row it sits in. The same URL in two messages points
+		// at two different snapshots, and a row id alone can be reused after a forget, so the row's
+		// `at` rides along and the app resolves the pair before handing it to a plugin.
+		if (a.classList.contains("link-handled") && window.Android && typeof window.Android.linkTap === "function") {
+			const row = a.closest("[data-id]");
+			window.Android.linkTap(String(row ? row.dataset.id || "" : ""), String(row ? row.dataset.at || "" : ""), href);
+			return;
+		}
 		if (window.Android && typeof window.Android.linkMenu === "function") {
-			window.Android.linkMenu(a.dataset.href || "");
+			window.Android.linkMenu(href);
 		}
 	});
 
