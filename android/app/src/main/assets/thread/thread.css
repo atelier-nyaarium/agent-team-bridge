@@ -195,14 +195,17 @@ html, body {
 	color: var(--error);
 }
 
-/* A claimed scheme is live, so it reads like an ordinary link rather than a broken one. */
+/* A claimed scheme is live, so it reads like an ordinary link rather than a broken one. A claimed
+   link carries no href by design (the tap rides the bridge instead), so nothing else gives it link
+   styling: if this declaration is dropped the anchor inherits body text and reads as plain prose. */
 .body a.link-handled {
-	color: var(--accent);
+	color: var(--link);
+	text-decoration: underline;
 }
 
 /* A ref whose target moved still opens, so it is flagged rather than disabled. */
 .body a.link-handled.link-fuzzy {
-	color: var(--warning, #b8860b);
+	color: var(--running);
 	text-decoration-style: dotted;
 }
 
