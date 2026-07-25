@@ -706,6 +706,7 @@ fun TerminalView(
 						value = input,
 						onValueChange = { input = it },
 						label = { Text("Type into the terminal") },
+						minLines = 2,
 						modifier = Modifier.weight(1f),
 					)
 					Column(
