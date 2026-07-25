@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -330,11 +329,11 @@ private fun BackspaceKey(onTap: () -> Unit, onHoldRepeat: () -> Unit, modifier: 
 	val haptics = LocalHapticFeedback.current
 	val strong = rememberStrongHaptic()
 	Surface(
-		shape = CircleShape,
+		shape = RoundedCornerShape(8.dp),
 		color = MaterialTheme.colorScheme.secondaryContainer,
 		contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
 		modifier = modifier
-			.size(48.dp)
+			.size(width = 56.dp, height = 40.dp)
 			.pointerInput(Unit) {
 				awaitEachGesture {
 					awaitFirstDown(requireUnconsumed = false)
@@ -375,11 +374,11 @@ private fun SendKey(inputEmpty: Boolean, onTap: () -> Unit, onLongPress: () -> U
 	val haptics = LocalHapticFeedback.current
 	val strong = rememberStrongHaptic()
 	Surface(
-		shape = CircleShape,
+		shape = RoundedCornerShape(8.dp),
 		color = MaterialTheme.colorScheme.primary,
 		contentColor = MaterialTheme.colorScheme.onPrimary,
 		modifier = modifier
-			.size(48.dp)
+			.size(width = 56.dp, height = 40.dp)
 			.pointerInput(inputEmpty) {
 				detectTapGestures(
 					// An empty-box tap IS the submit, so it gets the firm buzz; with text, a tap only
@@ -711,7 +710,8 @@ fun TerminalView(
 					)
 					Column(
 						Modifier.padding(start = 8.dp),
-						verticalArrangement = Arrangement.spacedBy(8.dp),
+						// 40 + 5 + 40 spans the two-line field exactly, as in the chat composer.
+						verticalArrangement = Arrangement.spacedBy(5.dp),
 						horizontalAlignment = Alignment.CenterHorizontally,
 					) {
 						// Backspace sits directly above Send: a tap erases one char; press-and-hold
