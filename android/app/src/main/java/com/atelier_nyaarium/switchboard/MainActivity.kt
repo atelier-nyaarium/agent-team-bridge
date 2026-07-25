@@ -89,12 +89,12 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -2905,25 +2905,29 @@ fun ThreadScreen(
 				)
 				// Attach stacks above Send in a narrow right column, so the text field
 				// takes the remaining width.
-				Column(Modifier.padding(start = 8.dp), horizontalAlignment = Alignment.End) {
-					IconButton(onClick = hapticClick { picker.launch(arrayOf("*/*")) }) {
-							Icon(Icons.Default.AttachFile, contentDescription = "Attach file")
-						}
+				Column(
+					Modifier.padding(start = 8.dp),
+					horizontalAlignment = Alignment.End,
+					// 40 + 5 + 40 spans the two-line field exactly, so the pair aligns to its edges.
+					verticalArrangement = Arrangement.spacedBy(5.dp),
+				) {
+					// Tonal rather than filled so Send stays the dominant action in this column.
+					FilledTonalIconButton(
+						onClick = hapticClick { picker.launch(arrayOf("*/*")) },
+						shape = RoundedCornerShape(8.dp),
+						modifier = Modifier.size(width = 56.dp, height = 40.dp),
+					) {
+						Icon(Icons.Default.AttachFile, contentDescription = "Attach file")
+					}
 					val sendEnabled = draft.isOccupied
 					val sendHaptics = LocalHapticFeedback.current
 					val sendStrongHaptic = rememberStrongHaptic()
-					// A plain FilledIconButton has no onLongClick of its own (Material3's IconButton family
-					// only exposes a single onClick) - a Surface styled to match its defaults (CircleShape,
-					// primary/onPrimary, the disabled-alpha pair) with combinedClickable applied directly is
-					// the same escape hatch SessionCard's own long-press already uses, on a button-shaped
-					// Surface instead of a Card. minimumInteractiveComponentSize + combinedClickable are on
-					// the OUTER Box (not the inner 40dp Surface) so the touch target matches IconButton's
-					// own 48dp minimum and Role.Button/onLongClickLabel are announced - IconButtonKt's real
-					// clickable is set up the same way, on the node minimumInteractiveComponentSize sized,
-					// not on a smaller visual child nested inside it.
+					// Material3's IconButton family exposes no onLongClick, so Send is a hand-rolled Surface
+					// with combinedClickable on the outer Box, which is what announces Role.Button.
 					Box(
 						modifier = Modifier
-							.minimumInteractiveComponentSize()
+							.size(width = 56.dp, height = 40.dp)
+							.clip(RoundedCornerShape(8.dp))
 							.combinedClickable(
 								enabled = sendEnabled,
 								role = Role.Button,
@@ -2941,8 +2945,8 @@ fun ThreadScreen(
 						contentAlignment = Alignment.Center,
 					) {
 						Surface(
-							modifier = Modifier.size(40.dp),
-							shape = CircleShape,
+							modifier = Modifier.fillMaxSize(),
+							shape = RoundedCornerShape(8.dp),
 							color = if (sendEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
 							contentColor = if (sendEnabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
 						) {
