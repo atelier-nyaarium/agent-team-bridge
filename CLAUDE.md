@@ -29,6 +29,14 @@
     - `discord/` - Discord utilities (validateMessageParts, used by tests)
   - `mcp/` - **MCP plugin** - Tools registered for Claude Code and other IDE agents
     - `index.ts` - MCP server initialization, mode detection (host vs container), tool registration
+    - `references/` - **Artifact references** - resolving `ref://` links an agent writes into file snapshots (see Artifact references below)
+      - `refGrammar.ts` - `parseRef`/`canonicalKey`: the ref URI grammar and its canonical identity
+      - `refScanner.ts` - `scanRefs`: markdown link destinations outside code, deduped by canonical key
+      - `refFile.ts` - `loadRefFile`: project-confined read plus the UTF-16/binary decision
+      - `refResolver.ts` - `resolveRef`: the tree-sitter scope walk, fragment matching, and degradation tiers
+      - `artifactBuilder.ts` / `artifactNames.ts` - the manifest, snapshot naming, and the size budgets
+      - `attachRefs.ts` - `appendRefArtifacts`: the one entry point both reply tools call
+      - `grammarSources.ts` - the pinned grammar list and the extension-to-grammar map
     - `capabilities.ts` - `fetchCapabilities`: the bounded, single-attempt read of the gateway's capability union a session makes before its MCP server exists, plus `hasCapability`/`capabilityInstructions` and `GATED_CAPABILITY_IDS` (the one list both the tool gates and the fail-open set derive from)
     - `bridge/` - **Crosstalk tools** - Cross-team communication via the gateway
       - `helpers.ts` - Bridge state, WebSocket connection to router, routerPost/routerGet, `postPluginAction` (self-scoped POST /plugin-action wrapper - takes no target/team param, so a plugin-action tool cannot smuggle a different destination through it), and the handshake role cache (`confirmHandshakeRole`) that lets a reconnect confirm its remembered lead/worker answer silently instead of re-answering the bridge handshake every time
@@ -253,6 +261,44 @@ A power-user view in the Console that drives an agent's RAW tmux pane (distinct 
 - **Host RPC:** the gateway sends a `host_op` frame (a `reqId` + a `HostOp`) and correlates the reply by `reqId` through `HostOpCoordinator` (`gateway/hostOpCoordinator.ts`, mirroring `evieClient`'s pending-calls; `failAll` on a host disconnect), via `relayToHost` in `gateway/index.ts`. The host daemon (`hostDaemon.ts`) runs it through `createHostOpRunner` (`mcp/devcontainer/hostOpRunner.ts`: peek single-flight + a cadence floor + a concurrency cap; the mutating ops - send / create_session / reload_plugins - dedup by `(conversationId, opId)` so a relay timeout or gateway restart replays the ack instead of re-running). The tmux primitives live in `mcp/devcontainer/tmuxCore.ts` (spawn argv - no shell; `--`-guarded literal text submitted atomically with a trailing CR; a slug-validated target name; an ANSI visible-pane capture with a byte cap + content hash; `hasSession`/`ensureSession` reattach-or-create so a create no longer errors on a duplicate). The wake path reports a FAILED wake when a freshly launched pane never captures (a dead launch - bad bashrc, claude off PATH), so `/send` fails fast instead of stalling. The wire vocabulary is the type-only `shared/host-op.ts` (deliberately no zod/codegen - it rides the trusted, token-authenticated host link, not the untrusted evie relay).
 - **Targets:** the `host` machine (the `"host"` target, run via bare `tmux`) and a locally-backed `kind: "devcontainer"` (`docker exec` into `<name>_devcontainer-dev-1`). A `TmuxTarget` carries a `sessionName` and the pane is always `.0`. The session rides in the address: `peek`/`tmux_send`/`reload_plugins` derive it from a composite `project.session` target (a bare name keeps the conventional `claude` session for back-compat), while `create_session` passes an explicit new session name. `resolveTmuxTarget` (`consoleHandler.ts`) does catalog-first disambiguation (a whole-name project match wins, else the last separator splits the session off) and validates the resolved name via the shared `assertTmuxName`/`isTmuxName` (`shared/host-op.ts`, slug + 64-char cap, enforced at both the gateway boundary and the host sinks). Loose and cross-Gateway targets are gated off, as is the daemon's own reserved `host-daemon` session (`isReservedHostSession`, also backstopped in `tmuxCore` create/kill).
 - **Auth:** the reserved `host` WS slot is authenticated with `HOST_WS_TOKEN` (auto-provisioned into `.env` by `start-gateway.sh`, read by `start-host-daemon.sh`) so a LAN peer cannot squat it to read/forge panes or capture keystrokes.
+
+### Artifact references (`ref://` links to code)
+
+An agent writes a markdown link to `ref://path:Scope:Name#matcher`. The MCP scans its outgoing
+message, resolves each ref against the real file with tree-sitter, and attaches a manifest plus file
+snapshots so a console can render a code viewer at the right place. Lives in `mcp/references/`; the
+full design, the questionaire, and the audit rounds are in `plans/artifact-references.md`.
+
+- **Grammar toolchain:** seven wasm grammars (TS, TSX, JS, C++, C#, Python, GDScript) COMMITTED under
+  `grammars/`, built by `scripts/build-grammars.ts` from pinned npm sources with a `tree-sitter-cli`
+  matched to the `web-tree-sitter` release line. Never harvest a package's own prebuilt wasm: the
+  0.26 runtime will not load one built by an older CLI, and each package's prebuilt was cut whenever
+  its author last released. `grammars/manifest.json` records the toolchain, since a wasm cannot be
+  asked. `grammars.test.ts` loads every one and parses a snippet, so a dependency bump that breaks
+  the ABI fails in the PR. Rerun the script and commit after changing any pin.
+- **The canonical key is the contract.** `canonicalKey` splits on the structural `:`/`#` separators
+  BEFORE percent-decoding, so a literal `%3A` in a filename can never be read as a scope separator.
+  The key must be IDEMPOTENT: the MCP writes it as a manifest key and the console recomputes it from
+  a tapped link, so anything `parseRef` strips (a surrounding angle-bracket PAIR, surrounding
+  whitespace) must be escaped by the encoders, or two distinct refs merge onto one key after a single
+  re-canonicalization pass. `tests/fixtures/refs/vectors.json` is the shared corpus, registered in
+  the cross-runtime manifest so the Kotlin twin is forced to read it too.
+- **Detection is asymmetric on purpose.** `scanRefs` matches only markdown link destinations outside
+  fenced blocks and inline code. Failing to mask attaches a snapshot for a documented example and can
+  hard-fail the send; over-masking silently drops a ref the agent meant, with no error anywhere.
+  Backtick pairing is confined to one CommonMark block, or a lone backtick used as casual punctuation
+  reaches across a blank line, pairs with an unrelated one, and swallows every ref between them.
+- **Confinement is not a nicety.** Refs are scanned out of a full message body, and a message can
+  carry relayed text, so an unconfined resolver would be a way to make an agent attach any file its
+  process can read. Absolute paths and `..` are refused before joining, and the realpath must land
+  inside the root, which is what catches a symlink.
+- **Hard failure lives only in the file and builder tiers** (missing, unreadable, binary, escaping,
+  over-cap-with-no-range; and a single range over the per-file cap, budget exhaustion, or a reserved
+  name collision). RESOLUTION always degrades: a renamed class or a moved line ships anyway with a
+  banner, because refusing to send a message over a stale pointer is worse than opening the reader
+  in roughly the right place.
+- **Gating:** `setReferencesEnabled` is driven by the capability union at startup. `references` is
+  deliberately NOT in the fail-open set, so this stays off until a console plugin renders it.
 
 ### Console capability union (which tools a session gets)
 

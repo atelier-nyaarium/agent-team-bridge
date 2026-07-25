@@ -415,7 +415,14 @@ version compat.
   session on another same-Domain gateway finds `known: false` and lands on the fail-open core
   set. The future fix mirrors fanOutConsolePush; out of scope here ("Only 1 PC anyways").
 
-## Phase 2: MCP ref detection + resolution engine
+## Phase 2: MCP ref detection + resolution engine ✅ SHIPPED (residue open)
+
+Built and audited across six angles. Both blockers and five significant findings are fixed and
+pinned; nine smaller ones are listed under "Phase 2 audit residue" at the end of this file and are
+the first work of the next lap. The framework-first pass was deliberately skipped this lap, since
+the residue list already exceeds what one lap should carry. Not deployed: gateway, MCP, and APK ship
+together by the clean-break ruling, and the `references` capability stays out of the fail-open set
+until Phase 3 ships the console viewer.
 
 - **Grammar toolchain:** a checked-in build script (pinned tree-sitter-cli version MATCHED to the
   pinned web-tree-sitter release line, emsdk or the CLI's docker fallback) builds every grammar
