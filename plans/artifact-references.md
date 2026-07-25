@@ -796,6 +796,31 @@ and then whitespace, each time making the canonical key non-idempotent.
 vectors pin parse results, canonical keys, AND error codes with offsets, so a divergence in
 rejection behavior fails the build too, not only a divergence in success.
 
+## Phase 3 progress
+
+**Kotlin canonicalizer twin (done).** `android/.../proto/RefGrammar.kt` mirrors the lexer and parser:
+same two modes, same token kinds, same productions, same derived escape sets.
+`RefGrammarVectorsTest` reads the shared corpus and pins parse results, canonical keys, `distinctFrom`
+non-collision, idempotency, error codes WITH offsets, and a totality sweep that never throws.
+
+Two Kotlin-specific divergences had to be written against explicitly, both of the exact class that
+already bit the filename sanitizer earlier:
+
+- **Iteration unit.** JS `for (const c of str)` walks code points; Kotlin `for (c in str)` walks
+  UTF-16 units, so an astral character would lex as two tokens and encode as two escaped halves. Both
+  the lexer and the printer walk code points deliberately.
+- **Invalid UTF-8.** `decodeURIComponent` throws and the lexer falls back to literal text, while
+  Kotlin's `String(bytes, UTF_8)` substitutes U+FFFD and succeeds. The twin uses a decoder with
+  `REPORT` so it fails the same way.
+
+**The corpus was wrong and the twin caught it.** `ref://` was listed under `notRefs`, but both
+runtimes classify it as a malformed ref (`path-required`). The TS assertion only checked
+`parseRef(...) === null`, which is true for a malformed ref as well, so it could not see the
+difference; the Kotlin test asserts the classification itself and failed. Fixed in the corpus, and the
+TS assertion now checks `{kind: "not-a-ref"}` so that side can catch the class too. Worth noting as
+evidence for the earlier lesson: a cross-runtime corpus only earns its keep if both sides assert the
+distinction, not merely the outcome.
+
 ## Phase 2 audit residue (open, next lap)
 
 Six audit angles ran against the shipped Phase 2. Both blockers and five significant findings are

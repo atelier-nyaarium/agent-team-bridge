@@ -14,7 +14,14 @@ interface Vector {
 	distinctFrom?: string;
 }
 
-const CORPUS: { vectors: Vector[]; notRefs: string[] } = JSON.parse(
+interface ErrorVector {
+	id: string;
+	uri: string;
+	code: string;
+	offset: number;
+}
+
+const CORPUS: { vectors: Vector[]; notRefs: string[]; errors: ErrorVector[] } = JSON.parse(
 	fs.readFileSync(path.join(import.meta.dirname, "..", "..", "tests", "fixtures", "refs", "vectors.json"), "utf8"),
 );
 
@@ -43,9 +50,17 @@ describe("the ref grammar vectors", () => {
 	});
 
 	it.each(
+		CORPUS.errors.map((e) => [e.id, e] as const),
+	)("refuses %s with its declared code and offset", (_id, vector) => {
+		expect(tryParseRef(vector.uri)).toMatchObject({ kind: "error", code: vector.code, offset: vector.offset });
+	});
+
+	it.each(
 		CORPUS.notRefs.map((s) => [JSON.stringify(s), s] as const),
-	)("declines %s, which is not a ref", (_l, uri) => {
-		expect(parseRef(uri)).toBeNull();
+	)("declines %s, which is not a ref at all", (_l, uri) => {
+		// The classification matters, not just the null: a malformed ref is ALSO null through
+		// parseRef, so asserting only that cannot tell "not a ref" from "a broken one".
+		expect(tryParseRef(uri)).toEqual({ kind: "not-a-ref" });
 	});
 });
 
