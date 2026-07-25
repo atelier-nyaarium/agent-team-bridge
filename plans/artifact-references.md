@@ -813,6 +813,44 @@ already bit the filename sanitizer earlier:
   Kotlin's `String(bytes, UTF_8)` substitutes U+FFFD and succeeds. The twin uses a decoder with
   `REPORT` so it fails the same way.
 
+**Tap chain and viewer (done).** `linkHandlers` is a new extension point: a plugin declares a
+`scheme` and gets `tryOpen(context, TappedLink)`. The scheme is declared rather than inferred because
+the RENDERER needs it before any tap, to style a claimed link as live rather than broken.
+
+The claimed tier renders BLUE but stays INERT, which is deliberate and worth not undoing: a kept
+href is tapped through WebView navigation, which cannot see which ROW the anchor sits in, and the
+same ref in two messages points at two different snapshots. Only the JS tap path carries row
+identity, so `linkTap(rowId, rowAt, href)` rides the readUpTo bridge pattern and the FRAMEWORK
+resolves `(team, rowId, rowAt)` to the live row before any plugin sees it. A plugin never looks a row
+up itself.
+
+The miss contract is every path out of `RefLinkHandler.tryOpen` that cannot show code returning
+false: no manifest on the row (a crosstalk body is never scanned, and its peer mirror carries none),
+a key absent from this message's manifest, a purged snapshot, a manifest that does not validate. All
+fall back to the link menu with the URL visible.
+
+Manifest selection is narrow: the FIRST file bearing the reserved name that parses AND carries its
+marker, and a manifest naming a snapshot absent from its own row is rejected wholesale rather than
+partly trusted. Pinned by `RefManifestTest`.
+
+**Chip hide.** `ChipDecoration` gained an explicit `hidden` verdict rather than a magic
+title/kind sentinel, honored in `buildFiles`. A reference artifact is machinery the reader never
+chose to send, and rendering it as a file invites a tap that opens raw source instead of the viewer
+the link already provides.
+
+**`references` is now in the fail-open set,** which is what switches the feature on: a console plugin
+renders it, so a session with no gateway answer may assume it. Two capability tests were loosened
+from exact membership to `arrayContaining`, since the core set legitimately grows as plugins ship and
+the manifest fixture already pins membership against the shipped plugin folders.
+
+**Still open in Phase 3:** the chat-body amber tier for a fuzzy ref. The drain-time index records
+per-ref quality already; what is missing is threading that map through the serialization payload so
+`link_open` can tag `link-fuzzy` (the CSS rule exists). Everything else in the tap-to-viewer path is
+built. The viewer itself ships a line gutter, blue range bands, amber character spans applied by a
+post-highlight text-node walk, a dismissible banner, breadcrumb, snippet elision markers with true
+line numbers, and light/dark theming; a GDScript hljs grammar is not vendored yet, so `.gd` renders
+as escaped plain text rather than highlighted.
+
 **The corpus was wrong and the twin caught it.** `ref://` was listed under `notRefs`, but both
 runtimes classify it as a malformed ref (`path-required`). The TS assertion only checked
 `parseRef(...) === null`, which is true for a malformed ref as well, so it could not see the

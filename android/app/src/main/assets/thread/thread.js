@@ -11,7 +11,7 @@
 //   thread.revealFirstUnread(idOrNull, regionIds)   re-snap/hold an already-rendered transcript
 //   thread.flushReadUpTo()                          flush any pending debounced read receipt now
 // Message shape: {id, role: "user"|"agent", from, at, body, status?, counts?, ownSend?,
-//   arrivedVisible?, files?: [{name, mime, src?, decoration?: {title, kind}}]}
+//   arrivedVisible?, files?: [{name, mime, src?, decoration?: {title, kind, hidden?}}]}
 // `counts`: this row counts toward unread (an inbound row with real mailbox coordinates).
 // `ownSend`: this row is the local optimistic send (never a settled echo from another device).
 // `arrivedVisible`: present (false) only when the row arrived while the app was backgrounded.
@@ -318,6 +318,9 @@
 		const wrap = document.createElement("div");
 		wrap.className = "files";
 		for (const f of files) {
+			// A decoration may drop the chip outright: some attachments are machinery a plugin
+			// already surfaces another way, and rendering them as files invites a misleading tap.
+			if (f.decoration && f.decoration.hidden === true) continue;
 			const isImage = f.mime && f.mime.indexOf("image/") === 0 && f.src;
 			if (isImage) {
 				const img = document.createElement("img");

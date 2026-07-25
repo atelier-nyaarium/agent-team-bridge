@@ -37,6 +37,10 @@ internal fun renderedSender(m: Message, resolve: (String) -> String, selfName: S
 class ChipDecoration(
 	val title: String,
 	val kind: String,
+	/** Drop the chip entirely rather than restyling it. For an attachment that is machinery the
+	 * reader never chose to send, such as a reference snapshot: showing it as a file would invite a
+	 * tap that opens a copy of source rather than the viewer the link already provides. */
+	val hidden: Boolean = false,
 )
 
 /** The transcript payload the bundled web app receives (thread.js's setMessages/appendMessages).
@@ -76,7 +80,10 @@ internal fun messagesToJson(
 			for (f in m.files) {
 				val fileObj = JSONObject().put("name", f.name).put("mime", f.mime).put("src", f.src)
 				decorate(f)?.let { d ->
-					fileObj.put("decoration", JSONObject().put("title", d.title).put("kind", d.kind))
+					fileObj.put(
+						"decoration",
+						JSONObject().put("title", d.title).put("kind", d.kind).put("hidden", d.hidden),
+					)
 				}
 				files.put(fileObj)
 			}

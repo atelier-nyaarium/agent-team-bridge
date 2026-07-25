@@ -38,7 +38,7 @@ export type CapabilityId = (typeof GATED_CAPABILITY_IDS)[number];
  * A gated id belongs here once a shipped console plugin renders it, and not before: assuming a
  * surface no device can draw would attach snapshots nothing opens.
  */
-const FAIL_OPEN_IDS: CapabilityId[] = ["designer"];
+const FAIL_OPEN_IDS: CapabilityId[] = ["designer", "references"];
 
 const FAIL_OPEN: Capability[] = FAIL_OPEN_IDS.map((id) => ({ id }));
 

@@ -96,7 +96,9 @@ describe("fetchCapabilities", () => {
 			vi.fn(async () => jsonResponse({ oops: true })),
 		);
 
-		expect(await fetchCapabilities(ROUTER)).toEqual([{ id: "designer", instructions: "Prefer Switchboard." }]);
+		// The cached entry's own guidance must survive; the rest of the core set rides along and grows
+		// as plugins ship, which the manifest fixture pins separately.
+		expect(await fetchCapabilities(ROUTER)).toContainEqual({ id: "designer", instructions: "Prefer Switchboard." });
 	});
 
 	it("remembers a fresh answer for the next start that cannot reach the gateway", async () => {
@@ -138,7 +140,8 @@ describe("fetchCapabilities", () => {
 
 		const capabilities = await fetchCapabilities(ROUTER);
 
-		expect(capabilities.map((c) => c.id).sort()).toEqual(["designer", "notes"]);
+		expect(capabilities.map((c) => c.id)).toContain("notes");
+		expect(capabilities.map((c) => c.id)).toEqual(expect.arrayContaining([...FAIL_OPEN_CAPABILITY_IDS]));
 		expect(capabilityInstructions(capabilities)).toContain("Jot it down.");
 	});
 
