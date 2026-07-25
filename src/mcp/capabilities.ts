@@ -24,12 +24,9 @@ export type Capability = z.infer<typeof EnabledPluginSchema>;
 // This bound exists so an unreachable one costs a beat rather than the session's whole startup.
 const FETCH_TIMEOUT_MS = 1500;
 
-/**
- * The capability-gated tool bundles this build ships. Deriving the fail-open set from the same list
- * the gates read means the two cannot disagree. A separate hand-written set eventually misses an id,
- * and the miss is invisible from both sides: the session simply comes up without the tool.
- */
-export const GATED_CAPABILITY_IDS = ["designer"] as const;
+/** Every capability this build gates something on. The type derives from it, so a gate against an
+ * id nothing reports is a compile error rather than a surface that silently never appears. */
+export const GATED_CAPABILITY_IDS = ["designer", "references"] as const;
 
 export type CapabilityId = (typeof GATED_CAPABILITY_IDS)[number];
 
@@ -37,8 +34,16 @@ export type CapabilityId = (typeof GATED_CAPABILITY_IDS)[number];
  * What a session assumes when the gateway cannot say. Fail OPEN: an agent with a tool the owner
  * cannot render loses nothing, while an agent missing a tool the owner does have is a silent
  * capability outage with no error anywhere. Only an affirmative answer ever removes a tool.
+ *
+ * A gated id belongs here once a shipped console plugin renders it, and not before: assuming a
+ * surface no device can draw would attach snapshots nothing opens.
  */
-const FAIL_OPEN: Capability[] = GATED_CAPABILITY_IDS.map((id) => ({ id }));
+const FAIL_OPEN_IDS: CapabilityId[] = ["designer"];
+
+const FAIL_OPEN: Capability[] = FAIL_OPEN_IDS.map((id) => ({ id }));
+
+/** The fail-open subset, exported so a fixture can hold it against the shipped plugin manifests. */
+export const FAIL_OPEN_CAPABILITY_IDS: readonly CapabilityId[] = FAIL_OPEN_IDS;
 
 function cacheFile(): string {
 	return path.join(os.homedir(), ".config", "switchboard", "capabilities-cache.json");

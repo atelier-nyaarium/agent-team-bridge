@@ -16,6 +16,7 @@ import { registerDesignerTools } from "./designer/designerTools.js";
 import { registerCompactSession } from "./devcontainer/compactSession.js";
 import { registerReloadPlugins } from "./devcontainer/reloadPlugins.js";
 import { registerSetEffortLevel } from "./devcontainer/setEffortLevel.js";
+import { setReferencesEnabled } from "./references/attachRefs.js";
 import { resolveSessionNaming } from "./team-name.js";
 
 ////////////////////////////////
@@ -74,6 +75,10 @@ export async function startMcp(): Promise<void> {
 	// Gated on the owner having the plugin that renders these cards: a session picks up a plugin
 	// toggle on its next start, which is why the console's own board calls it a restart-to-adopt.
 	if (hasCapability(capabilities, "designer")) registerDesignerTools(mcpServer);
+	// Ref snapshotting is not a tool of its own: it rides the reply path, so it is switched on here
+	// rather than registered. A session whose owner has no console able to render a code viewer never
+	// pays to build one.
+	setReferencesEnabled(hasCapability(capabilities, "references"));
 
 	// The game-client connector serves /workspace project schemas, so it is container-only. The
 	// registered name is composite (`project.session`); the workspace dir + schema are keyed by the

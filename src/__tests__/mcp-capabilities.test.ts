@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { capabilityInstructions, fetchCapabilities, GATED_CAPABILITY_IDS, hasCapability } from "../mcp/capabilities.js";
+import {
+	capabilityInstructions,
+	FAIL_OPEN_CAPABILITY_IDS,
+	fetchCapabilities,
+	hasCapability,
+} from "../mcp/capabilities.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -179,7 +184,7 @@ describe("capabilityInstructions", () => {
 	});
 });
 
-describe("the gated capability ids", () => {
+describe("the fail-open capability ids", () => {
 	it("each name a plugin the console actually ships, so a renamed manifest fails here", () => {
 		// A plugin id is documented to become `<author>.<content_id>` on a per-repo split, so this
 		// rename is planned work. Without this check it lands silently: the gateway stops reporting
@@ -204,6 +209,6 @@ describe("the gated capability ids", () => {
 				return manifest.author ? `${manifest.author}.${manifest.content_id}` : manifest.content_id;
 			});
 
-		expect(shipped).toEqual(expect.arrayContaining([...GATED_CAPABILITY_IDS]));
+		expect(shipped).toEqual(expect.arrayContaining([...FAIL_OPEN_CAPABILITY_IDS]));
 	});
 });

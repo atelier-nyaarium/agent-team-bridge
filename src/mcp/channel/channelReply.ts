@@ -7,6 +7,7 @@ import {
 } from "../../shared/schemas.js";
 import { bridgeConversationId, confirmHandshakeRole } from "../bridge/helpers.js";
 import { postReply, readReplyAttachment, type ToolTextResult, toolError } from "../bridge/replyTool.js";
+import { appendRefArtifacts } from "../references/attachRefs.js";
 
 ////////////////////////////////
 //  Payload builders (pure - the wire mapping, testable without a network call)
@@ -40,13 +41,22 @@ export async function handleChannelReply(args: ChannelReplyArgs): Promise<ToolTe
 	// scopes the write to a handshake this process actually received.
 	confirmHandshakeRole(args.session_id, /true/i.test(args.full));
 	const payload = buildChannelReplyPayload(args);
+	let files: Array<Awaited<ReturnType<typeof readReplyAttachment>>> = [];
 	if (args.attachments && args.attachments.length > 0) {
 		try {
-			payload.files = await Promise.all(args.attachments.map(readReplyAttachment));
+			files = await Promise.all(args.attachments.map(readReplyAttachment));
 		} catch (err) {
 			return toolError(`Attachment error: ${(err as Error).message}`);
 		}
 	}
+
+	// Snapshots ride alongside the agent's own attachments, and are named against them, so a ref and
+	// an attachment can never land on one filename. A hard failure here stops the send on purpose:
+	// the agent is still in the loop and can narrow or correct the ref it wrote.
+	const withRefs = await appendRefArtifacts(args.full, files);
+	if (!withRefs.ok) return toolError(withRefs.error);
+	if (withRefs.files.length > 0) payload.files = withRefs.files;
+
 	return postReply(payload, { toolName: "channel_reply", logPrefix: "channel", responseFieldLabel: "full" });
 }
 
