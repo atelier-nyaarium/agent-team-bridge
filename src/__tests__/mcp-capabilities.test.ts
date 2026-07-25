@@ -2,12 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-	capabilityInstructions,
-	FAIL_OPEN_CAPABILITY_IDS,
-	fetchCapabilities,
-	hasCapability,
-} from "../mcp/capabilities.js";
+import { capabilityInstructions, fetchCapabilities, GATED_CAPABILITY_IDS, hasCapability } from "../mcp/capabilities.js";
 import { EnabledPluginSchema } from "../shared/schemas.js";
 
 ////////////////////////////////
@@ -70,7 +65,9 @@ describe("fetchCapabilities", () => {
 		expect(hasCapability(await fetchCapabilities(ROUTER), "designer")).toBe(false);
 	});
 
-	it("keeps the tool when the gateway is unreachable, rather than silently dropping it", async () => {
+	// Nothing is assumed. Every gated id is a plugin the owner opts into, so a hardcoded set would be
+	// the code guessing on the owner's behalf with the least evidence it will ever have.
+	it("assumes nothing on a cold start that has never reached the gateway", async () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => {
@@ -78,13 +75,27 @@ describe("fetchCapabilities", () => {
 			}),
 		);
 
-		expect(hasCapability(await fetchCapabilities(ROUTER), "designer")).toBe(true);
+		expect(await fetchCapabilities(ROUTER)).toEqual([]);
 	});
 
-	it("keeps the tool when the gateway has no opinion yet, since no device has ever reported", async () => {
+	it("assumes nothing when the gateway has no opinion and nothing was ever cached", async () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => jsonResponse({ known: false, capabilities: [] })),
+		);
+
+		expect(await fetchCapabilities(ROUTER)).toEqual([]);
+	});
+
+	// The case a fail-open set was invented for, answered with evidence instead: a blip cannot strip a
+	// session's tools, because the last real answer is still on disk.
+	it("keeps the tool through an outage when the gateway had already answered once", async () => {
+		writeCache({ known: true, capabilities: [{ id: "designer", instructions: "Use it." }] });
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => {
+				throw new Error("ECONNREFUSED");
+			}),
 		);
 
 		expect(hasCapability(await fetchCapabilities(ROUTER), "designer")).toBe(true);
@@ -119,15 +130,16 @@ describe("fetchCapabilities", () => {
 		expect((await fetchCapabilities(ROUTER)).map((c) => c.id)).toContain("notes");
 	});
 
-	it("never lets a stale cache take away a tool the gateway did not speak to", async () => {
-		// The owner had everything off when this was cached; since then the gateway lost its records.
+	it("trusts a cache that recorded the owner turning everything off", async () => {
+		// This used to be floored back on by the fail-open set, which meant a guess overriding the one
+		// piece of evidence available: the owner's own last known choice.
 		writeCache({ known: true, capabilities: [] });
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => jsonResponse({ known: false, capabilities: [] })),
 		);
 
-		expect(hasCapability(await fetchCapabilities(ROUTER), "designer")).toBe(true);
+		expect(hasCapability(await fetchCapabilities(ROUTER), "designer")).toBe(false);
 	});
 
 	it("carries a cached plugin the core set does not know about through an outage", async () => {
@@ -142,7 +154,6 @@ describe("fetchCapabilities", () => {
 		const capabilities = await fetchCapabilities(ROUTER);
 
 		expect(capabilities.map((c) => c.id)).toContain("notes");
-		expect(capabilities.map((c) => c.id)).toEqual(expect.arrayContaining([...FAIL_OPEN_CAPABILITY_IDS]));
 		expect(capabilityInstructions(capabilities)).toContain("Jot it down.");
 	});
 
@@ -153,7 +164,7 @@ describe("fetchCapabilities", () => {
 			vi.fn(async () => new Response("nope", { status: 500 })),
 		);
 
-		expect(hasCapability(await fetchCapabilities(ROUTER), "designer")).toBe(true);
+		expect(await fetchCapabilities(ROUTER)).toEqual([]);
 	});
 
 	it("gives up rather than hanging the session behind an unresponsive gateway", async () => {
@@ -167,9 +178,12 @@ describe("fetchCapabilities", () => {
 			),
 		);
 
+		writeCache({ known: true, capabilities: [{ id: "designer", instructions: "Use it." }] });
 		const started = Date.now();
 		const capabilities = await fetchCapabilities(ROUTER);
 
+		// The subject here is the deadline, so the cache is seeded: a hung gateway must cost a beat and
+		// then hand back the last real answer, rather than holding the session open.
 		expect(Date.now() - started).toBeLessThan(5_000);
 		expect(hasCapability(capabilities, "designer")).toBe(true);
 	}, 10_000);
@@ -188,24 +202,6 @@ describe("capabilityInstructions", () => {
 	});
 });
 
-describe("what fails open, and what deliberately does not", () => {
-	// Fail-open's argument is about TOOLS: holding one the owner cannot render costs nothing. It does
-	// not transfer to a side effect on the reply path. References registers no tool, so assuming it
-	// means every message the owner receives carries snapshot attachments nothing can open, and the
-	// silent failure lands on the side that costs them something. This drifted once already: the
-	// comment argued the case ("would attach snapshots nothing opens") while the list said otherwise.
-	it("does not assume references, which attaches files rather than offering a tool", () => {
-		expect(FAIL_OPEN_CAPABILITY_IDS).not.toContain("references");
-	});
-
-	// A fail-open entry is a bare id: the guidance lives in the plugin's own manifest, so there is
-	// none to carry. Anything assumed here therefore runs with no instructions in any description,
-	// which is only safe for a surface an agent has to deliberately call.
-	it("carries no instruction text, which is why an assumed capability must not need any", () => {
-		expect(capabilityInstructions(FAIL_OPEN_CAPABILITY_IDS.map((id) => ({ id })))).toBe("");
-	});
-});
-
 /** Every plugin manifest the console app actually ships, as the entry a device reports from it. */
 function shippedPlugins(): { id: string; instructions?: string }[] {
 	const pluginsDir = path.join(import.meta.dirname, "..", "..", "android", "app", "src", "main", "assets", "plugins");
@@ -221,13 +217,13 @@ function shippedPlugins(): { id: string; instructions?: string }[] {
 		});
 }
 
-describe("the fail-open capability ids", () => {
+describe("the gated capability ids", () => {
 	it("each name a plugin the console actually ships, so a renamed manifest fails here", () => {
 		// A plugin id is documented to become `<author>.<content_id>` on a per-repo split, so this
 		// rename is planned work. Without this check it lands silently: the gateway stops reporting
-		// the old id, the gate stops matching, and the tools vanish from every session with the
-		// fail-open set still holding the old name, so the outage looks intermittent.
-		expect(shippedPlugins().map((p) => p.id)).toEqual(expect.arrayContaining([...FAIL_OPEN_CAPABILITY_IDS]));
+		// the old id, the gate stops matching, and the surface vanishes from every session while the
+		// gate still holds the old name, so the outage looks intermittent.
+		expect(shippedPlugins().map((p) => p.id)).toEqual(expect.arrayContaining([...GATED_CAPABILITY_IDS]));
 	});
 });
 
