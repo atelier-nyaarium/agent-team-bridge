@@ -204,6 +204,41 @@ Gateway side of a native Android chat client that reaches the bridge through evi
 - **Multi-gateway console-bound delivery:** a Domain can run more than one Gateway, but the console only polls its one route Gateway - so content composed on a *different* same-Domain Gateway (a peer-mirror row, a `notify_human` notice, or a plugin action on a Gateway with no console ever registered against it) has to be relayed there. `routes.ts`'s `fanOutConsolePush` is the origin-side fan-out: after `mirrorPeer`/`humanNotify`/`pluginAction` land their entry on the local mailbox, it enumerates every other same-Domain Gateway via evie's `list_gateways` (the same call `discover()` makes), self-excludes and filters through the locally-mirrored Allowlist, and relays a `console_push` `FederatedOp` to each over the existing sealed `gateway_relay` transport. The landing side (`routes.consolePush`, reached through `gatewayRelay.ts`'s `handleOp`) only ever appends locally and never re-fans-out - origin-only, so an entry cannot gossip-loop around the mesh. `console_push` is gated same-Domain-only at the destination with no exceptions (a cross-Domain sender is hard-denied before any mailbox write), stricter than every other `FederatedOp` kind. Delivery is idempotent per `dedupeKey` (feeding `DeviceMailbox.append`'s `seenKeys` map directly - `ReplayGuard` can't serve this role, since it mints a fresh nonce per relay attempt including retries). `mirrorPeer`/`humanNotify`/`pluginAction`/`routes.consolePush` all land their entry through one shared `landMailboxEntry` helper, so the dedupeKey-embedding convention has one writer instead of four.
 - **Trust:** frames are zod-validated at the boundary (`ConsoleRelayFrameSchema`) AND E2E sealed: the gateway opens each frame through the `consoleSealer` (verifies the console's signature against an owner-signed `kind:console` admission, decrypts with its box key, replay- and freshness-checks) before dispatch, so it trusts a frame because it is signed by an admitted console, not because it arrived on the evie WS. Each conversationId is bound to its first signing key (a console cannot operate another install's mailbox by borrowing its conversationId). The bearer token is the coexistence-window relay gate at evie, retired by W5. Adds no new HTTP surface.
 
+### Session identity binding (which session may speak as which name)
+
+A `SessionRecord` may carry a `bindToken`: a secret minted when the gateway dispatches a launch and
+delivered ONLY through the daemon's launch command (`buildLaunchCommand` exports
+`SWITCHBOARD_SESSION_TOKEN` beside `PROJECT_NAME`, over the already-`HOST_WS_TOKEN`-gated channel).
+The MCP presents it at register and as `x-session-token` on every HTTP call. This closes
+CROSS-PROJECT impersonation: a compromised devcontainer cannot register as another project's
+session, forge `from` on `/send`, `/human/notify` or `/plugin-action`, answer another session's
+handshake or vibe check, or forge a reply into a conversation it does not own. Same-project panes
+share one container and one uid, so they remain mutually impersonable by OS construction - that is
+a permanent, accepted residual, not a gap.
+
+`gateway/sessionAuthority.ts` is the SOLE owner of "what must a caller prove to act as X". Nothing
+else reads the credential fields; a residue test (`__tests__/session-authority.test.ts`) fails the
+build if any module outside it and `session-store.ts` mentions them. It answers two genuinely
+different questions plus one named composition, and collapsing them re-introduces bugs that were
+already paid for:
+
+- `toClaim(teamKey)` - NAME-keyed, and the only place inert-awareness lives. A token minted for a
+  launch that merely reattached was never delivered (a reattach discards the launch command), so a
+  binding stays INERT until a register actually presents it (`bindActiveAt`). Without this, every
+  reattach and gateway restart would strand its own session.
+- `toAnswerFor(ws)` - SOCKET-keyed, deliberately NOT record-derived: a `claude --resume` alias
+  incarnation legitimately serves a bound record under its own unbound name and holds no token.
+- `toActFor(teamKey)` - the composition, live-first with a record fallback, because asleep is a
+  session's normal state and the easiest moment to forge into.
+
+`satisfies` is the only comparator (timing-safe; a missing presentation is a refusal, never a
+fallback) and `sameAs` the only identity check. `SessionBinding` is opaque and UNBOUND is a VALUE a
+resolver returns, never an absence a caller falls into - that property is what makes a gate unable
+to manufacture an accidental permit, which was the shape of every bug this replaced.
+
+Deferred and tracked in `plans/pain-points.md`: the LAN-stranger origin gate, read-side ownership
+on `/poll` and `/pending`, the ungated fan-out, and `bindResume`'s transcript-id path.
+
 ### Console terminal view (peek + tmux_send)
 
 A power-user view in the Console that drives an agent's RAW tmux pane (distinct from the chat): the `peek` op captures the visible ANSI screen, `tmux_send` injects literal text or a whitelisted control key (Enter/Escape/C-c/arrows/Tab), `create_session` starts a new named tmux session running a fresh agent, or reattaches if that session already exists (the daemon builds the launch command, the console supplies only the target + name), and `reload_plugins` drives a session through the plugin update + MCP reconnect sequence. All are sealed `ConsoleOp` variants on the same trust path as the chat ops, and reach the host machine through a gateway<->host-daemon RPC layered on the existing host WebSocket:
@@ -303,14 +338,33 @@ earned rather than re-climbing from scratch. Full design, the questionaire, and 
 (plan alignment, an adversarial red team, and a framework-first pass) are in
 `plans/idle-pushback-manager.md`.
 
+### Composer drafts (Android)
+
+The pending outgoing message for a thread is ONE stored value: `Draft(text, files)` in
+`ChatState.drafts`, keyed by team. Files are already-copied `MessageFile` refs, not live picker
+grants, so a draft outlives both the grant and the process - attachments now survive a restart the
+way text always did, and `sweepOrphanAttachments` counts an open draft's files as referenced.
+Commands (`setDraftText`, `addDraftFiles`, `removeDraftFile`, `appendDraftText`, `clearDraft`) live
+on `ChatRepository`; the composer renders from the store rather than holding its own state, which is
+what keeps picked files from following a tab switch into the wrong session.
+
+`takeBackIntoDraft` is the single write path for handing a not-yet-sent message back to the
+composer, used by both the failed-row Cancel and the scheduled-send dock's cancel-for-edit. Files
+always UNION and text lands only on a blank draft: a file list has a meaningful merge so no caller
+can drop a pick, while text has none so anything already typed wins. Destroying composer contents is
+therefore not expressible at a call site, and `Draft.isOccupied` is the one definition of "the
+composer holds something" behind the Send button, the failed row's Cancel (mirrored into the
+WebView via `ThreadRenderer.setComposerOccupied`), and the dock's X.
+
 ### Scheduled Send (Android, client-local)
 
 Long-press the console's send button (`Schedule Send` / `Send`) to bank a message for a future
 wall-clock time instead of sending it live - purely client-local, no gateway involvement or wire
 shape. `ChatRepository.scheduleSend()`/`rescheduleSend()`/`cancelScheduledSend()` bank at most one
-`ScheduledSend` per team in `ChatState.scheduledSends` (mirrors the `drafts` storage pattern: plain
+`ScheduledSend` per team in `ChatState.scheduledSends` (mirrors the `Draft` storage pattern: plain
 SharedPreferences JSON, no special re-provisioning survival), eagerly copying any picked attachment
-into its own bucket at schedule time. A single shared `AlarmManager` alarm always targets the
+into its own bucket at schedule time. Cancelling for edit hands the record back through
+`takeBackIntoDraft` (see Composer drafts below) rather than restoring it itself. A single shared `AlarmManager` alarm always targets the
 earliest pending record (`ScheduledSendAlarmReceiver`, armed through `SwitchboardService`'s
 `ScheduledSendAlarmScheduler` implementation); firing funnels through the mutex-guarded
 `ChatRepository.fireDueScheduledSends()`/`fireOne()` from both the cold-boot chain and the
