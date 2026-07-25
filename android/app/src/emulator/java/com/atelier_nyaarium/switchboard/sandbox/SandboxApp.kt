@@ -25,10 +25,10 @@ import com.atelier_nyaarium.switchboard.Repo
 class SandboxApp : Application() {
 	override fun onCreate() {
 		super.onCreate()
-		// Plugins are opt-in and default off, which is right for a real install and useless here: with
-		// References off, `ref:` is not a claimed scheme, so every ref link renders as an inert red
-		// unhandled protocol and the artifact chips are not hidden. The first run of this sandbox
-		// showed exactly that, and it looks like a bug until you remember the toggle.
+		// An opt-in plugin is off by default, which is right for a real install and useless here: with
+		// a link-claiming plugin off, its scheme renders as an inert red unhandled protocol and looks
+		// broken. References is default-on now (AppStateStore.DEFAULT_ON_IDS) and deliberately NOT
+		// listed here, so a fresh install of this build is what verifies that default still holds.
 		for (id in SANDBOX_PLUGINS) AppStateStore(this).setPluginEnabled(id, true)
 
 		val repo = Repo.get(this)
@@ -37,8 +37,8 @@ class SandboxApp : Application() {
 	}
 
 	private companion object {
-		/** Switched on before anything boots. Add or drop ids freely; this is a convenience, not a
-		 * statement about what a real device should have. */
-		val SANDBOX_PLUGINS = listOf("references", "designer")
+		/** Switched on before anything boots, for plugins a real device leaves opt-in. Add or drop ids
+		 * freely; this is a convenience, not a statement about what a real device should have. */
+		val SANDBOX_PLUGINS = listOf("designer")
 	}
 }
