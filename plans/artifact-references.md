@@ -610,3 +610,47 @@ version compat.
   ambiguous, snippet-mode, range and anchored refs, and hard-fail paths, a capability-toggle
   restart cycle, and one agent-to-agent ref-bearing exchange observed from the console's peer
   thread.
+
+## Painpoints
+
+From building Phase 0. Not fixed here; recorded because each one cost real time or shipped a real
+defect.
+
+**An optional dependency makes a gate silently inert in tests.** Every gate is written
+`if (auth && ...)`, and the test harnesses construct routes/websocket without that dep. So the
+first gate tests I wrote passed while asserting nothing at all, and only started testing the gate
+once `makeCtx` and the websocket `setup` helpers were changed to build a real `SessionAuthority`.
+The same shape applies to `sessionStore` and `presenceWriter`. A harness that omits a dep should
+be the exception a test opts into, not the default every test silently inherits - otherwise a
+security test can be green and vacuous at the same time, which is worse than red.
+
+**`from` is unvalidated input that is trusted at the far end.** `SendRequestSchema` declares
+`from: z.string()` with no slug or arity validation, and `send()` stamps it verbatim into the
+`channel_push` the recipient reads. So a name that resolves to nothing locally still arrives
+looking like whoever it claims to be. I reasoned about this wrongly once: I checked that
+`Address.local` rejects odd spellings, concluded the path was safe, and deleted a test - but
+delivery never routes `from` through that validation before stamping it. Anything caller-supplied
+that reaches a human's screen verbatim deserves validation at the schema boundary, not at the one
+gate that happens to look.
+
+**`resolveLiveIncarnation` returning an ALIAS is load-bearing and under-named.** A `claude --resume`
+incarnation legitimately serves a bound record under a different registered name, holding none of
+that record's credentials. That single fact broke two separate gates in two different directions
+(one keyed on the record and silently discarded the alias's answers; one keyed only on the live
+socket and evaporated whenever the session was asleep). The concept is real and correct, but
+nothing in the name or return type says "this may be a different name than you asked for", so each
+caller rediscovers it by getting it wrong.
+
+**Two independent capability booleans on `send`/`respond`.** `opts.trustedInbound` and
+`opts.consoleSender` each mean "this caller is pre-authenticated by its own path", and every new
+gate has to remember both, separately, or it breaks exactly one caller. I broke the console this
+way: the guard checked `trustedInbound` and not `consoleSender`, which blocked the owner from
+sending to their own sessions. One `CallerOrigin` discriminant would make forgetting a branch a
+compile error rather than a production outage.
+
+**Comparing a plan against a codebase it predates.** `plans/gateway-auth-surface.md` recorded an
+owner-confirmed decision whose central mechanism (a fixed `172.18.0.*` subnet) had since become
+false: nothing configures that subnet and `start-gateway.sh` re-rolls the docker network on every
+start. A plan that states a decision but not the facts it rests on cannot be re-validated later,
+only re-argued. Worth stating load-bearing empirical assumptions next to the decision they support,
+so a stale one is visible rather than inherited.
