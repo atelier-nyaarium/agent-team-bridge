@@ -225,7 +225,7 @@ is already future-proofed" research note above was wrong for a dynamic plugin-cl
 and the handshake role cache is in-memory only (there is no existing MCP disk-cache pattern to
 reuse; the capability cache is new machinery).
 
-## Phase 0: Session identity binding (pre-phase)
+## Phase 0: Session identity binding (pre-phase) ✅ SHIPPED
 
 Added at the owner's request after the capability endpoint's gating question exposed that
 `plans/gateway-auth-surface.md` was decided but never built (that plan has since been deleted as
