@@ -11,6 +11,9 @@
 	--chip-bg: #f6f8fa;
 	--error: #d1242f;
 	--running: #9a6700;
+	/* Used as a MASK, so the shape is what matters and the colour comes from the element. Declared
+	   in both themes because it is a theme variable like any other, even though the value matches. */
+	--icon-code: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.5 4 2 8l3.5 4M10.5 4 14 8l-3.5 4'/%3E%3C/svg%3E");
 }
 
 html.dark {
@@ -26,6 +29,7 @@ html.dark {
 	--chip-bg: #151b23;
 	--error: #f85149;
 	--running: #d29922;
+	--icon-code: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.5 4 2 8l3.5 4M10.5 4 14 8l-3.5 4'/%3E%3C/svg%3E");
 }
 
 * {
@@ -195,18 +199,58 @@ html, body {
 	color: var(--error);
 }
 
-/* A claimed scheme is live, so it reads like an ordinary link rather than a broken one. A claimed
-   link carries no href by design (the tap rides the bridge instead), so nothing else gives it link
-   styling: if this declaration is dropped the anchor inherits body text and reads as plain prose. */
+/* A claimed link is a chip, not prose. It points into code at a location, and a sentence should not
+   disguise that as a web link. inline-flex keeps the icon on the text's own row, nowrap stops a
+   reference breaking across lines mid-name, and the 6px radius separates it from the 14px pills the
+   attachment chips use: different thing, different shape. A claimed link carries no href by design
+   (the tap rides the bridge), so nothing else would style it and it would inherit body text. */
 .body a.link-handled {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	white-space: nowrap;
+	padding: 1px 7px 1px 5px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--chip-bg);
 	color: var(--link);
-	text-decoration: underline;
+	font-family: ui-monospace, monospace;
+	font-size: 0.84em;
+	text-decoration: none;
+	vertical-align: 1px;
 }
 
-/* A ref whose target moved still opens, so it is flagged rather than disabled. */
+/* Per-scheme icon, keyed off the class the renderer stamps from the claimed scheme. A future plugin
+   claiming its own scheme gets a hook here without the renderer learning what any scheme means.
+   Masked rather than drawn as a background image so it takes `currentColor` and follows the chip
+   through both themes and the drifted variant. */
+.body a.link-scheme-ref::before {
+	content: "";
+	flex: none;
+	width: 11px;
+	height: 11px;
+	opacity: 0.75;
+	background-color: currentColor;
+	-webkit-mask: var(--icon-code) center / contain no-repeat;
+	mask: var(--icon-code) center / contain no-repeat;
+}
+
+/* The label rule is `file : symbol`, split by thread.js. The symbol carries the weight because it is
+   what the reference points at; the filename is context. */
+.body a.link-handled .ref-file { opacity: 0.78; }
+.body a.link-handled .ref-sep { opacity: 0.42; }
+.body a.link-handled .ref-sym { font-weight: 600; }
+
+/* A ref whose target moved still opens, so it is flagged rather than disabled. Same geometry, so a
+   drifted chip never reflows the sentence it sits in. */
 .body a.link-handled.link-fuzzy {
 	color: var(--running);
-	text-decoration-style: dotted;
+	border-color: var(--running);
+}
+
+.body a.link-handled.link-fuzzy .ref-sym {
+	text-decoration: underline dotted;
+	text-underline-offset: 2px;
 }
 
 .body blockquote {

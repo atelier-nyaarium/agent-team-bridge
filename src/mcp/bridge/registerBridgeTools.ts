@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Capability } from "../capabilities.js";
 import { registerChannelReply, registerChannelReplyStructured } from "../channel/channelReply.js";
 import { registerBridgeDiscover } from "./bridgeDiscover.js";
 import { registerBridgeSend } from "./bridgeSend.js";
@@ -44,7 +45,7 @@ const DISABLED_TOOLS: Array<{ name: string; title: string; description: string }
 	},
 ];
 
-export function registerBridgeTools(mcpServer: McpServer): void {
+export function registerBridgeTools(mcpServer: McpServer, capabilities: Capability[] = []): void {
 	const projectName = process.env.PROJECT_NAME;
 
 	if (!projectName) {
@@ -83,7 +84,7 @@ export function registerBridgeTools(mcpServer: McpServer): void {
 	registerBridgeSend(mcpServer);
 	registerBridgeWait(mcpServer);
 
-	registerChannelReply(mcpServer);
+	registerChannelReply(mcpServer, capabilities);
 	registerChannelReplyStructured(mcpServer);
 	setChannelServer(mcpServer.server);
 	console.error(`[bridge] channel mode, channel_reply + channel_reply_structured registered`);

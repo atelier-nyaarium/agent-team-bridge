@@ -80,8 +80,20 @@ describe("a scheme a plugin claims", () => {
 	it("renders as a live link rather than a broken one", () => {
 		const html = renderWith(["ref:"], "See [add](ref://src/cart.ts:Cart:add).");
 
-		expect(html).toContain('class="link-handled"');
+		expect(html).toContain("link-handled");
 		expect(html).not.toContain("link-unhandled");
+	});
+
+	// The scheme rides along as its own class so a plugin can style its links (the references chip's
+	// icon) without the renderer learning what any scheme means.
+	it("stamps the claimed scheme as a class, so styling stays per-plugin", () => {
+		const html = renderWith(["ref:"], "See [add](ref://src/cart.ts:Cart:add).");
+
+		expect(html).toContain("link-scheme-ref");
+	});
+
+	it("gives an unclaimed scheme no per-scheme class to style", () => {
+		expect(renderWith(["ref:"], "[a](file:///etc/hosts)")).not.toContain("link-scheme-");
 	});
 
 	it("stays inert, because only the JS tap path can see which row it sits in", () => {
@@ -107,7 +119,7 @@ describe("a scheme a plugin claims", () => {
 	});
 
 	it("matches the scheme case-insensitively, since a destination may be spelled either way", () => {
-		expect(renderWith(["ref:"], "[a](REF://src/a.ts)")).toContain('class="link-handled"');
+		expect(renderWith(["ref:"], "[a](REF://src/a.ts)")).toContain("link-handled");
 	});
 
 	it("works with no scheme list at all, which is the state before any plugin loads", () => {

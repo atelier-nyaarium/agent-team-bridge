@@ -1043,3 +1043,73 @@ are one call now.
 - **`CapabilityStore` giving up its own file** to join the tick-driven snapshot/restore idiom, which
   would delete the flush-floor machinery entirely. The assessor was straight that this eliminates no
   bug class, and it is duplication removal only.
+
+## Artifact references (`plans/artifact-references.md`, deleted, shipped - 2026-07-25)
+
+All five phases shipped and the feature is confirmed working end to end on a real device: an agent
+writes a `ref://` link, the MCP snapshots the target, and a tap opens the code viewer on the resolved
+lines. The plan is deleted; what follows is what it left behind.
+
+**Open work, roughly by cost:**
+
+- **Dead style: `a.link-handled.link-fuzzy`.** `thread.css` styles it and no code has ever applied
+  that class, so a drifted ref reads the same as an exact one in the chat body. NOT wanted: the owner
+  asked twice for the amber SYMBOL highlight inside the code viewer, which was already built and
+  works, and confirmed the chat-body tier is not what was meant. Either wire it or delete the rule,
+  but a styled class nothing sets is what made this look like a missing feature for a whole evening.
+- **The reserved manifest name is claimable when a body carries no detected ref.** The refusal lives
+  in the builder, which a ref-less message never reaches, so an attachment literally named
+  `switchboard-references.json` ships and Phase 3's selection rule would adopt it. The fix belongs at
+  the compose boundary.
+- **No cross-runtime vector pins `safeName`/`uniqueName`.** Its absence is why both filename
+  divergences (an astral character splitting into two underscores; dedupe seeded from a set rather
+  than the ordered assignment) shipped with a green suite.
+- **`referenceRoot()` cannot fall back to cwd inside a container,** because `PROJECT_NAME` is always
+  set by then, so any container whose project is not literally at `/workspace/<spawn>` fails every
+  ref-bearing send with a root-does-not-exist error.
+- **`walkSegments` branches are paths, not nodes,** with no memo on `(node, consumed)`. Measured 2.2s
+  on a 724-byte file of deeply nested same-named functions; memoizing collapses it to linear.
+- **A C# file-scoped namespace resolves to its own one-line declaration** when it is the final
+  segment. `searchAreas` supplies the sibling run for navigation, but the RANGE is still the node's
+  own extent.
+- **Aliased spellings of one file ship duplicate snapshots** (`src/x.ts`, `./src/x.ts`, and a
+  symlinked `lib/x.ts` produced three), because the builder keys on the written path rather than the
+  resolved absolute one, so a large file double-counts against the aggregate budget.
+- **`coversWholeFile` disagrees with `wholeFile()` by one line** on any file ending in a newline, so a
+  matcher-miss on an oversized file gets the wrong error message. Nothing is smuggled past the cap.
+- **`columnOf` returns -1** for a match at index 0 when the file begins with a newline.
+- **A GDScript highlight grammar is not vendored,** so `.gd` snapshots render unhighlighted.
+- **`AttachmentChipDecorator` has no message coordinate,** so the References hide verdict scans every
+  summary the team ever recorded rather than the one row's. See the seam lesson below.
+
+**Lessons, the ones that cost something:**
+
+- **A green suite is not evidence that a cross-runtime contract holds.** Both filename divergences
+  passed every test, because the only assertions were TS-side echoes of the same assumptions the
+  implementation made. Where two runtimes must agree, the shared corpus is the test, not polish.
+- **Writing an invariant down is not checking the code against it.** The scanner's own doc comment
+  said "over-masking silently drops a ref with no error anywhere", and the masking pass shipped doing
+  exactly that across blank lines.
+- **An idempotency property wants a fuzzer, not examples.** The canonical key had a hand-written
+  every-separator case that passed while `>` and space both broke round-tripping; a 60k-shape
+  generator found the class in seconds. Anything contracted as `f(f(x)) == f(x)` gets the generator.
+- **Auditing my own claims found more than auditing my own code.** Four audit passes over the
+  resolver missed the dotted C# namespace bug; pointing an audit at the sentence "all seven grammars
+  resolved exact" found it immediately, because the fixture chosen to prove it dodged the case.
+- **Inline-snippet tests encode what you imagine a language looks like.** The committed fixture tree
+  exists because a file written the way a person writes it is a different test. A `class_name` at
+  file scope, the idiom nearly every real Godot script uses, resolved to a CALL SITE for as long as
+  the feature existed, while the only `.gd` fixture used an inner class.
+- **The framework seam decides what a plugin can do well.** `TappedLink` carries the resolved row's
+  files, so its handler cannot look at the wrong row. `AttachmentChipDecorator` carries only
+  `(team, file)`, so its verdict has to scan everything. Same plugin, same session, opposite
+  outcomes. Pass the coordinate, not just the payload.
+- **A CSS rule can defeat intended behaviour with nothing to fail.** Twice in one night: a claimed ref
+  link coloured with a `--accent` that was never defined (so every ref rendered as plain prose, since
+  a claimed link deliberately carries no href either), and `#banner { display: flex }` outranking the
+  browser's `[hidden]` so the drift banner showed on every reference, empty. Neither is reachable by
+  any test on either side of the wire, and both needed a screenshot. `thread-css-variables.test.ts`
+  now guards both shapes, and `plans/emulator-sandbox-build.md` exists because of them.
+- **A debug log stream found in one pass what hours of reading source did not.** The attachment race
+  was diagnosed the moment the device reported `uris=1 read=0` beside a file that existed a
+  millisecond earlier. Reach for instrumentation before narrating what has been ruled out.

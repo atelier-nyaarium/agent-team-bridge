@@ -255,6 +255,7 @@
 		// header) before rendering, so a plain line right after a quoted line with no blank line
 		// between them starts its own block instead of being absorbed into the quote.
 		body.innerHTML = md.render(window.breakLazyBlockquoteContinuations(m.body || ""));
+		splitRefLabels(body);
 		row.appendChild(body);
 
 		if (Array.isArray(m.files) && m.files.length > 0) {
@@ -311,6 +312,34 @@
 		const rel = src.split("/attachments/")[1];
 		if (rel && window.Android && typeof window.Android.openAttachment === "function") {
 			window.Android.openAttachment(rel);
+		}
+	}
+
+	/**
+	 * Give a `file : symbol` chip label its two weights.
+	 *
+	 * The agent writes the label (see the references plugin's guidance), so this only splits what
+	 * already matches that shape and leaves anything else alone. Every part goes in through
+	 * textContent: a label is agent-authored text and never markup.
+	 */
+	function splitRefLabels(root) {
+		for (const a of root.querySelectorAll("a.link-handled")) {
+			const text = a.textContent;
+			const at = text.indexOf(" : ");
+			if (at === -1) continue;
+
+			const file = document.createElement("span");
+			file.className = "ref-file";
+			file.textContent = text.slice(0, at);
+			const sep = document.createElement("span");
+			sep.className = "ref-sep";
+			sep.textContent = ":";
+			const sym = document.createElement("span");
+			sym.className = "ref-sym";
+			sym.textContent = text.slice(at + 3);
+
+			a.textContent = "";
+			a.append(file, sep, sym);
 		}
 	}
 
