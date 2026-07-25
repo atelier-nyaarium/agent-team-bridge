@@ -543,7 +543,11 @@ until Phase 3 ships the console viewer.
   definitions, overload sets, .tsx, GDScript inner classes, waypoint resolution through anonymous
   JS nesting, and the fragment forms (ranges, anchors, anchor-miss, range-end-miss).
 
-## Phase 3: Phone References plugin + linkHandlers + renderer tier
+## Phase 3: Phone References plugin + linkHandlers + renderer tier ✅ SHIPPED (residue open)
+
+Tap-to-viewer works end to end. Audited across four angles, no blockers; the significant findings are
+fixed and the rest are listed under "Phase 3 audit residue". Chat-body amber and the vendored GDScript
+hljs grammar are the two named bullets not built. Not deployed.
 
 - **linkHandlers registry:** a plugin claims a URL scheme; the handler receives
   `(team, resolvedRow, url)` - the framework resolves row identity before dispatch (next bullet).
