@@ -863,6 +863,37 @@ TS assertion now checks `{kind: "not-a-ref"}` so that side can catch the class t
 evidence for the earlier lesson: a cross-runtime corpus only earns its keep if both sides assert the
 distinction, not merely the outcome.
 
+## Phase 4: teaching and verification
+
+**Agent-facing docs.** The full ref format lives in the References plugin's own
+`manifest.json` `agent_instructions`, which is the right home: the capability union carries it into
+every session's MCP instructions, so adding a plugin ships its guidance with no MCP change. It covers
+the waypoint form, `arguments`, all three matcher forms, the encoding rules (a raw space ends a link
+destination and silently degrades the ref to text; a literal `..` or `@` inside matched code must be
+encoded), that a fenced ref is never detected, and that `crosstalk_send` bodies are unscanned.
+`skills/crosstalk/SKILL.md` carries the short version beside the tools it applies to.
+
+**End-to-end, MCP side: 22 cases against a real project tree,** all correct. All seven grammars
+resolved exact (TS namespace chain, C++ out-of-line, C# file-scoped namespace, Python, GDScript, TSX,
+and JS through anonymous nesting). `arguments` and a named parameter resolved. Matcher, `@after`
+anchor, and range produced the right spans. The three degradation tiers each landed where they
+should. Two refs into one file produced ONE snapshot, which is the invariant the aggregate budget
+leans on. A fenced ref was ignored. All four hard-failure paths (missing, binary, escaping the
+project, malformed) failed with actionable messages naming the ref.
+
+**End-to-end, phone side: partial.** The debug build installs and launches clean on the emulator with
+the References plugin registered, so the catalog entry, the display index init, and the scheme claim
+all boot without error. The full tap-through could NOT be driven: the emulator has no provisioning
+blob, and enrollment is a QR/owner-key flow that cannot be scripted headlessly. What was verified
+instead is the viewer's riskiest logic, directly against the vendored highlighter: a line entirely
+inside a block comment is no longer coloured as live code, in both TypeScript and Python, and every
+emitted line still round-trips to its exact source text with balanced spans (which is what keeps the
+character-span walk aligned).
+
+**Owed before this is real:** a human tap-through on a provisioned device, covering a fuzzy ref's
+banner, an ambiguous ref's count, a snippet-mode file's elision markers, the chip-hide, and the miss
+contract on a crosstalk peer row.
+
 ## Phase 3 audit residue
 
 Four angles, 13 findings, no blockers. Fixed and verified:

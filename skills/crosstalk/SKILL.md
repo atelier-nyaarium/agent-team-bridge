@@ -65,6 +65,21 @@ client timeout may need to be increased in `.mcp.json` or the client's settings.
 
 ---
 
+## Referencing code (ref:// links)
+
+When you are talking about a specific piece of code, link it instead of pasting it. Write a markdown
+link whose destination is `ref://path/to/file.ts:Scope:Name`, and the file is snapshotted at send
+time and attached, so the reader taps through to the real code as it was when you wrote about it.
+
+- **Only `channel_reply` and `notify_human` are scanned.** A ref in a `crosstalk_send` body is not,
+  so it arrives as a link that cannot open. Put refs in your reply, not in the request you send.
+- **Refs in code fences or inline code are never detected**, so documenting the format costs nothing.
+- **Percent-encode a space as `%20`.** A raw space ends the link destination and the ref silently
+  becomes plain text.
+- A malformed ref fails the send and names the position, so correct it and resend.
+
+Full format, including the `#matcher` forms, is in `plans/artifact-references.md`.
+
 ## Receiving a Request
 
 How you receive requests depends on which agent is running:
