@@ -1067,3 +1067,20 @@ The comment described the code accurately and the code was wrong.
 already do, with the thread renderer's carrying the comment "Returning true keeps the app alive". A
 new surface in a codebase this consistent should be diffed against its nearest sibling before it is
 called done.
+
+### From Phase 4
+
+**Auditing my own claims found more than auditing my own code did.** The Phase 4 audit was pointed at
+the verification prose rather than the implementation, and it surfaced a real resolver bug that four
+prior audit passes over the code had missed: "all seven grammars resolved exact" was true of the
+fixtures I chose, and choosing an undotted C# namespace hid that a dotted one silently degraded. The
+claim was the evidence, and the claim was load-bearing enough to be worth attacking directly.
+
+**Inline-snippet unit tests dodge real file shapes.** Every resolver test uses a hand-written snippet,
+so they encode what I imagined the language looks like. The committed fixture tree exists because a
+file written the way a person writes it is a different test.
+
+**A verification with no artifact is a claim, not a test.** The first Phase 4 pass ran 22 cases by
+hand and committed nothing, which is the exact failure the Phase 2 painpoint had already named. I
+wrote that lesson down and then repeated it two phases later, which suggests recording a lesson is
+much cheaper than applying one.

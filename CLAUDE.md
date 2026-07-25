@@ -316,6 +316,17 @@ full design, the questionaire, and the audit rounds are in `plans/artifact-refer
   its marker, and a manifest naming a snapshot absent from its own row is rejected wholesale.
 - **Miss contract:** every path that cannot show code returns false, so the tap falls back to the link
   menu with a note saying no snapshot is attached. Never a crash, a silent no-op, or a wrong-row open.
+- **Teaching lives in the plugin's own manifest.** `agent_instructions` in
+  `assets/plugins/references/manifest.json` is what a session actually reads, since the capability
+  union carries it into the MCP instructions. It states the project-relative rule (an absolute path
+  hard-fails the send), the angle-bracket form for a matcher containing a space or a close paren, and
+  the distinction that matters most: the file tier fails loudly while RESOLUTION never fails, so no
+  error does not mean the ref landed where the author meant. `skills/crosstalk/SKILL.md` carries the
+  short version.
+- **Grammar coverage is pinned end to end** by `ref-grammars-e2e.test.ts` over the committed fixture
+  tree at `tests/fixtures/ref-project/`. It asserts the SOURCE LINES a range selects, not just a line
+  number, because a wrong range usually looks plausible. The resolver's own unit tests use inline
+  snippets, which is how a dotted C# namespace stayed broken while everything was green.
 - **Gating:** `setReferencesEnabled` is driven by the capability union at startup. `references` is
   deliberately NOT in the fail-open set, so this stays off until a console plugin renders it.
 
