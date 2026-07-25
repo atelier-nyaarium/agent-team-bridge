@@ -660,3 +660,34 @@ false: nothing configures that subnet and `start-gateway.sh` re-rolls the docker
 start. A plan that states a decision but not the facts it rests on cannot be re-validated later,
 only re-argued. Worth stating load-bearing empirical assumptions next to the decision they support,
 so a stale one is visible rather than inherited.
+
+### From Phase 1
+
+**`os.homedir()` under Bun ignores a reassigned `process.env.HOME`.** An audit agent probing
+`mcp/capabilities.ts` set `process.env.HOME` to a temp dir and still wrote a cache file into the
+real `~/.config/switchboard/`. Vitest runs on node, where `os.homedir()` does follow `$HOME`, so a
+test isolating itself that way passes and looks safe; the MCP runs on Bun, where the same trick
+silently does nothing. Any future code resolving a real user path needs its directory injected
+rather than read from `os.homedir()`, or its tests are testing a different resolution than
+production uses.
+
+**A long doc comment sitting directly above its subject is easy to re-parent by accident.** Adding
+a const or a field at a natural grouping point in `gateway/index.ts` and `console/consoleHandler.ts`
+silently pushed two existing multi-line comments onto unrelated code. It happened twice in one
+change and neither compile nor lint can see it, only a reader. This comment style is worth keeping,
+but an insertion near one needs a deliberate look at what the comment above now introduces.
+
+**Nothing steers a new route to `routes.ts`.** The request handler in `gateway/index.ts` is a column
+of `routes.*` delegations, and dropping an inline `new Response(...)` among them compiles and reads
+fine. The convention is real and otherwise unbroken, so a route that breaks it is pure drift that
+only a reviewer catches.
+
+**The Kotlin half has no formatting gate.** Biome covers TypeScript on every push; nothing checks
+Kotlin line width or formatting, so a 142-character line passed `testDebugUnitTest` without
+complaint. `ktlint` or `spotless` wired into the same Gradle task would close it.
+
+**`channel_reply` failed validation when its prose fields came last.** Several attempts reporting to
+the owner returned `full` and `fullSpoken` as `undefined` despite being present in the call;
+reordering them ahead of `title`/`summary` made the identical content land. Not diagnosed, and it
+may be a harness-side emission issue rather than the tool's, but it cost several round trips and is
+worth knowing about since a failed reply to a human is invisible to them.
