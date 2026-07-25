@@ -4148,6 +4148,35 @@ class ChatRepository(
 	 * can remove rows another thread was counting, so its count must be re-derived too. Also drops
 	 * the team from the board tile list immediately (see forgottenUntil above for why that needs a
 	 * tombstone rather than a bare filter). */
+	/**
+	 * Install canned sessions and threads, for the `emulator` sandbox build only.
+	 *
+	 * This is the single entry point that build type needs in shared code, and it exists for a
+	 * structural reason rather than convenience: `teams` is never restored from disk. It is only ever
+	 * what the Gateway last reported, and the board renders its onboarding screen whenever there are
+	 * no sessions. So a build with no network has an empty board no matter how much thread history is
+	 * persisted, and cannot reach the surfaces worth looking at.
+	 *
+	 * The build-type guard is not decoration. A hook that merely happens to be unset in release is one
+	 * refactor away from being set; one that checks its own build type stays inert even if something
+	 * wires it up by mistake.
+	 */
+	fun seedSandbox(teams: List<Team>, threads: Map<String, List<Message>>) {
+		if (BuildConfig.BUILD_TYPE != "emulator") return
+		_state.update { s ->
+			s.copy(
+				teams = teams,
+				threads = threads,
+				openTabs = threads.keys.toList(),
+				unread = threads.mapValues { (team, msgs) -> unreadCount(msgs, s.readAnchors[team]) },
+				connected = true,
+				provisioned = true,
+				status = "",
+				error = null,
+			)
+		}
+	}
+
 	fun forget(team: String) {
 		// Canonicalize once and key every field removal by it (matching openThread's own key), so
 		// a non-canonical spelling can't leave a field's entry behind while the others clear.

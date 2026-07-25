@@ -569,6 +569,26 @@ The sibling **evie-bot** repo (the synced leaves + the evie-side bridge code) ha
 
 Both variants R8-minify (`isMinifyEnabled` + `isShrinkResources` on release AND debug, to tree-shake `material-icons-extended` down to the icons actually used). `testDebugUnitTest` runs UN-minified, so it does NOT catch an R8 strip: a minify break (a renamed `@Serializable` wire class, a dropped JS-bridge method) only shows at `assembleDebug`/`assembleRelease` or on-device. The minify gate is `./gradlew :app:assembleRelease` plus an on-device wire round-trip (register/poll/seal). Keep-rules live in `app/proguard-rules.pro`: the `@JavascriptInterface` keep is load-bearing (the thread WebView bridge, which the AGP default misses because the bridge is an anonymous object, not a WebView subclass); the kotlinx-serialization block is documented as belt-and-suspenders over the artifact's shipped consumer rules.
 
+### Look at the console yourself: the `emulator` sandbox build
+
+There is a THIRD build type beside `debug` and `release`. It exists because the console cannot get past onboarding without a real Gateway, owner key, admission, and network, which meant every visual question had to be answered by the owner, on their phone. That cost a full night on one bug: a `--accent` CSS variable that was never defined made EVERY reference link in every message render as plain prose, and nothing on either side of the wire could see it. Not the Kotlin tests, not the TS suite, not the debug log stream. It took a screenshot from the owner's phone. Reach for this build before asking a human to describe a screen.
+
+```bash
+source ~/android-dev/env.sh
+cd android && ./gradlew :app:assembleEmulator
+adb install -r app/build/outputs/apk/emulator/switchboard-emulator.apk
+adb shell pm grant com.atelier_nyaarium.switchboard.sandbox android.permission.POST_NOTIFICATIONS
+adb shell am start -n com.atelier_nyaarium.switchboard.sandbox/com.atelier_nyaarium.switchboard.MainActivity
+adb exec-out screencap -p > /tmp/.../shot.png    # then Read the png
+```
+
+- **Installs BESIDE a real install** (`applicationIdSuffix = ".sandbox"`), so it can never overwrite the owner's app or its data. No `versionNameSuffix`: the board's version column wraps one character per line if the string is any longer.
+- **All sandbox code lives in `src/emulator/`**, so the seeding and the onboarding bypass are not compiled into `debug` or `release` at all. A hatch that cannot exist in a shipping build cannot become a hole in one.
+- **`SandboxApp`** switches on the plugins it needs (plugins default OFF, and with References off every ref link renders as an inert red unhandled protocol - the same toggle that caused hours of confusion on a real device), then calls `ChatRepository.seedSandbox`.
+- **`seedSandbox` is the ONLY seam in shared code**, and it is guarded by `BuildConfig.BUILD_TYPE != "emulator"`. It is needed for a structural reason, not convenience: `ChatState.teams` is never restored from disk (it is only ever what the Gateway last reported), and the board renders onboarding whenever there are no sessions, so a no-network build has an empty board no matter how much thread history is persisted.
+- **`SandboxFixtures` is scaffolding, not a spec.** Add a thread shape, delete a fixture, bend it to whatever is being looked at. Its ref artifacts under `src/emulator/assets/sandbox/` are REAL reference-builder output rather than hand-written JSON, so the viewer is exercised against the same bytes an agent sends; regenerate them by running the builder over this repo.
+- **Known fixture limitation:** seeding straight into state bypasses the mailbox drain, and drain time is where `RefDisplayIndex` learns which attachments are reference artifacts and what each ref's quality is. So in the sandbox the artifact chips are NOT hidden and a `fuzzy` ref renders blue instead of amber. Both are fixture artifacts, not product bugs. Design and residue: `plans/emulator-sandbox-build.md`.
+
 ### Dependencies
 
 Manifests use EXACT version pins, no ranges. The plugin launches via `bun run` (.mcp.json); it uses the installed node_modules and auto-installs only missing deps on demand. The old `--install=force` flag, which forced a full dependency reinstall on every launch, was removed because that reinstall breaks on Windows (file locking on in-use node_modules). Exact pins still matter because a caret range would let any plugin start pull a brand-new release. Dependabot (daily, 7-day cooldown) is the updater; the cooldown gives security audits time to flag a vulnerable release before we take it. The `overrides` block pins transitives with known advisories. After any manifest change, finish with `rm -rf node_modules && bun install --frozen-lockfile`, then run `scripts/check-module-residue.ts` - bun never prunes nested node_modules dirs the lock stopped sanctioning, and a stale nested copy silently shadows the pinned version for both tsc and runtime.

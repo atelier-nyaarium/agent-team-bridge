@@ -75,12 +75,35 @@ Chosen to cover exactly what could not be seen during the attachment investigati
 
 ## Phases
 
-- [ ] **Phase 1** - build type, source set, the `seedSandbox` seam, and one seeded thread covering
+- [x] **Phase 1** - build type, source set, the `seedSandbox` seam, and one seeded thread covering
       the four cases above. Verified by installing on the emulator and reaching a board.
-- [ ] **Phase 2** - fixtures for the cases the investigation could not reach: a stale ref, a ref
-      whose bytes are gone, a hidden-chip row beside a visible one.
+- [ ] **Phase 2** - seed through the mailbox drain rather than straight into state (see below), then
+      add the fixtures the investigation could not reach: a ref whose bytes are gone, and a
+      hidden-chip row beside a visible one.
 - [ ] **Phase 3** - a scripted screenshot pass, so a visual regression is catchable without a human
       describing a screen.
+
+## What Phase 1 confirmed, and what it caught
+
+Confirmed by looking, on the first run:
+
+- The build installs beside a real install and opens onto a seeded board and thread.
+- Image thumbnails and plain file chips both render.
+- A claimed ref link renders blue and underlined, which is the `--accent` fix. That bug had shipped
+  for as long as references existed and no test on either side of the wire could see it.
+- **The code viewer opens on the right lines.** A tap resolved to the snapshot, highlighted 33-36,
+  and syntax-highlighted the file. That was the last unverified hop in the whole feature.
+
+Caught immediately, both worth fixing in Phase 2:
+
+- **Plugins default off**, so the first run rendered every ref as an inert red unhandled protocol and
+  left the artifact chips visible. Now switched on by the sandbox before anything boots. This is the
+  same toggle that cost hours of confusion on a real device.
+- **Seeding straight into state bypasses the mailbox drain**, and drain time is where
+  `RefDisplayIndex` learns which attachments are reference artifacts and what each ref's quality is.
+  So in the sandbox the artifact chips are NOT hidden, and a `fuzzy` ref renders blue rather than
+  amber. Both are fixture artifacts rather than product bugs, and both would be fixed by routing the
+  canned rows through the same drain a real message takes.
 
 ## Open
 
@@ -88,5 +111,8 @@ Chosen to cover exactly what could not be seen during the attachment investigati
   drive the pulse bar and the terminal view's own gating. Not needed for attachments; likely needed
   the first time a board tile misbehaves.
 - Whether `SwitchboardService`'s poll loop should be suppressed entirely in this build, or left to
-  fail into a cosmetic banner. Leaving it running is more faithful and costs nothing while the board
-  has sessions; suppressing it removes noise from the log.
+  fail into a cosmetic banner. Left running for now: it costs nothing while the board has sessions,
+  and its "Gateway not provisioned" banner is honest about what this build is.
+- The board's version column is narrow enough that a longer `versionName` wraps one character per
+  line. Noticed because a `-sandbox` suffix mangled it; the suffix is gone, the weakness is not.
+
