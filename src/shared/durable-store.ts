@@ -17,6 +17,7 @@ import path from "node:path";
 export class DurableStore {
 	private readonly file: string;
 	private lastError: string | null = null;
+	private quarantined = false;
 
 	constructor(dir: string, name: string) {
 		this.file = path.join(dir, `${name}.json`);
@@ -24,11 +25,21 @@ export class DurableStore {
 
 	/** The persisted snapshot, or null if absent/unreadable (first boot, corrupt file). */
 	load(): unknown | null {
+		if (this.quarantined) return null;
 		try {
 			return JSON.parse(fs.readFileSync(this.file, "utf8"));
 		} catch {
 			return null;
 		}
+	}
+
+	/**
+	 * Stop serving this file's contents for the rest of the process while still writing through, so
+	 * the next save heals it. A consumer that these contents already poisoned cannot be handed them
+	 * a second time, which is what makes retrying a build safe rather than a guaranteed re-throw.
+	 */
+	quarantine(): void {
+		this.quarantined = true;
 	}
 
 	/** Atomic write: a partial file from a crash mid-write is never read (tmp + rename). */
@@ -53,5 +64,43 @@ export class DurableStore {
 				} catch {}
 			}
 		}
+	}
+}
+
+////////////////////////////////
+//  Functions & Helpers
+
+/**
+ * Build a consumer over a durable file, containing a poisoned file to that file alone.
+ *
+ * `load()` returning null already covers a file that does not parse. The gap this closes is a file
+ * that parses fine and then throws inside its CONSUMER's restore, which is not hypothetical: a
+ * `mailboxes.json` shaped `{phone:{epoch:"x"}}` throws on a missing `entries`, and a
+ * `replay-guard.json` holding a bare number array throws on destructuring. Whoever restores several
+ * files under one try loses every restore after the throwing one, and whoever restores under no try
+ * fails the whole boot with no way to self-heal.
+ */
+export function openDurable<T>(dir: string, name: string, build: (store: DurableStore) => T): T {
+	const store = new DurableStore(dir, name);
+	try {
+		return build(store);
+	} catch (err) {
+		console.error(`[durability] ${name} restore failed, starting fresh:`, err);
+		store.quarantine();
+		return build(store);
+	}
+}
+
+/**
+ * Run one already-built consumer's restore, contained. The sibling of `openDurable` for state that
+ * is restored in place rather than at construction: same per-file containment, no rebuild. Without
+ * it, neighbouring restores sharing one try are lost to whichever file throws first, and the
+ * periodic persist then writes those empty consumers back over good files.
+ */
+export function restoreDurable(name: string, restore: () => void): void {
+	try {
+		restore();
+	} catch (err) {
+		console.error(`[durability] ${name} restore failed, starting fresh:`, err);
 	}
 }

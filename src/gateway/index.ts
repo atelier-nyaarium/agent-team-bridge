@@ -5,7 +5,7 @@ import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
-import { DurableStore } from "../shared/durable-store.js";
+import { DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import {
 	type HostOp,
@@ -159,23 +159,10 @@ export async function startGateway(): Promise<void> {
 	const jobsDurable = new DurableStore(DATA_DIR, "pending-jobs");
 	const mailboxDurable = new DurableStore(DATA_DIR, "mailboxes");
 	// Restart-proof idempotency for send/respond, consulted only on an in-memory opCache miss -
-	// see durableOpStore.ts. Persists synchronously on every state transition (not this file's
-	// usual periodic-tick pattern), so it gets its own DurableStore rather than sharing one of
-	// the tick-driven snapshots above. Constructing it runs restore() synchronously, so it needs
-	// the SAME "a corrupt snapshot must not crash-loop boot" safety net as the sibling stores
-	// below - its own try/catch, since a throw here happens too early to reach their shared one,
-	// and retrying with the same (still-corrupt) durable file would just throw again.
-	const durableOpStore = ((): DurableOpStore => {
-		const opIdempotencyDurable = new DurableStore(DATA_DIR, "op-idempotency");
-		try {
-			return new DurableOpStore(opIdempotencyDurable);
-		} catch (err) {
-			console.error("[durability] op-idempotency restore failed, starting fresh:", err);
-			// load() stubbed to null so restore() sees nothing and starts empty (avoiding the same
-			// throw again); save() still delegates to the real file, so future persists recover it.
-			return new DurableOpStore({ load: () => null, save: (s) => opIdempotencyDurable.save(s) } as DurableStore);
-		}
-	})();
+	// see durableOpStore.ts. Persists synchronously on every state transition rather than on this
+	// file's usual periodic tick, so it holds its own DurableStore instead of sharing a tick-driven
+	// snapshot.
+	const durableOpStore = openDurable(DATA_DIR, "op-idempotency", (d) => new DurableOpStore(d));
 	// Session records: the durable known-session list (id-keyed, with the Claude harness resume id
 	// so a later wake can `claude --resume <id>`). Entries past this TTL are swept on the persist
 	// timer so the store cannot grow without bound. Mint/adopt ids must never land on a catalog
@@ -184,18 +171,9 @@ export async function startGateway(): Promise<void> {
 	const sessionStore = new SessionStore({
 		clash: (id) => isCatalogProject(id) || isReservedHostSession(id),
 	});
-	// What plugins the owner's consoles have enabled. A corrupt file starts empty rather than
-	// throwing the boot, mirroring the op-idempotency store above: the worst case is that tools
-	// fail open until a device re-registers, which is the same posture as a fresh install.
-	const capabilityStore = ((): CapabilityStore => {
-		const capabilitiesDurable = new DurableStore(DATA_DIR, "console-capabilities");
-		try {
-			return new CapabilityStore(capabilitiesDurable);
-		} catch (err) {
-			console.error("[durability] console-capabilities restore failed, starting fresh:", err);
-			return new CapabilityStore({ load: () => null, save: (s) => capabilitiesDurable.save(s) } as DurableStore);
-		}
-	})();
+	// What plugins the owner's consoles have enabled. Starting empty costs only that tools fail open
+	// until a device re-registers, which is the same posture as a fresh install.
+	const capabilityStore = openDurable(DATA_DIR, "console-capabilities", (d) => new CapabilityStore(d));
 
 	// Session records and the presence plane registry's own version identity (epoch/counter/hash/
 	// cleanShutdown) are ONE atomic file, written by the SAME save() call - an asymmetric loss
@@ -226,17 +204,19 @@ export async function startGateway(): Promise<void> {
 	const restoredCrossDomainPresence: unknown = isWrapped
 		? (loadedResumeRaw as { crossDomainPresence?: unknown }).crossDomainPresence
 		: undefined;
-	try {
+	// Each restore is contained to its own file. Sharing one try would let a throw part-way through
+	// skip every restore after it, and the persist tick below writes each store back unconditionally
+	// - so a corrupt mailboxes.json would take the owner's whole session list with it.
+	restoreDurable("pending-jobs", () => {
 		const jobs = jobsDurable.load();
 		if (Array.isArray(jobs)) store.restore(jobs as Parameters<typeof store.restore>[0]);
+	});
+	restoreDurable("mailboxes", () => {
 		const boxes = mailboxDurable.load();
 		if (boxes && typeof boxes === "object")
 			mailboxStore.restore(boxes as Parameters<typeof mailboxStore.restore>[0]);
-		sessionStore.restore(restoredSessions);
-	} catch (err) {
-		// A corrupt or partial snapshot must not crash-loop boot; start from empty delivery state.
-		console.error("[durability] restore failed, starting fresh:", err);
-	}
+	});
+	restoreDurable("session-resume", () => sessionStore.restore(restoredSessions));
 	console.log(
 		`[durability] restored jobs=${store.size} mailboxes=${mailboxStore.size} resume=${sessionStore.size} ops=${durableOpStore.size}`,
 	);
@@ -635,10 +615,10 @@ export async function startGateway(): Promise<void> {
 		// captured inside the 120s freshness window cannot replay once after a deploy.
 		const replayDurable = new DurableStore(DATA_DIR, "replay-guard");
 		const replayGuard = new ReplayGuard();
-		{
+		restoreDurable("replay-guard", () => {
 			const persisted = replayDurable.load();
 			if (Array.isArray(persisted)) replayGuard.restore(persisted as Array<[string, number]>);
-		}
+		});
 		replayPersist = () => replayDurable.save(replayGuard.snapshot());
 		sealer = createSealer(identity, allowlist, localGatewayId, crossDomainPeers, localDomainId, replayGuard);
 		// The requester leg routes both commit-reveal rounds through the Router seam below; evie
@@ -993,6 +973,7 @@ export async function startGateway(): Promise<void> {
 			registry,
 			conversationRegistry,
 			store,
+			capabilityStore,
 			auth: sessionAuthority,
 			config: { localGatewayId, localDomainId },
 			tryWakeTeam,
@@ -1359,15 +1340,7 @@ export async function startGateway(): Promise<void> {
 		}
 		if (method === "GET" && url.pathname === "/pending") return routes.pending();
 		if (method === "GET" && url.pathname === "/teams") return routes.teams();
-		// What plugins the owner's consoles have enabled, so a starting session knows which tools to
-		// register and what guidance to carry. Ungated on purpose: it returns non-secret plugin ids
-		// and their own instruction text, and a hand-launched host window (the launch style the
-		// startup fetch exists to cover) carries no credential to present.
-		if (method === "GET" && url.pathname === "/capabilities") {
-			return new Response(JSON.stringify(capabilityStore.snapshot()), {
-				headers: { "Content-Type": "application/json" },
-			});
-		}
+		if (method === "GET" && url.pathname === "/capabilities") return routes.capabilities();
 		if (method === "GET" && url.pathname === "/discover") return routes.discover();
 		if (method === "POST" && url.pathname === "/send") return routes.send(req, body);
 		if (method === "POST" && url.pathname === "/respond") return routes.respond(req, body);

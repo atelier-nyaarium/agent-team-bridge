@@ -1009,3 +1009,37 @@ what the MCP does not second-guess. The owner would silently lose a tool they ha
 until the next process restart re-registered. `reportEnabledPlugins` now arms `pluginReportPending`
 on entry and clears it only on a landed report, and the poll loop retries a pending one beside its
 other bounded-interval maintenance.
+
+### Framework-first pass, and what it deliberately left
+
+The assessment found two REAL pre-existing durability bugs, both verified by running them, both now
+closed by `openDurable`/`restoreDurable` in `shared/durable-store.ts`:
+
+- **A corrupt `mailboxes.json` destroyed the owner's whole session list.** `mailboxStore.restore`
+  throws on a snapshot missing `entries` (a shape that passes the `typeof === "object"` guard), and
+  it shared one try with `sessionStore.restore`, which therefore never ran. The 3-second persist
+  tick then wrote `{sessions:{}}` over a perfectly good file. Silent, permanent, and from an
+  unrelated file.
+- **A corrupt `replay-guard.json` was an unrecoverable boot loop.** Its restore had no containment
+  at all, so a bare number array threw inside `startGateway`; `replayPersist` is assigned on the
+  next line, so nothing could ever heal the file.
+
+Both were reachable because "restore this file" and "contain this file's failure" were separate
+concerns that each caller improvised, and the capability work added the fifth improvisation. They
+are one call now.
+
+**Deferred, with reasons rather than as a backlog dump:**
+
+- **`CapabilityAnswer`, the no-answer as a VALUE** (the `sessionAuthority.ts` treatment). Today
+  "the device said nothing" versus "the device reports nothing enabled" is spelled four ways across
+  two languages, and every one of them is an absence a caller can fall into. A tagged union would
+  make `?? []` stop type-checking. This is the strongest remaining proposal and the one to take
+  first; it was left out only because it crosses to Kotlin and this phase had already grown.
+- **`DeviceLifecycle`,** allocating device-keyed state through one registry so a satellite store
+  cannot outlive its device. This is the by-design fix for the revoked-device staleness above. Not
+  taken: it rewrites the teardown ordering invariants in `consoleHandler.ts`, and the per-satellite
+  lifetimes are deliberately different (mailbox 1h, intent ~135s, capabilities 14d), so the registry
+  has to model tiers rather than one clock.
+- **`CapabilityStore` giving up its own file** to join the tick-driven snapshot/restore idiom, which
+  would delete the flush-floor machinery entirely. The assessor was straight that this eliminates no
+  bug class, and it is duplication removal only.

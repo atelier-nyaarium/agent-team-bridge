@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { capabilityInstructions, fetchCapabilities, hasCapability } from "../mcp/capabilities.js";
+import { capabilityInstructions, fetchCapabilities, GATED_CAPABILITY_IDS, hasCapability } from "../mcp/capabilities.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -176,5 +176,34 @@ describe("capabilityInstructions", () => {
 
 		expect(text).toContain("Prefer Switchboard.");
 		expect(text.split("\n").filter((line) => line.startsWith("- "))).toHaveLength(1);
+	});
+});
+
+describe("the gated capability ids", () => {
+	it("each name a plugin the console actually ships, so a renamed manifest fails here", () => {
+		// A plugin id is documented to become `<author>.<content_id>` on a per-repo split, so this
+		// rename is planned work. Without this check it lands silently: the gateway stops reporting
+		// the old id, the gate stops matching, and the tools vanish from every session with the
+		// fail-open set still holding the old name, so the outage looks intermittent.
+		const pluginsDir = path.join(
+			import.meta.dirname,
+			"..",
+			"..",
+			"android",
+			"app",
+			"src",
+			"main",
+			"assets",
+			"plugins",
+		);
+		const shipped = fs
+			.readdirSync(pluginsDir, { withFileTypes: true })
+			.filter((e) => e.isDirectory())
+			.map((e) => {
+				const manifest = JSON.parse(fs.readFileSync(path.join(pluginsDir, e.name, "manifest.json"), "utf8"));
+				return manifest.author ? `${manifest.author}.${manifest.content_id}` : manifest.content_id;
+			});
+
+		expect(shipped).toEqual(expect.arrayContaining([...GATED_CAPABILITY_IDS]));
 	});
 });

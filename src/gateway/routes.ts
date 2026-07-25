@@ -75,6 +75,7 @@ export interface RoutesDeps {
 	// resolution; teams() itself defers entirely to `presence.snapshot()` below. Optional for
 	// test harnesses with no resume tracking.
 	sessionStore?: import("../shared/session-store.js").SessionStore;
+	capabilityStore?: Pick<import("./console/capabilityStore.js").CapabilityStore, "snapshot">;
 	// The presence facade: teams() is exactly `presence.snapshot()`, so a manual GET /teams pull-
 	// to-refresh and the poll response's presence plane can never compute two different answers.
 	// Optional so a harness testing routes with no presence wiring still gets an empty teams list
@@ -307,6 +308,7 @@ export function createRoutes({
 	registry,
 	conversationRegistry,
 	store,
+	capabilityStore,
 	tryWakeTeam,
 	isWakeInFlight,
 	offlineCatalog,
@@ -715,6 +717,13 @@ export function createRoutes({
 			status: "running",
 			message: `Message routed to ${qualifiedTo} via the Router. Responses will be pushed back automatically.`,
 		});
+	}
+
+	/** What the owner's consoles can render, so a starting session knows which tools to register.
+	 * Ungated on purpose: it serves non-secret plugin ids and their own instruction text, and the
+	 * hand-launched host window this exists to serve carries no credential to present. */
+	function capabilities(): Response {
+		return jsonResponse(capabilityStore?.snapshot() ?? { known: false, capabilities: [] });
 	}
 
 	function pending(): Response {
@@ -1717,6 +1726,7 @@ export function createRoutes({
 
 	return {
 		pending,
+		capabilities,
 		teams,
 		discover,
 		send,

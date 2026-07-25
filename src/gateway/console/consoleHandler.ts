@@ -52,6 +52,7 @@ import type { IntentTracker } from "../intent.js";
 import { type ReadAnchors, readAnchorsPlaneName } from "../readAnchors.js";
 import type { WakeResult } from "../wake.js";
 import { type ConversationRegistry, RESERVED_TEAM_NAMES, type TeamRegistry } from "../websocket.js";
+import type { CapabilityStore } from "./capabilityStore.js";
 import { ConsolePeer } from "./consolePeer.js";
 import type { DurableOpStore } from "./durableOpStore.js";
 
@@ -119,13 +120,7 @@ export interface ConsoleHandlerDeps {
 	 * an available asleep session. */
 	dropSessionResume?: (team: string) => void;
 	/** What plugins this owner's consoles have enabled. Absent in harnesses that do not exercise it. */
-	capabilityStore?: {
-		report: (
-			conversationId: string,
-			capabilities: Array<{ id: string; instructions?: string }> | undefined,
-		) => void;
-		touch: (conversationId: string) => void;
-	};
+	capabilityStore?: Pick<CapabilityStore, "report" | "touch">;
 	/** Session access. create_session mints/adopts a record here (the minted id is the tmux session
 	 * name); rename_session relabels one; forget drops one. Production wires the presence facade
 	 * (so these writes announce themselves on the presence plane); a narrow Pick, not the full

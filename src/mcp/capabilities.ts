@@ -25,11 +25,20 @@ export type Capability = z.infer<typeof EnabledPluginSchema>;
 const FETCH_TIMEOUT_MS = 1500;
 
 /**
+ * The capability-gated tool bundles this build ships. Deriving the fail-open set from the same list
+ * the gates read means the two cannot disagree. A separate hand-written set eventually misses an id,
+ * and the miss is invisible from both sides: the session simply comes up without the tool.
+ */
+export const GATED_CAPABILITY_IDS = ["designer"] as const;
+
+export type CapabilityId = (typeof GATED_CAPABILITY_IDS)[number];
+
+/**
  * What a session assumes when the gateway cannot say. Fail OPEN: an agent with a tool the owner
  * cannot render loses nothing, while an agent missing a tool the owner does have is a silent
  * capability outage with no error anywhere. Only an affirmative answer ever removes a tool.
  */
-const FAIL_OPEN: Capability[] = [{ id: "designer" }];
+const FAIL_OPEN: Capability[] = GATED_CAPABILITY_IDS.map((id) => ({ id }));
 
 function cacheFile(): string {
 	return path.join(os.homedir(), ".config", "switchboard", "capabilities-cache.json");
@@ -90,8 +99,9 @@ export async function fetchCapabilities(routerUrl: string): Promise<Capability[]
 	}
 }
 
-/** Whether a capability is available to this session. */
-export function hasCapability(capabilities: Capability[], id: string): boolean {
+/** Whether a capability is available to this session. Narrowed to the ids this build actually gates
+ * on, so a renamed plugin is a compile error rather than tools silently going missing. */
+export function hasCapability(capabilities: Capability[], id: CapabilityId): boolean {
 	return capabilities.some((c) => c.id === id);
 }
 
