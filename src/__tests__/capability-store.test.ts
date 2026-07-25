@@ -66,6 +66,23 @@ describe("what the gateway serves", () => {
 
 		expect(store.snapshot().capabilities.map((c) => c.id)).toEqual(["designer"]);
 	});
+
+	// Discarding the entry is what actually happened: guidance longer than the wire allowed took the
+	// whole capability with it, so a plugin the owner had switched on was invisible to every session
+	// with nothing logged anywhere. Guidance is the expendable half, never the id.
+	it("keeps a capability whose guidance the wire refuses, rather than dropping it entirely", () => {
+		const store = new CapabilityStore(fakeDurable());
+		store.report("phone", [{ id: "references", instructions: "x".repeat(200_000) }]);
+
+		expect(store.snapshot()).toEqual({ known: true, capabilities: [{ id: "references" }] });
+	});
+
+	it("still drops an entry with no usable id, which names no capability to keep", () => {
+		const store = new CapabilityStore(fakeDurable());
+		store.report("phone", [{ id: "Not A Slug" }, { id: "designer" }]);
+
+		expect(store.snapshot().capabilities.map((c) => c.id)).toEqual(["designer"]);
+	});
 });
 
 describe("whose guidance wins", () => {

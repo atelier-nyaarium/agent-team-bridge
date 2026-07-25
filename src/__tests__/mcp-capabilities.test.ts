@@ -8,6 +8,7 @@ import {
 	fetchCapabilities,
 	hasCapability,
 } from "../mcp/capabilities.js";
+import { EnabledPluginSchema } from "../shared/schemas.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -187,31 +188,41 @@ describe("capabilityInstructions", () => {
 	});
 });
 
+/** Every plugin manifest the console app actually ships, as the entry a device reports from it. */
+function shippedPlugins(): { id: string; instructions?: string }[] {
+	const pluginsDir = path.join(import.meta.dirname, "..", "..", "android", "app", "src", "main", "assets", "plugins");
+	return fs
+		.readdirSync(pluginsDir, { withFileTypes: true })
+		.filter((e) => e.isDirectory())
+		.map((e) => {
+			const manifest = JSON.parse(fs.readFileSync(path.join(pluginsDir, e.name, "manifest.json"), "utf8"));
+			return {
+				id: manifest.author ? `${manifest.author}.${manifest.content_id}` : manifest.content_id,
+				instructions: manifest.agent_instructions || undefined,
+			};
+		});
+}
+
 describe("the fail-open capability ids", () => {
 	it("each name a plugin the console actually ships, so a renamed manifest fails here", () => {
 		// A plugin id is documented to become `<author>.<content_id>` on a per-repo split, so this
 		// rename is planned work. Without this check it lands silently: the gateway stops reporting
 		// the old id, the gate stops matching, and the tools vanish from every session with the
 		// fail-open set still holding the old name, so the outage looks intermittent.
-		const pluginsDir = path.join(
-			import.meta.dirname,
-			"..",
-			"..",
-			"android",
-			"app",
-			"src",
-			"main",
-			"assets",
-			"plugins",
-		);
-		const shipped = fs
-			.readdirSync(pluginsDir, { withFileTypes: true })
-			.filter((e) => e.isDirectory())
-			.map((e) => {
-				const manifest = JSON.parse(fs.readFileSync(path.join(pluginsDir, e.name, "manifest.json"), "utf8"));
-				return manifest.author ? `${manifest.author}.${manifest.content_id}` : manifest.content_id;
-			});
+		expect(shippedPlugins().map((p) => p.id)).toEqual(expect.arrayContaining([...FAIL_OPEN_CAPABILITY_IDS]));
+	});
+});
 
-		expect(shipped).toEqual(expect.arrayContaining([...FAIL_OPEN_CAPABILITY_IDS]));
+describe("the guidance a shipped plugin carries", () => {
+	// The id check above passed while References was invisible to every session for hours. Its
+	// manifest was fine and the phone reported it correctly; the entry was refused at this schema
+	// for a 2304-character instructions string against a 2000 cap, and refusal here used to mean the
+	// whole capability was discarded. Nothing logged it, on the device or the gateway. Checking ids
+	// alone cannot see that, because the id was never the part that failed.
+	it.each(shippedPlugins().map((p) => [p.id, p] as const))("survives the wire schema whole for %s", (_id, plugin) => {
+		const parsed = EnabledPluginSchema.safeParse(plugin);
+
+		expect(parsed.success ? null : parsed.error.issues[0]?.message).toBeNull();
+		expect(parsed.success && parsed.data.instructions).toBe(plugin.instructions);
 	});
 });

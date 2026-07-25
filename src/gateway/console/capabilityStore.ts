@@ -46,6 +46,26 @@ const DEFAULT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 // polled daily for weeks is deleted by the first sweep after a restart.
 const LAST_SEEN_FLUSH_FLOOR_MS = 60 * 60 * 1000;
 
+/**
+ * What survives an entry this schema refuses.
+ *
+ * Discarding the whole entry is the one outcome that must never happen here. The id is what gates a
+ * tool and the instructions are only guidance, so a dropped entry is a capability the owner
+ * switched on going missing with no error on either side, which is precisely the silent outage the
+ * fail-open rule exists to prevent. A well-formed id is therefore kept without its guidance: the
+ * agent is told less, rather than being able to do less.
+ */
+function admit(raw: unknown): Capability[] {
+	const parsed = EnabledPluginSchema.safeParse(raw);
+	if (parsed.success) return [parsed.data as Capability];
+
+	const id = EnabledPluginSchema.shape.id.safeParse((raw as { id?: unknown } | null)?.id);
+	if (!id.success) return [];
+
+	console.warn(`[capabilities] ${id.data} kept without its guidance: ${parsed.error.issues[0]?.message}`);
+	return [{ id: id.data }];
+}
+
 ////////////////////////////////
 //  Class
 
@@ -79,9 +99,7 @@ export class CapabilityStore {
 			if (prior) this.markSeen(prior, t);
 			return;
 		}
-		const clean = capabilities
-			.map((c) => EnabledPluginSchema.safeParse(c))
-			.flatMap((r) => (r.success ? [r.data as Capability] : []));
+		const clean = capabilities.flatMap(admit);
 		this.devices.set(conversationId, { capabilities: clean, lastSeen: t, reportedAt: t });
 		this.evictOverflow();
 		this.persist();

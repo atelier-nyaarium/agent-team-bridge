@@ -360,9 +360,12 @@ export const EnabledPluginSchema = z
 			.max(129)
 			.refine((v) => v.split(".").every((seg) => /^[a-z0-9][a-z0-9-]*$/.test(seg)), "each segment must be a slug")
 			.describe("The plugin's globally unique id, as its manifest declares it."),
+		// A plugin's guidance is a whole section of an agent's instructions, not a sentence. The
+		// first real one shipped at 2304 characters against an earlier 2000 cap, which the wire
+		// then refused and the store discarded, so the capability vanished with no error anywhere.
 		instructions: z
 			.string()
-			.max(2000)
+			.max(16_000)
 			.optional()
 			.describe("Agent-facing usage guidance for this capability, surfaced to the session."),
 	})
