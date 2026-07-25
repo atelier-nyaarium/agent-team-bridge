@@ -123,6 +123,7 @@ sealed class ConsoleOp {
 	data class Register(
 		val clientVersion: String? = null,
 		val clientVariant: String? = null,
+		val enabledPlugins: List<EnabledPlugin>? = null,
 	) : ConsoleOp()
 
 	@Serializable
@@ -726,6 +727,14 @@ data class TransportResult(
 	val saToken: String? = null,
 	val caPem: String? = null,
 	val error: String? = null,
+)
+
+@Serializable
+data class EnabledPlugin(
+	/** The plugin's globally unique id, as its manifest declares it. */
+	val id: String,
+	/** Agent-facing usage guidance for this capability, surfaced to the session. */
+	val instructions: String? = null,
 )
 
 @Serializable

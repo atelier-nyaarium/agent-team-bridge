@@ -968,3 +968,44 @@ project hostname; a body-size cap on `/human/notify`; read-side ownership on `/p
 `/pending`; the ungated fan-out (delivery is never gated on handshake confirmation, so a socket
 registering a victim's name still receives its pushes); and `bindResume`'s tier-2 path, where
 `bind()` matches a record by transcript id regardless of the registering team.
+
+## Console capability union (`plans/artifact-references.md` Phase 1, 2026-07-24)
+
+**A revoked device keeps voting in the capability union for 14 days.** Removing a lost phone
+through Your devices drops its admission, so the sealer rejects its frames from then on and its
+`lastSeen` freezes. Nothing purges its `CapabilityStore` record: the class has no per-device
+delete, and `teardownDevice`/`removePeer` (which do clear bindings, signers, opCache, ownerDevices
+and the mailbox consumer) are never reached on revocation. So `snapshot()` counts it as live until
+the 14-day TTL expires it.
+
+Two adversarial verifiers split on this, and the surviving harm is small. The union only ever ADDS
+ids, so a stale record can never strip a capability a live console has, and it cannot pin different
+instruction text either: the text ships in the APK's own `manifest.json`, so every device on a
+build reports the same string. The residual is that if the revoked device was the ONLY one with a
+plugin enabled, sessions started in that window register its tools and carry its guidance. That is
+the same direction the design already fails on purpose (`FAIL_OPEN` is `[{id:"designer"}]`), so it
+lands inside the sanctioned posture rather than outside it.
+
+Not built because the obvious hook is wrong. Purging on `teardownDevice` would tie capability
+lifetime to the mailbox's 1-hour idle eviction and directly break the plan's own goal that a phone
+dozing on the 12-hour tier keeps voting. The correct fix is a revocation-time hook: when
+`Allowlist.applySnapshot` drops a console admission, resolve its signing key to a conversationId
+(`consoleHandler`'s `signers` map already holds that mapping) and purge the record. That is new
+plumbing across allowlist, consoleHandler, and the store for a minor, self-healing issue.
+
+**Refuted in the same pass, recorded so they are not re-raised:** the cache file blocking
+`0) Purge Federation` (the `rmdir` is already non-recursive and swallowed, and the cache holds no
+secret); an oversized `agent_instructions` bricking register (the 2000-char cap is enforced at the
+schema boundary and the plugin is toggleable, so there is no APK-only recovery); unbounded
+aggregate instruction text (reachable only by the owner's own admitted console, which already holds
+strictly greater power); a newline in `instructions` escaping its bullet (same trust boundary, and
+every entry is prefixed under a labelled heading); and a dropped toggle re-register leaving the
+gateway stale (best-effort by contract, and it degrades into the fail-open baseline).
+
+**The MIRROR of that last one had teeth, and was fixed.** A verifier noticed that a dropped
+toggle-ON report is not symmetric with a dropped toggle-OFF: a fresh install reports `[]` (an empty
+array, not absent), so the gateway holds an AFFIRMATIVE union, and an affirmative union is exactly
+what the MCP does not second-guess. The owner would silently lose a tool they had just switched on,
+until the next process restart re-registered. `reportEnabledPlugins` now arms `pluginReportPending`
+on entry and clears it only on a landed report, and the poll loop retries a pending one beside its
+other bounded-interval maintenance.

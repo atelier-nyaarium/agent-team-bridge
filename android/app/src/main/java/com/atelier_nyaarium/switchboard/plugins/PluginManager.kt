@@ -1,5 +1,7 @@
 package com.atelier_nyaarium.switchboard.plugins
 
+import com.atelier_nyaarium.switchboard.proto.EnabledPlugin
+
 /** One plugin's row for the settings UI. */
 data class PluginUiState(
 	/** Composite id (the enabled-flag key and claim tag). */
@@ -138,6 +140,19 @@ class PluginManager(
 
 	@Synchronized
 	fun isActive(id: String): Boolean = id in loaded
+
+	/**
+	 * What this device reports to the gateway, so an agent's tools match what the owner can
+	 * actually render. LOADED, not merely enabled: a plugin whose entry threw is switched on in
+	 * settings but renders nothing, and promising an agent a surface that is broken here is worse
+	 * than not offering it.
+	 */
+	@Synchronized
+	fun reportable(): List<EnabledPlugin> = records.mapNotNull { record ->
+		val manifest = record.manifest ?: return@mapNotNull null
+		if (record.id !in loaded) return@mapNotNull null
+		EnabledPlugin(id = record.id, instructions = manifest.agentInstructions.ifEmpty { null })
+	}
 
 	/** Run the entry hook inside the plugin's source window. A throwing entry may have landed
 	 * partial claims, so the failure path retract-sweeps before marking the plugin broken -

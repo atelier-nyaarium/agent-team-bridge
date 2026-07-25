@@ -349,6 +349,25 @@ export const CrossDomainShareTargetSchema = z
 // own LONG_POLL_HOLD_MS in ChatRepositoryConstantsTest and consoleHandler.test.ts.
 export const MAX_POLL_HOLD_MS = 45_000;
 
+/** One plugin a console has enabled, plus the guidance it wants surfaced to an agent session. */
+export const EnabledPluginSchema = z
+	.object({
+		// The manifest's own composite id: `<author>.<content_id>`, or a bare `<content_id>` when
+		// authorless (first-party). Dotted, so this cannot reuse the dotless slug field.
+		id: z
+			.string()
+			.min(1)
+			.max(129)
+			.refine((v) => v.split(".").every((seg) => /^[a-z0-9][a-z0-9-]*$/.test(seg)), "each segment must be a slug")
+			.describe("The plugin's globally unique id, as its manifest declares it."),
+		instructions: z
+			.string()
+			.max(2000)
+			.optional()
+			.describe("Agent-facing usage guidance for this capability, surfaced to the session."),
+	})
+	.meta({ id: "EnabledPlugin" });
+
 export const ConsoleOpSchema = z
 	.discriminatedUnion("kind", [
 		z.object({
@@ -358,6 +377,12 @@ export const ConsoleOpSchema = z
 			// Optional and additive: an older console that omits them still registers.
 			clientVersion: z.string().max(64).optional(),
 			clientVariant: z.string().max(16).optional(),
+			// Which plugins this device currently has enabled, and the agent-facing guidance each one
+			// wants a session to carry. Owned by the plugin's own manifest and reported from here, so a
+			// future plugin delivers its guidance by existing on a phone rather than by an MCP update.
+			// Optional so a console that has not updated yet still registers; absent contributes
+			// nothing to the union rather than asserting an empty one.
+			enabledPlugins: z.array(EnabledPluginSchema).max(64).optional(),
 		}),
 		// First-root a PENDING (rootless) Domain at the friend's silently-generated owner key.
 		// A pending Domain has no gateway, so first-rooting does not normally travel this op:

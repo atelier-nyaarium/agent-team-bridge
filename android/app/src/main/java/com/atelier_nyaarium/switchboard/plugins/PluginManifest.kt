@@ -23,6 +23,10 @@ data class PluginManifest(
 	val description: String = "",
 	val requires: List<PluginRequirement> = emptyList(),
 	@SerialName("entry_point") val entryPoint: String = "",
+	/** One line of guidance for an agent whose owner has this plugin on, reported at register and
+	 * appended to the session's MCP instructions. Owned by the plugin, so adding a plugin never
+	 * means editing the console's wire code or the gateway's. Empty means it has nothing to say. */
+	@SerialName("agent_instructions") val agentInstructions: String = "",
 ) {
 	/** Globally unique id: `<author>.<content_id>`, bare `<content_id>` when authorless
 	 * (first-party). This is the id claims are tagged with and the enabled flag is keyed by. */

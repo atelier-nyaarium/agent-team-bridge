@@ -2968,7 +2968,7 @@ fun SettingsScreen(
 				SettingsRoute.VOICE -> SttsVoiceSection(repo)
 				SettingsRoute.NETWORKS -> NetworksSettings(repo, onManage, onYourDevices, onFederation)
 				SettingsRoute.SECURITY -> SecuritySettings(state, onToggleBiometric)
-				SettingsRoute.PLUGINS -> PluginsSettings(plugins)
+				SettingsRoute.PLUGINS -> PluginsSettings(plugins, repo)
 				SettingsRoute.SYSTEM -> SystemSettings(repo, onClear)
 			}
 		}
@@ -2997,7 +2997,8 @@ private fun SettingsRow(icon: ImageVector, label: String, onClick: () -> Unit) {
 /** The baked-in plugin list, one row per catalog plugin with its opt-in toggle. A refused flip
  * (dep gating, broken plugin) surfaces the manager's message instead of silently reverting. */
 @Composable
-private fun PluginsSettings(plugins: PluginManager) {
+private fun PluginsSettings(plugins: PluginManager, repo: ChatRepository) {
+	val scope = rememberCoroutineScope()
 	var refresh by remember { mutableStateOf(0) }
 	var status by remember { mutableStateOf("") }
 	val states = remember(refresh) { plugins.states() }
@@ -3033,6 +3034,9 @@ private fun PluginsSettings(plugins: PluginManager) {
 				onCheckedChange = { on ->
 					status = plugins.setEnabled(p.id, on) ?: ""
 					refresh++
+					// Tell the gateway now. A session already running keeps the tools it started
+					// with; this is what the NEXT session start reads.
+					scope.launch { repo.reportEnabledPlugins() }
 				},
 			)
 		}

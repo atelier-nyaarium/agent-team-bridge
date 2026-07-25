@@ -21,6 +21,7 @@ import { isComposite, parseSessionName } from "../shared/session-id.js";
 import { type SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
+import { CapabilityStore } from "./console/capabilityStore.js";
 import { createConsoleDispatcher } from "./console/consoleHandler.js";
 import { type ConsoleSealer, createConsoleSealer } from "./console/consoleSealer.js";
 import { DurableOpStore } from "./console/durableOpStore.js";
@@ -183,6 +184,19 @@ export async function startGateway(): Promise<void> {
 	const sessionStore = new SessionStore({
 		clash: (id) => isCatalogProject(id) || isReservedHostSession(id),
 	});
+	// What plugins the owner's consoles have enabled. A corrupt file starts empty rather than
+	// throwing the boot, mirroring the op-idempotency store above: the worst case is that tools
+	// fail open until a device re-registers, which is the same posture as a fresh install.
+	const capabilityStore = ((): CapabilityStore => {
+		const capabilitiesDurable = new DurableStore(DATA_DIR, "console-capabilities");
+		try {
+			return new CapabilityStore(capabilitiesDurable);
+		} catch (err) {
+			console.error("[durability] console-capabilities restore failed, starting fresh:", err);
+			return new CapabilityStore({ load: () => null, save: (s) => capabilitiesDurable.save(s) } as DurableStore);
+		}
+	})();
+
 	// Session records and the presence plane registry's own version identity (epoch/counter/hash/
 	// cleanShutdown) are ONE atomic file, written by the SAME save() call - an asymmetric loss
 	// between "presence knows its epoch" and "SessionStore knows its sessions" (the two-file idiom
@@ -315,6 +329,7 @@ export async function startGateway(): Promise<void> {
 		// OTHER conversation's persist() call re-serializes the whole store, so idle dead weight
 		// inflates everyone else's write cost too).
 		durableOpStore.sweep();
+		capabilityStore.sweep();
 		sessionResumeDurable.save({
 			sessions: sessionStore.snapshot(),
 			planes: planeRegistry.persistedState(cleanShutdown),
@@ -1104,6 +1119,7 @@ export async function startGateway(): Promise<void> {
 				presence.forget(team);
 			},
 			sessionStore: presence,
+			capabilityStore,
 			domain: () => {
 				const snapshot = allowlistForConsole?.getSnapshot() ?? null;
 				return snapshot ? { version: allowlistForConsole?.version() ?? "", snapshot } : null;
@@ -1343,6 +1359,15 @@ export async function startGateway(): Promise<void> {
 		}
 		if (method === "GET" && url.pathname === "/pending") return routes.pending();
 		if (method === "GET" && url.pathname === "/teams") return routes.teams();
+		// What plugins the owner's consoles have enabled, so a starting session knows which tools to
+		// register and what guidance to carry. Ungated on purpose: it returns non-secret plugin ids
+		// and their own instruction text, and a hand-launched host window (the launch style the
+		// startup fetch exists to cover) carries no credential to present.
+		if (method === "GET" && url.pathname === "/capabilities") {
+			return new Response(JSON.stringify(capabilityStore.snapshot()), {
+				headers: { "Content-Type": "application/json" },
+			});
+		}
 		if (method === "GET" && url.pathname === "/discover") return routes.discover();
 		if (method === "POST" && url.pathname === "/send") return routes.send(req, body);
 		if (method === "POST" && url.pathname === "/respond") return routes.respond(req, body);
