@@ -333,8 +333,13 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// context menu (long-press on a standard anchor, or tap on an unhandled-protocol link)
 	// shows the URL with Open enabled only when the dispatcher can actually open it.
 	var linkMenu by remember { mutableStateOf<Pair<String, String>?>(null) }
+	// Set only when a plugin was offered this link and declined it, so the dialog can explain itself.
+	var linkMenuNote by remember { mutableStateOf<String?>(null) }
 	rendererPool.onLinkTap = { team, url -> openLink(context, team, url) }
-	rendererPool.onLinkMenu = { team, url -> linkMenu = team to url }
+	rendererPool.onLinkMenu = { team, url ->
+		linkMenuNote = null
+		linkMenu = team to url
+	}
 	// A tapped link whose scheme a plugin claims. The framework resolves the ROW first, so a handler
 	// receives that row's own files rather than a row id it would have to trust and resolve itself.
 	// The same ref in two messages points at two different snapshots, which is why the row's `at`
@@ -346,7 +351,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			pluginManager.host.linkHandlers.anyCaught(onError = ::logPluginThrow) {
 				it.tryOpen(context, TappedLink(team, url, row.files))
 			}
-		if (!claimed) linkMenu = team to url
+		if (!claimed) {
+			linkMenuNote = "No code snapshot is attached to this message."
+			linkMenu = team to url
+		}
 	}
 	// Claimed schemes decide which links render as live rather than broken; re-pushed on a toggle.
 	rendererPool.handledSchemes = pluginManager.host.linkHandlers.values().map { it.scheme }
@@ -756,7 +764,17 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 		AlertDialog(
 			onDismissRequest = { linkMenu = null },
 			title = { Text("Link") },
-			text = { Text(url) },
+			text = {
+				Column {
+					Text(url)
+					// A claimed scheme that reached this dialog was offered to its plugin and declined,
+					// so say why rather than leaving it indistinguishable from an unhandled link.
+					if (linkMenuNote != null) {
+						Spacer(Modifier.height(8.dp))
+						Text(linkMenuNote!!, style = MaterialTheme.typography.bodySmall)
+					}
+				}
+			},
 			confirmButton = {
 				// Greyed out for a scheme the dispatcher cannot open (an unhandled protocol's
 				// menu is copy-only until a handler exists).

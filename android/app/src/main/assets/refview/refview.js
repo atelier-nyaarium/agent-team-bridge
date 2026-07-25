@@ -16,7 +16,7 @@
 		banner.hidden = true;
 	});
 
-	/** Highlight one line, falling back to plain text when hljs has no grammar or throws. */
+	/** Highlight a whole block, falling back to escaped plain text when hljs has no grammar or throws. */
 	function highlight(text, language) {
 		if (language && window.hljs && window.hljs.getLanguage(language)) {
 			try {
@@ -28,6 +28,34 @@
 		const span = document.createElement("span");
 		span.textContent = text;
 		return span.innerHTML;
+	}
+
+	/**
+	 * Highlight a block and hand back one HTML string per line.
+	 *
+	 * Highlighting must see the WHOLE block: hljs carries state across lines, so highlighting each
+	 * line alone reads the second half of a block comment as live code and the closing delimiter of a
+	 * docstring as an opening one. Since a span may cross a line break, any span still open at the
+	 * end of a line is closed there and reopened on the next, which is what keeps each line a
+	 * standalone, balanced fragment the row can hold.
+	 */
+	function highlightLines(text, language) {
+		const lines = highlight(text, language).split("\n");
+		const out = [];
+		let open = [];
+		for (const line of lines) {
+			const stack = open.slice();
+			const tags = /<span\b[^>]*>|<\/span>/g;
+			let match = tags.exec(line);
+			while (match) {
+				if (match[0] === "</span>") stack.pop();
+				else stack.push(match[0]);
+				match = tags.exec(line);
+			}
+			out.push(open.join("") + line + "</span>".repeat(stack.length));
+			open = stack;
+		}
+		return out;
 	}
 
 	/**
@@ -90,6 +118,13 @@
 			document.getElementById("hljs-dark").disabled = !dark;
 		},
 
+		/** Shown instead of code when the snapshot could not be read, so a claimed tap never ends in a
+		 * blank page with no explanation. */
+		unavailable(message) {
+			bannerText.textContent = message;
+			banner.hidden = false;
+		},
+
 		render(payload) {
 			crumb.textContent = "";
 			const path = document.createElement("strong");
@@ -115,6 +150,7 @@
 					addGap(segment.startLine - previousEnd - 1 + " lines hidden");
 				}
 				const lines = String(segment.text).split("\n");
+				const highlighted = highlightLines(String(segment.text), payload.language);
 				for (let i = 0; i < lines.length; i++) {
 					const lineNumber = segment.startLine + i;
 					const row = document.createElement("div");
@@ -127,7 +163,7 @@
 
 					const src = document.createElement("div");
 					src.className = "src";
-					src.innerHTML = highlight(lines[i], payload.language);
+					src.innerHTML = highlighted[i] || "";
 
 					if (span && lineNumber >= span.startLine && lineNumber <= span.endLine) {
 						const from = lineNumber === span.startLine ? span.startColumn : 0;

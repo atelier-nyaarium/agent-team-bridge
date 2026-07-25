@@ -48,6 +48,10 @@ class ThreadRendererPool(private val context: Context) {
 	 * live ones when the claimed set changes. */
 	var handledSchemes: List<String> = emptyList()
 		set(value) {
+			// Assigned from the composable body, so this fires on every recomposition (a keystroke in
+			// the composer mutates state). Without the guard each one queues an identical eval into
+			// every live renderer, and into the pending buffer of any still loading.
+			if (field == value) return
 			field = value
 			renderers.values.forEach { it.setHandledSchemes(value) }
 		}

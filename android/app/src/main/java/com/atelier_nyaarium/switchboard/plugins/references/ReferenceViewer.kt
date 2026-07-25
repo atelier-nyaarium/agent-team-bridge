@@ -2,6 +2,7 @@ package com.atelier_nyaarium.switchboard.plugins.references
 
 import android.annotation.SuppressLint
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -30,6 +31,12 @@ private val HLJS_LANGUAGE = mapOf(
 	"cpp" to "cpp", "cc" to "cpp", "cxx" to "cpp", "hpp" to "cpp", "hh" to "cpp", "h" to "cpp", "c" to "cpp",
 	"cs" to "csharp", "py" to "python", "pyi" to "python", "gd" to "gdscript",
 	"json" to "json", "md" to "markdown", "kt" to "kotlin", "sh" to "bash", "yml" to "yaml", "yaml" to "yaml",
+	// The rest of what the vendored bundle already ships. Leaving one out costs nothing to add and
+	// renders an ordinary source file as flat text.
+	"go" to "go", "rs" to "rust", "java" to "java", "rb" to "ruby", "php" to "php", "sql" to "sql",
+	"css" to "css", "scss" to "scss", "less" to "less", "lua" to "lua", "swift" to "swift", "r" to "r",
+	"pl" to "perl", "m" to "objectivec", "ini" to "ini", "toml" to "ini", "diff" to "diff", "patch" to "diff",
+	"xml" to "xml", "html" to "xml", "htm" to "xml", "svg" to "xml", "graphql" to "graphql", "makefile" to "makefile",
 )
 
 /** The banner text for a resolution that did not land exactly where the ref asked. */
@@ -48,8 +55,12 @@ internal fun payloadFor(request: ReferenceOpenRequest, snapshot: File): String {
 	val entry = request.entry
 	val file = request.file
 
+	// A snippet snapshot holds only its segment texts, so falling back to "read the file as a whole"
+	// would number a fragment from line 1 and point the band at lines that are not in the render.
+	require(!file.snippet || file.segments.isNotEmpty()) { "snippet entry carries no segments" }
+
 	val segments = JSONArray()
-	if (file.snippet && file.segments.isNotEmpty()) {
+	if (file.snippet) {
 		for (segment in file.segments) {
 			segments.put(JSONObject().put("startLine", segment.startLine).put("text", segment.text))
 		}
@@ -101,6 +112,9 @@ fun ReferenceViewer(request: ReferenceOpenRequest, modifier: Modifier = Modifier
 	Box(modifier.fillMaxSize()) {
 		AndroidView(
 			modifier = Modifier.fillMaxSize(),
+			// Each dismissal must take its renderer process with it; the sibling Designer WebViews do
+			// the same. Without it, every ref tap in a session leaves one behind.
+			onRelease = { it.destroy() },
 			factory = { ctx ->
 				WebView(ctx).apply {
 					settings.javaScriptEnabled = true
@@ -114,7 +128,14 @@ fun ReferenceViewer(request: ReferenceOpenRequest, modifier: Modifier = Modifier
 							fun ready() {
 								post {
 									evaluateJavascript("window.refview.setTheme($dark)", null)
-									payload?.let { evaluateJavascript("window.refview.render($it)", null) }
+									if (payload != null) {
+									evaluateJavascript("window.refview.render($payload)", null)
+								} else {
+									// The tap was already claimed, so the link menu is unreachable. Say what
+									// happened rather than leaving a blank page that reads as a dead tap.
+									val note = JSONObject.quote("This snapshot is no longer available on this device.")
+									evaluateJavascript("window.refview.unavailable($note)", null)
+								}
 								}
 							}
 						},
@@ -122,6 +143,11 @@ fun ReferenceViewer(request: ReferenceOpenRequest, modifier: Modifier = Modifier
 					)
 
 					webViewClient = object : WebViewClient() {
+						// A large snapshot builds tens of thousands of nodes, which is the shape that
+						// OOMs a renderer. Returning true keeps the app alive instead of letting the
+						// framework kill the process out from under the conversation.
+						override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean = true
+
 						override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
 							if (request.url.scheme == "file") null else WebResourceResponse("text/plain", "utf-8", null)
 

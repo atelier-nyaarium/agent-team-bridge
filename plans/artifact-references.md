@@ -859,6 +859,59 @@ TS assertion now checks `{kind: "not-a-ref"}` so that side can catch the class t
 evidence for the earlier lesson: a cross-runtime corpus only earns its keep if both sides assert the
 distinction, not merely the outcome.
 
+## Phase 3 audit residue
+
+Four angles, 13 findings, no blockers. Fixed and verified:
+
+- **The viewer leaked a WebView per tap and a renderer crash killed the app.** No `onRelease`, and no
+  `onRenderProcessGone` override, whose documented default is the framework killing the process. Full
+  mode builds tens of thousands of nodes for a large snapshot, which is exactly the shape that OOMs a
+  renderer, so this was reachable rather than theoretical. Both sibling Designer WebViews already did
+  it right.
+- **hljs was called per LINE, so every multi-line construct highlighted wrong.** The second half of a
+  block comment rendered as live code; a closing docstring delimiter read as an opening one. That is
+  essentially every real source file. Highlighting is now whole-block, with any span still open at a
+  line end closed and reopened on the next so each row holds a balanced fragment.
+- **The miss contract dropped its promised note.** An unresolvable ref showed the generic link dialog,
+  visually identical to tapping a dead link. It now says so.
+- **The language map omitted grammars the bundle already ships** (go, rust, java, ruby, php, sql, css,
+  swift, and more), so those refs rendered flat for no reason.
+- **A blank viewer** when the payload could not be built, past the point where the tap was already
+  claimed and the link menu unreachable. It now renders the banner instead.
+- **A snippet entry with no segments** rendered the elided fragment as a whole file numbered from 1.
+  Now refused.
+- **`handledSchemes` re-pushed an identical eval into every renderer on every recomposition** (a
+  keystroke in the composer). Guarded.
+
+**Still open:**
+
+- **The chip-decorator seam carries no message coordinate.** `RefDisplayIndex` keys summaries by
+  `(team, at)` and exposes exactly the lookup wanted, but `AttachmentChipDecorator` is handed only
+  `(team, file)`, so the hide verdict falls back to scanning every summary the team ever recorded, on
+  the main thread, once per attachment per serialization. It also binds the verdict team-globally
+  rather than to the message whose manifest declared it. The fix is a framework change: give the
+  decorator the row's `at`, the way `TappedLink` was given row identity.
+- **Chat-body amber** is still unwired. The drain-time quality map exists and the CSS rule exists; the
+  missing piece is threading it through the serialization payload. The hard part is not plumbing but
+  KEYING: the map is keyed by canonical ref key, and the JS `link_open` rule sees the href markdown-it
+  normalized, so matching them needs either a JS canonicalizer (a third implementation of a grammar
+  that already has two) or the manifest carrying the raw destinations. That decision deserves the same
+  care the grammar got, which is why it was not guessed at.
+- **A claimed tap can still be dropped after `tryOpen` returned true**, if the request arrives after a
+  tab switch: the bus is replay-0 and the collector is scoped to the composed thread. The window is
+  narrow but the claim boundary is committed before the render.
+- **The plugin toggle does not itself re-push the claimed scheme set.** It works today only because
+  leaving Settings recomposes App. A future in-thread toggle would leave live renderers styling
+  `ref://` red.
+- **`relOf` is re-derived in three places** in the plugin, laxer than `Attachments`' own private parse
+  (which the core calls "the one parse every src consumer shares"). Making that public would collapse
+  all three.
+- **No GDScript hljs grammar is vendored**, so `.gd` renders as escaped plain text. Confirmed absent
+  from the bundle rather than merely unmapped.
+- **`ChipDecoration.hidden` is a boolean, not the sealed `Decorate`/`Hide`** the Phase 3 bullet
+  specifies. Deliberate and documented above, but it is a weaker compile-time guarantee than the plan
+  describes: nothing stops a caller supplying both a title and `hidden = true`.
+
 ## Phase 2 audit residue (open, next lap)
 
 Six audit angles ran against the shipped Phase 2. Both blockers and five significant findings are
