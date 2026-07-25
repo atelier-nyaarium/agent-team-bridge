@@ -214,11 +214,12 @@ data class CrossDomainReceiverPairing(
 /** `id` is a per-thread, local-only row key for the WebView DOM (lets the renderer
  * replace a row in place). It is NOT the mailbox seq; mailbox dedupe is owned by SyncCursor.
  * Stamped on append; reassigned from list order on load so old transcripts still work. */
-/** What a cancelled failed send hands back to the composer: its text plus its already-copied
- * attachment refs. Refs rather than Uris because only the UI layer mints the FileProvider
- * content:// Uri the composer's send path needs - a bare file:// Uri reads its bytes but carries
- * neither a display name nor a mime type, so the file would return renamed and untyped. */
-data class ComposerRestore(val text: String, val fileRefs: List<MessageFile> = emptyList())
+/** The pending outgoing message for one thread: what the composer shows and what Send consumes.
+ * Files are already-copied refs rather than live picker grants, so a draft outlives both the
+ * grant and the process, matching the durability its text always had. */
+data class Draft(val text: String = "", val files: List<MessageFile> = emptyList()) {
+	val isOccupied: Boolean get() = text.isNotBlank() || files.isNotEmpty()
+}
 
 data class Message(
 	val fromMe: Boolean,
@@ -514,9 +515,12 @@ data class ChatState(
 	 * renders a composer, so this is tracked apart from working/live and drives the check-terminal chip. */
 	val sessionNeedsLogin: Map<String, Boolean> = emptyMap(),
 	val status: String = "",
-	/** Content lifted out of a cancelled failed send, waiting for that thread's composer to take it
-	 * back. Keyed by team and cleared as soon as it is applied, so it restores exactly once. */
-	val composerRestore: Map<String, ComposerRestore> = emptyMap(),
+	/** Per-team composer content: what the thread's composer shows and what Send consumes. The
+	 * single owner of composer state - a cancelled failed send, a cancelled scheduled send, and the
+	 * live picker/text field all read and write through this same map, so none of them can drop or
+	 * clobber what the others hold. Sparse: a team with nothing typed and nothing picked has no
+	 * entry (see withDraft). */
+	val drafts: Map<String, Draft> = emptyMap(),
 	val error: String? = null,
 	val gap: Boolean = false,
 	val biometricLock: Boolean = false,
@@ -682,6 +686,21 @@ data class ChatState(
  * `unread` can never drift from `threads`/`readAnchors`. */
 internal fun ChatState.recomputeUnread(team: String, thread: List<Message>): ChatState =
 	copy(unread = unread + (team to unreadCount(thread, readAnchors[team])))
+
+/** Write `team`'s draft, dropping the entry once it is no longer occupied - the single point that
+ * keeps `drafts` sparse, mirroring the old string map's own empty-drops-the-key behavior. */
+internal fun ChatState.withDraft(team: String, draft: Draft): ChatState =
+	copy(drafts = if (draft.isOccupied) drafts + (team to draft) else drafts - team)
+
+/** The merge [ChatRepository.takeBackIntoDraft] applies: files always UNION (a list has a
+ * meaningful merge, so no caller can drop a pick); text lands only on a blank draft (it has no
+ * merge, so anything already typed wins). Extracted so the invariant is directly testable without
+ * a full repository instance. */
+internal fun mergeTakenBackDraft(current: Draft, text: String, files: List<MessageFile>): Draft =
+	Draft(
+		text = if (current.text.isBlank()) text else current.text,
+		files = (current.files + files).distinct(),
+	)
 
 /** Consecutive fresh-teams observations a locally-labeled team may miss entirely before
  * withFreshTeams prunes its local override. More than one so a single transient gap in a fetch
@@ -905,6 +924,7 @@ class ChatRepository(
 			displayName = store.displayName,
 			firstRooted = store.firstRooted,
 			scheduledSends = loadPersistedScheduledSends(),
+			drafts = loadPersistedDrafts(),
 		),
 	)
 	val state: StateFlow<ChatState> = _state
@@ -3100,19 +3120,19 @@ class ChatRepository(
 		if (!claimedByLiveRow) scheduleAttachmentDelete(prior.fileRefs.mapNotNull { it.src })
 	}
 
-	/** Cancel team's scheduled send and hand the banked record back instead of deleting its
-	 * attachment bucket - the dock's cancel-to-restore action, where the composer becomes the
+	/** Cancel team's scheduled send and hand its content back into the composer instead of deleting
+	 * its attachment bucket - the dock's cancel-to-restore action, where the draft becomes the
 	 * bucket's new owner (the same ownership-transfer shape as fireOne's own clearScheduledSendRecord
 	 * call). A restored-then-abandoned bucket still self-heals: dropping the record from
-	 * scheduledSends removes it from sweepOrphanAttachments' referenced set, so the next cold-start
-	 * sweep reclaims it exactly like any other orphaned bucket. Returns null if nothing was
-	 * scheduled, or if a fire already raced ahead and claimed the same opId into a live row first
-	 * (see cancelScheduledSend's own doc on that race) - there is nothing left to restore once the
-	 * message has genuinely gone out. */
-	fun cancelScheduledSendForEdit(team: String): ScheduledSend? {
-		val prior = clearScheduledSendRecord(team) ?: return null
+	 * scheduledSends removes it from sweepOrphanAttachments' referenced set (the draft's own files
+	 * join that set instead - see sweepOrphanAttachments), so the next cold-start sweep reclaims it
+	 * exactly like any other orphaned bucket. A no-op if nothing was scheduled, or if a fire already
+	 * raced ahead and claimed the same opId into a live row first (see cancelScheduledSend's own doc
+	 * on that race) - there is nothing left to restore once the message has genuinely gone out. */
+	fun cancelScheduledSendForEdit(team: String) {
+		val prior = clearScheduledSendRecord(team) ?: return
 		val claimedByLiveRow = _state.value.threads[team]?.any { it.opId == prior.opId } == true
-		return if (claimedByLiveRow) null else prior
+		if (!claimedByLiveRow) takeBackIntoDraft(team, prior.text, prior.fileRefs)
 	}
 
 	/** Change ONLY the fire time of team's existing scheduled send - the dock's tap-to-edit action.
@@ -3347,13 +3367,8 @@ class ChatRepository(
 		val msg = _state.value.threads[team]?.firstOrNull { it.id == messageId } ?: return
 		if (!msg.fromMe || msg.status != "error") return
 		val refs = msg.files.filter { Attachments.fileFor(filesDir, it.src) != null }
-		_state.update { it.copy(composerRestore = it.composerRestore + (team to ComposerRestore(msg.text, refs))) }
+		takeBackIntoDraft(team, msg.text, refs)
 		removeMessage(team, messageId)
-	}
-
-	/** Consume a staged restore once the composer has taken it, so it is applied exactly once. */
-	fun clearComposerRestore(team: String) {
-		_state.update { it.copy(composerRestore = it.composerRestore - team) }
 	}
 
 	private fun removeMessage(team: String, id: Long) {
@@ -3780,13 +3795,17 @@ class ChatRepository(
 	 * sweepOrphanBuckets's own age/mtime guard alone cannot prevent. A scheduled send's own eagerly-
 	 * copied bucket is deliberately not a thread row until it fires, so its fileRefs must join the
 	 * referenced set too - otherwise a record waiting out a long alarm (or several service restarts)
-	 * looks orphaned and gets swept out from under it, and the eventual fire sends text-only. */
+	 * looks orphaned and gets swept out from under it, and the eventual fire sends text-only. An open
+	 * draft's picked files are the same shape of gap: they never become a thread row until Send, so
+	 * they must join the referenced set too, or an open draft left untouched past this sweep's age
+	 * floor loses its attachments out from under it. */
 	suspend fun sweepOrphanAttachments() = withContext(Dispatchers.IO) {
 		val referencedSrcs = _state.value.threads.values.asSequence()
 			.flatMap { it.asSequence() }
 			.flatMap { it.files.asSequence() }
 			.map { it.src }
-			.toList() + _state.value.scheduledSends.values.flatMap { it.fileRefs }.map { it.src }
+			.toList() + _state.value.scheduledSends.values.flatMap { it.fileRefs }.map { it.src } +
+			_state.value.drafts.values.flatMap { it.files }.map { it.src }
 		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs)
 	}
 
@@ -3920,16 +3939,79 @@ class ChatRepository(
 		}
 	}
 
-	// Per-session composer drafts, persisted so a power-management kill (or any process
-	// death) never loses a half-typed message. Keyed by the same canonical team id as
-	// threads; an empty draft is dropped so the map stays sparse.
-	private val drafts: MutableMap<String, String> = loadPersistedDrafts()
+	// Per-thread composer state (ChatState.drafts), persisted so a power-management kill (or any
+	// process death) never loses a half-typed message or a picked-but-unsent file. Every writer
+	// below reads-modifies-writes the SAME _state.drafts map through withDraft and persists via
+	// persistDrafts, so text, files, and the two restore paths (cancelFailedSend,
+	// cancelScheduledSendForEdit, both above) can never observe or clobber a stale copy of the map.
 
-	fun draft(team: String): String = drafts[team] ?: ""
+	/** Set a team's composer text, replacing whatever text was there; files are untouched. */
+	fun setDraftText(team: String, text: String) {
+		val next = _state.updateAndGet { s ->
+			s.withDraft(team, (s.drafts[team] ?: Draft()).copy(text = text))
+		}.drafts
+		persistDrafts(next)
+	}
 
-	fun setDraft(team: String, text: String) {
-		if (text.isEmpty()) drafts.remove(team) else drafts[team] = text
-		persistDrafts()
+	/** Pick files into a team's draft, eagerly copying them into their own bucket - mirroring
+	 * scheduleSend's own eager copy at schedule time, since a transient content:// grant may not
+	 * outlive the wait between picking and Send. Each call mints its OWN bucket (never reused
+	 * across calls, unlike a row's single out-$opId bucket), so two picks that happen to share a
+	 * basename cannot overwrite each other on disk. */
+	suspend fun addDraftFiles(team: String, uris: List<Uri>) = withContext(Dispatchers.IO) {
+		val picked = uris.mapNotNull { readUri(it) }
+		if (picked.isEmpty()) return@withContext
+		val copied = Attachments.storeOutgoing(filesDir, "draft-${UUID.randomUUID()}", picked)
+		val next = _state.updateAndGet { s ->
+			val current = s.drafts[team] ?: Draft()
+			s.withDraft(team, current.copy(files = current.files + copied))
+		}.drafts
+		persistDrafts(next)
+	}
+
+	/** Drop one picked file from a team's draft (the attachment chip's remove) and delete its
+	 * now-unreferenced copy. */
+	fun removeDraftFile(team: String, src: String) {
+		val next = _state.updateAndGet { s ->
+			val current = s.drafts[team] ?: return@updateAndGet s
+			s.withDraft(team, current.copy(files = current.files.filterNot { it.src == src }))
+		}.drafts
+		persistDrafts(next)
+		scheduleAttachmentDelete(listOf(src))
+	}
+
+	/** Append text to a team's composer draft - the plugin seam (e.g. the Designer's "Reference in
+	 * chat"). Goes straight through the same drafts map every other writer here uses, so the team
+	 * binding is enforced by the call itself rather than incidental on an ambient composable var. */
+	fun appendDraftText(team: String, insert: String) {
+		val current = _state.value.drafts[team] ?: Draft()
+		val spaced = current.text.isEmpty() || current.text.endsWith(" ") || current.text.endsWith("\n")
+		setDraftText(team, (if (spaced) current.text else "${current.text} ") + insert)
+	}
+
+	/**
+	 * Hand a not-yet-sent message's content back to a thread's composer. Files always UNION: a list
+	 * has a meaningful merge, so no caller can drop a pick. Text lands only on a blank draft: it has
+	 * no merge, so anything already typed wins. Callers may disable their button as UX, but this
+	 * write is what makes destroying composer contents unexpressible.
+	 */
+	fun takeBackIntoDraft(team: String, text: String, files: List<MessageFile>) {
+		val next = _state.updateAndGet { s ->
+			s.withDraft(team, mergeTakenBackDraft(s.drafts[team] ?: Draft(), text, files))
+		}.drafts
+		persistDrafts(next)
+	}
+
+	/** Clear a team's draft once Send has taken its content - the text, and the draft's OWN copies
+	 * of any files, safe to reclaim because Send re-buckets its own copy under out-$opId before this
+	 * runs (see MainActivity's Send handler). Best-effort, same as every other ownership-transfer
+	 * delete in this file (forget, cancelScheduledSend, scheduleSend's own replace): a narrow miss
+	 * here is healed by the next cold-start sweepOrphanAttachments. */
+	fun clearDraft(team: String) {
+		val prior = _state.value.drafts[team] ?: return
+		val next = _state.updateAndGet { s -> s.copy(drafts = s.drafts - team) }.drafts
+		persistDrafts(next)
+		scheduleAttachmentDelete(prior.files.mapNotNull { it.src })
 	}
 
 	/** Give a team a local display label (or clear it with a blank name). Local-only: the optimistic
@@ -4033,6 +4115,7 @@ class ChatRepository(
 		val key = canonicalTarget(team)
 		forgottenUntil[key] = System.currentTimeMillis() + FORGET_TOMBSTONE_MS
 		var dropped: List<Message> = emptyList()
+		val priorDraft = _state.value.drafts[key]
 		val next = _state.updateAndGet { s ->
 			val afterForget = threadsAfterForget(s.threads, key)
 			dropped = afterForget.dropped
@@ -4051,18 +4134,19 @@ class ChatRepository(
 				closedTeams = s.closedTeams - key,
 				sessionWorking = s.sessionWorking - key,
 				sessionNeedsLogin = s.sessionNeedsLogin - key,
+				drafts = s.drafts - key,
 			)
 		}
 		persistThreadsAndReadAnchors(next.threads, next.readAnchors)
 		persistLabels(next.labels)
-		drafts.remove(key)
-		persistDrafts()
+		persistDrafts(next.drafts)
 		// Nothing left to send it into - clears the record, re-arms the alarm, and drops its bucket.
 		cancelScheduledSend(key)
 		stts.purge(key)
 		// Deliberately its OWN unconditional call, not nested in the local-gateway gate below -
 		// the files are local no matter where the session lives, unlike the gateway RPC.
 		scheduleAttachmentDelete(dropped.flatMap { it.files }.mapNotNull { it.src })
+		priorDraft?.let { scheduleAttachmentDelete(it.files.mapNotNull { f -> f.src }) }
 		// Also tear the live session down on the gateway (kill tmux + drop the resume record) so it
 		// stops listing as available. Local addressable sessions only (a remote thread or a non-address
 		// spawn-point has no local pane to kill); best-effort, the gateway no-ops an absent session.
@@ -4478,23 +4562,33 @@ class ChatRepository(
 		}.getOrDefault(emptyMap())
 	}
 
-	private fun persistDrafts() {
+	private fun persistDrafts(records: Map<String, Draft>) {
 		val root = JSONObject()
-		for ((team, text) in drafts) root.put(team, text)
+		for ((team, draft) in records) {
+			val files = JSONArray()
+			for (f in draft.files) files.put(JSONObject().put("name", f.name).put("mime", f.mime).putOpt("src", f.src))
+			root.put(team, JSONObject().put("text", draft.text).put("files", files))
+		}
 		runCatching { store.saveDrafts(root.toString()) }
 	}
 
-	private fun loadPersistedDrafts(): MutableMap<String, String> {
-		val json = store.loadDrafts() ?: return mutableMapOf()
-		return runCatching {
-			val root = JSONObject(json)
-			val out = mutableMapOf<String, String>()
+	/** A pre-Draft persisted row is a bare JSON string (just the text); real users have saved
+	 * drafts under that shape, so it loads as `Draft(text = it)` rather than being dropped. A
+	 * current-shape row is an object with "text" + "files", read the same way a ScheduledSend's
+	 * fileRefs are (loadFiles). Either way an entry that comes back unoccupied (empty legacy text)
+	 * is dropped, matching withDraft's own sparse-map invariant. */
+	private fun loadPersistedDrafts(): Map<String, Draft> {
+		val json = store.loadDrafts() ?: return emptyMap()
+		val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyMap()
+		return buildMap {
 			for (rawKey in root.keys()) {
 				if (!isAddressKey(rawKey)) continue
-				out[rawKey] = root.getString(rawKey)
+				runCatching {
+					val obj = root.optJSONObject(rawKey)
+					if (obj != null) Draft(text = obj.optString("text"), files = loadFiles(obj)) else Draft(text = root.getString(rawKey))
+				}.getOrNull()?.takeIf { it.isOccupied }?.let { put(rawKey, it) }
 			}
-			out
-		}.getOrDefault(mutableMapOf())
+		}
 	}
 
 	// internal (not private): a couple of these are pinned against gateway-side TypeScript
