@@ -746,3 +746,30 @@ different matcher.
 - **Aliased spellings of one file ship duplicate snapshots** (`src/x.ts`, `./src/x.ts`, and a
   symlinked `lib/x.ts` produced three), because the builder keys on the written path rather than the
   resolved absolute one, so a large file double-counts against the aggregate budget.
+
+### From Phase 2
+
+**A green suite is not evidence that a cross-runtime contract holds.** Both filename-sanitizer
+divergences (the astral character, the dedupe seeding) shipped with every test passing, because the
+only assertions were TS-side echoes of the same assumptions the implementation made. The plan asked
+for a cross-runtime vector and I skipped it as small; it is precisely the check that would have
+caught both. Where two runtimes must agree, the corpus is not optional polish, it is the test.
+
+**My own audit brief caught what my implementation missed.** I wrote "over-masking silently drops a
+ref the agent meant, with no error anywhere" into the scanner's doc comment, and then shipped a
+masking pass that did exactly that across blank lines. Writing the invariant down is not the same as
+checking the code against it, and the gap between those two is where both blockers lived.
+
+**An idempotency property is worth a fuzzer, not examples.** The canonical key had a hand-written
+stress case picking a matcher of every separator character, and it passed while `>` and space both
+broke round-tripping. A 60k-shape generator found the class in seconds. Any function whose contract
+is `f(f(x)) == f(x)` should get the generator, because examples test the cases you thought of.
+
+**`web-tree-sitter` node access needs a null filter at every hop.** `namedChildren` and `children`
+are typed as possibly-null per element, so every traversal in `refResolver.ts` carries a
+`.filter((c): c is Node => c !== null)`. It is noise, but the alternative is a non-null assertion in
+a tree walk over untrusted file shapes.
+
+**`tree-sitter build --wasm` needs no emsdk or docker on a recent CLI.** The plan assumed one or the
+other; 0.26 downloads its own wasi-sdk to `~/.cache/tree-sitter`. Worth knowing before anyone plumbs
+a docker path that is not needed.
