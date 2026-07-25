@@ -351,6 +351,19 @@ reachable locally; check `curl localhost:20000/health` and
 - `bun scripts/check-module-residue.ts` - Verify the node_modules tree against bun.lock
 - `bun scripts/codegen-kotlin.ts` - Regenerate the Kotlin protocol types after editing a shared schema (CI fails on a stale `proto/Protocol.kt`)
 
+### Pull before every follow-up edit after a push
+
+`gitPushNewBranch` moves the commits to a branch and resets local `main` to `origin/main` while the
+PR is still merging, so for a minute or two the working tree does NOT contain the work just pushed.
+Editing in that window silently applies to a tree missing the feature: a scripted search-and-replace
+finds nothing and reports success, and the follow-up commit lands without the change it was meant to
+build on. This is not hypothetical - it happened three times in one session, and once it handed a
+stale tree to an audit that then reported already-fixed code as broken.
+
+After any push, run `gitFetch` then `gitPull` before touching a file. Treat a non-empty
+`git log main..origin/main` as a hard stop rather than a warning. When scripting an edit, assert the
+match before writing; a replace that silently no-ops is the failure mode this hazard produces.
+
 ### Verify locally before pushing (especially Android)
 
 Develop and verify locally before every push. For TypeScript that is `bun run lint && bun run test`. For Android it means an ACTUAL local build, because `ci.yml` does NOT compile or test the Kotlin: it only runs the TS lint/test plus the codegen + stts drift checks. The Kotlin builds solely in `main-push.yml`, which runs on push to `main` AFTER the merge. So a Kotlin compile error or a failing Android unit test lands on `main` before any gate catches it, surfacing only as a red release build.
