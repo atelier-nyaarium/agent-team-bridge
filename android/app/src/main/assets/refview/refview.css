@@ -1,3 +1,11 @@
+/* The `hidden` attribute has to beat any rule that sets `display`, and an id selector like
+   `#banner { display: flex }` outranks the browser's own `[hidden] { display: none }`. Without this
+   the banner rendered on EVERY ref, empty, since nothing ever un-hid it: invisible against the light
+   theme's pale banner colour and a solid amber bar in dark. */
+[hidden] {
+	display: none !important;
+}
+
 :root {
 	--bg: #ffffff;
 	--fg: #1f2328;

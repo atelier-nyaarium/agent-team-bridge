@@ -14,18 +14,15 @@ import { describe, expect, it } from "vitest";
  * link in every message rendered as plain prose, with no way to tell it was tappable. Nothing failed,
  * nothing logged, and it took a screenshot from the owner's phone to see it.
  */
-const THREAD_CSS = path.join(
-	import.meta.dirname,
-	"..",
-	"..",
-	"android",
-	"app",
-	"src",
-	"main",
-	"assets",
-	"thread",
-	"thread.css",
-);
+const ASSETS = path.join(import.meta.dirname, "..", "..", "android", "app", "src", "main", "assets");
+
+const THREAD_CSS = path.join(ASSETS, "thread", "thread.css");
+
+/** Each bundled page as (name, html, css), for the checks that span both files. */
+const PAGES = [
+	["thread", path.join(ASSETS, "thread", "thread.html"), THREAD_CSS],
+	["refview", path.join(ASSETS, "refview", "refview.html"), path.join(ASSETS, "refview", "refview.css")],
+] as const;
 
 /** Custom properties the stylesheet declares, e.g. `--link: #0969da;`. */
 function declared(css: string): Set<string> {
@@ -52,6 +49,18 @@ describe("the thread stylesheet's custom properties", () => {
 			.map((r) => r.name);
 
 		expect([...new Set(missing)]).toEqual([]);
+	});
+
+	// An id selector that sets `display` outranks the browser's own `[hidden] { display: none }`, so an
+	// element the page hides by attribute renders anyway. That is how the ref viewer's drift banner
+	// came to show on EVERY reference, empty: pale enough to miss in the light theme, a solid amber bar
+	// in dark. Any page that hides something by attribute needs the reset that wins.
+	it.each(
+		PAGES.filter(([, html]) => fs.readFileSync(html, "utf8").includes("hidden")),
+	)("%s resets [hidden] so an id rule cannot un-hide an element", (_name, _html, cssPath) => {
+		const css = fs.readFileSync(cssPath, "utf8").replace(/\s+/g, " ");
+
+		expect(css).toContain("[hidden] { display: none !important; }");
 	});
 
 	it("defines every theme variable in both the light and dark blocks", () => {
