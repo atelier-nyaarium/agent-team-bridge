@@ -70,7 +70,7 @@ export async function startMcp(): Promise<void> {
 	registerReloadPlugins(mcpServer);
 	registerSetEffortLevel(mcpServer);
 	registerCompactSession(mcpServer);
-	registerHumanTools(mcpServer);
+	registerHumanTools(mcpServer, capabilities);
 	// After registerBridgeTools, so bridgeProjectName() already reflects whether PROJECT_NAME is set.
 	// Gated on the owner having the plugin that renders these cards: a session picks up a plugin
 	// toggle on its next start, which is why the console's own board calls it a restart-to-adopt.
