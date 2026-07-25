@@ -36,22 +36,6 @@ function resolveRefPath(projectRoot: string, refPath: string): string {
 	return path.resolve(projectRoot, refPath);
 }
 
-/** Paths whose contents are secrets rather than code. A guardrail, not a security boundary: an agent
- * that means to disclose one of these can simply read it and paste it, and the snapshot only ever
- * goes to the owner's own console anyway. What this stops is the careless case - a ref written into
- * a message body by relayed text, or by an author reaching for a config file without thinking - from
- * silently parking a private key in a chat thread. Refusal is loud, so the author can decide. */
-const SENSITIVE_SEGMENTS = new Set([".ssh", ".gnupg", ".aws", ".docker", ".kube"]);
-const SENSITIVE_FILE_RE = /^\.env(\..+)?$|\.(pem|p12|pfx|jks|keystore)$|^shadow$/;
-
-function sensitiveReason(absolute: string): string | null {
-	const segments = absolute.split(path.sep);
-	const dir = segments.find((s) => SENSITIVE_SEGMENTS.has(s));
-	if (dir) return `lives under ${dir}/`;
-	const name = segments[segments.length - 1] ?? "";
-	return SENSITIVE_FILE_RE.test(name) ? `is named ${name}` : null;
-}
-
 /**
  * Whether the bytes are text, and in which encoding.
  *
@@ -93,13 +77,6 @@ export function loadRefFile(projectRoot: string, refPath: string): LoadResult {
 		absolute = fs.realpathSync(resolveRefPath(root, refPath));
 	} catch {
 		return { ok: false, failure: "missing", detail: `${refPath} does not exist` };
-	}
-
-	// Judged after realpath, so a symlink is caught by where it LANDS rather than by how it was
-	// spelled - `notes.md` pointing at `~/.ssh/id_ed25519` is the same disclosure either way.
-	const reason = sensitiveReason(absolute);
-	if (reason) {
-		return { ok: false, failure: "sensitive", detail: `${refPath} ${reason}, so it is not snapshotted` };
 	}
 
 	let buffer: Buffer;

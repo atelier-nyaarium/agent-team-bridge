@@ -294,13 +294,7 @@ full design, the questionaire, and the audit rounds are in `plans/artifact-refer
   are mirrored exactly, `linkify: false` being load-bearing. Nothing here re-derives CommonMark, which
   is what a hand-rolled masking pass had to do and kept getting wrong.
 - **Paths resolve shell-style, and the project root is a base rather than a fence.** Bare is
-  project-relative, `/` is the filesystem root, `~/` is the owner's home, `..` normalizes. The root
-  cannot be a security boundary: an author who means to disclose a file can read it and paste it, and
-  a snapshot only ever rides a reply to the OWNER's own console. What remains is a **secrets
-  guardrail** (`SENSITIVE_SEGMENTS`/`SENSITIVE_FILE_RE` in `refFile.ts`: anything under
-  `.ssh`/`.gnupg`/`.aws`/`.docker`/`.kube`, a dotenv, a key file), judged AFTER realpath so a
-  symlink is caught by where it lands. It bounds the careless case - a ref arriving in relayed text,
-  or an author reaching for a config file - not a determined one, and it refuses loudly.
+  project-relative, `/` is the filesystem root, `~/` is the owner's home, `..` normalizes.
 - **Hard failure lives only in the file and builder tiers** (missing, unreadable, binary, sensitive,
   over-cap-with-no-range; and a single range over the per-file cap, budget exhaustion, or a reserved
   name collision). RESOLUTION always degrades: a renamed class or a moved line ships anyway with a
