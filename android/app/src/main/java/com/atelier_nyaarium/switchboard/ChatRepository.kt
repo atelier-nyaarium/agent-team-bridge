@@ -214,8 +214,11 @@ data class CrossDomainReceiverPairing(
 /** `id` is a per-thread, local-only row key for the WebView DOM (lets the renderer
  * replace a row in place). It is NOT the mailbox seq; mailbox dedupe is owned by SyncCursor.
  * Stamped on append; reassigned from list order on load so old transcripts still work. */
-/** What a cancelled failed send hands back to the composer: its text plus its attachment copies. */
-data class ComposerRestore(val text: String, val uris: List<Uri> = emptyList())
+/** What a cancelled failed send hands back to the composer: its text plus its already-copied
+ * attachment refs. Refs rather than Uris because only the UI layer mints the FileProvider
+ * content:// Uri the composer's send path needs - a bare file:// Uri reads its bytes but carries
+ * neither a display name nor a mime type, so the file would return renamed and untyped. */
+data class ComposerRestore(val text: String, val fileRefs: List<MessageFile> = emptyList())
 
 data class Message(
 	val fromMe: Boolean,
@@ -3337,14 +3340,14 @@ class ChatRepository(
 	 * that cannot be sent as-is can be edited instead of only retried or abandoned. The row is
 	 * dropped only once its content is staged for restore, so nothing is destroyed on the way.
 	 *
-	 * Attachment copies ride along as file URIs into the same picker slot a fresh pick uses; any
-	 * whose bytes are already gone are simply absent, exactly as a retry treats them.
+	 * Attachment copies ride along into the same picker slot a fresh pick uses; any whose bytes are
+	 * already gone are simply absent, exactly as a retry treats them.
 	 */
 	fun cancelFailedSend(team: String, messageId: Long) {
 		val msg = _state.value.threads[team]?.firstOrNull { it.id == messageId } ?: return
 		if (!msg.fromMe || msg.status != "error") return
-		val uris = msg.files.mapNotNull { Attachments.fileFor(filesDir, it.src)?.let(Uri::fromFile) }
-		_state.update { it.copy(composerRestore = it.composerRestore + (team to ComposerRestore(msg.text, uris))) }
+		val refs = msg.files.filter { Attachments.fileFor(filesDir, it.src) != null }
+		_state.update { it.copy(composerRestore = it.composerRestore + (team to ComposerRestore(msg.text, refs))) }
 		removeMessage(team, messageId)
 	}
 

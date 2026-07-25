@@ -2038,7 +2038,7 @@ internal fun absoluteTimeText(atMillis: Long, zone: java.time.ZoneId): String {
  * (see onEdit's own doc at the ThreadScreen call site for why this is time-only, not a full
  * text/attachment re-edit); the trailing icon cancels outright. */
 @Composable
-fun ScheduledSendDock(rec: ScheduledSend, onEdit: () -> Unit, onCancel: () -> Unit) {
+fun ScheduledSendDock(rec: ScheduledSend, onEdit: () -> Unit, onCancel: () -> Unit, cancelEnabled: Boolean) {
 	// NOT remember-cached: a device timezone change while this composable stays mounted must be
 	// picked up on the next recomposition, mirroring IdlePushbackManager's own fresh-read-per-call
 	// discipline for the identical value (it takes zone as a supplier invoked fresh every decide()).
@@ -2075,8 +2075,15 @@ fun ScheduledSendDock(rec: ScheduledSend, onEdit: () -> Unit, onCancel: () -> Un
 					color = MaterialTheme.colorScheme.onSecondaryContainer,
 				)
 			}
-			IconButton(onClick = hapticClick(onCancel)) {
-				Icon(Icons.Default.Close, contentDescription = "Cancel scheduled send", tint = MaterialTheme.colorScheme.onSecondaryContainer)
+			// Disabled while the composer holds text: cancelling hands this send's own text and
+			// attachments back into that box, so an unguarded tap would silently overwrite whatever
+			// is being typed. Matches the failed-send row's own Cancel.
+			IconButton(onClick = hapticClick(onCancel), enabled = cancelEnabled) {
+				Icon(
+					Icons.Default.Close,
+					contentDescription = "Cancel scheduled send",
+					tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = if (cancelEnabled) 1f else 0.4f),
+				)
 			}
 		}
 	}
@@ -2493,6 +2500,7 @@ fun ThreadScreen(
 	// silently dropped picked-but-not-yet-sent files (schedule OR live send) on that recreation.
 	var attachments by rememberSaveable { mutableStateOf<List<Uri>>(emptyList()) }
 	var showSendMenu by remember { mutableStateOf(false) }
+	val restoreContext = LocalContext.current
 
 	// A cancelled failed send hands its content back here. Only ever applied to an empty composer -
 	// Cancel is disabled otherwise - so this never overwrites something being typed.
@@ -2500,7 +2508,16 @@ fun ThreadScreen(
 		val restore = composerRestore ?: return@LaunchedEffect
 		draft = restore.text
 		onDraftChange(restore.text)
-		if (restore.uris.isNotEmpty()) attachments = restore.uris
+		// Same FileProvider round-trip the scheduled-send dock uses: a content:// Uri over the copy
+		// already in filesDir, so a restored file carries its name and type back through the
+		// composer's ordinary Uri-based send path exactly like a fresh pick.
+		if (restore.fileRefs.isNotEmpty()) {
+			attachments = restore.fileRefs.mapNotNull { f ->
+				Attachments.fileFor(restoreContext.filesDir, f.src)?.let { file ->
+					FileProvider.getUriForFile(restoreContext, "${restoreContext.packageName}.fileprovider", file)
+				}
+			}
+		}
 		onComposerRestored()
 	}
 	// Null: no dialog. Non-null: the seed instant it opens the picker at - a fresh Schedule Send
@@ -2760,6 +2777,7 @@ fun ThreadScreen(
 						scheduleDialogSeed = rec.fireAtMillis
 						scheduleDialogGeneration++
 					},
+					cancelEnabled = draft.trim().isEmpty(),
 					onCancel = {
 						val restored = onCancelScheduledSend()
 						if (restored != null) {
