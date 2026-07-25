@@ -39,7 +39,7 @@
       - `artifactBuilder.ts` / `artifactNames.ts` - the manifest, snapshot naming, and the size budgets
       - `attachRefs.ts` - `appendRefArtifacts`: the one entry point both reply tools call
       - `grammarSources.ts` - the pinned grammar list and the extension-to-grammar map
-    - `capabilities.ts` - `fetchCapabilities`: the bounded, single-attempt read of the gateway's capability union a session makes before its MCP server exists, plus `hasCapability`/`capabilityInstructions` and `GATED_CAPABILITY_IDS` (the one list both the tool gates and the fail-open set derive from)
+    - `capabilities.ts` - `fetchCapabilities`: the bounded, single-attempt read of the gateway's capability union a session makes before its MCP server exists, plus `hasCapability`/`capabilityInstructions` and `GATED_CAPABILITY_IDS` (the one list the tool gates derive from; nothing is assumed when the gateway cannot answer, see Console capability union)
     - `bridge/` - **Crosstalk tools** - Cross-team communication via the gateway
       - `helpers.ts` - Bridge state, WebSocket connection to router, routerPost/routerGet, `postPluginAction` (self-scoped POST /plugin-action wrapper - takes no target/team param, so a plugin-action tool cannot smuggle a different destination through it), and the handshake role cache (`confirmHandshakeRole`) that lets a reconnect confirm its remembered lead/worker answer silently instead of re-answering the bridge handshake every time
       - `bridgeDiscover.ts` - `crosstalk_discover` tool: list addressable teams on the bridge, grouped into one header per team (`groupDiscoverEntries`) - a session-less team still gets a bare header, only the console and reserved `"host"` name are hidden; each active session nests under its header as a `project.session` composite or a loose/cross-gateway peer; asleep sessions show a `last seen Xm ago` recency from `TeamInfo.lastActive`
@@ -327,8 +327,8 @@ full design, the questionaire, and the audit rounds are in `plans/artifact-refer
   tree at `tests/fixtures/ref-project/`. It asserts the SOURCE LINES a range selects, not just a line
   number, because a wrong range usually looks plausible. The resolver's own unit tests use inline
   snippets, which is how a dotted C# namespace stayed broken while everything was green.
-- **Gating:** `setReferencesEnabled` is driven by the capability union at startup. `references` is
-  deliberately NOT in the fail-open set, so this stays off until a console plugin renders it.
+- **Gating:** `setReferencesEnabled` is driven by the capability union at startup. NOTHING is assumed
+  when the gateway cannot answer, so this stays off until a console has actually reported it.
 
 ### Console capability union (which tools a session gets)
 
@@ -363,13 +363,18 @@ to carry. Full design and the audit rounds behind it are in `plans/artifact-refe
   `BRIDGE_ROUTER_URL` defaulting and before the McpServer is constructed, so the answer can gate
   tool registration and feed the server instructions. Deliberately not `routerGet`: that retries
   past any deadline, cannot see a status code, and reads a URL only set once the bridge initializes.
-  One bounded attempt, then `fallback()`. **Fail-open is the whole safety argument:** an agent
-  holding a tool the owner cannot render loses nothing, while an agent missing a tool the owner does
-  have is a silent outage with no error anywhere. So only an AFFIRMATIVE union lacking a capability
-  removes a tool, and `fallback()` lets the disk cache only ADD to the core set, never shrink below
-  it. `GATED_CAPABILITY_IDS` is the single list both the gates and that core set derive from, and a
-  fixture test holds it against the shipped `manifest.json` files so the planned rename of a plugin
-  id to `<author>.<content_id>` fails a test instead of silently un-registering its tools.
+  One bounded attempt, then `fallback()`, which is **the last answer that actually arrived and
+  nothing else**. There is NO hardcoded assumed set: every gated id is a console plugin the owner
+  opts into, so there is no principled basis for the code to assume one and not another, and any
+  such list is a rule with an exception list that drifts (the previous one did, shipping `references`
+  as assumed while the comment directly above it argued the opposite). The disk cache answers the
+  case an assumed set was invented for, a gateway blip stripping a session's tools, and answers it
+  with evidence of what the owner actually had, guidance text included. That leaves one uncovered
+  state, a cold start that has never once reached the gateway, where an empty answer is the correct
+  one: nothing has ever said this owner can render anything. `GATED_CAPABILITY_IDS` is the single
+  list the gates derive from, and a fixture test holds it against the shipped `manifest.json` files
+  so the planned rename of a plugin id to `<author>.<content_id>` fails a test instead of silently
+  un-registering its tools.
 - **Timing:** a running session never changes its tools. A plugin toggle is picked up at the next
   session start, which is the owner's explicit decision.
 

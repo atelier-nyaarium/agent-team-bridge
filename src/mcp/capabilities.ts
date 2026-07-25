@@ -30,28 +30,6 @@ export const GATED_CAPABILITY_IDS = ["designer", "references"] as const;
 
 export type CapabilityId = (typeof GATED_CAPABILITY_IDS)[number];
 
-/**
- * What a session assumes when the gateway cannot say. Fail OPEN: an agent with a TOOL the owner
- * cannot render loses nothing, while an agent missing a tool the owner does have is a silent
- * capability outage with no error anywhere. Only an affirmative answer ever removes a tool.
- *
- * That argument holds for a tool and not for anything else, which is why `references` is NOT here.
- * References registers no tool: it is a side effect on the reply path, so assuming it means every
- * message the owner receives carries snapshot attachments nothing on their device can open, and the
- * failure is silent in the direction that costs them something. Assumed-off costs a plain link.
- *
- * A second reason, found by asking what the tool description says in each state: a fail-open entry is
- * a bare id with no instructions, because the guidance belongs to the plugin's own manifest. So a
- * cold fallback would switch ref snapshotting on while telling the agent nothing about the format,
- * leaving a reply path that scans and can hard-fail without ever having taught what it scans for.
- */
-const FAIL_OPEN_IDS: CapabilityId[] = ["designer"];
-
-const FAIL_OPEN: Capability[] = FAIL_OPEN_IDS.map((id) => ({ id }));
-
-/** The fail-open subset, exported so a fixture can hold it against the shipped plugin manifests. */
-export const FAIL_OPEN_CAPABILITY_IDS: readonly CapabilityId[] = FAIL_OPEN_IDS;
-
 function cacheFile(): string {
 	return path.join(os.homedir(), ".config", "switchboard", "capabilities-cache.json");
 }
@@ -76,16 +54,24 @@ function writeCache(snapshot: unknown): void {
 }
 
 /**
- * What to assume when no answer arrived. The cache may only ADD to the core set, never shrink below
- * it, so the "only an affirmative answer removes a tool" rule survives a cache that recorded the
- * owner turning something off and then went stale. What the cache is genuinely for is carrying the
- * plugins and instruction text the core set does not know about.
+ * What to assume when no answer arrived: the last answer that DID arrive, and nothing else.
+ *
+ * There is no hardcoded set of assumed capabilities, deliberately. Every gated id is a console
+ * plugin the owner opts into, so there is no principled basis for the code to assume one and not
+ * another, and any such list is a rule with an exception list that drifts (this one did, and shipped
+ * a plugin as assumed while the comment above it argued the opposite).
+ *
+ * The cache is the honest version of the same intent. It answers the case that motivated a fail-open
+ * set in the first place, a gateway blip stripping a session's tools, and it answers it with the
+ * evidence of what the owner actually had rather than a guess. Its guidance text rides along too, so
+ * a recovered answer is complete rather than a bare id.
+ *
+ * Which leaves exactly one uncovered state: a cold start that has never once reached the gateway. An
+ * empty answer is the correct one there. Nothing has ever said this owner can render anything, and
+ * inventing a surface at that moment is guessing with the least evidence available anywhere.
  */
 function fallback(): Capability[] {
-	const cached = readCache() ?? [];
-	const byId = new Map(FAIL_OPEN.map((c) => [c.id, c]));
-	for (const capability of cached) byId.set(capability.id, capability);
-	return [...byId.values()];
+	return readCache() ?? [];
 }
 
 /**
