@@ -699,6 +699,32 @@ reordering them ahead of `title`/`summary` made the identical content land. Not 
 may be a harness-side emission issue rather than the tool's, but it cost several round trips and is
 worth knowing about since a failed reply to a human is invisible to them.
 
+## Detection now borrows the console's own parser
+
+`refScanner.ts` no longer decides what markdown means. `markdown.ts` loads the SAME vendored
+`markdown-it.min.js` the console renders with, enumerates its `link_open` tokens, and the scanner
+parses each destination. `maskCode` and both detection regexes are deleted.
+
+The reason is agreement, not correctness. The console decides what is a link and what is code when it
+renders; this side decides what gets a snapshot. A second implementation disagrees at the edges no
+matter how careful it is, and a disagreement is silent in both directions: a dropped snapshot, or one
+attached for something rendered as inert text. Running the same bytes makes agreement identity rather
+than hope. The renderer's options are mirrored exactly, `linkify: false` being the load-bearing one.
+
+The bundle is read and evaluated as CommonJS rather than `require`d, because this package is
+`type: module` and the bundle is UMD; copying it to a `.cjs` name would create the second set of bytes
+this change exists to avoid.
+
+**All 20 hand-written masking tests passed unchanged**, so the swap preserved every behavior that was
+already correct. It also closed, for free, three things the hand-rolled version could not do: a
+closing fence carrying trailing text no longer closes (an open residue item), an indented code block
+is masked (declined earlier as needing full block parsing), and a reference-style link is found at
+all. A raw anchor tag stays ignored, since `html: false` holds on both sides.
+
+Malformed refs now surface. `scanRefs` returns `{refs, problems}`, and `appendRefArtifacts` turns the
+first problem into a hard tool error naming the code and offset, because a malformed ref is the
+agent's own typo and the agent is right there to fix it.
+
 ## Ref grammar specification v1 (implemented)
 
 Owner: `src/mcp/references/refLexer.ts` + `refGrammar.ts`. This grammar covers the ref URI ONLY.
@@ -795,9 +821,6 @@ different matcher.
   lives in the builder, which a message with no refs never reaches, so an attachment literally named
   `switchboard-references.json` ships. Phase 3's selection rule would then adopt it. The fix belongs
   at the compose boundary, not the builder.
-- **A closing fence with trailing text still closes the fence.** CommonMark allows only spaces after
-  the marker, so content the spec still considers fenced gets un-masked and a documented example can
-  be detected.
 - **No cross-runtime vector pins `safeName`/`uniqueName`.** The plan asks for one and it is Phase 2's
   to own (unlike the canonicalizer twin, which is explicitly Phase 3's). Its absence is why the
   astral and dedupe divergences shipped green.

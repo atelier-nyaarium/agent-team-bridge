@@ -30,7 +30,9 @@
   - `mcp/` - **MCP plugin** - Tools registered for Claude Code and other IDE agents
     - `index.ts` - MCP server initialization, mode detection (host vs container), tool registration
     - `references/` - **Artifact references** - resolving `ref://` links an agent writes into file snapshots (see Artifact references below)
-      - `refGrammar.ts` - `parseRef`/`canonicalKey`: the ref URI grammar and its canonical identity
+      - `refLexer.ts` - `lex`: the ref URI token layer. A percent-escape becomes a `char` token carrying its DECODED value, so an encoded separator is structurally incapable of acting as one
+      - `refGrammar.ts` - `tryParseRef`/`canonicalKey`: recursive descent over those tokens, total (a ref, not-a-ref, or an error with a code and offset), plus the printer whose escape set is DERIVED from the token set. Spec in `plans/artifact-references.md`
+      - `markdown.ts` - `linkDestinations`: the console's own vendored markdown parser, so both sides agree by identity on what is a link
       - `refScanner.ts` - `scanRefs`: markdown link destinations outside code, deduped by canonical key
       - `refFile.ts` - `loadRefFile`: project-confined read plus the UTF-16/binary decision
       - `refResolver.ts` - `resolveRef`: the tree-sitter scope walk, fragment matching, and degradation tiers
@@ -283,11 +285,14 @@ full design, the questionaire, and the audit rounds are in `plans/artifact-refer
   whitespace) must be escaped by the encoders, or two distinct refs merge onto one key after a single
   re-canonicalization pass. `tests/fixtures/refs/vectors.json` is the shared corpus, registered in
   the cross-runtime manifest so the Kotlin twin is forced to read it too.
-- **Detection is asymmetric on purpose.** `scanRefs` matches only markdown link destinations outside
-  fenced blocks and inline code. Failing to mask attaches a snapshot for a documented example and can
-  hard-fail the send; over-masking silently drops a ref the agent meant, with no error anywhere.
-  Backtick pairing is confined to one CommonMark block, or a lone backtick used as casual punctuation
-  reaches across a blank line, pairs with an unrelated one, and swallows every ref between them.
+- **Detection borrows the console's own parser.** `markdown.ts` loads the SAME vendored
+  `markdown-it.min.js` the console renders with and enumerates its `link_open` tokens; `scanRefs`
+  parses each destination. The point is agreement, not correctness: the console decides what is a link
+  and what is code when it renders, this side decides what gets a snapshot, and a second
+  implementation disagrees at the edges in both silent directions (a dropped snapshot, or one attached
+  for text rendered as inert). Running the same bytes makes that agreement identity. Renderer options
+  are mirrored exactly, `linkify: false` being load-bearing. Nothing here re-derives CommonMark, which
+  is what a hand-rolled masking pass had to do and kept getting wrong.
 - **Confinement is not a nicety.** Refs are scanned out of a full message body, and a message can
   carry relayed text, so an unconfined resolver would be a way to make an agent attach any file its
   process can read. Absolute paths and `..` are refused before joining, and the realpath must land

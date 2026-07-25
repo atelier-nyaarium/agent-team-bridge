@@ -5,7 +5,11 @@ import { scanRefs } from "../mcp/references/refScanner.js";
 //  Functions & Helpers
 
 function keys(body: string): string[] {
-	return scanRefs(body).map((f) => f.key);
+	return scanRefs(body).refs.map((f) => f.key);
+}
+
+function refs(body: string) {
+	return scanRefs(body).refs;
 }
 
 ////////////////////////////////
@@ -13,7 +17,7 @@ function keys(body: string): string[] {
 
 describe("finding refs in a message", () => {
 	it("finds a linked ref and reports the key it will be filed under", () => {
-		const found = scanRefs("See [handleSubmit](ref://src/app.ts:App:handleSubmit) for the guard.");
+		const found = refs("See [handleSubmit](ref://src/app.ts:App:handleSubmit) for the guard.");
 
 		expect(found).toHaveLength(1);
 		expect(found[0].key).toBe("ref://src/app.ts:App:handleSubmit");
@@ -135,8 +139,59 @@ describe("destinations with parentheses", () => {
 	});
 
 	it("keeps an anchor naming a call", () => {
-		const found = scanRefs("[r](ref://c.js:tick#foo@after:reset())");
+		const found = refs("[r](ref://c.js:tick#foo@after:reset())");
 
 		expect(found[0].ref.matcher).toEqual({ kind: "after", text: "foo", anchor: "reset()" });
+	});
+});
+
+describe("cases only a real markdown parser gets right", () => {
+	// These are here because the hand-rolled scanner could not do them. The first two were open
+	// findings; the third was declined outright as needing full block parsing.
+	it("does not close a fence on a marker line carrying trailing text", () => {
+		const body = [
+			"```",
+			"fenced",
+			"``` <- end of block",
+			"[x](ref://sneaky.ts:X)",
+			"```",
+			"Real: [b](ref://two.ts:B)",
+		].join("\n");
+
+		expect(keys(body)).toEqual(["ref://two.ts:B"]);
+	});
+
+	it("ignores a ref inside an indented code block", () => {
+		const body = ["Example:", "", "    [x](ref://indented.ts:X)", "", "Real: [b](ref://two.ts:B)"].join("\n");
+
+		expect(keys(body)).toEqual(["ref://two.ts:B"]);
+	});
+
+	it("finds a ref written as a reference-style link", () => {
+		const body = "See [the handler][h].\n\n[h]: ref://src/app.ts:handleSubmit";
+
+		expect(keys(body)).toEqual(["ref://src/app.ts:handleSubmit"]);
+	});
+
+	it("ignores a ref inside a raw anchor tag, since html is off in the renderer too", () => {
+		expect(keys('<a href="ref://raw.ts:X">nope</a>')).toEqual([]);
+	});
+});
+
+describe("a malformed ref", () => {
+	it("is reported with its code and position, not silently skipped", () => {
+		const { refs: found, problems } = scanRefs("See [x](ref://:Foo).");
+
+		expect(found).toEqual([]);
+		expect(problems).toEqual([
+			{ raw: "ref://:Foo", code: "path-required", message: expect.stringContaining("file path"), offset: 0 },
+		]);
+	});
+
+	it("does not stop the well-formed refs in the same message from being found", () => {
+		const { refs: found, problems } = scanRefs("[bad](ref://a.ts#) and [good](ref://b.ts:Foo)");
+
+		expect(found.map((f) => f.key)).toEqual(["ref://b.ts:Foo"]);
+		expect(problems).toHaveLength(1);
 	});
 });

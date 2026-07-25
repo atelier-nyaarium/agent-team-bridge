@@ -55,7 +55,13 @@ export function referenceRoot(): string {
 export async function appendRefArtifacts(body: string, attachments: ReplyFile[]): Promise<AttachResult> {
 	if (!enabled) return { ok: true, files: attachments };
 
-	const found = scanRefs(body);
+	const { refs: found, problems } = scanRefs(body);
+	// A malformed ref is the agent's own typo, and the agent is right here to fix it. Reporting the
+	// position beats silently attaching a snapshot for a ref it did not write.
+	if (problems.length > 0) {
+		const first = problems[0];
+		return { ok: false, error: `${first.raw}: ${first.message} (at offset ${first.offset})` };
+	}
 	if (found.length === 0) return { ok: true, files: attachments };
 
 	const root = referenceRoot();
