@@ -188,6 +188,24 @@ describe("capabilityInstructions", () => {
 	});
 });
 
+describe("what fails open, and what deliberately does not", () => {
+	// Fail-open's argument is about TOOLS: holding one the owner cannot render costs nothing. It does
+	// not transfer to a side effect on the reply path. References registers no tool, so assuming it
+	// means every message the owner receives carries snapshot attachments nothing can open, and the
+	// silent failure lands on the side that costs them something. This drifted once already: the
+	// comment argued the case ("would attach snapshots nothing opens") while the list said otherwise.
+	it("does not assume references, which attaches files rather than offering a tool", () => {
+		expect(FAIL_OPEN_CAPABILITY_IDS).not.toContain("references");
+	});
+
+	// A fail-open entry is a bare id: the guidance lives in the plugin's own manifest, so there is
+	// none to carry. Anything assumed here therefore runs with no instructions in any description,
+	// which is only safe for a surface an agent has to deliberately call.
+	it("carries no instruction text, which is why an assumed capability must not need any", () => {
+		expect(capabilityInstructions(FAIL_OPEN_CAPABILITY_IDS.map((id) => ({ id })))).toBe("");
+	});
+});
+
 /** Every plugin manifest the console app actually ships, as the entry a device reports from it. */
 function shippedPlugins(): { id: string; instructions?: string }[] {
 	const pluginsDir = path.join(import.meta.dirname, "..", "..", "android", "app", "src", "main", "assets", "plugins");

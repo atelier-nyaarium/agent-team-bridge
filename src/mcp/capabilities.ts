@@ -31,14 +31,21 @@ export const GATED_CAPABILITY_IDS = ["designer", "references"] as const;
 export type CapabilityId = (typeof GATED_CAPABILITY_IDS)[number];
 
 /**
- * What a session assumes when the gateway cannot say. Fail OPEN: an agent with a tool the owner
+ * What a session assumes when the gateway cannot say. Fail OPEN: an agent with a TOOL the owner
  * cannot render loses nothing, while an agent missing a tool the owner does have is a silent
  * capability outage with no error anywhere. Only an affirmative answer ever removes a tool.
  *
- * A gated id belongs here once a shipped console plugin renders it, and not before: assuming a
- * surface no device can draw would attach snapshots nothing opens.
+ * That argument holds for a tool and not for anything else, which is why `references` is NOT here.
+ * References registers no tool: it is a side effect on the reply path, so assuming it means every
+ * message the owner receives carries snapshot attachments nothing on their device can open, and the
+ * failure is silent in the direction that costs them something. Assumed-off costs a plain link.
+ *
+ * A second reason, found by asking what the tool description says in each state: a fail-open entry is
+ * a bare id with no instructions, because the guidance belongs to the plugin's own manifest. So a
+ * cold fallback would switch ref snapshotting on while telling the agent nothing about the format,
+ * leaving a reply path that scans and can hard-fail without ever having taught what it scans for.
  */
-const FAIL_OPEN_IDS: CapabilityId[] = ["designer", "references"];
+const FAIL_OPEN_IDS: CapabilityId[] = ["designer"];
 
 const FAIL_OPEN: Capability[] = FAIL_OPEN_IDS.map((id) => ({ id }));
 
