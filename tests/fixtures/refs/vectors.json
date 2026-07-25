@@ -1,0 +1,172 @@
+{
+	"note": "Ref grammar vectors, read by BOTH runtimes. The TS parser is src/mcp/references/refGrammar.ts; the Kotlin twin lands in Phase 3 and must produce byte-identical canonical keys, since the MCP writes them as manifest keys and the phone recomputes them from a tapped link. `distinctFrom` names another vector id whose key must differ.",
+	"vectors": [
+		{
+			"id": "bare-path",
+			"uri": "ref://src/app.ts",
+			"parsed": { "path": "src/app.ts", "segments": [], "matcher": null },
+			"canonical": "ref://src/app.ts"
+		},
+		{
+			"id": "scope-chain",
+			"uri": "ref://src/app.ts:MyComponent:handleSubmit",
+			"parsed": { "path": "src/app.ts", "segments": ["MyComponent", "handleSubmit"], "matcher": null },
+			"canonical": "ref://src/app.ts:MyComponent:handleSubmit"
+		},
+		{
+			"id": "cpp-double-colon",
+			"uri": "ref://src/engine.cpp:A::B::method",
+			"parsed": { "path": "src/engine.cpp", "segments": ["A", "B", "method"], "matcher": null },
+			"canonical": "ref://src/engine.cpp:A:B:method",
+			"why": "Empty components merge, so the natural C++ spelling collapses onto the same key as the single-colon form."
+		},
+		{
+			"id": "single-colon-equivalent",
+			"uri": "ref://src/engine.cpp:A:B:method",
+			"parsed": { "path": "src/engine.cpp", "segments": ["A", "B", "method"], "matcher": null },
+			"canonical": "ref://src/engine.cpp:A:B:method"
+		},
+		{
+			"id": "angle-bracketed",
+			"uri": "<ref://src/app.ts:MyComponent>",
+			"parsed": { "path": "src/app.ts", "segments": ["MyComponent"], "matcher": null },
+			"canonical": "ref://src/app.ts:MyComponent",
+			"why": "Markdown's angle-bracket destination form is the same ref."
+		},
+		{
+			"id": "space-in-path",
+			"uri": "ref://src/my%20file.ts:Foo",
+			"parsed": { "path": "src/my file.ts", "segments": ["Foo"], "matcher": null },
+			"canonical": "ref://src/my file.ts:Foo"
+		},
+		{
+			"id": "literal-colon-in-filename",
+			"uri": "ref://src/we%3Aird.ts:Foo",
+			"parsed": { "path": "src/we:ird.ts", "segments": ["Foo"], "matcher": null },
+			"canonical": "ref://src/we%3Aird.ts:Foo",
+			"distinctFrom": "colon-as-separator",
+			"why": "Split on the structural separators BEFORE decoding. Decoding first would read the %3A as a separator and collapse this onto the two-segment ref."
+		},
+		{
+			"id": "colon-as-separator",
+			"uri": "ref://src/we.ts:ird.ts:Foo",
+			"parsed": { "path": "src/we.ts", "segments": ["ird.ts", "Foo"], "matcher": null },
+			"canonical": "ref://src/we.ts:ird.ts:Foo"
+		},
+		{
+			"id": "literal-hash-in-filename",
+			"uri": "ref://src/C%23notes.md",
+			"parsed": { "path": "src/C#notes.md", "segments": [], "matcher": null },
+			"canonical": "ref://src/C%23notes.md",
+			"distinctFrom": "hash-as-fragment",
+			"why": "A literal hash in a filename is not the start of a fragment."
+		},
+		{
+			"id": "hash-as-fragment",
+			"uri": "ref://src/C.md#notes.md",
+			"parsed": { "path": "src/C.md", "segments": [], "matcher": { "kind": "text", "text": "notes.md" } },
+			"canonical": "ref://src/C.md#notes%2Emd"
+		},
+		{
+			"id": "percent-literal",
+			"uri": "ref://src/100%25.ts:Foo",
+			"parsed": { "path": "src/100%.ts", "segments": ["Foo"], "matcher": null },
+			"canonical": "ref://src/100%25.ts:Foo"
+		},
+		{
+			"id": "non-ascii-path",
+			"uri": "ref://src/%E6%97%A5%E6%9C%AC.ts:Foo",
+			"parsed": { "path": "src/日本.ts", "segments": ["Foo"], "matcher": null },
+			"canonical": "ref://src/日本.ts:Foo"
+		},
+		{
+			"id": "hex-case-normalized",
+			"uri": "ref://src/we%3aird.ts:Foo",
+			"parsed": { "path": "src/we:ird.ts", "segments": ["Foo"], "matcher": null },
+			"canonical": "ref://src/we%3Aird.ts:Foo",
+			"why": "Lowercase hex decodes the same and must re-serialize to the same key, or two spellings of one ref would miss each other in the manifest."
+		},
+		{
+			"id": "arguments-pseudo-segment",
+			"uri": "ref://src/api.ts:fetchUser:arguments",
+			"parsed": { "path": "src/api.ts", "segments": ["fetchUser", "arguments"], "matcher": null },
+			"canonical": "ref://src/api.ts:fetchUser:arguments"
+		},
+		{
+			"id": "matcher-text",
+			"uri": "ref://src/api.ts:fetchUser#url",
+			"parsed": { "path": "src/api.ts", "segments": ["fetchUser"], "matcher": { "kind": "text", "text": "url" } },
+			"canonical": "ref://src/api.ts:fetchUser#url"
+		},
+		{
+			"id": "matcher-before",
+			"uri": "ref://src/counter.ts:tick#foo %2B= 1@before:foo = 0",
+			"parsed": {
+				"path": "src/counter.ts",
+				"segments": ["tick"],
+				"matcher": { "kind": "before", "text": "foo += 1", "anchor": "foo = 0" }
+			},
+			"canonical": "ref://src/counter.ts:tick#foo += 1@before:foo = 0"
+		},
+		{
+			"id": "matcher-after",
+			"uri": "ref://src/counter.ts:tick#foo@after:reset",
+			"parsed": {
+				"path": "src/counter.ts",
+				"segments": ["tick"],
+				"matcher": { "kind": "after", "text": "foo", "anchor": "reset" }
+			},
+			"canonical": "ref://src/counter.ts:tick#foo@after:reset"
+		},
+		{
+			"id": "matcher-range",
+			"uri": "ref://src/setup.ts#begin..end",
+			"parsed": {
+				"path": "src/setup.ts",
+				"segments": [],
+				"matcher": { "kind": "range", "from": "begin", "to": "end" }
+			},
+			"canonical": "ref://src/setup.ts#begin..end"
+		},
+		{
+			"id": "literal-dots-in-matcher",
+			"uri": "ref://src/setup.ts#a%2E%2Eb",
+			"parsed": {
+				"path": "src/setup.ts",
+				"segments": [],
+				"matcher": { "kind": "text", "text": "a..b" }
+			},
+			"canonical": "ref://src/setup.ts#a%2E%2Eb",
+			"distinctFrom": "matcher-range-ab",
+			"why": "An encoded dot pair is text being searched for, not a range separator."
+		},
+		{
+			"id": "matcher-range-ab",
+			"uri": "ref://src/setup.ts#a..b",
+			"parsed": {
+				"path": "src/setup.ts",
+				"segments": [],
+				"matcher": { "kind": "range", "from": "a", "to": "b" }
+			},
+			"canonical": "ref://src/setup.ts#a..b"
+		},
+		{
+			"id": "literal-at-in-matcher",
+			"uri": "ref://src/mail.ts#user%40example.com",
+			"parsed": {
+				"path": "src/mail.ts",
+				"segments": [],
+				"matcher": { "kind": "text", "text": "user@example.com" }
+			},
+			"canonical": "ref://src/mail.ts#user%40example%2Ecom",
+			"why": "An encoded at-sign is part of the searched text, not an anchor marker."
+		},
+		{
+			"id": "scheme-case-insensitive",
+			"uri": "REF://src/app.ts",
+			"parsed": { "path": "src/app.ts", "segments": [], "matcher": null },
+			"canonical": "ref://src/app.ts"
+		}
+	],
+	"notRefs": ["https://example.com/app.ts", "ref:/src/app.ts", "ref://", "", "src/app.ts"]
+}

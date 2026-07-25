@@ -1,0 +1,41 @@
+{
+	"treeSitterCli": "0.26.11",
+	"webTreeSitter": "0.26.11",
+	"grammars": {
+		"typescript": {
+			"package": "tree-sitter-typescript",
+			"version": "0.23.2",
+			"bytes": 1418209
+		},
+		"tsx": {
+			"package": "tree-sitter-typescript",
+			"version": "0.23.2",
+			"bytes": 1450757
+		},
+		"javascript": {
+			"package": "tree-sitter-javascript",
+			"version": "0.25.0",
+			"bytes": 416487
+		},
+		"cpp": {
+			"package": "tree-sitter-cpp",
+			"version": "0.23.4",
+			"bytes": 3470627
+		},
+		"c_sharp": {
+			"package": "tree-sitter-c-sharp",
+			"version": "0.23.5",
+			"bytes": 5350569
+		},
+		"python": {
+			"package": "tree-sitter-python",
+			"version": "0.25.0",
+			"bytes": 460107
+		},
+		"gdscript": {
+			"package": "tree-sitter-gdscript",
+			"version": "6.1.0",
+			"bytes": 292494
+		}
+	}
+}
