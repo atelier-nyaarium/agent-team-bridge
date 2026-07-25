@@ -66,7 +66,7 @@ export async function startMcp(): Promise<void> {
 			: undefined,
 	);
 
-	registerBridgeTools(mcpServer);
+	registerBridgeTools(mcpServer, capabilities);
 	registerReloadPlugins(mcpServer);
 	registerSetEffortLevel(mcpServer);
 	registerCompactSession(mcpServer);

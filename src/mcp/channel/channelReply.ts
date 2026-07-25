@@ -7,6 +7,7 @@ import {
 } from "../../shared/schemas.js";
 import { bridgeConversationId, confirmHandshakeRole } from "../bridge/helpers.js";
 import { postReply, readReplyAttachment, type ToolTextResult, toolError } from "../bridge/replyTool.js";
+import { type Capability, capabilityInstructions } from "../capabilities.js";
 import { appendRefArtifacts } from "../references/attachRefs.js";
 
 ////////////////////////////////
@@ -79,12 +80,19 @@ export async function handleChannelReplyStructured(args: ChannelReplyStructuredA
 ////////////////////////////////
 //  Functions & Helpers
 
-export function registerChannelReply(mcpServer: McpServer): void {
+/**
+ * `capabilities` is threaded in rather than read from a module global so the description can never be
+ * composed before the answer arrives. A plugin's guidance stays owned by its own manifest and is only
+ * appended when the owner's console actually has it enabled: the tool description is where an agent
+ * is standing at the moment it writes a reply, which the server instructions are not.
+ */
+export function registerChannelReply(mcpServer: McpServer, capabilities: Capability[] = []): void {
+	const guidance = capabilityInstructions(capabilities);
 	mcpServer.registerTool(
 		"channel_reply",
 		{
 			title: "Channel Reply",
-			description: `Reply to an incoming channel message. Channel conversations are streams: you can call this any number of times on the same session_id. Each call is just another message in the stream; there is no finality or "done" status. session_id, title, summary, full, and fullSpoken are all required. Send responses verbatim unless the requester explicitly asked for a summary.`,
+			description: `Reply to an incoming channel message. Channel conversations are streams: you can call this any number of times on the same session_id. Each call is just another message in the stream; there is no finality or "done" status. session_id, title, summary, full, and fullSpoken are all required. Send responses verbatim unless the requester explicitly asked for a summary.${guidance}`,
 			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
 			inputSchema: ChannelReplySchema as any,
 		},

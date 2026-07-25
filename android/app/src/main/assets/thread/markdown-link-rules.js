@@ -38,8 +38,11 @@
 	// same accepted staleness as chip decoration.
 	return function installThreadLinkRules(md, handledSchemes) {
 		const claimed = handledSchemes || { value: [] };
-		const isClaimed = (href) =>
-			(claimed.value || []).some((scheme) => href.toLowerCase().startsWith(String(scheme).toLowerCase()));
+		// The matched scheme rather than a boolean: it also becomes a per-scheme class, so a plugin
+		// can style its own links (the references chip's icon) without the renderer learning what any
+		// scheme means.
+		const claimedScheme = (href) =>
+			(claimed.value || []).find((scheme) => href.toLowerCase().startsWith(String(scheme).toLowerCase()));
 
 		md.validateLink = (url) => !BLOCKED_LINK.test(url.trim());
 
@@ -55,7 +58,12 @@
 				const i = token.attrIndex("href");
 				if (i >= 0) token.attrs.splice(i, 1);
 				token.attrSet("data-href", href);
-				token.attrJoin("class", isClaimed(href) ? "link-handled" : "link-unhandled");
+				const scheme = claimedScheme(href);
+				token.attrJoin("class", scheme ? "link-handled" : "link-unhandled");
+				// Slugged because it lands in a class name; a scheme is already `[a-z]+:` in practice,
+				// and anything that slugs to nothing simply gets no per-scheme hook.
+				const slug = String(scheme || "").replace(/[^a-z0-9]+/gi, "").toLowerCase();
+				if (slug) token.attrJoin("class", `link-scheme-${slug}`);
 			}
 			return defaultLinkOpen(tokens, idx, options, env, self);
 		};

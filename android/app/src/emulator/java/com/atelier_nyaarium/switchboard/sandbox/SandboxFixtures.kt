@@ -131,14 +131,22 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		 * to special-case it. */
 		const val SESSION = "local.sandbox.host.demo"
 
-		/** The link destinations MUST match the keys in the committed manifest, or the tap declines
-		 * and the fixture silently proves nothing. */
+		/**
+		 * The link destinations MUST match the keys in the committed manifest, or the tap declines and
+		 * the fixture silently proves nothing.
+		 *
+		 * Labels follow the `file : symbol` rule the references plugin teaches, which is also what
+		 * exercises the chip's two-weight split. The third link deliberately does NOT, so the
+		 * leave-it-alone path is on screen beside the split one.
+		 */
 		val REF_BODY = """
 			Two refs into this repo. One resolves exactly, one has drifted.
 
-			Exact, a small function: [isJoinable](ref://src/mcp/references/refFile.ts:isJoinable)
+			Exact, a small function: [refFile.ts : isJoinable](ref://src/mcp/references/refFile.ts:isJoinable)
 
-			Drifted, naming a scope that no longer exists: [a renamed scope](ref://src/mcp/references/refFile.ts:LoaderV1:isJoinable)
+			Drifted, naming a scope that no longer exists: [refFile.ts : LoaderV1](ref://src/mcp/references/refFile.ts:LoaderV1:isJoinable)
+
+			A label that does not follow the rule is left exactly as written: [the joinability check](ref://src/mcp/references/refFile.ts:isJoinable)
 		""".trimIndent()
 	}
 }
