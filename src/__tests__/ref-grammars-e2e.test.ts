@@ -115,6 +115,30 @@ describe("resolving against every whitelisted grammar", () => {
 		expect(r.code).toContain("func tick()");
 	});
 
+	// `class_name` is how nearly every real Godot script names itself, and it names the FILE rather
+	// than opening a scope. Only the inner-class form was covered before, so the spelling an agent
+	// naturally reaches for silently resolved to the first CALL of the method instead.
+	it("finds a method under a GDScript file-level class_name", async () => {
+		const r = await resolve("ref://src/belt.gd:Belt:advance");
+
+		expect(r.quality).toBe("exact");
+		expect(r.code).toContain("func advance()");
+	});
+
+	it("reaches a GDScript inner class through the file-level class_name", async () => {
+		const r = await resolve("ref://src/belt.gd:Belt:Slot:value");
+
+		expect(r.quality).toBe("exact");
+		expect(r.code).toContain("func value()");
+	});
+
+	it("finds a GDScript method named without its file-level class", async () => {
+		const r = await resolve("ref://src/belt.gd:advance");
+
+		expect(r.quality).toBe("exact");
+		expect(r.code).toContain("func advance()");
+	});
+
 	it("finds a .tsx member, which the plain TypeScript grammar cannot parse", async () => {
 		const r = await resolve("ref://src/App.tsx:App:render");
 

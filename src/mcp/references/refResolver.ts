@@ -83,10 +83,17 @@ function qualifiedDeclarator(node: Node): Node | null {
 /**
  * Where to keep searching after matching a node.
  *
- * A C# file-scoped namespace (`namespace Foo;`, the modern default) has no body node at all; every
- * declaration after it in the file belongs to it, so its effective body is its following siblings.
+ * Two declarations name a scope whose members are not their own children. A C# file-scoped
+ * namespace (`namespace Foo;`, the modern default) has no body node at all, so every declaration
+ * after it in the file belongs to it. A GDScript `class_name X` names the FILE, so its members are
+ * everything the file holds, including what precedes the declaration.
+ *
+ * Searching either one's own subtree instead dead-ends on a bare identifier, and a dead end is not
+ * an error here: the ref degrades to a text match and lands on the first CALL of the method it
+ * named, which reads as a plausible result rather than a miss.
  */
 function searchAreas(node: Node): Node[] {
+	if (node.type === "class_name_statement") return [node.parent ?? node];
 	if (node.type !== "file_scoped_namespace_declaration") return [node];
 
 	const parent = node.parent;
