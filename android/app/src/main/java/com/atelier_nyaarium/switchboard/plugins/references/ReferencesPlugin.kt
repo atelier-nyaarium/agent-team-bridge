@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard.plugins.references
 import android.content.Context
 import com.atelier_nyaarium.switchboard.Attachments
 import com.atelier_nyaarium.switchboard.ChipDecoration
+import com.atelier_nyaarium.switchboard.DebugLog
 import com.atelier_nyaarium.switchboard.plugins.AccountWipeHandler
 import com.atelier_nyaarium.switchboard.plugins.AttachmentChipDecorator
 import com.atelier_nyaarium.switchboard.plugins.InboundMessageHandler
@@ -33,6 +34,14 @@ class ReferencesPlugin : PluginEntry {
 		host.inboundMessages.claim("references:index", InboundMessageHandler { filesDir, msg ->
 			val manifest = manifestFrom(filesDir, msg.files) ?: return@InboundMessageHandler
 			val artifacts = (manifest.files.map { it.filename } + MANIFEST_FILENAME).toSet()
+			// #region files-vanished: what this row teaches the hide index. An over-broad entry here
+			// is the one way a decorator scoped to artifacts could still blank an unrelated chip.
+			DebugLog.log(
+				"RefIndex",
+				"record team=${msg.team} at=${msg.at} artifacts=[${artifacts.joinToString()}] " +
+					"rowFiles=[${msg.files.joinToString { it.name }}]",
+			)
+			// #endregion
 			RefDisplayIndex.record(
 				msg.team,
 				msg.at,
@@ -67,14 +76,23 @@ private object RefLinkHandler : LinkHandler {
 	 * and a manifest that does not validate.
 	 */
 	override fun tryOpen(context: Context, link: TappedLink): Boolean {
-		val key = canonicalizeRefUri(link.url) ?: return false
-		val manifest = manifestFrom(context.filesDir, link.files) ?: return false
-		val entry = manifest.refs[key] ?: return false
-		val file = manifest.files.firstOrNull { it.refPath == entry.refPath } ?: return false
+		// #region files-vanished: every decline below is silent by design (the miss contract), which
+		// is right for a user and useless for a diagnosis. Name which one fired.
+		fun decline(why: String): Boolean {
+			DebugLog.log("RefTap", "decline($why) url=${link.url} rowFiles=${link.files.size}")
+			return false
+		}
+		DebugLog.log("RefTap", "tap url=${link.url} team=${link.team} files=[${link.files.joinToString { it.name }}]")
+		// #endregion
 
-		val src = link.files.firstOrNull { it.name == file.filename }?.src ?: return false
+		val key = canonicalizeRefUri(link.url) ?: return decline("not a parseable ref")
+		val manifest = manifestFrom(context.filesDir, link.files) ?: return decline("no manifest on this row")
+		val entry = manifest.refs[key] ?: return decline("key absent from manifest: $key")
+		val file = manifest.files.firstOrNull { it.refPath == entry.refPath } ?: return decline("no file for ${entry.refPath}")
+
+		val src = link.files.firstOrNull { it.name == file.filename }?.src ?: return decline("row lacks ${file.filename}")
 		val rel = src.substringAfter("attachments/", src)
-		if (Attachments.resolve(context.filesDir, rel) == null) return false
+		if (Attachments.resolve(context.filesDir, rel) == null) return decline("bytes missing on disk: $rel")
 
 		ReferenceOpenBus.request(ReferenceOpenRequest(link.team, entry, file, rel, link.url))
 		return true

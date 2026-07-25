@@ -201,6 +201,13 @@ class ThreadRenderer(context: Context) {
 					webView.post { onOpenAttachment?.invoke(relPath) }
 				}
 
+				// #region files-vanished: let the renderer report what it did with a payload
+				@JavascriptInterface
+				fun debugLog(tag: String, message: String) {
+					DebugLog.log("Thread/$tag", message)
+				}
+				// #endregion
+
 				@JavascriptInterface
 				fun retryMessage(id: String) {
 					val msgId = id.toLongOrNull() ?: return
@@ -425,5 +432,21 @@ class ThreadRenderer(context: Context) {
 	}
 
 	private fun toJson(messages: List<Message>): String =
-		messagesToJson(messages, ::displayFrom, playEnabled) { f -> decorateFile?.invoke(f) }
+		messagesToJson(messages, ::displayFrom, playEnabled) { f -> decorateFile?.invoke(f) }.also {
+			// #region files-vanished: what the payload actually carries per row
+			// HYP-B (the row has no files at all) vs HYP-A (it has them and they are decorated away)
+			// are indistinguishable from the rendered screen, and only this side can tell them apart.
+			runCatching {
+				for (m in messages) {
+					if (m.files.isEmpty()) continue
+					val detail = m.files.joinToString("; ") { f ->
+						val d = decorateFile?.invoke(f)
+						"${f.name} mime=${f.mime} src=${if (f.src == null) "NULL" else "set"} " +
+							"deco=${if (d == null) "none" else "${d.kind}/hidden=${d.hidden}"}"
+					}
+					DebugLog.log("FilesPayload", "row at=${m.at} files=${m.files.size} [$detail]")
+				}
+			}
+			// #endregion
+		}
 }
