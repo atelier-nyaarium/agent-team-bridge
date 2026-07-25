@@ -1,3 +1,5 @@
+import { lex, type Token, tokensToText } from "./refLexer.js";
+
 ////////////////////////////////
 //  Interfaces & Types
 
@@ -22,151 +24,198 @@ export interface Ref {
 	matcher: Matcher | null;
 }
 
+export type ParseErrorCode =
+	| "path-required"
+	| "empty-fragment"
+	| "empty-match-text"
+	| "empty-anchor"
+	| "empty-range-bound";
+
+/**
+ * Parsing is TOTAL: an input is a ref, is not one at all, or is a stated error at a stated offset.
+ * There is no fourth outcome where a malformed ref silently becomes a different valid ref, which is
+ * the failure this grammar exists to make unrepresentable.
+ */
+export type ParseResult =
+	| { kind: "ok"; ref: Ref }
+	| { kind: "not-a-ref" }
+	| { kind: "error"; code: ParseErrorCode; message: string; offset: number };
+
 ////////////////////////////////
 //  Functions & Helpers
 
 export const REF_SCHEME = "ref://";
 
-const RANGE_SEP = "..";
-const BEFORE_SEP = "@before:";
-const AFTER_SEP = "@after:";
+const ANCHOR_KEYWORDS = ["before", "after"] as const;
+
+type AnchorKeyword = (typeof ANCHOR_KEYWORDS)[number];
 
 /**
- * Percent-decode one already-split component.
+ * Characters the printer escapes, per lexing mode.
  *
- * Split first, decode second. The reverse order conflates a literal `%3A` in a filename with a
- * scope separator, so `ref://we%3Aird.ts:Foo` and `ref://we:ird.ts:Foo` would collapse onto one key
- * while meaning different things. Decoding here, after the structure is fixed, keeps them distinct.
+ * Derived from what the reader treats specially rather than hand-maintained: that mode's structural
+ * tokens, `%` because it introduces an escape, and `<`/`>`/whitespace because `tryParseRef` strips
+ * those before lexing. A hand-kept list is what drifted twice before this existed.
  */
-function decodeComponent(raw: string): string {
-	try {
-		return decodeURIComponent(raw);
-	} catch {
-		// A lone `%` is a literal percent in practice, not a caller asking for a decode failure.
-		return raw;
+const SCOPE_ESCAPES = new Set(["%", ":", "#", "<", ">"]);
+const FRAGMENT_ESCAPES = new Set(["%", ":", "#", ".", "@", "<", ">"]);
+
+function escapeChar(c: string): string {
+	return [...new TextEncoder().encode(c)].map((b) => `%${b.toString(16).toUpperCase().padStart(2, "0")}`).join("");
+}
+
+function encode(raw: string, escapes: Set<string>): string {
+	let out = "";
+	for (const c of raw) out += escapes.has(c) || /\s/.test(c) ? escapeChar(c) : c;
+	return out;
+}
+
+function error(code: ParseErrorCode, message: string, offset: number): ParseResult {
+	return { kind: "error", code, message, offset };
+}
+
+/** Where an anchor marker (`@before:` / `@after:`) starts, or null. Only that exact shape is
+ * structural, so an `@` in an email address needs no encoding. */
+function findAnchor(tokens: Token[]): { at: number; keyword: AnchorKeyword; after: number } | null {
+	for (let i = 0; i < tokens.length; i++) {
+		if (tokens[i].kind !== "at") continue;
+		for (const keyword of ANCHOR_KEYWORDS) {
+			const end = i + 1 + keyword.length;
+			if (tokens[end]?.kind !== "sep") continue;
+			const spelled = tokens
+				.slice(i + 1, end)
+				.map((t) => (t.kind === "char" ? t.value : ""))
+				.join("");
+			if (spelled === keyword) return { at: i, keyword, after: end + 1 };
+		}
 	}
+	return null;
+}
+
+type MatcherResult = ParseResult | { kind: "matcher"; matcher: Matcher };
+
+/**
+ * Parse a fragment.
+ *
+ * One rule resolves every ambiguity: the FIRST structural marker by position wins, and everything
+ * after it is ordinary text. That is why a second `@after:` or a second `..` needs no encoding to be
+ * searched for literally, and why which form a fragment takes never depends on the order these
+ * branches happen to be written in.
+ */
+function parseMatcher(tokens: Token[], hashOffset: number): MatcherResult {
+	if (tokens.length === 0) {
+		return error("empty-fragment", "a `#` with nothing after it selects nothing", hashOffset);
+	}
+
+	const anchor = findAnchor(tokens);
+	const rangeAt = tokens.findIndex((t) => t.kind === "range");
+
+	if (anchor && (rangeAt === -1 || anchor.at < rangeAt)) {
+		const text = tokensToText(tokens.slice(0, anchor.at));
+		const anchorText = tokensToText(tokens.slice(anchor.after));
+		if (text === "") {
+			return error("empty-match-text", "nothing to search for before the anchor", tokens[0].offset);
+		}
+		if (anchorText === "") {
+			return error(
+				"empty-anchor",
+				`\`@${anchor.keyword}:\` needs text to anchor against`,
+				tokens[anchor.at].offset,
+			);
+		}
+		return { kind: "matcher", matcher: { kind: anchor.keyword, text, anchor: anchorText } };
+	}
+
+	if (rangeAt !== -1) {
+		const from = tokensToText(tokens.slice(0, rangeAt));
+		const to = tokensToText(tokens.slice(rangeAt + 1));
+		if (from === "" || to === "") {
+			return error("empty-range-bound", "a range needs text on both sides of `..`", tokens[rangeAt].offset);
+		}
+		return { kind: "matcher", matcher: { kind: "range", from, to } };
+	}
+
+	return { kind: "matcher", matcher: { kind: "text", text: tokensToText(tokens) } };
 }
 
 /**
- * Re-encode a component for the canonical key. Every character that could be read as structure is
- * encoded, so the key round-trips to the same parse. Deliberately not pretty: this is a lookup key
- * the MCP writes and the phone recomputes, and the only property that matters is that the two agree.
- */
-function encodeComponent(raw: string): string {
-	return (
-		raw
-			.replace(/%/g, "%25")
-			.replace(/:/g, "%3A")
-			.replace(/#/g, "%23")
-			// parseRef strips a surrounding angle-bracket pair and trims, so a component ending in `>` or
-			// whitespace would come back shorter than it went in. Encoding both keeps the key idempotent,
-			// which matters because `>` ends a generic, a template, and a JSX tag.
-			.replace(/</g, "%3C")
-			.replace(/>/g, "%3E")
-			.replace(/\s/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`)
-	);
-}
-
-/** As above, plus the characters that carry structure inside a fragment. */
-function encodeMatcherText(raw: string): string {
-	return encodeComponent(raw).replace(/@/g, "%40").replace(/\./g, "%2E");
-}
-
-/**
- * Parse a fragment's structure from its RAW text, before any decoding. A literal `..` or `@` in the
- * searched-for text arrives percent-encoded, so anything still visible here is structure.
- */
-function parseMatcher(rawFragment: string): Matcher | null {
-	if (rawFragment === "") return null;
-
-	const before = rawFragment.indexOf(BEFORE_SEP);
-	if (before !== -1) {
-		return {
-			kind: "before",
-			text: decodeComponent(rawFragment.slice(0, before)),
-			anchor: decodeComponent(rawFragment.slice(before + BEFORE_SEP.length)),
-		};
-	}
-
-	const after = rawFragment.indexOf(AFTER_SEP);
-	if (after !== -1) {
-		return {
-			kind: "after",
-			text: decodeComponent(rawFragment.slice(0, after)),
-			anchor: decodeComponent(rawFragment.slice(after + AFTER_SEP.length)),
-		};
-	}
-
-	const range = rawFragment.indexOf(RANGE_SEP);
-	if (range !== -1) {
-		return {
-			kind: "range",
-			from: decodeComponent(rawFragment.slice(0, range)),
-			to: decodeComponent(rawFragment.slice(range + RANGE_SEP.length)),
-		};
-	}
-
-	return { kind: "text", text: decodeComponent(rawFragment) };
-}
-
-/**
- * Parse a `ref://` URI into its structured form, or null if it is not one.
+ * Parse a `ref://` URI.
  *
  * Deliberately not `new URL()`: under URL rules `ref://app.js:Foo` reads `app.js` as a host and
  * `:Foo` as a port, which is not what any of this means.
  */
-export function parseRef(uri: string): Ref | null {
-	// Angle brackets come off only as a PAIR, which is the only form markdown produces. Stripping a
-	// lone trailing one would silently shorten `#Promise<Response>` to `#Promise<Response`.
+export function tryParseRef(uri: string): ParseResult {
+	// The angle-bracket pair is markdown's destination wrapper, so it comes off only as a PAIR.
+	// Stripping a lone trailing one would silently shorten `#Promise<Response>`.
 	const bare = uri.trim();
-	const trimmed = bare.startsWith("<") && bare.endsWith(">") ? bare.slice(1, -1) : bare;
-	if (!trimmed.toLowerCase().startsWith(REF_SCHEME)) return null;
+	const wrapped = bare.length >= 2 && bare.startsWith("<") && bare.endsWith(">");
+	const unwrapped = wrapped ? bare.slice(1, -1) : bare;
+	if (!unwrapped.toLowerCase().startsWith(REF_SCHEME)) return { kind: "not-a-ref" };
 
-	const body = trimmed.slice(REF_SCHEME.length);
-	if (body === "") return null;
+	const tokens = lex(unwrapped.slice(REF_SCHEME.length));
+	const hashAt = tokens.findIndex((t) => t.kind === "hash");
+	const scope = hashAt === -1 ? tokens : tokens.slice(0, hashAt);
 
-	const hash = body.indexOf("#");
-	const rawScope = hash === -1 ? body : body.slice(0, hash);
-	const rawFragment = hash === -1 ? "" : body.slice(hash + 1);
+	// path := char+. Required, which is what stops `ref://:Foo` from quietly promoting its first
+	// segment into the path slot; a filter over split pieces cannot tell that apart from a `::` merge.
+	const firstSep = scope.findIndex((t) => t.kind === "sep");
+	const pathTokens = firstSep === -1 ? scope : scope.slice(0, firstSep);
+	if (pathTokens.length === 0) {
+		return error("path-required", "a ref needs a file path before any `:`", 0);
+	}
 
-	// An empty component is a merge, not a segment, so the natural C++ spelling `A::B::method`
-	// parses as three waypoints rather than five with two blanks in between.
-	const parts = rawScope.split(":").filter((p) => p !== "");
-	if (parts.length === 0) return null;
+	// segment := char*, so an empty one merges. That IS the `::` collapse, stated rather than
+	// falling out of a filter as a side effect.
+	const segments: string[] = [];
+	let cursor = firstSep;
+	while (cursor !== -1) {
+		const nextSep = scope.findIndex((t, i) => i > cursor && t.kind === "sep");
+		const text = tokensToText(scope.slice(cursor + 1, nextSep === -1 ? scope.length : nextSep));
+		if (text !== "") segments.push(text);
+		cursor = nextSep;
+	}
 
-	const [rawPath, ...rawSegments] = parts;
-	return {
-		path: decodeComponent(rawPath),
-		segments: rawSegments.map(decodeComponent),
-		matcher: parseMatcher(rawFragment),
-	};
+	const ref: Ref = { path: tokensToText(pathTokens), segments, matcher: null };
+	if (hashAt === -1) return { kind: "ok", ref };
+
+	const matcher = parseMatcher(tokens.slice(hashAt + 1), tokens[hashAt].offset);
+	if (matcher.kind !== "matcher") return matcher;
+	return { kind: "ok", ref: { ...ref, matcher: matcher.matcher } };
 }
 
-/** The matcher half of a canonical key. */
+/** The parsed ref, or null for anything that is not a well-formed one. A caller that needs to tell
+ * an agent WHY its ref was rejected uses `tryParseRef`. */
+export function parseRef(uri: string): Ref | null {
+	const result = tryParseRef(uri);
+	return result.kind === "ok" ? result.ref : null;
+}
+
 function serializeMatcher(matcher: Matcher): string {
+	const text = (raw: string) => encode(raw, FRAGMENT_ESCAPES);
 	switch (matcher.kind) {
 		case "text":
-			return `#${encodeMatcherText(matcher.text)}`;
+			return `#${text(matcher.text)}`;
 		case "before":
-			return `#${encodeMatcherText(matcher.text)}${BEFORE_SEP}${encodeMatcherText(matcher.anchor)}`;
 		case "after":
-			return `#${encodeMatcherText(matcher.text)}${AFTER_SEP}${encodeMatcherText(matcher.anchor)}`;
+			return `#${text(matcher.text)}@${matcher.kind}:${text(matcher.anchor)}`;
 		case "range":
-			return `#${encodeMatcherText(matcher.from)}${RANGE_SEP}${encodeMatcherText(matcher.to)}`;
+			return `#${text(matcher.from)}..${text(matcher.to)}`;
 	}
 }
 
 /**
- * The stable identity of a ref: what the MCP writes as a manifest key and what the phone recomputes
- * from a tapped link. Two refs meaning the same thing produce the same key (`::` merged, hex case
- * normalized, angle brackets dropped); two meaning different things never do.
+ * The stable identity of a ref: what the MCP writes as a manifest key and what the console
+ * recomputes from a tapped link.
+ *
+ * Idempotent by construction rather than by remembering: every character the reader treats
+ * specially is escaped, so re-reading a key yields the same tokens and therefore the same ref.
  */
 export function canonicalKey(ref: Ref): string {
-	const scope = [ref.path, ...ref.segments].map(encodeComponent).join(":");
+	const scope = [ref.path, ...ref.segments].map((c) => encode(c, SCOPE_ESCAPES)).join(":");
 	return `${REF_SCHEME}${scope}${ref.matcher ? serializeMatcher(ref.matcher) : ""}`;
 }
 
-/** Parse and canonicalize in one step, or null if the input is not a ref. */
+/** Parse and canonicalize in one step, or null if the input is not a well-formed ref. */
 export function canonicalizeUri(uri: string): string | null {
 	const ref = parseRef(uri);
 	return ref ? canonicalKey(ref) : null;

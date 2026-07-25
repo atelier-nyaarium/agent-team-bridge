@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { canonicalizeUri, canonicalKey, parseRef } from "../mcp/references/refGrammar.js";
+import { canonicalizeUri, canonicalKey, parseRef, tryParseRef } from "../mcp/references/refGrammar.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -116,5 +116,97 @@ describe("canonical keys survive re-canonicalization", () => {
 
 			expect(reparsed, `lost ${JSON.stringify(piece)}`).toEqual(ref);
 		}
+	});
+});
+
+describe("the grammar's stated decisions", () => {
+	function parsed(uri: string) {
+		const result = tryParseRef(uri);
+		return result.kind === "ok" ? result.ref : result;
+	}
+
+	function errorCode(uri: string) {
+		const result = tryParseRef(uri);
+		return result.kind === "error" ? result.code : `unexpectedly ${result.kind}`;
+	}
+
+	it("refuses a ref with no path, rather than promoting its first segment into the path slot", () => {
+		expect(errorCode("ref://:Foo")).toBe("path-required");
+	});
+
+	it("points at where the problem is, so an agent can fix the ref it wrote", () => {
+		const result = tryParseRef("ref://a.ts#x@after:");
+
+		expect(result).toMatchObject({ kind: "error", code: "empty-anchor" });
+		expect(result.kind === "error" && typeof result.offset).toBe("number");
+	});
+
+	it.each([
+		["ref://a.ts#", "empty-fragment"],
+		["ref://a.ts#@after:y", "empty-match-text"],
+		["ref://a.ts#x@after:", "empty-anchor"],
+		["ref://a.ts#..b", "empty-range-bound"],
+		["ref://a.ts#a..", "empty-range-bound"],
+	])("refuses %s, which can never match anything", (uri, code) => {
+		expect(errorCode(uri)).toBe(code);
+	});
+
+	it("lets the first structural marker win, so the rest is searchable text", () => {
+		expect(parsed("ref://a.ts#x@after:y@after:z")).toMatchObject({
+			matcher: { kind: "after", text: "x", anchor: "y@after:z" },
+		});
+		expect(parsed("ref://a.ts#a..b..c")).toMatchObject({ matcher: { kind: "range", from: "a", to: "b..c" } });
+	});
+
+	it("decides a mixed fragment by position, not by which branch is written first", () => {
+		expect(parsed("ref://a.ts#x..y@after:z")).toMatchObject({
+			matcher: { kind: "range", from: "x", to: "y@after:z" },
+		});
+		expect(parsed("ref://a.ts#x@after:y..z")).toMatchObject({
+			matcher: { kind: "after", text: "x", anchor: "y..z" },
+		});
+	});
+
+	it("treats a run of three dots as text, since that is a spread and a variadic", () => {
+		expect(parsed("ref://a.ts#...args")).toMatchObject({ matcher: { kind: "text", text: "...args" } });
+	});
+
+	it("treats an at-sign with no anchor keyword as text, so an email needs no encoding", () => {
+		expect(parsed("ref://a.ts#user@example.com")).toMatchObject({
+			matcher: { kind: "text", text: "user@example.com" },
+		});
+	});
+
+	it("merges an empty segment, which is what the C++ double colon spelling relies on", () => {
+		expect(parsed("ref://a.cpp:A::B::run")).toMatchObject({ segments: ["A", "B", "run"] });
+		expect(parsed("ref://a.ts:")).toMatchObject({ path: "a.ts", segments: [] });
+	});
+
+	it("decodes a multi-escape character as one character, not as broken bytes", () => {
+		expect(parsed("ref://src/%E6%97%A5.ts:Foo")).toMatchObject({ path: "src/日.ts" });
+	});
+
+	it("keeps an encoded separator as text, which is the whole reason it lexes before decoding", () => {
+		expect(parsed("ref://we%3Aird.ts:Foo")).toMatchObject({ path: "we:ird.ts", segments: ["Foo"] });
+	});
+
+	it("says plainly when something is not a ref at all, distinct from being a broken one", () => {
+		expect(tryParseRef("https://example.com")).toEqual({ kind: "not-a-ref" });
+		expect(tryParseRef("ref://a.ts#")).toMatchObject({ kind: "error" });
+	});
+
+	it("never throws, whatever it is handed", () => {
+		const nasty = [
+			"ref://",
+			"ref://%",
+			"ref://%%%",
+			"ref://%ZZ",
+			"ref://a#%FF",
+			`ref://${"%3A".repeat(500)}`,
+			"<>",
+			"<ref://>",
+		];
+
+		for (const uri of nasty) expect(() => tryParseRef(uri)).not.toThrow();
 	});
 });

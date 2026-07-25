@@ -699,6 +699,77 @@ reordering them ahead of `title`/`summary` made the identical content land. Not 
 may be a harness-side emission issue rather than the tool's, but it cost several round trips and is
 worth knowing about since a failed reply to a human is invisible to them.
 
+## Ref grammar specification v1 (implemented)
+
+Owner: `src/mcp/references/refLexer.ts` + `refGrammar.ts`. This grammar covers the ref URI ONLY.
+Finding refs in a message belongs to the renderer's own markdown parser; resolving a scope chain to
+code belongs to tree-sitter. Written down because the previous implementation had no spec: it was a
+pile of `indexOf` and `split` calls, and its answer to any case nobody had considered was whatever
+those happened to do. Seven such cases were found by probing, and one was a live bug.
+
+**Tokens.** Two lexing modes: `scope` runs to the first raw `#`, `fragment` follows it.
+
+| Token | Produced by |
+|---|---|
+| `sep` | a raw `:` |
+| `hash` | the FIRST raw `#` (a later one is text) |
+| `range` | exactly two dots as a maximal run, fragment only |
+| `at` | a raw `@`, fragment only |
+| `char` | one literal character, or one percent-escape run |
+
+A percent-escape lexes to `char` tokens carrying the DECODED value, and a run of escapes decodes as
+one unit (a non-ASCII character arrives as several escapes). So an encoded colon is structurally
+incapable of being a separator: split-before-decode is a property of the token type rather than an
+ordering rule to remember. A `range` is exactly two dots because three is a spread and a variadic,
+so `#...args` must search for that text rather than parse as a broken range.
+
+**Grammar.**
+
+```
+ref     := SCHEME path (SEP segment)* (HASH matcher)? EOF
+path    := char+                    // REQUIRED
+segment := char*                    // empty allowed; this IS the `::` merge
+matcher := text AT kind SEP text    // anchor
+         | text RANGE text          // range
+         | text                     // plain
+kind    := "before" | "after"
+```
+
+**Ambiguity, one rule:** the FIRST structural marker by position wins, and everything after it is
+ordinary text. An anchor marker is structural only as `@` + exactly `before`/`after` + `:`, so an
+at-sign in an email address needs no encoding.
+
+**Decisions.** Every case that was previously undefined, now decided:
+
+| Input | Result |
+|---|---|
+| `#x@after:y@after:z` | anchor, `anchor = "y@after:z"` (first marker wins) |
+| `#a..b..c` | range, `to = "b..c"` (same rule) |
+| `#x..y@after:z` | RANGE, because `..` comes first. Previously an anchor, decided by which `if` was written first |
+| `#@after:y` | error `empty-match-text` |
+| `#x@after:` | error `empty-anchor` |
+| `#a..` / `#..b` | error `empty-range-bound` |
+| `ref://a.ts#` | error `empty-fragment` |
+| `ref://:Foo` | error `path-required`. Was the live bug: the first segment silently became the path |
+| `ref://a.ts:` | accepted, the empty segment merges |
+| `#...args` | text |
+| `#user@example.com` | text |
+
+**Totality.** Parsing yields exactly one of: a ref, `not-a-ref` (no scheme), or an error with a code
+and an offset. There is no fourth outcome where a malformed ref silently becomes a different valid
+ref, which is the class this grammar exists to eliminate. Lexing never fails, which is what makes
+the parser's error the only way an input is rejected.
+
+**Printing.** A character is escaped if and only if the reader treats it specially in that mode:
+that mode's structural tokens, `%` because it introduces an escape, and `<`/`>`/whitespace because
+the parser strips those before lexing. The escape set is DERIVED from the token set, never
+hand-kept. A hand-kept list is what drifted twice before this existed, first missing angle brackets
+and then whitespace, each time making the canonical key non-idempotent.
+
+**Cross-runtime.** The Phase 3 Kotlin twin implements the same modes, tokens, and productions. The
+vectors pin parse results, canonical keys, AND error codes with offsets, so a divergence in
+rejection behavior fails the build too, not only a divergence in success.
+
 ## Phase 2 audit residue (open, next lap)
 
 Six audit angles ran against the shipped Phase 2. Both blockers and five significant findings are
