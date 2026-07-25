@@ -6,6 +6,7 @@
 		"start:gateway": "bun run src/main-gateway.ts",
 		"start:mcp": "bun run src/main-mcp.ts",
 		"start:host-daemon": "bun run src/main-host-daemon.ts",
+		"bump": "bun run scripts/bump-version.ts",
 		"lint": "biome ci . && bunx tsc --noEmit",
 		"lint:fix": "biome check --write .",
 		"test": "vitest run"

@@ -534,6 +534,13 @@ reachable locally; check `curl localhost:20000/health` and
 - `bun run test` - Run all tests (vitest)
 - `bun run start:gateway` - Start gateway locally
 - `bun run start:mcp` - Start MCP server locally
+- `bun run bump patch|minor|major` (`--dry-run` to preview) - The whole version ritual in one command:
+  it bumps `package.json` and SETS that value into every other file that states a version (the
+  marketplace `plugin.json`, each baked-in console plugin manifest). The APK's `versionName` and the
+  MCP server's declared version derive from `package.json` at build time, so they are VERIFIED rather
+  than written - a refactor that hard-codes either one fails the bump instead of shipping half of it.
+  To release a version this arithmetic would not produce, set `package.json` by hand and bump `patch`
+  from there. Marketplace updates hinge on `plugin.json`, so a stale one silently skips the update.
 - `bun scripts/check-module-residue.ts` - Verify the node_modules tree against bun.lock
 - `bun scripts/codegen-kotlin.ts` - Regenerate the Kotlin protocol types after editing a shared schema (CI fails on a stale `proto/Protocol.kt`)
 
