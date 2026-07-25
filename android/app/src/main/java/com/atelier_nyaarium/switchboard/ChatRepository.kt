@@ -3012,6 +3012,13 @@ class ChatRepository(
 
 	suspend fun send(team: String, text: String, uris: List<Uri> = emptyList()) = withContext(Dispatchers.IO) {
 		val picked = uris.mapNotNull { readUri(it) }
+		// #region files-vanished: an outgoing attachment that never arrives is silent at every hop.
+		// A uri that fails readUri is dropped by mapNotNull with nothing logged, which is the one
+		// place a picked file can vanish without any error reaching the sender.
+		if (uris.isNotEmpty() || picked.isNotEmpty()) {
+			DebugLog.log("SendFiles", "uris=${uris.size} read=${picked.size} [${uris.joinToString { it.toString().take(70) }}]")
+		}
+		// #endregion
 		val total = picked.sumOf { it.bytes.size }
 		if (total > MAX_OUTGOING_BYTES) {
 			_state.update { it.copy(error = "Attachments too large (max ${MAX_OUTGOING_BYTES / 1_000_000} MB).") }
@@ -3990,6 +3997,9 @@ class ChatRepository(
 	 * basename cannot overwrite each other on disk. */
 	suspend fun addDraftFiles(team: String, uris: List<Uri>) = withContext(Dispatchers.IO) {
 		val picked = uris.mapNotNull { readUri(it) }
+		// #region files-vanished: the picker's own hop, which returns silently on a read failure
+		DebugLog.log("DraftFiles", "add uris=${uris.size} read=${picked.size} [${uris.joinToString { it.toString().take(70) }}]")
+		// #endregion
 		if (picked.isEmpty()) return@withContext
 		val copied = Attachments.storeOutgoing(filesDir, "draft-${UUID.randomUUID()}", picked)
 		val next = _state.updateAndGet { s ->

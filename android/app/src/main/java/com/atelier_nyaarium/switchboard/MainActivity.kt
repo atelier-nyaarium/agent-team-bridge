@@ -2461,7 +2461,16 @@ private fun ReorderableTabRow(
  * draft); only Send and Schedule Send need one, to reach ChatRepository.send/scheduleSend. */
 private fun draftFileUris(context: Context, files: List<MessageFile>): List<Uri> = files.mapNotNull { f ->
 	Attachments.fileFor(context.filesDir, f.src)?.let { file ->
+		// #region files-vanished: the draft-to-send handoff. A src that no longer resolves, or a
+		// file already gone from disk, drops out of this mapNotNull with nothing reported anywhere.
+		DebugLog.log("DraftUris", "mint ${f.name} src=${f.src} exists=${file.exists()} bytes=${file.length()}")
+		// #endregion
 		FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+	} ?: run {
+		// #region files-vanished
+		DebugLog.log("DraftUris", "UNRESOLVABLE ${f.name} src=${f.src}")
+		// #endregion
+		null
 	}
 }
 

@@ -434,17 +434,28 @@ class ThreadRenderer(context: Context) {
 	private fun toJson(messages: List<Message>): String =
 		messagesToJson(messages, ::displayFrom, playEnabled) { f -> decorateFile?.invoke(f) }.also {
 			// #region files-vanished: what the payload actually carries per row
-			// HYP-B (the row has no files at all) vs HYP-A (it has them and they are decorated away)
-			// are indistinguishable from the rendered screen, and only this side can tell them apart.
-			runCatching {
+			// A chip node can exist while its bytes do not, which looks identical to "no chip" for an
+			// image and is why the render-side counts alone were not enough. The disk stat is debug-only.
+			if (BuildConfig.DEBUG) runCatching {
 				for (m in messages) {
-					if (m.files.isEmpty()) continue
+					if (m.files.isEmpty()) {
+						// A row that LOST its files is silent otherwise, and own-sends are the case
+						// under investigation, so state their emptiness explicitly.
+						if (m.fromMe) DebugLog.log("FilesPayload", "row at=${m.at} mine, NO files")
+						continue
+					}
 					val detail = m.files.joinToString("; ") { f ->
 						val d = decorateFile?.invoke(f)
-						"${f.name} mime=${f.mime} src=${if (f.src == null) "NULL" else "set"} " +
+						val onDisk = Attachments.fileFor(webView.context.filesDir, f.src)
+						val bytes = when {
+							onDisk == null -> "unresolvable"
+							onDisk.exists() -> onDisk.length().toString()
+							else -> "MISSING"
+						}
+						"${f.name} mime=${f.mime} src=${if (f.src == null) "NULL" else "set"} bytes=$bytes " +
 							"deco=${if (d == null) "none" else "${d.kind}/hidden=${d.hidden}"}"
 					}
-					DebugLog.log("FilesPayload", "row at=${m.at} files=${m.files.size} [$detail]")
+					DebugLog.log("FilesPayload", "row at=${m.at} mine=${m.fromMe} files=${m.files.size} [$detail]")
 				}
 			}
 			// #endregion
