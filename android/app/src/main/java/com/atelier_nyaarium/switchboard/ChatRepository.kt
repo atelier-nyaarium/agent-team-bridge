@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.ownerKeyId
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalJoin
@@ -3423,11 +3424,43 @@ class ChatRepository(
 		persistThreads(threads)
 	}
 
-	private fun readUri(uri: Uri): OutgoingFile? = runCatching {
-		val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
-		val mime = contentResolver.getType(uri) ?: "application/octet-stream"
-		OutgoingFile(queryName(uri) ?: "file", mime, bytes)
-	}.getOrNull()
+	/**
+	 * A picked file's bytes.
+	 *
+	 * The ContentResolver read is right for a foreign provider's uri (the gallery, the file picker),
+	 * and it is the only option there. It is NOT the only option for a file this app already copied
+	 * into its own attachments dir and then minted a FileProvider uri over: that round trip can fail
+	 * for reasons that have nothing to do with whether the bytes are readable, and a failure here is
+	 * silent by construction, since every caller drops a null through `mapNotNull`. So a uri we
+	 * minted ourselves falls back to reading the file we already hold.
+	 */
+	private fun readUri(uri: Uri): OutgoingFile? {
+		val streamed = runCatching { contentResolver.openInputStream(uri)?.use { it.readBytes() } }
+			.getOrElse { e ->
+				DebugLog.log("SendFiles", "resolver read failed uri=$uri ${e::class.simpleName}: ${e.message}")
+				null
+			}
+		if (streamed != null) {
+			val mime = runCatching { contentResolver.getType(uri) }.getOrNull() ?: "application/octet-stream"
+			return OutgoingFile(queryName(uri) ?: "file", mime, streamed)
+		}
+
+		val own = ownAttachment(uri) ?: return null
+		return runCatching {
+			val mime = runCatching { contentResolver.getType(uri) }.getOrNull()
+				?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(own.extension.lowercase())
+				?: "application/octet-stream"
+			DebugLog.log("SendFiles", "read own copy instead uri=$uri bytes=${own.length()}")
+			OutgoingFile(own.name, mime, own.readBytes())
+		}.getOrNull()
+	}
+
+	/** The on-disk file behind a uri THIS app minted over its own attachments dir, or null for any
+	 * other uri. Authority-checked, so a foreign uri that merely looks similar never resolves here. */
+	private fun ownAttachment(uri: Uri): java.io.File? {
+		if (uri.authority != "${BuildConfig.APPLICATION_ID}.fileprovider") return null
+		return Attachments.fileFor(filesDir, uri.toString())?.takeIf { it.isFile }
+	}
 
 	private fun queryName(uri: Uri): String? = runCatching {
 		contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
