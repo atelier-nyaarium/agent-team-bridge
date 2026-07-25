@@ -636,10 +636,12 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				},
 				onSessions = { openTeam = null },
 				onSend = { text, uris -> scope.launch { repo.send(openTeam!!, text, uris) } },
-				initialDraft = repo.draft(openTeam!!),
-				onDraftChange = { repo.setDraft(openTeam!!, it) },
-				composerRestore = state.composerRestore[openTeam!!],
-				onComposerRestored = { repo.clearComposerRestore(openTeam!!) },
+				draft = state.drafts[openTeam!!] ?: Draft(),
+				onDraftTextChange = { repo.setDraftText(openTeam!!, it) },
+				onAddDraftFiles = { uris -> scope.launch { repo.addDraftFiles(openTeam!!, uris) } },
+				onRemoveDraftFile = { src -> repo.removeDraftFile(openTeam!!, src) },
+				onAppendDraftText = { insert -> repo.appendDraftText(openTeam!!, insert) },
+				onClearDraft = { repo.clearDraft(openTeam!!) },
 				scheduledSend = state.scheduledSends[openTeam!!],
 				onScheduleSend = { text, uris, at -> repo.scheduleSend(openTeam!!, text, uris, at) },
 				onReschedule = { at -> repo.rescheduleSend(openTeam!!, at) },
@@ -2075,9 +2077,10 @@ fun ScheduledSendDock(rec: ScheduledSend, onEdit: () -> Unit, onCancel: () -> Un
 					color = MaterialTheme.colorScheme.onSecondaryContainer,
 				)
 			}
-			// Disabled while the composer holds text: cancelling hands this send's own text and
-			// attachments back into that box, so an unguarded tap would silently overwrite whatever
-			// is being typed. Matches the failed-send row's own Cancel.
+			// Disabled while the composer holds text, purely as UX - cancelling hands this send's own
+			// text and files back into the draft (ChatRepository.takeBackIntoDraft), which itself
+			// guards against overwriting whatever is being typed regardless of this flag. Matches the
+			// failed-send row's own Cancel.
 			IconButton(onClick = hapticClick(onCancel), enabled = cancelEnabled) {
 				Icon(
 					Icons.Default.Close,
@@ -2171,7 +2174,7 @@ fun ScheduleSendDialog(initialAtMillis: Long, submitting: Boolean, onConfirm: (L
 						TextButton(
 							// Disabled once tapped, until the caller's async schedule/reschedule call
 							// resolves - prevents a double-tap (or a bounced/ghost touch) from launching
-							// two overlapping calls that race on the composer's draft/attachments.
+							// two overlapping calls that race on the composer's draft.
 							enabled = isFarEnoughOut && !submitting,
 							onClick = hapticClick { pickedMillis?.let(onConfirm) },
 						) { Text("Schedule") }
@@ -2418,6 +2421,16 @@ private fun ReorderableTabRow(
 	}
 }
 
+/** Mint content:// Uris over a draft's already-copied files - the one remaining FileProvider mint
+ * site, feeding them back through the ordinary Uri-based send/schedule API exactly like a fresh
+ * pick. Restore never touches a Uri (MessageFile is the sole currency between the store and the
+ * draft); only Send and Schedule Send need one, to reach ChatRepository.send/scheduleSend. */
+private fun draftFileUris(context: Context, files: List<MessageFile>): List<Uri> = files.mapNotNull { f ->
+	Attachments.fileFor(context.filesDir, f.src)?.let { file ->
+		FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+	}
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ThreadScreen(
@@ -2446,11 +2459,19 @@ fun ThreadScreen(
 	onCloseTab: (String) -> Unit,
 	onSessions: () -> Unit,
 	onSend: (String, List<Uri>) -> Unit,
-	initialDraft: String,
-	onDraftChange: (String) -> Unit,
-	// Content lifted out of a cancelled failed send, waiting to be taken back into this composer.
-	composerRestore: ComposerRestore?,
-	onComposerRestored: () -> Unit,
+	// This thread's composer state - what it shows and what Send consumes (ChatRepository.Draft).
+	// The single source read by the text field, the attachment chips, and every occupied/enabled
+	// check below; there is no local composable copy of it (see the deleted `draft`/`attachments`
+	// vars this replaced), so a tab switch can never bleed one thread's picked files into another's.
+	draft: Draft,
+	onDraftTextChange: (String) -> Unit,
+	onAddDraftFiles: (List<Uri>) -> Unit,
+	onRemoveDraftFile: (String) -> Unit,
+	// The plugin dock's composer-insert seam (e.g. the Designer's "Reference in chat").
+	onAppendDraftText: (String) -> Unit,
+	// Send hands the draft's content off (re-bucketed under its own out-$opId - see the Send
+	// handler below); this drops the draft and reclaims its now-unreferenced attachment copies.
+	onClearDraft: () -> Unit,
 	onRename: (String) -> Unit,
 	onForget: () -> Unit,
 	// At most one pending scheduled send for this team (plans/scheduled-send.md), null otherwise -
@@ -2466,9 +2487,10 @@ fun ThreadScreen(
 	// takes, so re-threading them through the same call without risking a silent attachment drop
 	// would need its own dedicated seam. Changing the time alone has no such mismatch.
 	onReschedule: suspend (Long) -> Boolean,
-	// Returns the cancelled record (null if nothing was scheduled) so the dock's X button can
-	// restore its text and attachments into the composer instead of discarding them.
-	onCancelScheduledSend: () -> ScheduledSend?,
+	// Cancels team's scheduled send and hands its content back into the draft itself (see
+	// ChatRepository.cancelScheduledSendForEdit) - the dock reads the result through `draft`,
+	// same as every other composer writer, rather than through a returned record.
+	onCancelScheduledSend: () -> Unit,
 	// Terminal view: only the host-agent and devcontainers are eligible. The peek/send are
 	// team-bound suspend closures (the screen supplies the team).
 	terminalEligible: Boolean,
@@ -2488,38 +2510,15 @@ fun ThreadScreen(
 	onTerminalSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
 	onFocusChange: (FocusIntent) -> Unit = {},
 ) {
-	// Seeded from the per-session saved draft and re-keyed on team, so switching tabs or
-	// leaving and reopening a thread restores what you were typing. onDraftChange writes
-	// every edit back to the session store.
-	var draft by remember(team) { mutableStateOf(initialDraft) }
 	var showMenu by remember { mutableStateOf(false) }
 	var showRename by remember { mutableStateOf(false) }
 	var confirmForget by remember { mutableStateOf(false) }
-	// rememberSaveable: no android:configChanges is declared anywhere in this app, so a rotation,
-	// theme, or font-scale change destroys and recreates the Activity - a plain remember here
-	// silently dropped picked-but-not-yet-sent files (schedule OR live send) on that recreation.
-	var attachments by rememberSaveable { mutableStateOf<List<Uri>>(emptyList()) }
 	var showSendMenu by remember { mutableStateOf(false) }
-	val restoreContext = LocalContext.current
-
-	// A cancelled failed send hands its content back here. Only ever applied to an empty composer -
-	// Cancel is disabled otherwise - so this never overwrites something being typed.
-	LaunchedEffect(composerRestore) {
-		val restore = composerRestore ?: return@LaunchedEffect
-		draft = restore.text
-		onDraftChange(restore.text)
-		// Same FileProvider round-trip the scheduled-send dock uses: a content:// Uri over the copy
-		// already in filesDir, so a restored file carries its name and type back through the
-		// composer's ordinary Uri-based send path exactly like a fresh pick.
-		if (restore.fileRefs.isNotEmpty()) {
-			attachments = restore.fileRefs.mapNotNull { f ->
-				Attachments.fileFor(restoreContext.filesDir, f.src)?.let { file ->
-					FileProvider.getUriForFile(restoreContext, "${restoreContext.packageName}.fileprovider", file)
-				}
-			}
-		}
-		onComposerRestored()
-	}
+	// The one remaining FileProvider mint site (see draftFileUris): Send and Schedule Send mint a
+	// content:// Uri over the draft's already-copied files to reach the existing Uri-based send API.
+	// Restore never touches a Uri - draft IS the restore, MessageFile the only currency, read
+	// straight off ChatState.
+	val composerContext = LocalContext.current
 	// Null: no dialog. Non-null: the seed instant it opens the picker at - a fresh Schedule Send
 	// seeds 5 minutes out, a dock edit seeds the record's own current fire time. Two distinct
 	// booleans would let a stray recomposition show the dialog with a stale seed from the other path.
@@ -2531,8 +2530,8 @@ fun ThreadScreen(
 	var scheduleDialogSeed by rememberSaveable { mutableStateOf<Long?>(null) }
 	// Disables the Schedule button once tapped until the async call resolves - otherwise a double
 	// tap (or a bounced/ghost touch, a documented real touchscreen artifact) can launch two
-	// concurrent scheduleSend coroutines that race on which one's draft/attachments they see, since
-	// the FIRST tap's own cleanup already blanks them before the second tap's handler reads them.
+	// concurrent scheduleSend coroutines that race on which one's draft they see, since the FIRST
+	// tap's own cleanup already clears it before the second tap's handler reads it.
 	var scheduleSubmitting by remember { mutableStateOf(false) }
 	val scheduleScope = rememberCoroutineScope()
 	// Bumped every time a NEW Schedule Send dialog session opens (a fresh schedule via the menu, or a
@@ -2554,7 +2553,7 @@ fun ThreadScreen(
 	}
 	if (terminalMode) BackHandler { terminalMode = false }
 	val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-		if (uris.isNotEmpty()) attachments = attachments + uris
+		if (uris.isNotEmpty()) onAddDraftFiles(uris)
 	}
 
 	// Hold the screen awake while a thread is open (reading or replying); released
@@ -2596,9 +2595,9 @@ fun ThreadScreen(
 			submitting = scheduleSubmitting,
 			onConfirm = { at ->
 				// Snapshot now: the async call below must bank exactly what was on screen at the
-				// moment of the tap, not whatever draft/attachments happen to hold once it resolves.
-				val text = draft
-				val files = attachments
+				// moment of the tap, not whatever the draft happens to hold once it resolves.
+				val text = draft.text
+				val files = draftFileUris(composerContext, draft.files)
 				val editingExisting = scheduledSend != null
 				val myGeneration = scheduleDialogGeneration
 				scheduleSubmitting = true
@@ -2630,11 +2629,7 @@ fun ThreadScreen(
 						if (scheduleDialogGeneration == myGeneration) {
 							scheduleSubmitting = false
 							scheduleDialogSeed = null
-							if (ok && !editingExisting) {
-								draft = ""
-								onDraftChange("")
-								attachments = emptyList()
-							}
+							if (ok && !editingExisting) onClearDraft()
 						}
 					}
 				}
@@ -2751,23 +2746,19 @@ fun ThreadScreen(
 					rendererPool = rendererPool,
 					openNonce = openNonce,
 					unreadBoundary = unreadBoundary,
-					composerOccupied = draft.trim().isNotEmpty(),
+					composerOccupied = draft.isOccupied,
 					modifier = Modifier.weight(1f).fillMaxWidth(),
 				)
 			}
 			// Plugin dock slots (e.g. the Designer dock) sit between the messages and the
 			// composer; each slot draws nothing when it has nothing to show for this thread. The
-			// scope carries a composer-insert seam (e.g. the Designer's "Reference in chat"); it's
-			// built inline so insertDraftText always writes the live draft.
-			val dockContext = LocalContext.current
-			val dockScope = com.atelier_nyaarium.switchboard.plugins.ThreadDockScope(team) { insert ->
-				draft = (if (draft.isEmpty() || draft.endsWith(" ") || draft.endsWith("\n")) draft else "$draft ") + insert
-				onDraftChange(draft)
-			}
+			// scope carries a composer-insert seam (e.g. the Designer's "Reference in chat"), team-bound
+			// through onAppendDraftText -> ChatRepository.appendDraftText rather than an ambient var.
+			val dockScope = com.atelier_nyaarium.switchboard.plugins.ThreadDockScope(team, onAppendDraftText)
 			// Composable slots cannot route through forEachCaught (a @Composable invocation needs the
 			// enclosing composable context, which a non-inline lambda parameter does not provide);
 			// a throwing slot is Compose's own error path, not a registry-containment case.
-			remember { Plugins.get(dockContext) }.host.threadDockSlots.values().forEach { slot -> slot(dockScope) }
+			remember { Plugins.get(composerContext) }.host.threadDockSlots.values().forEach { slot -> slot(dockScope) }
 			// A plain sibling in this same Column, same reason the plugin dock slots above need no
 			// collision-avoidance logic: nothing to show contributes no space at all.
 			scheduledSend?.let { rec ->
@@ -2777,23 +2768,8 @@ fun ThreadScreen(
 						scheduleDialogSeed = rec.fireAtMillis
 						scheduleDialogGeneration++
 					},
-					cancelEnabled = draft.trim().isEmpty(),
-					onCancel = {
-						val restored = onCancelScheduledSend()
-						if (restored != null) {
-							draft = restored.text
-							onDraftChange(restored.text)
-							// Already-copied local files, not fresh picker grants - FileProvider mints a
-							// content:// Uri over the same filesDir/attachments/ path file_paths.xml already
-							// exposes, so the restored files flow back through the composer's existing
-							// Uri-based attachment/send path exactly like a fresh pick.
-							attachments = restored.fileRefs.mapNotNull { f ->
-								Attachments.fileFor(dockContext.filesDir, f.src)?.let { file ->
-									FileProvider.getUriForFile(dockContext, "${dockContext.packageName}.fileprovider", file)
-								}
-							}
-						}
-					},
+					cancelEnabled = !draft.isOccupied,
+					onCancel = onCancelScheduledSend,
 				)
 			}
 			if (error != null) Text(error, Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.error)
@@ -2801,12 +2777,12 @@ fun ThreadScreen(
 			// letting the text field survive alongside it would let the user keep typing into a
 			// message that no longer has anywhere to go until the dock is cancelled or fires.
 			if (scheduledSend == null) {
-			if (attachments.isNotEmpty()) {
+			if (draft.files.isNotEmpty()) {
 				Row(
 					Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 4.dp),
 					horizontalArrangement = Arrangement.spacedBy(6.dp),
 				) {
-					attachments.forEach { uri ->
+					draft.files.forEach { file ->
 						Surface(
 							color = MaterialTheme.colorScheme.surfaceVariant,
 							shape = MaterialTheme.shapes.small,
@@ -2816,13 +2792,13 @@ fun ThreadScreen(
 								verticalAlignment = Alignment.CenterVertically,
 							) {
 								Text(
-									uri.lastPathSegment?.substringAfterLast('/') ?: "file",
+									file.name,
 									style = MaterialTheme.typography.labelSmall,
 									maxLines = 1,
 									overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
 									modifier = Modifier.widthIn(max = 120.dp),
 								)
-								IconButton(onClick = hapticClick { attachments = attachments - uri }) {
+								IconButton(onClick = hapticClick { file.src?.let(onRemoveDraftFile) }) {
 									Icon(Icons.Default.Close, contentDescription = "Remove attachment")
 								}
 							}
@@ -2832,8 +2808,8 @@ fun ThreadScreen(
 			}
 			Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
 				OutlinedTextField(
-					value = draft,
-					onValueChange = { draft = it; onDraftChange(it) },
+					value = draft.text,
+					onValueChange = onDraftTextChange,
 					label = { Text("Message") },
 					modifier = Modifier.weight(1f),
 				)
@@ -2843,7 +2819,7 @@ fun ThreadScreen(
 					IconButton(onClick = hapticClick { picker.launch(arrayOf("*/*")) }) {
 							Icon(Icons.Default.AttachFile, contentDescription = "Attach file")
 						}
-					val sendEnabled = draft.isNotBlank() || attachments.isNotEmpty()
+					val sendEnabled = draft.isOccupied
 					val sendHaptics = LocalHapticFeedback.current
 					val sendStrongHaptic = rememberStrongHaptic()
 					// A plain FilledIconButton has no onLongClick of its own (Material3's IconButton family
@@ -2864,10 +2840,8 @@ fun ThreadScreen(
 								onLongClickLabel = "Schedule send",
 								onClick = {
 									sendHaptics.performHapticFeedback(HapticFeedbackType.LongPress)
-									onSend(draft, attachments)
-									draft = ""
-									onDraftChange("")
-									attachments = emptyList()
+									onSend(draft.text, draftFileUris(composerContext, draft.files))
+									onClearDraft()
 								},
 								onLongClick = {
 									sendStrongHaptic()
@@ -2906,10 +2880,8 @@ fun ThreadScreen(
 							enabled = sendEnabled,
 							onClick = hapticClick {
 								showSendMenu = false
-								onSend(draft, attachments)
-								draft = ""
-								onDraftChange("")
-								attachments = emptyList()
+								onSend(draft.text, draftFileUris(composerContext, draft.files))
+								onClearDraft()
 							},
 						)
 					}
