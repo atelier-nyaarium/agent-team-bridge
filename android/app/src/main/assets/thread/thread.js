@@ -259,10 +259,6 @@
 
 		if (Array.isArray(m.files) && m.files.length > 0) {
 			row.appendChild(buildFiles(m.files));
-		} else if (m.files !== undefined) {
-			// #region files-vanished: the payload named a files field the renderer cannot use
-			debugReport("row", `at=${m.at} unusable files field: ${JSON.stringify(m.files)}`);
-			// #endregion
 		}
 		if (m.status === "error" && m.role === "user" && m.id !== undefined && m.id !== null) {
 			row.appendChild(buildFailedActions(String(m.id)));
@@ -318,37 +314,13 @@
 		}
 	}
 
-	// #region files-vanished
-	// The renderer is the only place that knows whether a chip was skipped, built-but-invisible, or
-	// never asked for. Kotlin can only report what it SENT.
-	function debugReport(tag, message) {
-		try {
-			if (window.Android && typeof window.Android.debugLog === "function") {
-				window.Android.debugLog(tag, String(message));
-			}
-		} catch (e) {
-			/* logging must never break a render */
-		}
-	}
-	// #endregion
-
 	function buildFiles(files) {
 		const wrap = document.createElement("div");
 		wrap.className = "files";
-		// #region files-vanished
-		let skipped = 0;
-		let built = 0;
-		// #endregion
 		for (const f of files) {
 			// A decoration may drop the chip outright: some attachments are machinery a plugin
 			// already surfaces another way, and rendering them as files invites a misleading tap.
-			if (f.decoration && f.decoration.hidden === true) {
-				// #region files-vanished
-				skipped++;
-				debugReport("buildFiles", `skip hidden name=${f.name} kind=${f.decoration.kind}`);
-				// #endregion
-				continue;
-			}
+			if (f.decoration && f.decoration.hidden === true) continue;
 			const isImage = f.mime && f.mime.indexOf("image/") === 0 && f.src;
 			if (isImage) {
 				const img = document.createElement("img");
@@ -376,18 +348,7 @@
 				if (f.src) chip.addEventListener("click", () => openAttachment(f.src));
 				wrap.appendChild(chip);
 			}
-			// #region files-vanished
-			built++;
-			// #endregion
 		}
-		// #region files-vanished
-		// A built-but-invisible chip is the case neither side can otherwise see: the nodes exist,
-		// so nothing logs an error, and CSS decides whether the reader ever sees them.
-		debugReport(
-			"buildFiles",
-			`in=${files.length} built=${built} skipped=${skipped} children=${wrap.childNodes.length}`,
-		);
-		// #endregion
 		return wrap;
 	}
 

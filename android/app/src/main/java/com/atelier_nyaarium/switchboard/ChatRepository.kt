@@ -3,7 +3,6 @@ package com.atelier_nyaarium.switchboard
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.webkit.MimeTypeMap
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.crypto.ownerKeyId
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalJoin
@@ -3013,13 +3012,6 @@ class ChatRepository(
 
 	suspend fun send(team: String, text: String, uris: List<Uri> = emptyList()) = withContext(Dispatchers.IO) {
 		val picked = uris.mapNotNull { readUri(it) }
-		// #region files-vanished: an outgoing attachment that never arrives is silent at every hop.
-		// A uri that fails readUri is dropped by mapNotNull with nothing logged, which is the one
-		// place a picked file can vanish without any error reaching the sender.
-		if (uris.isNotEmpty() || picked.isNotEmpty()) {
-			DebugLog.log("SendFiles", "uris=${uris.size} read=${picked.size} [${uris.joinToString { it.toString().take(70) }}]")
-		}
-		// #endregion
 		val total = picked.sumOf { it.bytes.size }
 		if (total > MAX_OUTGOING_BYTES) {
 			_state.update { it.copy(error = "Attachments too large (max ${MAX_OUTGOING_BYTES / 1_000_000} MB).") }
@@ -3424,43 +3416,11 @@ class ChatRepository(
 		persistThreads(threads)
 	}
 
-	/**
-	 * A picked file's bytes.
-	 *
-	 * The ContentResolver read is right for a foreign provider's uri (the gallery, the file picker),
-	 * and it is the only option there. It is NOT the only option for a file this app already copied
-	 * into its own attachments dir and then minted a FileProvider uri over: that round trip can fail
-	 * for reasons that have nothing to do with whether the bytes are readable, and a failure here is
-	 * silent by construction, since every caller drops a null through `mapNotNull`. So a uri we
-	 * minted ourselves falls back to reading the file we already hold.
-	 */
-	private fun readUri(uri: Uri): OutgoingFile? {
-		val streamed = runCatching { contentResolver.openInputStream(uri)?.use { it.readBytes() } }
-			.getOrElse { e ->
-				DebugLog.log("SendFiles", "resolver read failed uri=$uri ${e::class.simpleName}: ${e.message}")
-				null
-			}
-		if (streamed != null) {
-			val mime = runCatching { contentResolver.getType(uri) }.getOrNull() ?: "application/octet-stream"
-			return OutgoingFile(queryName(uri) ?: "file", mime, streamed)
-		}
-
-		val own = ownAttachment(uri) ?: return null
-		return runCatching {
-			val mime = runCatching { contentResolver.getType(uri) }.getOrNull()
-				?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(own.extension.lowercase())
-				?: "application/octet-stream"
-			DebugLog.log("SendFiles", "read own copy instead uri=$uri bytes=${own.length()}")
-			OutgoingFile(own.name, mime, own.readBytes())
-		}.getOrNull()
-	}
-
-	/** The on-disk file behind a uri THIS app minted over its own attachments dir, or null for any
-	 * other uri. Authority-checked, so a foreign uri that merely looks similar never resolves here. */
-	private fun ownAttachment(uri: Uri): java.io.File? {
-		if (uri.authority != "${BuildConfig.APPLICATION_ID}.fileprovider") return null
-		return Attachments.fileFor(filesDir, uri.toString())?.takeIf { it.isFile }
-	}
+	private fun readUri(uri: Uri): OutgoingFile? = runCatching {
+		val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+		val mime = contentResolver.getType(uri) ?: "application/octet-stream"
+		OutgoingFile(queryName(uri) ?: "file", mime, bytes)
+	}.getOrNull()
 
 	private fun queryName(uri: Uri): String? = runCatching {
 		contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
@@ -4030,9 +3990,6 @@ class ChatRepository(
 	 * basename cannot overwrite each other on disk. */
 	suspend fun addDraftFiles(team: String, uris: List<Uri>) = withContext(Dispatchers.IO) {
 		val picked = uris.mapNotNull { readUri(it) }
-		// #region files-vanished: the picker's own hop, which returns silently on a read failure
-		DebugLog.log("DraftFiles", "add uris=${uris.size} read=${picked.size} [${uris.joinToString { it.toString().take(70) }}]")
-		// #endregion
 		if (picked.isEmpty()) return@withContext
 		val copied = Attachments.storeOutgoing(filesDir, "draft-${UUID.randomUUID()}", picked)
 		val next = _state.updateAndGet { s ->
@@ -4075,21 +4032,20 @@ class ChatRepository(
 		persistDrafts(next)
 	}
 
-	/** Clear a team's draft once Send has taken its content - the text, and the draft's OWN copies
-	 * of any files, safe to reclaim because Send re-buckets its own copy under out-$opId before this
-	 * runs (see MainActivity's Send handler). Best-effort, same as every other ownership-transfer
-	 * delete in this file (forget, cancelScheduledSend, scheduleSend's own replace): a narrow miss
-	 * here is healed by the next cold-start sweepOrphanAttachments. */
 	/**
 	 * Drop a team's draft. Every caller reaches here right after handing the draft's contents to a
 	 * send or a schedule.
 	 *
-	 * The picked copies are deliberately NOT deleted. A send reads them on its own coroutine, so
-	 * deleting at the moment of the tap is a race the send loses: it opened a file that had existed a
-	 * millisecond earlier, got ENOENT, and dropped the attachment with no error anywhere, which is
-	 * how every attachment sent from this composer was silently lost. Once the send has stored its
-	 * own copy the draft's bucket is unreferenced, and `sweepOrphanAttachments` reclaims it.
-	 * Discarding a single pick before sending stays immediate, through [removeDraftFile].
+	 * The draft's own copies of its picked files are deliberately NOT deleted. Send does re-bucket
+	 * its own copy under `out-$opId`, but it does that on a coroutine, and the Send handler clears
+	 * the draft on the tap thread immediately after launching it. So a delete here does not follow
+	 * the re-bucket, it races it, and the send loses: it opened a file that had existed a millisecond
+	 * earlier, got ENOENT, and dropped the attachment through a `mapNotNull` that raises nothing.
+	 * Every attachment sent from this composer was lost that way, with no error anywhere.
+	 *
+	 * Once the send has stored its own copy the draft's bucket is unreferenced, and the cold-start
+	 * `sweepOrphanAttachments` reclaims it. Discarding a single pick before sending stays immediate,
+	 * through [removeDraftFile], which races nothing.
 	 */
 	fun clearDraft(team: String) {
 		if (_state.value.drafts[team] == null) return
