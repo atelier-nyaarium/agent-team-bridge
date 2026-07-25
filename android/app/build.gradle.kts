@@ -67,6 +67,22 @@ android {
 			isShrinkResources = true
 			proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
 		}
+		// A sandbox for looking at the console on an emulator, with no Gateway, no enrollment, and no
+		// network. It exists because every visual question otherwise has to be answered by the owner
+		// on their phone; see plans/emulator-sandbox-build.md. Its code lives in src/emulator/, so
+		// none of the seeding or the onboarding bypass is compiled into debug or release at all.
+		create("emulator") {
+			initWith(getByName("debug"))
+			// Its own package, so it installs BESIDE a real install and can never overwrite one.
+			applicationIdSuffix = ".sandbox"
+			// No versionNameSuffix: the board's version column is narrow enough that a longer string
+			// wraps one character per line, which mangles every screenshot taken here. The separate
+			// package and launcher entry already say which build this is.
+			// Unminified: this build is for iterating, and assembleRelease remains the R8 gate.
+			isMinifyEnabled = false
+			isShrinkResources = false
+			signingConfig = signingConfigs.getByName("debug")
+		}
 	}
 
 	compileOptions {

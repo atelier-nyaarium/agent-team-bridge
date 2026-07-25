@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	Points the emulator build at its own Application, which seeds the sandbox before anything reads
+	state. The main manifest declares no android:name, so this adds one rather than replacing it and
+	needs no tools:replace.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:name=".sandbox.SandboxApp" />
+</manifest>
