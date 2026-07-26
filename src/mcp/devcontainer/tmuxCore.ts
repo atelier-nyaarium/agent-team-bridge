@@ -350,7 +350,6 @@ export async function awaitReady(
 	const deadline = Date.now() + timeoutMs;
 	let captureOk = false;
 	let missedProbes = 0;
-	let polls = 0;
 	let screen = "";
 	while (Date.now() < deadline) {
 		await new Promise((r) => setTimeout(r, pollMs));
@@ -367,12 +366,10 @@ export async function awaitReady(
 		// capture-pane -e carries SGR escapes that precede the composer and split a prompt phrase, so
 		// match against the stripped text (isAgentReady strips internally; the prompt check must too).
 		const clean = stripAnsi(screen);
-		polls++;
 		// A pending prompt OUTRANKS the composer. A reattached pane can carry the previous
 		// incarnation's composer in the same frame as a live picker, and conceding ready there
 		// returns out of the loop and strands the picker unanswered forever.
 		if (STARTUP_PROMPT_RE.test(clean)) {
-			console.error(`[await-ready] ${target.sessionName} poll ${polls}: pressing 1 (startup menu)`);
 			try {
 				await pressDigit(target, "1");
 			} catch {
@@ -381,7 +378,6 @@ export async function awaitReady(
 			continue;
 		}
 		if (RESUME_PROMPT_RE.test(clean)) {
-			console.error(`[await-ready] ${target.sessionName} poll ${polls}: pressing 2 (resume picker)`);
 			try {
 				await pressDigit(target, "2");
 			} catch {
@@ -389,10 +385,7 @@ export async function awaitReady(
 			}
 			continue;
 		}
-		if (isAgentReady(clean)) {
-			console.error(`[await-ready] ${target.sessionName} poll ${polls}: composer up`);
-			return { alive: true, ready: true, screen };
-		}
+		if (isAgentReady(clean)) return { alive: true, ready: true, screen };
 	}
 	// Same invariant as the loop's own exit: a frame still showing a prompt is not ready, however
 	// much of a composer sits above it.
