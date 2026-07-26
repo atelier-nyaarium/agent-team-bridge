@@ -7,7 +7,7 @@ import path from "node:path";
 
 /** Why a file cannot be referenced at all. Every one of these is a hard tool error: the resolution
  * tier degrades, the file tier does not. */
-export type FileFailure = "missing" | "unreadable" | "binary" | "sensitive";
+export type FileFailure = "missing" | "unreadable" | "binary";
 
 export interface LoadedFile {
 	/** Path as written in the ref, kept for messages and manifest keys. */

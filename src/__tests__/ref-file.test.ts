@@ -86,47 +86,6 @@ describe("resolving a path the way a shell would", () => {
 	});
 });
 
-describe("refusing what is a secret rather than code", () => {
-	it("refuses a dotenv file, in the project like anywhere else", () => {
-		fs.writeFileSync(path.join(root, ".env"), "TOKEN=hunter2\n");
-
-		expect(load(".env")).toMatchObject({ ok: false, failure: "sensitive" });
-	});
-
-	it("refuses a suffixed dotenv (.env.production) too", () => {
-		fs.writeFileSync(path.join(root, ".env.production"), "TOKEN=hunter2\n");
-
-		expect(load(".env.production")).toMatchObject({ ok: false, failure: "sensitive" });
-	});
-
-	it("refuses anything under an .ssh directory", () => {
-		fs.mkdirSync(path.join(outside, ".ssh"), { recursive: true });
-		fs.writeFileSync(path.join(outside, ".ssh", "id_ed25519"), "PRIVATE KEY\n");
-
-		expect(load(path.join(outside, ".ssh", "id_ed25519"))).toMatchObject({ ok: false, failure: "sensitive" });
-	});
-
-	it("refuses a key file by extension", () => {
-		fs.writeFileSync(path.join(root, "src", "server.pem"), "CERT\n");
-
-		expect(load("src/server.pem")).toMatchObject({ ok: false, failure: "sensitive" });
-	});
-
-	it("judges the symlink's TARGET, so an innocent name cannot smuggle a key out", () => {
-		fs.mkdirSync(path.join(outside, ".ssh"), { recursive: true });
-		fs.writeFileSync(path.join(outside, ".ssh", "id_rsa"), "PRIVATE KEY\n");
-		fs.symlinkSync(path.join(outside, ".ssh", "id_rsa"), path.join(root, "src", "notes.ts"));
-
-		expect(load("src/notes.ts")).toMatchObject({ ok: false, failure: "sensitive" });
-	});
-
-	it("does not refuse an ordinary file whose name merely contains env", () => {
-		fs.writeFileSync(path.join(root, "src", "environment.ts"), "export const env = 1;\n");
-
-		expect(load("src/environment.ts").ok).toBe(true);
-	});
-});
-
 describe("deciding what counts as text", () => {
 	it("reads a UTF-16 source, which a naive binary sniff would reject for its NUL bytes", () => {
 		const source = "export const greeting = 'hi';\n";
