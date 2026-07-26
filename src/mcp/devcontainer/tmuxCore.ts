@@ -336,7 +336,9 @@ function pressDigit(target: TmuxTarget, digit: string): Promise<void> {
 
 /** Poll the pane until the REPL composer appears, pressing "1" through the dev-channels and
  * folder-trust menus as they show, and "2" through the large-resumed-session picker (full session,
- * not the highlighted summary option) so an unattended resume never silently drops context. Returns
+ * not the highlighted summary option) so an unattended resume never silently drops context. A
+ * pending prompt is answered BEFORE the composer is accepted, since only the composer check returns
+ * and a stale composer sharing a frame with a live picker would otherwise end the loop. Returns
  * whether the launch is alive: a launch that exits instantly takes its tmux session down with it, so
  * a pane that never captures is a dead launch. */
 export async function awaitReady(
@@ -348,6 +350,7 @@ export async function awaitReady(
 	const deadline = Date.now() + timeoutMs;
 	let captureOk = false;
 	let missedProbes = 0;
+	let polls = 0;
 	let screen = "";
 	while (Date.now() < deadline) {
 		await new Promise((r) => setTimeout(r, pollMs));
@@ -364,22 +367,38 @@ export async function awaitReady(
 		// capture-pane -e carries SGR escapes that precede the composer and split a prompt phrase, so
 		// match against the stripped text (isAgentReady strips internally; the prompt check must too).
 		const clean = stripAnsi(screen);
-		if (isAgentReady(clean)) return { alive: true, ready: true, screen };
+		polls++;
+		// A pending prompt OUTRANKS the composer. A reattached pane can carry the previous
+		// incarnation's composer in the same frame as a live picker, and conceding ready there
+		// returns out of the loop and strands the picker unanswered forever.
 		if (STARTUP_PROMPT_RE.test(clean)) {
+			console.error(`[await-ready] ${target.sessionName} poll ${polls}: pressing 1 (startup menu)`);
 			try {
 				await pressDigit(target, "1");
 			} catch {
 				// a transient send failure self-heals on the next poll
 			}
-		} else if (RESUME_PROMPT_RE.test(clean)) {
+			continue;
+		}
+		if (RESUME_PROMPT_RE.test(clean)) {
+			console.error(`[await-ready] ${target.sessionName} poll ${polls}: pressing 2 (resume picker)`);
 			try {
 				await pressDigit(target, "2");
 			} catch {
 				// a transient send failure self-heals on the next poll
 			}
+			continue;
+		}
+		if (isAgentReady(clean)) {
+			console.error(`[await-ready] ${target.sessionName} poll ${polls}: composer up`);
+			return { alive: true, ready: true, screen };
 		}
 	}
-	return { alive: captureOk, ready: isAgentReady(screen), screen };
+	// Same invariant as the loop's own exit: a frame still showing a prompt is not ready, however
+	// much of a composer sits above it.
+	const finalClean = stripAnsi(screen);
+	const prompted = STARTUP_PROMPT_RE.test(finalClean) || RESUME_PROMPT_RE.test(finalClean);
+	return { alive: captureOk, ready: !prompted && isAgentReady(finalClean), screen };
 }
 
 /** Reattach to `target.sessionName` if it is already alive, else launch a fresh agent. Returns

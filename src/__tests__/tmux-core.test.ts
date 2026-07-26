@@ -520,6 +520,20 @@ describe("tmuxCore awaitReady", () => {
 		expect(calls.some((c) => c.includes("send-keys") && c.includes("1"))).toBe(false);
 	});
 
+	it("answers the picker even when a stale composer shares the frame", async () => {
+		// A reattached pane carries the previous incarnation's composer at column 0 while the fresh
+		// `claude --resume` draws its picker below. Conceding ready here returns out of the loop, so
+		// the picker would sit unanswered for the life of the session.
+		stdoutData =
+			"\u276f some earlier prompt line\n" +
+			"This session is 5h 53m old and 217.1k tokens.\n" +
+			"Resuming the full session will consume a substantial portion of your usage limits.\n" +
+			"  \u276f 1. Resume from summary (recommended)\n    2. Resume full session as-is";
+		const res = await awaitReady(target, { pollMs: 5, timeoutMs: 40 });
+		expect(res.ready).toBe(false);
+		expect(calls).toContainEqual(["tmux", "send-keys", "-t", "=scratch.0", "-l", "--", "2"]);
+	});
+
 	it("reports a dead launch (alive:false) early when the pane never captures", async () => {
 		exitCode = 1; // capture-pane always fails: the session exited on launch
 		// Budget large enough that the dead-launch early-out (not the deadline) is what returns.
