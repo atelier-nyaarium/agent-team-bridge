@@ -333,6 +333,14 @@ adb shell am start -n com.atelier_nyaarium.switchboard.sandbox/com.atelier_nyaar
 adb exec-out screencap -p > /tmp/shot.png    # then Read the png
 ```
 
+**Shut the AVD down when the feature or plan is done** - it does not exit with your session, and an
+idle one still costs ~4.5% of a core and 4.4 GB. One left running burned 8 CPU-hours over 8 days,
+which was more than every other process on the machine combined.
+
+```bash
+adb emu kill
+```
+
 - Installs BESIDE a real install (`applicationIdSuffix = ".sandbox"`), so it cannot overwrite the
   owner's app or data.
 - All sandbox code lives in `src/emulator/`, so the onboarding bypass is not compiled into debug or
