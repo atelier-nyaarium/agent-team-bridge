@@ -23,12 +23,14 @@ import type { DeviceMailboxStore } from "../../shared/device-mailbox.js";
 import type { SignedXDomainLink } from "../../shared/federation-protocol.js";
 import {
 	ALLOWED_KEYS,
+	type HostListDirsResult,
 	type HostOp,
 	type HostOpResult,
 	type HostPeekResult,
 	isReservedHostSession,
 	isShellSafeName,
 	isTmuxName,
+	isWorkdirPath,
 	type TmuxTarget,
 } from "../../shared/host-op.js";
 import { ownerKeyId } from "../../shared/owner-id.js";
@@ -1104,10 +1106,27 @@ export function createConsoleDispatcher({
 				return { sent: true };
 			}
 
+			case "list_dirs": {
+				// The directory picker's type-ahead read: host filesystem only, runs fresh (not in
+				// isMutatingOp), same boundary validation as create_session's workdir.
+				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
+				if (!isWorkdirPath(op.path)) throw new Error("invalid path: must be absolute or ~-rooted");
+				const r = await relayToHost({ kind: "listDirs", path: op.path });
+				if (!r.ok) throw new Error(r.error ?? "list failed");
+				const listed = r.result as HostListDirsResult;
+				return { entries: listed.entries, ...(listed.truncated ? { truncated: true } : {}) };
+			}
+
 			case "create_session": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");
 				if (!op.sessionName && !op.displayLabel) {
 					throw new Error("create_session needs a sessionName or a displayLabel");
+				}
+				// A picked workdir must be a safe path shape before it can touch the record or the
+				// launch (fail fast; the store and daemon re-guard). Host sessions only - a
+				// devcontainer's workdir is fixed, so a picked one there is a caller bug.
+				if (op.workdir != null && !isWorkdirPath(op.workdir)) {
+					throw new Error("invalid workdir: must be an absolute or ~-rooted path");
 				}
 				// Computed once, directly from the request's own displayLabel - never by comparing the
 				// eventual sessionLabel/id after the fact, which would race a concurrent rename landing on
@@ -1139,6 +1158,7 @@ export function createConsoleDispatcher({
 						spawn,
 						sessionLabel: label,
 						workdirHint: label,
+						workdirPath: op.workdir,
 						mintedFrom: dedupKey,
 					});
 					rollbackEligible = adopted?.created === true || adopted?.record.mintedFrom === dedupKey;
@@ -1151,6 +1171,7 @@ export function createConsoleDispatcher({
 						spawn,
 						sessionLabel: label,
 						workdirHint: label,
+						workdirPath: op.workdir,
 						mintedFrom: dedupKey,
 					});
 					sessionId = minted?.record.id ?? label;
@@ -1179,11 +1200,13 @@ export function createConsoleDispatcher({
 				};
 				try {
 					const target = resolveTmuxTarget(op.target, sessionId);
-					// The host workdir hint (the daemon opens a host session in ~/projects/<hint>, ignoring
-					// it for a devcontainer). The store owns the workdirHint-over-sessionLabel precedence, so
-					// this matches the wake path: a display-label collision (label deduped to "-2",
-					// workdirHint pinned to the original) opens the same dir. The daemon guards traversal too.
-					const workdirHint = sessionStore && adopted ? sessionStore.hostWorkdirHint(adopted.record) : label;
+					// The host workdir hint (the daemon opens a host session there, ignoring it for a
+					// devcontainer). The store owns the workdirPath-over-workdirHint-over-sessionLabel
+					// precedence, so this matches the wake path: a display-label collision (label deduped
+					// to "-2", workdirHint pinned to the original) opens the same dir, and a picked path
+					// wins over both. The daemon guards traversal too.
+					const workdirHint =
+						sessionStore && adopted ? sessionStore.hostWorkdirHint(adopted.record) : (op.workdir ?? label);
 
 					// A devcontainer target may need a cold container bring-up (tryWakeTeam's
 					// ensureContainerUpAsync), which the host-op channel's HOST_OP_TIMEOUT_MS (20s) cannot

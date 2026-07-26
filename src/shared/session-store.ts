@@ -20,6 +20,10 @@ export interface SessionRecord {
 	spawn: string;
 	// Host sessions: drives the daemon's ~/projects/<hint> workdir inference (the id is opaque).
 	workdirHint?: string;
+	// Host sessions: the console-picked working directory (absolute or ~-rooted), taking precedence
+	// over workdirHint. Only ever set from the owner-sealed create_session op, never from a register,
+	// so path separators are safe here where the label rules forbid them.
+	workdirPath?: string;
 	// The AI-managed session description: the session's own agent's answer to the gateway's periodic
 	// vibe check ("what is this session about, as a short phrase"). Written only by setDescription
 	// (the vibe-check resolve path), never user-typed - sessionLabel stays the human-owned name.
@@ -63,6 +67,7 @@ interface CreateOpts {
 	spawn: string;
 	sessionLabel?: string;
 	workdirHint?: string;
+	workdirPath?: string;
 	claudeSessionId?: string;
 	mintedFrom?: string;
 }
@@ -86,6 +91,24 @@ export function sanitizeLabel(raw: string | undefined | null): string | null {
 	const trimmed = [...(raw ?? "").trim()].slice(0, LABEL_MAX).join("");
 	if (!trimmed || trimmed === "." || trimmed === "..") return null;
 	if (LABEL_FORBIDDEN.test(trimmed)) return null;
+	return trimmed;
+}
+
+const WORKDIR_PATH_MAX = 512;
+// The label's forbidden classes plus the launch-command breakout set (quotes, backtick, $,
+// backslash), minus "/" which is the entire point of a path.
+const WORKDIR_PATH_FORBIDDEN = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}'"`$\\]/u;
+
+/** Normalize a console-picked host workdir path (create_session's workdir): trimmed, capped on
+ * code points, absolute or ~-rooted, visibly printable, free of the characters that could break
+ * out of the daemon's quoted launch command (see host-op.ts isWorkdirPath, the boundary twin).
+ * Returns null when unusable - a truncated path would name a different directory, so an over-long
+ * one is rejected rather than sliced. */
+export function sanitizeWorkdirPath(raw: string | undefined | null): string | null {
+	const trimmed = (raw ?? "").trim();
+	if (!trimmed || [...trimmed].length > WORKDIR_PATH_MAX) return null;
+	if (!trimmed.startsWith("/") && trimmed !== "~" && !trimmed.startsWith("~/")) return null;
+	if (WORKDIR_PATH_FORBIDDEN.test(trimmed)) return null;
 	return trimmed;
 }
 
@@ -189,12 +212,13 @@ export class SessionStore {
 		return composeSessionName(record.spawn, record.id);
 	}
 
-	/** The host workdir hint the daemon resolves to ~/projects/<hint>: the frozen workdirHint, else the
-	 * current sessionLabel. workdirHint FIRST is load-bearing - rename() mutates only sessionLabel, so a
-	 * renamed session's workdir must stay pinned to its original label. The one owner of this precedence
-	 * so the wake and create paths cannot drift apart. */
+	/** The host workdir value the daemon resolves: a console-picked path first (workdirPath; the
+	 * daemon recognizes its leading "/" or "~", which a label can never carry), else the frozen
+	 * workdirHint, else the current sessionLabel. workdirHint before sessionLabel is load-bearing -
+	 * rename() mutates only sessionLabel, so a renamed session's workdir must stay pinned to its
+	 * original label. The one owner of this precedence so the wake and create paths cannot drift. */
 	hostWorkdirHint(record: SessionRecord): string {
-		return record.workdirHint ?? record.sessionLabel;
+		return record.workdirPath ?? record.workdirHint ?? record.sessionLabel;
 	}
 
 	/** The record a composite team field names, or undefined. */
@@ -439,6 +463,7 @@ export class SessionStore {
 				sessionLabel: this.dedupLabel(spawn, label),
 				spawn,
 				workdirHint: persisted ? (sanitizeLabel(v.workdirHint) ?? undefined) : segment,
+				workdirPath: persisted ? (sanitizeWorkdirPath(v.workdirPath) ?? undefined) : undefined,
 				description:
 					persisted && typeof v.description === "string"
 						? (sanitizeDescription(v.description) ?? undefined)
@@ -471,6 +496,7 @@ export class SessionStore {
 			sessionLabel: this.dedupLabel(opts.spawn, sanitizeLabel(opts.sessionLabel) ?? id),
 			spawn: opts.spawn,
 			workdirHint: sanitizeLabel(opts.workdirHint) ?? undefined,
+			workdirPath: sanitizeWorkdirPath(opts.workdirPath) ?? undefined,
 			claudeSessionId: opts.claudeSessionId,
 			mintedFrom: opts.mintedFrom,
 			lastSeen: this.now(),

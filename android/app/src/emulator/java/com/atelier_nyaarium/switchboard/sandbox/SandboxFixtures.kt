@@ -47,6 +47,16 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 
 	fun threads(): Map<String, List<Message>> = mapOf(SESSION to buildThread())
 
+	/** Canned listings for the create dialog's directory picker, keyed by the listed prefix (the
+	 * text up to and including its last "/"). Enough shape to see descent, filtering, and the
+	 * greyed dot dirs. */
+	fun dirs(): Map<String, List<String>> = mapOf(
+		"~/" to listOf(".config", ".local", "Desktop", "Documents", "Downloads", "Music", "Pictures", "plans", "projects", "Videos"),
+		"~/projects/" to listOf("evie-bot", "nyaaskills", "recipe-app", "story-designer", "switchboard"),
+		"~/Downloads/" to listOf("media"),
+		"~/.config/" to listOf("nvim", "systemd"),
+	)
+
 	private fun buildThread(): List<Message> {
 		val now = System.currentTimeMillis()
 		val rows = mutableListOf<Message>()

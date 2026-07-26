@@ -79,6 +79,19 @@ export function isShellSafeName(name: string): boolean {
 	return name.length <= MAX_TMUX_NAME_LEN && SHELL_SAFE_NAME_RE.test(name);
 }
 
+/** A console-picked host workdir path: absolute or ~-rooted, printable, and free of every character
+ * that could break out of the daemon's quoted launch command (quotes, backtick, $, backslash).
+ * Looser than a label on purpose (separators are the point); it only ever arrives on the
+ * owner-sealed console ops, never from an unauthenticated register. Enforced at the gateway
+ * boundary (create_session's workdir, list_dirs' path) and re-checked by the store/daemon. */
+export const MAX_WORKDIR_PATH_LEN = 512;
+const WORKDIR_PATH_FORBIDDEN = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}'"`$\\]/u;
+export function isWorkdirPath(path: string): boolean {
+	if (path.length === 0 || path.length > MAX_WORKDIR_PATH_LEN) return false;
+	if (!path.startsWith("/") && path !== "~" && !path.startsWith("~/")) return false;
+	return !WORKDIR_PATH_FORBIDDEN.test(path);
+}
+
 /** A conversationId must be a dotless slug so it stays ONE injective segment of a flattened channel
  * key (the upcoming dot-delimited grammar splits store keys on "."). Capped at 128 - it is a key
  * component, not a tmux name, so it is looser on length than a slug but identical on charset. Every
@@ -115,11 +128,23 @@ export type HostOp =
 			sessionToken?: string;
 			dedupKey?: string;
 	  }
+	// List the immediate subdirectories of one host directory (the create-session directory
+	// picker's type-ahead). Host filesystem only, read-only, never deduped - each request lists
+	// fresh. The path is gateway-validated (isWorkdirPath) and the daemon re-guards.
+	| { kind: "listDirs"; path: string }
 	// Drive the target session's pane through the plugin update + MCP reconnect sequence.
 	| { kind: "reloadPlugins"; target: TmuxTarget; dedupKey?: string }
 	// Tear down the target tmux session (the console's Forget). Idempotent: killing an
 	// already-gone session is treated as success.
 	| { kind: "killSession"; target: TmuxTarget; dedupKey?: string };
+
+/** A listDirs result: immediate subdirectory names (dirs and dir symlinks), sorted. Empty for a
+ * missing or unreadable path - autocomplete has no use for the reason. `truncated` marks the wire
+ * sanity bound (MAX_DIR_ENTRIES at the daemon), never a UX cap. */
+export interface HostListDirsResult {
+	entries: string[];
+	truncated?: boolean;
+}
 
 /** A captured tmux pane plus a short content hash, so the console can skip an unchanged frame. The
  * raw return of `peekPane`; `peekWithFallback` wraps it into the tagged `HostPeekResult` below. */

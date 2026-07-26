@@ -13,6 +13,8 @@
 		{ "file": "op-envelope-poll-cross-domain-presence.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
 		{ "file": "op-envelope-report-read.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
 		{ "file": "op-envelope-create-session-v2.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
+		{ "file": "op-envelope-create-session-workdir.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
+		{ "file": "op-envelope-list-dirs.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
 		{ "file": "op-envelope-rename-session.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
 		{ "file": "op-envelope-close-session.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
 		{ "file": "frame-sealed.json", "schema": "ConsoleRelayFrame", "expect": "pass" },
@@ -39,6 +41,7 @@
 		{ "file": "list-teams-result-v2.json", "schema": "ConsoleListTeamsResult", "expect": "pass" },
 		{ "file": "create-session-result-pending.json", "schema": "ConsoleCreateSessionResult", "expect": "pass" },
 		{ "file": "close-session-result.json", "schema": "ConsoleCloseSessionResult", "expect": "pass" },
+		{ "file": "list-dirs-result.json", "schema": "ConsoleListDirsResult", "expect": "pass" },
 		{ "file": "peek-result-container-logs.json", "schema": "ConsolePeekResult", "expect": "pass" },
 		{ "file": "peek-result-legacy.json", "schema": "ConsolePeekResult", "expect": "pass" }
 	]

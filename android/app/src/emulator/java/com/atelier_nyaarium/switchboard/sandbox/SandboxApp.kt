@@ -33,7 +33,7 @@ class SandboxApp : Application() {
 
 		val repo = Repo.get(this)
 		val fixtures = SandboxFixtures(filesDir, assets)
-		repo.seedSandbox(fixtures.teams(), fixtures.threads())
+		repo.seedSandbox(fixtures.teams(), fixtures.threads(), fixtures.dirs())
 	}
 
 	private companion object {

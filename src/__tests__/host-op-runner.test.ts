@@ -16,6 +16,7 @@ function makeOps(): { ops: TmuxOps } {
 		createSession: vi.fn(async () => {}),
 		reloadPlugins: vi.fn(async () => {}),
 		killSession: vi.fn(async () => {}),
+		listDirs: vi.fn(async () => ({ entries: ["projects"] })),
 	};
 	return { ops };
 }
@@ -158,6 +159,7 @@ describe("createHostOpRunner", () => {
 			createSession: async () => {},
 			reloadPlugins: async () => {},
 			killSession: async () => {},
+			listDirs: async () => ({ entries: [] }),
 		};
 		const runner = createHostOpRunner(ops, { minPeekIntervalMs: 0 });
 
@@ -187,6 +189,7 @@ describe("createHostOpRunner", () => {
 			createSession: async () => {},
 			reloadPlugins: async () => {},
 			killSession: async () => {},
+			listDirs: async () => ({ entries: [] }),
 		};
 		const runner = createHostOpRunner(ops, { minPeekIntervalMs: 0 });
 		await expect(runner.run({ kind: "peek", target: T })).rejects.toThrow();
@@ -229,6 +232,7 @@ describe("createHostOpRunner peek priority lanes", () => {
 			createSession: async () => {},
 			reloadPlugins: async () => {},
 			killSession: async () => {},
+			listDirs: async () => ({ entries: [] }),
 		};
 		return { ops, resolveTarget: (name) => resolvers.get(name)?.(), admissionOrder };
 	}

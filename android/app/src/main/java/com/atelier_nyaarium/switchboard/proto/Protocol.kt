@@ -199,6 +199,7 @@ sealed class ConsoleOp {
 		val target: String,
 		val sessionName: String? = null,
 		val displayLabel: String? = null,
+		val workdir: String? = null,
 	) : ConsoleOp()
 
 	@Serializable
@@ -224,6 +225,12 @@ sealed class ConsoleOp {
 	data class RenameSession(
 		val target: String,
 		val sessionLabel: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("list_dirs")
+	data class ListDirs(
+		val path: String,
 	) : ConsoleOp()
 
 	@Serializable
@@ -896,6 +903,12 @@ data class ConsoleCloseSessionResult(
 data class ConsoleRenameSessionResult(
 	val renamed: Boolean,
 	val sessionLabel: String? = null,
+)
+
+@Serializable
+data class ConsoleListDirsResult(
+	val entries: List<String>,
+	val truncated: Boolean? = null,
 )
 
 @Serializable

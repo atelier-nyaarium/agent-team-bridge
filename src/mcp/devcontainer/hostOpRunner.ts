@@ -1,4 +1,4 @@
-import type { HostOp, HostPeekResult, TmuxTarget } from "../../shared/host-op.js";
+import type { HostListDirsResult, HostOp, HostPeekResult, TmuxTarget } from "../../shared/host-op.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -18,6 +18,9 @@ export interface TmuxOps {
 	) => Promise<void>;
 	reloadPlugins: (target: TmuxTarget) => Promise<void>;
 	killSession: (target: TmuxTarget) => Promise<void>;
+	// Not a tmux op: the directory picker's host filesystem read. A cheap local readdir, so it
+	// needs none of the peek machinery (no slot cap, no cadence floor, no dedup).
+	listDirs: (path: string) => Promise<HostListDirsResult>;
 }
 
 /** Peek slot priority: INTERACTIVE (the actively-viewed terminal's rendering stream, relayed
@@ -144,6 +147,7 @@ export function createHostOpRunner(ops: TmuxOps, opts: { minPeekIntervalMs?: num
 	async function run(op: HostOp): Promise<unknown> {
 		if (op.kind === "peek") return runPeek(op.target);
 		if (op.kind === "sendText" || op.kind === "sendKey") return runSend(op);
+		if (op.kind === "listDirs") return ops.listDirs(op.path);
 		if (op.kind === "createSession")
 			return runDeduped(
 				op.dedupKey,
