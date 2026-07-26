@@ -287,6 +287,9 @@ export async function startGateway(): Promise<void> {
 	// The federation replay-guard wires its own persistence here once built (it only
 	// exists when the evie bridge is configured); null-safe until then.
 	let replayPersist: (() => void) | null = null;
+	// Same shape as replayPersist: the evie bridge registers its teardown here rather than adding a
+	// second signal listener, which would never run once the shutdown handler below exits.
+	let evieStop: (() => void) | null = null;
 	// `cleanShutdown` is the ONE signal that decides whether a restart trusts the persisted plane
 	// counter lineage at all (see PlaneRegistry.persistedState): the regular 3s tick always writes
 	// false (assume dirty until a clean exit proves otherwise); only the synchronous SIGTERM/SIGINT
@@ -320,8 +323,17 @@ export async function startGateway(): Promise<void> {
 	};
 	const persistTimer = setInterval(() => persistDelivery(false), 3_000);
 	persistTimer.unref?.();
-	process.on("SIGTERM", () => persistDelivery(true));
-	process.on("SIGINT", () => persistDelivery(true));
+	// Registering a signal listener REPLACES the runtime's default terminate, so this has to exit
+	// itself. Without the exit the process persists and then keeps running: a `timeout`-wrapped
+	// gateway outlives its budget and leaks, `docker stop` can only ever SIGKILL after the grace
+	// period, and the 3s persist tick overwrites the cleanShutdown flag this just wrote.
+	const shutdown = () => {
+		persistDelivery(true);
+		evieStop?.();
+		process.exit(0);
+	};
+	process.on("SIGTERM", shutdown);
+	process.on("SIGINT", shutdown);
 	// An uncaughtException can fire mid-mutation, so the in-memory store may be inconsistent right
 	// now. Do NOT flush it - that would overwrite the last good snapshot with crash-moment state.
 	// Just log and exit: the last quiescent persist-timer/SIGTERM snapshot is consistent, and the
@@ -736,9 +748,7 @@ export async function startGateway(): Promise<void> {
 			},
 		});
 
-		process.on("SIGTERM", () => {
-			evieClient?.stop();
-		});
+		evieStop = () => evieClient?.stop();
 	}
 
 	// Creds-less enrollment: when armed with a one-time nonce (setup.sh (Enroll gateway)), mint the
