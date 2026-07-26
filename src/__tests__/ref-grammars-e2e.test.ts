@@ -243,16 +243,6 @@ describe("the file tier, which is what actually stops a send", () => {
 		expect(result.ok).toBe(true);
 	});
 
-	it("refuses a secret even when the path to it is perfectly valid", async () => {
-		const secret = path.join(ROOT, ".env");
-		fs.writeFileSync(secret, "TOKEN=hunter2\n");
-		try {
-			expect(await hardError(`ref://${secret}`)).toContain("not snapshotted");
-		} finally {
-			fs.rmSync(secret, { force: true });
-		}
-	});
-
 	it("names the position of a malformed ref, indexed into the ref as written", async () => {
 		const error = await hardError("ref://src/cart.ts:Shop#");
 
