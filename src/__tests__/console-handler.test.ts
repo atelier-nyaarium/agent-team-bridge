@@ -2256,6 +2256,7 @@ describe("console terminal ops (peek / tmux_send)", () => {
 				if (opts.relayFails) return { ok: false, error: "launch failed" };
 				if (op.kind === "peek")
 					return relayPeek ? relayPeek() : { ok: true, result: { kind: "tmux", ansi: "SCREEN", hash: "h1" } };
+				if (op.kind === "listDirs") return { ok: true, result: { entries: [".config", "projects"] } };
 				return { ok: true, result: { sent: true } };
 			},
 		});
@@ -2496,6 +2497,53 @@ describe("console terminal ops (peek / tmux_send)", () => {
 		expect((r1.result as { sessionLabel: string }).sessionLabel).toBe("app");
 		expect((r2.result as { sessionLabel: string }).sessionLabel).toBe("app-2");
 		expect((h.hostOps[1] as { workdirHint?: string }).workdirHint).toBe("app");
+	});
+
+	it("create_session with a picked workdir stores it on the record and the host op carries it over the label hint", async () => {
+		const store = new SessionStore();
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "host", displayLabel: "deep", workdir: "~/some/deep/dir" }, "cwp1"),
+		);
+		const res = reply.result as { id: string };
+		expect(store.getByTeam(`host.${res.id}`)?.workdirPath).toBe("~/some/deep/dir");
+		expect((h.hostOps[0] as { workdirHint?: string }).workdirHint).toBe("~/some/deep/dir");
+	});
+
+	it("create_session rejects a malformed workdir before any record or launch side effect", async () => {
+		const store = new SessionStore();
+		const h = makeTerminalHarness(undefined, undefined, { sessionStore: store });
+		const reply = await h.handler.handleFrame(
+			frame({ kind: "create_session", target: "host", displayLabel: "bad", workdir: "relative/dir" }, "cwp2"),
+		);
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("workdir");
+		expect(h.hostOps).toHaveLength(0);
+		expect(store.size).toBe(0);
+	});
+
+	it("list_dirs relays a listDirs host op and returns the entries", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "list_dirs", path: "~/" }, "ld1"));
+		expect(reply.ok).toBe(true);
+		expect(reply.result).toEqual({ entries: [".config", "projects"] });
+		expect(h.hostOps[0]).toEqual({ kind: "listDirs", path: "~/" });
+	});
+
+	it("list_dirs rejects a non-path shape at the gateway (no host round-trip)", async () => {
+		const h = makeTerminalHarness();
+		const reply = await h.handler.handleFrame(frame({ kind: "list_dirs", path: "not-rooted" }, "ld2"));
+		expect(reply.ok).toBe(false);
+		expect(reply.error).toContain("path");
+		expect(h.hostOps).toHaveLength(0);
+	});
+
+	it("list_dirs is a fresh read: a retried opId relays again (not idempotency-cached)", async () => {
+		const h = makeTerminalHarness();
+		const f = frame({ kind: "list_dirs", path: "/data" }, "ldsame");
+		await h.handler.handleFrame(f);
+		await h.handler.handleFrame(f);
+		expect(h.hostOps).toHaveLength(2);
 	});
 
 	it("create_session on a devcontainer target wakes it instead of relaying a raw createSession host op", async () => {

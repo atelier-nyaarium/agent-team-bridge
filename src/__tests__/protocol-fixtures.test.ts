@@ -6,6 +6,7 @@ import { SPOKEN_TIER_FIELDS } from "../shared/notice.js";
 import {
 	ConsoleCloseSessionResultSchema,
 	ConsoleCreateSessionResultSchema,
+	ConsoleListDirsResultSchema,
 	ConsoleListTeamsResultSchema,
 	ConsoleOpEnvelopeSchema,
 	ConsolePeekResultSchema,
@@ -45,6 +46,7 @@ const SCHEMAS: Record<string, z.ZodType> = {
 	ConsoleCreateSessionResult: ConsoleCreateSessionResultSchema,
 	ConsoleCloseSessionResult: ConsoleCloseSessionResultSchema,
 	ConsolePeekResult: ConsolePeekResultSchema,
+	ConsoleListDirsResult: ConsoleListDirsResultSchema,
 };
 
 interface ManifestEntry {

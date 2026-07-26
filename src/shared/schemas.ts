@@ -498,6 +498,11 @@ export const ConsoleOpSchema = z
 			target: z.string().min(1).max(128),
 			sessionName: z.string().min(1).max(64).optional(),
 			displayLabel: z.string().min(1).max(64).optional(),
+			// A picked host working directory (absolute or ~-rooted; the directory picker's choice).
+			// Host sessions only - a devcontainer's workdir stays fixed. Absent keeps the label-derived
+			// default. Gateway-validated against isWorkdirPath; the daemon re-guards and falls back to
+			// home when the path no longer exists.
+			workdir: z.string().min(1).max(512).optional(),
 		}),
 		// Drive a session through the plugin update + MCP reconnect sequence. `target` is the
 		// gateway-qualified session to reload; the host runs the script detached. Idempotent per opId.
@@ -526,6 +531,13 @@ export const ConsoleOpSchema = z
 			kind: z.literal("rename_session"),
 			target: z.string().min(1).max(128),
 			sessionLabel: z.string().min(1).max(64),
+		}),
+		// List the immediate subdirectories of one host directory, for the create-session directory
+		// picker's type-ahead. Host filesystem only (a devcontainer session's workdir is fixed).
+		// Read-only, runs fresh (never opId-cached). The path must be absolute or ~-rooted.
+		z.object({
+			kind: z.literal("list_dirs"),
+			path: z.string().min(1).max(512),
 		}),
 		// Cross-Domain listening-mode handshake (cross-domain-federation.md). These ops drive
 		// the mutual pairing that links two Gateways owned by different owners. The owner root
@@ -944,6 +956,17 @@ export const ConsoleRenameSessionResultSchema = z
 	})
 	.meta({ id: "ConsoleRenameSessionResult" });
 
+export const ConsoleListDirsResultSchema = z
+	.object({
+		// Immediate subdirectory names (dirs and dir symlinks only), sorted. Empty for a missing or
+		// unreadable path - an autocomplete has no use for the reason.
+		entries: z.array(z.string()),
+		// True when the daemon's wire sanity bound cut the listing (never a UX cap; the console
+		// filters locally, so a hit only means the fragment filter may be incomplete).
+		truncated: z.boolean().optional(),
+	})
+	.meta({ id: "ConsoleListDirsResult" });
+
 ////////////////////////////////
 //  Cross-Domain handshake op results (gateway -> console)
 //
@@ -1101,6 +1124,7 @@ export const ConsoleOpResultSchema = z.union([
 	ConsoleForgetResultSchema,
 	ConsoleCloseSessionResultSchema,
 	ConsoleRenameSessionResultSchema,
+	ConsoleListDirsResultSchema,
 	CrossDomainListenResultSchema,
 	CrossDomainRequestResultSchema,
 	CrossDomainConfirmResultSchema,

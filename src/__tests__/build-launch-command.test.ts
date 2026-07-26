@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildLaunchCommand, resolveHostWorkdir, resolveWatchTarget } from "../mcp/devcontainer/hostDaemon.js";
+import {
+	buildLaunchCommand,
+	listHostDirs,
+	resolveHostWorkdir,
+	resolveWatchTarget,
+} from "../mcp/devcontainer/hostDaemon.js";
 
 const dc = { kind: "devcontainer" as const, name: "recipe-app", sessionName: "scratch" };
 
@@ -84,6 +89,68 @@ describe("resolveHostWorkdir", () => {
 		expect(resolveHostWorkdir("..", [base], home)).toBe(home);
 		expect(resolveHostWorkdir("../myproj", [base], home)).toBe(home);
 		expect(resolveHostWorkdir("sub/dir", [base], home)).toBe(home);
+	});
+
+	it("uses a picked absolute path verbatim when it is a real directory, else home", () => {
+		const base = fs.mkdtempSync(path.join(os.tmpdir(), "hostwd-"));
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "home-"));
+		const real = path.join(base, "some", "deep", "dir");
+		fs.mkdirSync(real, { recursive: true });
+		expect(resolveHostWorkdir(real, [base], home)).toBe(real);
+		expect(resolveHostWorkdir(path.join(base, "gone"), [base], home)).toBe(home);
+	});
+
+	it("expands a ~-rooted picked path against home; bare ~ is home itself", () => {
+		const base = fs.mkdtempSync(path.join(os.tmpdir(), "hostwd-"));
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "home-"));
+		fs.mkdirSync(path.join(home, "Downloads"));
+		expect(resolveHostWorkdir("~/Downloads", [base], home)).toBe(path.join(home, "Downloads"));
+		expect(resolveHostWorkdir("~", [base], home)).toBe(home);
+		expect(resolveHostWorkdir("~/absent", [base], home)).toBe(home);
+	});
+
+	it("drops a picked path bearing a launch-breakout character to home, even if the dir exists", () => {
+		const base = fs.mkdtempSync(path.join(os.tmpdir(), "hostwd-"));
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "home-"));
+		const quoted = path.join(base, "it's");
+		fs.mkdirSync(quoted);
+		expect(resolveHostWorkdir(quoted, [base], home)).toBe(home);
+		expect(resolveHostWorkdir(`${base}/a\`b`, [base], home)).toBe(home);
+		expect(resolveHostWorkdir(`${base}/a$b`, [base], home)).toBe(home);
+	});
+});
+
+describe("listHostDirs", () => {
+	it("lists immediate subdirectories only (no files), sorted case-insensitively", () => {
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "lshome-"));
+		fs.mkdirSync(path.join(home, "beta"));
+		fs.mkdirSync(path.join(home, "Alpha"));
+		fs.writeFileSync(path.join(home, "notes.txt"), "x");
+		expect(listHostDirs(home, home)).toEqual({ entries: ["Alpha", "beta"] });
+	});
+
+	it("expands ~/ against home and includes dot dirs (the console handles their placement)", () => {
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "lshome-"));
+		fs.mkdirSync(path.join(home, "sub"));
+		fs.mkdirSync(path.join(home, "sub", ".config"));
+		fs.mkdirSync(path.join(home, "sub", "projects"));
+		expect(listHostDirs("~/sub", home)).toEqual({ entries: [".config", "projects"] });
+	});
+
+	it("follows a symlink to a directory but skips one to a file", () => {
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "lshome-"));
+		fs.mkdirSync(path.join(home, "real"));
+		fs.writeFileSync(path.join(home, "file.txt"), "x");
+		fs.symlinkSync(path.join(home, "real"), path.join(home, "dirlink"));
+		fs.symlinkSync(path.join(home, "file.txt"), path.join(home, "filelink"));
+		fs.symlinkSync(path.join(home, "nowhere"), path.join(home, "dangling"));
+		expect(listHostDirs(home, home)).toEqual({ entries: ["dirlink", "real"] });
+	});
+
+	it("returns empty for a missing path or a non-path shape rather than erroring", () => {
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), "lshome-"));
+		expect(listHostDirs(path.join(home, "gone"), home)).toEqual({ entries: [] });
+		expect(listHostDirs("not-a-path", home)).toEqual({ entries: [] });
 	});
 });
 

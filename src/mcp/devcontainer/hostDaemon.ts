@@ -206,19 +206,42 @@ function findProjectPath(team: string): string {
 	return path.join(projectDirs[0], team);
 }
 
-/** Working directory for a host session: the first `<projectDir>/<hint>` that is a real directory
- * (a plain dir, unlike findProjectPath it does not require a .devcontainer), else home. The hint is
- * the record's human label (never the opaque session id, which has no matching project dir), so a
- * session created as "myproject" opens in ~/projects/myproject. A missing hint, or one that is not a
- * single path segment (a `/` or `\`, or `.`/`..`), lands in home rather than escaping the project
- * roots - belt and suspenders over the store's label sanitization. dirs/home are injectable for
- * tests. */
+/** Expand a ~-rooted path against home; an absolute path passes through. Null for any other
+ * shape, so callers cannot accidentally treat a label as a path. */
+function expandWorkdirPath(value: string, home: string): string | null {
+	if (value === "~") return home;
+	if (value.startsWith("~/")) return path.join(home, value.slice(2));
+	return value.startsWith("/") ? value : null;
+}
+
+/** Working directory for a host session. Two forms, distinguished by shape (a label can never
+ * contain a separator, see sanitizeLabel):
+ *  - a console-picked path (absolute or ~-rooted): used verbatim when it is a real directory. The
+ *    quote/backtick/$ guard mirrors buildLaunchCommand's own, so a path that would be dropped
+ *    there falls back here already.
+ *  - a legacy label hint: the first `<projectDir>/<hint>` that is a real directory (a plain dir,
+ *    unlike findProjectPath it does not require a .devcontainer). The hint is the record's human
+ *    label (never the opaque session id), so a session created as "myproject" opens in
+ *    ~/projects/myproject.
+ * Anything else (missing, deleted dir, a `\`, `.`/`..`) lands in home. dirs/home are injectable
+ * for tests. */
 export function resolveHostWorkdir(
 	hint: string | undefined,
 	dirs: string[] = projectDirs,
 	home: string = HOME,
 ): string {
-	if (!hint || hint === "." || hint === ".." || hint.includes("/") || hint.includes("\\")) return home;
+	if (!hint) return home;
+	const picked = expandWorkdirPath(hint, home);
+	if (picked != null) {
+		if (/['"`$\\]/.test(picked)) return home;
+		try {
+			if (fs.statSync(picked).isDirectory()) return picked;
+		} catch {
+			// deleted or unreadable since it was picked
+		}
+		return home;
+	}
+	if (hint === "." || hint === ".." || hint.includes("/") || hint.includes("\\")) return home;
 	for (const dir of dirs) {
 		const resolved = path.isAbsolute(dir) ? dir : path.join(home, dir);
 		const candidate = path.join(resolved, hint);
@@ -229,6 +252,40 @@ export function resolveHostWorkdir(
 		}
 	}
 	return home;
+}
+
+// The wire sanity bound on one listing, far above any real directory. Never a UX cap: the console
+// filters locally against whatever arrives, and `truncated` tells it the filter may be incomplete.
+const MAX_DIR_ENTRIES = 5000;
+
+/** The listDirs host op: immediate subdirectories of one host directory (dirs and dir symlinks),
+ * sorted case-insensitively. Missing/unreadable paths and non-path shapes return empty rather than
+ * erroring - this feeds an autocomplete, which has no use for the reason. home injectable for
+ * tests. */
+export function listHostDirs(rawPath: string, home: string = HOME): { entries: string[]; truncated?: boolean } {
+	const resolved = expandWorkdirPath(rawPath, home);
+	if (resolved == null) return { entries: [] };
+	let dirents: fs.Dirent[];
+	try {
+		dirents = fs.readdirSync(resolved, { withFileTypes: true });
+	} catch {
+		return { entries: [] };
+	}
+	const entries: string[] = [];
+	for (const d of dirents) {
+		let isDir = d.isDirectory();
+		if (!isDir && d.isSymbolicLink()) {
+			try {
+				isDir = fs.statSync(path.join(resolved, d.name)).isDirectory();
+			} catch {
+				// dangling symlink
+			}
+		}
+		if (isDir) entries.push(d.name);
+	}
+	entries.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b));
+	if (entries.length > MAX_DIR_ENTRIES) return { entries: entries.slice(0, MAX_DIR_ENTRIES), truncated: true };
+	return { entries };
 }
 
 async function handleWake(msg: WakeMessage): Promise<void> {
@@ -413,6 +470,7 @@ const hostOpRunner = createHostOpRunner({
 		spawnReloadPlugins(target);
 	},
 	killSession,
+	listDirs: async (p) => listHostDirs(p),
 });
 
 ////////////////////////////////

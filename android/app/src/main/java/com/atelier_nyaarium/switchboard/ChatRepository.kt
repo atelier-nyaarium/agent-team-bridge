@@ -914,6 +914,10 @@ class ChatRepository(
 	// Declared before _state so loadPersistedThreads/Labels/ReadAnchors read them in order. Kotlin
 	// initializes fields in declaration order.
 	@Volatile private var localGatewayId: String = store.loadGatewayId()
+
+	// Canned directory listings for the create dialog's picker, installed only by seedSandbox
+	// (emulator build). Null on every real device, so listDirs always asks the gateway there.
+	@Volatile private var sandboxDirs: Map<String, List<String>>? = null
 	private val loadedThreadsAtStartup: Map<String, List<Message>> = loadPersistedThreads()
 	private val loadedReadAnchorsAtStartup: Map<String, ReadAnchor> = loadPersistedReadAnchors(loadedThreadsAtStartup)
 
@@ -2962,7 +2966,7 @@ class ChatRepository(
 	 * label) still pending from an earlier, unresolved call is a silent no-op (see pendingSpawns)
 	 * rather than a second, ambiguous create. Runs on the caller's scope (the Activity's), so a tap
 	 * always fires even before the poll loop's scope exists. */
-	suspend fun spawnSession(project: String, label: String) = coroutineScope {
+	suspend fun spawnSession(project: String, label: String, workdir: String? = null) = coroutineScope {
 		val key = project to label
 		// A synchronous check before any suspension point - CreateSessionDialog's own disabled-while-pending
 		// state is the primary guard, but it is a Composable snapshot (recomposes asynchronously), not a
@@ -2978,7 +2982,9 @@ class ChatRepository(
 			// The gateway's mint/adopt bumps the presence plane synchronously with the create, so the
 			// just-adopted record's tile shows on this device's own NEXT poll with no manual nudge -
 			// unlike the pre-plane teams() pull, a fresh presence snapshot needs no explicit trigger.
-			runCatchingCancellable { withContext(Dispatchers.IO) { client().createSession(project, displayLabel = label, opId = opId) } }
+			runCatchingCancellable {
+				withContext(Dispatchers.IO) { client().createSession(project, displayLabel = label, workdir = workdir, opId = opId) }
+			}
 				.onSuccess { result ->
 					recentSpawnOpIds.remove(key)
 					_state.update {
@@ -3010,6 +3016,15 @@ class ChatRepository(
 	/** Send text (submitted with Enter) or a named control key to an agent's tmux pane. */
 	suspend fun tmuxSend(team: String, text: String? = null, key: String? = null, submit: Boolean = true) =
 		withContext(Dispatchers.IO) { client().tmuxSend(team, text, key, submit) }
+
+	/** The directory picker's type-ahead read: subdirectories of one host dir. Failures collapse to
+	 * an empty list - the picker just shows no suggestions. */
+	suspend fun listDirs(path: String): List<String> = withContext(Dispatchers.IO) {
+		// Canned listings exist only when seedSandbox installed them (emulator build), keeping the
+		// picker inspectable with no gateway behind it.
+		sandboxDirs?.let { return@withContext it[path].orEmpty() }
+		runCatchingCancellable { client().listDirs(path).entries }.getOrDefault(emptyList())
+	}
 
 	val terminalRefreshMs: Long get() = store.terminalRefreshMs
 
@@ -4160,8 +4175,13 @@ class ChatRepository(
 	 * refactor away from being set; one that checks its own build type stays inert even if something
 	 * wires it up by mistake.
 	 */
-	fun seedSandbox(teams: List<Team>, threads: Map<String, List<Message>>) {
+	fun seedSandbox(teams: List<Team>, threads: Map<String, List<Message>>, dirs: Map<String, List<String>> = emptyMap()) {
 		if (BuildConfig.BUILD_TYPE != "emulator") return
+		// The Create button and the local/peer board split key off localGatewayId, which a
+		// gatewayless sandbox never learns from a register. Adopt the first fixture's gateway
+		// segment so the seeded board renders as this device's own (Create button included).
+		teams.firstOrNull()?.name?.split(".")?.getOrNull(1)?.let { localGatewayId = it }
+		sandboxDirs = dirs
 		_state.update { s ->
 			s.copy(
 				teams = teams,
@@ -4172,6 +4192,7 @@ class ChatRepository(
 				provisioned = true,
 				status = "",
 				error = null,
+				localGatewayId = localGatewayId,
 			)
 		}
 	}

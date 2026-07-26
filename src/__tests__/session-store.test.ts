@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SessionStore, sanitizeLabel } from "../shared/session-store.js";
+import { SessionStore, sanitizeLabel, sanitizeWorkdirPath } from "../shared/session-store.js";
 
 // Deterministic ids for clash tests: yields the scripted values, then unique fillers.
 function scriptedIds(...ids: string[]) {
@@ -342,6 +342,41 @@ describe("SessionStore labels", () => {
 		const bare = store.mint({ spawn: "host", sessionLabel: "solo" });
 		expect(bare.workdirHint).toBeUndefined();
 		expect(store.hostWorkdirHint(bare)).toBe("solo"); // no hint -> current label
+	});
+
+	it("a picked workdirPath wins hostWorkdirHint over the label hint and survives a restore", () => {
+		const store = new SessionStore({ idGen: scriptedIds("id1") });
+		const rec = store.mint({ spawn: "host", sessionLabel: "app", workdirHint: "app", workdirPath: "~/deep/dir" });
+		expect(store.hostWorkdirHint(rec)).toBe("~/deep/dir");
+
+		const next = new SessionStore();
+		next.restore(store.snapshot());
+		const loaded = next.getByTeam("host.id1");
+		expect(loaded?.workdirPath).toBe("~/deep/dir");
+		expect(next.hostWorkdirHint(loaded as NonNullable<typeof loaded>)).toBe("~/deep/dir");
+	});
+
+	it("sanitizeWorkdirPath accepts absolute and ~-rooted paths only, rejecting breakout characters", () => {
+		expect(sanitizeWorkdirPath("/data/media")).toBe("/data/media");
+		expect(sanitizeWorkdirPath("  ~/projects/app  ")).toBe("~/projects/app");
+		expect(sanitizeWorkdirPath("~")).toBe("~");
+		expect(sanitizeWorkdirPath("relative/dir")).toBeNull();
+		expect(sanitizeWorkdirPath("~elsewhere")).toBeNull();
+		expect(sanitizeWorkdirPath("/it's")).toBeNull();
+		expect(sanitizeWorkdirPath('/a"b')).toBeNull();
+		expect(sanitizeWorkdirPath("/a`b")).toBeNull();
+		expect(sanitizeWorkdirPath("/a$b")).toBeNull();
+		expect(sanitizeWorkdirPath("/a\\b")).toBeNull();
+		expect(sanitizeWorkdirPath(`/${"x".repeat(600)}`)).toBeNull(); // over-long names a different dir if sliced
+		expect(sanitizeWorkdirPath("")).toBeNull();
+	});
+
+	it("restore drops a hand-edited workdirPath that fails the path rules", () => {
+		const store = new SessionStore();
+		store.restore({
+			"host.abc123": { id: "abc123", sessionLabel: "app", spawn: "host", workdirPath: "$(pwn)", lastSeen: 1 },
+		});
+		expect(store.getByTeam("host.abc123")?.workdirPath).toBeUndefined();
 	});
 });
 

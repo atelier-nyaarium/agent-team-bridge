@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type {
+	ConsoleListDirsResultSchema,
 	ConsoleListTeamsResultSchema,
 	ConsoleOpEnvelopeSchema,
 	ConsoleOpResultSchema,
@@ -120,6 +121,7 @@ export type ConsolePollResult = z.infer<typeof ConsolePollResultSchema>;
 export type ConsoleReportReadResult = z.infer<typeof ConsoleReportReadResultSchema>;
 export type ConsolePeekResult = z.infer<typeof ConsolePeekResultSchema>;
 export type ConsoleTmuxSendResult = z.infer<typeof ConsoleTmuxSendResultSchema>;
+export type ConsoleListDirsResult = z.infer<typeof ConsoleListDirsResultSchema>;
 export type CrossDomainListenResult = z.infer<typeof CrossDomainListenResultSchema>;
 export type CrossDomainRequestResult = z.infer<typeof CrossDomainRequestResultSchema>;
 export type CrossDomainConfirmResult = z.infer<typeof CrossDomainConfirmResultSchema>;

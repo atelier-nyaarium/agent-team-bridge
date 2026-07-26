@@ -18,6 +18,7 @@ import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleCreateSessionResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleListDirsResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
 import com.atelier_nyaarium.switchboard.proto.ConsolePeekResult
@@ -781,22 +782,31 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 
 	/** Spawn a new session in a spawn-point project. A `displayLabel` lets the gateway mint the id
 	 * (the minted id is the tmux name) and returns it; a `sessionName` is adopted as the id (the
-	 * old form, against a gateway that does not mint). Idempotent per opId (reattaches if it already
-	 * exists). Returns the gateway's reply; `id` is absent from an older gateway. */
+	 * old form, against a gateway that does not mint). `workdir` is a picked host working directory
+	 * (absolute or ~-rooted; host target only) - absent keeps the label-derived default. Idempotent
+	 * per opId (reattaches if it already exists). Returns the gateway's reply; `id` is absent from
+	 * an older gateway. */
 	suspend fun createSession(
 		target: String,
 		sessionName: String? = null,
 		displayLabel: String? = null,
+		workdir: String? = null,
 		opId: String = UUID.randomUUID().toString(),
 	): ConsoleCreateSessionResult =
 		resultOf(
 			relay(
-				ConsoleOp.CreateSession(target = target, sessionName = sessionName, displayLabel = displayLabel),
+				ConsoleOp.CreateSession(target = target, sessionName = sessionName, displayLabel = displayLabel, workdir = workdir),
 				opId,
 				targetGateway = targetGatewayOf(target),
 			),
 			"create_session",
 		)
+
+	/** List the immediate subdirectories of one host directory (the create-session directory
+	 * picker's type-ahead). Read-only, fresh each call, like peek. The path must be absolute or
+	 * ~-rooted; an unreadable or missing one returns empty entries rather than an error. */
+	suspend fun listDirs(path: String): ConsoleListDirsResult =
+		resultOf(relay(ConsoleOp.ListDirs(path = path), targetGateway = targetGatewayOf("host")), "list_dirs")
 
 	/** Rename a session: set the gateway-authoritative sessionLabel on its record. Idempotent per
 	 * opId. Returns the label the gateway actually applied (after its sanitize + per-spawn dedup). */

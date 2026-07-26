@@ -3,6 +3,7 @@ package com.atelier_nyaarium.switchboard
 import com.atelier_nyaarium.switchboard.proto.MailboxEntry
 import com.atelier_nyaarium.switchboard.proto.ConsoleCloseSessionResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleCreateSessionResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleListDirsResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleListTeamsResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
@@ -52,6 +53,7 @@ class ProtocolFixturesTest {
 			"ConsoleCreateSessionResult" -> json.decodeFromString<ConsoleCreateSessionResult>(body)
 			"ConsoleCloseSessionResult" -> json.decodeFromString<ConsoleCloseSessionResult>(body)
 			"ConsolePeekResult" -> json.decodeFromString<ConsolePeekResult>(body)
+			"ConsoleListDirsResult" -> json.decodeFromString<ConsoleListDirsResult>(body)
 			else -> throw AssertionError("unknown manifest schema: $schema")
 		}
 	}
@@ -83,6 +85,8 @@ class ProtocolFixturesTest {
 			"op-envelope-respond.json" to ConsoleOp.Respond::class,
 			"op-envelope-poll.json" to ConsoleOp.Poll::class,
 			"op-envelope-create-session-v2.json" to ConsoleOp.CreateSession::class,
+			"op-envelope-create-session-workdir.json" to ConsoleOp.CreateSession::class,
+			"op-envelope-list-dirs.json" to ConsoleOp.ListDirs::class,
 			"op-envelope-rename-session.json" to ConsoleOp.RenameSession::class,
 			"op-envelope-close-session.json" to ConsoleOp.CloseSession::class,
 		)
@@ -164,6 +168,18 @@ class ProtocolFixturesTest {
 	fun closeSessionResultDecodes() {
 		val result = json.decodeFromString<ConsoleCloseSessionResult>(fixture("close-session-result.json"))
 		assertEquals(true, result.closed)
+	}
+
+	@Test
+	fun createSessionWorkdirAndListDirsCarryTheirPaths() {
+		val create = json.decodeFromString<ConsoleOpEnvelope>(fixture("op-envelope-create-session-workdir.json")).op
+		assertEquals("~/Downloads/media", (create as ConsoleOp.CreateSession).workdir)
+
+		val list = json.decodeFromString<ConsoleOpEnvelope>(fixture("op-envelope-list-dirs.json")).op
+		assertEquals("~/Downloads", (list as ConsoleOp.ListDirs).path)
+
+		val result = json.decodeFromString<ConsoleListDirsResult>(fixture("list-dirs-result.json"))
+		assertEquals(listOf(".config", "Downloads", "projects"), result.entries)
 	}
 
 	@Test

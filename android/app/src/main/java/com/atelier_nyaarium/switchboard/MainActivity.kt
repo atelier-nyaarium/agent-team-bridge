@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -70,6 +71,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.Add
@@ -135,7 +137,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -740,7 +745,8 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				// synchronously and bumps the presence plane with it, so its own tile appears via this
 				// device's own next poll (spinner while it boots) with no separate refresh. Tapping the
 				// tile opens its terminal view. A failure surfaces as a Snackbar.
-				onSpawn = { project, label -> scope.launch { repo.spawnSession(project, label) } },
+				onSpawn = { project, label, workdir -> scope.launch { repo.spawnSession(project, label, workdir) } },
+				onListDirs = { path -> repo.listDirs(path) },
 				// Launch the enrollee compare from the empty board when one is still owed (the device
 				// rooted an enroll invite but has not completed the in-person trust step).
 				onVerifyEnroll = (if (state.provisioned) repo.pendingEnrolleeCeremony() else null)
@@ -1202,7 +1208,8 @@ fun SessionsScreen(
 	onOpen: (String) -> Unit,
 	onRename: (String, String) -> Unit,
 	onForget: (String) -> Unit,
-	onSpawn: (String, String) -> Unit,
+	onSpawn: (String, String, String?) -> Unit,
+	onListDirs: suspend (String) -> List<String> = { emptyList() },
 	onVerifyEnroll: (() -> Unit)? = null,
 	snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
@@ -1258,8 +1265,9 @@ fun SessionsScreen(
 		CreateSessionDialog(
 			projects = projects,
 			pendingSpawns = state.pendingSpawns,
-			onSpawn = { project, session ->
-				onSpawn(project, session)
+			onListDirs = onListDirs,
+			onSpawn = { project, session, workdir ->
+				onSpawn(project, session, workdir)
 				createDialogProjects = null
 			},
 			onDismiss = { createDialogProjects = null },
@@ -3823,20 +3831,27 @@ fun RenameDialog(team: String, current: String, onSave: (String) -> Unit, onDism
  * is free-form: the gateway mints the session id, so the field accepts any text and the spawn button
  * is enabled once it is non-blank. `pendingSpawns` is the full (project, label) set already mid-create
  * (see ChatState.pendingSpawns); the dialog derives its own project's pending labels off
- * `selectedProject`, so the duplicate-submit guard always matches whichever project is selected. */
+ * `selectedProject`, so the duplicate-submit guard always matches whichever project is selected.
+ * A host target additionally offers a Directory picker (see DirectoryField); blank means the
+ * label-derived default workdir, and a devcontainer never sends one (its workdir is fixed). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreateSessionDialog(
 	projects: List<String>,
 	pendingSpawns: Set<Pair<String, String>>,
-	onSpawn: (String, String) -> Unit,
+	onListDirs: suspend (String) -> List<String>,
+	onSpawn: (String, String, String?) -> Unit,
 	onDismiss: () -> Unit,
 ) {
 	var selectedProject by remember { mutableStateOf("host") }
 	var projectMenuOpen by remember { mutableStateOf(false) }
 	// A free-form label: the gateway mints the session id, so the label is not slug-constrained.
 	var name by remember { mutableStateOf("") }
+	var dir by remember { mutableStateOf(TextFieldValue("")) }
 	val trimmed = name.trim()
+	val dirText = dir.text.trim()
+	// Blank is the default workdir; anything else must be rooted before Spawn will send it.
+	val dirOk = dirText.isEmpty() || isRootedWorkdir(dirText)
 	val pendingLabels = pendingSpawns.filter { it.first == selectedProject }.mapTo(HashSet()) { it.second }
 	val isPending = trimmed.isNotEmpty() && trimmed in pendingLabels
 	AlertDialog(
@@ -3878,6 +3893,10 @@ fun CreateSessionDialog(
 					singleLine = true,
 					modifier = Modifier.fillMaxWidth(),
 				)
+				if (selectedProject == "host") {
+					Spacer(Modifier.height(12.dp))
+					DirectoryField(value = dir, onValueChange = { dir = it }, onListDirs = onListDirs, isError = !dirOk)
+				}
 				if (isPending) {
 					Text(
 						"Already creating \"$trimmed\" - wait for it to finish or use a different name.",
@@ -3888,12 +3907,140 @@ fun CreateSessionDialog(
 		},
 		confirmButton = {
 			TextButton(
-				enabled = trimmed.isNotEmpty() && !isPending,
-				onClick = hapticClick { onSpawn(selectedProject, trimmed) },
+				enabled = trimmed.isNotEmpty() && !isPending && dirOk,
+				onClick = hapticClick {
+					val workdir = dirText.takeIf { selectedProject == "host" && it.isNotEmpty() }
+					onSpawn(selectedProject, trimmed, workdir)
+				},
 			) { Text("Spawn") }
 		},
 		dismissButton = { TextButton(onClick = hapticClick(onDismiss)) { Text("Cancel") } },
 	)
+}
+
+private const val WORKDIR_MAX_CHARS = 512
+
+/** Whether a typed workdir is a shape the gateway will accept (absolute or ~-rooted). A bare
+ * fragment is what a half-finished type-ahead leaves behind, so the dialog blocks it here rather
+ * than letting the gateway reject the whole create. Mirrors host-op.ts isWorkdirPath's shape rule;
+ * the character rules stay server-side, where they are enforced. */
+private fun isRootedWorkdir(text: String): Boolean =
+	text.startsWith("/") || text == "~" || text.startsWith("~/")
+
+/** The host working-directory picker: a type-ahead path box. The field splits at its last "/" -
+ * the prefix names the directory to list (fetched once per directory and cached for the dialog's
+ * life), the fragment after it filters that listing locally, so typing within a segment costs no
+ * round-trip and only crossing a "/" boundary does. Blank shows "(default)" (the label-derived
+ * workdir); first focus fills "~/" with the cursor after the slash and lists home immediately.
+ * Every match renders (no cutoff) in a drag-scrollable box; dot dirs sort to the bottom, greyed
+ * but still selectable. Tapping a row completes it plus "/", descending a level. */
+@Composable
+fun DirectoryField(
+	value: TextFieldValue,
+	onValueChange: (TextFieldValue) -> Unit,
+	onListDirs: suspend (String) -> List<String>,
+	isError: Boolean = false,
+) {
+	// Per-directory listing cache, keyed by the listed prefix. Missing = not fetched yet; the
+	// LaunchedEffect below fills it once per directory.
+	val cache = remember { mutableStateMapOf<String, List<String>>() }
+	// Suggestions appear once the field is engaged, never under an untouched one: a dialog opened
+	// just to name a session should not carry a folder list it never asked for. Text alone also
+	// qualifies, so descending (which can move focus to the tapped row) never hides the list
+	// mid-navigation.
+	var focused by remember { mutableStateOf(false) }
+	val text = value.text
+	val cut = text.lastIndexOf('/')
+	// With no separator typed yet, home is the implied directory and the whole text is its filter.
+	// That covers a field cleared back to default (still focused, so the focus prefill cannot fire
+	// again) and a bare fragment, neither of which would otherwise have anything to list.
+	val parent = if (cut >= 0) text.substring(0, cut + 1) else "~/"
+	val fragment = if (cut >= 0) text.substring(cut + 1) else text
+	// Only a rooted prefix is listable; a relative one ("foo/") lists nothing.
+	val listable = parent.startsWith("/") || parent.startsWith("~/")
+	LaunchedEffect(parent, listable, focused) {
+		if (listable && (focused || text.isNotEmpty()) && parent !in cache) cache[parent] = onListDirs(parent)
+	}
+	val engaged = focused || text.isNotEmpty()
+	val matches = (if (listable && engaged) cache[parent].orEmpty() else emptyList())
+		.filter { it.startsWith(fragment, ignoreCase = true) }
+	// Dot dirs to the bottom, greyed below, but present and tappable (a .config dive is legitimate).
+	val (dotted, plain) = matches.partition { it.startsWith(".") }
+	val suggestions = plain + dotted
+
+	Column {
+		OutlinedTextField(
+			value = value,
+			onValueChange = { if (it.text.length <= WORKDIR_MAX_CHARS) onValueChange(it) },
+			label = { Text("Directory") },
+			placeholder = { Text("(default)") },
+			singleLine = true,
+			isError = isError,
+			supportingText = if (isError) ({ Text("Pick a folder below, or start with ~/ or /") }) else null,
+			trailingIcon = if (text.isEmpty()) null else ({
+				IconButton(onClick = hapticClick { onValueChange(TextFieldValue("")) }) {
+					Icon(Icons.Default.Close, contentDescription = "Reset to default")
+				}
+			}),
+			modifier = Modifier.fillMaxWidth().onFocusChanged { state ->
+				focused = state.isFocused
+				if (state.isFocused && text.isEmpty()) {
+					onValueChange(TextFieldValue("~/", selection = TextRange(2)))
+				}
+			},
+		)
+		if (suggestions.isNotEmpty()) {
+			Spacer(Modifier.height(6.dp))
+			// A contained, tonal surface so the list reads as a menu rather than as prose under the
+			// field. Each row carries a folder icon, a full-width touch target, and a trailing chevron
+			// (it descends a level rather than finishing the pick), which is what makes it look tappable.
+			Surface(
+				color = MaterialTheme.colorScheme.surfaceVariant,
+				shape = MaterialTheme.shapes.small,
+				modifier = Modifier.fillMaxWidth(),
+			) {
+				LazyColumn(Modifier.heightIn(max = 280.dp)) {
+					items(suggestions, key = { it }) { entry ->
+						val hidden = entry.startsWith(".")
+						Row(
+							Modifier
+								.fillMaxWidth()
+								.hapticClickable {
+									val next = "$parent$entry/"
+									onValueChange(TextFieldValue(next, selection = TextRange(next.length)))
+								}
+								.heightIn(min = 44.dp)
+								.padding(horizontal = 12.dp),
+							verticalAlignment = Alignment.CenterVertically,
+						) {
+							Icon(
+								Icons.Default.Folder,
+								contentDescription = null,
+								tint = if (hidden) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
+								modifier = Modifier.size(18.dp),
+							)
+							Spacer(Modifier.width(10.dp))
+							Text(
+								entry,
+								style = MaterialTheme.typography.bodyMedium,
+								color = if (hidden) MaterialTheme.colorScheme.onSurfaceVariant
+								else MaterialTheme.colorScheme.onSurface,
+								maxLines = 1,
+								overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+								modifier = Modifier.weight(1f),
+							)
+							Icon(
+								Icons.Default.ChevronRight,
+								contentDescription = null,
+								tint = MaterialTheme.colorScheme.onSurfaceVariant,
+								modifier = Modifier.size(18.dp),
+							)
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 /**
