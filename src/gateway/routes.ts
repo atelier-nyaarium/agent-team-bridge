@@ -211,6 +211,12 @@ const RespondBodySchema = z.object({
 // both sides together. Exported only so that test can read the real value.
 export const MAX_RESPONSE_FILE_BYTES = 500_000_000;
 
+// How long a send waits after waking a session before delivering: registration is instant, but
+// Claude Code's channel listener is not ready yet. Named (not inline) because it is one half of a
+// cross-module invariant - HANDSHAKE_REPUSH_DEDUPE_MS must stay above it, or the delivery below
+// re-pushes a handshake this very wake just minted. Pinned by a test; see websocket.ts.
+export const POST_WAKE_SETTLE_MS = 3_000;
+
 // A plugin-action payload is meant to carry a small, action-specific value (e.g. a filename), never
 // bytes - unlike files/attachments, it has no dedicated cap upstream and device-mailbox.ts's own
 // entryBytes() does not count it, so this is the only backstop against an oversized or pathologically
@@ -1148,7 +1154,7 @@ export function createRoutes({
 				}
 				// Claude Code needs time after MCP connect to initialize its channel listener.
 				// Registration happens instantly but channel notifications aren't ready yet.
-				await new Promise((r) => setTimeout(r, 3000));
+				await new Promise((r) => setTimeout(r, POST_WAKE_SETTLE_MS));
 				targetWs = resolveLiveIncarnation(registry, sessionStore, localName);
 			}
 		}
@@ -1238,7 +1244,9 @@ export function createRoutes({
 					// message, so the agent answers the handshake first and its reply never burns a turn
 					// on the reply gate's 409. Delivery itself is never gated on confirmation - the nudge
 					// rides alongside. repushHandshake's own dedupe window keeps a freshly-minted
-					// handshake (a just-woken session) from being duplicated here.
+					// handshake (a just-woken session) from being duplicated here - which requires that
+					// window to stay well ABOVE the post-wake settle delay below, since a wake registers
+					// the session (minting the handshake) and then lands here one settle later.
 					if (!ws.data.handshakeConfirmed && ws.data.teamName) {
 						repushHandshake?.(ws.data.teamName, ws.data.subId);
 					}

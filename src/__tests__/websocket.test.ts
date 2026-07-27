@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { POST_WAKE_SETTLE_MS } from "../gateway/routes.js";
 import { createSessionAuthority, presentedByRegister } from "../gateway/sessionAuthority.js";
 import { WakeCoordinator } from "../gateway/wake.js";
 import {
 	type ConversationRegistry,
 	createWebSocketHandlers,
+	HANDSHAKE_REPUSH_DEDUPE_MS,
 	resolveLiveIncarnation,
 	type TeamRegistry,
 	type WsData,
@@ -789,6 +791,15 @@ describe("handshake-established session records", () => {
 	});
 
 	describe("repushHandshake (recovery from a lost hs-* notification)", () => {
+		// A wake mints the handshake at register, then the send path waits POST_WAKE_SETTLE_MS and
+		// delivers - and that delivery re-pushes the handshake of any still-unconfirmed recipient. So
+		// the dedupe window has to outlast the settle, or every wake-then-deliver duplicates the
+		// handshake. These were both 3000ms once, which made the nudge land ~1ms after the window
+		// opened and duplicated it every single time, so the coupling is asserted rather than trusted.
+		it("dedupe window outlasts the post-wake settle delay, so a wake cannot duplicate its own handshake", () => {
+			expect(HANDSHAKE_REPUSH_DEDUPE_MS).toBeGreaterThan(POST_WAKE_SETTLE_MS);
+		});
+
 		// Fakes ONLY Date (repushHandshake's guards read Date.now()), leaving setInterval/clearInterval
 		// real so the outer describe's heartbeatInterval tracking/cleanup is unaffected.
 		afterEach(() => {
@@ -798,6 +809,12 @@ describe("handshake-established session records", () => {
 		/** Move the faked clock forward by ms. */
 		function advance(ms: number): void {
 			vi.setSystemTime(Date.now() + ms);
+		}
+
+		/** Step just past the dedupe window. Derived from the constant, never a literal, so changing
+		 * the window cannot silently turn these assertions into tests of the wrong thing. */
+		function pastWindow(): void {
+			advance(HANDSHAKE_REPUSH_DEDUPE_MS + 1);
 		}
 
 		it("throttles a call within the dedupe window of the last push", () => {
@@ -817,7 +834,7 @@ describe("handshake-established session records", () => {
 			register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
 			const first = handshakeIdFrom(ws);
 
-			advance(3001);
+			pastWindow();
 			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed");
 			expect(handshakePushCount(ws)).toBe(2);
 			expect(handshakeIdFrom(ws)).toBe(first);
@@ -837,9 +854,9 @@ describe("handshake-established session records", () => {
 			register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
 			const first = handshakeIdFrom(ws);
 
-			advance(3001);
+			pastWindow();
 			handlers.repushHandshake("recipe-app.abc123", "s1");
-			advance(3001);
+			pastWindow();
 			handlers.repushHandshake("recipe-app.abc123", "s1");
 			expect(handshakeIdFrom(ws)).toBe(first);
 
@@ -857,12 +874,12 @@ describe("handshake-established session records", () => {
 			const first = handshakeIdFrom(ws);
 
 			for (let i = 0; i < 5; i++) {
-				advance(3001);
+				pastWindow();
 				expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed");
 			}
 			expect(handshakePushCount(ws)).toBe(6); // 1 mint + 5 repushes
 
-			advance(3001);
+			pastWindow();
 			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("capped");
 			expect(handshakePushCount(ws)).toBe(6); // no further push sent
 
@@ -888,7 +905,7 @@ describe("handshake-established session records", () => {
 			register(handlers, ws, { team: "recipe-app.abc123", subId: "s1" });
 			(ws as { readyState: number }).readyState = 3;
 
-			advance(3001);
+			pastWindow();
 			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("socket-gone");
 			expect(handshakePushCount(ws)).toBe(1);
 		});
@@ -902,7 +919,7 @@ describe("handshake-established session records", () => {
 				throw new Error("boom");
 			});
 
-			advance(3001);
+			pastWindow();
 			expect(() => handlers.repushHandshake("recipe-app.abc123", "s1")).not.toThrow();
 			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("socket-gone");
 		});
@@ -932,7 +949,7 @@ describe("handshake-established session records", () => {
 			register(handlers, ws2, { team: "recipe-app.abc123", subId: "s2" });
 			register(handlers, ws3, { team: "recipe-app.abc123", subId: "s3" });
 
-			advance(3001);
+			pastWindow();
 			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed");
 			expect(handlers.repushHandshake("recipe-app.abc123", "s2")).toBe("pushed");
 			expect(handlers.repushHandshake("recipe-app.abc123", "s3")).toBe("pushed");
@@ -946,15 +963,15 @@ describe("handshake-established session records", () => {
 			register(handlers, ws1, { team: "recipe-app.abc123", subId: "s1" });
 			register(handlers, ws2, { team: "recipe-app.abc123", subId: "s2" });
 
-			advance(3001);
+			pastWindow();
 			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("pushed"); // s1 attempt 1
 
 			advance(100);
 			expect(handlers.repushHandshake("recipe-app.abc123", "s2")).toBe("pushed"); // s2 attempt 1 (exempt)
 
-			// s1's OWN per-entry window (3000ms since its last push) has cleared, but the team-wide
-			// window (3000ms since s2's more recent push) has not - only the team guard explains this.
-			advance(2901);
+			// s1's OWN per-entry window has cleared, but the team-wide window (measured from s2's more
+			// recent push, 100ms later) has not - only the team guard explains this.
+			advance(HANDSHAKE_REPUSH_DEDUPE_MS - 99);
 			expect(handlers.repushHandshake("recipe-app.abc123", "s1")).toBe("throttled");
 
 			advance(100);

@@ -123,7 +123,14 @@ const REGISTER_WINDOW_MS = 60_000;
 // window exempts an entry's OWN first attempt: without that, several sub-sessions of one team
 // recovering at once (the exact scenario repushHandshake exists for) could starve each other
 // indefinitely queuing behind a shared window, rather than merely being rate-limited on repeats.
-const HANDSHAKE_REPUSH_DEDUPE_MS = 3_000;
+//
+// MUST stay comfortably above the send path's post-wake settle delay (routes.ts waits for the woken
+// session's channel listener before delivering, which re-pushes the handshake for an unconfirmed
+// recipient). At 3s the two were EQUAL, so the nudge landed about a millisecond after this window
+// opened and every wake-then-deliver duplicated the handshake by construction - the window
+// postponed the duplicate rather than preventing it. 30s also absorbs a slow `claude --resume`,
+// where registration lands well before the session can answer anything.
+export const HANDSHAKE_REPUSH_DEDUPE_MS = 30_000;
 
 // repushHandshake's total attempt cap. /respond is unauthenticated and conversationId is spoofable
 // (it rides verbatim in every session_id a caller has seen), so without a cap a peer that merely
