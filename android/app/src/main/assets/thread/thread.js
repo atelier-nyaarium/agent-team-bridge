@@ -700,7 +700,11 @@
 		// must never enter it, or a later reveal's union-merge (applyRegion) can place it ahead of
 		// the genuinely unread ids in walk order, letting the pointer consume the historical tail
 		// and clobber the real report with a stale one.
-		let pastBoundary = firstUnreadId === null || firstUnreadId === undefined;
+		// An absent boundary means CAUGHT UP, which is precisely the case where NO row belongs in
+		// the region. Seeding it true enrols the whole already-read history instead, and the pointer
+		// walk then parks a divider above the last row via placeDividerAtPointer's caught-up
+		// fallback - a "New messages" line on a thread with nothing unread, on every fresh rebuild.
+		let pastBoundary = false;
 		for (const m of messages) {
 			if (!pastBoundary && m.id === firstUnreadId) {
 				pastBoundary = true;

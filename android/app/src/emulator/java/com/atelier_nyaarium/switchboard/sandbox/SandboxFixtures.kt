@@ -69,6 +69,10 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 				text = "Filler row $i. Here to give the read pointer and the unread divider something to move through.",
 				at = now - (60_000L * (30 - i)),
 				id = id++,
+				// Inbound rows need real journal coordinates or countsUnread() is false for every row
+				// and the unread/divider machinery never engages at all here.
+				epoch = if (i % 3 == 0) 0L else SANDBOX_EPOCH,
+				seq = if (i % 3 == 0) 0L else i.toLong(),
 			)
 		}
 
@@ -79,6 +83,8 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			id = id++,
 			files = attach("sandbox-media", listOf(pngFixture(), textFixture())),
 			from = SESSION,
+			epoch = SANDBOX_EPOCH,
+			seq = 20,
 		)
 
 		rows += Message(
@@ -88,6 +94,8 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			id = id++,
 			files = attach("sandbox-refs", refArtifacts()),
 			from = SESSION,
+			epoch = SANDBOX_EPOCH,
+			seq = 21,
 		)
 
 		return rows
@@ -140,6 +148,10 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		/** domain.gateway.spawn.session, matching the real address grammar so nothing downstream has
 		 * to special-case it. */
 		const val SESSION = "local.sandbox.host.demo"
+
+		/** A stable non-zero mailbox epoch for the seeded rows: countsUnread() needs seq > 0, and
+		 * the anchor resolves by (epoch, seq) equality, so both must be real values here. */
+		const val SANDBOX_EPOCH = 7L
 
 		/**
 		 * The link destinations MUST match the keys in the committed manifest, or the tap declines and
