@@ -2,7 +2,9 @@ package com.atelier_nyaarium.switchboard.plugins.references
 
 import android.content.Context
 import com.atelier_nyaarium.switchboard.Attachments
+import com.atelier_nyaarium.switchboard.BuildConfig
 import com.atelier_nyaarium.switchboard.ChipDecoration
+import com.atelier_nyaarium.switchboard.DebugLog
 import com.atelier_nyaarium.switchboard.plugins.AccountWipeHandler
 import com.atelier_nyaarium.switchboard.plugins.AttachmentChipDecorator
 import com.atelier_nyaarium.switchboard.plugins.InboundMessageHandler
@@ -31,15 +33,24 @@ class ReferencesPlugin : PluginEntry {
 		// site that consumes it. Reading the manifest again at tap time stays the authority, so a
 		// message drained before this plugin existed still opens; it just renders plain until then.
 		host.inboundMessages.claim("references:index", InboundMessageHandler { filesDir, msg ->
+			if (BuildConfig.DEBUG && msg.files.isNotEmpty()) {
+				DebugLog.log(
+					"RefIdx",
+					"inbound team=${msg.team} at=${msg.at} fromMe=${msg.fromMe} peer=${msg.isPeer} " +
+						"files=${msg.files.map { it.name }}",
+				)
+			}
 			val manifest = manifestFrom(filesDir, msg.files) ?: return@InboundMessageHandler
 			val artifacts = (manifest.files.map { it.filename } + MANIFEST_FILENAME).toSet()
+			val hiddenRels = msg.files.filter { it.name in artifacts }.mapNotNull { f ->
+				f.src?.let { it.substringAfter("attachments/", it) }
+			}.toSet()
+			if (BuildConfig.DEBUG) DebugLog.log("RefIdx", "record team=${msg.team} at=${msg.at} hiddenRels=$hiddenRels")
 			RefDisplayIndex.record(
 				msg.team,
 				msg.at,
 				RefDisplayIndex.Summary(
-					hiddenRels = msg.files.filter { it.name in artifacts }.mapNotNull { f ->
-						f.src?.let { it.substringAfter("attachments/", it) }
-					}.toSet(),
+					hiddenRels = hiddenRels,
 					quality = manifest.refs.mapValues { (_, entry) -> entry.quality },
 				),
 			)
@@ -47,7 +58,16 @@ class ReferencesPlugin : PluginEntry {
 		// A reference artifact is machinery, not something the reader attached, so its chip is hidden.
 		host.attachmentChipDecorators.claim("references:hide-artifacts", AttachmentChipDecorator { team, file ->
 			val rel = file.src?.let { it.substringAfter("attachments/", it) } ?: return@AttachmentChipDecorator null
-			if (RefDisplayIndex.isArtifact(team, rel)) ChipDecoration("", "references", hidden = true) else null
+			val artifact = RefDisplayIndex.isArtifact(team, rel)
+			// Paired with the "record" line above: same team, same rel shape. A hide that fails
+			// because the two disagree is only visible by comparing these two lines.
+			if (BuildConfig.DEBUG) {
+				DebugLog.log(
+					"RefIdx",
+					"decorate team=$team name=${file.name} rel=$rel artifact=$artifact known=${RefDisplayIndex.knownRels(team)}",
+				)
+			}
+			if (artifact) ChipDecoration("", "references", hidden = true) else null
 		})
 		host.threadForgetHandlers.claim("references:forget", ThreadForgetHandler { _, team -> RefDisplayIndex.forget(team) })
 		host.accountWipeHandlers.claim("references:wipe", AccountWipeHandler { _ -> RefDisplayIndex.forgetAll() })

@@ -62,6 +62,11 @@ object RefDisplayIndex {
 	fun isArtifact(team: String, rel: String): Boolean =
 		byTeam[team]?.values?.any { rel in it.hiddenRels } == true
 
+	/** Every rel this team has on record, for the artifact-chip trace: printed beside the rel the
+	 * decorator is asking about, so a shape or team mismatch is visible without guessing. */
+	@Synchronized
+	fun knownRels(team: String): Set<String> = byTeam[team]?.values?.flatMap { it.hiddenRels }?.toSet() ?: emptySet()
+
 	@Synchronized
 	fun forget(team: String) {
 		byTeam.remove(team)

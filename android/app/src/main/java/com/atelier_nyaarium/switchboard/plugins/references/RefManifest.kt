@@ -1,6 +1,8 @@
 package com.atelier_nyaarium.switchboard.plugins.references
 
 import com.atelier_nyaarium.switchboard.Attachments
+import com.atelier_nyaarium.switchboard.BuildConfig
+import com.atelier_nyaarium.switchboard.DebugLog
 import com.atelier_nyaarium.switchboard.MessageFile
 import java.io.File
 import kotlinx.serialization.json.Json
@@ -69,22 +71,58 @@ private fun relOf(src: String): String = src.substringAfter("attachments/", src)
 fun manifestFrom(filesDir: File, files: List<MessageFile>): RefManifest? {
 	val present = files.mapNotNull { it.src?.let(::relOf) }.toSet()
 
+	// Which guard rejected, for the artifact-chip trace. Every `continue` below is a distinct
+	// reason, and telling them apart is the whole point of the diagnostic.
+	fun reject(why: String) {
+		if (BuildConfig.DEBUG) DebugLog.log("RefIdx", "manifestFrom reject: $why")
+	}
+
+	var sawReserved = false
 	for (file in files) {
 		if (file.name != MANIFEST_FILENAME) continue
-		val rel = file.src?.let(::relOf) ?: continue
-		val onDisk = Attachments.resolve(filesDir, rel) ?: continue
-		if (onDisk.length() > MAX_MANIFEST_BYTES) continue
+		sawReserved = true
+		val rel = file.src?.let(::relOf)
+		if (rel == null) {
+			reject("no src on ${file.name}")
+			continue
+		}
+		val onDisk = Attachments.resolve(filesDir, rel)
+		if (onDisk == null) {
+			reject("unresolvable rel=$rel")
+			continue
+		}
+		if (onDisk.length() > MAX_MANIFEST_BYTES) {
+			reject("oversize ${onDisk.length()}")
+			continue
+		}
 
-		val parsed = runCatching { json.parseToJsonElement(onDisk.readText()).jsonObject }.getOrNull() ?: continue
-		if (parsed[MANIFEST_MARKER] == null) continue
+		val parsed = runCatching { json.parseToJsonElement(onDisk.readText()).jsonObject }.getOrNull()
+		if (parsed == null) {
+			reject("unparseable rel=$rel bytes=${onDisk.length()}")
+			continue
+		}
+		if (parsed[MANIFEST_MARKER] == null) {
+			reject("no marker, keys=${parsed.keys}")
+			continue
+		}
 
-		val manifest = runCatching { decode(parsed) }.getOrNull() ?: continue
+		val manifest = runCatching { decode(parsed) }.getOrNull()
+		if (manifest == null) {
+			reject("decode threw, keys=${parsed.keys}")
+			continue
+		}
 		// Every snapshot it names must be on this row. A manifest pointing anywhere else is not
 		// describing this message, so none of it is trusted.
 		val named = manifest.files.map { entry -> files.firstOrNull { it.name == entry.filename }?.src?.let(::relOf) }
-		if (named.any { it == null || it !in present }) continue
+		if (named.any { it == null || it !in present }) {
+			reject("named-not-present named=$named present=$present wanted=${manifest.files.map { it.filename }}")
+			continue
+		}
 
 		return manifest
+	}
+	if (!sawReserved && BuildConfig.DEBUG) {
+		DebugLog.log("RefIdx", "manifestFrom: no $MANIFEST_FILENAME among ${files.map { it.name }}")
 	}
 	return null
 }
