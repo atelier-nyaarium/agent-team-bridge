@@ -26,6 +26,12 @@ object RefDisplayIndex {
 	/** team -> (messageAt -> summary). Held in memory because the serialization site cannot wait. */
 	private val byTeam = HashMap<String, MutableMap<Long, Summary>>()
 
+	/** team -> the union of every summary's hiddenRels. Derived from [byTeam] and kept in step with
+	 * it, purely so [isArtifact] is a set lookup rather than a scan of every message: it is called
+	 * per file per row on EVERY transcript sync (serialization and the row fingerprint both), which
+	 * a scan would make quadratic in a long thread. */
+	private val hiddenByTeam = HashMap<String, MutableSet<String>>()
+
 	/** What one message's manifest said, reduced to what display needs. */
 	data class Summary(
 		/** Attachment relative paths that are reference artifacts, so their chips are hidden. */
@@ -42,6 +48,7 @@ object RefDisplayIndex {
 		for ((key, value) in store.all) {
 			if (value !is String) continue
 			byTeam[key] = runCatching { decodeTeam(value) }.getOrDefault(HashMap())
+			reindex(key)
 		}
 	}
 
@@ -51,6 +58,7 @@ object RefDisplayIndex {
 		// Idempotent by construction: the mailbox delivers at least once, and a redelivered message
 		// carries the same manifest, so rewriting the same summary is a no-op either way.
 		existing[messageAt] = summary
+		hiddenByTeam.getOrPut(team) { HashSet() }.addAll(summary.hiddenRels)
 		persist(team)
 	}
 
@@ -59,24 +67,31 @@ object RefDisplayIndex {
 
 	/** Whether an attachment is a reference artifact this message brought along. */
 	@Synchronized
-	fun isArtifact(team: String, rel: String): Boolean =
-		byTeam[team]?.values?.any { rel in it.hiddenRels } == true
+	fun isArtifact(team: String, rel: String): Boolean = hiddenByTeam[team]?.contains(rel) == true
 
 	/** Every rel this team has on record, for the artifact-chip trace: printed beside the rel the
 	 * decorator is asking about, so a shape or team mismatch is visible without guessing. */
 	@Synchronized
-	fun knownRels(team: String): Set<String> = byTeam[team]?.values?.flatMap { it.hiddenRels }?.toSet() ?: emptySet()
+	fun knownRels(team: String): Set<String> = hiddenByTeam[team]?.toSet() ?: emptySet()
 
 	@Synchronized
 	fun forget(team: String) {
 		byTeam.remove(team)
+		hiddenByTeam.remove(team)
 		prefs?.edit()?.remove(team)?.apply()
 	}
 
 	@Synchronized
 	fun forgetAll() {
 		byTeam.clear()
+		hiddenByTeam.clear()
 		prefs?.edit()?.clear()?.apply()
+	}
+
+	/** Rebuild one team's derived hidden-rel union from its summaries. */
+	private fun reindex(team: String) {
+		val rows = byTeam[team] ?: return
+		hiddenByTeam[team] = rows.values.flatMapTo(HashSet()) { it.hiddenRels }
 	}
 
 	private fun persist(team: String) {

@@ -3660,16 +3660,22 @@ class ChatRepository(
 							// false, so a redelivered entry never re-bumps unread or re-notifies. unread
 							// itself is recomputed from the anchor inside appendInbound's own state update
 							// (the single-writer derivation), not bumped here.
-							if (appendInbound(team, msg)) {
-								burst.getOrPut(team) { mutableListOf() }.add(msg)
-								// Data-plane fan-out: synchronous, pre-commit, so subscribers get the
-								// mailbox cursor's exactly-once for free. A subscriber must never throw
-								// upward (a throw here would break the drain for every team), so a throw
-								// is caught and logged rather than escaping.
-								inboundSubscribers.forEach { sub ->
-									runCatching { sub.onMessage(team, msg) }
-										.onFailure { DebugLog.log("Drain", "inbound subscriber threw: $it") }
+							//
+							// Data-plane fan-out rides appendInbound's beforeCommit hook: synchronous, still
+							// inside the mailbox cursor's exactly-once, and ordered BEFORE the row reaches
+							// `_state` so a subscriber that feeds a render-time lookup (the references chip
+							// index) is always seeded before the main thread can serialize the row. A
+							// subscriber must never throw upward (a throw here would break the drain for
+							// every team), so a throw is caught and logged rather than escaping.
+							if (
+								appendInbound(team, msg) {
+									inboundSubscribers.forEach { sub ->
+										runCatching { sub.onMessage(team, msg) }
+											.onFailure { DebugLog.log("Drain", "inbound subscriber threw: $it") }
+									}
 								}
+							) {
+								burst.getOrPut(team) { mutableListOf() }.add(msg)
 							}
 						} else {
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} -> thread=$team SKIPPED (no body, no files, no status)")
@@ -4317,7 +4323,14 @@ class ChatRepository(
 	 * nothing about the wake and leaves the notice up. Every branch recomputes `unread` inside
 	 * the SAME state update that touches `threads` (the single-writer derivation) rather
 	 * than a separate increment, so it can never race or drift from the anchor. */
-	private fun appendInbound(team: String, msg: Message): Boolean {
+	/** `beforeCommit` runs only for a genuinely new row, and strictly BEFORE the row enters
+	 * `_state`. That ordering is load-bearing: the append wakes Compose on the main thread, which
+	 * serializes the row (and consults the plugin chip decorators) while this drain coroutine is
+	 * still on Dispatchers.IO. Anything a decorator needs in memory must therefore be recorded
+	 * here, not after the append, or the row can render against an index that has not been seeded
+	 * yet - and since a row's fingerprint does not cover its decoration, such a row is never
+	 * re-pushed and stays wrong for the life of that renderer. */
+	private fun appendInbound(team: String, msg: Message, beforeCommit: () -> Unit = {}): Boolean {
 		if (!msg.isPeer) _state.update { it.copy(wakingTeams = it.wakingTeams - team) }
 		// At-least-once dedup: an entry with the same mailbox (epoch, seq) was already
 		// rendered, so fold it in place and report no new render (no re-notify/TTS).
@@ -4341,6 +4354,7 @@ class ChatRepository(
 				return false
 			}
 		}
+		beforeCommit()
 		append(team, msg)
 		return true
 	}

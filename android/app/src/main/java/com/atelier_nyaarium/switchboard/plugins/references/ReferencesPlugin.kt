@@ -33,24 +33,15 @@ class ReferencesPlugin : PluginEntry {
 		// site that consumes it. Reading the manifest again at tap time stays the authority, so a
 		// message drained before this plugin existed still opens; it just renders plain until then.
 		host.inboundMessages.claim("references:index", InboundMessageHandler { filesDir, msg ->
-			if (BuildConfig.DEBUG && msg.files.isNotEmpty()) {
-				DebugLog.log(
-					"RefIdx",
-					"inbound team=${msg.team} at=${msg.at} fromMe=${msg.fromMe} peer=${msg.isPeer} " +
-						"files=${msg.files.map { it.name }}",
-				)
-			}
 			val manifest = manifestFrom(filesDir, msg.files) ?: return@InboundMessageHandler
 			val artifacts = (manifest.files.map { it.filename } + MANIFEST_FILENAME).toSet()
-			val hiddenRels = msg.files.filter { it.name in artifacts }.mapNotNull { f ->
-				f.src?.let { it.substringAfter("attachments/", it) }
-			}.toSet()
-			if (BuildConfig.DEBUG) DebugLog.log("RefIdx", "record team=${msg.team} at=${msg.at} hiddenRels=$hiddenRels")
 			RefDisplayIndex.record(
 				msg.team,
 				msg.at,
 				RefDisplayIndex.Summary(
-					hiddenRels = hiddenRels,
+					hiddenRels = msg.files.filter { it.name in artifacts }.mapNotNull { f ->
+						f.src?.let { it.substringAfter("attachments/", it) }
+					}.toSet(),
 					quality = manifest.refs.mapValues { (_, entry) -> entry.quality },
 				),
 			)
@@ -59,12 +50,15 @@ class ReferencesPlugin : PluginEntry {
 		host.attachmentChipDecorators.claim("references:hide-artifacts", AttachmentChipDecorator { team, file ->
 			val rel = file.src?.let { it.substringAfter("attachments/", it) } ?: return@AttachmentChipDecorator null
 			val artifact = RefDisplayIndex.isArtifact(team, rel)
-			// Paired with the "record" line above: same team, same rel shape. A hide that fails
-			// because the two disagree is only visible by comparing these two lines.
-			if (BuildConfig.DEBUG) {
+			// Tripwire, not a trace. MANIFEST_FILENAME is reserved (the builder refuses to compose a
+			// message where any other attachment claims it), so a chip under that exact name that the
+			// index does not know is ALWAYS wrong, and saying so needs no manifest read. Silent on
+			// every healthy render, which is what lets it sit in the build waiting for a rare miss
+			// instead of rolling the ring buffer over.
+			if (BuildConfig.DEBUG && !artifact && file.name == MANIFEST_FILENAME) {
 				DebugLog.log(
 					"RefIdx",
-					"decorate team=$team name=${file.name} rel=$rel artifact=$artifact known=${RefDisplayIndex.knownRels(team)}",
+					"TRIPWIRE reserved-name chip not indexed team=$team rel=$rel known=${RefDisplayIndex.knownRels(team)}",
 				)
 			}
 			if (artifact) ChipDecoration("", "references", hidden = true) else null

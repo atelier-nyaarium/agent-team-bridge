@@ -378,6 +378,14 @@ class ThreadRenderer(context: Context) {
 		// counterparty relabel (isPeer); include it so a re-sync re-pushes already-rendered rows
 		// instead of leaving a stale sender label.
 		h = 31 * h + displayFrom(m).hashCode()
+		// Chip decoration is decided by a plugin lookup, not by the row itself, so an identical row
+		// can legitimately decorate differently than it did on a previous sync (an index seeded
+		// after the row first rendered). Fold it in so such a row is re-pushed instead of keeping
+		// the stale chips forever - the same reason displayFrom is here.
+		for (f in m.files) {
+			val d = decorateFile?.invoke(f)
+			h = 31 * h + (d?.let { (it.title.hashCode() * 31 + it.kind.hashCode()) * 31 + it.hidden.hashCode() } ?: 0)
+		}
 		return h
 	}
 
