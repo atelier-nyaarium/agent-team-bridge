@@ -11,7 +11,9 @@ import {
 	handleChannelReplyStructured,
 	isEmptyResponseData,
 } from "../mcp/channel/channelReply.js";
+import { blobIdFor } from "../shared/blob-store.js";
 import { ChannelReplySchema, ChannelReplyStructuredSchema, REAL_NEWLINES_GUIDANCE } from "../shared/schemas.js";
+import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js";
 
 vi.mock("../mcp/bridge/helpers.js", () => ({
 	routerPost: vi.fn(),
@@ -22,6 +24,45 @@ vi.mock("../mcp/bridge/helpers.js", () => ({
 }));
 
 const mockRouterPost = vi.mocked(routerPost);
+
+////////////////////////////////
+//  The blob plane under the tools
+//
+//  Attaching a file stages its bytes on the gateway before the tool posts anything, so a router
+//  mock that answers everything with {} reports a failed transfer.
+
+// Per test, not per file. A shared store lets one test's upload satisfy the next test's dedup
+// check, so a transfer that never happened looks like one that did.
+let wire: BlobWire;
+
+beforeEach(() => {
+	wire = mountBlobWire();
+});
+
+afterEach(() => {
+	wire.dispose();
+});
+
+/** Point the router mock at a real blob store for the three transfer routes, and at [reply] for
+ * everything else. Resets call history, so a test that asserts "did not post" still reads clean. */
+function resetRouterPost(reply: unknown = {}): void {
+	mockRouterPost.mockReset();
+	mockRouterPost.mockImplementation(async (route: string, body: unknown) =>
+		isBlobRoute(route) ? wire.answer(route, body) : reply,
+	);
+}
+
+beforeEach(() => {
+	resetRouterPost();
+});
+
+/** The first post a tool made on its OWN behalf. An attachment's chunk transfers land ahead of it,
+ * so the raw call list no longer starts with the call under test. */
+function firstToolPost<T>(): [string, T] {
+	const call = mockRouterPost.mock.calls.find(([route]) => !isBlobRoute(route as string));
+	if (!call) throw new Error("no non-blob post was made");
+	return call as [string, T];
+}
 
 /** Captures registered tool handlers so a registrar's REAL closures are testable without an MCP
  * server. Returned handlers are invoked directly. */
@@ -92,14 +133,16 @@ describe("readReplyAttachment", () => {
 		dir = undefined;
 	});
 
-	it("reads and base64-encodes an attachment, inferring its mime type from extension", async () => {
+	it("stages an attachment's bytes and names them, inferring its mime type from extension", async () => {
 		dir = mkdtempSync(join(tmpdir(), "reply-tool-test-"));
 		const filePath = join(dir, "note.txt");
 		writeFileSync(filePath, "hello");
 		const file = await readReplyAttachment(filePath);
 		expect(file.filename).toBe("note.txt");
 		expect(file.mime).toBe("text/plain");
-		expect(file.base64).toBe(Buffer.from("hello").toString("base64"));
+		// The reference names the bytes, and the gateway is holding them: a message carries no copy.
+		expect(file.blobId).toBe(blobIdFor(Buffer.from("hello")));
+		expect(wire.read(file.blobId!).toString("utf8")).toBe("hello");
 	});
 
 	it("rejects a relative path", async () => {
@@ -111,8 +154,7 @@ describe("handleChannelReply / handleChannelReplyStructured (the actual register
 	let dir: string | undefined;
 
 	beforeEach(() => {
-		mockRouterPost.mockReset();
-		mockRouterPost.mockResolvedValue({});
+		resetRouterPost();
 	});
 
 	afterEach(() => {
@@ -153,7 +195,7 @@ describe("handleChannelReply / handleChannelReplyStructured (the actual register
 			attachments: [filePath],
 		});
 		await handleChannelReply(args);
-		const [, payload] = mockRouterPost.mock.calls[0] as [string, Record<string, unknown>];
+		const [, payload] = firstToolPost<Record<string, unknown>>();
 		expect(payload.files).toEqual([
 			{
 				filename: "note.txt",
@@ -161,7 +203,7 @@ describe("handleChannelReply / handleChannelReplyStructured (the actual register
 				size: 5,
 				descriptiveKey: "note.txt",
 				modifiedAt: statSync(filePath).mtime.getTime(),
-				base64: "aGVsbG8=",
+				blobId: blobIdFor(Buffer.from("hello")),
 			},
 		]);
 	});
@@ -268,8 +310,7 @@ describe("literalEscapeHazard (the escaped-newline lint)", () => {
 
 describe("postReply escape-lint enforcement", () => {
 	beforeEach(() => {
-		mockRouterPost.mockReset();
-		mockRouterPost.mockResolvedValue({});
+		resetRouterPost();
 	});
 
 	it("rejects a hazardous field without posting, naming the field and showing the literal sequence", async () => {
@@ -336,8 +377,7 @@ describe("registered-handler lint enforcement (notify_human, crosstalk_send, des
 	const bs = "\\";
 
 	beforeEach(() => {
-		mockRouterPost.mockReset();
-		mockRouterPost.mockResolvedValue({});
+		resetRouterPost();
 	});
 
 	it("notify_human rejects a hazardous full, naming the field, without posting", async () => {
@@ -356,7 +396,7 @@ describe("registered-handler lint enforcement (notify_human, crosstalk_send, des
 	it("notify_human posts all four tiers to /human/notify", async () => {
 		const { registerHumanTools } = await import("../mcp/channel/humanTools.js");
 		const tools = captureTools(registerHumanTools);
-		mockRouterPost.mockResolvedValue({ delivered: true });
+		resetRouterPost({ delivered: true });
 		const result = await tools.notify_human({
 			title: "T",
 			summary: "S.",
@@ -406,7 +446,7 @@ describe("registered-handler lint enforcement (notify_human, crosstalk_send, des
 		expect(mockRouterPost).toHaveBeenCalledWith("/send", expect.objectContaining({ body: `task:${bs}n- item` }));
 	});
 
-	it("crosstalk_send carries attachments to /send as files with bytes", async () => {
+	it("crosstalk_send carries attachments to /send as blob references", async () => {
 		const { registerBridgeSend } = await import("../mcp/bridge/bridgeSend.js");
 		const tools = captureTools(registerBridgeSend);
 		const dir = mkdtempSync(join(tmpdir(), "crosstalk-att-"));
@@ -423,7 +463,7 @@ describe("registered-handler lint enforcement (notify_human, crosstalk_send, des
 						expect.objectContaining({
 							filename: "shot.png",
 							mime: "image/png",
-							base64: Buffer.from("bytes").toString("base64"),
+							blobId: blobIdFor(Buffer.from("bytes")),
 						}),
 					],
 				}),
@@ -462,18 +502,25 @@ describe("registered-handler lint enforcement (notify_human, crosstalk_send, des
 		expect(mockRouterPost).not.toHaveBeenCalled();
 	});
 
-	it("crosstalk_send names a polled reply's attachments instead of dropping them silently", async () => {
+	it("crosstalk_send names a polled reply's attachments and says how to actually get them", async () => {
+		// A poll reads the PERSISTENT copy, which deliberately carries no reference (stripFileRefs:
+		// /poll authorizes nobody, so a reference there would be a bearer token for the content).
+		// Naming them is therefore the most this branch can honestly do, and saying so is the point -
+		// claiming the sender attached nothing would be false AND would stop the agent asking for the
+		// one thing that recovers them.
 		const { registerBridgeSend } = await import("../mcp/bridge/bridgeSend.js");
 		const tools = captureTools(registerBridgeSend);
-		mockRouterPost.mockResolvedValue({
+		resetRouterPost({
 			status: "completed",
 			response: "done",
-			files: [{ filename: "proof.png", mime: "image/png", size: 5, descriptiveKey: "proof.png" }],
+			session_id: "s1",
+			files: [{ filename: "proof.png", mime: "image/png", size: 11, descriptiveKey: "proof.png" }],
 		});
 
 		const result = await tools.crosstalk_send({ session_id: "s1" } as never);
 		expect(result.content[0].text).toContain("proof.png");
-		expect(result.content[0].text).toContain("re-send");
+		expect(result.content[0].text).toContain("ask for a re-send");
+		expect(result.content[0].text).not.toContain("carried no bytes");
 	});
 
 	it("designer_push_card rejects a hazardous message, naming the tool-facing field", async () => {
@@ -500,8 +547,7 @@ describe("lint conformance (every guidance-marked schema field is lint-enforced)
 	const bs = "\\";
 
 	beforeEach(() => {
-		mockRouterPost.mockReset();
-		mockRouterPost.mockResolvedValue({});
+		resetRouterPost();
 	});
 
 	function guidedFields(shape: Record<string, { description?: string }>): string[] {
@@ -587,8 +633,7 @@ describe("attachment reading (the wire entry point every tool shares)", () => {
 
 describe("reserved-name coverage across every outbound ChannelFile producer", () => {
 	beforeEach(() => {
-		mockRouterPost.mockReset();
-		mockRouterPost.mockResolvedValue({});
+		resetRouterPost();
 	});
 
 	it("designer_push_card refuses a card claiming the reserved name, without posting", async () => {
@@ -612,14 +657,14 @@ describe("reserved-name coverage across every outbound ChannelFile producer", ()
 			name: "card.html",
 			html: "<!-- @dsCard --><div>hi</div>",
 		} as never);
-		const [, payload] = mockRouterPost.mock.calls[0] as [string, { files: Array<{ filename: string }> }];
+		const [, payload] = firstToolPost<{ files: Array<{ filename: string }> }>();
 		expect(payload.files[0].filename).toBe("card.html");
 	});
 
 	it("a polled reply's filename cannot forge the session_id line agents thread on", async () => {
 		const { registerBridgeSend } = await import("../mcp/bridge/bridgeSend.js");
 		const tools = captureTools(registerBridgeSend);
-		mockRouterPost.mockResolvedValue({
+		resetRouterPost({
 			status: "completed",
 			response: "done",
 			session_id: "s1",

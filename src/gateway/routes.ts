@@ -3,6 +3,7 @@ import type { ServerWebSocket } from "bun";
 import { z } from "zod";
 import { createBurstCache } from "../shared/burst-cache.js";
 import type { SealedEnvelope } from "../shared/crypto.js";
+import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
 import {
 	type ConsolePushEntry,
 	type CrossDomainPresenceSession,
@@ -88,6 +89,9 @@ export interface RoutesDeps {
 	evieClient?: import("./evie/evieClient.js").EvieClient | null;
 	// E2E seal/open for cross-Gateway frames; absent when federation crypto is off.
 	sealer?: import("./federation/sealer.js").Sealer | null;
+	/** This Gateway's byte store, for pulling in a blob a peer Gateway holds. Absent in tests that
+	 * never move bytes, which makes a cross-Gateway fetch a clean refusal rather than a crash. */
+	blobStore?: import("../shared/blob-store.js").BlobStore;
 	// The disjoint cross-Domain peer set. A cross-Domain send resolves its target's Domain
 	// here (the SealTarget is keyed by the full (domainId, gatewayId) pair, never the bare
 	// id), and discovery fans a list_teams to each linked peer. Absent when federation is off.
@@ -228,10 +232,39 @@ export const POST_WAKE_SETTLE_MS = 3_000;
 // nested payload reaching the mailbox (and the durable-store snapshot written on a timer).
 const MAX_PLUGIN_ACTION_PAYLOAD_BYTES = 32_768;
 
+/** The total a payload's files CLAIM to be. Sender-stated and never re-measured here, because the
+ * bytes are not here: they travel the blob plane, where the write path counts what actually lands
+ * against MAX_BLOB_BYTES. This stays as the cheap sanity check on an obviously absurd manifest, not
+ * as the memory backstop it used to be. */
 function fileBytes(files: ChannelFile[]): number {
 	let n = 0;
-	for (const f of files) n += f.base64 ? Math.floor((f.base64.length * 3) / 4) : f.size;
+	for (const f of files) n += f.size;
 	return n;
+}
+
+/**
+ * Drop the reference that makes a file's bytes fetchable, keeping everything that describes it.
+ *
+ * For the persistent store only. `blobId` names content to anyone holding it, and the routes that
+ * read the store (`/pending` to enumerate, `/poll` to fetch) authorize nobody, so a stored reference
+ * is readable content for as long as the entry lives, which for a channel conversation is forever.
+ * This is the same boundary the old `stripFileBytes` drew when the bytes were inline; moving them
+ * out of band changed what has to be withheld, not whether.
+ */
+function stripFileRefs(files: ChannelFile[]): ChannelFile[] {
+	return files.map(({ blobId: _omit, blobGateway: _also, ...meta }) => meta);
+}
+
+/**
+ * Record which Gateway holds a file's bytes, for files that do not already say.
+ *
+ * A blobId names WHAT; without a companion saying WHERE, a message that routes to another Gateway
+ * names bytes its receiver cannot reach. Only ever fills a blank: a stamp already present belongs to
+ * whoever actually holds the bytes, and overwriting it with ours would point every receiver at a
+ * Gateway that never had them.
+ */
+function stampBlobHolder(files: ChannelFile[], gatewayId: string): ChannelFile[] {
+	return files.map((f) => (f.blobId && !f.blobGateway ? { ...f, blobGateway: gatewayId } : f));
 }
 
 /** The one measurement of a plugin-action payload's size, so the schema-level check and the
@@ -239,12 +272,6 @@ function fileBytes(files: ChannelFile[]): number {
  * size is measured, mirroring fileBytes()'s role for MAX_RESPONSE_FILE_BYTES. */
 function payloadBytes(payload: Record<string, unknown>): number {
 	return JSON.stringify(payload).length;
-}
-
-/** Drop base64 so a persistent store entry never retains the bytes; the live
- * push and the mailbox carry the payload, the store keeps only metadata. */
-function stripFileBytes(files: ChannelFile[]): ChannelFile[] {
-	return files.map(({ base64: _omit, ...meta }) => meta);
 }
 
 const PollRequestSchema = z.object({
@@ -330,6 +357,7 @@ export function createRoutes({
 	config,
 	evieClient,
 	sealer,
+	blobStore,
 	crossDomainPeers,
 	displayName,
 	isAdminDomain,
@@ -603,6 +631,86 @@ export function createRoutes({
 			return { ok: true, result: sealer.open(dstGateway, reply.result as SealedEnvelope, resolvedDstDomain) };
 		} catch (err) {
 			return { ok: false, error: `bad sealed reply from "${dstGateway}": ${(err as Error).message}` };
+		}
+	}
+
+	/** In-progress cross-Gateway fetches, keyed by blob. Cleared on settle, so this is a coalescer
+	 * rather than a cache: a later reader of an absent blob still triggers a fresh attempt. */
+	const blobFetches = new Map<string, Promise<boolean>>();
+
+	/**
+	 * Pull a whole blob in from the Gateway that holds it, and report whether this Gateway now has it.
+	 *
+	 * The hop that makes an attachment survive routing. Bytes live on ONE Gateway while the message
+	 * naming them routes by its own rules, so a receiver regularly asks a Gateway that never had
+	 * them. Rather than teaching every client which Gateway holds what, a client always asks its own
+	 * and this fills the gap behind it, caching the result. Content addressing means the cache needs
+	 * no invalidation, and a re-fetch of something already held costs one stat.
+	 *
+	 * Bounded exactly like every other transfer: a range at a time, against MAX_BLOB_BYTES, refusing
+	 * a peer whose cursor stops advancing. A failure returns false rather than throwing, because the
+	 * caller's next move is to report the file unavailable, not to fail the whole message.
+	 */
+	function fetchBlobFromGateway(blobId: string, fromGateway: string): Promise<boolean> {
+		// Single-flight per blob. A client-facing door now initiates outbound mesh traffic, and while
+		// the bytes are absent every request re-enters here, so concurrent readers of one attachment
+		// would each open their own 16-round-trip relay loop for identical content. They share one.
+		const inFlight = blobFetches.get(blobId);
+		if (inFlight) return inFlight;
+		const started = runBlobFetch(blobId, fromGateway).finally(() => blobFetches.delete(blobId));
+		blobFetches.set(blobId, started);
+		return started;
+	}
+
+	/**
+	 * Every Domain a holder's gateway id could mean, most likely first.
+	 *
+	 * A gateway id defaults to the machine's hostname and duplicates are an anticipated condition
+	 * (see GATEWAY_ID in docker-compose.yml), so a friend's `desktop` and my own `desktop` are the
+	 * same string. `sealTargetFor` is local-first by deliberate design, which is right for a SEND -
+	 * misrouting a message is a disclosure - but wrong for a fetch, where local-first silently asks a
+	 * sibling that never held the file.
+	 *
+	 * So a fetch tries every candidate rather than betting on one. That is safe here and nowhere else
+	 * in this file: a blob is named by the digest of its own contents, so a wrong guess cannot return
+	 * wrong bytes, only no bytes. Asking is the cheap half; being wrong about who to ask was costing
+	 * the attachment entirely.
+	 */
+	function holderCandidates(fromGateway: string): Array<string | undefined> {
+		const domains = (crossDomainPeers?.all() ?? [])
+			.filter((p) => p.friendGatewayId === fromGateway)
+			.map((p) => p.friendDomainId);
+		// Undefined first: the bare form is the local/same-Domain resolution and the common case.
+		return [undefined, ...domains];
+	}
+
+	async function runBlobFetch(blobId: string, fromGateway: string): Promise<boolean> {
+		if (!blobStore || fromGateway === localGatewayId) return false;
+		for (const domain of holderCandidates(fromGateway)) {
+			if (await fetchBlobFrom(blobId, fromGateway, domain)) return true;
+		}
+		return false;
+	}
+
+	async function fetchBlobFrom(blobId: string, fromGateway: string, fromDomain?: string): Promise<boolean> {
+		if (!blobStore) return false;
+		let offset = blobStore.stat(blobId).have;
+		for (;;) {
+			if (offset > MAX_BLOB_BYTES) return false;
+			const relay = await relayToGateway(
+				fromGateway,
+				{ kind: "blob_fetch", blobId, offset, length: BLOB_CHUNK_BYTES },
+				fromDomain,
+			);
+			if (!relay.ok) return false;
+			const res = relay.result as { chunk?: string; eof?: boolean } | undefined;
+			if (!res) return false;
+			const bytes = Buffer.from(res.chunk ?? "", "base64");
+			if (bytes.length === 0 && !res.eof) return false;
+			const written = blobStore.write(blobId, offset, bytes, !!res.eof);
+			if (res.eof) return written.complete;
+			if (written.have <= offset) return false;
+			offset = written.have;
 		}
 	}
 
@@ -1027,10 +1135,14 @@ export function createRoutes({
 			to,
 			targetDomainId: targetDomain,
 			body: msgBody,
-			files,
+			files: rawSendFiles,
 			channelOnly,
 			displayLabel,
 		} = parsed.data;
+		// Same rule as respond: only a local agent's own upload gets this Gateway's stamp.
+		const files =
+			rawSendFiles &&
+			(opts.trustedInbound || opts.consoleSender ? rawSendFiles : stampBlobHolder(rawSendFiles, localGatewayId));
 		// Only a real external caller is gated. A federated relay speaks for a remote sender, and the
 		// console's `from` is its free-form Device Name rather than a session name, so neither can be
 		// resolved to a local record and both arrive already authenticated by their own sealed path.
@@ -1324,7 +1436,14 @@ export function createRoutes({
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
 
-		const { session_id: respondSessionId, replyAsJson, files, ...rest } = parsed.data;
+		const { session_id: respondSessionId, replyAsJson, files: rawFiles, ...rest } = parsed.data;
+		// Stamp this Gateway as the holder, but only for a LOCAL agent: it uploaded its bytes here and
+		// posts the message here, so this is the one point that knows both facts at once, which is why
+		// an agent never has to learn its own Gateway id. A relayed message already carries its
+		// origin's stamp and the console carries its own, so neither may be overwritten with ours.
+		const files =
+			rawFiles &&
+			(opts.trustedInbound || opts.consoleSender ? rawFiles : stampBlobHolder(rawFiles, localGatewayId));
 
 		// Raw-bytes backstop before anything is stored or pushed.
 		if (files && files.length > 0) {
@@ -1404,9 +1523,12 @@ export function createRoutes({
 			what_to_decide: rest.what_to_decide,
 			message: rest.message,
 		};
-		// The store result is poll-recoverable and (for channel convs) never swept,
-		// so it keeps file metadata only; the bytes ride the live push/mailbox below.
-		if (files && files.length > 0) response.files = stripFileBytes(files);
+		// The STORE keeps names, never a way to get the bytes. `/poll` reads this copy and authorizes
+		// nothing, and a channel entry is persistent and never swept, so whatever is written here is
+		// readable indefinitely by anyone who can reach the port. A blobId is not metadata: it is a
+		// bearer token for the content, since `/blob/get` will hand the bytes to whoever names them.
+		// The live push and the mailbox below carry the full record over authenticated paths.
+		if (files && files.length > 0) response.files = stripFileRefs(files);
 		if (replyAsJson) {
 			response.replyAsJson = replyAsJson;
 			if (!response.response) {
@@ -1659,7 +1781,12 @@ export function createRoutes({
 		if (!parsed.success) {
 			return jsonResponse({ error: `Invalid request: ${parsed.error.message}` }, 400);
 		}
-		const { from, title, summary, full, fullSpoken, files } = parsed.data;
+		const { from, title, summary, full, fullSpoken, files: rawNoticeFiles } = parsed.data;
+		// Stamped like every other locally-composed message. This route has no federated or console
+		// caller - a notice is always posted by an agent on this machine, whose bytes are therefore
+		// here - and the notice then fans out to wherever the owner's console actually polls, so
+		// without the stamp a multi-Gateway owner can never fetch a notify_human attachment.
+		const files = rawNoticeFiles && stampBlobHolder(rawNoticeFiles, localGatewayId);
 		const refused = refuseImpersonation(req, from);
 		if (refused) return refused;
 		if (files && files.length > 0) {
@@ -1749,6 +1876,7 @@ export function createRoutes({
 		send,
 		respond,
 		poll,
+		fetchBlobFromGateway,
 		health,
 		humanNotify,
 		consolePush,

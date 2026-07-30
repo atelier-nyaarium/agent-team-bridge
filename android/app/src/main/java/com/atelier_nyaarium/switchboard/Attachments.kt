@@ -1,7 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
-import android.util.Base64
 import java.io.File
 
 /**
@@ -25,11 +24,13 @@ object Attachments {
 
 	fun root(filesDir: File): File = File(filesDir, DIR)
 
-	/** Delete every materialized attachment under the attachments root. Wired into the one-shot
-	 * schema migration so grammar-era message bytes do not stay stranded on disk after the prefs
-	 * wipe (which never touched filesDir). */
+	/** Delete every attachment byte this device holds: the rendered copies AND the blob store the
+	 * fetch path keeps them in. Wired into the one-shot schema migration and into
+	 * Revoke-and-Delete, so a wipe that never touches filesDir cannot leave message bytes behind.
+	 * The two roots are siblings, so purging only one silently keeps a complete second copy. */
 	fun purgeAll(filesDir: File) {
 		root(filesDir).deleteRecursively()
+		BlobStore.root(filesDir).deleteRecursively()
 	}
 
 	/** Basename only, with anything outside a safe charset collapsed to '_'. */
@@ -55,31 +56,64 @@ object Attachments {
 		return candidate
 	}
 
+	/** The attachments bucket a message's files live under. Derived from the row's own position, so
+	 * a later fetch lands beside whatever the first pass already wrote. */
+	fun bucketFor(epoch: Long, seq: Long): String = "$epoch-$seq"
+
 	/**
-	 * Write each byte-bearing file under attachments/<epoch>-<seq>/ and return the
-	 * renderer DTOs. Metadata-only entries (no base64) get a null src so the UI
-	 * shows a plain chip with no thumbnail.
+	 * Map a message's wire files to renderer DTOs.
+	 *
+	 * Never blocks and never touches the network, because this runs inside the mailbox drain and a
+	 * message must not wait on its attachments to be delivered. A file comes back naming its bytes
+	 * and carrying no src; [land] finishes it once the fetch completes. A file naming no bytes at
+	 * all is metadata-only and stays that way.
 	 */
-	fun decode(filesDir: File, epoch: Long, seq: Long, raw: List<ChannelFile>?): List<MessageFile> {
+	fun decode(raw: List<ChannelFile>?): List<MessageFile> {
 		if (raw.isNullOrEmpty()) return emptyList()
-		val bucket = "$epoch-$seq"
-		val dir = File(root(filesDir), bucket)
 		val used = mutableSetOf<String>()
-		return raw.mapNotNull { f ->
-			val name = uniqueName(safeName(f.filename), used)
-			// Empty base64 is metadata-only too: decoding it would materialize a
-			// 0-byte file and hand the WebView a broken image src.
-			if (f.base64.isNullOrEmpty()) return@mapNotNull MessageFile(name, f.mime, null, f.size, f.modifiedAt)
-			val bytes = runCatching { Base64.decode(f.base64, Base64.DEFAULT) }.getOrNull() ?: return@mapNotNull null
-			runCatching {
-				dir.mkdirs()
-				val out = File(dir, name)
-				// Atomic-ish write so a partial decode never shows a truncated image.
-				val tmp = File(dir, "$name.tmp")
-				tmp.writeBytes(bytes)
-				tmp.renameTo(out)
-				MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name", bytes.size.toLong(), f.modifiedAt)
-			}.getOrNull()
+		return raw.map { f ->
+			MessageFile(
+				uniqueName(safeName(f.filename), used),
+				f.mime,
+				null,
+				f.size,
+				f.modifiedAt,
+				f.blobId,
+				f.blobGateway,
+			)
+		}
+	}
+
+	/**
+	 * Copy fetched blob bytes into a message's bucket and return the src the renderer loads, or null
+	 * if the copy failed.
+	 *
+	 * Stream-wise, never through a ByteArray: a file that was moved a chunk at a time has no reason
+	 * to exist whole in memory just to be filed. The blob store keeps its own copy, so a re-landing
+	 * after a wipe costs a copy rather than a re-download.
+	 */
+	fun land(filesDir: File, bucket: String, name: String, source: File): String? {
+		val dir = File(root(filesDir), bucket)
+		// Unique tmp name: two landings of the same file would otherwise share one path, and the
+		// second one's truncate-on-open would hole the first one's copy mid-write.
+		val tmp = File(dir, "$name.tmp.${java.util.UUID.randomUUID()}")
+		return try {
+			dir.mkdirs()
+			val out = File(dir, name)
+			source.inputStream().use { input -> tmp.outputStream().use(input::copyTo) }
+			// The rename is the commit. Reporting a src for a file that did not land would mark the
+			// row fetched, and a fetched row is never retried, so a recoverable failure would become
+			// a permanent one.
+			if (tmp.renameTo(out)) "$ASSET_BASE/$bucket/$name" else null
+		} catch (_: Exception) {
+			null
+		} finally {
+			// Whatever went wrong, the partial goes with it. The usual trigger here is a full disk,
+			// and the retry runs once per poll pass with a fresh name, so leaking on this path would
+			// consume more of the exact resource whose exhaustion caused the failure. Nothing else
+			// collects these: the orphan sweep only removes whole unreferenced BUCKETS, and a bucket
+			// with one landed sibling is referenced.
+			tmp.delete()
 		}
 	}
 
@@ -93,8 +127,13 @@ object Attachments {
 			val name = uniqueName(safeName(f.name), used)
 			runCatching {
 				dir.mkdirs()
-				File(dir, name).writeBytes(f.bytes)
-				MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name", f.bytes.size.toLong())
+				val out = File(dir, name)
+				// Copied stream-wise rather than through a ByteArray: an admitted file still has no
+				// reason to exist whole in memory just to be filed.
+				if (out.canonicalFile != f.source.canonicalFile) {
+					f.source.inputStream().use { input -> out.outputStream().use(input::copyTo) }
+				}
+				MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name", f.size)
 			}.getOrNull()
 		}
 	}

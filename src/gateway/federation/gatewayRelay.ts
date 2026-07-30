@@ -56,6 +56,10 @@ export interface GatewayRelayHandlerDeps {
 	 * created the job, never against the bare gateway id on the friend-controlled wire (it is
 	 * not unique across Domains). Absent when federation is not wired. */
 	crossDomainBinding?: (sessionId: string) => CrossDomainBinding | undefined;
+	/** Reads a bounded range out of this Gateway's byte store, for a peer fetching a blob this
+	 * Gateway holds. Absent when the byte store is not wired, which refuses the op rather than
+	 * answering an empty range. */
+	serveBlobRange?: (blobId: string, offset: number, length: number) => { chunk?: string; eof: boolean };
 }
 
 export interface GatewayRelayPumpDeps {
@@ -87,6 +91,7 @@ export function createGatewayRelayHandler({
 	localDomainId,
 	shareState,
 	crossDomainBinding,
+	serveBlobRange,
 }: GatewayRelayHandlerDeps) {
 	/** The canonical Address of a LOCAL session by its team field, the form the share state is
 	 * keyed by (identical to routes' localAddress and the pending-job store's jobAddress). */
@@ -195,6 +200,16 @@ export function createGatewayRelayHandler({
 				if (srcDomainId !== null) await gateCrossDomainTarget(op.team, srcDomainId);
 				const { ok } = await tryWakeTeam(op.team);
 				return { ok };
+			}
+			case "blob_fetch": {
+				// Serve a range of a blob this Gateway holds. Deliberately ungated beyond the relay's
+				// own admission check: a blobId is the digest of the content, so naming one is
+				// already proof of having the bytes it names. There is nothing to enumerate and no
+				// existence oracle worth having, since a caller who can name a blob can produce it.
+				// Reading a blob this Gateway does not hold throws, which the pump returns as an
+				// error rather than a silent empty range.
+				if (!serveBlobRange) throw new Error("blob transfer unavailable on this Gateway");
+				return serveBlobRange(op.blobId, op.offset, op.length);
 			}
 			case "response_push": {
 				// A reply pinned to the origin: deliver it to the local origin job, which pushes

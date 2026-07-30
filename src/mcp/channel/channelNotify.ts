@@ -11,7 +11,11 @@ import { dropReferenceArtifacts, materializeFiles, renderFilesBlock } from "./ev
  * `stripRefs` is false for an inbound SEND: only a reply appends ref artifacts, so a manifest
  * arriving on a send is a file someone genuinely attached, and splitting on it would silently eat
  * that file plus every one after it. */
-function filesBlockFor(bucketKey: string | undefined, files: ChannelFile[] | undefined, stripRefs: boolean): string {
+async function filesBlockFor(
+	bucketKey: string | undefined,
+	files: ChannelFile[] | undefined,
+	stripRefs: boolean,
+): Promise<string> {
 	if (!bucketKey || !files || files.length === 0) return "";
 	const wanted = stripRefs ? dropReferenceArtifacts(files) : files;
 	if (wanted.length < files.length) {
@@ -19,7 +23,7 @@ function filesBlockFor(bucketKey: string | undefined, files: ChannelFile[] | und
 	}
 	if (wanted.length === 0) return "";
 	try {
-		const materialized = materializeFiles({ discordMessageId: bucketKey, files: wanted });
+		const materialized = await materializeFiles({ discordMessageId: bucketKey, files: wanted });
 		return renderFilesBlock({ discordMessageId: bucketKey, files: materialized });
 	} catch (err) {
 		console.error(`[channel] could not materialize files for ${bucketKey}: ${(err as Error).message}`);
@@ -33,7 +37,7 @@ function filesBlockFor(bucketKey: string | undefined, files: ChannelFile[] | und
  */
 export async function emitChannelNotification(server: Server, payload: ChannelPushPayload): Promise<void> {
 	// Inbound files key the materialization bucket by the channel message_id.
-	const filesBlock = filesBlockFor(payload.message_id, payload.files, false);
+	const filesBlock = await filesBlockFor(payload.message_id, payload.files, false);
 
 	// content is the message prose ONLY (plus the [FILES] block, which is paths the agent must Read).
 	// Every structured field - session_id, from, reply_schema, instructions - rides in `meta`,
@@ -65,7 +69,7 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 }
 
 export async function emitResponseNotification(server: Server, payload: ResponsePushPayload): Promise<void> {
-	const filesBlock = filesBlockFor(payload.message_id, payload.files, true);
+	const filesBlock = await filesBlockFor(payload.message_id, payload.files, true);
 	const body = payload.response ?? "";
 
 	await server.notification({

@@ -289,7 +289,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	// renderer survives Sessions round-trips and tab switches. Pruned to open tabs;
 	// destroyed with the Activity.
 	val rendererPool = remember { ThreadRendererPool(context.applicationContext) }
-	rendererPool.onRetry = { team, id -> scope.launch { repo.retrySend(team, id) } }
+	rendererPool.onRetry = { team, id -> repo.command { retrySend(team, id) } }
 	rendererPool.onCancel = { team, id -> repo.cancelFailedSend(team, id) }
 	// Attribute a message's sender by its human label (a notice's `from` is a canonical address).
 	// Reads the live state at render time so a rename reflects without rebuilding the pool.
@@ -410,7 +410,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 	androidx.lifecycle.compose.LifecycleStartEffect(Unit) {
 		repo.onForeground()
 		rendererPool.setVisible(true)
-		scope.launch { repo.reconcilePending() }
+		repo.command { reconcilePending() }
 		onStopOrDispose {
 			repo.onBackground()
 			rendererPool.setVisible(false)
@@ -586,7 +586,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				plugins = pluginManager,
 				route = settingsRoute,
 				onRoute = { settingsRoute = it },
-				onSetDeviceName = { scope.launch { repo.setDeviceName(it) } },
+				onSetDeviceName = { repo.command { setDeviceName(it) } },
 				onToggleBiometric = { repo.setBiometricLock(it) },
 				onManage = { showManage = true },
 				onYourDevices = {
@@ -617,7 +617,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			ProvisionScreen(
 				repo = repo,
 				state = state,
-				onProvision = { scope.launch { repo.provision(it) } },
+				onProvision = { repo.command { provision(it) } },
 				onSettings = { showSettings = true },
 			)
 		openTeam != null -> {
@@ -669,10 +669,10 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					repo.closeTab(t)
 				},
 				onSessions = { openTeam = null },
-				onSend = { text, uris -> scope.launch { repo.send(openTeam!!, text, uris) } },
+				onSend = { text, uris -> repo.command { send(openTeam!!, text, uris) } },
 				draft = state.drafts[openTeam!!] ?: Draft(),
 				onDraftTextChange = { repo.setDraftText(openTeam!!, it) },
-				onAddDraftFiles = { uris -> scope.launch { repo.addDraftFiles(openTeam!!, uris) } },
+				onAddDraftFiles = { uris -> repo.command { addDraftFiles(openTeam!!, uris) } },
 				onRemoveDraftFile = { src -> repo.removeDraftFile(openTeam!!, src) },
 				onAppendDraftText = { insert -> repo.appendDraftText(openTeam!!, insert) },
 				onClearDraft = { repo.clearDraft(openTeam!!) },
@@ -681,7 +681,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				onScheduleSend = { text, uris, at -> repo.scheduleSend(openTeam!!, text, uris, at) },
 				onReschedule = { at -> repo.rescheduleSend(openTeam!!, at) },
 				onCancelScheduledSend = { repo.cancelScheduledSendForEdit(openTeam!!) },
-				onRename = { name -> scope.launch { repo.rename(openTeam!!, name) } },
+				onRename = { name -> repo.command { rename(openTeam!!, name) } },
 				onForget = {
 					val forgotten = openTeam!!
 					pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, forgotten) }
@@ -730,7 +730,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			SessionsScreen(
 				state = state,
 				snackbarHostState = snackbarHostState,
-				onRefresh = { scope.launch { repo.refreshTeams() } },
+				onRefresh = { repo.command { refreshTeams() } },
 				onSettings = {
 					settingsRoute = SettingsRoute.HUB
 					showSettings = true
@@ -742,7 +742,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 					openTeam = repo.openThread(team)
 					openNonce++
 				},
-				onRename = { team, name -> scope.launch { repo.rename(team, name) } },
+				onRename = { team, name -> repo.command { rename(team, name) } },
 				onForget = { team ->
 					pluginManager.host.threadForgetHandlers.forEachCaught(onError = ::logPluginThrow) { it.onForget(context, team) }
 					repo.forget(team)
@@ -753,7 +753,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				// synchronously and bumps the presence plane with it, so its own tile appears via this
 				// device's own next poll (spinner while it boots) with no separate refresh. Tapping the
 				// tile opens its terminal view. A failure surfaces as a Snackbar.
-				onSpawn = { project, label, workdir -> scope.launch { repo.spawnSession(project, label, workdir) } },
+				onSpawn = { project, label, workdir -> repo.command { spawnSession(project, label, workdir) } },
 				onListDirs = { path -> repo.listDirs(path) },
 				// Launch the enrollee compare from the empty board when one is still owed (the device
 				// rooted an enroll invite but has not completed the in-person trust step).
@@ -861,8 +861,12 @@ fun ProvisionScreen(repo: ChatRepository, state: ChatState, onProvision: (String
 	// SAF file picker. arrayOf("*/*") so a .json with any reported MIME type is selectable.
 	val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
 		if (uri == null) return@rememberLauncherForActivityResult
+		// A provisioning blob is a few KB of JSON; the picker is `*/*`, so without a bound a
+		// mis-picked video is read whole into memory before anyone looks at it.
 		val text = runCatching {
-			context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+			val length = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1
+			if (length < 0 || length > MAX_PROVISION_BLOB_BYTES) return@runCatching null
+			context.contentResolver.openInputStream(uri)?.use { it.readAllBytes().decodeToString() }
 		}.getOrNull()
 		tryProvision(text, "file")
 	}
@@ -3220,7 +3224,7 @@ private fun PluginsSettings(plugins: PluginManager, repo: ChatRepository) {
 					refresh++
 					// Tell the gateway now. A session already running keeps the tools it started
 					// with; this is what the NEXT session start reads.
-					scope.launch { repo.reportEnabledPlugins() }
+					repo.command { reportEnabledPlugins() }
 				},
 			)
 		}
@@ -3443,6 +3447,9 @@ private fun SystemSettings(repo: ChatRepository, onClear: () -> Unit) {
 
 // Cap the rendered voice menu: some providers ship hundreds of voices, and the
 // field's text filters the rest into view.
+/** A provisioning blob is small JSON; anything larger is a mis-picked file. */
+private const val MAX_PROVISION_BLOB_BYTES = 1_000_000L
+
 private const val MAX_VOICE_MENU_ITEMS = 60
 
 /** The Voice connection's single honest state, shown on the settings status line.

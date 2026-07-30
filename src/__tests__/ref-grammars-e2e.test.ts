@@ -1,7 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { appendRefArtifacts, setReferencesEnabled } from "../mcp/references/attachRefs.js";
+import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js";
+
+// A snapshot's bytes travel the blob plane like any other file, so building one uploads.
+const h = vi.hoisted(() => ({ wire: null as BlobWire | null }));
+
+vi.mock("../mcp/bridge/helpers.js", () => ({
+	routerPost: async (route: string, body: unknown) => {
+		if (!isBlobRoute(route) || !h.wire) throw new Error(`unexpected post to ${route}`);
+		return h.wire.answer(route, body);
+	},
+}));
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -22,6 +33,7 @@ let priorRoot: string | undefined;
 beforeAll(() => {
 	priorRoot = process.env.REFERENCE_ROOT;
 	process.env.REFERENCE_ROOT = ROOT;
+	h.wire = mountBlobWire();
 	setReferencesEnabled(true);
 });
 
@@ -29,6 +41,8 @@ afterAll(() => {
 	if (priorRoot === undefined) delete process.env.REFERENCE_ROOT;
 	else process.env.REFERENCE_ROOT = priorRoot;
 	setReferencesEnabled(false);
+	h.wire?.dispose();
+	h.wire = null;
 });
 
 interface Resolved {
@@ -47,7 +61,9 @@ async function resolve(uri: string): Promise<Resolved> {
 	if (!result.ok) throw new Error(`hard failure: ${result.error}`);
 	if (result.files.length === 0) throw new Error("no ref detected");
 
-	const manifest = JSON.parse(Buffer.from(result.files[0].base64, "base64").toString());
+	const blobId = result.files[0].blobId;
+	if (blobId === undefined || !h.wire) throw new Error("manifest shipped without naming its bytes");
+	const manifest = JSON.parse(h.wire.read(blobId).toString());
 	const entry = Object.values(manifest.refs)[0] as Resolved;
 	const source = fs.readFileSync(path.join(ROOT, (entry as unknown as { refPath: string }).refPath), "utf8");
 

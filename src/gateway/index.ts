@@ -3,9 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ServerWebSocket } from "bun";
 import { DomainSnapshotSchema, signRegister } from "../shared/admission.js";
+import { BlobStore } from "../shared/blob-store.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
+import { BLOB_CHUNK_BYTES } from "../shared/evie-protocol.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import {
 	type HostOp,
@@ -17,9 +19,19 @@ import {
 import { ownerKeyId } from "../shared/owner-id.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { type PlanePersistedState, PlaneRegistry, stableHash } from "../shared/plane-registry.js";
+import { BlobGetOpSchema, BlobPutOpSchema, BlobStatOpSchema } from "../shared/schemas.js";
 import { isComposite, parseSessionName } from "../shared/session-id.js";
 import { type SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
+import { answerBlobOp, BlobTooLarge } from "./blobOps.js";
+
+/** The three blob routes, each keyed to the schema the console plane validates the same op with. */
+const BLOB_ROUTE_SCHEMAS = {
+	"/blob/stat": BlobStatOpSchema,
+	"/blob/put": BlobPutOpSchema,
+	"/blob/get": BlobGetOpSchema,
+} as const;
+
 import { handleProxyClose, handleProxyMessage, isProxyConnection, setupProxy } from "./connectorProxy.js";
 import { CapabilityStore } from "./console/capabilityStore.js";
 import { createConsoleDispatcher } from "./console/consoleHandler.js";
@@ -61,7 +73,7 @@ import { IntentTracker } from "./intent.js";
 import { PresenceFacade } from "./presence.js";
 import { ReadAnchors } from "./readAnchors.js";
 import { createRoutes } from "./routes.js";
-import { createSessionAuthority } from "./sessionAuthority.js";
+import { createSessionAuthority, presentedByRequest } from "./sessionAuthority.js";
 import { createVibeCheck } from "./vibeCheck.js";
 import { decideWakeCreate, WakeCoordinator, type WakeResult } from "./wake.js";
 import { createWebSocketHandlers, resolveLiveIncarnation, type WsData } from "./websocket.js";
@@ -81,6 +93,14 @@ export async function startGateway(): Promise<void> {
 	// resume map) lives in DATA_DIR, deliberately SEPARATE from the legacy /app/log volume so a
 	// "clear the logs" action can never wipe federation identity.
 	const DATA_DIR = process.env.DATA_DIR || "/app/data";
+	// Byte store. Lives under DATA_DIR (a real docker volume) rather than the log volume, so
+	// clearing logs cannot destroy attachments a message still references.
+	const blobStore = new BlobStore(`${DATA_DIR}/blobs`);
+	// Ceiling for the whole store, swept on the persist tick. Sized for many max-size attachments in
+	// flight at once while staying small against any real volume, because this shares DATA_DIR with
+	// the federation keypair and allowlist: a store allowed to grow without limit takes the gateway's
+	// identity down with it when the disk fills.
+	const MAX_BLOB_STORE_BYTES = parseInt(process.env.MAX_BLOB_STORE_BYTES || "2000000000", 10);
 	fs.mkdirSync(DATA_DIR, { recursive: true });
 
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);
@@ -313,6 +333,12 @@ export async function startGateway(): Promise<void> {
 		// inflates everyone else's write cost too).
 		durableOpStore.sweep();
 		capabilityStore.sweep();
+		// The blob plane's only reclaim path. Nothing reference-counts a blob, so without this the
+		// store only grows: every ref snapshot, every superseded designer card, every transfer that
+		// died mid-flight stays forever. It shares DATA_DIR with the federation identity, so an
+		// unbounded store is not merely untidy, it eventually stops the gateway persisting its keys.
+		const freed = blobStore.sweep({ maxBytes: MAX_BLOB_STORE_BYTES });
+		if (freed > 0) console.error(`[blobs] swept ${freed} bytes`);
 		sessionResumeDurable.save({
 			sessions: sessionStore.snapshot(),
 			planes: planeRegistry.persistedState(cleanShutdown),
@@ -984,6 +1010,7 @@ export async function startGateway(): Promise<void> {
 			conversationRegistry,
 			store,
 			capabilityStore,
+			blobStore,
 			auth: sessionAuthority,
 			config: { localGatewayId, localDomainId },
 			tryWakeTeam,
@@ -1098,6 +1125,8 @@ export async function startGateway(): Promise<void> {
 		if (crossDomainPresenceReconciler) setInterval(() => crossDomainPresenceReconciler.tick(), 10_000);
 
 		const consoleHandler = createConsoleDispatcher({
+			blobStore,
+			fetchBlobFromGateway: routes.fetchBlobFromGateway,
 			registry,
 			conversationRegistry,
 			mailboxStore,
@@ -1248,6 +1277,12 @@ export async function startGateway(): Promise<void> {
 			// came from), not on the friend-controlled bare gateway id, so a friend cannot
 			// forge a reply into another friend's job or hijack an unrelated job's reply route.
 			crossDomainBinding: (sessionId) => store.crossDomainBinding(sessionId),
+			// Serving a peer a range of a blob THIS Gateway holds. The read path only, never a write:
+			// a peer may take bytes it can already name, and nothing else.
+			serveBlobRange: (blobId, offset, length) => {
+				const r = blobStore.read(blobId, offset, Math.min(length, BLOB_CHUNK_BYTES));
+				return { ...(r.bytes.length > 0 ? { chunk: r.bytes.toString("base64") } : {}), eof: r.eof };
+			},
 		});
 		handleGatewayRelay = createGatewayRelayPump({
 			sealer: sealer!,
@@ -1359,16 +1394,45 @@ export async function startGateway(): Promise<void> {
 		if (method === "POST" && url.pathname === "/human/notify") return routes.humanNotify(req, body);
 		if (method === "POST" && url.pathname === "/plugin-action") return routes.pluginAction(req, body);
 
+		// Blob transfer for agent callers. The console reaches the same store through its sealed
+		// ops; this is the plain-HTTP door for an in-process MCP, which has no relay to ride.
+		// Validated against the SAME schemas the sealed console plane uses, not a cast. These are the
+		// only unauthenticated routes that write to disk, so the shape of what they accept is the
+		// whole of their input handling, and a bound that exists at one door and not the other is not
+		// a bound. A rejection is a 400 naming the field rather than a 500 from deep in the store.
+		const blobRoute = BLOB_ROUTE_SCHEMAS[url.pathname as keyof typeof BLOB_ROUTE_SCHEMAS];
+		if (method === "POST" && blobRoute) {
+			// The only callers are this machine's own MCP agents; the console reaches the same three
+			// ops over its sealed plane instead. So these routes take the same posture as /send: prove
+			// you are one of this gateway's sessions, unless none of them is bound at all.
+			if (!sessionAuthority.mayUseLocalPlane(presentedByRequest(req))) {
+				return Response.json({ error: "blob transfer is not open to this caller" }, { status: 403 });
+			}
+			const parsed = blobRoute.safeParse({ ...body, kind: blobRoute.shape.kind.value });
+			if (!parsed.success) {
+				return Response.json(
+					{ error: `Invalid blob request: ${parsed.error.issues[0]?.message}` },
+					{ status: 400 },
+				);
+			}
+			try {
+				return Response.json(await answerBlobOp(blobStore, parsed.data, routes.fetchBlobFromGateway));
+			} catch (err) {
+				if (!(err instanceof BlobTooLarge)) throw err;
+				return Response.json({ error: err.message }, { status: 413 });
+			}
+		}
+
 		return new Response("Not Found", { status: 404 });
 	}
 
 	Bun.serve<WsData>({
 		port: PORT,
-		// Explicit so the ceiling is a decision, not an inherited default: one max-bucket
-		// payload (MAX_RESPONSE_FILE_BYTES, base64-inflated ~4/3) plus envelope headroom, so
-		// routes.ts gets to reject an oversized payload with a real error instead of Bun
-		// cutting the request off first.
-		maxRequestBodySize: 64_000_000,
+		// Explicit so the ceiling is a decision, not an inherited default. The largest legitimate
+		// body is one blob chunk, base64-inflated (~1.4 MB); everything else is prose. The headroom
+		// above that exists so an oversized request is rejected by a route with a real error rather
+		// than cut off by Bun with none.
+		maxRequestBodySize: 8_000_000,
 		fetch(req, server) {
 			const url = new URL(req.url);
 

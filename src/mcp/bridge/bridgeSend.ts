@@ -70,7 +70,10 @@ The owner can see every exchange in their console.
 When relaying responses back to the user, send them verbatim unless the user explicitly asked for a summary.
 `.trim();
 
-function formatResult(result: SendResult, to?: string): { content: Array<{ type: "text"; text: string }> } {
+async function formatResult(
+	result: SendResult,
+	to?: string,
+): Promise<{ content: Array<{ type: "text"; text: string }> }> {
 	const target = to || "team";
 	const parts = [`Response from ${target}:`];
 	if (result.status) parts.push(`Status: ${result.status}`);
@@ -102,11 +105,15 @@ function formatResult(result: SendResult, to?: string): { content: Array<{ type:
 		if (body) parts.push(`\n${body}`);
 	}
 
-	// The gateway strips base64 before persisting, so a polled reply can name its files but never
-	// carry them. Naming them is what makes the loss recoverable by asking for a re-send.
+	// A POLLED reply names its attachments and cannot fetch them. The stored copy deliberately holds
+	// no reference (see stripFileRefs: /poll authorizes nobody, so a reference there would be a bearer
+	// token for the content), which leaves naming them the most this branch can honestly do. Saying so
+	// is the point - reporting "carried no bytes" would be a lie about the sender and would stop the
+	// agent asking for the one thing that does recover them. The live push path carries full
+	// references and materializes normally.
 	const attached = result.files ? dropReferenceArtifacts(result.files) : [];
 	if (attached.length > 0) {
-		parts.push(`\nAttachments named on this reply (the store keeps no bytes; ask for a re-send if you need them):`);
+		parts.push(`\nAttachments on this reply (a poll recovers names only; ask for a re-send to get the bytes):`);
 		// The name comes from the replying peer and this output is line-structured, so a newline in
 		// it would forge entries, including the [session_id: ...] line an agent copies to thread.
 		for (const f of attached) parts.push(`- ${f.filename.replace(/[\r\n]+/g, " ")}`);
@@ -140,7 +147,7 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 						};
 					}
 
-					return formatResult(result, to);
+					return await formatResult(result, to);
 				}
 
 				// Send mode: requires to, body

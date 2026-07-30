@@ -78,6 +78,13 @@ data class MessageFile(
 	val src: String? = null,
 	val size: Long? = null,
 	val modifiedAt: Long? = null,
+	/** Names the bytes on the blob plane while they are still being fetched. A row with a blobId
+	 * and no src is a file whose message has arrived and whose bytes have not; the pair is what
+	 * lets a fetch resume across a restart instead of the attachment silently never appearing. */
+	val blobId: String? = null,
+	/** Which Gateway holds those bytes. Persisted with the reference because the fetch may not
+	 * happen for hours, and by then nothing else remembers where the message came from. */
+	val blobGateway: String? = null,
 )
 
 /** The one shape every file-list writer shares, so a field added for one cannot go missing from
@@ -89,6 +96,8 @@ internal fun fileJson(f: MessageFile): JSONObject =
 		.putOpt("src", f.src)
 		.putOpt("size", f.size)
 		.putOpt("modifiedAt", f.modifiedAt)
+		.putOpt("blobId", f.blobId)
+		.putOpt("blobGateway", f.blobGateway)
 
 /** Read back a [fileJson] list from any record that carries one. */
 internal fun loadFiles(m: JSONObject): List<MessageFile> {
@@ -103,6 +112,8 @@ internal fun loadFiles(m: JSONObject): List<MessageFile> {
 			f.optString("src").takeIf { s -> s.isNotEmpty() },
 			f.longOrNull("size"),
 			f.longOrNull("modifiedAt"),
+			f.optString("blobId").takeIf { s -> s.isNotEmpty() },
+			f.optString("blobGateway").takeIf { s -> s.isNotEmpty() },
 		)
 	}
 }
@@ -1033,6 +1044,17 @@ class ChatRepository(
 	// lock (they are plain, fast, _state.update-only ops like every other mutation in this file);
 	// only the fire path's check-then-convert sequence needs the exclusion.
 	private val scheduledSendFireMutex = Mutex()
+
+	// Single-flight latch for fetchPendingAttachments, which the poll loop fires once per pass while
+	// a transfer routinely spans several. Not a Mutex: an overlapping pass has nothing to add, since
+	// the in-flight run re-derives the same pending set, so it should be dropped rather than queued.
+	private val fetchingAttachments = java.util.concurrent.atomic.AtomicBoolean(false)
+
+	// Consecutive failed fetches per blobId. Keyed by blob rather than by row because one unreachable
+	// reference can appear on several rows and is one unfetchable thing. In-memory on purpose: a
+	// restart is exactly when a previously-hopeless fetch deserves another try.
+	private val attachmentFetchFailures = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
 	// Always available from construction, independent of pollScope (null until startPolling runs)
 	// and of SwitchboardService's own lifecycle - a receiver-triggered fire kick must never be a
 	// silent no-op the way scheduleAttachmentDelete's best-effort pollScope?.launch is allowed to be
@@ -1042,9 +1064,24 @@ class ChatRepository(
 	private val repoScope = CoroutineScope(
 		SupervisorJob() + Dispatchers.IO +
 			CoroutineExceptionHandler { _, e ->
-				DebugLog.log("ScheduledSend", "uncaught in repo scope: ${e.javaClass.simpleName}: ${e.message}")
+				DebugLog.log("Repo", "uncaught in repo scope: ${e.javaClass.simpleName}: ${e.message}")
+				// An Error (OOM on an oversized encode, a torn write) would otherwise reach the
+				// thread's uncaught handler and kill the app. Surfaced as a red banner instead.
+				_state.update { it.copy(error = "Something went wrong: ${e.javaClass.simpleName}") }
 			},
 	)
+
+	/**
+	 * Run a repository command on the repository's OWN scope.
+	 *
+	 * UI code must never launch repository work on a Compose scope. That scope carries no exception
+	 * handler, so the identical call is survivable from here and fatal from there - which is how one
+	 * oversized attachment turned into a crash on every foreground. Routing through this is what
+	 * makes the difference structural rather than something each call site has to remember.
+	 */
+	fun command(block: suspend ChatRepository.() -> Unit) {
+		repoScope.launch { block() }
+	}
 	/** Set by the service: called when a scheduled send's bounded one-shot retry also fails, so the
 	 * service (which owns NotificationManager) can post the failure notice. Mirrors [onInbound]. */
 	var onScheduledSendFailed: ((team: String, opId: String) -> Unit)? = null
@@ -3086,10 +3123,9 @@ class ChatRepository(
 	}
 
 	suspend fun send(team: String, text: String, uris: List<Uri> = emptyList()) = withContext(Dispatchers.IO) {
-		val picked = uris.mapNotNull { readUri(it) }
-		val total = picked.sumOf { it.bytes.size }
-		if (total > MAX_OUTGOING_BYTES) {
-			_state.update { it.copy(error = "Attachments too large (max ${MAX_OUTGOING_BYTES / 1_000_000} MB).") }
+		val (picked, refused) = admitPicked(uris, "pick-${java.util.UUID.randomUUID()}")
+		if (refused != null) {
+			_state.update { it.copy(error = refused.message()) }
 			return@withContext
 		}
 		// Local echo: persist the picked files so the sent message shows its own thumbnails through
@@ -3140,7 +3176,12 @@ class ChatRepository(
 		if (!claimed) return@withContext
 		val msg = _state.value.threads[team]?.firstOrNull { it.id == messageId } ?: return@withContext
 		persistThreads(_state.value.threads)
-		val files = rebuildFiles(msg)
+		val (files, refused) = rebuildFiles(msg)
+		if (refused != null) {
+			setMessageStatus(team, messageId, "error")
+			_state.update { it.copy(error = refused.message()) }
+			return@withContext
+		}
 		if (msg.text.isBlank() && files.isEmpty()) {
 			// Nothing recoverable (attachment copies gone); put the badge back and say why.
 			setMessageStatus(team, messageId, "error")
@@ -3178,10 +3219,9 @@ class ChatRepository(
 				_state.update { it.copy(error = "Can't schedule more than 30 days out.") }
 				return@withContext false
 			}
-			val picked = uris.mapNotNull { readUri(it) }
-			val total = picked.sumOf { it.bytes.size }
-			if (total > MAX_OUTGOING_BYTES) {
-				_state.update { it.copy(error = "Attachments too large (max ${MAX_OUTGOING_BYTES / 1_000_000} MB).") }
+			val (picked, refused) = admitPicked(uris, "pick-${java.util.UUID.randomUUID()}")
+			if (refused != null) {
+				_state.update { it.copy(error = refused.message()) }
 				return@withContext false
 			}
 			val opId = java.util.UUID.randomUUID().toString()
@@ -3344,7 +3384,7 @@ class ChatRepository(
 			// clearScheduledSendRecord, not cancelScheduledSend: the bucket's ownership just
 			// transferred to the row above, so deleting it here would strand that row's attachments.
 			clearScheduledSendRecord(team)
-			val picked = rebuildFiles(rec.fileRefs)
+			val (picked, _) = rebuildFiles(rec.fileRefs)
 			deliver(team, echoId, rec.text, picked, rec.opId, false, rec.targetDomainId)
 			if (_state.value.threads[team]?.firstOrNull { it.opId == rec.opId }?.status == "error") {
 				val at = System.currentTimeMillis() + SCHEDULED_SEND_RETRY_DELAY_MS
@@ -3440,15 +3480,25 @@ class ChatRepository(
 		}
 	}
 
-	/** Rebuild outgoing bytes from the local attachment copies stored at first
-	 * send; files whose copies are gone are dropped (caller decides how loudly). */
-	private fun rebuildFiles(msg: Message): List<OutgoingFile> = rebuildFiles(msg.files)
+	/** Re-admit the local attachment copies stored at first send. Admission stats rather than
+	 * reads, so a row too large for this device is refused here instead of dying at the encode. */
+	private fun rebuildFiles(msg: Message): Pair<List<OutgoingFile>, Admission.Refused?> = rebuildFiles(msg.files)
 
 	/** Same rebuild, from a bare file-ref list - shared with a scheduled send's eagerly-copied
 	 * bucket, which has no Message row to rebuild from until the fire itself appends one. */
-	private fun rebuildFiles(files: List<MessageFile>): List<OutgoingFile> = files.mapNotNull { f ->
-		val file = Attachments.fileFor(filesDir, f.src) ?: return@mapNotNull null
-		runCatching { OutgoingFile(f.name, f.mime, file.readBytes()) }.getOrNull()
+	private fun rebuildFiles(files: List<MessageFile>): Pair<List<OutgoingFile>, Admission.Refused?> {
+		val admitted = mutableListOf<OutgoingFile>()
+		var blocker: Admission.Refused? = null
+		for (a in OutgoingFiles.admitAll(files, filesDir)) {
+			when (a) {
+				is Admission.Granted -> admitted += a.file
+				// A missing copy has always been survivable (send the rest, say so); a size refusal
+				// is not, because sending "the rest" would silently drop what the user attached.
+				is Admission.Refused ->
+					if (a.reason == Admission.Reason.GONE) Unit else if (blocker == null) blocker = a
+			}
+		}
+		return admitted to blocker
 	}
 
 	/**
@@ -3483,11 +3533,32 @@ class ChatRepository(
 		persistThreads(threads)
 	}
 
-	private fun readUri(uri: Uri): OutgoingFile? = runCatching {
-		val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
-		val mime = contentResolver.getType(uri) ?: "application/octet-stream"
-		OutgoingFile(queryName(uri) ?: "file", mime, bytes)
-	}.getOrNull()
+	/** Stage picked Uris under one cumulative admission budget. Each is streamed to disk, never
+	 * held whole, and the first refusal is reported rather than silently dropping the file. */
+	private fun admitPicked(uris: List<Uri>, bucket: String): Pair<List<OutgoingFile>, Admission.Refused?> {
+		val staged = mutableListOf<OutgoingFile>()
+		val dir = File(Attachments.root(filesDir), bucket)
+		var running = 0L
+		for ((i, uri) in uris.withIndex()) {
+			when (val a = OutgoingFiles.admit(contentResolver, uri, File(dir, "staged-$i"))) {
+				is Admission.Refused -> {
+					staged.forEach { it.source.delete() }
+					return emptyList<OutgoingFile>() to a
+				}
+				is Admission.Granted -> {
+					running += a.file.size
+					if (running > MAX_OUTGOING_BYTES) {
+						staged.forEach { it.source.delete() }
+						a.file.source.delete()
+						return emptyList<OutgoingFile>() to
+							Admission.Refused(a.file.name, Admission.Reason.OVER_TRANSPORT, running, MAX_OUTGOING_BYTES)
+					}
+					staged += a.file
+				}
+			}
+		}
+		return staged to null
+	}
 
 	private fun queryName(uri: Uri): String? = runCatching {
 		contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
@@ -3675,7 +3746,7 @@ class ChatRepository(
 							DebugLog.log("Drain", "seq=${e.seq} kind=${e.kind} session=${e.session_id} from=${e.from} -> DROPPED (unresolvable team)")
 							continue
 						}
-						val files = Attachments.decode(filesDir, mb.epoch, e.seq, e.files)
+						val files = Attachments.decode(e.files)
 						// status-only entries still land (e.g. a wake-failure error
 						// with no body would otherwise vanish).
 						val bodyText = e.body.orEmpty()
@@ -3788,6 +3859,10 @@ class ChatRepository(
 					// This pass's own drain (just committed) is the "first completed pass" the resume
 					// flag exists to cover; the NEXT pass's rows tag by live visibility again.
 					resumeBacklogPending = false
+					// Off the drain, never inside it: the rows are durable and on screen at this point,
+					// so their bytes can take as long as they take. Also the heal for a fetch that a
+					// process death cut short, since it re-derives what is outstanding every pass.
+					fetchPendingAttachments()
 					pollFails = 0
 					if (_state.value.error != null || _state.value.pollFailStreak != 0) {
 						_state.update { it.copy(error = null, pollFailStreak = 0, connected = true, enrollingSince = 0L) }
@@ -3871,8 +3946,14 @@ class ChatRepository(
 					setMessageStatus(team, m.id, "error")
 					continue
 				}
+				val (rebuilt, refusedRow) = rebuildFiles(m)
+				if (refusedRow != null) {
+					setMessageStatus(team, m.id, "error")
+					DebugLog.log("Reconcile", "re-send of $key refused: ${refusedRow.reason}")
+					continue
+				}
 				try {
-					deliver(team, m.id, m.text, rebuildFiles(m), m.opId, false)
+					deliver(team, m.id, m.text, rebuilt, m.opId, false)
 				} catch (e: CancellationException) {
 					// The row is still genuinely "pending", not attempted-and-failed (the app
 					// backgrounded mid-upload) - undo the reconciled mark or this delivery can never
@@ -3881,11 +3962,9 @@ class ChatRepository(
 					throw e
 				} catch (e: Throwable) {
 					// deliver()'s own catch(Exception) settles every Exception via fail(), so what
-					// lands here is an Error - rebuildFiles() loading whole attachment files, or the
-					// send base64ing them, throwing OutOfMemoryError on a large re-upload. Rethrowing
-					// would escape into a Main-dispatched scope as an app-killing crash, and since the
-					// row stays "pending", every foreground would repeat it: a crash LOOP from one
-					// oversized row. Settle the row as retriable instead and move on.
+					// lands here is an Error. Rethrowing would escape into a Main-dispatched scope as
+					// an app-killing crash, and since the row stays "pending", every foreground would
+					// repeat it: a crash LOOP from one bad row. Settle it as retriable and move on.
 					setMessageStatus(team, m.id, "error")
 					DebugLog.log("Reconcile", "re-send of $key failed non-retriably: $e")
 				}
@@ -3913,6 +3992,12 @@ class ChatRepository(
 			.toList() + _state.value.scheduledSends.values.flatMap { it.fileRefs }.map { it.src } +
 			_state.value.drafts.values.flatMap { it.files }.map { it.src }
 		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs)
+		// The blob store's own residue, on the same cold-start pass. Nothing references a staged blob
+		// once its bytes reached a bucket, so age is the only signal available and the only one needed:
+		// a live transfer is minutes old, and anything swept can be fetched again by name. Runs
+		// strictly before startPolling, same as the bucket sweep, so no in-flight fetch is underfoot.
+		val freed = client?.pruneStaleBlobs(STALE_BLOB_MAX_AGE_MS) ?: 0L
+		if (freed > 0) DebugLog.log("Attachments", "pruned $freed bytes of transfer residue")
 	}
 
 	/** Mark a team fully read without opening it (swipe-away on its notification reads the burst).
@@ -4065,7 +4150,13 @@ class ChatRepository(
 	 * across calls, unlike a row's single out-$opId bucket), so two picks that happen to share a
 	 * basename cannot overwrite each other on disk. */
 	suspend fun addDraftFiles(team: String, uris: List<Uri>) = withContext(Dispatchers.IO) {
-		val picked = uris.mapNotNull { readUri(it) }
+		// Admitted like any other pick: a draft is just a send that has not happened yet, and this
+		// path previously had no size bound at all.
+		val (picked, refused) = admitPicked(uris, "pick-${UUID.randomUUID()}")
+		if (refused != null) {
+			_state.update { it.copy(error = refused.message()) }
+			return@withContext
+		}
 		if (picked.isEmpty()) return@withContext
 		val copied = Attachments.storeOutgoing(filesDir, "draft-${UUID.randomUUID()}", picked)
 		val next = _state.updateAndGet { s ->
@@ -4213,6 +4304,103 @@ class ChatRepository(
 	private fun scheduleAttachmentDelete(srcs: List<String>) {
 		if (srcs.isEmpty()) return
 		pollScope?.launch(Dispatchers.IO) { Attachments.deleteFiles(filesDir, srcs) }
+	}
+
+	/**
+	 * Fetch the bytes for every attachment whose message has arrived but whose file has not, and
+	 * fill in the src that makes it render.
+	 *
+	 * A message is prose plus references, so delivery never waits on bytes. This is the second half:
+	 * it runs off the drain, one file at a time so a thread of large attachments cannot open a dozen
+	 * concurrent transfers, and it is safe to call at any time because the work it looks for is
+	 * exactly the work still outstanding. That also makes it the recovery path: a fetch cut off by a
+	 * process death is simply still pending on the next pass, and resumes from the bytes already on
+	 * disk rather than restarting.
+	 *
+	 * Single-flight, because the caller fires once per poll pass and a transfer routinely outlives
+	 * one. Overlapping passes would re-derive the same pending set, re-download the same blobs, and
+	 * race each other inside [Attachments.land].
+	 */
+	private fun fetchPendingAttachments() {
+		val client = this.client ?: return
+		// Claim the latch only once there is somewhere to run, and hand it back if the dispatch does
+		// not happen. Claiming first would strand it forever on a null or already-cancelled scope,
+		// because the release lives in the coroutine body and a body that never runs never releases:
+		// attachments would then stop arriving for the life of the process, silently, since this
+		// singleton outlives every Activity and service restart.
+		val scope = pollScope ?: return
+		if (!fetchingAttachments.compareAndSet(false, true)) return
+		val job = scope.launch(Dispatchers.IO) {
+			try {
+				// Snapshot the work first: the state can change under a long transfer, and each landing
+				// re-reads the live row anyway.
+				val pending = _state.value.threads.flatMap { (team, msgs) ->
+					msgs.flatMap { m ->
+						m.files.filter { it.blobId != null && it.src == null }.map { Triple(team, m, it) }
+					}
+				}
+				for ((team, message, file) in pending) {
+					val blobId = file.blobId ?: continue
+					if (attachmentFetchFailures.getOrDefault(blobId, 0) >= MAX_ATTACHMENT_FETCH_TRIES) continue
+					val source = runCatchingCancellable { client.downloadBlob(blobId, file.blobGateway) }
+						.onFailure {
+							// Count against the blob, not the row: the same reference on several rows is
+							// one unfetchable thing, and a bounded count is what stops a blob no Gateway
+							// holds from being re-requested on every pass for the life of the install.
+							val tries = attachmentFetchFailures.getOrDefault(blobId, 0) + 1
+							attachmentFetchFailures[blobId] = tries
+							DebugLog.log("Attachments", "fetch of ${file.name} failed ($tries): $it")
+						}
+						.getOrNull() ?: continue
+					attachmentFetchFailures.remove(blobId)
+					val src =
+						Attachments.land(filesDir, Attachments.bucketFor(message.epoch, message.seq), file.name, source)
+							?: continue
+					landFetchedAttachment(team, message.id, file.name, src)
+					// The bytes now live in the attachments bucket, which is the copy the renderer reads
+					// and the orphan sweep owns. Keeping the blob as well would hold every attachment
+					// twice on the device with the least room for it.
+					client.forgetBlob(blobId)
+				}
+			} finally {
+				fetchingAttachments.set(false)
+			}
+		}
+		// A scope cancelled between the claim above and the dispatch creates a job whose body never
+		// runs, so its finally never fires. Releasing on completion covers that too, and is a no-op
+		// when the body did run and already released.
+		job.invokeOnCompletion { fetchingAttachments.set(false) }
+	}
+
+	/** Point one already-rendered row's file at its now-present bytes. Matched by name within the
+	 * row, the same pairing [Attachments.mergeSentEchoFiles] uses, since both sides derive names
+	 * through one safeName/uniqueName chain. */
+	private fun landFetchedAttachment(team: String, messageId: Long, name: String, src: String) {
+		var changed = false
+		val threads = _state.updateAndGet { s ->
+			// Re-established on EVERY invocation, not just the matching one: updateAndGet re-runs this
+			// lambda on a failed CAS, so a value carried over from a losing attempt would describe work
+			// the winning attempt did not do (see the same rule spelled out in reconcileSent).
+			changed = false
+			val thread = s.threads[team] ?: return@updateAndGet s
+			val idx = thread.indexOfFirst { it.id == messageId }
+			// The row can be gone (a forget, a replace) by the time the bytes land. Its blob stays in
+			// the store for the sweep; nothing here has to unwind.
+			if (idx < 0) {
+				changed = false
+				return@updateAndGet s
+			}
+			val row = thread[idx]
+			val files = row.files.map { if (it.name == name && it.src == null) it.copy(src = src) else it }
+			if (files == row.files) {
+				changed = false
+				return@updateAndGet s
+			}
+			changed = true
+			val next = thread.toMutableList().also { it[idx] = row.copy(files = files) }
+			s.copy(threads = s.threads + (team to next))
+		}.threads
+		if (changed) persistThreads(threads)
 	}
 
 	/** Drop a peer from this device: its thread, unread, tab, label, any cached TTS audio, and any
@@ -4398,7 +4586,13 @@ class ChatRepository(
 				val idx = thread.indexOfFirst { it.seq == msg.seq && it.epoch == msg.epoch }
 				if (idx >= 0) {
 					folded = true
-					val next = thread.toMutableList().also { it[idx] = msg.copy(id = thread[idx].id) }
+					val old = thread[idx]
+					// A re-drained entry describes its files but never carries them, so folding it in
+					// raw would blank a src whose bytes are already on disk and rendered - and a row
+					// with no src is one the orphan sweep is entitled to collect. Keep what landed;
+					// this is the inbound twin of mergeSentEchoFiles.
+					val merged = msg.copy(id = old.id, files = Attachments.mergeSentEchoFiles(old.files, msg.files).files)
+					val next = thread.toMutableList().also { it[idx] = merged }
 					s.copy(threads = s.threads + (team to next)).recomputeUnread(team, next)
 				} else {
 					folded = false
@@ -4470,7 +4664,7 @@ class ChatRepository(
 				obj.putOpt("from", persistFrom)
 				obj.putOpt("to", persistTo)
 				if (m.isPeer) obj.put("isPeer", true)
-				// Persist local paths (the decoded files survive on disk), never base64.
+				// Local paths and blob references only. The files themselves live on disk, not in here.
 				if (m.files.isNotEmpty()) {
 					val files = JSONArray()
 					for (f in m.files) {
@@ -4747,7 +4941,18 @@ class ChatRepository(
 		// MAX_RESPONSE_FILE_BYTES); a single attachment may use the whole bucket, so this is
 		// a total, not a stricter per-file cap. Pinned by ChatRepositoryConstantsTest - update
 		// both sides together.
-		const val MAX_OUTGOING_BYTES = 16_000_000
+		const val MAX_OUTGOING_BYTES = 16_000_000L
+
+		// Consecutive fetch failures before a blob stops being re-requested until the next launch. A
+		// reference no Gateway can serve is otherwise retried on every poll pass forever, which costs
+		// metered data and wakelock for something that will never arrive. Generous, because the common
+		// failure is a transient link, not a missing blob.
+		internal const val MAX_ATTACHMENT_FETCH_TRIES = 5
+
+		// How long transfer residue may sit in the blob store before a cold start reclaims it. Well
+		// past any real transfer, since the cost of being early is a re-fetch of something a live
+		// upload was still using.
+		internal const val STALE_BLOB_MAX_AGE_MS = 24 * 60 * 60 * 1000L
 
 		// A scheduled send's own bounded failure recovery (plans/scheduled-send.md): reconcilePending
 		// only mops up an INTERRUPTED (still-"pending") attempt, never a settled "error", so a fire

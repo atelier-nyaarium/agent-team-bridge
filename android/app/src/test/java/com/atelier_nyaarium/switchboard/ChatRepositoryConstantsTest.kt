@@ -16,7 +16,7 @@ class ChatRepositoryConstantsTest {
 	@Test
 	fun maxOutgoingBytesMatchesGatewayMaxResponseFileBytes() {
 		// src/gateway/routes.ts: const MAX_RESPONSE_FILE_BYTES = 16_000_000
-		assertEquals(16_000_000, ChatRepository.MAX_OUTGOING_BYTES)
+		assertEquals(16_000_000L, ChatRepository.MAX_OUTGOING_BYTES)
 	}
 
 	@Test

@@ -1,12 +1,23 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MANIFEST_FILENAME, MANIFEST_MARKER } from "../mcp/references/artifactNames.js";
 import { appendRefArtifacts, setReferencesEnabled } from "../mcp/references/attachRefs.js";
+import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js";
 
 ////////////////////////////////
 //  Functions & Helpers
+
+// A snapshot's bytes travel the blob plane like any other file, so building one uploads.
+const h = vi.hoisted(() => ({ wire: null as BlobWire | null }));
+
+vi.mock("../mcp/bridge/helpers.js", () => ({
+	routerPost: async (route: string, body: unknown) => {
+		if (!isBlobRoute(route) || !h.wire) throw new Error(`unexpected post to ${route}`);
+		return h.wire.answer(route, body);
+	},
+}));
 
 let root: string;
 let priorRoot: string | undefined;
@@ -25,7 +36,9 @@ const CART = [
 ].join("\n");
 
 beforeEach(() => {
+	// os.tmpdir() reads TMPDIR, which mounting the wire repoints, so take the ref root first.
 	root = fs.mkdtempSync(path.join(os.tmpdir(), "ref-e2e-"));
+	h.wire = mountBlobWire();
 	fs.mkdirSync(path.join(root, "src"), { recursive: true });
 	fs.writeFileSync(path.join(root, "src", "cart.ts"), CART);
 	priorRoot = process.env.REFERENCE_ROOT;
@@ -37,11 +50,17 @@ afterEach(() => {
 	if (priorRoot === undefined) delete process.env.REFERENCE_ROOT;
 	else process.env.REFERENCE_ROOT = priorRoot;
 	setReferencesEnabled(false);
+	h.wire?.dispose();
+	h.wire = null;
 	fs.rmSync(root, { recursive: true, force: true });
 });
 
-function decode(base64: string): string {
-	return Buffer.from(base64, "base64").toString("utf8");
+/** A shipped artifact's text, read back off the plane it was uploaded to. An artifact that named no
+ * bytes is a defect, not a supported shape. */
+function shipped(blobId: string | undefined): string {
+	if (blobId === undefined) throw new Error("ref artifact shipped without naming its bytes");
+	if (!h.wire) throw new Error("blob wire not mounted");
+	return h.wire.read(blobId).toString("utf8");
 }
 
 ////////////////////////////////
@@ -55,7 +74,7 @@ describe("a reply that links a symbol", () => {
 		if (!result.ok) return;
 		expect(result.files.map((f) => f.filename)).toEqual([MANIFEST_FILENAME, "cart.ts"]);
 
-		const manifest = JSON.parse(decode(result.files[0].base64));
+		const manifest = JSON.parse(shipped(result.files[0].blobId));
 		expect(manifest[MANIFEST_MARKER]).toBe(1);
 		expect(manifest.refs["ref://src/cart.ts:Cart:add"]).toMatchObject({
 			refPath: "src/cart.ts",
@@ -68,7 +87,7 @@ describe("a reply that links a symbol", () => {
 	it("ships the file's real text, so the viewer renders what the agent was looking at", async () => {
 		const result = await appendRefArtifacts("[add](ref://src/cart.ts:Cart:add)", []);
 
-		expect(result.ok && decode(result.files[1].base64)).toBe(CART);
+		expect(result.ok && shipped(result.files[1].blobId)).toBe(CART);
 	});
 
 	it("keeps the agent's own attachments and adds the snapshots after them", async () => {
@@ -77,7 +96,7 @@ describe("a reply that links a symbol", () => {
 			mime: "image/png",
 			size: 3,
 			descriptiveKey: "diagram.png",
-			base64: "AAA=",
+			blobId: `sha256-${"0".repeat(64)}`,
 		};
 
 		const result = await appendRefArtifacts("[add](ref://src/cart.ts:Cart:add)", [own]);
@@ -102,7 +121,7 @@ describe("what stops a send and what does not", () => {
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
-		const entry = Object.values(JSON.parse(decode(result.files[0].base64)).refs)[0];
+		const entry = Object.values(JSON.parse(shipped(result.files[0].blobId)).refs)[0];
 		expect(entry).toMatchObject({ quality: "fuzzy", startLine: 1 });
 	});
 
@@ -111,7 +130,7 @@ describe("what stops a send and what does not", () => {
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
-		const entry = Object.values(JSON.parse(decode(result.files[0].base64)).refs)[0];
+		const entry = Object.values(JSON.parse(shipped(result.files[0].blobId)).refs)[0];
 		expect(entry).toMatchObject({ quality: "unresolved", startLine: 1 });
 	});
 

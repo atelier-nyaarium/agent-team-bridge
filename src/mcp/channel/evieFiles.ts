@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, renameSync, statSync, utimesSync } from "node:fs";
 import { extname, join } from "node:path";
 import { cleanupTmpDir } from "../../shared/tmp-files.js";
 import type { ChannelFile } from "../../shared/types.js";
+import { downloadBlob } from "../blobTransfer.js";
 import { MANIFEST_FILENAME } from "../references/artifactNames.js";
 
 ////////////////////////////////
@@ -15,6 +16,9 @@ export interface MaterializeFilesParams {
 export interface MaterializedFile {
 	descriptiveKey: string;
 	path?: string;
+	/** The sender staged bytes and this side could not fetch them, as opposed to a file that named
+	 * no bytes in the first place. Both lack a path; only this one is worth retrying. */
+	fetchFailed?: boolean;
 }
 
 export interface RenderFilesBlockParams {
@@ -57,12 +61,17 @@ export function safeFilename(name: string): string {
 }
 
 /**
- * Materialize Discord-bridge files to /tmp/evie-files/<discordMessageId>/.
- * Files with a `base64` payload are written via tmp + atomic rename; files
- * without it pass through as metadata-only so the renderer lists them with no
- * `-> /path`. Expired buckets are swept at entry.
+ * Land an inbound message's files under /tmp/evie-files/<discordMessageId>/.
+ *
+ * A file's bytes are named by its `blobId` and pulled down a chunk at a time, then copied into
+ * place by the kernel, so an attachment of any size costs a fixed amount of heap. The copy lands
+ * through tmp + atomic rename. A file naming no bytes at all passes through as metadata-only, and
+ * the renderer lists it with no `-> /path`. Expired buckets are swept at entry.
  */
-export function materializeFiles({ discordMessageId, files }: MaterializeFilesParams): MaterializedFile[] {
+export async function materializeFiles({
+	discordMessageId,
+	files,
+}: MaterializeFilesParams): Promise<MaterializedFile[]> {
 	mkdirSync(EVIE_FILES_DIR, { recursive: true });
 	cleanupTmpDir({ dir: EVIE_FILES_DIR, maxAgeMs: EVIE_FILES_TTL_MS, mode: "dirs" });
 
@@ -77,16 +86,21 @@ export function materializeFiles({ discordMessageId, files }: MaterializeFilesPa
 			descriptiveKey: file.descriptiveKey,
 		};
 
-		// Presence, not truthiness: an empty file carries base64 "" and still has to land, or the
-		// recipient is told it was not transferred while the sender was told it sent.
-		if (file.base64 !== undefined) {
+		// Presence, not truthiness: a zero-byte file still has to land, or the recipient is told it
+		// was not transferred while the sender was told it sent.
+		if (file.blobId !== undefined) {
 			try {
+				const source = await downloadBlob(file.blobId, file.blobGateway);
 				mkdirSync(bucket, { recursive: true });
 				const targetPath = resolveCollisionFreePath(bucket, file.filename, claimedLeaves);
-				writeAtomic(targetPath, Buffer.from(file.base64, "base64"));
+				landAtomic(targetPath, (tmpPath) => copyFileSync(source, tmpPath));
 				meta.path = targetPath;
 				restoreModifiedAt(targetPath, file.modifiedAt);
 			} catch (err) {
+				// Distinct from a file that named no bytes at all. The sender staged these and the
+				// fetch failed, which is worth asking about; a metadata-only file never had bytes to
+				// get. Collapsing the two would have the agent give up on a recoverable transfer.
+				meta.fetchFailed = true;
 				console.error(
 					`[evie-files] failed to materialize "${file.filename}" for msg ${discordMessageId}: ${(err as Error).message}`,
 				);
@@ -121,23 +135,28 @@ export function dropReferenceArtifacts(files: ChannelFile[]): ChannelFile[] {
 
 /**
  * Render the unified [FILES] sentinel block for the channel notification.
- * Materialized entries get `-> /path`; metadata-only entries do not.
+ * Materialized entries get `-> /path`; the rest are described by why they have none.
  */
 export function renderFilesBlock({ discordMessageId, files }: RenderFilesBlockParams): string {
 	if (files.length === 0) return "";
 
 	const opener = discordMessageId ? `[FILES messageId="${discordMessageId}"]` : `[FILES]`;
-	// Console files always arrive with bytes and are materialized. A metadata-only
-	// entry (no bytes) has no re-fetch path, so it is surfaced as not-transferred.
-	const hasMetadataOnly = files.some((f) => !f.path);
-	const instruction = hasMetadataOnly
-		? `*Files with \`-> /path\` are on disk; Read them. Entries without a path were not transferred.*`
-		: `*Files with \`-> /path\` are on disk; Read them.*`;
+	// A file with no path failed one of two ways, and the agent's next move differs: bytes the
+	// sender never staged are gone for good, while a failed fetch is worth asking to have re-sent.
+	// One sentence for both would have the agent give up on the recoverable case.
+	const failed = files.some((f) => !f.path && f.fetchFailed);
+	const missing = files.some((f) => !f.path && !f.fetchFailed);
+	const notes = [
+		failed ? "Entries marked (fetch failed) were sent but could not be retrieved; ask for a re-send." : null,
+		missing ? "Entries without a path carried no bytes." : null,
+	].filter(Boolean);
+	const instruction = `*Files with \`-> /path\` are on disk; Read them.${notes.length ? ` ${notes.join(" ")}` : ""}*`;
 	const lines = files.map((f, i) => {
 		// descriptiveKey is sender-supplied and this block is line-structured, so a newline in it
 		// would let a filename forge entries or an early [/FILES] terminator.
 		const head = `${i + 1}. ${f.descriptiveKey.replace(/[\r\n]+/g, " ")}`;
-		return f.path ? `${head} -> \`${f.path}\`` : head;
+		if (f.path) return `${head} -> \`${f.path}\``;
+		return f.fetchFailed ? `${head} (fetch failed)` : head;
 	});
 
 	return `${opener}\n${instruction}\n${lines.join("\n")}\n[/FILES]`;
@@ -186,12 +205,11 @@ function resolveCollisionFreePath(bucket: string, requestedLeaf: string, claimed
 }
 
 /**
- * Write to <target>.tmp.<pid> then rename. Rename is atomic on POSIX, so
- * concurrent host MCP processes handling the same channel_push converge on
- * identical bytes at the target; last rename wins.
+ * Fill <target>.tmp.<pid> then rename. Rename is atomic on POSIX, so concurrent host MCP processes
+ * handling the same channel_push converge on identical bytes at the target; last rename wins.
  */
-function writeAtomic(targetPath: string, buffer: Buffer): void {
+function landAtomic(targetPath: string, fill: (tmpPath: string) => void): void {
 	const tmpPath = `${targetPath}.tmp.${process.pid}`;
-	writeFileSync(tmpPath, buffer);
+	fill(tmpPath);
 	renameSync(tmpPath, targetPath);
 }

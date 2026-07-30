@@ -87,6 +87,7 @@ class ProtocolFixturesTest {
 			"op-envelope-create-session-v2.json" to ConsoleOp.CreateSession::class,
 			"op-envelope-create-session-workdir.json" to ConsoleOp.CreateSession::class,
 			"op-envelope-list-dirs.json" to ConsoleOp.ListDirs::class,
+			"op-envelope-blob-put.json" to ConsoleOp.BlobPut::class,
 			"op-envelope-rename-session.json" to ConsoleOp.RenameSession::class,
 			"op-envelope-close-session.json" to ConsoleOp.CloseSession::class,
 		)

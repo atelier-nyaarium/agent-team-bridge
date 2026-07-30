@@ -2,6 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+/** Ceiling on a file a ref may point at, checked on the stat before the read. Well above the
+ * snapshot cap in artifactBuilder, which bounds what is SENT rather than what is opened. */
+const MAX_REF_SOURCE_BYTES = 8_000_000;
+
 ////////////////////////////////
 //  Interfaces & Types
 
@@ -83,6 +87,15 @@ export function loadRefFile(projectRoot: string, refPath: string): LoadResult {
 	try {
 		const stat = fs.statSync(absolute);
 		if (!stat.isFile()) return { ok: false, failure: "unreadable", detail: `${refPath} is not a file` };
+		// Sized BEFORE reading. The snippet caps downstream bound what is SENT, which is no help if
+		// pointing a ref at a multi-gigabyte file already read it into memory to find that out.
+		if (stat.size > MAX_REF_SOURCE_BYTES) {
+			return {
+				ok: false,
+				failure: "unreadable",
+				detail: `${refPath} is ${stat.size} bytes, over the ${MAX_REF_SOURCE_BYTES}-byte source limit`,
+			};
+		}
 		buffer = fs.readFileSync(absolute);
 	} catch (err) {
 		return { ok: false, failure: "unreadable", detail: `${refPath}: ${(err as Error).message}` };

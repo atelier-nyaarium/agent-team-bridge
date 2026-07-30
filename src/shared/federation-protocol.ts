@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { sign, verify } from "./crypto.js";
-import { ChannelFilesSchema } from "./evie-protocol.js";
+import { BLOB_CHUNK_BYTES, ChannelFilesSchema } from "./evie-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
 import { NoticeTierWireFields, NoticeTitle } from "./notice.js";
 import { isSlug } from "./session-id.js";
@@ -85,6 +85,19 @@ export const FederatedOpSchema = z.discriminatedUnion("kind", [
 	}),
 	// Discovery fan-out: the asking Gateway queries each online peer for its teams.
 	z.object({ kind: z.literal("list_teams") }),
+	// Fetch a range of a blob from the Gateway that holds it.
+	//
+	// The hop that makes an attachment survive routing. Bytes live on ONE Gateway; the message
+	// naming them routes by its own rules and often lands on another, so without this the receiver
+	// asks a Gateway that never had them. Clients still only ever talk to their own Gateway, which
+	// pulls the range in on their behalf and caches it - keeping the transfer loops identical
+	// whether a blob is local or three hops away.
+	z.object({
+		kind: z.literal("blob_fetch"),
+		blobId: z.string().regex(/^sha256-[0-9a-f]{64}$/),
+		offset: z.number().int().nonnegative(),
+		length: z.number().int().positive().max(BLOB_CHUNK_BYTES),
+	}),
 	// Wake-across-Gateways: bring up a sleeping devcontainer on the destination.
 	z.object({ kind: z.literal("wake"), team: z.string().min(1).max(MAX_ADDRESS_LEN) }),
 	// The destination's reply, pinned to the origin: delivered to `session_id` on the origin.

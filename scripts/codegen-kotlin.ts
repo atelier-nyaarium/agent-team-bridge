@@ -29,6 +29,7 @@ import {
 	SignedRevocationSchema,
 } from "../src/shared/admission.js";
 import { CONSOLE_PROTOCOL_VERSION } from "../src/shared/console-protocol.js";
+import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../src/shared/evie-protocol.js";
 import {
 	ConsoleApprovalOpSchema,
 	ConsoleApprovalResultSchema,
@@ -422,6 +423,14 @@ ${INDENT}const val SLUG_PATTERN: String = ${kotlinString(SLUG_RE.source)}
 ${INDENT}const val MAX_SLUG_LEN: Int = ${MAX_SLUG_LEN}
 
 ${INDENT}const val MAX_CONV_ID_LEN: Int = ${MAX_CONV_ID_LEN}
+
+${INDENT}/** Bytes per blob chunk. Every runtime moves attachment bytes in units of this, so the peak
+${INDENT} * allocation on a transfer is a constant no matter how large the file is. */
+${INDENT}const val BLOB_CHUNK_BYTES: Int = ${BLOB_CHUNK_BYTES}
+
+${INDENT}/** Largest a single blob may grow to. Enforced where the bytes land rather than where they
+${INDENT} * are described, since a message's stated size is the sender's own claim. */
+${INDENT}const val MAX_BLOB_BYTES: Long = ${MAX_BLOB_BYTES}
 }`;
 
 const output = `${[header, ...blocks].join("\n\n")}\n`;

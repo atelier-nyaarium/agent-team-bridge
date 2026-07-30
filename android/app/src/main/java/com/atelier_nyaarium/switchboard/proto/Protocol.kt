@@ -44,6 +44,14 @@ object Protocol {
 	const val MAX_SLUG_LEN: Int = 64
 
 	const val MAX_CONV_ID_LEN: Int = 128
+
+	/** Bytes per blob chunk. Every runtime moves attachment bytes in units of this, so the peak
+	 * allocation on a transfer is a constant no matter how large the file is. */
+	const val BLOB_CHUNK_BYTES: Int = 1048576
+
+	/** Largest a single blob may grow to. Enforced where the bytes land rather than where they
+	 * are described, since a message's stated size is the sender's own claim. */
+	const val MAX_BLOB_BYTES: Long = 16000000
 }
 
 @Serializable
@@ -52,8 +60,9 @@ data class ChannelFile(
 	val mime: String,
 	val size: Long,
 	val descriptiveKey: String,
-	val base64: String? = null,
 	val modifiedAt: Long? = null,
+	val blobId: String? = null,
+	val blobGateway: String? = null,
 )
 
 @Serializable
@@ -234,6 +243,31 @@ sealed class ConsoleOp {
 	@SerialName("list_dirs")
 	data class ListDirs(
 		val path: String,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("blob_stat")
+	data class BlobStat(
+		val blobId: String,
+		val fromGateway: String? = null,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("blob_put")
+	data class BlobPut(
+		val blobId: String,
+		val offset: Long,
+		val chunk: String,
+		val final: Boolean,
+	) : ConsoleOp()
+
+	@Serializable
+	@SerialName("blob_get")
+	data class BlobGet(
+		val blobId: String,
+		val offset: Long,
+		val length: Long,
+		val fromGateway: String? = null,
 	) : ConsoleOp()
 
 	@Serializable
@@ -912,6 +946,25 @@ data class ConsoleRenameSessionResult(
 data class ConsoleListDirsResult(
 	val entries: List<String>,
 	val truncated: Boolean? = null,
+)
+
+@Serializable
+data class ConsoleBlobStatResult(
+	val have: Long,
+	val size: Long? = null,
+	val complete: Boolean,
+)
+
+@Serializable
+data class ConsoleBlobPutResult(
+	val have: Long,
+	val complete: Boolean,
+)
+
+@Serializable
+data class ConsoleBlobGetResult(
+	val chunk: String? = null,
+	val eof: Boolean,
 )
 
 @Serializable

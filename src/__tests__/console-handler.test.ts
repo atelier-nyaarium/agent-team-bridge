@@ -402,14 +402,26 @@ describe("createConsoleDispatcher", () => {
 
 	it("send forwards op.files to routes.send", async () => {
 		const h = makeHarness();
-		const file = { filename: "shot.png", mime: "image/png", size: 3, descriptiveKey: "shot.png", base64: "aGk=" };
+		const file = {
+			filename: "shot.png",
+			mime: "image/png",
+			size: 3,
+			descriptiveKey: "shot.png",
+			blobId: `sha256-${"a".repeat(64)}`,
+		};
 		await h.handler.handleFrame(frame({ kind: "send", to: "team-a", body: "see this", files: [file] }, "op2"));
 		expect(h.sendCalls[0].files).toEqual([file]);
 	});
 
 	it("a retried send with the same opId runs the route once (idempotent)", async () => {
 		const h = makeHarness();
-		const file = { filename: "a.png", mime: "image/png", size: 3, descriptiveKey: "a.png", base64: "aGk=" };
+		const file = {
+			filename: "a.png",
+			mime: "image/png",
+			size: 3,
+			descriptiveKey: "a.png",
+			blobId: `sha256-${"b".repeat(64)}`,
+		};
 		const f = frame({ kind: "send", to: "team-a", body: "x", files: [file] }, "dup-op");
 		// Concurrent retry coalesces onto the in-flight promise; a later retry replays.
 		const [r1, r2] = await Promise.all([h.handler.handleFrame(f), h.handler.handleFrame(f)]);

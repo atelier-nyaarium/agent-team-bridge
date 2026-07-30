@@ -1,4 +1,4 @@
-// SYNC-HASH: 58dd0c9a31d25eff8a6d1b073de6982e
+// SYNC-HASH: e856f3f95c39795e26a37696a3d0b34d
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -21,10 +21,9 @@ import { z } from "zod";
 /**
  * Channel attachment metadata carried over the bridge (console-origin files).
  *
- * Presence of `base64` means the bytes are included and the host MCP plugin
- * should materialize the file; absence means metadata-only (no re-fetch path).
- * No regex on `base64`: it can hold ~670 MB (the 500 MB backstop, base64-inflated),
- * so validation is shape-only.
+ * Metadata only. A message names its files and never carries them, so its size is bounded by the
+ * count of attachments rather than by their contents, and the bytes move on the blob plane at
+ * whatever pace and chunk size that plane chooses.
  */
 export const ChannelFileSchema = z
 	.object({
@@ -32,17 +31,71 @@ export const ChannelFileSchema = z
 		mime: z.string(),
 		size: z.number().int().nonnegative(),
 		descriptiveKey: z.string(),
-		base64: z.string().optional(),
 		// The source file's own mtime in epoch MILLISECONDS, so a save on the far side can restore
 		// the real age rather than stamping now. Optional: a sender that cannot determine one omits
 		// it and the receiver hides the row. Populate from `mtime.getTime()`, never `mtimeMs`, which
 		// is fractional and fails this integer check. Bounded to the ECMAScript Date range, since a
 		// larger safe integer is representable here but not by the Date every consumer builds.
 		modifiedAt: z.number().int().min(-8_640_000_000_000_000).max(8_640_000_000_000_000).optional(),
+		// The bytes, by the digest of the bytes: `sha256-<64 hex>`. Transferred out of band in
+		// bounded chunks, so a message carrying a reference costs the same whether the file is
+		// 4 KB or 4 GB. Optional because a file may legitimately name no bytes: a peer that could
+		// not stage them still says the attachment existed rather than dropping it silently.
+		blobId: z
+			.string()
+			.regex(/^sha256-[0-9a-f]{64}$/)
+			.optional(),
+		// WHICH Gateway holds those bytes. A blob lives on the one Gateway it was uploaded to, while
+		// the message naming it routes by its own rules and regularly lands somewhere else, so a
+		// reference that says only WHAT is unfetchable the moment the two differ. A receiver still
+		// asks its OWN Gateway for the bytes; this tells that Gateway where to go and get them.
+		// Absent means "wherever you are", which is correct for every same-Gateway transfer and is
+		// what a peer predating this field implies.
+		blobGateway: z.string().min(1).max(64).optional(),
 	})
 	.meta({ id: "ChannelFile" });
 
-export const ChannelFilesSchema = z.array(ChannelFileSchema);
+/**
+ * Raw bytes per chunk of a blob transfer.
+ *
+ * Exported from the leaf so all four runtimes agree by construction rather than each picking a
+ * number. Sized against the phone, not the servers: the console holds several transient copies of
+ * a chunk while base64ing, JSON-encoding and sealing it, and its heap is the tightest ceiling in
+ * the path. Each of those copies is a JVM String, so each costs two bytes per character, which puts
+ * the live peak around 15-20 MB per chunk rather than the ~1.8x the wire figure suggests. That is
+ * survivable and, crucially, CONSTANT: it no longer scales with the size of the file being moved,
+ * which is the whole reason the plane exists.
+ */
+export const BLOB_CHUNK_BYTES = 1_048_576;
+
+/**
+ * Largest a single blob may grow to, enforced where the bytes land rather than where they are
+ * described.
+ *
+ * A message states a file's `size`, but that is the sender talking: nothing verifies it, and once
+ * bytes travel out of band there is no per-message total left to measure. So the ceiling lives on
+ * the store's own write path, which counts what actually arrived. A sender that under-reports gets
+ * refused at the chunk that crosses the line, having moved a bounded amount of data to get there.
+ */
+export const MAX_BLOB_BYTES = 16_000_000;
+
+/**
+ * Ceiling a single sealed relay frame may not cross, asserted in tests against the WebSocket
+ * limits set explicitly on both ends of the gateway<->evie socket. An oversized frame does not
+ * merely fail there: it closes the socket and takes every team's traffic with it.
+ */
+export const MAX_RELAY_FRAME_BYTES = 8_000_000;
+
+/**
+ * Attachments on one message.
+ *
+ * Capped by COUNT, because bytes are no longer what a message costs. Each file is a reference the
+ * receiver will chase, so an uncapped list is an uncapped amount of fetching however small the
+ * message itself is: a thousand files declaring one byte each still points at a thousand blobs.
+ * Ten matches the tightest renderer bound in the path (a Discord message) and is far above any real
+ * reply.
+ */
+export const ChannelFilesSchema = z.array(ChannelFileSchema).max(10);
 
 /** Frames the gateway RECEIVES from evie-bot. Unknown `type` values fail the
  * union; the consumer logs and drops them (observability, not crash). */

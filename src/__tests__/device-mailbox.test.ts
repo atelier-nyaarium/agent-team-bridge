@@ -117,30 +117,17 @@ describe("DeviceMailbox", () => {
 		expect(stale.cursor).toBe(2);
 	});
 
-	// No body, so the byte estimate is exactly the base64 length per entry.
-	function fileMessage(session_id: string, base64: string): MailboxInput {
-		return {
-			kind: "reply",
-			session_id,
-			files: [
-				{
-					filename: "a.bin",
-					mime: "application/octet-stream",
-					size: base64.length,
-					descriptiveKey: "a.bin",
-					base64,
-				},
-			],
-		};
+	/** An entry weighing [bytes], via the body. Prose is what the cap measures now: an attachment
+	 * contributes only its name and reference, since the bytes themselves are not in the mailbox. */
+	function heavyMessage(session_id: string, bytes: number): MailboxInput {
+		return { kind: "reply", session_id, body: "x".repeat(bytes) };
 	}
 
-	it("byte cap evicts oldest file-bearing entries and counts them in dropped", () => {
-		// 100-byte byte cap; each entry carries ~40 bytes of base64.
+	it("byte cap evicts oldest entries and counts them in dropped", () => {
 		const box = new DeviceMailbox(1, 100, 100);
-		const big = "x".repeat(40);
-		box.append(fileMessage("s1", big));
-		box.append(fileMessage("s1", big));
-		box.append(fileMessage("s1", big)); // now ~120 bytes > 100, oldest evicted
+		box.append(heavyMessage("s1", 40));
+		box.append(heavyMessage("s1", 40));
+		box.append(heavyMessage("s1", 40)); // now 120 bytes > 100, oldest evicted
 		const snap = box.drain(0);
 		expect(snap.entries.length).toBe(2);
 		expect(snap.dropped).toBe(1);
@@ -148,20 +135,44 @@ describe("DeviceMailbox", () => {
 
 	it("byte cap always keeps the just-appended entry even if it alone exceeds the cap", () => {
 		const box = new DeviceMailbox(1, 100, 50);
-		box.append(fileMessage("s1", "x".repeat(200))); // single oversized entry (backstop only)
+		box.append(heavyMessage("s1", 200)); // single oversized entry (backstop only)
 		const snap = box.drain(0);
 		expect(snap.entries.length).toBe(1);
 	});
 
+	it("an attachment weighs its reference, not its contents", () => {
+		// The whole point of the blob plane: a mailbox holding a 4 GB video costs the same as one
+		// holding a 4 KB note, so a few large attachments can never evict real unread mail. A 1 KB
+		// cap against ten 4 GB files is only survivable because the accounting counts the name and
+		// the digest; under the old base64 accounting the first entry alone would have evicted.
+		const box = new DeviceMailbox(10, 100, 1_000);
+		const withFile = (size: number): MailboxInput => ({
+			kind: "reply",
+			session_id: "s1",
+			files: [
+				{
+					filename: "a.bin",
+					mime: "application/octet-stream",
+					size,
+					descriptiveKey: "a.bin",
+					blobId: `sha256-${"b".repeat(64)}`,
+				},
+			],
+		});
+		for (let i = 0; i < 10; i++) box.append(withFile(4_000_000_000));
+		const snap = box.drain(0);
+		expect(snap.entries.length).toBe(10);
+		expect(snap.dropped).toBe(0);
+	});
+
 	it("ack keeps the byte accounting in sync so later appends do not over-evict", () => {
 		const box = new DeviceMailbox(1, 100, 100);
-		const big = "x".repeat(40);
-		box.append(fileMessage("s1", big));
-		box.append(fileMessage("s1", big));
+		box.append(heavyMessage("s1", 40));
+		box.append(heavyMessage("s1", 40));
 		box.drain(2, 1); // ack both, freeing their bytes
 		// A fresh pair fits because the acked bytes were reclaimed.
-		box.append(fileMessage("s1", big));
-		box.append(fileMessage("s1", big));
+		box.append(heavyMessage("s1", 40));
+		box.append(heavyMessage("s1", 40));
 		expect(box.drain(0).entries.length).toBe(2);
 		expect(box.drain(0).dropped).toBe(0);
 	});

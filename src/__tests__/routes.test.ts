@@ -5,6 +5,7 @@ import { createRoutes, MAX_RESPONSE_FILE_BYTES, type RoutesDeps } from "../gatew
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation } from "../gateway/websocket.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
+import { BLOB_CHUNK_BYTES, MAX_RELAY_FRAME_BYTES } from "../shared/evie-protocol.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
 import { SessionStore } from "../shared/session-store.js";
@@ -768,23 +769,34 @@ describe("routes", () => {
 			expect(withoutFiles.message_id).toBeUndefined();
 		});
 
-		it("stores file metadata without base64 but pushes the full bytes", async () => {
+		it("stores a reply's filenames but never a reference that would fetch their bytes", async () => {
+			// `/pending` enumerates every session id and `/poll` authorizes nobody, so anything in the
+			// store is readable by whoever can reach the port - and a channel entry is persistent and
+			// never swept. A blobId there is not metadata, it is a bearer token for the content:
+			// `/blob/get` hands the bytes to anyone who can name them. Naming the file is the most a
+			// stored copy may do.
 			const store = new PendingJobStore<ResponsePayload>();
 			store.create("sess-files", "agent", "console");
 			await store.waitForResult("sess-files", 1); // settle so the result is poll-recoverable
 			const ctx = makeCtx({ store });
 			const { respond, poll } = createRoutes(ctx);
-			const b64 = Buffer.from("hello bytes").toString("base64");
+			const blobId = `sha256-${"a".repeat(64)}`;
 			respond(new Request("http://localhost/respond", { method: "POST" }), {
 				session_id: "sess-files",
 				response: "screenshot attached",
-				files: [{ filename: "shot.png", mime: "image/png", size: 11, descriptiveKey: "shot.png", base64: b64 }],
+				files: [{ filename: "shot.png", mime: "image/png", size: 11, descriptiveKey: "shot.png", blobId }],
 			});
-			// The stored (poll-recoverable) result keeps metadata only, no base64.
+
 			const polled = poll(new Request("http://localhost/poll", { method: "POST" }), { session_id: "sess-files" });
 			const body = (await polled.json()) as ResponsePayload;
-			expect(body.files?.[0]).toMatchObject({ filename: "shot.png", mime: "image/png" });
-			expect(body.files?.[0].base64).toBeUndefined();
+			expect(body.files?.[0]).toEqual({
+				filename: "shot.png",
+				mime: "image/png",
+				size: 11,
+				descriptiveKey: "shot.png",
+			});
+			expect(body.files?.[0].blobId).toBeUndefined();
+			expect(JSON.stringify(body)).not.toContain(blobId);
 		});
 
 		describe("reply gate (an unconfirmed caller's own bridge handshake)", () => {
@@ -1860,6 +1872,16 @@ describe("routes", () => {
 		it("MAX_RESPONSE_FILE_BYTES matches the Android console's own MAX_OUTGOING_BYTES", () => {
 			// android/.../ChatRepository.kt: const val MAX_OUTGOING_BYTES = 16_000_000
 			expect(MAX_RESPONSE_FILE_BYTES).toBe(16_000_000);
+		});
+
+		it("a sealed chunk frame stays under the relay budget, which stays under the WS ceiling", () => {
+			// The chunk constant is sized against the phone's heap; this pins the OTHER end of that
+			// choice, that a chunk cannot grow into a frame the socket will refuse. An oversized
+			// frame closes the gateway<->evie socket and drops every team's traffic, so the two
+			// numbers must not be able to drift independently.
+			const sealedChunk = BLOB_CHUNK_BYTES * 2;
+			expect(sealedChunk).toBeLessThan(MAX_RELAY_FRAME_BYTES);
+			expect(MAX_RELAY_FRAME_BYTES).toBeLessThan(EVIE_WS_MAX_PAYLOAD_BYTES);
 		});
 
 		it("a max-size payload's sealed relay frame clears the explicit WS ceiling", () => {

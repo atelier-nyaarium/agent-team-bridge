@@ -31,6 +31,11 @@ function setup() {
 	return { auth, sessionStore, registry };
 }
 
+/** An HTTP request presenting a session credential, the way a bound MCP calls in. */
+function withToken(token: string): Request {
+	return new Request("http://gateway/blob/put", { headers: { "x-session-token": token } });
+}
+
 /** Put a socket in the registry under a team, the way a completed register does. */
 function goLive(registry: TeamRegistry, sessionStore: SessionStore, team: string, ws: { data: WsData }): void {
 	registry.set(team, new Map([["s1", ws as never]]));
@@ -39,6 +44,48 @@ function goLive(registry: TeamRegistry, sessionStore: SessionStore, team: string
 
 ////////////////////////////////
 //  Tests
+
+describe("what the subject-less byte plane requires", () => {
+	it("is open while no local session is bound, matching what an unbound name already allows", () => {
+		// Not a weakening invented for blobs: satisfies(UNBOUND, anything) is already true, so a
+		// hand-launched tokenless deployment keeps working instead of silently losing attachments.
+		const { auth } = setup();
+
+		expect(auth.mayUseLocalPlane(NOTHING_PRESENTED)).toBe(true);
+	});
+
+	it("refuses a caller presenting nothing once any session is bound", () => {
+		const { auth, sessionStore } = setup();
+		const record = sessionStore.mint({ spawn: "recipe-app" });
+		sessionStore.ensureBindToken(record);
+		sessionStore.activateBinding(record);
+
+		expect(auth.mayUseLocalPlane(NOTHING_PRESENTED)).toBe(false);
+	});
+
+	it("admits a caller holding any bound session's token, since a transfer names bytes, not a session", () => {
+		const { auth, sessionStore } = setup();
+		const mine = sessionStore.mint({ spawn: "recipe-app" });
+		const token = sessionStore.ensureBindToken(mine);
+		sessionStore.activateBinding(mine);
+		const other = sessionStore.mint({ spawn: "other-app" });
+		sessionStore.ensureBindToken(other);
+		sessionStore.activateBinding(other);
+
+		expect(auth.mayUseLocalPlane(presentedByRequest(withToken(token)))).toBe(true);
+		expect(auth.mayUseLocalPlane(presentedByRequest(withToken("not-a-real-token")))).toBe(false);
+	});
+
+	it("ignores a binding that was only minted, so a reattached session is not locked out", () => {
+		// The token for a launch that merely reattached was never delivered, so demanding it would
+		// refuse the very session it names - the same rule toClaim follows.
+		const { auth, sessionStore } = setup();
+		const record = sessionStore.mint({ spawn: "recipe-app" });
+		sessionStore.ensureBindToken(record);
+
+		expect(auth.mayUseLocalPlane(NOTHING_PRESENTED)).toBe(true);
+	});
+});
 
 describe("what a name requires", () => {
 	it("requires nothing of a name no record holds", () => {

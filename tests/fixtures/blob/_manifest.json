@@ -1,0 +1,127 @@
+{
+	"note": "Blob-store conformance corpus. Iterated by src/__tests__/blob-store.test.ts AND android BlobStoreTest.kt, so a chunk-boundary or digest rule cannot be honored by only one runtime.",
+	"cases": [
+		{
+			"name": "single-chunk",
+			"content": "hello blob",
+			"blobId": "sha256-e997afd18e5f6be004fc193aed2c90291e68ab2c7599a62538c935b7fca6ab0f",
+			"chunks": [
+				{
+					"offset": 0,
+					"text": "hello blob",
+					"final": true
+				}
+			],
+			"expect": "complete"
+		},
+		{
+			"name": "two-chunks-exact-boundary",
+			"content": "abcdefgh",
+			"chunks": [
+				{
+					"offset": 0,
+					"text": "abcd",
+					"final": false
+				},
+				{
+					"offset": 4,
+					"text": "efgh",
+					"final": true
+				}
+			],
+			"expect": "complete",
+			"blobId": "sha256-9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab"
+		},
+		{
+			"name": "retried-chunk-is-a-noop",
+			"content": "abcdefgh",
+			"chunks": [
+				{
+					"offset": 0,
+					"text": "abcd",
+					"final": false
+				},
+				{
+					"offset": 0,
+					"text": "abcd",
+					"final": false
+				},
+				{
+					"offset": 4,
+					"text": "efgh",
+					"final": true
+				}
+			],
+			"expect": "complete",
+			"blobId": "sha256-9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab"
+		},
+		{
+			"name": "overlapping-resume-from-stale-cursor",
+			"content": "abcdefgh",
+			"chunks": [
+				{
+					"offset": 0,
+					"text": "abcdef",
+					"final": false
+				},
+				{
+					"offset": 4,
+					"text": "efgh",
+					"final": true
+				}
+			],
+			"expect": "complete",
+			"blobId": "sha256-9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab"
+		},
+		{
+			"name": "gap-is-refused",
+			"content": "abcdefgh",
+			"chunks": [
+				{
+					"offset": 0,
+					"text": "abcd",
+					"final": false
+				},
+				{
+					"offset": 6,
+					"text": "gh",
+					"final": true
+				}
+			],
+			"expect": "throws",
+			"blobId": "sha256-9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab"
+		},
+		{
+			"name": "empty-blob",
+			"content": "",
+			"chunks": [
+				{
+					"offset": 0,
+					"text": "",
+					"final": true
+				}
+			],
+			"expect": "complete",
+			"blobId": "sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+		},
+		{
+			"name": "digest-mismatch-never-becomes-readable",
+			"content": "abcdefgh",
+			"corruptLastChunkTo": "efgX",
+			"chunks": [
+				{
+					"offset": 0,
+					"text": "abcd",
+					"final": false
+				},
+				{
+					"offset": 4,
+					"text": "efgh",
+					"final": true
+				}
+			],
+			"expect": "rejected",
+			"blobId": "sha256-9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab"
+		}
+	]
+}
