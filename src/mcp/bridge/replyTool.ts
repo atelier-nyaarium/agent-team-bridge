@@ -9,7 +9,7 @@ import { routerPost } from "./helpers.js";
 // (MAX_RESPONSE_FILE_BYTES) rather than a stricter sub-limit - a single file may use the
 // whole bucket. The gateway enforces the real backstop (a buggy agent on a trusted machine
 // is not the threat model, but a clear error beats a silent oversized push).
-const MAX_ATTACHMENT_BYTES = 500_000_000;
+const MAX_ATTACHMENT_BYTES = 16_000_000;
 
 // An extension missing here falls back to octet-stream, and both renderers classify on the mime
 // prefix alone without re-sniffing, so the file gets a bare row instead of a thumbnail or player.
@@ -37,7 +37,7 @@ const MIME_BY_EXT: Record<string, string> = {
 	".csv": "text/csv",
 };
 
-/** Read and base64 an absolute-path attachment with the 500MB advisory cap.
+/** Read and base64 an absolute-path attachment with the shared advisory cap.
  * Shared by the reply tools and notify_human. Unlike inbound ChannelFiles
  * (which may be metadata-only), this always carries bytes. */
 export async function readReplyAttachment(filePath: string): Promise<ChannelFile & { base64: string }> {

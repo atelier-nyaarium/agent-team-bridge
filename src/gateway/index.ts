@@ -1364,11 +1364,11 @@ export async function startGateway(): Promise<void> {
 
 	Bun.serve<WsData>({
 		port: PORT,
-		// Bun's own default (128MB) is well under a base64'd 500MB attachment (~667MB on the
-		// wire) - MAX_RESPONSE_FILE_BYTES in routes.ts would never even get a chance to reject
-		// or accept the request, since Bun would already have cut it off. Sized for one
-		// max-bucket payload with headroom, not the mailbox's own larger multi-payload ceiling.
-		maxRequestBodySize: 700_000_000,
+		// Explicit so the ceiling is a decision, not an inherited default: one max-bucket
+		// payload (MAX_RESPONSE_FILE_BYTES, base64-inflated ~4/3) plus envelope headroom, so
+		// routes.ts gets to reject an oversized payload with a real error instead of Bun
+		// cutting the request off first.
+		maxRequestBodySize: 64_000_000,
 		fetch(req, server) {
 			const url = new URL(req.url);
 

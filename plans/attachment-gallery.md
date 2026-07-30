@@ -65,346 +65,176 @@ non-scrolling row that clips past the screen edge. Unify them to kill the diverg
 
 ### Asked
 
-Prior analysis: `AttachmentViewer` already exists and branches image / video / other. Its pinch zoom
-is clamped `1f..6f` where `1f` IS fitted (fit-relative, never below fit), and its save button
-hardcodes Downloads. So this work EXTENDS that screen rather than adding one.
+**1. Video attachment placement** -> With images, as a previewable with a play badge. The real split
+is previewable-vs-not.
 
-**1. Where does a video attachment belong?** -> **A) With images.** Thumb in the wrapping grid with
-a play badge, no filename; tap opens the existing player. Recommended because the real split is
-previewable-vs-not: a video frame is a preview, a filename is not. Filing it with files would show
-`VID_20260727.mp4` beside a wall of thumbs, which is the inconsistency being removed; a third group
-would add a third code path to a change whose purpose is collapsing three into one.
+**2. Tapping a non-media file** -> One fullscreen sheet for everything; non-binary content previews
+in the stage. `FileInfoDialog` goes away.
 
-**2. What does tapping a non-media file open?** -> **A) One fullscreen sheet for everything**, plus:
-if the content is non-binary, PREVIEW it in the stage. Same info panel as images and video. One
-sheet, one set of info rows, one save path; the existing `FileInfoDialog` AlertDialog goes away.
-(Text preview was offered as a later follow-up and the user pulled it into scope.)
+**3. Non-binary detection** -> Sniff a bounded prefix: peek up to 64 KB for the decision, render
+only ~4 KB. Declared mime is ignored (sender-controlled).
 
-**3. How do we decide non-binary, and how much do we read?** -> **A) Sniff a bounded prefix**, with
-two SEPARATE bounds: peek up to 64 KB for the binary/text decision (UTF-8 decodes, no NUL byte), but
-render only a couple of KB as the preview - "download to see the rest". Declared mime is ignored: it
-is sender-controlled, and agents routinely attach logs as `application/octet-stream`. The peek being
-larger than the preview is deliberate - a file can be clean ASCII for 2 KB and binary after.
-Constraint behind it: `MAX_RESPONSE_FILE_BYTES` is 500 MB, so an unbounded read is a real hazard.
+**4. Draft expanded state** -> Ephemeral, always opens collapsed.
 
-**4. Does the draft's expanded state stick?** -> **A) Ephemeral, always opens collapsed.** Expanding
-is an inspection gesture, not a preference, and it is answered once you have looked; composer real
-estate is scarce enough that a thread expanded weeks ago should not still be eating it. Also adds no
-persisted field, in a change whose point is less state that can drift.
+**5. Viewer swipe** -> No. Swipe belongs to the collapsed draft strip only. `AttachmentViewer`
+keeps its single-attachment signature.
 
-**5. Does the viewer swipe between a message's images?** -> **No. Question was misframed.** "Swipe"
-belongs to the COLLAPSED DRAFT strip only, where it is the overview of everything attached. A
-message already shows every attachment (images wrapped, files listed vertically), so there is nothing
-to page through; an expanded draft likewise. `AttachmentViewer` keeps its single-attachment
-signature. Zoom is a separate concern that lives in the fullscreen view of ONE file.
+**6. Agent-to-agent attachments** -> In scope; owner: "I frequently need them to share files for
+verification." Shipped (section 3, done ledger).
 
-**6. Agent-to-agent attachments** -> **In scope, this phase.** Owner: "I frequently need them to
-share files for verification." This is what makes the `modifiedAt` wire field load-bearing rather
-than speculative, and it is also the only path by which the phone can ever DISPLAY a carried mtime.
-Details and the verified size of the change are in section 3.
+**7. Transport foundation** (added after the OOM incident) -> Owner directed the blob plane in as a
+REQUIRED intermission before the remaining UI sections: "kill this class of bug and make large
+uploads first-party."
 
 ## Plan
 
-Revised after two audit laps (lap 1: 6 angles, ~12 distinct; lap 2: 5 angles, ~7 distinct). Items
-marked VERIFIED were re-checked by hand, not taken on the auditor's word.
+### Done ledger (sections 1-5, shipped)
 
-### 0. What the audits changed
+| Slice | Commit | PR |
+|---|---|---|
+| 1. Store plumbing (`size`/`modifiedAt` through every hop) | `4623456` | #195 |
+| 2. Wire `modifiedAt` (synced leaf, both repos) | `52ac1e4` + evie `de76986` | #195 / evie #1420 |
+| 3. Agent-to-agent attachments, both directions | `3974fda` | #195 |
+| 4+5. Shared classifier + message row | `6ae83bb` | #195 |
+| Version bump 7.14.2 (marketplace ritual) | `20beb96` | #196 |
+| Crash-report flush on the way down | `e4396f7` | #197 |
 
-**Lap 1**
+Invariants the remaining work leans on (do not re-litigate; violating any of these re-opens a fixed
+bug):
 
-- **No Android API sets mtime on a SAF/MediaStore destination.** VERIFIED via `javap` on
-  `android.jar`: `android.system.Os` exposes no `utimes`/`utimensat`/`futimens`, and
-  `DocumentsContract` has no timestamp setter. `File.setLastModified` needs a real path, which SAF
-  never yields. So the phone save path CANNOT restore mtime. Owner's call: agent-to-agent only.
-- **The attachment shape is a SYNCED LEAF.** VERIFIED: `ChannelFileSchema` lives in
-  `src/shared/evie-protocol.ts` (`schemas.ts:91` merely re-exports it), carries a `SYNC-HASH`, is
-  copied verbatim into evie-bot, and `ci.yml:34` gates it. This is a TWO-REPO change; the earlier
-  scope note claiming otherwise was wrong and has been deleted.
-- **`MessageFile` is shared by drafts AND sent messages**, so "the sent type has nowhere to put
-  `sourceLocation`" was false as written. A separate picked-file type is required for that guarantee
-  to be real rather than decorative.
-- **Hand-rolled JSON serializers** enumerate exactly `{name, mime, src}`, so any new field is
-  silently dropped on restart - `modifiedAt` would render once and vanish, looking like a viewer bug.
-- Smaller but real: no image-loading library in the app; `decodeBounded` downsamples so intrinsic
-  size is lost; video has no renderer in the WebView at all; SAF exposes no user-visible path.
+- **One serialized file shape.** `fileJson`/`loadFiles`, top-level `internal` in `ChatRepository.kt`.
+  `grep 'put("name", f.name)'` must find exactly ONE hit. Absent loads as null via `longOrNull`,
+  never `optLong`'s 0. `loadFiles` is total: skips unreadable elements, garbled numbers read as
+  absent (the threads loader catches around its whole key loop, so a throw there costs every thread).
+- **`AttachmentDisplay.kt` is the only decider.** Previewable is an explicit allowlist, not a mime
+  prefix; TIFF/HEIC/SVG deliberately excluded (SVG because the viewer decodes with `BitmapFactory`);
+  video excluded until section 9 makes posters. Hidden entries never reach the renderer; `label` is
+  always sent and thread.js has NO fallback; a blank decoration title is omitted, not shipped.
+- **Only a real button wears control styling** in the file rows; a metadata-only row is muted and
+  inert (the dead-tap class).
+- **`modifiedAt`:** MCP populates via `mtime.getTime()` (never fractional `mtimeMs`), MCP restores
+  via `utimesSync(path, new Date(), new Date(ms))` (bare numbers are SECONDS; ms lands in 2446
+  without throwing) with a re-stat clamp check; the phone omits it. Long-bait fixtures pin the
+  Kotlin `Long` on the nested field in BOTH runtimes.
+- **Reserved-name invariant:** `assertNotReservedName` in `artifactNames.ts` guards BOTH outbound
+  `ChannelFile` producers (`readReplyAttachment`, `designer_push_card`). Ref artifacts are dropped
+  from agent-bound replies by POSITIONAL split on the reserved filename, reply leg only.
+- **Trust posture accepted by owner:** the unconfined attachment reader is acceptable because
+  `mirrorPeer` copies both legs into the owner's mailbox. Documented in `bridgeSend.ts`.
+- **Deploy ritual:** version bump (`bun run bump patch`) or the marketplace silently skips; evie-bot
+  pushes FIRST on any leaf change; Kotlin gate runs locally (`:app:testDebugUnitTest`) because CI
+  does not compile Kotlin pre-merge; `gitFetch`+`gitPull` after every push before editing.
 
-**Lap 2**
+Cross-cutting facts that survive into 6-9: no image-loading library exists (no Coil/Glide);
+`decodeBounded` discards intrinsic size and `inSampleSize` (section 6 changes it to return them);
+SAF exposes no user-visible path; the WebView asset loader mounts exactly one storage root
+(`ThreadRenderer.kt` registers `/attachments/` at `Attachments.root(filesDir)`).
 
-- **`stat().mtimeMs` is FRACTIONAL and `z.number().int()` rejects it.** VERIFIED by running node
-  plus this repo's own zod: a real stat gave `1785179969544.809`, which the schema refuses. Shipping
-  that pairing would 400 every attachment-bearing message, through a SYNCED leaf, into evie-bot. Use
-  `mtime.getTime()` (integral by construction), not a `Math.trunc` of the fractional field.
-- **The serializer count was wrong: FOUR, not three.** VERIFIED by grep -
-  `ThreadRenderer.kt:81` (`messagesToJson`), `ChatRepository.kt:4421` (`threadsJson`), `:4576`
-  (`scheduledSendsJson`), `:4651` (`persistDrafts`). Section 1 had listed three; `scheduledSendsJson`
-  was the one missed, and it is exactly the path where a dropped field survives a reboot unnoticed.
-- **The agent-to-agent transport gap is REAL but far narrower than reported.** The auditor said no
-  transport exists. VERIFIED otherwise: the gateway carries files end to end already, and only the
-  `crosstalk_send` TOOL fails to expose them - while the REPLY direction genuinely does drop bytes on
-  the floor. Section 3.
-- **Video frame extraction has a 1000x unit trap** (ms vs µs) that the declared test corpus cannot
-  catch. Section 9.
-- **Nothing tells an already-rendered transcript row that video frames finished generating.**
-  VERIFIED: `MainActivity.kt:4159` keys its re-sync on `messages` alone, and `ThreadRenderer.sync`
-  re-renders a row only on a `fingerprint` change. Section 9.
-- **The zoom math has a Dp-vs-px seam** that is correct only at density 1.0 and is invisible to the
-  unit test as specified. Section 6.
-- **The text sniffer false-negatives on a multi-byte UTF-8 sequence straddling the peek bound.**
-  Section 6.
+### I. INTERMISSION - Content-Addressed Blob Plane (REQUIRED before 6-9)
 
-**Lap 3** (weighted at the then-unaudited section 3; it found more in the older sections)
+Owner-directed after the 40 MB video OOM bricked the console. Framework-first assessment plus live
+probes; this section records the evidence, the design, and the order. The remaining UI sections
+build on top of this, not under it.
 
-- **`utimesSync` numbers are SECONDS, and `modifiedAt` is MILLISECONDS.** VERIFIED by running it on
-  bun (the runtime that actually hosts the MCP): `utimesSync(p, 1785179969544, ...)` yields an mtime
-  of **2446-05-10**, and it does NOT throw, so the plan's "guarded so a failure logs" would have
-  caught nothing. `new Date(ms)` gives the correct 2026-07-27. Same 1000x class as the video bug,
-  found in the section that was supposed to have learned the lesson.
-- **`JSONObject.optLong` returns `0L` for an absent key, never null.** Section 1 prescribed exactly
-  that for two new NULLABLE fields, so every pre-upgrade attachment and every phone-originated one
-  would load as `0L` and render "1 Jan 1970" / "0 B" instead of hiding the row. Confirmed there is
-  no nullable-Long load precedent in `ChatRepository` to copy - all existing `optLong` calls are on
-  genuinely non-null fields.
-- **I invented a precedent that does not exist.** The plan said the readiness fix is "exactly the
-  two-part shape the ref decoration already uses". VERIFIED FALSE: `RefDisplayIndex` appears in no
-  `LaunchedEffect` key anywhere; the ref path has the fingerprint fold ONLY, and relies on ordering
-  (the `cd3ebd8` subscriber-before-append fix) rather than on a signal. An implementer copying that
-  precedent would ship the one-part version the plan itself calls silently inert.
-- **`getFrameAtTime`'s default option snaps to the nearest KEYFRAME.** On a sparse-GOP source - a
-  screen recording, a long-GOP encode - every sample point resolves to the same sync frame and all
-  ten JPEGs are identical. Presents as "the thumb is static", the same invisible failure as the unit
-  bug, and equally uncatchable by an arithmetic-only corpus.
-- **Frames were unbounded in size.** Nothing capped thumb dimensions or bytes, so a 4K video would
-  decode a ~33 MB bitmap per seek and write ten full-resolution JPEGs permanently into the bucket,
-  which the transcript then re-decodes to paint a ~100 px tile.
-- **The agent side cannot produce a `video/*` mime at all.** `MIME_BY_EXT` (`replyTool.ts:13-26`) is
-  12 entries with no video types and several missing image types; everything else becomes
-  `application/octet-stream`. Since classification is a pure mime prefix test on both renderers, an
-  agent-attached `.mp4` can never reach the previewable group and section 9 could never fire for it.
-- **The zoom clamp's CEILING is as broken as its floor**, which the plan did not say, so the
-  natural minimal edit under-zooms the presets on exactly the large photos this is for.
-- **The UTF-8 boundary rule was both wrong and unnecessary.** `CharsetDecoder` already distinguishes
-  a truncated sequence (UNDERFLOW) from an invalid one (MALFORMED) natively; the hand-rolled
-  "malformed in the last 3 bytes is fine" heuristic instead EXCUSES genuinely binary tails and
-  classifies them as text.
+**The incident.** A pending video row is rebuilt on every app foreground
+(`MainActivity.kt` `LifecycleStartEffect` -> `scope.launch { reconcilePending() }`, Main-dispatched)
+-> `rebuildFiles` whole-file `readBytes` -> base64 (4/3 size) -> one ~54 MB contiguous allocation ->
+OOM on the 256 MB heap -> uncaught -> crash loop. The catch at that site names
+"OutOfMemoryError on a large re-upload" in its own comment: documented, armed, and left.
 
-REJECTED after checking: an auditor reported that the schema edit was already half-applied to the
-working tree and that `check-sync-hash` was therefore failing. Neither is true - `git status` is
-clean but for the plan files, `modifiedAt` appears nowhere in the tree, and the gate reports
-"1 file(s) faithful". Recorded so a later lap does not act on it.
+**Measured reality (probes run against prod, 2026-07-30):**
 
-### 1. Store plumbing (FIRST - everything else depends on it) ✅
+- 15 MB POST through the k8s apiserver service-proxy into evie's console-bridge: fully parsed
+  (post-parse 400 proves transit), 4.9 s at ~3.2 MB/s. The proxy carries big bodies fine; the
+  transport never forced small frames.
+- 140 MB POST: 413 after 128 KB sent. evie's `Bun.serve` has no explicit `maxRequestBodySize`;
+  the 128 MB default is a live, unencoded ceiling.
+- The TIGHTEST pipe is the gateway<->evie WebSocket: `maxPayloadLength` unset, Bun default 16 MiB.
+  With measured ~1.78x amplification (base64 -> JSON -> seal -> base64), the real end-to-end ceiling
+  is ~9 MB of raw file. The pinned `MAX_RESPONSE_FILE_BYTES = 500 MB` is fiction ~55x above it.
+- **Latent transport-killer:** an agent reply to the console with >~9 MB of attachments builds a
+  `console_relay_reply` frame that evie's WS rejects by CLOSING the gateway socket (1009), dropping
+  all federation traffic. Reply-direction; never yet hit.
+- Sockets verdict (owner asked): a WS for the console is possible but wrong twice over - Doze kills
+  persistent sockets (the whole `IdlePushbackManager` ladder exists for this; the 40 s held poll
+  already gives push-grade latency), and the WS hop is where oversized payloads are DEADLIEST. The
+  foundational shift is a plane split, not a socket.
 
-`MessageFile` gains `size: Long?` and `modifiedAt: Long?`, carried through EVERY hop:
-`Attachments.decode` (stop discarding `ChannelFile.size`), `Attachments.storeOutgoing`,
-`messagesToJson`, `threadsJson`/`loadFiles`, `scheduledSendsJson`, and `persistDrafts`/
-`loadPersistedDrafts`.
+**Anti-patterns this closes** (assessor findings, spot-verified): cap theater (500 MB pinned by
+tests in two repos, unreachable); bytes in the durable mailbox snapshot `JSON.stringify`d every 3 s
+(cap `DEFAULT_MAX_BYTES = 2 GB`); the sender re-downloading its own ~53 MB echo after every upload
+(`consoleHandler.ts` sent-echo carries full base64); "bytes were not retained, ask for a re-send"
+as a UX string; five separate implementations of "move bytes"; no digest anywhere, so corruption is
+silent (`runCatching{}.getOrNull()` swallows it).
 
-`loadFiles` skips an element it cannot read rather than throwing, and treats a present-but-
-non-numeric value as absent. Both matter because `loadPersistedThreads` catches around its ENTIRE
-key loop, unlike the drafts and scheduled-send loaders which guard per row, so one bad entry there
-would cost every thread on the device and then be overwritten by the next persist. Narrowing that
-loader to per-row guarding is a real pre-existing gap but is not this change's to make.
+**The design.** Messages carry references; bytes move on their own plane. One rule everywhere:
+NOTHING in the system can name, accept, or return a whole file.
 
-`decode` uses the DECODED BYTE LENGTH rather than the declared `ChannelFile.size` whenever bytes
-are present, because a sender's declared size is unverified input and the bytes on disk are what the
-row actually describes. The declared value is used only on the metadata-only branch, where there are
-no bytes to measure.
+- `blobId = "sha256-<64hex>"` of the plaintext. One value = dedup key, resume cursor key, retry
+  idempotency key, integrity check.
+- Three ops, chunked: `blob_stat {blobId}` -> `{have, size?, complete}`;
+  `blob_put {blobId, offset, chunk, final}` -> `{have}`; `blob_get {blobId, offset, length}` ->
+  `{chunk, eof}`. `have` is the contiguous prefix = the resume cursor. Console rides them as sealed
+  ops through the proven proxy path (per-chunk seal keeps evie content-blind); agents get three
+  plain HTTP verbs; federation gets three relay ops.
+- Constants exported from the SYNCED LEAF so all runtimes agree by construction:
+  `BLOB_CHUNK_BYTES = 1 MiB` (~1.9 MiB sealed, ~8x under the WS ceiling) and a
+  `MAX_RELAY_FRAME_BYTES` budget asserted in tests.
+- One store per runtime, cast in the durable-store mold: `stat/write/read/path/pin/unpin`,
+  offset-based (`pwrite`/`RandomAccessFile`), layout `blobs/<aa>/<sha256>` with a `.part` sidecar,
+  two-level fanout. A blob is readable ONLY when complete and its streaming digest equals its name.
+  Refcounted pins (mailbox entry pins, pending job pins), swept when unpinned - the generalization
+  of what `Attachments.sweepOrphanBuckets` already does.
+- `Attachments.kt` survives as a VIEW over the store (the WebView keeps fetching rel paths through
+  the one mounted root); `OutgoingFile` becomes `(name, mime, blobId, size)` - after which no
+  `ByteArray` field exists on the console send path at all.
+- Zero new dependencies. evie changes only by setting explicit limits.
 
-Two hops on the original list turned out not to belong here. `rebuildFiles` converts to
-`OutgoingFile`, whose bytes already carry the size and which never carries an mtime (the phone does
-not populate one), so it needs nothing. `OpenAttachment` is built from a bridge-supplied rel path
-with no `MessageFile` in hand, and the rel-to-file lookup it would need does not exist for drafts at
-all - that is section 6's work, and adding unread fields ahead of it buys nothing.
+**Bug classes made unexpressible:** whole-file OOM (no API takes one); the 1009 federation kill
+(one frame producer, one bounded constant); duplicate delivery on retry (re-put of an offset is a
+no-op); offline byte loss (the store outlives the message); silent corruption (the name is the
+checksum); the 3 s multi-GB snapshot (mailbox holds references); the own-bytes echo round trip
+(echo carries a blobId the sender already has).
 
-**Absent must load as null, not zero.** `optLong` returns `0L` for a missing key, so the obvious
-`optLong("modifiedAt")` turns "this file has no carried date" into "1 Jan 1970" and "no size" into
-"0 B" - on every pre-upgrade attachment and every phone-originated one, permanently, from the first
-restart. Read via an explicit presence check (`if (has(k) && !isNull(k)) getLong(k) else null`) and
-put a shared helper on it, since it is needed in three loaders. Section 6's "`Modified` when
-present" is only meaningful if absence survives the round trip.
+**Phases, in dependency order:**
 
-Rather than updating the four hand-rolled writers in step, they now share ONE `fileJson` paired with
-the existing single `loadFiles`, so there is nothing left to keep in step. The transcript payload
-joins them and adds decoration on top. That is byte-identical output, not a tolerated shape change:
-org.json's `put(key, null)` REMOVES the key rather than writing a JSON null, so it already behaved
-as `putOpt` does. Independently, every `f.src` use in `thread.js` is a truthiness check, so even a
-real shape change would have been safe. `grep 'put("name", f.name)'` should find exactly one hit, inside `fileJson` itself.
+- **I0 - encode reality, unbrick the phone. Ships alone, FIRST.** Explicit `maxPayloadLength` on
+  evie's `BridgeTransport`, explicit `maxRequestBodySize` on its console-bridge, explicit
+  `maxPayload` on the gateway's `evieClient`, honor the discarded `ws.send()` return in evie's
+  `BridgeServer` (a dropped frame is currently a silent 55 s timeout plus a retry of the same huge
+  body), drop both 500 MB pins to a deliverable number and re-pin. Android: `reconcilePending`'s
+  launch must not let an `Error` reach the uncaught handler - an oversized row marks `error`
+  (retriable) instead of crash-looping. Converts "bricked app" into "one message fails legibly".
+- **I1 - the store, three implementations, no wire change.** `src/shared/blob-store.ts` (gateway +
+  MCP) and `android/.../BlobStore.kt`, plus a golden corpus `tests/fixtures/blob/` with a
+  `_manifest.json` both runtimes iterate (chunk-boundary and digest-mismatch cases included), per
+  the existing fixture discipline.
+- **I2 - leaf + ops, additive.** `blobId` joins `ChannelFileSchema` (`base64` stays for migration);
+  the two constants; three console ops in `ConsoleOpSchema` (encode-side sealed class is
+  codegen-safe); three gateway HTTP verbs; three federation relay ops. Sync-leaf ritual, evie
+  deploys FIRST, regenerate `Protocol.kt`, Kotlin gate locally.
+- **I3 - producers switch, consumers accept both.** Console streams-and-hashes at pick (`readUri`
+  stops `readBytes`), uploads chunks, sends `blobId`; MCP mirrors; `Attachments.decode` /
+  `materializeFiles` prefer `blobId`, fall back to `base64` while old senders exist; the sent echo
+  carries the reference; the mailbox stops carrying bytes.
+- **I4 - delete `base64`.** Drop the field from the leaf, delete every fallback plus the whole
+  compensation list (`stripFileBytes`, `fileBytes`, the sequential-budget reader, `entryBytes`'
+  base64 accounting, the re-send apology text, the 700 MB `maxRequestBodySize`). Gate on minimum
+  console version via the capability union, which already receives `clientVersion` at register.
 
-Both are top-level `internal` functions rather than `ChatRepository` members, mirroring
-`messagesToJson` and `renderedSender`. That is what makes the round trip testable: a private member
-cannot be reached from a JVM test, since `ChatRepository` needs a `ContentResolver`.
+Known enforcement gap, accepted: `check-sync-hash` verifies internal faithfulness, not cross-repo
+equality, so a stale-but-self-consistent leaf copy passes both CIs. Push order remains discipline;
+consider a real cross-repo diff in one CI while touching this.
 
-Justified by `size` ALONE - the file row shows it and nothing carries it today. `modifiedAt` rides
-along at no extra cost.
-
-### 2. Wire: `modifiedAt` (synced leaf ritual) ✅
-
-- Add to `ChannelFileSchema` in `src/shared/evie-protocol.ts` as `z.number().int().optional()`
-  (epoch ms).
-- **Populate with `statResult.mtime.getTime()`, never `mtimeMs`** - see section 0, lap 2. Add it in
-  `readReplyAttachment` (`replyTool.ts:31`), which already stats the file, so every attachment-
-  bearing tool inherits it from one place.
-- `bun scripts/sync-leaf.ts src/shared/evie-protocol.ts` (format, restamp, copy - never a manual
-  `cp`), then push evie-bot and run ITS gate inside its devcontainer.
-- Regenerate `proto/Protocol.kt`; fixtures with and without the field, registered in
-  `_manifest.json` so BOTH runtimes cover it.
-- **Populated by the MCP only.** The phone OMITS it: no dependable picker column, and it could not
-  restore on save anyway.
-- **Restored by the MCP only**, in `materializeFiles` (`evieFiles.ts:61`), after the atomic rename.
-  **Use the Date form, never bare numbers:** `utimesSync(path, new Date(), new Date(modifiedAt))`.
-  VERIFIED on bun - a numeric argument is interpreted as epoch SECONDS, so passing ms stamps the
-  file 2446-05-10 and throws nothing. The Date form also resolves the other half: `utimesSync` has
-  no mtime-only overload, and passing `new Date()` for atime is what the questionaire's "atime is
-  set to now on write" rule actually requires. Wrap it so a failure logs and the file still reports
-  as transferred - the restore is a nicety, the bytes are the point, so this must sit AFTER
-  `meta.path` is set, not inside the write's own catch.
-- The Android save path does not attempt it.
-- The phone still DISPLAYS it when an agent sent one.
-- **Fixtures:** `ChannelFile` is not a dispatchable root in either runtime's manifest loop, so a
-  fixture cannot be registered under that name - it has to ride a frame that embeds it. And a
-  present/absent fixture pair does not prove an epoch-ms value survives as a Kotlin `Long`; this
-  repo already invented an explicit large-value "Long bait" assertion for exactly that, which must
-  be extended to the nested field rather than assumed.
-- **`readReplyAttachment` is the choke point for path-attachment tools, but not the only
-  `ChannelFile` producer** - two other sites build the shape by hand and will simply never carry
-  `modifiedAt`. That is acceptable (the field is optional by design) but should be a known absence,
-  not a surprise during review.
-
-### 3. Agent-to-agent attachments (`crosstalk_send`) ✅
-
-Pulled into this phase by the owner. This is what the `modifiedAt` field is FOR, so it lands here
-rather than after.
-
-**What already works** (VERIFIED by reading the path end to end):
-
-- `/send` already accepts `files: ChannelFilesSchema.optional()` (`routes.ts:169`).
-- A send carrying files mints a `message_id` and puts both on the `channel_push`
-  (`routes.ts:1229-1233`); a fileless send mints none.
-- The receiving MCP materializes to `/tmp/evie-files/<message_id>/` and appends the `[FILES]` block
-  (`channelNotify.ts:16-19`).
-- `mirrorPeer` spreads `files` into the peer mailbox entry (`routes.ts:415-421`), so the owner's
-  console ALREADY receives agent-to-agent attachments on the mirrored thread. They land in the very
-  gallery this plan builds - the two halves of this work meet here with no extra glue.
-
-**Outbound half - small.**
-
-- `BridgeSendSchema` gains `attachments: z.array(z.string()).optional()` (absolute paths). Write a
-  PURPOSE-BUILT describe - do not copy `channel_reply`'s, which is entirely about console rendering
-  (inline images, download chips, `@dsCard` design canvases) and describes nothing an agent
-  recipient experiences. What the recipient actually gets is a `[FILES]` block of on-disk paths.
-- **Fix the poll-vs-send discriminator first.** It is `session_id && !body` (`bridgeSend.ts:113`) and
-  returns BEFORE any attachment handling, so `crosstalk_send({session_id, attachments})` would
-  silently become a poll and discard the files with no error. Make it
-  `session_id && !body && !attachments`, and keep `body` mandatory for a send (state it, since the
-  existing `if (!to || !body) throw` already implies an attachment-only send is illegal).
-- Map through the EXISTING `readReplyAttachment`: it already enforces absolute paths,
-  `MAX_ATTACHMENT_BYTES`, mime-by-extension, and base64. No second reader, no second cap.
-- **Extend `MIME_BY_EXT` in the same change.** It is 12 entries with NO video types at all, so an
-  agent-attached `.mp4` arrives as `application/octet-stream`, and since both renderers classify on
-  a bare mime prefix, it can never reach the previewable group - section 9's whole frame set would
-  be dead code on the agent path. Add `video/*` (mp4, webm, quicktime, matroska) and the missing
-  image types (bmp, heic/heif, avif, tiff, apng). Section 4 should state plainly that this table is
-  the classifier's ONLY input on the agent path.
-- Pass `files` in the `/send` body. `MAX_RESPONSE_FILE_BYTES` bounds the payload SIZE gateway-side,
-  and nothing more: `routerPost` retries a fetch-level failure four times with the same body and
-  `/send` has no idempotency for an agent caller, so a socket error after the push already fanned
-  out delivers the files twice. Pre-existing and documented in `routes.ts` at `mirrorPeer`; noted
-  here so the size bound is not mistaken for a duplication bound.
-- Deliberately NO `appendRefArtifacts`: ref snapshots exist so a console can render a code viewer.
-  The recipient here is an agent, which would just receive files it never asked for.
-
-**Trust posture - an explicit decision, not an inherited one.** `readReplyAttachment` enforces only
-`isAbsolute` plus the size cap: no root confinement, no secret refusal. The codebase justifies that
-in-code by the destination being the owner's OWN console (`refFile.ts:62-67` says so for the sibling
-reader). Section 3 repoints that same unrestricted reader at a foreign agent, possibly in a linked
-friend Domain, since the relay carries `op.files` cross-Gateway and cross-Domain. Two mitigations
-are real and already in place: `mirrorPeer` puts a copy in the owner's mailbox, and the outbound leg
-mirrors too, so the owner SEES everything that leaves. Recommendation: accept, on that basis, and
-say so in a code comment rather than letting it rest on "same as channel_reply" - which is true of
-the reader and false of the recipient. Flagged for the owner; a path allowlist is the alternative.
-
-**Inbound half - the actual gap, and the half the owner needs.** You ask a team to verify something;
-they screenshot it back.
-
-- `/respond` accepts files (`routes.ts:203`) and puts them on the push (`:1500`), and
-  `ResponsePushPayload` declares the field (`types.ts:65`)...
-- ...but `emitResponseNotification` (`channelNotify.ts:50-64`) ignores it completely: no
-  materialization, no `[FILES]` block. Bytes cross the wire and are dropped on the floor. A reply's
-  attachments are, today, unreachable by the requesting agent.
-- Fix, mirroring the send path exactly rather than inventing a second convention: mint a
-  `message_id` on the response push when and only when files are present, add `message_id?` to
-  `ResponsePushPayload`, and run the same `materializeFiles` + `renderFilesBlock` pair.
-- **The offline case stays lossy, and that has to be said rather than discovered.** The store copy
-  is metadata-only by design (`routes.ts:1404` strips bytes), so if the asking agent's socket is
-  down when the reply lands, the bytes are gone with no re-fetch path. Worse, the recovery route -
-  polling by `session_id` - runs through `formatResult`, which never reads `result.files` in any
-  branch, so the asker is not even told files existed. Minimum fix in scope: have `formatResult`
-  list the filenames with an explicit "bytes were not retained, ask them to re-attach" line. Full
-  durability (re-push on the asker's next register) is deliberately NOT in scope; name it as the
-  known limit.
-
-**Keeping ref snapshots off an agent's disk.** `channel_reply` appends `ref://` artifacts to every
-reply whose body carries a ref, gated only on whether the OWNER's console can render a code viewer,
-never on who is receiving this particular reply. Materializing a reply's files therefore starts
-delivering source snapshots to an agent asker, which is the same thing the outbound bullet above
-refuses. Two rules keep it out:
-
-- The split is POSITIONAL. `appendRefArtifacts` emits the author's attachments first, then its
-  artifacts with the manifest first, so the reserved filename marks where generated files begin.
-  Reading the manifest to learn which files are snapshots would mean trusting a remote sender's own
-  JSON, and a genuine attachment that happened to BE a captured manifest would then delete itself
-  and every file it named. Position also survives the store, where the bytes are stripped and there
-  is nothing left to parse.
-- The reserved name is refused by `assertNotReservedName`, which is what makes the position
-  trustworthy rather than assumed. There are TWO in-process producers of an outbound `ChannelFile`
-  with a caller-chosen filename, not one: `readReplyAttachment` (crosstalk_send, channel_reply,
-  notify_human) and `designer_push_card`, which builds its file inline. The second was missed on the
-  first pass and made the invariant false, so the guard lives in `artifactNames.ts` beside the
-  constant it protects rather than in either caller.
-
-Applied to the REPLY leg only. A send never appends artifacts, so a manifest arriving there is a
-file someone genuinely attached, and splitting on it would silently eat that file plus every one
-after. Residual, accepted and logged rather than guarded: the console does not go through
-`readReplyAttachment`, so an owner who hand-attaches a real manifest to a REPLY still loses it and
-anything after it. Narrow, and the drop now writes a log line instead of vanishing.
-
-**Note on `crosstalk_discover`/skill text.** The tool description and `skills/crosstalk/SKILL.md`
-both enumerate what a send can carry; both need the new parameter or agents will not know it exists.
-
-**Entry-point hardening the red team forced.** `readReplyAttachment` also rejects a non-regular file
-(a FIFO stats as size 0 and then blocks `readFile` forever, wedging the tool call with no error),
-and a new `readReplyAttachments` reads a list sequentially against ONE budget, since reading
-concurrently holds every file plus its base64 in memory and N files each under the per-file cap can
-exhaust the heap before anything can reject them.
-
-### 4. Shared classifier (the anti-divergence layer) ✅
-
-One Kotlin decision layer both renderers consume: drop plugin-hidden artifacts FIRST, classify
-PREVIEWABLE (image, video) vs FILE, order previewables then files, and own the shared formatting
-(display name, pretty size, dimensions, date + "... ago"). Must handle a metadata-only attachment
-(`src == null`), which today falls back to a named chip. Unit-tested directly.
-
-**PREVIEWABLE is an explicit allowlist, not a mime prefix test.** Both renderers currently branch on
-`mime.startsWith("image/")`, which means widening the sender's mime table can silently promote a
-format the WebView cannot decode into the thumbnail path, where it renders as a broken image. TIFF
-and HEIC hit exactly that and are deliberately absent from `MIME_BY_EXT` until this allowlist exists
-(`BitmapFactory` decodes HEIF, so the viewer would have been fine; the transcript is what breaks).
-Adding them back is a one-line change here once the classifier gates on what the renderer supports.
-
-### 5. Message row (`thread.js`) ✅
-
-Previewables wrap as fixed squares, no names. Files stack below as thin one-line rows carrying a
-glyph and the name only. A Designer-decorated row keeps its title and accent styling. Same for own
-rows and theirs.
-
-Only a row that actually opens something wears the control styling. A metadata-only attachment has
-no bytes to show, so it renders muted and inert; dressing it identically was the dead-tap this
-layout exists to remove, and it got reintroduced once already.
-
-`prettySize` therefore has no consumer on this surface. It stays in the classifier for section 6's
-info rows rather than moving, since the composer will want the same formatting.
+**What the intermission unlocks for the later sections:** resumable large uploads; range reads
+(previews, streaming playback); dedup across resend and echo; content-keyed video thumbs (resolves
+section 9's regeneration problem outright); `ref://` snapshots escaping their 2 MB budget.
 
 ### 6. Viewer (extend `AttachmentViewer`, single attachment)
+
+Post-intermission note: file access goes through the blob view (`path()` only when complete and
+verified), so a torn download can no longer reach the decoder; everything below is unchanged in
+intent.
 
 - **True-pixel scale needs the INTRINSIC size AND the sample factor**, both of which `decodeBounded`
   (`AttachmentViewer.kt:65`) already computes and then discards. Change it to RETURN them alongside
@@ -437,6 +267,11 @@ info rows rather than moving, since the composer will want the same formatting.
   viewer opens fitted) and make the toggle inert. Constructing the painter is correct either way, so
   it costs nothing to not depend on the answer. Owner's standing permission to drop to smooth
   everywhere still stands.
+- **The viewer must route on the classifier, not a mime prefix.** Red-team residual: tapping an SVG
+  or TIFF file row still reaches `ZoomableImage` -> `BitmapFactory` -> "Could not decode image",
+  because `AttachmentViewer.kt:103` branches on `startsWith("image/")`. Consult `isPreviewable`
+  (plus a viewer-specific decodable set where `BitmapFactory` differs from the WebView, e.g. HEIF
+  decodes here but not there) so an undecodable format lands on the file-glyph sheet.
 - **Text sniff: 64 KB peek. Let `CharsetDecoder` do the work.** It already distinguishes the two
   cases natively - a truncated multi-byte sequence at the buffer end returns UNDERFLOW, genuinely
   invalid bytes return MALFORMED - so the earlier hand-rolled "malformed inside the last 3 bytes is
@@ -452,12 +287,12 @@ info rows rather than moving, since the composer will want the same formatting.
 - All I/O off the main thread; today the viewer reads in composition and in `onClick`.
 - **Video plays here, it does not cycle thumbnail frames.** The stage is the existing `VideoPlayer`,
   with an `Open with` fallback to an external player. Section 9's frame set is thumbnail-only.
-- Info rows: `Size` (+ dimensions for images), `Modified` when present.
-- **Drafts cannot reach this viewer at all today**, which the plan had assumed away. A draft chip has
-  no tap target, and the only rel-to-`MessageFile` resolution scans `state.threads` alone - a draft
-  file lives under `state.drafts` with an `attachments/draft-<uuid>/...` src, so the lookup returns
-  null and both the `Modified` and `Location` rows would come back blank. Section 7 must add the tap
-  target and the resolver must consult drafts.
+- Info rows: `Size` (+ dimensions for images), `Modified` when present. `prettySize` comes from the
+  classifier (its only current consumer; the duplicate in this file was deleted).
+- **Drafts cannot reach this viewer at all today.** A draft chip has no tap target, and the only
+  rel-to-`MessageFile` resolution scans `state.threads` alone - a draft file lives under
+  `state.drafts`, so the lookup returns null and both the `Modified` and `Location` rows would come
+  back blank. Section 7 must add the tap target and the resolver must consult drafts.
 - **`Save` is two writers, not one.** "Downloads on first run" cannot be a tree URI, because no
   persisted grant exists until the user picks a folder - so the first-run path stays the existing
   MediaStore-to-Downloads write, and only a user-chosen tree uses SAF
@@ -477,11 +312,9 @@ end on attach. Expanded mirrors the message layout plus remove badges. Ephemeral
 
 Thumbnails need a decode path the app does not have (no Coil/Glide). Do NOT stand up a second
 private bitmap cache: `DesignerThumbs` is already a mutex-serialized, byte-bounded `LruCache` that
-returns exactly what the Compose strip wants (a `Bitmap`), and a plan whose whole thesis is "one
-decision layer, kill the diverging code bug-class" should generalize that object rather than
-re-derive it. Its capture path is WebView-specific and stays Designer's; the cache and its bounds
-are what gets lifted. (Section 9's "DesignerThumbs does not transfer" is about the WEBVIEW surface
-only, which does need a fetchable URL.)
+returns exactly what the Compose strip wants (a `Bitmap`). Generalize that object; its WebView
+capture path stays Designer's. Post-intermission, key the cache by `blobId` rather than rel, which
+makes draft/outgoing/echo hits the same entry for free.
 
 Also add the missing tap target on a draft chip - see section 6, the draft viewer is currently
 unreachable.
@@ -492,22 +325,20 @@ while a send is banked. Consistent with today's behaviour for text and files.
 ### 8. `sourceLocation` - display name, not a path (draft-only)
 
 Needs a picked-file type distinct from `MessageFile`, so the "cannot reach the wire" guarantee is
-structural rather than a promise (today both share `MessageFile`, which is why the original claim was
-false).
+structural rather than a promise.
 
 **The threading is the hard part, and the obvious route is wrong.** The provider display name is
 only visible where the `content://` Uri is, at pick time. Getting it into the draft's file list
-means riding the input to `Attachments.storeOutgoing` - and that input type is `OutgoingFile`, the
-exact type `ConsoleClient.send` consumes. Putting `sourceLocation` there would place it on the
-wire-adjacent type and defeat the guarantee this section exists to buy. So the picked-file type must
-be introduced UPSTREAM of `OutgoingFile`, and the pick-to-draft path carries it in a side channel
-that `storeOutgoing` never sees.
+means riding the pick-to-draft path - and `OutgoingFile` is the exact type `ConsoleClient.send`
+consumes, so `sourceLocation` must never land on it. Post-intermission `OutgoingFile` is
+`(name, mime, blobId, size)` - byteless, but still wire-adjacent, so the rule is unchanged: the
+picked-file type lives UPSTREAM of it, and the display name travels in a side channel
+`storeOutgoing`'s successor never sees.
 
 Honest counterweight, worth deciding rather than assuming: the "cannot reach the wire" property
-already holds three layers deep at `OutgoingFile`, so the new type is a fourth gate behind three
-that work, at a cost of roughly a dozen call sites. It buys structure, not a fix for a live leak.
-If the implementation turns out to sprawl, dropping to a documented invariant plus a residue test is
-a legitimate downgrade.
+already holds three layers deep, so the new type is a fourth gate behind three that work, at a cost
+of roughly a dozen call sites. It buys structure, not a fix for a live leak. If the implementation
+sprawls, dropping to a documented invariant plus a residue test is a legitimate downgrade.
 
 SAF exposes no user-visible path, so the Location row shows the provider's own DISPLAY NAME (roughly
 "Downloads"), read at pick time. Weaker than a path and also safer: it cannot leak a username or
@@ -572,61 +403,31 @@ WebP or GIF on device. Extract frames as individual JPEGs and let each surface c
 the transcript, a Compose animation in the draft strip. One frame set feeds both renderers, with no
 new dependency.
 
-**Regeneration across buckets.** "One frame set feeds both renderers" holds only WITHIN one rel, and
-a video picked in the composer occupies three distinct buckets over its life (draft, outgoing, and
-the settled echo), so a naive implementation extracts up to three times per video sent. Either key
-the frame set by content rather than rel, or carry the thumbs across the same hops that already move
-the file - decide which, and say so, because a silent 3x on the most expensive operation in this
-plan is exactly the kind of cost that never gets noticed.
+**Regeneration across buckets - RESOLVED by the intermission.** Frame sets are keyed by the source
+video's `blobId`, so draft, outgoing, and settled-echo copies share one set by construction, and the
+old ".thumbs inside the bucket" questions (delete-path orphans, the emptiness check, the traversal
+guard for a dotted segment) collapse into the blob store's own pin/sweep lifecycle. The frames still
+have to be reachable by the WebView, so they are served through the same single mounted root as
+attachments, via the `Attachments` view.
 
 **Degenerate inputs.** An audio-only container carrying a `video/*` mime would run the full N-seek
 pass to produce N nulls before falling back to the glyph; `METADATA_KEY_DURATION` can also return
 null or a non-numeric string, for which `floor(duration / MIN_SPACING)` has no defined behaviour.
 Probe duration first and bail to the glyph on either.
 
-**Where they live, and why it is forced.** Under the SAME attachments root as the source, as
-`attachments/<bucket>/.thumbs/<name>.<i>.jpg` - app-private internal storage, never a shared or
-device-wide location. This is not a free choice: the transcript is a WebView whose asset loader is
-mounted on exactly one storage path (`ThreadRenderer.kt:186-192` registers
-`InternalStoragePathHandler` for `/attachments/` rooted at `Attachments.root(filesDir)`), so a frame
-stored anywhere else - `cacheDir` included - simply cannot be fetched by the transcript.
-
-The app's only existing thumbnail machinery, `DesignerThumbs`, is an in-memory `LruCache` with no
-disk at all, so there is no disk precedent to be consistent WITH; and its approach does not transfer,
-because a WebView needs a fetchable URL rather than a bitmap. `cacheDir` would otherwise be the
-idiomatic home for regenerable data (the app already uses `cacheDir/updates` for staged APKs,
-`AppUpdater.kt:57`), but it is unreachable from the WebView without registering a second path handler
-and widening what the renderer can read. Keeping thumbs inside the bucket also makes their lifetime
-free: `Attachments.purgeAll` (`Attachments.kt:31`) deletes the root recursively, and dropping a
-bucket drops its thumbs with it.
-
-The `.thumbs/` subdirectory needs care in both directions. The per-file delete path
-(`scheduleAttachmentDelete` / `mergeSentEchoFiles` deleteSrcs) must remove a file's thumbs rather
-than orphaning them, and `Attachments.resolve`'s traversal guard must still behave for a dotted
-segment. More subtly: the only thing in this app that enumerates a bucket directory is
-`Attachments.deleteFiles`' empty-bucket cleanup, so a lingering `.thumbs` child makes a bucket look
-non-empty forever and defeats it. That inverts the dot's stated purpose - nothing enumerates a
-bucket to DISCOVER attachments, so the dot buys nothing and costs the cleanup. Either drop the
-subdirectory in favour of a name suffix inside the bucket, or teach the emptiness check to ignore
-it. Decide explicitly.
-
 **Readiness needs a push channel, and it takes BOTH halves.** Frames generate lazily on a background
 dispatcher, so a row is usually on screen before its set exists - and nothing currently tells it.
-`MainActivity.kt:4159` re-syncs on `LaunchedEffect(renderer, messages)`, keyed on the message list
-alone, and `ThreadRenderer.sync` re-renders an existing row only when its `fingerprint` changes.
-Frames landing on disk change neither, so a completed set would surface only when some unrelated
-message happens to arrive. Fix: a small observable readiness signal (per-rel, version-counted) added
-as a `LaunchedEffect` key AND folded into `fingerprint`. Either half alone is silently inert.
+`MainActivity.kt` re-syncs on `LaunchedEffect(renderer, messages)`, keyed on the message list alone,
+and `ThreadRenderer.sync` re-renders an existing row only when its `fingerprint` changes. Frames
+landing on disk change neither. Fix: a small observable readiness signal (per-blobId,
+version-counted) added as a `LaunchedEffect` key AND folded into `fingerprint`. Either half alone is
+silently inert. There is NO precedent to copy: `RefDisplayIndex` appears in no `LaunchedEffect` key
+anywhere; the ref path has the fingerprint fold only and depends on being recorded before first
+render (`cd3ebd8`), a trick slow extraction cannot use.
 
-**There is no precedent to copy here** - an earlier draft of this plan claimed the ref decoration
-already does this, and that was wrong. `RefDisplayIndex` appears in no `LaunchedEffect` key
-anywhere; the ref path has the fingerprint fold only and depends on being recorded BEFORE the row
-renders (the ordering fix in `cd3ebd8`). Video frames cannot use that trick, because extraction is
-genuinely slow and cannot be pulled ahead of first render. So the observable half is new work.
-
-Related: `fingerprint` currently hashes the file COUNT and the decoration, never a per-file field
-value. Section 1 adds two per-file fields to the render payload, so fold those in too, or a row
-whose metadata is upgraded in place keeps a stale size in the transcript.
+Related: `fingerprint` hashes the file COUNT and decoration, never a per-file field value, so a row
+whose file metadata changes in place keeps stale content. Fold the per-file fields in with the
+readiness work.
 
 **Teardown.** The readiness signal guarantees at least one row REPLACE per video row, and any
 per-row frame-cycling timer in `thread.js` will be leaked by that replace, retaining a detached row.
@@ -641,46 +442,20 @@ ready. A video whose frames cannot be extracted falls back to the glyph tile rat
 
 Unit tests:
 
-- The classifier (ordering, hidden-artifact drop, `src == null`).
+- Blob store, all three implementations against the SHARED golden corpus (`tests/fixtures/blob/`
+  with `_manifest.json`, both runtimes iterate): chunk-boundary write, out-of-order offset refusal,
+  digest mismatch cannot become readable, resume from `have`, re-put idempotency, pin/sweep.
 - The text sniffer: NUL, invalid UTF-8, valid text exactly at the bound, and a 3-byte character
-  STRADDLING the bound (the case the naive implementation gets wrong).
+  STRADDLING the bound (UNDERFLOW vs MALFORMED split).
 - The scale math, in pixels (intrinsic vs container, below-fit). Explicitly not a density test.
-- The video sampling rule - the table above IS the corpus - plus the ms-to-µs conversion as its own
-  case.
-- **mtime restore**: write a file with a known epoch-ms stamp, materialize it, assert
-  `statSync().mtime.getTime()` equals the sent value exactly. This is the test that would have
-  caught the year-2446 bug, and it belongs on the TS side where the restore lives.
-- Crosstalk attachments: A sends a file to B and B replies with a DIFFERENT file; assert both
-  materialize and both `[FILES]` blocks render. Plus: a fileless response push mints no `message_id`,
-  an attachment-bearing send with a `session_id` is NOT treated as a poll, and the asker-offline case
-  reports filenames rather than silence.
-
-**What the round trip can and cannot gate.** Extracting `fileJson`/`loadFiles` to top-level
-`internal` functions made the serialization round trip an ordinary JVM test, and the two entry hops
-(`Attachments.decode`, `Attachments.storeOutgoing`) are plain-JVM reachable too, so all of that is
-covered and mutation-checked. What no unit test can catch is a FUTURE writer that simply does not
-call `fileJson`: reverting `messagesToJson` to a hand-rolled object leaves the whole suite green.
-That one stays a grep (`put("name", f.name)` should find exactly one hit) plus the emulator check
-that size and date survive a process death. The byte-bearing `decode` branch is also emulator-only,
-since `android.util.Base64` is a throwing stub off-device.
+- The video sampling rule (the table above IS the corpus) plus the ms-to-µs conversion on its own.
+- Frame-budget assertion: a max-size sealed chunk frame stays under `MAX_RELAY_FRAME_BYTES`, which
+  stays under the now-explicit WS payload limit. Pinned in tests on BOTH repos so neither limit can
+  drift independently.
 
 Emulator pass per surface: the 1:1 check at 100% zoom, a frame-set completion landing on an
-already-rendered row, an attachment's size and date surviving a process death, and the draft viewer
-opening at all (it is unreachable today).
-
-### Open decisions for the owner
-
-Neither blocks implementation; both are cheaper to settle now than to unwind later.
-
-1. **Trust posture on `crosstalk_send` attachments** (section 3). An agent can attach any absolute
-   path it can read, and the recipient may be a foreign agent in a linked Domain. Recommendation is
-   to accept, on the strength of the owner-mailbox mirror, and document it. The alternative is a
-   path allowlist or a refusal list for the obvious credential paths.
-2. **Scope.** This started as "make the attachment gallery consistent" and now also contains the
-   agent-to-agent transport, a mime-table expansion, a response-push fix, a two-writer save path,
-   and generalizing `DesignerThumbs`. Every piece is load-bearing for something asked for, but it is
-   a lot for one branch. Sections 1-3 (store, wire, transport) form a coherent first slice that ends
-   with agent attachments working and the console rendering them as it does today.
+already-rendered row, an attachment surviving a process death, the draft viewer opening at all, and
+a >16 MiB attachment surviving the full console round trip (the old ceiling, now just a number).
 
 Gates: `bun run lint && bun run test`,
 `bun scripts/check-sync-hash.ts src/shared/evie-protocol.ts`, `bun scripts/codegen-kotlin.ts`,

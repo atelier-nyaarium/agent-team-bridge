@@ -40,6 +40,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -3872,18 +3873,21 @@ class ChatRepository(
 				}
 				try {
 					deliver(team, m.id, m.text, rebuildFiles(m), m.opId, false)
-				} catch (e: Throwable) {
-					// Throwable, not just CancellationException: deliver()'s own catch(Exception) settles
-					// every Exception via fail() internally and rethrows only a CancellationException -
-					// but rebuildFiles() above (loading whole attachment files into memory) and the send
-					// itself can also throw an Error (e.g. OutOfMemoryError on a large re-upload), which
-					// bypasses deliver()'s catch(Exception) entirely and would otherwise sail past a
-					// CancellationException-only catch here too. Either way the row is still genuinely
-					// "pending", not attempted-and-failed - undo the reconciled mark or this delivery
-					// (e.g. the app backgrounded during a large re-upload) can never be reconciled again,
-					// stranding the row "pending" for the rest of the process's life.
+				} catch (e: CancellationException) {
+					// The row is still genuinely "pending", not attempted-and-failed (the app
+					// backgrounded mid-upload) - undo the reconciled mark or this delivery can never
+					// be reconciled again, stranding the row for the rest of the process's life.
 					reconciled.remove(key)
 					throw e
+				} catch (e: Throwable) {
+					// deliver()'s own catch(Exception) settles every Exception via fail(), so what
+					// lands here is an Error - rebuildFiles() loading whole attachment files, or the
+					// send base64ing them, throwing OutOfMemoryError on a large re-upload. Rethrowing
+					// would escape into a Main-dispatched scope as an app-killing crash, and since the
+					// row stays "pending", every foreground would repeat it: a crash LOOP from one
+					// oversized row. Settle the row as retriable instead and move on.
+					setMessageStatus(team, m.id, "error")
+					DebugLog.log("Reconcile", "re-send of $key failed non-retriably: $e")
 				}
 			}
 		}
@@ -4743,7 +4747,7 @@ class ChatRepository(
 		// MAX_RESPONSE_FILE_BYTES); a single attachment may use the whole bucket, so this is
 		// a total, not a stricter per-file cap. Pinned by ChatRepositoryConstantsTest - update
 		// both sides together.
-		const val MAX_OUTGOING_BYTES = 500_000_000
+		const val MAX_OUTGOING_BYTES = 16_000_000
 
 		// A scheduled send's own bounded failure recovery (plans/scheduled-send.md): reconcilePending
 		// only mops up an INTERRUPTED (still-"pending") attempt, never a settled "error", so a fire

@@ -3,6 +3,11 @@ import WebSocket from "ws";
 import { EvieInboundFrameSchema, FEDERATION_PROTOCOL_VERSION, type ToolCallFrame } from "../../shared/evie-protocol.js";
 import { createReconnector } from "../../shared/reconnect.js";
 
+// One relay-frame ceiling, set explicitly on BOTH ends of the gateway<->evie socket (here and
+// evie-bot's BridgeTransport). 64 MiB clears a max-cap attachment payload's sealed frame (~1.78x
+// the decoded bytes) with headroom; routes.test.ts pins that relationship.
+export const EVIE_WS_MAX_PAYLOAD_BYTES = 67_108_864;
+
 ////////////////////////////////
 //  Interfaces & Types
 
@@ -103,6 +108,11 @@ export function startEvieClient(config: EvieClientConfig): EvieClient {
 
 		ws = new WebSocket(config.url, {
 			headers: config.headers,
+			// Explicit rather than ws's inherited 100 MiB default: this socket carries every relay
+			// frame for the whole gateway, and an oversized inbound message does not merely fail,
+			// it can close the connection and drop all federation traffic with it. Must stay >= the
+			// matching explicit limit on evie's BridgeTransport, or a frame evie accepts kills us.
+			maxPayload: EVIE_WS_MAX_PAYLOAD_BYTES,
 			// Bun's WebSocket reads a pinned CA under `tls`, NOT a top-level `ca`. A top-level `ca` is
 			// silently ignored, so it falls back to the system trust store and rejects the private
 			// cluster-signed API server cert ("TLS handshake failed"). Verified against the live endpoint.
