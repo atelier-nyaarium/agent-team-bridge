@@ -1,22 +1,39 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { ChannelPushPayload, ResponsePushPayload } from "../../shared/types.js";
-import { materializeFiles, renderFilesBlock } from "./evieFiles.js";
+import type { ChannelFile, ChannelPushPayload, ResponsePushPayload } from "../../shared/types.js";
+import { dropReferenceArtifacts, materializeFiles, renderFilesBlock } from "./evieFiles.js";
 
 ////////////////////////////////
 //  Functions & Helpers
+
+/** The prose must survive a filesystem that will not take the bytes, so a materialization failure
+ * costs the [FILES] block and nothing else.
+ *
+ * `stripRefs` is false for an inbound SEND: only a reply appends ref artifacts, so a manifest
+ * arriving on a send is a file someone genuinely attached, and splitting on it would silently eat
+ * that file plus every one after it. */
+function filesBlockFor(bucketKey: string | undefined, files: ChannelFile[] | undefined, stripRefs: boolean): string {
+	if (!bucketKey || !files || files.length === 0) return "";
+	const wanted = stripRefs ? dropReferenceArtifacts(files) : files;
+	if (wanted.length < files.length) {
+		console.error(`[channel] hid ${files.length - wanted.length} ref artifact(s) from ${bucketKey}`);
+	}
+	if (wanted.length === 0) return "";
+	try {
+		const materialized = materializeFiles({ discordMessageId: bucketKey, files: wanted });
+		return renderFilesBlock({ discordMessageId: bucketKey, files: materialized });
+	} catch (err) {
+		console.error(`[channel] could not materialize files for ${bucketKey}: ${(err as Error).message}`);
+		return "";
+	}
+}
 
 /**
  * Emit a channel notification to push an incoming message into Claude's session.
  * The message arrives as a <channel source="bridge" ...>body</channel> tag.
  */
 export async function emitChannelNotification(server: Server, payload: ChannelPushPayload): Promise<void> {
-	let filesBlock = "";
-	// Console-origin files key the materialization bucket by the channel message_id.
-	const bucketKey = payload.message_id;
-	if (payload.files && payload.files.length > 0 && bucketKey) {
-		const materialized = materializeFiles({ discordMessageId: bucketKey, files: payload.files });
-		filesBlock = renderFilesBlock({ discordMessageId: bucketKey, files: materialized });
-	}
+	// Inbound files key the materialization bucket by the channel message_id.
+	const filesBlock = filesBlockFor(payload.message_id, payload.files, false);
 
 	// content is the message prose ONLY (plus the [FILES] block, which is paths the agent must Read).
 	// Every structured field - session_id, from, reply_schema, instructions - rides in `meta`,
@@ -48,12 +65,15 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 }
 
 export async function emitResponseNotification(server: Server, payload: ResponsePushPayload): Promise<void> {
+	const filesBlock = filesBlockFor(payload.message_id, payload.files, true);
+	const body = payload.response ?? "";
+
 	await server.notification({
 		method: "notifications/claude/channel",
 		params: {
 			// The reply prose only; status rides structured in meta, not as a
 			// "Status:" label flattened into the body.
-			content: payload.response ?? "",
+			content: filesBlock ? `${body}\n\n${filesBlock}` : body,
 			meta: {
 				session_id: payload.session_id,
 				...(payload.status ? { status: payload.status } : {}),

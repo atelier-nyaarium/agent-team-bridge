@@ -1496,8 +1496,12 @@ export function createRoutes({
 			response: response.response,
 		};
 		if (response.status) push.status = response.status;
-		// The push carries the full bytes (the store kept metadata only).
-		if (files && files.length > 0) push.files = files;
+		// The push carries the full bytes; the store kept metadata only. message_id is the
+		// materialization bucket key, minted only alongside files as on the send path.
+		if (files && files.length > 0) {
+			push.files = files;
+			push.message_id = crypto.randomUUID();
+		}
 		const pushMsg = JSON.stringify(push);
 
 		let pushedViaConversation = false;

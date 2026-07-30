@@ -11,6 +11,21 @@ export const MANIFEST_FILENAME = "switchboard-references.json";
 export const MANIFEST_MARKER = "switchboardReferences";
 
 /**
+ * Throw if a caller-chosen filename would claim the reserved name. EVERY producer of an outbound
+ * ChannelFile has to call this, because a receiver splits a reply's file list on that name to find
+ * where generated snapshots begin; one unguarded producer makes the split land in the wrong place
+ * and silently swallow real files.
+ *
+ * Compared post-`safeName` because the console renames as it writes, so a name that only collides
+ * after sanitizing still collides where it lands.
+ */
+export function assertNotReservedName(filename: string): void {
+	if (safeName(filename) === MANIFEST_FILENAME) {
+		throw new Error(`Attachment "${filename}" uses the reserved name ${MANIFEST_FILENAME}; rename it to send it`);
+	}
+}
+
+/**
  * The phone's own filename sanitizer, replicated.
  *
  * The console renames attachments as it writes them to disk, so the manifest has to record the name
