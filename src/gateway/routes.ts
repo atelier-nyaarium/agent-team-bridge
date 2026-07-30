@@ -209,7 +209,12 @@ const RespondBodySchema = z.object({
 // per-file - a single file may use the whole bucket. Matched by the Android console's own
 // send-side cap (ChatRepository.kt: MAX_OUTGOING_BYTES) - pinned by routes.test.ts, update
 // both sides together. Exported only so that test can read the real value.
-export const MAX_RESPONSE_FILE_BYTES = 500_000_000;
+//
+// 16 MB is the honest end-to-end ceiling, not a wish: a payload is held whole at every hop
+// (phone encode tail ~3 copies at ~1.78x, evie relay frame, gateway WS receive), so the cap
+// must clear the tightest of those, which is the 64 MiB relay-frame limit with the phone's
+// 256 MB heap underneath. The blob plane removes the whole-payload constraint itself.
+export const MAX_RESPONSE_FILE_BYTES = 16_000_000;
 
 // How long a send waits after waking a session before delivering: registration is instant, but
 // Claude Code's channel listener is not ready yet. Named (not inline) because it is one half of a

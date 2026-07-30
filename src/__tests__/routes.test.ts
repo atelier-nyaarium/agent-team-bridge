@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { EVIE_WS_MAX_PAYLOAD_BYTES } from "../gateway/evie/evieClient.js";
 import { PresenceFacade } from "../gateway/presence.js";
 import { createRoutes, MAX_RESPONSE_FILE_BYTES, type RoutesDeps } from "../gateway/routes.js";
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
@@ -395,7 +396,7 @@ describe("routes", () => {
 					{
 						filename: "b.bin",
 						mime: "application/octet-stream",
-						size: 500_000_001,
+						size: 16_000_001,
 						descriptiveKey: "b",
 					},
 				],
@@ -641,7 +642,7 @@ describe("routes", () => {
 				// A declared size alone (no base64) is enough to cross the cap, and avoids actually
 				// allocating a 500+ MB string in the test process.
 				files: [
-					{ filename: "big.bin", mime: "application/octet-stream", size: 500_000_001, descriptiveKey: "b" },
+					{ filename: "big.bin", mime: "application/octet-stream", size: 16_000_001, descriptiveKey: "b" },
 				],
 			};
 
@@ -726,7 +727,7 @@ describe("routes", () => {
 					{
 						filename: "big.bin",
 						mime: "application/octet-stream",
-						size: 500_000_001,
+						size: 16_000_001,
 						descriptiveKey: "big.bin",
 					},
 				],
@@ -1857,8 +1858,15 @@ describe("routes", () => {
 
 	describe("constants", () => {
 		it("MAX_RESPONSE_FILE_BYTES matches the Android console's own MAX_OUTGOING_BYTES", () => {
-			// android/.../ChatRepository.kt: const val MAX_OUTGOING_BYTES = 500_000_000
-			expect(MAX_RESPONSE_FILE_BYTES).toBe(500_000_000);
+			// android/.../ChatRepository.kt: const val MAX_OUTGOING_BYTES = 16_000_000
+			expect(MAX_RESPONSE_FILE_BYTES).toBe(16_000_000);
+		});
+
+		it("a max-size payload's sealed relay frame clears the explicit WS ceiling", () => {
+			// ~1.78x measured amplification (base64 -> JSON -> seal -> base64) plus slack. The WS
+			// limit is set in evieClient (this repo) and BridgeTransport (evie-bot); an oversized
+			// frame does not merely fail, it closes the shared gateway socket.
+			expect(MAX_RESPONSE_FILE_BYTES * 2).toBeLessThan(EVIE_WS_MAX_PAYLOAD_BYTES);
 		});
 	});
 });
