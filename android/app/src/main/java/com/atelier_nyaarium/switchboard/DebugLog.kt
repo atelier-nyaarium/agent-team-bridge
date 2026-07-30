@@ -30,6 +30,9 @@ object DebugLog {
 
 	// Bounded ring buffer: last RING_CAP formatted lines, drained on each flush.
 	private const val RING_CAP = 500
+	// How long a dying process waits for its crash report to reach ingest. Long enough for one POST
+	// on a normal connection, short enough not to hang the crash dialog on a dead network.
+	private const val CRASH_FLUSH_TIMEOUT_MS = 3_000L
 	// Lines waiting to be sent; guarded by `lock`.
 	private val ring: ArrayDeque<String> = ArrayDeque(RING_CAP + 1)
 
@@ -58,6 +61,17 @@ object DebugLog {
 		val prev = Thread.getDefaultUncaughtExceptionHandler()
 		Thread.setDefaultUncaughtExceptionHandler { thread, e ->
 			runCatching { log("CRASH", "uncaught on ${thread.name}: ${e.stackTraceToString()}") }
+			// The ring otherwise drains only on the poll cycle, so a crash before the first poll
+			// takes its own report down with the process - exactly the crash worth reading. Push it
+			// out here instead, on a bounded join because the crashing thread may be the main one.
+			runCatching {
+				Thread { runCatching { flushToIngest() } }
+					.apply {
+						isDaemon = true
+						start()
+						join(CRASH_FLUSH_TIMEOUT_MS)
+					}
+			}
 			prev?.uncaughtException(thread, e)
 		}
 	}
