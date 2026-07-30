@@ -362,55 +362,82 @@ html, body {
 
 /* Attachments */
 
-.files {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px;
+.attachments {
 	margin-top: 8px;
 }
 
-.files .thumb {
-	max-width: min(46%, 240px);
-	max-height: 200px;
+/* Previewables wrap left to right; files always stack. */
+.thumbs {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+/* Fixed squares so a row of them reads as a contact sheet and wraps predictably, rather than one
+   image dictating the row height. */
+.thumbs .thumb {
+	width: 88px;
+	height: 88px;
 	border-radius: 8px;
 	border: 1px solid var(--border);
 	object-fit: cover;
 }
 
-.files .chip {
-	display: inline-flex;
-	align-items: center;
+.filerows {
+	display: flex;
+	flex-direction: column;
 	gap: 6px;
-	padding: 5px 10px;
-	background: var(--chip-bg);
-	border: 1px solid var(--border);
-	border-radius: 14px;
-	font-size: 12px;
-	font-family: ui-monospace, monospace;
-	color: var(--fg);
-	max-width: 100%;
+	margin-top: 8px;
 }
 
-.files .chip .name {
+/* A row is a control, not a line of text: its own surface, a leading glyph, and the link accent
+   on the name. Still one line and still narrow, so a wall of them stays scannable. */
+.filerow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-height: 48px;
+	padding: 7px 10px;
+	background: var(--chip-bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	font: inherit;
+	font-size: 12px;
+	font-family: ui-monospace, monospace;
+	color: var(--muted);
+	text-align: left;
+	-webkit-tap-highlight-color: transparent;
+}
+
+/* Only a row that actually opens something wears the accent. A metadata-only attachment has no
+   bytes to show, and dressing it as a control is the dead-tap the unified layout exists to remove. */
+button.filerow {
+	color: var(--link);
+}
+
+button.filerow:active {
+	background: var(--border);
+}
+
+.filerow .glyph {
+	width: 13px;
+	height: 15px;
+	flex: 0 0 auto;
+	opacity: 0.75;
+}
+
+.filerow .name {
+	flex: 1 1 auto;
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-/* A decorated chip reads as a titled artifact, not a file path: proportional
-   type, link-accent edge, and a leading dot in the same accent. */
-.files .chip.deco {
+/* A decorated row reads as a titled artifact rather than a file path: proportional type and
+   heavier weight, on the same accent the plain row already uses. */
+.filerow.deco {
 	font-family: inherit;
 	font-weight: 600;
-	border-color: var(--link);
-	color: var(--link);
-}
-
-.files .chip.deco::before {
-	content: "";
-	width: 7px;
-	height: 7px;
-	border-radius: 50%;
-	background: var(--link);
-	flex-shrink: 0;
 }

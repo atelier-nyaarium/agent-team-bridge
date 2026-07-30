@@ -75,16 +75,20 @@ internal fun messagesToJson(
 		if (m.fromMe && m.seq == 0L) obj.put("ownSend", true)
 		if (!m.arrivedVisible) obj.put("arrivedVisible", false)
 		m.status?.let { obj.put("status", it) }
-		if (m.files.isNotEmpty()) {
+		// Hidden entries are already dropped and the order is already decided, so the renderer draws
+		// the list as given rather than re-deciding what an attachment is.
+		val shown = displayAttachments(m.files, decorate)
+		if (shown.isNotEmpty()) {
 			val files = JSONArray()
-			for (f in m.files) {
+			for (item in shown) {
 				// Decoration is transcript-only, layered on a shape the persistence writers share.
-				val fileObj = fileJson(f)
-				decorate(f)?.let { d ->
-					fileObj.put(
-						"decoration",
-						JSONObject().put("title", d.title).put("kind", d.kind).put("hidden", d.hidden),
-					)
+				val fileObj = fileJson(item.file)
+					.put("previewable", item.previewable)
+					.put("label", displayName(item))
+				// Only when the title actually survived displayName's fallback, so the renderer never
+				// has to re-decide whether a title is usable and reach a different answer.
+				item.decoration?.takeIf { it.title.isNotBlank() }?.let { d ->
+					fileObj.put("decoration", JSONObject().put("title", d.title).put("kind", d.kind))
 				}
 				files.put(fileObj)
 			}

@@ -11,7 +11,9 @@
 //   thread.revealFirstUnread(idOrNull, regionIds)   re-snap/hold an already-rendered transcript
 //   thread.flushReadUpTo()                          flush any pending debounced read receipt now
 // Message shape: {id, role: "user"|"agent", from, at, body, status?, counts?, ownSend?,
-//   arrivedVisible?, files?: [{name, mime, src?, size?, modifiedAt?, decoration?: {title, kind, hidden?}}]}
+//   arrivedVisible?, files?: [{name, mime, src?, size?, modifiedAt?, previewable, label,
+//   decoration?: {title, kind}}]}
+// The host classifies, labels, orders, and filters attachments; hidden ones never arrive.
 // `counts`: this row counts toward unread (an inbound row with real mailbox coordinates).
 // `ownSend`: this row is the local optimistic send (never a settled echo from another device).
 // `arrivedVisible`: present (false) only when the row arrived while the app was backgrounded.
@@ -343,42 +345,79 @@
 		}
 	}
 
+	// The host decides what is previewable, what each entry is called, and what order they come in.
+	// Hidden entries never arrive. This function only draws.
 	function buildFiles(files) {
 		const wrap = document.createElement("div");
-		wrap.className = "files";
+		wrap.className = "attachments";
+		const thumbs = document.createElement("div");
+		thumbs.className = "thumbs";
+		const rows = document.createElement("div");
+		rows.className = "filerows";
+
 		for (const f of files) {
-			// A decoration may drop the chip outright: some attachments are machinery a plugin
-			// already surfaces another way, and rendering them as files invites a misleading tap.
-			if (f.decoration && f.decoration.hidden === true) continue;
-			const isImage = f.mime && f.mime.indexOf("image/") === 0 && f.src;
-			if (isImage) {
+			if (f.previewable && f.src) {
 				const img = document.createElement("img");
 				img.className = "thumb";
 				img.loading = "lazy";
 				img.src = f.src;
-				img.alt = f.name || "";
+				// Named for assistive tech only. A thumbnail shows no filename: the picture is the
+				// label, and a wall of names under a wall of images is the noise being removed.
+				img.alt = f.label;
 				img.addEventListener("click", () => openAttachment(f.src));
-				wrap.appendChild(img);
+				thumbs.appendChild(img);
 			} else {
-				// A decoration (host-supplied per-file data) shows its title with accent styling
-				// instead of the raw filename; anything missing or malformed falls back to the
-				// plain chip. Titles are agent-authored, so they enter the DOM via textContent only.
-				const deco = f.decoration && typeof f.decoration.title === "string" && f.decoration.title ? f.decoration : null;
-				const chip = document.createElement("span");
-				chip.className = deco ? "chip deco" : "chip";
-				if (deco && typeof deco.kind === "string" && /^[a-z0-9-]{1,32}$/.test(deco.kind)) {
-					chip.classList.add("deco-" + deco.kind);
-				}
-				const name = document.createElement("span");
-				name.className = "name";
-				name.textContent = deco ? deco.title : (f.name || "file");
-				chip.title = f.name || "";
-				chip.appendChild(name);
-				if (f.src) chip.addEventListener("click", () => openAttachment(f.src));
-				wrap.appendChild(chip);
+				rows.appendChild(buildFileRow(f));
 			}
 		}
+
+		if (thumbs.childElementCount > 0) wrap.appendChild(thumbs);
+		if (rows.childElementCount > 0) wrap.appendChild(rows);
 		return wrap;
+	}
+
+	// A leading glyph, built as real SVG nodes rather than markup, since everything else in this
+	// renderer reaches the DOM without parsing a string.
+	function fileGlyph() {
+		const NS = "http://www.w3.org/2000/svg";
+		const svg = document.createElementNS(NS, "svg");
+		svg.setAttribute("class", "glyph");
+		svg.setAttribute("viewBox", "0 0 14 16");
+		svg.setAttribute("aria-hidden", "true");
+		const page = document.createElementNS(NS, "path");
+		page.setAttribute("d", "M2.5 0.5h6.2l2.8 2.8v12.2h-9z");
+		page.setAttribute("fill", "none");
+		page.setAttribute("stroke", "currentColor");
+		const fold = document.createElementNS(NS, "path");
+		fold.setAttribute("d", "M8.7 0.5v2.8h2.8");
+		fold.setAttribute("fill", "none");
+		fold.setAttribute("stroke", "currentColor");
+		svg.append(page, fold);
+		return svg;
+	}
+
+	// One tappable line, clipped rather than wrapped. A decoration (host-supplied per-file data)
+	// carries its own accent styling. Labels are agent-authored, so they enter the DOM via
+	// textContent only.
+	function buildFileRow(f) {
+		const deco = f.decoration || null;
+		const row = document.createElement(f.src ? "button" : "div");
+		row.className = deco ? "filerow deco" : "filerow";
+		if (f.src) row.type = "button";
+		if (deco && typeof deco.kind === "string" && /^[a-z0-9-]{1,32}$/.test(deco.kind)) {
+			row.classList.add("deco-" + deco.kind);
+		}
+
+		row.appendChild(fileGlyph());
+
+		const name = document.createElement("span");
+		name.className = "name";
+		name.textContent = f.label;
+		row.title = f.name || "";
+		row.appendChild(name);
+
+		if (f.src) row.addEventListener("click", () => openAttachment(f.src));
+		return row;
 	}
 
 	////////////////////////////////

@@ -11,8 +11,9 @@ non-scrolling row that clips past the screen edge. Unify them to kill the diverg
 
 **Message row**
 - Images: thumb only, NO filename, wrap horizontally onto following lines.
-- Files: narrow one-line rows, stacked vertically, never a fat chip. Name left, size right, ellipsis
-  rather than a second line.
+- Files: narrow one-line rows, stacked vertically, never a fat chip. Name only, ellipsis rather
+  than a second line, and each row has to read as a control rather than a line of text. No size on
+  the row (owner's call after seeing it rendered); the size still shows in the fullscreen viewer.
 - Images always first, then files.
 - Nothing expands in place. No inline name reveal. Identical for own rows and theirs.
 
@@ -376,7 +377,7 @@ and a new `readReplyAttachments` reads a list sequentially against ONE budget, s
 concurrently holds every file plus its base64 in memory and N files each under the per-file cap can
 exhaust the heap before anything can reject them.
 
-### 4. Shared classifier (the anti-divergence layer)
+### 4. Shared classifier (the anti-divergence layer) ✅
 
 One Kotlin decision layer both renderers consume: drop plugin-hidden artifacts FIRST, classify
 PREVIEWABLE (image, video) vs FILE, order previewables then files, and own the shared formatting
@@ -390,11 +391,18 @@ and HEIC hit exactly that and are deliberately absent from `MIME_BY_EXT` until t
 (`BitmapFactory` decodes HEIF, so the viewer would have been fine; the transcript is what breaks).
 Adding them back is a one-line change here once the classifier gates on what the renderer supports.
 
-### 5. Message row (`thread.js`)
+### 5. Message row (`thread.js`) ✅
 
-Previewables wrap as thumbs, no names. Files stack below as thin one-line rows with the size on the
-right. A Designer-decorated chip keeps its title and accent styling inside the file list. Same for
-own rows and theirs.
+Previewables wrap as fixed squares, no names. Files stack below as thin one-line rows carrying a
+glyph and the name only. A Designer-decorated row keeps its title and accent styling. Same for own
+rows and theirs.
+
+Only a row that actually opens something wears the control styling. A metadata-only attachment has
+no bytes to show, so it renders muted and inert; dressing it identically was the dead-tap this
+layout exists to remove, and it got reintroduced once already.
+
+`prettySize` therefore has no consumer on this surface. It stays in the classifier for section 6's
+info rows rather than moving, since the composer will want the same formatting.
 
 ### 6. Viewer (extend `AttachmentViewer`, single attachment)
 

@@ -61,6 +61,65 @@ class MessagesToJsonTest {
 	}
 
 	@Test
+	fun theRendererIsHandedTheHostsLabelRatherThanTheRawFilename() {
+		// The renderer has no fallback to the filename, so losing this wiring shows the wrong name
+		// rather than failing loudly.
+		val json = messagesToJson(
+			listOf(msg(listOf(MessageFile("a1b2c3.txt", "text/plain", "attachments/1-2/a1b2c3.txt")))),
+			{ "them" },
+			false,
+		) { ChipDecoration("cart.ts : add", "ref") }
+		val file = JSONArray(json).getJSONObject(0).getJSONArray("files").getJSONObject(0)
+		assertEquals("cart.ts : add", file.getString("label"))
+	}
+
+	@Test
+	fun anUnusableDecorationTitleIsNotSentAsADecorationAtAll() {
+		// Otherwise the renderer styles a row as a titled artifact while showing the filename,
+		// because it would have to re-derive "is this title usable" and could answer differently.
+		val json = messagesToJson(
+			listOf(msg(listOf(MessageFile("real.txt", "text/plain", "attachments/1-2/real.txt")))),
+			{ "them" },
+			false,
+		) { ChipDecoration("   ", "ref") }
+		val file = JSONArray(json).getJSONObject(0).getJSONArray("files").getJSONObject(0)
+		assertEquals("real.txt", file.getString("label"))
+		assertFalse(file.has("decoration"))
+	}
+
+	@Test
+	fun aHiddenFileNeverReachesTheRenderer() {
+		// The renderer no longer decides this, so a hidden entry must be absent from the payload
+		// rather than present with a flag the JS is trusted to honor.
+		val json = messagesToJson(
+			listOf(msg(listOf(MessageFile("shot.png", "image/png", "attachments/1-2/shot.png")))),
+			{ "them" },
+			false,
+		) { ChipDecoration("refs", "ref", hidden = true) }
+		assertFalse(JSONArray(json).getJSONObject(0).has("files"))
+	}
+
+	@Test
+	fun previewablesAreMarkedAndSortedAheadOfFiles() {
+		val json = messagesToJson(
+			listOf(
+				msg(
+					listOf(
+						MessageFile("notes.txt", "text/plain", "attachments/1-2/notes.txt", 4096L),
+						MessageFile("shot.png", "image/png", "attachments/1-2/shot.png"),
+					),
+				),
+			),
+			{ "them" },
+			false,
+		) { null }
+		val files = JSONArray(json).getJSONObject(0).getJSONArray("files")
+		assertEquals("shot.png", files.getJSONObject(0).getString("name"))
+		assertTrue(files.getJSONObject(0).getBoolean("previewable"))
+		assertFalse(files.getJSONObject(1).getBoolean("previewable"))
+	}
+
+	@Test
 	fun messagesWithoutFilesCarryNoFilesArray() {
 		val json = messagesToJson(
 			listOf(Message(fromMe = true, text = "hi", at = 1000L, id = 3)),
