@@ -82,11 +82,13 @@ export type ChannelReplyStructuredArgs = z.infer<typeof ChannelReplyStructuredSc
 ////////////////////////////////
 //  Channel File Schema (inbound from evie-bot bridge)
 //
-//  Owned by evie-protocol.ts (the self-contained module synced into
-//  evie-bot); re-exported here so the console-protocol schemas and existing
-//  importers keep one import surface.
+//  ChannelFile lives in channel-file.ts (zod-only, NOT a synced leaf - evie
+//  never reads it); the blob constants stay in the evie-protocol leaf. Both
+//  re-export here so the console-protocol schemas and existing importers keep
+//  one import surface.
 
-import { BLOB_CHUNK_BYTES, ChannelFilesSchema } from "./evie-protocol.js";
+import { ChannelFilesSchema } from "./channel-file.js";
+import { BLOB_CHUNK_BYTES } from "./evie-protocol.js";
 
 /** `sha256-<64 hex>`. A blob is named by the digest of its own bytes and by nothing else. */
 const BlobIdField = z.string().regex(/^sha256-[0-9a-f]{64}$/);
@@ -132,7 +134,7 @@ export const BlobGetOpSchema = z.object({
 	fromGateway: FromGatewayField,
 });
 
-export { ChannelFileSchema, ChannelFilesSchema } from "./evie-protocol.js";
+export { ChannelFileSchema, ChannelFilesSchema } from "./channel-file.js";
 
 ////////////////////////////////
 //  WS Register Schema

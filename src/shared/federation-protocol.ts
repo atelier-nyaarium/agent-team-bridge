@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { ChannelFilesSchema } from "./channel-file.js";
 import { sign, verify } from "./crypto.js";
-import { BLOB_CHUNK_BYTES, ChannelFilesSchema } from "./evie-protocol.js";
+import { BLOB_CHUNK_BYTES } from "./evie-protocol.js";
 import { CONVERSATION_ID_RE, MAX_CONVERSATION_ID_LEN } from "./host-op.js";
 import { NoticeTierWireFields, NoticeTitle } from "./notice.js";
 import { isSlug } from "./session-id.js";
