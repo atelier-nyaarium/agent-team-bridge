@@ -64,9 +64,47 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** `optLong` answers 0 for a key that is missing OR unparseable, turning "no value" into "0 B" and
+ * 1 Jan 1970. Anything that is not a number reads as absent instead, which a viewer hides. */
+internal fun JSONObject.longOrNull(key: String): Long? = (opt(key) as? Number)?.toLong()
+
 /** A rendered attachment on a message. `src` is what the WebView loads (a data URI
- * or an appassets-proxied local path); a null `src` renders as a download chip. */
-data class MessageFile(val name: String, val mime: String, val src: String? = null)
+ * or an appassets-proxied local path); a null `src` renders as a download chip.
+ * `size` and `modifiedAt` are null when unknown, which a viewer hides rather than showing as zero. */
+data class MessageFile(
+	val name: String,
+	val mime: String,
+	val src: String? = null,
+	val size: Long? = null,
+	val modifiedAt: Long? = null,
+)
+
+/** The one shape every file-list writer shares, so a field added for one cannot go missing from
+ * another. Top-level so this and [loadFiles] are testable without a ContentResolver. */
+internal fun fileJson(f: MessageFile): JSONObject =
+	JSONObject()
+		.put("name", f.name)
+		.put("mime", f.mime)
+		.putOpt("src", f.src)
+		.putOpt("size", f.size)
+		.putOpt("modifiedAt", f.modifiedAt)
+
+/** Read back a [fileJson] list from any record that carries one. */
+internal fun loadFiles(m: JSONObject): List<MessageFile> {
+	val arr = m.optJSONArray("files") ?: return emptyList()
+	// Skip a non-object element rather than throwing. The threads loader catches around its whole
+	// key loop, so one unreadable entry there would cost every thread on the device, not one row.
+	return (0 until arr.length()).mapNotNull {
+		val f = arr.optJSONObject(it) ?: return@mapNotNull null
+		MessageFile(
+			f.optString("name"),
+			f.optString("mime"),
+			f.optString("src").takeIf { s -> s.isNotEmpty() },
+			f.longOrNull("size"),
+			f.longOrNull("modifiedAt"),
+		)
+	}
+}
 
 /** A banked send waiting for its wall-clock time, keyed by team in ChatState.scheduledSends (at
  * most one per team - see plans/scheduled-send.md). `opId` is minted at schedule time and carried
@@ -4432,7 +4470,7 @@ class ChatRepository(
 				if (m.files.isNotEmpty()) {
 					val files = JSONArray()
 					for (f in m.files) {
-						files.put(JSONObject().put("name", f.name).put("mime", f.mime).putOpt("src", f.src))
+						files.put(fileJson(f))
 					}
 					obj.put("files", files)
 				}
@@ -4556,14 +4594,6 @@ class ChatRepository(
 		}.getOrDefault(emptyMap())
 	}
 
-	private fun loadFiles(m: JSONObject): List<MessageFile> {
-		val arr = m.optJSONArray("files") ?: return emptyList()
-		return (0 until arr.length()).map {
-			val f = arr.getJSONObject(it)
-			MessageFile(f.optString("name"), f.optString("mime"), f.optString("src").takeIf { s -> s.isNotEmpty() })
-		}
-	}
-
 	private fun persistLabels(labels: Map<String, String>) {
 		val root = JSONObject()
 		for ((team, name) in labels) root.put(team, name)
@@ -4587,7 +4617,7 @@ class ChatRepository(
 		val root = JSONObject()
 		for ((team, rec) in records) {
 			val files = JSONArray()
-			for (f in rec.fileRefs) files.put(JSONObject().put("name", f.name).put("mime", f.mime).putOpt("src", f.src))
+			for (f in rec.fileRefs) files.put(fileJson(f))
 			root.put(
 				team,
 				JSONObject()
@@ -4662,7 +4692,7 @@ class ChatRepository(
 		val root = JSONObject()
 		for ((team, draft) in records) {
 			val files = JSONArray()
-			for (f in draft.files) files.put(JSONObject().put("name", f.name).put("mime", f.mime).putOpt("src", f.src))
+			for (f in draft.files) files.put(fileJson(f))
 			root.put(team, JSONObject().put("text", draft.text).put("files", files))
 		}
 		runCatching { store.saveDrafts(root.toString()) }

@@ -69,7 +69,7 @@ object Attachments {
 			val name = uniqueName(safeName(f.filename), used)
 			// Empty base64 is metadata-only too: decoding it would materialize a
 			// 0-byte file and hand the WebView a broken image src.
-			if (f.base64.isNullOrEmpty()) return@mapNotNull MessageFile(name, f.mime, null)
+			if (f.base64.isNullOrEmpty()) return@mapNotNull MessageFile(name, f.mime, null, f.size, f.modifiedAt)
 			val bytes = runCatching { Base64.decode(f.base64, Base64.DEFAULT) }.getOrNull() ?: return@mapNotNull null
 			runCatching {
 				dir.mkdirs()
@@ -78,7 +78,7 @@ object Attachments {
 				val tmp = File(dir, "$name.tmp")
 				tmp.writeBytes(bytes)
 				tmp.renameTo(out)
-				MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name")
+				MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name", bytes.size.toLong(), f.modifiedAt)
 			}.getOrNull()
 		}
 	}
@@ -94,7 +94,7 @@ object Attachments {
 			runCatching {
 				dir.mkdirs()
 				File(dir, name).writeBytes(f.bytes)
-				MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name")
+				MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name", f.bytes.size.toLong())
 			}.getOrNull()
 		}
 	}

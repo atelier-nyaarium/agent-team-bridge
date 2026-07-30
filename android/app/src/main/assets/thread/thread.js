@@ -11,7 +11,7 @@
 //   thread.revealFirstUnread(idOrNull, regionIds)   re-snap/hold an already-rendered transcript
 //   thread.flushReadUpTo()                          flush any pending debounced read receipt now
 // Message shape: {id, role: "user"|"agent", from, at, body, status?, counts?, ownSend?,
-//   arrivedVisible?, files?: [{name, mime, src?, decoration?: {title, kind, hidden?}}]}
+//   arrivedVisible?, files?: [{name, mime, src?, size?, modifiedAt?, decoration?: {title, kind, hidden?}}]}
 // `counts`: this row counts toward unread (an inbound row with real mailbox coordinates).
 // `ownSend`: this row is the local optimistic send (never a settled echo from another device).
 // `arrivedVisible`: present (false) only when the row arrived while the app was backgrounded.

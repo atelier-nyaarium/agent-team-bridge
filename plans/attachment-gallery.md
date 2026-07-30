@@ -191,12 +191,29 @@ working tree and that `check-sync-hash` was therefore failing. Neither is true -
 clean but for the plan files, `modifiedAt` appears nowhere in the tree, and the gate reports
 "1 file(s) faithful". Recorded so a later lap does not act on it.
 
-### 1. Store plumbing (FIRST - everything else depends on it)
+### 1. Store plumbing (FIRST - everything else depends on it) ✅
 
 `MessageFile` gains `size: Long?` and `modifiedAt: Long?`, carried through EVERY hop:
 `Attachments.decode` (stop discarding `ChannelFile.size`), `Attachments.storeOutgoing`,
-`messagesToJson`, `threadsJson`/`loadFiles`, `scheduledSendsJson`, `persistDrafts`/
-`loadPersistedDrafts`, `OpenAttachment`, and `rebuildFiles`.
+`messagesToJson`, `threadsJson`/`loadFiles`, `scheduledSendsJson`, and `persistDrafts`/
+`loadPersistedDrafts`.
+
+`loadFiles` skips an element it cannot read rather than throwing, and treats a present-but-
+non-numeric value as absent. Both matter because `loadPersistedThreads` catches around its ENTIRE
+key loop, unlike the drafts and scheduled-send loaders which guard per row, so one bad entry there
+would cost every thread on the device and then be overwritten by the next persist. Narrowing that
+loader to per-row guarding is a real pre-existing gap but is not this change's to make.
+
+`decode` uses the DECODED BYTE LENGTH rather than the declared `ChannelFile.size` whenever bytes
+are present, because a sender's declared size is unverified input and the bytes on disk are what the
+row actually describes. The declared value is used only on the metadata-only branch, where there are
+no bytes to measure.
+
+Two hops on the original list turned out not to belong here. `rebuildFiles` converts to
+`OutgoingFile`, whose bytes already carry the size and which never carries an mtime (the phone does
+not populate one), so it needs nothing. `OpenAttachment` is built from a bridge-supplied rel path
+with no `MessageFile` in hand, and the rel-to-file lookup it would need does not exist for drafts at
+all - that is section 6's work, and adding unread fields ahead of it buys nothing.
 
 **Absent must load as null, not zero.** `optLong` returns `0L` for a missing key, so the obvious
 `optLong("modifiedAt")` turns "this file has no carried date" into "1 Jan 1970" and "no size" into
@@ -205,10 +222,16 @@ restart. Read via an explicit presence check (`if (has(k) && !isNull(k)) getLong
 put a shared helper on it, since it is needed in three loaders. Section 6's "`Modified` when
 present" is only meaningful if absence survives the round trip.
 
-All FOUR hand-rolled writers listed in section 0 must be updated together. A grep for
-`put("name"` is the check; missing one produces a field that renders until the next process death.
-There is exactly ONE shared reader behind the three persistence writers, so the read side is a
-single edit, not three.
+Rather than updating the four hand-rolled writers in step, they now share ONE `fileJson` paired with
+the existing single `loadFiles`, so there is nothing left to keep in step. The transcript payload
+joins them and adds decoration on top. That is byte-identical output, not a tolerated shape change:
+org.json's `put(key, null)` REMOVES the key rather than writing a JSON null, so it already behaved
+as `putOpt` does. Independently, every `f.src` use in `thread.js` is a truthiness check, so even a
+real shape change would have been safe. `grep 'put("name", f.name)'` should find exactly one hit, inside `fileJson` itself.
+
+Both are top-level `internal` functions rather than `ChatRepository` members, mirroring
+`messagesToJson` and `renderedSender`. That is what makes the round trip testable: a private member
+cannot be reached from a JVM test, since `ChatRepository` needs a `ContentResolver`.
 
 Justified by `size` ALONE - the file row shows it and nothing carries it today. `modifiedAt` rides
 along at no extra cost.
@@ -624,12 +647,14 @@ Unit tests:
   an attachment-bearing send with a `session_id` is NOT treated as a poll, and the asker-offline case
   reports filenames rather than silence.
 
-**The four-serializer round trip cannot be a unit test, and pretending otherwise leaves the gap
-open.** Three of the four writers and both loaders are private members of `ChatRepository`, which
-needs a `ContentResolver` a JVM test cannot construct; only `messagesToJson` is reachable. So the
-real gate against a missed writer is the grep plus an emulator check that an attachment's size and
-date survive a process death. Say that plainly rather than listing a test that will quietly never be
-written.
+**What the round trip can and cannot gate.** Extracting `fileJson`/`loadFiles` to top-level
+`internal` functions made the serialization round trip an ordinary JVM test, and the two entry hops
+(`Attachments.decode`, `Attachments.storeOutgoing`) are plain-JVM reachable too, so all of that is
+covered and mutation-checked. What no unit test can catch is a FUTURE writer that simply does not
+call `fileJson`: reverting `messagesToJson` to a hand-rolled object leaves the whole suite green.
+That one stays a grep (`put("name", f.name)` should find exactly one hit) plus the emulator check
+that size and date survive a process death. The byte-bearing `decode` branch is also emulator-only,
+since `android.util.Base64` is a throwing stub off-device.
 
 Emulator pass per surface: the 1:1 check at 100% zoom, a frame-set completion landing on an
 already-rendered row, an attachment's size and date surviving a process death, and the draft viewer

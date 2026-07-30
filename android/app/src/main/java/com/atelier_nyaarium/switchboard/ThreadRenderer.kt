@@ -78,7 +78,8 @@ internal fun messagesToJson(
 		if (m.files.isNotEmpty()) {
 			val files = JSONArray()
 			for (f in m.files) {
-				val fileObj = JSONObject().put("name", f.name).put("mime", f.mime).put("src", f.src)
+				// Decoration is transcript-only, layered on a shape the persistence writers share.
+				val fileObj = fileJson(f)
 				decorate(f)?.let { d ->
 					fileObj.put(
 						"decoration",
