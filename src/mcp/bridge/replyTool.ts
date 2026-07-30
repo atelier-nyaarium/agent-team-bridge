@@ -53,7 +53,28 @@ export async function readReplyAttachment(filePath: string): Promise<ChannelFile
 	}
 	const buffer = await readFile(filePath);
 	const mime = MIME_BY_EXT[extname(filename).toLowerCase()] ?? "application/octet-stream";
-	return { filename, mime, size: buffer.length, descriptiveKey: filename, base64: buffer.toString("base64") };
+	// Stat again after the read: the guard stat has to precede it (refusing an oversized file
+	// without loading it), but by then it describes bytes that may already be stale. This narrows
+	// the gap rather than closing it, since nothing locks the file across the two calls.
+	const { mtime } = await stat(filePath).catch(() => stats);
+	return {
+		filename,
+		mime,
+		size: buffer.length,
+		descriptiveKey: filename,
+		// getTime(), not mtimeMs: the latter carries sub-millisecond precision as a fraction, which
+		// the wire schema's integer check rejects. An mtime outside the Date range yields NaN, which
+		// serializes to null and would have the gateway reject the whole message over one odd file.
+		...wireModifiedAt(mtime),
+		base64: buffer.toString("base64"),
+	};
+}
+
+/** The wire field for a file's mtime, or nothing at all when the clock cannot be represented.
+ * Omission is a supported sender state; a null or NaN is not, and would fail the whole payload. */
+export function wireModifiedAt(mtime: Date): { modifiedAt?: number } {
+	const ms = mtime.getTime();
+	return Number.isFinite(ms) ? { modifiedAt: ms } : {};
 }
 
 /** Read a whole attachment list, sequentially, against ONE budget. Reading concurrently would hold

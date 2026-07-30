@@ -53,6 +53,7 @@ data class ChannelFile(
 	val size: Long,
 	val descriptiveKey: String,
 	val base64: String? = null,
+	val modifiedAt: Long? = null,
 )
 
 @Serializable

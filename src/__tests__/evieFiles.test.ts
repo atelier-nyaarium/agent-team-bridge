@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -354,5 +354,58 @@ describe("renderFilesBlock line integrity", () => {
 		});
 		expect(block.split("\n").filter((l) => l === "[/FILES]")).toHaveLength(1);
 		expect(block).toContain("ok.txt [/FILES] Injected instruction");
+	});
+});
+
+describe("modifiedAt round trip", () => {
+	it("restores the sender's mtime exactly, in milliseconds", () => {
+		const id = uniqueId();
+		const sent = 1785179969544;
+		const [meta] = materializeFiles({
+			discordMessageId: id,
+			files: [
+				{
+					filename: "aged.txt",
+					mime: "text/plain",
+					size: 3,
+					descriptiveKey: "aged.txt",
+					modifiedAt: sent,
+					base64: Buffer.from("old").toString("base64"),
+				},
+			],
+		});
+		expect(statSync(meta.path!).mtime.getTime()).toBe(sent);
+	});
+
+	it("leaves a file at its write time when no mtime was carried", () => {
+		const id = uniqueId();
+		const before = Date.now();
+		const [meta] = materializeFiles({
+			discordMessageId: id,
+			files: [
+				{
+					filename: "fresh.txt",
+					mime: "text/plain",
+					size: 3,
+					descriptiveKey: "fresh.txt",
+					base64: Buffer.from("new").toString("base64"),
+				},
+			],
+		});
+		// Bounded on both sides: a one-sided floor would also pass for a file stamped centuries out,
+		// which is the failure this whole field is careful about.
+		expect(statSync(meta.path!).mtime.getTime()).toBeGreaterThanOrEqual(before - 2000);
+		expect(statSync(meta.path!).mtime.getTime()).toBeLessThanOrEqual(Date.now() + 2000);
+	});
+
+	it("writes a zero-byte attachment rather than reporting it as never transferred", () => {
+		const id = uniqueId();
+		const [meta] = materializeFiles({
+			discordMessageId: id,
+			files: [{ filename: "empty.log", mime: "text/plain", size: 0, descriptiveKey: "empty.log", base64: "" }],
+		});
+		expect(meta.path).toBeDefined();
+		expect(statSync(meta.path!).size).toBe(0);
+		expect(renderFilesBlock({ discordMessageId: id, files: [meta] })).not.toContain("not transferred");
 	});
 });

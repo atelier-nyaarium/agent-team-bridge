@@ -213,7 +213,7 @@ single edit, not three.
 Justified by `size` ALONE - the file row shows it and nothing carries it today. `modifiedAt` rides
 along at no extra cost.
 
-### 2. Wire: `modifiedAt` (synced leaf ritual)
+### 2. Wire: `modifiedAt` (synced leaf ritual) ✅
 
 - Add to `ChannelFileSchema` in `src/shared/evie-protocol.ts` as `z.number().int().optional()`
   (epoch ms).

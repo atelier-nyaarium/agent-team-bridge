@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -155,7 +155,14 @@ describe("handleChannelReply / handleChannelReplyStructured (the actual register
 		await handleChannelReply(args);
 		const [, payload] = mockRouterPost.mock.calls[0] as [string, Record<string, unknown>];
 		expect(payload.files).toEqual([
-			{ filename: "note.txt", mime: "text/plain", size: 5, descriptiveKey: "note.txt", base64: "aGVsbG8=" },
+			{
+				filename: "note.txt",
+				mime: "text/plain",
+				size: 5,
+				descriptiveKey: "note.txt",
+				modifiedAt: statSync(filePath).mtime.getTime(),
+				base64: "aGVsbG8=",
+			},
 		]);
 	});
 
@@ -628,5 +635,51 @@ describe("reserved-name coverage across every outbound ChannelFile producer", ()
 		const result = await tools.crosstalk_send({ session_id: "s1" } as never);
 		const lines = result.content[0].text.split("\n");
 		expect(lines.filter((l) => l.startsWith("[session_id:"))).toEqual(["[session_id: s1]"]);
+	});
+});
+
+describe("modifiedAt on the wire", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "mtime-wire-"));
+	});
+
+	afterEach(() => {
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("carries a file's own mtime as an integer the wire schema accepts", async () => {
+		const { readReplyAttachment } = await import("../mcp/bridge/replyTool.js");
+		const { ChannelFilesSchema } = await import("../shared/schemas.js");
+		const path = join(dir, "aged.txt");
+		writeFileSync(path, "x");
+		const stamp = new Date("2019-03-14T09:26:53.589Z");
+		utimesSync(path, stamp, stamp);
+
+		const file = await readReplyAttachment(path);
+		expect(file.modifiedAt).toBe(stamp.getTime());
+		expect(ChannelFilesSchema.safeParse([file]).success).toBe(true);
+	});
+
+	it("omits the field entirely for an unrepresentable clock, since NaN would fail the whole payload", async () => {
+		const { wireModifiedAt } = await import("../mcp/bridge/replyTool.js");
+		const { ChannelFilesSchema } = await import("../shared/schemas.js");
+
+		expect(wireModifiedAt(new Date(1_552_555_613_589))).toEqual({ modifiedAt: 1_552_555_613_589 });
+		expect(wireModifiedAt(new Date(NaN))).toEqual({});
+
+		// The reason omission is the only safe fallback: NaN serializes to null, and null is not an
+		// accepted value, so one odd file would sink the entire message rather than just its date.
+		const base = { filename: "a.txt", mime: "text/plain", size: 1, descriptiveKey: "a.txt" };
+		expect(ChannelFilesSchema.safeParse([base]).success).toBe(true);
+		expect(ChannelFilesSchema.safeParse([{ ...base, modifiedAt: null }]).success).toBe(false);
+	});
+
+	it("refuses an epoch beyond what a Date can represent, so the restore side cannot be handed one", async () => {
+		const { ChannelFilesSchema } = await import("../shared/schemas.js");
+		const base = { filename: "a.txt", mime: "text/plain", size: 1, descriptiveKey: "a.txt" };
+		expect(ChannelFilesSchema.safeParse([{ ...base, modifiedAt: 8_640_000_000_000_000 }]).success).toBe(true);
+		expect(ChannelFilesSchema.safeParse([{ ...base, modifiedAt: 9_007_199_254_740_991 }]).success).toBe(false);
 	});
 });
