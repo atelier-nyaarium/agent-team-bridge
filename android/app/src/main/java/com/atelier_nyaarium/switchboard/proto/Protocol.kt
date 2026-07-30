@@ -51,7 +51,7 @@ object Protocol {
 
 	/** Largest a single blob may grow to. Enforced where the bytes land rather than where they
 	 * are described, since a message's stated size is the sender's own claim. */
-	const val MAX_BLOB_BYTES: Long = 16000000
+	const val MAX_BLOB_BYTES: Long = 500000000
 }
 
 @Serializable

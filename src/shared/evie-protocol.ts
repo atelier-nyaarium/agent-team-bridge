@@ -1,4 +1,4 @@
-// SYNC-HASH: e856f3f95c39795e26a37696a3d0b34d
+// SYNC-HASH: e6797b7c52c3ba64655fa3ac1ab9b837
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -69,15 +69,20 @@ export const ChannelFileSchema = z
 export const BLOB_CHUNK_BYTES = 1_048_576;
 
 /**
- * Largest a single blob may grow to, enforced where the bytes land rather than where they are
- * described.
+ * Largest a single attachment may be, anywhere in the system.
  *
- * A message states a file's `size`, but that is the sender talking: nothing verifies it, and once
- * bytes travel out of band there is no per-message total left to measure. So the ceiling lives on
- * the store's own write path, which counts what actually arrived. A sender that under-reports gets
+ * THE one size limit. Every other cap derives from this rather than restating it, because the
+ * previous four independent 16 MB constants all encoded a constraint that no longer exists and none
+ * of them moved when it went away: the old path held a payload whole at every hop, so the ceiling
+ * had to clear the tightest hop against a phone's heap. Nothing is held whole now. What bounds a
+ * transfer is BLOB_CHUNK_BYTES per hop and disk in total, and neither grows with the file.
+ *
+ * Enforced where the bytes land rather than where they are described. A message states a file's
+ * `size`, but that is the sender talking and nothing verifies it, so the ceiling lives on the
+ * store's own write path, which counts what actually arrived. A sender that under-reports is
  * refused at the chunk that crosses the line, having moved a bounded amount of data to get there.
  */
-export const MAX_BLOB_BYTES = 16_000_000;
+export const MAX_BLOB_BYTES = 500_000_000;
 
 /**
  * Ceiling a single sealed relay frame may not cross, asserted in tests against the WebSocket

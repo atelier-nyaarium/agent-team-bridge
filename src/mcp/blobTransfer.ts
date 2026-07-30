@@ -17,10 +17,12 @@ function localBlobStore(): BlobStore {
 	return new BlobStore(agentStagingRoot());
 }
 
-/** Ceiling for this process's staging copies. Smaller than the gateway's: an agent stages what it
- * is sending or has just received, not a whole domain's traffic, and /tmp is usually the tightest
- * disk in the container. */
-const MAX_STAGING_BYTES = 500_000_000;
+/** Ceiling for this process's staging copies. Smaller than the gateway's, since an agent stages
+ * what it is sending or has just received rather than a whole Domain's traffic, but a MULTIPLE of
+ * the largest single attachment and never equal to it: a store that can just barely hold one
+ * max-size blob evicts it the moment a second transfer starts, so the two would fight instead of
+ * queueing. That is the invariant, not the number. */
+const MAX_STAGING_BYTES = MAX_BLOB_BYTES * 4;
 
 /** Keep the staging store bounded. Called on every transfer rather than on a timer, because an MCP
  * process has no tick of its own, and the cost is one directory walk against work that just moved

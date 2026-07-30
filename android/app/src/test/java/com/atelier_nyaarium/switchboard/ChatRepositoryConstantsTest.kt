@@ -1,5 +1,6 @@
 package com.atelier_nyaarium.switchboard
 
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -14,9 +15,12 @@ import org.junit.Test
 class ChatRepositoryConstantsTest {
 
 	@Test
-	fun maxOutgoingBytesMatchesGatewayMaxResponseFileBytes() {
-		// src/gateway/routes.ts: const MAX_RESPONSE_FILE_BYTES = 16_000_000
-		assertEquals(16_000_000L, ChatRepository.MAX_OUTGOING_BYTES)
+	fun maxOutgoingBytesDerivesFromTheGeneratedWireLimitRatherThanRestatingIt() {
+		// Was a hand-copied 16 MB literal on both sides. That number existed only because the old path
+		// base64'd a whole file into the heap, and when that path was deleted the literal stayed - so
+		// the console kept refusing exactly the large files the chunked transport was built to carry.
+		// Asserting the derivation is the guard; a literal here would just be another copy to drift.
+		assertEquals(Protocol.MAX_BLOB_BYTES, ChatRepository.MAX_OUTGOING_BYTES)
 	}
 
 	@Test

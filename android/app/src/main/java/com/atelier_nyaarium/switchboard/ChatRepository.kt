@@ -4937,11 +4937,12 @@ class ChatRepository(
 		// ConsoleClient's own bound on that call (not an independent literal) so it can never
 		// silently fall behind the client's real worst case.
 		const val FORGET_TOMBSTONE_MS = ConsoleClient.DEFAULT_RELAY_CALL_TIMEOUT_MS + 5_000L
-		// Matches the gateway's own per-payload bucket (src/gateway/routes.ts:
-		// MAX_RESPONSE_FILE_BYTES); a single attachment may use the whole bucket, so this is
-		// a total, not a stricter per-file cap. Pinned by ChatRepositoryConstantsTest - update
-		// both sides together.
-		const val MAX_OUTGOING_BYTES = 16_000_000L
+		// DERIVED from the generated wire constant, never a literal. This was its own 16 MB number
+		// sized for a path that base64'd a whole file into the heap, and it stayed at 16 MB after that
+		// path was deleted - so the console went on refusing exactly the large videos the chunked
+		// transport exists to carry. Deriving it means the ceiling can only move in one place.
+		// A single attachment may use the whole bucket, so this is a total, not a per-file cap.
+		const val MAX_OUTGOING_BYTES = Protocol.MAX_BLOB_BYTES
 
 		// Consecutive fetch failures before a blob stops being re-requested until the next launch. A
 		// reference no Gateway can serve is otherwise retried on every poll pass forever, which costs

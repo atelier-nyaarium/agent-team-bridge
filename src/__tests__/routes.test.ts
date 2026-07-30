@@ -5,7 +5,7 @@ import { createRoutes, MAX_RESPONSE_FILE_BYTES, type RoutesDeps } from "../gatew
 import { createSessionAuthority } from "../gateway/sessionAuthority.js";
 import { resolveLiveIncarnation } from "../gateway/websocket.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
-import { BLOB_CHUNK_BYTES, MAX_RELAY_FRAME_BYTES } from "../shared/evie-protocol.js";
+import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES, MAX_RELAY_FRAME_BYTES } from "../shared/evie-protocol.js";
 import { PendingJobStore } from "../shared/pending-job-store.js";
 import { PlaneRegistry } from "../shared/plane-registry.js";
 import { SessionStore } from "../shared/session-store.js";
@@ -397,7 +397,7 @@ describe("routes", () => {
 					{
 						filename: "b.bin",
 						mime: "application/octet-stream",
-						size: 16_000_001,
+						size: MAX_RESPONSE_FILE_BYTES + 1,
 						descriptiveKey: "b",
 					},
 				],
@@ -643,7 +643,12 @@ describe("routes", () => {
 				// A declared size alone (no base64) is enough to cross the cap, and avoids actually
 				// allocating a 500+ MB string in the test process.
 				files: [
-					{ filename: "big.bin", mime: "application/octet-stream", size: 16_000_001, descriptiveKey: "b" },
+					{
+						filename: "big.bin",
+						mime: "application/octet-stream",
+						size: MAX_RESPONSE_FILE_BYTES + 1,
+						descriptiveKey: "b",
+					},
 				],
 			};
 
@@ -728,7 +733,7 @@ describe("routes", () => {
 					{
 						filename: "big.bin",
 						mime: "application/octet-stream",
-						size: 16_000_001,
+						size: MAX_RESPONSE_FILE_BYTES + 1,
 						descriptiveKey: "big.bin",
 					},
 				],
@@ -1869,9 +1874,12 @@ describe("routes", () => {
 	});
 
 	describe("constants", () => {
-		it("MAX_RESPONSE_FILE_BYTES matches the Android console's own MAX_OUTGOING_BYTES", () => {
-			// android/.../ChatRepository.kt: const val MAX_OUTGOING_BYTES = 16_000_000
-			expect(MAX_RESPONSE_FILE_BYTES).toBe(16_000_000);
+		it("derives the payload bucket from the one size limit rather than restating it", () => {
+			// Four independent copies of this number all encoded a constraint that no longer existed,
+			// and not one of them moved when it went away - the console went on refusing exactly the
+			// large files the chunked transport was built to carry. Asserting the DERIVATION rather
+			// than a literal is what stops that recurring: a literal here would just be a fifth copy.
+			expect(MAX_RESPONSE_FILE_BYTES).toBe(MAX_BLOB_BYTES);
 		});
 
 		it("a sealed chunk frame stays under the relay budget, which stays under the WS ceiling", () => {
@@ -1884,11 +1892,15 @@ describe("routes", () => {
 			expect(MAX_RELAY_FRAME_BYTES).toBeLessThan(EVIE_WS_MAX_PAYLOAD_BYTES);
 		});
 
-		it("a max-size payload's sealed relay frame clears the explicit WS ceiling", () => {
-			// ~1.78x measured amplification (base64 -> JSON -> seal -> base64) plus slack. The WS
-			// limit is set in evieClient (this repo) and BridgeTransport (evie-bot); an oversized
-			// frame does not merely fail, it closes the shared gateway socket.
-			expect(MAX_RESPONSE_FILE_BYTES * 2).toBeLessThan(EVIE_WS_MAX_PAYLOAD_BYTES);
+		it("lets an attachment be far larger than any single frame, which is the point of the plane", () => {
+			// The inverse of what this file used to assert. The old rule was that a whole payload had
+			// to fit inside one relay frame, which is why the size ceiling was pinned near the socket
+			// limit. Bytes travel in chunks now, so a file is deliberately allowed to dwarf a frame,
+			// and re-adding a "payload fits in a frame" assertion would quietly re-impose the cap the
+			// blob plane exists to remove.
+			expect(MAX_BLOB_BYTES).toBeGreaterThan(EVIE_WS_MAX_PAYLOAD_BYTES);
+			// What must still hold is the per-CHUNK bound, asserted above.
+			expect(BLOB_CHUNK_BYTES * 2).toBeLessThan(MAX_RELAY_FRAME_BYTES);
 		});
 	});
 });

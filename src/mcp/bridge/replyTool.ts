@@ -1,16 +1,17 @@
 import { stat } from "node:fs/promises";
 import { basename, extname, isAbsolute } from "node:path";
+import { MAX_BLOB_BYTES } from "../../shared/evie-protocol.js";
 import { SPOKEN_TIER_FIELDS } from "../../shared/notice.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { uploadBlob } from "../blobTransfer.js";
 import { assertNotReservedName } from "../references/artifactNames.js";
 import { routerPost } from "./helpers.js";
 
-// Advisory per-file cap on the agent side, matching the gateway's own per-payload bucket
-// (MAX_RESPONSE_FILE_BYTES) rather than a stricter sub-limit - a single file may use the
-// whole bucket. The gateway enforces the real backstop (a buggy agent on a trusted machine
-// is not the threat model, but a clear error beats a silent oversized push).
-const MAX_ATTACHMENT_BYTES = 16_000_000;
+// Advisory per-file cap on the agent side, DERIVED from the one size limit rather than restating
+// it - a private copy is how the previous four caps drifted apart. The gateway enforces the real
+// backstop (a buggy agent on a trusted machine is not the threat model, but a clear error here
+// beats a silent oversized push).
+const MAX_ATTACHMENT_BYTES = MAX_BLOB_BYTES;
 
 // An extension missing here falls back to octet-stream, and both renderers classify on the mime
 // prefix alone without re-sniffing, so the file gets a bare row instead of a thumbnail or player.
