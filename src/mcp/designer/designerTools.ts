@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ChannelFile } from "../../shared/types.js";
 import { bridgeProjectName, postPluginAction } from "../bridge/helpers.js";
 import { postReply, toolError } from "../bridge/replyTool.js";
+import { assertNotReservedName } from "../references/artifactNames.js";
 
 ////////////////////////////////
 //  Schemas
@@ -82,6 +83,11 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 		{ title: "Designer Push Card", description: PUSH_DESCRIPTION, inputSchema: pushSchema },
 		async (args: PushCardArgs) => {
 			const { session_id, name, html, message } = args;
+			try {
+				assertNotReservedName(name);
+			} catch (err) {
+				return toolError((err as Error).message);
+			}
 			const file: ChannelFile = {
 				filename: name,
 				mime: "text/html",

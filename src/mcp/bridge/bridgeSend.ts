@@ -1,8 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { ResponsePayload } from "../../shared/types.js";
+import type { ChannelFile, ResponsePayload } from "../../shared/types.js";
+import { dropReferenceArtifacts } from "../channel/evieFiles.js";
 import { bridgeConversationId, bridgeProjectName, routerPost } from "./helpers.js";
-import { literalEscapeHazard, literalEscapeReject, toolError } from "./replyTool.js";
+import { literalEscapeHazard, literalEscapeReject, readReplyAttachments, toolError } from "./replyTool.js";
 
 ////////////////////////////////
 //  Schemas
@@ -35,6 +36,12 @@ const BridgeSendSchema = z
 			.describe(
 				`Polling only: pass a session_id (with no body) to peek at the latest result for an existing conversation. Omit this field for sends - channel conversations are auto-derived from the sender/target pair.`,
 			),
+		attachments: z
+			.array(z.string())
+			.optional()
+			.describe(
+				`Absolute paths to send alongside the body. The receiving agent gets them written to disk and listed as a [FILES] block of paths to Read, so this is how you hand a screenshot or a log to the other team for direct inspection. Requires a body.`,
+			),
 	})
 	.strict();
 type BridgeSendArgs = z.infer<typeof BridgeSendSchema>;
@@ -55,6 +62,8 @@ Two call patterns:
 2. Poll: provide session_id only (no body). Peeks at the latest stored result for an existing conversation without consuming it. Rarely needed for channel-mode teams since responses arrive via push.
 
 Channel-mode teams (Claude): responses are pushed back automatically as <channel> notifications. No polling needed. The target team can reply multiple times (progress updates, phase reports) without closing the conversation; just keep watching the channel.
+
+Set attachments (absolute paths) when the other team needs to see an artifact rather than a description of one, such as a screenshot or a failing log. They arrive written to disk with the paths listed for the recipient to Read, and replies can carry attachments back the same way.
 
 The owner can see every exchange in their console.
 
@@ -93,6 +102,16 @@ function formatResult(result: SendResult, to?: string): { content: Array<{ type:
 		if (body) parts.push(`\n${body}`);
 	}
 
+	// The gateway strips base64 before persisting, so a polled reply can name its files but never
+	// carry them. Naming them is what makes the loss recoverable by asking for a re-send.
+	const attached = result.files ? dropReferenceArtifacts(result.files) : [];
+	if (attached.length > 0) {
+		parts.push(`\nAttachments named on this reply (the store keeps no bytes; ask for a re-send if you need them):`);
+		// The name comes from the replying peer and this output is line-structured, so a newline in
+		// it would forge entries, including the [session_id: ...] line an agent copies to thread.
+		for (const f of attached) parts.push(`- ${f.filename.replace(/[\r\n]+/g, " ")}`);
+	}
+
 	if (result.session_id) parts.push(`\n[session_id: ${result.session_id}]`);
 
 	return { content: [{ type: "text" as const, text: parts.join("\n") }] };
@@ -107,10 +126,11 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 			// biome-ignore lint/suspicious/noExplicitAny: MCP SDK expects this type
 			inputSchema: BridgeSendSchema as any,
 		},
-		async ({ to, body, session_id, displayLabel }: BridgeSendArgs) => {
+		async ({ to, body, session_id, displayLabel, attachments }: BridgeSendArgs) => {
 			try {
-				// Poll mode: session_id present, no body
-				if (session_id && !body) {
+				// Poll mode: session_id present, no body. Attachments exclude it too, or a threaded
+				// send that carried files but no prose would poll and discard them silently.
+				if (session_id && !body && !attachments?.length) {
 					const result = (await routerPost("/poll", { session_id })) as SendResult;
 
 					if (result.error) {
@@ -138,12 +158,27 @@ export function registerBridgeSend(mcpServer: McpServer): void {
 					if (hazard) return toolError(literalEscapeReject("crosstalk_send", "displayLabel", hazard));
 				}
 
+				// This reader is unconfined by design: any absolute path the session can read, with no
+				// root or secret policy. Unlike a reply's, the recipient here can be a foreign agent in
+				// a linked Domain, so the justification is not the one channel_reply's reader rests on.
+				// Accepted because mirrorPeer copies both legs into the owner's mailbox, so nothing
+				// leaves unseen.
+				let files: ChannelFile[] = [];
+				if (attachments?.length) {
+					try {
+						files = await readReplyAttachments(attachments);
+					} catch (err) {
+						return toolError(`Attachment error: ${(err as Error).message}`);
+					}
+				}
+
 				const result = (await routerPost("/send", {
 					from: bridgeProjectName(),
 					fromConversationId: bridgeConversationId(),
 					to,
 					body,
 					...(displayLabel ? { displayLabel } : {}),
+					...(files.length > 0 ? { files } : {}),
 				})) as SendResult;
 
 				if (result.error) {

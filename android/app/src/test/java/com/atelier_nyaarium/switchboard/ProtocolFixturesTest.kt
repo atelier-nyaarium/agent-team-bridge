@@ -109,6 +109,16 @@ class ProtocolFixturesTest {
 		assertTrue("at must survive as a Long above 2^31", message.at > Int.MAX_VALUE.toLong())
 		assertEquals("message", message.kind)
 
+		// An epoch-ms attachment stamp overflows Int and loses precision as Double, and the manifest
+		// decode loop only catches the Int case (a Double decodes without throwing), so the value is
+		// asserted exactly rather than merely decoded.
+		val aged = json.decodeFromString<MailboxEntry>(fixture("mailbox-reply-files-modified.json"))
+		assertEquals(1785179969544L, aged.files!![0].modifiedAt)
+		assertNull(
+			"an attachment with no carried mtime must stay absent, not default to 0",
+			json.decodeFromString<MailboxEntry>(fixture("mailbox-reply-files.json")).files!![0].modifiedAt,
+		)
+
 		val reply = json.decodeFromString<MailboxEntry>(fixture("mailbox-reply.json"))
 		assertEquals("completed", reply.status)
 		assertEquals("Done, spoken in the body's place.", reply.fullSpoken)

@@ -4,7 +4,7 @@ import { SPOKEN_TIER_FIELDS } from "../../shared/notice.js";
 import { GuidedNoticeTiers } from "../../shared/schemas.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { bridgeProjectName, routerPost } from "../bridge/helpers.js";
-import { literalEscapeHazard, literalEscapeReject, readReplyAttachment, toolError } from "../bridge/replyTool.js";
+import { literalEscapeHazard, literalEscapeReject, readReplyAttachments, toolError } from "../bridge/replyTool.js";
 import { type Capability, capabilityInstructions } from "../capabilities.js";
 import { appendRefArtifacts } from "../references/attachRefs.js";
 
@@ -65,10 +65,10 @@ export function registerHumanTools(mcpServer: McpServer, capabilities: Capabilit
 				if (hazard) return toolError(literalEscapeReject("notify_human", field, hazard));
 			}
 			let files: ChannelFile[] | undefined;
-			let attached: Array<Awaited<ReturnType<typeof readReplyAttachment>>> = [];
+			let attached: Awaited<ReturnType<typeof readReplyAttachments>> = [];
 			if (attachments?.length) {
 				try {
-					attached = await Promise.all(attachments.map(readReplyAttachment));
+					attached = await readReplyAttachments(attachments);
 				} catch (err) {
 					return {
 						content: [{ type: "text" as const, text: `Attachment error: ${(err as Error).message}` }],

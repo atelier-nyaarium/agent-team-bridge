@@ -42,6 +42,20 @@ switchboard:crosstalk_send(to="cool-lib", session_id="bfa069ad-...", body="...")
 Do not reuse a `session_id` across unrelated conversations. Each distinct task should be
 its own thread.
 
+### Sending Files
+
+Pass absolute paths in `attachments` when the other team needs to see the artifact itself rather
+than your description of it, such as a screenshot or a failing log.
+
+```
+switchboard:crosstalk_send(to="cool-lib", body="repro attached", attachments=["/tmp/shot.png"])
+```
+
+They arrive on the recipient's disk, listed as a `[FILES]` block of paths to Read. Replies carry
+attachments back the same way, so this is the channel for round-trip visual verification. A body is
+still required. Attachment bytes are not retained after delivery: if the reply reaches you as a
+poll rather than a live push, you get the filenames and have to ask for a re-send.
+
 ### Response Statuses
 
 **Successful:**

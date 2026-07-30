@@ -1,4 +1,4 @@
-// SYNC-HASH: 2de068140b7197ab6d10a76425aa0594
+// SYNC-HASH: 58dd0c9a31d25eff8a6d1b073de6982e
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -33,6 +33,12 @@ export const ChannelFileSchema = z
 		size: z.number().int().nonnegative(),
 		descriptiveKey: z.string(),
 		base64: z.string().optional(),
+		// The source file's own mtime in epoch MILLISECONDS, so a save on the far side can restore
+		// the real age rather than stamping now. Optional: a sender that cannot determine one omits
+		// it and the receiver hides the row. Populate from `mtime.getTime()`, never `mtimeMs`, which
+		// is fractional and fails this integer check. Bounded to the ECMAScript Date range, since a
+		// larger safe integer is representable here but not by the Date every consumer builds.
+		modifiedAt: z.number().int().min(-8_640_000_000_000_000).max(8_640_000_000_000_000).optional(),
 	})
 	.meta({ id: "ChannelFile" });
 

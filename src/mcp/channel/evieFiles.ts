@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import { cleanupTmpDir } from "../../shared/tmp-files.js";
 import type { ChannelFile } from "../../shared/types.js";
+import { MANIFEST_FILENAME } from "../references/artifactNames.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -28,6 +29,9 @@ export const EVIE_FILES_DIR = "/tmp/evie-files";
 export const EVIE_FILES_TTL_MS = 60 * 60 * 1000;
 
 const MAX_LEAF_BYTES = 200;
+// Wider than any real filesystem's timestamp granularity (FAT's 2s is the coarsest in practice) and
+// far narrower than a clamp, which lands centuries out.
+const MTIME_GRANULARITY_TOLERANCE_MS = 2_000;
 // Discord caps a message at 10 attachments; this bound is generous.
 const MAX_COLLISION_SUFFIX = 50;
 
@@ -73,12 +77,15 @@ export function materializeFiles({ discordMessageId, files }: MaterializeFilesPa
 			descriptiveKey: file.descriptiveKey,
 		};
 
-		if (file.base64) {
+		// Presence, not truthiness: an empty file carries base64 "" and still has to land, or the
+		// recipient is told it was not transferred while the sender was told it sent.
+		if (file.base64 !== undefined) {
 			try {
 				mkdirSync(bucket, { recursive: true });
 				const targetPath = resolveCollisionFreePath(bucket, file.filename, claimedLeaves);
 				writeAtomic(targetPath, Buffer.from(file.base64, "base64"));
 				meta.path = targetPath;
+				restoreModifiedAt(targetPath, file.modifiedAt);
 			} catch (err) {
 				console.error(
 					`[evie-files] failed to materialize "${file.filename}" for msg ${discordMessageId}: ${(err as Error).message}`,
@@ -90,6 +97,26 @@ export function materializeFiles({ discordMessageId, files }: MaterializeFilesPa
 	}
 
 	return out;
+}
+
+/**
+ * Drop `ref://` snapshot artifacts from a file list.
+ *
+ * Snapshots exist so a console can render a code viewer, and they ride every reply whose author
+ * wrote a ref, regardless of who is receiving it. An agent reads paths off disk instead, so
+ * materializing them would hand it source copies it never asked for.
+ *
+ * The split is POSITIONAL, not by content: `appendRefArtifacts` emits the author's own attachments
+ * first and then its artifacts, manifest first, so the reserved name marks where generated files
+ * begin. Reading the manifest instead would mean trusting a remote sender's JSON to say which of
+ * its own files are real, and a genuine attachment that happened to be a captured manifest would
+ * delete itself and everything it named. `assertNotReservedName` refuses the name in every producer
+ * of an outbound ChannelFile, which is what makes the position trustworthy. Works on a stored
+ * payload too, where the bytes have been stripped and there is nothing to parse.
+ */
+export function dropReferenceArtifacts(files: ChannelFile[]): ChannelFile[] {
+	const start = files.findIndex((f) => f.filename === MANIFEST_FILENAME);
+	return start === -1 ? files : files.slice(0, start);
 }
 
 /**
@@ -107,11 +134,38 @@ export function renderFilesBlock({ discordMessageId, files }: RenderFilesBlockPa
 		? `*Files with \`-> /path\` are on disk; Read them. Entries without a path were not transferred.*`
 		: `*Files with \`-> /path\` are on disk; Read them.*`;
 	const lines = files.map((f, i) => {
-		const head = `${i + 1}. ${f.descriptiveKey}`;
+		// descriptiveKey is sender-supplied and this block is line-structured, so a newline in it
+		// would let a filename forge entries or an early [/FILES] terminator.
+		const head = `${i + 1}. ${f.descriptiveKey.replace(/[\r\n]+/g, " ")}`;
 		return f.path ? `${head} -> \`${f.path}\`` : head;
 	});
 
 	return `${opener}\n${instruction}\n${lines.join("\n")}\n[/FILES]`;
+}
+
+/**
+ * Stamp a materialized file with the sender's mtime, so a file that arrives keeps its real age.
+ *
+ * Dates, never numbers: `utimesSync` reads a bare number as epoch SECONDS, so passing the
+ * millisecond field lands the file in the year 2446 and throws nothing. The Date form is also the
+ * only way to set mtime alone, since atime is required and belongs at now.
+ *
+ * Failing is not worth losing the file over, so the caller has already recorded the path.
+ */
+function restoreModifiedAt(targetPath: string, modifiedAt: number | undefined): void {
+	if (modifiedAt === undefined) return;
+	try {
+		utimesSync(targetPath, new Date(), new Date(modifiedAt));
+		// A stamp past the filesystem's own ceiling is CLAMPED, not rejected, so the exception path
+		// never sees it. Reading the result back is the only way to notice. The tolerance keeps a
+		// filesystem with coarser-than-millisecond timestamps from reporting every single file.
+		const landed = statSync(targetPath).mtime.getTime();
+		if (Math.abs(landed - modifiedAt) > MTIME_GRANULARITY_TOLERANCE_MS) {
+			console.error(`[evie-files] mtime on "${targetPath}" landed at ${landed}, not the sent ${modifiedAt}`);
+		}
+	} catch (err) {
+		console.error(`[evie-files] could not restore mtime on "${targetPath}": ${(err as Error).message}`);
+	}
 }
 
 function resolveCollisionFreePath(bucket: string, requestedLeaf: string, claimedLeaves: Set<string>): string {

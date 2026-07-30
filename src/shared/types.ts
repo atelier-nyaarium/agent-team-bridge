@@ -62,6 +62,7 @@ export interface ResponsePushPayload {
 	session_id: string;
 	status?: string;
 	response?: string;
+	message_id?: string;
 	files?: ChannelFile[];
 }
 

@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute } from "node:path";
 import { SPOKEN_TIER_FIELDS } from "../../shared/notice.js";
 import type { ChannelFile } from "../../shared/types.js";
+import { assertNotReservedName } from "../references/artifactNames.js";
 import { routerPost } from "./helpers.js";
 
 // Advisory per-file cap on the agent side, matching the gateway's own per-payload bucket
@@ -10,6 +11,8 @@ import { routerPost } from "./helpers.js";
 // is not the threat model, but a clear error beats a silent oversized push).
 const MAX_ATTACHMENT_BYTES = 500_000_000;
 
+// An extension missing here falls back to octet-stream, and both renderers classify on the mime
+// prefix alone without re-sniffing, so the file gets a bare row instead of a thumbnail or player.
 const MIME_BY_EXT: Record<string, string> = {
 	".png": "image/png",
 	".jpg": "image/jpeg",
@@ -17,6 +20,15 @@ const MIME_BY_EXT: Record<string, string> = {
 	".gif": "image/gif",
 	".webp": "image/webp",
 	".svg": "image/svg+xml",
+	".bmp": "image/bmp",
+	".apng": "image/apng",
+	".avif": "image/avif",
+	// TIFF and HEIC are deliberately absent: the transcript renders anything image/* as an <img>,
+	// which the WebView cannot decode for either, so octet-stream and a file row is the better fall.
+	".mp4": "video/mp4",
+	".webm": "video/webm",
+	".mov": "video/quicktime",
+	".mkv": "video/x-matroska",
 	".pdf": "application/pdf",
 	".json": "application/json",
 	".txt": "text/plain",
@@ -30,16 +42,56 @@ const MIME_BY_EXT: Record<string, string> = {
  * (which may be metadata-only), this always carries bytes. */
 export async function readReplyAttachment(filePath: string): Promise<ChannelFile & { base64: string }> {
 	if (!isAbsolute(filePath)) throw new Error(`Attachment path must be absolute: ${filePath}`);
-	const { size } = await stat(filePath);
-	if (size > MAX_ATTACHMENT_BYTES) {
-		throw new Error(
-			`Attachment "${basename(filePath)}" is ${size} bytes, over the ${MAX_ATTACHMENT_BYTES}-byte limit`,
-		);
+	const filename = basename(filePath);
+	assertNotReservedName(filename);
+	const stats = await stat(filePath);
+	// A FIFO stats as size 0 and then blocks readFile until a writer appears, wedging the tool call
+	// with no error and no timeout.
+	if (!stats.isFile()) throw new Error(`Attachment "${filename}" is not a regular file`);
+	if (stats.size > MAX_ATTACHMENT_BYTES) {
+		throw new Error(`Attachment "${filename}" is ${stats.size} bytes, over the ${MAX_ATTACHMENT_BYTES}-byte limit`);
 	}
 	const buffer = await readFile(filePath);
-	const filename = basename(filePath);
 	const mime = MIME_BY_EXT[extname(filename).toLowerCase()] ?? "application/octet-stream";
-	return { filename, mime, size: buffer.length, descriptiveKey: filename, base64: buffer.toString("base64") };
+	// Stat again after the read: the guard stat has to precede it (refusing an oversized file
+	// without loading it), but by then it describes bytes that may already be stale. This narrows
+	// the gap rather than closing it, since nothing locks the file across the two calls.
+	const { mtime } = await stat(filePath).catch(() => stats);
+	return {
+		filename,
+		mime,
+		size: buffer.length,
+		descriptiveKey: filename,
+		// getTime(), not mtimeMs: the latter carries sub-millisecond precision as a fraction, which
+		// the wire schema's integer check rejects. An mtime outside the Date range yields NaN, which
+		// serializes to null and would have the gateway reject the whole message over one odd file.
+		...wireModifiedAt(mtime),
+		base64: buffer.toString("base64"),
+	};
+}
+
+/** The wire field for a file's mtime, or nothing at all when the clock cannot be represented.
+ * Omission is a supported sender state; a null or NaN is not, and would fail the whole payload. */
+export function wireModifiedAt(mtime: Date): { modifiedAt?: number } {
+	const ms = mtime.getTime();
+	return Number.isFinite(ms) ? { modifiedAt: ms } : {};
+}
+
+/** Read a whole attachment list, sequentially, against ONE budget. Reading concurrently would hold
+ * every file plus its base64 in memory at once, so N files each under the per-file cap can still
+ * exhaust the heap before anything is in a position to reject them. */
+export async function readReplyAttachments(paths: string[]): Promise<Array<ChannelFile & { base64: string }>> {
+	const out: Array<ChannelFile & { base64: string }> = [];
+	let total = 0;
+	for (const path of paths) {
+		const file = await readReplyAttachment(path);
+		total += file.size;
+		if (total > MAX_ATTACHMENT_BYTES) {
+			throw new Error(`Attachments total over the ${MAX_ATTACHMENT_BYTES}-byte limit at "${file.filename}"`);
+		}
+		out.push(file);
+	}
+	return out;
 }
 
 ////////////////////////////////

@@ -87,6 +87,14 @@ describe("protocol fixtures", () => {
 		expect(entry.at).toBeGreaterThan(2 ** 31);
 	});
 
+	it("keeps an attachment's modifiedAt above 2^31 (Long bait for the Kotlin side)", () => {
+		// An epoch-ms stamp overflows Int, so a fixture below 2^31 would pass on both runtimes while
+		// a real one silently truncated. The absent case is covered by mailbox-reply-files.json.
+		const entry = MailboxEntrySchema.parse(fixture("mailbox-reply-files-modified.json"));
+		expect(entry.files?.[0].modifiedAt).toBeGreaterThan(2 ** 31);
+		expect(MailboxEntrySchema.parse(fixture("mailbox-reply-files.json")).files?.[0].modifiedAt).toBeUndefined();
+	});
+
 	it("a reply entry carries all three spoken tiers beside its body", () => {
 		const entry = MailboxEntrySchema.parse(fixture("mailbox-reply.json"));
 		expect(entry.title).toBe("Reply headline");

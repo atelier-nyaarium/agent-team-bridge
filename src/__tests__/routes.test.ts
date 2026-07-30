@@ -734,6 +734,39 @@ describe("routes", () => {
 			expect(res.status).toBe(413);
 		});
 
+		it("mints a materialization bucket key on a reply that carries files, and none on one that does not", async () => {
+			async function pushFor(files?: unknown[]): Promise<Record<string, unknown>> {
+				const sent: string[] = [];
+				const store = new PendingJobStore<ResponsePayload>();
+				store.create("sess-push", "agent", "console", { fromConversationId: "conv-asker" });
+				const conversationRegistry = new Map([
+					["conv-asker", { readyState: 1, data: {}, send: (m: string) => sent.push(m) }],
+				]) as unknown as RoutesDeps["conversationRegistry"];
+				const { respond } = createRoutes(makeCtx({ store, conversationRegistry }));
+				respond(new Request("http://localhost/respond", { method: "POST" }), {
+					session_id: "sess-push",
+					response: "reply",
+					...(files ? { files } : {}),
+				});
+				return JSON.parse(sent[0]);
+			}
+
+			const withFiles = await pushFor([
+				{
+					filename: "shot.png",
+					mime: "image/png",
+					size: 5,
+					descriptiveKey: "shot.png",
+					base64: Buffer.from("bytes").toString("base64"),
+				},
+			]);
+			expect(withFiles.message_id).toEqual(expect.any(String));
+			expect(withFiles.files).toHaveLength(1);
+
+			const withoutFiles = await pushFor();
+			expect(withoutFiles.message_id).toBeUndefined();
+		});
+
 		it("stores file metadata without base64 but pushes the full bytes", async () => {
 			const store = new PendingJobStore<ResponsePayload>();
 			store.create("sess-files", "agent", "console");

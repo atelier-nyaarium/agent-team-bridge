@@ -91,12 +91,6 @@ internal fun saveFileToDownloads(context: Context, file: File, name: String, mim
 private fun saveToDownloads(context: Context, att: OpenAttachment): Boolean =
 	saveFileToDownloads(context, att.file, att.name, att.mime)
 
-private fun prettySize(bytes: Long): String = when {
-	bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
-	bytes >= 1_000 -> "%.0f KB".format(bytes / 1_000.0)
-	else -> "$bytes B"
-}
-
 ////////////////////////////////
 //  Composables
 
@@ -202,7 +196,7 @@ private fun FileInfoDialog(att: OpenAttachment, onOpenWith: () -> Unit, onDismis
 		text = {
 			Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
 				Text(att.mime, style = MaterialTheme.typography.bodySmall)
-				Text(prettySize(att.file.length()), style = MaterialTheme.typography.bodySmall)
+				Text(prettySize(att.file.length()) ?: "", style = MaterialTheme.typography.bodySmall)
 			}
 		},
 		confirmButton = {

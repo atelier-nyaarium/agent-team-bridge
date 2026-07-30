@@ -6,7 +6,7 @@ import {
 	ChannelReplyStructuredSchema,
 } from "../../shared/schemas.js";
 import { bridgeConversationId, confirmHandshakeRole } from "../bridge/helpers.js";
-import { postReply, readReplyAttachment, type ToolTextResult, toolError } from "../bridge/replyTool.js";
+import { postReply, readReplyAttachments, type ToolTextResult, toolError } from "../bridge/replyTool.js";
 import { type Capability, capabilityInstructions } from "../capabilities.js";
 import { appendRefArtifacts } from "../references/attachRefs.js";
 
@@ -42,10 +42,10 @@ export async function handleChannelReply(args: ChannelReplyArgs): Promise<ToolTe
 	// scopes the write to a handshake this process actually received.
 	confirmHandshakeRole(args.session_id, /true/i.test(args.full));
 	const payload = buildChannelReplyPayload(args);
-	let files: Array<Awaited<ReturnType<typeof readReplyAttachment>>> = [];
+	let files: Awaited<ReturnType<typeof readReplyAttachments>> = [];
 	if (args.attachments && args.attachments.length > 0) {
 		try {
-			files = await Promise.all(args.attachments.map(readReplyAttachment));
+			files = await readReplyAttachments(args.attachments);
 		} catch (err) {
 			return toolError(`Attachment error: ${(err as Error).message}`);
 		}
