@@ -207,18 +207,13 @@ const RespondBodySchema = z.object({
 	files: ChannelFilesSchema.optional(),
 });
 
-// Raw-bytes backstop on attachment payloads at the trust boundary. Shape
-// validation does not bound memory, so sum the decoded sizes cheaply (base64 is
-// ~4/3 of the bytes) before anything is stored or pushed. Per-payload total, not
-// per-file - a single file may use the whole bucket. Matched by the Android console's own
-// send-side cap (ChatRepository.kt: MAX_OUTGOING_BYTES) - pinned by routes.test.ts, update
-// both sides together. Exported only so that test can read the real value.
+// Per-payload total across a message's files, and DERIVED rather than restated: this used to be its
+// own 16 MB constant and stayed at 16 MB after the reason for it was deleted, which is exactly the
+// drift the single source now prevents. A single file may still use the whole bucket.
 //
-// 16 MB is the honest end-to-end ceiling, not a wish: a payload is held whole at every hop
-// (phone encode tail ~3 copies at ~1.78x, evie relay frame, gateway WS receive), so the cap
-// must clear the tightest of those, which is the 64 MiB relay-frame limit with the phone's
-// 256 MB heap underneath. The blob plane removes the whole-payload constraint itself.
-export const MAX_RESPONSE_FILE_BYTES = 16_000_000;
+// Advisory by nature, because it sums sender-stated sizes and nothing re-measures them. The real
+// enforcement is per-blob on the write path, where the bytes actually land.
+export const MAX_RESPONSE_FILE_BYTES = MAX_BLOB_BYTES;
 
 // How long a send waits after waking a session before delivering: registration is instant, but
 // Claude Code's channel listener is not ready yet. Named (not inline) because it is one half of a

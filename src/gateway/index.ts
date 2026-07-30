@@ -7,7 +7,7 @@ import { BlobStore } from "../shared/blob-store.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
 import { DOMAIN_ID_FILE, resolveLocalDomainId } from "../shared/domain-id.js";
 import { DurableStore, openDurable, restoreDurable } from "../shared/durable-store.js";
-import { BLOB_CHUNK_BYTES } from "../shared/evie-protocol.js";
+import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
 import { resolveLocalGatewayId } from "../shared/gateway-id.js";
 import {
 	type HostOp,
@@ -96,11 +96,13 @@ export async function startGateway(): Promise<void> {
 	// Byte store. Lives under DATA_DIR (a real docker volume) rather than the log volume, so
 	// clearing logs cannot destroy attachments a message still references.
 	const blobStore = new BlobStore(`${DATA_DIR}/blobs`);
-	// Ceiling for the whole store, swept on the persist tick. Sized for many max-size attachments in
-	// flight at once while staying small against any real volume, because this shares DATA_DIR with
-	// the federation keypair and allowlist: a store allowed to grow without limit takes the gateway's
-	// identity down with it when the disk fills.
-	const MAX_BLOB_STORE_BYTES = parseInt(process.env.MAX_BLOB_STORE_BYTES || "2000000000", 10);
+	// Ceiling for the whole store, swept on the persist tick. A MULTIPLE of the largest single
+	// attachment, deliberately: a store only a few max-size blobs deep starts evicting live
+	// transfers to make room for each other, so the sweep would thrash instead of reclaiming. It
+	// still needs a ceiling at all because this shares DATA_DIR with the federation keypair and
+	// allowlist, and a store allowed to grow without limit takes the gateway's identity down with it
+	// when the disk fills.
+	const MAX_BLOB_STORE_BYTES = parseInt(process.env.MAX_BLOB_STORE_BYTES || String(MAX_BLOB_BYTES * 16), 10);
 	fs.mkdirSync(DATA_DIR, { recursive: true });
 
 	const WAKE_TIMEOUT_MS = parseInt(process.env.WAKE_TIMEOUT_MS || "600000", 10);
