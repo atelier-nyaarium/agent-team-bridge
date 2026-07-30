@@ -5,6 +5,7 @@ import {
 	type ConsoleReplyBody,
 	type OpenedConsoleFrame,
 } from "../../shared/console-protocol.js";
+import { MAX_RELAY_FRAME_BYTES } from "../../shared/evie-protocol.js";
 import { ConsoleRelayFrameSchema } from "../../shared/schemas.js";
 import type { ConsoleSealer } from "./consoleSealer.js";
 
@@ -82,11 +83,21 @@ export function createConsoleRelayPump({ sealer, handleFrame, sendReply }: Relay
 			// settles the request with a cleartext error rather than stranding it.
 			let reply: ConsoleRelayReply;
 			try {
+				const sealed = sealer.seal(frame.signerSignPub, body);
+				// The budget is enforced HERE, at the one point a frame becomes bytes on the shared
+				// socket, rather than being a number three constants agree about in a test. An
+				// oversized frame does not fail politely: evie's WebSocket closes the gateway
+				// connection and every team's traffic goes with it. Refusing this one reply keeps the
+				// blast radius at the op that caused it.
+				const framed = JSON.stringify(sealed).length;
+				if (framed > MAX_RELAY_FRAME_BYTES) {
+					throw new Error(`reply frame of ${framed} bytes exceeds ${MAX_RELAY_FRAME_BYTES}`);
+				}
 				reply = {
 					type: "console_relay_reply",
 					v: CONSOLE_PROTOCOL_VERSION,
 					opId: frame.opId,
-					sealed: sealer.seal(frame.signerSignPub, body),
+					sealed,
 				};
 			} catch (err) {
 				const message = (err as Error).message;

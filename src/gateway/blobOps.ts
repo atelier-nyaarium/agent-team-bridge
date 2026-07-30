@@ -1,0 +1,83 @@
+import type { BlobStore } from "../shared/blob-store.js";
+import { BLOB_CHUNK_BYTES, MAX_BLOB_BYTES } from "../shared/evie-protocol.js";
+
+////////////////////////////////
+//  Interfaces & Types
+
+export type BlobOp =
+	| { kind: "blob_stat"; blobId: string; fromGateway?: string }
+	| { kind: "blob_put"; blobId: string; offset: number; chunk: string; final: boolean }
+	| { kind: "blob_get"; blobId: string; offset: number; length: number; fromGateway?: string };
+
+/** Pulls a whole blob in from the Gateway that holds it, one bounded range at a time, and returns
+ * true once this Gateway has it. Absent when federation is not wired, which leaves a blob held
+ * elsewhere simply unavailable rather than pretending otherwise. */
+export type BlobFetcher = (blobId: string, fromGateway: string) => Promise<boolean>;
+
+export type BlobOpResult = { have: number; complete: boolean } | { chunk?: string; eof: boolean };
+
+/** A put refused on size: either the chunk is over the per-request cap, or the blob it would grow
+ * is over the total. Named so the HTTP door can answer 413 rather than 500, since the difference
+ * tells a caller whether the request was too big or the transfer was. */
+export class BlobTooLarge extends Error {}
+
+////////////////////////////////
+//  Functions & Helpers
+
+/**
+ * Answer one blob op against the gateway's byte store.
+ *
+ * The SOLE implementation. The HTTP route and the console op plane are two doors onto the same
+ * three operations, and a bound enforced at only one door is not a bound: the point of the whole
+ * chunked plane is that no single request can name more bytes than fit comfortably in the heap, and
+ * a second implementation is a second chance to forget that. Both directions are held here, a put
+ * loudly (an oversized chunk is a caller that will keep sending them) and a get quietly (every
+ * reader already advances on the returned cursor, so a short read costs one extra round trip).
+ *
+ * This is also where a transfer's TOTAL is bounded. A message states its file's `size`, but that is
+ * the sender's own claim and nothing downstream re-measures it, so the only honest place to count
+ * is the write path, against what has actually landed.
+ *
+ * A read for a blob this Gateway does not hold pulls it in from the one that does, when the caller
+ * says where that is, and caches it. That indirection is the whole reason clients never need to
+ * know which Gateway anything lives on: they ask their own, always, and it either has the bytes or
+ * gets them. Content addressing makes the cache free of invalidation, since a name IS its contents.
+ */
+export async function answerBlobOp(
+	store: BlobStore | undefined,
+	op: BlobOp,
+	fetch?: BlobFetcher,
+): Promise<BlobOpResult> {
+	if (!store) throw new Error("blob transfer unavailable on this Gateway");
+
+	// A GET only. A stat is advertised as the cheap "how much do you have" that a resume asks before
+	// committing to a transfer, so pulling a whole blob across the mesh to answer it inverts its
+	// cost by four orders of magnitude. Nothing legitimate sets `fromGateway` on a stat, which is
+	// exactly why a hand-crafted one must not become an amplifier.
+	if (op.kind === "blob_get" && op.fromGateway && fetch && !store.path(op.blobId)) {
+		await fetch(op.blobId, op.fromGateway);
+	}
+
+	switch (op.kind) {
+		case "blob_stat":
+			return store.stat(op.blobId);
+
+		case "blob_put": {
+			const chunk = Buffer.from(op.chunk, "base64");
+			if (chunk.length > BLOB_CHUNK_BYTES) {
+				throw new BlobTooLarge(`chunk of ${chunk.length} bytes exceeds ${BLOB_CHUNK_BYTES}`);
+			}
+			if (op.offset + chunk.length > MAX_BLOB_BYTES) {
+				throw new BlobTooLarge(`blob would reach ${op.offset + chunk.length} bytes, over ${MAX_BLOB_BYTES}`);
+			}
+			return store.write(op.blobId, op.offset, chunk, op.final);
+		}
+
+		case "blob_get": {
+			const r = store.read(op.blobId, op.offset, Math.min(op.length, BLOB_CHUNK_BYTES));
+			// An absent chunk, not an empty string: reading at or past the end has no bytes to report,
+			// and "" would read as a zero-length chunk that landed.
+			return { ...(r.bytes.length > 0 ? { chunk: r.bytes.toString("base64") } : {}), eof: r.eof };
+		}
+	}
+}

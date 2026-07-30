@@ -31,7 +31,7 @@ describe("what the gateway serves", () => {
 	it("has no opinion until a device reports, so a caller can tell silence from an empty answer", () => {
 		const store = new CapabilityStore(fakeDurable());
 
-		expect(store.snapshot()).toEqual({ known: false, capabilities: [] });
+		expect(store.snapshot()).toEqual({ known: false, capabilities: [], clientVersions: [] });
 	});
 
 	it("serves what a device reported", () => {
@@ -41,7 +41,29 @@ describe("what the gateway serves", () => {
 		expect(store.snapshot()).toEqual({
 			known: true,
 			capabilities: [{ id: "designer", instructions: "Prefer Switchboard." }],
+			clientVersions: [],
 		});
+	});
+
+	it("reports each live device's build, and says nothing for one that named none", () => {
+		const store = new CapabilityStore(fakeDurable());
+		store.report("phone", [{ id: "designer" }], "7.15.0");
+		store.report("tablet", [{ id: "designer" }], "7.14.1");
+		store.report("laptop", [{ id: "designer" }]);
+
+		// Deduped and sorted, and the silent device is absent rather than represented: a caller
+		// reading this to decide something must be able to tell "old" from "did not say".
+		expect(store.snapshot().clientVersions).toEqual(["7.14.1", "7.15.0"]);
+	});
+
+	it("updates a build on a register that carried no plugin list, since the two claims are separate", () => {
+		const store = new CapabilityStore(fakeDurable());
+		store.report("phone", [{ id: "designer" }], "7.14.1");
+		store.report("phone", undefined, "7.15.0");
+
+		expect(store.snapshot().clientVersions).toEqual(["7.15.0"]);
+		// The plugin list it never re-stated still stands.
+		expect(store.snapshot().capabilities.map((c) => c.id)).toEqual(["designer"]);
 	});
 
 	it("serves the union, so one phone holding a plugin is enough to enable it", () => {
@@ -56,7 +78,7 @@ describe("what the gateway serves", () => {
 		const store = new CapabilityStore(fakeDurable());
 		store.report("phone", []);
 
-		expect(store.snapshot()).toEqual({ known: true, capabilities: [] });
+		expect(store.snapshot()).toEqual({ known: true, capabilities: [], clientVersions: [] });
 	});
 
 	it("leaves a prior report standing when a register carries no plugin list at all", () => {
@@ -74,7 +96,7 @@ describe("what the gateway serves", () => {
 		const store = new CapabilityStore(fakeDurable());
 		store.report("phone", [{ id: "references", instructions: "x".repeat(200_000) }]);
 
-		expect(store.snapshot()).toEqual({ known: true, capabilities: [{ id: "references" }] });
+		expect(store.snapshot()).toEqual({ known: true, capabilities: [{ id: "references" }], clientVersions: [] });
 	});
 
 	it("still drops an entry with no usable id, which names no capability to keep", () => {
@@ -107,7 +129,7 @@ describe("going quiet", () => {
 		store.report("retired", [{ id: "designer" }]);
 		clock.advance(15 * DAY);
 
-		expect(store.snapshot()).toEqual({ known: false, capabilities: [] });
+		expect(store.snapshot()).toEqual({ known: false, capabilities: [], clientVersions: [] });
 	});
 
 	it("keeps a device alive on any activity, so a dozing phone does not lose its plugins", () => {
@@ -149,7 +171,7 @@ describe("surviving a restart", () => {
 		const durable = fakeDurable({ phone: { capabilities: [{ id: "NOT A SLUG" }], lastSeen: Date.now() } });
 		const store = new CapabilityStore(durable);
 
-		expect(store.snapshot()).toEqual({ known: false, capabilities: [] });
+		expect(store.snapshot()).toEqual({ known: false, capabilities: [], clientVersions: [] });
 	});
 
 	it("keeps the readable half of a partly unreadable record", () => {
@@ -158,14 +180,14 @@ describe("surviving a restart", () => {
 		});
 		const store = new CapabilityStore(durable);
 
-		expect(store.snapshot()).toEqual({ known: true, capabilities: [{ id: "designer" }] });
+		expect(store.snapshot()).toEqual({ known: true, capabilities: [{ id: "designer" }], clientVersions: [] });
 	});
 
 	it("still honours a device that genuinely reported nothing enabled", () => {
 		const durable = fakeDurable({ phone: { capabilities: [], lastSeen: Date.now() } });
 		const store = new CapabilityStore(durable);
 
-		expect(store.snapshot()).toEqual({ known: true, capabilities: [] });
+		expect(store.snapshot()).toEqual({ known: true, capabilities: [], clientVersions: [] });
 	});
 
 	it("keeps a polling device across a restart, without a register to carry its liveness", () => {

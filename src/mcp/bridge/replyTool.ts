@@ -1,7 +1,8 @@
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { basename, extname, isAbsolute } from "node:path";
 import { SPOKEN_TIER_FIELDS } from "../../shared/notice.js";
 import type { ChannelFile } from "../../shared/types.js";
+import { uploadBlob } from "../blobTransfer.js";
 import { assertNotReservedName } from "../references/artifactNames.js";
 import { routerPost } from "./helpers.js";
 
@@ -37,36 +38,38 @@ const MIME_BY_EXT: Record<string, string> = {
 	".csv": "text/csv",
 };
 
-/** Read and base64 an absolute-path attachment with the shared advisory cap.
- * Shared by the reply tools and notify_human. Unlike inbound ChannelFiles
- * (which may be metadata-only), this always carries bytes. */
-export async function readReplyAttachment(filePath: string): Promise<ChannelFile & { base64: string }> {
+/** Stage an absolute-path attachment on the blob plane and describe it, under the shared advisory
+ * cap. Shared by the reply tools and notify_human. Unlike an inbound ChannelFile (which may be
+ * metadata-only), this always names transferable bytes. */
+export async function readReplyAttachment(filePath: string): Promise<ChannelFile> {
 	if (!isAbsolute(filePath)) throw new Error(`Attachment path must be absolute: ${filePath}`);
 	const filename = basename(filePath);
 	assertNotReservedName(filename);
 	const stats = await stat(filePath);
-	// A FIFO stats as size 0 and then blocks readFile until a writer appears, wedging the tool call
-	// with no error and no timeout.
+	// A FIFO stats as size 0 and then blocks the ingest read until a writer appears, wedging the tool
+	// call with no error and no timeout.
 	if (!stats.isFile()) throw new Error(`Attachment "${filename}" is not a regular file`);
 	if (stats.size > MAX_ATTACHMENT_BYTES) {
 		throw new Error(`Attachment "${filename}" is ${stats.size} bytes, over the ${MAX_ATTACHMENT_BYTES}-byte limit`);
 	}
-	const buffer = await readFile(filePath);
 	const mime = MIME_BY_EXT[extname(filename).toLowerCase()] ?? "application/octet-stream";
-	// Stat again after the read: the guard stat has to precede it (refusing an oversized file
-	// without loading it), but by then it describes bytes that may already be stale. This narrows
-	// the gap rather than closing it, since nothing locks the file across the two calls.
-	const { mtime } = await stat(filePath).catch(() => stats);
+	// The bytes go to the blob store a chunk at a time; the message carries only the reference, so
+	// this function no longer holds the file and its base64 at once.
+	const blobId = await uploadBlob(filePath);
+	// Stat again after the upload: the guard stat has to precede it, but by then it describes bytes
+	// that may already be stale. This narrows the gap rather than closing it, since nothing locks
+	// the file across the two calls.
+	const after = await stat(filePath).catch(() => stats);
 	return {
 		filename,
 		mime,
-		size: buffer.length,
+		size: after.size,
 		descriptiveKey: filename,
 		// getTime(), not mtimeMs: the latter carries sub-millisecond precision as a fraction, which
 		// the wire schema's integer check rejects. An mtime outside the Date range yields NaN, which
 		// serializes to null and would have the gateway reject the whole message over one odd file.
-		...wireModifiedAt(mtime),
-		base64: buffer.toString("base64"),
+		...wireModifiedAt(after.mtime),
+		blobId,
 	};
 }
 
@@ -77,11 +80,11 @@ export function wireModifiedAt(mtime: Date): { modifiedAt?: number } {
 	return Number.isFinite(ms) ? { modifiedAt: ms } : {};
 }
 
-/** Read a whole attachment list, sequentially, against ONE budget. Reading concurrently would hold
- * every file plus its base64 in memory at once, so N files each under the per-file cap can still
- * exhaust the heap before anything is in a position to reject them. */
-export async function readReplyAttachments(paths: string[]): Promise<Array<ChannelFile & { base64: string }>> {
-	const out: Array<ChannelFile & { base64: string }> = [];
+/** Stage a whole attachment list, sequentially, against ONE budget. The per-file cap alone lets N
+ * files each under it push an unbounded total onto the gateway, and running them concurrently would
+ * multiply the transfer buffers live at once for no gain on a link this short. */
+export async function readReplyAttachments(paths: string[]): Promise<ChannelFile[]> {
+	const out: ChannelFile[] = [];
 	let total = 0;
 	for (const path of paths) {
 		const file = await readReplyAttachment(path);
@@ -159,18 +162,33 @@ export function toolError(text: string): ToolTextResult {
 	return { content: [{ type: "text" as const, text }], isError: true };
 }
 
-/** POST a reply payload to the gateway, owning the try/catch and success/failure tool response
- * shape shared by every reply tool. `payload` must already carry the fields the caller wants on
- * the wire - callers build it explicitly rather than rest-spreading their args, so a renamed or
- * mistyped arg can never leak through unmapped (see the silent-strip footgun this guards against
- * in `RespondBodySchema`, which is not `.strict()`). */
+/**
+ * POST a reply payload to the gateway, owning the try/catch and success/failure tool response
+ * shape shared by every reply tool.
+ *
+ * `payload` must already carry the fields the caller wants on the wire - callers build it
+ * explicitly rather than rest-spreading their args, so a renamed or mistyped arg can never leak
+ * through unmapped (see the silent-strip footgun this guards against in `RespondBodySchema`, which
+ * is not `.strict()`).
+ *
+ * `files` is a THUNK, called only once the prose has passed the lint. Staging an attachment puts
+ * its bytes on the gateway, so building the list eagerly would leave a rejected call's uploads
+ * sitting there unreferenced. Deferring it is what makes "a refused reply sends nothing" true for
+ * every tool at once, rather than something each one has to remember at its own call site.
+ */
 export async function postReply(
 	payload: Record<string, unknown>,
 	{
 		toolName,
 		logPrefix,
 		responseFieldLabel = "response",
-	}: { toolName: string; logPrefix: string; responseFieldLabel?: string },
+		files,
+	}: {
+		toolName: string;
+		logPrefix: string;
+		responseFieldLabel?: string;
+		files?: () => Promise<ChannelFile[]>;
+	},
 ): Promise<ToolTextResult> {
 	// Absent/non-string fields are clean by definition - that is what lets a structured reply's
 	// replyAsJson-only payload and a title-less designer push pass with no per-tool special-casing.
@@ -187,7 +205,8 @@ export async function postReply(
 		}
 	}
 	try {
-		await routerPost("/respond", payload);
+		const staged = await files?.();
+		await routerPost("/respond", staged?.length ? { ...payload, files: staged } : payload);
 		console.error(`[${logPrefix}] ${toolName} sent [${payload.session_id}]`);
 		return { content: [{ type: "text" as const, text: "Reply sent." }] };
 	} catch (err) {

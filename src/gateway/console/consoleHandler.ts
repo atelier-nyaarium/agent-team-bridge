@@ -1,4 +1,5 @@
 import type { DomainSnapshot } from "../../shared/admission.js";
+import type { BlobStore } from "../../shared/blob-store.js";
 import { capFifo } from "../../shared/cap-fifo.js";
 import {
 	type ConsoleOp,
@@ -48,6 +49,7 @@ import {
 } from "../../shared/session-id.js";
 import { type SessionRecord, type SessionStore, sanitizeLabel } from "../../shared/session-store.js";
 import type { TeamInfo } from "../../shared/types.js";
+import { answerBlobOp } from "../blobOps.js";
 import type { CrossDomainPresenceConsumer } from "../federation/crossDomainPresence.js";
 import { crossDomainPresencePlaneName } from "../federation/crossDomainPresence.js";
 import type { IntentTracker } from "../intent.js";
@@ -178,6 +180,12 @@ export interface ConsoleHandlerDeps {
 	linkedDomainIds?: () => string[];
 	/** Relay a tmux op to the local host daemon and await its reply. Drives the console terminal
 	 * view; absent when no host daemon is wired (the op then errors "terminal unavailable"). */
+	/** The gateway's byte store. Absent only in tests that never exercise a blob op; the three
+	 * blob cases refuse rather than inventing a location to write to. */
+	blobStore?: BlobStore;
+	/** Pulls a blob in from the Gateway holding it. The console always asks its route Gateway, which
+	 * is often not the holder, so without this a cross-Gateway attachment is unfetchable. */
+	fetchBlobFromGateway?: (blobId: string, fromGateway: string) => Promise<boolean>;
 	relayToHost?: (op: HostOp) => Promise<HostOpResult>;
 	/** Wake a team (the same trigger send() uses for an asleep target), bringing up a devcontainer's
 	 * cold container if needed. create_session uses this instead of relayToHost for a devcontainer
@@ -355,6 +363,8 @@ export function createConsoleDispatcher({
 	readAnchors,
 	crossDomainPresenceConsumer,
 	linkedDomainIds,
+	blobStore,
+	fetchBlobFromGateway,
 	relayToHost,
 	tryWakeTeam,
 	isWakeInFlight,
@@ -610,7 +620,7 @@ export function createConsoleDispatcher({
 		switch (op.kind) {
 			case "register": {
 				const box = mailboxStore.ensure(ownerId);
-				capabilityStore?.report(conversationId, op.enabledPlugins);
+				capabilityStore?.report(conversationId, op.enabledPlugins, op.clientVersion);
 				console.log(
 					`[console register] conv=${conversationId.slice(0, 12)} owner=${ownerId.slice(0, 12)} dev=${device} build=${op.clientVersion ?? "?"}/${op.clientVariant ?? "?"} -> cursor=${box.highWater} epoch=${box.epoch}`,
 				);
@@ -1116,6 +1126,16 @@ export function createConsoleDispatcher({
 				const listed = r.result as HostListDirsResult;
 				return { entries: listed.entries, ...(listed.truncated ? { truncated: true } : {}) };
 			}
+
+			// Blob transfer. Deliberately outside isMutatingOp's dedup: a re-put of the same offset
+			// is already a no-op in the store (the digest names the content), so opId bookkeeping
+			// would add a second, weaker idempotency mechanism on top of a stronger one.
+			case "blob_stat":
+			case "blob_put":
+			case "blob_get":
+				// The console asks its ROUTE Gateway for everything, which is regularly not the one
+				// holding the bytes; the fetcher closes that gap behind this call.
+				return answerBlobOp(blobStore, op, fetchBlobFromGateway);
 
 			case "create_session": {
 				if (!relayToHost) throw new Error("terminal view unavailable on this Gateway");

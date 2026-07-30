@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { Address, composeSessionName, DEFAULT_SESSION, parseTarget } from "../shared/session-id.js";
-import type { SessionStore } from "../shared/session-store.js";
+import type { SessionRecord, SessionStore } from "../shared/session-store.js";
 // Type-only: websocket.ts imports the gates from here, so a value import either way would close a
 // runtime cycle. The one function needed from that module is injected instead.
 import type { TeamRegistry, WsData } from "./websocket.js";
@@ -90,6 +90,21 @@ export interface SessionAuthority {
 	 * fallback. */
 	satisfies(need: SessionBinding, got: Presented): boolean;
 
+	/**
+	 * SUBJECT-less: may this caller use a local plane that belongs to no single session?
+	 *
+	 * The byte plane is the case that needs it. A blob transfer names bytes, not a session, so there
+	 * is no claim to check and none of the three gates above applies - yet those routes write to this
+	 * gateway's disk and must not be usable by anything that can reach the port.
+	 *
+	 * The answer keeps the module's existing shape rather than inventing a stricter one: if ANY local
+	 * session is bound, a caller must present one of those tokens; if none is, the requirement is
+	 * UNBOUND and anything satisfies it, exactly as `toClaim` on an unbound name already decides. So
+	 * this is no weaker than the posture `/send` already takes, and a hand-launched tokenless
+	 * deployment keeps working instead of silently losing its attachments.
+	 */
+	mayUseLocalPlane(got: Presented): boolean;
+
 	/** Are these the same principal? Not satisfaction: UNBOUND equals only UNBOUND. */
 	sameAs(a: SessionBinding, b: SessionBinding): boolean;
 }
@@ -178,5 +193,15 @@ export function createSessionAuthority(deps: SessionAuthorityDeps): SessionAutho
 		return secretsEqual(a.token, b.token);
 	}
 
-	return { toClaim, toAnswerFor, toActFor, localTeamKey, satisfies, sameAs };
+	function mayUseLocalPlane(got: Presented): boolean {
+		const records = Object.values(sessionStore?.snapshot() ?? {});
+		// Inert bindings do not count, for the same reason toClaim ignores them: a token minted for a
+		// launch that only reattached was never delivered, so demanding it would refuse a session that
+		// legitimately holds nothing.
+		const bound = records.filter((r) => r.bindToken && sessionStore?.isBindingActive(r as SessionRecord));
+		if (bound.length === 0) return true;
+		return bound.some((r) => satisfies(binding(r.bindToken), got));
+	}
+
+	return { toClaim, toAnswerFor, toActFor, localTeamKey, satisfies, sameAs, mayUseLocalPlane };
 }

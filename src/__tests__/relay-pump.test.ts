@@ -11,6 +11,7 @@ import { signAdmission } from "../shared/admission.js";
 import type { ConsoleOp, ConsoleOpEnvelope, ConsoleRelayReply, ConsoleReplyBody } from "../shared/console-protocol.js";
 import { generateIdentity, type Identity, type SealedEnvelope, seal, unseal } from "../shared/crypto.js";
 import { DeviceMailboxStore } from "../shared/device-mailbox.js";
+import { MAX_RELAY_FRAME_BYTES } from "../shared/evie-protocol.js";
 
 ////////////////////////////////
 //  Harness
@@ -116,6 +117,34 @@ describe("createConsoleRelayPump (sealed)", () => {
 		expect(body.ok).toBe(true);
 		expect(body.result).toMatchObject({ device: "pixel", cursor: 0 });
 		expect(registry.get("pixel")).toBeDefined();
+	});
+
+	it("refuses to put an oversized reply on the shared socket, failing the op instead", async () => {
+		// An oversized frame does not fail politely: evie's WebSocket closes the gateway connection
+		// and every team's traffic goes with it. So the budget has to be enforced where a frame
+		// becomes bytes, not merely agreed upon by constants. Without the check this test does not
+		// fail loudly, it takes down the socket in production and looks fine here.
+		const device = generateIdentity();
+		const replies: ConsoleRelayReply[] = [];
+		const registry: TeamRegistry = new Map();
+		const pump = createConsoleRelayPump({
+			sealer: createConsoleSealer(gateway, admittedAllowlist(device)),
+			// Cast: the reply-body union describes real op results, and the point here is a body too
+			// big to put on the wire, whatever its shape.
+			handleFrame: async () => ({ ok: true, result: { blob: "x".repeat(MAX_RELAY_FRAME_BYTES) } }) as never,
+			sendReply: async (reply) => {
+				replies.push(reply);
+				return {};
+			},
+		});
+
+		pump(sealFrame(device, { kind: "register" }, { opId: "op-big" }));
+		await flush();
+
+		expect(replies).toHaveLength(1);
+		expect(replies[0].sealed).toBeUndefined();
+		expect(replies[0].error).toContain(`exceeds ${MAX_RELAY_FRAME_BYTES}`);
+		expect(registry.size).toBe(0);
 	});
 
 	it("a frame signed by an unadmitted console is rejected with a cleartext error", async () => {

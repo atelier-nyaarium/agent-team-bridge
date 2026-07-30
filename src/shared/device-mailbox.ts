@@ -38,23 +38,23 @@ export interface MailboxSnapshotState {
 // small regardless of the cap. The cap only bounds UNACKED accumulation for a
 // dark/slow device, so it is generous, and an eviction here is logged as exceptional.
 const DEFAULT_MAX_ENTRIES = 10_000;
-// entryBytes() sums raw base64 STRING length (the entry's actual in-memory footprint), which
-// runs ~4/3 over MAX_RESPONSE_FILE_BYTES' decoded-byte figure - a single max-cap payload is
-// ~667M of this budget, not 500M. Sized for a few max-size payloads to sit here unacked
-// without eviction, not just barely over one.
-const DEFAULT_MAX_BYTES = 2_000_000_000;
+// An entry is prose and file references now, never file bytes, so this bounds text rather than
+// attachments. Still generous by orders of magnitude against any real message, because its job is
+// to catch a runaway producer, not to ration ordinary mail.
+const DEFAULT_MAX_BYTES = 64_000_000;
 const DEFAULT_TTL_MS = 3_600_000;
 const DEFAULT_SWEEP_MS = 300_000;
 const DEFAULT_MAX_DEVICES = 500;
 const DEFAULT_MAX_SEEN_KEYS = 4096;
 const DEFAULT_MAX_RESPONDABLE_SESSIONS = 500;
 
-/** Cheap byte estimate for cap accounting: the body, its spoken copy (by contract
- * near body-sized, unlike the small title/summary tiers), and the base64 of every
- * attachment, which dominates. Avoids re-serializing the whole entry per append. */
+/** Cheap byte estimate for cap accounting: the body and its spoken copy (by contract near
+ * body-sized, unlike the small title/summary tiers), plus each attachment's name and reference.
+ * Attachments no longer dominate, since an entry describes its files rather than carrying them.
+ * Avoids re-serializing the whole entry per append. */
 function entryBytes(input: MailboxInput): number {
 	let n = (input.body?.length ?? 0) + (input.fullSpoken?.length ?? 0);
-	if (input.files) for (const f of input.files) n += f.base64?.length ?? 0;
+	if (input.files) for (const f of input.files) n += f.filename.length + (f.blobId?.length ?? 0);
 	return n;
 }
 

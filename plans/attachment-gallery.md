@@ -205,6 +205,48 @@ checksum); the 3 s multi-GB snapshot (mailbox holds references); the own-bytes e
   body), drop both 500 MB pins to a deliverable number and re-pin. Android: `reconcilePending`'s
   launch must not let an `Error` reach the uncaught handler - an oversized row marks `error`
   (retriable) instead of crash-looping. Converts "bricked app" into "one message fails legibly".
+- **IB - admission handle + repo-owned Error boundary. Ships alone, right after I0.** Added by a
+  second assessment after I0's reconcile fix held but the RETRY button still crashed: I0 patched one
+  call site of a shared hazard, which is the same defect wearing a different hat.
+
+  The allocation is now pinned exactly: `53894224 = ceil(40420668/3) * 4`, so it is
+  `Base64.encode`'s output array at `ConsoleClient.kt:661`, NOT `readBytes`. The file read
+  succeeded. That also means `rebuildFiles`' `runCatching` (which catches `Throwable`) has been
+  silently DROPPING oversized attachments and reporting them as "no longer on this device".
+
+  The ownership defect, proven in-repo: `retrySend` is safe from `repoScope` (`SupervisorJob +
+  Dispatchers.IO + CoroutineExceptionHandler`) and fatal from the retry button
+  (`MainActivity.kt:292`, a Compose scope with no handler). Same function, same row; the caller
+  decides whether it crashes. A per-caller `try/catch` is therefore not the fix.
+
+  Two halves:
+  1. **`OutgoingFile` becomes a smart constructor.** Private constructor, NO `bytes` field; an
+     `OutgoingFiles.admit()` factory stats (`File.length()` / `openAssetFileDescriptor`) and returns
+     `Granted` or `Refused(GONE | OVER_TRANSPORT | OVER_DEVICE)` BEFORE allocating anything.
+     Budgets: the transport ceiling, AND live heap headroom scaled by a safety fraction, against
+     `size * SEND_AMPLIFICATION` (the measured 1.78x, constant carries its probe date). Refusal is a
+     VALUE, mirroring `sessionAuthority.ts`'s UNBOUND discipline. Enforced by a residue test:
+     zero `OutgoingFile(` outside the factory, the Kotlin twin of the existing
+     `grep 'put("name", f.name)'` rule.
+  2. **The repository owns its scope.** Every `scope.launch { repo.X() }` in `MainActivity.kt`
+     (~15 sites) becomes a plain `repo.X()` dispatching internally on the handler-bearing scope, so
+     no repository `Error` has a path to Main. This half is PERMANENT - it is what will surface the
+     blob store's own future failures (disk full, digest mismatch, torn `.part`) as red rows.
+
+  Same commit, cheap and per-site (acceptable only because these have no shared producer type):
+  evie's PUBLIC `DeviceApprovalPublicServer.ts:88` has no `maxRequestBodySize` (intends 8 KB, gets
+  Bun's 128 MB; the ingress limit does not cover the pod-network path); four more unchecked
+  `ws.send` returns (`BridgeServer.ts:617,771`, `BridgeTransport.ts:209,212` - I0 fixed two of six);
+  `refFile.ts:86` reads before its cap; `listener.ts:177` `ChunkStream` has no total bound;
+  `MainActivity.kt:865` length-checks nothing on a `*/*` picker.
+
+  Honest limit: an admitted 16 MB file still peaks near ~140 MB through the encode chain. IB turns
+  that into a clean refusal on a loaded device; only I3 makes it small. IB folds INTO the plane
+  rather than being thrown away - at I3 the one private field flips `File` -> `blobId`, making I3 a
+  one-function change instead of five construction sites, and at I4 only two integer constants die.
+  The type, factory, residue test and Error boundary survive as the enforcement of this section's
+  own rule that nothing can name a whole file, which nothing else in I1-I4 actually enforces.
+
 - **I1 - the store, three implementations, no wire change.** `src/shared/blob-store.ts` (gateway +
   MCP) and `android/.../BlobStore.kt`, plus a golden corpus `tests/fixtures/blob/` with a
   `_manifest.json` both runtimes iterate (chunk-boundary and digest-mismatch cases included), per
@@ -222,9 +264,197 @@ checksum); the 3 s multi-GB snapshot (mailbox holds references); the own-bytes e
   base64 accounting, the re-send apology text, the 700 MB `maxRequestBodySize`). Gate on minimum
   console version via the capability union, which already receives `clientVersion` at register.
 
-Known enforcement gap, accepted: `check-sync-hash` verifies internal faithfulness, not cross-repo
-equality, so a stale-but-self-consistent leaf copy passes both CIs. Push order remains discipline;
-consider a real cross-repo diff in one CI while touching this.
+**I0-I4 shipped.** Where the built result differs from the plan above, and why:
+
+- **The sequential-budget reader stayed.** It was to be deleted as a memory guard, and that reason
+  is gone, but the same loop is still the only thing bounding how much one message may attach: the
+  per-file cap alone lets N files each under it total anything. Kept, with the justification
+  rewritten to the one that is now true.
+- **A total-size bound moved onto the write path** (`MAX_BLOB_BYTES`, enforced in `answerBlobOp`).
+  Deleting `fileBytes`' base64 term would have left `MAX_RESPONSE_FILE_BYTES` measuring only the
+  sender's own `size` claim, which nothing verifies, so the ceiling had to follow the bytes.
+- **`answerBlobOp` is a new single implementation** of the three ops. The HTTP door and the console
+  door had each grown a bound the other lacked: console `blob_get` took an unclamped `length`.
+- **`OVER_DEVICE` was deleted, not just its two constants.** The heap-proportional refusal existed
+  because the encode chain held ~1.8x the file; with a chunked transport it would only refuse work
+  the device can do.
+- **A stored reply now keeps its file references**, so `stripFileBytes` did not just die, it
+  inverted: a polled reply materializes its attachments instead of naming them and apologizing.
+- **The console version gate was NOT built.** The capability union now carries every live device's
+  `clientVersion` (the input such a gate needs), but no enforcement reads it, because none of the
+  available behaviours is worth its cost: refusing a send because one device is stale breaks the
+  union semantics every other capability follows, and warning an agent about a device it cannot
+  affect is noise. Degradation is already graceful, since a console that does not understand
+  `blobId` renders a metadata-only chip rather than failing. Decide the policy before building one.
+
+**Second round, after three adversarial reviews.** What they found and what changed:
+
+- **A blob's lifetime is now a CACHE lifetime.** Nothing reference-counts a blob, deliberately: a
+  reference can live in a mailbox entry, a durable job result, a thread row on a phone, or a message
+  still in flight, and a counter that must be right in four places will be wrong in one. Content
+  addressing makes the cheap answer correct, since evicting something still named costs a re-fetch
+  rather than a loss. `BlobStore.sweep` (byte-capped, coldest-first, gateway + agent) and
+  `BlobStore.pruneStale` (age-based, phone) are the only reclaim paths, and every store now has one.
+- **The phone stores an attachment once, not twice.** Its blob store is a transfer BUFFER: an
+  inbound blob is dropped the moment `land` puts its bytes in the attachments bucket that the
+  renderer reads and the orphan sweep already owns. Without this, every attachment existed in both
+  trees and only one of them was ever swept.
+- **`purgeAll` reaches the blob store.** Its own comment promised a Revoke-and-Delete leaves no
+  message bytes behind; the two roots are siblings, so it had been leaving a complete second copy.
+- **`land` reports a failed commit instead of a src.** It discarded `renameTo`'s result, so a failed
+  rename produced a src for a file that was not there, and a row carrying a src is never retried:
+  one recoverable failure became permanent.
+- **The inbound re-drain fold keeps landed attachments.** A re-drained entry describes files without
+  carrying them, so folding it in raw blanked a src whose bytes were on disk and rendered, after
+  which the orphan sweep was entitled to collect them. Now the inbound twin of `mergeSentEchoFiles`.
+- **The fetch pass is single-flight and gives up.** It fired once per poll pass with no guard while a
+  transfer routinely spans several, and a reference no Gateway could serve was re-requested forever.
+- **The untimed exemption moved to the op that carries bytes.** It had stayed on `send()`, which no
+  longer does, leaving `blobPut` under a 60s whole-call deadline that a slow link fails every time.
+- **`MAX_RELAY_FRAME_BYTES` enforces something.** It related three constants in a test that passed
+  with the entire blob plane deleted; the budget is now checked where a frame becomes bytes, so an
+  oversized reply fails its own op instead of closing the socket every team shares.
+- **Both transfer directions are bounded.** Uploads got the stall guard downloads had; downloads got
+  the total ceiling uploads had; `ChannelFilesSchema` is capped by count, since a message's cost is
+  now the number of references a receiver will chase rather than its own size.
+- **A failed fetch reads differently from a file that carried no bytes**, because one is worth asking
+  to have re-sent and the other is gone, and one sentence for both had the agent give up on the
+  recoverable case.
+- **Two residue rules were evadable.** `OutgoingFile.of` slipped past a `\bOutgoingFile\(` match, and
+  `\s*` cannot span a statement, so any line before the repo call defeated the launch-scope rule. The
+  second now exempts a file that builds its own `CoroutineExceptionHandler`, which is the thing whose
+  absence makes a launch dangerous in the first place.
+
+**Third round, two more adversarial passes.** The sharpest findings were in code written during the
+second round, which is the argument for auditing a fix as hard as the thing it fixed:
+
+- **Reads now refresh mtime, and the sweep doc was lying before they did.** It claimed eviction was
+  least-recently-USED "by the same mtime the reads refresh". Reads refresh atime, not mtime, and no
+  filesystem here is mounted to make atime readable, so the order was really first-written-first-out:
+  a large attachment being fetched over a slow link was among the FIRST evicted, precisely because
+  the transfer started early.
+- **The sweep doc's safety claim was also false.** It said evicting a blob someone still names "costs
+  a re-fetch, not a loss". There is nowhere to re-fetch from: the sender's staging copy has its own
+  sweep and its container may be gone. Corrected to say eviction IS a loss, which is why the ceiling
+  sits far above real traffic and the mtime touch matters.
+- **A short final write no longer destroys the transfer.** `writeSync` returns a partial count rather
+  than throwing when a disk fills, so the part ended up shorter than the chunk that claimed to finish
+  it, and `seal` deleted every transferred byte to punish the lost tail. Both runtimes now report the
+  honest prefix so the sender resumes.
+- **The single-flight latch could stick forever.** It was claimed before the dispatch, and the
+  release lived in the coroutine body, so a null or already-cancelled scope left it latched for the
+  life of a process-lifetime singleton: attachments would silently stop arriving until a force-stop.
+- **`land` leaked its partial on the throw path** (the rename path already cleaned up). The usual
+  trigger is a full disk, and the retry runs once per poll pass with a fresh name, so the failure
+  path consumed more of the exact resource whose exhaustion caused it.
+- **Staging is swept BEFORE an ingest, not after.** Sweeping after let a file large enough to blow
+  the budget alone be staged and immediately evicted as the single over-budget entry, so the next
+  line failed on a blob that existed a millisecond earlier.
+
+**Fourth round, an adversarial-peer pass. It found the worst bug of the whole intermission:**
+
+- **A stored reply no longer carries a fetchable reference, and never should have.** The old code
+  called `stripFileBytes` before persisting, commented "so a persistent store entry never retains the
+  bytes". Moving bytes out of band was read as making that guard obsolete, and it was replaced with
+  "the store holds the whole thing" - which turned a deliberate METADATA leak into a CONTENT leak.
+  `/pending` enumerates every session id and authorizes nobody, `/poll` takes a `req` it never reads,
+  `/blob/get` has no gate, and a channel entry is persistent and never swept. So three unauthenticated
+  hops read every attachment any agent ever sent. `blobId` is not metadata: it is a bearer token for
+  the content. `stripFileRefs` restores the boundary, and moving the bytes out of band changed WHAT
+  has to be withheld, not whether. Pinned by a test that greps the whole polled body for the id.
+- **Unfinished transfers count toward the store ceiling.** They were reclaimed by age alone, so the
+  one unbounded attacker-controlled write on the disk sat outside the one bound on it: never send a
+  final chunk and hold arbitrary space for an hour, none of it registering against the budget. A
+  partial now also evicts before a sealed blob of equal age, since nothing can name a partial yet, so
+  losing one costs a resume rather than the file.
+- **The HTTP blob door validates against the console plane's own schemas.** It parsed with a bare
+  cast while the sealed plane ran zod. Harmless only by accident: `write` never seeks to the caller's
+  offset, so unvalidated negatives merely threw. Anyone "fixing" that into a real seek would have
+  turned an unauthenticated route into a corruption primitive.
+
+### I5 - a blob reference names where its bytes are. DONE.
+
+`blobId` says WHAT; without a companion saying WHERE, a message that routes to another Gateway names
+bytes its receiver cannot reach, in both directions, which was a regression against the inline wire.
+
+- **`ChannelFile.blobGateway`** carries the holder. Absent means "wherever you are", which is right
+  for every same-Gateway transfer and is what a peer predating the field implies.
+- **The GATEWAY stamps it** for a local agent, in `respond` and `send`. That one point knows both
+  that the bytes were uploaded here and that the message is being posted here, which is why an agent
+  never has to learn its own Gateway id. Only ever fills a blank: a relayed message already carries
+  its origin's stamp and the console carries its own, and overwriting either would point every
+  receiver at a Gateway that never held the file. The console stamps its own `routeGateway`, because
+  it uploads there while sealing the send to the target's Gateway.
+- **`blob_fetch`** joins the federated op union. The Gateway being asked for a blob it lacks pulls it
+  from the holder over the existing sealed relay and caches it. Deliberately ungated beyond the
+  relay's own admission check: a blobId is the digest of the content, so naming one is already proof
+  of holding the bytes it names, and there is nothing to enumerate.
+- **Clients never learn any of this.** They ask their own Gateway, always, and it either has the
+  bytes or gets them. That indirection is the point: the transfer loops are identical whether a blob
+  is local or three hops away, and content addressing makes the cache free of invalidation.
+- Bounded like every other transfer: a range at a time, against `MAX_BLOB_BYTES`, refusing a peer
+  whose cursor stops advancing. A failure returns false rather than throwing, because the caller's
+  next move is to report that one file unavailable, not to fail the message.
+
+Rejected: having the producer upload to the target's Gateway. It closes console-to-agent only, since
+an agent cannot know which Gateway the owner's console happens to poll.
+
+**Fifth round, red-teaming I5 itself.** Four fixes, all in code from this slice:
+
+- **`notify_human` was the one unstamped path.** `stampBlobHolder` had two call sites and this was not
+  one, so a notice's attachment fanned out to every Gateway naming bytes none of them could locate.
+  A `channel_reply` attachment from the same agent worked, and a single-Gateway Domain never sees it,
+  which is exactly the shape that survives local testing.
+- **A cross-Gateway fetch now tries every candidate Domain, not one.** `sealTargetFor` is local-first
+  by deliberate design, which is right for a SEND (misrouting a message is a disclosure) and wrong for
+  a fetch, where it silently asks a sibling that never held the file. Gateway ids default to the
+  machine hostname and duplicates are anticipated (see `GATEWAY_ID` in docker-compose.yml), so a
+  friend's `desktop` and this Domain's `desktop` are the same string. Trying several sources is safe
+  HERE and nowhere else in that file: a blob is named by the digest of its contents, so a wrong guess
+  returns no bytes rather than wrong bytes.
+- **A stat can no longer trigger a cross-Gateway pull.** The guard read `kind !== "blob_put"`, so a
+  hand-crafted stat carrying `fromGateway` dragged up to 16 MB across the mesh to answer what is
+  advertised as the cheap "how much do you have" a resume asks first.
+- **Concurrent readers of one absent blob share a single fetch.** A client-facing door now initiates
+  outbound mesh traffic, and every request re-enters while the bytes are absent, so N readers meant N
+  full relay loops for identical content.
+
+And one correction to this document: the `crosstalk_send` poll branch was changed in the fourth round
+to materialize attachments, on the claim that a stored reply keeps its references. The SAME round
+made that false by adding `stripFileRefs`. A poll reads the persistent copy, which deliberately holds
+no reference, so it names attachments and says a re-send is what recovers them. Claiming the sender
+attached nothing would have been both untrue and the one message that stops an agent asking.
+
+Rejected from that round, as unsubstantiated: a cross-Domain share gate on `blob_fetch`. The reviewer
+could not construct a sequence where a friend obtains a digest without already holding the content,
+which is the whole claim - a digest IS the capability. Gating it needs per-session blob tenancy, and
+the store is content-addressed and partitioned by nothing, so that is a redesign, not a gate.
+
+Known gaps, accepted and real:
+
+- **The cutover strips `base64` silently rather than refusing it.** A not-yet-updated console's
+  attachment is discarded at the schema boundary while the sender is told the send succeeded. Making
+  it loud needs `z.undefined()`, which cannot be represented in JSON Schema and so breaks the Kotlin
+  codegen the drift check depends on. MITIGATION, and it is a real one: deploy the PHONE FIRST. New
+  phone against an old Gateway fails loudly and retriably (the op kind is not in the old union), and
+  that ordering never enters the silent cell at all.
+- **Rollback is destructive to in-flight rows.** An old APK has no `blobId` in `fileJson`/`loadFiles`,
+  so the first `persistThreads` after a downgrade drops the field from every row, and re-upgrading
+  cannot recover the reference. Rows already landed (`src` set) are unaffected.
+
+- `check-sync-hash` verifies internal faithfulness, not cross-repo equality, so a stale-but-self-
+  consistent leaf copy passes both CIs. Push order remains discipline; consider a real cross-repo
+  diff in one CI while touching this.
+- ~~A blob lives on ONE Gateway and messages route to another.~~ Closed by I5, below.
+- **The blob HTTP routes now authorize, through a question `sessionAuthority` owns.** They were the
+  only POST routes that never read `req`. The question a blob op poses is genuinely new, because a
+  transfer names bytes rather than a session, so none of the three name-keyed gates applies:
+  `mayUseLocalPlane` answers "is this caller any of my sessions?" and keeps the module's existing
+  shape rather than a stricter invented one. If any local session is bound a caller must present one
+  of those tokens; if none is, the requirement is UNBOUND and anything satisfies it, exactly as
+  `toClaim` on an unbound name already decides. The console is unaffected: it reaches the same three
+  ops over its sealed plane, and the HTTP routes have exactly one caller class, this machine's own
+  MCP agents.
 
 **What the intermission unlocks for the later sections:** resumable large uploads; range reads
 (previews, streaming playback); dedup across resend and echo; content-keyed video thumbs (resolves

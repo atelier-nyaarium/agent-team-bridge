@@ -5,6 +5,7 @@ import com.atelier_nyaarium.switchboard.crypto.Keyring
 import com.atelier_nyaarium.switchboard.proto.ChannelFile
 import com.atelier_nyaarium.switchboard.proto.EnabledPlugin
 import com.atelier_nyaarium.switchboard.proto.EnrollHandshakeOp
+import com.atelier_nyaarium.switchboard.proto.Protocol
 import com.atelier_nyaarium.switchboard.proto.RosterRequest
 import com.atelier_nyaarium.switchboard.proto.RosterResult
 import com.atelier_nyaarium.switchboard.proto.TrustHandshakeOp
@@ -18,6 +19,9 @@ import com.atelier_nyaarium.switchboard.proto.EnrollResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleApprovalResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleCreateSessionResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleBlobGetResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleBlobPutResult
+import com.atelier_nyaarium.switchboard.proto.ConsoleBlobStatResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleListDirsResult
 import com.atelier_nyaarium.switchboard.proto.ConsoleOp
 import com.atelier_nyaarium.switchboard.proto.ConsoleOpEnvelope
@@ -63,6 +67,7 @@ import com.atelier_nyaarium.switchboard.proto.parseTarget
 import com.atelier_nyaarium.switchboard.proto.TransportRequest
 import com.atelier_nyaarium.switchboard.proto.TransportResult
 import java.io.ByteArrayInputStream
+import java.io.File
 import java.io.IOException
 import java.security.KeyStore
 import java.security.SecureRandom
@@ -255,9 +260,6 @@ internal fun teamInfoToTeam(it: TeamInfo, localGatewayId: String): Team {
 
 data class SendResult(val ok: Boolean, val status: String, val error: String?)
 
-/** A file the user picked to send. Bytes are base64-encoded onto the wire. */
-data class OutgoingFile(val name: String, val mime: String, val bytes: ByteArray)
-
 /** The owner enroll envelope: `enrollOp` (not `op`) routes to evie's enrollment coordinator,
  * which answers an EnrollResult directly instead of relaying to a Gateway. */
 @Serializable
@@ -331,6 +333,10 @@ private fun SealedEnvelope.toCrypto(): Crypto.SealedEnvelope =
 /** Talks to the console bridge through the CA-pinned k8s API service-proxy. */
 class ConsoleClient(private val prov: Provisioning, private val store: AppStateStore) {
 	private val client = buildPinnedClient(prov.caPem)
+
+	/** This device's staging half of the blob plane. Content-addressed, so attaching a file the
+	 * Gateway already holds, or re-opening one already received, moves no bytes at all. */
+	private val blobs = BlobStore(BlobStore.root(store.filesDir))
 	private val proxyBase =
 		"${prov.apiUrl}/api/v1/namespaces/${prov.namespace}/services/${prov.service}:${prov.port}/proxy"
 
@@ -440,7 +446,8 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		readTimeoutMs: Long? = null,
 		targetGateway: String? = null,
 		// Bounds the whole call so a peer that trickles bytes can't wedge the caller forever -
-		// readTimeout alone only covers inactivity gaps. null opts out (send()'s upload).
+		// readTimeout alone only covers inactivity gaps. null opts out (blobPut, the one op whose
+		// body is file bytes rather than a description of them).
 		callTimeoutMs: Long? = DEFAULT_RELAY_CALL_TIMEOUT_MS,
 	): ConsoleReplyBody {
 		val identity = requireConsoleIdentity()
@@ -652,13 +659,22 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		opId: String = UUID.randomUUID().toString(),
 		domainId: String? = null,
 	): SendResult {
+		// This device's own Gateway: where every blob op goes, and therefore where an attachment's
+		// bytes end up. Resolved before the files are described, because each one has to name it.
+		val local = routeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()
+		// Staged before the message is composed: the op carries a reference per file, never the bytes,
+		// so composing a send costs the same whether the attachment is a screenshot or a video.
 		val wireFiles = files.map { f ->
 			ChannelFile(
 				filename = f.name,
 				mime = f.mime,
-				size = f.bytes.size.toLong(),
+				size = f.size,
 				descriptiveKey = f.name,
-				base64 = android.util.Base64.encodeToString(f.bytes, android.util.Base64.NO_WRAP),
+				blobId = uploadBlob(f.source),
+				// Bytes go to the ROUTE Gateway while this send seals to the TARGET's, so the two are
+				// routinely different and the receiver has no way to guess which one to ask. Naming the
+				// holder here is what lets a cross-Gateway attachment be fetched at all.
+				blobGateway = local,
 			)
 		}
 		// Carry the selected session's Domain so the Gateway resolves a cross-Domain seal target by the full
@@ -669,11 +685,10 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 		// the local Gateway), so a cross-Gateway send goes E2E to that Gateway. A cross-Domain send instead
 		// seals to the local Gateway: the friend Gateway's keys are not in this owner's keyring, so the local
 		// Gateway opens the op and relays it to the friend over the mesh.
-		val local = routeGateway?.takeIf { it.isNotEmpty() } ?: store.loadGatewayId()
 		val target = if (crossDomain != null) local else gatewayOfTarget(to, local)
-		// callTimeoutMs = null: a large attachment upload must not be capped by an overall
-		// call duration, only by writeTimeout's per-write inactivity bound (buildPinnedClient).
-		val replyBody = relay(op, opId, targetGateway = target, callTimeoutMs = null)
+		// Ordinary call timeout: this op carries file references, not file bytes, so it is the same
+		// size as any other send. The untimed exemption moved to blobPut, which is where the bytes are.
+		val replyBody = relay(op, opId, targetGateway = target)
 		val status = replyBody.result?.let {
 			runCatching { wireJson.decodeFromJsonElement<ConsoleSendResult>(it).status }.getOrNull()
 		}
@@ -814,6 +829,117 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 	 * ~-rooted; an unreadable or missing one returns empty entries rather than an error. */
 	suspend fun listDirs(path: String): ConsoleListDirsResult =
 		resultOf(relay(ConsoleOp.ListDirs(path = path), targetGateway = targetGatewayOf("host")), "list_dirs")
+
+	/** How much of a blob the gateway already holds. `have` is the contiguous prefix, so it is also
+	 * the offset to resume from - no separate progress bookkeeping to get out of step. */
+	suspend fun blobStat(blobId: String): ConsoleBlobStatResult =
+		resultOf(relay(ConsoleOp.BlobStat(blobId = blobId)), "blob_stat")
+
+	/** Send one bounded chunk. Re-sending an offset already held is a no-op at the store, because
+	 * the blob is named by its own digest, so a retry needs no idempotency key of its own. */
+	suspend fun blobPut(blobId: String, offset: Long, chunk: ByteArray, final: Boolean): ConsoleBlobPutResult =
+		resultOf(
+			relay(
+				ConsoleOp.BlobPut(
+					blobId = blobId,
+					offset = offset,
+					chunk = android.util.Base64.encodeToString(chunk, android.util.Base64.NO_WRAP),
+					final = final,
+				),
+				// callTimeoutMs = null: this is the op that carries bytes. A sealed chunk is a couple of
+				// MB, and a whole-call deadline on a slow link would fail every chunk alike, leaving the
+				// transfer unable to advance at all. Progress is bounded by writeTimeout's per-write
+				// inactivity check instead (buildPinnedClient), which is what actually detects a dead link.
+				callTimeoutMs = null,
+			),
+			"blob_put",
+		)
+
+	/** Read one bounded range back. */
+	/** `fromGateway` names the Gateway holding the bytes. This device still only ever asks its own
+	 * route Gateway, which pulls the range in behind this call when it is not the holder. */
+	suspend fun blobGet(blobId: String, offset: Long, length: Int, fromGateway: String? = null): ConsoleBlobGetResult =
+		resultOf(
+			relay(
+				ConsoleOp.BlobGet(
+					blobId = blobId,
+					offset = offset,
+					length = length.toLong(),
+					fromGateway = fromGateway,
+				),
+			),
+			"blob_get",
+		)
+
+	/**
+	 * Put a local file's bytes on the Gateway and return the reference that names them.
+	 *
+	 * A chunk at a time in both hops, so neither this process nor a relay frame ever holds the whole
+	 * file. `have` from each write is the resume cursor, so a transfer interrupted by a dropped
+	 * connection continues instead of restarting, and a re-sent chunk is free because a blob is named
+	 * by its own digest.
+	 */
+	suspend fun uploadBlob(source: File): String {
+		val blobId = blobs.ingestFile(source)
+
+		// Skip anything the Gateway already holds: a resend, or the same file from another device.
+		val remote = blobStat(blobId)
+		if (remote.complete) return blobId
+
+		var offset = remote.have
+		val total = blobs.stat(blobId).have
+		while (true) {
+			val read = blobs.read(blobId, offset, Protocol.BLOB_CHUNK_BYTES)
+			val final = read.eof || offset + read.bytes.size >= total
+			val ack = blobPut(blobId, offset, read.bytes, final)
+			if (final) {
+				if (!ack.complete) error("blob $blobId failed verification at the Gateway")
+				return blobId
+			}
+			// The Gateway's cursor beats our own arithmetic: it is the side that knows what landed. But
+			// a cursor that does not move means the chunk did not land, and re-sending it forever would
+			// spin on metered data rather than fail, so a stalled transfer becomes a visible error.
+			if (ack.have <= offset) error("blob $blobId stalled at offset $offset")
+			offset = ack.have
+		}
+	}
+
+	/** Drop a staged blob once its bytes are safely somewhere durable. The store is a transfer
+	 * buffer on this device, so keeping a landed blob would mean holding every attachment twice. */
+	fun forgetBlob(blobId: String) {
+		runCatching { blobs.remove(blobId) }
+	}
+
+	/** Reclaim transfer residue: an abandoned upload, a fetch whose row vanished, a torn `.part`. */
+	fun pruneStaleBlobs(maxAgeMs: Long): Long = runCatching { blobs.pruneStale(maxAgeMs) }.getOrDefault(0L)
+
+	/**
+	 * Pull a blob's bytes down and return the local file holding them.
+	 *
+	 * Resumes from whatever this device already has, and returns immediately for one it holds in
+	 * full. The store seal-verifies the digest, so a truncated or tampered transfer yields no file
+	 * at all rather than a subtly wrong one.
+	 */
+	suspend fun downloadBlob(blobId: String, fromGateway: String? = null): File {
+		blobs.path(blobId)?.let { return it }
+
+		var offset = blobs.stat(blobId).have
+		while (true) {
+			// The far side decides when a transfer ends, so a peer that never sets eof would otherwise
+			// stream onto the phone's storage until it filled. Nothing legitimate crosses the ceiling.
+			if (offset > Protocol.MAX_BLOB_BYTES) error("blob $blobId exceeded ${Protocol.MAX_BLOB_BYTES} bytes")
+			val res = blobGet(blobId, offset, Protocol.BLOB_CHUNK_BYTES, fromGateway)
+			val bytes = res.chunk?.let { android.util.Base64.decode(it, android.util.Base64.DEFAULT) } ?: ByteArray(0)
+			// A short read that is not the end would otherwise spin here asking for the same offset.
+			if (bytes.isEmpty() && !res.eof) error("blob $blobId stalled at offset $offset")
+			val written = blobs.write(blobId, offset, bytes, res.eof)
+			if (res.eof) {
+				if (!written.complete) error("blob $blobId failed verification after download")
+				return blobs.path(blobId) ?: error("blob $blobId sealed but has no path")
+			}
+			offset = written.have
+		}
+	}
 
 	/** Rename a session: set the gateway-authoritative sessionLabel on its record. Idempotent per
 	 * opId. Returns the label the gateway actually applied (after its sanitize + per-spawn dedup). */

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	dropReferenceArtifacts,
 	EVIE_FILES_DIR,
@@ -11,6 +11,27 @@ import {
 } from "../mcp/channel/evieFiles.js";
 import { MANIFEST_FILENAME } from "../mcp/references/artifactNames.js";
 import type { ChannelFile } from "../shared/types.js";
+import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js";
+
+////////////////////////////////
+//  The blob plane under the subject
+//
+//  Landing a file means fetching its bytes, so the transfer routes have to be answered for real.
+
+const h = vi.hoisted(() => ({ wire: null as BlobWire | null }));
+
+vi.mock("../mcp/bridge/helpers.js", () => ({
+	routerPost: async (route: string, body: unknown) => {
+		if (!isBlobRoute(route) || !h.wire) throw new Error(`unexpected post to ${route}`);
+		return h.wire.answer(route, body);
+	},
+}));
+
+/** Bytes a peer has already put on the plane, named the way a message would name them. */
+function staged(bytes: Buffer): string {
+	if (!h.wire) throw new Error("blob wire not mounted");
+	return h.wire.stage(bytes);
+}
 
 const createdBuckets: string[] = [];
 
@@ -20,11 +41,17 @@ function uniqueId(): string {
 	return id;
 }
 
+beforeEach(() => {
+	h.wire = mountBlobWire();
+});
+
 afterEach(() => {
 	while (createdBuckets.length > 0) {
 		const id = createdBuckets.pop()!;
 		rmSync(join(EVIE_FILES_DIR, id), { recursive: true, force: true });
 	}
+	h.wire?.dispose();
+	h.wire = null;
 });
 
 describe("safeFilename", () => {
@@ -54,28 +81,28 @@ describe("materializeFiles", () => {
 			mime: "image/png",
 			size: 4,
 			descriptiveKey: "The image named `dog.png`",
-			base64: Buffer.from("test").toString("base64"),
+			blobId: staged(Buffer.from("test")),
 			...overrides,
 		};
 	}
 
-	it("writes base64-bearing files to /tmp/evie-files/<msgId>/<safeFilename>", () => {
+	it("writes byte-bearing files to /tmp/evie-files/<msgId>/<safeFilename>", async () => {
 		const id = uniqueId();
 		const params: MaterializeFilesParams = { discordMessageId: id, files: [makeFile()] };
-		const out = materializeFiles(params);
+		const out = await materializeFiles(params);
 
 		expect(out).toHaveLength(1);
 		expect(out[0].path).toBe(join(EVIE_FILES_DIR, id, "dog.png"));
 		expect(readFileSync(out[0].path!).toString()).toBe("test");
 	});
 
-	it("metadata-only entries (no base64) get no path", () => {
+	it("metadata-only entries (naming no bytes) get no path", async () => {
 		const id = uniqueId();
-		const out = materializeFiles({
+		const out = await materializeFiles({
 			discordMessageId: id,
 			files: [
 				makeFile({
-					base64: undefined,
+					blobId: undefined,
 					mime: "application/pdf",
 					filename: "doc.pdf",
 					descriptiveKey: "The PDF named `doc.pdf`",
@@ -88,9 +115,9 @@ describe("materializeFiles", () => {
 		expect(out[0].descriptiveKey).toBe("The PDF named `doc.pdf`");
 	});
 
-	it("collision suffix appends -2, -3 within one materialize call", () => {
+	it("collision suffix appends -2, -3 within one materialize call", async () => {
 		const id = uniqueId();
-		const out = materializeFiles({
+		const out = await materializeFiles({
 			discordMessageId: id,
 			files: [
 				makeFile({ filename: "shot.png" }),
@@ -104,9 +131,9 @@ describe("materializeFiles", () => {
 		expect(out[2].path).toBe(join(EVIE_FILES_DIR, id, "shot-3.png"));
 	});
 
-	it("path-traversal filename gets sanitized to its basename", () => {
+	it("path-traversal filename gets sanitized to its basename", async () => {
 		const id = uniqueId();
-		const out = materializeFiles({
+		const out = await materializeFiles({
 			discordMessageId: id,
 			files: [makeFile({ filename: "../../etc/passwd" })],
 		});
@@ -131,11 +158,32 @@ describe("renderFilesBlock", () => {
 		});
 
 		expect(block).toContain(`[FILES messageId="abc"]`);
-		expect(block).toContain("were not transferred");
+		expect(block).toContain("carried no bytes");
 		expect(block).toContain("1. The 1st image named `dog.png` -> `/tmp/evie-files/abc/dog.png`");
 		expect(block).toContain("2. The PDF named `doc.pdf`");
 		expect(block).not.toContain("2. The PDF named `doc.pdf` ->");
 		expect(block).toContain("[/FILES]");
+	});
+
+	it("tells a failed fetch apart from a file that never carried bytes", () => {
+		// The agent's next move differs: one is worth asking to have re-sent, the other is gone. A
+		// single sentence for both had it give up on the recoverable case.
+		const block = renderFilesBlock({
+			files: [{ descriptiveKey: "staged.png", fetchFailed: true }, { descriptiveKey: "namedonly.pdf" }],
+		});
+
+		expect(block).toContain("1. staged.png (fetch failed)");
+		expect(block).toContain("2. namedonly.pdf");
+		expect(block).not.toContain("2. namedonly.pdf (fetch failed)");
+		expect(block).toContain("ask for a re-send");
+		expect(block).toContain("carried no bytes");
+	});
+
+	it("says nothing about missing bytes when every file landed", () => {
+		const block = renderFilesBlock({ files: [{ descriptiveKey: "ok.png", path: "/tmp/ok.png" }] });
+
+		expect(block).not.toContain("fetch failed");
+		expect(block).not.toContain("carried no bytes");
 	});
 
 	it("returns empty string for empty file list", () => {
@@ -182,7 +230,7 @@ describe("emitResponseNotification", () => {
 					mime: "image/png",
 					size: 5,
 					descriptiveKey: "proof.png",
-					base64: Buffer.from("bytes").toString("base64"),
+					blobId: staged(Buffer.from("bytes")),
 				},
 			],
 		});
@@ -219,9 +267,9 @@ describe("emitChannelNotification", () => {
 	}
 
 	function refManifest(snapshotName: string): string {
-		return Buffer.from(
-			JSON.stringify({ switchboardReferences: 1, files: [{ filename: snapshotName }], refs: {} }),
-		).toString("base64");
+		return staged(
+			Buffer.from(JSON.stringify({ switchboardReferences: 1, files: [{ filename: snapshotName }], refs: {} })),
+		);
 	}
 
 	it("materializes an inbound send's attachments and points the agent at them", async () => {
@@ -241,7 +289,7 @@ describe("emitChannelNotification", () => {
 					mime: "text/plain",
 					size: 5,
 					descriptiveKey: "repro.log",
-					base64: Buffer.from("trace").toString("base64"),
+					blobId: staged(Buffer.from("trace")),
 				},
 			],
 		});
@@ -269,21 +317,21 @@ describe("emitChannelNotification", () => {
 					mime: "text/plain",
 					size: 3,
 					descriptiveKey: "wanted.txt",
-					base64: Buffer.from("yes").toString("base64"),
+					blobId: staged(Buffer.from("yes")),
 				},
 				{
 					filename: "switchboard-references.json",
 					mime: "application/json",
 					size: 1,
 					descriptiveKey: "switchboard-references.json",
-					base64: refManifest("routes.ts.txt"),
+					blobId: refManifest("routes.ts.txt"),
 				},
 				{
 					filename: "routes.ts.txt",
 					mime: "text/plain",
 					size: 4,
 					descriptiveKey: "routes.ts.txt",
-					base64: Buffer.from("code").toString("base64"),
+					blobId: staged(Buffer.from("code")),
 				},
 			],
 		});
@@ -308,14 +356,14 @@ describe("emitChannelNotification", () => {
 					mime: "application/json",
 					size: 1,
 					descriptiveKey: "switchboard-references.json",
-					base64: refManifest("helpers.ts.txt"),
+					blobId: refManifest("helpers.ts.txt"),
 				},
 				{
 					filename: "helpers.ts.txt",
 					mime: "text/plain",
 					size: 4,
 					descriptiveKey: "helpers.ts.txt",
-					base64: Buffer.from("code").toString("base64"),
+					blobId: staged(Buffer.from("code")),
 				},
 			],
 		});
@@ -358,10 +406,10 @@ describe("renderFilesBlock line integrity", () => {
 });
 
 describe("modifiedAt round trip", () => {
-	it("restores the sender's mtime exactly, in milliseconds", () => {
+	it("restores the sender's mtime exactly, in milliseconds", async () => {
 		const id = uniqueId();
 		const sent = 1785179969544;
-		const [meta] = materializeFiles({
+		const [meta] = await materializeFiles({
 			discordMessageId: id,
 			files: [
 				{
@@ -370,17 +418,17 @@ describe("modifiedAt round trip", () => {
 					size: 3,
 					descriptiveKey: "aged.txt",
 					modifiedAt: sent,
-					base64: Buffer.from("old").toString("base64"),
+					blobId: staged(Buffer.from("old")),
 				},
 			],
 		});
 		expect(statSync(meta.path!).mtime.getTime()).toBe(sent);
 	});
 
-	it("leaves a file at its write time when no mtime was carried", () => {
+	it("leaves a file at its write time when no mtime was carried", async () => {
 		const id = uniqueId();
 		const before = Date.now();
-		const [meta] = materializeFiles({
+		const [meta] = await materializeFiles({
 			discordMessageId: id,
 			files: [
 				{
@@ -388,7 +436,7 @@ describe("modifiedAt round trip", () => {
 					mime: "text/plain",
 					size: 3,
 					descriptiveKey: "fresh.txt",
-					base64: Buffer.from("new").toString("base64"),
+					blobId: staged(Buffer.from("new")),
 				},
 			],
 		});
@@ -398,11 +446,19 @@ describe("modifiedAt round trip", () => {
 		expect(statSync(meta.path!).mtime.getTime()).toBeLessThanOrEqual(Date.now() + 2000);
 	});
 
-	it("writes a zero-byte attachment rather than reporting it as never transferred", () => {
+	it("writes a zero-byte attachment rather than reporting it as never transferred", async () => {
 		const id = uniqueId();
-		const [meta] = materializeFiles({
+		const [meta] = await materializeFiles({
 			discordMessageId: id,
-			files: [{ filename: "empty.log", mime: "text/plain", size: 0, descriptiveKey: "empty.log", base64: "" }],
+			files: [
+				{
+					filename: "empty.log",
+					mime: "text/plain",
+					size: 0,
+					descriptiveKey: "empty.log",
+					blobId: staged(Buffer.alloc(0)),
+				},
+			],
 		});
 		expect(meta.path).toBeDefined();
 		expect(statSync(meta.path!).size).toBe(0);

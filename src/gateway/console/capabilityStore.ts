@@ -19,6 +19,9 @@ interface DeviceRecord {
 	// arbiter for conflicting instruction text: a device that merely polls often must not outrank
 	// one that recently re-registered with fresher guidance.
 	reportedAt: number;
+	// The build this device last registered with. Absent from a device that did not say, which is
+	// not the same as an old one: a version-sensitive caller has to treat unknown as unknown.
+	clientVersion?: string;
 }
 
 /** What the endpoint serves. `known: false` means no device has ever reported, which a caller must
@@ -26,6 +29,10 @@ interface DeviceRecord {
 export interface CapabilitySnapshot {
 	known: boolean;
 	capabilities: Capability[];
+	/** Every live device's reported build, deduped and sorted. A device that reported none is
+	 * absent rather than represented, so an empty list means nobody said, never "everybody is old".
+	 * Diagnostic today; this is the input a version gate would read. */
+	clientVersions: string[];
 }
 
 ////////////////////////////////
@@ -92,15 +99,20 @@ export class CapabilityStore {
 
 	/** Record what a device reports at register. Absent (rather than empty) means the device said
 	 * nothing about plugins, so its previous report stands rather than being erased. */
-	report(conversationId: string, capabilities: Capability[] | undefined): void {
+	report(conversationId: string, capabilities: Capability[] | undefined, clientVersion?: string): void {
 		const t = this.now();
 		const prior = this.devices.get(conversationId);
 		if (!capabilities) {
-			if (prior) this.markSeen(prior, t);
+			if (prior) {
+				this.markSeen(prior, t);
+				// A register that named a build still updates it, even when it said nothing about
+				// plugins: the two are independent claims and one must not gate the other.
+				if (clientVersion) prior.clientVersion = clientVersion;
+			}
 			return;
 		}
 		const clean = capabilities.flatMap(admit);
-		this.devices.set(conversationId, { capabilities: clean, lastSeen: t, reportedAt: t });
+		this.devices.set(conversationId, { capabilities: clean, lastSeen: t, reportedAt: t, clientVersion });
 		this.evictOverflow();
 		this.persist();
 	}
@@ -118,7 +130,7 @@ export class CapabilityStore {
 	 */
 	snapshot(): CapabilitySnapshot {
 		const live = [...this.devices.values()].filter((r) => this.now() - r.lastSeen < this.ttlMs);
-		if (live.length === 0) return { known: false, capabilities: [] };
+		if (live.length === 0) return { known: false, capabilities: [], clientVersions: [] };
 		const best = new Map<string, { cap: Capability; reportedAt: number }>();
 		for (const record of live) {
 			for (const cap of record.capabilities) {
@@ -130,6 +142,7 @@ export class CapabilityStore {
 		return {
 			known: true,
 			capabilities: [...best.values()].map((e) => e.cap).sort((a, b) => a.id.localeCompare(b.id)),
+			clientVersions: [...new Set(live.flatMap((r) => (r.clientVersion ? [r.clientVersion] : [])))].sort(),
 		};
 	}
 
@@ -194,6 +207,7 @@ export class CapabilityStore {
 				capabilities,
 				lastSeen: v.lastSeen,
 				reportedAt: typeof v.reportedAt === "number" ? v.reportedAt : v.lastSeen,
+				clientVersion: typeof v.clientVersion === "string" ? v.clientVersion : undefined,
 			});
 		}
 	}

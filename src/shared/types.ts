@@ -17,10 +17,9 @@ import type {
 /**
  * Channel attachment metadata carried over the bridge (console-origin files).
  *
- * Presence of `base64` means the sender included the bytes and the host MCP
- * plugin should materialize the file under /tmp/evie-files/<msgId>/. Absence
- * means the entry is metadata-only; those bytes were not transferred (there is
- * no re-fetch path), so the agent only sees the metadata.
+ * A `blobId` names the bytes on the blob plane, which the host MCP plugin pulls down a chunk at a
+ * time into /tmp/evie-files/<msgId>/. Absence means the entry is metadata-only: the sender could
+ * not stage the bytes, so the agent sees the file was there and nothing more.
  */
 export type ChannelFile = z.infer<typeof ChannelFileSchema>;
 

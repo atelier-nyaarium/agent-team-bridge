@@ -3,6 +3,7 @@ import path from "node:path";
 import { isInsideContainer } from "../../shared/env.js";
 import { parseSessionName } from "../../shared/session-id.js";
 import type { ChannelFile } from "../../shared/types.js";
+import { uploadBytes } from "../blobTransfer.js";
 import { buildArtifacts, type ResolvedRef } from "./artifactBuilder.js";
 import { loadRefFile } from "./refFile.js";
 import { resolveRef } from "./refResolver.js";
@@ -11,7 +12,9 @@ import { scanRefs } from "./refScanner.js";
 ////////////////////////////////
 //  Interfaces & Types
 
-type ReplyFile = ChannelFile & { base64: string };
+/** A file on a reply. Its bytes ride the blob plane, named by `blobId`, whether the agent attached
+ * them or this module generated them. */
+type ReplyFile = ChannelFile;
 
 export type AttachResult = { ok: true; files: ReplyFile[] } | { ok: false; error: string };
 
@@ -94,17 +97,17 @@ export async function appendRefArtifacts(body: string, attachments: ReplyFile[])
 	// Snapshots follow the agent's own attachments, and the manifest leads the snapshots. Its
 	// selection rule only needs to be first among files bearing the reserved name, which nothing
 	// else can be: a collision on that name was already refused above.
-	return {
-		ok: true,
-		files: [
-			...attachments,
-			...built.artifacts.map((artifact) => ({
-				filename: artifact.filename,
-				mime: artifact.mime,
-				size: Buffer.byteLength(artifact.content, "utf8"),
-				descriptiveKey: artifact.filename,
-				base64: Buffer.from(artifact.content, "utf8").toString("base64"),
-			})),
-		],
-	};
+	const snapshots: ReplyFile[] = [];
+	for (const artifact of built.artifacts) {
+		const bytes = Buffer.from(artifact.content, "utf8");
+		snapshots.push({
+			filename: artifact.filename,
+			mime: artifact.mime,
+			size: bytes.length,
+			descriptiveKey: artifact.filename,
+			blobId: await uploadBytes(bytes),
+		});
+	}
+
+	return { ok: true, files: [...attachments, ...snapshots] };
 }

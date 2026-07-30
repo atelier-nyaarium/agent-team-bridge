@@ -24,10 +24,16 @@ interface PendingInvocation {
 	clientHash: string;
 }
 
+/** Bounds on a reassembling chunk stream. A client can open one by sending a single frame, so
+ * both the part count and the accumulated size have to be refused rather than trusted. */
+const MAX_CHUNK_STREAM_PARTS = 4096;
+const MAX_CHUNK_STREAM_BYTES = 16_000_000;
+
 interface ChunkStream {
 	total: number;
 	parts: (string | null)[];
 	received: number;
+	bytes: number;
 }
 
 ////////////////////////////////
@@ -165,11 +171,23 @@ function acceptChunk(hash: string, streamId: string, seq: number, total: number,
 	const key = `${hash}:${streamId}`;
 	let stream = chunkStreams.get(key);
 	if (!stream) {
-		stream = { total, parts: new Array<string | null>(total).fill(null), received: 0 };
+		if (total > MAX_CHUNK_STREAM_PARTS) {
+			console.error(`${TAG} Refusing stream from ${hash}: ${total} parts over the ${MAX_CHUNK_STREAM_PARTS} cap`);
+			return null;
+		}
+		stream = { total, parts: new Array<string | null>(total).fill(null), received: 0, bytes: 0 };
 		chunkStreams.set(key, stream);
 	}
 	if (stream.parts[seq] == null) {
+		// Bounded as it accumulates: a client that keeps sending parts would otherwise grow this
+		// map without limit, and the join at the end doubles whatever it reached.
+		if (stream.bytes + payload.length > MAX_CHUNK_STREAM_BYTES) {
+			console.error(`${TAG} Dropping stream from ${hash}: over the ${MAX_CHUNK_STREAM_BYTES}-byte cap`);
+			chunkStreams.delete(key);
+			return null;
+		}
 		stream.parts[seq] = payload;
+		stream.bytes += payload.length;
 		stream.received++;
 	}
 	if (stream.received < stream.total) return null;

@@ -6,6 +6,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.atelier_nyaarium.switchboard.crypto.Crypto
 import com.atelier_nyaarium.switchboard.proto.SyncCursor
+import java.io.File
 
 /**
  * The outcome of reading a persisted federation identity. Decode-to-null would conflate a MISSING
@@ -39,6 +40,10 @@ sealed interface IdentityLoad {
  * to plain prefs only if the device keystore is unavailable.
  */
 class AppStateStore(context: Context) : IdleSilenceStore {
+	/** Where this app's durable state lives on disk. The prefs live here already; anything else
+	 * that has to survive a restart (the blob store's bytes) roots off the same directory. */
+	val filesDir: File = context.applicationContext.filesDir
+
 	// True when the Keystore-backed store initialized. Federation private keys are persisted ONLY
 	// when encrypted, keeping the Domain root signing key off disk in cleartext (fail closed).
 	private var encrypted = false
