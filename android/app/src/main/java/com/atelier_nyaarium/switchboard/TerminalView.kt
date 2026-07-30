@@ -431,6 +431,8 @@ fun TerminalView(
 	onRelaunch: suspend () -> Unit,
 	onPeek: suspend (sinceHash: String?) -> Result<ConsolePeekResult>,
 	onSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
+	// Answer a usage-limit dialog with choice 1 and type "resume". Throws on failure.
+	onResumeAfterLimit: suspend () -> Unit,
 	onFocusChange: (FocusIntent) -> Unit = {},
 	modifier: Modifier = Modifier,
 ) {
@@ -472,6 +474,9 @@ fun TerminalView(
 	// The Wake up button's in-flight latch (the close_session + create_session round trip), so a
 	// double-tap cannot fire a second chain whose close would kill the first chain's fresh session.
 	var relaunching by remember(team) { mutableStateOf(false) }
+	// The Resume button's own in-flight latch, so a double-tap cannot inject the three-send sequence
+	// twice and leave a stray "resume" staged in the composer.
+	var resuming by remember(team) { mutableStateOf(false) }
 	val scope = rememberCoroutineScope()
 	val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -535,6 +540,10 @@ fun TerminalView(
 	}
 
 	val frameEmpty = ansi.isEmpty() && logs.isEmpty()
+	// Derived from this view's own frame rather than the presence plane: the terminal already holds the
+	// pane, so the affordance appears on the same frame the dialog does instead of waiting out the
+	// daemon's 2-peek hysteresis and the next poll.
+	val limit = remember(ansi) { if (ansi.isEmpty()) null else AgentScreen.limitNotice(ansi) }
 	// An asleep session (board says available) has not been woken, so it shows the Wake button even when
 	// its container is still warm and a peek would return stale container-logs; only a session actually
 	// coming up (verifying / wake requested) shows the live logs-then-pane. Excludes a session that has
@@ -626,7 +635,33 @@ fun TerminalView(
 						color = MaterialTheme.colorScheme.error,
 					)
 				}
-				if (sessionStatus == "online") {
+				if (limit != null) {
+					// Outranks the slash macros deliberately: the session stays "online" while this dialog
+					// holds the pane, so the macro row would otherwise still be showing, and tapping one
+					// would type a slash command into a dialog whose keys pick menu options.
+					Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+						Text(
+							limit.detail?.let { "Session Limit hit · $it" } ?: "Session Limit hit",
+							color = MaterialTheme.colorScheme.error,
+							fontFamily = FontFamily.Monospace,
+							fontSize = 12.sp,
+						)
+						FilledTonalButton(
+							onClick = hapticClick {
+								resuming = true
+								scope.launch {
+									runCatching { onResumeAfterLimit() }
+										.onFailure { sendError = it.message ?: "resume failed" }
+									resuming = false
+								}
+							},
+							enabled = !resuming,
+							modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+						) {
+							Text(if (resuming) "Resuming..." else "Resume")
+						}
+					}
+				} else if (sessionStatus == "online") {
 					Row(
 						Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
 						horizontalArrangement = Arrangement.spacedBy(6.dp),

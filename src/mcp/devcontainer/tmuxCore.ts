@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
-import { isAgentReady, stripAnsi } from "../../shared/agent-screen.js";
+import { isAgentReady, type LimitNotice, limitNotice, stripAnsi } from "../../shared/agent-screen.js";
 import {
 	ALLOWED_KEYS,
 	assertTmuxName,
@@ -14,7 +14,7 @@ import { parseSessionName } from "../../shared/session-id.js";
 
 // The pane-screen classifiers live in shared/agent-screen.ts (the gateway's vibe-check idle gate needs them too);
 // re-exported here so the daemon and existing tests can use this import path.
-export { isAgentReady, isAgentWorking, isAtPrompt, isLoggedOut } from "../../shared/agent-screen.js";
+export { isAgentReady, isAgentWorking, isAtPrompt, isLoggedOut, limitNotice } from "../../shared/agent-screen.js";
 
 ////////////////////////////////
 //  Constants
@@ -344,7 +344,7 @@ function pressDigit(target: TmuxTarget, digit: string): Promise<void> {
 export async function awaitReady(
 	target: TmuxTarget,
 	opts: { timeoutMs?: number; pollMs?: number } = {},
-): Promise<{ alive: boolean; ready: boolean; screen: string }> {
+): Promise<{ alive: boolean; ready: boolean; screen: string; limit?: LimitNotice }> {
 	const timeoutMs = opts.timeoutMs ?? READY_TIMEOUT_MS;
 	const pollMs = opts.pollMs ?? READY_POLL_MS;
 	const deadline = Date.now() + timeoutMs;
@@ -385,6 +385,12 @@ export async function awaitReady(
 			}
 			continue;
 		}
+		// A usage limit replaces the composer with its own dialog, so the composer check below can never
+		// succeed and this would otherwise spin out the whole (resume-sized) budget before reporting a
+		// bare not-ready. Deliberately answers nothing: one of that dialog's choices buys usage credits,
+		// so pressing a digit here would spend money on the owner's behalf.
+		const limit = limitNotice(clean);
+		if (limit) return { alive: true, ready: false, screen, limit };
 		if (isAgentReady(clean)) return { alive: true, ready: true, screen };
 	}
 	// Same invariant as the loop's own exit: a frame still showing a prompt is not ready, however

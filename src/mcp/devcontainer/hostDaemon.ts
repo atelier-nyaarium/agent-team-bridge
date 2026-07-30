@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
+import type { LimitNotice } from "../../shared/agent-screen.js";
 import {
 	classifyPeekError,
 	type HostOp,
@@ -319,7 +320,9 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 			// can land on a dead shell. awaitReady has now pressed through any startup menus and polled,
 			// so a pane that neither reached the composer nor is working a turn is dead - relaunch it
 			// with --resume. A fresh launch (created) is never a reattach, so never force-relaunched.
-			if (!created && !res.ready && !isAgentWorking(res.screen)) {
+			// A limit-blocked pane is alive and holding an unanswered dialog, not a dead shell, so it must
+			// not be killed: relaunching would discard the dialog and hit the same limit on the next turn.
+			if (!created && !res.ready && !res.limit && !isAgentWorking(res.screen)) {
 				// Re-capture before the destructive kill: the awaitReady frame could be a sub-second
 				// composer/spinner transition on a still-live session.
 				const recheck = await peekPane(target)
@@ -335,8 +338,18 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 				}
 			}
 			const live = res.ready || isAgentWorking(res.screen);
-			console.error(`[host-wake] ${msg.team} ${live ? "Claude is up" : "did not reach the REPL"}`);
-			safeSend({ type: "wake_result", team: msg.team, success: live, screen: res.screen });
+			if (res.limit) {
+				console.error(`[host-wake] ${msg.team} hit a usage limit: ${res.limit.headline}`);
+			} else {
+				console.error(`[host-wake] ${msg.team} ${live ? "Claude is up" : "did not reach the REPL"}`);
+			}
+			safeSend({
+				type: "wake_result",
+				team: msg.team,
+				success: live,
+				screen: res.screen,
+				...(res.limit ? { error: `session limit hit${res.limit.detail ? ` (${res.limit.detail})` : ""}` } : {}),
+			});
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			console.error(`[host-wake] failed to wake ${msg.team}: ${message}`);
@@ -372,11 +385,14 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 		// report a failed wake so /send fails fast. A slow-but-alive session captures at least once.
 		let lastScreen = "";
 		let launchAlive = !created;
+		let limit: LimitNotice | undefined;
 		if (created) {
 			const res = await awaitReady(target);
 			lastScreen = res.screen;
 			launchAlive = res.alive;
-			console.error(`[host-wake] ${msg.team} ${res.ready ? "Claude is ready" : "did not reach the REPL"}`);
+			limit = res.limit;
+			if (limit) console.error(`[host-wake] ${msg.team} hit a usage limit: ${limit.headline}`);
+			else console.error(`[host-wake] ${msg.team} ${res.ready ? "Claude is ready" : "did not reach the REPL"}`);
 		} else {
 			try {
 				lastScreen = (await peekPane(target)).ansi;
@@ -387,7 +403,14 @@ async function handleWake(msg: WakeMessage): Promise<void> {
 
 		// Send wake_result with a screen capture so the caller can assess; success reflects whether
 		// the launched session is actually alive (dead-launch detection above).
-		safeSend({ type: "wake_result", team: msg.team, success: launchAlive, pluginsProvisioned, screen: lastScreen });
+		safeSend({
+			type: "wake_result",
+			team: msg.team,
+			success: launchAlive,
+			pluginsProvisioned,
+			screen: lastScreen,
+			...(limit ? { error: `session limit hit${limit.detail ? ` (${limit.detail})` : ""}` } : {}),
+		});
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		console.error(`[host-wake] failed to wake ${msg.team}: ${message}`);
@@ -474,7 +497,7 @@ const hostOpRunner = createHostOpRunner({
 });
 
 ////////////////////////////////
-//  Presence derivation (board tile working/needsLogin)
+//  Presence derivation (board tile working/needsLogin/limitBlocked)
 
 // The composite-parsing mirror of handleWake's own target resolution, without any container
 // bring-up: a watched team is by construction already live (the gateway derives its watch list
@@ -501,7 +524,15 @@ export function resolveWatchTarget(team: string): TmuxTarget | undefined {
 const presenceScheduler = new PresenceScheduler({
 	peek: (target) => hostOpRunner.peek(target, { resize: false, priority: "derive" }),
 	report: (team, value) => {
-		if (value) safeSend({ type: "presence_derive", team, working: value.working, needsLogin: value.needsLogin });
+		if (value)
+			safeSend({
+				type: "presence_derive",
+				team,
+				working: value.working,
+				needsLogin: value.needsLogin,
+				limitBlocked: value.limitBlocked,
+				...(value.limitDetail ? { limitDetail: value.limitDetail } : {}),
+			});
 		else safeSend({ type: "presence_derive", team });
 	},
 });

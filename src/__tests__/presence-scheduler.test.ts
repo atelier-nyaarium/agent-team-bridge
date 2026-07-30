@@ -8,6 +8,8 @@ const RULE = "─".repeat(40);
 const IDLE = `● done\n${RULE}\n❯ \n${RULE}\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents`;
 const WORKING = `✻ Envisioning… (2m)\n${RULE}\n❯ \n${RULE}\n  ⏵⏵ bypass permissions on · esc to interrupt`;
 const LOGGED_OUT = `${RULE}\n❯ \n${RULE}\n  Not logged in. Run /login`;
+// The limit dialog replaces the composer, so there is no prompt row and no toolbar below.
+const LIMITED = `  └   You've hit your weekly limit · resets 5pm\n${"━".repeat(40)}\n ❯ 1. Stop and wait for limit to reset\n   2. Switch to usage credits`;
 
 function tmuxFrame(ansi: string, hash: string): HostPeekResult {
 	return { kind: "tmux", ansi, hash };
@@ -18,9 +20,30 @@ function logsFrame(hash: string): HostPeekResult {
 
 describe("deriveFromPeek", () => {
 	it("derives working/needsLogin from a tmux frame", () => {
-		expect(deriveFromPeek(tmuxFrame(WORKING, "h1"))).toEqual({ working: true, needsLogin: false });
-		expect(deriveFromPeek(tmuxFrame(IDLE, "h2"))).toEqual({ working: false, needsLogin: false });
-		expect(deriveFromPeek(tmuxFrame(LOGGED_OUT, "h3"))).toEqual({ working: false, needsLogin: true });
+		expect(deriveFromPeek(tmuxFrame(WORKING, "h1"))).toEqual({
+			working: true,
+			needsLogin: false,
+			limitBlocked: false,
+		});
+		expect(deriveFromPeek(tmuxFrame(IDLE, "h2"))).toEqual({
+			working: false,
+			needsLogin: false,
+			limitBlocked: false,
+		});
+		expect(deriveFromPeek(tmuxFrame(LOGGED_OUT, "h3"))).toEqual({
+			working: false,
+			needsLogin: true,
+			limitBlocked: false,
+		});
+	});
+
+	it("derives the usage-limit block and its reset text from the dialog frame", () => {
+		expect(deriveFromPeek(tmuxFrame(LIMITED, "h4"))).toEqual({
+			working: false,
+			needsLogin: false,
+			limitBlocked: true,
+			limitDetail: "resets 5pm",
+		});
 	});
 
 	it("never derives from a container-logs frame, even if the text contains lookalike substrings", () => {
@@ -32,7 +55,10 @@ describe("deriveFromPeek", () => {
 
 function makeScheduler(peekSequence: HostPeekResult[]) {
 	let i = 0;
-	const reports: Array<{ team: string; value: { working: boolean; needsLogin: boolean } | undefined }> = [];
+	const reports: Array<{
+		team: string;
+		value: { working: boolean; needsLogin: boolean; limitBlocked: boolean } | undefined;
+	}> = [];
 	const peek = vi.fn(async () => {
 		const r = peekSequence[Math.min(i, peekSequence.length - 1)];
 		i++;
@@ -79,8 +105,8 @@ describe("PresenceScheduler hysteresis", () => {
 		await scheduler.tick("proj.main"); // h5: confirmed idle
 
 		expect(reports).toEqual([
-			{ team: "proj.main", value: { working: true, needsLogin: false } },
-			{ team: "proj.main", value: { working: false, needsLogin: false } },
+			{ team: "proj.main", value: { working: true, needsLogin: false, limitBlocked: false } },
+			{ team: "proj.main", value: { working: false, needsLogin: false, limitBlocked: false } },
 		]);
 	});
 
@@ -102,8 +128,8 @@ describe("PresenceScheduler hysteresis", () => {
 		await scheduler.tick("proj.main");
 
 		expect(reports).toEqual([
-			{ team: "proj.main", value: { working: true, needsLogin: false } },
-			{ team: "proj.main", value: { working: false, needsLogin: false } },
+			{ team: "proj.main", value: { working: true, needsLogin: false, limitBlocked: false } },
+			{ team: "proj.main", value: { working: false, needsLogin: false, limitBlocked: false } },
 		]);
 	});
 
@@ -118,7 +144,9 @@ describe("PresenceScheduler hysteresis", () => {
 		await scheduler.tick("proj.main");
 		await scheduler.tick("proj.main");
 		await scheduler.tick("proj.main");
-		expect(reports).toEqual([{ team: "proj.main", value: { working: true, needsLogin: false } }]);
+		expect(reports).toEqual([
+			{ team: "proj.main", value: { working: true, needsLogin: false, limitBlocked: false } },
+		]);
 	});
 });
 

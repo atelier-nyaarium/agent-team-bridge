@@ -540,6 +540,26 @@ describe("tmuxCore awaitReady", () => {
 		const res = await awaitReady(target, { pollMs: 2, timeoutMs: 5_000 });
 		expect(res).toMatchObject({ alive: false, ready: false });
 	});
+
+	it("returns the usage limit early instead of spinning out the budget, pressing no key", async () => {
+		// The dialog replaces the composer, so without this the composer check can never succeed and the
+		// whole budget burns before reporting a bare not-ready. Budget large enough that a deadline exit
+		// would outlast the assertion window.
+		stdoutData = [
+			"  └   You've hit your weekly limit · resets 5pm",
+			"━".repeat(58),
+			"   What do you want to do?",
+			" ❯ 1. Stop and wait for limit to reset",
+			"   2. Switch to usage credits",
+		].join("\n");
+		const started = Date.now();
+		const res = await awaitReady(target, { pollMs: 5, timeoutMs: 5_000 });
+		expect(res).toMatchObject({ alive: true, ready: false });
+		expect(res.limit?.detail).toBe("resets 5pm");
+		expect(Date.now() - started).toBeLessThan(1_000);
+		// One of those choices buys usage credits, so answering it would spend the owner's money.
+		expect(calls.some((c) => c.includes("send-keys"))).toBe(false);
+	});
 });
 
 describe("tmuxCore selfSessionTarget", () => {

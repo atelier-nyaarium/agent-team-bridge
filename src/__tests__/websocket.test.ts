@@ -64,7 +64,12 @@ describe("createWebSocketHandlers", () => {
 			wakeCoordinator?: WakeCoordinator;
 			hostWsToken?: string;
 			hostOpCoordinator?: { settle: ReturnType<typeof vi.fn>; failAll: ReturnType<typeof vi.fn> };
-			onPresenceDerive?: (team: string, working: boolean | undefined, needsLogin: boolean | undefined) => void;
+			onPresenceDerive?: (
+				team: string,
+				derived:
+					| { working?: boolean; needsLogin?: boolean; limitBlocked?: boolean; limitDetail?: string }
+					| undefined,
+			) => void;
 		} = {},
 	) {
 		const registry: TeamRegistry = overrides.registry || new Map();
@@ -180,17 +185,47 @@ describe("createWebSocketHandlers", () => {
 			ws,
 			JSON.stringify({ type: "presence_derive", team: "proj-a.main", working: true, needsLogin: false }),
 		);
-		expect(onPresenceDerive).toHaveBeenCalledWith("proj-a.main", true, false);
+		expect(onPresenceDerive).toHaveBeenCalledWith("proj-a.main", {
+			working: true,
+			needsLogin: false,
+			limitBlocked: undefined,
+			limitDetail: undefined,
+		});
 	});
 
-	it("a presence_derive with neither field passes both through as undefined (a derivation-impossible clear)", () => {
+	it("a presence_derive carries the usage-limit block and its reset text", () => {
+		const onPresenceDerive = vi.fn();
+		const { handlers } = setup({ onPresenceDerive });
+		const ws = createMockWs();
+		handlers.open(ws);
+		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
+		handlers.message(
+			ws,
+			JSON.stringify({
+				type: "presence_derive",
+				team: "proj-a.main",
+				working: false,
+				needsLogin: false,
+				limitBlocked: true,
+				limitDetail: "resets 5pm",
+			}),
+		);
+		expect(onPresenceDerive).toHaveBeenCalledWith("proj-a.main", {
+			working: false,
+			needsLogin: false,
+			limitBlocked: true,
+			limitDetail: "resets 5pm",
+		});
+	});
+
+	it("a presence_derive with no derived field at all passes undefined (a derivation-impossible clear)", () => {
 		const onPresenceDerive = vi.fn();
 		const { handlers } = setup({ onPresenceDerive });
 		const ws = createMockWs();
 		handlers.open(ws);
 		handlers.message(ws, JSON.stringify({ type: "register", team: "host", subId: "h1", token: HOST_TOKEN }));
 		handlers.message(ws, JSON.stringify({ type: "presence_derive", team: "proj-a.main" }));
-		expect(onPresenceDerive).toHaveBeenCalledWith("proj-a.main", undefined, undefined);
+		expect(onPresenceDerive).toHaveBeenCalledWith("proj-a.main", undefined);
 	});
 
 	it("a presence_derive from a NON-host socket is ignored", () => {

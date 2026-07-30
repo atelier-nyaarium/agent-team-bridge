@@ -196,6 +196,11 @@ data class Team(
 	// local frame directly.
 	val working: Boolean? = null,
 	val needsLogin: Boolean? = null,
+	// The session is holding an unanswered usage-limit dialog and cannot progress until it is
+	// answered. limitDetail is the text after the headline's middle dot ("resets 5pm"), null when that
+	// headline carried no dot, so a blocked session still renders as blocked without one.
+	val limitBlocked: Boolean? = null,
+	val limitDetail: String? = null,
 	// Same-Domain federation freshness for a peer-gateway-sourced row; null for a local row (not a
 	// fourth "local" value - the field simply carries no federation freshness concept for one).
 	val presenceFresh: String? = null,
@@ -242,6 +247,8 @@ internal fun teamInfoToTeam(it: TeamInfo, localGatewayId: String): Team {
 		description = it.description,
 		working = it.working,
 		needsLogin = it.needsLogin,
+		limitBlocked = it.limitBlocked,
+		limitDetail = it.limitDetail,
 		presenceFresh = it.presenceFresh,
 	)
 }

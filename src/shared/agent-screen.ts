@@ -1,4 +1,14 @@
 ////////////////////////////////
+//  Interfaces & Types
+
+export interface LimitNotice {
+	/** The matched headline, rejoined across wrap rows. */
+	headline: string;
+	/** Everything after the headline's first middle dot, e.g. "resets 5pm". Null when it has no dot. */
+	detail: string | null;
+}
+
+////////////////////////////////
 //  Functions & Helpers
 
 // Pure classifiers over a captured tmux pane: what state the agent's REPL screen shows. Shared
@@ -24,6 +34,39 @@ const LOGGED_OUT_RE = /Not logged in|Run \/login/;
 // width with no other content, so this is a stricter test than TOOLBAR_RULE's .includes() - it can't
 // false-positive on a stray few dashes inside transcript/tool-output text.
 const FULL_RULE_RE = /^─+$/;
+
+// A rule row for the usage-limit check, as any run of box-drawing characters rather than the specific
+// glyph: that dialog's divider is heavier than the composer's U+2500 border, and a restyle must not
+// silently disable detection. TITLED_BORDER_RE is the same run leading a row that also carries text,
+// which the composer's top border does once a session has a name.
+const ANY_RULE_RE = /^[─-╿]+$/u;
+const TITLED_BORDER_RE = /^[─-╿]{3,}/u;
+// An INDENTED prompt followed by a numbered option, i.e. a selectable dialog holds the pane. Column 0
+// would be the composer, so the leading whitespace is load-bearing.
+const MENU_CURSOR_RE = /^\s+❯\s*\d+\./mu;
+// The usage-limit dialog's own cancel choice, matched on the label's stable tail. It collapses to a
+// bare "Stop" on usage-based billing, which is too generic to match, so that case is not detected.
+const LIMIT_MENU_RE = /wait for limit to reset/;
+// Deliberately names no model, plan, seat kind, or billing period: those churn, and an enumeration
+// fails silently the first time one is renamed. Each branch is a literal prefix of one of the CLI's
+// own headline builders, so the variable part stays payload to display rather than something to match.
+// The apostrophe slot is \W so a straight or typographic quote both match; the CLI emits ASCII today.
+const LIMIT_HEADLINE_RE = new RegExp(
+	[
+		"You\\Wve (?:hit|reached) your\\b",
+		"You\\Wre out of (?:extra )?usage\\b",
+		"is out of usage\\b",
+		"requires usage credits\\b",
+		"seat type doesn\\Wt include\\b",
+		"usage allocation has been disabled\\b",
+		"usage limit is set to \\$0",
+		"This service is disabled for your org\\b",
+	].join("|"),
+	"u",
+);
+// Rows to read above the divider. Panes are pinned to 58 columns, where a short reset-time headline
+// fits on one row and a long admin/org suffix wraps onto a second or third.
+const LIMIT_WINDOW_ROWS = 3;
 
 // capture-pane runs with -e, so the screen carries SGR color escapes. Strip them before matching: an
 // escape at the start of a line defeats the composer's ^ anchor, and one splitting a phrase defeats a
@@ -113,4 +156,57 @@ export function isPromptEmpty(screen: string): boolean {
 	if (inner.every((line) => /^❯?\s*$/.test(line))) return true;
 	const toolbarLine = lines[ruleIdxs[ruleIdxs.length - 1] + 1] ?? "";
 	return toolbarLine.includes("·") && !toolbarLine.includes(WORKING_HINT);
+}
+
+/** The usage-limit dialog, i.e. the agent has stopped and cannot progress until the choice is answered.
+ * Returns the headline and the text after its middle dot, or null.
+ *
+ * Detected by POSITION rather than by scanning the screen, because the headline renders in the
+ * transcript and lingers in scrollback after the dialog closes; a whole-screen match would latch
+ * permanently and would also trip on a session that merely quotes the wording while discussing it.
+ *
+ * Both below-divider signals are required before the headline pattern runs at all. Neither is
+ * sufficient alone: the dialog's title is reused by unrelated dialogs, and a numbered menu is just as
+ * present on a permission prompt. Once the choice is answered the composer returns, which puts the
+ * headline out of window, so the notice clears itself with no state to expire.
+ *
+ * The Kotlin twin lives in AgentScreen.kt. */
+export function limitNotice(screen: string): LimitNotice | null {
+	const lines = stripAnsi(screen).split("\n");
+	// Lowest divider whose region below carries both signals. Not simply the last rule: a dialog that
+	// draws its own bottom border would put that border last, leaving the menu above it unseen.
+	let divider = -1;
+	for (let i = lines.length - 1; i >= 0; i--) {
+		if (!ANY_RULE_RE.test(lines[i].trim())) continue;
+		const below = lines.slice(i + 1).join("\n");
+		if (MENU_CURSOR_RE.test(below) && LIMIT_MENU_RE.test(below)) {
+			divider = i;
+			break;
+		}
+	}
+	if (divider < 0) return null;
+	// Walk up from the divider, stopping at the next border so a composer-present screen exposes only
+	// the composer row. Blank rows do not spend budget; a wrapped headline needs the full allowance.
+	const above: string[] = [];
+	for (let i = divider - 1; i >= 0 && above.length < LIMIT_WINDOW_ROWS; i--) {
+		const line = lines[i];
+		if (TITLED_BORDER_RE.test(line.trim())) break;
+		if (line.trim() === "") continue;
+		above.push(line);
+	}
+	// Grow the join upward a row at a time and take the first size that matches. A single-row headline
+	// therefore stays clean, while a wrapped one is rejoined far enough to recover a suffix that landed
+	// on a continuation row, without swallowing the unrelated transcript above it. Rows join on a space
+	// because the renderer wraps on word boundaries and drops the break itself.
+	for (let take = 1; take <= above.length; take++) {
+		const headline = above
+			.slice(0, take)
+			.reverse()
+			.map((line) => line.trim())
+			.join(" ");
+		if (!LIMIT_HEADLINE_RE.test(headline)) continue;
+		const dot = headline.indexOf("·");
+		return { headline, detail: dot < 0 ? null : headline.slice(dot + 1).trim() || null };
+	}
+	return null;
 }

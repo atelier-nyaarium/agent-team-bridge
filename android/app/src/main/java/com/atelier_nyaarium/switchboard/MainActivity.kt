@@ -91,6 +91,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -628,6 +629,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 			val presence = when {
 				session == null -> null
 				session.status == "online" -> when {
+					// Outranks "working...": the session reads as online while the dialog holds its pane,
+					// so without this a blocked session would present as healthy.
+					session.limitBlocked == true -> "limit hit"
 					state.needsLogin(session.name) -> "check terminal"
 					state.working(session.name) -> "working..."
 					else -> "live"
@@ -698,6 +702,9 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				// Daemon-derived (presence plane), so it can be true even before "online" - a peeked pane
 				// stuck at a login prompt is knowable while the MCP handshake is still pending.
 				sessionNeedsLogin = session?.needsLogin == true,
+				// Also daemon-derived, so the chat view learns about a block with no peek of its own.
+				sessionLimitBlocked = session?.limitBlocked == true,
+				sessionLimitDetail = session?.limitDetail,
 				// A "verifying" session is coming up (a wake in flight, through the MCP handshake), so the
 				// terminal seeds "Waking..." rather than "asleep"; a plain asleep session reads "asleep".
 				wakePending = session?.status == "verifying",
@@ -706,6 +713,7 @@ fun App(repo: ChatRepository, injectedBlob: String?, openTeamRequest: MutableSta
 				terminalRefreshMs = repo.terminalRefreshMs,
 				onTerminalPeek = { hash -> repo.peekTerminal(openTeam!!, hash) },
 				onTerminalSend = { text, key, submit -> repo.tmuxSend(openTeam!!, text, key, submit) },
+				onResumeAfterLimit = { repo.resumeAfterLimit(openTeam!!) },
 				onFocusChange = repo::declareFocus,
 			)
 		}
@@ -1681,7 +1689,7 @@ private fun presenceColor(presence: String): Color = when (presence) {
 	"live" -> STATUS_GREEN
 	"working...", "waking...", "verifying" -> STATUS_AMBER
 	"available" -> Color(0xFF0969DA)
-	"check terminal" -> Color(0xFFDA3633)
+	"check terminal", "limit hit" -> Color(0xFFDA3633)
 	else -> MaterialTheme.colorScheme.outline
 }
 
@@ -1911,8 +1919,11 @@ fun SessionCard(
 	// derivation just became impossible), never false - a tile shows no pulse rather than a stale
 	// frozen one, so both chips are gated on an explicit `== true`, not a null-as-false fallback.
 	val checkTerminal = live && team.needsLogin == true
-	// "working" and "verifying" are one busy state sharing a single pulse bar.
-	val busy = statusWord == "verifying" || (live && team.working == true)
+	val limitHit = live && team.limitBlocked == true
+	// "working" and "verifying" are one busy state sharing a single pulse bar. A limit-blocked session
+	// is stopped rather than busy, so it must not pulse even if the frame that derived it caught a
+	// spinner still on screen.
+	val busy = statusWord == "verifying" || (live && team.working == true && !limitHit)
 	// Ambient presence: full color while connected or busy, muted once asleep or gone ("down or
 	// asleep" both read the same muted way - only a connected/busy session keeps full-color text).
 	val titleColor =
@@ -1922,7 +1933,11 @@ fun SessionCard(
 			MaterialTheme.colorScheme.onSurface
 		}
 	// Presence is colour/motion only on the title, so a screen reader needs it spelled out here.
-	val presenceDescription = if (checkTerminal) "check terminal" else if (busy) "working" else statusWord
+	val presenceDescription =
+		if (limitHit) "session limit hit"
+		else if (checkTerminal) "check terminal"
+		else if (busy) "working"
+		else statusWord
 	// The clip keeps the ripple inside the card's rounded corners. A nested session card indents
 	// under its spawn-point header.
 	Card(
@@ -1948,6 +1963,7 @@ fun SessionCard(
 					overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
 					modifier = Modifier.weight(1f).clearAndSetSemantics { contentDescription = "$display, $presenceDescription" },
 				)
+				if (limitHit) StatusChip("limit hit", presenceColor("limit hit"))
 				if (checkTerminal) StatusChip("check terminal", presenceColor("check terminal"))
 				// Visible from the board without opening the thread (plans/scheduled-send.md) - the
 				// dock inside the thread is still the sole edit/cancel surface, this is read-only.
@@ -2130,6 +2146,47 @@ fun ScheduledSendDock(rec: ScheduledSend, onEdit: () -> Unit, onCancel: () -> Un
 					contentDescription = "Cancel scheduled send",
 					tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = if (cancelEnabled) 1f else 0.4f),
 				)
+			}
+		}
+	}
+}
+
+/** The usage-limit notice: the session is holding an unanswered limit dialog, so nothing sent to it
+ * will be read until that is cleared. A plain sibling in ThreadScreen's own Column, stacking above the
+ * composer the way [ScheduledSendDock] and the plugin dock slots already do.
+ *
+ * Deliberately has no dismiss. The block is a fact about the session rather than a message about it,
+ * so hiding the notice would only hide the one affordance that resolves it; it clears itself once the
+ * dialog is answered and the daemon's next derivation sees the composer back. */
+@Composable
+fun SessionLimitDock(detail: String?, onResume: () -> Unit, resumeEnabled: Boolean) {
+	Surface(
+		modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+		color = MaterialTheme.colorScheme.errorContainer,
+		shape = MaterialTheme.shapes.medium,
+	) {
+		Row(
+			Modifier.fillMaxWidth().padding(12.dp),
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.spacedBy(10.dp),
+		) {
+			Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer)
+			Column(Modifier.weight(1f)) {
+				Text(
+					"Session Limit hit",
+					style = MaterialTheme.typography.bodyMedium,
+					color = MaterialTheme.colorScheme.onErrorContainer,
+				)
+				if (detail != null) {
+					Text(
+						detail,
+						style = MaterialTheme.typography.labelSmall,
+						color = MaterialTheme.colorScheme.onErrorContainer,
+					)
+				}
+			}
+			FilledTonalButton(onClick = hapticClick(onResume), enabled = resumeEnabled) {
+				Text(if (resumeEnabled) "Resume" else "Resuming...")
 			}
 		}
 	}
@@ -2577,6 +2634,8 @@ fun ThreadScreen(
 	// one signal available at tap time that distinguishes a stuck boot from a plain one still in
 	// progress (see the terminalMode default below).
 	sessionNeedsLogin: Boolean,
+	sessionLimitBlocked: Boolean,
+	sessionLimitDetail: String?,
 	onWake: () -> Unit,
 	// The terminal palette's Wake up button: force-relaunch claude in a still-existing pane
 	// (close_session + create_session composed - see ChatRepository.relaunchSession).
@@ -2584,6 +2643,8 @@ fun ThreadScreen(
 	terminalRefreshMs: Long,
 	onTerminalPeek: suspend (sinceHash: String?) -> Result<com.atelier_nyaarium.switchboard.proto.ConsolePeekResult>,
 	onTerminalSend: suspend (text: String?, key: String?, submit: Boolean) -> Unit,
+	// Clear a usage-limit dialog and pick the work back up (see ChatRepository.resumeAfterLimit).
+	onResumeAfterLimit: suspend () -> Unit,
 	onFocusChange: (FocusIntent) -> Unit = {},
 ) {
 	var showMenu by remember { mutableStateOf(false) }
@@ -2610,6 +2671,11 @@ fun ThreadScreen(
 	// tap's own cleanup already clears it before the second tap's handler reads it.
 	var scheduleSubmitting by remember { mutableStateOf(false) }
 	val scheduleScope = rememberCoroutineScope()
+	// ThreadScreen-scoped rather than scoped to the limit dock itself: the dock leaves composition as
+	// soon as the block clears, and a scope dying mid-sequence would strand a partial injection (the
+	// dialog answered, but "resume" never typed).
+	var resumingAfterLimit by remember(team) { mutableStateOf(false) }
+	val resumeScope = rememberCoroutineScope()
 	// Bumped every time a NEW Schedule Send dialog session opens (a fresh schedule via the menu, or a
 	// dock edit) - never on a bare dismiss. scheduleSubmitting/scheduleScope are ThreadScreen-scoped,
 	// so a launched onConfirm continuation OUTLIVES the dialog: if the user dismisses while it is
@@ -2790,6 +2856,7 @@ fun ThreadScreen(
 					onRelaunch = onRelaunch,
 					onPeek = onTerminalPeek,
 					onSend = onTerminalSend,
+					onResumeAfterLimit = onResumeAfterLimit,
 					onFocusChange = onFocusChange,
 					modifier = Modifier.weight(1f).fillMaxWidth(),
 				)
@@ -2824,6 +2891,21 @@ fun ThreadScreen(
 					unreadBoundary = unreadBoundary,
 					composerOccupied = draft.isOccupied,
 					modifier = Modifier.weight(1f).fillMaxWidth(),
+				)
+			}
+			// Above the plugin slots deliberately: nothing sent to a limit-blocked session is read until
+			// the dialog clears, so this outranks anything else docked here.
+			if (sessionLimitBlocked) {
+				SessionLimitDock(
+					detail = sessionLimitDetail,
+					onResume = {
+						resumingAfterLimit = true
+						resumeScope.launch {
+							runCatching { onResumeAfterLimit() }
+							resumingAfterLimit = false
+						}
+					},
+					resumeEnabled = !resumingAfterLimit,
 				)
 			}
 			// Plugin dock slots (e.g. the Designer dock) sit between the messages and the

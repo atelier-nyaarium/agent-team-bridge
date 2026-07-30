@@ -40,11 +40,14 @@ export interface WebSocketDeps {
 	// Fired when the host daemon's catalog scan replaces offlineCatalog's contents - a presence-read
 	// input with no method boundary of its own (a plain Map, mutated in place) to wrap.
 	onCatalogChange?: () => void;
-	// Fired on a presence_derive frame from the host daemon: a genuine, hysteresis-confirmed
-	// working/needsLogin flip for one team, or both undefined for a derivation-impossible clear
-	// (the daemon lost its only frame source for that team - a peek-failure streak, or the team
-	// dropped from its watch list). Absent when presence is not wired.
-	onPresenceDerive?: (team: string, working: boolean | undefined, needsLogin: boolean | undefined) => void;
+	// Fired on a presence_derive frame from the host daemon: a genuine, hysteresis-confirmed flip for
+	// one team, or `undefined` for a derivation-impossible clear (the daemon lost its only frame source
+	// for that team - a peek-failure streak, or the team dropped from its watch list). Absent when
+	// presence is not wired.
+	onPresenceDerive?: (
+		team: string,
+		derived: { working?: boolean; needsLogin?: boolean; limitBlocked?: boolean; limitDetail?: string } | undefined,
+	) => void;
 	// Fired when a real registration evicts a virtual console peer, so the console
 	// handler can clear its binding/mailbox and let the device re-register.
 	onVirtualPeerEvicted?: (conversationId: string) => void;
@@ -603,15 +606,16 @@ export function createWebSocketHandlers({
 		}
 
 		// The daemon's presence-derivation report for one team. Only the authenticated host socket
-		// may report a derivation (matching wake_result/host_op_reply/catalog). Both working and
-		// needsLogin absent together means a derivation-impossible clear, not "observed false" -
-		// passed through as undefined so the presence facade can tell the two apart.
+		// may report a derivation (matching wake_result/host_op_reply/catalog). A frame carrying no
+		// derived field at all means a derivation-impossible clear, not "observed false" - passed
+		// through as undefined so the presence facade can tell the two apart.
 		if (msg.type === "presence_derive" && ws.data.teamName === "host" && typeof msg.team === "string") {
-			onPresenceDerive?.(
-				msg.team,
-				typeof msg.working === "boolean" ? msg.working : undefined,
-				typeof msg.needsLogin === "boolean" ? msg.needsLogin : undefined,
-			);
+			const working = typeof msg.working === "boolean" ? msg.working : undefined;
+			const needsLogin = typeof msg.needsLogin === "boolean" ? msg.needsLogin : undefined;
+			const limitBlocked = typeof msg.limitBlocked === "boolean" ? msg.limitBlocked : undefined;
+			const limitDetail = typeof msg.limitDetail === "string" ? msg.limitDetail : undefined;
+			const cleared = working === undefined && needsLogin === undefined && limitBlocked === undefined;
+			onPresenceDerive?.(msg.team, cleared ? undefined : { working, needsLogin, limitBlocked, limitDetail });
 		}
 
 		// Reset missed pings on any message (acts like pong)

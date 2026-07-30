@@ -3017,6 +3017,20 @@ class ChatRepository(
 	suspend fun tmuxSend(team: String, text: String? = null, key: String? = null, submit: Boolean = true) =
 		withContext(Dispatchers.IO) { client().tmuxSend(team, text, key, submit) }
 
+	/**
+	 * Clear a usage-limit dialog and pick the work back up: answer it with choice 1 (wait for the
+	 * reset), then type "resume" and submit that as its own keypress.
+	 *
+	 * Three separate sends, none of them auto-submitting. A digit alone both selects and confirms in
+	 * that dialog, so appending Enter to it would submit the composer underneath as well. Enter also
+	 * only registers as Enter when delivered on its own rather than as a trailing byte on the text.
+	 */
+	suspend fun resumeAfterLimit(team: String) = withContext(Dispatchers.IO) {
+		tmuxSend(team, text = "1", submit = false)
+		tmuxSend(team, text = "resume", submit = false)
+		tmuxSend(team, key = "Enter")
+	}
+
 	/** The directory picker's type-ahead read: subdirectories of one host dir. Failures collapse to
 	 * an empty list - the picker just shows no suggestions. */
 	suspend fun listDirs(path: String): List<String> = withContext(Dispatchers.IO) {

@@ -3,6 +3,7 @@
 	"directories": [
 		"cross-domain-sas",
 		"enroll-sas",
+		"limit-notice",
 		"owner-id",
 		"provision-ops",
 		"refs",

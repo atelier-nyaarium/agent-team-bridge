@@ -72,6 +72,8 @@ data class TeamInfo(
 	val queue_depth: Long,
 	val working: Boolean? = null,
 	val needsLogin: Boolean? = null,
+	val limitBlocked: Boolean? = null,
+	val limitDetail: String? = null,
 	val presenceFresh: String? = null,
 )
 

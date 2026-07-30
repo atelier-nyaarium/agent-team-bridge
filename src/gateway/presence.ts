@@ -11,6 +11,8 @@ import { resolveLiveIncarnation, type TeamRegistry, type WsData } from "./websoc
 export interface WorkingState {
 	working?: boolean;
 	needsLogin?: boolean;
+	limitBlocked?: boolean;
+	limitDetail?: string;
 }
 
 /** The gateway-internal name for a presence-plane row. TeamInfo's wire schema already carries
@@ -248,7 +250,13 @@ export class PresenceFacade {
 	 * different facts a tile should not conflate. */
 	setWorking(team: string, state: WorkingState): void {
 		const prev = this.working.get(team);
-		if (prev?.working === state.working && prev?.needsLogin === state.needsLogin) return;
+		if (
+			prev?.working === state.working &&
+			prev?.needsLogin === state.needsLogin &&
+			prev?.limitBlocked === state.limitBlocked &&
+			prev?.limitDetail === state.limitDetail
+		)
+			return;
 		this.working.set(team, state);
 		this.markDirty();
 	}
@@ -311,6 +319,8 @@ export class PresenceFacade {
 				...(record.description ? { description: record.description } : {}),
 				...(w?.working !== undefined ? { working: w.working } : {}),
 				...(w?.needsLogin !== undefined ? { needsLogin: w.needsLogin } : {}),
+				...(w?.limitBlocked !== undefined ? { limitBlocked: w.limitBlocked } : {}),
+				...(w?.limitDetail !== undefined ? { limitDetail: w.limitDetail } : {}),
 				queue_depth: 0,
 			});
 		}

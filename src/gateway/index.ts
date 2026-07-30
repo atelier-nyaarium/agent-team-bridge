@@ -962,12 +962,12 @@ export async function startGateway(): Promise<void> {
 			}
 		},
 		onCatalogChange: () => presence.markDirty(),
-		// A confirmed daemon derivation for one team; both undefined means derivation became
-		// impossible for it (a peek-failure streak, or it dropped off the watch list) - a clear to
-		// unknown, distinct from observing it as not-working.
-		onPresenceDerive: (team, working, needsLogin) => {
-			if (working === undefined && needsLogin === undefined) presence.clearWorkingFor(team);
-			else presence.setWorking(team, { working, needsLogin });
+		// A confirmed daemon derivation for one team; undefined means derivation became impossible for
+		// it (a peek-failure streak, or it dropped off the watch list) - a clear to unknown, distinct
+		// from observing it as not-working.
+		onPresenceDerive: (team, derived) => {
+			if (!derived) presence.clearWorkingFor(team);
+			else presence.setWorking(team, derived);
 		},
 		sessionStore,
 		auth: sessionAuthority,

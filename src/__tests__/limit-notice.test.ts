@@ -1,0 +1,193 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { limitNotice } from "../shared/agent-screen.js";
+
+interface Vector {
+	name: string;
+	screen: string[];
+	expect: { detail: string | null } | null;
+}
+
+const vectors: Vector[] = JSON.parse(
+	readFileSync(new URL("../../tests/fixtures/limit-notice/vectors.json", import.meta.url), "utf8"),
+).vectors;
+
+// Panes are pinned to 58 columns (tmuxCore's TMUX_COLS), confirmed against a live capture whose
+// composer border was exactly 58 wide. Wrapping is therefore reproducible rather than incidental.
+const COLS = 58;
+const rule = (ch = "─") => ch.repeat(COLS);
+const CANCEL = "Stop and wait for limit to reset";
+
+/** Word wrap, matching the renderer: it breaks between words and the break itself is not captured. */
+function wrap(s: string): string[] {
+	const rows: string[] = [];
+	let row = "";
+	for (const word of s.split(" ")) {
+		if (row && `${row} ${word}`.length > COLS) {
+			rows.push(row);
+			row = word;
+		} else {
+			row = row ? `${row} ${word}` : word;
+		}
+	}
+	if (row) rows.push(row);
+	return rows;
+}
+
+/** The shape of a real limit dialog: transcript, divider, title, indented numbered menu. `gutter` is
+ * the transcript sub-item glyph, which varies by item type, so every caller pins a different one. */
+function dialog(headline: string, opts: { cancel?: string; gutter?: string; bottomBorder?: boolean } = {}) {
+	const { cancel = CANCEL, gutter = "└", bottomBorder = false } = opts;
+	return [
+		"● an earlier turn said something",
+		"",
+		"←  switchboard: This is the initial bridge handshake. Reply",
+		...wrap(`  ${gutter}   ${headline}`),
+		rule("━"),
+		"   What do you want to do?",
+		"",
+		` ❯ 1. ${cancel}`,
+		"   2. Switch to usage credits",
+		...(bottomBorder ? [rule("━")] : []),
+		"   Enter to confirm · Esc to cancel",
+	].join("\n");
+}
+
+/** An ordinary idle composer: titled top border, prompt, solid bottom border, toolbar. */
+function composer(...transcript: string[]) {
+	return [
+		...transcript,
+		"",
+		`${"─".repeat(16)} Designing session limit sentinel regex ──`,
+		"❯ ",
+		rule(),
+		"   ⏵⏵ bypass permissions on (shift+tab to cycle) · ? for shortcuts",
+	].join("\n");
+}
+
+describe("limitNotice", () => {
+	// The same vectors the Kotlin twin reads, so neither runtime can drift from the other.
+	describe("cross-runtime vectors", () => {
+		it.each(vectors.map((v) => [v.name, v] as const))("%s", (_name, vector) => {
+			const got = limitNotice(vector.screen.join("\n"));
+			if (vector.expect === null) expect(got).toBeNull();
+			else expect(got?.detail).toBe(vector.expect.detail);
+		});
+	});
+
+	describe("detects a blocking dialog and reports the text after the dot", () => {
+		it("reads the weekly limit exactly as the console showed it", () => {
+			expect(limitNotice(dialog("You've hit your weekly limit · resets 5pm"))).toEqual({
+				headline: "└   You've hit your weekly limit · resets 5pm",
+				detail: "resets 5pm",
+			});
+		});
+
+		it.each([
+			["You've hit your session limit · resets 3pm", "resets 3pm"],
+			["You've hit your Opus limit · resets Monday", "resets Monday"],
+			["You've hit your fast limit · resets in 3h 20m", "resets in 3h 20m"],
+			["You've hit your usage credit limit · resets 5pm", "resets 5pm"],
+			["You've reached your weekly limit · resets 9am", "resets 9am"],
+		])("reads %j", (headline, detail) => {
+			expect(limitNotice(dialog(headline))?.detail).toBe(detail);
+		});
+
+		it("reads a name that does not exist yet, since no name is enumerated", () => {
+			expect(limitNotice(dialog("You've hit your quarterly widget allowance · resets never"))?.detail).toBe(
+				"resets never",
+			);
+		});
+
+		it("reports a null detail when the headline carries no dot", () => {
+			expect(limitNotice(dialog("You've hit your cap"))?.detail).toBeNull();
+		});
+
+		it("rejoins a headline that wrapped, so a suffix on the continuation row survives", () => {
+			const long =
+				"You've hit your usage credit limit · run /usage-credits to raise it, or visit claude.ai/admin";
+			expect(wrap(`  └   ${long}`).length).toBeGreaterThan(1);
+			expect(limitNotice(dialog(long))?.detail).toBe("run /usage-credits to raise it, or visit claude.ai/admin");
+		});
+
+		it.each(["└", "⏿", "●", " "])("does not depend on the gutter glyph (%j)", (gutter) => {
+			expect(limitNotice(dialog("You've hit your weekly limit · resets 5pm", { gutter }))).not.toBeNull();
+		});
+
+		it("finds the divider even when the dialog draws its own bottom border", () => {
+			const screen = dialog("You've hit your weekly limit · resets 5pm", { bottomBorder: true });
+			expect(limitNotice(screen)?.detail).toBe("resets 5pm");
+		});
+
+		it.each([
+			"You're out of usage credits · add funds to continue",
+			"Your seat type doesn't include usage credits",
+			"Your usage allocation has been disabled by your admin",
+			"This service is disabled for your org",
+		])("detects the non-templated blocking notice %j", (headline) => {
+			expect(limitNotice(dialog(headline))).not.toBeNull();
+		});
+	});
+
+	describe("stays silent while the session can still make progress", () => {
+		it.each([
+			"You've used 90% of your weekly limit",
+			"You're close to your usage limit",
+			"You're now using usage credits · Your weekly limit resets Monday",
+			"Now using extra usage",
+		])("ignores the non-blocking notice %j", (headline) => {
+			expect(limitNotice(dialog(headline))).toBeNull();
+		});
+
+		it("ignores a dialog whose cancel choice collapsed to a bare Stop", () => {
+			const screen = dialog("You've hit your session limit · resets 3pm", { cancel: "Stop" });
+			expect(limitNotice(screen)).toBeNull();
+		});
+
+		it("ignores a menu carrying the limit choice with no headline above it", () => {
+			const screen = ["● nothing relevant", rule("━"), " ❯ 1. Stop and wait for limit to reset"].join("\n");
+			expect(limitNotice(screen)).toBeNull();
+		});
+
+		it("ignores a screen with no rule at all", () => {
+			expect(limitNotice("You've hit your weekly limit · resets 5pm")).toBeNull();
+		});
+	});
+
+	describe("stays silent on transcript text, which is where the headline also lives", () => {
+		it("clears once the choice is answered and the composer returns", () => {
+			const screen = composer("  └   You've hit your weekly limit · resets 5pm");
+			expect(limitNotice(screen)).toBeNull();
+		});
+
+		it("ignores a session quoting the wording while discussing it", () => {
+			const screen = composer(
+				'● I tested it against "You\'ve hit your weekly limit" and it',
+				'  matched, yielding "resets 5pm" after the dot.',
+			);
+			expect(limitNotice(screen)).toBeNull();
+		});
+
+		it("ignores quoted wording sitting directly above an unrelated dialog", () => {
+			const screen = [
+				'● I tested it against "You\'ve hit your weekly limit" and it',
+				'  matched, yielding "resets 5pm" after the dot.',
+				rule("━"),
+				"   Bash command wants to run",
+				"",
+				" ❯ 1. Yes",
+				"   2. No, and tell Claude what to do differently",
+			].join("\n");
+			expect(limitNotice(screen)).toBeNull();
+		});
+
+		it.each([
+			"GitHub API rate limit exceeded (5,000/hr shared across all tools)",
+			"The summary doesn't include usage data for last week",
+			"You've hit the nail on the head",
+			"const RATE_LIMIT = 10;",
+		])("ignores ordinary output that mentions limits (%j)", (line) => {
+			expect(limitNotice(composer(`  └   ${line}`))).toBeNull();
+		});
+	});
+});

@@ -1,4 +1,4 @@
-import { isAgentWorking, isLoggedOut } from "../../shared/agent-screen.js";
+import { isAgentWorking, isLoggedOut, limitNotice } from "../../shared/agent-screen.js";
 import type { HostPeekResult, TmuxTarget } from "../../shared/host-op.js";
 
 ////////////////////////////////
@@ -7,6 +7,11 @@ import type { HostPeekResult, TmuxTarget } from "../../shared/host-op.js";
 export interface DerivedState {
 	working: boolean;
 	needsLogin: boolean;
+	/** Holding an unanswered usage-limit dialog. */
+	limitBlocked: boolean;
+	/** Text after the limit headline's middle dot, e.g. "resets 5pm". Undefined when not blocked, or
+	 * when the headline carried no dot. */
+	limitDetail?: string;
 }
 
 /** One watched session: the peek target, and how often to peek it (the max over every intent
@@ -79,7 +84,13 @@ class HysteresisTracker {
 }
 
 function sameValue(a: DerivedState, b: DerivedState | undefined): boolean {
-	return b !== undefined && a.working === b.working && a.needsLogin === b.needsLogin;
+	return (
+		b !== undefined &&
+		a.working === b.working &&
+		a.needsLogin === b.needsLogin &&
+		a.limitBlocked === b.limitBlocked &&
+		a.limitDetail === b.limitDetail
+	);
 }
 
 /** Derive {working, needsLogin} from a peek result. Regex runs ONLY on kind=tmux frames -
@@ -88,7 +99,13 @@ function sameValue(a: DerivedState, b: DerivedState | undefined): boolean {
  * carries nothing to derive yet. */
 export function deriveFromPeek(peek: HostPeekResult): DerivedState | undefined {
 	if (peek.kind !== "tmux") return undefined;
-	return { working: isAgentWorking(peek.ansi), needsLogin: isLoggedOut(peek.ansi) };
+	const limit = limitNotice(peek.ansi);
+	return {
+		working: isAgentWorking(peek.ansi),
+		needsLogin: isLoggedOut(peek.ansi),
+		limitBlocked: limit !== null,
+		...(limit?.detail ? { limitDetail: limit.detail } : {}),
+	};
 }
 
 /**

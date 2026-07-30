@@ -1,0 +1,210 @@
+{
+	"_comment": "Cross-runtime vectors for usage-limit dialog detection. Read by BOTH src/__tests__/limit-notice.test.ts and android/.../AgentScreenLimitVectorsTest.kt, so the hand-authored Kotlin twin cannot drift from the TS source. Pane geometry follows a live capture: 58 columns, a titled top border once the session has a name, the composer prompt, a solid bottom border, then the toolbar. `expect` is null when nothing is detected, otherwise an object whose `detail` is the text after the headline's middle dot (null when the headline has no dot).",
+	"vectors": [
+		{
+			"name": "weekly limit, as the console showed it",
+			"screen": [
+				"● an earlier turn said something",
+				"",
+				"←  switchboard: This is the initial bridge handshake. Reply",
+				"  └   You've hit your weekly limit · resets 5pm",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				"   What do you want to do?",
+				"",
+				" ❯ 1. Stop and wait for limit to reset",
+				"   2. Switch to usage credits",
+				"   3. Switch to Team plan",
+				"",
+				"   Enter to confirm · Esc to cancel"
+			],
+			"expect": { "detail": "resets 5pm" }
+		},
+		{
+			"name": "five-hour session limit",
+			"screen": [
+				"  └   You've hit your session limit · resets 3pm",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset",
+				"   2. Switch to usage credits"
+			],
+			"expect": { "detail": "resets 3pm" }
+		},
+		{
+			"name": "model-named limit, name never enumerated by the pattern",
+			"screen": [
+				"  └   You've hit your Opus limit · resets Monday",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset"
+			],
+			"expect": { "detail": "resets Monday" }
+		},
+		{
+			"name": "a limit name that does not exist yet still detects",
+			"screen": [
+				"  └   You've hit your quarterly widget allowance · resets never",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset"
+			],
+			"expect": { "detail": "resets never" }
+		},
+		{
+			"name": "fast limit carries a duration rather than a time",
+			"screen": [
+				"  └   You've hit your fast limit · resets in 3h 20m",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset"
+			],
+			"expect": { "detail": "resets in 3h 20m" }
+		},
+		{
+			"name": "headline with no dot reports a null detail",
+			"screen": [
+				"  └   You've hit your cap",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset"
+			],
+			"expect": { "detail": null }
+		},
+		{
+			"name": "wrapped headline rejoins so the suffix survives",
+			"screen": [
+				"  └   You've hit your usage credit limit · run",
+				"/usage-credits to raise it at claude.ai/admin",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset"
+			],
+			"expect": { "detail": "run /usage-credits to raise it at claude.ai/admin" }
+		},
+		{
+			"name": "divider found even when the dialog draws its own bottom border",
+			"screen": [
+				"  └   You've hit your weekly limit · resets 5pm",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				"   Enter to confirm · Esc to cancel"
+			],
+			"expect": { "detail": "resets 5pm" }
+		},
+		{
+			"name": "gutter glyph varies by item type and must not matter",
+			"screen": [
+				"  ⏿   You've hit your weekly limit · resets 5pm",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset"
+			],
+			"expect": { "detail": "resets 5pm" }
+		},
+		{
+			"name": "out of usage credits, a non-templated blocking notice",
+			"screen": [
+				"  └   You're out of usage credits · add funds to continue",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset"
+			],
+			"expect": { "detail": "add funds to continue" }
+		},
+		{
+			"name": "a usage warning is not a block, the session is still running",
+			"screen": [
+				"  └   You've used 90% of your weekly limit",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset"
+			],
+			"expect": null
+		},
+		{
+			"name": "a transition to credits is not a block either",
+			"screen": [
+				"  └   You're now using usage credits · Your weekly limit resets Monday",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset"
+			],
+			"expect": null
+		},
+		{
+			"name": "cancel label collapsed to a bare Stop is out of scope",
+			"screen": [
+				"  └   You've hit your session limit · resets 3pm",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop",
+				"   2. Switch to usage credits"
+			],
+			"expect": null
+		},
+		{
+			"name": "the limit choice with no headline above it detects nothing",
+			"screen": [
+				"● nothing relevant here",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset"
+			],
+			"expect": null
+		},
+		{
+			"name": "answered: the composer returned and the headline fell out of window",
+			"screen": [
+				"←  switchboard: This is the initial bridge handshake. Reply",
+				"  └   You've hit your weekly limit · resets 5pm",
+				"",
+				"──────────────── Designing session limit sentinel regex ──",
+				"❯ ",
+				"──────────────────────────────────────────────────────────",
+				"   ⏵⏵ bypass permissions on (shift+tab to cycle) · ? for shortcuts"
+			],
+			"expect": null
+		},
+		{
+			"name": "a session quoting the wording while discussing it",
+			"screen": [
+				"● I tested it against \"You've hit your weekly limit\" and it",
+				"  matched, yielding \"resets 5pm\" after the dot.",
+				"",
+				"──────────────── Designing session limit sentinel regex ──",
+				"❯ ",
+				"──────────────────────────────────────────────────────────",
+				"   ⏵⏵ bypass permissions on (shift+tab to cycle) · ? for shortcuts"
+			],
+			"expect": null
+		},
+		{
+			"name": "quoted wording directly above an unrelated dialog",
+			"screen": [
+				"● I tested it against \"You've hit your weekly limit\" and it",
+				"  matched, yielding \"resets 5pm\" after the dot.",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				"   Bash command wants to run",
+				"",
+				" ❯ 1. Yes",
+				"   2. No, and tell Claude what to do differently"
+			],
+			"expect": null
+		},
+		{
+			"name": "ordinary output mentioning a rate limit",
+			"screen": [
+				"  └   GitHub API rate limit exceeded (5,000/hr shared across all tools)",
+				"",
+				"──────────────── Designing session limit sentinel regex ──",
+				"❯ ",
+				"──────────────────────────────────────────────────────────",
+				"   ⏵⏵ bypass permissions on (shift+tab to cycle) · ? for shortcuts"
+			],
+			"expect": null
+		},
+		{
+			"name": "prose about usage data, which an earlier looser pattern tripped on",
+			"screen": [
+				"  └   The summary doesn't include usage data for last week",
+				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				" ❯ 1. Stop and wait for limit to reset"
+			],
+			"expect": null
+		},
+		{
+			"name": "no rule anywhere on the screen",
+			"screen": ["You've hit your weekly limit · resets 5pm"],
+			"expect": null
+		}
+	]
+}

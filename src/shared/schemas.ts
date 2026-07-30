@@ -200,6 +200,12 @@ export const TeamInfoSchema = z
 		// rather than a stale frozen one. Only tmux-backed live sessions ever carry a value.
 		working: z.boolean().optional(),
 		needsLogin: z.boolean().optional(),
+		// The session is holding an unanswered usage-limit dialog, so it cannot progress until the
+		// choice is answered. limitDetail is the text after the headline's middle dot ("resets 5pm"),
+		// absent when that headline carried no dot. Two flat fields rather than one, because a blocked
+		// session with no reset text still has to render as blocked.
+		limitBlocked: z.boolean().optional(),
+		limitDetail: z.string().optional(),
 		// Same-Domain federation freshness for a PEER-gateway-sourced row (this gateway's own local
 		// rows never carry it - absent, not a fourth "local" value). "unreachable" is the honest
 		// stale-mark Q4 requires; "quiet" is healthy idle, not stale.
