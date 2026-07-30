@@ -460,6 +460,390 @@ Known gaps, accepted and real:
 (previews, streaming playback); dedup across resend and echo; content-keyed video thumbs (resolves
 section 9's regeneration problem outright); `ref://` snapshots escaping their 2 MB budget.
 
+### J. INTERMISSION - Declared file metadata (REQUIRED before 6-9)
+
+Owner directed this in after the I intermission shipped and the ref artifact rows appeared as visible
+junk: "Be ready to totally junk and undo most of the code and decisions in all of those commits. We
+do this right foundationally. Perhaps a meta object in base Switchboard that base can make use of,
+and plugins can too."
+
+**The defect.** A `ChannelFile` is genuinely a sum type (user attachment, ref manifest, ref snapshot,
+designer card) collapsed at the wire edge into one product shape. The tag is dropped, so every
+receiver re-derives the role from whatever side channel it can reach. The sender knew it declaratively
+at compose time and threw that knowledge away.
+
+**Four independent recovery mechanisms**, free to disagree:
+
+| Site | Mechanism |
+|---|---|
+| `ReferencesPlugin.kt:36` | reads manifest BYTES at drain time |
+| `DesignerPlugin.kt:33-37` + `DesignerCards.kt:74` | `f.src ?: continue`, reads bytes |
+| `evieFiles.ts:131-134` | POSITIONAL split on a reserved filename |
+| `channelNotify.ts:11-20` | gates that split on message DIRECTION |
+
+`assertNotReservedName` is the tell: a global rule every producer must remember, existing only to keep
+one filename unclaimable so a positional guess stays trustworthy.
+
+**Why it kept coming back.** Six commits, every one a timing adjustment: `7cdbca6` (feature),
+`8830994` (instrument), `b8a4678` (fix attempt, disproved), `e4df21c` (instrument again), `cd3ebd8`
+(seed earlier, into a `beforeCommit` hook), `bc22582` (blob plane). `cd3ebd8` was correct and still
+works; the blob plane then moved the BYTES later, so perfectly-timed seeding reads a file that is not
+there. The decision depends on a conjunction of five things (bytes exist, landed, under a size cap,
+parseable, at the right moment) and each fix pins one conjunct.
+
+**Live regressions from `bc22582`:**
+
+- References records nothing (`manifestFrom` returns null). Artifact rows never hidden; fuzzy refs
+  never amber. `RefDisplayIndex` documents no backfill, so those rows are permanently wrong.
+- References is TWO stacked bugs: even given a manifest, `hiddenRels` maps over `f.src`, null at
+  drain time. Fixing manifest discovery alone leaves it broken.
+- Designer's `cardsFrom` skips every file. Agent-pushed cards never enter the dock.
+- `DesignerDock.kt:203-217` is worse than dead: `markBackfilled` runs BEFORE the seed loop, so an
+  unlanded row is missed permanently, not until next time. Mark-first was right against a torn loop.
+
+**Not broken, leave alone:** `RefLinkHandler.tryOpen` and `DesignerCardOpener` read at TAP time, when
+bytes exist by definition. That is the authority path and it gives references their snapshot
+semantics. The gateway inspects no filenames at all and must stay role-blind.
+
+#### Questionaire
+
+Process: one advocate agent per option, each required to make its own option work and then attack it.
+The synthesis is verified against the code before it becomes a recommendation.
+
+**J-1. What scope does the meta ride at?** -> **Per-file only.** Message-level meta deferred, not
+rejected; owner: "As plugins expand, we might find a real use for it." Retrofit is additive (optional
+field, `ignoreUnknownKeys`, open generated types), so nothing closes.
+
+Corrected fact, load-bearing: the ref key to quality map DOES ride per-file. Every ref key resolves to
+exactly one file, and `artifactBuilder.ts:136-151` groups refs BY `refPath` and emits one file per
+group. An earlier claim that it could not was wrong.
+
+**J-2. How is the per-file meta shaped?** -> **Flat base-owned named fields.** A flat optional `role`
+that base alone reads to decide visibility, plus hand-named optional fields for the plugin facts. No
+open bag. Rejected: a per-plugin untyped bag, and a single open bag with reserved keys.
+
+Recommendation reason (chosen): the CLAUDE.md never-a-generic-map rule transfers, because its stated
+rationale is a pair of codegen facts, not anything about planes. The two arguments for a bag both
+fail on inspection: the synced-leaf cost is removable (evie has zero consumers), and the shipped
+`plugin_action.payload` precedent is a COMMAND channel with open-ended action types, where naming
+fields is impossible. A file's facts are closed, because the plugin catalog is compile-time.
+
+Two amendments accepted with it:
+- Move `ChannelFileSchema` OUT of the synced leaf first, as its own verifiable step.
+- Do NOT build `refQuality` yet. There is no consumer once the index dies. Accepted consequence:
+  amber rendering for fuzzy refs stays dead until something is built to read it.
+
+**J-3. How does the Designer dock stop depending on WHEN bytes arrive?** -> **Byte-free ingest with
+lazy resolution at render**, taking the frozen-legacy-archive migration from the rejected derive-from-
+state option. Rejected: a second "attachment settled" event, and deleting the store entirely.
+
+Recommendation reason (chosen): it RESTORES the single-writer invariant rather than patching it. With
+no second event the inbound handler stays the only writer, firing once before the row reaches
+`_state`. Verified: a redelivered message returns at `ChatRepository.kt:4604`, before `beforeCommit()`
+fires at `:4607`, so the premise `DesignStore.kt:94-95` relied on becomes true again. Deleting the
+store outright was rejected because persisting ONLY deletions fails in the wrong direction (a lost
+tombstone resurrects every card ever deleted, where today the same corruption merely empties the
+dock), and because it forecloses designs outliving their conversation.
+
+Migration is taken from the rejected option because this one's own plan needed a legacy sweep that
+READS BYTES and re-runs, which would keep alive exactly the path being deleted. Freezing the old store
+once at upgrade is a single migration with no surviving byte-reading path.
+
+**A generation guard does NOT fix the resurrection bug. Do not try it again.** Recorded because it was
+proposed and is wrong: with a row-shaped landing event, two cards in one message where the first lands,
+is deleted, and then the second lands re-presents BOTH files, so the deleted card returns. A `guardGen`
+captured at handler entry is captured AFTER the delete, so it equals the current generation and
+`DesignStore.kt:97` lets the write through. The fix is an event that names exactly the one file that
+changed, which makes the bug unrepresentable rather than guarded. Under the chosen option there is no
+landing event at all, so this is moot - but it stays written down because the guard LOOKS sufficient.
+
+**Pending and failed become representable.** `StoredCard.rel` stops being non-null, which is what lets
+a card exist before its bytes. Both states are drawn (dock card `designer-card-states.html`):
+downloading and failed look different from each other and neither looks like empty; rows keep their
+real name and dimensions in every state, since those came off the wire; the dock bar's peek slot
+carries the state rather than falling back to a generic icon; `Reattach`/`Download` dim because they
+read the file, while `Reference`/`Delete` stay live because they do not.
+
+UX delegated to Claude by owner. Rulings:
+- **Retry ships.** `attachmentFetchFailures` (`ChatRepository.kt:1056`) is private and in-memory, so a
+  failed card already silently re-attempts on next launch. A button makes that recovery deliberate
+  instead of folklore, and a dead-end "couldn't download" with no action is the same silent-dead-end
+  shape this intermission exists to delete.
+- Retry MUST clear that blob's entry in `attachmentFetchFailures`, because `fetchPendingAttachments`
+  skips at `>= MAX_ATTACHMENT_FETCH_TRIES` (`:4344`). A Retry that does not clear it is a no-op button,
+  which would be its own silent dead end.
+
+**J-4. What does a file carrying NO role mean?** -> **Absent means ordinary attachment, always shown.
+No live-path fallback.** Plus a one-shot migration for rows already drained. Rejected: a permanent
+fallback to the old derivation, and migration alone.
+
+Recommendation reason (chosen): **every degradation collapses toward SHOWING.** A stale sender, a
+stripping Gateway, an APK rollback all remove the field, which makes a file more visible, never less.
+No input, malformed or hostile, makes an unstamped file disappear. It also deletes the only code that
+can silently eat a real attachment (`evieFiles.ts:133` `slice(0, start)` drops the matched file AND
+every file after it).
+
+The permanent-fallback option was rejected on safety: it is the only one whose own advocate admits a
+genuine user file can be wrongly hidden, and it depends on producer array ordering
+(`attachRefs.ts:112`) that no test enforces, while making `role` look authoritative. A future engineer
+relaxes the ordering because the field exists, and real files start vanishing. Same "global rule
+everyone must remember" shape this intermission exists to delete.
+
+A live fallback provably cannot fix already-drained rows: the mailbox is exactly-once, so a drained row
+is never revisited. Hence the one-shot pass. It reads manifests off disk, which is legitimate ONLY
+because it runs once, later, when bytes have landed - not at drain. Bounded: skips `fromMe` rows, and
+hides a chip rather than deleting a file, so bytes stay resolvable if it misclassifies.
+
+Accepted cost: while any agent is un-upgraded, its ref artifacts show as junk to an upgraded receiver.
+Narrow (agent crosstalks agent, replier stale, receiver not), cosmetic never functional, taps still
+work, and `MainActivity.kt:1982-1988` already draws a version chip on a session running behind.
+
+**`role` is STRIPPED IN TRANSIT by a stale hop.** Verified: `routes.ts:1434` forwards `parsed.data`,
+and zod `.object()` drops unknown keys, across up to four independently-versioned hops. A receiver
+therefore CANNOT distinguish "old sender" from "old middle box", which is why absence must never be
+interpreted as anything but ordinary.
+
+**Corrections to earlier claims in this plan:**
+- `assertNotReservedName` is PERMANENT, not deletable. All three advocates concluded this
+  independently. `RefManifest.kt:82` selects the manifest by that exact name at TAP time, and tap time
+  stays authoritative so old rows keep opening. Without the guard, a forged manifest plus matching fake
+  snapshots makes the console open fabricated source for a ref link. The earlier framing of it as
+  coupling the role field would retire was wrong.
+- "Old rows keep visible junk forever" was also wrong. `RefDisplayIndex` is SharedPreferences-backed
+  and survives an APK update, so deleting the writer does not delete the records. Normally-drained rows
+  stay hidden. The junk rows are specifically those drained AFTER the blob plane broke recording.
+
+**Live bug found, independent of this work:** Kotlin has NO producer-side reserved-name guard.
+`MANIFEST_FILENAME` appears only for reading (`RefManifest.kt:50,82,125`, `ReferencesPlugin.kt:37,58`);
+`ConsoleClient.kt:667` builds outbound files straight from the picker with no check. Latent today only
+because the console never calls `respond`. Port the guard to Kotlin regardless.
+
+**Also required in the same commit:** delete or reword the DEBUG tripwire (`ReferencesPlugin.kt:52-63`).
+Under this option a stale sender's message is exactly what it warns about, so it would fire routinely
+and be correct.
+
+**J-5. What does a receiver do with a role value it does NOT recognize?** -> **Show it**, and demote it.
+Rejected: sender-declared policy fields alongside identity, and a structured role string parsed for
+coarse policy.
+
+Recommendation reason (chosen): **asymmetry of failure.** On the console the decision is recomputed on
+every render pass (`AttachmentDisplay.kt:56-65`), so a wrong SHOW self-heals retroactively across the
+whole back history at the next app update. A wrong HIDE cannot: `displayAttachments` drops hidden
+entries before the row is drawn, so the file is unreachable rather than dimmed. On the agent side the
+notification fires exactly once, so an omitted file is never learned about at all - and that is the
+receiver where hiding is most often wrong anyway, since "content the sender meant for you" is the broad
+class and machinery is the narrow one.
+
+Policy fields were rejected because they are stripped by the SAME hops that strip `role`, so policy
+only carries when every intermediary is new enough: the same message can render differently on two of
+the owner's own devices depending on the route. The structured-string option was rejected because it is
+the same in-band technique being deleted, enforceable only by a residue test, on a runtime whose CI
+does not compile Kotlin before merge.
+
+`Protocol.kt:4-6` already commits to this posture in writing: "Enum-like fields are open Strings on
+purpose: the console must tolerate values newer than this build."
+
+**Demote-never-hide amendment (zero wire cost).** An unknown role never takes a thumbnail slot and
+never sorts above the user's own attachments; it renders as a plain named row at the end. Add
+`file.role == null` to `isPreviewable` (`AttachmentDisplay.kt:46-47`); the existing
+`sortedByDescending { it.previewable }` already puts it last. The signal is spent on RANKING, never on
+reachability. The agent's `[FILES]` block prints the role beside the entry so an agent can see the
+sender classified it deliberately.
+
+#### Two-phase clean break
+
+Owner directive, and it revises the ending rather than any single answer: "keep in mind I am the only
+user. I can update everything at once. so don't lock into legacy behavior. It can be a 2 parter phase
+migration, and then clean out for clean break."
+
+- **Phase 1.** `role` optional. Every producer stamps, INCLUDING ordinary attachments, which stamp
+  `attachment` explicitly. One-shot migration stamps rows already persisted. Absent tolerated, shows.
+  Ship every runtime.
+- **Phase 2.** `role` becomes REQUIRED. Absent stops being a state anyone interprets and becomes a
+  schema violation rejected at the edge. Delete the tolerance path, the positional split, and the
+  direction gate.
+
+Why it is worth a second phase: absent was carrying two meanings at once, "an ordinary file the user
+attached" and "a sender that could not say". The safety argument worked by collapsing both to SHOW,
+which is correct but works by refusing to distinguish two genuinely different situations. Requiring the
+field makes the ambiguity nonexistent rather than handled.
+
+Verified: `stripFileRefs` (`routes.ts:250`) spreads the rest of the file after omitting `blobId` and
+`blobGateway`, so `role` reaches the persistent store with no additional work.
+
+Mixed-fleet cost from J-4 shrinks to a deploy window rather than weeks, but J-5 is unaffected: it rests
+on recoverability, not on fleet composition, and the phone is exactly the component that can sit a
+version behind a just-updated gateway.
+
+**This reopens the reserved-name question.** All three J-4 advocates called `assertNotReservedName`
+permanent BECAUSE old rows must open forever, and the clean break removes "forever". It does not simply
+delete, because the guard exists to stop a crafted attachment being adopted as a real manifest, and if
+selection moves to the role field then a hostile peer can stamp that role instead, so the protection
+changes shape rather than disappearing. Under advocacy separately, since it carries a security property.
+
+**J-6. After the clean break, what protects manifest adoption from forgery?** -> **Delete the manifest
+FILE entirely.** Its content moves onto the snapshot files as per-file ref metadata. Rejected: keeping
+`assertNotReservedName` alongside role (its own advocate called it vestigial as forgery protection),
+and role-alone selection with the file kept.
+
+Recommendation reason (chosen): with no manifest there is no adoption step - no reserved name, no
+first-wins selection, nothing to forge. The guards become unnecessary rather than weaker. The real
+protection already exists and survives: `role` is a LITERAL in each producer, never derived from an
+operator-supplied path, and ref authority is confined to the one file carrying the stamp (the manifest's
+guards all existed to bound its authority over SIBLING files, and that cross-file authority is what gets
+deleted).
+
+**The feasibility worry was inverted, and it decided the question.** Segment text never rides the wire:
+the snapshot file IS `segments.map(s => s.text).join("\n")` (`artifactBuilder.ts:219-224`), so
+`(startLine, lineCount)` pairs partition it byte-exactly. Today the text ships TWICE (manifest JSON +
+snapshot file) and the file's copy is never read in snippet mode (`ReferenceViewer.kt:60-69`).
+Dissolving the manifest roughly halves snippet-mode wire cost.
+
+Also fixed for free, verified live: producer allows 2 MB of artifacts (`artifactBuilder.ts:75`), console
+refuses any manifest over 512 KB (`RefManifest.kt:56,94`) and then silently declines the tap - enough
+refs in one reply and the code viewer stops working with no error anywhere.
+
+Evie-strip risk checked and does not hold: relay frames are `looseObject` (`evie-protocol.ts:121-136`),
+payloads are sealed, and evie has zero consumers of `ChannelFileSchema`. The only strip points are our
+own gateways.
+
+Wire shape (stays within per-file-only; arrays not records, honoring the no-generic-map rule):
+`RefSegmentMeta {startLine, lineCount}`, `RefKeyMeta {key, startLine, endLine, span?, quality, reason?,
+ambiguous?, matchCount?}`, `RefFileMeta {refPath, segments?: [].max(64), keys: [].max(64)}`;
+`ChannelFileSchema` gains `ref: RefFileMetaSchema.optional()`. Segments absent = full mode. HARD CAPS
+ARE MANDATORY: without them per-file metadata scales with prose, and an oversized relay frame closes
+the socket rather than failing politely. With them, worst case ~50 KB across a 10-file message.
+
+Conditions attached (non-negotiable): the array caps above; golden wire fixtures under
+`tests/fixtures/` iterated by BOTH runtimes; the amber-tier consumer builds a ROW-LOCAL map once per
+render (the site is hot - the old index existed because a scan is quadratic in a long thread,
+`RefDisplayIndex.kt:31-32`); serialize the Kotlin side through the codegen'd `@Serializable` class
+rather than hand-building JSON, with a round-trip test; drop `totalLines` (decoded, never read).
+
+Deleted outright: `assertNotReservedName` + both call sites, `MANIFEST_FILENAME` (both runtimes),
+`MANIFEST_MARKER`, `manifestFrom` + `decode` (~130 lines), `RefDisplayIndex.kt` (127 lines + prefs
+store), the TS naming-replay hack (`artifactBuilder.ts:141-146`), the positional split, the direction
+gate, the debug tripwire, and the producer/consumer manifest-size mismatch.
+
+Honest scope statement, owner accepted ("let's do it"): 3-4x the change of the alternatives (~14 files,
+two runtimes, the synced leaf re-copied to evie-bot, a codegen pass, four test files rewritten), and the
+phone-side migration must RECONSTRUCT per-file metadata from on-disk manifests rather than merely stamp
+an enum. Net deletion overall. Budget effect: frees one file slot per ref-carrying message.
+
+**J-7. When does the clean break happen?** -> **Two releases: full code clean break immediately, wire
+strictness at the end.** R1 deletes every old code path and keeps `role` `.optional()` with one
+`?? "attachment"` normalization at the decode edges. R2, after the owner updates Claude plugin and
+phone, flips `role` to required and deletes the normalization and the restore shim. Owner: "let's make
+it permanent by the end of the plan after I update my Claude and phone."
+
+Recommendation reason (all three advocates converged): the feared split-brain never exists, because R1
+already deletes the old derivation everywhere - the only tolerance is one optional marker and one
+default expression on the single new path, not a second implementation. Verified: no gateway restore
+parses ChannelFiles through zod at all (`gateway/index.ts:232-240` restores are raw casts), so
+strictness cannot fail a restore. The REAL hazard is one hop later and is why strictness must wait:
+`codegen-kotlin.ts:287` emits a required field as a non-default Kotlin param, so a strict APK's poll
+decode throws `MissingFieldException` on a single role-less served mailbox entry, the cursor never
+advances, the entry can never be acked past, and the box never idle-expires because polling refreshes
+`lastActivity` - a PERMANENTLY wedged console with healthy-looking gateway logs. R1's restore-stamp plus
+ingest normalization plus the soak make "zero role-less entries exist" an inspectable precondition
+before R2 ships, instead of a hope.
+
+#### Verified constraints
+
+- `codegen-kotlin.ts:376-377` is a literally EMPTY else. A non-sealed `oneOf`/`anyOf` root emits
+  nothing, silently, and the CI drift check passes on the silence. Unions are unusable.
+- `codegen-kotlin.ts:252` maps `z.record` to an untyped `JsonObject`.
+- `codegen-kotlin.ts:247` emits `List<Named>` for an array of a `.meta({id})` schema. **Array-of-pairs
+  is the typed-map workaround, so no fact forces a generic map.** This killed option C, and the same
+  false premise ("quality is intrinsically a map") had already produced one wrong recommendation.
+- `z.enum` emits an open Kotlin `String`, so an unknown future value cannot throw on an old console.
+- **`ChannelFileSchema` is misfiled.** It lives in the synced leaf `evie-protocol.ts:28`, but evie has
+  ZERO consumers: it appears in evie-bot only in that file's own copied definition. Moving it out of
+  the leaf removes a three-repo ritual that buys nothing.
+- `MessageFile` persistence is hand-written (`ChatRepository.kt` `fileJson`/`loadFiles`) and untested;
+  a field added to the data class but not both vanishes silently across restart. `MessageFile` is also
+  built POSITIONALLY in three places with adjacent nullable-String slots.
+- `PluginEntry.kt:137` - plugins are first-party code compiled into the same module, from a
+  compile-time catalog. There is no third party to keep a schema open for.
+- A plugin-keyed untyped map IS already shipped and endorsed (`schemas.ts:812` -> `Protocol.kt:111`),
+  but that is a COMMAND channel with open-ended action types.
+- `ChannelFilesSchema` caps at 10 files TOTAL, and ref artifacts spend the same budget as user
+  attachments. Eight refs plus three files silently exceeds it today.
+
+#### J execution phases
+
+**J0 - move `ChannelFileSchema` out of the synced leaf.** Own commit, independently verifiable. Evie
+has zero consumers (it appears in evie-bot only as the leaf's own definition), so it moves to
+`schemas.ts` beside the other wire truth. Re-sync the leaf (format, restamp, copy; evie pushes FIRST),
+await workflows, pull main.
+
+**J-R1 - the big release. One coordinated deploy: full code clean break, lenient wire.**
+
+Wire (`schemas.ts` post-J0):
+- `role: z.enum(["attachment", "ref-snapshot", "design-card"]).optional()` on ChannelFile. There is no
+  `ref-manifest` role - the manifest died in J-6. z.enum emits an open Kotlin String, so future values
+  decode and SHOW.
+- `RefSegmentMeta {startLine, lineCount}`, `RefKeyMeta {key, startLine, endLine, span?, quality,
+  reason?, ambiguous?, matchCount?}`, `RefFileMeta {refPath, segments?: [].max(64), keys: [].max(64)}`,
+  all `.meta({id})` so codegen emits real classes. `ref: RefFileMetaSchema.optional()` on ChannelFile.
+  Segments absent = full mode. Caps are mandatory (frame overflow closes the socket).
+- Designer card fields: `cardTitle`, `cardGroup`, `cardWidth`, `cardHeight`, flat optional.
+- Codegen; golden wire fixtures under `tests/fixtures/` iterated by BOTH runtimes.
+
+Producers (role is a LITERAL in each; never derived from arguments):
+- `readReplyAttachment` stamps `attachment`; a hand-attached `@dsCard`-marked html sniffs the 2 KB
+  prefix at compose time and stamps `design-card` (preserves hand-attached docking).
+- `attachRefs`/`artifactBuilder` stamp `ref-snapshot` and per-file `ref` metadata; STOP emitting the
+  manifest file. Segment text rides only in the snapshot file; `(startLine, lineCount)` partitions it.
+- `designerTools` stamps `design-card` + the four card fields parsed from the html it already holds.
+- `ConsoleClient.kt` stamps `attachment` on picker files.
+
+Receivers (ONE path; absent -> `attachment` via `?? "attachment"` at the decode edges only):
+- `evieFiles`: role filter replaces `dropReferenceArtifacts` (drop `ref-snapshot` for agents; a
+  `design-card` still materializes - an agent has no dock). Delete the positional split, its rationale
+  block, and the `stripRefs` direction gate. `[FILES]` prints unknown roles beside the entry.
+- References (console): hide decorator = pure role read. Delete `RefDisplayIndex` + prefs store, the
+  drain-time indexer, `manifestFrom`/`decode` from the live path, `MANIFEST_FILENAME`,
+  `MANIFEST_MARKER`, `assertNotReservedName` + call sites, the naming-replay hack, the debug tripwire.
+  Tap-time reads `file.ref` + the snapshot file; miss contract unchanged (decline -> link menu).
+- Designer (console): byte-free ingest from wire fields; `StoredCard.rel` nullable; bytes resolve
+  lazily at render; downloading/failed states per `designer-card-states.html`; Retry clears that
+  blob's `attachmentFetchFailures` entry (else it is a no-op button); one-time frozen legacy archive
+  replaces the backfill (which is deleted, mark-before-seed bug and all).
+- Unknown-role demotion: previewable requires `role == null || role == "attachment"`; unknown roles
+  sort last as plain named rows. Ranking only, never reachability.
+
+Gateway:
+- `stampLegacyRoles` inside the two restore callbacks (`gateway/index.ts:232-240`): mailbox entry
+  files and pending-job storedResult files get the positional rule applied ONCE at restore (before
+  first `MANIFEST_FILENAME` -> `attachment`, the manifest entry dropped, after -> `ref-snapshot`).
+  Idempotent; a no-op once the persist tick rewrites the snapshots stamped.
+- Ingest normalization: absent -> `attachment` stamped INTO stored entries, so everything persisted
+  from R1 onward carries a role.
+
+Phone:
+- `MessageFile` + `fileJson`/`loadFiles` gain `role` and the ref metadata (append-position params;
+  BOTH sides of the hand-written pair; round-trip test through the codegen'd `@Serializable` class).
+- One-shot migration on the `AppStateStore` schema-version latch: stamp roles on persisted rows and
+  reconstruct per-file ref metadata by running the old `manifestFrom` logic once per row against
+  on-disk manifest bytes. That logic then lives ONLY inside the migration module, off every live path.
+  Additive only: never remove fields, never delete manifest bytes on disk (small orphans). A row whose
+  manifest never landed or predates the plugin migrates as plain attachments; its ref links stop
+  opening - accepted spillage.
+
+Verification gates: `bun run lint && bun run test`; codegen drift; fixtures; `./gradlew
+:app:testDebugUnitTest`; emulator pass (artifact rows hidden, designer states render, dock ingests a
+pushed card again); evie leaf re-sync pushed FIRST; await workflows; pull main after merge.
+
+**J-R2 - the flip. After the owner confirms Claude plugin and phone are updated.**
+- `role` becomes required on ChannelFile. Codegen makes it a non-default Kotlin param.
+- Delete the `?? "attachment"` normalization lines and `stampLegacyRoles`.
+- Ingest edges now reject absent-role loudly (schema validation at routes/sealer/relay).
+- PRECONDITION, inspected not hoped: zero role-less file entries in `mailboxes.json` and
+  `pending-jobs.json` (R1's restore-stamp + persist tick + soak should have rewritten all; check
+  before shipping). The wedged-console hazard in J-7 is what this precondition exists to prevent.
+- Wire-identical behavior otherwise; skew during R2 is validation-only.
+
 ### 6. Viewer (extend `AttachmentViewer`, single attachment)
 
 Post-intermission note: file access goes through the blob view (`path()` only when complete and

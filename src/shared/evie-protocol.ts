@@ -1,4 +1,4 @@
-// SYNC-HASH: e6797b7c52c3ba64655fa3ac1ab9b837
+// SYNC-HASH: aa058a86494f27213908d32c1837064e
 // SYNCED MODULE - source of truth: switchboard/src/shared/evie-protocol.ts
 // Copied verbatim into: evie-bot/app/features/bridge/evie-protocol.ts
 // MUST re-copy on change: cp src/shared/evie-protocol.ts ../evie-bot/app/features/bridge/evie-protocol.ts
@@ -17,43 +17,6 @@ import { z } from "zod";
 
 ////////////////////////////////
 //  Schemas
-
-/**
- * Channel attachment metadata carried over the bridge (console-origin files).
- *
- * Metadata only. A message names its files and never carries them, so its size is bounded by the
- * count of attachments rather than by their contents, and the bytes move on the blob plane at
- * whatever pace and chunk size that plane chooses.
- */
-export const ChannelFileSchema = z
-	.object({
-		filename: z.string().min(1).max(255),
-		mime: z.string(),
-		size: z.number().int().nonnegative(),
-		descriptiveKey: z.string(),
-		// The source file's own mtime in epoch MILLISECONDS, so a save on the far side can restore
-		// the real age rather than stamping now. Optional: a sender that cannot determine one omits
-		// it and the receiver hides the row. Populate from `mtime.getTime()`, never `mtimeMs`, which
-		// is fractional and fails this integer check. Bounded to the ECMAScript Date range, since a
-		// larger safe integer is representable here but not by the Date every consumer builds.
-		modifiedAt: z.number().int().min(-8_640_000_000_000_000).max(8_640_000_000_000_000).optional(),
-		// The bytes, by the digest of the bytes: `sha256-<64 hex>`. Transferred out of band in
-		// bounded chunks, so a message carrying a reference costs the same whether the file is
-		// 4 KB or 4 GB. Optional because a file may legitimately name no bytes: a peer that could
-		// not stage them still says the attachment existed rather than dropping it silently.
-		blobId: z
-			.string()
-			.regex(/^sha256-[0-9a-f]{64}$/)
-			.optional(),
-		// WHICH Gateway holds those bytes. A blob lives on the one Gateway it was uploaded to, while
-		// the message naming it routes by its own rules and regularly lands somewhere else, so a
-		// reference that says only WHAT is unfetchable the moment the two differ. A receiver still
-		// asks its OWN Gateway for the bytes; this tells that Gateway where to go and get them.
-		// Absent means "wherever you are", which is correct for every same-Gateway transfer and is
-		// what a peer predating this field implies.
-		blobGateway: z.string().min(1).max(64).optional(),
-	})
-	.meta({ id: "ChannelFile" });
 
 /**
  * Raw bytes per chunk of a blob transfer.
@@ -90,17 +53,6 @@ export const MAX_BLOB_BYTES = 500_000_000;
  * merely fail there: it closes the socket and takes every team's traffic with it.
  */
 export const MAX_RELAY_FRAME_BYTES = 8_000_000;
-
-/**
- * Attachments on one message.
- *
- * Capped by COUNT, because bytes are no longer what a message costs. Each file is a reference the
- * receiver will chase, so an uncapped list is an uncapped amount of fetching however small the
- * message itself is: a thousand files declaring one byte each still points at a thousand blobs.
- * Ten matches the tightest renderer bound in the path (a Discord message) and is far above any real
- * reply.
- */
-export const ChannelFilesSchema = z.array(ChannelFileSchema).max(10);
 
 /** Frames the gateway RECEIVES from evie-bot. Unknown `type` values fail the
  * union; the consumer logs and drops them (observability, not crash). */
@@ -295,7 +247,6 @@ export const CrossDomainHandshakeRevealReplyParamsSchema = z.object({
 ////////////////////////////////
 //  Types
 
-export type ChannelFile = z.infer<typeof ChannelFileSchema>;
 export type EvieInboundFrame = z.infer<typeof EvieInboundFrameSchema>;
 export type ToolCallFrame = z.infer<typeof ToolCallFrameSchema>;
 export type GatewayRegisterParams = z.infer<typeof GatewayRegisterParamsSchema>;
