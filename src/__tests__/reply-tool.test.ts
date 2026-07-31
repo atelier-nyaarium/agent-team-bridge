@@ -204,6 +204,7 @@ describe("handleChannelReply / handleChannelReplyStructured (the actual register
 				descriptiveKey: "note.txt",
 				modifiedAt: statSync(filePath).mtime.getTime(),
 				blobId: blobIdFor(Buffer.from("hello")),
+				role: "attachment",
 			},
 		]);
 	});
@@ -608,11 +609,33 @@ describe("attachment reading (the wire entry point every tool shares)", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("refuses the reserved manifest name so a receiver can trust where generated files begin", async () => {
+	it("accepts a file named like the old reserved manifest - roles decide, names do not", async () => {
 		const { readReplyAttachment } = await import("../mcp/bridge/replyTool.js");
 		const path = join(dir, "switchboard-references.json");
 		writeFileSync(path, "{}");
-		await expect(readReplyAttachment(path)).rejects.toThrow(/reserved name/);
+		const file = await readReplyAttachment(path);
+		expect(file.filename).toBe("switchboard-references.json");
+		expect(file.role).toBe("attachment");
+	});
+
+	it("stamps an ordinary file as an attachment and a marker-led html as a card", async () => {
+		const { readReplyAttachment } = await import("../mcp/bridge/replyTool.js");
+		const plain = join(dir, "notes.txt");
+		writeFileSync(plain, "hello");
+		expect((await readReplyAttachment(plain)).role).toBe("attachment");
+
+		const card = join(dir, "mock.html");
+		writeFileSync(card, '<!-- @dsCard group="Forms" width="900" --><title>Editor</title><div>hi</div>');
+		const read = await readReplyAttachment(card);
+		expect(read.role).toBe("design-card");
+		expect(read).toMatchObject({ cardTitle: "Editor", cardGroup: "Forms", cardWidth: 900 });
+	});
+
+	it("an html without the leading marker stays an ordinary attachment", async () => {
+		const { readReplyAttachment } = await import("../mcp/bridge/replyTool.js");
+		const page = join(dir, "page.html");
+		writeFileSync(page, "<div>no marker</div>");
+		expect((await readReplyAttachment(page)).role).toBe("attachment");
 	});
 
 	it("refuses a non-regular file rather than blocking forever on it", async () => {
@@ -631,34 +654,41 @@ describe("attachment reading (the wire entry point every tool shares)", () => {
 	});
 });
 
-describe("reserved-name coverage across every outbound ChannelFile producer", () => {
+describe("role stamping across every outbound ChannelFile producer", () => {
 	beforeEach(() => {
 		resetRouterPost();
 	});
 
-	it("designer_push_card refuses a card claiming the reserved name, without posting", async () => {
-		const { registerDesignerTools } = await import("../mcp/designer/designerTools.js");
-		const tools = captureTools(registerDesignerTools);
-		const result = await tools.designer_push_card({
-			session_id: "s1",
-			name: "switchboard-references.json",
-			html: "<!-- @dsCard --><div>hi</div>",
-		} as never);
-		expect(result.isError).toBe(true);
-		expect(result.content[0].text).toContain("reserved name");
-		expect(mockRouterPost).not.toHaveBeenCalled();
-	});
-
-	it("designer_push_card still posts an ordinary card", async () => {
+	it("designer_push_card stamps the role and the card fields it parsed", async () => {
 		const { registerDesignerTools } = await import("../mcp/designer/designerTools.js");
 		const tools = captureTools(registerDesignerTools);
 		await tools.designer_push_card({
 			session_id: "s1",
 			name: "card.html",
-			html: "<!-- @dsCard --><div>hi</div>",
+			html: '<!-- @dsCard group="Kit" width="800" height="600" --><title>Editor form</title><div>hi</div>',
 		} as never);
-		const [, payload] = firstToolPost<{ files: Array<{ filename: string }> }>();
-		expect(payload.files[0].filename).toBe("card.html");
+		const [, payload] = firstToolPost<{ files: Array<Record<string, unknown>> }>();
+		expect(payload.files[0]).toMatchObject({
+			filename: "card.html",
+			role: "design-card",
+			cardTitle: "Editor form",
+			cardGroup: "Kit",
+			cardWidth: 800,
+			cardHeight: 600,
+		});
+	});
+
+	it("designer_push_card posts a markerless card as a card still - the tool call is the declaration", async () => {
+		const { registerDesignerTools } = await import("../mcp/designer/designerTools.js");
+		const tools = captureTools(registerDesignerTools);
+		await tools.designer_push_card({
+			session_id: "s1",
+			name: "card.html",
+			html: "<div>no marker</div>",
+		} as never);
+		const [, payload] = firstToolPost<{ files: Array<Record<string, unknown>> }>();
+		expect(payload.files[0]).toMatchObject({ filename: "card.html", role: "design-card" });
+		expect(payload.files[0].cardTitle).toBeUndefined();
 	});
 
 	it("a polled reply's filename cannot forge the session_id line agents thread on", async () => {

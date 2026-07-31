@@ -24,6 +24,7 @@ import { isComposite, parseSessionName } from "../shared/session-id.js";
 import { type SessionRecord, SessionStore } from "../shared/session-store.js";
 import type { ResponsePayload } from "../shared/types.js";
 import { answerBlobOp, BlobTooLarge } from "./blobOps.js";
+import { stampLegacyRolesDeep } from "./legacyRoles.js";
 
 /** The three blob routes, each keyed to the schema the console plane validates the same op with. */
 const BLOB_ROUTE_SCHEMAS = {
@@ -231,10 +232,14 @@ export async function startGateway(): Promise<void> {
 	// - so a corrupt mailboxes.json would take the owner's whole session list with it.
 	restoreDurable("pending-jobs", () => {
 		const jobs = jobsDurable.load();
+		// Pre-role file lists get their roles stamped in at the boundary (legacyRoles.ts), so a
+		// strict decoder downstream never meets a role-less stored entry.
+		stampLegacyRolesDeep(jobs);
 		if (Array.isArray(jobs)) store.restore(jobs as Parameters<typeof store.restore>[0]);
 	});
 	restoreDurable("mailboxes", () => {
 		const boxes = mailboxDurable.load();
+		stampLegacyRolesDeep(boxes);
 		if (boxes && typeof boxes === "object")
 			mailboxStore.restore(boxes as Parameters<typeof mailboxStore.restore>[0]);
 	});

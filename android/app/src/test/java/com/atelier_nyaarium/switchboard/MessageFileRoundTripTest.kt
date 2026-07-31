@@ -18,8 +18,52 @@ class MessageFileRoundTripTest {
 
 	@Test
 	fun carriesEveryFieldAcrossARestart() {
-		val original = MessageFile("shot.png", "image/png", "attachments/1-2/shot.png", 4096L, 1785179969544L)
+		val original = MessageFile(
+			"shot.png",
+			"image/png",
+			"attachments/1-2/shot.png",
+			4096L,
+			1785179969544L,
+			blobId = "sha256-${"a".repeat(64)}",
+			blobGateway = "sakura",
+			role = "attachment",
+			cardTitle = "Editor",
+			cardGroup = "Kit",
+			cardWidth = 800L,
+			cardHeight = 600L,
+		)
 		assertEquals(listOf(original), roundTrip(listOf(original)))
+	}
+
+	@Test
+	fun refMetadataSurvivesTheRestartThroughTheGeneratedShape() {
+		// The nested block persists through the codegen'd @Serializable class, so the wire shape and
+		// the stored shape cannot drift apart.
+		val meta = com.atelier_nyaarium.switchboard.proto.RefFileMeta(
+			refPath = "src/cart.ts",
+			segments = listOf(com.atelier_nyaarium.switchboard.proto.RefSegmentMeta(startLine = 97, lineCount = 17)),
+			keys = listOf(
+				com.atelier_nyaarium.switchboard.proto.RefKeyMeta(
+					key = "ref://src/cart.ts:Cart:add",
+					startLine = 100,
+					endLine = 110,
+					span = com.atelier_nyaarium.switchboard.proto.RefSpanMeta(100, 4, 100, 9),
+					quality = "exact",
+				),
+			),
+		)
+		val original = MessageFile("cart.ts", "text/plain", null, role = "ref-snapshot", ref = meta)
+		assertEquals(listOf(original), roundTrip(listOf(original)))
+	}
+
+	@Test
+	fun aGarbledRefBlobReadsAsAbsentRatherThanCostingTheThread() {
+		val garbled = JSONObject(
+			"""{"files":[{"name":"cart.ts","mime":"text/plain","role":"ref-snapshot","ref":"{not json"}]}""",
+		)
+		val restored = loadFiles(garbled)
+		assertEquals("ref-snapshot", restored[0].role)
+		assertNull(restored[0].ref)
 	}
 
 	@Test

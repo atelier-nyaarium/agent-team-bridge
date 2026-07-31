@@ -17,12 +17,18 @@ data class DsCardMeta(
 data class DesignerCard(
 	/** The attachment filename - the card's IDENTITY and the Delete key. */
 	val fileName: String,
-	/** Display name: the HTML `<title>`, else the filename stem. */
+	/** Display name: the wire-declared title, else the filename stem. */
 	val name: String,
-	/** The attachment-relative path (`<bucket>/<name>`) of the latest push, for rendering + actions. */
-	val rel: String,
+	/** The attachment-relative path (`<bucket>/<name>`) of the latest push, for rendering + actions.
+	 * Null while the bytes are still in flight (or failed): the card exists the moment its message
+	 * arrives, and the stage says downloading rather than the card silently not existing. */
+	val rel: String?,
 	val updatedAt: Long,
 	val meta: DsCardMeta,
+	/** Names the bytes for the retry path while [rel] is null. */
+	val blobId: String? = null,
+	/** The fetch gave up (bounded tries). Distinguishes "arriving" from "will never arrive". */
+	val fetchFailed: Boolean = false,
 )
 
 // The marker must LEAD the file (same contract as claude.ai/design's self-check): a first-line
@@ -58,27 +64,34 @@ internal fun looksHtml(mime: String, name: String): Boolean =
 /** The attachment-relative path (`<bucket>/<name>`) inside an appassets card src. */
 internal fun relOf(src: String): String = src.substringAfter("/${Attachments.DIR}/", "")
 
-/** Extract the design cards from one message's attachments - the ingest unit for the inbound
- * pipeline and the one-time dock backfill. Reads at most [maxFiles] html-looking attachments (a
- * bounded synchronous read on the drain thread); [readPrefix] returns a bounded head of an
- * attachment (the `@dsCard` marker leads the file) or null when unavailable. */
-internal fun cardsFrom(
-	files: List<MessageFile>,
-	at: Long,
-	maxFiles: Int = 4,
-	readPrefix: (rel: String) -> String?,
-): List<StoredCard> {
-	val out = mutableListOf<StoredCard>()
-	var scanned = 0
-	for (f in files) {
-		val src = f.src ?: continue
-		if (!looksHtml(f.mime, f.name)) continue
-		if (scanned >= maxFiles) break
-		scanned++
-		val rel = relOf(src)
-		val html = readPrefix(rel) ?: continue
-		val meta = parseDsCardMarker(html) ?: continue
-		out.add(StoredCard(f.name, rel, at, htmlTitle(html), meta.group, meta.width, meta.height))
+/** The landed rel for a stored card, from the live thread rows, newest first. Content-keyed: the
+ * row file naming the card's own bytes is the one whose src counts, so an older revision under the
+ * same filename can never lend its bytes to the current card. Null while nothing has landed. */
+internal fun resolveCardRel(rows: List<com.atelier_nyaarium.switchboard.Message>, card: StoredCard): String? {
+	val blobId = card.blobId ?: return null
+	for (i in rows.indices.reversed()) {
+		for (f in rows[i].files) {
+			if (f.blobId == blobId) {
+				f.src?.let(::relOf)?.takeIf { it.isNotEmpty() }?.let { return it }
+			}
+		}
 	}
-	return out
+	return null
+}
+
+/** A message file's stored-card form, from its wire-declared fields alone. Zero disk, zero timing:
+ * the card is real the instant its message is, and the rel fills in whenever the bytes have landed
+ * (which may be now, later, or never). */
+internal fun storedCardFrom(f: MessageFile, at: Long): StoredCard? {
+	if (f.role != "design-card") return null
+	return StoredCard(
+		fileName = f.name,
+		rel = f.src?.let(::relOf)?.takeIf { it.isNotEmpty() },
+		at = at,
+		title = f.cardTitle,
+		group = f.cardGroup ?: "",
+		w = f.cardWidth?.toInt(),
+		h = f.cardHeight?.toInt(),
+		blobId = f.blobId,
+	)
 }

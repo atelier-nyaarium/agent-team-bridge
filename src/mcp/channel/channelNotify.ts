@@ -6,18 +6,11 @@ import { dropReferenceArtifacts, materializeFiles, renderFilesBlock } from "./ev
 //  Functions & Helpers
 
 /** The prose must survive a filesystem that will not take the bytes, so a materialization failure
- * costs the [FILES] block and nothing else.
- *
- * `stripRefs` is false for an inbound SEND: only a reply appends ref artifacts, so a manifest
- * arriving on a send is a file someone genuinely attached, and splitting on it would silently eat
- * that file plus every one after it. */
-async function filesBlockFor(
-	bucketKey: string | undefined,
-	files: ChannelFile[] | undefined,
-	stripRefs: boolean,
-): Promise<string> {
+ * costs the [FILES] block and nothing else. Ref snapshots are dropped by their declared role
+ * regardless of direction; an agent reads paths off disk, not source copies it never asked for. */
+async function filesBlockFor(bucketKey: string | undefined, files: ChannelFile[] | undefined): Promise<string> {
 	if (!bucketKey || !files || files.length === 0) return "";
-	const wanted = stripRefs ? dropReferenceArtifacts(files) : files;
+	const wanted = dropReferenceArtifacts(files);
 	if (wanted.length < files.length) {
 		console.error(`[channel] hid ${files.length - wanted.length} ref artifact(s) from ${bucketKey}`);
 	}
@@ -37,7 +30,7 @@ async function filesBlockFor(
  */
 export async function emitChannelNotification(server: Server, payload: ChannelPushPayload): Promise<void> {
 	// Inbound files key the materialization bucket by the channel message_id.
-	const filesBlock = await filesBlockFor(payload.message_id, payload.files, false);
+	const filesBlock = await filesBlockFor(payload.message_id, payload.files);
 
 	// content is the message prose ONLY (plus the [FILES] block, which is paths the agent must Read).
 	// Every structured field - session_id, from, reply_schema, instructions - rides in `meta`,
@@ -69,7 +62,7 @@ export async function emitChannelNotification(server: Server, payload: ChannelPu
 }
 
 export async function emitResponseNotification(server: Server, payload: ResponsePushPayload): Promise<void> {
-	const filesBlock = await filesBlockFor(payload.message_id, payload.files, true);
+	const filesBlock = await filesBlockFor(payload.message_id, payload.files);
 	const body = payload.response ?? "";
 
 	await server.notification({

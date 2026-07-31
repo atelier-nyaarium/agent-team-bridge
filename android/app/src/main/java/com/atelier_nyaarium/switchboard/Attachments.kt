@@ -80,6 +80,12 @@ object Attachments {
 				f.modifiedAt,
 				f.blobId,
 				f.blobGateway,
+				role = f.role,
+				ref = f.ref,
+				cardTitle = f.cardTitle,
+				cardGroup = f.cardGroup,
+				cardWidth = f.cardWidth,
+				cardHeight = f.cardHeight,
 			)
 		}
 	}
@@ -133,7 +139,7 @@ object Attachments {
 				if (out.canonicalFile != f.source.canonicalFile) {
 					f.source.inputStream().use { input -> out.outputStream().use(input::copyTo) }
 				}
-				MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name", f.size)
+				MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name", f.size, role = "attachment")
 			}.getOrNull()
 		}
 	}

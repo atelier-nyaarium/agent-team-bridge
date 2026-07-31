@@ -35,6 +35,8 @@ code does not belong here; rationale lives in `git log`.
 - `src/shared/` - wire truth and utilities used by both sides
   - `schemas.ts` - THE single zod truth for every wire shape. Every schema carries `.meta({id})`,
     which is its generated Kotlin class name
+  - `channel-file.ts` - the ChannelFile wire shape, zod-only and NOT a leaf (evie never reads it);
+    its own module because schemas.ts and federation-protocol.ts both consume it and would cycle
   - `session-id.ts` - the SOLE owner of the address grammar (see Addressing below)
   - `crypto.ts` / `admission.ts` / `federation-lifecycle.ts` / `evie-protocol.ts` - the synced leaves
   - `notice.ts` - the four notice tiers both reply tools and the console wire share
@@ -346,8 +348,10 @@ adb emu kill
 - All sandbox code lives in `src/emulator/`, so the onboarding bypass is not compiled into debug or
   release at all. `seedSandbox` is the only seam in shared code and is build-type guarded.
 - `SandboxFixtures` is scaffolding, not a spec. Bend it to whatever is being looked at.
-- Known fixture limitation: seeding bypasses the mailbox drain, which is where `RefDisplayIndex`
-  learns about ref artifacts, so artifact chips are not hidden and a `fuzzy` ref renders blue.
+- Seeding bypasses the mailbox drain, so no inbound plugin handler runs. Anything a receiver decides
+  from wire FIELDS (hiding a ref snapshot, a card's title) is unaffected and renders correctly;
+  anything a handler has to record on arrival must be seeded directly, the way `SandboxApp` upserts
+  design cards into `DesignStore` after `seedSandbox`.
 
 ### Dependencies
 

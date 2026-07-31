@@ -3,7 +3,6 @@ import { extname, join } from "node:path";
 import { cleanupTmpDir } from "../../shared/tmp-files.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { downloadBlob } from "../blobTransfer.js";
-import { MANIFEST_FILENAME } from "../references/artifactNames.js";
 
 ////////////////////////////////
 //  Interfaces & Types
@@ -19,6 +18,9 @@ export interface MaterializedFile {
 	/** The sender staged bytes and this side could not fetch them, as opposed to a file that named
 	 * no bytes in the first place. Both lack a path; only this one is worth retrying. */
 	fetchFailed?: boolean;
+	/** The sender's own classification, printed beside the entry when it is anything but an
+	 * ordinary attachment, so an agent can see a file is machinery and skip it. */
+	role?: string;
 }
 
 export interface RenderFilesBlockParams {
@@ -84,6 +86,7 @@ export async function materializeFiles({
 	for (const file of files) {
 		const meta: MaterializedFile = {
 			descriptiveKey: file.descriptiveKey,
+			...(file.role && file.role !== "attachment" ? { role: file.role } : {}),
 		};
 
 		// Presence, not truthiness: a zero-byte file still has to land, or the recipient is told it
@@ -120,17 +123,13 @@ export async function materializeFiles({
  * wrote a ref, regardless of who is receiving it. An agent reads paths off disk instead, so
  * materializing them would hand it source copies it never asked for.
  *
- * The split is POSITIONAL, not by content: `appendRefArtifacts` emits the author's own attachments
- * first and then its artifacts, manifest first, so the reserved name marks where generated files
- * begin. Reading the manifest instead would mean trusting a remote sender's JSON to say which of
- * its own files are real, and a genuine attachment that happened to be a captured manifest would
- * delete itself and everything it named. `assertNotReservedName` refuses the name in every producer
- * of an outbound ChannelFile, which is what makes the position trustworthy. Works on a stored
- * payload too, where the bytes have been stripped and there is nothing to parse.
+ * A pure read of the sender-declared role. Deliberately a KNOWN-SET drop, never "anything with a
+ * role": a design-card reaching an agent has no dock to land in and must still materialize as a
+ * readable file, and an unknown future role must fail toward showing. Works on a stored payload
+ * too, where the bytes have been stripped but the role survives.
  */
 export function dropReferenceArtifacts(files: ChannelFile[]): ChannelFile[] {
-	const start = files.findIndex((f) => f.filename === MANIFEST_FILENAME);
-	return start === -1 ? files : files.slice(0, start);
+	return files.filter((f) => f.role !== "ref-snapshot");
 }
 
 /**
@@ -153,8 +152,10 @@ export function renderFilesBlock({ discordMessageId, files }: RenderFilesBlockPa
 	const instruction = `*Files with \`-> /path\` are on disk; Read them.${notes.length ? ` ${notes.join(" ")}` : ""}*`;
 	const lines = files.map((f, i) => {
 		// descriptiveKey is sender-supplied and this block is line-structured, so a newline in it
-		// would let a filename forge entries or an early [/FILES] terminator.
-		const head = `${i + 1}. ${f.descriptiveKey.replace(/[\r\n]+/g, " ")}`;
+		// would let a filename forge entries or an early [/FILES] terminator. The role tag gets the
+		// same defanging for the same reason.
+		const tag = f.role ? ` (sender-tagged: ${f.role.replace(/[\r\n]+/g, " ")})` : "";
+		const head = `${i + 1}. ${f.descriptiveKey.replace(/[\r\n]+/g, " ")}${tag}`;
 		if (f.path) return `${head} -> \`${f.path}\``;
 		return f.fetchFailed ? `${head} (fetch failed)` : head;
 	});

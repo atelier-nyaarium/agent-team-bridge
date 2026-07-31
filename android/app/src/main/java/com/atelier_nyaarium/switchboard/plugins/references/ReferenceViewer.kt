@@ -11,85 +11,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.atelier_nyaarium.switchboard.Attachments
-import java.io.File
-import org.json.JSONArray
 import org.json.JSONObject
-
-////////////////////////////////
-//  Functions & Helpers
-
-/** hljs language ids, by extension. An unknown extension renders as escaped plain text rather than
- * guessing, which is the same posture the thread renderer takes for an unlabelled fence. */
-private val HLJS_LANGUAGE = mapOf(
-	"ts" to "typescript", "mts" to "typescript", "cts" to "typescript", "tsx" to "typescript",
-	"js" to "javascript", "mjs" to "javascript", "cjs" to "javascript", "jsx" to "javascript",
-	"cpp" to "cpp", "cc" to "cpp", "cxx" to "cpp", "hpp" to "cpp", "hh" to "cpp", "h" to "cpp", "c" to "cpp",
-	"cs" to "csharp", "py" to "python", "pyi" to "python", "gd" to "gdscript",
-	"json" to "json", "md" to "markdown", "kt" to "kotlin", "sh" to "bash", "yml" to "yaml", "yaml" to "yaml",
-	// The rest of what the vendored bundle already ships. Leaving one out costs nothing to add and
-	// renders an ordinary source file as flat text.
-	"go" to "go", "rs" to "rust", "java" to "java", "rb" to "ruby", "php" to "php", "sql" to "sql",
-	"css" to "css", "scss" to "scss", "less" to "less", "lua" to "lua", "swift" to "swift", "r" to "r",
-	"pl" to "perl", "m" to "objectivec", "ini" to "ini", "toml" to "ini", "diff" to "diff", "patch" to "diff",
-	"xml" to "xml", "html" to "xml", "htm" to "xml", "svg" to "xml", "graphql" to "graphql", "makefile" to "makefile",
-)
-
-/** The banner text for a resolution that did not land exactly where the ref asked. */
-internal fun noticeFor(entry: RefEntry): String? {
-	val drift = when (entry.quality) {
-		"fuzzy" -> entry.reason ?: "this reference no longer matches exactly"
-		"unresolved" -> entry.reason ?: "this reference could not be found in the file"
-		else -> null
-	}
-	val ambiguity = if (entry.ambiguous) "${entry.matchCount} declarations matched; showing the first" else null
-	return listOfNotNull(drift, ambiguity).ifEmpty { null }?.joinToString(". ")
-}
-
-/** The payload the page renders. Built here rather than in JS so the viewer stays a renderer. */
-internal fun payloadFor(request: ReferenceOpenRequest, snapshot: File): String {
-	val entry = request.entry
-	val file = request.file
-
-	// A snippet snapshot holds only its segment texts, so falling back to "read the file as a whole"
-	// would number a fragment from line 1 and point the band at lines that are not in the render.
-	require(!file.snippet || file.segments.isNotEmpty()) { "snippet entry carries no segments" }
-
-	val segments = JSONArray()
-	if (file.snippet) {
-		for (segment in file.segments) {
-			segments.put(JSONObject().put("startLine", segment.startLine).put("text", segment.text))
-		}
-	} else {
-		segments.put(JSONObject().put("startLine", 1).put("text", snapshot.readText()))
-	}
-
-	return JSONObject()
-		.put("refPath", file.refPath)
-		.put("label", request.label)
-		.put("language", HLJS_LANGUAGE[file.refPath.substringAfterLast('.', "").lowercase()])
-		.put("startLine", entry.startLine)
-		.put("endLine", entry.endLine)
-		.put("segments", segments)
-		.apply {
-			entry.span?.let {
-				put(
-					"span",
-					JSONObject()
-						.put("startLine", it.startLine)
-						.put("startColumn", it.startColumn)
-						.put("endLine", it.endLine)
-						.put("endColumn", it.endColumn),
-				)
-			}
-			noticeFor(entry)?.let { put("notice", it) }
-		}
-		.toString()
-}
 
 ////////////////////////////////
 //  Composable
@@ -102,14 +29,38 @@ internal fun payloadFor(request: ReferenceOpenRequest, snapshot: File): String {
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun ReferenceViewer(request: ReferenceOpenRequest, modifier: Modifier = Modifier) {
+fun ReferenceViewer(request: ReferenceOpenRequest, modifier: Modifier = Modifier) = androidx.compose.runtime.key(request) {
+	// key(request) owns the whole lifecycle: a request swap under a live viewer tears this subtree
+	// down (releasing the WebView) and rebuilds it fresh, so the one-shot factory closure can never
+	// render a previous ref's payload under the new request. produceState alone does NOT give this -
+	// its backing state is remembered unkeyed, only its effect restarts.
 	val context = LocalContext.current
 	val dark = !MaterialTheme.colorScheme.background.let { it.red + it.green + it.blue > 1.5f }
-	val payload = remember(request) {
-		Attachments.resolve(context.filesDir, request.rel)?.let { runCatching { payloadFor(request, it) }.getOrNull() }
+	// Off the main thread: the payload build reads the whole snapshot file. The WebView composes
+	// only once the read has SETTLED (Result present, its value possibly null for a gone snapshot),
+	// so the factory always sees the final answer - never a race against a still-running read.
+	val loaded by androidx.compose.runtime.produceState<Result<String?>?>(initialValue = null) {
+		value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+			runCatching {
+				Attachments.resolve(context.filesDir, request.rel)?.let { payloadFor(request, it) }
+			}
+		}
 	}
 
-	Box(modifier.fillMaxSize()) {
+	val settled = loaded
+	// Branch rather than return early: a non-local return out of an inline lambda emits a marker
+	// D8 cannot represent in dex, so the whole APK fails to build while the JVM tests stay green.
+	if (settled == null) {
+		Box(modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+			androidx.compose.material3.CircularProgressIndicator()
+		}
+	} else {
+		// A read that THREW (an unreadable or oversize snapshot) is a different fact than a snapshot
+		// that is simply gone, and the page says which.
+		val payload = settled.getOrNull()
+		val failureNote =
+			if (settled.isFailure) "Couldn't open this snapshot." else "This snapshot is no longer available on this device."
+		Box(modifier.fillMaxSize()) {
 		AndroidView(
 			modifier = Modifier.fillMaxSize(),
 			// Each dismissal must take its renderer process with it; the sibling Designer WebViews do
@@ -133,7 +84,7 @@ fun ReferenceViewer(request: ReferenceOpenRequest, modifier: Modifier = Modifier
 								} else {
 									// The tap was already claimed, so the link menu is unreachable. Say what
 									// happened rather than leaving a blank page that reads as a dead tap.
-									val note = JSONObject.quote("This snapshot is no longer available on this device.")
+									val note = JSONObject.quote(failureNote)
 									evaluateJavascript("window.refview.unavailable($note)", null)
 								}
 								}
@@ -155,8 +106,9 @@ fun ReferenceViewer(request: ReferenceOpenRequest, modifier: Modifier = Modifier
 					}
 
 					loadUrl("file:///android_asset/refview/refview.html")
-				}
-			},
-		)
+					}
+				},
+			)
+		}
 	}
 }

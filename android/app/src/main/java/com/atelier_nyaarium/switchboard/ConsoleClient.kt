@@ -675,6 +675,9 @@ class ConsoleClient(private val prov: Provisioning, private val store: AppStateS
 				// routinely different and the receiver has no way to guess which one to ask. Naming the
 				// holder here is what lets a cross-Gateway attachment be fetched at all.
 				blobGateway = local,
+				// A picker file is an ordinary attachment by construction; the role is a literal, so
+				// no user file can ever be classified as machinery by this producer.
+				role = "attachment",
 			)
 		}
 		// Carry the selected session's Domain so the Gateway resolves a cross-Domain seal target by the full

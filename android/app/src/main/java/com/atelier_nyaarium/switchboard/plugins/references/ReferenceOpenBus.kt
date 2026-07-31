@@ -4,11 +4,15 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 
-/** One request to open a resolved ref in the code viewer, raised by a tap in the chat body. */
+/** One request to open a resolved ref in the code viewer, raised by a tap in the chat body. Carries
+ * the tapped file's own wire-declared metadata; the snapshot bytes are read by the viewer, off the
+ * main thread, at render. */
 data class ReferenceOpenRequest(
 	val team: String,
-	val entry: RefEntry,
-	val file: RefFileEntry,
+	/** The tapped ref's resolution, as the sender declared it. */
+	val key: com.atelier_nyaarium.switchboard.proto.RefKeyMeta,
+	/** The snapshot file's declared identity and slicing. */
+	val meta: com.atelier_nyaarium.switchboard.proto.RefFileMeta,
 	/** The snapshot's on-device relative path, already resolved from the tapped row. */
 	val rel: String,
 	/** What the agent wrote, for the viewer's breadcrumb. */

@@ -1,10 +1,10 @@
-import { stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute } from "node:path";
 import { MAX_BLOB_BYTES } from "../../shared/evie-protocol.js";
 import { SPOKEN_TIER_FIELDS } from "../../shared/notice.js";
 import type { ChannelFile } from "../../shared/types.js";
 import { uploadBlob } from "../blobTransfer.js";
-import { assertNotReservedName } from "../references/artifactNames.js";
+import { parseDsCard } from "../designer/dsCard.js";
 import { routerPost } from "./helpers.js";
 
 // Advisory per-file cap on the agent side, DERIVED from the one size limit rather than restating
@@ -39,13 +39,33 @@ const MIME_BY_EXT: Record<string, string> = {
 	".csv": "text/csv",
 };
 
+/** Bytes of prefix sniffed from a hand-attached html file for the @dsCard marker. The marker must
+ * lead the file, so the prefix decides card-ness exactly; only a <title> past this bound is missed,
+ * and the console then falls back to the filename stem. */
+const CARD_SNIFF_BYTES = 8192;
+
+/** A hand-attached html file's declared card fields, or null when it is not a card. Compose-time is
+ * the one place allowed to read bytes to answer this, so an attached card docks exactly like a
+ * designer_push_card one. */
+async function sniffDsCard(filePath: string, filename: string, mime: string): Promise<ReturnType<typeof parseDsCard>> {
+	const html = mime.startsWith("text/html") || /\.html?$/i.test(filename);
+	if (!html) return null;
+	const handle = await open(filePath, "r");
+	try {
+		const buffer = Buffer.alloc(CARD_SNIFF_BYTES);
+		const { bytesRead } = await handle.read(buffer, 0, CARD_SNIFF_BYTES, 0);
+		return parseDsCard(buffer.subarray(0, bytesRead).toString("utf-8"));
+	} finally {
+		await handle.close();
+	}
+}
+
 /** Stage an absolute-path attachment on the blob plane and describe it, under the shared advisory
  * cap. Shared by the reply tools and notify_human. Unlike an inbound ChannelFile (which may be
  * metadata-only), this always names transferable bytes. */
 export async function readReplyAttachment(filePath: string): Promise<ChannelFile> {
 	if (!isAbsolute(filePath)) throw new Error(`Attachment path must be absolute: ${filePath}`);
 	const filename = basename(filePath);
-	assertNotReservedName(filename);
 	const stats = await stat(filePath);
 	// A FIFO stats as size 0 and then blocks the ingest read until a writer appears, wedging the tool
 	// call with no error and no timeout.
@@ -54,6 +74,7 @@ export async function readReplyAttachment(filePath: string): Promise<ChannelFile
 		throw new Error(`Attachment "${filename}" is ${stats.size} bytes, over the ${MAX_ATTACHMENT_BYTES}-byte limit`);
 	}
 	const mime = MIME_BY_EXT[extname(filename).toLowerCase()] ?? "application/octet-stream";
+	const card = await sniffDsCard(filePath, filename, mime);
 	// The bytes go to the blob store a chunk at a time; the message carries only the reference, so
 	// this function no longer holds the file and its base64 at once.
 	const blobId = await uploadBlob(filePath);
@@ -71,6 +92,10 @@ export async function readReplyAttachment(filePath: string): Promise<ChannelFile
 		// serializes to null and would have the gateway reject the whole message over one odd file.
 		...wireModifiedAt(after.mtime),
 		blobId,
+		// An operator file is an ordinary attachment BY CONSTRUCTION - the role is a literal here,
+		// never an argument - except a marker-led html, which declares itself a card the same way a
+		// designer_push_card does.
+		...(card ? { role: "design-card" as const, ...card } : { role: "attachment" as const }),
 	};
 }
 

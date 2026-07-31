@@ -3,7 +3,6 @@ package com.atelier_nyaarium.switchboard.plugins.designer
 import android.content.Context
 import android.content.SharedPreferences
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -11,13 +10,13 @@ import org.junit.Test
 /**
  * Pins the additive index. Two layers: the PURE fold ([upsertInto]) that owns the latest-wins,
  * first-appearance ordering (no Context), and the singleton's observable behavior over a fake
- * SharedPreferences - upsert/delete reflect on the per-team flow, forget/forgetAll clear, the
- * backfilled flag latches, and the index survives a simulated process restart.
+ * SharedPreferences - upsert/delete reflect on the per-team flow, forget/forgetAll clear, and the
+ * index survives a simulated process restart.
  */
 class DesignStoreTest {
 
-	private fun card(fileName: String, rel: String = "1-1/$fileName", at: Long = 1000, group: String = "") =
-		StoredCard(fileName, rel, at, title = fileName.substringBeforeLast('.'), group = group)
+	private fun card(fileName: String, rel: String? = "1-1/$fileName", at: Long = 1000, group: String = "", blobId: String? = null) =
+		StoredCard(fileName, rel, at, title = fileName.substringBeforeLast('.'), group = group, blobId = blobId)
 
 	////////////////////////////////
 	//  Pure fold (no Context)
@@ -46,10 +45,28 @@ class DesignStoreTest {
 
 	@Test
 	fun anOlderCardDoesNotClobberANewerOneForTheSameFilename() {
-		// A slow dock backfill of an older revision must not overwrite a newer live-ingested pointer.
+		// A redelivered older revision must not overwrite a newer live-ingested pointer.
 		val newer = upsertInto(emptyList(), card("a.html", rel = "1-9/a.html", at = 250))
 		val stale = upsertInto(newer, card("a.html", rel = "1-2/a.html", at = 100))
 		assertEquals("1-9/a.html", stale.single().rel)
+	}
+
+	@Test
+	fun anEqualAtRedeliveryWithoutBytesKeepsWhatTheStoredEntryLearned() {
+		// The re-drain fold can re-present a metadata-only copy of a message whose bytes already
+		// landed; folding it in raw would forget the rel and blank the dock canvas.
+		val landed = upsertInto(emptyList(), card("a.html", rel = "1-2/a.html", at = 100, blobId = "sha256-aa"))
+		val redelivered = upsertInto(landed, card("a.html", rel = null, at = 100, blobId = null))
+		assertEquals("1-2/a.html", redelivered.single().rel)
+		assertEquals("sha256-aa", redelivered.single().blobId)
+	}
+
+	@Test
+	fun aByteLessCardExistsAndFillsItsRelWhenTheSameAtRedeliversWithBytes() {
+		val pending = upsertInto(emptyList(), card("a.html", rel = null, at = 100, blobId = "sha256-aa"))
+		assertEquals(null, pending.single().rel)
+		val landed = upsertInto(pending, card("a.html", rel = "1-2/a.html", at = 100, blobId = "sha256-aa"))
+		assertEquals("1-2/a.html", landed.single().rel)
 	}
 
 	////////////////////////////////
@@ -112,10 +129,8 @@ class DesignStoreTest {
 	fun forgetClearsOnlyTheNamedConversation() {
 		DesignStore.upsert("keep", card("k.html"))
 		DesignStore.upsert("drop", card("d.html"))
-		DesignStore.markBackfilled("drop")
 		DesignStore.forget("drop")
 		assertTrue(DesignStore.cards("drop").value.isEmpty())
-		assertFalse(DesignStore.hasBackfilled("drop"))
 		assertEquals(listOf("k.html"), DesignStore.cards("keep").value.map { it.fileName })
 	}
 
@@ -129,66 +144,39 @@ class DesignStoreTest {
 	}
 
 	@Test
-	fun backfilledFlagLatchesPerTeam() {
-		assertFalse(DesignStore.hasBackfilled("t"))
-		DesignStore.markBackfilled("t")
-		assertTrue(DesignStore.hasBackfilled("t"))
-		assertFalse(DesignStore.hasBackfilled("other"))
-	}
-
-	@Test
-	fun aGuardedSeedIsDroppedAfterARemovalRacesIt() {
-		// Simulates the backfill loop: it captured the removal generation, then the user deleted the
-		// card mid-seed. The guarded re-seed must NOT resurrect it.
-		DesignStore.upsert("t", card("a.html"))
-		val guardGen = DesignStore.removalGeneration("t")
-		DesignStore.delete("t", "a.html")
-		DesignStore.upsert("t", card("a.html"), guardGen = guardGen)
-		assertTrue(DesignStore.cards("t").value.isEmpty())
-	}
-
-	@Test
-	fun aForgetAlsoStopsAGuardedSeed() {
-		val guardGen = DesignStore.removalGeneration("t")
-		DesignStore.forget("t")
-		DesignStore.upsert("t", card("a.html"), guardGen = guardGen)
-		assertTrue(DesignStore.cards("t").value.isEmpty())
-	}
-
-	@Test
-	fun forgetAllStopsAGuardedSeed() {
-		val guardGen = DesignStore.removalGeneration("t")
-		DesignStore.forgetAll()
-		DesignStore.upsert("t", card("a.html"), guardGen = guardGen)
-		assertTrue(DesignStore.cards("t").value.isEmpty())
-	}
-
-	@Test
-	fun aRemovalInAnotherConversationDoesNotAbortThisTeamsSeed() {
-		// The guard is per-team: a delete in conversation "a" must not drop conversation "b"'s backfill.
-		val guardGen = DesignStore.removalGeneration("b")
-		DesignStore.upsert("a", card("x.html"))
-		DesignStore.delete("a", "x.html")
-		DesignStore.upsert("b", card("y.html"), guardGen = guardGen)
-		assertEquals(listOf("y.html"), DesignStore.cards("b").value.map { it.fileName })
-	}
-
-	@Test
-	fun aGuardedSeedAppliesWhenNoRemovalRaced() {
-		val guardGen = DesignStore.removalGeneration("t")
-		DesignStore.upsert("t", card("a.html"), guardGen = guardGen)
-		assertEquals(listOf("a.html"), DesignStore.cards("t").value.map { it.fileName })
+	fun cardForBlobFindsTheCurrentPushAndNeverAnOlderRevision() {
+		DesignStore.upsert("t", card("a.html", at = 100, blobId = "sha256-old"))
+		DesignStore.upsert("t", card("a.html", at = 250, blobId = "sha256-new"))
+		assertEquals("a.html", DesignStore.cardForBlob("t", "sha256-new")?.fileName)
+		assertEquals(null, DesignStore.cardForBlob("t", "sha256-old"))
 	}
 
 	@Test
 	fun theIndexSurvivesAProcessRestart() {
-		DesignStore.upsert("t", card("a.html", rel = "1-2/a.html"))
-		DesignStore.markBackfilled("t")
+		DesignStore.upsert("t", card("a.html", rel = "1-2/a.html", blobId = "sha256-aa"))
 		// Drop the in-memory flows (simulated process death), then rebind the SAME prefs.
 		DesignStore.resetForTest()
 		DesignStore.init(context)
 		assertEquals("1-2/a.html", DesignStore.cards("t").value.single().rel)
-		assertTrue(DesignStore.hasBackfilled("t"))
+		assertEquals("sha256-aa", DesignStore.cards("t").value.single().blobId)
+	}
+
+	@Test
+	fun aPreRoleStoredIndexStillLoads() {
+		// The frozen legacy archive: cards persisted by the old build carry rel and no blobId, and
+		// must hydrate unchanged rather than being lost on upgrade day.
+		prefs.edit()
+			.putString(
+				"designs.t",
+				"""[{"fileName":"old.html","rel":"1-1/old.html","at":500,"title":"Old","group":"Kit"}]""",
+			)
+			.apply()
+		DesignStore.resetForTest()
+		DesignStore.init(context)
+		val loaded = DesignStore.cards("t").value.single()
+		assertEquals("1-1/old.html", loaded.rel)
+		assertEquals(null, loaded.blobId)
+		assertEquals("Old", loaded.title)
 	}
 }
 

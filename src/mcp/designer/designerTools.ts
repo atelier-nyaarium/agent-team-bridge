@@ -4,7 +4,7 @@ import type { ChannelFile } from "../../shared/types.js";
 import { uploadBytes } from "../blobTransfer.js";
 import { bridgeProjectName, postPluginAction } from "../bridge/helpers.js";
 import { postReply, toolError } from "../bridge/replyTool.js";
-import { assertNotReservedName } from "../references/artifactNames.js";
+import { parseDsCard } from "./dsCard.js";
 
 ////////////////////////////////
 //  Schemas
@@ -84,12 +84,10 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 		{ title: "Designer Push Card", description: PUSH_DESCRIPTION, inputSchema: pushSchema },
 		async (args: PushCardArgs) => {
 			const { session_id, name, html, message } = args;
-			try {
-				assertNotReservedName(name);
-			} catch (err) {
-				return toolError((err as Error).message);
-			}
 			const bytes = Buffer.from(html, "utf-8");
+			// The tool call IS the declaration that this file is a card, so the role is unconditional;
+			// the marker only enriches it. The console docks from these fields without opening the file.
+			const card = parseDsCard(html) ?? {};
 			return postReply(
 				{ session_id, ...(message ? { response: message } : {}) },
 				{
@@ -103,6 +101,8 @@ export function registerDesignerTools(mcpServer: McpServer): void {
 							size: bytes.length,
 							descriptiveKey: name,
 							blobId: await uploadBytes(bytes),
+							role: "design-card",
+							...card,
 						},
 					],
 				},

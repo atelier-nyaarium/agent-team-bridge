@@ -94,9 +94,8 @@ export async function appendRefArtifacts(body: string, attachments: ReplyFile[])
 	);
 	if (!built.ok) return { ok: false, error: built.error };
 
-	// Snapshots follow the agent's own attachments, and the manifest leads the snapshots. Its
-	// selection rule only needs to be first among files bearing the reserved name, which nothing
-	// else can be: a collision on that name was already refused above.
+	// The role is a literal here, never derived from anything the caller passed: an artifact is one
+	// this loop built, and nothing else on the message can become one.
 	const snapshots: ReplyFile[] = [];
 	for (const artifact of built.artifacts) {
 		const bytes = Buffer.from(artifact.content, "utf8");
@@ -106,6 +105,8 @@ export async function appendRefArtifacts(body: string, attachments: ReplyFile[])
 			size: bytes.length,
 			descriptiveKey: artifact.filename,
 			blobId: await uploadBytes(bytes),
+			role: "ref-snapshot",
+			ref: artifact.ref,
 		});
 	}
 

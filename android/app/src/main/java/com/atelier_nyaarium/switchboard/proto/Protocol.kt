@@ -63,6 +63,12 @@ data class ChannelFile(
 	val modifiedAt: Long? = null,
 	val blobId: String? = null,
 	val blobGateway: String? = null,
+	val role: String? = null,
+	val ref: RefFileMeta? = null,
+	val cardTitle: String? = null,
+	val cardGroup: String? = null,
+	val cardWidth: Long? = null,
+	val cardHeight: Long? = null,
 )
 
 @Serializable
@@ -771,6 +777,39 @@ data class TransportResult(
 	val saToken: String? = null,
 	val caPem: String? = null,
 	val error: String? = null,
+)
+
+@Serializable
+data class RefFileMeta(
+	val refPath: String,
+	val segments: List<RefSegmentMeta>? = null,
+	val keys: List<RefKeyMeta>,
+)
+
+@Serializable
+data class RefSegmentMeta(
+	val startLine: Long,
+	val lineCount: Long,
+)
+
+@Serializable
+data class RefKeyMeta(
+	val key: String,
+	val startLine: Long,
+	val endLine: Long,
+	val span: RefSpanMeta? = null,
+	val quality: String,
+	val reason: String? = null,
+	val ambiguous: Boolean? = null,
+	val matchCount: Long? = null,
+)
+
+@Serializable
+data class RefSpanMeta(
+	val startLine: Long,
+	val startColumn: Long,
+	val endLine: Long,
+	val endColumn: Long,
 )
 
 @Serializable

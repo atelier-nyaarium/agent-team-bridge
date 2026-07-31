@@ -3,6 +3,8 @@ package com.atelier_nyaarium.switchboard.sandbox
 import android.app.Application
 import com.atelier_nyaarium.switchboard.AppStateStore
 import com.atelier_nyaarium.switchboard.Repo
+import com.atelier_nyaarium.switchboard.plugins.designer.DesignStore
+import com.atelier_nyaarium.switchboard.plugins.designer.storedCardFrom
 
 /**
  * The `emulator` build type's entry point.
@@ -33,7 +35,16 @@ class SandboxApp : Application() {
 
 		val repo = Repo.get(this)
 		val fixtures = SandboxFixtures(filesDir, assets)
-		repo.seedSandbox(fixtures.teams(), fixtures.threads(), fixtures.dirs())
+		val threads = fixtures.threads()
+		repo.seedSandbox(fixtures.teams(), threads, fixtures.dirs())
+		// Seeding writes rows straight into state, bypassing the mailbox drain where the inbound
+		// handlers run, so the dock would stay empty however correct the ingest is. Run the same
+		// wire-declared conversion the handler runs, so the gallery is inspectable here.
+		for ((team, rows) in threads) {
+			for (row in rows) {
+				for (file in row.files) storedCardFrom(file, row.at)?.let { DesignStore.upsert(team, it) }
+			}
+		}
 	}
 
 	private companion object {

@@ -799,9 +799,41 @@ describe("routes", () => {
 				mime: "image/png",
 				size: 11,
 				descriptiveKey: "shot.png",
+				// The role survives the strip: it is display metadata, not a capability, and a stored
+				// entry carrying it explicitly is what lets the strict decoder eventually exist.
+				role: "attachment",
 			});
 			expect(body.files?.[0].blobId).toBeUndefined();
 			expect(JSON.stringify(body)).not.toContain(blobId);
+		});
+
+		it("classifies a pre-role agent reply at ingest: manifest dropped, snapshots stamped", async () => {
+			// A not-yet-reloaded MCP still composes under the old convention. Ingest must apply the
+			// legacy rule, not blanket-stamp `attachment` - that would relabel the machinery as user
+			// files, hand agents source copies they never asked for, and leave the stored manifest
+			// entry satisfying the strict-flip precondition while lying about it.
+			const store = new PendingJobStore<ResponsePayload>();
+			store.create("sess-legacy", "agent", "console");
+			await store.waitForResult("sess-legacy", 1);
+			const ctx = makeCtx({ store });
+			const { respond, poll } = createRoutes(ctx);
+			const legacy = (filename: string, mime: string) => ({ filename, mime, size: 1, descriptiveKey: filename });
+			respond(new Request("http://localhost/respond", { method: "POST" }), {
+				session_id: "sess-legacy",
+				response: "see the ref",
+				files: [
+					legacy("shot.png", "image/png"),
+					legacy("switchboard-references.json", "application/json"),
+					legacy("cart.ts", "text/plain"),
+				],
+			});
+
+			const polled = poll(new Request("http://localhost/poll", { method: "POST" }), {
+				session_id: "sess-legacy",
+			});
+			const body = (await polled.json()) as ResponsePayload;
+			expect(body.files?.map((f) => f.filename)).toEqual(["shot.png", "cart.ts"]);
+			expect(body.files?.map((f) => f.role)).toEqual(["attachment", "ref-snapshot"]);
 		});
 
 		describe("reply gate (an unconfirmed caller's own bridge handshake)", () => {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildArtifacts, MAX_FILE_BYTES, type ResolvedRef } from "../mcp/references/artifactBuilder.js";
-import { MANIFEST_FILENAME, MANIFEST_MARKER, safeName, uniqueName } from "../mcp/references/artifactNames.js";
+import { safeName, uniqueName } from "../mcp/references/artifactNames.js";
 import type { Resolution } from "../mcp/references/refResolver.js";
+import { REF_META_MAX_KEYS } from "../shared/channel-file.js";
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -29,15 +30,15 @@ function hugeFile(): string {
 //  Tests
 
 describe("building the artifact set", () => {
-	it("ships a manifest first, so no later file can be adopted in its place", () => {
+	it("ships snapshots only - no manifest file exists to adopt or forge", () => {
 		const result = buildArtifacts([ref("src/app.ts", "const a = 1;\n")], []);
 
 		expect(result.ok).toBe(true);
-		expect(result.ok && result.artifacts[0].filename).toBe(MANIFEST_FILENAME);
-		expect(result.ok && result.artifacts[0].content).toContain(MANIFEST_MARKER);
+		expect(result.ok && result.artifacts).toHaveLength(1);
+		expect(result.ok && result.artifacts[0].filename).toBe("app.ts");
 	});
 
-	it("ships one snapshot per file however many refs point into it", () => {
+	it("ships one snapshot per file carrying every ref key that points into it", () => {
 		const text = lines(40);
 		const result = buildArtifacts(
 			[
@@ -47,9 +48,9 @@ describe("building the artifact set", () => {
 			[],
 		);
 
-		expect(result.ok && result.artifacts).toHaveLength(2);
-		expect(result.ok && result.manifest.files).toHaveLength(1);
-		expect(result.ok && Object.keys(result.manifest.refs)).toHaveLength(2);
+		expect(result.ok && result.artifacts).toHaveLength(1);
+		expect(result.ok && result.artifacts[0].ref.keys).toHaveLength(2);
+		expect(result.ok && result.artifacts[0].ref.refPath).toBe("src/app.ts");
 	});
 
 	it("records each ref's range and quality for the viewer's banner", () => {
@@ -58,48 +59,107 @@ describe("building the artifact set", () => {
 			[],
 		);
 
-		const entry = result.ok && Object.values(result.manifest.refs)[0];
-
-		expect(entry).toMatchObject({ startLine: 4, endLine: 6, quality: "fuzzy", reason: "renamed" });
+		expect(result.ok && result.artifacts[0].ref.keys[0]).toMatchObject({
+			startLine: 4,
+			endLine: 6,
+			quality: "fuzzy",
+			reason: "renamed",
+		});
 	});
 
 	it("carries the ambiguity count through, so the viewer can say 1 of N", () => {
 		const result = buildArtifacts([ref("a.ts", lines(10), { ambiguous: true, matchCount: 3 })], []);
 
-		expect(result.ok && Object.values(result.manifest.refs)[0]).toMatchObject({ ambiguous: true, matchCount: 3 });
+		expect(result.ok && result.artifacts[0].ref.keys[0]).toMatchObject({ ambiguous: true, matchCount: 3 });
+	});
+
+	it("keeps the last resolution when one canonical key repeats", () => {
+		const text = lines(30);
+		const result = buildArtifacts(
+			[
+				ref("a.ts", text, { startLine: 2, endLine: 3 }),
+				ref("a.ts", text, { startLine: 2, endLine: 3, quality: "fuzzy" }),
+			],
+			[],
+		);
+
+		expect(result.ok && result.artifacts[0].ref.keys).toHaveLength(1);
+		expect(result.ok && result.artifacts[0].ref.keys[0].quality).toBe("fuzzy");
+	});
+
+	it("refuses more distinct keys into one file than the wire allows, never truncating", () => {
+		const text = lines(REF_META_MAX_KEYS + 10);
+		const refs = Array.from({ length: REF_META_MAX_KEYS + 1 }, (_, i) =>
+			ref("a.ts", text, { startLine: i + 1, endLine: i + 1 }),
+		);
+		const result = buildArtifacts(refs, []);
+
+		expect(result).toMatchObject({ ok: false });
+		expect(!result.ok && result.error).toContain(`${REF_META_MAX_KEYS}`);
+	});
+});
+
+describe("segment metadata partitioning the snapshot", () => {
+	it("a full-mode snapshot declares no segments", () => {
+		const result = buildArtifacts([ref("a.ts", lines(10), { startLine: 2, endLine: 4 })], []);
+
+		expect(result.ok && result.artifacts[0].ref.segments).toBeUndefined();
+	});
+
+	it("snippet segments' line counts sum to exactly the snapshot's own line count", () => {
+		const text = hugeFile();
+		const result = buildArtifacts(
+			[
+				ref("big.ts", text, { startLine: 100, endLine: 104 }),
+				ref("big.ts", text, { startLine: 900, endLine: 904 }),
+			],
+			[],
+		);
+
+		expect(result.ok).toBe(true);
+		const artifact = result.ok ? result.artifacts[0] : undefined;
+		const declared = (artifact?.ref.segments ?? []).reduce((sum, s) => sum + s.lineCount, 0);
+		expect(declared).toBe(artifact?.content.split("\n").length);
+	});
+
+	it("each segment's declared slice reproduces the original file's lines", () => {
+		const text = hugeFile();
+		const result = buildArtifacts([ref("big.ts", text, { startLine: 900, endLine: 910 })], []);
+
+		expect(result.ok).toBe(true);
+		const artifact = result.ok ? result.artifacts[0] : undefined;
+		const segment = artifact?.ref.segments?.[0];
+		expect(segment?.startLine).toBe(897);
+		const original = text
+			.split("\n")
+			.slice((segment?.startLine ?? 1) - 1, (segment?.startLine ?? 1) - 1 + (segment?.lineCount ?? 0));
+		expect(artifact?.content.split("\n").slice(0, segment?.lineCount)).toEqual(original);
 	});
 });
 
 describe("naming snapshots the way the phone will", () => {
-	it("records the name the file will actually land under, not the path it came from", () => {
+	it("uses the name the file will actually land under, not the path it came from", () => {
 		const result = buildArtifacts([ref("src/deep/app.ts", "x\n")], []);
 
-		expect(result.ok && result.manifest.files[0].filename).toBe("app.ts");
+		expect(result.ok && result.artifacts[0].filename).toBe("app.ts");
 	});
 
 	it("dedupes against the agent's own attachments, not just against other snapshots", () => {
 		const result = buildArtifacts([ref("src/app.ts", "x\n")], ["app.ts"]);
 
-		expect(result.ok && result.manifest.files[0].filename).toBe("app-1.ts");
+		expect(result.ok && result.artifacts[0].filename).toBe("app-1.ts");
 	});
 
 	it("dedupes two source files that sanitize to one basename", () => {
 		const result = buildArtifacts([ref("a/app.ts", "x\n"), ref("b/app.ts", "y\n")], []);
 
-		expect(result.ok && result.manifest.files.map((f) => f.filename)).toEqual(["app.ts", "app-1.ts"]);
+		expect(result.ok && result.artifacts.map((a) => a.filename)).toEqual(["app.ts", "app-1.ts"]);
 	});
 
-	it("refuses an attachment claiming the reserved manifest name", () => {
-		const result = buildArtifacts([ref("a.ts", "x\n")], [MANIFEST_FILENAME]);
+	it("accepts any attachment name - nothing is reserved anymore", () => {
+		const result = buildArtifacts([ref("a.ts", "x\n")], ["switchboard-references.json"]);
 
-		expect(result).toMatchObject({ ok: false });
-		expect(!result.ok && result.error).toContain("reserved");
-	});
-
-	it("refuses it even when the collision only appears after sanitizing", () => {
-		const result = buildArtifacts([ref("a.ts", "x\n")], [`/tmp/evil/${MANIFEST_FILENAME}`]);
-
-		expect(result.ok).toBe(false);
+		expect(result.ok).toBe(true);
 	});
 });
 
@@ -109,10 +169,8 @@ describe("staying inside the size caps", () => {
 		const result = buildArtifacts([ref("big.ts", text, { startLine: 900, endLine: 910 })], []);
 
 		expect(result.ok).toBe(true);
-		const entry = result.ok ? result.manifest.files[0] : undefined;
-		expect(entry?.mode).toBe("snippet");
-		expect(entry?.segments?.[0].startLine).toBe(897);
-		expect(entry?.totalLines).toBe(text.split("\n").length);
+		const artifact = result.ok ? result.artifacts[0] : undefined;
+		expect(artifact?.ref.segments?.[0].startLine).toBe(897);
 	});
 
 	it("merges two nearby refs into one segment rather than shipping the lines twice", () => {
@@ -125,7 +183,7 @@ describe("staying inside the size caps", () => {
 			[],
 		);
 
-		expect(result.ok && result.manifest.files[0].segments).toHaveLength(1);
+		expect(result.ok && result.artifacts[0].ref.segments).toHaveLength(1);
 	});
 
 	it("keeps distant refs as separate segments, so the viewer can elide between them", () => {
@@ -138,7 +196,7 @@ describe("staying inside the size caps", () => {
 			[],
 		);
 
-		expect(result.ok && result.manifest.files[0].segments).toHaveLength(2);
+		expect(result.ok && result.artifacts[0].ref.segments).toHaveLength(2);
 	});
 
 	it("refuses an oversized file a bare path cannot narrow, and says what to do", () => {
