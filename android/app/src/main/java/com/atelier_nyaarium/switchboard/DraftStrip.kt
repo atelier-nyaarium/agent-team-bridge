@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.io.File
+import kotlinx.coroutines.delay
 
 ////////////////////////////////
 //  Composables
@@ -60,6 +61,10 @@ private val NAMED_TILE_WIDTH = 104.dp
 /** Identity for a tile's slot. A draft's srcs are unique (each pick mints its own bucket), and the
  * name is only a fallback for a row that names no bytes yet. */
 private fun tileKey(file: MessageFile): String = file.src ?: "name:${file.name}"
+
+/** How long each video frame holds. Matches the transcript, so one clip does not animate at two
+ * different speeds depending on which surface is showing it. */
+private const val FRAME_HOLD_MS = 500L
 
 /**
  * The composer's picked files. Collapsed to a fixed-height strip so a dozen attachments cannot push
@@ -202,8 +207,27 @@ private fun AttachmentTile(
 	onOpen: () -> Unit,
 	onRemove: () -> Unit,
 ) {
-	val thumb by produceState<Bitmap?>(null, file.src, file.blobId) {
-		value = ImageThumbs.of(filesDir, file)
+	// A video's frames, extracted lazily and shared with the transcript, so a picked clip animates
+	// here too rather than sitting as a named tile.
+	val frames by produceState(emptyList<String>(), file.src, file.blobId) {
+		val key = VideoThumbs.keyFor(file)
+		if (file.mime.startsWith("video/") && key != null) {
+			val source = Attachments.fileFor(filesDir, file.src)
+			if (source != null) value = VideoThumbs.ensure(filesDir, key, source)
+		}
+	}
+	var frameIndex by remember(frames) { mutableIntStateOf(0) }
+	LaunchedEffect(frames) {
+		if (frames.size > 1) {
+			while (true) {
+				delay(FRAME_HOLD_MS)
+				frameIndex = (frameIndex + 1) % frames.size
+			}
+		}
+	}
+	val thumb by produceState<Bitmap?>(null, file.src, file.blobId, frames, frameIndex) {
+		value = frames.getOrNull(frameIndex)?.let { ImageThumbs.ofSrc(filesDir, it) }
+			?: ImageThumbs.of(filesDir, file)
 	}
 	val width = if (thumb != null) TILE else NAMED_TILE_WIDTH
 	Box(Modifier.height(TILE).width(width)) {

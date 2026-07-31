@@ -16,6 +16,10 @@ object Attachments {
 	const val DIR = "attachments"
 	private const val ASSET_BASE = "https://appassets.androidplatform.net/$DIR"
 
+	/** The one mounted root the WebView loads through. Anything drawn in the transcript has to sit
+	 * under it, video frames included, so this is not private. */
+	internal fun assetBase(): String = ASSET_BASE
+
 	// sweepOrphanBuckets' default age floor: how long an unreferenced bucket must sit before it
 	// is treated as safe to delete outright, rather than possibly still being written into by a
 	// decode whose row has not reached a durable write yet. A generous round number - internal so
@@ -34,6 +38,8 @@ object Attachments {
 		// Thumbnails outlive their files in memory, so a purge that skipped this would keep drawing
 		// revoked attachments until the process died.
 		ThumbCache.clear()
+		// The frames went with the root above, so nothing may still be counted as ready.
+		FrameReadiness.clear()
 	}
 
 	/** Basename only, with anything outside a safe charset collapsed to '_'. */

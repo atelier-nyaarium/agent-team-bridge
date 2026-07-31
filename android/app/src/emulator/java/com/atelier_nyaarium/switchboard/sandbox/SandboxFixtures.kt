@@ -5,6 +5,10 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.media.MediaCodec
+import android.media.MediaCodecInfo.CodecCapabilities
+import android.media.MediaFormat
+import android.media.MediaMuxer
 import com.atelier_nyaarium.switchboard.Attachments
 import com.atelier_nyaarium.switchboard.Draft
 import com.atelier_nyaarium.switchboard.Message
@@ -101,6 +105,19 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			seq = 20,
 		)
 
+		videoFixture()?.let { clip ->
+			rows += Message(
+				fromMe = false,
+				text = "A video, whose tile cycles frames once they have been extracted.",
+				at = now - 110_000,
+				id = id++,
+				files = attach("sandbox-video", listOf(clip)),
+				from = SESSION,
+				epoch = SANDBOX_EPOCH,
+				seq = 23,
+			)
+		}
+
 		// The snapshot declares what it is and which refs it backs, exactly as a sender stamps it, so
 		// the sandbox exercises the real classification: the chip hides and the links open.
 		rows += Message(
@@ -194,6 +211,96 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		bitmap.recycle()
 		return staged(name, "image/png", out.toByteArray())
 	}
+
+	/**
+	 * A real, encodable clip, generated rather than bundled for the same reason the PNG is.
+	 *
+	 * Fed as YUV buffers rather than through an input Surface, which would need GL. Each second gets
+	 * its own colour, so a thumbnail that cycles is obviously distinguishable from one that does not,
+	 * which is the whole thing being looked at. Null when the device has no usable encoder: the
+	 * sandbox then has no video row, rather than failing to start.
+	 */
+	private fun videoFixture(): OutgoingFile? = runCatching {
+		val width = 320
+		val height = 240
+		val fps = 12
+		val seconds = 40
+		val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+			setInteger(MediaFormat.KEY_COLOR_FORMAT, CodecCapabilities.COLOR_FormatYUV420SemiPlanar)
+			setInteger(MediaFormat.KEY_BIT_RATE, 500_000)
+			setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+			// A sparse GOP on purpose: it is what makes a keyframe-snapping seek collapse every sample
+			// onto one frame, which is the failure OPTION_CLOSEST exists to avoid.
+			setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 10)
+		}
+		val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+		codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+		codec.start()
+
+		val scratch = File(filesDir, "sandbox-fixtures").apply { mkdirs() }
+		val out = File(scratch, "clip.mp4")
+		val muxer = MediaMuxer(out.path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+		val frame = ByteArray(width * height * 3 / 2)
+		val info = MediaCodec.BufferInfo()
+		var track = -1
+		var muxing = false
+
+		fun drain(endOfStream: Boolean) {
+			while (true) {
+				val index = codec.dequeueOutputBuffer(info, if (endOfStream) 10_000 else 0)
+				if (index == MediaCodec.INFO_TRY_AGAIN_LATER) {
+					if (!endOfStream) return
+				} else if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+					track = muxer.addTrack(codec.outputFormat)
+					muxer.start()
+					muxing = true
+				} else if (index >= 0) {
+					val buffer = codec.getOutputBuffer(index)
+					if (buffer != null && muxing && info.size > 0 &&
+						info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0
+					) {
+						buffer.position(info.offset)
+						buffer.limit(info.offset + info.size)
+						muxer.writeSampleData(track, buffer, info)
+					}
+					codec.releaseOutputBuffer(index, false)
+					if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
+				}
+			}
+		}
+
+		for (i in 0 until fps * seconds) {
+			val index = codec.dequeueInputBuffer(10_000)
+			if (index >= 0) {
+				val second = i / fps
+				// Luma ramps and chroma rotates, so consecutive sampled seconds never look alike.
+				frame.fill((60 + (second * 17) % 160).toByte(), 0, width * height)
+				val u = (80 + (second * 37) % 140).toByte()
+				val v = (200 - (second * 23) % 140).toByte()
+				var p = width * height
+				while (p < frame.size) {
+					frame[p] = u
+					frame[p + 1] = v
+					p += 2
+				}
+				codec.getInputBuffer(index)?.apply {
+					clear()
+					put(frame)
+				}
+				codec.queueInputBuffer(index, 0, frame.size, i * 1_000_000L / fps, 0)
+			}
+			drain(false)
+		}
+		val last = codec.dequeueInputBuffer(10_000)
+		if (last >= 0) codec.queueInputBuffer(last, 0, 0, fps * seconds * 1_000_000L / fps, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+		drain(true)
+
+		codec.stop()
+		codec.release()
+		if (muxing) muxer.stop()
+		muxer.release()
+		OutgoingFile.of("clip.mp4", "video/mp4", out.length(), out).takeIf { out.length() > 0 }
+	}.getOrNull()
 
 	private fun textFixture(): OutgoingFile =
 		staged("notes.txt", "text/plain", "A plain attachment, so the non-image chip path renders too.\n".toByteArray())
