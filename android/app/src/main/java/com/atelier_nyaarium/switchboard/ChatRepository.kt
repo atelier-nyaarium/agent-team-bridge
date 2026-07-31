@@ -4059,7 +4059,17 @@ class ChatRepository(
 			.map { it.src }
 			.toList() + _state.value.scheduledSends.values.flatMap { it.fileRefs }.map { it.src } +
 			_state.value.drafts.values.flatMap { it.files }.map { it.src }
-		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs)
+		// A video's frame set lives in its own bucket that no src points at, so it has to be named
+		// separately or every restart wipes the sets and re-runs the seeks that filled them.
+		val frameBuckets = (
+			_state.value.threads.values.asSequence().flatMap { it.asSequence() }.flatMap { it.files.asSequence() } +
+				_state.value.drafts.values.asSequence().flatMap { it.files.asSequence() }
+			)
+			.filter { it.mime.startsWith("video/") }
+			.mapNotNull { VideoThumbs.keyFor(it) }
+			.map { VideoThumbs.bucketFor(it) }
+			.toSet()
+		Attachments.sweepOrphanBuckets(filesDir, referencedSrcs, frameBuckets)
 		// The blob store's own residue, on the same cold-start pass. Nothing references a staged blob
 		// once its bytes reached a bucket, so age is the only signal available and the only one needed:
 		// a live transfer is minutes old, and anything swept can be fetched again by name. Runs

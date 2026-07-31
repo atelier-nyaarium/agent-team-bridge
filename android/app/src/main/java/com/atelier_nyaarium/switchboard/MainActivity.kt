@@ -4182,7 +4182,12 @@ fun ThreadWebView(
 			for (file in message.files) {
 				if (!file.mime.startsWith("video/")) continue
 				val key = VideoThumbs.keyFor(file) ?: continue
-				if (VideoThumbs.cached(filesDir, key).isNotEmpty()) continue
+				// Skip on ANNOUNCED, never on "already on disk". Extraction does not observe
+				// cancellation, so an interrupted pass still writes its full set; keying the skip on
+				// the files would then make every later pass step over it, leaving the row rendered as
+				// a plain file forever with a complete set sitting unused. This also keeps the common
+				// case off the disk entirely.
+				if (FrameReadiness.versionOf(key) > 0) continue
 				val source = Attachments.fileFor(filesDir, file.src) ?: continue
 				if (VideoThumbs.ensure(filesDir, key, source).isNotEmpty()) FrameReadiness.mark(key)
 			}

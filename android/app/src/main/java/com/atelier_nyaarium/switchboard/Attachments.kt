@@ -225,8 +225,17 @@ object Attachments {
 	 * concurrently with anything that could still decode into a bucket (mtime updates the
 	 * instant a file is written into it, so sequencing strictly before any write is the only
 	 * safe ordering - a concurrent sweep cannot be made safe by the age guard alone). */
-	fun sweepOrphanBuckets(filesDir: File, referencedSrcs: Collection<String?>, minAgeMs: Long = ORPHAN_SWEEP_MIN_AGE_MS) {
-		val referencedBuckets = referencedSrcs.mapNotNull { bucketOf(it) }.toSet()
+	fun sweepOrphanBuckets(
+		filesDir: File,
+		referencedSrcs: Collection<String?>,
+		// Buckets that no src points at. A video's frame set is reachable only through the file it was
+		// extracted from, so it has to be named here or the sweep treats it as orphaned. Exempting the
+		// whole family by name prefix instead would make it unreclaimable, since this sweep is the only
+		// thing that deletes a bucket wholesale.
+		keepBuckets: Set<String> = emptySet(),
+		minAgeMs: Long = ORPHAN_SWEEP_MIN_AGE_MS,
+	) {
+		val referencedBuckets = referencedSrcs.mapNotNull { bucketOf(it) }.toSet() + keepBuckets
 		val now = System.currentTimeMillis()
 		val dirs = root(filesDir).listFiles()?.filter { it.isDirectory } ?: return
 		for (dir in dirs) {
