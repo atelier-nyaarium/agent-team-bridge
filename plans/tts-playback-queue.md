@@ -1003,6 +1003,12 @@ question is really one of ownership of that directory, and nothing here owns it:
 preload, and `forget` all reach into the same path with no arbiter. Every fix so far has been a way
 for a writer to guess whether its file is still wanted.
 
+STILL OPEN. This is the one class of the three that structural work has not closed, and it is
+deliberately left for a later lap rather than attempted late: the shape (a generation-stamped
+directory, so a purge RENAMES and a stale writer's path stops existing) is filesystem-semantics work
+that nothing automated covers, and a hasty version of it would be another seam relocation. The epoch
+is now the registry's ONLY remaining opinion about files, so the chunk is cleanly separable.
+
 **The pattern across all three mechanisms.** Rounds 7, 8 and 9 each introduced their own successor:
 the role fix made the button claim-wide (round 8 regression), the button fix left `play` still
 cancelling a synthesizing entry (round 9 regression, MAJOR), and the purge epoch broke the voice
@@ -1046,7 +1052,15 @@ the suppression rule every bulk path had to remember. Six role tests collapsed i
 protects a warm-up now. This closes bug class 2: there is no second identity left to conflate, and no
 rule for a Phase 1b predicate to forget.
 
-**Ranked next, not done.** Each closes a recorded class rather than a defect:
+**Landed: a residue gate.** `PlaybackResidueTest.kt`, in the repo's existing
+`OutgoingFileResidueTest.kt` mould: nothing outside the registry may mint a `PlaybackId` or construct a
+playback `Event`, and the registry may import no platform type. The first two keep the ownership the
+other two chunks established from eroding at a NEW call site, which is how all nine rounds recurred -
+every patch was correct where it landed. The third guards the property the 39 unit tests depend on,
+and the pressure on it is ordinary: the first instinct on losing a log line was to reach for the
+Android logger. Verified to fail when violated rather than assumed to.
+
+**Ranked next, not done.** Closes the one recorded class still open:
 
 1. **Give the cache directory an owner.** The strongest shape proposed is a generation-stamped
    directory, so a purge RENAMES and a stale writer's path simply no longer exists. That deletes
