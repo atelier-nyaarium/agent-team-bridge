@@ -130,7 +130,9 @@ class PlaybackQueueTest {
 
 		val tookPlaying = q.dropTeam(team)
 
-		assertTrue(tookPlaying)
+		// Named, not just flagged: the caller stops that request by identity so a teardown cannot
+		// silence a different team that happens to be the audible one.
+		assertEquals(entry(2), tookPlaying)
 		// A remembered failure is no longer a queued entry, so a teardown scoped to the queue alone
 		// leaves it pointing at a thread forget has already removed.
 		assertTrue(q.remembered().isEmpty())
@@ -144,7 +146,7 @@ class PlaybackQueueTest {
 
 		val tookPlaying = q.dropTeam(team)
 
-		assertFalse(tookPlaying)
+		assertNull(tookPlaying)
 		assertEquals(head, q.playing())
 		assertEquals(listOf(entry(1, other)), q.queued())
 	}

@@ -1486,7 +1486,7 @@ class ChatRepository(
 	 * separate step, so closing a tab the user may reopen keeps its audio. */
 	suspend fun dropQueuedFor(team: String) {
 		advanceMutex.withLock {
-			if (queue.dropTeam(team)) stts.abandonSounding()
+			queue.dropTeam(team)?.let { stts.abandon(it.team, it.at, it.tier) }
 			queue.startNext()?.let { speak(it) }
 		}
 	}
@@ -3969,12 +3969,13 @@ class ChatRepository(
 					val burstJobs = mutableListOf<Job>()
 					val autoPlayedPeerPairs = mutableSetOf<String>()
 					for ((team, msgs) in burst) {
-						// EVERY agent message, in arrival order. A peer copy is attributed to the
-						// RECEIVING session rather than to whichever thread the drain reached first,
-						// because the entry's team is what teardown and tap-to-jump dereference.
+						// EVERY agent message, in arrival order, addressed by the thread it actually
+						// lives in. A peer copy is NOT re-attributed to its `to`: the two mirror
+						// copies carry different timestamps, so (to, at) names a row that thread does
+						// not hold, and the engine would decline an entry the queue is waiting on.
 						val agentMsgs = msgs.filter { !it.fromMe }
 							.filterNot { isDuplicatePeerAutoPlay(it, autoPlayedPeerPairs) }
-							.map { it to (it.takeIf { m -> m.isPeer }?.to ?: team) }
+							.map { it to team }
 						val lastAgent = msgs.lastOrNull { !it.fromMe }
 						val alreadyAutoPlayed = agentMsgs.isEmpty()
 						// Only spend synthesis on followed threads (open tabs); a

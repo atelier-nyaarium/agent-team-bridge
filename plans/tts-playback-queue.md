@@ -1144,6 +1144,20 @@ Lower-ranked and not yet fixed: cross-team order within one burst is synthesis-c
 than arrival order; `clearAll` leaves the queue populated; and the preload warms the burst's first
 message while the notification's Play action still targets its last.
 
+**Fixed so far.** A1: `SttsPlayer.play` now returns whether it CLAIMED the request, which is the same
+question as whether a terminal is owed, and the repository mints the terminal itself when the engine
+declines. A2: the peer re-attribution is REVERTED - an entry is addressed by the thread it actually
+lives in. Attributing to the receiving session needs that thread's own copy of the row looked up, not
+the other copy's timestamp pasted onto a different team; until that lookup exists, the re-attribution
+only produced entries nothing could resolve. A3: `dropQueuedFor` starts the next entry, so tearing one
+team down no longer halts every other. A7: `dropTeam` NAMES the entry it took so teardown abandons that
+request by identity rather than silencing whatever is audible.
+
+**Still open, and they matter:** A4, a user stop parks the queue for good because `STOPPED` holds and
+`resume()` has no caller; A5, the queue talks over a manual play because it reads PREEMPTED as "carry
+on" when something outside the queue took the sound; A6, the followed gate is evaluated on the drained
+thread and the dedupe claims its key before the gate runs.
+
 Still to wire, all in `ChatRepository`:
 
 - Autoplay drain over EVERY agent message in order, replacing `msgs.lastOrNull { !it.fromMe }`.

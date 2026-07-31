@@ -272,9 +272,6 @@ class SttsPlayer(private val root: File) {
 		return true
 	}
 
-	/** End the sounding request by its own identity rather than by "whatever is audible", so a teardown
-	 * cannot silence a team it was not asked to touch. */
-	fun abandonSounding() = apply(requests.finishSounding(Outcome.PREEMPTED))
 
 	/** Play on its own lane. `prepare` throws on a cached file that will not decode and
 	 * `LoudnessEnhancer` throws on devices without the effect; neither reaches `setOnErrorListener`,

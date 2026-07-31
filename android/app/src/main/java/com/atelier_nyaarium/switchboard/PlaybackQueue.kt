@@ -95,18 +95,19 @@ class PlaybackQueue {
 	/**
 	 * Forget everything belonging to one team: queued, playing, and remembered.
 	 *
-	 * Returns whether the HEAD was taken, so the caller can stop the player knowing this queue no
-	 * longer points at it. Dropping before stopping is what keeps a stop's own terminal from advancing
-	 * into an entry whose audio the same call is deleting.
+	 * Returns the entry it took the sound from, or null. NAMING it lets the caller stop that request by
+	 * identity instead of stopping whatever happens to be audible, which may belong to another team.
+	 * Dropping before stopping is what keeps a stop's own terminal from advancing into an entry whose
+	 * audio the same call is deleting.
 	 */
 	@Synchronized
-	fun dropTeam(team: String): Boolean {
+	fun dropTeam(team: String): QueueEntry? {
 		pending.removeAll { it.team == team }
 		retried.removeAll { it.team == team }
 		failures.removeAll { it.team == team }
-		val wasPlaying = head?.team == team
-		if (wasPlaying) head = null
-		return wasPlaying
+		val dropped = head?.takeIf { it.team == team }
+		if (dropped != null) head = null
+		return dropped
 	}
 
 	@Synchronized
