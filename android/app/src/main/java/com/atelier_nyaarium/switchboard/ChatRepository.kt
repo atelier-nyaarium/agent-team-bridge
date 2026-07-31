@@ -1481,10 +1481,11 @@ class ChatRepository(
 			val step = queue.advance(entry, outcome)
 			step.failed?.let { DebugLog.log("Stts", "giving up on ${it.team} @${it.at} after a retry") }
 			if (step.next != null) {
-				// Guarded like the resume below. A head can fail BEFORE it ever sounds - a cache miss
-				// that errors, or a cached file that will not decode - and in that window the user may
-				// already be listening to something they asked for.
-				if (!stts.isSounding()) speak(step.next)
+				// Spoken unconditionally. `advance` has already installed this as the head, so refusing
+				// here would strand an entry the engine was never given and no terminal will ever
+				// retire. It is safe to hand over even while the user is listening to something else:
+				// the request yields at the player and reports its own terminal.
+				speak(step.next)
 				return
 			}
 			// The head just gave the sound to something else. An empty head reads exactly like an idle

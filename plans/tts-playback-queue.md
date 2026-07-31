@@ -1209,8 +1209,16 @@ request that finds the sound already taken stands down and reports its own termi
 displacing. Autoplay yields; anything the user asked for never does. The asymmetry is the rule, and it
 holds for every request in flight rather than for the call sites that remembered to check - which is
 the point, because a request handed over before the person acted arrives long after any caller is left
-to ask. The three caller-side guards stay as cheap early exits, but they are no longer what makes it
-correct.
+to ask.
+
+- Round 4: the caller-side guard from round 3 was not merely redundant afterwards, it was harmful.
+  `advance` installs `step.next` as the head BEFORE the caller decides, so refusing to speak it
+  stranded an entry the engine never received and no terminal could ever retire - the wedge from A1,
+  reintroduced by the patch for A5. Deleted. Handing the entry over is now always right, because the
+  request yields at the player and reports its own terminal either way.
+
+The lesson worth keeping: once the invariant moved into `sound()`, every guard protecting it from
+outside became a liability rather than insurance. A redundant check is not free when it can refuse.
 
 **Still open:** cross-team ordering within one burst; `clearAll` leaving the queue populated; the
 notification's Play action targeting the burst's last message while the preload warms its first; two
