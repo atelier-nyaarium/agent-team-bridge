@@ -61,15 +61,15 @@ async function resolve(uri: string): Promise<Resolved> {
 	if (!result.ok) throw new Error(`hard failure: ${result.error}`);
 	if (result.files.length === 0) throw new Error("no ref detected");
 
-	const blobId = result.files[0].blobId;
-	if (blobId === undefined || !h.wire) throw new Error("manifest shipped without naming its bytes");
-	const manifest = JSON.parse(h.wire.read(blobId).toString());
-	const entry = Object.values(manifest.refs)[0] as Resolved;
-	const source = fs.readFileSync(path.join(ROOT, (entry as unknown as { refPath: string }).refPath), "utf8");
+	// Resolution now rides the snapshot's own declared metadata, not a manifest file.
+	const meta = result.files[0].ref;
+	if (!meta) throw new Error("ref snapshot shipped without its ref metadata");
+	const entry = meta.keys[0] as unknown as Resolved;
+	const source = fs.readFileSync(path.join(ROOT, meta.refPath), "utf8");
 
 	return {
 		...entry,
-		snapshots: result.files.length - 1,
+		snapshots: result.files.length,
 		code: source
 			.split("\n")
 			.slice(entry.startLine - 1, entry.endLine)
@@ -228,13 +228,14 @@ describe("degrading rather than refusing", () => {
 });
 
 describe("what the send carries", () => {
-	it("ships one snapshot for two refs into the same file", async () => {
+	it("ships one snapshot for two refs into the same file, carrying both keys", async () => {
 		const result = await appendRefArtifacts(
 			"[a](ref://src/cart.ts:Shop:Cart:add) and [b](ref://src/cart.ts:Shop:Cart)",
 			[],
 		);
 
-		expect(result.ok && result.files.map((f) => f.filename)).toEqual(["switchboard-references.json", "cart.ts"]);
+		expect(result.ok && result.files.map((f) => f.filename)).toEqual(["cart.ts"]);
+		expect(result.ok && result.files[0].ref?.keys).toHaveLength(2);
 	});
 
 	it("detects nothing for a ref written inside a fence", async () => {

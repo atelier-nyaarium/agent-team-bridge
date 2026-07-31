@@ -2,14 +2,9 @@ package com.atelier_nyaarium.switchboard.plugins.references
 
 import android.content.Context
 import com.atelier_nyaarium.switchboard.Attachments
-import com.atelier_nyaarium.switchboard.BuildConfig
 import com.atelier_nyaarium.switchboard.ChipDecoration
-import com.atelier_nyaarium.switchboard.DebugLog
-import com.atelier_nyaarium.switchboard.plugins.AccountWipeHandler
 import com.atelier_nyaarium.switchboard.plugins.AttachmentChipDecorator
-import com.atelier_nyaarium.switchboard.plugins.InboundMessageHandler
 import com.atelier_nyaarium.switchboard.plugins.LinkHandler
-import com.atelier_nyaarium.switchboard.plugins.ThreadForgetHandler
 import com.atelier_nyaarium.switchboard.plugins.PluginEntry
 import com.atelier_nyaarium.switchboard.plugins.PluginHost
 import com.atelier_nyaarium.switchboard.plugins.TappedLink
@@ -19,52 +14,23 @@ import com.atelier_nyaarium.switchboard.proto.canonicalizeRefUri
 /**
  * The References plugin (manifest: `assets/plugins/references/manifest.json`).
  *
- * Claims the `ref:` scheme. A tap resolves against the TAPPED ROW's own manifest rather than any
- * stored index, which is what gives references snapshot semantics: the same ref written in two
- * messages opens each message's own copy of the file, as it was when that message was sent. It also
- * means a message drained before this plugin existed still opens correctly, since nothing had to be
- * recorded at the time.
+ * Claims the `ref:` scheme. Every display decision is a pure read of the tapped file's own
+ * wire-declared metadata: which files are machinery (`role`), and which ref keys a snapshot backs
+ * (`ref.keys`). A tap resolves against the TAPPED ROW's own files, which is what gives references
+ * snapshot semantics: the same ref written in two messages opens each message's own copy of the
+ * file, as it was when that message was sent.
  */
 class ReferencesPlugin : PluginEntry {
 	override fun register(host: PluginHost) {
-		RefDisplayIndex.init(host.applicationContext)
+		// TODO(2026-09): remove with LegacyRefMigration. The drain-time display index this store
+		// backed is gone; deleting its orphaned prefs file is a no-op once it has run anywhere.
+		host.applicationContext.deleteSharedPreferences("plugin-references-index")
+		// A snapshot is machinery, not something the reader attached, so its chip is hidden. A pure
+		// field read: no bytes, no disk, no index, no dependence on when anything landed.
+		host.attachmentChipDecorators.claim("references:hide-artifacts", AttachmentChipDecorator { _, file ->
+			if (file.role == "ref-snapshot") ChipDecoration("", "references", hidden = true) else null
+		})
 		host.linkHandlers.claim("references:ref", RefLinkHandler)
-		// Drain-time seeding of the DISPLAY index. Disk is allowed here, unlike the serialization
-		// site that consumes it. Reading the manifest again at tap time stays the authority, so a
-		// message drained before this plugin existed still opens; it just renders plain until then.
-		host.inboundMessages.claim("references:index", InboundMessageHandler { filesDir, msg ->
-			val manifest = manifestFrom(filesDir, msg.files) ?: return@InboundMessageHandler
-			val artifacts = (manifest.files.map { it.filename } + MANIFEST_FILENAME).toSet()
-			RefDisplayIndex.record(
-				msg.team,
-				msg.at,
-				RefDisplayIndex.Summary(
-					hiddenRels = msg.files.filter { it.name in artifacts }.mapNotNull { f ->
-						f.src?.let { it.substringAfter("attachments/", it) }
-					}.toSet(),
-					quality = manifest.refs.mapValues { (_, entry) -> entry.quality },
-				),
-			)
-		})
-		// A reference artifact is machinery, not something the reader attached, so its chip is hidden.
-		host.attachmentChipDecorators.claim("references:hide-artifacts", AttachmentChipDecorator { team, file ->
-			val rel = file.src?.let { it.substringAfter("attachments/", it) } ?: return@AttachmentChipDecorator null
-			val artifact = RefDisplayIndex.isArtifact(team, rel)
-			// Tripwire, not a trace. MANIFEST_FILENAME is reserved (the builder refuses to compose a
-			// message where any other attachment claims it), so a chip under that exact name that the
-			// index does not know is ALWAYS wrong, and saying so needs no manifest read. Silent on
-			// every healthy render, which is what lets it sit in the build waiting for a rare miss
-			// instead of rolling the ring buffer over.
-			if (BuildConfig.DEBUG && !artifact && file.name == MANIFEST_FILENAME) {
-				DebugLog.log(
-					"RefIdx",
-					"TRIPWIRE reserved-name chip not indexed team=$team rel=$rel known=${RefDisplayIndex.knownRels(team)}",
-				)
-			}
-			if (artifact) ChipDecoration("", "references", hidden = true) else null
-		})
-		host.threadForgetHandlers.claim("references:forget", ThreadForgetHandler { _, team -> RefDisplayIndex.forget(team) })
-		host.accountWipeHandlers.claim("references:wipe", AccountWipeHandler { _ -> RefDisplayIndex.forgetAll() })
 	}
 }
 
@@ -76,21 +42,20 @@ private object RefLinkHandler : LinkHandler {
 	 *
 	 * Declining rather than claiming-and-doing-nothing is the miss contract: every path out of here
 	 * that cannot show code returns false, so the tap falls back to the link menu with the URL
-	 * visible. That covers a row with no manifest (a crosstalk body is never scanned, and its peer
-	 * mirror carries none), a ref absent from this message's manifest, a purged attachment bucket,
-	 * and a manifest that does not validate.
+	 * visible. That covers a ref no file on this row declares, a snapshot whose bytes have not
+	 * landed, and a purged attachment bucket.
 	 */
 	override fun tryOpen(context: Context, link: TappedLink): Boolean {
 		val key = canonicalizeRefUri(link.url) ?: return false
-		val manifest = manifestFrom(context.filesDir, link.files) ?: return false
-		val entry = manifest.refs[key] ?: return false
-		val file = manifest.files.firstOrNull { it.refPath == entry.refPath } ?: return false
-
-		val src = link.files.firstOrNull { it.name == file.filename }?.src ?: return false
-		val rel = src.substringAfter("attachments/", src)
-		if (Attachments.resolve(context.filesDir, rel) == null) return false
-
-		ReferenceOpenBus.request(ReferenceOpenRequest(link.team, entry, file, rel, link.url))
-		return true
+		for (file in link.files) {
+			val meta = file.ref ?: continue
+			val entry = meta.keys.firstOrNull { it.key == key } ?: continue
+			val src = file.src ?: return false
+			val rel = src.substringAfter("attachments/", src)
+			if (Attachments.resolve(context.filesDir, rel) == null) return false
+			ReferenceOpenBus.request(ReferenceOpenRequest(link.team, entry, meta, rel, link.url))
+			return true
+		}
+		return false
 	}
 }

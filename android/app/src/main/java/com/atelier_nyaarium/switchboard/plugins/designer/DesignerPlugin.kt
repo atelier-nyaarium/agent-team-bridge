@@ -28,12 +28,13 @@ class DesignerPlugin : PluginEntry {
 		host.attachmentOpeners.claim("designer:card", DesignerCardOpener)
 		host.threadForgetHandlers.claim("designer:forget", ThreadForgetHandler { _, team -> DesignStore.forget(team) })
 		host.accountWipeHandlers.claim("designer:wipe", AccountWipeHandler { _ -> DesignStore.forgetAll() })
-		// Data-plane: each new inbound dsCard upserts into the store (agent-pushed content only, so
-		// skip own/peer rows). Runs on the poll thread inside the drain, so the read is bounded.
-		host.inboundMessages.claim("designer:ingest", InboundMessageHandler { filesDir, msg ->
+		// Data-plane: each new inbound design-card upserts into the store from its wire-declared
+		// fields alone (agent-pushed content only, so skip own/peer rows). Zero disk and zero
+		// dependence on whether the bytes have landed: the card exists the moment its message does,
+		// and the dock resolves the bytes lazily at render.
+		host.inboundMessages.claim("designer:ingest", InboundMessageHandler { _, msg ->
 			if (msg.fromMe || msg.isPeer) return@InboundMessageHandler
-			cardsFrom(msg.files, msg.at) { rel -> readCardPrefix(filesDir, rel) }
-				.forEach { DesignStore.upsert(msg.team, it) }
+			msg.files.mapNotNull { storedCardFrom(it, msg.at) }.forEach { DesignStore.upsert(msg.team, it) }
 		})
 		// Agent-initiated delete via the generic plugin-action dispatch. DesignStore.delete is
 		// already idempotent (a list-size check before any write), satisfying PluginActionHandler's
@@ -42,13 +43,15 @@ class DesignerPlugin : PluginEntry {
 			val fileName = (action.payload?.get("fileName") as? JsonPrimitive)?.contentOrNull ?: return@PluginActionHandler
 			DesignStore.delete(action.team, fileName)
 		})
-		// The in-chat announce chip: a chip whose rel IS a card's current push shows the card's
-		// title with Designer styling. Rel-keyed on purpose - an older revision of a re-pushed
-		// file, a deleted card, or a non-card html all miss the store and keep the plain chip.
-		// In-memory lookup only (the decorator contract; this runs per file per transcript sync).
+		// The in-chat announce chip: a chip naming a card's CURRENT push shows the card's title with
+		// Designer styling. Content-keyed (blobId) with a rel fallback for pre-role stored cards -
+		// both keys make an older revision of a re-pushed file, a deleted card, or a non-card html
+		// miss the store and keep the plain chip. In-memory lookup only (the decorator contract;
+		// this runs per file per transcript sync).
 		host.attachmentChipDecorators.claim("designer:card-title", AttachmentChipDecorator { team, file ->
-			val rel = file.src?.let(::relOf)?.takeIf { it.isNotEmpty() } ?: return@AttachmentChipDecorator null
-			DesignStore.cardForRel(team, rel)?.let { card -> ChipDecoration(card.displayName, "designer") }
+			val card = file.blobId?.let { DesignStore.cardForBlob(team, it) }
+				?: file.src?.let(::relOf)?.takeIf { it.isNotEmpty() }?.let { DesignStore.cardForRel(team, it) }
+			card?.let { ChipDecoration(it.displayName, "designer") }
 		})
 	}
 }

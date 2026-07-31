@@ -72,6 +72,21 @@ class AttachmentDisplayTest {
 	}
 
 	@Test
+	fun anUnrecognizedRoleNeverTakesAThumbnailAndSortsLast() {
+		// The sender said something deliberate this build does not understand: the signal spends on
+		// ranking only, never reachability - shown as a plain row at the end, not hidden, because a
+		// wrong show heals at the next update while a wrong hide is a file the user cannot reach.
+		val files = listOf(
+			file("future.png", "image/png").copy(role = "hologram-frame"),
+			file("shot.png", "image/png").copy(role = "attachment"),
+			file("notes.txt", "text/plain"),
+		)
+		val shown = displayAttachments(files, noDecoration)
+		assertEquals(listOf("shot.png", "notes.txt", "future.png"), shown.map { it.file.name })
+		assertTrue(!shown.last().previewable)
+	}
+
+	@Test
 	fun labelsAnAttachmentWithItsDecorationTitleInsteadOfTheFilename() {
 		val shown = displayAttachments(listOf(file("a1b2c3.txt", "text/plain"))) {
 			ChipDecoration("cart.ts : add", "ref")

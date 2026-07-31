@@ -43,6 +43,7 @@ import type {
 	ResponsePushPayload,
 	TeamInfo,
 } from "../shared/types.js";
+import { stampLegacyRoles } from "./legacyRoles.js";
 import { type Presented, presentedByRequest, type SessionAuthority } from "./sessionAuthority.js";
 import type { VibeCheck } from "./vibeCheck.js";
 import type { WakeResult } from "./wake.js";
@@ -260,6 +261,24 @@ function stripFileRefs(files: ChannelFile[]): ChannelFile[] {
  */
 function stampBlobHolder(files: ChannelFile[], gatewayId: string): ChannelFile[] {
 	return files.map((f) => (f.blobId && !f.blobGateway ? { ...f, blobGateway: gatewayId } : f));
+}
+
+/**
+ * Fill absent roles before the entry is stored or forwarded, so the durable stores converge on a
+ * state where a role-less entry no longer exists.
+ *
+ * Two rules, chosen by WHO composed the list. A console list is the owner's own files, never
+ * machinery, so absent means `attachment` outright - the positional rule below must never touch it,
+ * or a file the owner happened to name like the old manifest would be relabeled and hidden. Any
+ * agent-composed role-less list (a not-yet-reloaded MCP, an old federated peer) was written under
+ * the pre-role convention, so it takes `stampLegacyRoles`: attachments, then the manifest (dropped),
+ * then its snapshots - which also degrades to all-`attachment` when no manifest rides along. A
+ * partially-roled list passes through untouched; absence still SHOWS downstream, and the strict
+ * edge rejects it outright once the flip lands.
+ */
+function normalizeRoles(files: ChannelFile[], opts: { consoleSender?: boolean }): ChannelFile[] {
+	if (!opts.consoleSender) return stampLegacyRoles(files);
+	return files.map((f) => (f.role ? f : { ...f, role: "attachment" }));
 }
 
 /** The one measurement of a plugin-action payload's size, so the schema-level check and the
@@ -1137,7 +1156,12 @@ export function createRoutes({
 		// Same rule as respond: only a local agent's own upload gets this Gateway's stamp.
 		const files =
 			rawSendFiles &&
-			(opts.trustedInbound || opts.consoleSender ? rawSendFiles : stampBlobHolder(rawSendFiles, localGatewayId));
+			normalizeRoles(
+				opts.trustedInbound || opts.consoleSender
+					? rawSendFiles
+					: stampBlobHolder(rawSendFiles, localGatewayId),
+				opts,
+			);
 		// Only a real external caller is gated. A federated relay speaks for a remote sender, and the
 		// console's `from` is its free-form Device Name rather than a session name, so neither can be
 		// resolved to a local record and both arrive already authenticated by their own sealed path.
@@ -1438,7 +1462,10 @@ export function createRoutes({
 		// origin's stamp and the console carries its own, so neither may be overwritten with ours.
 		const files =
 			rawFiles &&
-			(opts.trustedInbound || opts.consoleSender ? rawFiles : stampBlobHolder(rawFiles, localGatewayId));
+			normalizeRoles(
+				opts.trustedInbound || opts.consoleSender ? rawFiles : stampBlobHolder(rawFiles, localGatewayId),
+				opts,
+			);
 
 		// Raw-bytes backstop before anything is stored or pushed.
 		if (files && files.length > 0) {
@@ -1781,7 +1808,8 @@ export function createRoutes({
 		// caller - a notice is always posted by an agent on this machine, whose bytes are therefore
 		// here - and the notice then fans out to wherever the owner's console actually polls, so
 		// without the stamp a multi-Gateway owner can never fetch a notify_human attachment.
-		const files = rawNoticeFiles && stampBlobHolder(rawNoticeFiles, localGatewayId);
+		// A notice is always posted by an agent on this machine, so the legacy-sender rule applies.
+		const files = rawNoticeFiles && normalizeRoles(stampBlobHolder(rawNoticeFiles, localGatewayId), {});
 		const refused = refuseImpersonation(req, from);
 		if (refused) return refused;
 		if (files && files.length > 0) {

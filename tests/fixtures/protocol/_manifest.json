@@ -24,6 +24,7 @@
 		{ "file": "mailbox-reply-files.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "mailbox-reply-files-modified.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "mailbox-reply-blob.json", "schema": "MailboxEntry", "expect": "pass" },
+		{ "file": "mailbox-reply-roles.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "op-envelope-blob-put.json", "schema": "ConsoleOpEnvelope", "expect": "pass" },
 		{ "file": "mailbox-sent.json", "schema": "MailboxEntry", "expect": "pass" },
 		{ "file": "mailbox-peer.json", "schema": "MailboxEntry", "expect": "pass" },

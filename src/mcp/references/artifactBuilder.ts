@@ -1,11 +1,12 @@
-import { MANIFEST_FILENAME, MANIFEST_MARKER, safeName, uniqueName } from "./artifactNames.js";
+import { REF_META_MAX_KEYS, REF_META_MAX_SEGMENTS, type RefFileMeta } from "../../shared/channel-file.js";
+import { safeName, uniqueName } from "./artifactNames.js";
 import type { Resolution } from "./refResolver.js";
 import type { FoundRef } from "./refScanner.js";
 
 ////////////////////////////////
 //  Interfaces & Types
 
-/** A ref that resolved, ready to be filed into the manifest. */
+/** A ref that resolved, ready to become snapshot metadata. */
 export interface ResolvedRef {
 	found: FoundRef;
 	/** Path as written, which is also the snapshot's identity: one snapshot per file however many
@@ -21,48 +22,28 @@ export interface Segment {
 	text: string;
 }
 
-export interface ManifestFileEntry {
+/** A working entry while the budget settles. Never ships: the wire form is the `ref` block on the
+ * snapshot's own ChannelFile, derived at the end. */
+interface InternalEntry {
 	refPath: string;
-	/** The name this file will actually land under on the device. */
 	filename: string;
 	mode: "full" | "snippet";
-	/** Present only in snippet mode. Ordered, non-overlapping. */
 	segments?: Segment[];
-	totalLines: number;
-}
-
-/** A working entry. `snippetEligible` is a build-time decision, stripped before it ships. */
-interface InternalEntry extends ManifestFileEntry {
 	snippetEligible?: boolean;
-}
-
-export interface ManifestRefEntry {
-	refPath: string;
-	startLine: number;
-	endLine: number;
-	span?: Resolution["span"];
-	quality: Resolution["quality"];
-	reason?: string;
-	ambiguous?: boolean;
-	matchCount?: number;
-}
-
-/** What ships as the manifest file. Keyed by canonical ref key, which is what the console
- * recomputes from a tapped link. */
-export interface Manifest {
-	[MANIFEST_MARKER]: 1;
-	files: ManifestFileEntry[];
-	refs: Record<string, ManifestRefEntry>;
 }
 
 export interface BuiltArtifact {
 	filename: string;
-	/** UTF-8 text. The caller base64-encodes it into a ChannelFile. */
+	/** UTF-8 text. The caller stages it onto the blob plane. */
 	content: string;
 	mime: string;
+	/** What this snapshot IS, for the ChannelFile that carries it. The snapshot content is exactly
+	 * its segments' text joined with newlines, so the line ranges here partition it byte-exactly and
+	 * the text never rides the wire twice. */
+	ref: RefFileMeta;
 }
 
-export type BuildResult = { ok: true; artifacts: BuiltArtifact[]; manifest: Manifest } | { ok: false; error: string };
+export type BuildResult = { ok: true; artifacts: BuiltArtifact[] } | { ok: false; error: string };
 
 ////////////////////////////////
 //  Functions & Helpers
@@ -111,24 +92,20 @@ function segmentsFor(text: string, ranges: Array<{ startLine: number; endLine: n
 	return merged.map((w) => ({ startLine: w.start, text: lines.slice(w.start - 1, w.end).join("\n") }));
 }
 
-function entryBytes(entry: ManifestFileEntry, fullText: string): number {
+function entryBytes(entry: InternalEntry, fullText: string): number {
 	if (entry.mode === "full") return bytes(fullText);
 	return (entry.segments ?? []).reduce((sum, s) => sum + bytes(s.text), 0);
 }
 
 /**
- * Assemble the manifest and snapshot artifacts for a message's refs.
+ * Assemble the snapshot artifacts for a message's refs, each carrying its own `ref` metadata.
  *
  * `existingNames` must be the agent's own attachment filenames, so snapshot naming dedupes across
- * the whole files array. A collision on the reserved manifest name is a hard error rather than a
- * rename: leaving the name claimable is what would let a crafted attachment be adopted as the
- * manifest.
+ * the whole files array. Naming is display-only: the console pairs a tapped ref to its snapshot
+ * through the file entry's own `ref` block, never through the filename.
  */
 export function buildArtifacts(resolved: ResolvedRef[], existingNames: string[]): BuildResult {
-	if (existingNames.some((n) => safeName(n) === MANIFEST_FILENAME)) {
-		return { ok: false, error: `an attachment is named ${MANIFEST_FILENAME}, which is reserved` };
-	}
-	if (resolved.length === 0) return { ok: true, artifacts: [], manifest: emptyManifest() };
+	if (resolved.length === 0) return { ok: true, artifacts: [] };
 
 	// One entry per FILE, in first-referenced order.
 	const byPath = new Map<string, ResolvedRef[]>();
@@ -140,10 +117,9 @@ export function buildArtifacts(resolved: ResolvedRef[], existingNames: string[])
 
 	// Replay the device's own naming over the agent's attachments IN ORDER rather than collapsing
 	// them into a set: it renames each colliding entry, so two attachments sharing a basename take
-	// two names, and a snapshot must not be told it owns the one the second attachment will get.
+	// two names, and a snapshot must not take a name the second attachment will land under.
 	const used = new Set<string>();
 	for (const name of existingNames) uniqueName(safeName(name), used);
-	used.add(MANIFEST_FILENAME);
 
 	const entries: InternalEntry[] = [];
 	const texts = new Map<string, string>();
@@ -161,7 +137,6 @@ export function buildArtifacts(resolved: ResolvedRef[], existingNames: string[])
 			refPath,
 			filename: uniqueName(safeName(refPath), used),
 			mode: "full",
-			totalLines: total,
 		};
 
 		if (bytes(text) > MAX_FILE_BYTES) {
@@ -192,45 +167,58 @@ export function buildArtifacts(resolved: ResolvedRef[], existingNames: string[])
 	const budgeted = applyBudget(entries, byPath, texts);
 	if (!budgeted.ok) return budgeted;
 
-	const manifest: Manifest = {
-		[MANIFEST_MARKER]: 1,
-		files: entries.map(stripInternal),
-		refs: Object.fromEntries(
-			resolved.map((r) => [
-				r.found.key,
-				{
-					refPath: r.refPath,
+	// Wire caps are refused loudly, never truncated: a silently dropped key would be a ref that
+	// taps dead with no error anywhere, and both bounds are far past any real message.
+	const artifacts: BuiltArtifact[] = [];
+	for (const entry of entries) {
+		const refs = byPath.get(entry.refPath) ?? [];
+		// Last write wins on a duplicate canonical key, preserving the old keyed-record semantics.
+		const keyed = new Map<string, ResolvedRef>();
+		for (const r of refs) keyed.set(r.found.key, r);
+		if (keyed.size > REF_META_MAX_KEYS) {
+			return {
+				ok: false,
+				error: `${entry.refPath} is referenced by ${keyed.size} distinct refs, over the ${REF_META_MAX_KEYS} cap`,
+			};
+		}
+		const segments = entry.mode === "snippet" ? (entry.segments ?? []) : undefined;
+		if (segments && segments.length > REF_META_MAX_SEGMENTS) {
+			return {
+				ok: false,
+				error: `${entry.refPath} needs ${segments.length} snippet segments, over the ${REF_META_MAX_SEGMENTS} cap; reference fewer regions`,
+			};
+		}
+		artifacts.push({
+			filename: entry.filename,
+			content:
+				entry.mode === "full"
+					? (texts.get(entry.refPath) ?? "")
+					: (segments ?? []).map((s) => s.text).join("\n"),
+			mime: "text/plain",
+			ref: {
+				refPath: entry.refPath,
+				...(segments
+					? {
+							segments: segments.map((s) => ({
+								startLine: s.startLine,
+								lineCount: s.text.split("\n").length,
+							})),
+						}
+					: {}),
+				keys: [...keyed.values()].map((r) => ({
+					key: r.found.key,
 					startLine: r.resolution.startLine,
 					endLine: r.resolution.endLine,
 					...(r.resolution.span ? { span: r.resolution.span } : {}),
 					quality: r.resolution.quality,
 					...(r.resolution.reason ? { reason: r.resolution.reason } : {}),
 					...(r.resolution.ambiguous ? { ambiguous: true, matchCount: r.resolution.matchCount } : {}),
-				},
-			]),
-		),
-	};
+				})),
+			},
+		});
+	}
 
-	// The manifest is placed FIRST, which the selection rule depends on: the plugin adopts the first
-	// entry that bears the reserved name AND validates, so no later file can displace it.
-	const artifacts: BuiltArtifact[] = [
-		{ filename: MANIFEST_FILENAME, content: JSON.stringify(manifest), mime: "application/json" },
-		...entries.map((entry) => ({
-			filename: entry.filename,
-			content:
-				entry.mode === "full"
-					? (texts.get(entry.refPath) ?? "")
-					: (entry.segments ?? []).map((s) => s.text).join("\n"),
-			mime: "text/plain",
-		})),
-	];
-
-	return { ok: true, artifacts, manifest };
-}
-
-function stripInternal(entry: InternalEntry): ManifestFileEntry {
-	const { snippetEligible: _ignored, ...rest } = entry;
-	return rest;
+	return { ok: true, artifacts };
 }
 
 /**
@@ -271,8 +259,4 @@ function applyBudget(
 		ok: false,
 		error: `the referenced files exceed the ${Math.floor(MAX_TOTAL_BYTES / 1024 / 1024)} MB message budget; narrow the refs into ${biggest.join(", ")}`,
 	};
-}
-
-function emptyManifest(): Manifest {
-	return { [MANIFEST_MARKER]: 1, files: [], refs: {} };
 }

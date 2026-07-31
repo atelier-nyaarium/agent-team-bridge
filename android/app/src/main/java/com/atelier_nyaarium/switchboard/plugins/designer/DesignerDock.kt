@@ -20,10 +20,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -33,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -67,8 +71,8 @@ import kotlinx.coroutines.withContext
 //  Functions & Helpers
 
 /** The most a card's HTML may be to render. Shared so the chip opener refuses to CLAIM anything the
- * viewer would then refuse to render (which would swallow the tap), and so an oversize file is never
- * ingested into the gallery. A card is small by contract (the mockup corpus is ~10 KB each). */
+ * viewer would then refuse to render, which would swallow the tap. A card is small by contract (the
+ * mockup corpus is ~10 KB each); an oversize one keeps its dock entry and renders as unavailable. */
 internal const val CARD_RENDER_CAP_BYTES: Long = 4L * 1024 * 1024
 
 /** Bytes read to detect a card: the `@dsCard` marker and `<title>` both lead the file (head), so a
@@ -189,35 +193,21 @@ fun DesignerDock(scope: ThreadDockScope) {
 	val repo = remember { Repo.get(context) }
 	val filesDir = context.filesDir
 
-	// Render straight from the additive store. The inbound pipeline ingests each NEW dsCard exactly
-	// once (DesignerPlugin's `inboundMessages` handler), so the dock never re-scans the thread. The
-	// only history the pipeline missed is what arrived before the plugin existed: a one-time per-team
-	// backfill seeds those, then the flag is set and it never scans again.
-	androidx.compose.runtime.LaunchedEffect(team) {
-		if (DesignStore.hasBackfilled(team)) return@LaunchedEffect
-		// Wait for the thread to hydrate (first non-empty snapshot) before seeding, so a compose that
-		// races thread load cannot mark an empty history backfilled and lose its old cards. A truly
-		// empty thread just suspends here harmlessly until the dock leaves composition.
-		val history = androidx.compose.runtime.snapshotFlow { repo.state.value.threads[team] ?: emptyList() }
-			.first { it.isNotEmpty() }
-		// Claim the flag BEFORE seeding, and seed uncancellably. Mark-first means a torn backfill (the
-		// dock closes, or the process dies mid-loop) can only MISS some pre-plugin cards, never leave
-		// the flag unset to re-seed a card the user has since deleted. NonCancellable lets an ordinary
-		// tab switch still finish the seed it began rather than dropping the tail. Each seed is guarded
-		// by the removal generation captured up front, so a Delete/Forget that races this loop wins:
-		// once it bumps the generation, the remaining seeds drop instead of resurrecting a removed card.
-		withContext(NonCancellable + Dispatchers.IO) {
-			val guardGen = DesignStore.removalGeneration(team)
-			DesignStore.markBackfilled(team)
-			for (msg in history) {
-				if (msg.fromMe || msg.isPeer) continue // agent-pushed content only, mirroring the ingest guard
-				cardsFrom(msg.files, msg.at) { rel -> readCardPrefix(filesDir, rel) }
-					.forEach { DesignStore.upsert(team, it, guardGen = guardGen) }
-			}
+	// Render straight from the additive store: the inbound pipeline ingests each design-card message
+	// exactly once from its wire fields, so the dock never re-scans the thread and never reads a file
+	// to know a card exists. Bytes are resolved HERE, at render, from the live row - a pure function
+	// of current state re-evaluated on every recomposition, so a card whose bytes land 3ms or 3 days
+	// after its message reaches the same rendered end state with no moment to miss.
+	val stored by androidx.compose.runtime.key(team) { DesignStore.cards(team).collectAsState() }
+	val appState by repo.state.collectAsState()
+	val failedFetches by repo.failedAttachmentFetches.collectAsState()
+	val cards = remember(stored, appState.threads[team], failedFetches) {
+		val rows = appState.threads[team].orEmpty()
+		stored.map { c ->
+			val rel = c.rel ?: resolveCardRel(rows, c)
+			c.toCard(rel, fetchFailed = rel == null && c.blobId != null && c.blobId in failedFetches)
 		}
 	}
-	val stored by androidx.compose.runtime.key(team) { DesignStore.cards(team).collectAsState() }
-	val cards = remember(stored) { stored.map { it.toCard() } }
 
 	// State keyed by team: the dock is one composable instance reused across tab/session switches
 	// (the scope changes, the instance does not), so unkeyed state would carry an open sheet or
@@ -272,6 +262,7 @@ fun DesignerDock(scope: ThreadDockScope) {
 				expanded = false
 			},
 			onAction = { card, action -> runAction(context, scope, filesDir, card, action) {} },
+			onRetry = { card -> card.blobId?.let { repo.retryAttachmentFetch(it) } },
 			onDismiss = { expanded = false },
 		)
 	}
@@ -300,6 +291,7 @@ fun DesignerDock(scope: ThreadDockScope) {
 						if (action == CardAction.DELETE) viewer = null
 					}
 				},
+				onRetry = { card -> card.blobId?.let { repo.retryAttachmentFetch(it) } },
 				onClose = { viewer = null },
 			)
 		}
@@ -317,9 +309,9 @@ private fun runAction(
 ) {
 	when (action) {
 		CardAction.REFERENCE -> scope.insertDraftText("**${card.name}** ")
-		CardAction.REATTACH -> cardFile(filesDir, card.rel)?.let { reattach(context, scope.team, it) }
+		CardAction.REATTACH -> card.rel?.let { cardFile(filesDir, it) }?.let { reattach(context, scope.team, it) }
 		CardAction.DOWNLOAD -> {
-			val ok = cardFile(filesDir, card.rel)?.let { saveFileToDownloads(context, it, card.fileName, "text/html") } ?: false
+			val ok = card.rel?.let { cardFile(filesDir, it) }?.let { saveFileToDownloads(context, it, card.fileName, "text/html") } ?: false
 			Toast.makeText(context, if (ok) "Saved to Downloads" else "Couldn't save", Toast.LENGTH_SHORT).show()
 		}
 		CardAction.DELETE -> {
@@ -339,28 +331,68 @@ private fun DockBar(cards: List<DesignerCard>, filesDir: File, onExpand: () -> U
 			Modifier.fillMaxWidth().hapticClickable(onClick = onExpand).padding(horizontal = 12.dp, vertical = 8.dp),
 			verticalAlignment = Alignment.CenterVertically,
 		) {
-			// The peek slot previews the most recently updated canvas.
+			// The peek slot previews the most recently updated canvas. When that one has no bytes it
+			// carries the state instead of a generic icon, so a stalled transfer is visible without
+			// opening the sheet.
+			val peek = cards.maxBy { it.updatedAt }
 			CardThumb(
 				filesDir = filesDir,
-				card = cards.maxBy { it.updatedAt },
+				card = peek,
 				modifier = Modifier.size(34.dp).clip(RoundedCornerShape(9.dp)),
 			) {
-				Box(
-					Modifier.size(34.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(9.dp)),
-					contentAlignment = Alignment.Center,
-				) {
+				PendingThumb(peek, Modifier.size(34.dp), corner = 9.dp) {
 					Icon(Icons.Default.GridView, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
 				}
 			}
+			val downloading = cards.count { it.rel == null && !it.fetchFailed }
+			val failed = cards.count { it.fetchFailed }
 			Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
 				Text("Designer", style = MaterialTheme.typography.titleSmall)
 				Text(
-					"${cards.size} ${if (cards.size == 1) "canvas" else "canvases"} - updated ${shortTime(cards.maxOf { it.updatedAt })}",
+					"${cards.size} ${if (cards.size == 1) "canvas" else "canvases"}" +
+						when {
+							failed > 0 -> " - $failed couldn't download"
+							downloading > 0 -> " - $downloading downloading"
+							else -> " - updated ${shortTime(cards.maxOf { it.updatedAt })}"
+						},
 					style = MaterialTheme.typography.bodySmall,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
+					color = if (failed > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
 				)
 			}
 			Icon(Icons.Default.ExpandLess, contentDescription = "Expand designs", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+		}
+	}
+}
+
+/** The stateful placeholder for a thumb slot whose card has no bytes: a spinner while the fetch is
+ * live, an error glyph once it has given up, and the caller's own idle glyph otherwise (a card with
+ * bytes whose thumbnail simply has not rendered yet). */
+@Composable
+private fun PendingThumb(card: DesignerCard, modifier: Modifier, corner: androidx.compose.ui.unit.Dp, idle: @Composable () -> Unit) {
+	val shape = RoundedCornerShape(corner)
+	when {
+		card.fetchFailed -> Box(
+			modifier.background(MaterialTheme.colorScheme.errorContainer, shape),
+			contentAlignment = Alignment.Center,
+		) {
+			Icon(
+				Icons.Default.ErrorOutline,
+				contentDescription = "Couldn't download",
+				modifier = Modifier.size(18.dp),
+				tint = MaterialTheme.colorScheme.onErrorContainer,
+			)
+		}
+		card.rel == null -> Box(
+			modifier.background(MaterialTheme.colorScheme.surfaceVariant, shape),
+			contentAlignment = Alignment.Center,
+		) {
+			CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+		}
+		else -> Box(
+			modifier.background(MaterialTheme.colorScheme.secondaryContainer, shape),
+			contentAlignment = Alignment.Center,
+		) {
+			idle()
 		}
 	}
 }
@@ -372,6 +404,7 @@ private fun CanvasSheet(
 	filesDir: File,
 	onOpen: (Int) -> Unit,
 	onAction: (DesignerCard, CardAction) -> Unit,
+	onRetry: (DesignerCard) -> Unit,
 	onDismiss: () -> Unit,
 ) {
 	ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -396,14 +429,26 @@ private fun CanvasSheet(
 		}
 		LazyColumn(Modifier.padding(bottom = 24.dp)) {
 			items(cards.size, key = { cards[it].fileName }) { i ->
-				CanvasRow(cards[i], filesDir, onOpen = { onOpen(i) }, onAction = { onAction(cards[i], it) })
+				CanvasRow(
+					cards[i],
+					filesDir,
+					onOpen = { onOpen(i) },
+					onAction = { onAction(cards[i], it) },
+					onRetry = { onRetry(cards[i]) },
+				)
 			}
 		}
 	}
 }
 
 @Composable
-private fun CanvasRow(card: DesignerCard, filesDir: File, onOpen: () -> Unit, onAction: (CardAction) -> Unit) {
+private fun CanvasRow(
+	card: DesignerCard,
+	filesDir: File,
+	onOpen: () -> Unit,
+	onAction: (CardAction) -> Unit,
+	onRetry: () -> Unit,
+) {
 	var menuOpen by remember { mutableStateOf(false) }
 	Row(
 		Modifier.fillMaxWidth().hapticClickable(onClick = onOpen).padding(start = 16.dp, end = 4.dp).padding(vertical = 10.dp),
@@ -414,30 +459,59 @@ private fun CanvasRow(card: DesignerCard, filesDir: File, onOpen: () -> Unit, on
 			card = card,
 			modifier = Modifier.size(width = 44.dp, height = 58.dp).clip(RoundedCornerShape(8.dp)),
 		) {
-			Box(
-				Modifier.size(width = 44.dp, height = 58.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)),
-				contentAlignment = Alignment.Center,
-			) {
-				Icon(Icons.Default.GridView, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+			PendingThumb(card, Modifier.size(width = 44.dp, height = 58.dp), corner = 8.dp) {
+				Icon(
+					Icons.Default.GridView,
+					contentDescription = null,
+					modifier = Modifier.size(18.dp),
+					tint = MaterialTheme.colorScheme.onSurfaceVariant,
+				)
 			}
 		}
 		Column(Modifier.weight(1f).padding(horizontal = 13.dp)) {
+			// The name and dimensions render in EVERY state: they came off the wire, so they are known
+			// the instant the message lands and cannot be lost to a transfer that did not finish.
 			Text(card.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
 			val dims = card.meta.width?.let { w -> card.meta.height?.let { h -> "$w x $h" } }
-			Text(
-				listOfNotNull("updated ${shortTime(card.updatedAt)}", dims).joinToString("  "),
-				style = MaterialTheme.typography.bodySmall,
-				color = MaterialTheme.colorScheme.onSurfaceVariant,
-			)
+			when {
+				card.fetchFailed -> Text(
+					listOfNotNull("couldn't download", dims).joinToString("  "),
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.error,
+				)
+				card.rel == null -> Text(
+					listOfNotNull("downloading", dims).joinToString("  "),
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+				)
+				else -> Text(
+					listOfNotNull("updated ${shortTime(card.updatedAt)}", dims).joinToString("  "),
+					style = MaterialTheme.typography.bodySmall,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+				)
+			}
+			if (card.fetchFailed) {
+				TextButton(onClick = onRetry, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)) {
+					Text("Retry")
+				}
+			}
 		}
 		Box {
 			IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Canvas actions") }
 			DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
 				CardAction.entries.forEach { action ->
-					DropdownMenuItem(text = { Text(action.label) }, onClick = {
-						menuOpen = false
-						onAction(action)
-					})
+					// Reattach and Download read the file, so they cannot work before the bytes land.
+					// Dimmed rather than hidden; Reference and Delete stay live because they do not
+					// touch bytes - and Delete especially must work on a card that can never download.
+					val needsBytes = action == CardAction.REATTACH || action == CardAction.DOWNLOAD
+					DropdownMenuItem(
+						text = { Text(action.label) },
+						enabled = !needsBytes || card.rel != null,
+						onClick = {
+							menuOpen = false
+							onAction(action)
+						},
+					)
 				}
 			}
 		}
@@ -452,6 +526,7 @@ private fun CanvasViewer(
 	allowDelete: Boolean,
 	onIndex: (Int) -> Unit,
 	onAction: (DesignerCard, CardAction) -> Unit,
+	onRetry: (DesignerCard) -> Unit,
 	onClose: () -> Unit,
 ) {
 	val context = LocalContext.current
@@ -460,10 +535,16 @@ private fun CanvasViewer(
 	val actions = if (allowDelete) CardAction.entries else CardAction.entries.filter { it != CardAction.DELETE }
 	// Produced value carries the rel it was read for: produceState keeps the prior value across a
 	// key change until the new read lands, so the render gates on a match and never paints the
-	// previous canvas under the new card's identity.
-	val loaded by produceState<Pair<String, String>?>(initialValue = null, card.rel) {
-		val text = withContext(Dispatchers.IO) { readCardHtml(filesDir, card.rel) }
-		value = text?.let { card.rel to it }
+	// previous canvas under the new card's identity. A byte-less card produces nothing and the
+	// stage below says why instead.
+	// Pair(rel, html?) once the read has SETTLED: a null html is a definite "cannot render this"
+	// (purged, oversize, unreadable), which the stage must say rather than sitting blank forever.
+	// Newly reachable because ingest docks a card from its declared role alone, without opening it.
+	val loaded by produceState<Pair<String, String?>?>(initialValue = null, card.rel) {
+		val rel = card.rel
+		if (rel != null) {
+			value = rel to withContext(Dispatchers.IO) { readCardHtml(filesDir, rel) }
+		}
 	}
 	Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
 		Surface(Modifier.fillMaxSize()) {
@@ -483,35 +564,93 @@ private fun CanvasViewer(
 							)
 						}
 					}
-					IconButton(onClick = { cardFile(filesDir, card.rel)?.let { shareCard(context, it) } }) {
+					IconButton(
+						enabled = card.rel != null,
+						onClick = { card.rel?.let { r -> cardFile(filesDir, r) }?.let { shareCard(context, it) } },
+					) {
 						Icon(Icons.Default.Share, contentDescription = "Share canvas")
 					}
 					Box {
 						IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Canvas actions") }
 						DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
 							actions.forEach { action ->
-								DropdownMenuItem(text = { Text(action.label) }, onClick = {
-									menuOpen = false
-									onAction(card, action)
-								})
+								val needsBytes = action == CardAction.REATTACH || action == CardAction.DOWNLOAD
+								DropdownMenuItem(
+									text = { Text(action.label) },
+									enabled = !needsBytes || card.rel != null,
+									onClick = {
+										menuOpen = false
+										onAction(card, action)
+									},
+								)
 							}
 						}
 					}
 				}
 				Box(Modifier.weight(1f).fillMaxWidth()) {
 					val match = loaded?.takeIf { it.first == card.rel }
-					if (match != null) {
-						AndroidView(
+					val html = match?.second
+					when {
+						html != null -> AndroidView(
 							factory = { ctx -> sandboxedCardWebView(ctx) },
 							update = { wv ->
 								if (wv.tag != card.rel) {
 									wv.tag = card.rel
-									wv.loadDataWithBaseURL(null, match.second, "text/html", "utf-8", null)
+									wv.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
 								}
 							},
 							onRelease = { it.destroy() },
 							modifier = Modifier.fillMaxSize(),
 						)
+						match != null -> Column(
+							Modifier.align(Alignment.Center),
+							horizontalAlignment = Alignment.CenterHorizontally,
+						) {
+							// The bytes are here and cannot be rendered: too large for the viewer, or
+							// swept from the bucket. A blank stage would read as a dead tap.
+							Icon(
+								Icons.Default.ErrorOutline,
+								contentDescription = null,
+								modifier = Modifier.size(34.dp),
+								tint = MaterialTheme.colorScheme.onSurfaceVariant,
+							)
+							Text(
+								"This canvas can't be displayed",
+								style = MaterialTheme.typography.bodyMedium,
+								color = MaterialTheme.colorScheme.onSurfaceVariant,
+								modifier = Modifier.padding(top = 8.dp),
+							)
+						}
+						card.rel == null && card.fetchFailed -> Column(
+							Modifier.align(Alignment.Center),
+							horizontalAlignment = Alignment.CenterHorizontally,
+						) {
+							Icon(
+								Icons.Default.ErrorOutline,
+								contentDescription = null,
+								modifier = Modifier.size(34.dp),
+								tint = MaterialTheme.colorScheme.error,
+							)
+							Text(
+								"Couldn't download this canvas",
+								style = MaterialTheme.typography.bodyMedium,
+								color = MaterialTheme.colorScheme.error,
+								modifier = Modifier.padding(top = 8.dp),
+							)
+							TextButton(onClick = { onRetry(card) }) { Text("Retry") }
+						}
+						card.rel == null -> Column(
+							Modifier.align(Alignment.Center),
+							horizontalAlignment = Alignment.CenterHorizontally,
+						) {
+							CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
+							Text(
+								"Downloading...",
+								style = MaterialTheme.typography.bodyMedium,
+								color = MaterialTheme.colorScheme.onSurfaceVariant,
+								modifier = Modifier.padding(top = 10.dp),
+							)
+						}
 					}
 					if (index > 0) NavArrow(Modifier.align(Alignment.CenterStart), left = true) { onIndex(index - 1) }
 					if (index < items.size - 1) NavArrow(Modifier.align(Alignment.CenterEnd), left = false) { onIndex(index + 1) }

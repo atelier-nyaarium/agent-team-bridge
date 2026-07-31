@@ -9,7 +9,6 @@ import {
 	renderFilesBlock,
 	safeFilename,
 } from "../mcp/channel/evieFiles.js";
-import { MANIFEST_FILENAME } from "../mcp/references/artifactNames.js";
 import type { ChannelFile } from "../shared/types.js";
 import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js";
 
@@ -352,18 +351,13 @@ describe("emitChannelNotification", () => {
 			message_id: id,
 			files: [
 				{
-					filename: "switchboard-references.json",
-					mime: "application/json",
-					size: 1,
-					descriptiveKey: "switchboard-references.json",
-					blobId: refManifest("helpers.ts.txt"),
-				},
-				{
 					filename: "helpers.ts.txt",
 					mime: "text/plain",
 					size: 4,
 					descriptiveKey: "helpers.ts.txt",
 					blobId: staged(Buffer.from("code")),
+					role: "ref-snapshot",
+					ref: { refPath: "src/helpers.ts", keys: [] },
 				},
 			],
 		});
@@ -374,23 +368,28 @@ describe("emitChannelNotification", () => {
 });
 
 describe("dropReferenceArtifacts", () => {
-	function file(filename: string): ChannelFile {
-		return { filename, mime: "text/plain", size: 1, descriptiveKey: filename };
+	function file(filename: string, role?: ChannelFile["role"]): ChannelFile {
+		return { filename, mime: "text/plain", size: 1, descriptiveKey: filename, ...(role ? { role } : {}) };
 	}
 
-	it("keeps a real attachment that a following manifest happens to name", () => {
-		const kept = dropReferenceArtifacts([file("routes.ts"), file(MANIFEST_FILENAME), file("routes.ts")]);
-		expect(kept.map((f) => f.filename)).toEqual(["routes.ts"]);
+	it("drops exactly the declared snapshots, wherever they sit in the list", () => {
+		const kept = dropReferenceArtifacts([file("shot.png"), file("cart.ts", "ref-snapshot"), file("notes.md")]);
+		expect(kept.map((f) => f.filename)).toEqual(["shot.png", "notes.md"]);
 	});
 
-	it("keeps everything when no manifest rides along", () => {
-		const kept = dropReferenceArtifacts([file("a.png"), file("b.log")]);
-		expect(kept.map((f) => f.filename)).toEqual(["a.png", "b.log"]);
+	it("keeps a real attachment named like the old reserved manifest - names decide nothing", () => {
+		const kept = dropReferenceArtifacts([file("routes.ts"), file("switchboard-references.json"), file("cart.ts")]);
+		expect(kept.map((f) => f.filename)).toEqual(["routes.ts", "switchboard-references.json", "cart.ts"]);
 	});
 
-	it("filters a stored payload whose bytes were stripped, where there is no manifest to parse", () => {
-		const kept = dropReferenceArtifacts([file("shot.png"), file(MANIFEST_FILENAME), file("cart.ts")]);
-		expect(kept.map((f) => f.filename)).toEqual(["shot.png"]);
+	it("keeps a design-card - an agent has no dock, so the file must still materialize", () => {
+		const kept = dropReferenceArtifacts([file("mock.html", "design-card"), file("cart.ts", "ref-snapshot")]);
+		expect(kept.map((f) => f.filename)).toEqual(["mock.html"]);
+	});
+
+	it("keeps a role it does not recognize - unknown fails toward showing", () => {
+		const files = [file("shot.png"), { ...file("weird.bin"), role: "future-thing" as ChannelFile["role"] }];
+		expect(dropReferenceArtifacts(files).map((f) => f.filename)).toEqual(["shot.png", "weird.bin"]);
 	});
 });
 

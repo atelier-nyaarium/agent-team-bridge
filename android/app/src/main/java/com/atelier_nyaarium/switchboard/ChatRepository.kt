@@ -85,7 +85,21 @@ data class MessageFile(
 	/** Which Gateway holds those bytes. Persisted with the reference because the fetch may not
 	 * happen for hours, and by then nothing else remembers where the message came from. */
 	val blobGateway: String? = null,
+	/** What this file IS, declared by the sender. Null or "attachment" renders as an ordinary file;
+	 * "ref-snapshot" hides as machinery; an unrecognized value shows demoted (sorted last, never a
+	 * thumbnail), because a wrong show heals at the next update while a wrong hide is unreachable. */
+	val role: String? = null,
+	/** Ref metadata for a "ref-snapshot" file, decoded from the wire's own generated shape. */
+	val ref: com.atelier_nyaarium.switchboard.proto.RefFileMeta? = null,
+	val cardTitle: String? = null,
+	val cardGroup: String? = null,
+	val cardWidth: Long? = null,
+	val cardHeight: Long? = null,
 )
+
+/** Persistence codec for the nested ref block: the codegen'd @Serializable class through kotlinx,
+ * never a hand-built JSONObject, so the wire shape and the stored shape cannot drift apart. */
+private val fileMetaJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
 /** The one shape every file-list writer shares, so a field added for one cannot go missing from
  * another. Top-level so this and [loadFiles] are testable without a ContentResolver. */
@@ -98,6 +112,12 @@ internal fun fileJson(f: MessageFile): JSONObject =
 		.putOpt("modifiedAt", f.modifiedAt)
 		.putOpt("blobId", f.blobId)
 		.putOpt("blobGateway", f.blobGateway)
+		.putOpt("role", f.role)
+		.putOpt("ref", f.ref?.let { fileMetaJson.encodeToString(com.atelier_nyaarium.switchboard.proto.RefFileMeta.serializer(), it) })
+		.putOpt("cardTitle", f.cardTitle)
+		.putOpt("cardGroup", f.cardGroup)
+		.putOpt("cardWidth", f.cardWidth)
+		.putOpt("cardHeight", f.cardHeight)
 
 /** Read back a [fileJson] list from any record that carries one. */
 internal fun loadFiles(m: JSONObject): List<MessageFile> {
@@ -114,6 +134,18 @@ internal fun loadFiles(m: JSONObject): List<MessageFile> {
 			f.longOrNull("modifiedAt"),
 			f.optString("blobId").takeIf { s -> s.isNotEmpty() },
 			f.optString("blobGateway").takeIf { s -> s.isNotEmpty() },
+			role = f.optString("role").takeIf { s -> s.isNotEmpty() },
+			// A garbled blob reads as absent rather than throwing: the tap then declines to the link
+			// menu, the documented miss contract, instead of one bad row costing every thread.
+			ref = f.optString("ref").takeIf { s -> s.isNotEmpty() }?.let { raw ->
+				runCatching {
+					fileMetaJson.decodeFromString(com.atelier_nyaarium.switchboard.proto.RefFileMeta.serializer(), raw)
+				}.getOrNull()
+			},
+			cardTitle = f.optString("cardTitle").takeIf { s -> s.isNotEmpty() },
+			cardGroup = f.optString("cardGroup").takeIf { s -> s.isNotEmpty() },
+			cardWidth = f.longOrNull("cardWidth"),
+			cardHeight = f.longOrNull("cardHeight"),
 		)
 	}
 }
@@ -948,22 +980,39 @@ class ChatRepository(
 	 * init block so the one-shot wipe can purge its cache root. */
 	val stts = SttsPlayer(filesDir)
 
-	// One-shot grammar-version wipe. MUST run before the first thread/label load-parse below, so a
-	// stale-grammar persisted key (`gateway/name`) never reaches the new parser. Kotlin runs init
-	// blocks and property initializers top-to-bottom, so this clears the old keys before _state's
-	// loadPersistedThreads()/loadPersistedLabels() read them.
-	init {
-		if (store.migrateSchemaIfNeeded()) {
-			// The prefs wipe never touched filesDir, so the matching grammar-era caches (attachment
-			// bytes + TTS audio) would otherwise stay stranded. Purge them on the same one-shot latch.
-			stts.purgeAll()
-			Attachments.purgeAll(filesDir)
-		}
-	}
-
 	// Declared before _state so loadPersistedThreads/Labels/ReadAnchors read them in order. Kotlin
 	// initializes fields in declaration order.
 	@Volatile private var localGatewayId: String = store.loadGatewayId()
+
+	// One-shot schema latch. MUST run AFTER localGatewayId above (loadPersistedThreads filters every
+	// key through parseTarget, whose non-null parameter check throws on the still-default field - a
+	// too-early call silently loads ZERO rows) and BEFORE the first thread/label load-parse below, so
+	// a stale-grammar persisted key (`gateway/name`) never reaches the new parser. Kotlin runs init
+	// blocks and property initializers top-to-bottom.
+	init {
+		when (store.migrateSchemaIfNeeded()) {
+			AppStateStore.SchemaMigration.WIPE -> {
+				// The prefs wipe never touched filesDir, so the matching grammar-era caches (attachment
+				// bytes + TTS audio) would otherwise stay stranded. Purge them on the same one-shot latch.
+				stts.purgeAll()
+				Attachments.purgeAll(filesDir)
+			}
+			AppStateStore.SchemaMigration.STAMP_ROLES -> {
+				// Stamp roles (and reconstruct ref metadata from on-disk manifests) onto pre-role rows,
+				// re-persist, THEN seal the version - a death mid-way re-runs the additive conversion.
+				// The seal is gated on the WRITE having landed, not merely on rows having parsed: a
+				// swallowed serialization failure with an unconditional seal would leave every row
+				// unstamped with no re-run path, which is the exact miss the latch exists to prevent.
+				val converted = loadPersistedThreads().mapValues { (_, rows) ->
+					com.atelier_nyaarium.switchboard.plugins.references.LegacyRefMigration.migrate(rows, filesDir)
+				}
+				val wrote =
+					converted.isNotEmpty() && runCatching { store.saveThreads(threadsJson(converted)) }.isSuccess
+				if (store.loadThreads() == null || wrote) store.markSchemaCurrent()
+			}
+			AppStateStore.SchemaMigration.NONE -> {}
+		}
+	}
 
 	// Canned directory listings for the create dialog's picker, installed only by seedSandbox
 	// (emulator build). Null on every real device, so listDirs always asks the gateway there.
@@ -1054,6 +1103,20 @@ class ChatRepository(
 	// reference can appear on several rows and is one unfetchable thing. In-memory on purpose: a
 	// restart is exactly when a previously-hopeless fetch deserves another try.
 	private val attachmentFetchFailures = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+	// Blobs the fetch has GIVEN UP on (bounded tries exhausted), for any UI that must distinguish
+	// "arriving" from "will never arrive" - the two were previously the same invisible nothing.
+	private val _failedAttachmentFetches = MutableStateFlow<Set<String>>(emptySet())
+	val failedAttachmentFetches: StateFlow<Set<String>> = _failedAttachmentFetches
+
+	/** Give a permanently-failed blob another bounded round of tries, deliberately: clears its
+	 * failure count (the fetch loop skips anything at the cap, so a retry that does not clear it
+	 * would be a button that does nothing) and kicks the fetch. */
+	fun retryAttachmentFetch(blobId: String) {
+		attachmentFetchFailures.remove(blobId)
+		_failedAttachmentFetches.update { it - blobId }
+		fetchPendingAttachments()
+	}
 
 	// Always available from construction, independent of pollScope (null until startPolling runs)
 	// and of SwitchboardService's own lifecycle - a receiver-triggered fire kick must never be a
@@ -4349,10 +4412,12 @@ class ChatRepository(
 							// holds from being re-requested on every pass for the life of the install.
 							val tries = attachmentFetchFailures.getOrDefault(blobId, 0) + 1
 							attachmentFetchFailures[blobId] = tries
+							if (tries >= MAX_ATTACHMENT_FETCH_TRIES) _failedAttachmentFetches.update { s -> s + blobId }
 							DebugLog.log("Attachments", "fetch of ${file.name} failed ($tries): $it")
 						}
 						.getOrNull() ?: continue
 					attachmentFetchFailures.remove(blobId)
+					_failedAttachmentFetches.update { s -> s - blobId }
 					val src =
 						Attachments.land(filesDir, Attachments.bucketFor(message.epoch, message.seq), file.name, source)
 							?: continue

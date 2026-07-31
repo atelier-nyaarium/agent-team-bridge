@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MANIFEST_FILENAME, MANIFEST_MARKER } from "../mcp/references/artifactNames.js";
 import { appendRefArtifacts, setReferencesEnabled } from "../mcp/references/attachRefs.js";
 import { type BlobWire, isBlobRoute, mountBlobWire } from "./helpers/blobWire.js";
 
@@ -67,17 +66,16 @@ function shipped(blobId: string | undefined): string {
 //  Tests
 
 describe("a reply that links a symbol", () => {
-	it("attaches a manifest and the file it points into", async () => {
+	it("attaches one role-stamped snapshot declaring the ref it backs", async () => {
 		const result = await appendRefArtifacts("Look at [add](ref://src/cart.ts:Cart:add).", []);
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
-		expect(result.files.map((f) => f.filename)).toEqual([MANIFEST_FILENAME, "cart.ts"]);
-
-		const manifest = JSON.parse(shipped(result.files[0].blobId));
-		expect(manifest[MANIFEST_MARKER]).toBe(1);
-		expect(manifest.refs["ref://src/cart.ts:Cart:add"]).toMatchObject({
-			refPath: "src/cart.ts",
+		expect(result.files.map((f) => f.filename)).toEqual(["cart.ts"]);
+		expect(result.files[0].role).toBe("ref-snapshot");
+		expect(result.files[0].ref?.refPath).toBe("src/cart.ts");
+		expect(result.files[0].ref?.keys[0]).toMatchObject({
+			key: "ref://src/cart.ts:Cart:add",
 			startLine: 2,
 			endLine: 4,
 			quality: "exact",
@@ -87,7 +85,7 @@ describe("a reply that links a symbol", () => {
 	it("ships the file's real text, so the viewer renders what the agent was looking at", async () => {
 		const result = await appendRefArtifacts("[add](ref://src/cart.ts:Cart:add)", []);
 
-		expect(result.ok && shipped(result.files[1].blobId)).toBe(CART);
+		expect(result.ok && shipped(result.files[0].blobId)).toBe(CART);
 	});
 
 	it("keeps the agent's own attachments and adds the snapshots after them", async () => {
@@ -101,7 +99,13 @@ describe("a reply that links a symbol", () => {
 
 		const result = await appendRefArtifacts("[add](ref://src/cart.ts:Cart:add)", [own]);
 
-		expect(result.ok && result.files.map((f) => f.filename)).toEqual(["diagram.png", MANIFEST_FILENAME, "cart.ts"]);
+		expect(result.ok && result.files.map((f) => f.filename)).toEqual(["diagram.png", "cart.ts"]);
+	});
+
+	it("a full-file snapshot declares no segments, so the whole file is its own slice", async () => {
+		const result = await appendRefArtifacts("[add](ref://src/cart.ts:Cart:add)", []);
+
+		expect(result.ok && result.files[0].ref?.segments).toBeUndefined();
 	});
 
 	it("attaches nothing when the message links no refs", async () => {
@@ -121,8 +125,7 @@ describe("what stops a send and what does not", () => {
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
-		const entry = Object.values(JSON.parse(shipped(result.files[0].blobId)).refs)[0];
-		expect(entry).toMatchObject({ quality: "fuzzy", startLine: 1 });
+		expect(result.files[0].ref?.keys[0]).toMatchObject({ quality: "fuzzy", startLine: 1 });
 	});
 
 	it("opens the whole file when nothing in the chain survives, still without refusing", async () => {
@@ -130,8 +133,7 @@ describe("what stops a send and what does not", () => {
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
-		const entry = Object.values(JSON.parse(shipped(result.files[0].blobId)).refs)[0];
-		expect(entry).toMatchObject({ quality: "unresolved", startLine: 1 });
+		expect(result.files[0].ref?.keys[0]).toMatchObject({ quality: "unresolved", startLine: 1 });
 	});
 
 	it("stops the send for a file that does not exist, while the agent can still fix it", async () => {

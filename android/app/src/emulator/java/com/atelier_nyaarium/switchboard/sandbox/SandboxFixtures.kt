@@ -10,6 +10,8 @@ import com.atelier_nyaarium.switchboard.Message
 import com.atelier_nyaarium.switchboard.MessageFile
 import com.atelier_nyaarium.switchboard.OutgoingFile
 import com.atelier_nyaarium.switchboard.Team
+import com.atelier_nyaarium.switchboard.proto.RefFileMeta
+import com.atelier_nyaarium.switchboard.proto.RefKeyMeta
 import java.io.ByteArrayOutputStream
 import java.io.File
 
@@ -87,30 +89,74 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 			seq = 20,
 		)
 
+		// The snapshot declares what it is and which refs it backs, exactly as a sender stamps it, so
+		// the sandbox exercises the real classification: the chip hides and the links open.
 		rows += Message(
 			fromMe = false,
 			text = REF_BODY,
 			at = now - 60_000,
 			id = id++,
-			files = attach("sandbox-refs", refArtifacts()),
+			files = attach("sandbox-refs", refArtifacts()).map { it.copy(role = "ref-snapshot", ref = refMeta()) },
 			from = SESSION,
 			epoch = SANDBOX_EPOCH,
 			seq = 21,
 		)
 
+		// A card the console never opened to classify: declared, docked, and rendered from its own
+		// fields, which is the byte-free ingest path the dock now takes.
+		rows += Message(
+			fromMe = false,
+			text = "A design card, docked from its declared fields.",
+			at = now - 30_000,
+			id = id++,
+			files = attach("sandbox-card", listOf(cardFixture())).map {
+				it.copy(role = "design-card", cardTitle = "Editor form", cardGroup = "Forms", cardWidth = 900, cardHeight = 1180)
+			},
+			from = SESSION,
+			epoch = SANDBOX_EPOCH,
+			seq = 22,
+		)
+
 		return rows
 	}
+
+	/** The ref block the snapshot declares: one exact resolution and one drifted, matching REF_BODY's
+	 * two canonical keys, so the viewer's banner path renders alongside the clean one. */
+	private fun refMeta(): RefFileMeta = RefFileMeta(
+		refPath = "src/mcp/references/refFile.ts",
+		segments = null,
+		keys = listOf(
+			RefKeyMeta(
+				key = "ref://src/mcp/references/refFile.ts:isJoinable",
+				startLine = 1,
+				endLine = 12,
+				quality = "exact",
+			),
+			RefKeyMeta(
+				key = "ref://src/mcp/references/refFile.ts:LoaderV1:isJoinable",
+				startLine = 1,
+				endLine = 12,
+				quality = "fuzzy",
+				reason = "LoaderV1 no longer exists in this file",
+			),
+		),
+	)
 
 	/** Write fixture bytes into a real attachment bucket, so every src resolves the way a drained
 	 * message's would. */
 	private fun attach(bucket: String, files: List<OutgoingFile>): List<MessageFile> =
 		Attachments.storeOutgoing(filesDir, bucket, files)
 
-	/** The committed builder output: the manifest first, then every snapshot it names. */
-	private fun refArtifacts(): List<OutgoingFile> = listOf(
-		OutgoingFile("switchboard-references.json", "application/json", asset("switchboard-references.json")),
-		OutgoingFile("refFile.ts", "text/plain", asset("refFile.ts")),
-	)
+	/** The committed builder output: one role-stamped snapshot carrying the ref it backs. */
+	private fun refArtifacts(): List<OutgoingFile> = listOf(staged("refFile.ts", "text/plain", asset("refFile.ts")))
+
+	/** Bytes on disk under a scratch dir, because an OutgoingFile names a FILE the transport streams
+	 * rather than a buffer it holds. Mirrors what a real pick or a staged artifact hands the sender. */
+	private fun staged(name: String, mime: String, bytes: ByteArray): OutgoingFile {
+		val scratch = File(filesDir, "sandbox-fixtures").apply { mkdirs() }
+		val file = File(scratch, name).apply { writeBytes(bytes) }
+		return OutgoingFile.of(name, mime, file.length(), file)
+	}
 
 	private fun asset(name: String): ByteArray = assets.open("sandbox/$name").use { it.readBytes() }
 
@@ -134,15 +180,22 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 		val out = ByteArrayOutputStream()
 		bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
 		bitmap.recycle()
-		return OutgoingFile("sandbox-image.png", "image/png", out.toByteArray())
+		return staged("sandbox-image.png", "image/png", out.toByteArray())
 	}
 
 	private fun textFixture(): OutgoingFile =
-		OutgoingFile(
-			"notes.txt",
-			"text/plain",
-			"A plain attachment, so the non-image chip path renders too.\n".toByteArray(),
-		)
+		staged("notes.txt", "text/plain", "A plain attachment, so the non-image chip path renders too.\n".toByteArray())
+
+	private fun cardFixture(): OutgoingFile = staged(
+		"editor-form.html",
+		"text/html",
+		(
+			"<!-- @dsCard group=\"Forms\" width=\"900\" height=\"1180\" -->\n" +
+				"<html><head><title>Editor form</title></head>" +
+				"<body style=\"background:#12151a;color:#e3e6ea;font-family:sans-serif;padding:24px\">" +
+				"<h1>Editor form</h1><p>A sandbox canvas.</p></body></html>\n"
+			).toByteArray(),
+	)
 
 	private companion object {
 		/** domain.gateway.spawn.session, matching the real address grammar so nothing downstream has

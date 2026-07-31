@@ -63,7 +63,7 @@ internal object DesignerThumbs {
 	private val renderLock = Mutex()
 	private var webView: WebView? = null
 
-	fun cached(rel: String): Bitmap? = cache.get(rel)
+	fun cached(rel: String?): Bitmap? = rel?.let { cache.get(it) }
 
 	fun attach(wv: WebView) {
 		webView = wv
@@ -73,15 +73,17 @@ internal object DesignerThumbs {
 		if (webView === wv) webView = null
 	}
 
-	/** The card's thumbnail, from cache or rendered now; null when the file is gone/oversize, no
-	 * host is attached, or the render timed out (the caller keeps its placeholder). */
+	/** The card's thumbnail, from cache or rendered now; null when the bytes have not landed, the
+	 * file is gone/oversize, no host is attached, or the render timed out (the caller keeps its
+	 * placeholder). */
 	suspend fun render(filesDir: File, card: DesignerCard): Bitmap? {
-		cache.get(card.rel)?.let { return it }
-		val html = withContext(Dispatchers.IO) { readCardHtml(filesDir, card.rel) } ?: return null
+		val rel = card.rel ?: return null
+		cache.get(rel)?.let { return it }
+		val html = withContext(Dispatchers.IO) { readCardHtml(filesDir, rel) } ?: return null
 		return renderLock.withLock {
-			cache.get(card.rel)?.let { return it }
+			cache.get(rel)?.let { return it }
 			val wv = webView ?: return null
-			withTimeoutOrNull(RENDER_TIMEOUT_MS) { renderOn(wv, html) }?.also { cache.put(card.rel, it) }
+			withTimeoutOrNull(RENDER_TIMEOUT_MS) { renderOn(wv, html) }?.also { cache.put(rel, it) }
 		}
 	}
 

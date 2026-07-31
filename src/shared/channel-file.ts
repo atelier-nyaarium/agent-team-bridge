@@ -11,6 +11,65 @@ import { z } from "zod";
 ////////////////////////////////
 //  Schemas
 
+/** A character span to highlight inside a snapshot, in original-file coordinates. */
+export const RefSpanMetaSchema = z
+	.object({
+		startLine: z.number().int().positive(),
+		startColumn: z.number().int().nonnegative(),
+		endLine: z.number().int().positive(),
+		endColumn: z.number().int().nonnegative(),
+	})
+	.meta({ id: "RefSpanMeta" });
+
+/** One contiguous piece of the original file, as a line range. Carries NO text: the snapshot file
+ * IS the segments' text joined with newlines, so `(startLine, lineCount)` partitions it exactly and
+ * the bytes never ride the wire twice. */
+export const RefSegmentMetaSchema = z
+	.object({
+		startLine: z.number().int().positive(),
+		lineCount: z.number().int().positive(),
+	})
+	.meta({ id: "RefSegmentMeta" });
+
+/** One canonical ref key this snapshot backs, and how it resolved. */
+export const RefKeyMetaSchema = z
+	.object({
+		key: z.string().min(1).max(512),
+		startLine: z.number().int().positive(),
+		endLine: z.number().int().positive(),
+		span: RefSpanMetaSchema.optional(),
+		// Open string, not an enum: an older console must render a quality tier it has never heard
+		// of as plain rather than reject the file.
+		quality: z.string().min(1).max(32),
+		reason: z.string().max(256).optional(),
+		ambiguous: z.boolean().optional(),
+		matchCount: z.number().int().nonnegative().optional(),
+	})
+	.meta({ id: "RefKeyMeta" });
+
+/** Hard bounds on one snapshot's metadata arrays. Load-bearing, not tidiness: per-file metadata
+ * must stay bounded by the attachment COUNT, never by the sender's prose, and an oversized relay
+ * frame closes the socket rather than failing one message. The producer refuses loudly at these
+ * rather than truncating, so they are exported instead of restated. */
+export const REF_META_MAX_SEGMENTS = 64;
+export const REF_META_MAX_KEYS = 64;
+
+/**
+ * What a ref-snapshot file IS, declared by the sender: the source path it snapshots, which slice of
+ * it (absent segments = the whole file), and the ref keys it backs. Authority over exactly ONE
+ * file - the one carrying it - never over siblings, which is what makes it unforgeable-by-design:
+ * the worst a false block can do is mislabel the bytes it rides with.
+ */
+export const RefFileMetaSchema = z
+	.object({
+		refPath: z.string().min(1).max(512),
+		// min(1): an empty list and an absent one would both have to mean "the whole file", and two
+		// spellings of one meaning is how a consumer branch goes untested. Absent is the spelling.
+		segments: z.array(RefSegmentMetaSchema).min(1).max(REF_META_MAX_SEGMENTS).optional(),
+		keys: z.array(RefKeyMetaSchema).max(REF_META_MAX_KEYS),
+	})
+	.meta({ id: "RefFileMeta" });
+
 /**
  * Channel attachment metadata carried over the bridge (console-origin files).
  *
@@ -45,6 +104,24 @@ export const ChannelFileSchema = z
 		// Absent means "wherever you are", which is correct for every same-Gateway transfer and is
 		// what a peer predating this field implies.
 		blobGateway: z.string().min(1).max(64).optional(),
+		// What this file IS, declared by the SENDER at compose time and never re-derived by a
+		// receiver from bytes, filename, array position, or message direction. Absent means an
+		// ordinary attachment - also the only thing a stripping middle box or an older sender can
+		// mean, so every degradation collapses toward SHOWING the file, never hiding it. A value a
+		// receiver does not recognize also shows (demoted in sort, never a thumbnail): the sender
+		// said something deliberate, and a wrong show heals at the receiver's next update while a
+		// wrong hide is a file the user cannot reach. z.enum emits an open Kotlin String, so an
+		// unknown future value cannot throw on an old console.
+		role: z.enum(["attachment", "ref-snapshot", "design-card"]).optional(),
+		// Ref metadata for a `role: "ref-snapshot"` file. See RefFileMetaSchema.
+		ref: RefFileMetaSchema.optional(),
+		// Designer card facts for a `role: "design-card"` file, lifted from the HTML at compose time
+		// so the dock never opens the file to learn what a card is. Absent title falls back to the
+		// filename stem on the console.
+		cardTitle: z.string().min(1).max(200).optional(),
+		cardGroup: z.string().max(64).optional(),
+		cardWidth: z.number().int().positive().max(8192).optional(),
+		cardHeight: z.number().int().positive().max(8192).optional(),
 	})
 	.meta({ id: "ChannelFile" });
 
@@ -63,3 +140,7 @@ export const ChannelFilesSchema = z.array(ChannelFileSchema).max(10);
 //  Types
 
 export type ChannelFile = z.infer<typeof ChannelFileSchema>;
+export type ChannelFileRole = NonNullable<ChannelFile["role"]>;
+export type RefFileMeta = z.infer<typeof RefFileMetaSchema>;
+export type RefKeyMeta = z.infer<typeof RefKeyMetaSchema>;
+export type RefSegmentMeta = z.infer<typeof RefSegmentMetaSchema>;

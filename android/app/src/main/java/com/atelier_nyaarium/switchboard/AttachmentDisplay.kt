@@ -41,15 +41,29 @@ private val PREVIEWABLE_MIMES = setOf(
 	"image/avif",
 )
 
-/** A thumbnail needs both a drawable format and bytes to draw; a metadata-only attachment has a
- * name and nothing else, so it lists as a file. */
+/** The role vocabulary this build understands. A value outside it was said DELIBERATELY by a
+ * NEWER sender; absent (a pre-role row, or a stripping middle hop) means an ordinary attachment. */
+private val KNOWN_ROLES = setOf("attachment", "ref-snapshot", "design-card")
+
+private fun unrecognizedRole(file: MessageFile): Boolean = file.role != null && file.role !in KNOWN_ROLES
+
+/** An ordinary attachment: absent role or the explicit value. Machinery and unknown roles are not,
+ * however drawable their bytes happen to be. */
+private fun ordinaryRole(file: MessageFile): Boolean = file.role == null || file.role == "attachment"
+
+/** A thumbnail needs a drawable format, bytes to draw, and an ordinary role: a file whose declared
+ * role this build does not recognize renders as a plain named row, never a thumbnail - the unknown
+ * signal is spent on RANKING, not reachability, so a wrong guess is a demoted row rather than an
+ * unreachable file. */
 internal fun isPreviewable(file: MessageFile): Boolean =
-	file.src != null && file.mime.substringBefore(';').trim().lowercase() in PREVIEWABLE_MIMES
+	file.src != null && ordinaryRole(file) && file.mime.substringBefore(';').trim().lowercase() in PREVIEWABLE_MIMES
 
 /**
  * The attachments to show, in the order to show them: previewables first as thumbnails, then files
- * as rows. Plugin-hidden entries are dropped before anything else, since an attachment a plugin
- * already surfaces another way should not be counted, ordered, or rendered at all.
+ * as rows, with UNRECOGNIZED-role files last so future machinery can never crowd out what the user
+ * actually attached (a known role keeps its sent position - it is machinery this build understands,
+ * not a stranger). Plugin-hidden entries are dropped before anything else, since an attachment a
+ * plugin already surfaces another way should not be counted, ordered, or rendered at all.
  *
  * Stable within each group, so files keep the order they were sent in.
  */
@@ -62,7 +76,7 @@ internal fun displayAttachments(
 			val d = decorate(f)
 			if (d?.hidden == true) null else DisplayAttachment(f, d, isPreviewable(f))
 		}
-		.sortedByDescending { it.previewable }
+		.sortedWith(compareByDescending<DisplayAttachment> { it.previewable }.thenBy { unrecognizedRole(it.file) })
 
 /** What to label an attachment with. A decoration's title replaces the filename outright, which is
  * how a plugin presents an attachment as the thing it means rather than the file it is. */
