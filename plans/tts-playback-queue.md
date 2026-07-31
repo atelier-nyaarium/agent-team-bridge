@@ -1153,10 +1153,23 @@ only produced entries nothing could resolve. A3: `dropQueuedFor` starts the next
 team down no longer halts every other. A7: `dropTeam` NAMES the entry it took so teardown abandons that
 request by identity rather than silencing whatever is audible.
 
-**Still open, and they matter:** A4, a user stop parks the queue for good because `STOPPED` holds and
-`resume()` has no caller; A5, the queue talks over a manual play because it reads PREEMPTED as "carry
-on" when something outside the queue took the sound; A6, the followed gate is evaluated on the drained
-thread and the dedupe claims its key before the gate runs.
+A4: `STOPPED` now retires its entry and the run carries on. The stop control says "not this one", not
+"not any more"; holding the head there ended autoplay for the life of the process, because nothing
+resumed it. A real pause needs a control that says so, and arrives with the Phase 4 transport - so
+`resume()` and `QueueStep.paused` are deleted rather than left as API with no caller.
+
+A5: PREEMPTED now retires the head and starts NOTHING. Something outside the queue has taken the sound,
+and speaking over it is the bug. The run picks up again when that playback reports its own terminal:
+an outcome for a non-head entry moves nothing by itself, so the caller sees an idle queue with a
+backlog and restarts it.
+
+A6: closed in two halves. The gate half fell out of the A2 revert - an entry is now attributed to the
+same thread the gate tests, so they cannot disagree. The dedupe half needed a reorder: the peer content
+key is claimed only by a thread that is actually eligible to speak, otherwise a muted session silently
+suppressed the followed one showing the same exchange.
+
+**Still open:** cross-team ordering within one burst, `clearAll` leaving the queue populated, and the
+notification's Play action still targeting the burst's last message while the preload warms its first.
 
 Still to wire, all in `ChatRepository`:
 

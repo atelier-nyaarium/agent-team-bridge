@@ -3976,15 +3976,7 @@ class ChatRepository(
 					val burstJobs = mutableListOf<Job>()
 					val autoPlayedPeerPairs = mutableSetOf<String>()
 					for ((team, msgs) in burst) {
-						// EVERY agent message, in arrival order, addressed by the thread it actually
-						// lives in. A peer copy is NOT re-attributed to its `to`: the two mirror
-						// copies carry different timestamps, so (to, at) names a row that thread does
-						// not hold, and the engine would decline an entry the queue is waiting on.
-						val agentMsgs = msgs.filter { !it.fromMe }
-							.filterNot { isDuplicatePeerAutoPlay(it, autoPlayedPeerPairs) }
-							.map { it to team }
 						val lastAgent = msgs.lastOrNull { !it.fromMe }
-						val alreadyAutoPlayed = agentMsgs.isEmpty()
 						// Only spend synthesis on followed threads (open tabs); a
 						// never-opened or forgotten session is not in openTabs, so it
 						// notifies without preloading.
@@ -3993,10 +3985,27 @@ class ChatRepository(
 						// Pre-generate and auto-play are independent: enter the launch
 						// path when either is active for this followed thread.
 						val autoTier = autoPlayTier(sttsAutoPlay)
-						if (scope != null && lastAgent != null && sttsReady() && followed && !alreadyAutoPlayed && (sttsAutoGen || autoTier != null)) {
+						val eligible =
+							scope != null && lastAgent != null && sttsReady() && followed && (sttsAutoGen || autoTier != null)
+						// EVERY agent message, in arrival order, addressed by the thread it actually
+						// lives in. A peer copy is NOT re-attributed to its `to`: the two mirror copies
+						// carry different timestamps, so (to, at) names a row that thread does not hold,
+						// and the engine would decline an entry the queue is waiting on.
+						//
+						// Claimed only by a thread that can actually speak. The peer dedupe hands the
+						// slot to the first claimant, so letting an ineligible thread run it would let a
+						// muted session silently suppress the followed one showing the same exchange.
+						val agentMsgs = if (!eligible) {
+							emptyList()
+						} else {
+							msgs.filter { !it.fromMe }
+								.filterNot { isDuplicatePeerAutoPlay(it, autoPlayedPeerPairs) }
+								.map { it to team }
+						}
+						if (eligible && agentMsgs.isNotEmpty()) {
 							val t = team
 							val ms = msgs
-							val at = lastAgent.at
+							val at = lastAgent!!.at
 							val queueable = agentMsgs
 							// The message that will speak FIRST, which is the one worth waiting on.
 							// Warming the burst's last message instead would leave the one actually
