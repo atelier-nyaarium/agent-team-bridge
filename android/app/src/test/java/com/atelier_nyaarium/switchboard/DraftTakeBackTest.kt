@@ -47,6 +47,30 @@ class DraftTakeBackTest {
 	}
 
 	@Test
+	fun aPicksOriginSurvivesTakingBackAFailedSend() {
+		// Where a file came from is read from a content Uri at pick time and is unrecoverable after,
+		// so a merge that dropped it would lose it permanently and persist the loss. Taking back an
+		// unsendable message is exactly when the composer is most complicated to look at.
+		val current = Draft(
+			files = listOf(file("a.jpg", "src-a")),
+			locations = mapOf("src-a" to "Download"),
+		)
+
+		val merged = mergeTakenBackDraft(current, "restored", listOf(file("b.jpg", "src-b")))
+
+		assertEquals("Download", merged.locations["src-a"])
+	}
+
+	@Test
+	fun takenBackFilesBringNoOriginOfTheirOwn() {
+		// A sent file's origin was never known: it is read at pick time and the message has since
+		// been through the wire, which carries no such field by construction.
+		val merged = mergeTakenBackDraft(Draft(), "restored", listOf(file("b.jpg", "src-b")))
+
+		assertEquals(emptyMap<String, String>(), merged.locations)
+	}
+
+	@Test
 	fun unionDoesNotDuplicateAnIdenticalFile() {
 		val shared = file("a.jpg", "src-a")
 		val current = Draft(files = listOf(shared))

@@ -293,13 +293,22 @@ data class CrossDomainReceiverPairing(
 	val friendGatewayBoxPub: String,
 )
 
-/** `id` is a per-thread, local-only row key for the WebView DOM (lets the renderer
- * replace a row in place). It is NOT the mailbox seq; mailbox dedupe is owned by SyncCursor.
- * Stamped on append; reassigned from list order on load so old transcripts still work. */
-/** The pending outgoing message for one thread: what the composer shows and what Send consumes.
- * Files are already-copied refs rather than live picker grants, so a draft outlives both the
- * grant and the process, matching the durability its text always had. */
-data class Draft(val text: String = "", val files: List<MessageFile> = emptyList()) {
+/**
+ * The pending outgoing message for one thread: what the composer shows and what Send consumes.
+ *
+ * Files are already-copied refs rather than live picker grants, so a draft outlives both the grant
+ * and the process, matching the durability its text always had.
+ *
+ * `locations` is where each picked file came from, keyed by its src. It sits HERE rather than on
+ * [MessageFile] so the conversion to an outgoing file, and from there to the wire, has nowhere to
+ * put it: a device path names a user and a folder layout, and these cross a gateway to another
+ * machine. Draft-only by construction rather than by promise.
+ */
+data class Draft(
+	val text: String = "",
+	val files: List<MessageFile> = emptyList(),
+	val locations: Map<String, String> = emptyMap(),
+) {
 	val isOccupied: Boolean get() = text.isNotBlank() || files.isNotEmpty()
 }
 
@@ -307,6 +316,9 @@ data class Message(
 	val fromMe: Boolean,
 	val text: String,
 	val at: Long,
+	/** A per-thread, local-only row key for the WebView DOM, which lets the renderer replace a row in
+	 * place. NOT the mailbox seq; mailbox dedupe is owned by SyncCursor. Stamped on append, and
+	 * reassigned from list order on load so old transcripts still work. */
 	val id: Long = 0,
 	val files: List<MessageFile> = emptyList(),
 	/** Reply/send state: wire "running"/"error", local "pending" (echo in flight),
@@ -783,10 +795,12 @@ internal fun ChatState.withDraft(team: String, draft: Draft): ChatState =
 
 /** The merge [ChatRepository.takeBackIntoDraft] applies: files always UNION (a list has a
  * meaningful merge, so no caller can drop a pick); text lands only on a blank draft (it has no
- * merge, so anything already typed wins). Extracted so the invariant is directly testable without
- * a full repository instance. */
+ * merge, so anything already typed wins). Locations survive with the picks they describe, and the
+ * taken-back files bring none of their own: a sent file's origin was never recoverable, since it is
+ * read from a content Uri that is gone by then. Extracted so the invariant is directly testable
+ * without a full repository instance. */
 internal fun mergeTakenBackDraft(current: Draft, text: String, files: List<MessageFile>): Draft =
-	Draft(
+	current.copy(
 		text = if (current.text.isBlank()) text else current.text,
 		files = (current.files + files).distinct(),
 	)
@@ -4212,10 +4226,19 @@ class ChatRepository(
 			return@withContext
 		}
 		if (picked.isEmpty()) return@withContext
-		val copied = Attachments.storeOutgoing(filesDir, "draft-${UUID.randomUUID()}", picked)
+		// admitPicked is all-or-nothing, so on success these line up with the uris that produced them
+		// and each picked file can be asked where it came from. Read now: the content Uri is gone
+		// after this call and nothing downstream can recover it.
+		val origins = uris.map { PickedLocation.of(it) }
+		val paired = Attachments.storeOutgoingPaired(filesDir, "draft-${UUID.randomUUID()}", picked)
+		val copied = paired.map { (_, stored) -> stored }
+		val located = paired.mapNotNull { (out, stored) ->
+			val src = stored.src ?: return@mapNotNull null
+			origins.getOrNull(picked.indexOf(out))?.let { src to it }
+		}.toMap()
 		val next = _state.updateAndGet { s ->
 			val current = s.drafts[team] ?: Draft()
-			s.withDraft(team, current.copy(files = current.files + copied))
+			s.withDraft(team, current.copy(files = current.files + copied, locations = current.locations + located))
 		}.drafts
 		persistDrafts(next)
 	}
@@ -4225,7 +4248,13 @@ class ChatRepository(
 	fun removeDraftFile(team: String, src: String) {
 		val next = _state.updateAndGet { s ->
 			val current = s.drafts[team] ?: return@updateAndGet s
-			s.withDraft(team, current.copy(files = current.files.filterNot { it.src == src }))
+			s.withDraft(
+				team,
+				current.copy(
+					files = current.files.filterNot { it.src == src },
+					locations = current.locations - src,
+				),
+			)
 		}.drafts
 		persistDrafts(next)
 		scheduleAttachmentDelete(listOf(src))
@@ -4948,12 +4977,23 @@ class ChatRepository(
 		}.getOrDefault(emptyMap())
 	}
 
+	/** Absent on a draft saved before locations existed, and on any file the provider named nothing
+	 * usable for. Either way the row hides rather than showing a guess. */
+	private fun loadLocations(obj: JSONObject): Map<String, String> {
+		val raw = obj.optJSONObject("locations") ?: return emptyMap()
+		return buildMap {
+			for (src in raw.keys()) raw.optString(src).takeIf { it.isNotBlank() }?.let { put(src, it) }
+		}
+	}
+
 	private fun persistDrafts(records: Map<String, Draft>) {
 		val root = JSONObject()
 		for ((team, draft) in records) {
 			val files = JSONArray()
 			for (f in draft.files) files.put(fileJson(f))
-			root.put(team, JSONObject().put("text", draft.text).put("files", files))
+			val locations = JSONObject()
+			for ((src, where) in draft.locations) locations.put(src, where)
+			root.put(team, JSONObject().put("text", draft.text).put("files", files).put("locations", locations))
 		}
 		runCatching { store.saveDrafts(root.toString()) }
 	}
@@ -4971,7 +5011,11 @@ class ChatRepository(
 				if (!isAddressKey(rawKey)) continue
 				runCatching {
 					val obj = root.optJSONObject(rawKey)
-					if (obj != null) Draft(text = obj.optString("text"), files = loadFiles(obj)) else Draft(text = root.getString(rawKey))
+					if (obj != null) {
+						Draft(text = obj.optString("text"), files = loadFiles(obj), locations = loadLocations(obj))
+					} else {
+						Draft(text = root.getString(rawKey))
+					}
 				}.getOrNull()?.takeIf { it.isOccupied }?.let { put(rawKey, it) }
 			}
 		}

@@ -84,6 +84,9 @@ data class OpenAttachment(
 	val relPath: String,
 	val size: Long? = null,
 	val modifiedAt: Long? = null,
+	/** Where a picked file came from. Draft-only: a sent attachment has no such thing, because it
+	 * never crossed the wire and could not have. */
+	val location: String? = null,
 )
 
 ////////////////////////////////
@@ -501,8 +504,9 @@ private fun SaveLocationRow(folder: String?, onPick: () -> Unit) {
 	}
 }
 
-/** Size, dimensions, and modified date, each shown only when it is actually known. Dimensions are
- * dropped for a non-image, and a date the sender never stamped hides rather than reading as epoch. */
+/** Size, dimensions, modified date, and where a picked file came from, each shown only when actually
+ * known. Dimensions drop for a non-image, a date the sender never stamped hides rather than reading
+ * as epoch, and only a draft ever has a source to show. */
 @Composable
 private fun InfoRows(att: OpenAttachment, bounds: ImageBounds?) {
 	val size = prettySize(att.size ?: att.file.length().takeIf { it > 0 })
@@ -510,7 +514,7 @@ private fun InfoRows(att: OpenAttachment, bounds: ImageBounds?) {
 	val modified = att.modifiedAt?.let {
 		runCatching { DateFormat.getDateTimeInstance().format(Date(it)) }.getOrNull()
 	}
-	if (size == null && dims == null && modified == null) return
+	if (size == null && dims == null && modified == null && att.location == null) return
 	Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
 		val sizeLine = listOfNotNull(size, dims).joinToString("  -  ")
 		if (sizeLine.isNotEmpty()) {
@@ -518,6 +522,9 @@ private fun InfoRows(att: OpenAttachment, bounds: ImageBounds?) {
 		}
 		if (modified != null) {
 			Text("Modified  $modified", color = Color.White, style = MaterialTheme.typography.labelSmall)
+		}
+		if (att.location != null) {
+			Text("From  ${att.location}", color = Color.White, style = MaterialTheme.typography.labelSmall)
 		}
 	}
 }

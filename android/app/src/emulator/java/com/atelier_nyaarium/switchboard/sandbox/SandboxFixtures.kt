@@ -55,7 +55,10 @@ class SandboxFixtures(private val filesDir: File, private val assets: AssetManag
 	fun drafts(): Map<String, Draft> {
 		val picked = (1..7).map { pngFixture("shot-$it.png") } + textFixture()
 		val staged = Attachments.storeOutgoing(filesDir, bucket = "draft-1", files = picked)
-		return mapOf(SESSION to Draft(text = "", files = staged))
+		// A real pick reads these off the content Uri, which a seeded draft never has. Only some
+		// files carry one, matching a provider that names nothing usable for the rest.
+		val locations = staged.take(2).mapNotNull { f -> f.src?.let { it to "Pictures" } }.toMap()
+		return mapOf(SESSION to Draft(text = "", files = staged, locations = locations))
 	}
 
 	/** Canned listings for the create dialog's directory picker, keyed by the listed prefix (the

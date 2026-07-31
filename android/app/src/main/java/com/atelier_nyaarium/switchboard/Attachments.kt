@@ -128,7 +128,17 @@ object Attachments {
 
 	/** Persist outbound (user-picked) files so the sent message can show its own
 	 * thumbnails through the same asset-loader path as inbound attachments. */
-	fun storeOutgoing(filesDir: File, bucket: String, files: List<OutgoingFile>): List<MessageFile> {
+	fun storeOutgoing(filesDir: File, bucket: String, files: List<OutgoingFile>): List<MessageFile> =
+		storeOutgoingPaired(filesDir, bucket, files).map { (_, stored) -> stored }
+
+	/** [storeOutgoing], but reporting which input each stored file came from. A caller holding
+	 * per-pick side data cannot pair by position, because a failed write is dropped rather than
+	 * held as a gap. */
+	fun storeOutgoingPaired(
+		filesDir: File,
+		bucket: String,
+		files: List<OutgoingFile>,
+	): List<Pair<OutgoingFile, MessageFile>> {
 		if (files.isEmpty()) return emptyList()
 		val dir = File(root(filesDir), bucket)
 		val used = mutableSetOf<String>()
@@ -142,7 +152,7 @@ object Attachments {
 				if (out.canonicalFile != f.source.canonicalFile) {
 					f.source.inputStream().use { input -> out.outputStream().use(input::copyTo) }
 				}
-				MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name", f.size, role = "attachment")
+				f to MessageFile(name, f.mime, "$ASSET_BASE/$bucket/$name", f.size, role = "attachment")
 			}.getOrNull()
 		}
 	}
