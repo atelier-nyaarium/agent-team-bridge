@@ -1183,6 +1183,32 @@ because the pattern is the same one Phase 1a's bug classes describe.
   entry back into a queue the teardown believed it had emptied. Enqueue now re-checks the team under
   the advance lock rather than trusting the check made back at the drain.
 
+### Bug Classes
+
+**Mechanism: who is allowed to take the sound.**
+Defect class: a request handed to the engine takes the sound whenever it finally becomes ready,
+regardless of what happened in between. The queue is not consulted, so no amount of queue-side care
+fixes it.
+
+- Round 1: the queue advanced on PREEMPTED and started its next entry over the top. Patched by making
+  PREEMPTED not advance.
+- Round 2: the stand-down was undone one line later by a resume that asked whether the QUEUE was
+  headless. Patched with an explicit `standDown` flag plus asking the player instead.
+- Round 3: the OTHER start path, `step.next`, never asked at all. A head that fails before it ever
+  sounds - a cache-miss error, or a cached file that will not decode - hands back a next entry that
+  starts over the top of a manual play. Patched with the same guard.
+
+Three rounds, three patches, and the audit's own refutation names why none of them close it: the same
+overwrite happens with NO queue decision at all when an in-flight head's synthesis simply succeeds.
+`PlaybackRequests.sound` displaces unconditionally, so every request already in flight is a pending
+interruption of whatever the user does next. The window is ordinary rather than rare - with
+pre-generate off, every autoplay head is a live cache-miss synth bounded only by the transport's 80s.
+
+The shape that would close it: a request declares whether it YIELDS. An autoplay entry that finds the
+sound taken when it becomes ready should stand down and report its own terminal, rather than displace.
+That is one decision in `sound()`, and it makes "autoplay never interrupts a person" true by
+construction instead of by three call sites remembering to ask. `framework-fan-out` owns it.
+
 **Still open:** cross-team ordering within one burst; `clearAll` leaving the queue populated; the
 notification's Play action targeting the burst's last message while the preload warms its first; two
 rows sharing one `at` collapsing into a single entry; unspeakable rows (status-only, files-only) being

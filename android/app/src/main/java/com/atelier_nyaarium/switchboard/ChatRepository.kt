@@ -1481,7 +1481,10 @@ class ChatRepository(
 			val step = queue.advance(entry, outcome)
 			step.failed?.let { DebugLog.log("Stts", "giving up on ${it.team} @${it.at} after a retry") }
 			if (step.next != null) {
-				speak(step.next)
+				// Guarded like the resume below. A head can fail BEFORE it ever sounds - a cache miss
+				// that errors, or a cached file that will not decode - and in that window the user may
+				// already be listening to something they asked for.
+				if (!stts.isSounding()) speak(step.next)
 				return
 			}
 			// The head just gave the sound to something else. An empty head reads exactly like an idle
