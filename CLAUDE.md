@@ -36,7 +36,10 @@ code does not belong here; rationale lives in `git log`.
   - `schemas.ts` - THE single zod truth for every wire shape. Every schema carries `.meta({id})`,
     which is its generated Kotlin class name
   - `channel-file.ts` - the ChannelFile wire shape, zod-only and NOT a leaf (evie never reads it);
-    its own module because schemas.ts and federation-protocol.ts both consume it and would cycle
+    its own module because schemas.ts and federation-protocol.ts both consume it and would cycle.
+    A file DECLARES what it is here (`role`, plus the ref and design-card facts a receiver would
+    otherwise have to open the bytes to learn); no receiver may re-derive that from content,
+    filename, array position, or message direction
   - `session-id.ts` - the SOLE owner of the address grammar (see Addressing below)
   - `crypto.ts` / `admission.ts` / `federation-lifecycle.ts` / `evie-protocol.ts` - the synced leaves
   - `notice.ts` - the four notice tiers both reply tools and the console wire share
@@ -218,8 +221,15 @@ dedup on the mutating ops).
 ### Artifact references (`ref://`)
 
 An agent writes a markdown link to `ref://path:Scope:Name#matcher`; the MCP resolves it with
-tree-sitter and attaches a manifest plus file snapshots. Lives in `mcp/references/`.
+tree-sitter and attaches one file snapshot per referenced file. Lives in `mcp/references/`.
 
+- **A snapshot declares itself.** Each carries `role: "ref-snapshot"` plus a `ref` block naming its
+  source path, the canonical keys it backs, and (in snippet mode) its slicing as `(startLine,
+  lineCount)` pairs. There is no manifest file and no reserved filename: a receiver classifies from
+  the file entry it is already holding, so nothing has to be read, timed, or kept unclaimable.
+- **The snapshot's bytes ARE its segments joined by newline**, which is why line counts alone
+  partition it. `artifactBuilder`'s join and `RefPayload.payloadFor`'s slicing are inverses; break
+  one and the viewer renders the wrong lines under the right header.
 - **Grammars are COMMITTED wasm** under `grammars/`, built by `scripts/build-grammars.ts` from pinned
   npm sources. Never harvest a package's own prebuilt wasm: the 0.26 runtime will not load one built
   by an older CLI. Rerun the script and commit after changing a pin.
@@ -255,8 +265,13 @@ cap), and a starting MCP reads the union over `GET /capabilities` before the Mcp
   exception (Compose values cannot cross a non-inline lambda).
 - **Inbound pipeline:** subscribers fire synchronously inside the mailbox drain, before
   `mailboxSync.commit`, so they inherit the cursor's exactly-once. Deliberately not a `SharedFlow`.
-- **Designer plugin:** renders `@dsCard`-marked HTML attachments as a dock gallery, backed by its
-  own per-team `DesignStore`.
+  **A handler gets NO bytes**: a delivered message names its files and the blob plane fetches them
+  afterwards, so anything a handler decides must come from wire fields alone. That is also what
+  keeps a handler's single write ahead of any user action, so nothing it writes can be resurrected.
+- **Designer plugin:** docks a `design-card` file from its declared title/group/dimensions the
+  moment the message lands, and resolves the bytes at RENDER from the live row (content-keyed, so an
+  older revision cannot lend its bytes). A card therefore exists before its bytes and says whether
+  it is downloading or gave up. Backed by its own per-team `DesignStore`.
 - **Unread tracking:** a per-team `ReadAnchor(epoch, seq, at)`. Mailbox epochs are random and never
   ordered, so an anchor resolves to its row by EQUALITY only and unread is a pure positional count.
   Reads drain by scroll position, not by opening; `thread.js` walks a monotonic pointer against live
