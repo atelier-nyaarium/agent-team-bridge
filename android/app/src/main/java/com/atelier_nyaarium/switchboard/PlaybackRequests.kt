@@ -4,28 +4,11 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executor
 
 /**
- * Why a request exists. A PLAY is what a consumer sees and what the toggle acts on; a PRELOAD only
- * warms the cache. They are separate entries, so pre-generating a message cannot make it read as
- * playing, and a Play landing mid-preload starts audio instead of cancelling the warm-up. A purge
- * still reaches both, which is the reason a preload is registered at all.
- */
-enum class PlaybackRole {
-	PLAY,
-	PRELOAD,
-}
-
-/**
  * One playback request's identity, minted at claim and carried through every lane hand-off rather
  * than re-derived. `gen` distinguishes a re-claim of the same entry from the claim it replaced, so a
  * hand-off that arrives late drives nothing.
  */
-data class PlaybackId(
-	val team: String,
-	val at: Long,
-	val tier: SttsPlayer.Tier?,
-	val gen: Long,
-	val role: PlaybackRole = PlaybackRole.PLAY,
-)
+data class PlaybackId(val team: String, val at: Long, val tier: SttsPlayer.Tier?, val gen: Long)
 
 /**
  * The result of ending one or more requests: the events to publish, and WHICH request lost the sound.
@@ -42,9 +25,14 @@ data class PlaybackDrop(val events: List<SttsPlayer.Event.Ended>, val soundingEn
 /**
  * The request lifecycle with no playback in it: claim, sound, one terminal, nothing after.
  *
- * An ENTRY is (team, at, tier, role) and holds at most one live request, so a second claim for the
- * same entry is refused instead of racing it. Provider and voice belong to the caller's cache key,
- * never to identity, because two identities for one thing is what makes an abandon return a list.
+ * An ENTRY is (team, at, tier) and holds at most one live request, so a second claim for the same
+ * entry is refused instead of racing it. Provider and voice belong to the caller's cache key, never
+ * to identity, because two identities for one thing is what makes an abandon return a list.
+ *
+ * Only PLAYBACK lives here. A cache warm-up holds no claim: it is not something a consumer can see,
+ * stop, or advance a queue on, and giving it one made a message being pre-generated read as playing.
+ * A purge reaches it through the epoch below instead, which covers it even between two of its writes,
+ * where a claim could not.
  *
  * Which request is sounding lives here too. Split across two objects it needed two monitors, so a
  * bulk drop could release a newer generation's player while leaving its claim orphaned.
@@ -58,7 +46,7 @@ data class PlaybackDrop(val events: List<SttsPlayer.Event.Ended>, val soundingEn
  * passes a single-thread lane so a listener cannot run under the monitor.
  */
 class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
-	private data class Entry(val team: String, val at: Long, val tier: SttsPlayer.Tier?, val role: PlaybackRole)
+	private data class Entry(val team: String, val at: Long, val tier: SttsPlayer.Tier?)
 
 	private val live = mutableMapOf<Entry, PlaybackId>()
 	private var sounding: PlaybackId? = null
@@ -86,10 +74,9 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	}
 
 	/** Queue an event for delivery. Called only from inside the monitor, in the same critical section
-	 * as the state change it reports. A PRELOAD is silent: no consumer saw it start, and its terminal
-	 * would clear a glyph it never lit. */
-	private fun publish(id: PlaybackId, event: SttsPlayer.Event?) {
-		if (event != null && id.role == PlaybackRole.PLAY) outbox.addLast(event)
+	 * as the state change it reports. */
+	private fun publish(event: SttsPlayer.Event?) {
+		if (event != null) outbox.addLast(event)
 	}
 
 	/** Hand the queued events to the sink. The drain takes the monitor again and empties the WHOLE
@@ -109,14 +96,14 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 		}
 	}
 
-	private fun entryOf(id: PlaybackId) = Entry(id.team, id.at, id.tier, id.role)
+	private fun entryOf(id: PlaybackId) = Entry(id.team, id.at, id.tier)
 
 	/** Null when this entry is already live: single-flight, and the running request is untouched. */
 	@Synchronized
-	fun claim(team: String, at: Long, tier: SttsPlayer.Tier?, role: PlaybackRole = PlaybackRole.PLAY): PlaybackId? {
-		val entry = Entry(team, at, tier, role)
+	fun claim(team: String, at: Long, tier: SttsPlayer.Tier?): PlaybackId? {
+		val entry = Entry(team, at, tier)
 		if (live.containsKey(entry)) return null
-		val id = PlaybackId(team, at, tier, nextGen++, role)
+		val id = PlaybackId(team, at, tier, nextGen++)
 		live[entry] = id
 		return id
 	}
@@ -133,16 +120,15 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	@Synchronized
 	fun isLive(id: PlaybackId): Boolean = live[entryOf(id)] == id
 
-	/** Whether a PLAY request is claimed for this entry, sounding or still synthesizing. This is what a
+	/** Whether a request is claimed for this entry, sounding or still synthesizing. This is what a
 	 * toggle acts on, so a caller's "is it active" check must ask the same question. */
 	@Synchronized
-	fun isLive(team: String, at: Long, tier: SttsPlayer.Tier?): Boolean =
-		live.containsKey(Entry(team, at, tier, PlaybackRole.PLAY))
+	fun isLive(team: String, at: Long, tier: SttsPlayer.Tier?): Boolean = live.containsKey(Entry(team, at, tier))
 
-	/** Whether any TIER of this message has a live PLAY request, sounding or still synthesizing. */
+	/** Whether any TIER of this message is claimed, sounding or still synthesizing. */
 	@Synchronized
 	fun isLiveForMessage(team: String, at: Long): Boolean =
-		live.keys.any { it.team == team && it.at == at && it.role == PlaybackRole.PLAY }
+		live.keys.any { it.team == team && it.at == at }
 
 	/** Whether this message is AUDIBLE. The play button toggles on this rather than on the claim,
 	 * because a row gives the user no way to see a request that is still synthesizing: tapping one
@@ -169,7 +155,7 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	fun started(id: PlaybackId): SttsPlayer.Event.Started? {
 		if (!isLive(id)) return null
 		val event = SttsPlayer.Event.Started(id.team, id.at, id.tier, id.gen)
-		publish(id, event)
+		publish(event)
 		pump()
 		return event
 	}
@@ -183,7 +169,7 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 		live.remove(entry)
 		if (sounding == id) sounding = null
 		val event = SttsPlayer.Event.Ended(id.team, id.at, id.tier, id.gen, outcome, reason)
-		publish(id, event)
+		publish(event)
 		pump()
 		return event
 	}
@@ -204,7 +190,7 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 		tier: SttsPlayer.Tier?,
 		outcome: SttsPlayer.Outcome,
 		reason: String? = null,
-	): PlaybackDrop = drop(listOfNotNull(live[Entry(team, at, tier, PlaybackRole.PLAY)]), outcome, reason)
+	): PlaybackDrop = drop(listOfNotNull(live[Entry(team, at, tier)]), outcome, reason)
 
 	@Synchronized
 	fun finishSounding(outcome: SttsPlayer.Outcome): PlaybackDrop = drop(listOfNotNull(sounding), outcome)
@@ -223,7 +209,7 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	 * still synthesizing. */
 	@Synchronized
 	fun finishMessage(team: String, at: Long, outcome: SttsPlayer.Outcome): PlaybackDrop =
-		drop(live.values.filter { it.team == team && it.at == at && it.role == PlaybackRole.PLAY }.toList(), outcome)
+		drop(live.values.filter { it.team == team && it.at == at }.toList(), outcome)
 
 	/** End every live request for one team. Cache deletion needs this: a request that is claimed but
 	 * still synthesizing owns no player, so ending the sounding one cannot reach it, and its hand-off
@@ -231,6 +217,17 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	@Synchronized
 	fun finishTeam(team: String, outcome: SttsPlayer.Outcome): PlaybackDrop =
 		drop(live.values.filter { it.team == team }.toList(), outcome)
+
+	/** End a team's requests apart from one entry. Superseding is "replace everything else", and doing
+	 * it as a check then a sweep would let the sweep end the very entry the caller is about to claim,
+	 * which costs a second synthesis for audio already being fetched. */
+	@Synchronized
+	fun finishTeamExcept(
+		team: String,
+		at: Long,
+		tier: SttsPlayer.Tier?,
+		outcome: SttsPlayer.Outcome,
+	): PlaybackDrop = drop(live.values.filter { it.team == team && (it.at != at || it.tier != tier) }.toList(), outcome)
 
 	/** End a team's requests AND mark its cache deleted. Distinct from [finishTeam]: preempting a
 	 * team's playback says nothing about its files, and stamping on a mere preempt makes an in-flight
@@ -259,15 +256,11 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	fun purgedSince(team: String, stamp: Long): Boolean =
 		(purgedAt[team] ?: 0L) >= stamp || wipedAt >= stamp
 
-	/** A PRELOAD is ended silently: it reports no terminal because no consumer ever saw it start, and
-	 * an Ended for a message the user never played would clear the glyph of one they did. */
+	/** `loser` is read before the loop, because finishing it clears the pointer it would be read from. */
 	@Synchronized
 	private fun drop(ids: List<PlaybackId>, outcome: SttsPlayer.Outcome, reason: String? = null): PlaybackDrop {
 		if (ids.isEmpty()) return PlaybackDrop.NONE
 		val loser = ids.firstOrNull { it == sounding }
-		val events = ids.mapNotNull { id ->
-			finish(id, outcome, reason)?.takeIf { id.role == PlaybackRole.PLAY }
-		}
-		return PlaybackDrop(events, loser)
+		return PlaybackDrop(ids.mapNotNull { finish(it, outcome, reason) }, loser)
 	}
 }

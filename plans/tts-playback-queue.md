@@ -855,8 +855,9 @@ the sections that follow record what each later round added.
   trail its own terminal and strand a consumer on a phantom playing entry.
 - **Listeners run off the monitor.** A pump hands the drained outbox to a sink: the `stts-events` lane
   in production, inline by default so a JVM test can assert the delivered transcript.
-- **A preload is silent.** Suppressed at the single publish site rather than per bulk path, so no
-  consumer can be handed a terminal for a warm-up it never saw start.
+- **A preload is not a request.** It holds no claim at all, so it cannot be reported, stopped, or
+  mistaken for playback. A purge reaches it through the epoch instead, which also covers the gaps
+  between its writes where a claim could not exist.
 - **MediaPlayer built into a local** and released by hand on failure; a field assigned via `apply` is
   never assigned when the block throws, which is exactly when it must be released.
 
@@ -968,6 +969,16 @@ other.
   user no way to SEE a claim. With autoplay on, one tap on a fresh message cancelled the autoplay and
   played nothing. The button is back to toggling on audible; the claim-scoped toggle is blocked on the
   Loading / Playing / Queued button state, which is where the owner already put it.
+- Round 10 (red team, after the preload removal): the same claim-versus-sounding mismatch was still in
+  `playSample`, the sibling call site I did not change when I fixed `play()`. A second tap on the
+  settings voice preview cancelled a synthesis the user was still waiting on and played nothing. The
+  naive fix would have double-paid the provider, because the team-wide supersede sweep would have
+  ended the very entry the re-claim was about to make; `finishTeamExcept` makes it one operation
+  instead of a check then a sweep. `stopEntry`, the last claim-scoped toggle, is deleted.
+- CLOSED by framework-first: the preload left the registry, so the role and its six filters are gone.
+  Three rounds tried to make one identity serve two things; the fix was for the second thing to stop
+  being a request. Registering it was always the wrong instinct - what it needed was reachability, not
+  identity, and those are not the same requirement.
 
 **Mechanism: purge versus an in-flight producer.**
 Defect class: a purge is an instant and a producer spans one, so "is this claimed" cannot answer "is
@@ -1027,20 +1038,26 @@ would let that guard be deleted. Dropping `@Volatile` also makes the Phase 4/5 h
 strictly more reachable, since a future `positionMs()` accessor touches the field, not the guarded
 methods.
 
-**Ranked next, not done.** Each is a real chunk, and each closes a recorded class rather than a defect:
+**Landed: the preload left the registry.** It was never a playback request - no sound, no terminal any
+consumer observes, and the only thing it actually needed was purge reachability, which the epoch
+already provides and provides better (a claim cannot exist in the gap between two of its writes; the
+epoch covers it). `PlaybackRole` is deleted along with the six predicates that had to filter on it and
+the suppression rule every bulk path had to remember. Six role tests collapsed into one that pins what
+protects a warm-up now. This closes bug class 2: there is no second identity left to conflate, and no
+rule for a Phase 1b predicate to forget.
 
-1. **Take the preload out of the registry.** It is a cache-write lease, not a playback request: no
-   sound, no terminal anyone observes, only purge reachability. Removing the role removes the rule
-   that every predicate Phase 1b adds must remember to filter on it - which is what RC-B's seven
-   findings were.
-2. **Give the cache directory an owner.** The strongest shape proposed is a generation-stamped
+**Ranked next, not done.** Each closes a recorded class rather than a defect:
+
+1. **Give the cache directory an owner.** The strongest shape proposed is a generation-stamped
    directory, so a purge RENAMES and a stale writer's path simply no longer exists. That deletes
    `purgedAt`, `wipedAt`, `isStale` and `purgeStamp` from the registry outright, and with them the
    question "which method stamps the epoch" that produced round 9's voice-sample regression. This also
-   fits the repo's documented sole-owner-plus-residue-test idiom.
-3. **An `AudioDevice` port owning opaque handles.** Makes `teardownPlayer` - "release whatever the
+   fits the repo's documented sole-owner-plus-residue-test idiom. Note the registry now holds the
+   epoch as its ONLY remaining opinion about files, so this chunk finishes the separation the preload
+   removal started.
+2. **An `AudioDevice` port owning opaque handles.** Makes `teardownPlayer` - "release whatever the
    field holds" - unexpressible, and with it the `playerOwner` guard.
-4. **A `Lanes` port**, so hand-offs are deterministic in a test and lane identity is a type rather than
+3. **A `Lanes` port**, so hand-offs are deterministic in a test and lane identity is a type rather than
    a comment.
 
 ### Gates

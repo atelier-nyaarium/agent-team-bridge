@@ -293,54 +293,22 @@ class PlaybackRequestsTest {
 	}
 
 	@Test
-	fun `a preload does not make its message read as playing`() {
+	fun `a cache warm-up needs no claim to be reachable by a purge`() {
 		val r = requests()
-		r.claim(team, at, tier, PlaybackRole.PRELOAD)!!
+		val heard = Heard()
+		heard.subscribe(r)
+		// A warm-up holds nothing here. It captures the horizon and asks later, which is what the four
+		// rounds of claim, role, and per-item staleness were each trying to approximate.
+		val horizon = r.purgeStamp()
 
-		// Pre-generation used to share the play entry, so the button read "playing" for the whole
-		// synthesis: it stopped whatever else was audible instead of starting this.
+		r.purgeTeam(team)
+
+		assertTrue(r.purgedSince(team, horizon))
+		// Silent by construction rather than by a suppression rule every bulk path had to remember:
+		// nothing was claimed, so there is no request to report a terminal for.
+		assertTrue(heard.transcript().isEmpty())
+		// And it never made the message read as playing, which is what sharing the play entry did.
 		assertFalse(r.isLiveForMessage(team, at))
-		assertFalse(r.isLive(team, at, tier))
-	}
-
-	@Test
-	fun `a play request and a preload of the same tier coexist`() {
-		val r = requests()
-		val warm = r.claim(team, at, tier, PlaybackRole.PRELOAD)!!
-
-		// A tap landing mid-preload has to start audio, not be refused by the warm-up's claim.
-		val play = r.claim(team, at, tier)!!
-		assertTrue(r.isLive(warm))
-		assertTrue(r.isLive(play))
-		assertNotEquals(warm, play)
-	}
-
-	@Test
-	fun `stopping an entry leaves its preload running`() {
-		val r = requests()
-		val warm = r.claim(team, at, tier, PlaybackRole.PRELOAD)!!
-		r.claim(team, at, tier)!!
-
-		val ended = r.finishEntry(team, at, tier, SttsPlayer.Outcome.STOPPED).events.single()
-
-		// STOPPED is the outcome a queue does not advance on, so it must name the request the user
-		// stopped and never the cache warm-up behind it.
-		assertEquals(SttsPlayer.Outcome.STOPPED, ended.outcome)
-		assertTrue(r.isLive(warm))
-	}
-
-	@Test
-	fun `a purge reaches a preload but reports no terminal for it`() {
-		val r = requests()
-		val warm = r.claim(team, at, tier, PlaybackRole.PRELOAD)!!
-
-		val drop = r.finishTeam(team, SttsPlayer.Outcome.PREEMPTED)
-
-		// Swept, so its hand-off cannot recreate the directory the purge just deleted - but silent,
-		// because no consumer ever saw it start and its Ended would clear a glyph it never lit.
-		assertFalse(r.isLive(warm))
-		assertTrue(drop.events.isEmpty())
-		assertNull(r.finish(warm, SttsPlayer.Outcome.COMPLETED))
 	}
 
 	@Test
@@ -362,15 +330,19 @@ class PlaybackRequestsTest {
 	}
 
 	@Test
-	fun `stopping a message spares its preload`() {
+	fun `superseding a team spares the entry that is replacing it`() {
 		val r = requests()
-		val warm = r.claim(team, at, tier, PlaybackRole.PRELOAD)!!
-		r.claim(team, at, tier)!!
+		val otherVoice = r.claim(SttsPlayer.SAMPLE_TEAM, 100, null)!!
+		val thisVoice = r.claim(SttsPlayer.SAMPLE_TEAM, 200, null)!!
 
-		val drop = r.finishMessage(team, at, SttsPlayer.Outcome.STOPPED)
+		val drop = r.finishTeamExcept(SttsPlayer.SAMPLE_TEAM, 200, null, SttsPlayer.Outcome.PREEMPTED)
 
-		assertEquals(1, drop.events.size)
-		assertTrue(r.isLive(warm))
+		// Sweeping the whole team would end the synthesis a second tap is waiting on, and the re-claim
+		// behind it would pay a provider twice for audio already in flight.
+		assertEquals(listOf(100L), drop.events.map { it.at })
+		assertFalse(r.isLive(otherVoice))
+		assertTrue(r.isLive(thisVoice))
+		assertNull(r.claim(SttsPlayer.SAMPLE_TEAM, 200, null))
 	}
 
 	@Test
@@ -584,20 +556,6 @@ class PlaybackRequestsTest {
 
 		// started() is refused after the terminal, so the stranded-row case cannot be delivered at all.
 		assertEquals(listOf("end:FULL:1:STOPPED"), heard.transcript())
-	}
-
-	@Test
-	fun `a preload is silent to listeners even when a purge sweeps it`() {
-		val r = requests()
-		val heard = Heard()
-		heard.subscribe(r)
-
-		val warm = r.claim(team, at, tier, PlaybackRole.PRELOAD)!!
-		r.started(warm)
-		r.purgeTeam(team)
-
-		assertTrue(heard.transcript().isEmpty())
-		assertFalse(r.isLive(warm))
 	}
 
 	@Test

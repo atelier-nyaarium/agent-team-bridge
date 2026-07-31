@@ -137,10 +137,13 @@ class SttsPlayer(private val root: File) {
 	 * provider+voice under the reserved "_sample" team, purged with clearAll. */
 	fun playSample(client: SttsClient, provider: SttsProvider, voice: String?, text: String, volumePct: Int = 100) {
 		// Each voice is its own entry, so Test toggles the voice you pressed rather than whatever
-		// happens to be audible, and picking a different voice supersedes instead of just stopping.
+		// happens to be audible. Toggling on sound, like the message button: the screen shows no
+		// spinner, so a tap during synthesis must not cancel audio the user is still waiting for.
 		val voiceAt = sampleAt(provider, voice)
-		if (stopEntry(SAMPLE_TEAM, voiceAt, null)) return
-		apply(requests.finishTeam(SAMPLE_TEAM, Outcome.PREEMPTED))
+		if (stopSounding(SAMPLE_TEAM, voiceAt, null)) return
+		// Picking a different voice supersedes instead of just stopping; this voice is left alone so a
+		// second tap on it falls through to single-flight rather than paying for a second synthesis.
+		apply(requests.finishTeamExcept(SAMPLE_TEAM, voiceAt, null, Outcome.PREEMPTED))
 		val dest = File(File(root, "stts/$SAMPLE_TEAM"), "${provider.path}-${safeVoice(voice)}.audio")
 		synthesizeAndPlay(SAMPLE_TEAM, voiceAt, null, dest, volumePct) { d -> client.sample(provider, text, voice, d) }
 	}
@@ -172,16 +175,11 @@ class SttsPlayer(private val root: File) {
 				if (requests.purgedSince(team, horizon)) return discardPreload(dest)
 				continue
 			}
-			// Claimed under the PRELOAD role, so a purge reaches this producer without the warm-up
-			// reading as playback.
-			val id = requests.claim(team, at, tier, PlaybackRole.PRELOAD) ?: continue
 			val ok = synthToCache(client, provider, voice, text, dest)
-			// Purged at any point since this preload began, or dropped while synthesizing: either way
-			// the write above resurrected a deleted directory, so undo it.
-			if (requests.purgedSince(team, horizon) || requests.finish(id, Outcome.COMPLETED) == null) {
-				requests.finish(id, Outcome.PREEMPTED)
-				return discardPreload(dest)
-			}
+			// Purged at any point since this preload began: the write above resurrected a deleted
+			// directory, so undo it. This holds no claim - a warm-up is not a request, and the epoch
+			// covers it in the gaps between tiers where a claim could not.
+			if (requests.purgedSince(team, horizon)) return discardPreload(dest)
 			if (ok) done[text] = dest
 		}
 	}
@@ -292,17 +290,10 @@ class SttsPlayer(private val root: File) {
 	 * apart from "something replaced it": only one of those advances. */
 	fun stopWith(outcome: Outcome) = apply(requests.finishSounding(outcome))
 
-	/** Stop ONE entry, whether it is sounding or still synthesizing, and say whether it was there.
-	 * The check and the act are one registry operation, so a toggle cannot end whatever became
-	 * current in between - and STOPPED is the one outcome a queue does not advance on, so a
-	 * mis-scoped stop would halt it on an entry nobody touched. */
-	private fun stopEntry(team: String, at: Long, tier: Tier?): Boolean {
-		val drop = requests.finishEntry(team, at, tier, Outcome.STOPPED)
-		apply(drop)
-		return drop.events.isNotEmpty()
-	}
-
-	/** Stop ONE entry only while it is audible, and say whether it was. */
+	/** Stop ONE entry only while it is audible, and say whether it was. The check and the act are one
+	 * registry operation, so a toggle cannot end whatever became audible in between - and STOPPED is
+	 * the one outcome a queue does not advance on, so a mis-scoped stop would halt it on an entry
+	 * nobody touched. */
 	private fun stopSounding(team: String, at: Long, tier: Tier?): Boolean {
 		val drop = requests.finishIfSounding(team, at, tier, Outcome.STOPPED)
 		apply(drop)
