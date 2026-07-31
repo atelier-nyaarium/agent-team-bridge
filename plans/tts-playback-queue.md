@@ -1088,9 +1088,10 @@ top 6 to adversarial verify at 2 opus skeptics each, which is 12 in the verify l
 that line ships UNVERIFIED and must be labelled so - verify kills roughly half of what explore raises,
 so an unverified finding is not the same claim as a survivor.
 
-### Phase 1b as built
+### Phase 1b as built ✅
 
-In progress. What is landed and green:
+Landed and green. Six MODERATE items remain, listed under "Still open" below; none of them break
+autoplay, and each is recorded rather than dropped.
 
 - **`PlaybackQueue.kt`** (new, pure, no Android import; `PlaybackQueueTest` covers it). Ordered entries
   with one head. Advancing is ONE operation keyed on the outcome: `STOPPED` alone holds position, and
@@ -1272,6 +1273,23 @@ reading quickly.
 **`ChatRepository.kt` is too large to read.** It exceeded the context budget to open at all, so every
 question about it had to be answered by grep. A file that cannot be read is a file whose invariants
 are discovered by accident.
+
+**A green test suite meant nothing, three separate times.** Every defect the queue work produced passed
+the full suite. Worse, three tests passed while the exact behaviour they were named for was broken: a
+teardown test whose `pending` was already empty, an ordering test asserting `step.next` at the queue
+level while the caller overrode it, and a stand-down test that could not see the caller ignoring the
+flag. The habit that actually worked was breaking the line under test and confirming the test goes red
+before believing it. That should be routine here, not a reaction to being burned.
+
+**Every fix in this area spawned its own successor.** Four rounds on "who takes the sound", and each
+patch was correct where it landed and wrong one layer out. The pattern only broke when the decision
+moved INTO `sound()`. The tell, in hindsight, was that each fix was a question asked by a caller about
+state it did not own - and by the time an autoplay request is ready, no caller is left to ask.
+
+**A redundant guard is not free.** The `step.next` guard was added as insurance and became the wedge:
+`advance` installs the head before returning it, so declining to speak stranded an entry forever. Once
+an invariant lives inside a unit, an outside check that can REFUSE is a liability, not a belt to the
+braces.
 
 **A stale doc count survived nine rounds.** The plan's own as-built preamble claimed 19 tests while the
 suite held 37, and it took an audit agent to notice. Counts in prose go stale the moment they are

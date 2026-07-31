@@ -292,6 +292,14 @@ cap), and a starting MCP reads the union over `GET /capabilities` before the Mcp
   something a consumer can see or stop, and a purge reaches it through the epoch, which also covers
   the gaps between its writes where a claim cannot exist. A tap toggles on what is AUDIBLE, never on
   the claim, because a row cannot show a request that is only synthesizing.
+- **Autoplay yields, people do not** (`PlaybackQueue.kt`): the repository owns the queue and advances
+  it from playback terminals under one mutex; `SttsPlayer` stays a one-shot engine. A request declares
+  whether it YIELDS, and `sound()` decides: a yielding one that finds the sound taken stands down and
+  reports its own terminal instead of displacing. That belongs there rather than at the call sites,
+  because a request handed to the engine arrives long after any caller is left to ask - a cache miss
+  is bounded only by the transport's timeout. Consequence worth knowing before adding a caller-side
+  guard: `advance` installs the next entry as the head BEFORE returning it, so a caller that declines
+  to speak it strands an entry no terminal will ever retire. Hand it over and let it yield.
 - **Attachment viewer** (`AttachmentViewer.kt`): one fullscreen sheet for every tapped file. Which
   stage it shows is decided by `viewerDecodableImage` in `AttachmentDisplay.kt`, never by a mime
   prefix, because the two renderers disagree in BOTH directions (the WebView draws SVG that
