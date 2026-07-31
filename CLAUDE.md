@@ -279,6 +279,25 @@ cap), and a starting MCP reads the union over `GET /capabilities` before the Mcp
 - **Idle pushback** (`IdlePushbackManager.kt`): background poll cadence backs off the longer it stays
   silent, releasing the wakelock for wall-clock-aligned `AlarmManager` wakeups at the deeper tiers.
   A fresh mailbox entry resets the ladder.
+- **Attachment viewer** (`AttachmentViewer.kt`): one fullscreen sheet for every tapped file. Which
+  stage it shows is decided by `viewerDecodableImage` in `AttachmentDisplay.kt`, never by a mime
+  prefix, because the two renderers disagree in BOTH directions (the WebView draws SVG that
+  BitmapFactory cannot; BitmapFactory decodes HEIF that the WebView cannot), so the viewer's set is
+  not the thumbnail set.
+  - `ZoomMath.kt` owns the arithmetic, free of Compose so it is unit-testable. The layer scale is NOT
+    the zoom percentage: `ContentScale.Fit` has already scaled the bitmap and a downsampled one
+    covers `sampleSize` source pixels per bitmap pixel, so a preset cannot be a constant. Both ends of
+    the pinch range are derived per image, since which of fit or 200% is outermost flips with image
+    size. The real gate is an emulator check that 100% is 1:1; the unit test cannot see the
+    Dp-versus-pixel seam at the call site.
+  - `TextPeek.kt` decides text-vs-binary for the preview stage. `CharsetDecoder` does the classifying,
+    because it already separates a character truncated by the peek window from bytes that cannot
+    appear in the encoding. `String(bytes)` cannot be used: it substitutes U+FFFD and never fails, so
+    every file would classify as text.
+  - `SaveTarget.kt` is the SAF half of Save. Downloads via MediaStore is the other half and is the
+    only one reachable before a folder is picked. A stored grant is re-validated on every read, and
+    `SaveOutcome` keeps "the folder is gone" apart from "the write failed", because only the first
+    should send the user back to the picker.
 - **Composer drafts:** one `Draft(text, files)` per team in the store, not composer-local state, so
   picked files cannot follow a tab switch. `takeBackIntoDraft` is the single write path back to the
   composer: files UNION, text lands only on a blank draft.
