@@ -1204,10 +1204,13 @@ overwrite happens with NO queue decision at all when an in-flight head's synthes
 interruption of whatever the user does next. The window is ordinary rather than rare - with
 pre-generate off, every autoplay head is a live cache-miss synth bounded only by the transport's 80s.
 
-The shape that would close it: a request declares whether it YIELDS. An autoplay entry that finds the
-sound taken when it becomes ready should stand down and report its own terminal, rather than displace.
-That is one decision in `sound()`, and it makes "autoplay never interrupts a person" true by
-construction instead of by three call sites remembering to ask. `framework-fan-out` owns it.
+CLOSED by framework-first. A request now declares whether it YIELDS, and `sound()` decides: a yielding
+request that finds the sound already taken stands down and reports its own terminal instead of
+displacing. Autoplay yields; anything the user asked for never does. The asymmetry is the rule, and it
+holds for every request in flight rather than for the call sites that remembered to check - which is
+the point, because a request handed over before the person acted arrives long after any caller is left
+to ask. The three caller-side guards stay as cheap early exits, but they are no longer what makes it
+correct.
 
 **Still open:** cross-team ordering within one burst; `clearAll` leaving the queue populated; the
 notification's Play action targeting the burst's last message while the preload warms its first; two

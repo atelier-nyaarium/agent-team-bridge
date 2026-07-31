@@ -145,8 +145,17 @@ class PlaybackRequests(private val sink: Executor = Executor { it.run() }) {
 	/** Mark `id` as the one sounding, returning the terminal of whatever it displaced. Null when `id`
 	 * is no longer live, which means it was abandoned before reaching the player. */
 	@Synchronized
-	fun sound(id: PlaybackId): PlaybackDrop? {
+	fun sound(id: PlaybackId, yielding: Boolean = false): PlaybackDrop? {
 		if (live[entryOf(id)] != id) return null
+		// A yielding request that finds the sound taken stands down instead of displacing, and reports
+		// its own terminal on the way out. Deciding it HERE is what makes "autoplay never interrupts a
+		// person" true of every request in flight, rather than of the call sites that remembered to
+		// check: a request handed over before the person acted arrives long after, and by then no
+		// caller is left to ask.
+		if (yielding && sounding != null && sounding != id) {
+			finish(id, SttsPlayer.Outcome.PREEMPTED, "yielded")
+			return null
+		}
 		val loser = sounding?.takeIf { it != id }
 		val displaced = loser?.let { finish(it, SttsPlayer.Outcome.PREEMPTED) }
 		sounding = id

@@ -209,6 +209,56 @@ class PlaybackRequestsTest {
 	}
 
 	@Test
+	fun `a yielding request stands down instead of interrupting`() {
+		val r = requests()
+		val heard = Heard()
+		heard.subscribe(r)
+		val mine = r.claim(team, at, SttsPlayer.Tier.FULL)!!
+		r.sound(mine)
+		r.started(mine)
+
+		// Handed to the player before the person acted, and only now ready. Displacing here is the
+		// defect three rounds of caller-side guards failed to close, because by this point no caller
+		// is left to ask.
+		val auto = r.claim(team, at + 1, SttsPlayer.Tier.TITLE)!!
+		val drop = r.sound(auto, yielding = true)
+
+		assertNull(drop)
+		assertTrue(r.isLive(mine))
+		assertTrue(r.isSoundingForMessage(team, at))
+		// It reports its OWN terminal on the way out, so a queue waiting on it is not left hanging.
+		assertFalse(r.isLive(auto))
+		assertEquals(
+			listOf("start:FULL:1", "end:TITLE:2:PREEMPTED"),
+			heard.transcript(),
+		)
+	}
+
+	@Test
+	fun `a yielding request takes silence`() {
+		val r = requests()
+		val auto = r.claim(team, at, tier)!!
+
+		// Yielding is about not INTERRUPTING. With nothing audible there is nothing to yield to.
+		assertNotNull(r.sound(auto, yielding = true))
+		assertTrue(r.isSoundingForMessage(team, at))
+	}
+
+	@Test
+	fun `a request the user made still displaces`() {
+		val r = requests()
+		val auto = r.claim(team, at, SttsPlayer.Tier.TITLE)!!
+		r.sound(auto)
+
+		val mine = r.claim(team, at + 1, SttsPlayer.Tier.FULL)!!
+		val drop = r.sound(mine)!!
+
+		// The asymmetry IS the rule: autoplay yields to a person, a person never yields to autoplay.
+		assertEquals(auto, drop.soundingEnded)
+		assertTrue(r.isSoundingForMessage(team, at + 1))
+	}
+
+	@Test
 	fun `a request abandoned before it reaches the player never takes the sound`() {
 		val r = requests()
 		val id = r.claim(team, at, tier)!!

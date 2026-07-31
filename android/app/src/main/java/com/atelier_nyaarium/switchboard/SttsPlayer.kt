@@ -126,6 +126,9 @@ class SttsPlayer(private val root: File) {
 		tier: Tier,
 		text: String,
 		volumePct: Int = 100,
+		/** Stand down rather than interrupt, if something else has taken the sound by the time this is
+		 * ready. Autoplay sets it; a request the user made never does. */
+		yielding: Boolean = false,
 	): Boolean {
 		// Toggle on what the user can see. A tap while this is still synthesizing is NOT a cancel: the
 		// row shows nothing yet, so cancelling would read as a dead button, and single-flight already
@@ -136,7 +139,7 @@ class SttsPlayer(private val root: File) {
 		if (text.isBlank()) return false
 		// Whether this entry's outcome will be reported. A caller driving a queue has to know the
 		// difference from "declined, silently", which is a terminal that never arrives.
-		return synthesizeAndPlay(team, at, tier, cacheFile(team, at, tier, provider, voice), volumePct) { dest ->
+		return synthesizeAndPlay(team, at, tier, cacheFile(team, at, tier, provider, voice), volumePct, yielding) { dest ->
 			client.stream(provider, text, voice, dest)
 		}
 	}
@@ -154,7 +157,9 @@ class SttsPlayer(private val root: File) {
 		// second tap on it falls through to single-flight rather than paying for a second synthesis.
 		apply(requests.finishTeamExcept(SAMPLE_TEAM, voiceAt, null, Outcome.PREEMPTED))
 		val dest = File(File(root, "stts/$SAMPLE_TEAM"), "${provider.path}-${safeVoice(voice)}.audio")
-		synthesizeAndPlay(SAMPLE_TEAM, voiceAt, null, dest, volumePct) { d -> client.sample(provider, text, voice, d) }
+		synthesizeAndPlay(SAMPLE_TEAM, voiceAt, null, dest, volumePct, yielding = false) { d ->
+			client.sample(provider, text, voice, d)
+		}
 	}
 
 	/** Pre-synthesize every tier of one message into the cache without playing, so a later Play is a
@@ -238,13 +243,14 @@ class SttsPlayer(private val root: File) {
 		tier: Tier?,
 		dest: File,
 		volumePct: Int,
+		yielding: Boolean,
 		fetch: (File) -> Unit,
 	): Boolean {
 		val id = requests.claim(team, at, tier) ?: return false
 		// A cache hit goes straight to the play lane. Left inside the synth lane it queued behind a
 		// stalled fetch, which is the one thing the lane split exists to prevent.
 		if (dest.isFile && dest.length() > 0L) {
-			playExec.execute { playGuarded(id, dest, volumePct) }
+			playExec.execute { playGuarded(id, dest, volumePct, yielding) }
 			return true
 		}
 		synthExec.execute {
@@ -267,7 +273,7 @@ class SttsPlayer(private val root: File) {
 				}
 				// The id crosses the lane, so a hand-off that arrives after this request was abandoned
 				// and the entry re-claimed drives nothing.
-				playExec.execute { playGuarded(id, dest, volumePct) }
+				playExec.execute { playGuarded(id, dest, volumePct, yielding) }
 			} catch (e: Exception) {
 				Log.w(TAG, "stts synth failed: ${e.message}")
 				dest.delete()
@@ -281,9 +287,9 @@ class SttsPlayer(private val root: File) {
 	/** Play on its own lane. `prepare` throws on a cached file that will not decode and
 	 * `LoudnessEnhancer` throws on devices without the effect; neither reaches `setOnErrorListener`,
 	 * so both are caught here rather than ending the request with no event at all. */
-	private fun playGuarded(id: PlaybackId, dest: File, volumePct: Int) {
+	private fun playGuarded(id: PlaybackId, dest: File, volumePct: Int, yielding: Boolean) {
 		try {
-			playFile(id, dest, volumePct)
+			playFile(id, dest, volumePct, yielding)
 		} catch (e: Exception) {
 			Log.w(TAG, "playback failed: ${e.message}")
 			dest.delete()
@@ -354,7 +360,7 @@ class SttsPlayer(private val root: File) {
 
 	/** Start `id` playing, or do nothing if it was abandoned before it reached the lane. Throws if
 	 * MediaPlayer setup fails, having assigned nothing for the caller to unpick. */
-	private fun playFile(id: PlaybackId, f: File, volumePct: Int) {
+	private fun playFile(id: PlaybackId, f: File, volumePct: Int, yielding: Boolean) {
 		if (!requests.isLive(id)) return
 		val (linear, gainMb) = volumeSteps(volumePct)
 		// Built into a local and released by hand on failure: an object assigned only after `apply`
@@ -397,7 +403,7 @@ class SttsPlayer(private val root: File) {
 		}
 		// Taking the sound displaces whatever held it, and the registry reports that terminal rather
 		// than it vanishing. Null means this request was abandoned while the player was being built.
-		val displaced = requests.sound(id)
+		val displaced = requests.sound(id, yielding)
 		if (displaced == null) {
 			runCatching { effect?.release() }
 			runCatching { mp.release() }

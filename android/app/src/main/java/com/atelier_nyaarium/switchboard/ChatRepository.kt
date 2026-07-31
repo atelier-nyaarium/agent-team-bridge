@@ -1446,14 +1446,14 @@ class ChatRepository(
 	/** Whether the engine TOOK this message, which is the same as whether a terminal is now owed for
 	 * it. Every reason to give up returns false here rather than returning silently, because a queue
 	 * waiting on a terminal that will never come waits forever. */
-	private fun startPlayback(team: String, at: Long, tier: SttsPlayer.Tier): Boolean {
+	private fun startPlayback(team: String, at: Long, tier: SttsPlayer.Tier, yielding: Boolean = false): Boolean {
 		val client = sttsClient() ?: return false
 		val provider = currentProvider() ?: return false
 		val msg = _state.value.threads[team]?.lastOrNull { it.at == at && !it.fromMe } ?: return false
 		val text = ttsTextFramed(_state.value, msg, tier)
 		if (text.isBlank()) return false
 		val voice = sttsVoiceFor(provider.id).takeIf { it.isNotEmpty() }
-		return stts.play(client, provider, voice, team, at, tier, text, sttsVolume)
+		return stts.play(client, provider, voice, team, at, tier, text, sttsVolume, yielding)
 	}
 
 	fun isMessagePlaying(team: String, at: Long): Boolean = stts.isPlayingMessage(team, at)
@@ -1524,8 +1524,10 @@ class ChatRepository(
 			repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR) }
 			return
 		}
+		// Yielding: by the time this reaches the player the user may have started something of their
+		// own, and autoplay stands down rather than talking over it.
 		stts.post {
-			if (!startPlayback(entry.team, entry.at, tier)) {
+			if (!startPlayback(entry.team, entry.at, tier, yielding = true)) {
 				repoScope.launch { onPlaybackEnded(entry, SttsPlayer.Outcome.SYNTH_ERROR) }
 			}
 		}
